@@ -9,3 +9,6 @@
 | `wontfix` | `wontfix` | 不再处理 |
 
 Skill 提及 canonical role 时，使用对应 GitHub label。
+
+`ci:skip` 是 PR 的 CI 豁免标签，不是 triage 状态。需要豁免时添加，恢复检查时移除；适用范围与
+行为以[工作流 Spec §7.2.1](../architecture/SPEC-ai-native-development-workflow.md#721-ci-豁免) 为准。

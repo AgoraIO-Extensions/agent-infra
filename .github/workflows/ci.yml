@@ -8,6 +8,7 @@ run-name: >-
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -15,9 +16,47 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  ci-exemption:
+    name: Check CI exemption
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.label.outputs.skip }}
+    steps:
+      - name: Read current CI exemption label
+        id: label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          skip=false
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            if ! skip=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+              --jq 'any(.labels[]; .name == "ci:skip")'); then
+              skip=false
+              echo '::warning::Could not read the CI exemption label; running normal checks.'
+            fi
+          fi
+          if [[ "$skip" == true ]]; then
+            echo 'CI and Workload kind are waived by the current ci:skip label; tests did not run. Issue and human validation gates still apply.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No CI exemption; normal checks apply.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   ci:
     name: CI
+    needs: ci-exemption
+    # Failure to read the label must run CI, never grant an exemption.
+    if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -523,6 +562,8 @@ jobs:
 
   workload-kind:
     name: Workload kind
+    needs: ci-exemption
+    if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:

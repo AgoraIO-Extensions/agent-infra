@@ -10,6 +10,7 @@ Agent Runtime 或 Connection 的运行职责。
 - 所有开发工作按 `Issue -> 实现与验证 -> PR` 执行。创建任务分支、修改文件或提交代码前，
   必须确认内容完整的 primary Issue；不得事后补建 Issue 或用占位 PR 追认实现。
 - 人确认范围与授权，使用本地 Agent 实现、验证和评审。AI 不能代替人工 Approve 或绕过分支保护。
+- 维护者可按 [§7.2.1](#721-ci-豁免) 使用 `ci:skip` 明确豁免单个 PR 的 CI；AI 不能自行豁免。
 - GitHub Issues、PR、原生 Actions 结果和分支保护是交付事实来源。
 - 仓库不运行无人值守开发 Agent；Codex Worker、gh-aw Issue-to-PR、自动 repair、授权周期、
   Blocker Reconciler 和 Workflow Outcome 通知/自动重开 Issue 链路均退役。
@@ -78,7 +79,7 @@ PR 正文包含唯一的 `Closes #<primary issue>`，说明问题、最终改动
 
 | 原生 job / required check | 条件 |
 | --- | --- |
-| `CI` | 确定性构建、静态检查和测试通过 |
+| `CI` | 确定性构建、静态检查和测试通过，或按 §7.2.1 明确豁免 |
 | `Issue Gate` | 唯一主 Issue 存在、open、非 wontfix，创建时间早于 PR |
 | `Human Validation Gate` | 未要求人工验证，或当前提交的人工验证由有效 Team 成员确认 |
 
@@ -86,6 +87,18 @@ PR 正文包含唯一的 `Closes #<primary issue>`，说明问题、最终改动
 ready_for_review 事件运行。取消 Issue 事件派发、定时巡检和额外汇总 job；关联 Issue 或 Team
 成员状态单独变化后，必须重新运行 PR 检查。检查读取实时 PR，若已不是触发时的 head 则失败，
 不把旧事件的结果当成新 head 的验证。
+
+#### 7.2.1 CI 豁免
+
+具有 PR 标签管理权限的维护者可添加 `ci:skip`，豁免该 PR 的 `CI` workflow 中的仓库检查与
+Workload kind。标签使用 GitHub 原生权限管理；AI 不得自行添加豁免标签。检查以原生 `skipped`
+结束并满足 required `CI`，运行摘要明确记录豁免，不作为测试通过的证据。
+
+添加、移除标签及新提交都会重新运行 workflow，执行时回读当前标签；重跑旧事件也不能复用
+已撤销的标签。CI 执行中添加标签会取消同一 PR、同一 head 的旧运行，再发布豁免结果。
+移除 `ci:skip` 后恢复正常检查，标签保留期间的新提交继续豁免；旧 head 重跑不会取消新 head。
+读取失败时运行原有 CI，不能因此豁免。main push、独立 Connection E2E、Issue Gate、
+Human Validation Gate、CODEOWNER approval、conversation resolution 与 PR review 不受该标签影响。
 
 ### 7.3 Automated PR Review
 
@@ -124,8 +137,8 @@ CI 或评审失败时由负责人、本地 Agent 查看原生日志和评论，�
 
 ## 9. 合并
 
-当前 head 的三个 required checks 通过、符合 CODEOWNER 批准要求且所有讨论解决后，才允许
-合并。同仓库、目标为默认分支的非 Draft PR 保留 GitHub 原生 Squash Auto-merge enrollment；
+当前 head 的三个 required checks 满足（CI 可按 §7.2.1 豁免）、符合 CODEOWNER 批准要求且所有
+讨论解决后，才允许合并。同仓库、目标为默认分支的非 Draft PR 保留 GitHub 原生 Squash Auto-merge enrollment；
 它只登记 auto-merge，不直接 Merge、不绕过门禁，也不替人 Approve。
 
 ## 10. 安全与验证
