@@ -32,7 +32,9 @@ TypeScript。该例外不适用于产品 Runtime、Host、Grant 或 Driver，不
 [PR-Agent derived runtime ADR](../adr/ADR-0014-pr-agent-derived-runtime.md) 为准；本条款、
 [Workflow Spec §7.3](SPEC-ai-native-development-workflow.md#73-automated-pr-review) 与该 ADR 须先完成
 独立评审及维护者接收，再实施生产补丁、构建派生镜像或启用 workflow。所有既有 token cap、
-required checks 和安全扫描要求保持不变。
+required checks 和安全扫描要求保持不变。派生制品还必须提供可回读的 OCI build provenance /
+attestation，至少绑定基础镜像 digest、构建工作流与 commit、补丁摘要、构建器身份和制品 digest；
+缺失、不可验证或与 `sourceCommit`/`patchSha256`/`imageDigest` 不匹配时不得进入生产。
 
 ### 2.1 技术栈
 
