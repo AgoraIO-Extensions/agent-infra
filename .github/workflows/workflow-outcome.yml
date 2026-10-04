@@ -11,8 +11,6 @@ on:
     workflows:
       - Auto-merge Enrollment
       - Blocker Reconciler
-      - Claude Issue Review
-      - Claude PR Review
       - Codex Worker
       - CI
       - PR Gates

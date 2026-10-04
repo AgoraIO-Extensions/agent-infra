@@ -8,8 +8,6 @@ const REQUIRED_WORKFLOWS = [
   "auto-merge.yml",
   "blocker-reconciler.yml",
   "ci.yml",
-  "claude-issue-review.yml",
-  "claude-pr-review.yml",
   "codex-worker.yml",
   "connection-github-e2e.yml",
   "gh-aw-issue-to-pr-pilot.lock.yml",
@@ -28,24 +26,6 @@ const RUN_NAME_CONTRACTS = {
       "github.event.action",
       "github.event.issue.number",
       "github.event_name",
-    ],
-  },
-  "claude-issue-review.yml": {
-    operation: "claude-issue-review",
-    references: [
-      "github.event.action",
-      "github.event.client_payload.issue_number",
-      "github.event.issue.number",
-      "github.event.issue.pull_request",
-      "github.event.pull_request.number",
-      "github.event_name",
-    ],
-  },
-  "claude-pr-review.yml": {
-    operation: "claude-pr-review",
-    references: [
-      "github.event.workflow_run.id",
-      "github.event.workflow_run.pull_requests[0].number",
     ],
   },
   "codex-worker.yml": {
@@ -100,20 +80,6 @@ const SOURCE_OUTCOME_CONTRACTS = {
     needs: ["reconcile"],
     operation: "blocker-reconcile",
   },
-  "claude-issue-review.yml": {
-    needs: [
-      "automatic-issue-review",
-      "authorize-blocker-review",
-      "analyze-blocker-review",
-      "publish-blocker-review",
-      "mentions",
-    ],
-    operation: "claude-issue-review",
-  },
-  "claude-pr-review.yml": {
-    needs: ["analyze", "publish"],
-    operation: "claude-pr-review",
-  },
   "codex-worker.yml": {
     needs: ["base-update", "authorization", "prepare", "implement", "publish"],
     operation: "codex-worker",
@@ -164,12 +130,6 @@ const SOURCE_OUTCOME_SUMMARY = [
   "",
 ].join("\n");
 const FULL_SHA_ACTION = /^[^@]+@[0-9a-f]{40}$/;
-const CLAUDE_ACTION = "anthropics/claude-code-action@";
-const CLAUDE_SECRETS = [
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_BASE_URL",
-  "CLAUDE_REVIEW_MODEL",
-];
 const CODEX_ACTION =
   "openai/codex-action@dd78cb653811af44014baa08fe954e28d32c1bf9";
 const UPLOAD_ARTIFACT_ACTION =
@@ -327,24 +287,6 @@ function gatePublisherTokenReferences(value) {
   return JSON.stringify(value ?? {}).match(
     /steps\.gate-publisher-token\.outputs\.token/g,
   ) ?? [];
-}
-
-function hasSingleFixedClaudeArgument(args, option, value) {
-  if (typeof args !== "string") {
-    return false;
-  }
-  const escapeRegExp = (input) => input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const optionPattern = `(?:^|\\s)${escapeRegExp(option)}`;
-  const optionOccurrences = args.match(
-    new RegExp(`${optionPattern}(?=\\s|=|$)`, "g"),
-  ) ?? [];
-  const fixedOccurrences = args.match(
-    new RegExp(
-      `${optionPattern}\\s+"${escapeRegExp(value)}"(?=\\s|$)`,
-      "g",
-    ),
-  ) ?? [];
-  return optionOccurrences.length === 1 && fixedOccurrences.length === 1;
 }
 
 function validateGhAwPilotWorkflow(workflow) {
@@ -593,46 +535,11 @@ export function validateGhAwPilotSource(source) {
     : ["gh-aw Pilot source must match the reviewed generated workflow source"];
 }
 
-function isApprovedClaudeConfigStep(workflowName, jobName, step) {
-  return (
-    step.id === "validate-config" &&
-    step.run === "node .github/scripts/validate-claude-review-config.mjs" &&
-    ((workflowName === "claude-pr-review.yml" && jobName === "analyze") ||
-      (workflowName === "claude-issue-review.yml" &&
-        [
-          "automatic-issue-review",
-          "mentions",
-          "analyze-blocker-review",
-        ].includes(jobName)))
-  );
-}
-
 function validateStepSecrets(errors, workflowName, jobName, step) {
   for (const secret of referencedSecrets(step)) {
     const occurrences = referencedSecrets(step).filter(
       (reference) => reference === secret,
     ).length;
-    if (CLAUDE_SECRETS.includes(secret)) {
-      const reference = `\${{ secrets.${secret} }}`;
-      const allowedConfig =
-        isApprovedClaudeConfigStep(workflowName, jobName, step) &&
-        step.env?.[secret] === reference &&
-        occurrences === 1;
-      const allowedAction =
-        step.uses?.startsWith(CLAUDE_ACTION) &&
-        occurrences === 1 &&
-        ((secret === "ANTHROPIC_API_KEY" &&
-          step.with?.anthropic_api_key === reference) ||
-          (secret === "ANTHROPIC_BASE_URL" && step.env?.ANTHROPIC_BASE_URL === reference) ||
-          (secret === "CLAUDE_REVIEW_MODEL" &&
-            step.with?.claude_args?.includes(`--model "${reference}"`)));
-      if (!allowedConfig && !allowedAction) {
-        errors.push(
-          `${workflowName}/${jobName}: ${secret} is allowed only in approved Claude configuration or Action inputs`,
-        );
-      }
-      continue;
-    }
     if (secret === "CODEX_API_KEY") {
       if (
         workflowName !== "codex-worker.yml" ||
@@ -784,8 +691,7 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
         jobName === "gates";
       const allowedGatePublisherLocation =
         step.id === "gate-publisher-token" &&
-        ((workflowName === "pr-gates.yml" && jobName === "gates") ||
-          (workflowName === "claude-pr-review.yml" && jobName === "publish"));
+        (workflowName === "pr-gates.yml" && jobName === "gates");
       if (
         (!allowedMembershipLocation && !allowedGatePublisherLocation) ||
         step.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
@@ -810,17 +716,13 @@ export function validateTrustedScriptSources(sources) {
     errors.push("Gate publishers must not use legacy statuses");
   }
   const gateSource = sources?.["pr-gates.mjs"] ?? "";
-  const reviewSource = sources?.["claude-review.mjs"] ?? "";
   const contractSource = sources?.["check-run-contract.mjs"] ?? "";
   const workerSource = sources?.["codex-worker.mjs"] ?? "";
   const pilotSource = sources?.["gh-aw-pilot.mjs"] ?? "";
-  const resilienceSource = sources?.["worker-resilience.mjs"] ?? "";
   const workerContractSource = sources?.["worker-contract.mjs"] ?? "";
   const blockerContractSource = sources?.["blocker-contract.mjs"] ?? "";
   const blockerReconcilerSource = sources?.["blocker-reconciler.mjs"] ?? "";
   const outcomeSource = sources?.["workflow-outcome.mjs"] ?? "";
-  const claudeAuthorizationSource =
-    sources?.["claude-event-authorization.mjs"] ?? "";
   const gateRequirements = [
     "/check-runs",
     'tokenEnvironment: "GATE_CHECK_TOKEN"',
@@ -830,27 +732,15 @@ export function validateTrustedScriptSources(sources) {
     '"Issue Gate"',
     '"Issue Readiness Gate"',
     '"Human Validation Gate"',
-    '"Claude Review Gate"',
     'blockerStatus(blocker) !== "completed"',
-  ];
-  const reviewRequirements = [
-    "/check-runs",
-    'tokenEnvironment: "GATE_CHECK_TOKEN"',
-    "return gateCheckRequest(`/repos/${repository}/check-runs`,",
-    "await gateCheckRequest(`/repos/${repository}/check-runs/${check.id}`,",
-    "head_sha: expectedHead",
-    "assertCurrentReviewTarget(pr, expectedHead)",
-    "reviewGateOutcome(blocking)",
   ];
   const contractRequirements = [
     "GITHUB_ACTIONS_APP_ID",
     "GATE_PUBLISHER_APP_ID = 4_503_079",
-    "check.head_sha === headSha",
-    "check.external_id === externalId",
+    "agent-infra:pr:${prNumber}:${slug}:${headSha}",
   ];
   if (
     gateRequirements.some((requirement) => !gateSource.includes(requirement)) ||
-    reviewRequirements.some((requirement) => !reviewSource.includes(requirement)) ||
     contractRequirements.some((requirement) => !contractSource.includes(requirement))
   ) {
     errors.push("Gate publishers must bind Check Runs to current heads");
@@ -931,36 +821,6 @@ export function validateTrustedScriptSources(sources) {
   if (pilotSourceHash !== GH_AW_PILOT_SCRIPT_SHA256) {
     errors.push("gh-aw Pilot authorization script must match the reviewed trusted source");
   }
-  const claudeRecoveryRequirements = [
-    "reviewRecoveryArtifactAvailable({",
-    'if (command === "resolve-review-recovery") return resolveReviewRecoveryCommand();',
-    "readReviewRecoveryTarget({ repository, run })",
-    "target.source_run_id !== run.id",
-    "target.repository !== repository",
-    "reviewGateReason(checks.check_runs, sourceHeadSha)",
-    "reviewComments",
-  ];
-  const claudeFindingRequirements = [
-    "GITHUB_ACTIONS_BOT_ID = 41_898_282",
-    "comment.user?.id !== GITHUB_ACTIONS_BOT_ID",
-    "comment.original_commit_id !== headSha",
-    "agent-infra-claude-review:${headSha}",
-    'comment.user?.login !== "github-actions[bot]"',
-    'comment.user?.type !== "Bot"',
-    'reason: "claude_findings_unavailable"',
-  ];
-  if (
-    claudeRecoveryRequirements.some(
-      (requirement) => !workerSource.includes(requirement),
-    ) ||
-    claudeFindingRequirements.some(
-      (requirement) => !resilienceSource.includes(requirement),
-    )
-  ) {
-    errors.push(
-      "Claude recovery context must stay source-head and GitHub-Actions-authored",
-    );
-  }
   if (
     !/async function retryCiCommand\(\)[\s\S]{0,2500}await publishPullRequestRecoveryRecord\(\{ record, repository, token \}\);[\s\S]{0,500}\/rerun-failed-jobs/.test(
       workerSource,
@@ -972,7 +832,6 @@ export function validateTrustedScriptSources(sources) {
     "validateBlockerProposals",
     "assertCanAddBlockers",
     "latestBlockerStateRecord",
-    "isTrustedBlockerReviewComment",
     "workItemKind",
     "hydrateNativeDependencies",
     "native_blockers",
@@ -1004,9 +863,7 @@ export function validateTrustedScriptSources(sources) {
     blockerWorkerRequirements.some(
       (requirement) => !workerSource.includes(requirement),
     ) ||
-    !gateSource.includes("validatedExecutionIssue(") ||
-    !claudeAuthorizationSource.includes("authorizeBlockerReviewDispatch") ||
-    !claudeAuthorizationSource.includes("hasTrustedBlockerReviewAck")
+    !gateSource.includes("validatedExecutionIssue(")
   ) {
     errors.push("Blocker automation must preserve bounded proposals and signed reconciliation");
   }
@@ -1022,7 +879,7 @@ export function validateTrustedScriptSources(sources) {
     "Source pull request target does not match workflow_run metadata",
     "workflowNotRun: true",
     "allowNotFound: allowMissing",
-    "GATE_PUBLISHER_APP_ID = 4_503_079",
+    "check?.app?.id === GATE_PUBLISHER_APP_ID",
     "Pull request Check Run pagination limit exceeded",
     "canonicalClaim.id !== created.id",
     "duplicateClaim",
@@ -1054,15 +911,6 @@ export function validateTrustedScriptSources(sources) {
     )
   ) {
     errors.push("Workflow Outcome must use only trusted Summary sources");
-  }
-  const reviewHeadRechecks =
-    reviewSource.match(/await requireCurrentReviewTarget\(\{/g) ?? [];
-  if (
-    reviewHeadRechecks.length < 5 ||
-    !reviewSource.includes("reviewSummaryMarker(result.head_sha)") ||
-    !reviewSource.includes("reviewSummaryMarker(expectedHead)")
-  ) {
-    errors.push("Claude publisher must isolate and recheck each Review head");
   }
   if (
     /affected\.map\(async \(pr\) => \{[\s\S]{0,500}setPendingChecks\(repository, pr\)[\s\S]{0,500}\/dispatches/.test(
@@ -1211,14 +1059,10 @@ export function validateWorkflowDocuments(workflows) {
           gateTokenReferences.length === 1 &&
           step.env?.GATE_CHECK_TOKEN ===
             "${{ steps.gate-publisher-token.outputs.token }}" &&
-          ((name === "pr-gates.yml" &&
+          (name === "pr-gates.yml" &&
             jobName === "gates" &&
             step.name === "Evaluate Issue, readiness, and human validation gates" &&
-            step.run === "node .github/scripts/pr-gates.mjs") ||
-            (name === "claude-pr-review.yml" &&
-              jobName === "publish" &&
-              step.name === "Publish validated Review result" &&
-              step.run === "node .github/scripts/claude-review.mjs"));
+            step.run === "node .github/scripts/pr-gates.mjs");
         if (gateTokenReferences.length > 0 && !allowedGatePublisherToken) {
           errors.push(
             `${name}/${jobName}: Gate publisher token is allowed only in fixed Check Run steps`,
@@ -1251,8 +1095,6 @@ export function validateWorkflowDocuments(workflows) {
       JSON.stringify([
         "Auto-merge Enrollment",
         "Blocker Reconciler",
-        "Claude Issue Review",
-        "Claude PR Review",
         "Codex Worker",
         "CI",
         "PR Gates",
@@ -1373,7 +1215,6 @@ export function validateWorkflowDocuments(workflows) {
     !gatesCondition.includes("github.event_name != 'issues'") ||
     !gatesCondition.includes("github.event_name != 'schedule'") ||
     !gatesCondition.includes("github.event_name != 'issue_comment'") ||
-    !gatesCondition.includes("github.event.issue.pull_request") ||
     membershipTokenStep?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
     membershipTokenStep?.["continue-on-error"] !== true ||
     !sameObject(membershipTokenStep?.with, {
@@ -1479,17 +1320,6 @@ export function validateWorkflowDocuments(workflows) {
     errors.push("Codex Worker concurrency must isolate external fork PRs");
   }
   if (
-    !workerGroup.includes("codex-worker-review-recovery") ||
-    workerCancellation.includes("github.event_name == 'workflow_run'")
-  ) {
-    errors.push("Claude recovery concurrency must not cancel another PR");
-  }
-  if (
-    !workerGroup.includes("github.event.workflow_run.head_repository.full_name == github.repository")
-  ) {
-    errors.push("Codex Worker Review recovery must require a same-repository source");
-  }
-  if (
     !workerCancellation.includes("github.event.pull_request.head.repo.full_name") ||
     !workerCancellation.includes("github.repository") ||
     !workerCancellation.includes("github.event.client_payload.operation")
@@ -1517,7 +1347,7 @@ export function validateWorkflowDocuments(workflows) {
   if (
     JSON.stringify(worker?.on?.push?.branches) !== JSON.stringify(["main"]) ||
     JSON.stringify(worker?.on?.workflow_run?.workflows) !==
-      JSON.stringify(["CI", "Claude PR Review"]) ||
+      JSON.stringify(["CI"]) ||
     JSON.stringify(worker?.on?.workflow_run?.types) !== JSON.stringify(["completed"]) ||
     baseUpdate?.if !== "github.event_name == 'push'" ||
     !sameObject(prepare?.permissions, {
@@ -1699,68 +1529,11 @@ export function validateWorkflowDocuments(workflows) {
       "Codex Worker checkpoint download must bind the trusted source run and name",
     );
   }
-  const reviewRecoverySteps =
-    workflows["claude-pr-review.yml"]?.jobs?.publish?.steps ?? [];
-  const reviewTargetStage = reviewRecoverySteps.find(
-    (step) => step.name === "Stage trusted Review recovery target",
-  );
-  const reviewTargetUpload = reviewRecoverySteps.find(
-    (step) => step.name === "Upload trusted Review recovery target",
-  );
-  const reviewTargetResolve = (prepare?.steps ?? []).find(
-    (step) => step.name === "Resolve trusted Review recovery target",
-  );
-  const reviewTargetDownload = (prepare?.steps ?? []).find(
-    (step) => step.name === "Download trusted Review recovery target",
-  );
-  const reviewTargetCondition = "steps.publish-review.outcome == 'success'";
-  if (
-    reviewTargetStage?.if !== reviewTargetCondition ||
-    !String(reviewTargetStage?.run ?? "").includes(
-      '> "$RUNNER_TEMP/claude-review-recovery.json"',
-    ) ||
-    reviewTargetUpload?.if !== reviewTargetCondition ||
-    reviewTargetUpload?.uses !== UPLOAD_ARTIFACT_ACTION ||
-    !sameObject(reviewTargetUpload?.with, {
-      name: "claude-review-recovery-${{ github.run_id }}",
-      path: "${{ runner.temp }}/claude-review-recovery.json",
-      "if-no-files-found": "error",
-      "retention-days": 1,
-    }) ||
-    reviewTargetResolve?.id !== "resolve-review-recovery" ||
-    reviewTargetResolve?.run !==
-      "node trusted/.github/scripts/codex-worker.mjs resolve-review-recovery" ||
-    reviewTargetResolve?.env?.GITHUB_TOKEN !== "${{ github.token }}" ||
-    !String(reviewTargetResolve?.if ?? "").includes(
-      "github.event.workflow_run.name == 'Claude PR Review'",
-    ) ||
-    !String(reviewTargetResolve?.if ?? "").includes(
-      "github.event.workflow_run.conclusion == 'success'",
-    ) ||
-    reviewTargetDownload?.uses !== DOWNLOAD_ARTIFACT_ACTION ||
-    reviewTargetDownload?.if !==
-      "steps.resolve-review-recovery.outputs.available == 'true'" ||
-    !sameObject(reviewTargetDownload?.with, {
-      name: "claude-review-recovery-${{ github.event.workflow_run.id }}",
-      path: "${{ runner.temp }}/claude-review-recovery",
-      "github-token": "${{ github.token }}",
-      repository: "${{ github.repository }}",
-      "run-id": "${{ github.event.workflow_run.id }}",
-    })
-  ) {
-    errors.push("Claude recovery target Artifact must stay source-run bound");
-  }
   const prepareConfig = (prepare?.steps ?? []).find(
     (step) => step.name === "Prepare trusted Worker plan",
   );
   if (prepareConfig?.env?.CODEX_EFFORT !== "${{ vars.CODEX_EFFORT }}") {
     errors.push("Codex Worker effort must use the fixed repository Variable");
-  }
-  if (
-    prepareConfig?.env?.WORKER_REVIEW_RECOVERY_AVAILABLE !==
-    "${{ steps.resolve-review-recovery.outputs.available }}"
-  ) {
-    errors.push("Claude recovery Artifact availability must reach trusted preparation");
   }
   const codexIndex = implementSteps.findIndex((step) =>
     step.uses?.startsWith("openai/codex-action@"),
@@ -1890,220 +1663,6 @@ export function validateWorkflowDocuments(workflows) {
     errors.push("Blocker Reconciler must use fixed events, permissions, and serialization");
   }
 
-  const review = workflows["claude-pr-review.yml"];
-  const reviewTrigger = review?.on?.workflow_run;
-  const reviewConcurrency = review?.concurrency;
-  const reviewAnalyzeCondition = String(review?.jobs?.analyze?.if ?? "");
-  const reviewPublishCondition = String(review?.jobs?.publish?.if ?? "");
-  const reviewJobConditions = [review?.jobs?.analyze?.if, review?.jobs?.publish?.if].map(
-    (condition) => String(condition ?? ""),
-  );
-  if (
-    JSON.stringify(reviewTrigger?.workflows) !== JSON.stringify(["CI"]) ||
-    JSON.stringify(reviewTrigger?.types) !== JSON.stringify(["completed"]) ||
-    reviewConcurrency?.group !==
-      "claude-review-${{ github.event.workflow_run.pull_requests[0].number || github.run_id }}" ||
-    reviewConcurrency?.["cancel-in-progress"] !== true ||
-    reviewJobConditions.some(
-      (condition) =>
-        !condition.includes("github.event.workflow_run.conclusion == 'success'") ||
-        !condition.includes("github.event.workflow_run.event == 'pull_request'") ||
-        !condition.includes("github.event.workflow_run.pull_requests[0]") ||
-        !condition.includes(
-          "github.event.workflow_run.head_repository.full_name == github.repository",
-        ),
-    ) ||
-    !reviewAnalyzeCondition.includes("vars.PR_REVIEW_PROVIDER == 'claude'") ||
-    !reviewPublishCondition.includes(
-      "needs.analyze.outputs.selected_provider == 'claude'",
-    )
-  ) {
-    errors.push("Claude PR Review trigger and concurrency must stay current-head bound");
-  }
-  const analyzeSteps = review?.jobs?.analyze?.steps ?? [];
-  const reviewActionIndex = analyzeSteps.findIndex((step) => step.id === "claude");
-  const reviewAction = analyzeSteps[reviewActionIndex];
-  const selectedReviewProvider = analyzeSteps.find(
-    (step) => step.id === "selected-provider",
-  );
-  const reviewDataCheckout = analyzeSteps.find(
-    (step) => step.name === "Checkout untrusted PR head as review data",
-  );
-  const reviewPublishSteps = review?.jobs?.publish?.steps ?? [];
-  const reviewPublish = reviewPublishSteps.find(
-    (step) => step.name === "Publish validated Review result",
-  );
-  const reviewGatePublisherToken = reviewPublishSteps.find(
-    (step) => step.id === "gate-publisher-token",
-  );
-  if (
-    review?.jobs?.analyze?.outputs?.selected_provider !==
-      "${{ steps.selected-provider.outputs.selected_provider }}" ||
-    analyzeSteps[0] !== selectedReviewProvider ||
-    selectedReviewProvider?.run !==
-      'echo "selected_provider=claude" >> "$GITHUB_OUTPUT"' ||
-    reviewDataCheckout?.with?.ref !== "${{ github.event.workflow_run.head_sha }}" ||
-    reviewDataCheckout?.with?.path !== "pr-head" ||
-    reviewDataCheckout?.with?.["persist-credentials"] !== false ||
-    reviewPublish?.run !== "node .github/scripts/claude-review.mjs" ||
-    reviewGatePublisherToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
-    !sameObject(reviewGatePublisherToken?.with, {
-      "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
-      "permission-checks": "write",
-      "private-key": "${{ secrets.TEAM_MEMBERSHIP_APP_PRIVATE_KEY }}",
-      owner: "${{ github.repository_owner }}",
-      repositories: "${{ github.event.repository.name }}",
-    }) ||
-    !sameObject(reviewPublish?.env, {
-      ANALYSIS_RESULT: "${{ needs.analyze.result }}",
-      EXPECTED_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
-      GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
-      GITHUB_TOKEN: "${{ github.token }}",
-      PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
-      REVIEW_ENABLED: "true",
-      STRUCTURED_OUTPUT: "${{ needs.analyze.outputs.structured_output }}",
-    }) ||
-    !sameObject(review?.jobs?.publish?.permissions, {
-      checks: "read",
-      contents: "read",
-      issues: "write",
-      "pull-requests": "write",
-    }) ||
-    gatePublisherTokenReferences(review).length !== 1
-  ) {
-    errors.push("Claude PR Review must publish only the completed CI head");
-  }
-  if (reviewGatePublisherToken?.["continue-on-error"] === true) {
-    errors.push("Gate publisher token mint must fail the workflow");
-  }
-  const reviewConfigIndex = analyzeSteps.findIndex((step) => step.id === "validate-config");
-  const reviewConfig = analyzeSteps[reviewConfigIndex];
-  const reviewInputStage = analyzeSteps.find(
-    (step) => step.name === "Stage untrusted PR review data",
-  );
-  const reviewConfigEnv = reviewConfig?.env ?? {};
-  if (
-    reviewConfig?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
-    Object.keys(reviewConfigEnv).sort().join("\0") !==
-      [
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_BASE_URL",
-        "CLAUDE_REVIEW_EFFORT",
-        "CLAUDE_REVIEW_MODEL",
-      ]
-        .sort()
-        .join("\0") ||
-    reviewConfigEnv.ANTHROPIC_API_KEY !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
-    reviewConfigEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
-    reviewConfigEnv.CLAUDE_REVIEW_EFFORT !== "${{ vars.CLAUDE_REVIEW_EFFORT }}" ||
-    reviewConfigEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
-    reviewActionIndex !== reviewConfigIndex + 1 ||
-    reviewInputStage?.env?.GH_TOKEN !== "${{ github.token }}" ||
-    reviewInputStage?.env?.EXPECTED_HEAD_SHA !==
-      "${{ github.event.workflow_run.head_sha }}" ||
-    reviewInputStage?.env?.PR_NUMBER !==
-      "${{ github.event.workflow_run.pull_requests[0].number }}" ||
-    reviewInputStage?.shell !== "bash" ||
-    !String(reviewInputStage?.run ?? "").includes('gh pr view "$PR_NUMBER"') ||
-    !String(reviewInputStage?.run ?? "").includes("> .review-input/pr.json") ||
-    !String(reviewInputStage?.run ?? "").includes(
-      "--json author,baseRefName,baseRefOid,body,commits,files,headRefName,headRefOid,title,url",
-    ) ||
-    !String(reviewInputStage?.run ?? "").includes(
-      'BASE_SHA="$(jq -r \'.baseRefOid // empty\' .review-input/pr.json)"',
-    ) ||
-    !String(reviewInputStage?.run ?? "").includes(
-      '[[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]',
-    ) ||
-    !String(reviewInputStage?.run ?? "").includes(
-      'MERGE_BASE_SHA="$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$EXPECTED_HEAD_SHA" --jq .merge_base_commit.sha)"',
-    ) ||
-    !String(reviewInputStage?.run ?? "").includes(
-      '[[ "$MERGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]',
-    ) ||
-    !String(reviewInputStage?.run ?? "").includes(
-      `git -C pr-head -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch --no-tags --depth=1 origin "$MERGE_BASE_SHA"`,
-    ) ||
-    !String(reviewInputStage?.run ?? "").includes(
-      'test "$(git -C pr-head rev-parse --verify HEAD)" = "$EXPECTED_HEAD_SHA"',
-    ) ||
-    !String(reviewInputStage?.run ?? "").includes(
-      "git -C pr-head diff --no-ext-diff --no-textconv --diff-algorithm=myers --binary --unified=80",
-    ) ||
-    !String(reviewInputStage?.run ?? "").includes(
-      '"$MERGE_BASE_SHA" "$EXPECTED_HEAD_SHA" > .review-input/pr.diff',
-    ) ||
-    !String(reviewInputStage?.run ?? "").includes(
-      "test -s .review-input/pr.diff",
-    ) ||
-    (String(reviewInputStage?.run ?? "").match(/= "\$EXPECTED_HEAD_SHA"/g) ?? [])
-      .length !== 3 ||
-    reviewAction?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
-    reviewAction?.with?.show_full_output !==
-      "${{ vars.CLAUDE_REVIEW_VERBOSE == 'true' }}" ||
-    !hasSingleFixedClaudeArgument(
-      reviewAction?.with?.claude_args,
-      "--model",
-      "${{ secrets.CLAUDE_REVIEW_MODEL }}",
-    ) ||
-    !hasSingleFixedClaudeArgument(
-      reviewAction?.with?.claude_args,
-      "--effort",
-      "${{ vars.CLAUDE_REVIEW_EFFORT }}",
-    )
-  ) {
-    errors.push("Claude PR Review model configuration must use validated settings");
-  }
-  const reviewPublisherSecrets = referencedSecrets(review?.jobs?.publish).sort();
-  if (
-    JSON.stringify(reviewPublisherSecrets) !==
-    JSON.stringify([
-      "TEAM_MEMBERSHIP_APP_ID",
-      "TEAM_MEMBERSHIP_APP_PRIVATE_KEY",
-    ])
-  ) {
-    errors.push(
-      "Claude Review publisher may receive Secrets only in the fixed control App token step",
-    );
-  }
-  const reviewPrompt = reviewAction?.with?.prompt ?? "";
-  const reviewPromptRequirements = [
-    "Before returning each finding, verify that it:",
-    "is introduced by this PR on an added RIGHT-side or deleted LEFT-side diff line;",
-    "does not depend on an unverified assumption.",
-    "Do not report pre-existing issues, style or nitpicks, issues fully",
-    "Discard every candidate that fails any check.",
-  ];
-  if (reviewPromptRequirements.some((requirement) => !reviewPrompt.includes(requirement))) {
-    errors.push("Claude PR Review must validate and filter candidate findings");
-  }
-  const reviewArgs = reviewAction?.with?.claude_args ?? "";
-  if (
-    !reviewPrompt.includes("added RIGHT-side or deleted LEFT-side diff line") ||
-    !reviewArgs.includes('"side":{"enum":["LEFT","RIGHT"]}') ||
-    !reviewArgs.includes('"required":["severity","title","body","path","line","side"]')
-  ) {
-    errors.push("Claude PR Review must bind findings to LEFT or RIGHT diff lines");
-  }
-  const allowedToolFlags = reviewArgs.match(/--allowedTools\s+"[^"]*"/g) ?? [];
-  const allowedToolOptions =
-    reviewArgs.match(/--(?:allowedTools|allowed-tools)(?=\s|=|$)/g) ?? [];
-  const disallowedToolFlags = reviewArgs.match(/--disallowedTools\s+"[^"]*"/g) ?? [];
-  const disallowedToolOptions =
-    reviewArgs.match(/--(?:disallowedTools|disallowed-tools)(?=\s|=|$)/g) ?? [];
-  if (
-    JSON.stringify(allowedToolFlags) !==
-      JSON.stringify(['--allowedTools "Read,Grep,Glob"']) ||
-    JSON.stringify(allowedToolOptions) !== JSON.stringify(["--allowedTools"]) ||
-    JSON.stringify(disallowedToolFlags) !==
-      JSON.stringify([
-        '--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"',
-      ]) ||
-    JSON.stringify(disallowedToolOptions) !== JSON.stringify(["--disallowedTools"])
-  ) {
-    errors.push("Claude PR Review model must use bounded read-only tools");
-  }
-
   const autoMerge = workflows["auto-merge.yml"];
   const enrollment = autoMerge?.jobs?.enroll;
   if (
@@ -2147,191 +1706,6 @@ export function validateWorkflowDocuments(workflows) {
     errors.push("Auto-merge Enrollment must use the fixed repository Secret");
   }
 
-  const issueReview = workflows["claude-issue-review.yml"];
-  const blockerAuthorize = issueReview?.jobs?.["authorize-blocker-review"];
-  const blockerAnalyze = issueReview?.jobs?.["analyze-blocker-review"];
-  const blockerPublish = issueReview?.jobs?.["publish-blocker-review"];
-  const blockerReviewAction = (blockerAnalyze?.steps ?? []).find((step) =>
-    step.uses?.startsWith(CLAUDE_ACTION),
-  );
-  const blockerPublisher = (blockerPublish?.steps ?? []).find(
-    (step) => step.name === "Publish validated blocker Review",
-  );
-  if (
-    JSON.stringify(issueReview?.on?.repository_dispatch?.types) !==
-      JSON.stringify(["claude-blocker-review"]) ||
-    !String(issueReview?.concurrency?.group ?? "").includes(
-      "github.event.client_payload.issue_number",
-    ) ||
-    issueReview?.concurrency?.["cancel-in-progress"] !== false ||
-    !sameObject(blockerAuthorize?.permissions, {
-      contents: "read",
-      issues: "write",
-    }) ||
-    blockerAnalyze?.needs !== "authorize-blocker-review" ||
-    blockerAnalyze?.if !==
-      "needs.authorize-blocker-review.outputs.allowed == 'true'" ||
-    !sameObject(blockerAnalyze?.permissions, {
-      contents: "read",
-      issues: "read",
-    }) ||
-    blockerReviewAction?.with?.track_progress !== "false" ||
-    JSON.stringify(blockerPublish?.needs) !==
-      JSON.stringify(["authorize-blocker-review", "analyze-blocker-review"]) ||
-    !sameObject(blockerPublish?.permissions, {
-      contents: "read",
-      issues: "write",
-    }) ||
-    blockerPublisher?.run !== "node .github/scripts/claude-blocker-review.mjs" ||
-    !sameObject(blockerPublisher?.env, {
-      ANALYSIS_RESULT: "${{ needs.analyze-blocker-review.result }}",
-      BLOCKER_ISSUE_NUMBER: "${{ github.event.client_payload.issue_number }}",
-      GITHUB_TOKEN: "${{ github.token }}",
-      STRUCTURED_OUTPUT:
-        "${{ needs.analyze-blocker-review.outputs.structured_output }}",
-    })
-  ) {
-    errors.push("Claude blocker Review must isolate authorization, analysis, and publication");
-  }
-  if (blockerReviewAction?.with?.allowed_bots !== "github-actions") {
-    errors.push("Claude blocker Review must allow only the trusted github-actions dispatch actor");
-  }
-  for (const [jobName, job] of Object.entries(issueReview?.jobs ?? {})) {
-    if (jobName === "mentions" && String(job.if ?? "").includes("endsWith")) {
-      errors.push(
-        "claude-issue-review.yml/mentions: App blocker review must reach the trusted authorizer",
-      );
-    }
-    if (/contains\s*\(\s*fromJSON\([\s\S]*?author_association\s*\)/.test(job.if ?? "")) {
-      errors.push(
-        `claude-issue-review.yml/${jobName}: use explicit actor association comparisons`,
-      );
-    }
-    if ((job.if ?? "").includes("author_association") && jobName !== "automatic-issue-review") {
-      errors.push(
-        `claude-issue-review.yml/${jobName}: must authorize identity in a trusted step`,
-      );
-    }
-    const authorizeIndex = (job.steps ?? []).findIndex(
-      (step) =>
-        step.id === "authorize" &&
-        step.run === "node .github/scripts/claude-event-authorization.mjs",
-    );
-    const modelIndex = (job.steps ?? []).findIndex((step) =>
-      step.uses?.startsWith(CLAUDE_ACTION),
-    );
-    const configIndex = (job.steps ?? []).findIndex((step) => step.id === "validate-config");
-    const configStep = job.steps?.[configIndex];
-    const modelStep = job.steps?.[modelIndex];
-    const reviewInputStage = (job.steps ?? []).find((step) =>
-      step.name?.startsWith("Stage untrusted "),
-    );
-    const configEnv = configStep?.env ?? {};
-    const splitBlockerReview = jobName === "analyze-blocker-review";
-    if (
-      modelIndex >= 0 &&
-      !splitBlockerReview &&
-      (authorizeIndex < 0 || authorizeIndex >= modelIndex)
-    ) {
-      errors.push(
-        `claude-issue-review.yml/${jobName}: trusted authorization must run before model`,
-      );
-    }
-    if (
-      modelIndex >= 0 &&
-      !splitBlockerReview &&
-      modelStep.if !== "steps.authorize.outputs.allowed == 'true'"
-    ) {
-      errors.push(
-        `claude-issue-review.yml/${jobName}: model step must use trusted authorization output`,
-      );
-    }
-    if (
-      modelIndex >= 0 &&
-      (modelIndex !== configIndex + 1 ||
-        (!splitBlockerReview && configIndex <= authorizeIndex) ||
-        (!splitBlockerReview &&
-          configStep?.if !== "steps.authorize.outputs.allowed == 'true'") ||
-        configStep?.run !== "node .github/scripts/validate-claude-review-config.mjs" ||
-        (["automatic-issue-review", "analyze-blocker-review"].includes(jobName) &&
-          (reviewInputStage?.env?.GH_TOKEN !== "${{ github.token }}" ||
-            reviewInputStage?.shell !== "bash" ||
-            !String(reviewInputStage?.run ?? "").includes("gh issue view \"$ISSUE_NUMBER\"") ||
-            !String(reviewInputStage?.run ?? "").includes("> .review-input/issue.json"))) ||
-        Object.keys(configEnv).sort().join("\0") !==
-          [
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_BASE_URL",
-            "CLAUDE_REVIEW_EFFORT",
-            "CLAUDE_REVIEW_MODEL",
-          ]
-            .sort()
-            .join("\0") ||
-        configEnv.ANTHROPIC_API_KEY !== "${{ secrets.ANTHROPIC_API_KEY }}" ||
-        configEnv.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
-        configEnv.CLAUDE_REVIEW_EFFORT !== "${{ vars.CLAUDE_REVIEW_EFFORT }}" ||
-        configEnv.CLAUDE_REVIEW_MODEL !== "${{ secrets.CLAUDE_REVIEW_MODEL }}" ||
-        modelStep?.env?.ANTHROPIC_BASE_URL !== "${{ secrets.ANTHROPIC_BASE_URL }}" ||
-        !hasSingleFixedClaudeArgument(
-          modelStep?.with?.claude_args,
-          "--model",
-          "${{ secrets.CLAUDE_REVIEW_MODEL }}",
-        ) ||
-        !hasSingleFixedClaudeArgument(
-          modelStep?.with?.claude_args,
-          "--effort",
-          "${{ vars.CLAUDE_REVIEW_EFFORT }}",
-        ))
-    ) {
-      errors.push(
-        `claude-issue-review.yml/${jobName}: model configuration must use validated settings`,
-      );
-    }
-  }
-
-  for (const [name, workflow] of Object.entries(workflows)) {
-    for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
-      const claudeSteps = (job.steps ?? []).filter((step) =>
-        step.uses?.startsWith(CLAUDE_ACTION),
-      );
-      const scrubbingEnabled =
-        job.env?.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === "1" ||
-        claudeSteps.some(
-          (step) => step.env?.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === "1",
-        );
-      if (claudeSteps.length && scrubbingEnabled) {
-        errors.push(`${name}/${jobName}: must not enable subprocess env scrubbing`);
-      }
-      if (
-        (name !== "claude-issue-review.yml" ||
-          jobName !== "analyze-blocker-review") &&
-        claudeSteps.some((step) => step.with?.allowed_bots !== undefined)
-      ) {
-        errors.push(
-          `${name}/${jobName}: Bot allowlists are restricted to blocker Review dispatch`,
-        );
-      }
-    }
-  }
-
-  for (const [jobName, job] of Object.entries(issueReview?.jobs ?? {})) {
-    for (const step of job.steps ?? []) {
-      if (!step.uses?.startsWith(CLAUDE_ACTION)) continue;
-      const args = step.with?.claude_args ?? "";
-      const expectedAllowed = '--allowedTools "Read,Grep,Glob"';
-      const expectedDisallowed =
-        '--disallowedTools "Edit,Write,MultiEdit,Bash,WebFetch,WebSearch"';
-      const unsafeBash = /--allowedTools\s+"[^"]*\bBash\b/.test(args);
-      if (
-        !args.includes(expectedAllowed) ||
-        !args.includes(expectedDisallowed) ||
-        unsafeBash ||
-        /--allowedTools\s+"[^"]*\b(?:Edit|Write)\b/.test(args)
-      ) {
-        errors.push("Issue Review model must stay read-only");
-      }
-    }
-  }
   return errors;
 }
 
@@ -2357,8 +1731,6 @@ async function main() {
         "blocker-contract.mjs",
         "blocker-reconciler.mjs",
         "check-run-contract.mjs",
-        "claude-event-authorization.mjs",
-        "claude-review.mjs",
         "codex-worker.mjs",
         "gh-aw-pilot.mjs",
         "pr-gates.mjs",

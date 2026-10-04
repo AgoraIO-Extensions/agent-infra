@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
+import { GATE_PUBLISHER_APP_ID } from "./check-run-contract.mjs";
 import { latestBlockerStateRecord } from "./blocker-contract.mjs";
 import { extractPrimaryIssueNumbers } from "./pr-gates.mjs";
 import { validateAuthorizationRecord } from "./worker-contract.mjs";
@@ -9,8 +10,6 @@ import { validateWorkerAttemptRecord } from "./worker-resilience.mjs";
 const TRUSTED_OPERATIONS = new Set([
   "auto-merge",
   "blocker-reconcile",
-  "claude-issue-review",
-  "claude-pr-review",
   "codex-worker",
   "ci",
   "pr-gates",
@@ -20,8 +19,6 @@ const TRUSTED_OPERATIONS = new Set([
 const WORKFLOW_OPERATIONS = new Map([
   ["Auto-merge Enrollment", "auto-merge"],
   ["Blocker Reconciler", "blocker-reconcile"],
-  ["Claude Issue Review", "claude-issue-review"],
-  ["Claude PR Review", "claude-pr-review"],
   ["Codex Worker", "codex-worker"],
   ["CI", "ci"],
   ["PR Gates", "pr-gates"],
@@ -29,15 +26,12 @@ const WORKFLOW_OPERATIONS = new Map([
 const WORKFLOW_NAMES_BY_PATH = new Map([
   [".github/workflows/auto-merge.yml", "Auto-merge Enrollment"],
   [".github/workflows/blocker-reconciler.yml", "Blocker Reconciler"],
-  [".github/workflows/claude-issue-review.yml", "Claude Issue Review"],
-  [".github/workflows/claude-pr-review.yml", "Claude PR Review"],
   [".github/workflows/codex-worker.yml", "Codex Worker"],
   [".github/workflows/ci.yml", "CI"],
   [".github/workflows/pr-gates.yml", "PR Gates"],
 ]);
 const POST_MERGE_MARKER = "agent-infra-post-merge-failure";
 const GITHUB_ACTIONS_APP_ID = 15_368;
-const GATE_PUBLISHER_APP_ID = 4_503_079;
 const POST_MERGE_FAILURE_CONCLUSIONS = new Set([
   "failure",
   "startup_failure",
@@ -195,9 +189,6 @@ export function classifyOutcome({ sourceRun, parsedRunName, context = {} }) {
     context.blockerState.reason === "blockers-completed"
   ) {
     return outcome("blocker_resumed", "automation", true);
-  }
-  if (sourceRun.workflowName === "PR Gates" && context.waiverUsed) {
-    return outcome("waiver_used", "repository-maintainer", true);
   }
   if (context.humanValidationPending) {
     return outcome("human_validation_required", "reviewer", true);
@@ -842,7 +833,6 @@ async function loadPullRequestContext({
       .filter((check) => check.name === name)
       .sort((left, right) => right.id - left.id)[0];
   const humanCheck = latestTrustedCheck("Human Validation Gate");
-  const claudeCheck = latestTrustedCheck("Claude Review Gate");
   const pullRequestMerged = Boolean(
     parsedRunName.action === "closed" && pullRequest.merged_at,
   );
@@ -853,9 +843,6 @@ async function loadPullRequestContext({
       : {}),
     ...(humanCheck?.id
       ? { human_validation_required: `human-validation-check-${humanCheck.id}` }
-      : {}),
-    ...(claudeCheck?.id
-      ? { waiver_used: `claude-waiver-check-${claudeCheck.id}` }
       : {}),
   };
   return {
@@ -875,11 +862,6 @@ async function loadPullRequestContext({
     humanValidationPending: Boolean(
       labelsOf(issueContext.issue).includes("ready-for-human") &&
         humanCheck?.conclusion !== "success",
-    ),
-    waiverUsed: Boolean(
-      claudeCheck?.output?.summary?.includes(
-        "reason_code: waived_infrastructure_failure",
-      ),
     ),
     eventIds,
   };

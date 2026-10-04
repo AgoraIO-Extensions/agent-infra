@@ -6,17 +6,16 @@ import {
   parseSourceRunName,
   processWorkflowOutcome,
   renderJobSummary,
-  renderWeComMessage,
   sendWeComNotification,
   triagePostMergeFailure,
 } from "./workflow-outcome.mjs";
 
 test("parses only fixed workflow run names into trusted targets", () => {
   assert.deepEqual(
-    parseSourceRunName("PR #105 | claude-pr-review | source 31464062784"),
+    parseSourceRunName("PR #105 | codex-worker | source 31464062784"),
     {
       action: "source 31464062784",
-      operation: "claude-pr-review",
+      operation: "codex-worker",
       targetNumber: 105,
       targetType: "pr",
     },
@@ -249,9 +248,9 @@ test("builds a safe terminal outcome and Job Summary from workflow_run metadata"
     repository: "AgoraIO-Extensions/agent-infra",
     sourceRun: {
       id: 31464062784,
-      name: "Claude PR Review",
-      path: ".github/workflows/claude-pr-review.yml",
-      display_title: "PR #105 | claude-pr-review | source 31464062784",
+      name: "Codex Worker",
+      path: ".github/workflows/codex-worker.yml",
+      display_title: "PR #105 | codex-worker | source 31464062784",
       event: "workflow_run",
       conclusion: "failure",
       head_sha: "a".repeat(40),
@@ -273,7 +272,7 @@ test("builds a safe terminal outcome and Job Summary from workflow_run metadata"
     checkHeadSha: "a".repeat(40),
     sourceRun: {
       id: 31464062784,
-      workflow: "Claude PR Review",
+      workflow: "Codex Worker",
       event: "workflow_run",
       action: "source 31464062784",
       headSha: "a".repeat(40),
@@ -312,8 +311,6 @@ function sourceRun(overrides = {}) {
   const workflowPaths = {
     "Auto-merge Enrollment": ".github/workflows/auto-merge.yml",
     "Blocker Reconciler": ".github/workflows/blocker-reconciler.yml",
-    "Claude Issue Review": ".github/workflows/claude-issue-review.yml",
-    "Claude PR Review": ".github/workflows/claude-pr-review.yml",
     "Codex Worker": ".github/workflows/codex-worker.yml",
     "CI": ".github/workflows/ci.yml",
     "PR Gates": ".github/workflows/pr-gates.yml",
@@ -539,7 +536,6 @@ test("notifies only actionable or final outcomes and ignores later audit state",
       "blocker_resumed",
     ],
     [{}, { humanValidationPending: true }, "human_validation_required"],
-    [{ name: "PR Gates" }, { waiverUsed: true }, "waiver_used"],
     [{}, { issueCompleted: true }, "issue_completed"],
     [{}, { pullRequestMerged: true }, "pr_completed"],
   ]) {
@@ -690,8 +686,8 @@ test("deduplicates completed target notifications across source workflows", asyn
           target: "Issue #55",
         },
         {
-          name: "Claude Issue Review",
-          operation: "claude-issue-review",
+          name: "Blocker Reconciler",
+          operation: "blocker-reconcile",
           event: "issues",
           target: "Issue #55",
         },
@@ -1568,8 +1564,8 @@ test("does not reuse a Worker audit from before an unrelated source run", async 
       },
       workflow_run: sourceRun({
         id: 502,
-        name: "Claude Issue Review",
-        display_title: "Issue #55 | claude-issue-review | opened",
+        name: "Blocker Reconciler",
+        display_title: "Issue #55 | blocker-reconcile | opened",
         event: "issues",
         run_started_at: "2026-08-11T09:00:00Z",
         updated_at: "2026-08-11T10:00:00Z",
@@ -1767,119 +1763,6 @@ test("derives dependency triage from a trusted Blocker Reconciler audit", async 
 
   assert.equal(result.record.outcome.code, "dependency_triage");
   assert.equal(result.record.eventId, `blocker-state-${"1".repeat(64)}`);
-});
-
-test("derives current-head waiver use from trusted PR Gate Checks", async () => {
-  const headSha = "2".repeat(40);
-  const sourceHeadSha = "3".repeat(40);
-  const gateChecks = [
-    {
-      id: 1_099,
-      name: "Claude Review Gate",
-      app: { id: 15_368 },
-      head_sha: headSha,
-      conclusion: "success",
-      output: { summary: "reason_code: waived_infrastructure_failure" },
-    },
-    {
-      id: 1_100,
-      name: "Human Validation Gate",
-      app: { id: 4_503_079 },
-      head_sha: headSha,
-      conclusion: "failure",
-      output: { summary: "reason_code: pending" },
-    },
-    {
-      id: 1_101,
-      name: "Claude Review Gate",
-      app: { id: 4_503_079 },
-      head_sha: headSha,
-      conclusion: "success",
-      output: { summary: "reason_code: waived_infrastructure_failure" },
-    },
-  ];
-  const outcomeChecks = [];
-  const staleGateChecks = Array.from({ length: 100 }, (_, index) => ({
-    id: index + 1,
-    name: index === 0 ? "Claude Review Gate" : `Other ${index}`,
-    app: { id: 4_503_079 },
-    head_sha: headSha,
-    conclusion: "failure",
-    output: { summary: "reason_code: blocking_finding" },
-  }));
-  const gatePages = [];
-  const request = async (apiPath, options = {}) => {
-    if (apiPath.endsWith("/pulls/105")) {
-      return {
-        number: 105,
-        body: "Closes #55",
-        head: { sha: headSha },
-        merged_at: null,
-      };
-    }
-    if (apiPath.endsWith("/issues/55")) {
-      return {
-        number: 55,
-        state: "open",
-        labels: [{ name: "ready-for-human" }],
-      };
-    }
-    if (apiPath.endsWith("/issues/55/comments")) return [];
-    if (apiPath.includes(`/commits/${headSha}/check-runs`)) {
-      if (apiPath.includes("check_name=Workflow%20Outcome")) {
-        return { check_runs: outcomeChecks };
-      }
-      assert.match(apiPath, /filter=all&per_page=100/);
-      const page = Number(new URL(apiPath, "https://api.github.test").searchParams.get("page"));
-      gatePages.push(page);
-      return page === 1
-        ? { total_count: 103, check_runs: staleGateChecks }
-        : { total_count: 103, check_runs: gateChecks };
-    }
-    if (apiPath.endsWith("/check-runs") && options.method === "POST") {
-      const check = {
-        id: 1_102,
-        app: { id: 15368 },
-        head_sha: headSha,
-        ...JSON.parse(options.body),
-      };
-      outcomeChecks.push(check);
-      return check;
-    }
-    if (apiPath.endsWith("/check-runs/1102") && options.method === "PATCH") {
-      return JSON.parse(options.body);
-    }
-    throw new Error(`Unexpected request: ${options.method ?? "GET"} ${apiPath}`);
-  };
-  const result = await processWorkflowOutcome({
-    event: {
-      action: "completed",
-      repository: {
-        full_name: "AgoraIO-Extensions/agent-infra",
-        default_branch: "main",
-      },
-      workflow_run: sourceRun({
-        id: 701,
-        name: "PR Gates",
-        display_title: "PR #105 | pr-gates | synchronize",
-        event: "pull_request_target",
-        conclusion: "success",
-        head_sha: sourceHeadSha,
-        pull_requests: [{ number: 105, head: { sha: headSha } }],
-      }),
-    },
-    token: "test-token",
-    webhookUrl: "",
-    request,
-    writeSummary: async () => {},
-  });
-
-  assert.equal(result.record.outcome.code, "waiver_used");
-  assert.equal(result.record.eventId, "claude-waiver-check-1101");
-  assert.equal(result.record.sourceRun.headSha, sourceHeadSha);
-  assert.equal(result.record.checkHeadSha, headSha);
-  assert.equal(outcomeChecks[0].head_sha, headSha);
-  assert.deepEqual(gatePages, [1, 2]);
 });
 
 test("paginates trusted audit comments instead of truncating old Issues", async () => {

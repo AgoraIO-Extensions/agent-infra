@@ -13,7 +13,6 @@ permissions: {}
 jobs:
   review:
     if: >-
-      vars.PR_REVIEW_PROVIDER != 'claude' &&
       github.event.sender.type != 'Bot' &&
       ((github.event_name == 'pull_request_target' &&
         github.event.pull_request.draft == false &&

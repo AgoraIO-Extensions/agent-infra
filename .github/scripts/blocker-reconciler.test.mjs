@@ -12,7 +12,6 @@ import {
 import {
   BLOCKER_PUBLISH_TRIAGE_COMMENT,
   buildBlockerIssue,
-  buildBlockerReviewAck,
   buildBlockerStateComment,
   buildWorkerDispatchAck,
   classifyDependentBlockers,
@@ -359,21 +358,6 @@ function mockGitHub(
     if (apiPath.endsWith("/dispatches") && options.method === "POST") {
       const payload = body.client_payload;
       const values = comments.get(payload.issue_number) ?? [];
-      if (body.event_type === "claude-blocker-review") {
-        const target = issues.find((entry) => entry.number === payload.issue_number);
-        values.push(
-          appComment(
-            commentId,
-            buildBlockerReviewAck(
-              payload.issue_number,
-              parseBlockerProposalRecord(target, { trusted: false }),
-            ),
-          ),
-        );
-        commentId += 1;
-        comments.set(payload.issue_number, values);
-        return null;
-      }
       values.push(
         appComment(
           commentId,
@@ -867,7 +851,7 @@ test("repairs a removed triage label without duplicating the state audit", () =>
   );
 });
 
-test("repairs one orphan trusted proposal edge and review marker idempotently", async () => {
+test("repairs one orphan trusted proposal edge idempotently", async () => {
   const source = issue(1);
   const contract = executionContent({ ...source, title: "Source Issue" });
   source.title = "Source Issue";
@@ -928,8 +912,7 @@ test("repairs one orphan trusted proposal edge and review marker idempotently", 
   assert.equal(first.repairedEdges, true);
   assert.equal(first.repairedAuthorizations, 1);
   assert.match(source.body, /## Blocked by\n\n- #2/);
-  assert.equal(github.comments.get(2).length, 3);
-  assert.match(github.comments.get(2)[1].body, /agent-infra-blocker-review/);
+  assert.equal(github.comments.get(2).length, 1);
 
   const before = github.calls.length;
   const second = await reconcileRepository({
@@ -994,10 +977,8 @@ test("recovers the trusted prefix after partial multi-edge publication", async (
     },
   ]);
   for (const [index, blocker] of blockers.entries()) {
-    const record = parseBlockerProposalRecord(blocker, { trusted: false });
     github.comments.set(blocker.number, [
       appComment(41 + index * 2, rendered[index].identityComment),
-      appComment(42 + index * 2, buildBlockerReviewAck(blocker.number, record)),
     ]);
   }
   github.events.set(1, [timelineEvent]);
@@ -1073,7 +1054,6 @@ test("retires a not-planned older-cycle proposal after new authorization", async
     performed_via_github_app: { id: 15368 },
   };
   const github = mockGitHub([source, blocker]);
-  const proposalRecord = parseBlockerProposalRecord(blocker, { trusted: false });
   github.comments.set(1, [
     {
       ...appComment(40, buildAuthorizationRecordComment(authorization)),
@@ -1082,7 +1062,6 @@ test("retires a not-planned older-cycle proposal after new authorization", async
   ]);
   github.comments.set(2, [
     appComment(41, rendered.identityComment),
-    appComment(42, buildBlockerReviewAck(2, proposalRecord)),
   ]);
   assert.ok(
     parseBlockerProposalRecord(blocker, { comments: github.comments.get(2) }),
@@ -1163,7 +1142,6 @@ test("keeps same-cycle not-planned orphan recovery fail closed", async () => {
     performed_via_github_app: { id: 15368 },
   };
   const github = mockGitHub([source, blocker]);
-  const proposalRecord = parseBlockerProposalRecord(blocker, { trusted: false });
   github.comments.set(1, [
     {
       ...appComment(40, buildAuthorizationRecordComment(authorization)),
@@ -1172,7 +1150,6 @@ test("keeps same-cycle not-planned orphan recovery fail closed", async () => {
   ]);
   github.comments.set(2, [
     appComment(41, rendered.identityComment),
-    appComment(42, buildBlockerReviewAck(2, proposalRecord)),
   ]);
   github.events.set(1, [timelineEvent]);
 
@@ -1273,7 +1250,6 @@ test("restores only current-cycle proposals from a mixed missing set", async () 
     performed_via_github_app: { id: 15368 },
   };
   const github = mockGitHub([source, retired, current]);
-  const currentRecord = parseBlockerProposalRecord(current, { trusted: false });
   github.comments.set(1, [
     {
       ...appComment(40, buildAuthorizationRecordComment(authorization)),
@@ -1283,7 +1259,6 @@ test("restores only current-cycle proposals from a mixed missing set", async () 
   github.comments.set(2, [appComment(41, retiredRendered.identityComment)]);
   github.comments.set(3, [
     appComment(42, currentRendered.identityComment),
-    appComment(43, buildBlockerReviewAck(3, currentRecord)),
   ]);
   github.events.set(1, [priorTimelineEvent, timelineEvent]);
 

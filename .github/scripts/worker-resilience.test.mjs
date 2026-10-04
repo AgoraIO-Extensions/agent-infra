@@ -322,116 +322,16 @@ test("classifies only repository validation steps as deterministic CI failures",
   assert.notEqual(infrastructure.fingerprint, deterministic.fingerprint);
 });
 
-test("uses the immutable source commit of a GitHub Actions Claude finding", () => {
-  const headSha = "6".repeat(40);
-  assert.deepEqual(
-    planPullRequestRecovery({
-      event: {
-        kind: "claude_blocking",
-        headSha,
-        reviewComments: [
-          {
-            id: 3_734_920_271,
-            user: {
-              id: 41_898_282,
-              login: "github-actions[bot]",
-              type: "Bot",
-            },
-            performed_via_github_app: null,
-            commit_id: "1".repeat(40),
-            original_commit_id: headSha,
-            path: ".github/scripts/blocker-contract.mjs",
-            line: 398,
-            body: `**P1: Mutable blocker identity**\n\nUse immutable content.\n\n<!-- agent-infra-claude-review:${headSha}:trusted-key -->`,
-          },
-        ],
-      },
-      headSha,
-      noCodeRetries: [],
-      repairRounds: [],
-    }),
-    {
-      operation: "repair",
-      reason: "claude_p0_p1",
-      headSha,
-      round: 1,
-      recoveryContext: [
-        "P1 at .github/scripts/blocker-contract.mjs:398\nMutable blocker identity\nUse immutable content.",
-      ],
-    },
-  );
-});
-
-test("shares two repair rounds across CI and Claude while infrastructure never repairs", () => {
+test("limits deterministic CI repairs to two rounds while infrastructure never repairs", () => {
   const headSha = "c".repeat(40);
-  const claudeComment = (severity, overrides = {}) => ({
-    id: 100,
-    user: { id: 41_898_282, login: "github-actions[bot]", type: "Bot" },
-    performed_via_github_app: null,
-    commit_id: headSha,
-    original_commit_id: headSha,
-    path: "apps/web/src/app.tsx",
-    line: 42,
-    body: `**${severity}: Broken authorization**\n\nDo not trust @actor input.\n\n<!-- agent-infra-claude-review:${headSha}:trusted-key -->`,
-    ...overrides,
+  const event = { kind: "ci_failure", headSha, failureClass: "deterministic", fingerprint: "d".repeat(64) };
+  const noCodeRetries = [{ headSha, fingerprint: event.fingerprint }];
+  assert.deepEqual(planPullRequestRecovery({event, headSha, noCodeRetries, repairRounds: [{round: 1}]}), {
+    operation: "repair", reason: "repeated_deterministic_ci_failure", headSha, round: 2,
   });
-  assert.deepEqual(
-    planPullRequestRecovery({
-      event: {
-        kind: "claude_blocking",
-        headSha,
-        reviewComments: [claudeComment("P1")],
-      },
-      headSha,
-      noCodeRetries: [],
-      repairRounds: [{ round: 1, reason: "ci" }],
-    }),
-    {
-      operation: "repair",
-      reason: "claude_p0_p1",
-      headSha,
-      round: 2,
-      recoveryContext: [
-        "P1 at apps/web/src/app.tsx:42\nBroken authorization\nDo not trust @\u200bactor input.",
-      ],
-    },
-  );
-  assert.deepEqual(
-    planPullRequestRecovery({
-      event: {
-        kind: "claude_blocking",
-        headSha,
-        reviewComments: [claudeComment("P0")],
-      },
-      headSha,
-      noCodeRetries: [],
-      repairRounds: [{ round: 1 }, { round: 2 }],
-    }),
-    {
-      operation: "triage",
-      reason: "repair_budget_exhausted",
-      headSha,
-      roundsUsed: 2,
-    },
-  );
-  assert.deepEqual(
-    planPullRequestRecovery({
-      event: {
-        kind: "claude_blocking",
-        headSha,
-        reviewComments: [
-          claudeComment("P1", {
-            user: { id: 999, login: "github-actions[bot]", type: "Bot" },
-          }),
-          claudeComment("P1", { original_commit_id: "e".repeat(40) }),
-        ],
-      },
-      headSha,
-      noCodeRetries: [],
-      repairRounds: [],
-    }),
-    { operation: "triage", reason: "claude_findings_unavailable", headSha },
-  );
+  assert.deepEqual(planPullRequestRecovery({event, headSha, noCodeRetries, repairRounds: [{round: 1}, {round: 2}]}), {
+    operation: "triage", reason: "repair_budget_exhausted", headSha, roundsUsed: 2,
+  });
   assert.equal(
     planPullRequestRecovery({
       event: {

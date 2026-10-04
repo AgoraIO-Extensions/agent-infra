@@ -7,19 +7,15 @@ import { TextDecoder } from "node:util";
 
 import {
   assertCanAddBlockers,
-  BLOCKER_REVIEW_COMMENT,
   BLOCKER_PUBLISH_FAILURE_MESSAGE,
   blockerStatus,
   buildBlockerIssue,
   buildHumanHandoffComment,
   buildWorkerDispatchAck,
   canRegisterBlockerIdentity,
-  hasTrustedBlockerReviewAck,
   hasTrustedWorkerDispatchAck,
   hydrateNativeDependencies,
   inspectBlockerGraph,
-  isTrustedActionsObject,
-  isTrustedBlockerReviewComment,
   latestBlockerStateRecord,
   parseBlockerProposalRecord,
   parseHumanHandoffComment,
@@ -1359,45 +1355,6 @@ async function writeOutput(name, value) {
   await fs.appendFile(outputPath, `${name}=${String(value)}\n`, "utf8");
 }
 
-export async function reviewRecoveryArtifactAvailable({
-  repository,
-  runId,
-  token,
-  request = githubRequest,
-}) {
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? "")) {
-    throw new Error("Review recovery repository is invalid");
-  }
-  if (!Number.isSafeInteger(runId) || runId < 1) {
-    throw new Error("Review recovery source run is invalid");
-  }
-  if (!token) throw new Error("GITHUB_TOKEN is required");
-  const artifactName = `claude-review-recovery-${runId}`;
-  const response = await request(
-    `/repos/${repository}/actions/runs/${runId}/artifacts?name=${encodeURIComponent(artifactName)}&per_page=100`,
-    { token },
-  );
-  if (!Array.isArray(response?.artifacts)) {
-    throw new Error("Review recovery Artifact response is invalid");
-  }
-  const matches = response.artifacts.filter(
-    (artifact) => artifact?.name === artifactName && artifact.expired === false,
-  );
-  if (matches.length > 1) {
-    throw new Error("Review recovery Artifact is ambiguous");
-  }
-  if (matches.length === 0) return false;
-  const artifact = matches[0];
-  if (
-    !Number.isSafeInteger(artifact.id) ||
-    artifact.id < 1 ||
-    artifact.workflow_run?.id !== runId
-  ) {
-    throw new Error("Review recovery Artifact is invalid");
-  }
-  return true;
-}
-
 async function githubRequest(apiPath, { token, allowNotFound = false, ...options } = {}) {
   const headers = {
     Accept: "application/vnd.github+json",
@@ -2097,78 +2054,17 @@ async function publishPullRequestRecoveryRecord({ record, repository, token }) {
   return record;
 }
 
-function reviewGateReason(checkRuns, headSha) {
-  return [...(checkRuns ?? [])]
-    .filter(
-      (check) =>
-        check.name === "Claude Review Gate" &&
-        check.head_sha === headSha &&
-        check.app?.id === 4_503_079,
-    )
-    .sort((left, right) => right.id - left.id)
-    .at(0)
-    ?.output?.summary?.match(
-      /(?:^|\n)reason_code: ([a-z_]+)(?:\n|$)/,
-    )?.[1];
-}
-
-const REVIEW_RECOVERY_KEYS = [
-  "head_sha",
-  "pull_request_number",
-  "repository",
-  "source_run_id",
-  "version",
-];
-
-async function readReviewRecoveryTarget({ repository, run }) {
-  const targetPath = requiredEnvironment("WORKER_REVIEW_RECOVERY_PATH");
-  const targetStat = await fs.lstat(targetPath);
-  if (!targetStat.isFile() || targetStat.size > 4096) {
-    throw new Error("Review recovery target Artifact is invalid");
-  }
-  const target = JSON.parse(
-    decodeUtf8(await fs.readFile(targetPath), "Review recovery target Artifact"),
-  );
-  if (
-    !target ||
-    Array.isArray(target) ||
-    typeof target !== "object" ||
-    Object.keys(target).sort().join("\0") !== REVIEW_RECOVERY_KEYS.join("\0") ||
-    target.version !== 1 ||
-    target.repository !== repository ||
-    target.source_run_id !== run.id ||
-    !Number.isSafeInteger(target.pull_request_number) ||
-    target.pull_request_number < 1 ||
-    !/^[0-9a-f]{40}$/.test(target.head_sha ?? "")
-  ) {
-    throw new Error("Review recovery target Artifact is invalid");
-  }
-  return target;
-}
-
 export async function preparePullRequestRecovery({
   repository,
   event,
   token,
-  reviewRecoveryAvailable,
 }) {
   const run = event.workflow_run;
-  let runPullRequest;
-  let sourceHeadSha;
-  if (run?.name === "CI" && run.event === "pull_request") {
-    runPullRequest = run.pull_requests?.[0];
-    sourceHeadSha = run.head_sha;
-  } else if (run?.name === "Claude PR Review" && run.event === "workflow_run") {
-    if (run.conclusion !== "success") {
-      return { operation: "noop", reason: "review-infrastructure-failure" };
-    }
-    if (!reviewRecoveryAvailable) {
-      return { operation: "noop", reason: "review-infrastructure-failure" };
-    }
-    const target = await readReviewRecoveryTarget({ repository, run });
-    runPullRequest = { number: target.pull_request_number };
-    sourceHeadSha = target.head_sha;
+  if (run?.name !== "CI" || run.event !== "pull_request") {
+    return { operation: "noop", reason: "unrelated-event" };
   }
+  const runPullRequest = run.pull_requests?.[0];
+  const sourceHeadSha = run.head_sha;
   if (!runPullRequest?.number || !/^[0-9a-f]{40}$/.test(sourceHeadSha ?? "")) {
     return { operation: "noop", reason: "unrelated-event" };
   }
@@ -2219,47 +2115,21 @@ export async function preparePullRequestRecovery({
     cycle,
     pullRequestNumber: pullRequest.number,
   });
-  let recoveryEvent;
-  let promptContext = [];
-  if (run.name === "CI") {
-    if (run.conclusion === "success") {
-      return { operation: "noop", reason: "ci-success" };
-    }
-    const jobs = await githubRequest(
-      `/repos/${repository}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`,
-      { token },
-    );
-    const failure = classifyCiFailure(jobs.jobs);
-    recoveryEvent = {
-      kind: "ci_failure",
-      headSha: sourceHeadSha,
-      failureClass: failure.failureClass,
-      fingerprint: failure.fingerprint,
-    };
-    promptContext = failure.failedSteps;
-  } else if (run.name === "Claude PR Review") {
-    if (run.conclusion !== "success") {
-      return { operation: "noop", reason: "review-infrastructure-failure" };
-    }
-    const checks = await githubRequest(
-      `/repos/${repository}/commits/${sourceHeadSha}/check-runs?per_page=100`,
-      { token },
-    );
-    if (reviewGateReason(checks.check_runs, sourceHeadSha) !== "blocking_finding") {
-      return { operation: "noop", reason: "review-not-blocking" };
-    }
-    const reviewComments = await githubPaginate(
-      `/repos/${repository}/pulls/${pullRequest.number}/comments`,
-      { token },
-    );
-    recoveryEvent = {
-      kind: "claude_blocking",
-      headSha: sourceHeadSha,
-      reviewComments,
-    };
-  } else {
-    return { operation: "noop", reason: "unrelated-workflow" };
+  if (run.conclusion === "success") {
+    return { operation: "noop", reason: "ci-success" };
   }
+  const jobs = await githubRequest(
+    `/repos/${repository}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`,
+    { token },
+  );
+  const failure = classifyCiFailure(jobs.jobs);
+  const recoveryEvent = {
+    kind: "ci_failure",
+    headSha: sourceHeadSha,
+    failureClass: failure.failureClass,
+    fingerprint: failure.fingerprint,
+  };
+  const promptContext = failure.failedSteps;
   const decision = planPullRequestRecovery({
     event: recoveryEvent,
     headSha: pullRequest.head.sha,
@@ -2274,9 +2144,6 @@ export async function preparePullRequestRecovery({
       fingerprint: recoveryEvent.fingerprint,
       headSha: sourceHeadSha,
     };
-  }
-  if (recoveryEvent.kind === "claude_blocking") {
-    promptContext = decision.recoveryContext;
   }
   const planDecision = createWorkerPlan({
     repository,
@@ -2387,8 +2254,6 @@ export async function prepareCommand({ fetchState = fetchWorkerState } = {}) {
         repository,
         event,
         token: requiredEnvironment("GITHUB_TOKEN"),
-        reviewRecoveryAvailable:
-          process.env.WORKER_REVIEW_RECOVERY_AVAILABLE === "true",
       });
     } catch {
       await writePrepareOutputs({
@@ -2499,26 +2364,6 @@ export async function prepareCommand({ fetchState = fetchWorkerState } = {}) {
     state,
     issueNumber,
   });
-}
-
-async function resolveReviewRecoveryCommand() {
-  const event = JSON.parse(
-    await fs.readFile(requiredEnvironment("GITHUB_EVENT_PATH"), "utf8"),
-  );
-  const run = event.workflow_run;
-  if (
-    run?.name !== "Claude PR Review" ||
-    run.event !== "workflow_run" ||
-    run.conclusion !== "success"
-  ) {
-    throw new Error("Review recovery source run is invalid");
-  }
-  const available = await reviewRecoveryArtifactAvailable({
-    repository: requiredEnvironment("GITHUB_REPOSITORY"),
-    runId: run.id,
-    token: requiredEnvironment("GITHUB_TOKEN"),
-  });
-  await writeOutput("available", available);
 }
 
 async function readWorkerPlan(filePath, expected = {}) {
@@ -3169,40 +3014,6 @@ async function ensureBlockerIdentityComment({
   return [...comments, identity];
 }
 
-async function ensureBlockerReviewComment(repository, issue, token) {
-  let comments = await githubPaginate(
-    `/repos/${repository}/issues/${issue.number}/comments`,
-    { token },
-  );
-  const existing = comments.some(
-    (comment) => isTrustedBlockerReviewComment(comment),
-  );
-  if (!existing) {
-    const comment = await githubRequest(
-      `/repos/${repository}/issues/${issue.number}/comments`,
-      {
-        token,
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: BLOCKER_REVIEW_COMMENT }),
-      },
-    );
-    comments = [...comments, comment];
-  }
-  const record = parseBlockerProposalRecord(issue, { comments });
-  if (!record) throw new Error("Blocker Review request has no trusted identity");
-  if (hasTrustedBlockerReviewAck(comments, issue.number, record)) return;
-  await githubRequest(`/repos/${repository}/dispatches`, {
-    token,
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      event_type: "claude-blocker-review",
-      client_payload: { issue_number: issue.number },
-    }),
-  });
-}
-
 async function addNativeDependencies({
   repository,
   issueNumber,
@@ -3450,9 +3261,6 @@ async function publishBlockerProposals({ plan, result, token }) {
     throw new Error("Existing Blocked by graph is invalid");
   }
   if (replay) {
-    for (const issue of existingIssues) {
-      await ensureBlockerReviewComment(plan.repository, issue, token);
-    }
     return { blockerNumbers: existingIssues.map((issue) => issue.number), replay: true };
   }
 
@@ -3487,7 +3295,6 @@ async function publishBlockerProposals({ plan, result, token }) {
       token,
     });
     await requirePublishAuthorization(plan, token);
-    await ensureBlockerReviewComment(plan.repository, blockerIssue, token);
     blockerIssues.push(blockerIssue);
   }
 
@@ -3642,7 +3449,6 @@ async function handleCommand() {
 async function main() {
   const command = process.argv[2];
   if (command === "authorize") return authorizeCommand();
-  if (command === "resolve-review-recovery") return resolveReviewRecoveryCommand();
   if (command === "prepare") return prepareCommand();
   if (command === "resume") return resumeCommand();
   if (command === "preflight") return preflightCommand();
@@ -3655,7 +3461,7 @@ async function main() {
   if (command === "handoffs") return handoffsCommand();
   if (command === "handle") return handleCommand();
   throw new Error(
-    "Expected authorize, resolve-review-recovery, prepare, resume, preflight, finalize-attempt, dispatch-retry, retry-ci, update-bases, publish, blockers, handoffs, or handle command",
+    "Expected authorize, prepare, resume, preflight, finalize-attempt, dispatch-retry, retry-ci, update-bases, publish, blockers, handoffs, or handle command",
   );
 }
 

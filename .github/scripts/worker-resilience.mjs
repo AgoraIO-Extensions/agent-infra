@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 
 const IDENTITY_KEYS = ["issueNumber", "cycle", "workerRunId", "baseSha"];
 const GITHUB_ACTIONS_APP_ID = 15_368;
-const GITHUB_ACTIONS_BOT_ID = 41_898_282;
 const ATTEMPT_MARKER = "agent-infra-worker-attempt";
 const RECOVERY_MARKER = "agent-infra-pr-recovery";
 const ATTEMPT_KEYS = [
@@ -357,59 +356,6 @@ export function planWorkerAttempt({ identity, controlState, attempts }) {
   };
 }
 
-function sanitizeRepairContext(value) {
-  return String(value)
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
-    .replace(/@(?=[\w-])/g, "@\u200b")
-    .replace(/<!--/g, "&lt;!--")
-    .replace(/-->/g, "--&gt;")
-    .replace(/```/g, "`\u200b``");
-}
-
-function claudeRepairContext(comments, headSha) {
-  if (!Array.isArray(comments) || !/^[0-9a-f]{40}$/.test(headSha)) return [];
-  const marker = new RegExp(
-    `<!-- agent-infra-claude-review:${headSha}:[A-Za-z0-9_-]{1,512} -->`,
-  );
-  return [...comments]
-    .sort((left, right) => (left.id ?? 0) - (right.id ?? 0))
-    .flatMap((comment) => {
-      const body = comment.body ?? "";
-      const heading = /^\*\*(P[01]): ([^\r\n]{1,500})\*\*(?:\r?\n|$)/.exec(body);
-      const markerMatch = marker.exec(body);
-      const validPath =
-        typeof comment.path === "string" &&
-        /^(?!\/)(?!.*\\)(?!.*(?:^|\/)\.\.(?:\/|$))[^\u0000-\u001f\u007f]{1,512}$/.test(
-          comment.path,
-        );
-      if (
-        comment.user?.id !== GITHUB_ACTIONS_BOT_ID ||
-        comment.user?.login !== "github-actions[bot]" ||
-        comment.user?.type !== "Bot" ||
-        comment.original_commit_id !== headSha ||
-        !Number.isSafeInteger(comment.line) ||
-        comment.line < 1 ||
-        !validPath ||
-        !heading ||
-        !markerMatch
-      ) {
-        return [];
-      }
-      const details = body
-        .slice(heading[0].length, markerMatch.index)
-        .trim()
-        .slice(0, 4000);
-      return [
-        sanitizeRepairContext(
-          `${heading[1]} at ${comment.path}:${comment.line}\n${heading[2]}${
-            details ? `\n${details}` : ""
-          }`,
-        ).slice(0, 1000),
-      ];
-    })
-    .slice(0, 20);
-}
-
 export function planPullRequestRecovery({
   event,
   headSha,
@@ -446,16 +392,6 @@ export function planPullRequestRecovery({
     return event.failureClass === "deterministic"
       ? repair("repeated_deterministic_ci_failure")
       : { operation: "triage", reason: "ci_infrastructure_failure", headSha };
-  }
-  if (event.kind === "claude_blocking") {
-    const recoveryContext = claudeRepairContext(event.reviewComments, headSha);
-    if (recoveryContext.length === 0) {
-      return { operation: "triage", reason: "claude_findings_unavailable", headSha };
-    }
-    const decision = repair("claude_p0_p1");
-    return decision.operation === "repair"
-      ? { ...decision, recoveryContext }
-      : decision;
   }
   if (event.kind === "base_advanced") {
     if (event.mergeable === "unknown") {

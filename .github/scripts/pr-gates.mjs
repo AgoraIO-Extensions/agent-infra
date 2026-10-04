@@ -1,11 +1,7 @@
 import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-import {
-  GATE_PUBLISHER_APP_ID,
-  gateExternalId,
-  selectCurrentGateCheck,
-} from "./check-run-contract.mjs";
+import { gateExternalId } from "./check-run-contract.mjs";
 import {
   blockerStatus,
   hydrateNativeDependencies,
@@ -194,17 +190,6 @@ export function evaluateIssueReadinessGate({
   };
 }
 
-export function parseWaiverCommand(body = "") {
-  if (typeof body !== "string" || Buffer.byteLength(body, "utf8") > 8 * 1024) return null;
-  const match = body
-    .trim()
-    .match(/^\/claude-review-waiver ([0-9a-f]{40})\r?\n([^\u0000]{1,4000})$/);
-  if (!match) return null;
-  const reason = match[2].trim();
-  if (!reason) return null;
-  return { headSha: match[1], reason };
-}
-
 function latestHumanValidationEvent(events = []) {
   return events.findLast(
     (event) =>
@@ -228,26 +213,11 @@ function currentHumanValidationEvent(events, event, currentHead) {
 }
 
 export function buildGateRecords({
-  comments = [],
   events = [],
   event,
   currentHead,
   memberships = new Map(),
 }) {
-  const waivers = [];
-  for (const comment of comments) {
-    const command = parseWaiverCommand(comment.body);
-    const login = comment.user?.login;
-    if (!command || command.headSha !== currentHead || !login) continue;
-    waivers.push({
-      actor: { login, type: comment.user?.type },
-      headSha: command.headSha,
-      membership: memberships.get(login),
-      reason: command.reason,
-      recordedAt: comment.updated_at ?? comment.created_at,
-      url: comment.html_url,
-    });
-  }
   const validationEvent = currentHumanValidationEvent(events, event, currentHead);
   const login = validationEvent?.actor?.login;
   const validation =
@@ -261,7 +231,7 @@ export function buildGateRecords({
           url: validationEvent.url,
         }
       : null;
-  return { validation, waivers };
+  return { validation };
 }
 
 function isActiveTeamMember(record) {
@@ -311,215 +281,6 @@ export function evaluateHumanValidationGate({
     ok: true,
     description: `Human validation confirmed by ${validation.actor.login} for current head`,
   };
-}
-
-export function evaluateClaudeReviewGate({
-  currentHead,
-  review,
-  waivers = [],
-  hasPublishedBlockingFinding = false,
-  hasUnresolvedThread = false,
-  publishedBlockingFindingCount = 0,
-}) {
-  if (hasPublishedBlockingFinding) {
-    return {
-      ok: false,
-      waived: false,
-      reasonCode: "blocking_finding",
-      description: "P0/P1 finding cannot be waived",
-    };
-  }
-  if (hasUnresolvedThread) {
-    return {
-      ok: false,
-      waived: false,
-      reasonCode: "unresolved_thread",
-      description: "Blocking Review thread is unresolved",
-    };
-  }
-  if (
-    !review ||
-    review.headSha !== currentHead ||
-    review.appId !== GATE_PUBLISHER_APP_ID ||
-    review.status !== "completed"
-  ) {
-    return {
-      ok: false,
-      waived: false,
-      description: "Current-head Claude Review has not completed",
-    };
-  }
-  const hasRecordedBlockingFindings =
-    review.reasonCode === "blocking_finding" ||
-    review.blockingFindingCount !== undefined;
-  if (
-    hasRecordedBlockingFindings &&
-    (!Number.isSafeInteger(review.blockingFindingCount) ||
-      review.blockingFindingCount < 1 ||
-      publishedBlockingFindingCount !== review.blockingFindingCount)
-  ) {
-    return {
-      ok: false,
-      waived: false,
-      reasonCode: "blocking_finding",
-      description: "Blocking Review finding evidence is incomplete",
-    };
-  }
-  const reviewSucceededBeforeThreadState =
-    (review.conclusion === "success" &&
-      ["success", "disabled"].includes(review.reasonCode)) ||
-    (review.conclusion === "failure" &&
-      ["blocking_finding", "unresolved_thread"].includes(review.reasonCode));
-  if (reviewSucceededBeforeThreadState) {
-    return {
-      ok: true,
-      waived: false,
-      description: "Claude Review passed for current head",
-    };
-  }
-  const waivableInfrastructureFailure =
-    review.failureKind === "infrastructure_failure" &&
-    ((review.conclusion === "failure" &&
-      review.reasonCode === "infrastructure_failure") ||
-      (review.conclusion === "success" &&
-        review.reasonCode === "waived_infrastructure_failure"));
-  if (!waivableInfrastructureFailure) {
-    return {
-      ok: false,
-      waived: false,
-      description: "Claude Review failure is not waivable",
-    };
-  }
-  const waiver = waivers.find(
-    (candidate) =>
-      candidate.headSha === currentHead &&
-      boundedCheckValue(candidate.reason, 4_000) &&
-      isActiveTeamMember(candidate),
-  );
-  if (!waiver) {
-    return {
-      ok: false,
-      waived: false,
-      description: "Current-head Team infrastructure waiver is required",
-    };
-  }
-  return {
-    ok: true,
-    waived: true,
-    description: `Claude Review infrastructure failure waived by ${waiver.actor.login} for current head`,
-  };
-}
-
-export function buildReviewState({
-  checkRuns = [],
-  threads = [],
-  currentHead,
-  prNumber,
-}) {
-  const check = selectCurrentGateCheck(checkRuns, {
-    name: "Claude Review Gate",
-    headSha: currentHead,
-    prNumber,
-  });
-  const reasonCode = check?.output?.summary?.match(
-    /(?:^|\n)reason_code: (success|disabled|infrastructure_failure|invalid_output|waived_infrastructure_failure|blocking_finding|unresolved_thread)(?:\n|$)/,
-  )?.[1];
-  const marker = `<!-- agent-infra-claude-review:${currentHead}:`;
-  const blockingFindingCountText = check?.output?.summary?.match(
-    /(?:^|\n)blocking_finding_count: ([1-9][0-9]*)(?:\n|$)/,
-  )?.[1];
-  const blockingFindingCount = blockingFindingCountText
-    ? Number(blockingFindingCountText)
-    : null;
-  const publishedBlockingFindingThreads = threads.filter((thread) =>
-    (thread.comments?.nodes ?? []).some(
-      (comment) =>
-        /^github-actions(?:\[bot\])?$/.test(comment.author?.login ?? "") &&
-        /^\*\*P[01]:/.test(comment.body ?? "") &&
-        comment.body?.includes(marker),
-    ),
-  );
-  return {
-    review: check
-      ? {
-          appId: check.app.id,
-          checkRunId: check.id,
-          conclusion: check.conclusion,
-          failureKind: ["infrastructure_failure", "waived_infrastructure_failure"].includes(
-            reasonCode,
-          )
-            ? "infrastructure_failure"
-            : reasonCode === "invalid_output"
-              ? "invalid_output"
-              : null,
-          headSha: check.head_sha,
-          reasonCode: reasonCode ?? null,
-          status: check.status,
-          ...(blockingFindingCountText
-            ? { blockingFindingCount }
-            : {}),
-        }
-      : undefined,
-    hasPublishedBlockingFinding: publishedBlockingFindingThreads.some(
-      (thread) => !thread.isResolved,
-    ),
-    hasUnresolvedThread: threads.some((thread) => !thread.isResolved),
-    ...(blockingFindingCountText
-      ? { publishedBlockingFindingCount: publishedBlockingFindingThreads.length }
-      : {}),
-  };
-}
-
-export function claudeReviewGateUpdate({ result, review }) {
-  if (result?.waived) {
-    return {
-      conclusion: "success",
-      description: result.description,
-      reasonCode: "waived_infrastructure_failure",
-    };
-  }
-  if (!result?.ok && review?.reasonCode === "waived_infrastructure_failure") {
-    return {
-      conclusion: "failure",
-      description: result.description,
-      reasonCode: "infrastructure_failure",
-    };
-  }
-  const threadFailureReason = ["blocking_finding", "unresolved_thread"].includes(
-    result?.reasonCode,
-  )
-    ? result.reasonCode
-    : null;
-  if (
-    !result?.ok &&
-    threadFailureReason &&
-    ["success", "disabled", "blocking_finding", "unresolved_thread"].includes(
-      review?.reasonCode,
-    )
-  ) {
-    return {
-      conclusion: "failure",
-      description: result.description,
-      reasonCode: threadFailureReason,
-      ...(Number.isSafeInteger(review?.blockingFindingCount)
-        ? { blockingFindingCount: review.blockingFindingCount }
-        : {}),
-    };
-  }
-  if (
-    result?.ok &&
-    ["blocking_finding", "unresolved_thread"].includes(review?.reasonCode)
-  ) {
-    return {
-      conclusion: "success",
-      description: result.description,
-      reasonCode: "success",
-      ...(Number.isSafeInteger(review?.blockingFindingCount)
-        ? { blockingFindingCount: review.blockingFindingCount }
-        : {}),
-    };
-  }
-  return null;
 }
 
 export function shouldReapplyHumanValidation({ action, labels, events }) {
@@ -616,24 +377,6 @@ async function teamRequest(path) {
   return response.json();
 }
 
-async function githubGraphql(query, variables) {
-  const response = await fetch("https://api.github.com/graphql", {
-    method: "POST",
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${requiredEnvironment("GITHUB_TOKEN")}`,
-      "Content-Type": "application/json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-    body: JSON.stringify({ query, variables }),
-  });
-  const payload = await response.json();
-  if (!response.ok || payload.errors?.length) {
-    throw new Error(`GitHub GraphQL request failed: ${response.status}`);
-  }
-  return payload.data;
-}
-
 async function paginate(path) {
   const values = [];
   for (let page = 1; page <= 20; page += 1) {
@@ -658,13 +401,7 @@ async function completeCheckRun(
   check,
   conclusion,
   description,
-  reasonCode,
-  blockingFindingCount,
 ) {
-  const blockingFindingCountLine =
-    Number.isSafeInteger(blockingFindingCount) && blockingFindingCount > 0
-      ? `\nblocking_finding_count: ${blockingFindingCount}`
-      : "";
   await gateCheckRequest(`/repos/${repository}/check-runs/${check.id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -673,23 +410,14 @@ async function completeCheckRun(
       conclusion,
       output: {
         title: `${check.name}: ${conclusion}`,
-        summary: reasonCode
-          ? `reason_code: ${reasonCode}${blockingFindingCountLine}\n\n${description}`
-          : description,
+        summary: description,
       },
     }),
   });
 }
 
-async function readGateRecords(repository, prNumber, currentHead, events, event) {
-  const comments = await paginate(`/repos/${repository}/issues/${prNumber}/comments`);
+async function readGateRecords(repository, currentHead, events, event) {
   const logins = new Set();
-  for (const comment of comments) {
-    const command = parseWaiverCommand(comment.body);
-    if (command?.headSha === currentHead && comment.user?.login) {
-      logins.add(comment.user.login);
-    }
-  }
   const validationEvent = currentHumanValidationEvent(events, event, currentHead);
   if (validationEvent?.event === "unlabeled" && validationEvent.actor?.login) {
     logins.add(validationEvent.actor.login);
@@ -705,7 +433,7 @@ async function readGateRecords(repository, prNumber, currentHead, events, event)
       ]),
     ),
   );
-  return buildGateRecords({ comments, events, event, currentHead, memberships });
+  return buildGateRecords({ events, event, currentHead, memberships });
 }
 
 async function readIssueReadinessState(repository, pullRequest, issue) {
@@ -747,58 +475,6 @@ async function readIssueReadinessState(repository, pullRequest, issue) {
   };
 }
 
-const REVIEW_THREADS_QUERY = `
-  query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: String) {
-    repository(owner: $owner, name: $name) {
-      pullRequest(number: $number) {
-        reviewThreads(first: 100, after: $after) {
-          nodes {
-            isResolved
-            comments(first: 100) {
-              nodes {
-                author { login }
-                body
-              }
-            }
-          }
-          pageInfo { hasNextPage endCursor }
-        }
-      }
-    }
-  }
-`;
-
-async function readReviewState(repository, prNumber, currentHead) {
-  const encodedName = encodeURIComponent("Claude Review Gate");
-  const checks = await githubRequest(
-    `/repos/${repository}/commits/${currentHead}/check-runs?check_name=${encodedName}&filter=latest&per_page=100`,
-  );
-  const [owner, name] = repository.split("/");
-  const threads = [];
-  let after = null;
-  for (let page = 0; page < 20; page += 1) {
-    const data = await githubGraphql(REVIEW_THREADS_QUERY, {
-      owner,
-      name,
-      number: prNumber,
-      after,
-    });
-    const connection = data.repository?.pullRequest?.reviewThreads;
-    if (!connection) throw new Error("Pull Request Review threads are unavailable");
-    threads.push(...connection.nodes);
-    if (!connection.pageInfo.hasNextPage) {
-      return buildReviewState({
-        checkRuns: checks.check_runs,
-        threads,
-        currentHead,
-        prNumber,
-      });
-    }
-    after = connection.pageInfo.endCursor;
-  }
-  throw new Error("Review thread pagination limit exceeded");
-}
-
 function validationWasRequired(labels, events) {
   return (
     labelNames(labels).includes(HUMAN_LABEL) ||
@@ -806,18 +482,15 @@ function validationWasRequired(labels, events) {
   );
 }
 
-export function auditDescription(result, records, type) {
+export function auditDescription(result, records) {
   if (!result.ok) return result.description;
-  const expectedDescription = (login) =>
-    type === "human-validation"
-      ? `Human validation confirmed by ${login} for current head`
-      : `Claude Review infrastructure failure waived by ${login} for current head`;
-  const candidates = type === "human-validation" ? [records.validation] : records.waivers;
-  const record = candidates.find(
-    (candidate) =>
-      candidate?.headSha && result.description === expectedDescription(candidate.actor.login),
-  );
-  if (!record) return result.description;
+  const record = records.validation;
+  if (
+    !record?.headSha ||
+    result.description !== `Human validation confirmed by ${record.actor.login} for current head`
+  ) {
+    return result.description;
+  }
   const reason = record.reason
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replaceAll("<!--", "&lt;!--")
@@ -900,7 +573,7 @@ async function evaluatePullRequestWithChecks(repository, number, action, pr, che
       description: "Issue Readiness evaluation failed closed",
     };
   }
-  const records = await readGateRecords(repository, number, pr.head.sha, events, event);
+  const records = await readGateRecords(repository, pr.head.sha, events, event);
   const humanValidationRequired =
     validationWasRequired(labels, events) ||
     (event?.action === "unlabeled" && event.label?.name === HUMAN_LABEL);
@@ -922,16 +595,6 @@ async function evaluatePullRequestWithChecks(repository, number, action, pr, che
     });
     labels = [...labels, { name: HUMAN_LABEL }];
   }
-  const reviewState = await readReviewState(repository, number, pr.head.sha);
-  const claudeResult = evaluateClaudeReviewGate({
-    currentHead: pr.head.sha,
-    review: reviewState.review,
-    waivers: records.waivers,
-    hasPublishedBlockingFinding: reviewState.hasPublishedBlockingFinding,
-    hasUnresolvedThread: reviewState.hasUnresolvedThread,
-    publishedBlockingFindingCount: reviewState.publishedBlockingFindingCount,
-  });
-
   await Promise.all([
     completeCheckRun(
       repository,
@@ -949,25 +612,9 @@ async function evaluatePullRequestWithChecks(repository, number, action, pr, che
       repository,
       checks["Human Validation Gate"],
       humanResult.ok ? "success" : "failure",
-      auditDescription(humanResult, records, "human-validation"),
+      auditDescription(humanResult, records),
     ),
   ]);
-  const reviewUpdate = claudeReviewGateUpdate({
-    result: claudeResult,
-    review: reviewState.review,
-  });
-  if (reviewUpdate && reviewState.review?.checkRunId) {
-    await completeCheckRun(
-      repository,
-      { id: reviewState.review.checkRunId, name: "Claude Review Gate" },
-      reviewUpdate.conclusion,
-      reviewUpdate.conclusion === "success"
-        ? auditDescription(claudeResult, records, "claude-review-waiver")
-        : reviewUpdate.description,
-      reviewUpdate.reasonCode,
-      reviewUpdate.blockingFindingCount,
-    );
-  }
 }
 
 async function evaluatePullRequest(repository, number, action, event) {
@@ -1001,7 +648,6 @@ async function main() {
   }
 
   if (eventName === "issue_comment" && event.issue?.pull_request) {
-    await evaluatePullRequest(repository, event.issue.number, "comment-updated", event);
     return;
   }
 

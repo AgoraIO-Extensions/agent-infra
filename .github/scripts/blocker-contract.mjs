@@ -6,15 +6,9 @@ import { parseBlockedBy } from "./worker-contract.mjs";
 export const BLOCKER_PROPOSAL_MARKER = "agent-infra-blocker-proposal";
 export const BLOCKER_IDENTITY_MARKER = "agent-infra-blocker-identity";
 export const BLOCKER_STATE_MARKER = "agent-infra-blocker-state";
-export const BLOCKER_REVIEW_ACK_MARKER = "agent-infra-blocker-review-ack";
 export const BLOCKER_WORKER_DISPATCH_ACK_MARKER =
   "agent-infra-blocker-worker-dispatch-ack";
 export const HUMAN_HANDOFF_MARKER = "agent-infra-human-handoff";
-export const BLOCKER_REVIEW_COMMENT = [
-  "@claude Review this newly created unprivileged blocker proposal.",
-  "",
-  "<!-- agent-infra-blocker-review -->",
-].join("\n");
 export const BLOCKER_PUBLISH_FAILURE_MESSAGE =
   "The trusted Publisher could not create or register the proposed blocker.";
 export const BLOCKER_PUBLISH_TRIAGE_COMMENT = [
@@ -82,7 +76,6 @@ const STATE_RECORD_KEYS = [
   "version",
 ];
 const STATE_BLOCKER_KEYS = ["number", "status"];
-const REVIEW_ACK_KEYS = ["digest", "issueNumber", "sourceCycle", "sourceIssue", "version"];
 const WORKER_DISPATCH_ACK_KEYS = ["issueNumber", "operation", "signature", "version"];
 const BLOCKER_STATUSES = new Set([
   "completed",
@@ -585,51 +578,6 @@ export function parseBlockerProposalRecord(
     throw new Error("Blocker proposal has multiple trusted identity audits");
   }
   return identities[0] ?? null;
-}
-
-export function isTrustedBlockerReviewComment(comment) {
-  return (
-    isTrustedActionsObject(comment, { appendOnly: true }) &&
-    comment.body === BLOCKER_REVIEW_COMMENT
-  );
-}
-
-export function buildBlockerReviewAck(issueNumber, record) {
-  positiveInteger(issueNumber, "Blocker review Issue");
-  validateBlockerProposalRecord(record);
-  const ack = {
-    version: 1,
-    issueNumber,
-    sourceIssue: record.sourceIssue,
-    sourceCycle: record.sourceCycle,
-    digest: record.digest,
-  };
-  return [
-    encodeMarker(BLOCKER_REVIEW_ACK_MARKER, ack),
-    "Blocker advisory review dispatch accepted.",
-  ].join("\n\n");
-}
-
-export function hasTrustedBlockerReviewAck(comments, issueNumber, record) {
-  positiveInteger(issueNumber, "Blocker review Issue");
-  validateBlockerProposalRecord(record);
-  return (comments ?? []).some((comment) => {
-    if (!isTrustedActionsObject(comment, { appendOnly: true })) return false;
-    const ack = decodeMarker(
-      comment.body,
-      BLOCKER_REVIEW_ACK_MARKER,
-      "Blocker review acknowledgement",
-    );
-    if (!ack) return false;
-    exactKeys(ack, REVIEW_ACK_KEYS, "Blocker review acknowledgement");
-    return (
-      ack.version === 1 &&
-      ack.issueNumber === issueNumber &&
-      ack.sourceIssue === record.sourceIssue &&
-      ack.sourceCycle === record.sourceCycle &&
-      ack.digest === record.digest
-    );
-  });
 }
 
 export function buildWorkerDispatchAck(issueNumber, signature, operation) {

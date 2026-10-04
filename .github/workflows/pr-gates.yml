@@ -29,7 +29,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: pr-gates-${{ github.event.pull_request.number || github.event.client_payload.pr_number || (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.issue.number) || (github.event_name == 'schedule' && 'membership-reconcile') || format('issue-{0}', github.event.issue.number) }}
+  group: pr-gates-${{ github.event.pull_request.number || github.event.client_payload.pr_number || (github.event_name == 'schedule' && 'membership-reconcile') || format('issue-{0}', github.event.issue.number) }}
   cancel-in-progress: true
 
 jobs:
@@ -67,7 +67,7 @@ jobs:
     if: >-
       github.event_name != 'issues' &&
       github.event_name != 'schedule' &&
-      (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+      github.event_name != 'issue_comment'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

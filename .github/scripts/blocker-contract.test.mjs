@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   affectedDependents,
   assertCanAddBlockers,
-  BLOCKER_REVIEW_COMMENT,
   buildBlockerIssue,
   buildBlockerStateComment,
   buildWorkerDispatchAck,
@@ -13,7 +12,6 @@ import {
   hasTrustedWorkerDispatchAck,
   hydrateNativeDependencies,
   inspectBlockerGraph,
-  isTrustedBlockerReviewComment,
   latestBlockerStateRecord,
   parseBlockerProposalRecord,
   reconciliationIssueNumbers,
@@ -135,17 +133,6 @@ test("renders a complete sanitized Implementation Issue with a trusted identity 
     assert.match(rendered.body, new RegExp(heading));
   }
   assert.doesNotMatch(rendered.body, /@owner|close #9|<!-- hidden -->/);
-  assert.equal(BLOCKER_REVIEW_COMMENT.includes("@claude"), true);
-  assert.equal(
-    isTrustedBlockerReviewComment({
-      body: BLOCKER_REVIEW_COMMENT,
-      user: { login: "github-actions[bot]", type: "Bot" },
-      performed_via_github_app: { id: 15368 },
-      created_at: "2026-08-06T00:00:00Z",
-      updated_at: "2026-08-06T00:00:00Z",
-    }),
-    true,
-  );
   const parsed = parseBlockerProposalRecord(
     {
       title: rendered.title,

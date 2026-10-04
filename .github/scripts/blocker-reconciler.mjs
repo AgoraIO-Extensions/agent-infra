@@ -4,12 +4,10 @@ import { pathToFileURL } from "node:url";
 import {
   assertCanAddBlockers,
   BLOCKER_PUBLISH_TRIAGE_COMMENT,
-  BLOCKER_REVIEW_COMMENT,
   blockerStatus,
   buildBlockerIdentityComment,
   buildBlockerStateComment,
   classifyDependentBlockers,
-  hasTrustedBlockerReviewAck,
   hasTrustedBlockerIdentityAudit,
   hasTrustedWorkerDispatchAck,
   hydrateNativeDependencies,
@@ -17,7 +15,6 @@ import {
   isActionsCreatedBlockerIssue,
   isGitHubActionsBot,
   isTrustedActionsObject,
-  isTrustedBlockerReviewComment,
   latestBlockerStateRecord,
   parseBlockerProposalRecord,
   reconciliationIssueNumbers,
@@ -321,43 +318,6 @@ async function dispatchWorker(repository, issueNumber, state, operation, token, 
         reason: state.reason,
         blocker_state_signature: state.signature,
       },
-    }),
-  });
-}
-
-async function ensureReviewComment({
-  repository,
-  issueNumber,
-  record,
-  token,
-  request,
-  paginate,
-}) {
-  let comments = await paginate(
-    `/repos/${repository}/issues/${issueNumber}/comments`,
-    { token, request },
-  );
-  if (!comments.some((comment) => isTrustedBlockerReviewComment(comment))) {
-    await publishComment(
-      repository,
-      issueNumber,
-      BLOCKER_REVIEW_COMMENT,
-      token,
-      request,
-    );
-    comments = await paginate(
-      `/repos/${repository}/issues/${issueNumber}/comments`,
-      { token, request },
-    );
-  }
-  if (hasTrustedBlockerReviewAck(comments, issueNumber, record)) return;
-  await request(`/repos/${repository}/dispatches`, {
-    token,
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      event_type: "claude-blocker-review",
-      client_payload: { issue_number: issueNumber },
     }),
   });
 }
@@ -707,21 +667,6 @@ async function repairProposalState({
       );
     } catch {
       // The group remains fail closed below.
-    }
-  }
-
-  for (const [sourceIssue, entries] of groups) {
-    const authorization = sourceAuthorizations.get(sourceIssue);
-    for (const { issue, record } of entries) {
-      if (isRetiredBlockerProposal(record, issue, authorization)) continue;
-      await ensureReviewComment({
-        repository,
-        issueNumber: issue.number,
-        record,
-        token,
-        request,
-        paginate,
-      });
     }
   }
 
