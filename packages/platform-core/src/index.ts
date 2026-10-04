@@ -112,6 +112,7 @@ export {
 	parseSessionSandboxBindingV1,
 	type SessionSandboxBindingV1,
 } from "./session-sandbox.js";
+export * from "./session-sandbox-lifecycle.js";
 export * from "./session-sandbox-reconciliation.js";
 export * from "./task-api-audit.js";
 export * from "./task-authorization.js";

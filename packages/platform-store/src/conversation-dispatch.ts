@@ -530,6 +530,15 @@ export class PostgresConversationDispatchStoreV1
         update platform.conversations set session_generation = ${plan.nextGeneration}, status = ${plan.conversationStatus}, updated_at = clock_timestamp()
         where id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration}
       `;
+			// Capture the source before changing the allocation generation/fence. The
+			// same durable intent is resumed by later management; no second allocation.
+			await transaction`update platform.outbox_items o set payload = o.payload || jsonb_build_object('sourceSnapshot',
+				coalesce(o.payload->'lifecycle'->'source', jsonb_build_object('sandbox', ${transaction.json(claim.sandbox as unknown as Parameters<typeof transaction.json>[0])},
+					'resourceFence', a.resource_fence, 'policy', a.resource_policy, 'observation', a.resource_observation)))
+				from platform.session_sandbox_allocations a where a.conversation_id = ${claim.conversationId}
+					and o.scope_type = 'conversation' and o.scope_id = a.conversation_id
+					and o.operation = 'conversation.sandbox.reconcile.v1'
+					and o.payload->>'sessionGeneration' = ${String(claim.sessionGeneration)}`;
 			const rebound = await transaction<{ sandbox_id: string }[]>`
 				update platform.session_sandbox_allocations
 				set session_generation = ${plan.nextGeneration}, resource_fence = resource_fence + 1,

@@ -489,7 +489,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				leaseDurationMs: 30_000,
 			};
 			const claim = await store.claimSandboxReconciliation(request);
-			if (!claim) throw new Error("Expected resource claim");
+			if (!claim?.deployment)
+				throw new Error("Expected prepare resource claim");
 			expect(claim.execution).toBeNull();
 			expect(claim.deployment).toEqual(verifiedState.verified.deployment);
 			expect(claim).not.toHaveProperty("executionDeliveryFence");
@@ -2868,6 +2869,18 @@ describe("durable generation isolation in the existing dispatch loop", () => {
 					status: "unavailable",
 				},
 				outbox: { status: "failed", lease_owner: null, lease_expires_at: null },
+			});
+			const [retiredResourceIntent] =
+				await client`select payload from platform.outbox_items where id = ${resourceItemId}`;
+			expect(retiredResourceIntent?.payload.sourceSnapshot).toMatchObject({
+				sandbox: {
+					sandboxId: resourceBefore.allocation?.sandbox_id,
+					sessionId: work.conversationId,
+					generation: 1,
+				},
+				resourceFence: Number(resourceBefore.allocation?.fence),
+				policy: resourceBefore.allocation?.resource_policy,
+				observation: resourceBefore.allocation?.resource_observation,
 			});
 			const resourceAfter = await resourceState();
 			expect(await store.confirmGenerationIsolation(confirmation)).toBe(false);

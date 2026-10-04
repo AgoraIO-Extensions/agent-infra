@@ -1,4 +1,8 @@
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
+import type {
+	SessionSandboxLifecycleV1,
+	SessionSandboxStopReceiptV1,
+} from "./session-sandbox-lifecycle.js";
 import type { TaskAuthorizationBoundaryV1 } from "./task-authorization.js";
 
 export interface SessionSandboxPolicyV1 {
@@ -41,7 +45,11 @@ export interface SessionSandboxReconciliationClaimV1 {
 	readonly resourceFence: number;
 	readonly resourceStatus: "applying" | "unknown";
 	readonly desiredState: "running" | "stopped";
-	readonly authorization: TaskAuthorizationBoundaryV1;
+	readonly authorization: TaskAuthorizationBoundaryV1 | null;
+	readonly purpose: "prepare" | "drain";
+	/** False permits route closure only; original Execution control still owns termination. */
+	readonly drainComputeAllowed: boolean;
+	readonly lifecycle: SessionSandboxLifecycleV1 | null;
 	readonly policy: SessionSandboxVerifiedPolicyV1;
 	/** Original verified configuration; resource names still come from the Session binding. */
 	readonly deployment: unknown;
@@ -50,6 +58,7 @@ export interface SessionSandboxReconciliationClaimV1 {
 
 export interface SessionSandboxObservationV1 {
 	readonly status: "observed" | "ready" | "stopped" | "unknown";
+	readonly sourceStop?: SessionSandboxStopReceiptV1;
 	readonly resources: readonly SessionSandboxResourceIdentityV1[];
 }
 

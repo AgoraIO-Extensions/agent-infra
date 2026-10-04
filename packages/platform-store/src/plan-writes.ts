@@ -7,7 +7,6 @@ import type {
 } from "@agent-infra/platform-core";
 import { and, eq } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/postgres-js";
-
 import {
 	agentAvailability,
 	agentConfigurationRevisions,
@@ -17,6 +16,7 @@ import {
 	auditEvents,
 	outboxItems,
 } from "./schema.js";
+import { persistSessionSandboxManagementIntents } from "./session-sandbox-management.js";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -156,6 +156,7 @@ export async function insertAgentManagementEffects(
 	plan: AgentManagementWritePlanV1,
 ): Promise<void> {
 	if (plan.outboxIntent) {
+		await persistSessionSandboxManagementIntents(transaction, plan);
 		await transaction.insert(outboxItems).values({
 			id: randomUUID(),
 			scopeType: "agent",

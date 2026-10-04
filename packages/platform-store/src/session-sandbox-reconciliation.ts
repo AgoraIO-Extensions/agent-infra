@@ -6,12 +6,15 @@ import {
 } from "@agent-infra/contracts/workload";
 import {
 	type AgentManagementStateV1,
+	canDrainSessionSandboxComputeV1,
 	capturePersonalApiTaskAuthorizationBoundaryV1,
 	captureTaskApplicationAuthorizationBoundaryV1,
 	captureTaskAuthorizationBoundaryV1,
+	decideSessionSandboxDrainObservationV1,
 	decideSessionSandboxObservationV1,
 	isTaskApiChannelV1,
 	resolveCurrentPersonalApiUserV1,
+	type SessionSandboxLifecycleV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
@@ -99,10 +102,7 @@ async function lockedContext(
 		!management ||
 		sandbox.agentId !== hint.agent_id ||
 		sandbox.principal.id !== hint.actor_id ||
-		sandbox.principal.kind !== hint.principal_type ||
-		conversation.authorization_revision !== agent.authorization_revision ||
-		management.status !== "available" ||
-		management.desiredState !== "running"
+		sandbox.principal.kind !== hint.principal_type
 	)
 		return null;
 	const payload = outbox.payload;
@@ -110,18 +110,80 @@ async function lockedContext(
 		!payload ||
 		typeof payload !== "object" ||
 		Array.isArray(payload) ||
-		!isDeepStrictEqual(payload, {
-			schemaVersion: 1,
-			conversationId: sandbox.sessionId,
-			sessionGeneration: sandbox.generation,
-		})
+		!isDeepStrictEqual(
+			Object.fromEntries(
+				Object.entries(payload).filter(([key]) => key !== "lifecycle"),
+			),
+			{
+				schemaVersion: 1,
+				conversationId: sandbox.sessionId,
+				sessionGeneration: sandbox.generation,
+			},
+		)
 	)
 		return null;
 	const [allocation] = await transaction<
 		AllocationRow[]
 	>`select resource_fence, desired_state, status, resource_policy, resource_observation
 		from platform.session_sandbox_allocations where sandbox_id = ${sandbox.sandboxId} for update`;
-	if (allocation?.desired_state !== "running") return null;
+	if (!allocation) return null;
+	const lifecycle =
+		(payload as { lifecycle?: SessionSandboxLifecycleV1 }).lifecycle ?? null;
+	if (lifecycle) {
+		const authority = lifecycle.authority;
+		const source = lifecycle.source;
+		if (
+			lifecycle.schemaVersion !== 1 ||
+			!authority ||
+			!source ||
+			!source.policy ||
+			lifecycle.stopReceipt !== null ||
+			authority.kind !== "management" ||
+			authority.applicationId !== management.applicationId ||
+			!Number.isSafeInteger(authority.managementRevision) ||
+			management.revision < authority.managementRevision ||
+			authority.managementFence !== management.fence ||
+			authority.workloadRevision !== management.workloadRevision ||
+			authority.targetDesiredState !== management.desiredState ||
+			allocation.desired_state !== "stopped" ||
+			!isDeepStrictEqual(
+				{ ...source.sandbox, generation: sandbox.generation },
+				sandbox,
+			) ||
+			!Number.isSafeInteger(source.sandbox.generation) ||
+			source.sandbox.generation > sandbox.generation ||
+			!Number.isSafeInteger(source.resourceFence) ||
+			source.resourceFence < 1 ||
+			source.resourceFence >= Number(allocation.resource_fence) ||
+			source.policy.namespace !== policy.namespace ||
+			!isDeepStrictEqual(source.policy, allocation.resource_policy) ||
+			!isDeepStrictEqual(source.observation, allocation.resource_observation)
+		)
+			return null;
+		const executions = await transaction<
+			{ status: string }[]
+		>`select status from platform.conversation_executions where conversation_id = ${sandbox.sessionId}`;
+		return {
+			outbox,
+			sandbox,
+			allocation,
+			authorization: null,
+			purpose: "drain" as const,
+			lifecycle,
+			drainComputeAllowed: canDrainSessionSandboxComputeV1(
+				executions.map((execution) => execution.status),
+			),
+			policy: source.policy,
+			deployment: null,
+		};
+	}
+	if (
+		allocation.desired_state !== "running" ||
+		conversation.authorization_revision !== agent.authorization_revision ||
+		management.status !== "available" ||
+		management.desiredState !== "running"
+	)
+		return null;
 	const [workload] = await transaction<
 		{ state: unknown }[]
 	>`select state from platform.workload_reconciliations where agent_id = ${sandbox.agentId} for share`;
@@ -205,6 +267,9 @@ async function lockedContext(
 		authorization,
 		policy: currentPolicy,
 		deployment,
+		purpose: "prepare" as const,
+		lifecycle: null,
+		drainComputeAllowed: false,
 	};
 }
 
@@ -215,7 +280,7 @@ export async function claimSandboxReconciliation(
 	directory: TaskUserDirectoryV1 | undefined,
 ): Promise<
 	| (SessionSandboxReconciliationClaimV1 & {
-			readonly deployment: AgentWorkloadDesiredV1;
+			readonly deployment: AgentWorkloadDesiredV1 | null;
 	  })
 	| null
 > {
@@ -269,6 +334,9 @@ export async function claimSandboxReconciliation(
 		resourceStatus: allocation.status === "unknown" ? "unknown" : "applying",
 		desiredState: allocation.desired_state,
 		authorization,
+		purpose: context.purpose,
+		lifecycle: context.lifecycle,
+		drainComputeAllowed: context.drainComputeAllowed,
 		policy: context.policy,
 		deployment: context.deployment,
 		previousObservation: allocation.resource_observation,
@@ -307,6 +375,9 @@ async function ownedContext(
 			claim.previousObservation,
 		) ||
 		!isDeepStrictEqual(context.sandbox, claim.sandbox) ||
+		context.purpose !== claim.purpose ||
+		context.drainComputeAllowed !== claim.drainComputeAllowed ||
+		!isDeepStrictEqual(context.lifecycle, claim.lifecycle) ||
 		!isDeepStrictEqual(context.authorization, claim.authorization) ||
 		!isDeepStrictEqual(context.policy, claim.policy) ||
 		!isDeepStrictEqual(context.deployment, claim.deployment) ||
@@ -347,17 +418,38 @@ export async function recordSandboxObservation(
 ): Promise<"committed" | "stale" | "unknown"> {
 	const context = await ownedContext(transaction, claim, policy, directory);
 	if (!context) return "stale";
-	const decision = decideSessionSandboxObservationV1(
-		claim,
-		context.allocation.resource_observation,
-		observation,
-	);
+	const decision =
+		context.purpose === "drain" && context.lifecycle
+			? decideSessionSandboxDrainObservationV1({
+					sandbox: claim.sandbox,
+					resourceFence: claim.resourceFence,
+					lifecycle: context.lifecycle,
+					observation: context.drainComputeAllowed
+						? observation
+						: { status: "unknown", resources: [] },
+				})
+			: decideSessionSandboxObservationV1(
+					claim,
+					context.allocation.resource_observation,
+					observation,
+				);
 	const unknown = decision.status === "unknown";
 	const recorded = await transaction`update platform.outbox_items
 		set status = ${decision.finished ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
 		available_at = clock_timestamp() + interval '1 second', updated_at = clock_timestamp()
 		where id = ${claim.itemId} and lease_expires_at > clock_timestamp() returning id`;
 	if (recorded.length !== 1) return "stale";
+	if (context.lifecycle && "stopReceipt" in decision && decision.stopReceipt) {
+		await transaction`update platform.outbox_items set payload = ${transaction.json(
+			{
+				schemaVersion: 1,
+				conversationId: claim.sandbox.sessionId,
+				sessionGeneration: claim.sandbox.generation,
+				lifecycle: { ...context.lifecycle, stopReceipt: decision.stopReceipt },
+			} as unknown as Parameters<typeof transaction.json>[0],
+		)}
+			where id = ${claim.itemId}`;
+	}
 	await transaction`update platform.session_sandbox_allocations set status = ${decision.status},
 		resource_observation = ${transaction.json(decision.observation as unknown as Parameters<typeof transaction.json>[0])},
 		updated_at = clock_timestamp() where sandbox_id = ${claim.sandbox.sandboxId}`;
