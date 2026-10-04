@@ -8,6 +8,7 @@ import {
 } from "./application-foundation.conformance.ts";
 import {
 	ApplicationFoundationError,
+	snapshotApplicationFoundationWritePlanV1,
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
 	createApplicationFoundationUseCaseV1,
@@ -487,6 +488,182 @@ describe("Fake application foundation transaction", () => {
 });
 
 describe("Application foundation Secret sidecar", () => {
+	function defaultKeyFixture() {
+		const command = {
+			...applicationFoundationCommandV1,
+			defaultRelayKey: "controlled-default-key-for-test",
+		};
+		const identity = vi
+			.fn()
+			.mockResolvedValue({
+				userId: applicationFoundationActorContextV1.userId,
+				accountStatus: "active",
+				authorizationRevision: "authorization_9",
+			});
+		const candidates = vi
+			.fn()
+			.mockResolvedValue([
+				{
+					endpointId: "endpoint_01",
+					modelId: "gpt-5",
+					reasoningLevels: ["low"],
+				},
+			]);
+		const encrypt = vi
+			.fn()
+			.mockResolvedValue({ encrypted: "controlled-ciphertext" });
+		const commit = vi
+			.fn<ApplicationFoundationTransactionPortV1["commit"]>()
+			.mockImplementation(async (plan, _secrets, key) => {
+				// Exercise the real strict snapshot boundary; plaintext must never join the write plan.
+				expect(snapshotApplicationFoundationWritePlanV1(plan)).toEqual(plan);
+				expect(JSON.stringify(plan)).not.toContain(command.defaultRelayKey);
+				expect(plan).not.toHaveProperty("defaultRelayKey");
+				await key?.encrypt({
+					purpose: "agent-default",
+					subjectId: command.agentId,
+					keyId: "controlled-key-id",
+					keyVersion: 1,
+				});
+				return { outcome: "committed", result: plan.result };
+			});
+		const read = vi
+			.fn<ApplicationFoundationTransactionPortV1["read"]>()
+			.mockResolvedValue({ outcome: "ready" });
+		const useCase = createApplicationFoundationUseCaseV1(
+			{
+				...applicationFoundationAdmissionDependenciesV1(),
+				transaction: { read, commit },
+				defaultRelayKey: { currentIdentity: identity, candidates, encrypt },
+			},
+			{ now: () => new Date(serverInstant) },
+		);
+		return {
+			command,
+			identity,
+			candidates,
+			encrypt,
+			commit,
+			read,
+			submit: () =>
+				useCase.submit(
+					command,
+					applicationFoundationActorContextV1,
+					pendingSecretRecordAttachmentFixtureV1(),
+				),
+		};
+	}
+
+	it("commits an admitted default Key via the transaction sidecar without persisting plaintext", async () => {
+		const fixture = defaultKeyFixture();
+		await expect(fixture.submit()).resolves.toMatchObject({
+			status: "pending_approval",
+		});
+		expect(fixture.commit).toHaveBeenCalledOnce();
+		expect(fixture.encrypt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				purpose: "agent-default",
+				subjectId: fixture.command.agentId,
+				keyVersion: 1,
+			}),
+			fixture.command.defaultRelayKey,
+		);
+	});
+
+	it.each([
+		["missing model", []],
+		[
+			"wrong endpoint",
+			[{ endpointId: "other", modelId: "gpt-5", reasoningLevels: ["low"] }],
+		],
+		[
+			"wrong model",
+			[
+				{
+					endpointId: "endpoint_01",
+					modelId: "other",
+					reasoningLevels: ["low"],
+				},
+			],
+		],
+		[
+			"incompatible reasoning",
+			[
+				{
+					endpointId: "endpoint_01",
+					modelId: "gpt-5",
+					reasoningLevels: ["high"],
+				},
+			],
+		],
+	])(
+		"rejects %s before writing any application or Key",
+		async (_name, visible) => {
+			const fixture = defaultKeyFixture();
+			fixture.candidates.mockResolvedValue(visible);
+			await expect(fixture.submit()).rejects.toMatchObject({
+				code: "not_admitted",
+			});
+			expect(fixture.commit).not.toHaveBeenCalled();
+			expect(fixture.encrypt).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		[
+			{
+				userId: "other",
+				accountStatus: "active",
+				authorizationRevision: "authorization_9",
+			},
+			"not_authorized",
+		],
+		[
+			{
+				userId: applicationFoundationActorContextV1.userId,
+				accountStatus: "disabled",
+				authorizationRevision: "authorization_9",
+			},
+			"not_authorized",
+		],
+		[
+			{
+				userId: applicationFoundationActorContextV1.userId,
+				accountStatus: "active",
+				authorizationRevision: "authorization_10",
+			},
+			"dependency_unavailable",
+		],
+	])(
+		"rejects identity or authorization drift before persistence",
+		async (identity, code) => {
+			const fixture = defaultKeyFixture();
+			fixture.identity.mockResolvedValue(identity);
+			await expect(fixture.submit()).rejects.toMatchObject({ code });
+			expect(fixture.commit).not.toHaveBeenCalled();
+		},
+	);
+
+	it("replays without validating or encrypting a second Key version", async () => {
+		const fixture = defaultKeyFixture();
+		const result = await fixture.submit();
+		fixture.read.mockResolvedValue({ outcome: "replayed", result });
+		await expect(fixture.submit()).resolves.toEqual(result);
+		expect(fixture.commit).toHaveBeenCalledOnce();
+		expect(fixture.candidates).toHaveBeenCalledOnce();
+		expect(fixture.encrypt).toHaveBeenCalledOnce();
+	});
+
+	it("sanitizes encryption failure returned by the transaction", async () => {
+		const fixture = defaultKeyFixture();
+		fixture.encrypt.mockRejectedValue(
+			new Error(fixture.command.defaultRelayKey),
+		);
+		await expect(fixture.submit()).rejects.toEqual(
+			new ApplicationFoundationError("persistence_failed"),
+		);
+	});
+
 	it("requires the default Relay Key admission dependency", async () => {
 		let plan: ApplicationFoundationWritePlanV1 | undefined;
 		const command = {
