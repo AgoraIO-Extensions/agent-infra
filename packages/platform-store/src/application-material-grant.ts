@@ -56,8 +56,33 @@ async function writeAudit(
 		throw new Error("grant audit unavailable");
 	}
 }
-function operations(tx: Transaction): ApplicationMaterialGrantTransactionV1 {
+export function applicationMaterialGrantTransactionV1(
+	tx: Transaction,
+): ApplicationMaterialGrantTransactionV1 {
 	return {
+		async expireDeliveryReceipts(request) {
+			await tx.execute(sql`
+    update platform.idempotency_records
+    set result = jsonb_set(result, '{result,delivery,status}', '"unknown"'::jsonb), updated_at = clock_timestamp()
+    where scope_type = 'application_api_credential' and scope_id = ${request.applicationId}
+     and command_type = 'application.credential.issue_or_rotate'
+     and result->'result'->'delivery'->'recipient'->>'principalType' = ${request.principalType}
+     and result->'result'->'delivery'->'recipient'->>'principalId' = ${request.principalId}
+     and result->'result'->'delivery'->>'status' in ('delivery_pending','delivery_in_flight')
+     and (result->>'expiresAt')::timestamptz <= clock_timestamp()`);
+		},
+		async hasInFlightDelivery(request) {
+			const rows = await tx.execute(sql`
+    select id from platform.idempotency_records
+    where scope_type = 'application_api_credential' and scope_id = ${request.applicationId}
+     and command_type = 'application.credential.issue_or_rotate'
+     and result->'result'->'delivery'->'recipient'->>'principalType' = ${request.principalType}
+     and result->'result'->'delivery'->'recipient'->>'principalId' = ${request.principalId}
+     and result->'result'->'delivery'->>'status' = 'delivery_in_flight'
+     and (result->>'expiresAt')::timestamptz > clock_timestamp()
+    limit 1`);
+			return rows.length > 0;
+		},
 		async lockUserDisabled(userId) {
 			await tx.execute(
 				sql`lock table platform.platform_user_disables in share mode`,
@@ -184,7 +209,9 @@ export class PostgresApplicationMaterialGrantStoreV1
 	async execute<T>(
 		work: (tx: ApplicationMaterialGrantTransactionV1) => Promise<T>,
 	): Promise<T> {
-		return this.#database.transaction((tx) => work(operations(tx)));
+		return this.#database.transaction((tx) =>
+			work(applicationMaterialGrantTransactionV1(tx)),
+		);
 	}
 	async close(): Promise<void> {
 		await this.#client.end();

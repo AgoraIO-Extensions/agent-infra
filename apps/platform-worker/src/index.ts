@@ -376,9 +376,9 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 
 export { createWorkerFileClientV1 } from "./file-client.js";
 export { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
-
 export {
 	createSessionSandboxEgressV1,
 	type SessionSandboxEgressBindingV1,
 	type SessionSandboxEgressReceiptV1,
 } from "./session-sandbox-egress.js";
+export * from "./session-workload-adapter.js";

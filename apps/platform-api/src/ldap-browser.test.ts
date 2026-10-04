@@ -450,3 +450,46 @@ describe("LDAP browser adapter", () => {
 		expect(await result?.text()).not.toContain("private session store detail");
 	});
 });
+
+describe("current material-grant administrator", () => {
+	it("derives LDAP facts from the current directory and refreshes them on every call", async () => {
+		const f = fixture();
+		const resolve = () =>
+			f.adapter.identityAdapter.resolveMaterialGrantActor(account.userId);
+		expect(await resolve()).toMatchObject({
+			userId: account.userId,
+			accountStatus: "active",
+			isSystemAdmin: true,
+			ldapStableUid: account.uid,
+			ldapAdministratorConfigured: true,
+		});
+		f.setCurrent({
+			...account,
+			roles: ["employee"],
+			authorizationRevision: "revoked",
+		});
+		expect(await resolve()).toMatchObject({
+			isSystemAdmin: false,
+			ldapAdministratorConfigured: false,
+		});
+		f.setDisabled(true);
+		expect(await resolve()).toMatchObject({ accountStatus: "disabled" });
+		expect(f.directory.currentByUserId).toHaveBeenCalledTimes(3);
+	});
+	it("fails closed for missing, mismatched or unavailable directory facts", async () => {
+		const f = fixture();
+		const resolve = () =>
+			f.adapter.identityAdapter.resolveMaterialGrantActor(account.userId);
+		f.setCurrent(null);
+		expect(await resolve()).toBeNull();
+		f.setCurrent({ ...account, userId: "another-user" });
+		await expect(resolve()).rejects.toThrow();
+		f.setCurrent(account);
+		f.setOrganizationsAvailable(false);
+		await expect(resolve()).rejects.toThrow();
+		vi.mocked(f.directory.currentByUserId).mockRejectedValueOnce(
+			new Error("private directory failure"),
+		);
+		await expect(resolve()).rejects.toThrow();
+	});
+});

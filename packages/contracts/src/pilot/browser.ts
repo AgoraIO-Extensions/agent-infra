@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import {
 	IdempotencyKeyV1Schema,
 	OpaqueCursorV1Schema,
@@ -8,6 +7,10 @@ import {
 	SchemaVersionV1Schema,
 	TraceIdV1Schema,
 } from "../index.ts";
+import {
+	ApplicationApiCredentialRequestV1Schema,
+	ApplicationApiCredentialResponseV1Schema,
+} from "./application-api-credentials.ts";
 import {
 	ApplicationMaterialGrantRequestV1Schema,
 	ApplicationMaterialGrantResponseV1Schema,
@@ -1147,6 +1150,34 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/applications/{applicationId}/credentials": {
+		post: {
+			operationId: "issueOrRotateApplicationApiCredentialV2",
+			summary:
+				"Issue or rotate an application credential for an explicitly granted recipient",
+			description:
+				"Current responsible-user browser session only. Material is delivered through the trusted consumer, never this management response. Same-key retry only returns metadata and delivery status; unknown delivery requires explicit rotation with a new key. Responses are no-store.",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ applicationId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(
+				ApplicationApiCredentialRequestV1Schema,
+			),
+			responses: {
+				"201": jsonResponse(
+					"Credential committed; inspect delivery status",
+					ApplicationApiCredentialResponseV1Schema,
+				),
+				"200": jsonResponse(
+					"Original metadata and delivery status replayed",
+					ApplicationApiCredentialResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/applications": {
 		post: {
 			operationId: "registerApplicationV2",
