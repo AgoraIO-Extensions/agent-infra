@@ -1,67 +1,67 @@
-# Proposed: native review coverage for lockfile-only diffs
+# 提案：为仅锁文件差异恢复原生 Review Coverage
 
-Status: **Proposed — not approved and not implementation authority**  
-Owner: review-infrastructure lane for Issue #1304  
-Primary: [Issue #1304](https://github.com/AgoraIO-Extensions/agent-infra/issues/1304)  
-Affected consumer: #1296 / primary #1295  
-Review base: `8327fbf911cc2e6761610ac86772c4969bf0771c`
+状态：**Proposed——未批准，不构成实现授权**
+负责人：Issue #1304 的 Review 基础设施 lane
+Primary：[Issue #1304](https://github.com/AgoraIO-Extensions/agent-infra/issues/1304)
+受影响消费者：#1296 / primary #1295
+评审基线：`8327fbf911cc2e6761610ac86772c4969bf0771c`
 
-## Decision requested
+## 待决策事项
 
-Approve or reject the bounded compatibility boundary below. No provider, workflow, Publisher, Coverage, or vulnerability-policy code may be changed from this proposal alone.
+请批准或拒绝以下有界兼容边界。仅凭本提案不得修改 provider、workflow、Publisher、Coverage 或漏洞策略代码。
 
-## Evidence and current contract
+## 证据与当前合同
 
-The pinned official PR-Agent GitHub-provider image filters the basename `pnpm-lock.yaml` in `is_valid_file` before model invocation. The behavior was reproduced for root and nested lockfiles using the exact source layer recorded in Issue #1304. Upstream release `v0.47.0` and commit `9ed605cc992f18663d2527c35cf990813fba6654` retain the filter; upstream PR #3806 only reports filtered filenames as metadata and does not send lockfile content.
+固定版本的官方 PR-Agent GitHub provider image 在模型调用前，通过 `is_valid_file` 按 basename 过滤 `pnpm-lock.yaml`。Issue #1304 已用记录的精确 source layer 复现 root 和 nested lockfile 行为。上游 `v0.47.0` 及 commit `9ed605cc992f18663d2527c35cf990813fba6654` 仍保留该过滤；上游 PR #3806 只报告被过滤的文件名 metadata，不把锁文件内容发送给模型。
 
-The current repository workflow already invokes the pinned official CLI through `--diff-file` plain-diff mode. It writes the certified diff to `.pr-agent-review-input.diff` and passes that path into the container; adding another diff-file entry point is therefore not the proposed fix. The current failure is later in the official plain-diff path: on #1312 head `255df29f822c8e356356d409d66f628fc6b24466`, run `37182555582` attempt `1` recorded a complete 1184-byte diff (`diffSha256=a1379d721574a144796d2453a1585f3ac0fc5bbfcd29b66c6aef16a205e2e6ff`), and the runtime logged 2,544 tokens below the 300,000-token limit, but then emitted `Empty diff for PR: local_diff`. No valid Review receipt was produced and Coverage remained `review-run-failed`. The log confirms the container entered `PlainDiffGitProvider`; the remaining diagnosis must cover file visibility/content transfer, CLI argument parsing, provider diff loading, and the output/receipt path.
+当前仓库 workflow 已经通过 `--diff-file` plain-diff 模式调用固定的官方 CLI，将经过认证的差异写入 `.pr-agent-review-input.diff` 后传入 container，因此不能再把“增加 diff-file 入口”作为修复。当前故障发生在官方 plain-diff 后续路径：#1312 head `255df29f822c8e356356d409d66f628fc6b24466` 的 run `37182555582` attempt `1` 记录了完整的 1184-byte diff（`diffSha256=a1379d721574a144796d2453a1585f3ac0fc5bbfcd29b66c6aef16a205e2e6ff`），运行时记录 2,544 tokens，低于 300,000 上限，但随后输出 `Empty diff for PR: local_diff`。没有产生有效 Review receipt，Coverage 保持 `review-run-failed`。日志确认已进入 `PlainDiffGitProvider`；后续诊断必须覆盖文件可见性/内容传输、CLI 参数解析、provider 加载差异以及输出/receipt 链路。
 
-Workflow Spec §7.3 therefore remains the authority: exact current-head provider evidence, deterministic token decision log, same-run native Review publication receipt, dedicated check-only Coverage publication, and fail-closed handling for missing, invalid, truncated, old-head, or provider-mismatched output.
+工程 Workflow Spec §7.3 仍是权威：必须有 exact current-head provider 证据、确定性的 token decision log、同一 run/attempt 的 native Review publication receipt、专用且只检查的 Coverage publication，并对缺失、非法、截断、旧 head 或 provider 不匹配输出 fail closed。
 
-## Proposed controlled boundary
+## 有界提案
 
-After the plain-diff failure is diagnosed, accept only one of these bounded repairs:
+在完成 plain-diff 故障诊断后，只接受以下两类修复之一：
 
-- an official upstream fix to the pinned plain-diff/local-diff behavior; or
-- a formally approved, minimal repository-side repair that proves the existing input file, container path, CLI parsing, provider mode, output transfer, and receipt binding end to end.
+- 固定版本的官方 plain-diff/local-diff 修复；或
+- 经正式批准的最小仓库侧修复，端到端证明现有输入文件、container 路径、CLI 解析、provider 模式、输出传输和 receipt 绑定均未丢失。
 
-Any approved repair must:
+任何获批修复都必须：
 
-1. obtain the immutable GitHub PR diff for the exact head and merge-base already certified by the workflow;
-2. write that byte-preserving unified diff to a short-lived runner file without renaming paths or changing hunks;
-3. preserve the existing pinned official PR-Agent runtime and `--diff-file` plain-diff entry (or use the reviewed upstream equivalent);
-4. record the native review result and token decision log with the same PR, head, run, attempt, merge-base, diff SHA-256, provider pin, and model identity;
-5. publish findings through the existing trusted Publisher and use the existing dedicated Coverage publisher unchanged;
-6. fail closed when the diff is empty, any file is omitted or truncated, the CLI output is malformed, the receipt identity differs, or the head/run/attempt/provider does not match.
+1. 获取 workflow 已认证的 exact head 与 merge-base 对应的 immutable GitHub PR diff；
+2. 在不改名路径、不改 hunk 的前提下，将保持字节不变的 unified diff 写入短生命周期 runner 文件；
+3. 保留现有固定的官方 PR-Agent runtime 和 `--diff-file` plain-diff 入口（或采用经过评审的上游等价修复）；
+4. 用相同的 PR、head、run、attempt、merge-base、diff SHA-256、provider pin 和 model identity 记录 native review 结果及 token decision log；
+5. 通过现有受信 Publisher 发布 findings，并原样使用现有专用 Coverage publisher；
+6. 在 diff 为空、文件缺失或截断、CLI 输出 malformed、receipt identity 不一致，或 head/run/attempt/provider 不匹配时 fail closed。
 
-The compatibility path must not alter model instructions, findings semantics, Review thread anchoring, Coverage verdicts, required checks, scan policy, or merge authority. It must not accept the filtered-filename metadata added by upstream #3806 as content coverage.
+兼容路径不得改变 model instructions、findings 语义、Review thread 锚定、Coverage 判定、required checks、扫描策略或 merge authority，也不得把上游 #3806 增加的 filtered-filename metadata 当作内容覆盖。
 
-## Rejected shortcuts
+## 拒绝的捷径
 
-- Renaming `pnpm-lock.yaml`, padding the diff, or adding synthetic source lines.
-- Accepting `PR-Agent Publish Review` success, an empty review, an advisory scan, or a local fixture as `Automated Review Coverage` success.
-- Changing `is_valid_file` through repository config, changing `bad_extensions`, or weakening the Coverage validator.
-- Using an unpinned fork/private image or a different provider while reporting official-provider compliance.
-- Updating `main` or replacing the #1296 head to make an old receipt appear current.
+- 重命名 `pnpm-lock.yaml`、填充 diff 或加入 synthetic source lines；
+- 将 `PR-Agent Publish Review` 成功、空 Review、advisory scan 或 local fixture 当作 `Automated Review Coverage` 成功；
+- 通过仓库配置修改 `is_valid_file`、修改 `bad_extensions` 或削弱 Coverage validator；
+- 使用未 pin 的 fork/private image 或其他 provider，却声称符合 official-provider；
+- 更新 `main` 或替换 #1296 head，使旧 receipt 看起来是当前结果。
 
-## Contract mapping
+## 合同映射
 
-| Requirement | Existing authority | Proposed proof after approval |
+| 要求 | 现有权威 | 批准后的证明 |
 | --- | --- | --- |
-| Complete immutable input | Workflow Spec §7.3; #1304 AC-1/2 | exact diff bytes, merge-base, SHA-256, root/nested/mixed cases |
-| Official runtime | Workflow Spec §6.3/§7.3 | pinned image digest, current `--diff-file` invocation, and plain-diff failure readback |
-| Native review output | Workflow Spec §7.3 | same-run native receipt bound to PR/head/run/attempt/provider |
-| Dedicated Coverage | `.github/scripts/review-coverage.mjs` | unchanged validator returns `complete` only for matching receipt |
-| Fail-closed | Workflow Spec §7.2/§7.3 | negative tests for empty/omitted/truncated/malformed/old-head/mismatch |
-| Merge authority | Workflow Spec §7.2/§7.3 | current-head CI/Issue/Readiness/Human/Coverage, zero threads, CODEOWNER |
+| 完整 immutable input | Workflow Spec §7.3；#1304 AC-1/2 | exact diff bytes、merge-base、SHA-256，以及 root/nested/mixed cases |
+| Official runtime | Workflow Spec §6.3/§7.3 | image digest、当前 `--diff-file` 调用和 plain-diff 故障回读 |
+| Native review output | Workflow Spec §7.3 | 绑定 PR/head/run/attempt/provider 的同 run native receipt |
+| Dedicated Coverage | `.github/scripts/review-coverage.mjs` | 不变的 validator 仅对匹配 receipt 返回 `complete` |
+| Fail-closed | Workflow Spec §7.2/§7.3 | empty/omitted/truncated/malformed/old-head/mismatch 负例 |
+| Merge authority | Workflow Spec §7.2/§7.3 | current-head CI、Issue、Readiness、Human、Coverage、零线程和 CODEOWNER |
 
-## Validation plan after approval
+## 批准后的验证计划
 
-- Focused deterministic tests: exact diff preservation; root and nested lockfile-only; mixed lockfile/source; empty input; omission and truncation; malformed CLI output; stale head; provider and receipt mismatch.
-- Native hosted run on unchanged #1296 head `85ccd983043d164b8ed74981cfc5fd61d18fd953`, with model-request evidence, Review receipt and Coverage all bound to one run/attempt.
-- Independent `$code-review` and `$ponytail-review`; workflow-policy and Coverage tests; Node 24/pnpm 11 frozen validation.
-- Read back all hashes, check conclusions, zero unresolved threads, CODEOWNER approval, Draft/Ready state and `autoMergeRequest`. Do not merge this proposal.
+- 运行 focused deterministic tests：精确 diff 保持、root/nested lockfile-only、mixed diff、empty input、omission/truncation、malformed CLI output、stale head、provider/receipt mismatch；
+- 在未改变的 #1296 head `85ccd983043d164b8ed74981cfc5fd61d18fd953` 上执行 native hosted run，使 model-request evidence、Review receipt 和 Coverage 绑定同一 run/attempt；
+- 执行独立 `$code-review` 与 `$ponytail-review`、workflow-policy 和 Coverage tests，以及 Node 24/pnpm 11 frozen validation；
+- 回读全部 hash、check conclusion、零未解决线程、CODEOWNER approval、Draft/Ready 状态及 `autoMergeRequest`。本提案不合并。
 
-## Approval gate
+## 审批门
 
-This proposal is ready for maintainer/review-infrastructure contract review. Until approved, Issue #1304 remains `needs-triage`, #1296 remains Draft with auto-merge disabled, and no provider/workflow implementation is authorized.
+本提案已可交 maintainer/review-infrastructure 做合同评审。在批准前，Issue #1304 保持 `needs-triage`，#1296 保持 Draft 且关闭 auto-merge，不授权任何 provider/workflow 实现。
