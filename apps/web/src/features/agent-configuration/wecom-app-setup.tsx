@@ -1,3 +1,4 @@
+import { WecomApplicationCredentialsV1Schema } from "@agent-infra/contracts/pilot";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -41,32 +42,49 @@ export function WecomAppSetup({
 	const [status, setStatus] = useState<SetupStatus>();
 	const [callbackUrl, setCallbackUrl] = useState("");
 	const [error, setError] = useState("");
-	const session = useRef<{ id: string; state: string } | undefined>(undefined);
+	const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+	const session = useRef<{ id: string } | undefined>(undefined);
 	const generation = useRef(0);
+	const refreshSequence = useRef(0);
 	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	const connectionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
 		undefined,
 	);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: poll reads refs and stable props
 	const refresh = useCallback(async () => {
 		clearTimeout(connectionTimer.current);
 		const attempt = generation.current;
+		const sequence = ++refreshSequence.current;
 		try {
 			const result = await getWecomAppConnection({
 				path: { agentId },
 				responseStyle: "fields",
 				throwOnError: false,
 			});
-			if (attempt !== generation.current) return;
+			if (
+				attempt !== generation.current ||
+				sequence !== refreshSequence.current
+			)
+				return;
 			setStatus(result.data?.status);
 			setCallbackUrl(result.data?.callbackUrl ?? "");
+			if (result.data?.status === "verifying" && result.data.sessionId) {
+				session.current = { id: result.data.sessionId };
+				setBusy(true);
+				void poll(attempt);
+			}
 			if (
-				result.data?.status === "verifying" ||
-				result.data?.status === "disconnected"
+				result.data?.status === "disconnected" ||
+				(result.data?.status === "verifying" && !result.data.sessionId)
 			)
 				connectionTimer.current = setTimeout(() => void refresh(), 2000);
 		} catch {
-			if (attempt === generation.current) setStatus(undefined);
+			if (
+				attempt === generation.current &&
+				sequence === refreshSequence.current
+			)
+				setStatus(undefined);
 		}
 	}, [agentId]);
 
@@ -100,10 +118,17 @@ export function WecomAppSetup({
 				responseStyle: "fields",
 				throwOnError: false,
 			});
-			if (attempt !== generation.current || !result.data) return;
+			if (attempt !== generation.current || session.current !== currentSession)
+				return;
+			if (!result.data) throw new Error();
 			const next = result.data.status;
 			if (next === "awaiting_input" || next === "verifying") {
 				setStatus("verifying");
+				setError(
+					next === "awaiting_input"
+						? "提交结果尚未确认，可取消本次配置后重试。"
+						: "",
+				);
 			} else {
 				session.current = undefined;
 				setBusy(false);
@@ -122,24 +147,32 @@ export function WecomAppSetup({
 			if (attempt === generation.current)
 				setError("配置结果暂未确认，正在重新查询。请勿重复提交。");
 		}
-		timer.current = setTimeout(() => void poll(attempt), 2000);
+		if (attempt === generation.current && session.current === currentSession)
+			timer.current = setTimeout(() => void poll(attempt), 2000);
 	}
 
 	async function submit() {
 		if (busy) return;
-		if (
-			!corporationId.trim() ||
-			!applicationId.trim() ||
-			!secret ||
-			!token ||
-			!encodingAesKey ||
-			!confirmed
-		) {
-			setError(
-				"请填写企业 ID、应用 ID、Secret、Token、EncodingAESKey，并确认连接影响。",
-			);
+		const validation = WecomApplicationCredentialsV1Schema.safeParse({
+			corporationId: corporationId.trim(),
+			applicationId: applicationId.trim(),
+			secret,
+			token,
+			encodingAesKey,
+			state: "pending",
+			takeoverConfirmed: confirmed,
+		});
+		const invalid: Record<string, string> = {};
+		if (!validation.success)
+			for (const issue of validation.error.issues)
+				invalid[String(issue.path[0])] = "请填写符合格式的值。";
+		if (!confirmed) invalid.takeoverConfirmed = "请确认连接影响。";
+		setFieldErrors(invalid);
+		if (Object.keys(invalid).length) {
+			setError("请检查标出的字段并确认连接影响。");
 			return;
 		}
+
 		const credentials = {
 			corporationId: corporationId.trim(),
 			applicationId: applicationId.trim(),
@@ -151,7 +184,10 @@ export function WecomAppSetup({
 		setToken("");
 		setEncodingAesKey("");
 		setError("");
+		setFieldErrors({});
 		setBusy(true);
+		refreshSequence.current++;
+		clearTimeout(connectionTimer.current);
 		setStatus("verifying");
 		const attempt = generation.current;
 		try {
@@ -163,7 +199,6 @@ export function WecomAppSetup({
 			if (attempt !== generation.current || !started.data) throw new Error();
 			session.current = {
 				id: started.data.sessionId,
-				state: started.data.state,
 			};
 			setCallbackUrl(started.data.callbackUrl);
 			const submitted = await submitWecomAppCredentials({
@@ -199,7 +234,10 @@ export function WecomAppSetup({
 				await refresh();
 			}
 		}
-		if (session.current) await poll(attempt);
+		credentials.secret = "";
+		credentials.token = "";
+		credentials.encodingAesKey = "";
+		if (attempt === generation.current && session.current) await poll(attempt);
 	}
 
 	async function cancel() {
@@ -216,6 +254,7 @@ export function WecomAppSetup({
 				return;
 			if (result.data?.status !== "cancelled") throw new Error();
 			generation.current++;
+			clearTimeout(timer.current);
 			session.current = undefined;
 			setBusy(false);
 			setError("");
@@ -229,7 +268,7 @@ export function WecomAppSetup({
 	return (
 		<section
 			aria-label="自建应用配置"
-			className="space-y-4 rounded-lg border border-slate-200 p-4"
+			className="space-y-4 rounded-lg border border-border p-4"
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
 				<h3 className="font-semibold">自建应用</h3>
@@ -238,7 +277,7 @@ export function WecomAppSetup({
 				</p>
 			</div>
 			{callbackUrl ? (
-				<p className="break-all text-slate-600 text-sm">
+				<p className="break-all text-muted-foreground text-sm">
 					请在企微后台配置回调 URL：{callbackUrl}
 				</p>
 			) : null}
@@ -247,68 +286,141 @@ export function WecomAppSetup({
 					<Label htmlFor="wecom-app-corporation-id">企业 ID</Label>
 					<Input
 						id="wecom-app-corporation-id"
+						aria-invalid={!!fieldErrors.corporationId}
+						aria-describedby={
+							fieldErrors.corporationId
+								? "wecom-app-corporation-id-error"
+								: undefined
+						}
 						value={corporationId}
 						disabled={busy}
 						onChange={(e) => setCorporationId(e.target.value)}
 						autoComplete="off"
 					/>
+					{fieldErrors.corporationId ? (
+						<p
+							id="wecom-app-corporation-id-error"
+							className="text-destructive text-sm"
+						>
+							{fieldErrors.corporationId}
+						</p>
+					) : null}
 				</div>
 				<div className="space-y-2">
 					<Label htmlFor="wecom-app-application-id">应用 ID</Label>
 					<Input
 						id="wecom-app-application-id"
+						aria-invalid={!!fieldErrors.applicationId}
+						aria-describedby={
+							fieldErrors.applicationId
+								? "wecom-app-application-id-error"
+								: undefined
+						}
 						value={applicationId}
 						disabled={busy}
 						onChange={(e) => setApplicationId(e.target.value)}
 						inputMode="numeric"
 						autoComplete="off"
 					/>
+					{fieldErrors.applicationId ? (
+						<p
+							id="wecom-app-application-id-error"
+							className="text-destructive text-sm"
+						>
+							{fieldErrors.applicationId}
+						</p>
+					) : null}
 				</div>
 				<div className="space-y-2">
 					<Label htmlFor="wecom-app-secret">应用 Secret</Label>
 					<Input
 						id="wecom-app-secret"
+						aria-invalid={!!fieldErrors.secret}
+						aria-describedby={
+							fieldErrors.secret ? "wecom-app-secret-error" : undefined
+						}
 						type="password"
 						value={secret}
 						disabled={busy}
 						onChange={(e) => setSecret(e.target.value)}
 						autoComplete="new-password"
 					/>
+					{fieldErrors.secret ? (
+						<p id="wecom-app-secret-error" className="text-destructive text-sm">
+							{fieldErrors.secret}
+						</p>
+					) : null}
 				</div>
 				<div className="space-y-2">
 					<Label htmlFor="wecom-app-token">回调 Token</Label>
 					<Input
 						id="wecom-app-token"
+						aria-invalid={!!fieldErrors.token}
+						aria-describedby={
+							fieldErrors.token ? "wecom-app-token-error" : undefined
+						}
 						type="password"
 						value={token}
 						disabled={busy}
 						onChange={(e) => setToken(e.target.value)}
 						autoComplete="new-password"
 					/>
+					{fieldErrors.token ? (
+						<p id="wecom-app-token-error" className="text-destructive text-sm">
+							{fieldErrors.token}
+						</p>
+					) : null}
 				</div>
 				<div className="space-y-2 sm:col-span-2">
 					<Label htmlFor="wecom-app-encoding-aes-key">EncodingAESKey</Label>
 					<Input
 						id="wecom-app-encoding-aes-key"
+						aria-invalid={!!fieldErrors.encodingAesKey}
+						aria-describedby={
+							fieldErrors.encodingAesKey
+								? "wecom-app-encoding-aes-key-error"
+								: undefined
+						}
 						type="password"
 						value={encodingAesKey}
 						disabled={busy}
 						onChange={(e) => setEncodingAesKey(e.target.value)}
 						autoComplete="new-password"
 					/>
+					{fieldErrors.encodingAesKey ? (
+						<p
+							id="wecom-app-encoding-aes-key-error"
+							className="text-destructive text-sm"
+						>
+							{fieldErrors.encodingAesKey}
+						</p>
+					) : null}
 				</div>
 			</div>
-			<div className="min-h-11 flex-nowrap items-start gap-3 text-sm leading-6">
+			<Label className="min-h-11 flex-nowrap items-start gap-3 text-sm leading-6">
 				<Checkbox
+					id="wecom-app-takeover"
 					className="mt-1"
 					checked={confirmed}
 					disabled={busy}
+					aria-invalid={!!fieldErrors.takeoverConfirmed}
+					aria-describedby={
+						fieldErrors.takeoverConfirmed
+							? "wecom-app-takeover-error"
+							: undefined
+					}
 					onCheckedChange={(value) => setConfirmed(value === true)}
 				/>
 				<span>我已知悉：连接此应用可能影响其在其他服务中的现有配置。</span>
-			</div>
-			<p className="text-slate-600 text-sm">
-				Secret、Token 和 EncodingAESKey 仅用于本次验证，提交后立即清空。
+			</Label>
+			{fieldErrors.takeoverConfirmed ? (
+				<p id="wecom-app-takeover-error" className="text-destructive text-sm">
+					{fieldErrors.takeoverConfirmed}
+				</p>
+			) : null}
+			<p className="text-muted-foreground text-sm">
+				输入框中的 Secret、Token 和 EncodingAESKey
+				提交后清空；平台加密保存用于渠道收发。
 			</p>
 			{error ? (
 				<Alert variant="destructive">

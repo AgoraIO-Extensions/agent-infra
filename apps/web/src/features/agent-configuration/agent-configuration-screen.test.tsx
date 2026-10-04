@@ -350,7 +350,10 @@ describe("AgentConfigurationScreen", () => {
 
 it("shows group visibility and the self-built application setup contract", () => {
 	const onSave = vi.fn();
-	vi.stubGlobal("fetch", vi.fn(async () => Response.json({ status: "not_configured" })));
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => Response.json({ status: "not_configured" })),
+	);
 	render(
 		<AgentConfigurationScreen
 			agent={agent}

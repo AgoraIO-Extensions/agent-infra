@@ -1,9 +1,18 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { client } from "../../pilot/generated/client.gen.js";
 import { WecomAppSetup } from "./wecom-app-setup.js";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+	cleanup();
+	vi.unstubAllGlobals();
+});
 
 it("submits the application setup contract and clears write-only fields", async () => {
 	client.setConfig({ baseUrl: "https://platform.test" });
@@ -14,7 +23,9 @@ it("submits the application setup contract and clears write-only fields", async 
 		vi.fn(async (input: Request) => {
 			const path = new URL(input.url).pathname;
 			if (path.endsWith("/wecom-app"))
-				return Response.json({ status: "not_configured" });
+				return Response.json({
+					status: reads ? "connected" : "not_configured",
+				});
 			if (path.endsWith("/wecom-app-setup"))
 				return Response.json({
 					sessionId: "setup",
@@ -60,5 +71,96 @@ it("submits the application setup contract and clears write-only fields", async 
 		takeoverConfirmed: true,
 		state: "state",
 	});
-	expect(reads).toBeGreaterThan(0);
+	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
+	expect(reads).toBe(1);
+});
+
+function fillCredentials() {
+	for (const [label, value] of [
+		["企业 ID", "corp"],
+		["应用 ID", "123"],
+		["应用 Secret", "fixture"],
+		["回调 Token", "fixture-token"],
+		["EncodingAESKey", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"],
+	])
+		fireEvent.change(screen.getByLabelText(label), { target: { value } });
+	fireEvent.click(screen.getByRole("checkbox", { name: /我已知悉/ }));
+	fireEvent.click(screen.getByRole("button", { name: "验证并绑定" }));
+}
+it.each([429, 503])(
+	"retries setup status HTTP %s without resubmitting credentials",
+	async (code) => {
+		client.setConfig({ baseUrl: "https://platform.test" });
+		let reads = 0;
+		let submissions = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (request: Request) => {
+				const path = new URL(request.url).pathname;
+				if (path.endsWith("/wecom-app"))
+					return Response.json({
+						status: reads >= 2 ? "connected" : "not_configured",
+					});
+				if (path.endsWith("/wecom-app-setup"))
+					return Response.json({
+						sessionId: "setup",
+						state: "fixture-state",
+						callbackUrl: "https://callback.test",
+						status: "awaiting_input",
+					});
+				if (path.endsWith("/credentials")) {
+					submissions++;
+					throw new TypeError("Unknown result");
+				}
+				reads++;
+				return reads === 1
+					? Response.json({}, { status: code })
+					: Response.json({ status: "active" });
+			}),
+		);
+		render(<WecomAppSetup agentId="agent" onUnbind={vi.fn()} />);
+		await waitFor(() => expect(screen.getByText("未配置")).toBeTruthy());
+		fillCredentials();
+		await waitFor(() =>
+			expect(screen.getByRole("alert").textContent).toContain("请勿重复提交"),
+		);
+		await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy(), {
+			timeout: 3500,
+		});
+		expect(submissions).toBe(1);
+	},
+);
+it("cancels a pending setup without unbinding the existing application", async () => {
+	client.setConfig({ baseUrl: "https://platform.test" });
+	const onUnbind = vi.fn();
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (request: Request) => {
+			const path = new URL(request.url).pathname;
+			if (path.endsWith("/wecom-app"))
+				return Response.json({ status: "connected" });
+			if (path.endsWith("/wecom-app-setup"))
+				return Response.json({
+					sessionId: "setup",
+					state: "fixture-state",
+					callbackUrl: "https://callback.test",
+					status: "awaiting_input",
+				});
+			return Response.json({
+				status: path.endsWith("/cancel") ? "cancelled" : "verifying",
+			});
+		}),
+	);
+	render(<WecomAppSetup agentId="agent" onUnbind={onUnbind} />);
+	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
+	fillCredentials();
+	await waitFor(() =>
+		expect(screen.getByText(/https:\/\/callback.test/)).toBeTruthy(),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "取消配置" }));
+	await waitFor(() =>
+		expect(screen.queryByRole("button", { name: "取消配置" })).toBeNull(),
+	);
+	expect(screen.getByText("已连接")).toBeTruthy();
+	expect(onUnbind).not.toHaveBeenCalled();
 });

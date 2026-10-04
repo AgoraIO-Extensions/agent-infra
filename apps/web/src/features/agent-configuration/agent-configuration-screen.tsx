@@ -362,7 +362,7 @@ export function AgentConfigurationScreen({
 											Agent，不能阻止群成员阅读已有内容；每位发送者的会话上下文仍独立。
 										</p>
 										<p className="text-muted-foreground text-sm">
-											自建应用和智能机器人都可在下方完成绑定，凭证只在提交时使用。
+											自建应用和智能机器人都可在下方完成绑定，凭证通过受保护的接口提交。
 										</p>
 										<WecomBotSetup
 											key={`${agent.agentId}:wecom_bot`}
