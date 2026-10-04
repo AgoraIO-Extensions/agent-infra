@@ -1642,11 +1642,36 @@ function isKnownCredentialAuditSubjectAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #1270 admits only the pinned server-resolved capability; old contracts stay exact.
+function isConnectionCapabilityOpenApiAddition(previous, current) {
+	const path = "/api/v1/connection/capability";
+	const name = "ConnectionCapabilityProjectionV1";
+	if (
+		previous.paths?.[path] !== undefined ||
+		previous.components?.schemas?.[name] !== undefined
+	)
+		return false;
+	const addition = {
+		path: current.paths?.[path],
+		schema: current.components?.schemas?.[name],
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"e1e46d38ed8749051748bbb54abfdd6674051907aa237dd38eae022ff63e9326"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	delete normalized.components.schemas[name];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
+			!isConnectionCapabilityOpenApiAddition(previous, current) &&
 			!isKnownCredentialAuditSubjectAddition(previous, current) &&
 			!isPersonalCredentialNarrowOpenApiAddition(previous, current) &&
 			!isPersonalCredentialListOpenApiAddition(previous, current) &&

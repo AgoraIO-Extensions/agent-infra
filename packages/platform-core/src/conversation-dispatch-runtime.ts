@@ -226,6 +226,7 @@ export function parseRuntimeStatusResponse(
 	}
 	if (
 		input.outcome === "binding_found" &&
+		claim.hostSessionRef === null &&
 		Object.keys(input).length === 4 &&
 		input.code === undefined &&
 		input.status === undefined

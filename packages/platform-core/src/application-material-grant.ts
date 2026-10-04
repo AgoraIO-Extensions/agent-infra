@@ -217,6 +217,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 						outcome: "succeeded",
 						details: { returnedMaterial: false },
 					});
+					await assertCurrentActor(request);
 					return { metadata: current, replayed: true };
 				}
 				const metadata = await tx.upsertGrant(
@@ -235,6 +236,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 					outcome: "succeeded",
 					details: { returnedMaterial: false },
 				});
+				await assertCurrentActor(request);
 				return { metadata, replayed: current?.revokedAt === null };
 			});
 		},
@@ -266,6 +268,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 						outcome: "succeeded",
 						details: { returnedMaterial: false },
 					});
+					await assertCurrentActor(request);
 					return { metadata: current, replayed: true };
 				}
 				const metadata = await tx.revokeGrant(
@@ -285,6 +288,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 					outcome: "succeeded",
 					details: { returnedMaterial: false },
 				});
+				await assertCurrentActor(request);
 				return { metadata, replayed: false };
 			});
 		},
@@ -310,6 +314,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 					outcome: "succeeded",
 					details: { returnedMaterial: false },
 				});
+				await assertCurrentActor(request);
 				return current;
 			});
 		},

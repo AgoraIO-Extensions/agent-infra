@@ -36,6 +36,7 @@ import {
 	type WecomCallbackKeysV1,
 } from "@agent-infra/wecom";
 import type { PlatformAppDependencies } from "./app.js";
+import type { ConnectionCapabilityV1 } from "./connection-consumer-profile.js";
 import {
 	assemblePlatformFilesV1,
 	type PlatformFileDeploymentV1,
@@ -45,6 +46,7 @@ import type { ConversationAuthorization } from "./http/conversation-routes.js";
 import type { DeploymentConfigurationRoutesDependencies } from "./http/deployment-configuration-routes.js";
 import {
 	type IdentityAdapter,
+	resolveCurrentMaterialGrantActor,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
@@ -78,6 +80,7 @@ export interface PlatformApiAssemblyInput {
 	>;
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
+	readonly connectionCapability?: ConnectionCapabilityV1;
 	readonly allocateApplicationIds: ManagementRouteDependencies["allocateApplicationIds"];
 	readonly prepareApplicationSecrets: ManagementRouteDependencies["prepareSecretReplacements"];
 	readonly prepareConfigurationSecrets: ConfigurationRoutesDependencies["prepareSecretReplacements"];
@@ -193,6 +196,8 @@ export function assemblePlatformApi(
 		});
 	const applicationMaterialGrants = createApplicationMaterialGrantUseCaseV1({
 		store: applicationMaterialGrantStore,
+		resolveCurrentActor: (userId) =>
+			resolveCurrentMaterialGrantActor(input.identity, userId, randomUUID()),
 		resolveUser: async (userId) => {
 			const user = await resolveCurrentTaskUser(
 				input.identity,
@@ -517,7 +522,13 @@ export function assemblePlatformApi(
 					resolveCurrentTaskUser(input.identity, actorId, randomUUID()),
 			}),
 		},
-		sessionAudit: { identity: input.identity, audit: auditQuery },
+		sessionAudit: {
+			identity: input.identity,
+			audit: auditQuery,
+			...(input.connectionCapability
+				? { connectionCapability: input.connectionCapability }
+				: {}),
+		},
 		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },
 	};
 	const adapters = [

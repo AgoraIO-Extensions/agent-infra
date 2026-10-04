@@ -2,6 +2,7 @@ import {
 	AgentProjectionV2Schema,
 	BrowserSessionProjectionV1Schema,
 	CommandAcceptedProjectionV1Schema,
+	ConnectionCapabilityProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
 	ConversationPageV1Schema,
 	ExecutionDetailProjectionV2Schema,
@@ -642,6 +643,7 @@ test("saves the next-message model and stops the bound execution", async ({
 	let selectionBody: unknown;
 	let stopBody: unknown;
 	let stopIdempotencyKey: string | undefined;
+	const unexpectedMessageWrites: string[] = [];
 	const detail = () => {
 		const events =
 			phase === "cancelled" ? [processing, cancelled] : [processing];
@@ -687,6 +689,14 @@ test("saves the next-message model and stops the bound execution", async ({
 		}
 		if (path === `/api/v2/conversations/${conversationId}`) {
 			await route.fulfill({ json: detail() });
+			return;
+		}
+		if (path === `/api/v1/conversations/${conversationId}/messages`) {
+			unexpectedMessageWrites.push(request.method());
+			await route.fulfill({
+				status: 500,
+				json: { code: "UNEXPECTED_MESSAGE_WRITE" },
+			});
 			return;
 		}
 		if (path.endsWith("/model-selection")) {
@@ -766,7 +776,8 @@ test("saves the next-message model and stops the bound execution", async ({
 		});
 		expect(geometry.precedesTimeline).toBe(true);
 		expect(geometry.title.bottom).toBeLessThanOrEqual(geometry.controls.top);
-		expect(geometry.timeline).toBeTruthy();
+		expect(geometry.timeline.width).toBeGreaterThan(0);
+		expect(geometry.timeline.height).toBeGreaterThan(0);
 		expect(geometry.controls.bottom).toBeLessThanOrEqual(geometry.timeline.top);
 		for (const [index, control] of [
 			controls.getByRole("combobox", { name: "模型", exact: true }),
@@ -866,6 +877,7 @@ test("saves the next-message model and stops the bound execution", async ({
 	});
 	expect(stopIdempotencyKey).toBeTruthy();
 	expect(stopIdempotencyKey).not.toBe("undefined");
+	expect(unexpectedMessageWrites).toEqual([]);
 	await page.setViewportSize({ width: 390, height: 844 });
 	expect(
 		await page.evaluate(
@@ -1035,6 +1047,17 @@ for (const source of ["standard", "custom"] as const) {
 			await page.route(/\/api\/v[12]\//, async (route) => {
 				const request = route.request();
 				const path = new URL(request.url()).pathname;
+				if (
+					request.method() === "GET" &&
+					path === "/api/v1/connection/capability"
+				)
+					return route.fulfill({
+						json: ConnectionCapabilityProjectionV1Schema.parse({
+							schemaVersion: 1,
+							status: "unavailable",
+							reason: "missing",
+						}),
+					});
 				if (path === "/api/v2/me/conversations/recent")
 					return route.fulfill({
 						json: ConversationPageV1Schema.parse({

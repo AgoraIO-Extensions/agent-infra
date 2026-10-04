@@ -874,3 +874,24 @@ test("the CLI reports output-write failure without producing a receipt or leakin
   ]);
   await assert.rejects(readFile(outputPath), { code: "ENOENT" });
 });
+
+test("missing publisher input is distinct from invalid received output and never publishes", async () => {
+  for (const [raw, expected] of [
+    [undefined, { stage: "read-output", category: "input-missing" }],
+    ["", { stage: "read-output", category: "input-missing" }],
+    ["PRIVATE_INVALID_SENTINEL", { stage: "validate-output", category: "validation" }],
+    ['{"key_issues_to_review":null}', { stage: "validate-output", category: "validation" }],
+  ]) {
+    const remote = api();
+    const diagnostic = {};
+    let receipt;
+    await assert.rejects(publishPrAgentReview({ ...context, raw, diagnostic, request: remote.request })
+      .then((value) => { receipt = value; }), (error) => {
+        assert.deepEqual(publicationFailure(diagnostic, error), expected);
+        assert.doesNotMatch(JSON.stringify(publicationFailure(diagnostic, error)), /PRIVATE/);
+        return true;
+      });
+    assert.equal(receipt, undefined);
+    assert.deepEqual(remote.writes, []);
+  }
+});

@@ -10,6 +10,7 @@ import {
 } from "@agent-infra/secret-store";
 
 import type { PlatformApiAssemblyInput } from "./assembly.js";
+import { createConnectionCapability } from "./connection-consumer-profile.js";
 import {
 	createDeploymentAdmissionsV1,
 	createDeploymentConfigurationProjectionV2,
@@ -28,6 +29,8 @@ import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 
 export interface ProductionPlatformApiInputV1
 	extends Omit<DeploymentAdmissionInputV1, "currentIdentity"> {
+	readonly connectionConsumerProfile?: unknown;
+	readonly connectionConsumerProfileApproval?: unknown;
 	readonly wecom?: PlatformApiAssemblyInput["wecom"];
 	readonly wecomIdentity?: PlatformApiAssemblyInput["wecomIdentity"];
 	readonly wecomCredentialEncryptionKeys?: PlatformApiAssemblyInput["wecomCredentialEncryptionKeys"];
@@ -81,6 +84,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 	});
 	const deploymentConfiguration =
 		createDeploymentConfigurationProjectionV2(input);
+	const connectionCapability = createConnectionCapability(
+		input.connectionConsumerProfile,
+		input.connectionConsumerProfileApproval,
+	);
 	const secrets = createDeploymentSecretPreparation(
 		createSecretEncryptorV1({ encryptionKeys: input.encryptionKeys }),
 	);
@@ -131,6 +138,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,
 		conversationReplayWindowMs: input.conversationReplayWindowMs,
+		connectionCapability,
 		allocateApplicationIds: allocateDeploymentApplicationIds,
 		...secrets,
 		admissions: ({ configurationQuery }) => ({

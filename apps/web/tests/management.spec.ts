@@ -1,6 +1,7 @@
 import {
 	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
+	ConnectionCapabilityProjectionV1Schema,
 	ConversationPageV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
@@ -239,6 +240,17 @@ async function fixture(
 		const body = request.postData() ? request.postDataJSON() : undefined;
 		if (
 			request.method() === "GET" &&
+			pathname === "/api/v1/connection/capability"
+		)
+			return route.fulfill({
+				json: ConnectionCapabilityProjectionV1Schema.parse({
+					schemaVersion: 1,
+					status: "unavailable",
+					reason: "missing",
+				}),
+			});
+		if (
+			request.method() === "GET" &&
 			pathname === "/api/v2/me/conversations/recent"
 		) {
 			await route.fulfill({
@@ -266,6 +278,10 @@ async function fixture(
 			return;
 		}
 		if (pathname.endsWith("/wecom-bot")) {
+			await route.fulfill({ json: { status: "not_configured" } });
+			return;
+		}
+		if (pathname.endsWith("/wecom-app")) {
 			await route.fulfill({ json: { status: "not_configured" } });
 			return;
 		}
@@ -950,7 +966,7 @@ test("administrator authorization failure does not offer a pending-queue retry",
 	);
 });
 
-test("Owner configuration checkbox, Secret clearing, lifecycle and custom image upgrade", async ({
+test("Owner configuration, Secret clearing, lifecycle and custom image upgrade", async ({
 	page,
 }, info) => {
 	const api = await fixture(page);
@@ -973,8 +989,9 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 		"password",
 	);
 	await expect(page.getByText(/群消息和 Agent 回复对群成员可见/)).toBeVisible();
-	await page.getByRole("checkbox", { name: "修改自建应用绑定" }).check();
-	await page.getByLabel("自建应用配置标识").fill("approved-app-fixture");
+	await expect(
+		page.getByRole("region", { name: "自建应用配置" }),
+	).toBeVisible();
 	await capture(page, info, "owner-configuration");
 	api.holdNextCommand();
 	await page.getByRole("button", { name: "校验并保存" }).click();
@@ -992,13 +1009,6 @@ test("Owner configuration checkbox, Secret clearing, lifecycle and custom image 
 		schemaVersion: 2,
 		coOwnerIds: ["user-owner-1"],
 		secrets: [{ name: "RELEASE_KEY", value: "synthetic-browser-secret" }],
-		channels: [
-			{
-				kind: "wecom_app",
-				enabled: true,
-				bindingReference: "approved-app-fixture",
-			},
-		],
 	});
 	await page.goto("/agents/agent-pilot-1/configuration");
 	await capture(page, info, "lifecycle");
@@ -1207,6 +1217,8 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 			return route.fulfill({
 				json: { status: active ? "connected" : "not_configured" },
 			});
+		if (path.endsWith("/wecom-app"))
+			return route.fulfill({ json: { status: "not_configured" } });
 		if (path.endsWith("/wecom-setup"))
 			return route.fulfill({
 				json: {
@@ -1233,13 +1245,20 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	await page.getByLabel("Bot ID", { exact: true }).fill("fixture-bot");
 	const secret = "synthetic-bot-secret";
 	await page.getByLabel("Secret", { exact: true }).fill(secret);
-	await page.getByRole("checkbox", { name: /我已知悉/ }).check();
+	await page
+		.getByRole("checkbox", {
+			name: "我已知悉：连接此机器人可能断开它在其他服务中的现有连接。",
+		})
+		.check();
 	await page.getByLabel("Secret", { exact: true }).evaluate((element) => {
 		(element as HTMLInputElement).value = "";
 	});
 	await capture(page, info, "wecom-manual");
 	await page.getByLabel("Secret", { exact: true }).fill(secret);
-	await page.getByRole("button", { name: "验证并绑定" }).click();
+	await page
+		.getByRole("region", { name: "智能机器人配置" })
+		.getByRole("button", { name: "验证并绑定" })
+		.click();
 	await expect(page.getByLabel("Secret", { exact: true })).toHaveValue("");
 	await expect(page.getByText("已连接", { exact: true })).toBeVisible();
 	expect(saved).toEqual({
@@ -1588,31 +1607,53 @@ test("Agent catalog follows original IA card columns and keeps keyboard detail n
 	}
 });
 
-test("Agent directory keeps independent Connection in navigation and creation in the page heading", async ({
-	page,
-}, info) => {
-	await fixture(page, "employee");
-	await page.goto("/agents");
-	if (info.project.name === "mobile")
-		await page.getByRole("button", { name: "打开导航" }).click();
-	const nav =
-		info.project.name === "mobile"
-			? page.getByRole("dialog", { name: "主导航" })
-			: page.locator(".platform-sidebar");
-	const connection = nav.getByRole("link", { name: "我的 Connection" });
-	if (await connection.count()) {
-		await expect(connection).toHaveAttribute("target", "_blank");
-		expect(await connection.getAttribute("href")).not.toContain("/agents");
-	} else await expect(nav).not.toContainText("Connection");
-	if (info.project.name === "mobile") await page.keyboard.press("Escape");
-	const create = page
-		.locator("main .page-heading")
-		.getByRole("link", { name: "创建申请" });
-	await create.focus();
-	await page.keyboard.press("Enter");
-	await expect(page).toHaveURL(/\/my-agents\/new$/);
-	await expect(page.getByLabel("Agent 名称", { exact: true })).toBeVisible();
-});
+for (const available of [true, false]) {
+	test(`Agent directory shows Connection available=${available} and keeps creation in the page heading`, async ({
+		page,
+	}, info) => {
+		await fixture(page, "employee");
+		if (available)
+			await page.route("**/api/v1/connection/capability", (route) =>
+				route.fulfill({
+					json: ConnectionCapabilityProjectionV1Schema.parse({
+						schemaVersion: 1,
+						status: "available",
+						publicOrigin: "https://connection.example.test",
+						mcpPath: "/mcp",
+						configFingerprint: "a".repeat(64),
+					}),
+				}),
+			);
+		await page.goto("/agents");
+		if (info.project.name === "mobile")
+			await page.getByRole("button", { name: "打开导航" }).click();
+		const nav =
+			info.project.name === "mobile"
+				? page.getByRole("dialog", { name: "主导航" })
+				: page.locator(".platform-sidebar");
+		const connection = nav.getByRole("link", { name: "我的 Connection" });
+		if (available) {
+			await expect(connection).toHaveAttribute("target", "_blank");
+			await expect(connection).toHaveAttribute(
+				"href",
+				"https://connection.example.test/mcp",
+			);
+		} else {
+			await expect(connection).toHaveCount(0);
+			await expect(
+				nav.getByText("我的 Connection（暂不可用）"),
+			).toHaveAttribute("aria-disabled", "true");
+		}
+		if (info.project.name === "mobile") await page.keyboard.press("Escape");
+		const create = page
+			.locator("main .page-heading")
+			.getByRole("link", { name: "创建申请" });
+		await create.focus();
+		await page.keyboard.press("Enter");
+		await expect(page).toHaveURL(/\/my-agents\/new$/);
+		await expect(page.getByLabel("Agent 名称", { exact: true })).toBeVisible();
+	});
+}
 
 test("directory detail binds the selected Agent and hides a previously visible resource on opaque denial", async ({
 	page,

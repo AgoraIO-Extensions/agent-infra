@@ -11,8 +11,10 @@ import {
 } from "@/components/ui/dialog";
 import { useResultFocus } from "@/hooks/use-result-focus";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
-import { agentManagementStatusLabels } from "../agent-management-status.js";
+import {
+	agentManagementStatusLabels,
+	agentServiceAvailabilityLabel,
+} from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import type { AgentLifecycleCommand } from "./agent-administration.js";
 
