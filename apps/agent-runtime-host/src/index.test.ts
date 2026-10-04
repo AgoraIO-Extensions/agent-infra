@@ -19,6 +19,7 @@ import {
 	submitV3Fixture,
 } from "../../../packages/agent-runtime/src/grant-v2-fixture.test-support.js";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
+import { createRuntimeTlsTransport } from "../../platform-worker/src/runtime-tls-transport.js";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
@@ -54,6 +55,7 @@ vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 
 import {
 	assembleRuntimeHost,
+	closeRuntimeHost,
 	createRuntimeHostApp,
 	startRuntimeHost,
 } from "./index.js";
@@ -378,7 +380,7 @@ describe("RuntimeHost environment assembly", () => {
 		await runtime.close();
 	});
 
-	it("binds V3 HTTP to the deployed Worker and closes its authority", async () => {
+	it("keeps service token and signed Worker authorization independent over verified TLS", async () => {
 		const runtime = await assembleRuntimeHost({
 			...(await environment()),
 			AGENT_INFRA_RUNTIME_WORKER_ID: "worker-fixture",
@@ -388,31 +390,59 @@ describe("RuntimeHost environment assembly", () => {
 				.export({ type: "spki", format: "pem" })
 				.toString(),
 		});
-		const app = createRuntimeHostApp(runtime);
-		const post = (workerId: string, now = Date.now()) =>
-			app.request("/internal/runtime/v3/turns", {
-				method: "POST",
-				headers: {
-					authorization: "Bearer synthetic-token",
-					"content-type": "application/json",
+		const material = await runtimeTlsFixture();
+		const transport = createRuntimeTlsTransport(material.ca);
+		const ready = Promise.withResolvers<string>();
+		const server = startRuntimeHost({
+			...runtime,
+			tls: { ...material, serviceDnsNames: ["localhost"] },
+			port: 0,
+			log: ready.resolve,
+		});
+		await ready.promise;
+		const address = server.address();
+		if (!address || typeof address === "string")
+			throw new Error("Missing test port");
+		const post = (
+			workerId: string,
+			now = Date.now(),
+			token = "synthetic-token",
+		) =>
+			transport.fetch(
+				`https://localhost:${address.port}/internal/runtime/v3/turns`,
+				{
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${token}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify(
+						signV3Fixture(submitV3Fixture(), "turn.submit", {
+							now,
+							claims: { workerId },
+						}),
+					),
 				},
-				body: JSON.stringify(
-					signV3Fixture(submitV3Fixture(), "turn.submit", {
-						now,
-						claims: { workerId },
-					}),
-				),
-			});
-		try {
-			expect((await post("foreign-worker")).status).toBe(403);
-			expect((await post("worker-fixture", Date.now() - 60_000)).status).toBe(
-				403,
 			);
-			expect((await post("worker-fixture")).status).toBe(200);
+		try {
+			try {
+				expect(
+					(await post("worker-fixture", Date.now(), "invalid-token")).status,
+				).toBe(401);
+				expect((await post("foreign-worker")).status).toBe(403);
+				expect((await post("worker-fixture", Date.now() - 60_000)).status).toBe(
+					403,
+				);
+				expect((await post("worker-fixture")).status).toBe(200);
+			} finally {
+				await runtime.close();
+			}
+			expect((await post("worker-fixture")).status).toBe(403);
 		} finally {
-			await runtime.close();
+			await closeRuntimeHost(server, async () => {});
+			await transport.close();
+			await material.cleanup();
 		}
-		expect((await post("worker-fixture")).status).toBe(403);
 	});
 
 	it.each([false, true])(
