@@ -19,13 +19,13 @@
 - [ADR: Connection 使用单一账号级权威](docs/adr/0005-use-one-account-backed-connection-authority.md)
 - [ADR: 独立部署 Connection Web](docs/adr/0006-deploy-connection-web-independently.md)
 - [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)
-- [M1 三层交付与汇合计划](docs/architecture/PLAN-M1-delivery-convergence.md)
+- [M1 交付路线与阶段验收](https://github.com/AgoraIO-Extensions/agent-infra/issues/144)
 
 ## 当前状态
 
 仓库已进入 M1 领域功能实现阶段，已交付 Platform 管理、配置、Conversation 持久化与
 HTTP/SSE、RuntimeHost 和 Codex Driver 组件。主系统本地整装、真实 GitHub Pilot 和完整
-M1 上线是独立验收层次，当前仍有未完成门禁，见交付与汇合计划。
+M1 上线是独立验收层次，当前仍有未完成门禁，见 [阶段验收与交付边界 #150](https://github.com/AgoraIO-Extensions/agent-infra/issues/150)。
 
 | 部署单元 | 目录 | 当前能力 |
 | --- | --- | --- |
