@@ -2,8 +2,8 @@ import { Buffer } from "node:buffer";
 
 import {
 	type AgentConfigurationAccessTargetV1,
-	type AgentConfigurationRecordV2,
-	decodeAgentConfigurationRecordV2,
+	type AgentConfigurationRecord,
+	decodeAgentConfigurationRecord,
 } from "./agent-configuration.js";
 import {
 	ApplicationFoundationError,
@@ -45,7 +45,7 @@ export interface ApplicationFoundationSnapshot {
 	configurationRevisions: {
 		agentId: string;
 		revision: number;
-		configuration: AgentConfigurationRecordV2;
+		configuration: AgentConfigurationRecord;
 		createdAt: Date;
 	}[];
 	owners: { agentId: string; ownerId: string; createdAt: Date }[];
@@ -135,9 +135,9 @@ function sameValue(left: unknown, right: unknown): boolean {
 }
 
 function validatePlan(plan: ApplicationFoundationWritePlanV1): void {
-	let configuration: ReturnType<typeof decodeAgentConfigurationRecordV2>;
+	let configuration: ReturnType<typeof decodeAgentConfigurationRecord>;
 	try {
-		configuration = decodeAgentConfigurationRecordV2(
+		configuration = decodeAgentConfigurationRecord(
 			plan.configurationRevision.configuration,
 		);
 	} catch {
@@ -256,7 +256,7 @@ export class FakeApplicationFoundationTransactionV1
 		if (!agent || !current || !Number.isSafeInteger(nextRevision)) {
 			throw new ApplicationFoundationError("persistence_failed");
 		}
-		const configuration = decodeAgentConfigurationRecordV2({
+		const configuration = decodeAgentConfigurationRecord({
 			...current.configuration,
 			revision: nextRevision,
 		});
@@ -325,6 +325,9 @@ export class FakeApplicationFoundationTransactionV1
 	): ReturnType<ApplicationFoundationTransactionPortV1["commit"]> {
 		const plan = snapshotApplicationFoundationWritePlanV1(input);
 		validatePlan(plan);
+		// This legacy test transaction does not implement the Relay Key writer.
+		if (plan.configurationRevision.configuration.schemaVersion === 3)
+			throw new ApplicationFoundationError("persistence_failed");
 		const existingIdempotency = this.#state.idempotencyResults.find(
 			(record) =>
 				record.agentId === plan.agent.agentId &&

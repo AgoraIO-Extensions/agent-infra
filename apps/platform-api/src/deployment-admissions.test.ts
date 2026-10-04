@@ -417,6 +417,24 @@ describe("production deployment admissions", () => {
 		expect(f.load).not.toHaveBeenCalled();
 	});
 
+	it("resolves V3 model selection without creating per-model credentials", async () => {
+		const f = fixture();
+		const a = createDeploymentAdmissionsV1(f.input);
+		const selected = modelInput();
+		const options = selected.options.map(
+			({ replaceCredential: _replace, ...option }) => option,
+		);
+		const requested = { ...selected, options };
+		if (!a.keylessModelAdmission) throw new Error("missing admission");
+		const result = await a.keylessModelAdmission.admitModels({
+			...request,
+			requested,
+		});
+		expect(result).toEqual({ catalogRevision: "catalog-a", ...requested });
+		expect(f.load).toHaveBeenCalledOnce();
+		expect(JSON.stringify(result)).not.toMatch(/credential|secretId/);
+	});
+
 	it("uses one real catalog snapshot for all options and freezes its configured revision", async () => {
 		const f = fixture();
 		const config = { ...f.input.modelCatalog };

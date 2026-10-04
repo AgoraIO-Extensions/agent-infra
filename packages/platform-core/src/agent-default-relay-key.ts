@@ -1,4 +1,4 @@
-import type { AgentConfigurationRecordV2 } from "./agent-configuration-types.js";
+import type { AgentConfigurationRecord } from "./agent-configuration-types.js";
 import type { PersonalRelayKeyIdentityV1 } from "./personal-relay-key.js";
 
 export class AgentDefaultRelayKeyErrorV1 extends Error {
@@ -43,7 +43,7 @@ export interface AgentDefaultRelayKeyTransactionV1 {
 	/** Locks the original Agent configuration and Owner membership, and current disable fact. */
 	ownedConfiguration(
 		request: AgentDefaultRelayKeyRequestV1,
-	): Promise<AgentConfigurationRecordV2 | null>;
+	): Promise<AgentConfigurationRecord | null>;
 	current(agentId: string): Promise<number | null>;
 	replace(
 		agentId: string,
@@ -67,7 +67,7 @@ export interface AgentDefaultRelayKeyDependenciesV1 {
 	/** Fresh Key visibility intersected with this exact template/image and current catalog. No cache receipt authorizes a save. */
 	readonly candidates: (
 		keyValue: string,
-		configuration: AgentConfigurationRecordV2,
+		configuration: AgentConfigurationRecord,
 	) => Promise<readonly AgentDefaultRelayKeyCandidateV1[]>;
 	readonly encrypt: (
 		binding: AgentDefaultRelayKeyBindingV1,
@@ -111,7 +111,7 @@ export function createAgentDefaultRelayKeyUseCaseV1(
 		operation: AgentDefaultRelayKeyAuditV1["operation"],
 		work: (
 			tx: AgentDefaultRelayKeyTransactionV1,
-			configuration: AgentConfigurationRecordV2,
+			configuration: AgentConfigurationRecord,
 		) => Promise<{
 			result: T;
 			audit?: Partial<
@@ -201,7 +201,7 @@ export function createAgentDefaultRelayKeyUseCaseV1(
 	}
 	async function candidates(
 		key: string,
-		configuration: AgentConfigurationRecordV2,
+		configuration: AgentConfigurationRecord,
 	) {
 		const result = await input.candidates(key, structuredClone(configuration));
 		if (

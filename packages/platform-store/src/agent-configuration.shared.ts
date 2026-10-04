@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import {
-	type AgentConfigurationRecordV2,
+	type AgentConfigurationRecord,
 	type AgentConfigurationWritePlanV1,
 	snapshotAgentConfigurationWritePlanV1,
 } from "@agent-infra/platform-core";
@@ -36,7 +36,7 @@ export interface IdempotencyRow {
 }
 
 export function canonicalSourceReference(
-	configuration: AgentConfigurationRecordV2,
+	configuration: AgentConfigurationRecord,
 ) {
 	return configuration.source.kind === "standard"
 		? configuration.source.templateId

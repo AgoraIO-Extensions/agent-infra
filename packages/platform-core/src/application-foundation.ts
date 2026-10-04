@@ -4,13 +4,14 @@ import {
 	type AgentConfigurationAccessTargetV1,
 	type AgentConfigurationActorContextV1,
 	AgentConfigurationError,
-	type AgentConfigurationRecordV2,
+	type AgentConfigurationRecord,
 	beginInitialAgentConfigurationAdmissionV1,
-	decodeAgentConfigurationRecordV2,
+	decodeAgentConfigurationRecord,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
 	type InitialAgentConfigurationCommandV2,
 	validateLegacyInitialActionsV1,
 } from "./agent-configuration.js";
+import type { InitialAgentConfigurationCommandV3 } from "./agent-configuration-types.js";
 import type {
 	AgentDefaultRelayKeyBindingV1,
 	AgentDefaultRelayKeyDependenciesV1,
@@ -30,6 +31,18 @@ export interface CommitApplicationFoundationCommandV2
 	/** Optional during the contract handoff; when present it is persisted atomically with the application. */
 	readonly defaultRelayKey?: string;
 }
+
+export interface CommitApplicationFoundationCommandV3
+	extends Omit<
+			CommitApplicationFoundationCommandV2,
+			"schemaVersion" | "source" | "modelConfiguration" | "defaultRelayKey"
+		>,
+		InitialAgentConfigurationCommandV3 {
+	readonly defaultRelayKey: string;
+}
+export type CommitApplicationFoundationCommand =
+	| CommitApplicationFoundationCommandV2
+	| CommitApplicationFoundationCommandV3;
 
 export interface ApplicationFoundationRelayKeyAttachmentV1 {
 	readonly encrypt: (
@@ -73,7 +86,7 @@ export interface ApplicationFoundationWritePlanV1 {
 	readonly configurationRevision: {
 		readonly agentId: string;
 		readonly revision: 1;
-		readonly configuration: AgentConfigurationRecordV2;
+		readonly configuration: AgentConfigurationRecord;
 		readonly createdAt: Date;
 	};
 	readonly access: {
@@ -156,7 +169,7 @@ export interface ApplicationFoundationUseCaseV1 {
 	): Promise<CommitApplicationFoundationResultV1>;
 
 	submit(
-		command: CommitApplicationFoundationCommandV2,
+		command: CommitApplicationFoundationCommand,
 		actorContext: ApplicationFoundationActorContextV1,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<CommitApplicationFoundationResultV1>;
@@ -337,7 +350,7 @@ function isCapturedText(value: unknown, maxBytes = 1024): value is string {
 function parseApplicationFoundationCommandV1(
 	command: unknown,
 	legacy = false,
-): CommitApplicationFoundationCommandV2 {
+): CommitApplicationFoundationCommand {
 	try {
 		const values = snapshotExactDataValues(
 			command,
@@ -356,7 +369,9 @@ function parseApplicationFoundationCommandV1(
 			traceId,
 		} = values;
 		if (
-			schemaVersion !== (legacy ? 1 : 2) ||
+			(legacy
+				? schemaVersion !== 1
+				: schemaVersion !== 2 && schemaVersion !== 3) ||
 			!isCapturedText(applicationId) ||
 			!isCapturedText(agentId) ||
 			!isCapturedText(idempotencyKey, 128) ||
@@ -369,7 +384,7 @@ function parseApplicationFoundationCommandV1(
 			invalidApplicationFoundationInput();
 		}
 		if (
-			Object.hasOwn(values, "defaultRelayKey") &&
+			(schemaVersion === 3 || Object.hasOwn(values, "defaultRelayKey")) &&
 			(typeof values.defaultRelayKey !== "string" ||
 				values.defaultRelayKey.length < 16 ||
 				values.defaultRelayKey.length > 8192 ||
@@ -384,8 +399,8 @@ function parseApplicationFoundationCommandV1(
 			if (nameCodePointCount >= 200) invalidApplicationFoundationInput();
 		}
 		if (legacy) validateLegacyInitialActionsV1(values.actions);
-		return {
-			schemaVersion: 2,
+		const captured = {
+			schemaVersion: schemaVersion === 3 ? 3 : 2,
 			applicationId,
 			agentId,
 			idempotencyKey,
@@ -414,6 +429,7 @@ function parseApplicationFoundationCommandV1(
 				values.channels as InitialAgentConfigurationCommandV2["channels"],
 			traceId,
 		};
+		return captured as CommitApplicationFoundationCommand;
 	} catch {
 		invalidApplicationFoundationInput();
 	}
@@ -534,10 +550,12 @@ export function snapshotApplicationFoundationWritePlanV1(
 			["agentId", "revision", "configuration", "createdAt"],
 		);
 		if (
-			Object.getOwnPropertyDescriptor(
-				configurationRevision.configuration,
-				"schemaVersion",
-			)?.value !== 2
+			![2, 3].includes(
+				Object.getOwnPropertyDescriptor(
+					configurationRevision.configuration,
+					"schemaVersion",
+				)?.value,
+			)
 		) {
 			throw new ApplicationFoundationError("persistence_failed");
 		}
@@ -607,7 +625,7 @@ export function snapshotApplicationFoundationWritePlanV1(
 			configurationRevision: {
 				agentId: configurationRevision.agentId as string,
 				revision: configurationRevision.revision as 1,
-				configuration: decodeAgentConfigurationRecordV2(
+				configuration: decodeAgentConfigurationRecord(
 					configurationRevision.configuration,
 				),
 				createdAt: snapshotPlanDate(configurationRevision.createdAt),
@@ -793,21 +811,14 @@ export function createApplicationFoundationUseCaseV1(
 		>;
 		try {
 			admission = await beginInitialAgentConfigurationAdmissionV1(
-				{
-					schemaVersion: 2,
-					agentId: command.agentId,
-					requestId: command.requestId,
-					traceId: command.traceId,
-					coOwnerIds: command.coOwnerIds,
-					availability: command.availability,
-					source: command.source,
-					...(command.modelConfiguration === undefined
-						? {}
-						: { modelConfiguration: command.modelConfiguration }),
-					environment: command.environment,
-					secrets: command.secrets,
-					channels: command.channels,
-				},
+				(({
+					applicationId: _applicationId,
+					idempotencyKey: _idempotencyKey,
+					name: _name,
+					description: _description,
+					defaultRelayKey: _key,
+					...initial
+				}) => initial)(command),
 				{
 					schemaVersion: 1,
 					actorId: actorContext.userId,

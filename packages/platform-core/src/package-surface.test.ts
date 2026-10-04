@@ -87,6 +87,7 @@ describe("platform-core package surface", () => {
 			"decideAgentRuntimePresentationV1",
 			"decideConversationDispatchCapacityV1",
 			"decideConversationDispatchRetryTransitionV1",
+			"decodeAgentConfigurationRecordV3",
 			"immutableSecretNameV1",
 			"isAdministratorAgentReadAllowedV1",
 			"isAgentAccessAllowedV1",

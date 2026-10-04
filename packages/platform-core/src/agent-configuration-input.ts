@@ -6,12 +6,13 @@ import type {
 	AgentConfigurationChannelChangeV1,
 	AgentConfigurationChannelKindV1,
 	AgentConfigurationModelInputV1,
+	AgentConfigurationModelInputV2,
 	AgentConfigurationModelOptionInputV1,
 	AgentConfigurationRecordV2,
 	AgentConfigurationSecretReplacementInputV1,
 	AgentConfigurationSourceSelectionV1,
 	AgentConfigurationSourceV1,
-	InitialAgentConfigurationCommandV2,
+	InitialAgentConfigurationCommand,
 	LegacyUpdateAgentConfigurationCommandV1,
 	ReleaseStandardTemplateCommandV1,
 	StandardTemplateReleaseTargetV1,
@@ -40,6 +41,16 @@ import {
 function parseModelConfiguration(
 	input: unknown,
 ): AgentConfigurationModelInputV1 {
+	return parseModelConfigurationVersion(
+		input,
+		false,
+	) as AgentConfigurationModelInputV1;
+}
+
+function parseModelConfigurationVersion(
+	input: unknown,
+	keyless: boolean,
+): AgentConfigurationModelInputV2 {
 	const values = exactObject(input, [
 		"options",
 		"defaultOptionId",
@@ -53,7 +64,10 @@ function parseModelConfiguration(
 	) {
 		invalidCommand();
 	}
-	const options: AgentConfigurationModelOptionInputV1[] = [];
+	const options: (Omit<
+		AgentConfigurationModelOptionInputV1,
+		"replaceCredential"
+	> & { replaceCredential?: boolean })[] = [];
 	const optionIds = new Set<string>();
 	for (const inputOption of inputs) {
 		const option = exactObject(inputOption, [
@@ -61,13 +75,13 @@ function parseModelConfiguration(
 			"endpointId",
 			"modelId",
 			"reasoningLevels",
-			"replaceCredential",
+			...(keyless ? [] : ["replaceCredential"]),
 		]);
 		if (
 			!isText(option.optionId, idMaxBytes) ||
 			!isText(option.endpointId, idMaxBytes) ||
 			!isText(option.modelId, idMaxBytes) ||
-			typeof option.replaceCredential !== "boolean" ||
+			(!keyless && typeof option.replaceCredential !== "boolean") ||
 			optionIds.has(option.optionId)
 		) {
 			invalidCommand();
@@ -92,7 +106,9 @@ function parseModelConfiguration(
 			endpointId: option.endpointId,
 			modelId: option.modelId,
 			reasoningLevels: reasoningLevels.toSorted(),
-			replaceCredential: option.replaceCredential,
+			...(keyless
+				? {}
+				: { replaceCredential: option.replaceCredential as boolean }),
 		});
 	}
 	const defaultOption = options.find(
@@ -677,7 +693,7 @@ export function parseReleaseStandardTemplateCommand(
 
 export function parseInitialCommand(
 	command: unknown,
-): InitialAgentConfigurationCommandV2 {
+): InitialAgentConfigurationCommand {
 	const values = exactObject(
 		command,
 		[
@@ -695,7 +711,7 @@ export function parseInitialCommand(
 		["modelConfiguration"],
 	);
 	if (
-		values.schemaVersion !== 2 ||
+		(values.schemaVersion !== 2 && values.schemaVersion !== 3) ||
 		!isText(values.agentId, idMaxBytes) ||
 		!isText(values.requestId, idMaxBytes) ||
 		!isText(values.traceId, idMaxBytes)
@@ -710,14 +726,33 @@ export function parseInitialCommand(
 	) {
 		invalidCommand();
 	}
-	return {
-		schemaVersion: 2,
+	const common = {
 		agentId: values.agentId,
 		requestId: values.requestId,
 		traceId: values.traceId,
 		coOwnerIds,
 		availability,
-		source: parseSourceSelection(values.source),
+		environment: parseEnvironment(values.environment),
+		secrets: parseSecretReplacements(values.secrets),
+		channels: parseChannelChanges(values.channels),
+	};
+	const source = parseSourceSelection(values.source);
+	if (values.schemaVersion === 3) {
+		if (source.kind !== "standard") invalidCommand();
+		return {
+			...common,
+			schemaVersion: 3,
+			source,
+			modelConfiguration: parseModelConfigurationVersion(
+				values.modelConfiguration,
+				true,
+			),
+		};
+	}
+	return {
+		...common,
+		schemaVersion: 2,
+		source,
 		...(Object.hasOwn(values, "modelConfiguration")
 			? {
 					modelConfiguration: parseModelConfiguration(
@@ -725,9 +760,6 @@ export function parseInitialCommand(
 					),
 				}
 			: {}),
-		environment: parseEnvironment(values.environment),
-		secrets: parseSecretReplacements(values.secrets),
-		channels: parseChannelChanges(values.channels),
 	};
 }
 

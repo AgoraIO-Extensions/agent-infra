@@ -7,6 +7,7 @@ import {
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
 	type CommitApplicationFoundationResultV1,
+	decodeAgentConfigurationRecordV3,
 	type PendingSecretRecordAttachmentsV1,
 	snapshotApplicationFoundationWritePlanV1,
 } from "@agent-infra/platform-core";
@@ -14,7 +15,16 @@ import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { decodeAgentConfigurationRecord as decodeLegacyConfiguration } from "./agent-configuration-record.js";
+
+function decodeAgentConfigurationRecord(input: unknown) {
+	return input !== null &&
+		typeof input === "object" &&
+		Object.getOwnPropertyDescriptor(input, "schemaVersion")?.value === 3
+		? decodeAgentConfigurationRecordV3(input)
+		: decodeLegacyConfiguration(input);
+}
+
 import { isPostgresError } from "./postgres-error.js";
 import { replaceRelayKeyVersionInTransaction } from "./relay-key-versions.js";
 import {
@@ -343,6 +353,9 @@ export class PostgresApplicationFoundationTransactionV1
 	): ReturnType<ApplicationFoundationTransactionPortV1["commit"]> {
 		try {
 			const { plan, configuration, result } = validatedPlan(input);
+			if (configuration.schemaVersion === 3 && !defaultRelayKey) {
+				throw new ApplicationFoundationError("persistence_failed");
+			}
 			return await this.#database.transaction(async (transaction) => {
 				const [reservation] = await transaction
 					.insert(idempotencyRecords)

@@ -10,6 +10,7 @@ import {
 	ApplicationFoundationError,
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
+	type CommitApplicationFoundationCommand,
 	createApplicationFoundationUseCaseV1,
 	snapshotApplicationFoundationWritePlanV1,
 } from "./application-foundation.ts";
@@ -488,11 +489,45 @@ describe("Fake application foundation transaction", () => {
 });
 
 describe("Application foundation Secret sidecar", () => {
-	function defaultKeyFixture() {
-		const command = {
+	function defaultKeyFixture(keyless = false) {
+		const legacyCommand = {
 			...applicationFoundationCommandV1,
 			defaultRelayKey: "controlled-default-key-for-test",
 		};
+		const command: CommitApplicationFoundationCommand = keyless
+			? {
+					...legacyCommand,
+					schemaVersion: 3,
+					source: { kind: "standard", templateId: "template_01" },
+					secrets: [],
+					modelConfiguration: {
+						options: [
+							{
+								optionId: "model_primary",
+								endpointId: "endpoint_01",
+								modelId: "gpt-5",
+								reasoningLevels: ["low"],
+							},
+							{
+								optionId: "model_secondary",
+								endpointId: "endpoint_01",
+								modelId: "gpt-5",
+								reasoningLevels: ["low"],
+							},
+						],
+						defaultOptionId: "model_primary",
+						defaultReasoningLevel: "low",
+					},
+				}
+			: legacyCommand;
+		const keylessAdmission = vi
+			.fn()
+			.mockImplementation(async ({ requested }) => ({
+				catalogRevision: "catalog_4",
+				...requested,
+			}));
+		const admissions = applicationFoundationAdmissionDependenciesV1();
+		const legacyAdmission = vi.spyOn(admissions.modelAdmission, "admitModels");
 		const identity = vi.fn().mockResolvedValue({
 			userId: applicationFoundationActorContextV1.userId,
 			accountStatus: "active",
@@ -528,7 +563,8 @@ describe("Application foundation Secret sidecar", () => {
 			.mockResolvedValue({ outcome: "ready" });
 		const useCase = createApplicationFoundationUseCaseV1(
 			{
-				...applicationFoundationAdmissionDependenciesV1(),
+				...admissions,
+				keylessModelAdmission: { admitModels: keylessAdmission },
 				transaction: { read, commit },
 				defaultRelayKey: { currentIdentity: identity, candidates, encrypt },
 			},
@@ -536,6 +572,8 @@ describe("Application foundation Secret sidecar", () => {
 		);
 		return {
 			command,
+			keylessAdmission,
+			legacyAdmission,
 			identity,
 			candidates,
 			encrypt,
@@ -545,10 +583,102 @@ describe("Application foundation Secret sidecar", () => {
 				useCase.submit(
 					command,
 					applicationFoundationActorContextV1,
-					pendingSecretRecordAttachmentFixtureV1(),
+					keyless ? undefined : pendingSecretRecordAttachmentFixtureV1(),
 				),
 		};
 	}
+
+	it("creates V3 with one default Key and multiple credential-free models through the original commit", async () => {
+		const fixture = defaultKeyFixture(true);
+		await expect(fixture.submit()).resolves.toMatchObject({
+			status: "pending_approval",
+		});
+		expect(fixture.legacyAdmission).not.toHaveBeenCalled();
+		expect(fixture.keylessAdmission).toHaveBeenCalledOnce();
+		const call = fixture.commit.mock.calls[0];
+		if (!call) throw new Error("missing commit");
+		const [plan, attachments, key] = call;
+		expect(plan.configurationRevision.configuration.schemaVersion).toBe(3);
+		expect(
+			plan.configurationRevision.configuration.modelConfiguration?.options,
+		).toHaveLength(2);
+		expect(JSON.stringify(plan)).not.toMatch(
+			/credential|controlled-default-key/,
+		);
+		expect(attachments).toBeUndefined();
+		expect(key?.encrypt).toBeTypeOf("function");
+		expect(fixture.candidates).toHaveBeenCalledWith(
+			fixture.command.defaultRelayKey,
+			plan.configurationRevision.configuration,
+		);
+	});
+
+	it.each(["credential", "replaceCredential", "keyReference"])(
+		"rejects V3 per-model %s without side effects",
+		async (field) => {
+			const fixture = defaultKeyFixture(true);
+			const option = fixture.command.modelConfiguration?.options[0];
+			if (!option) throw new Error("missing model");
+			Object.assign(option, {
+				[field]: field === "replaceCredential" ? false : "forbidden",
+			});
+			await expect(fixture.submit()).rejects.toMatchObject({
+				code: "invalid_command",
+			});
+			expect(fixture.read).not.toHaveBeenCalled();
+			expect(fixture.commit).not.toHaveBeenCalled();
+		},
+	);
+
+	it("rejects a keyless admission that changes the selected model", async () => {
+		const fixture = defaultKeyFixture(true);
+		fixture.keylessAdmission.mockImplementation(async ({ requested }) => ({
+			catalogRevision: "catalog_4",
+			...requested,
+			defaultOptionId: "model_secondary",
+		}));
+		await expect(fixture.submit()).rejects.toMatchObject({
+			code: "not_admitted",
+		});
+		expect(fixture.commit).not.toHaveBeenCalled();
+	});
+
+	it("refuses V3 when the submitted Key cannot see the resulting selection", async () => {
+		const fixture = defaultKeyFixture(true);
+		fixture.candidates.mockResolvedValue([]);
+		await expect(fixture.submit()).rejects.toMatchObject({
+			code: "not_admitted",
+		});
+		expect(fixture.encrypt).not.toHaveBeenCalled();
+		expect(fixture.commit).not.toHaveBeenCalled();
+	});
+
+	it("distinguishes V3 catalog rejection from dependency failure without leaking input", async () => {
+		const refused = defaultKeyFixture(true);
+		refused.keylessAdmission.mockResolvedValue(null);
+		await expect(refused.submit()).rejects.toMatchObject({
+			code: "not_admitted",
+		});
+		expect(refused.commit).not.toHaveBeenCalled();
+		const unavailable = defaultKeyFixture(true);
+		unavailable.keylessAdmission.mockRejectedValue(
+			new Error(unavailable.command.defaultRelayKey),
+		);
+		await expect(unavailable.submit()).rejects.toMatchObject({
+			code: "dependency_unavailable",
+			message: "Application foundation dependency unavailable",
+		});
+		expect(unavailable.commit).not.toHaveBeenCalled();
+	});
+
+	it("requires a Key for V3 instead of inferring a legacy credential", async () => {
+		const fixture = defaultKeyFixture(true);
+		Reflect.deleteProperty(fixture.command, "defaultRelayKey");
+		await expect(fixture.submit()).rejects.toMatchObject({
+			code: "invalid_command",
+		});
+		expect(fixture.read).not.toHaveBeenCalled();
+	});
 
 	it("commits an admitted default Key via the transaction sidecar without persisting plaintext", async () => {
 		const fixture = defaultKeyFixture();

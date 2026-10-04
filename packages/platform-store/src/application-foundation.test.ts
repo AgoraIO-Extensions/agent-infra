@@ -475,6 +475,90 @@ describe("PostgreSQL application foundation transaction", () => {
 });
 
 describe("PostgreSQL application default Relay Key atomicity", () => {
+	it.each([false, true])(
+		"persists V3 keyless models with one Key and replays atomically (audit failure=%s)",
+		async (failAudit) => {
+			await resetDatabase();
+			const adapter = new builtStore.PostgresApplicationFoundationTransactionV1(
+				{ databaseUrl },
+			);
+			try {
+				const plan = await captureApplicationFoundationWritePlan();
+				const old = plan.configurationRevision.configuration;
+				const model = old.modelConfiguration;
+				if (!model || old.source.kind !== "standard")
+					throw new Error("missing standard model");
+				const v3: ApplicationFoundationWritePlanV1 = {
+					...plan,
+					configurationRevision: {
+						...plan.configurationRevision,
+						configuration: {
+							...old,
+							schemaVersion: 3,
+							source: old.source,
+							secrets: [],
+							modelConfiguration: {
+								...model,
+								options: model.options.map(
+									({ optionId, endpointId, modelId, reasoningLevels }) => ({
+										optionId,
+										endpointId,
+										modelId,
+										reasoningLevels,
+									}),
+								),
+							},
+						},
+					},
+				};
+				await expect(adapter.commit(v3)).rejects.toMatchObject({
+					code: "persistence_failed",
+				});
+				await expect(snapshot()).resolves.toEqual(
+					emptyApplicationFoundationSnapshot,
+				);
+				if (failAudit) {
+					await armFailure("audit");
+					await expect(
+						adapter.commit(v3, undefined, { encrypt: encryptRelayKeyFixture }),
+					).rejects.toMatchObject({ code: "persistence_failed" });
+					await disarmFailure("audit");
+					await expect(snapshot()).resolves.toEqual(
+						emptyApplicationFoundationSnapshot,
+					);
+					expect(
+						await adminClient`select * from platform.relay_key_versions`,
+					).toHaveLength(0);
+				}
+				const encrypt = vi.fn(encryptRelayKeyFixture);
+				await expect(
+					adapter.commit(v3, undefined, { encrypt }),
+				).resolves.toMatchObject({ outcome: "committed" });
+				await expect(
+					adapter.commit(v3, undefined, { encrypt }),
+				).resolves.toMatchObject({ outcome: "replayed" });
+				expect(encrypt).toHaveBeenCalledOnce();
+				const rows =
+					await adminClient`select configuration from platform.agent_configuration_revisions where agent_id=${plan.agent.agentId}`;
+				expect(rows[0]?.configuration).toEqual(
+					v3.configurationRevision.configuration,
+				);
+				expect(JSON.stringify(rows)).not.toMatch(
+					/credential|controlled-default-relay-key-fixture/,
+				);
+				expect(
+					await adminClient`select * from platform.relay_key_versions`,
+				).toHaveLength(1);
+				expect(
+					await adminClient`select * from platform.secret_records`,
+				).toHaveLength(0);
+			} finally {
+				await disarmFailure("audit");
+				await adapter.close();
+			}
+		},
+	);
+
 	it("commits one encrypted version and audit even when the create response is replayed", async () => {
 		await resetDatabase();
 		const adapter = new builtStore.PostgresApplicationFoundationTransactionV1({
