@@ -1,7 +1,8 @@
 # ADR-0014：PR-Agent lockfile plain-diff 的 derived runtime
 
-状态：Proposed（未批准，不是当前生产配置）  
-日期：2026-10-04  
+状态：Proposed（未批准，不是当前生产配置）
+
+日期：2026-10-04
 关联：Issue #1304、Workflow Spec §6.3、§7.3、§7.3.1
 
 ## 决策
@@ -34,11 +35,13 @@ plain-diff diff-processing 调用点传入该 capability。路径安全检查、
 - `sourceCommit`：不可变的完整上游 commit SHA（tag 只能作为辅助别名）；
 - 最小补丁文件清单及 `patchSha256`：实际补丁文件原始字节的 SHA-256；
 - `imageDigest`：实际运行的 OCI image digest；
+- `buildProvenance`：可回读的 OCI build provenance/attestation，绑定基础镜像 digest、构建工作流
+  与 `sourceCommit`、补丁摘要、构建器身份和 `imageDigest`；
 - repository、PR、base/head/merge-base、diff SHA-256/bytes、workflow run/attempt、Analysis job；
 - `templateVersion`、`transportVersion`、TypeScript recorder 版本和生效 token cap；版本值
   必须对应可回读的固定模板与 HTTP 请求/响应格式，未知版本拒绝。
 
-任一字段缺失、截断、摘要不匹配、source/patch/image 不是批准组合，或 provider 与 runtimeKind
+任一字段缺失、截断、摘要不匹配、provenance 不可验证、source/patch/image 不是批准组合，或 provider 与 runtimeKind
 不一致，均使用 `review-output-invalid`/provider mismatch 拒绝，不可进入 `complete`。
 
 ## Recorder、Publisher 与 Coverage
@@ -54,12 +57,12 @@ filtered-filename metadata、部分响应或另一个 run 均不能通过 Covera
 ## 安全边界与回退
 
 `--diff-file` 输入保持原始路径和字节；不加载 PR 配置、attributes 或外部 diff。Source、patch、
-image、template、transport 和 recorder 版本都必须可回读。GitHub 写 Token 不进入 recorder 或
+image、build provenance、template、transport 和 recorder 版本都必须可回读并逐字段核对。GitHub 写 Token 不进入 recorder 或
 模型请求；普通用户正文和 Secret 不进入持久 metadata。
 
 任何 identity、输入、输出、receipt 或 current-head 校验失败都使本次 run 失败；受控配置回滚
 才可在后续 run 回退到官方 image，且不得在同一 run 更换 identity 或重跑模型绕过预算。到期或
-官方等价修复发布后，维护者必须重新固定 source/patch/image identity，
+官方等价修复发布后，维护者必须重新固定 source/patch/image/provenance identity，
 完成同一 hosted 正负验证并提交替换评审；禁止无审查替换 digest。
 
 ## 验证与退出条件
