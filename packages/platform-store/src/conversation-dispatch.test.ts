@@ -3466,6 +3466,73 @@ describe("accepted Task V4 preparation pins", () => {
 });
 
 describe("waiting Task original Store promotion", () => {
+	it("keeps blocked work discoverable across restart and settles its expired deadline", async () => {
+		const blocked = await acceptedKeyWork("api:user");
+		const runnable = await seed("conversation.turn.submit.v1", {
+			agentId: "other-agent",
+		});
+		await client`insert into platform.agent_principal_grants (agent_id, principal_type, principal_id, grant_type, authorization_revision) values ('agent-dispatch', 'user', 'actor-dispatch', 'use', 'use-dispatch')`;
+		await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'owner-a', now()) on conflict do nothing`;
+		await client`update platform.agent_applications set service_availability='starting' where agent_id='agent-dispatch'`;
+		await client`update platform.conversation_executions set status='waiting', task_wait_order=1, task_wait_deadline=clock_timestamp()+interval '60 seconds' where execution_id=${blocked.executionId}`;
+		await client`update platform.outbox_items set available_at='infinity' where id=${blocked.itemId}`;
+		const options = {
+			databaseUrl,
+			userDirectory: {
+				resolveUser: async (userId: string) => ({
+					schemaVersion: 1 as const,
+					userId,
+					accountStatus: "active" as const,
+					organizationIds: [],
+					authorizationRevision: "identity-dispatch",
+				}),
+			},
+		};
+		const claim = (itemId: string) => ({
+			schemaVersion: 1 as const,
+			itemId,
+			workerId: "fairness-worker",
+			leaseDurationMs: 30_000,
+		});
+		let store = new PostgresConversationDispatchStoreV1(options);
+		try {
+			expect(await store.claim(claim(blocked.itemId))).toMatchObject({
+				outcome: "busy",
+			});
+			const page = await store.findDispatchable({
+				limit: 256,
+				afterItemId: blocked.itemId,
+			});
+			expect(page[0]?.itemId).toBe(runnable.itemId);
+			expect(await store.claim(claim(runnable.itemId))).toMatchObject({
+				outcome: "claimed",
+			});
+			await store.close();
+			store = new PostgresConversationDispatchStoreV1(options);
+			expect(await store.findDispatchable({ limit: 256 })).toContainEqual({
+				itemId: blocked.itemId,
+				operation: "conversation.turn.submit.v1",
+			});
+			expect(await store.claim(claim(blocked.itemId))).toMatchObject({
+				outcome: "busy",
+			});
+			await client`update platform.conversation_executions set created_at=clock_timestamp()-interval '2 minutes', task_wait_deadline=clock_timestamp()-interval '1 minute' where execution_id=${blocked.executionId}`;
+			await store.close();
+			store = new PostgresConversationDispatchStoreV1(options);
+			expect(await store.claim(claim(blocked.itemId))).toMatchObject({
+				outcome: "failed",
+			});
+			const [execution] =
+				await client`select status from platform.conversation_executions where execution_id=${blocked.executionId}`;
+			expect(execution?.status).toBe("failed");
+			const [outbox] =
+				await client`select status from platform.outbox_items where id=${blocked.itemId}`;
+			expect(outbox?.status).toBe("failed");
+		} finally {
+			await store.close();
+		}
+	});
+
 	for (const channel of ["api:user", "api:application"] as const) {
 		it.each(["standard", "custom"] as const)(
 			`${channel} rechecks capacity and pins %s work before first dispatch`,
