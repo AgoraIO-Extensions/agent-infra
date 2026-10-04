@@ -382,8 +382,9 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   `Automated Review Coverage` required context，不把失败改写为成功；CI、三个通用 Gate、
   CODEOWNER approval 和 required conversation resolution 保持原样。
 - Claude 仍在确定性 CI 成功后启动，其只读分析、结构化输出校验、可信 Publisher、
-  `Claude Review Gate` 与既有 Coverage 信号仅属于 Claude Adapter；Coverage 不再是通用
-  required context。只有选中 Claude 时，其 P0/P1 finding 才进入现有无人值守 code-repair。
+  `Claude Review Gate` 保留；删除共享 Coverage 脚本、包装 Check、测试与通知，不再对任何
+  Reviewer 生成 `Automated Review Coverage`。只有选中 Claude 时，其 P0/P1 finding 才进入
+  现有无人值守 code-repair。
 - Reviewer 不 Approve、不 Merge、不修改 branch/label，也不解决自己的线程。PR-Agent
   原生评论由人工或本地 review skill 处理，不接入自定义 repair 或 Workflow Outcome 通知。
 - 此工作流替换合入后，移除旧 required context 并回读剩余 Check 的 App 绑定；用默认分支
@@ -413,7 +414,6 @@ PR 正文列出验证内容。
   code-repair round 绑定 `(PR, authorization cycle)` 并跨 repair 产生的新 head 累计。
 - 基础设施失败、CI flake、P2 finding 和普通评论不触发 code repair。
 - 两轮后仍未通过、输出不完整或发生冲突时停止并进入 `needs-triage`，发送终态通知。
-- Claude Coverage failure 不进入 CI/Claude code-repair，不消耗或重置 repair 预算。
 - CODEOWNERS Team 成员提交 `Request changes` 或明确使用 `@codex` 是新的人工 repair 授权，
   可以开始新的两轮预算。普通清除 `needs-triage` 不重置预算。
 - 人创建的 PR 只有明确使用 `@codex` 才允许 Codex 修改；人直接 push 只重新运行当前-head CI

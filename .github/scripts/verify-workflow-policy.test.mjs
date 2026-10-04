@@ -41,7 +41,6 @@ async function actualTrustedScriptSources() {
         "codex-worker.mjs",
         "gh-aw-pilot.mjs",
         "pr-gates.mjs",
-        "review-coverage.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
         "workflow-outcome.mjs",
@@ -409,18 +408,6 @@ test("requires bounded deduplicated outcome and post-merge behavior", async () =
   );
 });
 
-test("requires deduplicated failed Review Coverage notification", async () => {
-  const sources = await actualTrustedScriptSources();
-  sources["workflow-outcome.mjs"] = sources["workflow-outcome.mjs"].replace(
-    "review-coverage-check-${reviewCoverage.checkId}-${reviewCoverage.provider}-${reviewCoverage.reasonCode}",
-    "review-coverage-check-${reviewCoverage.checkId}",
-  );
-  assert.ok(
-    validateTrustedScriptSources(sources).some((error) =>
-      error.includes("Review Coverage notification"),
-    ),
-  );
-});
 
 test("isolates workflow outcome concurrency per source run", async () => {
   const workflows = await actualWorkflows();
@@ -962,23 +949,6 @@ test("rejects floating third-party Action references", async () => {
   );
 });
 
-test("preserves the Claude-only Coverage publisher", async () => {
-  const workflows = await actualWorkflows();
-  const claudePublish = workflows["claude-pr-review.yml"].jobs.publish;
-  const claudeCoverage = claudePublish.steps.find(
-    (step) => step.name === "Publish Automated Review Coverage",
-  );
-  assert.equal(claudeCoverage.if, "always()");
-  assert.equal(claudeCoverage["continue-on-error"], true);
-  assert.deepEqual(claudeCoverage.env, {
-    EXPECTED_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
-    GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
-    GITHUB_TOKEN: "${{ github.token }}",
-    PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
-    REVIEW_PROVIDER: "claude",
-    REVIEW_RUN_RESULT: "${{ steps.publish-review.outcome }}",
-  });
-});
 
 test("keeps PR-Agent Secrets only in the pinned review Action", async () => {
   const workflows = await actualWorkflows();

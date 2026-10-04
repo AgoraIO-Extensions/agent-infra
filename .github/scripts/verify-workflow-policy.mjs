@@ -811,7 +811,6 @@ export function validateTrustedScriptSources(sources) {
   }
   const gateSource = sources?.["pr-gates.mjs"] ?? "";
   const reviewSource = sources?.["claude-review.mjs"] ?? "";
-  const coverageSource = sources?.["review-coverage.mjs"] ?? "";
   const contractSource = sources?.["check-run-contract.mjs"] ?? "";
   const workerSource = sources?.["codex-worker.mjs"] ?? "";
   const pilotSource = sources?.["gh-aw-pilot.mjs"] ?? "";
@@ -843,13 +842,6 @@ export function validateTrustedScriptSources(sources) {
     "assertCurrentReviewTarget(pr, expectedHead)",
     "reviewGateOutcome(blocking)",
   ];
-  const coverageRequirements = [
-    'COVERAGE_CHECK_NAME = "Automated Review Coverage"',
-    "gateCheckRequest,",
-    "await requireCurrentReviewTarget({",
-    "selectReviewGateCheck(",
-    "await checkRequest(`/repos/${repository}/check-runs/${check.id}`",
-  ];
   const contractRequirements = [
     "GITHUB_ACTIONS_APP_ID",
     "GATE_PUBLISHER_APP_ID = 4_503_079",
@@ -859,9 +851,6 @@ export function validateTrustedScriptSources(sources) {
   if (
     gateRequirements.some((requirement) => !gateSource.includes(requirement)) ||
     reviewRequirements.some((requirement) => !reviewSource.includes(requirement)) ||
-    coverageRequirements.some(
-      (requirement) => !coverageSource.includes(requirement),
-    ) ||
     contractRequirements.some((requirement) => !contractSource.includes(requirement))
   ) {
     errors.push("Gate publishers must bind Check Runs to current heads");
@@ -1041,14 +1030,6 @@ export function validateTrustedScriptSources(sources) {
     "Workflow outcome Check Run pagination limit exceeded",
     "WECOM_BOT_WEBHOOK_URL",
   ];
-  const coverageOutcomeRequirements = [
-    "REVIEW_PROVIDER_BY_WORKFLOW",
-    "selectCoverageCheck(",
-    'outcome("review_coverage_failed", "repository-maintainer", true)',
-    "review-coverage-check-${reviewCoverage.checkId}-${reviewCoverage.provider}-${reviewCoverage.reasonCode}",
-    "Review provider:",
-    "Coverage reason:",
-  ];
   const summaryStart = outcomeSource.indexOf("export function renderJobSummary");
   const summaryEnd = outcomeSource.indexOf("function wait(milliseconds)");
   const hasTrustedSummaryWindow =
@@ -1064,15 +1045,6 @@ export function validateTrustedScriptSources(sources) {
   ) {
     errors.push(
       "Workflow Outcome must preserve bounded dedupe and post-merge triage without auto-revert",
-    );
-  }
-  if (
-    coverageOutcomeRequirements.some(
-      (requirement) => !outcomeSource.includes(requirement),
-    )
-  ) {
-    errors.push(
-      "Workflow Outcome must preserve the required Review Coverage notification",
     );
   }
   if (
@@ -1245,10 +1217,8 @@ export function validateWorkflowDocuments(workflows) {
             step.run === "node .github/scripts/pr-gates.mjs") ||
             (name === "claude-pr-review.yml" &&
               jobName === "publish" &&
-              ((step.name === "Publish validated Review result" &&
-                step.run === "node .github/scripts/claude-review.mjs") ||
-                (step.name === "Publish Automated Review Coverage" &&
-                  step.run === "node .github/scripts/review-coverage.mjs"))));
+              step.name === "Publish validated Review result" &&
+              step.run === "node .github/scripts/claude-review.mjs"));
         if (gateTokenReferences.length > 0 && !allowedGatePublisherToken) {
           errors.push(
             `${name}/${jobName}: Gate publisher token is allowed only in fixed Check Run steps`,
@@ -1963,9 +1933,6 @@ export function validateWorkflowDocuments(workflows) {
   const reviewPublish = reviewPublishSteps.find(
     (step) => step.name === "Publish validated Review result",
   );
-  const reviewCoveragePublish = reviewPublishSteps.find(
-    (step) => step.name === "Publish Automated Review Coverage",
-  );
   const reviewGatePublisherToken = reviewPublishSteps.find(
     (step) => step.id === "gate-publisher-token",
   );
@@ -1979,9 +1946,6 @@ export function validateWorkflowDocuments(workflows) {
     reviewDataCheckout?.with?.path !== "pr-head" ||
     reviewDataCheckout?.with?.["persist-credentials"] !== false ||
     reviewPublish?.run !== "node .github/scripts/claude-review.mjs" ||
-    reviewCoveragePublish?.if !== "always()" ||
-    reviewCoveragePublish?.["continue-on-error"] !== true ||
-    reviewCoveragePublish?.run !== "node .github/scripts/review-coverage.mjs" ||
     reviewGatePublisherToken?.uses !== TEAM_MEMBERSHIP_TOKEN_ACTION ||
     !sameObject(reviewGatePublisherToken?.with, {
       "app-id": "${{ secrets.TEAM_MEMBERSHIP_APP_ID }}",
@@ -1999,21 +1963,13 @@ export function validateWorkflowDocuments(workflows) {
       REVIEW_ENABLED: "true",
       STRUCTURED_OUTPUT: "${{ needs.analyze.outputs.structured_output }}",
     }) ||
-    !sameObject(reviewCoveragePublish?.env, {
-      EXPECTED_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
-      GATE_CHECK_TOKEN: "${{ steps.gate-publisher-token.outputs.token }}",
-      GITHUB_TOKEN: "${{ github.token }}",
-      PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
-      REVIEW_PROVIDER: "claude",
-      REVIEW_RUN_RESULT: "${{ steps.publish-review.outcome }}",
-    }) ||
     !sameObject(review?.jobs?.publish?.permissions, {
       checks: "read",
       contents: "read",
       issues: "write",
       "pull-requests": "write",
     }) ||
-    gatePublisherTokenReferences(review).length !== 2
+    gatePublisherTokenReferences(review).length !== 1
   ) {
     errors.push("Claude PR Review must publish only the completed CI head");
   }
@@ -2406,7 +2362,6 @@ async function main() {
         "codex-worker.mjs",
         "gh-aw-pilot.mjs",
         "pr-gates.mjs",
-        "review-coverage.mjs",
         "worker-contract.mjs",
         "worker-resilience.mjs",
         "workflow-outcome.mjs",
