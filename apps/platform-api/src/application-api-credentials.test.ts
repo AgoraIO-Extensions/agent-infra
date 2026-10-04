@@ -5,37 +5,28 @@ import type {
 	createLdapIdentityDirectory,
 	LdapAccount,
 } from "@agent-infra/identity";
-import {
-	createApplicationApiCredentialIssuerV1,
-	createApplicationMaterialGrantUseCaseV1,
-} from "@agent-infra/platform-core";
-import {
-	migratePlatformDatabase,
-	PostgresApplicationApiCredentialIssuerStoreV1,
-	PostgresApplicationMaterialGrantStoreV1,
-} from "@agent-infra/platform-store";
+import { migratePlatformDatabase } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
 import postgres from "postgres";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.ts";
+import { createPlatformApp } from "./app.js";
 import {
-	createApplicationCredentialProcessDeliveryV1,
-	registerApplicationApiCredentialRoutes,
-} from "./http/application-api-credential-routes.js";
-import { registerApplicationMaterialGrantRoutes } from "./http/application-material-grant-routes.js";
-import { resolveCurrentMaterialGrantActor } from "./http/identity.js";
+	assemblePlatformApi,
+	type PlatformApiAssembly,
+	type PlatformApiAssemblyInput,
+} from "./assembly.js";
 import { createLdapBrowserAdapter } from "./ldap-browser.js";
 
 // Actual TCP HTTP, current LDAP adapter and PG; controlled identity/session ports and recipient process.
-// App/assembly receiving and Task consumption remain separate acceptance requirements.
+// Task consumption and deployment acceptance remain separate requirements.
 let database: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
-let store: PostgresApplicationApiCredentialIssuerStoreV1;
-let grantStore: PostgresApplicationMaterialGrantStoreV1;
+let assembly: PlatformApiAssembly;
+let assemblyInput: PlatformApiAssemblyInput;
 let server: ReturnType<typeof serve>;
 let baseUrl: string;
 const materials: string[] = [];
@@ -57,8 +48,6 @@ beforeAll(async () => {
 	await migratePlatformDatabase(database);
 	sql = postgres(database.databaseUrl, { max: 2 });
 	await sql`insert into platform.platform_applications (id,name,responsible_user_id,authorization_revision) values ('app-1','App','manager','app-v1')`;
-	store = new PostgresApplicationApiCredentialIssuerStoreV1(database);
-	grantStore = new PostgresApplicationMaterialGrantStoreV1(database);
 	const adapter = createLdapBrowserAdapter({
 		publicOrigin: origin,
 		directory: {
@@ -84,34 +73,38 @@ beforeAll(async () => {
 		isPlatformDisabled: async () => false,
 		organizationIds: async () => [],
 	}).identityAdapter;
-	const app = new Hono();
-	registerApplicationMaterialGrantRoutes(app, {
+	const unused = async (): Promise<never> => {
+		throw new Error("Unrelated adapter called");
+	};
+	assemblyInput = {
+		databaseUrl: database.databaseUrl,
 		identity: adapter,
-		grants: createApplicationMaterialGrantUseCaseV1({
-			store: grantStore,
-			resolveCurrentActor: (id) =>
-				resolveCurrentMaterialGrantActor(adapter, id, "current-grant"),
-			resolveUser: async (id) => adapter.resolveUser?.(id) ?? null,
-		}),
-	});
-	registerApplicationApiCredentialRoutes(app, {
-		identity: adapter,
-		issuer: createApplicationApiCredentialIssuerV1({
-			store,
-			userDirectory: {
-				resolveUser: (id) => adapter.resolveUser?.(id) ?? Promise.resolve(null),
+		admissions: {
+			authorizationAdmission: { authorize: unused },
+			imageAdmission: { admitImage: unused },
+			modelAdmission: { admitModels: unused },
+			secretAdmission: { admitSecrets: unused },
+			channelAdmission: { admitChannels: unused },
+		},
+		allocateApplicationIds: unused,
+		prepareApplicationSecrets: unused,
+		prepareConfigurationSecrets: unused,
+		presentAgent: unused,
+		applicationCredentialDelivery: {
+			principalType: "user",
+			principalId: "recipient",
+			accept: (_attempt, material) => {
+				materials.push(material);
+				return true;
 			},
-			delivery: createApplicationCredentialProcessDeliveryV1({
-				principalType: "user",
-				principalId: "recipient",
-				accept: (_attempt, material) => {
-					materials.push(material);
-					return true;
-				},
-			}),
-		}),
+		},
+	};
+	assembly = assemblePlatformApi(assemblyInput);
+	server = serve({
+		fetch: createPlatformApp(assembly.dependencies).fetch,
+		hostname: "127.0.0.1",
+		port: 0,
 	});
-	server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 });
 	await once(server, "listening");
 	const address = server.address();
 	if (!address || typeof address === "string")
@@ -123,8 +116,7 @@ afterAll(async () => {
 		await new Promise<void>((resolve, reject) =>
 			server.close((error) => (error ? reject(error) : resolve())),
 		);
-	await store?.close();
-	await grantStore?.close();
+	await assembly?.close();
 	await sql?.end();
 	await database?.stop();
 });
@@ -210,4 +202,38 @@ it("uses formal grant and issuer HTTP, delivers to the bound process only once, 
 		await sql`select details from platform.audit_events`,
 	);
 	expect(audits.includes(materials[0] ?? "missing")).toBe(false);
+});
+
+it("assembly without a trusted delivery consumer fails closed without issuing", async () => {
+	const without = { ...assemblyInput };
+	delete without.applicationCredentialDelivery;
+	const unavailable = assemblePlatformApi(without);
+	try {
+		const before =
+			await sql`select count(*)::int as count from platform.platform_api_credentials`;
+		const response = await createPlatformApp(unavailable.dependencies).request(
+			"http://127.0.0.1/api/v2/applications/app-1/credentials",
+			{
+				method: "POST",
+				headers: {
+					Cookie: `__Host-platform-session=${token("manager")}`,
+					Origin: origin,
+					"Content-Type": "application/json",
+					"Idempotency-Key": "missing-consumer",
+				},
+				body: JSON.stringify({
+					operation: "issue",
+					recipient: { principalType: "user", principalId: "recipient" },
+					scopes: ["agent:use"],
+					expiresAt: null,
+				}),
+			},
+		);
+		expect(response.status).toBe(503);
+		expect(
+			await sql`select count(*)::int as count from platform.platform_api_credentials`,
+		).toEqual(before);
+	} finally {
+		await unavailable.close();
+	}
 });
