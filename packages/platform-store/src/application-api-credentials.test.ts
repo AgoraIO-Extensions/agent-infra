@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type ApplicationCredentialAttemptV1,
 	type ApplicationCredentialDeliveryPortV1,
@@ -170,6 +171,91 @@ describe("application issuer with real PostgreSQL and a controlled recipient", (
 			expect(JSON.stringify(first).includes(material)).toBe(false);
 		}
 	});
+	it.each([
+		["issue", 2],
+		["issue", 3],
+		["issue", 4],
+		["rotate", 2],
+		["rotate", 3],
+		["rotate", 4],
+	] as const)(
+		"fences %s when the active recipient revision changes at check %i",
+		async (operation, changeAt) => {
+			await grants().grant(grantRequest());
+			const previous =
+				operation === "rotate"
+					? await createApplicationApiCredentialIssuerV1({
+							store,
+							userDirectory: directory,
+							delivery: sink().port,
+						}).execute(request, command)
+					: undefined;
+			const beforeCredentials =
+				await sql`select * from platform.platform_api_credentials order by id`;
+			const beforeReceipts =
+				await sql`select * from platform.idempotency_records order by idempotency_key`;
+			const beforeAudits =
+				await sql`select * from platform.audit_events order by id`;
+			let reads = 0;
+			const delivery = sink();
+			const issuer = createApplicationApiCredentialIssuerV1({
+				store,
+				userDirectory: {
+					resolveUser: async (userId) => ({
+						...(await directory.resolveUser(userId)),
+						authorizationRevision:
+							userId === "recipient" && ++reads >= changeAt
+								? "user-v2"
+								: "user-v1",
+					}),
+				},
+				delivery: delivery.port,
+			});
+			const raceRequest = { ...request, idempotencyKey: "revision-race" };
+			const raceCommand = previous
+				? {
+						...command,
+						operation: "rotate",
+						credentialId: previous.metadata.credentialId,
+					}
+				: command;
+			await expect(
+				issuer.execute(raceRequest, raceCommand),
+			).rejects.toMatchObject({ code: "forbidden" });
+			expect(delivery.accepted.length).toBe(0);
+			expect(delivery.pending.size).toBe(0);
+			if (changeAt === 2) {
+				expect(
+					isDeepStrictEqual(
+						await sql`select * from platform.platform_api_credentials order by id`,
+						beforeCredentials,
+					),
+				).toBe(true);
+				expect(
+					await sql`select * from platform.idempotency_records order by idempotency_key`,
+				).toEqual(beforeReceipts);
+				expect(
+					await sql`select * from platform.audit_events order by id`,
+				).toEqual(beforeAudits);
+			} else {
+				const replay = await issuer.execute(raceRequest, raceCommand);
+				expect(replay.replayed).toBe(true);
+				expect(replay.delivery.status).toBe("unknown");
+				expect(delivery.accepted.length).toBe(0);
+				expect(
+					await sql`select id from platform.platform_api_credentials where revoked_at is null`,
+				).toHaveLength(1);
+				if (previous) {
+					const [old] =
+						await sql`select revoked_at from platform.platform_api_credentials where id = ${previous.metadata.credentialId}`;
+					expect(old?.revoked_at).not.toBeNull();
+				}
+				const [audit] =
+					await sql`select outcome from platform.audit_events where action = 'application.credential.delivery' and details->>'credentialId' = ${replay.metadata.credentialId}`;
+				expect(audit?.outcome).toBe("failed");
+			}
+		},
+	);
 	it("rejects manager without grant, admin without management, and cross-type recipient", async () => {
 		const delivery = sink();
 		const issuer = createApplicationApiCredentialIssuerV1({

@@ -278,17 +278,18 @@ export function createApplicationApiCredentialIssuerV1(input: {
 			grant.principalId !== recipient.principalId
 		)
 			throw new ApplicationApiCredentialErrorV1("forbidden");
+		let recipientRevision: string | null = null;
 		if (recipient.principalType === "user") {
 			if (await tx.lockUserDisabled(recipient.principalId))
 				throw new ApplicationApiCredentialErrorV1("forbidden");
-			requirePersonalApiUserActiveV1(
-				await resolveCurrentPersonalApiUserV1(
-					input.userDirectory,
-					recipient.principalId,
-				),
+			const user = await resolveCurrentPersonalApiUserV1(
+				input.userDirectory,
+				recipient.principalId,
 			);
+			requirePersonalApiUserActiveV1(user);
+			recipientRevision = user.authorizationRevision;
 		}
-		return { grant, manager };
+		return { grant, manager, recipientRevision };
 	}
 	async function execute(
 		requestInput: ApplicationApiCredentialRequestV1,
@@ -309,11 +310,13 @@ export function createApplicationApiCredentialIssuerV1(input: {
 						result: ApplicationApiCredentialResultV1;
 						material?: never;
 						expiresAt?: never;
+						recipientRevision?: never;
 				  }
 				| {
 						result: ApplicationApiCredentialResultV1;
 						material: string;
 						expiresAt: string;
+						recipientRevision: string | null;
 				  }
 			>(async (tx) => {
 				const first = await authority(tx, request, command.recipient);
@@ -391,10 +394,17 @@ export function createApplicationApiCredentialIssuerV1(input: {
 				if (
 					last.manager.authorizationRevision !==
 						first.manager.authorizationRevision ||
-					last.grant.authorizationRevision !== first.grant.authorizationRevision
+					last.grant.authorizationRevision !==
+						first.grant.authorizationRevision ||
+					last.recipientRevision !== first.recipientRevision
 				)
 					throw new ApplicationApiCredentialErrorV1("forbidden");
-				return { result, material, expiresAt };
+				return {
+					result,
+					material,
+					expiresAt,
+					recipientRevision: first.recipientRevision,
+				};
 			});
 			if (issued.material === undefined) return issued.result;
 			attempt = {
@@ -415,6 +425,7 @@ export function createApplicationApiCredentialIssuerV1(input: {
 				const saved = await tx.lockReceipt(request);
 				if (
 					!saved ||
+					current.recipientRevision !== issued.recipientRevision ||
 					saved.result.delivery.attemptId !== currentAttempt.attemptId ||
 					saved.result.delivery.status !== "delivery_pending" ||
 					current.grant.authorizationRevision !==
@@ -441,6 +452,7 @@ export function createApplicationApiCredentialIssuerV1(input: {
 				const credential = await tx.lockActiveCredential(request.applicationId);
 				if (
 					!saved ||
+					current.recipientRevision !== issued.recipientRevision ||
 					saved.result.delivery.attemptId !== currentAttempt.attemptId ||
 					saved.result.delivery.status !== "delivery_in_flight" ||
 					current.grant.authorizationRevision !==
