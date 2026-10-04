@@ -164,3 +164,35 @@ it("cancels a pending setup without unbinding the existing application", async (
 	expect(screen.getByText("已连接")).toBeTruthy();
 	expect(onUnbind).not.toHaveBeenCalled();
 });
+
+it("restores a pending session after reload so the Owner can cancel it", async () => {
+	client.setConfig({ baseUrl: "https://platform.test" });
+	let cancelled = false;
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (request: Request) => {
+			const path = new URL(request.url).pathname;
+			if (path.endsWith("/wecom-app"))
+				return Response.json(
+					cancelled
+						? { status: "not_configured" }
+						: { status: "verifying", sessionId: "pending" },
+				);
+			if (path.endsWith("/wecom-app-setup/pending/cancel")) {
+				cancelled = true;
+				return Response.json({ status: "cancelled" });
+			}
+			if (path.endsWith("/wecom-app-setup/pending"))
+				return Response.json({ status: "verifying", sessionId: "pending" });
+			return Response.json({ status: "verifying" });
+		}),
+	);
+	render(<WecomAppSetup agentId="agent" onUnbind={vi.fn()} />);
+	await waitFor(() =>
+		expect(screen.getByRole("button", { name: "取消配置" })).toBeTruthy(),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "取消配置" }));
+	await waitFor(() =>
+		expect(screen.queryByRole("button", { name: "取消配置" })).toBeNull(),
+	);
+});
