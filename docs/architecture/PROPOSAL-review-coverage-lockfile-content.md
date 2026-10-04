@@ -72,7 +72,7 @@ derived runtime 只携带上述最小多文件补丁，生成并固定新的 OCI
 | 要求 | 现有权威 | 批准后的证明 |
 | --- | --- | --- |
 | 完整 immutable input | Workflow Spec §7.3；#1304 AC-1/2 | exact diff bytes、merge-base、SHA-256，以及 root/nested/mixed cases |
-| Official runtime | Workflow Spec §6.3/§7.3 | image digest、当前 `--diff-file` 调用和 plain-diff 故障回读 |
+| Runtime identity | Workflow Spec §7.3 proposed delta | `plain-diff-derived`、source/patch/image identity、当前 `--diff-file` 调用和 plain-diff 故障回读 |
 | Native review output | Workflow Spec §7.3 | 绑定 PR/head/run/attempt/provider 的同 run native receipt |
 | Dedicated Coverage | `.github/scripts/review-coverage.mjs` | 不变的 validator 仅对匹配 receipt 返回 `complete` |
 | Fail-closed | Workflow Spec §7.2/§7.3 | empty/omitted/truncated/malformed/old-head/mismatch 负例 |
