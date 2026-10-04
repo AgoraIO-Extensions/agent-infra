@@ -1477,6 +1477,55 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the exact application issuer addition and preserves existing authority", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const path = "/api/v2/applications/{applicationId}/credentials";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-issuer-v2-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					document.paths[path].post.security = [];
+				},
+				(document: typeof current) => {
+					document.paths[path].get = document.paths[path].post;
+				},
+				(document: typeof current) => {
+					delete document.paths[path].post.responses["403"];
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/admin/audit"].get.security = [];
+				},
+				(document: typeof current) => {
+					document.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the V2 lifecycle addition and preserves existing audit authority", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -1506,6 +1555,7 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/me/conversations/recent" &&
 				path !== "/api/v2/me/api-credentials" &&
 				path !== "/api/v2/me/api-credentials/{credentialId}" &&
+				path !== "/api/v2/applications/{applicationId}/credentials" &&
 				path !== "/api/v2/applications/{applicationId}/material-grant" &&
 				path !==
 					"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}" &&
