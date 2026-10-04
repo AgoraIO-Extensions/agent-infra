@@ -822,6 +822,7 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 				const result: Record<string, { count: number; digest: string }> = {};
 				for (const table of [
 					"conversations",
+					"session_sandbox_allocations",
 					"conversation_executions",
 					"conversation_messages",
 					"outbox_items",
@@ -870,10 +871,29 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 				"conversations",
 				"conversation_executions",
 				"conversation_messages",
-				"outbox_items",
+				"session_sandbox_allocations",
 				"task_authorization_records",
 			])
 				expect(firstFacts[table]?.count).toBe(1);
+			expect(firstFacts.outbox_items?.count).toBe(2);
+			expect(
+				await sql`select operation from platform.outbox_items order by operation`,
+			).toEqual([
+				{ operation: "conversation.sandbox.reconcile.v1" },
+				{ operation: "conversation.turn.submit.v1" },
+			]);
+			const [allocationFacts] = await sql`
+				select s.xmin::text as allocation, c.xmin::text as conversation,
+					e.xmin::text as execution, o.xmin::text as resource_intent,
+					a.xmin::text as allocation_audit
+				from platform.session_sandbox_allocations s
+				join platform.conversations c on c.id = s.conversation_id
+				join platform.conversation_executions e on e.conversation_id = c.id and e.sandbox_id = s.sandbox_id
+				join platform.outbox_items o on o.scope_id = c.id and o.operation = 'conversation.sandbox.reconcile.v1'
+				join platform.conversation_audit_events a on a.conversation_id = c.id and a.action = 'conversation.sandbox.allocated'
+				where e.execution_id = ${task.executionId}`;
+			if (!allocationFacts) throw new Error("Missing atomic Sandbox admission");
+			expect(new Set(Object.values(allocationFacts)).size).toBe(1);
 			expect((await snapshot(task))?.execution).toMatchObject({
 				principal_type: "user",
 				actor_id: "user_alice",
