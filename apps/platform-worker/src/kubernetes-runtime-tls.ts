@@ -30,6 +30,7 @@ export function validateRuntimeTlsPolicyV1(policy: KubernetesWorkloadPolicyV1) {
 				!binding.serverSecretRef ||
 				Object.keys(binding.serverSecretRef).join(",") !== "name" ||
 				typeof binding.serverSecretRef.name !== "string" ||
+				binding.serverSecretRef.name === policy.tlsSecretName ||
 				binding.serverSecretRef.name.length > 253 ||
 				!binding.serverSecretRef.name
 					.split(".")

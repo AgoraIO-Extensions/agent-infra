@@ -131,6 +131,7 @@ it.each([
 	"extra-field",
 	"duplicate-agent",
 	"shared-leaf",
+	"ingress-leaf",
 ])("rejects malformed trusted TLS configuration: %s", (kind) => {
 	const api = fakeKubernetesApi();
 	const tls = binding();
@@ -141,6 +142,8 @@ it.each([
 	if (kind === "missing-probe-dns") tls.serviceDnsNames.pop();
 	if (kind === "wildcard") tls.serviceDnsNames[0] = `*.${tls.namespace}.svc`;
 	if (kind === "secret-path") tls.serverSecretRef.name = "../tls";
+	if (kind === "ingress-leaf")
+		tls.serverSecretRef.name = workloadTestPolicy.tlsSecretName;
 	if (kind === "extra-field") Object.assign(tls, { keyPath: "/other/key" });
 	if (kind === "duplicate-agent")
 		entries.push({ ...tls, serverSecretRef: { name: "another-leaf" } });
