@@ -27,6 +27,10 @@ export function assembleWecomApiV1(
 	databaseUrl: string,
 	deployment: WecomApiDeploymentV1,
 ) {
+	if (typeof deployment.userDirectory?.resolveUser !== "function")
+		throw new Error(
+			"WeCom message admission requires a trusted user directory",
+		);
 	const protectReply = createWecomReplyEncryptorV1(
 		deployment.replyEncryptionPublicKeyPem,
 	);

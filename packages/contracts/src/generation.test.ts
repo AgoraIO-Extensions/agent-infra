@@ -186,6 +186,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/agents/{agentId}/lifecycle",
 			"/api/v2/applications",
 			"/api/v2/applications/{applicationId}",
+			"/api/v2/applications/{applicationId}/credentials",
 			"/api/v2/applications/{applicationId}/material-grant",
 			"/api/v2/applications/{applicationId}/material-grant/{principalType}/{principalId}",
 			"/api/v2/conversations/{conversationId}",

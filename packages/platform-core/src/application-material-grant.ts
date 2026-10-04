@@ -60,6 +60,18 @@ export interface ApplicationMaterialGrantAuditV1 {
 	};
 }
 export interface ApplicationMaterialGrantTransactionV1 {
+	expireDeliveryReceipts(
+		request: Pick<
+			ApplicationMaterialGrantRequestV1,
+			"applicationId" | "principalType" | "principalId"
+		>,
+	): Promise<void>;
+	hasInFlightDelivery(
+		request: Pick<
+			ApplicationMaterialGrantRequestV1,
+			"applicationId" | "principalType" | "principalId"
+		>,
+	): Promise<boolean>;
 	lockUserDisabled(userId: string): Promise<boolean>;
 	applicationExists(applicationId: string): Promise<boolean>;
 	recipientEligible(
@@ -217,6 +229,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 						outcome: "succeeded",
 						details: { returnedMaterial: false },
 					});
+					await assertCurrentActor(request);
 					return { metadata: current, replayed: true };
 				}
 				const metadata = await tx.upsertGrant(
@@ -235,6 +248,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 					outcome: "succeeded",
 					details: { returnedMaterial: false },
 				});
+				await assertCurrentActor(request);
 				return { metadata, replayed: current?.revokedAt === null };
 			});
 		},
@@ -266,8 +280,12 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 						outcome: "succeeded",
 						details: { returnedMaterial: false },
 					});
+					await assertCurrentActor(request);
 					return { metadata: current, replayed: true };
 				}
+				await tx.expireDeliveryReceipts(request);
+				if (await tx.hasInFlightDelivery(request))
+					throw new ApplicationMaterialGrantErrorV1("idempotency_conflict");
 				const metadata = await tx.revokeGrant(
 					request,
 					new Date(),
@@ -285,6 +303,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 					outcome: "succeeded",
 					details: { returnedMaterial: false },
 				});
+				await assertCurrentActor(request);
 				return { metadata, replayed: false };
 			});
 		},
@@ -310,6 +329,7 @@ export function createApplicationMaterialGrantUseCaseV1(dependencies: {
 					outcome: "succeeded",
 					details: { returnedMaterial: false },
 				});
+				await assertCurrentActor(request);
 				return current;
 			});
 		},

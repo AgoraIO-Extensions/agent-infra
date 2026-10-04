@@ -200,6 +200,7 @@ export function createPlatformConversationWorkerV2(
 			signal,
 		});
 		let launched = 0;
+		let lastBusinessItemId: string | undefined;
 		for (const item of items) {
 			if (stopped || signal.aborted) break;
 			// Advance after every scanned item; the Store wraps deferred work on the next lap.
@@ -227,9 +228,12 @@ export function createPlatformConversationWorkerV2(
 				)
 				.finally(() => running.delete(item.itemId));
 			running.set(item.itemId, { control, promise });
+			if (!control) lastBusinessItemId = item.itemId;
 			launched += 1;
 		}
-		if (items.length < limit) afterItemId = undefined;
+		// Resume after the last business attempt, including a busy claim.
+		// When saturated, keep scanning pages so stop work remains reachable.
+		if (lastBusinessItemId) afterItemId = lastBusinessItemId;
 		return launched;
 	}
 	function tick() {

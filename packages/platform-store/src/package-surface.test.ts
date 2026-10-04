@@ -50,6 +50,7 @@ describe("platform-store package surface", () => {
 			"PostgresAgentConfigurationTransactionV1",
 			"PostgresAgentManagementQueryV1",
 			"PostgresAgentManagementTransactionV1",
+			"PostgresApplicationApiCredentialIssuerStoreV1",
 			"PostgresApplicationFoundationTransactionV1",
 			"PostgresApplicationMaterialGrantStoreV1",
 			"PostgresApplicationRegistrationStoreV1",

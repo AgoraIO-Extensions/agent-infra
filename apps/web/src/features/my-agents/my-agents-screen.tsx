@@ -8,11 +8,11 @@ import { Empty, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import { agentChannelKindLabels } from "../agent-discovery/agent-discovery-screen.js";
 import {
-	agentChannelKindLabels,
+	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
-} from "../agent-discovery/agent-discovery-screen.js";
-import { agentManagementStatusLabels } from "../agent-management-status.js";
+} from "../agent-management-status.js";
 import {
 	agentApplicationEditActionLabels,
 	getAgentApplicationEditAction,

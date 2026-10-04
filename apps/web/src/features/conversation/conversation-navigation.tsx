@@ -27,7 +27,7 @@ export function PersonalHistory({
 		if (history.status === "denied") onDenied();
 	}, [history.status, onDenied]);
 	return (
-		<section aria-label="个人历史" className="min-w-0 space-y-3 pb-4">
+		<section aria-label="个人历史" className="min-w-0 space-y-3">
 			<h2 className="flex items-center gap-2 font-semibold">
 				<History className="size-4" aria-hidden="true" />
 				个人历史
@@ -43,12 +43,10 @@ export function PersonalHistory({
 					<EmptyDescription>暂无 Web 会话。</EmptyDescription>
 				</Empty>
 			)}
+			<p className="text-muted-foreground text-xs">只显示你的会话</p>
 			<ul className="space-y-1">
 				{history.items.map((item) => (
-					<li
-						className="record-row border-border border-b py-3"
-						key={item.conversationId}
-					>
+					<li key={item.conversationId}>
 						<a
 							href={`/chat/${encodeURIComponent(agentId)}/${encodeURIComponent(item.conversationId)}`}
 							aria-current={
@@ -74,9 +72,10 @@ export function PersonalHistory({
 						>
 							<span className="min-w-0 break-words">
 								{item.title || "未命名会话"}
-								<span className="block text-muted-foreground text-xs">
-									{new Date(item.updatedAt).toLocaleString()}
-								</span>
+								<small>
+									{current === item.conversationId && "当前对话 · "}
+									{new Date(item.updatedAt).toLocaleString("zh-CN")}
+								</small>
 							</span>
 						</a>
 					</li>

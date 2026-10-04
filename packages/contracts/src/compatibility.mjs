@@ -1065,6 +1065,22 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1277 permits only the reviewed issuer operation; all previous contracts remain exact.
+function isApplicationCredentialIssuerV2OpenApiAddition(previous, current) {
+	const path = "/api/v2/applications/{applicationId}/credentials";
+	if (previous.paths?.[path] !== undefined) return false;
+	if (
+		createHash("sha256")
+			.update(JSON.stringify(current.paths?.[path] ?? null))
+			.digest("hex") !==
+		"6051aa1324b7504c92636d95c5d0d3bdfd1103560a502d5f81289cf959826ab4"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	return sameValue(previous, normalized);
+}
+
 function isAgentLifecycleV2OpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v2/admin/agent-applications",
@@ -1780,6 +1796,7 @@ function findBreakingChanges(previous, current) {
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
 			!isApplicationMaterialGrantV2OpenApiAddition(previous, current) &&
+			!isApplicationCredentialIssuerV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&

@@ -4,6 +4,7 @@ import {
 	type ConversationTaskAdmissionPolicyV1,
 	createAgentConfigurationUseCaseV1,
 	createAgentManagementV1,
+	createApplicationApiCredentialIssuerV1,
 	createApplicationFoundationUseCaseV1,
 	createApplicationMaterialGrantUseCaseV1,
 	createApplicationRegistrationUseCaseV1,
@@ -20,6 +21,7 @@ import {
 	PostgresAgentConfigurationTransactionV1,
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
+	PostgresApplicationApiCredentialIssuerStoreV1,
 	PostgresApplicationFoundationTransactionV1,
 	PostgresApplicationMaterialGrantStoreV1,
 	PostgresApplicationRegistrationStoreV1,
@@ -42,11 +44,13 @@ import {
 	assemblePlatformFilesV1,
 	type PlatformFileDeploymentV1,
 } from "./file-assembly.js";
+import { createApplicationCredentialProcessDeliveryV1 } from "./http/application-api-credential-routes.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type { ConversationAuthorization } from "./http/conversation-routes.js";
 import type { DeploymentConfigurationRoutesDependencies } from "./http/deployment-configuration-routes.js";
 import {
 	type IdentityAdapter,
+	resolveCurrentMaterialGrantActor,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
@@ -69,6 +73,9 @@ interface AssemblyQueries {
 }
 
 export interface PlatformApiAssemblyInput {
+	readonly applicationCredentialDelivery?: Parameters<
+		typeof createApplicationCredentialProcessDeliveryV1
+	>[0];
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
@@ -116,6 +123,18 @@ export function assemblePlatformApi(
 		!input.wecomIdentity
 	)
 		throw new Error("WeCom setup requires a receipt identity deployment");
+	if (
+		(input.wecom || input.wecomApplicationSetup) &&
+		!input.wecom?.userDirectory &&
+		typeof input.identity.resolveUser !== "function"
+	)
+		throw new Error(
+			"WeCom message admission requires a trusted user directory",
+		);
+	const userDirectory = {
+		resolveUser: (userId: string) =>
+			resolveCurrentTaskUser(input.identity, userId, randomUUID()),
+	};
 	const wecomSetup = input.wecomCredentialEncryptionKeys
 		? assembleWecomSetupApiV1({
 				databaseUrl: input.databaseUrl,
@@ -127,14 +146,16 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const wecomDeployment =
-		input.wecom ??
+		(input.wecom
+			? {
+					...input.wecom,
+					userDirectory: input.wecom.userDirectory ?? userDirectory,
+				}
+			: undefined) ??
 		(input.wecomApplicationSetup && input.wecomIdentity
 			? {
 					identity: input.wecomIdentity,
-					userDirectory: {
-						resolveUser: (userId: string) =>
-							resolveCurrentTaskUser(input.identity, userId, randomUUID()),
-					},
+					userDirectory,
 					replyEncryptionPublicKeyPem:
 						input.wecomApplicationSetup.replyEncryptionPublicKeyPem,
 					resolveBinding: async () => null,
@@ -200,12 +221,30 @@ export function assemblePlatformApi(
 		new PostgresApplicationRegistrationStoreV1({
 			databaseUrl: input.databaseUrl,
 		});
+	const applicationApiCredentialStore =
+		new PostgresApplicationApiCredentialIssuerStoreV1({
+			databaseUrl: input.databaseUrl,
+		});
+	const applicationApiCredentials = createApplicationApiCredentialIssuerV1({
+		store: applicationApiCredentialStore,
+		userDirectory: {
+			resolveUser: (userId) =>
+				resolveCurrentTaskUser(input.identity, userId, randomUUID()),
+		},
+		delivery: input.applicationCredentialDelivery
+			? createApplicationCredentialProcessDeliveryV1(
+					input.applicationCredentialDelivery,
+				)
+			: undefined,
+	});
 	const applicationMaterialGrantStore =
 		new PostgresApplicationMaterialGrantStoreV1({
 			databaseUrl: input.databaseUrl,
 		});
 	const applicationMaterialGrants = createApplicationMaterialGrantUseCaseV1({
 		store: applicationMaterialGrantStore,
+		resolveCurrentActor: (userId) =>
+			resolveCurrentMaterialGrantActor(input.identity, userId, randomUUID()),
 		resolveUser: async (userId) => {
 			const user = await resolveCurrentTaskUser(
 				input.identity,
@@ -227,10 +266,6 @@ export function assemblePlatformApi(
 					encrypt: input.personalRelayKeys.encrypt,
 				})
 			: undefined;
-	const userDirectory = {
-		resolveUser: (userId: string) =>
-			resolveCurrentTaskUser(input.identity, userId, randomUUID()),
-	};
 	const personalApiCredentials = createPersonalApiCredentialUseCaseV1({
 		transaction: personalApiCredentialStore,
 		userDirectory,
@@ -496,6 +531,10 @@ export function assemblePlatformApi(
 			readAgentProjection: projections.readConfigurationAgentProjection,
 		},
 		applications: { identity: input.identity, applications },
+		applicationApiCredentials: {
+			identity: input.identity,
+			issuer: applicationApiCredentials,
+		},
 		applicationMaterialGrants: {
 			identity: input.identity,
 			grants: applicationMaterialGrants,
@@ -561,6 +600,7 @@ export function assemblePlatformApi(
 		personalApiCredentialStore,
 		applicationRegistrationStore,
 		applicationMaterialGrantStore,
+		applicationApiCredentialStore,
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
 	];
 	return {
