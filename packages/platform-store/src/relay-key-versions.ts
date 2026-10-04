@@ -282,12 +282,13 @@ export async function replaceRelayKeyVersionInTransaction(
 		await input.encrypt(nextBinding),
 		nextBinding,
 	);
+	// Keep the bound parameter text: postgres-js otherwise JSON-encodes an already serialized value.
 	await sql`
 		insert into platform.relay_key_versions
 			(purpose, subject_id, key_version, key_id, ciphertext)
 		values
 			(${target.purpose}, ${target.subjectId}, ${next}, ${nextBinding.keyId},
-			 ${JSON.stringify(encrypted)}::jsonb)
+			 ${JSON.stringify(encrypted)}::text::jsonb)
 	`;
 	await sql`
 		update platform.relay_key_subjects
