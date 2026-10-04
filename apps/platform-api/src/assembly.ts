@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentDefaultRelayKeyDependenciesV1,
+	type ApplicationFoundationRelayKeyEncryptorV1,
 	createAgentConfigurationUseCaseV1,
 	createAgentDefaultRelayKeyUseCaseV1,
 	createAgentManagementV1,
@@ -74,6 +75,7 @@ export interface PlatformApiAssemblyInput {
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
+	readonly applicationFoundationRelayKeyEncryptor?: ApplicationFoundationRelayKeyEncryptorV1;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
@@ -85,6 +87,9 @@ export interface PlatformApiAssemblyInput {
 		Parameters<typeof createPersonalRelayKeyUseCaseV1>[0],
 		"currentIdentity" | "validate" | "encrypt"
 	>;
+	readonly validateDefaultRelayKey?: Parameters<
+		typeof createPersonalRelayKeyUseCaseV1
+	>[0]["validate"];
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly connectionCapability?: ConnectionCapabilityV1;
@@ -169,6 +174,9 @@ export function assemblePlatformApi(
 			: undefined;
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl: input.databaseUrl,
+		...(input.applicationFoundationRelayKeyEncryptor
+			? { relayKeyEncryptor: input.applicationFoundationRelayKeyEncryptor }
+			: {}),
 	});
 	const revisionTransaction = new PostgresApplicationRevisionTransactionV1({
 		databaseUrl: input.databaseUrl,
@@ -499,6 +507,9 @@ export function assemblePlatformApi(
 			query: managementQuery,
 			allocateApplicationIds: input.allocateApplicationIds,
 			prepareSecretReplacements: input.prepareApplicationSecrets,
+			...(input.validateDefaultRelayKey
+				? { validateDefaultRelayKey: input.validateDefaultRelayKey }
+				: {}),
 			readApplicationProjection: projections.readApplicationProjection,
 			readAgentProjection: projections.readManagementAgentProjection,
 			personalApiAgentRead,

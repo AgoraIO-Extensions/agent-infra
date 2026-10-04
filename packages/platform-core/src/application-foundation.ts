@@ -24,6 +24,18 @@ export interface CommitApplicationFoundationCommandV2
 	readonly idempotencyKey: string;
 	readonly name: string;
 	readonly description: string;
+	/** Optional during the contract handoff; when present it is persisted atomically with the application. */
+	readonly defaultRelayKey?: string;
+}
+
+export interface ApplicationFoundationRelayKeyEncryptorV1 {
+	encrypt(input: {
+		readonly purpose: "agent-default";
+		readonly subjectId: string;
+		readonly keyId: string;
+		readonly keyVersion: number;
+		readonly plaintext: string;
+	}): unknown;
 }
 
 export interface ApplicationFoundationActorContextV1 {
@@ -65,6 +77,7 @@ export interface ApplicationFoundationWritePlanV1 {
 		readonly configuration: AgentConfigurationRecordV2;
 		readonly createdAt: Date;
 	};
+	readonly defaultRelayKey?: string;
 	readonly access: {
 		readonly agentId: string;
 		readonly ownerIds: readonly string[];
@@ -252,7 +265,7 @@ const commandRequiredKeys = [
 	"channels",
 	"traceId",
 ] as const;
-const commandOptionalKeys = ["modelConfiguration"] as const;
+const commandOptionalKeys = ["modelConfiguration", "defaultRelayKey"] as const;
 const actorContextKeys = [
 	"schemaVersion",
 	"userId",
@@ -352,6 +365,15 @@ function parseApplicationFoundationCommandV1(
 		) {
 			invalidApplicationFoundationInput();
 		}
+		if (
+			Object.hasOwn(values, "defaultRelayKey") &&
+			(typeof values.defaultRelayKey !== "string" ||
+				values.defaultRelayKey.length < 16 ||
+				values.defaultRelayKey.length > 8192 ||
+				!/^[\x21-\x7e]+$/.test(values.defaultRelayKey))
+		) {
+			invalidApplicationFoundationInput();
+		}
 		let nameCodePointCount = 0;
 		for (let offset = 0; offset < name.length; nameCodePointCount += 1) {
 			const codePoint = name.codePointAt(offset);
@@ -375,6 +397,11 @@ function parseApplicationFoundationCommandV1(
 				? {
 						modelConfiguration:
 							values.modelConfiguration as InitialAgentConfigurationCommandV2["modelConfiguration"],
+					}
+				: {}),
+			...(Object.hasOwn(values, "defaultRelayKey")
+				? {
+						defaultRelayKey: values.defaultRelayKey as string,
 					}
 				: {}),
 			environment:
@@ -409,8 +436,9 @@ function parseApplicationFoundationActorContextV1(
 function requiredPlanObject(
 	input: unknown,
 	keys: readonly string[],
+	optionalKeys: readonly string[] = [],
 ): Record<string, unknown> {
-	const values = snapshotExactDataValues(input, keys);
+	const values = snapshotExactDataValues(input, keys, optionalKeys);
 	if (!values) throw new ApplicationFoundationError("persistence_failed");
 	return values;
 }
@@ -466,17 +494,33 @@ export function snapshotApplicationFoundationWritePlanV1(
 	input: unknown,
 ): ApplicationFoundationWritePlanV1 {
 	try {
-		const plan = requiredPlanObject(input, [
-			"schemaVersion",
-			"agent",
-			"application",
-			"configurationRevision",
-			"access",
-			"result",
-			"idempotency",
-			"outboxIntent",
-			"auditEvent",
-		]);
+		const plan = requiredPlanObject(
+			input,
+			[
+				"schemaVersion",
+				"agent",
+				"application",
+				"configurationRevision",
+				"access",
+				"result",
+				"idempotency",
+				"outboxIntent",
+				"auditEvent",
+			],
+			["defaultRelayKey"],
+		);
+		const defaultRelayKey = Object.hasOwn(plan, "defaultRelayKey")
+			? plan.defaultRelayKey
+			: undefined;
+		if (
+			defaultRelayKey !== undefined &&
+			(typeof defaultRelayKey !== "string" ||
+				defaultRelayKey.length < 16 ||
+				defaultRelayKey.length > 8192 ||
+				!/^[\x21-\x7e]+$/.test(defaultRelayKey))
+		) {
+			throw new ApplicationFoundationError("persistence_failed");
+		}
 		const agent = requiredPlanObject(plan.agent, [
 			"agentId",
 			"currentConfigurationRevision",
@@ -577,6 +621,7 @@ export function snapshotApplicationFoundationWritePlanV1(
 				),
 				createdAt: snapshotPlanDate(configurationRevision.createdAt),
 			},
+			...(defaultRelayKey === undefined ? {} : { defaultRelayKey }),
 			access: {
 				agentId: access.agentId as string,
 				ownerIds: snapshotPlanArray(access.ownerIds, 256) as string[],
@@ -850,6 +895,9 @@ export function createApplicationFoundationUseCaseV1(
 				configuration: admitted.configuration,
 				createdAt: submittedAt,
 			},
+			...(command.defaultRelayKey === undefined
+				? {}
+				: { defaultRelayKey: command.defaultRelayKey }),
 			access: {
 				agentId: command.agentId,
 				ownerIds: admitted.ownerIds,
