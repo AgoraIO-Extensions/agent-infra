@@ -5,7 +5,6 @@ import { Agent, buildConnector } from "undici";
 
 /** One deployment-owned pool shared by business, control, and signed readiness. */
 export function createRuntimeTlsTransport(caBundle: string) {
-	let trustExpiresAt = Number.POSITIVE_INFINITY;
 	try {
 		if (typeof caBundle !== "string" || caBundle.length > 1_048_576)
 			throw new Error();
@@ -24,10 +23,6 @@ export function createRuntimeTlsTransport(caBundle: string) {
 			throw new Error();
 		for (const pem of certificates) {
 			const certificate = new X509Certificate(pem);
-			trustExpiresAt = Math.min(
-				trustExpiresAt,
-				certificate.validToDate.getTime(),
-			);
 			if (
 				!certificate.ca ||
 				Date.now() < certificate.validFromDate.getTime() ||
@@ -68,7 +63,7 @@ export function createRuntimeTlsTransport(caBundle: string) {
 					socket.destroy();
 					return callback(new Error("RUNTIME_TLS_PEER_INVALID"), null);
 				}
-				let expiresAt = trustExpiresAt;
+				let expiresAt = Number.POSITIVE_INFINITY;
 				let certificate = socket.getPeerCertificate(true);
 				const seen = new Set<string>();
 				while (certificate && !seen.has(certificate.fingerprint256)) {
@@ -82,11 +77,19 @@ export function createRuntimeTlsTransport(caBundle: string) {
 					return callback(new Error("RUNTIME_TLS_PEER_EXPIRED"), null);
 				}
 				// Do not keep a POST/SSE connection alive beyond its verified chain.
-				const expiry = setTimeout(
-					() => socket.destroy(),
-					Math.min(remaining, 2_147_483_647),
-				);
-				expiry.unref();
+				let expiry: ReturnType<typeof setTimeout>;
+				const expire = () => {
+					const delay = expiresAt - Date.now();
+					if (delay <= 0) {
+						socket.destroy();
+						return;
+					}
+					// Re-arm long deadlines instead of truncating certificate life
+					// to Node's maximum timer interval.
+					expiry = setTimeout(expire, Math.min(delay, 2_147_483_647));
+					expiry.unref();
+				};
+				expire();
 				socket.once("close", () => clearTimeout(expiry));
 				callback(null, socket);
 			});

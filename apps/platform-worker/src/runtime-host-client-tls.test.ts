@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { createServer, type Server } from "node:https";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import {
 	createWorkerRuntimeHostClientV1,
@@ -97,6 +97,28 @@ describe("Runtime client real TLS transport", () => {
 		expect(() => createRuntimeTlsTransport(material.cert)).toThrow(
 			"RUNTIME_TLS_CA_INVALID",
 		);
+	});
+	it("bases connection lifetime on its verified chain during overlapping CA trust", async () => {
+		const previous = await runtimeTlsFixture({ caDays: 1 });
+		const current = await runtimeTlsFixture({ caDays: 2, days: 2 });
+		const overlap = createRuntimeTlsTransport(`${previous.ca}\n${current.ca}`);
+		const server = createServer(current, (_, response) =>
+			response.end("current issuer"),
+		);
+		try {
+			const origin = await listen(server);
+			// Advance only the application's lifetime calculation. OpenSSL still
+			// performs a real valid handshake against the selected current chain.
+			vi.spyOn(Date, "now").mockReturnValue(Date.now() + 36 * 60 * 60 * 1_000);
+			const response = await overlap.fetch(origin);
+			expect(await response.text()).toBe("current issuer");
+		} finally {
+			vi.restoreAllMocks();
+			await overlap.close();
+			await close(server);
+			await previous.cleanup();
+			await current.cleanup();
+		}
 	});
 	it("closes an existing SSE connection when its verified leaf expires", async () => {
 		const shortLived = await runtimeTlsFixture({

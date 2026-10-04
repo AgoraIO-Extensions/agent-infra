@@ -8,6 +8,7 @@ export async function runtimeTlsFixture(
 	options: {
 		dnsNames?: readonly string[];
 		days?: number;
+		caDays?: number;
 		extendedKeyUsage?: string;
 		commonName?: string;
 		expiresAt?: Date;
@@ -25,7 +26,7 @@ export async function runtimeTlsFixture(
 			"rsa:2048",
 			"-nodes",
 			"-days",
-			"2",
+			String(options.caDays ?? 2),
 			"-subj",
 			"/CN=Runtime test CA",
 			"-addext",
