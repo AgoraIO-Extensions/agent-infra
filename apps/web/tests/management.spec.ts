@@ -1245,7 +1245,11 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	await page.getByLabel("Bot ID", { exact: true }).fill("fixture-bot");
 	const secret = "synthetic-bot-secret";
 	await page.getByLabel("Secret", { exact: true }).fill(secret);
-	await page.getByRole("checkbox", { name: /我已知悉/ }).check();
+	await page
+		.getByRole("checkbox", {
+			name: "我已知悉：连接此机器人可能断开它在其他服务中的现有连接。",
+		})
+		.check();
 	await page.getByLabel("Secret", { exact: true }).evaluate((element) => {
 		(element as HTMLInputElement).value = "";
 	});
