@@ -129,6 +129,9 @@ export interface ManagementRouteDependencies {
 	readonly prepareSecretReplacements: (
 		input: SecretPreparationInput,
 	) => Promise<SecretPreparationResult>;
+	readonly validateDefaultRelayKey?: (
+		keyValue: string,
+	) => Promise<"valid" | "invalid" | "unavailable">;
 	readonly readApplicationProjection: (
 		input: ProjectionInput<AgentManagementApplicationProjectionV1>,
 	) => Promise<unknown>;
@@ -465,6 +468,9 @@ function applicationCommandFields(
 		coOwnerIds: body.coOwnerIds,
 		availability: body.availability,
 		source: body.source,
+		...("defaultRelayKey" in body && body.defaultRelayKey !== undefined
+			? { defaultRelayKey: body.defaultRelayKey }
+			: {}),
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 		environment: body.environment,
 	};
@@ -510,6 +516,16 @@ export function registerV2ManagementRoutes(
 				});
 			} catch {
 				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			}
+			if (body.defaultRelayKey !== undefined) {
+				if (!dependencies.validateDefaultRelayKey)
+					fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+				const validity = await dependencies.validateDefaultRelayKey(
+					body.defaultRelayKey,
+				);
+				if (validity === "invalid") fail("INVALID_REQUEST", metadata.traceId);
+				if (validity === "unavailable")
+					fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
 			const prepared = await prepareApplicationInput(
 				dependencies,
