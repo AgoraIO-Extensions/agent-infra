@@ -16,7 +16,8 @@ GitHub 冒烟的能力，才视为仓库当前能力；标记为配置前置或�
   PR 完成追踪。不得先创建任务分支、修改文件、提交代码或创建 PR，再补建 Issue。
 - AI 负责需求梳理、实现、自检和独立评审；人负责确认授权、必要的真实测试和最终批准。
 - GitHub Issue、PR、Check Run、Review、事件时间线和分支保护是流程状态的权威来源。
-- 确定性检查优先于模型判断。AI 不能覆盖 CI、人工批准或分支保护结果。
+- 确定性检查优先于模型判断。AI 不能自行豁免 CI、人工批准或分支保护结果；维护者可按
+  [§7.1](#71-确定性-ci) 使用 `ci:skip` 明确豁免单个 PR 的 CI。
 - 所有门禁和确认都绑定明确的 Issue cycle 或 PR head SHA，不能跨版本复用。
 - 自动化失败必须有限重试、明确终止或转人工处理，不能静默成功或形成无上界循环。
 - 所有人和 AI 创建的 PR 使用相同的合并门禁；Worker 专属检查可以对人工 PR 返回明确的
@@ -343,6 +344,15 @@ Gate 的唯一事实源。
 PR 首先运行仓库定义的格式、静态检查、测试、构建和 workflow policy。所有结果绑定精确 PR
 head SHA。Runner、Action、网关或第三方服务故障属于基础设施失败，不能触发代码修改。
 
+具有 PR 标签管理权限的维护者可添加 `ci:skip`，豁免该 PR 的 `CI` workflow 中的仓库检查与
+Workload kind。标签使用 GitHub 原生权限管理；AI 不得自行添加豁免标签。检查以原生 `skipped`
+结束并满足 required `CI`，运行摘要明确记录豁免，不作为测试通过的证据。
+
+添加、移除标签及新提交都会重新运行 workflow，执行时回读当前标签；重跑旧事件也不能复用
+已撤销的标签。移除 `ci:skip` 后恢复正常检查，标签保留期间的新提交继续豁免。读取失败时运行
+原有 CI，不能因此豁免。main push、独立 Connection E2E、Issue Gate、Human Validation Gate、
+CODEOWNER approval、conversation resolution 与 PR review 不受该标签影响。
+
 同一 head 的首次 CI failure 只执行一次 no-code retry。只有相同失败在 retry 后仍能确定性复现，
 才可以触发 Codex repair；通过 retry 的 flake 不消费 repair round。
 
@@ -354,7 +364,7 @@ head SHA。Runner、Action、网关或第三方服务故障属于基础设施失
 
 | Check | 适用范围 | 校验内容 |
 | --- | --- | --- |
-| `CI` | 所有 PR | 确定性仓库检查 |
+| `CI` | 所有 PR | 确定性仓库检查；`ci:skip` 豁免见 §7.1 |
 | `Issue Gate` | 所有 PR | 恰好一个 open primary Issue，不带 `wontfix`，且 Issue `created_at` 严格早于 PR `created_at` |
 | `Issue Readiness Gate` | Worker PR；人工 PR 返回 `not_applicable` | cycle、hash、branch/PR 所有权、blocker/triage 状态和 AC evidence |
 | `Human Validation Gate` | 所有 PR | 当前 head 的必要人工验证是否完成 |
@@ -594,7 +604,8 @@ PR 正文列出验证内容。
 
 所有 PR 必须同时满足：
 
-- 当前 head 的 `CI`、`Issue Gate`、`Issue Readiness Gate` 和 `Human Validation Gate` 通过。
+- 当前 head 的 `CI` 通过或具有 §7.1 定义的 `ci:skip` 豁免；`Issue Gate`、
+  `Issue Readiness Gate` 和 `Human Validation Gate` 通过。
 - 至少一名符合 branch protection 的 CODEOWNER 提交 Approve。
 - 所有 Review thread 已解决。
 
