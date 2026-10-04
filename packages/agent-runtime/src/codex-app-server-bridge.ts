@@ -3,7 +3,7 @@ import {
 	type ChildProcessWithoutNullStreams,
 	spawn,
 } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
 	access,
@@ -45,6 +45,10 @@ import {
 	serveCodexNativeCallbacks,
 } from "./codex-native-callback.js";
 import release from "./codex-release.json" with { type: "json" };
+import {
+	type CodexSkillLaunchProvenance,
+	codexSkillLaunch,
+} from "./codex-skill-launch.internal.js";
 
 const defaultTimeoutMs = 5_000;
 const recoveryShutdownTimeoutMs = defaultTimeoutMs;
@@ -233,6 +237,8 @@ export function codexConversationKey(binding: {
 }
 
 export interface CodexAppServerBridgeOptions {
+	/** Fixed installed-Skill launch policy, only for a new model-only process. */
+	readonly disableBundledSkills?: true;
 	readonly modelOnly?: boolean;
 	readonly launchPath?: string;
 	// Deployment-owned storage on the current Agent PVC; never a wire input.
@@ -501,6 +507,7 @@ export class CodexAppServerBridgeError extends Error {
 }
 
 interface ValidatedOptions {
+	readonly disableBundledSkills: boolean;
 	modelOnly: boolean;
 	readonly launchPath?: string;
 	dataDirectory: string;
@@ -682,6 +689,7 @@ function parseTimeout(value: unknown, fallback: number) {
 function validateOptions(input: unknown): ValidatedOptions {
 	if (!isPlainRecord(input)) configurationInvalid();
 	const allowedKeys = [
+		"disableBundledSkills",
 		"modelOnly",
 		"launchPath",
 		"dataDirectory",
@@ -740,6 +748,13 @@ function validateOptions(input: unknown): ValidatedOptions {
 		configurationInvalid();
 	const privateLane = privateNativeLaneRequired(input);
 	if (
+		input.disableBundledSkills !== undefined &&
+		(input.disableBundledSkills !== true ||
+			input.modelOnly !== true ||
+			privateLane)
+	)
+		configurationInvalid();
+	if (
 		(input.modelOnly !== undefined && typeof input.modelOnly !== "boolean") ||
 		(input.modelOnly === true &&
 			(privateLane ||
@@ -793,6 +808,7 @@ function validateOptions(input: unknown): ValidatedOptions {
 		configurationInvalid();
 	}
 	return {
+		disableBundledSkills: input.disableBundledSkills === true,
 		...(input.launchPath !== undefined ? { launchPath: input.launchPath } : {}),
 		dataDirectory: input.dataDirectory,
 		conversationKey: input.conversationKey,
@@ -1436,6 +1452,11 @@ function provenanceMismatchError() {
 }
 
 export class CodexAppServerBridge {
+	#skillLaunch: CodexSkillLaunchProvenance;
+	get [codexSkillLaunch](): CodexSkillLaunchProvenance {
+		if (this.#closing || this.#isClosed || this.#failure) throw closed();
+		return this.#skillLaunch;
+	}
 	#queue = new FrameQueue();
 	#exit: Promise<void>;
 	#resolveExit!: () => void;
@@ -1453,10 +1474,20 @@ export class CodexAppServerBridge {
 		process: ChildProcessWithoutNullStreams,
 		shutdownTimeoutMs: number,
 		private readonly isolatedDirectory: string,
+		launch: {
+			cwd: string;
+			conversationKey: string;
+			bundledSkillsDisabled: boolean;
+		},
 		nativeCallback?: CodexNativeCallbackHandler,
 		nativeConnectionBootstrap?: CodexNativeConnectionBootstrapHandler,
 	) {
 		this.#process = process;
+		this.#skillLaunch = Object.freeze({
+			...launch,
+			transport: this,
+			processId: randomUUID(),
+		});
 		this.#shutdownTimeoutMs = shutdownTimeoutMs;
 		this.#exit = new Promise((resolve) => {
 			this.#resolveExit = resolve;
@@ -1573,6 +1604,9 @@ export class CodexAppServerBridge {
 						: []),
 					"--config",
 					"features.plugins=false",
+					...(validated.disableBundledSkills
+						? ["--config", "skills.bundled.enabled=false"]
+						: []),
 					...(validated.modelOnly
 						? Object.entries(CODEX_MODEL_ONLY_CONFIG).flatMap(
 								([key, value]) => [
@@ -1630,6 +1664,11 @@ export class CodexAppServerBridge {
 			process,
 			validated.shutdownTimeoutMs,
 			launchPolicy.directory,
+			{
+				cwd: nativeLaunchPolicy.directory,
+				conversationKey: validated.conversationKey,
+				bundledSkillsDisabled: validated.disableBundledSkills,
+			},
 			validated.nativeCallback,
 			validated.nativeConnectionBootstrap,
 		);
