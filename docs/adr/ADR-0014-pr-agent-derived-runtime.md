@@ -29,7 +29,7 @@ plain-diff diff-processing 调用点传入该 capability。路径安全检查、
 启用时必须在 scope receipt、native Review receipt 和 Coverage metadata 中逐字段绑定：
 
 - `reviewer=pr-agent`；`provider=plain-diff-derived`；`runtimeKind=derived`；
-- 上游 source commit/tag；
+- 不可变的上游 source commit（tag 只能作为辅助别名，不能作为身份值）；
 - 最小补丁文件清单及 patch SHA-256；
 - OCI image digest；
 - repository、PR、base/head/merge-base、diff SHA-256/bytes、workflow run/attempt、Analysis job；
@@ -54,8 +54,9 @@ filtered-filename metadata、部分响应或另一个 run 均不能通过 Covera
 image、template、transport 和 recorder 版本都必须可回读。GitHub 写 Token 不进入 recorder 或
 模型请求；普通用户正文和 Secret 不进入持久 metadata。
 
-任何 identity、输入、输出、receipt 或 current-head 校验失败都回退到官方 image，并保持
-Coverage failure。到期或官方等价修复发布后，维护者必须重新固定 source/patch/image identity，
+任何 identity、输入、输出、receipt 或 current-head 校验失败都使本次 run 失败；受控配置回滚
+才可在后续 run 回退到官方 image，且不得在同一 run 更换 identity 或重跑模型绕过预算。到期或
+官方等价修复发布后，维护者必须重新固定 source/patch/image identity，
 完成同一 hosted 正负验证并提交替换评审；禁止无审查替换 digest。
 
 ## 验证与退出条件

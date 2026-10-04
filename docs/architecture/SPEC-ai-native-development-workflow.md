@@ -416,12 +416,11 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   token 裁剪、输出缺失或无效、旧 head、provider mismatch、运行失败或
   取消分别返回失败 Check 和稳定 reason code。
 - `provider=plain-diff-derived` 仍属于 PR-Agent reviewer 的受控 runtime identity，不是新的
-  Automated Reviewer。Scope receipt、native Review receipt 与 Coverage metadata 必须逐字段绑定
-  `runtimeKind`、upstream source commit、patch SHA-256、OCI image digest、repository、PR、
-  base/head/merge-base、diff SHA-256/bytes、workflow run/attempt 和 Analysis job。Coverage
-  validator 只有在这些值与同一 run/attempt 的 Review receipt 完全相等时，才可返回既有
-  `complete`；Publisher 成功、空 Review、filtered-filename metadata、旧 head 或缺字段不得
-  通过 required Gate。该 runtime 不得声称 official provider conformance。
+  Automated Reviewer。其完整的 runtime、scope、native Review 和 Coverage identity 字段及
+  比对规则以 [ADR-0014](../adr/ADR-0014-pr-agent-derived-runtime.md) 为唯一权威；Coverage
+  validator 只有在同一 run/attempt 的 receipt 完全相等时才可返回既有 `complete`。Publisher
+  成功、空 Review、filtered-filename metadata、旧 head 或缺字段不得通过 required Gate；该
+  runtime 不得声称 official provider conformance。
 - `Automated Review Coverage` 只由隔离的 check-only App 发布到精确 head；provider workflow 中的
   publisher job/step 保持 non-blocking 且使用不同名称，不能成为同名 required context。普通 workflow
   token、模型凭证、inactive provider Check 或旧 head Check 都不能满足 Gate。
@@ -434,10 +433,10 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
 - PR-Agent Suggestions 保持多 chunk 的局部 finding 工具，不是 cross-file Review coverage authority；
   Suggestions 成功不能把不完整的 Analysis evidence 改为完整。
 - PR-Agent Analysis 与 Suggestions 默认使用固定 digest 的官方容器镜像，不通过可变镜像标签执行。
-  经批准的 `plain-diff-derived` 例外只能用于 lockfile plain-diff 输入边界，必须披露并固定
-  `runtimeKind=derived`、上游 source commit、最小 patch SHA-256 和 OCI image digest；它不能
-  声称 official provider conformance。没有完整 identity 或任一字段不匹配时，Analysis 与
-  Coverage fail closed，并回退为当前官方 image + Coverage failure。
+  经批准的 `plain-diff-derived` 例外只能用于 lockfile plain-diff 输入边界，并遵守
+  [ADR-0014](../adr/ADR-0014-pr-agent-derived-runtime.md) 的固定 identity；没有完整 identity
+  或任一字段不匹配时，Analysis 与 Coverage fail closed，并回退为当前官方 image + Coverage
+  failure。
   Analysis 使用官方 CLI 的 `--diff-file` 输入，将可信 SHA 范围的统一 diff 交给原生 reviewer；
   在无 Git 工作树的目录运行 patch-only 模式，保留官方 JSON 日志供 Coverage 判定，
   避免混入默认分支工作树的文件内容；不从本轮范围之外的文件推断实现缺失。
@@ -526,11 +525,10 @@ Coverage job 从同 run/attempt 的受信 Analysis 获取 metadata，重新计�
 chunk 结果及 receipt；回读 Review/comments 的作者、commit、数量和内容摘要后才可返回
 `complete`。不能接受 PR 文件、模型响应或其他 run 自报的 coverage JSON。
 
-derived identity 的 `runtimeKind`、source commit、patch SHA-256 和 image digest 必须同时出现在
-scope receipt、Review receipt 和 Coverage metadata；任一字段缺失、截断、摘要不匹配、source/
-patch/image 不是获批组合，或 provider 与 runtimeKind 不一致，使用既有
-`review-output-invalid`/provider mismatch 拒绝路径。不得用另一个 run、旧 image、metadata-only
-或 Publisher job 成功补齐。
+derived identity 必须遵循 [ADR-0014](../adr/ADR-0014-pr-agent-derived-runtime.md)；任一字段缺失、
+截断、摘要不匹配、source/patch/image 不是获批组合，或 provider 与 runtimeKind 不一致，使用
+既有 `review-output-invalid`/provider mismatch 拒绝路径。不得用另一个 run、旧 image、
+metadata-only 或 Publisher job 成功补齐。
 
 metadata 使用已有受信 job 间的有界输出传递；缺失、截断、无法解析、大小超限、摘要不匹配或
 来源无法验证均失败，不另开 artifact/编码通道绕过 runner 防泄漏。Analysis 仍只有只读 GitHub
