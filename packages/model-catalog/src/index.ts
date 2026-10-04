@@ -29,6 +29,7 @@ export {
 	type AgentDefaultModelRequestV1,
 	admitAgentDefaultModelsV1,
 } from "./agent-default-admission.js";
+export { createAgentDefaultRelayKeyModelCandidatesV1 } from "./agent-default-candidates.js";
 export * from "./catalog.js";
 export { createMessagesModelAccessValidatorV1 } from "./messages-access.js";
 export {
