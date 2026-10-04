@@ -331,29 +331,44 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 #### #1164 Proposed：内部 Runtime TLS 契约（未批准）
 
-本段是 #1164 的 **proposed** 文档提案，不是已批准的产品或部署结论；在具名人工决定、适用 Standards/Spec 与 CODEOWNER 评审完成前，不能被 #504 或任何实现 PR 当作实施授权。它只约束 Agent 平台的 `platform-worker`、Runtime Host 和其实际内部 Service，不改变 Connection 的身份、Grant 或外部调用契约。
+本提案只约束 Worker 到 RuntimeHost 的内部传输；须经具名机制选择、供应职责确认及适用 Standards/Spec、CODEOWNER/人工评审，才可实施。本文不证明 TLS、证书供应或真实部署已交付，不授权修改 Connection 或 Host/Grant/Driver wire。
 
-**推荐机制：服务端 TLS + 既有部署 service token + 签名 Grant。** 若部署把 business/control 分成两个 Service，Runtime Host 为两者提供 TLS server leaf；若保持当前 HLD 的单一 Agent Service，则两条路径共享该 Service origin，不能在本提案中臆造第二个 Service。Worker 仅连接 `https` origin，并以部署提供的 CA 验证链、以实际 Service DNS 验证 hostname；有效证书绑定可信 Agent、namespace 和实际 Service DNS，不使用用户 Ingress 证书代替内部身份。现有 `WorkloadRuntimeAuthV1.serviceTokenSecret`（仅含 Kubernetes Secret `name` 与 `key` 引用）仍由部署以独立受控 Secret 交付 token，token 继续做部署调用方认证；现有 signed Workload Readiness/Execution Grant 继续验证 issuer、audience、时间、唯一 ID、Agent、Execution、revision、fence、Digest 和操作范围。TLS 成功不能替代 token 或 Grant，token/Grant 成功也不能跳过 TLS。
+**推荐等价机制：server TLS + 既有 deployment service token + signed Grant。** 三道校验分别满足本节的传输保护、部署服务身份和执行授权，不能相互替代：
 
-推荐机制的实际变更边界如下：
+| 要求 | 推荐机制及边界 |
+| --- | --- |
+| Worker 认证 Host 并保护传输 | 只连接部署确定的 HTTPS origin；校验证书链、有效期、serverAuth 用途及与 origin 完全匹配的 DNS SAN。部署把该 DNS、namespace 与可信 Agent 绑定；证书不证明 revision、fence、Digest 或 Session。禁止明文 fallback、redirect、关闭校验和调用方覆盖 origin。 |
+| Host 认证部署调用方 | 继续校验既有 service token；它证明持有部署凭证，不是某个 Worker 进程的私钥持有证明。token 只在已验证 TLS 上传输，部署控制其发布、访问、轮换和撤销；Host 所持 token 也不能取得 Grant 签名私钥。 |
+| Host 核对当前授权与部署 | 保留独立 signed readiness 的 Worker/Agent/revision/fence/Digest 本机绑定；业务及控制 Grant 仍按 [§9.3](#93-服务端授权上下文) 校验签名、issuer、audience、时间、对象、用途和操作范围，继续执行原持久幂等、租约与屏障。不能把 readiness 字段笼统写成每种 Execution Grant 已有的字段。 |
 
-- `platform-worker` 的 business/control origin 从 `http://` 改为 `https://`；禁止明文 fallback、redirect、跳过 CA/hostname 校验或从请求输入覆盖 origin。
-- 部署 owner 负责发布、轮换、撤销和保留 server leaf、私钥与 CA 信任材料；TLS 材料通过受控 `kubernetes.io/tls` Secret 引用和只读文件装配，Worker 只消费 CA 文件，Runtime Host 只消费 server-key/server-cert 文件。既有 service token 继续使用独立的受控 Secret 引用。私钥、token 和 Grant 原值不得进入日志、持久业务状态、事件或普通查询。
-- 同一可信服务身份的 leaf 续期可以跨 Workload revision 使用；证书材料、Service DNS、namespace 或 CA 引用变化须按一次加载语义重新装配并验证。CA 轮换采用重叠信任、替换验证、撤旧顺序；失效、撤销或泄露材料不得复用。既有 Session/Execution/stop/drain/unknown、PVC、容量、fence、rollback 和 durable recovery 语义不变。
-- TLS 启动、健康或 signed readiness 失败时阻止新 business 调用和 promotion；不得把 Pod 退出、healthz 或控制响应单独当作可信终态。原 Kubernetes authority 仍可执行 fenced closeRoute、scale-zero、ownership cleanup；无法确认的结果继续 pending/unknown。
+在凭证受控、TLS 严格校验和上述授权屏障全部成立的威胁边界内，此组合可以作为本节的等价机制候选；它不等同于 mTLS 的双向传输层私钥证明。共享 bearer token 泄漏会扩大服务认证风险，捕获仍有效的 Grant 也不能靠 TLS 自动消除重放；必须依赖原用途/对象校验、持久幂等与 fence，并完成对应负向验收。当前 HTTP 实现不满足此候选，挂载 CA 或启用某一 Runtime 版本也不代表满足。
 
-当前 Runtime HLD §4 只定义单一 `service.port` 和固定 Agent Service origin；它尚未定义 business/control 双 Service、路由/DNS、证书绑定或相应 Manifest 字段。因此“双 Service”是本提案的明确跨文档差额：批准前必须由 HLD/相关契约选择单 Service 或补齐双 Service 映射；本段不把任一选择写成已批准字段，也不授权新增部署配置。
+**沿既有 Service 拓扑补齐传输。** [Runtime HLD §4.1](HLD-agent-runtime-M1.md#41-内部-runtime-service-与-tls-映射提案) 区分 Agent 级 candidate/verified Workload 与业务 Session Sandbox。Agent 级实现已有主 Service 和 `-probe` Service，分别承载 business 与 readiness/verified control；沿这两个实际 DNS 提供同一 Host listener 的 server TLS，不因 TLS 新建或合并 Service、不新增 Manifest 字段。Sandbox 沿其原已批准分配及唯一 Service 身份供证，不复用 Agent 级路由或擅加 `-probe`；本提案不改变 §10.1.1 或 #1322 的资源合同。
 
-**mTLS 差额（备选，未选定）。** mTLS 还需由同一可信部署 owner 为 Worker 发布 client leaf/key，并为 Host 发布 server leaf/key；Worker 要求 Host 的 CA/hostname 校验，Host 还要校验 Worker client CA 与受控身份 SAN。除 server leaf/CA 外，新增 client leaf 的 Secret/只读文件、双向轮换与撤销、Worker/Host 同时重载或受控重启、双向负向测试和跨 revision 复用规则。mTLS 只增加传输层 peer 身份，仍必须保留既有 service token、signed Grant、revision/fence/Digest 和执行授权；它因此带来双 leaf 供应与更高故障恢复成本，不能以“集群内”或单边 server TLS 代替。
+**受信部署输入。** 复用[现有 Worker 部署模块](../../deploy/platform-worker/README.md#配置模块形状)，准确入口与最小差额如下；新增项是待批准的部署输入，不是已存在的 Schema 或产物：
 
-**唯一待人工输入。** 供应 owner/准确产物入口尚不能从现场确认，须由具名可信部署发布 owner 提供：可信 Agent/namespace、按批准的单/双 Service 映射确定的实际 Service DNS、受控引用及写权限、`tls.crt`/`tls.key`（若选 mTLS 另含 Worker client leaf/key）、CA 信任与 hostname/SAN 校验输入，以及发布、续期、撤销、重叠保留和泄露处置责任。上述材料缺失不等于契约已批准，也不阻止先评审本段其余文字。
+| 输入 | 已有入口 / 所需差额 |
+| --- | --- |
+| 部署代码与身份 | `platformWorker.configurationModuleSecretRef.{name,key}` 只读挂载 `/app/dist/configuration.mjs`；导出 `workloadInput`、`signing`、`serviceToken`。`workloadInput.policy.namespace` 必须与 `PLATFORM_WORKER_NAMESPACE` 一致，Agent 来自服务端持久 Workload，不能从请求、Owner env、模型或 live annotation 获取。 |
+| token 与 Grant | `platformWorker.runtimeAuthSecretRef.{name,privateKeyKey,serviceTokenKey}` 向 Worker 提供 `/var/run/agent-infra/runtime-auth/{runtime-grant.pem,service-token}`；Host 通过 `policy.runtimeAuth.serviceTokenSecret.{name,key}` 的 `secretKeyRef` 得到同一 transport token。保留 `WorkloadRuntimeAuthV1` 原五字段 `workerId/grantKeyId/grantPublicKey/grantIssuer/serviceTokenSecret`；签名私钥仅在 Worker，Host 只得到公钥和预期身份。 |
+| CA | 既有 `platformWorker.trustedCaSecretRef.{name,key}` 挂载 `/var/run/agent-infra/trusted-ca/ca.crt`，由 `NODE_EXTRA_CA_CERTS` 在 Worker 启动时加载。它是附加信任入口，不是 Host leaf，也不自动把 Runtime 信任限定到某一 CA；TLS 消费者须验证配置存在、可解析且含获准 CA，明确实际信任集合，不能把 Node 对坏文件的警告当作 fail closed。 |
+| server leaf（新增受控输入） | 部署须交付可信 `agentId`、`namespace`、从 HLD 对应拓扑计算的 `serviceDnsNames`（Sandbox 另核原分配/归属），以及该 namespace 内原生 `kubernetes.io/tls` 的受控 `serverSecretRef.name`；键固定 `tls.crt`（leaf 与中间链）、`tls.key`（匹配私钥）。与上述 CA 引用分别管理，不复用 Ingress 的 `policy.tlsSecretName` 或 Grant 私钥。拟只读挂载到 Host `/var/run/agent-infra/runtime-tls/{tls.crt,tls.key}`；这些字段/文件消费者当前尚未实现。 |
 
-**提案验收与负向门禁。** 在批准和实施前，评审包必须证明：
+可信部署发布角色负责上述输入及 Secret 写权限、签发来源、发布、到期前续期、撤销、保留和泄露处置；生命周期装配角色消费受审阅输入，沿现有 namespace-scoped Kubernetes Adapter 核引用、归属和材料有效性，Host 启动核对挂载证书/私钥及服务绑定。Kubernetes Secret 类型和键存在不证明证书有效。Worker 不获得 Host 私钥挂载，Host 不获得 Grant 签名私钥或 Kubernetes authority；Owner、镜像及请求不能选择 Secret、CA 或 DNS。具体签发者、写入身份、真实引用和操作责任须在 #1164 具名确认，不能从示例名称或 Issue assignee 推断实际供应已存在。
 
-1. 两项人工决定（供应输入、server TLS 等价机制或 mTLS）有明确记录，并将 proposed 与已批准内容分开；不以 Secret 存在、命名、fixture、Helm render 或 healthz 充当真实供应证明。
-2. business 与 control 均拒绝明文、错误 Service DNS、错误 CA、过期/撤销/泄露 leaf、无效 token、过期/错误 audience 或跨 Agent/Execution/revision/fence/Digest/操作的 Grant；拒绝 redirect、hostname 校验关闭、空 CA 和调用方覆盖 origin。
-3. 证书续期、CA 重叠轮换、引用变化、Worker/Host 重启、Pod 替换、stop/drain、响应丢失和恢复都沿原 attempt/Session/Execution 收敛；未确认结果保持 unknown/pending，不重发 token/Grant 或外部副作用。
-4. 验收同时覆盖已批准的 Service 映射（当前 HLD 单 Service，或经 HLD 补齐的双 Service）、candidate/verified、business/control、跨主体/Agent、旧 revision late call、回滚和 Worker/Host 分别不可用；真实部署、签发、Secret 内容和生产费用必须另有独立证据。
+**生命周期与失效。** 同一受信运行实例及其 namespace/DNS（Sandbox 须保持原分配）的有效 leaf 可跨 Workload revision 使用，不建立逐 revision 证书账本，不新增 PKI 服务、CRD 或 TLS reader 框架。Host 沿原受权持久 Pod 替换加载材料，重新验证 HTTPS、signed readiness 后才 promotion；不增热加载。相同 Secret 引用及受信 CA 下续期 leaf 不要求 Worker 重启；受审阅配置引用改变或 Worker 信任集合改变时，按其一次加载语义重启。CA 轮换先加入新 CA 并重启消费者、替换并验证 Host、最后移除旧 CA 并重启消费者，重叠期间不接受已失效材料。
+
+到期、材料不匹配或身份错误须拒绝握手/启动与新业务；CA/hostname 校验本身不保证已撤销证书被拒绝。没有已交付逐 leaf 撤销校验时，泄露/撤销事件采用既有 Kubernetes authority 隔离受影响 Workload，并从 Worker 信任集合移除受影响 CA、关闭旧连接并受控重启后再恢复；同 CA 的其他服务也可能受影响，供应责任人须承担该范围及恢复成本，不能只删 Secret 或换 leaf 就宣称旧 leaf 已不可用。失效或泄露 token 同样须在两端撤旧并受控重载；Grant 仍按原有效期/授权恢复规则处理。
+
+首次 HTTP→TLS 切换先沿原受权持久流程停止新准入、核实/排空原执行并隔离旧通路，不能向旧 HTTP 发送 token/Grant；旧控制不可达时保持 pending/unknown，使用原 Kubernetes fenced closeRoute、scale-zero 和 ownership cleanup 权限收敛。证书失败不能剥夺这些 Kubernetes 权限，也不能把 Pod 退出当作可信终态。保留原 tuple、PVC、Session、Execution、facts、stop/drain、durable recovery/ACK、容量、重试和回滚；回滚不得重新启用明文或复用失效凭证。
+
+**mTLS 备选成本。** 另需 Worker client leaf/key 的受控供应、clientAuth 用途与身份 SAN、Host 侧 client CA 和身份映射、双向轮换/撤销、两端重启与双向故障验收。它加强客户端私钥持有证明，但不替代 token、业务/控制 Grant、fence 或恢复屏障。本轮推荐不增加这些 client leaf 输入；是否选择等价机制仍须人工明确批准。
+
+**验收。** 文档评审与后续真实实施分别给证据，不以 fixture、Helm render、Secret 存在或 healthz 签收：
+
+1. #1164 记录机制选择及具名供应/装配职责，填齐真实 Agent/namespace/DNS、Secret/CA 引用、写权限、签发与生命周期输入；缺失项保持未交付。
+2. business、control、readiness 均覆盖明文/redirect、错误 DNS/CA、空或损坏 CA、到期/撤销/泄露 leaf、无效 token 和跨用途/主体/Agent/对象的 Grant；分别验证本机 revision/fence/Digest 与旧请求、重复请求的原屏障。
+3. Agent 级主 Service/`-probe` 分别验证 candidate/verified 与业务关路后的控制，Sandbox 验证其独立 Service/分配归属且拒绝跨 Session 路由；原执行恢复/ACK、CA/leaf/token 轮换、响应丢失、Worker/Host 分别重启及回滚均保持原准入和 unknown 语义。证书不能让错误 revision/Session 的后端通过授权。
 
 Agent/客户端到 Connection 的 MCP/API 使用 Connection 的独立身份和契约，不经过 Platform API。平台不读取 Connection Catalog，不持有其目录读取或代调用 workload credential。
 

@@ -128,6 +128,24 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，Ru
 使用独立 Workload Readiness Grant。Host 必须在调用 Driver 的无副作用 capability 读取前
 校验本机 Workload 绑定；此路径不使用业务 Session，也不开放任务提交或事件查询。
 
+### 4.1 内部 Runtime Service 与 TLS 映射提案
+
+本节为 #1164 的 **Proposed / 未批准** 差额，只细化[工程 Spec §8.3](SPEC-agent-infra-M1-engineering-architecture.md#83-内部接口)，不授权实现或部署。TLS 跟随已有 Workload 拓扑，不增加或合并 Service、监听端口或 Manifest 字段；部署材料不来自镜像 Manifest 或 Owner 配置。
+
+**Agent 级 candidate/verified Workload。** 令 `N = agent-` 加可信 `agentId` 的 SHA-256 十六进制前 32 位（`workloadResourceNameV1`，见[现有命名函数](../../apps/platform-worker/src/kubernetes-runtime-comparison.ts)），`NS = workloadInput.policy.namespace`。`P` 取对应 candidate/verified deployment 的 `service.port`；readiness 取该候选 Manifest 的同一端口。
+
+| 路径 | 已有 origin（HTTP，尚未满足 TLS 契约） | TLS 提案与不变门禁 |
+| --- | --- | --- |
+| business | `http://N.NS.svc:P` | `https://N.NS.svc:P`；只在 ready 时消费 candidate，仍校验实际 ownership、Workload readiness 和新 Turn 容量 |
+| verified control | `http://N-probe.NS.svc:P` | `https://N-probe.NS.svc:P`；取原 verified deployment，`observeVerifiedControl` 成功后才返回路由，保留独立控制 Grant |
+| candidate health / signed readiness | `http://N-probe.NS.svc:P` | 同名 HTTPS origin；分别验证原 `health.path` 和 `/internal/runtime/v1/readiness`，不授予业务准入 |
+
+准确消费者为 `createProductionConversationRuntimeResolverV2`（[conversation resolver](../../apps/platform-worker/src/conversation-deployment.ts)）、`createWorkloadRuntimeProbeV1`（[readiness 装配](../../apps/platform-worker/src/workload-deployment.ts)）及 `createKubernetesRuntimeAdapterV1`（[Kubernetes Adapter](../../apps/platform-worker/src/kubernetes-runtime-adapter.ts)）。Adapter 已创建 `N` 和 `N-probe` 两个 ClusterIP Service，共用 Workload 的 `service.port`；候选阶段 `N` selector 为 `closed`，`N-probe` 选中候选 Pod。`closeAgentAtFence`（[cleanup](../../apps/platform-worker/src/kubernetes-runtime-cleanup.ts)）关闭主路由时保留合规的内部 probe 路由；probe 漂移可被移除，不能保证任意故障下 control 都可达。verified 观测失败必须继续 unavailable/unknown，不能把候选误当旧执行目标。
+
+同一 Agent 级 Host leaf 的 DNS SAN 覆盖 `N.NS.svc` 和 `N-probe.NS.svc`，每次连接仍只核实际 origin 的 hostname；不以 `.svc.cluster.local`、Pod IP、用户 Ingress 域名或 wildcard 替代这两个实际名称。可信部署将两个名称绑定同一 Agent/namespace；leaf 不证明 candidate/verified revision，原本机绑定及路由观测不得省略。这里补齐的是既有 Kubernetes 资源映射，不是新增双 Runtime 或双服务供应系统。
+
+**业务 Session Sandbox。** Agent 级上述现状不能证明平台会话已按独立 Sandbox 路由。Session 的分配、Service、原 PVC、resourceFence 与真实 UID/version 继续以 [Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定) 为准；五类必需资源及可选 StatefulSet 的澄清归 #1322。TLS 只消费该分配已有 Service 的实际 DNS/端口与原 Session/Sandbox/代次绑定，不套用 Agent 级 `N`/`N-probe`，不新增 Sandbox probe Service，不让两个 Session 共享 leaf 私钥或后端。准确 Sandbox Service 命名与接线由该 owner 的受审阅交付给出；缺少时拒绝该路由，不能回退到 Agent 级 Service，也不能以本票签收 Sandbox 资源或 Host/Grant/Driver wire。
+
 ## 5. Platform Conversation Contract
 
 Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation Contract；Runtime 不另建身份、任务队列或 Eval 状态权威。Contract 定义以下语义，不暴露具体 Runtime 协议：
