@@ -12,6 +12,9 @@ import {
 	planConversationGenerationConfirmationV1,
 	planConversationGenerationIsolationV1,
 	planTaskSystemControlV1,
+	type SessionSandboxObservationV1,
+	type SessionSandboxPolicyV1,
+	type SessionSandboxReconciliationClaimV1,
 	type TaskPrincipalV1,
 	type TaskUserDirectoryV1,
 	type WorkloadReconciliationStateV1,
@@ -61,10 +64,18 @@ import {
 	type PlatformQueueResourceSnapshot,
 	readPlatformQueueResourceSnapshot,
 } from "./observability-snapshot.js";
+import { readSessionSandboxRuntimeState } from "./session-sandbox.js";
+import {
+	claimSandboxReconciliation,
+	prepareSandboxReconciliation,
+	recordSandboxObservation,
+	type SandboxClaimRequest,
+} from "./session-sandbox-reconciliation.js";
 import { readLegacyControlRecoveryInTransaction } from "./task-authorization-migration.ts";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.ts";
 
 export interface PostgresConversationDispatchOptionsV1 {
+	readonly sandboxPolicy?: SessionSandboxPolicyV1;
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly databaseUrl: string;
 }
@@ -74,12 +85,24 @@ export class PostgresConversationDispatchStoreV1
 {
 	readonly #client: Client;
 	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
+	readonly #sandboxPolicy: SessionSandboxPolicyV1 | undefined;
 
 	constructor(options: PostgresConversationDispatchOptionsV1) {
 		if (!options || typeof options !== "object") {
 			throw new TypeError("Conversation dispatch Store options are invalid");
 		}
 		this.#userDirectory = options.userDirectory;
+		if (
+			options.sandboxPolicy &&
+			(!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(
+				options.sandboxPolicy.namespace,
+			) ||
+				!/^[a-f0-9]{64}$/.test(options.sandboxPolicy.resourceConfigurationHash))
+		)
+			throw new TypeError("Sandbox policy is invalid");
+		this.#sandboxPolicy = options.sandboxPolicy
+			? { ...options.sandboxPolicy }
+			: undefined;
 		this.#client = postgres(
 			platformDatabaseUrlFromEnvironment({
 				PLATFORM_DATABASE_URL: options.databaseUrl,
@@ -91,6 +114,63 @@ export class PostgresConversationDispatchStoreV1
 		signal: AbortSignal,
 	): Promise<PlatformQueueResourceSnapshot> {
 		return readPlatformQueueResourceSnapshot(this.#client, signal);
+	}
+
+	async claimSandboxReconciliation(
+		input: SandboxClaimRequest & { readonly schemaVersion: 1 },
+	) {
+		requireCommand(input);
+		const policy = this.#sandboxPolicy;
+		if (!policy) return null;
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				claimSandboxReconciliation(
+					transaction,
+					input,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
+	}
+
+	async prepareSandboxReconciliation(input: {
+		readonly claim: SessionSandboxReconciliationClaimV1;
+		readonly leaseDurationMs: number;
+	}) {
+		requireLeaseDuration(input.leaseDurationMs);
+		const policy = this.#sandboxPolicy;
+		if (!policy) return false;
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				prepareSandboxReconciliation(
+					transaction,
+					input.claim,
+					input.leaseDurationMs,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
+	}
+
+	async recordSandboxObservation(input: {
+		readonly claim: SessionSandboxReconciliationClaimV1;
+		readonly observation: SessionSandboxObservationV1;
+	}) {
+		const policy = this.#sandboxPolicy;
+		if (!policy) return "stale" as const;
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				recordSandboxObservation(
+					transaction,
+					input.claim,
+					input.observation,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
 	}
 
 	/** Recheck the live lease and derive recovery metadata from the original accepted task. */
@@ -126,6 +206,14 @@ export class PostgresConversationDispatchStoreV1
 				)
 					return null;
 				return {
+					sandboxResource:
+						state.conversation.sandbox && this.#sandboxPolicy
+							? await readSessionSandboxRuntimeState(
+									transaction,
+									state.conversation.sandbox,
+									this.#sandboxPolicy,
+								)
+							: null,
 					hostSessionRef: state.conversation.host_session_ref,
 					...(isolation
 						? { generationIsolation: isolationProjection(isolation) }
@@ -157,7 +245,9 @@ export class PostgresConversationDispatchStoreV1
 	}): Promise<
 		readonly {
 			readonly itemId: string;
-			readonly operation: ConversationDispatchOperationV1;
+			readonly operation:
+				| ConversationDispatchOperationV1
+				| "conversation.sandbox.reconcile.v1";
 		}[]
 	> {
 		if (
@@ -170,13 +260,19 @@ export class PostgresConversationDispatchStoreV1
 		}
 		return databaseOperation(async () => {
 			const query = this.#client<
-				{ id: string; operation: ConversationDispatchOperationV1 }[]
+				{
+					id: string;
+					operation:
+						| ConversationDispatchOperationV1
+						| "conversation.sandbox.reconcile.v1";
+				}[]
 			>`
 				select id, operation from platform.outbox_items
 				where scope_type = 'conversation'
 					and operation in (
 						'conversation.turn.submit.v1', 'conversation.turn.regenerate.v1',
 						'conversation.turn.supplement.v1', 'conversation.turn.stop.v1'
+						, 'conversation.sandbox.reconcile.v1'
 					)
 					and (
 						(status in ('pending', 'retry_scheduled') and available_at <= clock_timestamp())
@@ -434,6 +530,15 @@ export class PostgresConversationDispatchStoreV1
         update platform.conversations set session_generation = ${plan.nextGeneration}, status = ${plan.conversationStatus}, updated_at = clock_timestamp()
         where id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration}
       `;
+			const rebound = await transaction<{ sandbox_id: string }[]>`
+				update platform.session_sandbox_allocations
+				set session_generation = ${plan.nextGeneration}, status = 'unavailable', updated_at = clock_timestamp()
+				where conversation_id = ${claim.conversationId} and sandbox_id = ${claim.sandbox?.sandboxId ?? null}
+					and session_generation = ${claim.sessionGeneration}
+				returning sandbox_id
+			`;
+			if (rebound.length !== 1)
+				throw new Error("Sandbox generation binding changed");
 			await transaction`update platform.conversation_generation_tombstones set status = 'confirmed', confirmed_at = clock_timestamp() where operation_id = ${isolation.operation_id}`;
 			await transaction`
         insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
@@ -540,6 +645,11 @@ export class PostgresConversationDispatchStoreV1
 						if (decision.outcome === "wait")
 							throw new DispatchCapacityUnavailable("capacity_wait");
 					}
+					if (
+						!state.conversation.sandbox_ready &&
+						input.claim.operation !== "conversation.turn.stop.v1"
+					)
+						throw new DispatchCapacityUnavailable("capacity_wait");
 					if (
 						pendingIsolation &&
 						input.claim.operation !== "conversation.turn.stop.v1"

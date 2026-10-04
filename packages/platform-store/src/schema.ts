@@ -132,6 +132,7 @@ export const platformInfrastructureTables = [
 	agentManagementHistory,
 	conversations,
 	conversationExecutions,
+	sessionSandboxAllocations,
 	taskAuthorizationRecords,
 	taskControlRecords,
 	conversationGenerationTombstones,
@@ -150,3 +151,7 @@ export const platformInfrastructureTables = [
 	platformFileAccesses,
 	fileReconciliation,
 ] as const;
+
+import { sessionSandboxAllocations } from "./schema-session-sandboxes";
+
+export { sessionSandboxAllocations } from "./schema-session-sandboxes";

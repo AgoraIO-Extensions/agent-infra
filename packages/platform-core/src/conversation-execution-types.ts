@@ -2,6 +2,7 @@ import type { ConversationMetadataRecoveryV1 } from "./conversation-dispatch.js"
 import type { PersistedConversationEventV1 } from "./conversation-events.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
 import type { PersonalApiTaskAdmissionAuthorityV1 } from "./personal-api-task-authorization.js";
+import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
@@ -263,6 +264,9 @@ export interface ConversationModelConfigurationV1 {
 }
 
 export interface ConversationExecutionConversationStateV1 {
+	readonly sandbox?: SessionSandboxBindingV1;
+	/** Required with a persisted Sandbox binding; independent of Conversation task status. */
+	readonly sandboxReady?: boolean;
 	/** Persisted C/E identity; legacy non-API user states may omit it. */
 	readonly principal?: TaskPrincipalV1;
 	readonly isolationPending?: true;
@@ -415,6 +419,7 @@ export type ConversationStateDecisionV1 =
 
 export interface CreateConversationWritePlanV1 {
 	readonly schemaVersion: 1;
+	readonly sandbox: SessionSandboxBindingV1;
 	readonly conversation: ConversationExecutionConversationStateV1;
 	readonly result: ConversationCreatedResultV1;
 	readonly idempotency: {

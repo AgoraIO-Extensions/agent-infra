@@ -9,6 +9,12 @@ import type { ConversationQueryProjectionV1 } from "./conversation-query.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 interface Row {
+	readonly sandbox_ready: boolean | null;
+	readonly sandbox_id: string;
+	readonly resource_name: string;
+	readonly workspace_scope: string;
+	readonly principal_type: string;
+	readonly session_generation: number | string;
 	readonly id: string;
 	readonly agent_id: string;
 	readonly actor_id: string;
@@ -95,6 +101,10 @@ export async function readRecentPersonalConversations(
 			from channel_guard guard
 			left join lateral (
 				select c.id, c.agent_id, c.actor_id, c.channel_id, c.status,
+					c.principal_type, c.session_generation,
+					s.sandbox_id, s.resource_name, s.workspace_scope,
+					s.status = 'ready' and s.desired_state = 'running' and s.resource_fence > 0
+						and s.resource_observation->>'status' = 'ready' as sandbox_ready,
 					c.selected_model_option_id, c.selected_reasoning_level,
 					c.last_conversation_cursor, c.created_at, c.updated_at,
 					to_char(c.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as exact_updated_at,
@@ -114,8 +124,14 @@ export async function readRecentPersonalConversations(
 							from platform.agent_availability av where av.agent_id = c.agent_id), '[]'::jsonb)
 					) as management
 				from platform.conversations c
+				join platform.session_sandbox_allocations s
+					on s.conversation_id = c.id and s.agent_id = c.agent_id
+					and s.actor_id = c.actor_id and s.principal_type = c.principal_type
+					and s.channel_id = c.channel_id and s.session_generation = c.session_generation
 				join current_agents a on a.agent_id = c.agent_id and a.channel_state = 'included'
 				where not guard.channel_unavailable and c.actor_id = $1 and c.channel_id = 'web'
+					and not exists (select 1 from platform.conversation_executions e
+						where e.conversation_id = c.id and e.sandbox_id is distinct from s.sandbox_id)
 					and ($3::text::timestamptz is null or (c.updated_at, c.id) < ($3::text::timestamptz, $4::text))
 				order by c.updated_at desc, c.id desc
 				limit $5

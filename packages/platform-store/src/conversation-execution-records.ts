@@ -4,6 +4,7 @@ import {
 	type ConversationModelConfigurationV1,
 	isTaskApiChannelV1,
 	parsePersonalApiTaskAdmissionAuthorityV1,
+	parseSessionSandboxBindingV1,
 	parseTaskAuthorizationBoundaryV1,
 	parseTaskPrincipalV1,
 } from "@agent-infra/platform-core";
@@ -112,7 +113,7 @@ export function parseConversation(
 			"createdAt",
 			"updatedAt",
 		],
-		["isolationPending", "principal"],
+		["isolationPending", "principal", "sandbox", "sandboxReady"],
 	);
 	if (
 		input.schemaVersion !== 1 ||
@@ -143,6 +144,21 @@ export function parseConversation(
 			(principal.id !== input.actorId || (!api && principal.kind !== "user")))
 	)
 		unavailable();
+	const sandbox =
+		input.sandbox === undefined
+			? undefined
+			: parseSessionSandboxBindingV1(input.sandbox);
+	if (
+		sandbox &&
+		(typeof input.sandboxReady !== "boolean" ||
+			sandbox.sessionId !== input.conversationId ||
+			sandbox.agentId !== input.agentId ||
+			sandbox.principal.id !== input.actorId ||
+			sandbox.principal.kind !== (principal?.kind ?? "user") ||
+			sandbox.channelId !== channelId ||
+			sandbox.generation !== input.sessionGeneration)
+	)
+		unavailable();
 	const createdAt = date(input.createdAt);
 	const updatedAt = date(input.updatedAt);
 	if (updatedAt.getTime() < createdAt.getTime()) unavailable();
@@ -153,6 +169,9 @@ export function parseConversation(
 		actorId: text(input.actorId),
 		channelId,
 		...(principal ? { principal } : {}),
+		...(sandbox
+			? { sandbox, sandboxReady: input.sandboxReady as boolean }
+			: {}),
 		...(input.isolationPending === true
 			? { isolationPending: true as const }
 			: {}),

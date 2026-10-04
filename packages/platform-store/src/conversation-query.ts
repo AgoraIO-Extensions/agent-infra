@@ -4,7 +4,9 @@ import type { RecentPersonalConversationsQueryV1 } from "@agent-infra/platform-c
 import {
 	isTaskApiChannelV1,
 	parseConversationOperationEventV2,
+	parseSessionSandboxBindingV1,
 	parseTaskPrincipalV1,
+	type SessionSandboxBindingV1,
 	type TaskPrincipalV1,
 } from "@agent-infra/platform-core";
 
@@ -31,6 +33,8 @@ export interface ConversationQueryPageV1 {
 }
 
 export interface ConversationQueryProjectionV1 {
+	readonly sandbox?: SessionSandboxBindingV1;
+	readonly sandboxReady?: boolean;
 	readonly conversationId: string;
 	readonly agentId: string;
 	readonly status: "ready" | "active" | "unavailable";
@@ -113,6 +117,14 @@ export interface PlatformQueueResourceSnapshot {
 }
 
 interface ConversationRow {
+	readonly sandbox_ready: boolean | null;
+	readonly sandbox_id: string;
+	readonly resource_name: string;
+	readonly workspace_scope: string;
+	readonly actor_id: string;
+	readonly principal_type: string;
+	readonly channel_id: string;
+	readonly session_generation: number | string;
 	readonly id: string;
 	readonly agent_id: string;
 	readonly status: "ready" | "active" | "unavailable";
@@ -363,7 +375,19 @@ function projection(row: ConversationRow): ConversationQueryProjectionV1 {
 	return {
 		conversationId: text(row.id),
 		agentId: text(row.agent_id),
+		sandbox: parseSessionSandboxBindingV1({
+			schemaVersion: 1,
+			sandboxId: row.sandbox_id,
+			sessionId: row.id,
+			agentId: row.agent_id,
+			principal: { kind: row.principal_type, id: row.actor_id },
+			channelId: row.channel_id,
+			generation: Number(row.session_generation),
+			resourceName: row.resource_name,
+			workspaceScope: row.workspace_scope,
+		}),
 		status: row.status,
+		sandboxReady: row.sandbox_ready === true,
 		lastConversationCursor:
 			cursor === 0 ? null : conversationCursor(row.id, cursor),
 		createdAt: timestamp(row.created_at),
@@ -416,8 +440,19 @@ function event(row: EventRow): ConversationQueryEventV1 {
 }
 
 const conversationSelection = `
-	select id, agent_id, status, last_conversation_cursor, created_at, updated_at
-	from platform.conversations
+	select id, agent_id, status, last_conversation_cursor, created_at, updated_at,
+		sandbox_id, resource_name, workspace_scope, sandbox_ready, actor_id, principal_type, channel_id, session_generation
+	from (select c.*, a.sandbox_id, a.resource_name, a.workspace_scope,
+		a.status = 'ready' and a.desired_state = 'running' and a.resource_fence > 0
+			and a.resource_observation->>'status' = 'ready' as sandbox_ready
+		from platform.conversations c join platform.session_sandbox_allocations a
+		on a.conversation_id = c.id and a.agent_id = c.agent_id and a.actor_id = c.actor_id
+		and a.principal_type = c.principal_type and a.channel_id = c.channel_id
+		and a.session_generation = c.session_generation
+		where not exists (
+			select 1 from platform.conversation_executions e
+			where e.conversation_id = c.id and e.sandbox_id is distinct from a.sandbox_id
+		)) as conversations
 `;
 
 async function readConversation(
@@ -484,6 +519,11 @@ async function readExecutions(
 		join platform.conversations c on c.id = e.conversation_id
 			and c.agent_id = e.agent_id and c.actor_id = e.actor_id
 			and c.channel_id = e.channel_id and c.principal_type = e.principal_type
+		join platform.session_sandbox_allocations s
+			on s.conversation_id = c.id and s.sandbox_id = e.sandbox_id
+			and s.agent_id = c.agent_id and s.actor_id = c.actor_id
+			and s.principal_type = c.principal_type and s.channel_id = c.channel_id
+			and s.session_generation = c.session_generation
 		where e.conversation_id = ${conversationId}
 			and (${executionId ?? null}::text is null or e.execution_id = ${executionId ?? null})
 		order by e.created_at, e.execution_id
@@ -507,6 +547,16 @@ async function readEvents(
 				limit 1
 			) as trace_id
 		from platform.conversation_events e
+		join platform.conversation_executions x
+			on x.execution_id = e.execution_id and x.conversation_id = e.conversation_id
+		join platform.conversations c on c.id = x.conversation_id
+			and c.agent_id = x.agent_id and c.actor_id = x.actor_id
+			and c.principal_type = x.principal_type and c.channel_id = x.channel_id
+		join platform.session_sandbox_allocations s
+			on s.conversation_id = c.id and s.sandbox_id = x.sandbox_id
+			and s.agent_id = c.agent_id and s.actor_id = c.actor_id
+			and s.principal_type = c.principal_type and s.channel_id = c.channel_id
+			and s.session_generation = c.session_generation
 		where e.conversation_id = ${conversationId}
 			and e.conversation_cursor > ${options.afterCursor ?? 0}
 			${options.executionId === undefined ? database`` : database`and e.execution_id = ${options.executionId}`}

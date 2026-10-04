@@ -11,6 +11,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
+import { seedSessionSandboxFixture } from "./session-sandbox.fixture.ts";
 
 let databaseUrl = "";
 let client: ReturnType<typeof postgres>;
@@ -168,6 +169,9 @@ beforeAll(async () => {
 				${client.json({ type: "text.delta", text: suffix })}, ${"b".repeat(64)}, ${`runtime-${suffix}`}, now(), 'runtime')
 		`;
 	}
+	for (const row of await client`select id from platform.conversations`) {
+		await seedSessionSandboxFixture(client, String(row.id));
+	}
 }, 120_000);
 
 afterAll(async () => {
@@ -270,6 +274,7 @@ describe("API Conversation principal binding", () => {
 				await client`insert into platform.conversations
 					(id,agent_id,actor_id,channel_id,principal_type,status,session_generation,authorization_revision)
 					values (${id},'agent-typed',${actorId},'api',${kind},'ready',1,'authorization-typed')`;
+			for (const id of ids) await seedSessionSandboxFixture(client, id);
 			const first = await query.list(current, "agent-typed", { limit: 1 });
 			expect(first.items.map((item) => item.conversationId)).toEqual([ids[0]]);
 			if (!first.nextCursor) throw new Error("Expected a typed list cursor");
@@ -348,6 +353,7 @@ describe("API Conversation principal binding", () => {
 				values (${`gap-event-${cursor}`},${conversationId},${executionId},${`gap-${cursor}`},${sequence},${cursor},'text.delta',${client.json({ type: "text.delta", text: executionId })},${"c".repeat(64)},${`gap-runtime-${cursor}`},now(),'runtime')`;
 		}
 		await client`update platform.conversation_events set persisted_at=now()-interval '1 hour' where execution_id='gaps-other'`;
+		await seedSessionSandboxFixture(client, conversationId);
 		const replay = await query.replayExecution(
 			apiScope("application"),
 			conversationId,
@@ -414,6 +420,88 @@ describe("API Conversation principal binding", () => {
 });
 
 describe("PostgreSQL Conversation query", () => {
+	it("projects each Sandbox readiness without hiding authorized history or changing another Session", async () => {
+		const before = await query.get(actorOne, "conversation-1");
+		expect(before?.conversation.sandboxReady).toBe(true);
+		try {
+			for (const status of [
+				"allocated",
+				"applying",
+				"observed",
+				"unknown",
+				"stopped",
+				"unavailable",
+			]) {
+				await client`update platform.session_sandbox_allocations set status = ${status} where conversation_id = 'conversation-1'`;
+				const detail = await query.get(actorOne, "conversation-1");
+				expect(detail?.conversation.sandboxReady).toBe(false);
+				expect(detail?.conversation.sandbox).toEqual(
+					before?.conversation.sandbox,
+				);
+				expect(detail?.messages).toEqual(before?.messages);
+				expect(detail?.executions).toEqual(before?.executions);
+				expect(
+					(await query.get(actorOne, "conversation-3"))?.conversation
+						.sandboxReady,
+				).toBe(true);
+				expect(
+					await query.replay(actorOne, "conversation-1", undefined),
+				).toBeDefined();
+			}
+		} finally {
+			await client`update platform.session_sandbox_allocations set status = 'ready' where conversation_id = 'conversation-1'`;
+		}
+	});
+
+	it("hides all query paths for a Session with an unbound persisted Execution", async () => {
+		const [original] =
+			await client`select sandbox_id from platform.conversation_executions
+			where execution_id = 'execution-conversation-1'`;
+		await client`update platform.conversation_executions set sandbox_id = null
+			where execution_id = 'execution-conversation-1'`;
+		try {
+			await expect(
+				query.get(actorOne, "conversation-1"),
+			).resolves.toBeUndefined();
+			await expect(
+				query.getAuthorizationTarget(actorOne, "conversation-1"),
+			).resolves.toBeUndefined();
+			await expect(
+				query.getExecution(
+					actorOne,
+					"conversation-1",
+					"execution-conversation-1",
+				),
+			).resolves.toBeUndefined();
+			await expect(
+				query.replay(actorOne, "conversation-1", undefined),
+			).resolves.toBeUndefined();
+		} finally {
+			await client`update platform.conversation_executions set sandbox_id = ${original?.sandbox_id}
+				where execution_id = 'execution-conversation-1'`;
+		}
+	});
+
+	it("hides a stale allocation generation without repairing the allocation", async () => {
+		await client`update platform.session_sandbox_allocations set session_generation = 2
+			where conversation_id = 'conversation-1'`;
+		try {
+			await expect(
+				query.get(actorOne, "conversation-1"),
+			).resolves.toBeUndefined();
+			await expect(
+				query.replay(actorOne, "conversation-1", undefined),
+			).resolves.toBeUndefined();
+			expect(
+				await client`select session_generation::int as generation
+				from platform.session_sandbox_allocations where conversation_id = 'conversation-1'`,
+			).toEqual([{ generation: 2 }]);
+		} finally {
+			await client`update platform.session_sandbox_allocations set session_generation = 1
+				where conversation_id = 'conversation-1'`;
+		}
+	});
+
 	it("binds list, history, and execution detail to actor and channel", async () => {
 		const page = await query.list(actorOne, "agent-1", { limit: 1 });
 		expect(page.items).toEqual([

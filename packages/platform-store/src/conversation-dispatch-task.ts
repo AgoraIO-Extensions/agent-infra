@@ -214,6 +214,7 @@ export async function waitingDecision(
 				}
 			: null,
 		conversationAvailable: state.conversation.status !== "unavailable",
+		sandboxReady: state.conversation.sandbox_ready,
 		isolationPending,
 		occupied: snapshot.occupied,
 		earlierWaiting: snapshot.earlier_waiting,

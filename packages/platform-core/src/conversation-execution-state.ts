@@ -78,7 +78,7 @@ export function parseState(
 				"createdAt",
 				"updatedAt",
 			],
-			["isolationPending", "principal"],
+			["isolationPending", "principal", "sandbox", "sandboxReady"],
 		);
 		const sessionGenerationInput = conversation.sessionGeneration;
 		const lastConversationCursorInput = conversation.lastConversationCursor;
@@ -374,6 +374,21 @@ export function parseState(
 		) {
 			unavailable();
 		}
+		const sandbox =
+			conversation.sandbox === undefined
+				? undefined
+				: parseSessionSandboxBindingV1(conversation.sandbox);
+		if (
+			sandbox &&
+			(typeof conversation.sandboxReady !== "boolean" ||
+				sandbox.sessionId !== conversation.conversationId ||
+				sandbox.agentId !== conversation.agentId ||
+				sandbox.principal.id !== conversation.actorId ||
+				sandbox.principal.kind !== (principal?.kind ?? "user") ||
+				sandbox.channelId !== conversation.channelId ||
+				sandbox.generation !== conversation.sessionGeneration)
+		)
+			unavailable();
 		const sessionGeneration = conversation.sessionGeneration as number;
 		const lastConversationCursor =
 			conversation.lastConversationCursor as number;
@@ -387,6 +402,9 @@ export function parseState(
 				actorId: conversation.actorId,
 				channelId: conversation.channelId,
 				...(principal ? { principal } : {}),
+				...(sandbox
+					? { sandbox, sandboxReady: conversation.sandboxReady as boolean }
+					: {}),
 				status,
 				...(conversation.isolationPending === true
 					? { isolationPending: true as const }
@@ -660,3 +678,5 @@ export function planMetadataRecovery(
 		updates,
 	};
 }
+
+import { parseSessionSandboxBindingV1 } from "./session-sandbox.js";

@@ -150,6 +150,8 @@ export const conversationExecutions = platformSchema.table(
 			.notNull(),
 		taskWaitOrder: bigint("task_wait_order", { mode: "number" }),
 		taskWaitDeadline: timestamp("task_wait_deadline", { withTimezone: true }),
+		// Legacy rows remain unbound and cannot be dispatched as isolated Sessions.
+		sandboxId: text("sandbox_id"),
 	},
 	(table) => [
 		foreignKey({
@@ -438,16 +440,18 @@ export const conversationAuditEvents = platformSchema.table(
 			"conversation_audit_execution_binding",
 			sql`(
 					${table.executionId} IS NULL
-					AND ${table.action} = 'conversation.model_selection.updated'
+					AND ${table.action} in ('conversation.model_selection.updated', 'conversation.sandbox.allocated', 'conversation.sandbox.observed')
 				) OR (
 					${table.executionId} IS NOT NULL
-					AND ${table.action} <> 'conversation.model_selection.updated'
+					AND ${table.action} not in ('conversation.model_selection.updated', 'conversation.sandbox.allocated', 'conversation.sandbox.observed')
 				)`,
 		),
 		check(
 			"conversation_audit_details_binding",
 			sql`(
 				${table.action} in (
+					'conversation.sandbox.allocated',
+					'conversation.sandbox.observed',
 					'conversation.model_selection.updated',
 					'conversation.model_selection.fell_back'
 				)
