@@ -13,7 +13,12 @@ import {
 } from "@/components/ui/native-select";
 import { cn } from "@/lib/utils";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-import { agentManagementStatusLabels } from "../agent-management-status.js";
+import {
+	agentManagementStatusLabels,
+	agentServiceAvailabilityLabel,
+	agentSourceLabel,
+} from "../agent-management-status.js";
+
 import {
 	type AgentDiscoveryState,
 	canStartPlatformConversation,
@@ -30,15 +35,6 @@ type AgentDiscoveryScreenProps = {
 
 export const agentDiscoveryQueryMaxLength = 256;
 
-export function agentServiceAvailabilityLabel(
-	availability: NonNullable<AgentProjectionV2["serviceAvailability"]>,
-) {
-	if (availability === "starting") return "启动中";
-	if (availability === "updating") return "更新中";
-	if (availability === "unavailable") return "暂时不可用";
-	return "就绪";
-}
-
 export const agentChannelKindLabels = {
 	web: "Web",
 	wecom_bot: "企微机器人",
@@ -47,12 +43,6 @@ export const agentChannelKindLabels = {
 	AgentProjectionV2["configuration"]["channels"][number]["kind"],
 	string
 >;
-
-function agentSourceLabel(agent: AgentProjectionV2) {
-	return agent.source.kind === "standard"
-		? `标准模板 · ${agent.source.templateId}`
-		: "自定义 Agent";
-}
 
 function agentChannelSummary(agent: AgentProjectionV2) {
 	return (

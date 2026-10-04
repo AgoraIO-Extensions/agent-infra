@@ -13,8 +13,10 @@ import type {
 	AgentConfigurationUpdateRequestV2Writable,
 	AgentProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
-import { agentServiceAvailabilityLabel } from "../agent-discovery/agent-discovery-screen.js";
-import { agentManagementStatusLabels } from "../agent-management-status.js";
+import {
+	agentManagementStatusLabels,
+	agentServiceAvailabilityLabel,
+} from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import {

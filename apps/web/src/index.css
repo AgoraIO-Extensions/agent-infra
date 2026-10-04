@@ -818,7 +818,9 @@ a[class~="group/button"] {
 	.conversation-columns[data-history-open="true"] .conversation-history-panel {
 		display: block;
 	}
-	.conversation-columns[data-history-open="true"] .chat-workspace {
+	.conversation-columns[data-history-open="true"]
+		.chat-workspace
+		> :not(.conversation-header) {
 		display: none;
 	}
 }

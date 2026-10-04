@@ -12,16 +12,16 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-import { agentManagementStatusLabels } from "../agent-management-status.js";
+import {
+	agentManagementStatusLabels,
+	agentServiceAvailabilityLabel,
+} from "../agent-management-status.js";
 import { PageLoadingState } from "../page-loading-state.js";
 import {
 	type AgentDetailState,
 	canStartPlatformConversation,
 } from "./agent-discovery.js";
-import {
-	agentChannelKindLabels,
-	agentServiceAvailabilityLabel,
-} from "./agent-discovery-screen.js";
+import { agentChannelKindLabels } from "./agent-discovery-screen.js";
 
 type AgentDetailScreenProps = {
 	onRetry?: () => void;

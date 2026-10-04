@@ -317,7 +317,7 @@ test("keeps the composer in view while a long conversation scrolls", async ({
 });
 
 for (const compact of [false, true]) {
-	test(`keeps the Agent header above the exported conversation columns${compact ? " at 320 by 370" : ""}`, async ({
+	test(`keeps the Agent header inside the left conversation column${compact ? " at 320 by 370" : ""}`, async ({
 		page,
 	}, info) => {
 		if (compact) await page.setViewportSize({ width: 320, height: 370 });
@@ -345,7 +345,7 @@ for (const compact of [false, true]) {
 			contentType: "application/json",
 		});
 		expect(geometry.header.left).toBe(geometry.workspace.left);
-		expect(geometry.header.bottom).toBeLessThanOrEqual(geometry.workspace.top);
+		expect(geometry.header.top).toBe(geometry.workspace.top);
 		if (geometry.viewport.width >= 1024) {
 			expect(
 				Math.abs(geometry.workspace.top - geometry.history.top),
@@ -353,7 +353,7 @@ for (const compact of [false, true]) {
 			expect(geometry.history.left).toBeGreaterThanOrEqual(
 				geometry.workspace.right,
 			);
-			expect(geometry.header.right).toBe(geometry.history.right);
+			expect(geometry.header.right).toBe(geometry.workspace.right);
 		} else {
 			await expect(page.locator(".conversation-history-panel")).toBeHidden();
 			expect(geometry.header.right).toBe(geometry.workspace.right);
