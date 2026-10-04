@@ -1,5 +1,7 @@
+import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
+import { promisify } from "node:util";
 import {
 	TaskAcceptedV1Schema,
 	TaskCancellationV1Schema,
@@ -28,6 +30,8 @@ import {
 	getAgentTask,
 	submitAgentTask,
 } from "../../web/src/pilot/generated/index.ts";
+import { createClient as createCredentialClient } from "../../web/src/pilot/generated-v2/client/index.ts";
+import { issuePersonalApiCredentialV2 } from "../../web/src/pilot/generated-v2/sdk.gen.ts";
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import { registerTaskRoutes } from "./http/task-routes.js";
 import {
@@ -750,4 +754,382 @@ describe("actual Bearer Task admission and original-transaction waiting cancella
 			expect((await cancel(task, kind)).status).toBe(202);
 		},
 	);
+	it("uses formally issued user credentials for concurrent Task admission, audit rollback and durable HTTP cancellation", async () => {
+		// Remove the older suite's seeded credentials: every token used below is
+		// issued through the production HTTP endpoint with controlled identities.
+		await sql`truncate platform.platform_api_credentials`;
+		for (const userId of ["user_alice", "user_bob"]) {
+			await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values(${configuration.agentId},'user',${userId},'use','formal-use-1')`;
+		}
+		const moduleSpecifier = new URL(
+			"../../../tests/fixtures/personal-credential-deployment.ts",
+			import.meta.url,
+		).href;
+		const deployment: typeof import("../../../tests/fixtures/personal-credential-deployment.ts") =
+			await import(moduleSpecifier);
+		deployment.state.databaseUrl = database.databaseUrl;
+		deployment.state.directoryMode = "active";
+		deployment.state.directoryCalls = 0;
+		const logLines: string[] = [];
+		const output = new PassThrough();
+		output.on("data", (chunk) => logLines.push(String(chunk)));
+		let running = await startPlatformApiFromDeployment({
+			moduleSpecifier,
+			port: 0,
+			log: (line) => logLines.push(line),
+			observabilityOptions: { output, otlpEndpoint: undefined },
+		});
+		let shutdown = createPlatformApiShutdown(running);
+		try {
+			const address = running.server.address();
+			if (!address || typeof address === "string")
+				throw new Error("Test API did not bind");
+			let origin = `http://127.0.0.1:${address.port}`;
+			const issuer = createCredentialClient({ baseUrl: origin });
+			const tokens: string[] = [];
+			for (const auth of ["session_alice", "session_bob"]) {
+				const issued = await issuePersonalApiCredentialV2({
+					client: issuer,
+					auth,
+					body: { scopes: ["agent:read", "agent:use"], expiresAt: null },
+					headers: { "Idempotency-Key": `formal-${auth}` },
+				});
+				expect(issued.response?.status).toBe(201);
+				if (!issued.data?.credential)
+					throw new Error("Formal issuer returned no credential");
+				tokens.push(issued.data.credential);
+			}
+			const send = (
+				url: string,
+				body?: unknown,
+				key = "formal-submit",
+				token = tokens[0],
+			) =>
+				fetch(`${origin}${url}`, {
+					method: body === undefined ? "GET" : "POST",
+					headers: {
+						Authorization: `Bearer ${token}`,
+						"Content-Type": "application/json",
+						"Idempotency-Key": key,
+					},
+					...(body === undefined ? {} : { body: JSON.stringify(body) }),
+					signal: AbortSignal.timeout(20_000),
+				});
+			// Admission snapshots exclude request-access audit rows and last-use
+			// timestamps, which legitimately change before a rejected command.
+			// Restart snapshots include all columns. Only counts/hashes are asserted.
+			const facts = async (includeRequestFacts = false) => {
+				const result: Record<string, { count: number; digest: string }> = {};
+				for (const table of [
+					"conversations",
+					"conversation_executions",
+					"conversation_messages",
+					"outbox_items",
+					"idempotency_records",
+					"task_authorization_records",
+					"task_control_records",
+					"platform_api_credentials",
+					"audit_events",
+					"conversation_audit_events",
+					"conversation_events",
+					"conversation_stops",
+					"relay_key_subjects",
+					"relay_key_versions",
+					"agent_configuration_revisions",
+					"agent_principal_grants",
+				]) {
+					const [row] = await sql<
+						{ count: number; rows: string }[]
+					>`select count(*)::int as count, coalesce(jsonb_agg(value order by value::text), '[]'::jsonb)::text as rows from (select ${!includeRequestFacts && table === "platform_api_credentials" ? sql`to_jsonb(t) - 'last_used_at'` : sql`to_jsonb(t)`} as value from ${sql(`platform.${table}`)} t ${!includeRequestFacts && table === "audit_events" ? sql`where action <> 'task.api.access'` : sql``}) rows`;
+					if (!row) throw new Error("Missing authoritative snapshot");
+					result[table] = {
+						count: row.count,
+						digest: createHash("sha256").update(row.rows).digest("hex"),
+					};
+				}
+				return result;
+			};
+			const submitPath = `/api/v1/agents/${configuration.agentId}/tasks`;
+			const input = { schemaVersion: 1, text: "FORMAL_TASK_PRIVATE_BODY" };
+			const concurrent = await Promise.all(
+				Array.from({ length: 4 }, () => send(submitPath, input)),
+			);
+			expect(concurrent.map((response) => response.status)).toEqual([
+				202, 202, 202, 202,
+			]);
+			const accepted = await Promise.all(
+				concurrent.map(async (response) =>
+					TaskAcceptedV1Schema.parse(await response.json()),
+				),
+			);
+			const task = accepted[0];
+			if (!task) throw new Error("Missing accepted Task");
+			for (const replay of accepted) expect(replay).toEqual(task);
+			const firstFacts = await facts();
+			for (const table of [
+				"conversations",
+				"conversation_executions",
+				"conversation_messages",
+				"outbox_items",
+				"task_authorization_records",
+			])
+				expect(firstFacts[table]?.count).toBe(1);
+			expect((await snapshot(task))?.execution).toMatchObject({
+				principal_type: "user",
+				actor_id: "user_alice",
+				channel_id: "api",
+				status: "waiting",
+				model_option_id: "model_primary",
+				model_configuration_revision: configuration.revision,
+				reasoning_level: "low",
+				relay_key_purpose: "agent-default",
+				relay_key_subject_id: configuration.agentId,
+				relay_key_id: "original-key",
+				relay_key_version: 1,
+			});
+			const originalAudits = await sql<
+				{ id: string; digest: string }[]
+			>`select id, md5(to_jsonb(a)::text) as digest from platform.audit_events a order by id`;
+			const conflicts = await Promise.all(
+				Array.from({ length: 3 }, () =>
+					send(submitPath, { ...input, text: "conflicting input" }),
+				),
+			);
+			expect(conflicts.map((response) => response.status)).toEqual([
+				409, 409, 409,
+			]);
+			// Failed HTTP attempts may add rejection audits, but cannot mutate any
+			// accepted command's rows or leave correlated transaction orphans.
+			const afterConflicts = await facts();
+			const preservedAudits =
+				await sql`select id, md5(to_jsonb(a)::text) as digest from platform.audit_events a where id = any(${originalAudits.map((row) => row.id)}) order by id`;
+			expect(preservedAudits).toEqual(originalAudits);
+			const additionalAudits =
+				await sql`select distinct action from platform.audit_events where not (id = any(${originalAudits.map((row) => row.id)}))`;
+			expect(additionalAudits).toEqual([{ action: "task.api.access" }]);
+			for (const table of Object.keys(firstFacts))
+				expect(afterConflicts[table]).toEqual(firstFacts[table]);
+			const detail = await send(path(task));
+			expect(detail.status).toBe(200);
+			expect(TaskProjectionV1Schema.parse(await detail.json())).toMatchObject({
+				executionId: task.executionId,
+				status: "waiting",
+			});
+			for (const operation of ["query", "cancel", "continue"]) {
+				const response =
+					operation === "query"
+						? await send(path(task), undefined, "", tokens[1])
+						: operation === "cancel"
+							? await send(
+									`${path(task)}/cancel`,
+									{ schemaVersion: 1 },
+									"foreign-cancel",
+									tokens[1],
+								)
+							: await send(
+									submitPath,
+									{ ...input, conversationId: task.conversationId },
+									"foreign-continue",
+									tokens[1],
+								);
+				expect(response.status).toBe(404);
+				expect((await response.text()).includes(input.text)).toBe(false);
+			}
+			// Both pre-insert and commit-time required audit failures must roll
+			// back admission, including the fresh Conversation and idempotency.
+			for (const deferred of [false, true]) {
+				await sql`create function platform.fail_task_admission_audit() returns trigger language plpgsql as $$ begin if NEW.action='task.authorization.accepted' then raise exception 'PRIVATE_ADMISSION_AUDIT'; end if; return NEW; end $$`;
+				await sql.unsafe(
+					deferred
+						? "create constraint trigger fail_task_admission_audit after insert on platform.audit_events deferrable initially deferred for each row execute function platform.fail_task_admission_audit()"
+						: "create trigger fail_task_admission_audit before insert on platform.audit_events for each row execute function platform.fail_task_admission_audit()",
+				);
+				try {
+					const before = await facts();
+					const response = await send(
+						submitPath,
+						input,
+						`audit-failure-${deferred}`,
+					);
+					expect(response.status).toBe(503);
+					expect(
+						(await response.text()).includes("PRIVATE_ADMISSION_AUDIT"),
+					).toBe(false);
+					expect(await facts()).toEqual(before);
+				} finally {
+					await sql`drop trigger fail_task_admission_audit on platform.audit_events`;
+					await sql`drop function platform.fail_task_admission_audit()`;
+				}
+			}
+			const cancellation = await send(
+				`${path(task)}/cancel`,
+				{ schemaVersion: 1 },
+				"formal-cancel",
+			);
+			expect(cancellation.status).toBe(202);
+			expect(
+				TaskCancellationV1Schema.parse(await cancellation.json()),
+			).toMatchObject({ executionId: task.executionId, status: "submitted" });
+			const terminal = await send(path(task));
+			expect(terminal.status).toBe(200);
+			expect(TaskProjectionV1Schema.parse(await terminal.json())).toMatchObject(
+				{ status: "cancelled" },
+			);
+			const otherConfiguration = {
+				...configuration,
+				agentId: "formal-other-agent",
+			};
+			await sql`insert into platform.agents(id,current_configuration_revision,authorization_revision) values(${otherConfiguration.agentId},${configuration.revision},'agent-1')`;
+			await sql`insert into platform.agent_configuration_revisions(agent_id,revision,source_reference,created_at,configuration) select ${otherConfiguration.agentId},revision,source_reference,created_at,${sql.json(otherConfiguration as unknown as postgres.JSONValue)} from platform.agent_configuration_revisions where agent_id=${configuration.agentId}`;
+			await sql`insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values('formal-other-application',${otherConfiguration.agentId},'owner','Agent','Synthetic fixture','available','seed','seed',now(),1,1,'ready','running',1,1)`;
+			await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision) values(${otherConfiguration.agentId},'user','user_alice','use','formal-use-1')`;
+			await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('agent-default',${otherConfiguration.agentId},1,1)`;
+			await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('agent-default',${otherConfiguration.agentId},1,'other-key',${sql.json({ schemaVersion: 1, purpose: "agent-default", subjectId: otherConfiguration.agentId, keyId: "other-key", keyVersion: 1 })})`;
+			const otherPath = `/api/v1/agents/${otherConfiguration.agentId}/tasks`;
+			// Prove this is an accessible Agent, so the negative below exercises
+			// Conversation binding rather than an unavailable target.
+			const otherAccepted = await send(otherPath, input, "other-agent-task");
+			expect(otherAccepted.status).toBe(202);
+			await sql`insert into platform.conversations(id,agent_id,actor_id,principal_type,channel_id,status,session_generation,authorization_revision,last_conversation_cursor) values('formal-web-conversation',${configuration.agentId},'user_alice','user','web','ready',1,'agent-1',0)`;
+			for (const [targetPath, conversationId] of [
+				[otherPath, task.conversationId],
+				[submitPath, "formal-web-conversation"],
+			]) {
+				if (!targetPath || !conversationId)
+					throw new Error("Missing boundary fixture");
+				const before = await facts();
+				const response = await send(
+					targetPath,
+					{ ...input, conversationId },
+					`boundary-${conversationId}`,
+				);
+				expect(response.status).toBe(404);
+				expect(await facts()).toEqual(before);
+			}
+			const beforeRestart = await facts(true);
+			const [serverBefore] =
+				await sql`select system_identifier::text as identity, pg_postmaster_start_time()::text as started from pg_control_system()`;
+			const [durability] =
+				await sql`select current_setting('fsync') as fsync, current_setting('synchronous_commit') as synchronous_commit, current_setting('full_page_writes') as full_page_writes`;
+			expect(durability).toEqual({
+				fsync: "on",
+				synchronous_commit: "on",
+				full_page_writes: "on",
+			});
+			// Resolve the suite-owned container by its published port, never by
+			// another lane's name or shared daemon-wide lifecycle operation.
+			const execFile = promisify(execFileCallback);
+			const { stdout } = await execFile("docker", [
+				"ps",
+				"--filter",
+				"name=agent-infra-task-api-admission-",
+				"--format",
+				"{{.Names}}",
+			]);
+			let container: string | undefined;
+			for (const name of stdout.trim().split("\n").filter(Boolean)) {
+				const ports = await execFile("docker", ["port", name, "5432/tcp"]);
+				if (
+					ports.stdout.trim() ===
+					`127.0.0.1:${new URL(database.databaseUrl).port}`
+				)
+					container = name;
+			}
+			if (!container)
+				throw new Error("Cannot identify suite-owned PostgreSQL container");
+			await shutdown();
+			await transaction.close();
+			await query.close();
+			await sql.end();
+			await execFile("docker", ["restart", "--time", "30", container]);
+			const published = await execFile("docker", [
+				"port",
+				container,
+				"5432/tcp",
+			]);
+			const port = published.stdout.trim().match(/:(\d+)$/)?.[1];
+			if (!port)
+				throw new Error("Restarted test PostgreSQL has no published port");
+			const databaseUrl = new URL(database.databaseUrl);
+			databaseUrl.port = port;
+			database.databaseUrl = databaseUrl.href;
+			sql = postgres(database.databaseUrl, { max: 1, connect_timeout: 1 });
+
+			await expect
+				.poll(
+					async () => {
+						try {
+							await sql`select 1`;
+							return true;
+						} catch {
+							return false;
+						}
+					},
+					{ timeout: 20_000 },
+				)
+				.toBe(true);
+			const [serverAfter] =
+				await sql`select system_identifier::text as identity, pg_postmaster_start_time()::text as started from pg_control_system()`;
+			expect(serverAfter?.identity).toBe(serverBefore?.identity);
+			expect(serverAfter?.started).not.toBe(serverBefore?.started);
+			expect(await facts(true)).toEqual(beforeRestart);
+			deployment.state.databaseUrl = database.databaseUrl;
+			running = await startPlatformApiFromDeployment({
+				moduleSpecifier,
+				port: 0,
+				log: (line) => logLines.push(line),
+				observabilityOptions: { output, otlpEndpoint: undefined },
+			});
+			shutdown = createPlatformApiShutdown(running);
+			const restartedAddress = running.server.address();
+			if (!restartedAddress || typeof restartedAddress === "string")
+				throw new Error("Restarted API did not bind");
+			origin = `http://127.0.0.1:${restartedAddress.port}`;
+
+			const reopened = await send(path(task));
+			expect(reopened.status).toBe(200);
+			expect(TaskProjectionV1Schema.parse(await reopened.json())).toMatchObject(
+				{ status: "cancelled" },
+			);
+			const replay = await send(
+				`${path(task)}/cancel`,
+				{ schemaVersion: 1 },
+				"formal-cancel",
+			);
+			expect(replay.status).toBe(202);
+			const auditRows =
+				await sql`select to_jsonb(a) as audit from platform.audit_events a union all select to_jsonb(a) from platform.conversation_audit_events a`;
+			const privateEvidence = JSON.stringify(auditRows) + logLines.join("");
+			for (const secret of [
+				...tokens,
+				...tokens.map((token) =>
+					createHash("sha256").update(token).digest("hex"),
+				),
+				input.text,
+			])
+				expect(privateEvidence.includes(secret)).toBe(false);
+		} finally {
+			await shutdown();
+			output.destroy();
+			// Restore the suite adapters too, so shuffled test order remains safe.
+			await transaction.close();
+			await query.close();
+			transaction = new PostgresConversationExecutionTransactionV1({
+				databaseUrl: database.databaseUrl,
+				userDirectory: directory,
+			});
+			query = new PostgresConversationQueryV1({
+				databaseUrl: database.databaseUrl,
+			});
+			router = new Hono();
+			registerTaskRoutes(
+				router,
+				createTaskRoutesDependenciesV1({
+					transaction,
+					query,
+					policy: { maximumWaitingTasksPerAgent: 8, waitingTimeoutMs: 30_000 },
+				}),
+			);
+		}
+	}, 60_000);
 });
