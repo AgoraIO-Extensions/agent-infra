@@ -2717,7 +2717,10 @@ test("locks the full-scope producer to trusted inputs, bounded outputs and read-
     (job) => { job.steps.push({uses: "actions/upload-artifact@" + "a".repeat(40)}); },
     (job) => { job.outputs.coverage_metadata = "${{ github.event.pull_request.body }}"; },
     (job) => { job.steps.find(s => s.name === "Verify full-scope trusted chunk shadow").env.REVIEW_COVERAGE_ANALYSIS_JOB_ID = "${{ fromJSON(steps.analysis-producer.outputs.coverage_identity).analysisJobId }}"; },
-    (job) => { job.steps.find(s => s.name === "Verify full-scope trusted chunk shadow")["continue-on-error"] = true; },
+    (job) => { delete job.steps.find(s => s.name === "Verify full-scope trusted chunk shadow")["continue-on-error"]; },
+    (job) => { job.steps.find(s => s.name === "Verify full-scope trusted chunk shadow").env.REVIEW_COVERAGE_METADATA = "${{ steps.analysis-producer.outputs.coverage_metadata }}"; },
+    (job) => { job.steps.find(s => s.name === "Verify full-scope trusted chunk shadow").env.REVIEW_COVERAGE_METADATA_FILE = "${{ steps.analysis-producer.outputs.metadata_file }}"; },
+    (job) => { job.steps.find(s => s.id === "analysis-producer").env.REVIEW_COVERAGE_METADATA_FILE = "${{ github.event.pull_request.body }}"; },
     (job) => { job.steps.find(s => s.id === "analysis-producer").env["config.max_model_tokens"] = "600000"; },
   ];
   for (const mutate of mutations) {
@@ -2761,12 +2764,13 @@ globalThis.fetch = async url => {
 };
 `);
   const script = path.resolve(".github/scripts/review-coverage-prepare.ts");
-  for (const mode of ["ok", "wrong-attempt", "truncated", "stale-head", "wrong-cap", "invalid-diff-hash", "missing-diff-hash", "zero-diff-bytes", "string-diff-bytes"]) {
+  for (const mode of ["ok", "wrong-attempt", "truncated", "stale-head", "wrong-cap", "invalid-diff-hash", "missing-diff-hash", "zero-diff-bytes", "string-diff-bytes", "missing-runner-temp", "relative-runner-temp", "newline-runner-temp"]) {
     const output = path.join(directory, `${mode}.output`);
     await fs.writeFile(output, "");
     const run = promisify(execFile)(process.execPath, ["--import", preload, script], {
       cwd: directory,
       env: { ...process.env, FIXTURE_MODE: mode, GITHUB_OUTPUT: output, GITHUB_TOKEN: "fixture-token",
+        RUNNER_TEMP: mode === "missing-runner-temp" ? "" : mode === "relative-runner-temp" ? "relative" : mode === "newline-runner-temp" ? `${directory}\ninjected=value` : directory,
         GITHUB_REPOSITORY: "fixture/repo", GITHUB_RUN_ID: "100", GITHUB_RUN_ATTEMPT: "2",
         REVIEW_TOKEN_CAP: mode === "wrong-cap" ? "128000" : "300000",
         PR_AGENT_REVIEW_SCOPE: JSON.stringify({mode:"full",repository:"fixture/repo",prNumber:1,
@@ -2779,7 +2783,20 @@ globalThis.fetch = async url => {
       await run;
       const result = await fs.readFile(output, "utf8");
       assert.match(result, /^recorder_version=sha256:[a-f0-9]{64}\nanalysis_job_id=500\n/);
-      assert.match(result, /base_sha=a{40}\nhead_sha=b{40}\nmerge_base_sha=a{40}\npr_number=1\ndiff_sha256=d{64}\ndiff_bytes=123\n$/);
+      assert.match(result, /base_sha=a{40}\nhead_sha=b{40}\nmerge_base_sha=a{40}\npr_number=1\ndiff_sha256=d{64}\ndiff_bytes=123\nmetadata_file=[^\n]+\n$/);
+      const metadataFile = result.match(/^metadata_file=(.+)$/m)[1];
+      assert.equal(path.dirname(path.dirname(metadataFile)), directory);
+      assert.equal(path.basename(metadataFile), "coverage.json");
+      assert.equal((await fs.stat(path.dirname(metadataFile))).mode & 0o777, 0o700);
+      await assert.rejects(fs.stat(metadataFile), { code: "ENOENT" });
+      // Exercise the actual process boundary using only the prepared small path.
+      const metadata = JSON.stringify({ value: "x".repeat(256 * 1024 - 12) });
+      assert.equal(Buffer.byteLength(metadata), 256 * 1024);
+      await fs.writeFile(metadataFile, metadata, { mode: 0o600, flag: "wx" });
+      const readback = await promisify(execFile)(process.execPath, ["--input-type=module", "-e",
+        "import fs from 'node:fs/promises'; const bytes = await fs.readFile(process.env.REVIEW_COVERAGE_METADATA_FILE); process.stdout.write(String(bytes.length));"],
+        { env: { ...process.env, REVIEW_COVERAGE_METADATA_FILE: metadataFile } });
+      assert.equal(readback.stdout, String(256 * 1024));
     } else {
       await assert.rejects(run, error => error.code === 1 &&
         error.stderr.trim() === "review-output-invalid: trusted full-scope preparation failed");

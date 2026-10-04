@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import {
 	createServer,
 	type IncomingMessage,
@@ -557,6 +558,23 @@ export async function buildGitInventory(
 	baseSha: string,
 	headSha: string,
 ): Promise<GitInventory> {
+	const result = await observeGitInventory(repositoryPath, baseSha, headSha);
+	if (!result.inventory) throw new CoverageError(result.reasonCode);
+	return result.inventory;
+}
+
+// Only unsupported diff representation is advisory. Git/object/identity errors
+// still escape; the merge-base is independently established before observation.
+export async function observeGitInventory(
+	repositoryPath: string,
+	baseSha: string,
+	headSha: string,
+): Promise<
+	{ mergeBaseSha: string } & (
+		| { inventory: GitInventory; reasonCode?: never }
+		| { inventory?: never; reasonCode: string }
+	)
+> {
 	assertSha(baseSha, "baseSha");
 	assertSha(headSha, "headSha");
 	if (![40, 64].includes(baseSha.length) || headSha.length !== baseSha.length)
@@ -611,7 +629,9 @@ export async function buildGitInventory(
 			baseSha,
 			headSha,
 		);
-		return { ...inventory, repositoryPath };
+		return inventory.inventory
+			? { ...inventory, inventory: { ...inventory.inventory, repositoryPath } }
+			: inventory;
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
@@ -621,7 +641,12 @@ async function buildIsolatedGitInventory(
 	repositoryPath: string,
 	baseSha: string,
 	headSha: string,
-): Promise<GitInventory> {
+): Promise<
+	{ mergeBaseSha: string } & (
+		| { inventory: GitInventory; reasonCode?: never }
+		| { inventory?: never; reasonCode: string }
+	)
+> {
 	const mergeBases = String(
 		await git(repositoryPath, ["merge-base", "--all", baseSha, headSha]),
 	)
@@ -668,34 +693,41 @@ async function buildIsolatedGitInventory(
 			"--",
 		]),
 	);
-	const files = parseRaw(raw).map((entry) => {
-		const oldPath = entry.status === "added" ? null : entry.oldPath;
-		const newPath = entry.status === "deleted" ? null : entry.newPath;
-		const hunks = parseHunks(patch, { oldPath, newPath });
-		const fileValue = {
-			oldPath,
-			newPath,
-			status: entry.status as DiffStatus,
-			oldMode: entry.oldMode,
-			newMode: entry.newMode,
-			oldBlob: entry.oldBlob,
-			newBlob: entry.newBlob,
-			hunks,
+	try {
+		const files = parseRaw(raw).map((entry) => {
+			const oldPath = entry.status === "added" ? null : entry.oldPath;
+			const newPath = entry.status === "deleted" ? null : entry.newPath;
+			const hunks = parseHunks(patch, { oldPath, newPath });
+			const fileValue = {
+				oldPath,
+				newPath,
+				status: entry.status as DiffStatus,
+				oldMode: entry.oldMode,
+				newMode: entry.newMode,
+				oldBlob: entry.oldBlob,
+				newBlob: entry.newBlob,
+				hunks,
+			};
+			return { ...fileValue, id: digest(canonical(fileValue)) };
+		});
+		const inventory = {
+			repositoryPath,
+			baseSha,
+			headSha,
+			mergeBaseSha,
+			files,
+			digest: "",
 		};
-		return { ...fileValue, id: digest(canonical(fileValue)) };
-	});
-	const inventory = {
-		repositoryPath,
-		baseSha,
-		headSha,
-		mergeBaseSha,
-		files,
-		digest: "",
-	};
-	inventory.digest = digest(
-		canonical({ baseSha, headSha, mergeBaseSha, files }),
-	);
-	return inventory;
+		inventory.digest = digest(
+			canonical({ baseSha, headSha, mergeBaseSha, files }),
+		);
+		return { mergeBaseSha, inventory };
+	} catch (error) {
+		if (error instanceof CoverageError && error.code === "unsupported-input") {
+			return { mergeBaseSha, reasonCode: error.code };
+		}
+		throw error;
+	}
 }
 
 function textValues(value: unknown): string[] {
@@ -1243,6 +1275,15 @@ function parseOfficialResponse(body: string, strictResponses = false): unknown {
 				"review-output-invalid",
 				"stream did not complete",
 			);
+		if (
+			strictResponses &&
+			deltaParts.length > 0 &&
+			deltaParts.join("") !== completedParts.join("")
+		)
+			throw new CoverageError(
+				"review-output-invalid",
+				"streamed text differs from completed response",
+			);
 		const text = (deltaParts.length > 0 ? deltaParts : completedParts).join("");
 		return parseReviewText(text);
 	}
@@ -1281,7 +1322,8 @@ function parseOfficialResponse(body: string, strictResponses = false): unknown {
 }
 
 export interface RecordingProxyOptions {
-	inventory: GitInventory;
+	inventory?: GitInventory;
+	observationOnly?: boolean;
 	upstreamBaseUrl: string;
 	transportHeaders?: Record<string, string>;
 	maxRequestBytes?: number;
@@ -1394,6 +1436,8 @@ export async function startRecordingProxy(
 	port: number;
 	results: () => ChunkResult[];
 	failedChunks: () => FailedChunk[];
+	observationFailure: () => string | undefined;
+	transportFailure: () => string | undefined;
 	close: () => Promise<void>;
 }> {
 	const upstream = new URL(options.upstreamBaseUrl);
@@ -1416,60 +1460,73 @@ export async function startRecordingProxy(
 		throw new CoverageError("invalid-recorder-config");
 	const activeRequests = new Set<AbortController>();
 	let closing = false;
-	const recorder = new JobLocalRecorder({
-		inventory: options.inventory,
-		maxRetries: 1,
-		requireResponses: true,
-		transport: async (forwardedBody, headers) => {
-			if (closing)
-				throw new CoverageError("review-run-failed", "recorder is closing");
-			const chunkId = headers["x-review-chunk-id"];
-			if (typeof chunkId !== "string")
-				throw new CoverageError(
-					"invalid-chunk",
-					"forwarded chunk identity is missing",
-				);
-			const path = headers["x-review-forward-path"] ?? "/";
-			delete headers["x-review-forward-path"];
-			delete headers["x-review-chunk-id"];
-			const target = relativeUpstreamUrl(path, upstream);
-			const controller = new AbortController();
-			activeRequests.add(controller);
-			const timeout = setTimeout(() => controller.abort(), upstreamTimeoutMs);
-			try {
-				const upstreamResponse = await fetch(target, {
-					method: "POST",
-					headers,
-					body: forwardedBody,
-					redirect: "error",
-					signal: controller.signal,
-				});
-				const rawBody = await readResponseBody(
-					upstreamResponse,
-					maxResponseBytes,
-				);
-				const body = new TextDecoder("utf-8", { fatal: true }).decode(rawBody);
-				const responseHeaders: Record<string, string> = {};
-				upstreamResponse.headers.forEach((value, key) => {
-					responseHeaders[key] = value;
-				});
-				const result = {
-					status: upstreamResponse.status,
-					body,
-					headers: responseHeaders,
-				};
-				rawResponses.set(`${chunkId}:${digest(forwardedBody)}`, {
-					status: result.status,
-					body: rawBody,
-					headers: responseHeaders,
-				});
-				return result;
-			} finally {
-				clearTimeout(timeout);
-				activeRequests.delete(controller);
-			}
-		},
-	});
+	if (!options.inventory && !options.observationOnly)
+		throw new CoverageError("invalid-recorder-config");
+	let observationFailure: string | undefined;
+	let transportFailure: string | undefined;
+	const observedResults = new Map<string, ChunkResult>();
+	const observedAttempts = new Map<
+		string,
+		{ digest: string; attempts: number }
+	>();
+	const transport: ChunkTransport = async (forwardedBody, headers) => {
+		if (closing)
+			throw new CoverageError("review-run-failed", "recorder is closing");
+		const chunkId = headers["x-review-chunk-id"];
+		if (typeof chunkId !== "string")
+			throw new CoverageError(
+				"invalid-chunk",
+				"forwarded chunk identity is missing",
+			);
+		const path = headers["x-review-forward-path"] ?? "/";
+		delete headers["x-review-forward-path"];
+		delete headers["x-review-chunk-id"];
+		const target = relativeUpstreamUrl(path, upstream);
+		const controller = new AbortController();
+		activeRequests.add(controller);
+		const timeout = setTimeout(() => controller.abort(), upstreamTimeoutMs);
+		try {
+			const upstreamResponse = await fetch(target, {
+				method: "POST",
+				headers,
+				body: forwardedBody,
+				redirect: "error",
+				signal: controller.signal,
+			});
+			const rawBody = await readResponseBody(
+				upstreamResponse,
+				maxResponseBytes,
+			);
+			const body = new TextDecoder("utf-8", { fatal: true }).decode(rawBody);
+			const responseHeaders: Record<string, string> = {};
+			upstreamResponse.headers.forEach((value, key) => {
+				responseHeaders[key] = value;
+			});
+			const result = {
+				status: upstreamResponse.status,
+				body,
+				headers: responseHeaders,
+			};
+			rawResponses.set(`${chunkId}:${digest(forwardedBody)}`, {
+				status: result.status,
+				body: rawBody,
+				headers: responseHeaders,
+			});
+			return result;
+		} finally {
+			clearTimeout(timeout);
+			activeRequests.delete(controller);
+		}
+	};
+	const recorder = options.inventory
+		? new JobLocalRecorder({
+				inventory: options.inventory,
+				maxRetries: 1,
+				requireResponses: true,
+				transport,
+			})
+		: undefined;
+
 	const rawResponses = new Map<
 		string,
 		{ status: number; body: Uint8Array; headers: Record<string, string> }
@@ -1504,11 +1561,50 @@ export async function startRecordingProxy(
 				relativeUpstreamUrl(requestPath, upstream);
 				headers["x-review-chunk-id"] = chunkId;
 				headers["x-review-forward-path"] = requestPath;
-				await recorder.record({
-					chunkId,
-					body,
-					headers,
-				});
+				const chunkRequest = { chunkId, body, headers };
+				if (options.observationOnly) {
+					const bodyDigest = digest(body);
+					const prior = observedAttempts.get(chunkId);
+					if (prior && prior.digest !== bodyDigest)
+						throw new CoverageError("review-coverage-incomplete");
+					const attempts = prior?.attempts ?? 0;
+					if (
+						(attempts === 0 && observedAttempts.size >= MAX_CHUNKS) ||
+						attempts >= 2
+					)
+						throw new CoverageError("review-coverage-incomplete");
+					observedAttempts.set(chunkId, {
+						digest: bodyDigest,
+						attempts: attempts + 1,
+					});
+					// Exactly one actual upstream call. Observation never retries a model
+					// request or substitutes an error for an independently valid response.
+					const upstreamResult = await transport(body, { ...headers });
+					try {
+						if (!options.inventory)
+							throw new CoverageError("review-coverage-incomplete");
+						const result = await recordChunk(
+							options.inventory,
+							chunkRequest,
+							async () => upstreamResult,
+							true,
+						);
+						// A late earlier attempt must not overwrite the latest dispatched
+						// response or undercount calls after concurrent native retries.
+						if (observedAttempts.get(chunkId)?.attempts === attempts + 1)
+							observedResults.set(chunkId, {
+								...result,
+								attempts: attempts + 1,
+							});
+					} catch (error) {
+						observationFailure =
+							error instanceof CoverageError
+								? error.code
+								: "review-output-invalid";
+					}
+				} else {
+					await recorder?.record(chunkRequest);
+				}
 				const rawKey = `${chunkId}:${digest(body)}`;
 				const raw = rawResponses.get(rawKey);
 				if (!raw)
@@ -1530,6 +1626,7 @@ export async function startRecordingProxy(
 			} catch (error) {
 				const code =
 					error instanceof CoverageError ? error.code : "review-run-failed";
+				if (options.observationOnly) transportFailure = code;
 				response.writeHead(502, { "content-type": "application/json" });
 				response.end(JSON.stringify({ error: code }));
 			}
@@ -1548,8 +1645,14 @@ export async function startRecordingProxy(
 	return {
 		server,
 		port: address.port,
-		results: () => recorder.results(),
-		failedChunks: () => recorder.failedChunks(),
+		results: () =>
+			options.observationOnly
+				? [...observedResults.values()]
+				: (recorder?.results() ?? []),
+		failedChunks: () =>
+			options.observationOnly ? [] : (recorder?.failedChunks() ?? []),
+		observationFailure: () => observationFailure,
+		transportFailure: () => transportFailure,
 		close: () =>
 			new Promise((resolve, reject) => {
 				closing = true;
@@ -2131,3 +2234,57 @@ export const limits = {
 	maxChunks: MAX_CHUNKS,
 	maxMetadataBytes: MAX_METADATA_BYTES,
 } as const;
+
+// The preparation step owns a private directory outside native container mounts.
+// Exclusive creation prevents replacing any prior observation; readers run only
+// after this writer has closed the file.
+export async function writeShadowMetadataFile(
+	path: string,
+	text: string,
+): Promise<void> {
+	const bytes = Buffer.from(text, "utf8");
+	if (!bytes.length || bytes.length > MAX_METADATA_BYTES)
+		throw new CoverageError("review-output-invalid");
+	const file = await open(path, "wx", 0o600);
+	try {
+		await file.writeFile(bytes);
+	} catch (error) {
+		await rm(path, { force: true });
+		throw error;
+	} finally {
+		await file.close();
+	}
+}
+
+export async function readShadowMetadataFile(path: string): Promise<string> {
+	const file = await open(
+		path,
+		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+	);
+	try {
+		const before = await file.stat();
+		if (!before.isFile() || before.size < 1 || before.size > MAX_METADATA_BYTES)
+			throw new CoverageError("review-output-invalid");
+		const bytes = Buffer.alloc(MAX_METADATA_BYTES + 1);
+		let size = 0;
+		while (size < bytes.length) {
+			const read = await file.read(bytes, size, bytes.length - size, null);
+			if (!read.bytesRead) break;
+			size += read.bytesRead;
+		}
+		const after = await file.stat();
+		if (
+			size !== before.size ||
+			size !== after.size ||
+			size > MAX_METADATA_BYTES ||
+			before.mtimeMs !== after.mtimeMs ||
+			before.ctimeMs !== after.ctimeMs
+		)
+			throw new CoverageError("review-output-invalid");
+		return new TextDecoder("utf-8", { fatal: true }).decode(
+			bytes.subarray(0, size),
+		);
+	} finally {
+		await file.close();
+	}
+}

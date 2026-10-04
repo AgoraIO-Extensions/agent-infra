@@ -6,6 +6,10 @@
 `merge-base..head`。生产 `JobLocalRecorder` 只接受当前部署的 Responses JSON 或 Responses SSE，
 从实际输入中提取 unified diff，逐文件、逐 hunk 核对后原样转发；同一 logical chunk 共用 retry 预算，
 并在等待网络前预留最多三个 chunk。官方响应必须完成，并且能解析为唯一顶层 `review` 的 YAML/JSON Schema。
+当前 shadow producer 在同一代理中先转发每个原生请求一次，再校验实际请求和缓存响应；观察失败只记 invalid，
+不替换原生响应。请求预算、传输限制、认证 scope、Git 对象与原生输出 Schema 仍严格拒绝。
+独立 shadow 使用 preparation 创建的私有文件传递 metadata，拒绝链接、非普通文件、超限和无效 UTF-8；
+现有有界 job output 保留，文件不承担 job 间证据传输。
 `serializeMetadata` 只输出有界 metadata；源码、prompt、凭证和 runtime repository path 不会持久化。
 
 `verifyShadowMetadata` 校验同一 run/attempt、repository、head、inventory、互补 file/hunk coverage、请求和响应摘要、

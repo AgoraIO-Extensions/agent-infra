@@ -20,9 +20,10 @@ const PR_AGENT_INPUT_STEP = {
 };
 const PR_AGENT_SHADOW_STEP = {
   "name": "Verify full-scope trusted chunk shadow",
+  "continue-on-error": true,
   "if": "steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode == 'full'",
   "env": {
-    "REVIEW_COVERAGE_METADATA": "${{ steps.analysis-producer.outputs.coverage_metadata }}",
+    "REVIEW_COVERAGE_METADATA_FILE": "${{ steps.analysis-input.outputs.metadata_file }}",
     "REVIEW_COVERAGE_DIFF_SHA256": "${{ steps.analysis-input.outputs.diff_sha256 }}",
     "REVIEW_COVERAGE_DIFF_BYTES": "${{ steps.analysis-input.outputs.diff_bytes }}",
     "REVIEW_COVERAGE_BASE_SHA": "${{ steps.analysis-input.outputs.base_sha }}",
@@ -1732,6 +1733,7 @@ export function validateWorkflowDocuments(workflows) {
         PR_AGENT_REVIEW_SCOPE: "${{ steps.scope.outputs.scope }}",
         REVIEW_COVERAGE_ANALYSIS_JOB_ID: "${{ steps.analysis-input.outputs.analysis_job_id }}",
         REVIEW_COVERAGE_RUNTIME_KIND: "official", REVIEW_COVERAGE_PROVIDER: "pr-agent",
+        REVIEW_COVERAGE_METADATA_FILE: "${{ steps.analysis-input.outputs.metadata_file }}",
     }) ||
     !sameObject(prAgentAnalyze?.steps?.[7], {
       name: "Prepare review findings output", id: "review-output",

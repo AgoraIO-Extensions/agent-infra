@@ -1,5 +1,5 @@
 import { appendFile } from "node:fs/promises";
-import { buildGitInventory, verifyShadowMetadata } from "../../packages/review-coverage/dist/index.mjs";
+import { buildGitInventory, readShadowMetadataFile, verifyShadowMetadata } from "../../packages/review-coverage/dist/index.mjs";
 
 const required = (name) => {
   const value = process.env[name];
@@ -21,7 +21,7 @@ try {
   const baseSha = required("REVIEW_COVERAGE_BASE_SHA");
   const headSha = required("REVIEW_COVERAGE_HEAD_SHA");
   const mergeBaseSha = required("REVIEW_COVERAGE_MERGE_BASE_SHA");
-  const metadataText = required("REVIEW_COVERAGE_METADATA");
+  const metadataText = await readShadowMetadataFile(required("REVIEW_COVERAGE_METADATA_FILE"));
   const inventory = await buildGitInventory(workspace, baseSha, headSha);
   if (inventory.mergeBaseSha !== mergeBaseSha) throw new Error("review-output-invalid: merge-base mismatch");
   const runtimeKind = required("REVIEW_COVERAGE_RUNTIME_KIND");
@@ -66,7 +66,9 @@ try {
   ].join("\n");
   if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, summary, "utf8");
 } catch (error) {
-  const message = error instanceof Error ? error.message : "review-output-invalid: shadow verifier failed";
-  process.stderr.write(`${message}\n`);
+  const reason = error?.code === "review-coverage-incomplete" ? error.code : "review-output-invalid";
+  process.stderr.write(`${reason}: shadow observation invalid\n`);
+  if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY,
+    `### PR-Agent trusted chunk shadow\n\n- result: invalid\n- reason: ${reason}\n`);
   process.exitCode = 1;
 }

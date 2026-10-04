@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -586,6 +587,123 @@ describe("metadata-only diff boundaries", () => {
 });
 
 describe("job-local HTTP boundary", () => {
+	it("keeps the latest dispatched response when native retries finish out of order", async () => {
+		const r = await repo();
+		const inventory = await buildGitInventory(r.path, r.base, r.head);
+		let calls = 0;
+		let latestResponse = "";
+		let releaseFirst: () => void = () => {};
+		let firstArrived: () => void = () => {};
+		const waiting = new Promise<void>((resolve) => {
+			firstArrived = resolve;
+		});
+		const upstream = createServer((_request, response) => {
+			calls++;
+			const body = JSON.stringify({
+				...JSON.parse(responsesBody()),
+				id: `resp-${calls}`,
+			});
+			latestResponse = body;
+			const finish = () => {
+				if (!response.writableEnded)
+					response
+						.writeHead(200, { "content-type": "application/json" })
+						.end(body);
+			};
+			if (calls === 1) {
+				releaseFirst = finish;
+				firstArrived();
+			} else finish();
+		});
+		await new Promise<void>((resolve) =>
+			upstream.listen(0, "127.0.0.1", resolve),
+		);
+		const address = upstream.address();
+		if (!address || typeof address === "string") throw new Error("no port");
+		const proxy = await startRecordingProxy({
+			inventory,
+			observationOnly: true,
+			upstreamBaseUrl: `http://127.0.0.1:${address.port}`,
+		});
+		const call = () =>
+			fetch(`http://127.0.0.1:${proxy.port}/v1/responses`, {
+				method: "POST",
+				headers: { "x-review-chunk-id": "chunk-one" },
+				body: responsesRequest(r.patch),
+			});
+		try {
+			const first = call();
+			await waiting;
+			expect((await call()).status).toBe(200);
+			releaseFirst();
+			expect((await first).status).toBe(200);
+			expect(calls).toBe(2);
+			expect(proxy.results()[0]?.responseSha256).toBe(
+				createHash("sha256").update(latestResponse).digest("hex"),
+			);
+			expect(proxy.results().map((result) => result.attempts)).toEqual([2]);
+			expect(proxy.observationFailure()).toBeUndefined();
+		} finally {
+			releaseFirst();
+			await proxy.close();
+			await new Promise<void>((resolve) => upstream.close(() => resolve()));
+			await rm(r.path, { recursive: true, force: true });
+		}
+	});
+
+	it("observation forwards invalid evidence once and preserves request budgets", async () => {
+		const r = await repo();
+		const inventory = await buildGitInventory(r.path, r.base, r.head);
+		let calls = 0;
+		const raw = '{"review":{"key_issues_to_review":[]}}';
+		const upstream = createServer((_request, response) => {
+			calls++;
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(raw);
+		});
+		await new Promise<void>((resolve) =>
+			upstream.listen(0, "127.0.0.1", resolve),
+		);
+		const address = upstream.address();
+		if (!address || typeof address === "string") throw new Error("no port");
+		const proxy = await startRecordingProxy({
+			inventory,
+			observationOnly: true,
+			upstreamBaseUrl: `http://127.0.0.1:${address.port}`,
+		});
+		const call = (chunkId: string, body = responsesRequest(r.patch)) =>
+			fetch(`http://127.0.0.1:${proxy.port}/v1/responses`, {
+				method: "POST",
+				headers: {
+					"x-review-chunk-id": chunkId,
+					"content-type": "application/json",
+				},
+				body,
+			});
+		try {
+			for (let i = 0; i < 2; i++) {
+				const response = await call("chunk-one");
+				expect(response.status).toBe(200);
+				expect(await response.text()).toBe(raw);
+			}
+			expect(calls).toBe(2);
+			expect(proxy.observationFailure()).toBe("review-output-invalid");
+			expect(proxy.results()).toHaveLength(0);
+			expect((await call("chunk-one")).status).toBe(502);
+			expect((await call("chunk-one", "changed")).status).toBe(502);
+			expect(calls).toBe(2);
+			expect(proxy.transportFailure()).toBe("review-coverage-incomplete");
+			expect((await call("chunk-two")).status).toBe(200);
+			expect((await call("chunk-three")).status).toBe(200);
+			expect((await call("chunk-four")).status).toBe(502);
+			expect(calls).toBe(4);
+		} finally {
+			await proxy.close();
+			await new Promise<void>((resolve) => upstream.close(() => resolve()));
+			await rm(r.path, { recursive: true, force: true });
+		}
+	});
+
 	it("forwards the real request body through a bounded local proxy", async () => {
 		const r = await repo();
 		const inventory = await buildGitInventory(r.path, r.base, r.head);
@@ -683,6 +801,42 @@ describe("job-local HTTP boundary", () => {
 			await new Promise<void>((resolve, reject) =>
 				upstream.close((error) => (error ? reject(error) : resolve())),
 			);
+		}
+	});
+
+	it("rejects completed SSE output that differs from its streamed review", async () => {
+		const r = await repo();
+		const inventory = await buildGitInventory(r.path, r.base, r.head);
+		const delta = JSON.stringify({ review: { key_issues_to_review: [] } });
+		for (const terminalText of [
+			"not a review",
+			JSON.stringify({
+				review: {
+					key_issues_to_review: [
+						{
+							relevant_file: "a.txt",
+							issue_header: "Different",
+							issue_content: "Not present in the deltas",
+							start_line: 1,
+							end_line: 1,
+						},
+					],
+				},
+			}),
+		]) {
+			const wire = `data: ${JSON.stringify({ type: "response.output_text.delta", delta })}\n\ndata: ${JSON.stringify({ type: "response.completed", response: { object: "response", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: terminalText }] }] } })}\n\n`;
+			await expect(
+				recordChunk(
+					inventory,
+					{
+						chunkId: "chunk-mismatched-sse",
+						body: responsesRequest(r.patch),
+						headers: {},
+					},
+					async () => ({ status: 200, body: wire }),
+					true,
+				),
+			).rejects.toMatchObject({ code: "review-output-invalid" });
 		}
 	});
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile, symlink, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -45,11 +45,11 @@ for (const prompt of JSON.parse(readFileSync(process.env.FIXTURE_PROMPTS, 'utf8'
 if (process.env.FIXTURE_MODE !== 'missing') {
   const findings = process.env.FIXTURE_MODE === 'tampered' ? [{ relevant_file: 'a.txt', issue_header: 'Wrong',
     issue_content: 'This finding was never returned by a chunk', start_line: 1, end_line: 1 }] : [];
-  writeFileSync(output, 'review=' + JSON.stringify({ key_issues_to_review: findings }) + '\\n');
+  writeFileSync(output, 'review=' + JSON.stringify({ key_issues_to_review: process.env.FIXTURE_MODE === 'invalid' ? 'invalid' : findings }) + '\\n');
 }
 `;
 
-async function fixture(t, { mode = "ok", staleBase = false, invalidResponse = false } = {}) {
+async function fixture(t, { mode = "ok", staleBase = false, invalidResponse = false, unsupported = false, badPrompt = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "review-producer-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const git = (...args) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", ...args],
@@ -61,7 +61,7 @@ async function fixture(t, { mode = "ok", staleBase = false, invalidResponse = fa
   await writeFile(join(directory, "b.txt"), "old-b\nsame-b\n");
   git("add", "."); git("commit", "-qm", "base");
   const base = git("rev-parse", "HEAD").trim();
-  await writeFile(join(directory, "a.txt"), "new-a-never-persist\nsame-a\n");
+  await writeFile(join(directory, "a.txt"), unsupported ? Buffer.from([0, 1, 2]) : "new-a-never-persist\nsame-a\n");
   await writeFile(join(directory, "b.txt"), "new-b-never-persist\nsame-b\n");
   git("add", "."); git("commit", "-qm", "head");
   const head = git("rev-parse", "HEAD").trim();
@@ -75,7 +75,9 @@ async function fixture(t, { mode = "ok", staleBase = false, invalidResponse = fa
   const prompts = ["a", "b"].map((name) =>
     `The PR code diff:\n======\n\n## File: '${name}.txt'\n\n@@ -1,2 +1,2 @@\n__new hunk__\n1 +new-${name}-never-persist\n2  same-${name}\n__old hunk__\n-old-${name}\n same-${name}\n======`);
   const promptPath = join(directory, "prompts.json");
-  await writeFile(promptPath, JSON.stringify(prompts));
+  await writeFile(promptPath, JSON.stringify(badPrompt ? ["unsupported prompt"] : prompts));
+  const metadataDirectory = await mkdtemp(join(tmpdir(), "review-producer-metadata-"));
+  t.after(() => rm(metadataDirectory, { recursive: true, force: true }));
   const output = join(directory, "job-output");
   await writeFile(output, "");
   const calls = join(directory, "calls");
@@ -87,7 +89,7 @@ async function fixture(t, { mode = "ok", staleBase = false, invalidResponse = fa
     observations.push({ path: request.url, headers: request.headers, body });
     const yaml = "review:\n  key_issues_to_review: []\n";
     const terminal = { type: invalidResponse ? "response.incomplete" : "response.completed", sequence_number: 2, response: {
-      id: "resp_fixture", object: "response", created_at: 1, model: "fixture",
+      id: "resp_fixture", object: "response", created_at: 1, model: "gpt-4.1",
       status: invalidResponse ? "incomplete" : "completed", error: null,
       incomplete_details: invalidResponse ? { reason: "max_output_tokens" } : null,
       output: [{ id: "msg_fixture", type: "message", role: "assistant", status: "completed",
@@ -105,10 +107,13 @@ async function fixture(t, { mode = "ok", staleBase = false, invalidResponse = fa
   const environment = {
     ...process.env, PATH: `${directory}:${dirname(process.execPath)}:${process.env.PATH}`,
     GITHUB_WORKSPACE: directory, GITHUB_REPOSITORY: "fixture/repository", GITHUB_REPOSITORY_ID: "42",
+    REVIEW_COVERAGE_METADATA_FILE: join(metadataDirectory, "coverage.json"),
     GITHUB_RUN_ID: "100", GITHUB_RUN_ATTEMPT: "2", GITHUB_OUTPUT: output,
     REVIEW_COVERAGE_ANALYSIS_JOB_ID: "200", REVIEW_COVERAGE_RUNTIME_KIND: "official", REVIEW_COVERAGE_PROVIDER: "pr-agent",
     OPENAI__API_BASE: `http://127.0.0.1:${upstream.address().port}/v1`, OPENAI__KEY: "fixture-upstream-key",
-    "config.model": "fixture", "config.max_model_tokens": "300000", "config.custom_model_max_tokens": "300000",
+    // LiteLLM 1.99.0 marks unknown model names as non-streaming and removes
+    // stream=true. Use a known streaming model against this local-only server.
+    "config.model": "gpt-4.1", "config.max_model_tokens": "300000", "config.custom_model_max_tokens": "300000",
     "litellm.custom_llm_provider": "openai", "litellm.force_streaming_custom_llm_provider": "openai",
     "litellm.force_streaming_api_base_substrings": '["https://"]',
     PR_AGENT_REVIEW_SCOPE: JSON.stringify({ version: 1, repository: "fixture/repository", prNumber: 1,
@@ -144,6 +149,8 @@ test("producer observes two native-format HTTP chunks and independently reads ch
   }));
   const metadata = JSON.parse(values.coverage_metadata);
   const scope = JSON.parse(f.environment.PR_AGENT_REVIEW_SCOPE);
+  assert.equal(await readFile(f.environment.REVIEW_COVERAGE_METADATA_FILE, "utf8"), values.coverage_metadata);
+  assert.equal((await stat(f.environment.REVIEW_COVERAGE_METADATA_FILE)).mode & 0o777, 0o600);
   assert.equal(metadata.diffSha256, scope.diffSha256);
   assert.equal(metadata.diffBytes, scope.diffBytes);
   assert.equal(metadata.chunks.length, 2);
@@ -160,18 +167,59 @@ test("producer observes two native-format HTTP chunks and independently reads ch
   await assert.rejects(readFile(join(temporaryDirectory, "output")), { code: "ENOENT" });
 });
 
-for (const options of [{ mode: "missing" }, { mode: "tampered" }, { staleBase: true }, { invalidResponse: true }]) {
+for (const options of [{ mode: "missing" }, { mode: "invalid" }, { staleBase: true }, { invalidResponse: true }]) {
   test(`producer rejects missing, altered, stale or incomplete evidence: ${JSON.stringify(options)}`, async (t) => {
     const f = await fixture(t, options);
     const code = options.mode === "missing" ? "review-output-missing"
       : options.invalidResponse ? "review-run-failed" : "review-output-invalid";
-    await assert.rejects(produceAnalysis(f), { code });
-    // Incomplete evidence consumes the recorder's one retry for the first chunk.
-    assert.equal(f.observations.length, 2);
+    await assert.rejects(produceAnalysis(f), options.mode === "invalid" ? /review findings are invalid/ : { code });
+    // Shadow validation never retries the real native model call.
+    assert.equal(f.observations.length, options.invalidResponse ? 1 : 2);
     if (options.staleBase) assert.equal(f.reads(), 2);
     assert.equal(await readFile(f.output, "utf8"), "");
   });
 }
+
+
+for (const options of [{ mode: "tampered" }, { unsupported: true }, { badPrompt: true }]) {
+  test(`shadow invalid preserves independently valid native review: ${JSON.stringify(options)}`, async (t) => {
+    const f = await fixture(t, options);
+    const result = await produceAnalysis(f);
+    assert.ok(result.shadowFailure);
+    assert.equal(f.observations.length, options.badPrompt ? 1 : 2);
+    assert.match(await readFile(f.output, "utf8"), /^review=/m);
+    assert.doesNotMatch(await readFile(f.output, "utf8"), /^coverage_metadata=/m);
+    await assert.rejects(readFile(f.environment.REVIEW_COVERAGE_METADATA_FILE), { code: "ENOENT" });
+  });
+}
+
+test("metadata write failure is advisory but missing native output still fails", async (t) => {
+  const f = await fixture(t);
+  f.environment.REVIEW_COVERAGE_METADATA_FILE = join(f.directory, "absent", "coverage.json");
+  assert.ok((await produceAnalysis(f)).shadowFailure);
+  assert.match(await readFile(f.output, "utf8"), /^review=/m);
+  const missing = await fixture(t, { mode: "missing", badPrompt: true });
+  await assert.rejects(produceAnalysis(missing), { code: "review-output-missing" });
+});
+
+test("shadow file transport is bounded, exclusive and rejects symlinks and invalid UTF-8", async (t) => {
+  const { writeShadowMetadataFile, readShadowMetadataFile } = await import("../../packages/review-coverage/dist/index.mjs");
+  const directory = await mkdtemp(join(tmpdir(), "review-shadow-file-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "coverage.json");
+  const text = JSON.stringify({ value: "x".repeat(256 * 1024 - 12) });
+  await writeShadowMetadataFile(path, text);
+  assert.equal(await readShadowMetadataFile(path), text);
+  await assert.rejects(writeShadowMetadataFile(path, text), { code: "EEXIST" });
+  await symlink(path, join(directory, "link"));
+  await assert.rejects(readShadowMetadataFile(join(directory, "link")));
+  await assert.rejects(readShadowMetadataFile(directory));
+  await assert.rejects(readShadowMetadataFile(join(directory, "missing")));
+  for (const bytes of [Buffer.alloc(0), Buffer.alloc(256 * 1024 + 1), Buffer.from([0xc0, 0xaf])]) {
+    await writeFile(path, bytes);
+    await assert.rejects(readShadowMetadataFile(path));
+  }
+});
 
 test("producer rejects modified certified input and a different provider before invocation", async (t) => {
   const f = await fixture(t);

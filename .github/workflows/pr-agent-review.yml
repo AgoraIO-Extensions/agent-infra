@@ -202,6 +202,7 @@ jobs:
           REVIEW_COVERAGE_ANALYSIS_JOB_ID: ${{ steps.analysis-input.outputs.analysis_job_id }}
           REVIEW_COVERAGE_RUNTIME_KIND: official
           REVIEW_COVERAGE_PROVIDER: pr-agent
+          REVIEW_COVERAGE_METADATA_FILE: ${{ steps.analysis-input.outputs.metadata_file }}
         # Node is the direct step shell, preserving dotted environment keys.
         shell: node {0}
         run: |
@@ -220,10 +221,12 @@ jobs:
           PR_AGENT_REVIEW: ${{ steps.scope.outputs.mode == 'full' && steps.analysis-producer.outputs.review || steps.pr-agent.outputs.review }}
         run: node .github/scripts/pr-agent-review-output.mjs
 
+      # Shadow observations do not enable the chunk Coverage gate. Native output remains strict.
       - name: Verify full-scope trusted chunk shadow
+        continue-on-error: true
         if: steps.scope.outputs.applicable == 'true' && steps.scope.outputs.mode == 'full'
         env:
-          REVIEW_COVERAGE_METADATA: ${{ steps.analysis-producer.outputs.coverage_metadata }}
+          REVIEW_COVERAGE_METADATA_FILE: ${{ steps.analysis-input.outputs.metadata_file }}
           REVIEW_COVERAGE_DIFF_SHA256: ${{ steps.analysis-input.outputs.diff_sha256 }}
           REVIEW_COVERAGE_DIFF_BYTES: ${{ steps.analysis-input.outputs.diff_bytes }}
           REVIEW_COVERAGE_BASE_SHA: ${{ steps.analysis-input.outputs.base_sha }}

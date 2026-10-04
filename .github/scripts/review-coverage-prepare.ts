@@ -1,4 +1,5 @@
-import { appendFile, readFile } from 'node:fs/promises';
+import { appendFile, readFile, mkdtemp, chmod } from 'node:fs/promises';
+import { join, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { githubRequest, requirePrAgentTarget } from './pr-agent-review.mjs';
@@ -24,7 +25,11 @@ try {
   const recorderBytes = await readFile('packages/review-coverage/dist/index.mjs');
   const recorderVersion = `sha256:${createHash('sha256').update(recorderBytes).digest('hex')}`;
   if (!env.GITHUB_OUTPUT) throw new Error('missing output');
-  await appendFile(env.GITHUB_OUTPUT, `recorder_version=${recorderVersion}\nanalysis_job_id=${matching[0].id}\nbase_sha=${current.base.sha}\nhead_sha=${scope.headSha}\nmerge_base_sha=${scope.mergeBaseSha}\npr_number=${scope.prNumber}\ndiff_sha256=${scope.diffSha256}\ndiff_bytes=${scope.diffBytes}\n`);
+  if (!env.RUNNER_TEMP || !isAbsolute(env.RUNNER_TEMP) || /[\r\n]/.test(env.RUNNER_TEMP)) throw new Error('invalid runner temp');
+  const metadataDirectory = await mkdtemp(join(env.RUNNER_TEMP, 'review-coverage-'));
+  await chmod(metadataDirectory, 0o700);
+  const metadataFile = join(metadataDirectory, 'coverage.json');
+  await appendFile(env.GITHUB_OUTPUT, `recorder_version=${recorderVersion}\nanalysis_job_id=${matching[0].id}\nbase_sha=${current.base.sha}\nhead_sha=${scope.headSha}\nmerge_base_sha=${scope.mergeBaseSha}\npr_number=${scope.prNumber}\ndiff_sha256=${scope.diffSha256}\ndiff_bytes=${scope.diffBytes}\nmetadata_file=${metadataFile}\n`);
 } catch {
   console.error('review-output-invalid: trusted full-scope preparation failed');
   process.exitCode = 1;

@@ -156,8 +156,9 @@ export async function produceAnalysis({ environment = process.env, request = git
   const recorder = await import(RECORDER_MODULE.href);
   // The trusted preparation step must fetch these exact Git objects, without
   // checking out PR code. Missing objects fail before the model is invoked.
-  const inventory = await recorder.buildGitInventory(workspace, current.base.sha, scope.headSha);
-  if (inventory.mergeBaseSha !== scope.mergeBaseSha) throw failure("review-output-invalid");
+  const observedInventory = await recorder.observeGitInventory(workspace, current.base.sha, scope.headSha);
+  const inventory = observedInventory.inventory;
+  if (observedInventory.mergeBaseSha !== scope.mergeBaseSha) throw failure("review-output-invalid");
   const diffPath = join(workspace, ".pr-agent-review-input.diff");
   const diff = await boundedRead(diffPath, 10 * 1024 * 1024);
   if (hash(diff) !== scope.diffSha256 || Buffer.byteLength(diff) !== scope.diffBytes) {
@@ -166,7 +167,7 @@ export async function produceAnalysis({ environment = process.env, request = git
   const identity = {
     reviewer: "pr-agent", runtimeKind: "official", provider: "pr-agent",
     repositoryId, repositoryName: repository, pullRequest: scope.prNumber,
-    baseSha: current.base.sha, headSha: scope.headSha, mergeBaseSha: inventory.mergeBaseSha,
+    baseSha: current.base.sha, headSha: scope.headSha, mergeBaseSha: observedInventory.mergeBaseSha,
     diffSha256: scope.diffSha256, diffBytes: scope.diffBytes,
     workflowRunId: positiveInteger(environment, "GITHUB_RUN_ID"),
     runAttempt: positiveInteger(environment, "GITHUB_RUN_ATTEMPT"),
@@ -181,7 +182,7 @@ export async function produceAnalysis({ environment = process.env, request = git
   await writeFile(nativeOutput, "", { mode: 0o600 });
   let proxy;
   try {
-    proxy = await recorder.startRecordingProxy({ inventory, upstreamBaseUrl: upstream.href });
+    proxy = await recorder.startRecordingProxy({ inventory, observationOnly: true, upstreamBaseUrl: upstream.href });
     const proxyBase = `http://127.0.0.1:${proxy.port}${upstream.pathname.replace(/\/$/, "")}`;
     const runtimeEnvironment = {};
     for (const [key, value] of Object.entries(environment)) {
@@ -216,6 +217,7 @@ export async function produceAnalysis({ environment = process.env, request = git
       "--diff-file", "/github/workspace/.pr-agent-review-input.diff", "review");
     await runContainer(args, { ...environment, ...runtimeEnvironment }, workspace);
     await proxy.close();
+    if (proxy.transportFailure()) throw failure("review-run-failed");
     const lines = (await boundedRead(nativeOutput, MAX_REVIEW_BYTES + 8)).split("\n").filter(Boolean);
     if (lines.length !== 1 || !lines[0].startsWith("review=")) throw failure("review-output-missing");
     const raw = lines[0].slice("review=".length);
@@ -224,26 +226,39 @@ export async function produceAnalysis({ environment = process.env, request = git
     // envelope from that independently observed output, not a recorder alias.
     const mergedOutput = { review: JSON.parse(raw) };
     const chunks = proxy.results();
-    const failed = proxy.failedChunks();
-    const metadata = recorder.buildCoverageMetadata(identity, inventory, chunks, mergedOutput,
-      [...chunks, ...failed].map((chunk) => chunk.chunkId), failed);
-    const metadataText = recorder.serializeMetadata(metadata);
-    recorder.verifyShadowMetadata(metadataText, {
-      ...identity, mergedOutputSha256: hash(JSON.stringify(mergedOutput)),
-      successfulResponseSha256: chunks.map((chunk) => chunk.responseSha256),
-    }, inventory);
+    let metadataText;
+    let shadowFailure;
+    try {
+      if (!inventory || proxy.observationFailure()) throw failure("review-coverage-incomplete");
+      const failed = proxy.failedChunks();
+      const metadata = recorder.buildCoverageMetadata(identity, inventory, chunks, mergedOutput,
+        [...chunks, ...failed].map((chunk) => chunk.chunkId), failed);
+      metadataText = recorder.serializeMetadata(metadata).trimEnd();
+      recorder.verifyShadowMetadata(metadataText, {
+        ...identity, mergedOutputSha256: hash(JSON.stringify(mergedOutput)),
+        successfulResponseSha256: chunks.map((chunk) => chunk.responseSha256),
+      }, inventory);
+      await recorder.writeShadowMetadataFile(required(environment, "REVIEW_COVERAGE_METADATA_FILE"), metadataText);
+    } catch (error) {
+      // Only shadow observation is advisory before activation. The independently
+      // read native output/schema and current target checks remain outside.
+      metadataText = undefined;
+      shadowFailure = error?.code === "review-coverage-incomplete"
+        ? "review-coverage-incomplete" : "review-output-invalid";
+      console.error(`${shadowFailure}: trusted chunk shadow observation invalid`);
+    }
     const finalTarget = await requirePrAgentTarget(target);
     if (finalTarget.base?.sha !== identity.baseSha || finalTarget.base?.repo?.id !== repositoryId) {
       throw failure("review-output-invalid");
     }
     const outputs = {
-      review, coverage_metadata: metadataText.trimEnd(), coverage_identity: JSON.stringify(identity),
+      review, ...(metadataText === undefined ? {} : { coverage_metadata: metadataText }), coverage_identity: JSON.stringify(identity),
       merged_output_sha256: hash(JSON.stringify(mergedOutput)),
       successful_response_sha256: JSON.stringify(chunks.map((chunk) => chunk.responseSha256)),
     };
     await appendFile(required(environment, "GITHUB_OUTPUT"),
       Object.entries(outputs).map(([name, value]) => `${name}=${value}\n`).join(""));
-    return { chunks: chunks.length, inventorySha256: inventory.digest };
+    return { chunks: chunks.length, inventorySha256: inventory?.digest, shadowFailure };
   } finally {
     if (proxy?.server.listening) await proxy.close();
     await rm(directory, { recursive: true, force: true });
