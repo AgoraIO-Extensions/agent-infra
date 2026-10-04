@@ -414,7 +414,7 @@ async function dispatchState(work: { itemId: string; executionId: string }) {
 }
 
 describe("PostgreSQL Conversation dispatch Store", () => {
-	it.each(["recover", "stop-during-prepare"] as const)(
+	it.each(["recover", "stop-during-prepare", "lost-observation"] as const)(
 		"rebuilds the same allocation and PVC only after durable stop proof and fresh business authority (%s)",
 		async (mode) => {
 			const work = await seed("conversation.turn.submit.v1", {
@@ -447,6 +447,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				}) => ({ ...resource, namespace: policy.namespace }),
 			);
 			await client`update platform.session_sandbox_allocations set resource_policy = ${client.json(sourcePolicy)}, resource_observation = ${client.json({ status: "ready", resources: originalResources })} where conversation_id = ${work.conversationId}`;
+			if (mode === "lost-observation")
+				await client`update platform.session_sandbox_allocations set resource_observation = null where conversation_id = ${work.conversationId}`;
 			const managementStore = new PostgresAgentManagementTransactionV1({
 				databaseUrl,
 			});
@@ -495,7 +497,38 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						actor,
 					),
 				).toMatchObject({ outcome: "accepted" });
-				const drain = await store.claimSandboxReconciliation(request);
+				let drain = await store.claimSandboxReconciliation(request);
+				if (mode === "lost-observation") {
+					if (!drain) throw new Error("Expected unobserved source claim");
+					expect(drain.previousObservation).toBeNull();
+					expect(
+						await store.recordSandboxObservation({
+							claim: drain,
+							observation: { status: "unknown", resources: [] },
+						}),
+					).toBe("unknown");
+					await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+					drain = await store.claimSandboxReconciliation(request);
+					if (!drain) throw new Error("Expected missing source retry");
+					expect(
+						await store.recordSandboxObservation({
+							claim: drain,
+							observation: { status: "observed", resources: originalResources },
+						}),
+					).toBe("unknown");
+					expect(
+						await store.prepareSandboxReconciliation({
+							claim: drain,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(false);
+					await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+					drain = await store.claimSandboxReconciliation(request);
+					expect(drain?.lifecycle?.source.observation).toEqual({
+						status: "observed",
+						resources: originalResources,
+					});
+				}
 				if (!drain?.lifecycle?.source.observation)
 					throw new Error("Expected drain source");
 				const resources = drain.lifecycle.source.observation.resources;

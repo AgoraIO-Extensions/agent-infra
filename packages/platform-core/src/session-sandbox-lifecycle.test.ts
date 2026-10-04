@@ -97,6 +97,48 @@ function fixture() {
 }
 
 describe("original source stop proof", () => {
+	it.each(["missing", "partial", "changed-uid", "incomplete"] as const)(
+		"refines %s source observations without authorizing readiness",
+		(mode) => {
+			const input = fixture();
+			const full = input.lifecycle.source.observation!;
+			const prior =
+				mode === "missing"
+					? null
+					: {
+							status: "unknown" as const,
+							resources: full.resources.slice(0, 2),
+						};
+			const observation: SessionSandboxObservationV1 = {
+				status: "observed",
+				resources:
+					mode === "incomplete"
+						? full.resources.slice(0, 3)
+						: full.resources.map((r, i) =>
+								mode === "changed-uid" && i === 0
+									? { ...r, uid: "another-pod" }
+									: { ...r, resourceVersion: "2" },
+							),
+			};
+			const decision = decideSessionSandboxDrainObservationV1({
+				...input,
+				lifecycle: {
+					...input.lifecycle,
+					source: { ...input.lifecycle.source, observation: prior },
+				},
+				observation,
+			});
+			expect(decision).toMatchObject({
+				status: "unknown",
+				finished: false,
+				stopReceipt: null,
+			});
+			expect(decision.observation).toEqual(
+				mode === "missing" || mode === "partial" ? observation : prior,
+			);
+		},
+	);
+
 	it("accepts latest per-object delete versions, actual absence of the Service route and the same PVC", () => {
 		const input = fixture();
 		expect(decideSessionSandboxDrainObservationV1(input)).toEqual({

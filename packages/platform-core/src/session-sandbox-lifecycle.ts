@@ -133,6 +133,36 @@ export function decideSessionSandboxDrainObservationV1(input: {
 		finished: false,
 		stopReceipt: null,
 	});
+	// A prepare may have created resources before its observation committed.
+	// Adopt only a complete owned readback, preserving every previously known UID.
+	// This is evidence refinement, never readiness or stop/absence proof.
+	if (
+		observation.status === "observed" &&
+		!observation.sourceStop &&
+		source.policy &&
+		!lifecycle.stopReceipt &&
+		!lifecycle.preparation &&
+		isSessionSandboxObservationValidV1(
+			{
+				sandbox: source.sandbox,
+				policy: source.policy,
+				desiredState: "running",
+			},
+			{ ...observation, status: "ready" },
+		) &&
+		(source.observation?.resources ?? []).every((prior) =>
+			observation.resources.some(
+				(current) =>
+					current.kind === prior.kind &&
+					current.namespace === prior.namespace &&
+					current.name === prior.name &&
+					current.uid === prior.uid &&
+					current.controllerUid === prior.controllerUid,
+			),
+		)
+	) {
+		return { ...unknown(), observation };
+	}
 	if (
 		observation.status !== "stopped" ||
 		!receipt ||

@@ -475,9 +475,10 @@ export async function recordSandboxObservation(
 					sandbox: claim.sandbox,
 					resourceFence: claim.resourceFence,
 					lifecycle: context.lifecycle,
-					observation: context.drainComputeAllowed
-						? observation
-						: { status: "unknown", resources: [] },
+					observation:
+						context.drainComputeAllowed || observation.status === "observed"
+							? observation
+							: { status: "unknown", resources: [] },
 				})
 			: decideSessionSandboxObservationV1(
 					claim,
@@ -494,13 +495,26 @@ export async function recordSandboxObservation(
 		available_at = clock_timestamp() + interval '1 second', updated_at = clock_timestamp()
 		where id = ${claim.itemId} and lease_expires_at > clock_timestamp() returning id`;
 	if (recorded.length !== 1) return "stale";
-	if (context.lifecycle && "stopReceipt" in decision && decision.stopReceipt) {
+	if (
+		context.lifecycle &&
+		context.purpose === "drain" &&
+		"stopReceipt" in decision
+	) {
 		await transaction`update platform.outbox_items set payload = payload || ${transaction.json(
 			{
 				schemaVersion: 1,
 				conversationId: claim.sandbox.sessionId,
 				sessionGeneration: claim.sandbox.generation,
-				lifecycle: { ...context.lifecycle, stopReceipt: decision.stopReceipt },
+				lifecycle: {
+					...context.lifecycle,
+					stopReceipt: decision.stopReceipt,
+					source: decision.stopReceipt
+						? context.lifecycle.source
+						: {
+								...context.lifecycle.source,
+								observation: decision.observation,
+							},
+				},
 			} as unknown as Parameters<typeof transaction.json>[0],
 		)}
 			where id = ${claim.itemId}`;
