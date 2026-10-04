@@ -329,30 +329,30 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 `platform-worker` 到 Agent Pod 使用遵循 [Contract Schema authority](#64-contract-schema-authority) 的版本化 OpenAPI HTTP 契约；Runtime 增量事件使用由 JSON Schema 校验的内部 SSE。内部接口通过部署提供的服务身份和 mTLS 或等价机制认证，并验证执行授权，不因位于集群内而跳过鉴权。
 
-#### #1164 Proposed：内部 Runtime TLS 契约（未批准）
+#### 内部 Runtime TLS 身份与传输
 
-本提案只约束 Worker 到 RuntimeHost 的内部传输；须经具名机制选择、供应职责确认及适用 Standards/Spec、CODEOWNER/人工评审，才可实施。本文不证明 TLS、证书供应或真实部署已交付，不授权修改 Connection 或 Host/Grant/Driver wire。
+本契约的机制与部署输入边界已接收，待完成适用评审与合并；TLS 实现和真实部署尚未交付。它只约束 Worker 到 RuntimeHost 的内部传输，不改变 Connection 或 Host/Grant/Driver wire。受控实现须有独立、完整的 primary Issue，绑定已评审契约与精确消费者；真实证书、签发者及生产供应签收缺失只阻塞对应部署和实测，不阻塞不依赖这些材料的受控实现。本文不授予本次文档任务实施或部署权限。
 
-**推荐等价机制：server TLS + 既有 deployment service token + signed Grant。** 三道校验分别满足本节的传输保护、部署服务身份和执行授权，不能相互替代：
+**采用等价机制：server TLS + 既有 deployment service token + signed Grant。** 三道校验分别满足本节的传输保护、部署服务身份和执行授权，不能相互替代：
 
-| 要求 | 推荐机制及边界 |
+| 要求 | 采用机制及边界 |
 | --- | --- |
 | Worker 认证 Host 并保护传输 | 只连接部署确定的 HTTPS origin；校验证书链、有效期、serverAuth 用途及与 origin 完全匹配的 DNS SAN。部署把该 DNS、namespace 与可信 Agent 绑定；证书不证明 revision、fence、Digest 或 Session。禁止明文 fallback、redirect、关闭校验和调用方覆盖 origin。 |
 | Host 认证部署调用方 | 继续校验既有 service token；它证明持有部署凭证，不是某个 Worker 进程的私钥持有证明。token 只在已验证 TLS 上传输，部署控制其发布、访问、轮换和撤销；Host 所持 token 也不能取得 Grant 签名私钥。 |
 | Host 核对当前授权与部署 | 保留独立 signed readiness 的 Worker/Agent/revision/fence/Digest 本机绑定；业务及控制 Grant 仍按 [§9.3](#93-服务端授权上下文) 校验签名、issuer、audience、时间、对象、用途和操作范围，继续执行原持久幂等、租约与屏障。不能把 readiness 字段笼统写成每种 Execution Grant 已有的字段。 |
 
-在凭证受控、TLS 严格校验和上述授权屏障全部成立的威胁边界内，此组合可以作为本节的等价机制候选；它不等同于 mTLS 的双向传输层私钥证明。共享 bearer token 泄漏会扩大服务认证风险，捕获仍有效的 Grant 也不能靠 TLS 自动消除重放；必须依赖原用途/对象校验、持久幂等与 fence，并完成对应负向验收。当前 HTTP 实现不满足此候选，挂载 CA 或启用某一 Runtime 版本也不代表满足。
+在凭证受控、TLS 严格校验和上述授权屏障全部成立的威胁边界内，本节采用此组合作为等价机制；它不等同于 mTLS 的双向传输层私钥证明。共享 bearer token 泄漏会扩大服务认证风险，捕获仍有效的 Grant 也不能靠 TLS 自动消除重放；必须依赖原用途/对象校验、持久幂等与 fence，并完成对应负向验收。当前 HTTP 实现不满足本契约，挂载 CA 或启用某一 Runtime 版本也不代表满足。
 
-**沿既有 Service 拓扑补齐传输。** [Runtime HLD §4.1](HLD-agent-runtime-M1.md#41-内部-runtime-service-与-tls-映射提案) 区分 Agent 级 candidate/verified Workload 与业务 Session Sandbox。Agent 级实现已有主 Service 和 `-probe` Service，分别承载 business 与 readiness/verified control；沿这两个实际 DNS 提供同一 Host listener 的 server TLS，不因 TLS 新建或合并 Service、不新增 Manifest 字段。Sandbox 沿其原已批准分配及唯一 Service 身份供证，不复用 Agent 级路由或擅加 `-probe`；本提案不改变 §10.1.1 或 #1322 的资源合同。
+**沿既有 Service 拓扑补齐传输。** [Runtime HLD §4.1](HLD-agent-runtime-M1.md#41-内部-runtime-service-与-tls-映射) 区分 Agent 级 candidate/verified Workload 与业务 Session Sandbox。Agent 级实现已有主 Service 和 `-probe` Service，分别承载 business 与 readiness/verified control；沿这两个实际 DNS 提供同一 Host listener 的 server TLS，不因 TLS 新建或合并 Service、不新增 Manifest 字段。Sandbox 沿其原已批准分配及唯一 Service 身份供证，不复用 Agent 级路由或擅加 `-probe`；本契约不改变 §10.1.1 或 #1322 的资源合同。
 
-**受信部署输入。** 复用[现有 Worker 部署模块](../../deploy/platform-worker/README.md#配置模块形状)，准确入口与最小差额如下；新增项是待批准的部署输入，不是已存在的 Schema 或产物：
+**受信部署输入。** 复用[现有 Worker 部署模块](../../deploy/platform-worker/README.md#配置模块形状)，准确入口与最小差额如下；新增项是已接收、待实现的部署输入，不是已存在的 Schema 或产物：
 
 | 输入 | 已有入口 / 所需差额 |
 | --- | --- |
 | 部署代码与身份 | `platformWorker.configurationModuleSecretRef.{name,key}` 只读挂载 `/app/dist/configuration.mjs`；导出 `workloadInput`、`signing`、`serviceToken`。`workloadInput.policy.namespace` 必须与 `PLATFORM_WORKER_NAMESPACE` 一致，Agent 来自服务端持久 Workload，不能从请求、Owner env、模型或 live annotation 获取。 |
 | token 与 Grant | `platformWorker.runtimeAuthSecretRef.{name,privateKeyKey,serviceTokenKey}` 向 Worker 提供 `/var/run/agent-infra/runtime-auth/{runtime-grant.pem,service-token}`；Host 通过 `policy.runtimeAuth.serviceTokenSecret.{name,key}` 的 `secretKeyRef` 得到同一 transport token。保留 `WorkloadRuntimeAuthV1` 原五字段 `workerId/grantKeyId/grantPublicKey/grantIssuer/serviceTokenSecret`；签名私钥仅在 Worker，Host 只得到公钥和预期身份。 |
 | CA | 既有 `platformWorker.trustedCaSecretRef.{name,key}` 挂载 `/var/run/agent-infra/trusted-ca/ca.crt`，由 `NODE_EXTRA_CA_CERTS` 在 Worker 启动时加载。它是附加信任入口，不是 Host leaf，也不自动把 Runtime 信任限定到某一 CA；TLS 消费者须验证配置存在、可解析且含获准 CA，明确实际信任集合，不能把 Node 对坏文件的警告当作 fail closed。 |
-| server leaf（新增受控输入） | 部署须交付可信 `agentId`、`namespace`、从 HLD 对应拓扑计算的 `serviceDnsNames`（Sandbox 另核原分配/归属），以及该 namespace 内原生 `kubernetes.io/tls` 的受控 `serverSecretRef.name`；键固定 `tls.crt`（leaf 与中间链）、`tls.key`（匹配私钥）。与上述 CA 引用分别管理，不复用 Ingress 的 `policy.tlsSecretName` 或 Grant 私钥。拟只读挂载到 Host `/var/run/agent-infra/runtime-tls/{tls.crt,tls.key}`；这些字段/文件消费者当前尚未实现。 |
+| server leaf（新增受控输入） | 部署须交付可信 `agentId`、`namespace`、从 HLD 对应拓扑计算的 `serviceDnsNames`（Sandbox 另核原分配/归属），以及该 namespace 内原生 `kubernetes.io/tls` 的受控 `serverSecretRef.name`；键固定 `tls.crt`（leaf 与中间链）、`tls.key`（匹配私钥）。与上述 CA 引用分别管理，不复用 Ingress 的 `policy.tlsSecretName` 或 Grant 私钥。只读挂载到 Host `/var/run/agent-infra/runtime-tls/{tls.crt,tls.key}`；这些字段/文件消费者当前尚未实现。 |
 
 可信部署发布角色负责上述输入及 Secret 写权限、签发来源、发布、到期前续期、撤销、保留和泄露处置；生命周期装配角色消费受审阅输入，沿现有 namespace-scoped Kubernetes Adapter 核引用、归属和材料有效性，Host 启动核对挂载证书/私钥及服务绑定。Kubernetes Secret 类型和键存在不证明证书有效。Worker 不获得 Host 私钥挂载，Host 不获得 Grant 签名私钥或 Kubernetes authority；Owner、镜像及请求不能选择 Secret、CA 或 DNS。具体签发者、写入身份、真实引用和操作责任须在 #1164 具名确认，不能从示例名称或 Issue assignee 推断实际供应已存在。
 
@@ -362,13 +362,13 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 首次 HTTP→TLS 切换先沿原受权持久流程停止新准入、核实/排空原执行并隔离旧通路，不能向旧 HTTP 发送 token/Grant；旧控制不可达时保持 pending/unknown，使用原 Kubernetes fenced closeRoute、scale-zero 和 ownership cleanup 权限收敛。证书失败不能剥夺这些 Kubernetes 权限，也不能把 Pod 退出当作可信终态。保留原 tuple、PVC、Session、Execution、facts、stop/drain、durable recovery/ACK、容量、重试和回滚；回滚不得重新启用明文或复用失效凭证。
 
-**mTLS 备选成本。** 另需 Worker client leaf/key 的受控供应、clientAuth 用途与身份 SAN、Host 侧 client CA 和身份映射、双向轮换/撤销、两端重启与双向故障验收。它加强客户端私钥持有证明，但不替代 token、业务/控制 Grant、fence 或恢复屏障。本轮推荐不增加这些 client leaf 输入；是否选择等价机制仍须人工明确批准。
+**mTLS 备选成本。** 另需 Worker client leaf/key 的受控供应、clientAuth 用途与身份 SAN、Host 侧 client CA 和身份映射、双向轮换/撤销、两端重启与双向故障验收。它加强客户端私钥持有证明，但不替代 token、业务/控制 Grant、fence 或恢复屏障。本契约不增加这些 client leaf 输入；改用 mTLS 须另行审查和批准。
 
 **验收。** 文档评审与后续真实实施分别给证据，不以 fixture、Helm render、Secret 存在或 healthz 签收：
 
-1. #1164 记录机制选择及具名供应/装配职责，填齐真实 Agent/namespace/DNS、Secret/CA 引用、写权限、签发与生命周期输入；缺失项保持未交付。
+1. #1164 记录已接收的机制、部署输入及供应协调/装配责任；实际部署前填齐真实 Agent/namespace/DNS、Secret/CA 引用、写权限、签发与生命周期签收。材料缺失保持未交付，不冒充受控实现已完成生产验收。
 2. business、control、readiness 均覆盖明文/redirect、错误 DNS/CA、空或损坏 CA、到期/撤销/泄露 leaf、无效 token 和跨用途/主体/Agent/对象的 Grant；分别验证本机 revision/fence/Digest 与旧请求、重复请求的原屏障。
-3. Agent 级主 Service/`-probe` 分别验证 candidate/verified 与业务关路后的控制，Sandbox 验证其独立 Service/分配归属且拒绝跨 Session 路由；原执行恢复/ACK、CA/leaf/token 轮换、响应丢失、Worker/Host 分别重启及回滚均保持原准入和 unknown 语义。证书不能让错误 revision/Session 的后端通过授权。
+3. kubelet readiness probe 的 HTTPS scheme、path/port 及实际 Pod/StatefulSet drift 核验保持一致；HTTP 降级、额外 handler 或覆盖 host/header 必须拒绝。kubelet 成功不替代 Worker 的 CA/hostname 校验和 signed readiness。Agent 级主 Service/`-probe` 分别验证 candidate/verified 与业务关路后的控制，Sandbox 验证其独立 Service/分配归属且拒绝跨 Session 路由；原执行恢复/ACK、CA/leaf/token 轮换、响应丢失、Worker/Host 分别重启及回滚均保持原准入和 unknown 语义。证书不能让错误 revision/Session 的后端通过授权。
 
 Agent/客户端到 Connection 的 MCP/API 使用 Connection 的独立身份和契约，不经过 Platform API。平台不读取 Connection Catalog，不持有其目录读取或代调用 workload credential。
 

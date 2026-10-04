@@ -128,19 +128,21 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，Ru
 使用独立 Workload Readiness Grant。Host 必须在调用 Driver 的无副作用 capability 读取前
 校验本机 Workload 绑定；此路径不使用业务 Session，也不开放任务提交或事件查询。
 
-### 4.1 内部 Runtime Service 与 TLS 映射提案
+### 4.1 内部 Runtime Service 与 TLS 映射
 
-本节为 #1164 的 **Proposed / 未批准** 差额，只细化[工程 Spec §8.3](SPEC-agent-infra-M1-engineering-architecture.md#83-内部接口)，不授权实现或部署。TLS 跟随已有 Workload 拓扑，不增加或合并 Service、监听端口或 Manifest 字段；部署材料不来自镜像 Manifest 或 Owner 配置。
+本节细化[工程 Spec §8.3](SPEC-agent-infra-M1-engineering-architecture.md#83-内部接口)；机制已接收、待评审合并，尚未部署。受控实现与真实材料的分阶段门禁引用该节。TLS 跟随已有 Workload 拓扑，不增加或合并 Service、监听端口或 Manifest 字段；部署材料不来自镜像 Manifest 或 Owner 配置。
 
 **Agent 级 candidate/verified Workload。** 令 `N = agent-` 加可信 `agentId` 的 SHA-256 十六进制前 32 位（`workloadResourceNameV1`，见[现有命名函数](../../apps/platform-worker/src/kubernetes-runtime-comparison.ts)），`NS = workloadInput.policy.namespace`。`P` 取对应 candidate/verified deployment 的 `service.port`；readiness 取该候选 Manifest 的同一端口。
 
-| 路径 | 已有 origin（HTTP，尚未满足 TLS 契约） | TLS 提案与不变门禁 |
+| 路径 | 已有 origin（HTTP，尚未满足 TLS 契约） | TLS 契约与不变门禁 |
 | --- | --- | --- |
 | business | `http://N.NS.svc:P` | `https://N.NS.svc:P`；只在 ready 时消费 candidate，仍校验实际 ownership、Workload readiness 和新 Turn 容量 |
 | verified control | `http://N-probe.NS.svc:P` | `https://N-probe.NS.svc:P`；取原 verified deployment，`observeVerifiedControl` 成功后才返回路由，保留独立控制 Grant |
 | candidate health / signed readiness | `http://N-probe.NS.svc:P` | 同名 HTTPS origin；分别验证原 `health.path` 和 `/internal/runtime/v1/readiness`，不授予业务准入 |
 
 准确消费者为 `createProductionConversationRuntimeResolverV2`（[conversation resolver](../../apps/platform-worker/src/conversation-deployment.ts)）、`createWorkloadRuntimeProbeV1`（[readiness 装配](../../apps/platform-worker/src/workload-deployment.ts)）及 `createKubernetesRuntimeAdapterV1`（[Kubernetes Adapter](../../apps/platform-worker/src/kubernetes-runtime-adapter.ts)）。Adapter 已创建 `N` 和 `N-probe` 两个 ClusterIP Service，共用 Workload 的 `service.port`；候选阶段 `N` selector 为 `closed`，`N-probe` 选中候选 Pod。`closeAgentAtFence`（[cleanup](../../apps/platform-worker/src/kubernetes-runtime-cleanup.ts)）关闭主路由时保留合规的内部 probe 路由；probe 漂移可被移除，不能保证任意故障下 control 都可达。verified 观测失败必须继续 unavailable/unknown，不能把候选误当旧执行目标。
+
+**kubelet 探针与 Worker 验证分离。** 当前 Adapter 的 `readinessProbe.httpGet` 未设置 `scheme`，默认 HTTP；`hasDriftedPodSpec`（[Pod drift 校验](../../apps/platform-worker/src/kubernetes-runtime-pod-validation.ts)）也把缺失值归为 `HTTP` 并按 HTTP 比较。启用 Host TLS 时须同时把期望探针设为 `scheme: HTTPS` 并对实际 StatefulSet/Pod 核验 scheme、原 path/port 与禁止覆盖项；只改 Host 或 Worker URL 会让健康检查与 drift 判定不一致。该 kubelet 探针只判断容器可用性，不携带 service token 或 Grant，不增加明文健康端口。[Kubernetes HTTPS probe 不验证证书](https://kubernetes.io/docs/concepts/workloads/pods/probes/)，其成功不能证明 CA/SAN、服务身份或执行授权；promotion 和 Runtime 调用仍须经过 Worker 严格 TLS 及 signed readiness，不给 kubelet 承担这些认证职责。
 
 同一 Agent 级 Host leaf 的 DNS SAN 覆盖 `N.NS.svc` 和 `N-probe.NS.svc`，每次连接仍只核实际 origin 的 hostname；不以 `.svc.cluster.local`、Pod IP、用户 Ingress 域名或 wildcard 替代这两个实际名称。可信部署将两个名称绑定同一 Agent/namespace；leaf 不证明 candidate/verified revision，原本机绑定及路由观测不得省略。这里补齐的是既有 Kubernetes 资源映射，不是新增双 Runtime 或双服务供应系统。
 
