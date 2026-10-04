@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { get as httpsGet } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,6 +18,7 @@ import {
 	signV3Fixture,
 	submitV3Fixture,
 } from "../../../packages/agent-runtime/src/grant-v2-fixture.test-support.js";
+import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
@@ -330,9 +332,11 @@ describe("RuntimeHost environment assembly", () => {
 	);
 	it("reports the consumed configuration revision in readiness metadata", async () => {
 		const runtime = await assembleRuntimeHost(await environment());
+		const material = await runtimeTlsFixture();
 		const ready = Promise.withResolvers<string>();
 		const server = startRuntimeHost({
 			...runtime,
+			tls: { ...material, serviceDnsNames: ["localhost"] },
 			port: 0,
 			configVersion: "active-revision-17",
 			log: ready.resolve,
@@ -342,11 +346,28 @@ describe("RuntimeHost environment assembly", () => {
 				status: "ready",
 				configVersion: "active-revision-17",
 			});
+			const address = server.address();
+			if (!address || typeof address === "string")
+				throw new Error("Missing test port");
+			const status = await new Promise<number | undefined>(
+				(resolve, reject) => {
+					httpsGet(
+						`https://localhost:${address.port}/healthz`,
+						{ ca: material.ca },
+						(response) => {
+							response.resume();
+							response.once("end", () => resolve(response.statusCode));
+						},
+					).once("error", reject);
+				},
+			);
+			expect(status).toBe(200);
 		} finally {
 			await new Promise<void>((resolve, reject) =>
 				server.close((error) => (error ? reject(error) : resolve())),
 			);
 			await runtime.close();
+			await material.cleanup();
 		}
 	});
 
