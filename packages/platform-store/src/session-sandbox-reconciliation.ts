@@ -7,6 +7,7 @@ import {
 import {
 	type AgentManagementStateV1,
 	canDrainSessionSandboxComputeV1,
+	canPrepareSessionSandboxReplacementV1,
 	capturePersonalApiTaskAuthorizationBoundaryV1,
 	captureTaskApplicationAuthorizationBoundaryV1,
 	captureTaskAuthorizationBoundaryV1,
@@ -137,7 +138,6 @@ async function lockedContext(
 			!authority ||
 			!source ||
 			!source.policy ||
-			lifecycle.stopReceipt !== null ||
 			authority.kind !== "management" ||
 			authority.applicationId !== management.applicationId ||
 			!Number.isSafeInteger(authority.managementRevision) ||
@@ -145,7 +145,6 @@ async function lockedContext(
 			authority.managementFence !== management.fence ||
 			authority.workloadRevision !== management.workloadRevision ||
 			authority.targetDesiredState !== management.desiredState ||
-			allocation.desired_state !== "stopped" ||
 			!isDeepStrictEqual(
 				{ ...source.sandbox, generation: sandbox.generation },
 				sandbox,
@@ -155,30 +154,53 @@ async function lockedContext(
 			!Number.isSafeInteger(source.resourceFence) ||
 			source.resourceFence < 1 ||
 			source.resourceFence >= Number(allocation.resource_fence) ||
-			source.policy.namespace !== policy.namespace ||
-			!isDeepStrictEqual(source.policy, allocation.resource_policy) ||
-			!isDeepStrictEqual(source.observation, allocation.resource_observation)
+			source.policy.namespace !== policy.namespace
 		)
 			return null;
 		const executions = await transaction<
-			{ status: string }[]
-		>`select status from platform.conversation_executions where conversation_id = ${sandbox.sessionId}`;
-		return {
-			outbox,
-			sandbox,
-			allocation,
-			authorization: null,
-			purpose: "drain" as const,
-			lifecycle,
-			drainComputeAllowed: canDrainSessionSandboxComputeV1(
-				executions.map((execution) => execution.status),
-			),
-			policy: source.policy,
-			deployment: null,
-		};
+			{ status: string; delivery_fence: string }[]
+		>`select status, delivery_fence::text from platform.conversation_executions where conversation_id = ${sandbox.sessionId}`;
+		if (lifecycle.stopReceipt) {
+			const pending =
+				await transaction`select 1 from platform.conversation_generation_tombstones where conversation_id = ${sandbox.sessionId} and status = 'pending' limit 1`;
+			if (
+				!canPrepareSessionSandboxReplacementV1({
+					sandbox,
+					resourceFence: Number(allocation.resource_fence),
+					lifecycle,
+					observation: allocation.resource_observation,
+					generationBarrierPending: pending.length > 0,
+					executions: executions.map((execution) => ({
+						status: execution.status,
+						deliveryFence: Number(execution.delivery_fence),
+					})),
+				})
+			)
+				return null;
+		} else {
+			if (
+				allocation.desired_state !== "stopped" ||
+				!isDeepStrictEqual(source.policy, allocation.resource_policy) ||
+				!isDeepStrictEqual(source.observation, allocation.resource_observation)
+			)
+				return null;
+			return {
+				outbox,
+				sandbox,
+				allocation,
+				authorization: null,
+				purpose: "drain" as const,
+				lifecycle,
+				drainComputeAllowed: canDrainSessionSandboxComputeV1(
+					executions.map((execution) => execution.status),
+				),
+				policy: source.policy,
+				deployment: null,
+			};
+		}
 	}
 	if (
-		allocation.desired_state !== "running" ||
+		(allocation.desired_state !== "running" && !lifecycle?.stopReceipt) ||
 		conversation.authorization_revision !== agent.authorization_revision ||
 		management.status !== "available" ||
 		management.desiredState !== "running"
@@ -268,7 +290,7 @@ async function lockedContext(
 		policy: currentPolicy,
 		deployment,
 		purpose: "prepare" as const,
-		lifecycle: null,
+		lifecycle,
 		drainComputeAllowed: false,
 	};
 }
@@ -307,7 +329,12 @@ export async function claimSandboxReconciliation(
 	if (!lease?.eligible) return null;
 	if (
 		allocation.resource_policy &&
-		!isDeepStrictEqual(allocation.resource_policy, context.policy)
+		!isDeepStrictEqual(allocation.resource_policy, context.policy) &&
+		!(
+			context.purpose === "prepare" &&
+			context.lifecycle?.stopReceipt &&
+			allocation.desired_state === "stopped"
+		)
 	)
 		return null;
 	const resourceFence = Math.max(1, Number(allocation.resource_fence));
@@ -317,10 +344,28 @@ export async function claimSandboxReconciliation(
 		!Number.isSafeInteger(deliveryFence)
 	)
 		throw new TypeError("Invalid Sandbox fence");
+	const claimedLifecycle =
+		context.purpose === "prepare" && context.lifecycle?.stopReceipt
+			? {
+					...context.lifecycle,
+					preparation: { generation: sandbox.generation, resourceFence },
+				}
+			: context.lifecycle;
+	if (!isDeepStrictEqual(claimedLifecycle, context.lifecycle)) {
+		await transaction`update platform.outbox_items set payload = ${transaction.json(
+			{
+				schemaVersion: 1,
+				conversationId: sandbox.sessionId,
+				sessionGeneration: sandbox.generation,
+				lifecycle: claimedLifecycle,
+			} as unknown as Parameters<typeof transaction.json>[0],
+		)}
+			where id = ${input.itemId}`;
+	}
 	await transaction`update platform.outbox_items set status = 'processing', lease_owner = ${input.workerId},
 		lease_expires_at = clock_timestamp() + (${input.leaseDurationMs}::bigint * interval '1 millisecond'),
 		delivery_fence = ${deliveryFence}, attempt_count = attempt_count + 1, updated_at = clock_timestamp() where id = ${input.itemId}`;
-	await transaction`update platform.session_sandbox_allocations set resource_fence = ${resourceFence}, resource_policy = ${transaction.json(context.policy as unknown as Parameters<typeof transaction.json>[0])},
+	await transaction`update platform.session_sandbox_allocations set resource_fence = ${resourceFence}, desired_state = ${context.purpose === "prepare" ? "running" : "stopped"}, resource_policy = ${transaction.json(context.policy as unknown as Parameters<typeof transaction.json>[0])},
 		status = case when status = 'unknown' then 'unknown' else 'applying' end, updated_at = clock_timestamp() where sandbox_id = ${sandbox.sandboxId}`;
 	return {
 		schemaVersion: 1,
@@ -332,10 +377,10 @@ export async function claimSandboxReconciliation(
 		sandbox,
 		resourceFence,
 		resourceStatus: allocation.status === "unknown" ? "unknown" : "applying",
-		desiredState: allocation.desired_state,
+		desiredState: context.purpose === "prepare" ? "running" : "stopped",
 		authorization,
 		purpose: context.purpose,
-		lifecycle: context.lifecycle,
+		lifecycle: claimedLifecycle,
 		drainComputeAllowed: context.drainComputeAllowed,
 		policy: context.policy,
 		deployment: context.deployment,
@@ -434,8 +479,12 @@ export async function recordSandboxObservation(
 					observation,
 				);
 	const unknown = decision.status === "unknown";
+	const continuePreparation =
+		decision.finished &&
+		context.purpose === "drain" &&
+		context.lifecycle?.authority.targetDesiredState === "running";
 	const recorded = await transaction`update platform.outbox_items
-		set status = ${decision.finished ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
+		set status = ${decision.finished && !continuePreparation ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
 		available_at = clock_timestamp() + interval '1 second', updated_at = clock_timestamp()
 		where id = ${claim.itemId} and lease_expires_at > clock_timestamp() returning id`;
 	if (recorded.length !== 1) return "stale";

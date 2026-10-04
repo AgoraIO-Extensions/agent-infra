@@ -51,6 +51,11 @@ export interface SessionSandboxLifecycleV1 {
 	};
 	readonly source: SessionSandboxSourceV1;
 	readonly stopReceipt: SessionSandboxStopReceiptV1 | null;
+	/** Set atomically before any replacement mutation can be authorized. */
+	readonly preparation?: {
+		readonly generation: number;
+		readonly resourceFence: number;
+	};
 }
 
 export function planSessionSandboxManagementTransitionV1(input: {
@@ -72,7 +77,10 @@ export function planSessionSandboxManagementTransitionV1(input: {
 	// Once new resources have been observed, they become the next source. Until
 	// then a later management intent cannot erase the original drain obligation.
 	const retained =
-		previous && input.status !== "ready" && input.status !== "observed";
+		previous &&
+		!previous.preparation &&
+		input.status !== "ready" &&
+		input.status !== "observed";
 	const source = retained ? previous.source : (input.sourceSnapshot ?? current);
 	if (
 		source.sandbox.sandboxId !== current.sandbox.sandboxId ||
@@ -212,5 +220,63 @@ export function canDrainSessionSandboxComputeV1(
 ): boolean {
 	return executionStatuses.every((status) =>
 		["completed", "failed", "cancelled"].includes(status),
+	);
+}
+
+/** A persisted source-stop proof permits preparation, never business execution. */
+export function canPrepareSessionSandboxReplacementV1(input: {
+	readonly sandbox: SessionSandboxBindingV1;
+	readonly resourceFence: number;
+	readonly lifecycle: SessionSandboxLifecycleV1;
+	readonly observation: SessionSandboxObservationV1 | null;
+	readonly executions: readonly {
+		readonly status: string;
+		readonly deliveryFence: number;
+	}[];
+	readonly generationBarrierPending: boolean;
+}): boolean {
+	const { sandbox, resourceFence, lifecycle, observation } = input;
+	const receipt = lifecycle.stopReceipt;
+	if (
+		!receipt ||
+		(lifecycle.preparation &&
+			(lifecycle.preparation.generation !== sandbox.generation ||
+				lifecycle.preparation.resourceFence !== resourceFence)) ||
+		lifecycle.authority.targetDesiredState !== "running" ||
+		input.generationBarrierPending ||
+		!Number.isSafeInteger(receipt.targetGeneration) ||
+		receipt.targetGeneration < lifecycle.source.sandbox.generation ||
+		receipt.targetGeneration > sandbox.generation ||
+		!Number.isSafeInteger(receipt.targetResourceFence) ||
+		receipt.targetResourceFence <= lifecycle.source.resourceFence ||
+		receipt.targetResourceFence > resourceFence ||
+		!input.executions.every(
+			({ status, deliveryFence }) =>
+				["completed", "failed", "cancelled"].includes(status) ||
+				(["submitted", "waiting"].includes(status) && deliveryFence === 0),
+		)
+	)
+		return false;
+	if (
+		!decideSessionSandboxDrainObservationV1({
+			sandbox: { ...sandbox, generation: receipt.targetGeneration },
+			resourceFence: receipt.targetResourceFence,
+			lifecycle,
+			observation: {
+				status: "stopped",
+				resources: [receipt.retainedPVC],
+				sourceStop: receipt,
+			},
+		}).finished
+	)
+		return false;
+	const pvc = observation?.resources.find(
+		(resource) => resource.kind === "PersistentVolumeClaim",
+	);
+	return (
+		!!pvc &&
+		pvc.namespace === receipt.retainedPVC.namespace &&
+		pvc.name === receipt.retainedPVC.name &&
+		pvc.uid === receipt.retainedPVC.uid
 	);
 }

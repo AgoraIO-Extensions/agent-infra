@@ -146,7 +146,8 @@ export function decideSessionSandboxObservationV1(
 	claim: Pick<
 		SessionSandboxReconciliationClaimV1,
 		"sandbox" | "policy" | "desiredState"
-	>,
+	> &
+		Partial<Pick<SessionSandboxReconciliationClaimV1, "lifecycle">>,
 	previous: SessionSandboxObservationV1 | null,
 	observation: SessionSandboxObservationV1,
 ) {
@@ -163,7 +164,14 @@ export function decideSessionSandboxObservationV1(
 						current.uid === old.uid,
 				),
 		) ?? false;
-	const unknown = observation.status === "unknown" || identityChanged;
+	const resurrectedSource =
+		claim.lifecycle?.stopReceipt?.removed.some(({ resource: old }) =>
+			observation.resources.some(
+				(current) => current.kind === old.kind && current.uid === old.uid,
+			),
+		) ?? false;
+	const unknown =
+		observation.status === "unknown" || identityChanged || resurrectedSource;
 	return {
 		status: unknown ? ("unknown" as const) : observation.status,
 		observation: unknown && previous ? previous : observation,

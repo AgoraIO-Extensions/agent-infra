@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createAgentManagementV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -18,6 +19,7 @@ import {
 import { createConversationEventUseCaseV1 } from "../../platform-core/src/conversation-events.ts";
 import { createConversationExecutionUseCaseV1 } from "../../platform-core/src/conversation-execution.ts";
 import { FakeConversationRuntimeHostV1 } from "../../platform-core/src/fake-conversation-runtime-host.ts";
+import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
 import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.ts";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.ts";
@@ -412,6 +414,274 @@ async function dispatchState(work: { itemId: string; executionId: string }) {
 }
 
 describe("PostgreSQL Conversation dispatch Store", () => {
+	it.each(["recover", "stop-during-prepare"] as const)(
+		"rebuilds the same allocation and PVC only after durable stop proof and fresh business authority (%s)",
+		async (mode) => {
+			const work = await seed("conversation.turn.submit.v1", {
+				executionStatus: "completed",
+			});
+			const [workload] =
+				await client`select state from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+			const verified = workload!.state;
+			await client`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent-dispatch','owner-a',now()),('agent-dispatch','actor-dispatch',now())`;
+			const policy = {
+				namespace: workloadTestPolicy.namespace,
+				resourceConfigurationHash:
+					workloadResourceConfigurationHashV1(workloadTestPolicy),
+			};
+			const sourcePolicy = {
+				...policy,
+				configurationRevision: 4,
+				workloadRevision: 4,
+				managementFence: 4,
+				imageDigest: verified.verified.deployment.imageDigest,
+			};
+			const [allocation] =
+				await client`select * from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`;
+			const originalResources = allocation!.resource_observation.resources.map(
+				(resource: {
+					kind: string;
+					name: string;
+					uid: string;
+					resourceVersion: string;
+				}) => ({ ...resource, namespace: policy.namespace }),
+			);
+			await client`update platform.session_sandbox_allocations set resource_policy = ${client.json(sourcePolicy)}, resource_observation = ${client.json({ status: "ready", resources: originalResources })} where conversation_id = ${work.conversationId}`;
+			const managementStore = new PostgresAgentManagementTransactionV1({
+				databaseUrl,
+			});
+			const management = createAgentManagementV1(managementStore);
+			let active = true;
+			const store = new PostgresConversationDispatchStoreV1({
+				databaseUrl,
+				sandboxPolicy: policy,
+				userDirectory: {
+					async resolveUser(userId) {
+						return {
+							schemaVersion: 1,
+							userId,
+							accountStatus: active ? "active" : "disabled",
+							organizationIds: [],
+							authorizationRevision: "directory-current",
+						};
+					},
+				},
+			});
+			const actor = {
+				schemaVersion: 1 as const,
+				userId: "owner-a",
+				accountStatus: "active" as const,
+				organizationIds: [],
+				isAdministrator: false,
+			};
+			const request = {
+				schemaVersion: 1 as const,
+				itemId: `conversation:sandbox:${work.conversationId}:1`,
+				workerId: "replacement-worker",
+				leaseDurationMs: 30_000,
+			};
+			try {
+				expect(
+					await management.executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: "stop_agent",
+							agentId: "agent-dispatch",
+							expectedRevision: 1,
+							idempotencyKey: "stop-for-rebuild",
+							requestId: "stop",
+							traceId: "stop",
+						},
+						actor,
+					),
+				).toMatchObject({ outcome: "accepted" });
+				const drain = await store.claimSandboxReconciliation(request);
+				if (!drain?.lifecycle?.source.observation)
+					throw new Error("Expected drain source");
+				const resources = drain.lifecycle.source.observation.resources;
+				const pvc = resources.find(
+					(resource) => resource.kind === "PersistentVolumeClaim",
+				)!;
+				const receipt = {
+					schemaVersion: 1 as const,
+					sandboxId: drain.sandbox.sandboxId,
+					sessionId: drain.sandbox.sessionId,
+					sourceGeneration: drain.lifecycle.source.sandbox.generation,
+					sourceResourceFence: drain.lifecycle.source.resourceFence,
+					targetGeneration: drain.sandbox.generation,
+					targetResourceFence: drain.resourceFence,
+					removed: resources
+						.filter((resource) => resource.kind !== "PersistentVolumeClaim")
+						.map((resource) => ({
+							resource,
+							preconditions: {
+								uid: resource.uid,
+								resourceVersion: resource.resourceVersion,
+							},
+							absence: {
+								kind: resource.kind,
+								namespace: resource.namespace,
+								name: resource.name,
+							},
+						})),
+					retainedPVC: pvc,
+				};
+				expect(
+					await store.recordSandboxObservation({
+						claim: drain,
+						observation: {
+							status: "stopped",
+							resources: [pvc],
+							sourceStop: receipt,
+						},
+					}),
+				).toBe("committed");
+				expect(
+					await management.executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: "restart_agent",
+							agentId: "agent-dispatch",
+							expectedRevision: 2,
+							idempotencyKey: "restart-after-stop",
+							requestId: "restart",
+							traceId: "restart",
+						},
+						actor,
+					),
+				).toMatchObject({ outcome: "accepted" });
+				// Original verified Workload is a controlled receiver fixture, not runtime acceptance.
+				const target = structuredClone(verified);
+				target.sourceLifecycleRevision = 6;
+				target.fence = 6;
+				target.revision = 6;
+				target.candidate.deployment.workloadRevision = 6;
+				target.candidate.deployment.fence = 6;
+				target.verified.deployment.workloadRevision = 6;
+				target.verified.deployment.fence = 6;
+				await client`update platform.workload_reconciliations set revision = 6, state = ${client.json(target)} where agent_id = 'agent-dispatch'`;
+				expect(
+					await management.recordWorkloadObservation({
+						schemaVersion: 1,
+						observation: "service_ready",
+						observationId: "restarted-ready",
+						agentId: "agent-dispatch",
+						expectedRevision: 3,
+						workloadRevision: 6,
+						fence: 6,
+						requestId: "observed",
+						traceId: "observed",
+					}),
+				).toMatchObject({ outcome: "accepted" });
+				active = false;
+				expect(await store.claimSandboxReconciliation(request)).toBeNull();
+				active = true;
+				await client`update platform.conversation_executions set status = 'unknown' where execution_id = ${work.executionId}`;
+				expect(await store.claimSandboxReconciliation(request)).toBeNull();
+				await client`update platform.conversation_executions set status = 'completed' where execution_id = ${work.executionId}`;
+				const replacement = await store.claimSandboxReconciliation(request);
+				if (!replacement?.deployment)
+					throw new Error("Expected authorized replacement preparation");
+				expect(replacement).toMatchObject({
+					purpose: "prepare",
+					desiredState: "running",
+					sandbox: drain.sandbox,
+					resourceFence: 3,
+					previousObservation: { status: "stopped", resources: [pvc] },
+					lifecycle: { source: drain.lifecycle.source, stopReceipt: receipt },
+				});
+				expect(replacement.authorization).not.toBeNull();
+				if (mode === "stop-during-prepare") {
+					expect(
+						await management.executeManagementCommand(
+							{
+								schemaVersion: 1,
+								command: "stop_agent",
+								agentId: "agent-dispatch",
+								expectedRevision: 4,
+								idempotencyKey: "stop-new-source",
+								requestId: "stop-new",
+								traceId: "stop-new",
+							},
+							actor,
+						),
+					).toMatchObject({ outcome: "accepted" });
+					const [stopping] =
+						await client`select payload from platform.outbox_items where id = ${request.itemId}`;
+					expect(stopping?.payload.lifecycle).toMatchObject({
+						source: {
+							resourceFence: replacement.resourceFence,
+							policy: replacement.policy,
+						},
+						stopReceipt: null,
+					});
+					expect(
+						await store.prepareSandboxReconciliation({
+							claim: replacement,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(false);
+					return;
+				}
+				expect(replacement.policy).toMatchObject({
+					managementFence: 6,
+					workloadRevision: 6,
+				});
+				expect(
+					await store.prepareSandboxReconciliation({
+						claim: replacement,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				const newResources = resources.map((resource) =>
+					resource.kind === "PersistentVolumeClaim"
+						? resource
+						: { ...resource, uid: `new-${resource.uid}`, resourceVersion: "2" },
+				);
+				expect(
+					await store.recordSandboxObservation({
+						claim: replacement,
+						observation: {
+							status: "ready",
+							resources: newResources.map((resource) =>
+								resource.kind === "PersistentVolumeClaim"
+									? { ...resource, uid: "foreign-volume" }
+									: resource,
+							),
+						},
+					}),
+				).toBe("unknown");
+				await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+				const retry = await store.claimSandboxReconciliation(request);
+				if (!retry) throw new Error("Expected original replacement retry");
+				expect(
+					await store.recordSandboxObservation({
+						claim: retry,
+						observation: { status: "ready", resources: newResources },
+					}),
+				).toBe("committed");
+				expect(
+					await client`select sandbox_id, workspace_scope, session_generation::int, status from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`,
+				).toEqual([
+					{
+						sandbox_id: allocation!.sandbox_id,
+						workspace_scope: allocation!.workspace_scope,
+						session_generation: 1,
+						status: "ready",
+					},
+				]);
+				expect(
+					await client`select count(*)::int as count from platform.outbox_items where scope_id = ${work.conversationId} and operation = 'conversation.sandbox.reconcile.v1'`,
+				).toEqual([{ count: 1 }]);
+				expect(
+					await client`select status from platform.conversation_executions where execution_id = ${work.executionId}`,
+				).toEqual([{ status: "completed" }]);
+			} finally {
+				await Promise.all([store.close(), managementStore.close()]);
+			}
+		},
+	);
+
 	it("prepares a new Session without an Execution and commits observations only under the current lease and authority", async () => {
 		const verifiedState = await seedCapacityAgent(
 			"agent-dispatch",

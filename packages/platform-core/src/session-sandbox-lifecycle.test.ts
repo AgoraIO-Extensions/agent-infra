@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	canDrainSessionSandboxComputeV1,
+	canPrepareSessionSandboxReplacementV1,
 	decideSessionSandboxDrainObservationV1,
 	type SessionSandboxLifecycleV1,
 	type SessionSandboxStopReceiptV1,
 } from "./session-sandbox-lifecycle.js";
-import type { SessionSandboxObservationV1 } from "./session-sandbox-reconciliation.js";
+import {
+	decideSessionSandboxObservationV1,
+	type SessionSandboxObservationV1,
+} from "./session-sandbox-reconciliation.js";
 
 function fixture() {
 	const sandbox = createSessionSandboxBindingV1(
@@ -248,5 +252,115 @@ describe("original Execution drain eligibility", () => {
 		expect(
 			canDrainSessionSandboxComputeV1(["completed", "failed", "cancelled"]),
 		).toBe(true);
+	});
+});
+
+function replacementFixture() {
+	const input = fixture();
+	return {
+		...input,
+		lifecycle: {
+			...input.lifecycle,
+			authority: {
+				...input.lifecycle.authority,
+				targetDesiredState: "running" as const,
+			},
+			stopReceipt: input.observation.sourceStop!,
+		},
+		executions: [] as { status: string; deliveryFence: number }[],
+		generationBarrierPending: false,
+	};
+}
+
+describe("same Sandbox replacement permission", () => {
+	it("allows only the proved source and retained PVC while preserving new never-dispatched work", () => {
+		const input = replacementFixture();
+		expect(canPrepareSessionSandboxReplacementV1(input)).toBe(true);
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				...input,
+				executions: [
+					{ status: "waiting", deliveryFence: 0 },
+					{ status: "submitted", deliveryFence: 0 },
+				],
+			}),
+		).toBe(true);
+	});
+	it.each(["processing", "unknown", "invalid", "waiting", "submitted"])(
+		"blocks occupied or previously dispatched %s work",
+		(status) => {
+			expect(
+				canPrepareSessionSandboxReplacementV1({
+					...replacementFixture(),
+					executions: [{ status, deliveryFence: 1 }],
+				}),
+			).toBe(false);
+		},
+	);
+	it("requires the original generation barrier and an immutable accepted stop proof", () => {
+		const input = replacementFixture();
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				...input,
+				generationBarrierPending: true,
+			}),
+		).toBe(false);
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				...input,
+				lifecycle: { ...input.lifecycle, stopReceipt: null },
+			}),
+		).toBe(false);
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				...input,
+				lifecycle: {
+					...input.lifecycle,
+					preparation: { generation: 1, resourceFence: 999 },
+				},
+			}),
+		).toBe(false);
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				...input,
+				lifecycle: {
+					...input.lifecycle,
+					stopReceipt: {
+						...input.lifecycle.stopReceipt,
+						targetResourceFence: 999,
+					},
+				},
+			}),
+		).toBe(false);
+	});
+	it("rejects a swapped PVC and an old deleted compute UID", () => {
+		const input = replacementFixture();
+		expect(
+			canPrepareSessionSandboxReplacementV1({
+				...input,
+				observation: {
+					...input.observation,
+					resources: [
+						{ ...input.observation.resources[0]!, uid: "another-volume" },
+					],
+				},
+			}),
+		).toBe(false);
+		const source = input.lifecycle.source;
+		const decision = decideSessionSandboxObservationV1(
+			{
+				sandbox: input.sandbox,
+				policy: source.policy!,
+				desiredState: "running",
+				lifecycle: input.lifecycle,
+			},
+			input.observation,
+			{ status: "ready", resources: source.observation!.resources },
+		);
+		expect(decision).toMatchObject({
+			status: "unknown",
+			finished: false,
+			observation: input.observation,
+		});
 	});
 });

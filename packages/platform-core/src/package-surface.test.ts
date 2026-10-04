@@ -57,6 +57,7 @@ describe("platform-core package surface", () => {
 			"WorkloadPreflightRejectedErrorV1",
 			"bindInputFileV1",
 			"canDrainSessionSandboxComputeV1",
+			"canPrepareSessionSandboxReplacementV1",
 			"capturePersonalApiTaskAuthorizationBoundaryV1",
 			"captureTaskApplicationAuthorizationBoundaryV1",
 			"captureTaskAuthorizationBoundaryV1",
