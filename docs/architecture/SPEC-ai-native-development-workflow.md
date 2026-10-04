@@ -436,7 +436,7 @@ cycle、hash、blocker、triage 和所有权，不能要求该 Issue 同时处�
   经批准的 `plain-diff-derived` 例外只能用于 lockfile plain-diff 输入边界，并遵守
   [ADR-0014](../adr/ADR-0014-pr-agent-derived-runtime.md) 的固定 identity；没有完整 identity
   或任一字段不匹配时，Analysis 与 Coverage fail closed，并回退为当前官方 image + Coverage
-  failure。
+  failure；当前 run 不切换 identity 或重跑模型，后续 run 才能按 ADR 受控回滚到官方 image。
   Analysis 使用官方 CLI 的 `--diff-file` 输入，将可信 SHA 范围的统一 diff 交给原生 reviewer；
   在无 Git 工作树的目录运行 patch-only 模式，保留官方 JSON 日志供 Coverage 判定，
   避免混入默认分支工作树的文件内容；不从本轮范围之外的文件推断实现缺失。
