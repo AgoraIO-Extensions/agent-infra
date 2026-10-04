@@ -306,7 +306,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 					where scope_type = 'conversation' and payload->>'executionId' = ${input.executionId}
 						and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
 				`;
-				// Waiting dispatch and cancellation share the original Outbox mutex.
+				// Waiting dispatch and cancellation lock Conversation before the original Outbox.
 				const outbox =
 					initialExecution?.status === "waiting" && original
 						? await lockOutbox(transaction, original.id)

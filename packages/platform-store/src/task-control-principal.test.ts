@@ -306,41 +306,39 @@ describe("original system control lock order", () => {
 
 	for (const reason of ["stop", "authorization_revoked"] as const) {
 		it.each(["processing", "completed"] as const)(
-			`rejects waiting ${reason} after Outbox wait changes to %s before locking Conversation`,
+			`rejects waiting ${reason} after Conversation wait changes to %s`,
 			async (status) => {
 				await waitingTask("application");
 				const before = await waitingSnapshot();
 				const conversationOwner = postgres(database.databaseUrl, { max: 1 });
-				const outboxOwner = postgres(database.databaseUrl, { max: 1 });
+
 				let pending: Promise<void> | undefined;
 				let outcome: { error?: unknown; result?: unknown } | undefined;
 				try {
 					await conversationOwner.begin(async (conversationTransaction) => {
 						await conversationTransaction`select id from platform.conversations where id = 'conversation' for update`;
-						await outboxOwner.begin(async (outboxTransaction) => {
-							const [owner] = await outboxTransaction<{ pid: number }[]>`
-								select pg_backend_pid() as pid
-								`;
-							if (!owner) throw new Error("Missing original Outbox lock owner");
-							await outboxTransaction`select id from platform.outbox_items where id = 'conversation:turn:execution' for update`;
-							pending = control(reason).then(
-								(result) => {
-									outcome = { result };
-								},
-								(error: unknown) => {
-									outcome = { error };
-								},
-							);
-							await waitForBlockedControl(owner.pid, "platform.outbox_items");
-							await outboxTransaction`update platform.conversation_executions set status = ${status} where execution_id = 'execution'`;
-						});
-						// Conversation stays locked until the original waiting route fails closed.
-						await vi.waitFor(() =>
-							expect(outcome?.error).toBeInstanceOf(
-								TaskAuthorizationStoreError,
-							),
+						const [owner] = await conversationTransaction<
+							{ pid: number }[]
+						>`select pg_backend_pid() as pid`;
+						if (!owner) throw new Error("Missing Conversation lock owner");
+						pending = control(reason).then(
+							(result) => {
+								outcome = { result };
+							},
+							(error: unknown) => {
+								outcome = { error };
+							},
 						);
+						await waitForBlockedControl(
+							owner.pid,
+							"from platform.conversations",
+						);
+						// Control cannot hold Outbox while waiting for Conversation.
+						await conversationTransaction`select id from platform.outbox_items where id = 'conversation:turn:execution' for update`;
+						await conversationTransaction`update platform.conversation_executions set status = ${status} where execution_id = 'execution'`;
 					});
+					await pending;
+					expect(outcome?.error).toBeInstanceOf(TaskAuthorizationStoreError);
 					expect(await waitingSnapshot()).toEqual({
 						...before,
 						executions: before.executions.map((execution) => ({
@@ -350,7 +348,7 @@ describe("original system control lock order", () => {
 					});
 				} finally {
 					await pending;
-					await Promise.all([conversationOwner.end(), outboxOwner.end()]);
+					await conversationOwner.end();
 				}
 			},
 		);
