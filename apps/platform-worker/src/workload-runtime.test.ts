@@ -3345,7 +3345,7 @@ it.each(["unchanged", "uid", "selector", "port", "fence"] as const)(
 			return;
 		}
 		await expect(resolution).resolves.toMatchObject({
-			baseUrl: `http://${sandbox.resourceName}.${sourcePolicy.namespace}.svc:${verifiedDeployment.service.port}`,
+			baseUrl: `https://${sandbox.resourceName}.${sourcePolicy.namespace}.svc:${verifiedDeployment.service.port}`,
 		});
 	},
 );

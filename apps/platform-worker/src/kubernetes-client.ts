@@ -32,6 +32,11 @@ export interface WorkerKubernetesClientV1 {
 	create<T extends KubernetesObject>(object: T): Promise<T>;
 	replace<T extends KubernetesObject>(object: T): Promise<T>;
 	delete(object: KubernetesObject): Promise<void>;
+	/**
+	 * Conditional delete result used by durable Session Sandbox cleanup.
+	 * `absent` means the API returned 404; it is not a DELETE acknowledgement.
+	 */
+	deleteResult?(object: KubernetesObject): Promise<"acknowledged" | "absent">;
 }
 
 export class WorkloadKubernetesError extends Error {
@@ -138,6 +143,9 @@ export function createWorkerKubernetesClientV1(
 			return operation(() => api.replace(object));
 		},
 		async delete(object) {
+			await this.deleteResult?.(object);
+		},
+		async deleteResult(object) {
 			check(object);
 			if (!object.metadata?.uid || !object.metadata.resourceVersion)
 				throw new WorkloadKubernetesError("policy");
@@ -148,7 +156,7 @@ export function createWorkerKubernetesClientV1(
 					resourceVersion: object.metadata.resourceVersion,
 				},
 			};
-			await operation(async () => {
+			return operation(async () => {
 				try {
 					await api.delete(
 						object,
@@ -159,8 +167,10 @@ export function createWorkerKubernetesClientV1(
 						undefined,
 						options,
 					);
+					return "acknowledged" as const;
 				} catch (error) {
-					if (status(error) !== 404) throw error;
+					if (status(error) === 404) return "absent" as const;
+					throw error;
 				}
 			});
 		},
