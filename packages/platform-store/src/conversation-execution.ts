@@ -101,6 +101,11 @@ import {
 	requireCurrentPersonalApiTaskAdmissionV1,
 	resolvePersonalApiTaskAdmissionAuthorityV1,
 } from "./personal-api-task-authorization.js";
+import {
+	type RelayKeyVersionBindingV1,
+	type RelayKeyVersionCiphertextV1,
+	readRelayKeyVersionInTransaction,
+} from "./relay-key-versions.js";
 import { insertSessionSandboxBinding } from "./session-sandbox.js";
 import { writeTaskApiAuditV1 } from "./task-api-audit.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
@@ -124,9 +129,7 @@ export class PostgresConversationExecutionTransactionV1
 	readonly #client: ReturnType<typeof postgres> | undefined;
 	readonly #existingTransaction: Transaction | undefined;
 	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
-	readonly #acceptedKeyReads = new Set<
-		Promise<AcceptedExecutionKeyProjectionV4 | null>
-	>();
+	readonly #acceptedKeyReads = new Set<Promise<unknown>>();
 	#acceptedKeyClosing = false;
 
 	constructor(
@@ -163,6 +166,26 @@ export class PostgresConversationExecutionTransactionV1
 		if (this.#acceptedKeyClosing) unavailable();
 		const pending = this.#transaction((transaction) =>
 			readAcceptedExecutionKeyInTransactionV4(transaction, request),
+		);
+		this.#acceptedKeyReads.add(pending);
+		try {
+			return await pending;
+		} finally {
+			this.#acceptedKeyReads.delete(pending);
+		}
+	}
+
+	/**
+	 * Reads only the immutable ciphertext tuple pinned by an accepted Execution.
+	 * Callers must obtain the accepted projection first; this method never follows
+	 * a subject's mutable current-version alias.
+	 */
+	async readCiphertext(
+		binding: RelayKeyVersionBindingV1,
+	): Promise<RelayKeyVersionCiphertextV1 | null> {
+		if (this.#acceptedKeyClosing) unavailable();
+		const pending = this.#transaction((transaction) =>
+			readRelayKeyVersionInTransaction(transaction, binding),
 		);
 		this.#acceptedKeyReads.add(pending);
 		try {

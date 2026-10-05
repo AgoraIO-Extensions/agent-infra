@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import {
 	type RuntimeSubmitTurnRequestV4,
 	RuntimeSubmitTurnRequestV4Schema,
@@ -162,6 +163,49 @@ it.each(["web", "api:user", "api:application"] as const)(
 		});
 	},
 );
+
+it("reads only the accepted ciphertext tuple and fails closed on crossed bindings", async () => {
+	const { store, request } = await accepted();
+	const ciphertext = {
+		schemaVersion: 1,
+		purpose: request.keyBinding.purpose,
+		subjectId: request.keyBinding.subjectId,
+		keyId: request.keyBinding.ciphertextRef,
+		keyVersion: request.keyBinding.version,
+		crypto: {
+			schemaVersion: 1,
+			algorithmVersion: "aes-256-gcm:v1",
+			wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+			wrappingKeyVersion: "wrapping-key-1",
+			aadVersion: "relay-key-aad:v1",
+			dekFingerprint: "a".repeat(64),
+			nonce: Buffer.alloc(12).toString("base64"),
+			ciphertext: Buffer.alloc(16).toString("base64"),
+			authenticationTag: Buffer.alloc(16).toString("base64"),
+			wrappedDek: Buffer.alloc(384).toString("base64"),
+		},
+	};
+	await client`update platform.relay_key_versions set ciphertext=${client.json(ciphertext)}
+		where purpose=${request.keyBinding.purpose} and subject_id=${request.keyBinding.subjectId}
+		and key_id=${request.keyBinding.ciphertextRef} and key_version=${request.keyBinding.version}`;
+
+	await expect(
+		store.readCiphertext({
+			purpose: request.keyBinding.purpose,
+			subjectId: request.keyBinding.subjectId,
+			keyId: request.keyBinding.ciphertextRef,
+			keyVersion: request.keyBinding.version,
+		}),
+	).resolves.toEqual(ciphertext);
+	await expect(
+		store.readCiphertext({
+			purpose: request.keyBinding.purpose,
+			subjectId: request.keyBinding.subjectId,
+			keyId: "other-key",
+			keyVersion: request.keyBinding.version,
+		}),
+	).resolves.toBeNull();
+});
 
 it("rejects crossed principal namespace, Session, Key and operation fences", async () => {
 	const { store, request } = await accepted("api:application");
