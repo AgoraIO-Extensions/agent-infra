@@ -196,6 +196,46 @@ describe("session sandbox workload adapter", () => {
 		).rejects.toMatchObject({ code: "conflict" });
 	});
 
+	it("does not downgrade an acknowledged delete after a later call error", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const observed = await adapter.observe(allocation);
+		const pod = observed.resources.find((resource) => resource.kind === "Pod");
+		if (!pod) throw new Error("Missing Pod observation");
+		const acknowledged: SessionSandboxDeletionProgressV1 = {
+			schemaVersion: 1,
+			state: "delete-requested",
+			deleteAttemptId: "attempt-ack",
+			deleteAttempted: true,
+			deleteCallResult: "acknowledged",
+			sourceGeneration: allocation.generation,
+			resourceFence: allocation.resourceFence,
+			managementFence: 4,
+			resource: pod,
+			preconditions: { uid: pod.uid, resourceVersion: pod.resourceVersion },
+		};
+		const originalDelete = client.delete;
+		client.delete = async (resource) => {
+			if (resource.kind === "Pod") throw new Error("delete transport lost");
+			return originalDelete(resource);
+		};
+		const progress: SessionSandboxDeletionProgressV1[] = [];
+		await expect(
+			adapter.cleanup(allocation, observed.resources, {
+				managementFence: 4,
+				deletionProgress: [acknowledged],
+				recordDeletionProgress: async (entry) => {
+					progress.push(entry);
+					return "committed";
+				},
+			}),
+		).rejects.toThrow("delete transport lost");
+		expect(
+			progress.every((entry) => entry.deleteCallResult === "acknowledged"),
+		).toBe(true);
+	});
+
 	it("creates idempotently and rejects a stale fence or foreign resource", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });

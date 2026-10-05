@@ -740,7 +740,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				try {
 					await options.client.delete(current);
 				} catch (error) {
-					await record(identity, "unknown", "unknown");
+					if (existing?.deleteCallResult !== "acknowledged")
+						await record(identity, "unknown", "unknown");
 					throw error;
 				}
 				await record(identity, "delete-requested", "acknowledged");
@@ -838,7 +839,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				try {
 					await options.client.delete(current);
 				} catch (error) {
-					await record(identity, "unknown", "unknown");
+					if (existing?.deleteCallResult !== "acknowledged")
+						await record(identity, "unknown", "unknown");
 					throw error;
 				}
 				await record(identity, "delete-requested", "acknowledged");
