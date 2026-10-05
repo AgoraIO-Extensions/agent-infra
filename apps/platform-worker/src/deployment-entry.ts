@@ -124,6 +124,7 @@ async function createPrepared(signal: AbortSignal) {
 					signing,
 					serviceToken,
 				}),
+			fetch: workload.fetch,
 		},
 		wecom: wecomDeployment,
 	};
