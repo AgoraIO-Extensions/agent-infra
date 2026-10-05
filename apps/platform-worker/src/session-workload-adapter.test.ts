@@ -259,6 +259,18 @@ describe("session sandbox workload adapter", () => {
 		});
 	});
 
+	it("reports unknown when an owned resource is terminating", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const pod = await client.read("Pod", allocation.podName);
+		if (!pod?.metadata) throw new Error("Missing Pod");
+		pod.metadata.deletionTimestamp = new Date().toISOString();
+		await expect(adapter.observe(allocation)).resolves.toMatchObject({
+			status: "unknown",
+		});
+	});
+
 	it("rejects PVC storage drift", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });

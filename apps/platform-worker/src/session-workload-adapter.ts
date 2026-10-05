@@ -580,6 +580,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					!owned(current, expected, allocation) ||
 					!current.metadata?.uid ||
 					!current.metadata.resourceVersion ||
+					current.metadata.deletionTimestamp ||
 					current.metadata.namespace !== allocation.namespace ||
 					current.metadata.name !== name
 				) {

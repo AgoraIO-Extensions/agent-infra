@@ -193,6 +193,48 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						workloadResourceConfigurationHashV1(workload.policy)
 				)
 					throw new Error();
+				const liveService = await workload.client.read<V1Service>(
+					"Service",
+					service.name,
+				);
+				input.signal.throwIfAborted();
+				const expectedLabels = {
+					"agent-infra.agora.io/agent-id": sandboxResource.sandbox.agentId,
+					"agent-infra.agora.io/session-id": sandboxResource.sandbox.sessionId,
+					"agent-infra.agora.io/sandbox-id": sandboxResource.sandbox.sandboxId,
+					"agent-infra.agora.io/generation": String(
+						sandboxResource.sandbox.generation,
+					),
+				};
+				const livePort = liveService?.spec?.ports?.[0];
+				if (
+					!service.uid ||
+					liveService?.metadata?.uid !== service.uid ||
+					!liveService.metadata.resourceVersion ||
+					liveService.metadata.deletionTimestamp ||
+					liveService.metadata.namespace !== service.namespace ||
+					liveService.metadata.name !== service.name ||
+					liveService.metadata.annotations?.["agent-infra.agora.io/managed"] !==
+						"session-sandbox-v1" ||
+					liveService.metadata.annotations?.["agent-infra.agora.io/fence"] !==
+						String(sandboxResource.resourceFence) ||
+					Object.entries(expectedLabels).some(
+						([key, value]) =>
+							liveService.metadata?.labels?.[key] !== value ||
+							liveService.spec?.selector?.[key] !== value,
+					) ||
+					Object.keys(liveService.spec?.selector ?? {}).length !==
+						Object.keys(expectedLabels).length ||
+					liveService.spec?.type !== "ClusterIP" ||
+					liveService.spec.ports?.length !== 1 ||
+					livePort?.name !== "runtime" ||
+					livePort.port !== deployment.service.port ||
+					livePort.targetPort !== deployment.service.port ||
+					(livePort.protocol !== undefined && livePort.protocol !== "TCP") ||
+					liveService.spec.externalIPs?.length ||
+					liveService.spec.externalName
+				)
+					throw new Error();
 				return {
 					// Session sandboxes use their own Service contract; Agent runtime TLS
 					// policy does not imply that sandbox resources expose TLS.
