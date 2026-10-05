@@ -132,7 +132,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				)
 					throw new Error();
 				return {
-					baseUrl: `http://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
+					baseUrl: `https://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
 				};
@@ -237,9 +237,9 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				)
 					throw new Error();
 				return {
-					// Session sandboxes use their own Service contract; Agent runtime TLS
-					// policy does not imply that sandbox resources expose TLS.
-					baseUrl: `http://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
+					// Session sandboxes use their own Service contract; the bound Service
+					// must still be consumed through the internal HTTPS contract.
+					baseUrl: `https://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
 				};
@@ -367,6 +367,8 @@ export function createProductionSessionSandboxReceiverV1(
 				source.sandbox.generation,
 				source.resourceFence,
 			);
+			if (!recordDeletionProgress)
+				throw new Error("Session Sandbox deletion CAS is unavailable");
 			const stopReceipt = await adapter.cleanup(allocation, sourceResources, {
 				sourceGeneration: source.sandbox.generation,
 				sourceResourceFence: source.resourceFence,
@@ -405,6 +407,8 @@ export function createProductionSessionSandboxReceiverV1(
 		);
 		const previous = claim.previousObservation?.resources ?? [];
 		if (claim.desiredState === "stopped") {
+			if (!recordDeletionProgress)
+				throw new Error("Session Sandbox deletion CAS is unavailable");
 			const stopReceipt = await adapter.cleanup(allocation, previous, {
 				sourceGeneration: claim.sandbox.generation,
 				sourceResourceFence: claim.resourceFence,

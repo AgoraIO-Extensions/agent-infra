@@ -62,7 +62,7 @@ const api = () => {
 			resources.delete(key(object.kind ?? "", object.metadata?.name ?? ""));
 		},
 	};
-	return client;
+	return Object.assign(client, { resources });
 };
 
 const allocation: SessionSandboxAllocationV1 = {
@@ -192,6 +192,7 @@ describe("session sandbox workload adapter", () => {
 			adapter.cleanup(allocation, observed.resources, {
 				managementFence: 4,
 				deletionProgress: [intent],
+				recordDeletionProgress: async () => "committed",
 			}),
 		).rejects.toMatchObject({ code: "conflict" });
 	});
@@ -556,7 +557,9 @@ describe("session sandbox workload adapter", () => {
 		if (!service?.metadata) throw new Error("Missing service");
 		service.metadata.uid = "replacement-service";
 		await expect(
-			adapter.cleanup(allocation, observed.resources),
+			adapter.cleanup(allocation, observed.resources, {
+				recordDeletionProgress: async () => "committed",
+			}),
 		).rejects.toMatchObject({ code: "conflict" });
 	});
 
@@ -566,7 +569,9 @@ describe("session sandbox workload adapter", () => {
 		await adapter.apply(allocation);
 		const observed = await adapter.observe(allocation);
 		await expect(
-			adapter.cleanup(allocation, observed.resources),
+			adapter.cleanup(allocation, observed.resources, {
+				recordDeletionProgress: async () => "committed",
+			}),
 		).resolves.toMatchObject({
 			schemaVersion: 1,
 			sandboxId: allocation.sandboxId,
@@ -625,5 +630,107 @@ describe("session sandbox workload adapter", () => {
 		expect(
 			progress.filter((entry) => entry.result === "acknowledged"),
 		).toHaveLength(8);
+	});
+
+	it("fails closed before DELETE when the durable CAS callback is absent", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const observed = await adapter.observe(allocation);
+		let deletes = 0;
+		const guarded = createSessionSandboxWorkloadAdapterV1({
+			client: {
+				...client,
+				async delete(object) {
+					deletes++;
+					return client.delete(object);
+				},
+			},
+		});
+		await expect(
+			guarded.cleanup(allocation, observed.resources),
+		).rejects.toMatchObject({
+			code: "unavailable",
+		});
+		expect(deletes).toBe(0);
+	});
+
+	it("does not treat a Kubernetes 404 delete response as acknowledged", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const observed = await adapter.observe(allocation);
+		const progress: SessionSandboxDeletionProgressV1[] = [];
+		const deleteResult = async () => "absent" as const;
+		const clientWith404 = Object.assign({}, client, { deleteResult });
+		const guarded = createSessionSandboxWorkloadAdapterV1({
+			client: clientWith404,
+		});
+		await expect(
+			guarded.cleanup(allocation, observed.resources, {
+				recordDeletionProgress: async (entry) => {
+					progress.push(entry);
+					return "committed";
+				},
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(
+			progress.find(
+				(entry) =>
+					entry.resource.kind === "Pod" && entry.deleteCallResult === "unknown",
+			),
+		).toMatchObject({
+			state: "delete-requested",
+			deleteCallResult: "unknown",
+		});
+	});
+
+	it("retries a terminating resource without issuing a second DELETE", async () => {
+		const { resources, ...client } = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const observed = await adapter.observe(allocation);
+		const originalDelete = client.delete;
+		let deletes = 0;
+		client.delete = async (object) => {
+			deletes++;
+			if (object.kind === "Pod") {
+				const pod = resources.get(`Pod/${allocation.podName}`);
+				if (!pod?.metadata) throw new Error("Missing Pod");
+				pod.metadata.deletionTimestamp = new Date();
+				pod.metadata.resourceVersion = "terminating";
+				return;
+			}
+			return originalDelete(object);
+		};
+		const progress: SessionSandboxDeletionProgressV1[] = [];
+		const record = async (entry: SessionSandboxDeletionProgressV1) => {
+			progress.push(entry);
+			return "committed" as const;
+		};
+		await expect(
+			adapter.cleanup(allocation, observed.resources, {
+				deletionProgress: [],
+				recordDeletionProgress: record,
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		const saved = progress.filter((entry) => entry.resource.kind === "Pod");
+		await expect(
+			adapter.cleanup(allocation, observed.resources, {
+				deletionProgress: saved,
+				recordDeletionProgress: record,
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(deletes).toBe(1);
+		resources.delete(`Pod/${allocation.podName}`);
+		await adapter.cleanup(allocation, observed.resources, {
+			deletionProgress: saved,
+			recordDeletionProgress: record,
+		});
+		expect(
+			progress.some(
+				(entry) => entry.resource.kind === "Pod" && entry.state === "absent",
+			),
+		).toBe(true);
 	});
 });

@@ -639,6 +639,9 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 		): Promise<SessionSandboxStopReceiptV1> {
 			if (options.client.namespace !== allocation.namespace)
 				throw new WorkloadKubernetesError("policy");
+			const recordDeletionProgress = context.recordDeletionProgress;
+			if (!recordDeletionProgress)
+				throw new WorkloadKubernetesError("unavailable");
 			const expectedResources = sessionSandboxResourcesV1(allocation);
 			const previousByKind = new Map(
 				previous.map((resource) => [resource.kind, resource]),
@@ -658,7 +661,6 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				result: SessionSandboxDeletionProgressV1["deleteCallResult"],
 				absence?: SessionSandboxDeletionProgressV1["absence"],
 			) => {
-				if (!context.recordDeletionProgress) return;
 				const previousProgress = progressByKind.get(resource.kind);
 				const progress: SessionSandboxDeletionProgressV1 = {
 					schemaVersion: 1,
@@ -678,11 +680,19 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					},
 					...(absence ? { absence } : {}),
 				};
-				const status = await context.recordDeletionProgress(progress);
+				const status = await recordDeletionProgress(progress);
 				if (status !== "committed")
 					throw new WorkloadKubernetesError("unavailable");
 				progressByKind.set(resource.kind, progress);
 			};
+			const terminatingRetry = (
+				current: KubernetesObject,
+				existing: SessionSandboxDeletionProgressV1 | undefined,
+			) =>
+				!!existing?.deleteAttempted &&
+				existing.deleteCallResult !== "failed" &&
+				current.metadata?.uid === existing.resource.uid &&
+				!!current.metadata.deletionTimestamp;
 			const resources = expectedResources
 				.filter((resource) => resource.kind !== "PersistentVolumeClaim")
 				.reverse();
@@ -726,7 +736,9 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				if (
 					existing &&
 					(existing.resource.uid !== current.metadata?.uid ||
-						existing.preconditions.resourceVersion !== currentResourceVersion)
+						(!terminatingRetry(current, existing) &&
+							existing.preconditions.resourceVersion !==
+								currentResourceVersion))
 				)
 					throw new WorkloadKubernetesError("conflict");
 				const identity = existing
@@ -737,18 +749,34 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						};
 				if (!existing?.deleteAttempted)
 					await record(identity, "delete-requested", "not-attempted");
+				if (terminatingRetry(current, existing))
+					throw new WorkloadKubernetesError("unavailable");
+				let callResult: SessionSandboxDeletionProgressV1["deleteCallResult"];
 				try {
-					await options.client.delete(current);
+					let result: "acknowledged" | "absent";
+					if (options.client.deleteResult)
+						result = await options.client.deleteResult(current);
+					else {
+						await options.client.delete(current);
+						result = "acknowledged";
+					}
+					callResult = result === "absent" ? "unknown" : result;
 				} catch (error) {
 					if (existing?.deleteCallResult !== "acknowledged")
-						await record(identity, "unknown", "unknown");
+						await record(
+							identity,
+							"unknown",
+							error instanceof WorkloadKubernetesError &&
+								error.code !== "unavailable"
+								? "failed"
+								: "unknown",
+						);
 					throw error;
 				}
-				await record(identity, "delete-requested", "acknowledged");
-				if (await options.client.read(kind, expected.metadata?.name ?? "")) {
+				await record(identity, "delete-requested", callResult);
+				if (await options.client.read(kind, expected.metadata?.name ?? ""))
 					throw new WorkloadKubernetesError("unavailable");
-				}
-				await record(identity, "absent", "acknowledged", {
+				await record(identity, "absent", callResult, {
 					kind,
 					namespace: identity.namespace,
 					name: identity.name,
@@ -824,8 +852,9 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				if (
 					existing &&
 					(existing.resource.uid !== current.metadata?.uid ||
-						existing.preconditions.resourceVersion !==
-							current.metadata.resourceVersion)
+						(!terminatingRetry(current, existing) &&
+							existing.preconditions.resourceVersion !==
+								current.metadata.resourceVersion))
 				)
 					throw new WorkloadKubernetesError("conflict");
 				const identity = existing
@@ -836,18 +865,34 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						};
 				if (!existing?.deleteAttempted)
 					await record(identity, "delete-requested", "not-attempted");
+				if (terminatingRetry(current, existing))
+					throw new WorkloadKubernetesError("unavailable");
+				let callResult: SessionSandboxDeletionProgressV1["deleteCallResult"];
 				try {
-					await options.client.delete(current);
+					let result: "acknowledged" | "absent";
+					if (options.client.deleteResult)
+						result = await options.client.deleteResult(current);
+					else {
+						await options.client.delete(current);
+						result = "acknowledged";
+					}
+					callResult = result === "absent" ? "unknown" : result;
 				} catch (error) {
 					if (existing?.deleteCallResult !== "acknowledged")
-						await record(identity, "unknown", "unknown");
+						await record(
+							identity,
+							"unknown",
+							error instanceof WorkloadKubernetesError &&
+								error.code !== "unavailable"
+								? "failed"
+								: "unknown",
+						);
 					throw error;
 				}
-				await record(identity, "delete-requested", "acknowledged");
-				if (await options.client.read(prior.kind, prior.name)) {
+				await record(identity, "delete-requested", callResult);
+				if (await options.client.read(prior.kind, prior.name))
 					throw new WorkloadKubernetesError("unavailable");
-				}
-				await record(identity, "absent", "acknowledged", {
+				await record(identity, "absent", callResult, {
 					kind: prior.kind,
 					namespace: identity.namespace,
 					name: identity.name,
