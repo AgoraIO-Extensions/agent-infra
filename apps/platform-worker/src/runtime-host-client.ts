@@ -1,15 +1,24 @@
 import { Buffer } from "node:buffer";
+import { isDeepStrictEqual } from "node:util";
+
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import {
 	ExecutionGrantV1Schema,
 	type RuntimeAuthorizationRenewRequestV3,
 	RuntimeAuthorizationRenewRequestV3Schema,
 	RuntimeAuthorizationRenewResponseV3Schema,
+	type RuntimeBusinessGrantClaimsV4,
+	type RuntimeBusinessRequestV4,
 	type RuntimeEventAckRequestV3,
 	RuntimeEventAckRequestV3Schema,
+	type RuntimeEventAckRequestV4,
+	RuntimeEventAckRequestV4Schema,
 	RuntimeEventAckResponseV3Schema,
+	RuntimeEventAckResponseV4Schema,
 	type RuntimeEventPersistRequestV3,
 	RuntimeEventPersistRequestV3Schema,
+	type RuntimeEventReadRequestV4,
+	RuntimeEventReadRequestV4Schema,
 	RuntimeEventSchema,
 	RuntimeEventV1Schema,
 	type RuntimeEventV2,
@@ -18,8 +27,13 @@ import {
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV3Schema,
+	RuntimeOperationResponseV4Schema,
 	RuntimeOriginalBindingResponseV3Schema,
+	type RuntimePinnedExecutionKeyScopeV4,
+	RuntimePrivateRelayKeyFieldV1Schema,
+	RuntimeRelayKeyDeliveryV1Schema,
 	RuntimeReplayRequestV1Schema,
+	type RuntimeSelectionV1,
 	RuntimeStatusRequestV2Schema,
 	type RuntimeStatusRequestV3,
 	RuntimeStatusRequestV3Schema,
@@ -32,9 +46,16 @@ import {
 	RuntimeSubmitTurnRequestV2Schema,
 	type RuntimeSubmitTurnRequestV3,
 	RuntimeSubmitTurnRequestV3Schema,
+	RuntimeSubmitTurnRequestV4Schema,
+	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV1Schema,
 	type RuntimeSupplementRequestV3,
 	RuntimeSupplementRequestV3Schema,
+	RuntimeSupplementRequestV4Schema,
+	RuntimeSupplementTransportV4Schema,
+	validateRuntimeBusinessBindingV4,
+	validateRuntimePinnedExecutionKeyScopeV4,
+	validateRuntimeReplayResponseV4,
 } from "@agent-infra/contracts/runtime";
 import {
 	type ConversationOperationFactV2,
@@ -45,12 +66,57 @@ import {
 	type ConversationRuntimeOperationEventV2,
 	type ConversationRuntimeStatusRequestV2,
 } from "@agent-infra/platform-core";
+import type { RelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { runtimeTlsFetch } from "./runtime-tls-transport.js";
 
 export interface WorkerRuntimeHostClientOptionsV1 {
 	readonly baseUrl: string;
 	readonly serviceToken: string;
 	readonly fetch?: typeof fetch;
+}
+
+/** Projection of the original accepted Execution, never a subject's current Key alias. */
+export interface WorkerAcceptedExecutionV4 {
+	readonly scope: RuntimePinnedExecutionKeyScopeV4;
+	readonly trustedHostSessionRef: string | null;
+	readonly authorizationRecordId: string;
+	readonly selection: RuntimeSelectionV1;
+}
+
+export interface WorkerExecutionKeyReaderV4 {
+	readAcceptedExecution(
+		request: RuntimeBusinessRequestV4,
+	): Promise<WorkerAcceptedExecutionV4 | null>;
+	readCiphertext(binding: {
+		readonly purpose: "personal" | "agent-default";
+		readonly subjectId: string;
+		readonly keyId: string;
+		readonly keyVersion: number;
+	}): Promise<unknown | null>;
+}
+
+export interface WorkerRuntimeHostClientOptionsV4
+	extends WorkerRuntimeHostClientOptionsV1 {
+	readonly verifyGrant: (
+		grant: RuntimeBusinessRequestV4["grant"],
+	) => RuntimeBusinessGrantClaimsV4;
+	readonly executionKeys?: WorkerExecutionKeyReaderV4;
+	readonly decryptor?: RelayKeyWorkerDecryptorV1;
+	/** Original accepted model selection supplied by the Store claim, also checked against the Reader. */
+	readonly selection?: RuntimeSelectionV1;
+	readonly assertCurrentAuthorization: () => Promise<void>;
+}
+
+/** Local failure before the original Key can be delivered to RuntimeHost. */
+export class RuntimeRelayKeyDeliveryError extends ConversationRuntimeHostError {
+	constructor(
+		code:
+			| "RELAY_KEY_UNAVAILABLE"
+			| "RELAY_KEY_METADATA_INVALID"
+			| "RELAY_KEY_AUTHENTICATION_FAILED",
+	) {
+		super(code, false);
+	}
 }
 
 const maximumResponseBytes = 65_536;
@@ -96,10 +162,13 @@ async function responseFailure(response: Response): Promise<never> {
 	}
 }
 
-async function boundedResponseText(response: Response): Promise<string> {
+async function boundedResponseText(
+	response: Response,
+	limit = maximumResponseBytes,
+): Promise<string> {
 	const reader = response.body?.getReader();
 	const length = response.headers.get("content-length");
-	if (length && /^\d+$/.test(length) && Number(length) > maximumResponseBytes) {
+	if (length && /^\d+$/.test(length) && Number(length) > limit) {
 		await reader?.cancel().catch(() => undefined);
 		return failure("RUNTIME_RESPONSE_INVALID", true);
 	}
@@ -111,7 +180,7 @@ async function boundedResponseText(response: Response): Promise<string> {
 			const next = await reader.read();
 			if (next.value) {
 				bytes += next.value.byteLength;
-				if (bytes > maximumResponseBytes) {
+				if (bytes > limit) {
 					return failure("RUNTIME_RESPONSE_INVALID", true);
 				}
 				chunks.push(next.value);
@@ -131,16 +200,17 @@ function requestInit(
 	traceId: string,
 	body: unknown,
 	signal?: AbortSignal,
+	_confidential = false,
 ): RequestInit {
 	return {
 		method: "POST",
-		redirect: "error",
 		headers: {
 			authorization: `Bearer ${serviceToken}`,
 			"content-type": "application/json",
 			"x-trace-id": traceId,
 		},
 		body: JSON.stringify(body),
+		redirect: "error" as const,
 		signal,
 	};
 }
@@ -152,12 +222,13 @@ async function post(
 	traceId: string,
 	body: unknown,
 	signal?: AbortSignal,
+	confidential = false,
 ) {
 	let response: Response;
 	try {
 		response = await fetcher(
 			url,
-			requestInit(serviceToken, traceId, body, signal),
+			requestInit(serviceToken, traceId, body, signal, confidential),
 		);
 	} catch {
 		return failure("RUNTIME_UNAVAILABLE", true);
@@ -376,8 +447,8 @@ export function createWorkerRuntimeHostClientV1(
 	if (!options || typeof options !== "object" || !options.serviceToken) {
 		throw new TypeError("RuntimeHost client options are invalid");
 	}
-	const dispatchBase = endpoint(options.baseUrl, "/");
 	const fetcher = options.fetch ?? runtimeTlsFetch();
+	const dispatchBase = endpoint(options.baseUrl, "/");
 	return {
 		async dispatch(request, signal) {
 			let selected: ReturnType<typeof dispatchBody>;
@@ -544,8 +615,8 @@ export function createWorkerRuntimeHostClientV3(
 ) {
 	if (!options || typeof options !== "object" || !options.serviceToken)
 		throw new TypeError("RuntimeHost client options are invalid");
-	const base = endpoint(options.baseUrl, "/");
 	const fetcher = options.fetch ?? runtimeTlsFetch();
+	const base = endpoint(options.baseUrl, "/");
 	async function request<T extends { traceId: string }, R>(
 		path: string,
 		value: T,
@@ -677,6 +748,265 @@ export function createWorkerRuntimeHostClientV3(
 				if (event.executionId !== body.executionId)
 					return failure("RUNTIME_EVENT_INVALID", true);
 				yield event.schemaVersion === 2 ? operationEvent(event) : event;
+			}
+		},
+	};
+}
+
+async function interruptedDependency<T>(
+	promise: Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
+	if (!signal) return promise;
+	let abort: (() => void) | undefined;
+	try {
+		if (signal.aborted) {
+			void promise.catch(() => undefined);
+			throw new ConversationRuntimeHostError("RUNTIME_INTERRUPTED", true);
+		}
+		return await Promise.race([
+			promise,
+			new Promise<never>((_resolve, reject) => {
+				abort = () =>
+					reject(new ConversationRuntimeHostError("RUNTIME_INTERRUPTED", true));
+				signal.addEventListener("abort", abort, { once: true });
+			}),
+		]);
+	} finally {
+		if (abort) signal.removeEventListener("abort", abort);
+	}
+}
+
+/** V4 business and event consumers within the existing Worker loop. Control recovery stays Key-free. */
+export function createWorkerRuntimeHostClientV4(
+	options: WorkerRuntimeHostClientOptionsV4,
+) {
+	if (
+		!options.serviceToken ||
+		!options.verifyGrant ||
+		!options.assertCurrentAuthorization
+	)
+		throw new TypeError("RuntimeHost V4 client options are invalid");
+	const base = endpoint(options.baseUrl, "/");
+	if (
+		process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0" ||
+		base.protocol !== "https:"
+	)
+		throw new TypeError("RuntimeHost V4 transport must be confidential");
+	const fetcher = options.fetch ?? runtimeTlsFetch();
+	async function send(value: RuntimeBusinessRequestV4, signal?: AbortSignal) {
+		try {
+			signal?.throwIfAborted();
+			const request =
+				"selection" in value
+					? RuntimeSubmitTurnRequestV4Schema.parse(value)
+					: RuntimeSupplementRequestV4Schema.parse(value);
+			const claims = options.verifyGrant(request.grant);
+			await validateRuntimeBusinessBindingV4(request, claims);
+			const reader = options.executionKeys;
+			const decryptor = options.decryptor;
+			if (!reader || !decryptor || !options.selection)
+				throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+			const accepted = await interruptedDependency(
+				reader.readAcceptedExecution(request),
+				signal,
+			);
+			if (!accepted) return failure("RUNTIME_GRANT_INVALID", false);
+			validateRuntimePinnedExecutionKeyScopeV4(
+				accepted.scope,
+				request,
+				accepted.trustedHostSessionRef,
+			);
+			if (
+				accepted.authorizationRecordId !== claims.authorizationRecordId ||
+				!isDeepStrictEqual(accepted.selection, options.selection) ||
+				("selection" in request &&
+					!isDeepStrictEqual(accepted.selection, request.selection))
+			)
+				return failure("RUNTIME_GRANT_INVALID", false);
+			const original = structuredClone(accepted);
+			const binding = {
+				purpose: original.scope.keyBinding.purpose,
+				subjectId: original.scope.keyBinding.subjectId,
+				keyId: original.scope.keyBinding.ciphertextRef,
+				keyVersion: original.scope.keyBinding.version,
+			};
+			const encryptedRecord = await interruptedDependency(
+				reader.readCiphertext(binding),
+				signal,
+			);
+			signal?.throwIfAborted();
+			if (!encryptedRecord)
+				throw new RuntimeRelayKeyDeliveryError("RELAY_KEY_UNAVAILABLE");
+			const decryption = decryptor
+				.decrypt({ encryptedRecord, expectedBinding: binding })
+				.then((result) => {
+					if (signal?.aborted && result.outcome === "decrypted")
+						result.plaintext.fill(0);
+					return result;
+				});
+			const decrypted = await interruptedDependency(decryption, signal);
+			if (decrypted.outcome !== "decrypted")
+				throw new RuntimeRelayKeyDeliveryError(decrypted.code);
+			let relayKey: string;
+			try {
+				signal?.throwIfAborted();
+				relayKey = new TextDecoder("utf-8", { fatal: true }).decode(
+					decrypted.plaintext,
+				);
+				RuntimeRelayKeyDeliveryV1Schema.parse({ relayKey });
+			} finally {
+				decrypted.plaintext.fill(0);
+			}
+			const current = await interruptedDependency(
+				reader.readAcceptedExecution(request),
+				signal,
+			);
+			if (!current || !isDeepStrictEqual(current, original))
+				return failure("RUNTIME_GRANT_INVALID", false);
+			const privateKeyField = RuntimePrivateRelayKeyFieldV1Schema.parse({
+				schemaVersion: 1,
+				context: {
+					requestId: request.requestId,
+					grantId: claims.grantId,
+					requestDigest: claims.requestDigest,
+					traceId: request.traceId,
+					principal: request.principal,
+					executionSource: request.executionSource,
+					channelId: request.channelId,
+					agentId: request.agentId,
+					conversationId: request.conversationId,
+					executionId: request.executionId,
+					turnId: request.turnId,
+					sessionGeneration: request.sessionGeneration,
+					hostSessionRef: request.hostSessionRef,
+					operation: request.operation,
+					keyBinding: request.keyBinding,
+				},
+				keyDelivery: { relayKey },
+			});
+			const transport =
+				"selection" in request
+					? RuntimeSubmitTurnTransportV4Schema.parse({
+							businessRequest: request,
+							privateKeyField,
+						})
+					: RuntimeSupplementTransportV4Schema.parse({
+							businessRequest: request,
+							privateKeyField,
+						});
+			await interruptedDependency(options.assertCurrentAuthorization(), signal);
+			signal?.throwIfAborted();
+			// Synchronous final cryptographic/time check follows all dependency awaits.
+			const finalClaims = options.verifyGrant(request.grant);
+			if (!isDeepStrictEqual(finalClaims, claims))
+				return failure("RUNTIME_GRANT_INVALID", false);
+			const response = await post(
+				fetcher,
+				new URL(
+					`internal/runtime/v4/${"selection" in request ? "turns" : "instructions"}`,
+					base,
+				),
+				options.serviceToken,
+				request.traceId,
+				transport,
+				signal,
+				true,
+			);
+			try {
+				const result = RuntimeOperationResponseV4Schema.parse(
+					JSON.parse(await boundedResponseText(response)),
+				);
+				if (
+					result.operationId !== request.operation.id ||
+					(request.hostSessionRef !== null &&
+						result.hostSessionRef !== request.hostSessionRef)
+				)
+					return failure("RUNTIME_RESPONSE_INVALID", true);
+				return result;
+			} catch {
+				return failure("RUNTIME_RESPONSE_INVALID", true);
+			}
+		} catch (error) {
+			if (error instanceof ConversationRuntimeHostError) throw error;
+			return failure("RUNTIME_REQUEST_INVALID", false);
+		}
+	}
+	return {
+		submitTurn: send,
+		supplement: send,
+		async readEvents(value: RuntimeEventReadRequestV4, signal?: AbortSignal) {
+			const parsed = RuntimeEventReadRequestV4Schema.safeParse(value);
+			if (!parsed.success) return failure("RUNTIME_REQUEST_INVALID", false);
+			await interruptedDependency(options.assertCurrentAuthorization(), signal);
+			signal?.throwIfAborted();
+			const response = await post(
+				fetcher,
+				new URL("internal/runtime/v4/events/read", base),
+				options.serviceToken,
+				parsed.data.traceId,
+				parsed.data,
+				signal,
+				true,
+			);
+			try {
+				const replay = validateRuntimeReplayResponseV4(
+					JSON.parse(
+						await boundedResponseText(
+							response,
+							maximumEventFrameBytes * 8 + 16_384,
+						),
+					),
+					parsed.data,
+				);
+				const seen = new Set<string>();
+				for (const event of replay.events) {
+					if (
+						event.cursor === parsed.data.afterCursor ||
+						seen.has(event.cursor)
+					)
+						return failure("RUNTIME_EVENT_INVALID", true);
+					seen.add(event.cursor);
+				}
+				return {
+					...replay,
+					events: replay.events.map((event) =>
+						event.schemaVersion === 2 ? operationEvent(event) : event,
+					),
+				};
+			} catch {
+				return failure("RUNTIME_EVENT_INVALID", true);
+			}
+		},
+		async acknowledgeEvents(
+			value: RuntimeEventAckRequestV4,
+			signal?: AbortSignal,
+		) {
+			const parsed = RuntimeEventAckRequestV4Schema.safeParse(value);
+			if (!parsed.success) return failure("RUNTIME_REQUEST_INVALID", false);
+			await interruptedDependency(options.assertCurrentAuthorization(), signal);
+			signal?.throwIfAborted();
+			const response = await post(
+				fetcher,
+				new URL("internal/runtime/v4/events/ack", base),
+				options.serviceToken,
+				parsed.data.traceId,
+				parsed.data,
+				signal,
+				true,
+			);
+			try {
+				const ack = RuntimeEventAckResponseV4Schema.parse(
+					JSON.parse(await boundedResponseText(response)),
+				);
+				if (
+					ack.executionId !== parsed.data.executionId ||
+					ack.confirmedCursor !== parsed.data.confirmedCursor
+				)
+					return failure("RUNTIME_RESPONSE_INVALID", true);
+				return ack;
+			} catch {
+				return failure("RUNTIME_RESPONSE_INVALID", true);
 			}
 		},
 	};
