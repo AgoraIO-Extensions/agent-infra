@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
+	canAdvanceSessionSandboxDeletionProgressV1,
 	decideSessionSandboxObservationV1,
+	isSessionSandboxDeletionProgressValidV1,
 	isSessionSandboxObservationValidV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
@@ -52,6 +54,84 @@ const ready: SessionSandboxObservationV1 = {
 };
 
 describe("Session Sandbox actual resource receipt", () => {
+	it("requires explicit absence proof and excludes PVC from delete progress", () => {
+		const service = ready.resources.find(
+			(resource) => resource.kind === "Service",
+		)!;
+		const progress = {
+			schemaVersion: 1 as const,
+			state: "absent" as const,
+			deleteAttemptId: "attempt-service",
+			deleteAttempted: true,
+			deleteCallResult: "unknown" as const,
+			sourceGeneration: 1,
+			resourceFence: 2,
+			managementFence: 3,
+			resource: service,
+			preconditions: {
+				uid: service.uid,
+				resourceVersion: service.resourceVersion,
+			},
+			absence: {
+				kind: service.kind,
+				namespace: service.namespace,
+				name: service.name,
+			},
+		};
+		const intent = {
+			...progress,
+			state: "delete-requested" as const,
+			deleteAttempted: false,
+			deleteCallResult: "not-attempted" as const,
+			absence: undefined,
+		};
+		expect(
+			canAdvanceSessionSandboxDeletionProgressV1(undefined, progress),
+		).toBe(false);
+		expect(canAdvanceSessionSandboxDeletionProgressV1(undefined, intent)).toBe(
+			true,
+		);
+		expect(canAdvanceSessionSandboxDeletionProgressV1(intent, progress)).toBe(
+			true,
+		);
+		expect(canAdvanceSessionSandboxDeletionProgressV1(progress, intent)).toBe(
+			false,
+		);
+		expect(
+			canAdvanceSessionSandboxDeletionProgressV1(intent, {
+				...progress,
+				deleteAttemptId: "new",
+			}),
+		).toBe(false);
+		expect(
+			canAdvanceSessionSandboxDeletionProgressV1(
+				{ ...progress, deleteCallResult: "acknowledged" },
+				progress,
+			),
+		).toBe(false);
+		expect(
+			canAdvanceSessionSandboxDeletionProgressV1(intent, {
+				...intent,
+				deleteAttempted: true,
+				deleteCallResult: "failed",
+			}),
+		).toBe(true);
+
+		expect(isSessionSandboxDeletionProgressValidV1([progress])).toBe(true);
+		expect(
+			isSessionSandboxDeletionProgressValidV1([
+				{ ...progress, absence: undefined },
+			]),
+		).toBe(false);
+		expect(
+			isSessionSandboxDeletionProgressValidV1([
+				{
+					...progress,
+					resource: { ...service, kind: "PersistentVolumeClaim" },
+				},
+			]),
+		).toBe(false);
+	});
 	it("accepts the five actual direct-Pod resources without a fabricated controller", () => {
 		expect(isSessionSandboxObservationValidV1(claim, ready)).toBe(true);
 	});

@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { createAgentManagementV1 } from "@agent-infra/platform-core";
+import {
+	createAgentManagementV1,
+	type SessionSandboxReconciliationClaimV1,
+} from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -743,21 +746,23 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			});
 			const management = createAgentManagementV1(managementStore);
 			let active = true;
-			const store = new PostgresConversationDispatchStoreV1({
-				databaseUrl,
-				sandboxPolicy: policy,
-				userDirectory: {
-					async resolveUser(userId) {
-						return {
-							schemaVersion: 1,
-							userId,
-							accountStatus: active ? "active" : "disabled",
-							organizationIds: [],
-							authorizationRevision: "directory-current",
-						};
+			const createStore = () =>
+				new PostgresConversationDispatchStoreV1({
+					databaseUrl,
+					sandboxPolicy: policy,
+					userDirectory: {
+						async resolveUser(userId) {
+							return {
+								schemaVersion: 1,
+								userId,
+								accountStatus: active ? "active" : "disabled",
+								organizationIds: [],
+								authorizationRevision: "directory-current",
+							};
+						},
 					},
-				},
-			});
+				});
+			let store = createStore();
 			const actor = {
 				schemaVersion: 1 as const,
 				userId: "owner-a",
@@ -786,7 +791,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						actor,
 					),
 				).toMatchObject({ outcome: "accepted" });
-				let drain = await store.claimSandboxReconciliation(request);
+				let drain: SessionSandboxReconciliationClaimV1 | null =
+					await store.claimSandboxReconciliation(request);
 				if (mode === "lost-observation") {
 					if (!drain) throw new Error("Expected unobserved source claim");
 					expect(drain.previousObservation).toBeNull();
@@ -852,6 +858,252 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				if (!drain?.lifecycle?.source.observation)
 					throw new Error("Expected drain source");
 				const resources = drain.lifecycle.source.observation.resources;
+				const service = resources.find(
+					(resource) => resource.kind === "Service",
+				)!;
+				const deleteIntent = {
+					schemaVersion: 1 as const,
+					state: "delete-requested" as const,
+					deleteAttemptId: "sandbox-delete-service",
+					deleteAttempted: false,
+					deleteCallResult: "not-attempted" as const,
+					sourceGeneration: drain.lifecycle.source.sandbox.generation,
+					resourceFence: drain.lifecycle.source.resourceFence,
+					managementFence: drain.lifecycle.authority.managementFence,
+					resource: service,
+					preconditions: {
+						uid: service.uid,
+						resourceVersion: service.resourceVersion,
+					},
+				};
+				expect(
+					await store.recordSandboxDeletionProgress({
+						claim: drain,
+						progress: {
+							...deleteIntent,
+							state: "absent",
+							absence: {
+								kind: service.kind,
+								namespace: service.namespace,
+								name: service.name,
+							},
+						},
+						leaseDurationMs: 30_000,
+					}),
+				).toEqual({ status: "stale" });
+
+				expect(
+					await store.recordSandboxDeletionProgress({
+						claim: drain,
+						progress: {
+							...deleteIntent,
+							resource: { ...service, resourceVersion: "unobserved-version" },
+							preconditions: {
+								...deleteIntent.preconditions,
+								resourceVersion: "unobserved-version",
+							},
+						},
+						leaseDurationMs: 30_000,
+					}),
+				).toEqual({ status: "stale" });
+				const pod = resources.find((resource) => resource.kind === "Pod");
+				if (!pod) throw new Error("Expected original Pod identity");
+				expect(pod.controllerUid).toBeUndefined();
+				expect(
+					await store.recordSandboxDeletionProgress({
+						claim: drain,
+						progress: {
+							...deleteIntent,
+							deleteAttemptId: "sandbox-delete-pod",
+							resource: { ...pod, controllerUid: "unobserved-controller" },
+							preconditions: {
+								uid: pod.uid,
+								resourceVersion: pod.resourceVersion,
+							},
+						},
+						leaseDurationMs: 30_000,
+					}),
+				).toEqual({ status: "stale" });
+
+				const [beforeIntent] =
+					await client`select payload from platform.outbox_items where id = ${request.itemId}`;
+				expect(beforeIntent?.payload.lifecycle.deletionProgress ?? []).toEqual(
+					[],
+				);
+
+				const intentResult = await store.recordSandboxDeletionProgress({
+					claim: drain,
+					progress: deleteIntent,
+					leaseDurationMs: 30_000,
+				});
+				expect(intentResult.status).toBe("committed");
+				if (intentResult.status !== "committed")
+					throw new Error("Expected delete intent claim refresh");
+				drain = intentResult.claim;
+				// A fresh process must recover the original intent after lease takeover.
+				const oldClaim = drain;
+				await store.close();
+				store = createStore();
+				await client`update platform.outbox_items set lease_expires_at = now() - interval '1 second' where id = ${request.itemId}`;
+				drain = await store.claimSandboxReconciliation({
+					...request,
+					workerId: "recovery-worker",
+				});
+				if (!drain?.lifecycle) throw new Error("Expected reclaimed intent");
+				expect(drain.deliveryFence).toBeGreaterThan(oldClaim.deliveryFence);
+				expect(drain.lifecycle.deletionProgress).toEqual([deleteIntent]);
+				expect(
+					await store.recordSandboxDeletionProgress({
+						claim: oldClaim,
+						progress: deleteIntent,
+						leaseDurationMs: 30_000,
+					}),
+				).toEqual({ status: "stale" });
+				for (const progress of [
+					{ ...deleteIntent, deleteAttemptId: "replacement-attempt" },
+					{ ...deleteIntent, resourceFence: deleteIntent.resourceFence + 1 },
+					{
+						...deleteIntent,
+						managementFence: deleteIntent.managementFence + 1,
+					},
+					{
+						...deleteIntent,
+						sourceGeneration: deleteIntent.sourceGeneration + 1,
+					},
+					{
+						...deleteIntent,
+						resource: { ...service, resourceVersion: "later-version" },
+						preconditions: {
+							...deleteIntent.preconditions,
+							resourceVersion: "later-version",
+						},
+					},
+					{
+						...deleteIntent,
+						resource: { ...service, uid: "same-name-new-uid" },
+						preconditions: {
+							...deleteIntent.preconditions,
+							uid: "same-name-new-uid",
+						},
+					},
+				])
+					expect(
+						await store.recordSandboxDeletionProgress({
+							claim: drain,
+							progress,
+							leaseDurationMs: 30_000,
+						}),
+					).toEqual({ status: "stale" });
+
+				if (mode === "recover") {
+					// A terminating readback may advance the object's RV, not the original DELETE conditions.
+					expect(
+						await store.recordSandboxObservation({
+							claim: drain,
+							observation: {
+								status: "observed",
+								resources: resources.map((resource) =>
+									resource.kind === "Service"
+										? { ...resource, resourceVersion: "terminating-version" }
+										: resource,
+								),
+							},
+						}),
+					).toBe("unknown");
+					await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+					drain = await store.claimSandboxReconciliation(request);
+					if (!drain?.lifecycle)
+						throw new Error(
+							"Expected original attempt after updated observation",
+						);
+					expect(drain.lifecycle.deletionProgress).toEqual([deleteIntent]);
+					expect(drain.lifecycle.source.observation?.resources).toContainEqual({
+						...service,
+						resourceVersion: "terminating-version",
+					});
+				}
+
+				const attemptResult = await store.recordSandboxDeletionProgress({
+					claim: drain,
+					progress: {
+						...deleteIntent,
+						state: "unknown",
+						deleteAttempted: true,
+						deleteCallResult: "unknown",
+					},
+					leaseDurationMs: 30_000,
+				});
+				expect(attemptResult.status).toBe("committed");
+				if (attemptResult.status !== "committed")
+					throw new Error("Expected delete attempt claim refresh");
+				drain = attemptResult.claim;
+				await store.close();
+				store = createStore();
+				await client`update platform.outbox_items set lease_expires_at = now() - interval '1 second' where id = ${request.itemId}`;
+				drain = await store.claimSandboxReconciliation({
+					...request,
+					workerId: "partial-recovery-worker",
+				});
+				if (!drain?.lifecycle)
+					throw new Error("Expected partial deletion recovery");
+				expect(drain.lifecycle.deletionProgress).toMatchObject([
+					{
+						deleteAttemptId: deleteIntent.deleteAttemptId,
+						deleteCallResult: "unknown",
+					},
+				]);
+
+				for (const resource of resources.filter(
+					(resource) => resource.kind !== "PersistentVolumeClaim",
+				)) {
+					const intent = {
+						...deleteIntent,
+						deleteAttemptId: `sandbox-delete-${resource.kind}`,
+						resource,
+						preconditions: {
+							uid: resource.uid,
+							resourceVersion: resource.resourceVersion,
+						},
+					};
+					const saved = drain.lifecycle!.deletionProgress?.find(
+						(entry) => entry.resource.kind === resource.kind,
+					);
+					if (!saved) {
+						const result = await store.recordSandboxDeletionProgress({
+							claim: drain,
+							progress: intent,
+							leaseDurationMs: 30_000,
+						});
+						if (result.status !== "committed")
+							throw new Error("Expected original intent");
+						drain = result.claim;
+					}
+					const result = await store.recordSandboxDeletionProgress({
+						claim: drain,
+						progress: {
+							...(saved ?? intent),
+							state: "absent",
+							deleteAttempted: resource.kind !== "NetworkPolicy",
+							deleteCallResult:
+								resource.kind === "NetworkPolicy"
+									? "not-attempted"
+									: saved
+										? "unknown"
+										: "acknowledged",
+							absence: {
+								kind: resource.kind,
+								namespace: resource.namespace,
+								name: resource.name,
+							},
+						},
+						leaseDurationMs: 30_000,
+					});
+					if (result.status !== "committed")
+						throw new Error("Expected durable absence");
+					drain = result.claim;
+				}
+				if (!drain?.lifecycle)
+					throw new Error("Expected completed progress lifecycle");
 				const pvc = resources.find(
 					(resource) => resource.kind === "PersistentVolumeClaim",
 				)!;
@@ -889,6 +1141,20 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						},
 					}),
 				).toBe("committed");
+				const [completed] =
+					await client`select payload from platform.outbox_items where id = ${request.itemId}`;
+				expect(completed?.payload.lifecycle.deletionProgress).toEqual(
+					drain.lifecycle.deletionProgress,
+				);
+				expect(completed?.payload.lifecycle.deletionProgress).toContainEqual(
+					expect.objectContaining({
+						resource: expect.objectContaining({ kind: "NetworkPolicy" }),
+						state: "absent",
+						deleteCallResult: "not-attempted",
+						deleteAttempted: false,
+					}),
+				);
+
 				expect(
 					await management.executeManagementCommand(
 						{

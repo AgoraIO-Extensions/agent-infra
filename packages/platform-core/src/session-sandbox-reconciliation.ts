@@ -34,6 +34,43 @@ export interface SessionSandboxResourceIdentityV1 {
 	readonly controllerUid?: string;
 }
 
+export type SessionSandboxDeletionProgressStateV1 =
+	| "delete-requested"
+	| "absent"
+	| "unknown";
+const sessionSandboxDeletionProgressStates = new Set([
+	"delete-requested",
+	"absent",
+	"unknown",
+]);
+
+/** Durable per-resource cleanup evidence; absence is not a DELETE ACK. */
+export interface SessionSandboxDeletionProgressV1 {
+	readonly schemaVersion: 1;
+	readonly state: SessionSandboxDeletionProgressStateV1;
+	/** Stable id for the conditional DELETE attempt; survives lost responses. */
+	readonly deleteAttemptId: string;
+	readonly deleteAttempted: boolean;
+	readonly deleteCallResult:
+		| "not-attempted"
+		| "acknowledged"
+		| "failed"
+		| "unknown";
+	readonly sourceGeneration: number;
+	readonly resourceFence: number;
+	readonly managementFence: number;
+	readonly resource: SessionSandboxResourceIdentityV1;
+	readonly preconditions: {
+		readonly uid: string;
+		readonly resourceVersion: string;
+	};
+	readonly absence?: {
+		readonly kind: SessionSandboxResourceIdentityV1["kind"];
+		readonly namespace: string;
+		readonly name: string;
+	};
+}
+
 /** Resource reconciliation has no business Execution or Turn delivery fence. */
 export interface SessionSandboxReconciliationClaimV1 {
 	readonly schemaVersion: 1;
@@ -60,7 +97,93 @@ export interface SessionSandboxReconciliationClaimV1 {
 export interface SessionSandboxObservationV1 {
 	readonly status: "observed" | "ready" | "stopped" | "unknown";
 	readonly sourceStop?: SessionSandboxStopReceiptV1;
+	readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
 	readonly resources: readonly SessionSandboxResourceIdentityV1[];
+}
+
+export function isSessionSandboxDeletionProgressValidV1(
+	progress: readonly SessionSandboxDeletionProgressV1[] | undefined,
+): progress is readonly SessionSandboxDeletionProgressV1[] {
+	if (progress === undefined) return true;
+	if (!Array.isArray(progress)) return false;
+	const kinds = new Set<string>();
+	return progress.every((entry) => {
+		if (
+			!entry ||
+			entry.schemaVersion !== 1 ||
+			!sessionSandboxDeletionProgressStates.has(entry.state) ||
+			typeof entry.deleteAttemptId !== "string" ||
+			!entry.deleteAttemptId.trim() ||
+			typeof entry.deleteAttempted !== "boolean" ||
+			!["not-attempted", "acknowledged", "failed", "unknown"].includes(
+				entry.deleteCallResult,
+			) ||
+			entry.deleteAttempted !== (entry.deleteCallResult !== "not-attempted") ||
+			!Number.isSafeInteger(entry.sourceGeneration) ||
+			entry.sourceGeneration < 0 ||
+			!Number.isSafeInteger(entry.resourceFence) ||
+			entry.resourceFence < 0 ||
+			!Number.isSafeInteger(entry.managementFence) ||
+			entry.managementFence < 0 ||
+			!entry.resource ||
+			![
+				"StatefulSet",
+				"Pod",
+				"Service",
+				"ServiceAccount",
+				"NetworkPolicy",
+			].includes(entry.resource.kind) ||
+			![
+				entry.resource.namespace,
+				entry.resource.name,
+				entry.resource.uid,
+				entry.resource.resourceVersion,
+			].every((value) => typeof value === "string" && value.trim()) ||
+			kinds.has(entry.resource.kind) ||
+			entry.resource.kind === "PersistentVolumeClaim" ||
+			entry.preconditions?.uid !== entry.resource.uid ||
+			entry.preconditions.resourceVersion !== entry.resource.resourceVersion
+		)
+			return false;
+		if (entry.state === "absent") {
+			if (
+				!entry.absence ||
+				entry.absence.kind !== entry.resource.kind ||
+				entry.absence.namespace !== entry.resource.namespace ||
+				entry.absence.name !== entry.resource.name
+			)
+				return false;
+		} else if (entry.absence) return false;
+		kinds.add(entry.resource.kind);
+		return true;
+	});
+}
+
+/** One durable intent precedes all call/absence evidence and cannot be replaced. */
+export function canAdvanceSessionSandboxDeletionProgressV1(
+	previous: SessionSandboxDeletionProgressV1 | undefined,
+	next: SessionSandboxDeletionProgressV1,
+): boolean {
+	if (!isSessionSandboxDeletionProgressValidV1([next])) return false;
+	if (!previous)
+		return next.state === "delete-requested" && !next.deleteAttempted;
+	if (!isSessionSandboxDeletionProgressValidV1([previous])) return false;
+	return (
+		previous.deleteAttemptId === next.deleteAttemptId &&
+		previous.sourceGeneration === next.sourceGeneration &&
+		previous.resourceFence === next.resourceFence &&
+		previous.managementFence === next.managementFence &&
+		previous.resource.kind === next.resource.kind &&
+		previous.resource.namespace === next.resource.namespace &&
+		previous.resource.name === next.resource.name &&
+		previous.resource.uid === next.resource.uid &&
+		previous.resource.resourceVersion === next.resource.resourceVersion &&
+		previous.resource.controllerUid === next.resource.controllerUid &&
+		(!previous.deleteAttempted || next.deleteAttempted) &&
+		(previous.deleteCallResult !== "acknowledged" ||
+			next.deleteCallResult === "acknowledged") &&
+		(previous.state !== "absent" || next.state === "absent")
+	);
 }
 
 /** Persisted resource facts, not a grant to call or recreate the Runtime. */
@@ -95,6 +218,8 @@ export function isSessionSandboxObservationValidV1(
 		!["observed", "ready", "stopped", "unknown"].includes(observation.status) ||
 		!Array.isArray(observation.resources)
 	)
+		return false;
+	if (!isSessionSandboxDeletionProgressValidV1(observation.deletionProgress))
 		return false;
 	const required = new Set([
 		"Pod",

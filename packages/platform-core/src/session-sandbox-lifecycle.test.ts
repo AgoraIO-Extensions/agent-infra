@@ -93,7 +93,25 @@ function fixture() {
 		resources: [retainedPVC],
 		sourceStop: receipt,
 	};
-	return { sandbox, lifecycle, resourceFence: 4, observation };
+	return {
+		sandbox,
+		lifecycle: {
+			...lifecycle,
+			deletionProgress: receipt.removed.map((proof) => ({
+				...proof,
+				schemaVersion: 1 as const,
+				state: "absent" as const,
+				deleteAttemptId: `attempt-${proof.resource.kind}`,
+				deleteAttempted: true,
+				deleteCallResult: "unknown" as const,
+				sourceGeneration: 1,
+				resourceFence: 3,
+				managementFence: 2,
+			})),
+		},
+		resourceFence: 4,
+		observation,
+	};
 }
 
 describe("original source stop proof", () => {
@@ -300,6 +318,67 @@ describe("original source stop proof", () => {
 			finished: true,
 			stopReceipt: input.observation.sourceStop,
 		});
+	});
+	it("requires persisted absence for every resource even with a complete stop receipt", () => {
+		const input = fixture();
+		for (const deletionProgress of [
+			undefined,
+			[],
+			input.lifecycle.deletionProgress.slice(1),
+			input.lifecycle.deletionProgress.map((entry) => ({
+				...entry,
+				state: "unknown" as const,
+				absence: undefined,
+			})),
+		]) {
+			expect(
+				decideSessionSandboxDrainObservationV1({
+					...input,
+					lifecycle: { ...input.lifecycle, deletionProgress },
+				}),
+			).toMatchObject({ status: "unknown", finished: false });
+		}
+	});
+
+	it("rejects observation callbacks as a way to inject deletion progress", () => {
+		const input = fixture();
+		const service = input.lifecycle.source.observation!.resources.find(
+			(resource) => resource.kind === "Service",
+		)!;
+		const progress = {
+			schemaVersion: 1 as const,
+			state: "delete-requested" as const,
+			deleteAttemptId: "attempt-service",
+			deleteAttempted: false,
+			deleteCallResult: "not-attempted" as const,
+			sourceGeneration: input.lifecycle.source.sandbox.generation,
+			resourceFence: input.lifecycle.source.resourceFence,
+			managementFence: input.lifecycle.authority.managementFence,
+			resource: service,
+			preconditions: {
+				uid: service.uid,
+				resourceVersion: service.resourceVersion,
+			},
+		};
+		const observation = {
+			status: "unknown" as const,
+			resources: input.lifecycle.source.observation!.resources,
+			deletionProgress: [progress],
+		};
+		expect(
+			decideSessionSandboxDrainObservationV1({ ...input, observation }),
+		).toMatchObject({ observation: input.lifecycle.source.observation });
+		expect(
+			decideSessionSandboxDrainObservationV1({
+				...input,
+				observation: {
+					...observation,
+					deletionProgress: [
+						{ ...progress, resource: { ...service, uid: "new" } },
+					],
+				},
+			}),
+		).toMatchObject({ observation: input.lifecycle.source.observation });
 	});
 	for (const field of [
 		"sandboxId",

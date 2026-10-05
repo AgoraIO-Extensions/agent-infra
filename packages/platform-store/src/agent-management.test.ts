@@ -4,6 +4,7 @@ import type {
 	AgentManagementInterfaceV1,
 	AgentManagementStateV1,
 	AgentManagementTransactionPortV1,
+	SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
 import {
 	createAgentManagementV1,
@@ -479,7 +480,7 @@ describe("PostgreSQL Agent-management Adapter", () => {
 				leaseDurationMs: 30_000,
 			}),
 		).toBe(false);
-		const stoppedObservation = (claim: typeof drain) => {
+		const stoppedObservation = (claim: SessionSandboxReconciliationClaimV1) => {
 			const source = claim.lifecycle!.source;
 			const identities = source.observation!.resources;
 			const retainedPVC = identities.find(
@@ -527,8 +528,73 @@ describe("PostgreSQL Agent-management Adapter", () => {
 				?.resource_observation,
 		).toEqual(sourceEvidence);
 		await adminClient`update platform.outbox_items set available_at = now() where id = ${claimInput.itemId}`;
-		const retry = await dispatch.claimSandboxReconciliation(claimInput);
+		let retry: SessionSandboxReconciliationClaimV1 | null =
+			await dispatch.claimSandboxReconciliation(claimInput);
 		if (!retry) throw new Error("Expected same drain retry");
+		// A synthetic complete receipt cannot replace durable pre-DELETE intent.
+		expect(
+			await dispatch.recordSandboxObservation({
+				claim: retry,
+				observation: stoppedObservation(retry),
+			}),
+		).toBe("unknown");
+		expect(
+			(await snapshot()).find((row) => row.conversation_id === "ready-session")
+				?.resource_observation,
+		).toEqual(sourceEvidence);
+		await adminClient`update platform.outbox_items set available_at = now() where id = ${claimInput.itemId}`;
+		retry = await dispatch.claimSandboxReconciliation(claimInput);
+		if (!retry?.lifecycle?.source.observation)
+			throw new Error("Expected recoverable management drain");
+		const source = retry.lifecycle.source;
+		for (const resource of source.observation!.resources.filter(
+			(resource) => resource.kind !== "PersistentVolumeClaim",
+		)) {
+			const intent = {
+				schemaVersion: 1 as const,
+				state: "delete-requested" as const,
+				deleteAttemptId: `management-stop-${resource.kind}`,
+				deleteAttempted: false,
+				deleteCallResult: "not-attempted" as const,
+				sourceGeneration: source.sandbox.generation,
+				resourceFence: source.resourceFence,
+				managementFence: retry.lifecycle!.authority.managementFence,
+				resource,
+				preconditions: {
+					uid: resource.uid,
+					resourceVersion: resource.resourceVersion,
+				},
+			};
+			const recordedIntent = await dispatch.recordSandboxDeletionProgress({
+				claim: retry,
+				progress: intent,
+				leaseDurationMs: 30_000,
+			});
+			expect(recordedIntent.status).toBe("committed");
+			if (recordedIntent.status !== "committed")
+				throw new Error("Expected persisted deletion intent");
+			retry = recordedIntent.claim;
+			const recordedAbsence = await dispatch.recordSandboxDeletionProgress({
+				claim: retry,
+				progress: {
+					...intent,
+					state: "absent",
+					deleteAttempted: true,
+					deleteCallResult: "acknowledged",
+					absence: {
+						kind: resource.kind,
+						namespace: resource.namespace,
+						name: resource.name,
+					},
+				},
+				leaseDurationMs: 30_000,
+			});
+			expect(recordedAbsence.status).toBe("committed");
+			if (recordedAbsence.status !== "committed")
+				throw new Error("Expected persisted deletion evidence");
+			retry = recordedAbsence.claim;
+		}
+
 		const beforeReceipt = await snapshot();
 		const [beforeReceiptIntent] =
 			await adminClient`select * from platform.outbox_items where id = ${claimInput.itemId}`;

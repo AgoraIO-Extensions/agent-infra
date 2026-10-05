@@ -1,7 +1,9 @@
 import type { AgentManagementWritePlanV1 } from "./agent-management.js";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
+	isSessionSandboxDeletionProgressValidV1,
 	isSessionSandboxObservationValidV1,
+	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxResourceIdentityV1,
 	type SessionSandboxVerifiedPolicyV1,
@@ -55,6 +57,8 @@ export interface SessionSandboxLifecycleV1 {
 	/** Original outbox proved no resource preparation was ever authorized. */
 	readonly sourceState?: "never-prepared";
 	readonly stopReceipt: SessionSandboxStopReceiptV1 | null;
+	/** Per-resource cleanup intent/progress survives a lost response or restart. */
+	readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
 	/** Set atomically before any replacement mutation can be authorized. */
 	readonly preparation?: {
 		readonly generation: number;
@@ -138,6 +142,7 @@ export function planSessionSandboxManagementTransitionV1(input: {
 			source,
 			...(neverPrepared ? { sourceState: "never-prepared" as const } : {}),
 			stopReceipt: retained ? previous.stopReceipt : null,
+			...(retained ? { deletionProgress: previous.deletionProgress } : {}),
 		} satisfies SessionSandboxLifecycleV1,
 	};
 }
@@ -198,7 +203,9 @@ export function decideSessionSandboxDrainObservationV1(input: {
 			),
 		)
 	) {
-		return { ...unknown(), observation };
+		const { deletionProgress: _untrustedProgress, ...sourceObservation } =
+			observation;
+		return { ...unknown(), observation: sourceObservation };
 	}
 	if (
 		observation.status !== "stopped" ||
@@ -258,12 +265,25 @@ export function decideSessionSandboxDrainObservationV1(input: {
 			removed.length
 	)
 		return unknown();
+	if (!isSessionSandboxDeletionProgressValidV1(lifecycle.deletionProgress))
+		return unknown();
 	for (const old of removed) {
+		const progress = lifecycle.deletionProgress?.find(
+			(entry) => entry.resource.kind === old.kind,
+		);
 		const proof = receipt.removed.find(
 			(item) => item?.resource?.kind === old.kind,
 		);
 		if (
 			!proof ||
+			!progress ||
+			progress.state !== "absent" ||
+			progress.sourceGeneration !== source.sandbox.generation ||
+			progress.resourceFence !== source.resourceFence ||
+			progress.managementFence > lifecycle.authority.managementFence ||
+			!sameIdentity(progress.resource, proof.resource) ||
+			progress.preconditions.resourceVersion !==
+				proof.preconditions?.resourceVersion ||
 			!sameIdentity(old, proof.resource) ||
 			proof.preconditions?.uid !== proof.resource.uid ||
 			proof.preconditions.resourceVersion !== proof.resource.resourceVersion ||
