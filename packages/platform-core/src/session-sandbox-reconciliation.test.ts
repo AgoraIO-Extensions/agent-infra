@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	decideSessionSandboxObservationV1,
+	isSessionSandboxDeletionProgressValidV1,
 	isSessionSandboxObservationValidV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxReconciliationClaimV1,
@@ -52,6 +53,44 @@ const ready: SessionSandboxObservationV1 = {
 };
 
 describe("Session Sandbox actual resource receipt", () => {
+	it("requires explicit absence proof and excludes PVC from delete progress", () => {
+		const service = ready.resources.find(
+			(resource) => resource.kind === "Service",
+		)!;
+		const progress = {
+			schemaVersion: 1 as const,
+			state: "absent" as const,
+			deleteAttemptId: "attempt-service",
+			deleteAttempted: true,
+			sourceGeneration: 1,
+			resourceFence: 2,
+			managementFence: 3,
+			resource: service,
+			preconditions: {
+				uid: service.uid,
+				resourceVersion: service.resourceVersion,
+			},
+			absence: {
+				kind: service.kind,
+				namespace: service.namespace,
+				name: service.name,
+			},
+		};
+		expect(isSessionSandboxDeletionProgressValidV1([progress])).toBe(true);
+		expect(
+			isSessionSandboxDeletionProgressValidV1([
+				{ ...progress, absence: undefined },
+			]),
+		).toBe(false);
+		expect(
+			isSessionSandboxDeletionProgressValidV1([
+				{
+					...progress,
+					resource: { ...service, kind: "PersistentVolumeClaim" },
+				},
+			]),
+		).toBe(false);
+	});
 	it("accepts the five actual direct-Pod resources without a fabricated controller", () => {
 		expect(isSessionSandboxObservationValidV1(claim, ready)).toBe(true);
 	});

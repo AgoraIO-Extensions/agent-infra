@@ -301,6 +301,45 @@ describe("original source stop proof", () => {
 			stopReceipt: input.observation.sourceStop,
 		});
 	});
+	it("retains only source-bound cleanup progress after a lost response", () => {
+		const input = fixture();
+		const service = input.lifecycle.source.observation!.resources.find(
+			(resource) => resource.kind === "Service",
+		)!;
+		const progress = {
+			schemaVersion: 1 as const,
+			state: "delete-requested" as const,
+			deleteAttemptId: "attempt-service",
+			deleteAttempted: false,
+			sourceGeneration: input.lifecycle.source.sandbox.generation,
+			resourceFence: input.lifecycle.source.resourceFence,
+			managementFence: input.lifecycle.authority.managementFence,
+			resource: service,
+			preconditions: {
+				uid: service.uid,
+				resourceVersion: service.resourceVersion,
+			},
+		};
+		const observation = {
+			status: "unknown" as const,
+			resources: input.lifecycle.source.observation!.resources,
+			deletionProgress: [progress],
+		};
+		expect(
+			decideSessionSandboxDrainObservationV1({ ...input, observation }),
+		).toMatchObject({ observation: { deletionProgress: [progress] } });
+		expect(
+			decideSessionSandboxDrainObservationV1({
+				...input,
+				observation: {
+					...observation,
+					deletionProgress: [
+						{ ...progress, resource: { ...service, uid: "new" } },
+					],
+				},
+			}),
+		).toMatchObject({ observation: input.lifecycle.source.observation });
+	});
 	for (const field of [
 		"sandboxId",
 		"sessionId",

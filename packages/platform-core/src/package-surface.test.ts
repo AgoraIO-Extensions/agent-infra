@@ -109,6 +109,7 @@ describe("platform-core package surface", () => {
 			"isConversationGenerationBarrierConfirmedV1",
 			"isPersonalApiAgentMetadataReadAllowedV1",
 			"isPlatformConversationChannelCurrentV1",
+			"isSessionSandboxDeletionProgressValidV1",
 			"isSessionSandboxObservationValidV1",
 			"isSessionSandboxReadyV1",
 			"isTaskApiChannelV1",

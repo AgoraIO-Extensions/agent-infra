@@ -852,6 +852,45 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				if (!drain?.lifecycle?.source.observation)
 					throw new Error("Expected drain source");
 				const resources = drain.lifecycle.source.observation.resources;
+				const service = resources.find(
+					(resource) => resource.kind === "Service",
+				)!;
+				const deleteIntent = {
+					schemaVersion: 1 as const,
+					state: "delete-requested" as const,
+					deleteAttemptId: "sandbox-delete-service",
+					deleteAttempted: false,
+					sourceGeneration: drain.lifecycle.source.sandbox.generation,
+					resourceFence: drain.lifecycle.source.resourceFence,
+					managementFence: drain.lifecycle.authority.managementFence,
+					resource: service,
+					preconditions: {
+						uid: service.uid,
+						resourceVersion: service.resourceVersion,
+					},
+				};
+				const intentResult = await store.recordSandboxDeletionProgress({
+					claim: drain,
+					progress: deleteIntent,
+					leaseDurationMs: 30_000,
+				});
+				expect(intentResult.status).toBe("committed");
+				if (intentResult.status !== "committed")
+					throw new Error("Expected delete intent claim refresh");
+				drain = intentResult.claim;
+				const attemptResult = await store.recordSandboxDeletionProgress({
+					claim: drain,
+					progress: {
+						...deleteIntent,
+						state: "unknown",
+						deleteAttempted: true,
+					},
+					leaseDurationMs: 30_000,
+				});
+				expect(attemptResult.status).toBe("committed");
+				if (attemptResult.status !== "committed")
+					throw new Error("Expected delete attempt claim refresh");
+				drain = attemptResult.claim;
 				const pvc = resources.find(
 					(resource) => resource.kind === "PersistentVolumeClaim",
 				)!;

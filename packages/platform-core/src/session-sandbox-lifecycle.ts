@@ -2,7 +2,9 @@ import type { AgentManagementWritePlanV1 } from "./agent-management.js";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	isSessionSandboxObservationValidV1,
+	isSessionSandboxDeletionProgressValidV1,
 	type SessionSandboxObservationV1,
+	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxResourceIdentityV1,
 	type SessionSandboxVerifiedPolicyV1,
 } from "./session-sandbox-reconciliation.js";
@@ -55,6 +57,8 @@ export interface SessionSandboxLifecycleV1 {
 	/** Original outbox proved no resource preparation was ever authorized. */
 	readonly sourceState?: "never-prepared";
 	readonly stopReceipt: SessionSandboxStopReceiptV1 | null;
+	/** Per-resource cleanup intent/progress survives a lost response or restart. */
+	readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
 	/** Set atomically before any replacement mutation can be authorized. */
 	readonly preparation?: {
 		readonly generation: number;
@@ -152,15 +156,43 @@ export function decideSessionSandboxDrainObservationV1(input: {
 	const { lifecycle, observation, sandbox, resourceFence } = input;
 	const source = lifecycle.source;
 	const receipt = observation.sourceStop;
-	const unknown = () => ({
-		status: "unknown" as const,
-		observation: source.observation ?? {
+	const unknown = () => {
+		const sourceResources = source.observation?.resources ?? [];
+		const deletionProgress =
+			isSessionSandboxDeletionProgressValidV1(observation.deletionProgress) &&
+			(observation.deletionProgress ?? []).every((progress) => {
+				const original = sourceResources.find(
+					(resource) => resource.kind === progress.resource.kind,
+				);
+				return (
+					!!original &&
+					original.namespace === progress.resource.namespace &&
+					original.name === progress.resource.name &&
+					original.uid === progress.resource.uid &&
+					original.resourceVersion === progress.preconditions.resourceVersion &&
+					progress.sourceGeneration === source.sandbox.generation &&
+					progress.resourceFence === source.resourceFence &&
+					progress.managementFence === lifecycle.authority.managementFence
+				);
+			})
+				? observation.deletionProgress
+				: undefined;
+		return {
 			status: "unknown" as const,
-			resources: [],
-		},
-		finished: false,
-		stopReceipt: null,
-	});
+			observation: deletionProgress
+				? {
+						...(source.observation ?? { resources: [] }),
+						status: "unknown" as const,
+						deletionProgress,
+					}
+				: (source.observation ?? {
+						status: "unknown" as const,
+						resources: [],
+					}),
+			finished: false,
+			stopReceipt: null,
+		};
+	};
 	// A prepare may have created resources before its observation committed.
 	// Keep partial owned readbacks too, preserving every previously known UID.
 	// This is evidence refinement, never readiness or stop/absence proof.

@@ -13,8 +13,10 @@ import {
 	captureTaskAuthorizationBoundaryV1,
 	decideSessionSandboxDrainObservationV1,
 	decideSessionSandboxObservationV1,
+	isSessionSandboxDeletionProgressValidV1,
 	isTaskApiChannelV1,
 	resolveCurrentPersonalApiUserV1,
+	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxLifecycleV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxPolicyV1,
@@ -461,6 +463,73 @@ export async function prepareSandboxReconciliation(
 	return renewed.length === 1;
 }
 
+/** Persist the delete intent/attempt before or after the Kubernetes call and refresh the claim. */
+export async function recordSandboxDeletionProgress(
+	transaction: Transaction,
+	claim: SessionSandboxReconciliationClaimV1,
+	progress: SessionSandboxDeletionProgressV1,
+	leaseDurationMs: number,
+	policy: SessionSandboxPolicyV1,
+	directory: TaskUserDirectoryV1 | undefined,
+): Promise<
+	| {
+			readonly status: "committed";
+			readonly claim: SessionSandboxReconciliationClaimV1;
+	  }
+	| { readonly status: "stale" | "unknown" }
+> {
+	const context = await ownedContext(transaction, claim, policy, directory);
+	const source = context?.lifecycle?.source;
+	const valid =
+		!!context &&
+		context.purpose === "drain" &&
+		!!context.lifecycle &&
+		isSessionSandboxDeletionProgressValidV1([progress]) &&
+		!!source?.observation?.resources.some(
+			(resource) =>
+				resource.kind === progress.resource.kind &&
+				resource.namespace === progress.resource.namespace &&
+				resource.name === progress.resource.name &&
+				resource.uid === progress.resource.uid &&
+				resource.resourceVersion === progress.preconditions.resourceVersion,
+		) &&
+		progress.sourceGeneration === source.sandbox.generation &&
+		progress.resourceFence === source.resourceFence &&
+		progress.managementFence === context.lifecycle.authority.managementFence;
+	if (!valid || !context?.lifecycle) return { status: "stale" };
+	const existing = context.lifecycle.deletionProgress ?? [];
+	const merged = [
+		...existing.filter(
+			(entry) => entry.resource.kind !== progress.resource.kind,
+		),
+		progress,
+	];
+	const lifecycle: SessionSandboxLifecycleV1 = {
+		...context.lifecycle,
+		deletionProgress: merged,
+	};
+	const updated = await transaction`update platform.outbox_items
+		set payload = payload || ${transaction.json({
+			schemaVersion: 1,
+			conversationId: claim.sandbox.sessionId,
+			sessionGeneration: claim.sandbox.generation,
+			lifecycle,
+		} as unknown as Parameters<
+			typeof transaction.json
+		>[0])} , lease_expires_at = clock_timestamp() + (${leaseDurationMs}::bigint * interval '1 millisecond'),
+		updated_at = clock_timestamp()
+		where id = ${claim.itemId} and status = 'processing'
+			and lease_owner = ${claim.leaseOwner}
+			and delivery_fence = ${claim.deliveryFence}
+			and lease_expires_at > clock_timestamp()
+		returning id`;
+	if (updated.length !== 1) return { status: "stale" };
+	return {
+		status: "committed",
+		claim: { ...claim, lifecycle },
+	};
+}
+
 export async function recordSandboxObservation(
 	transaction: Transaction,
 	claim: SessionSandboxReconciliationClaimV1,
@@ -491,35 +560,49 @@ export async function recordSandboxObservation(
 		decision.finished &&
 		context.purpose === "drain" &&
 		context.lifecycle?.authority.targetDesiredState === "running";
-	const recorded = await transaction`update platform.outbox_items
-		set status = ${decision.finished && !continuePreparation ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
-		available_at = clock_timestamp() + interval '1 second', updated_at = clock_timestamp()
-		where id = ${claim.itemId} and lease_expires_at > clock_timestamp() returning id`;
-	if (recorded.length !== 1) return "stale";
-	if (
-		context.lifecycle &&
-		context.purpose === "drain" &&
-		"stopReceipt" in decision
-	) {
-		await transaction`update platform.outbox_items set payload = payload || ${transaction.json(
-			{
+	const stopReceipt = "stopReceipt" in decision ? decision.stopReceipt : null;
+	if (context.lifecycle && context.purpose === "drain") {
+		const nextLifecycle = {
+			...context.lifecycle,
+			source: stopReceipt
+				? context.lifecycle.source
+				: {
+						...context.lifecycle.source,
+						observation: decision.observation,
+					},
+			deletionProgress: stopReceipt
+				? []
+				: (decision.observation.deletionProgress ??
+					context.lifecycle.deletionProgress ??
+					[]),
+			...(stopReceipt
+				? {
+						stopReceipt,
+					}
+				: {}),
+		};
+		const progressWrite = await transaction`update platform.outbox_items
+			set payload = payload || ${transaction.json({
 				schemaVersion: 1,
 				conversationId: claim.sandbox.sessionId,
 				sessionGeneration: claim.sandbox.generation,
-				lifecycle: {
-					...context.lifecycle,
-					stopReceipt: decision.stopReceipt,
-					source: decision.stopReceipt
-						? context.lifecycle.source
-						: {
-								...context.lifecycle.source,
-								observation: decision.observation,
-							},
-				},
-			} as unknown as Parameters<typeof transaction.json>[0],
-		)}
-			where id = ${claim.itemId}`;
+				lifecycle: nextLifecycle,
+			} as unknown as Parameters<typeof transaction.json>[0])}
+			where id = ${claim.itemId} and status = 'processing'
+				and lease_owner = ${claim.leaseOwner}
+				and delivery_fence = ${claim.deliveryFence}
+				and lease_expires_at > clock_timestamp()
+			returning id`;
+		if (progressWrite.length !== 1) return "stale";
 	}
+	const recorded = await transaction`update platform.outbox_items
+		set status = ${decision.finished && !continuePreparation ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
+		available_at = clock_timestamp() + interval '1 second', updated_at = clock_timestamp()
+		where id = ${claim.itemId} and status = 'processing'
+			and lease_owner = ${claim.leaseOwner}
+			and delivery_fence = ${claim.deliveryFence}
+			and lease_expires_at > clock_timestamp() returning id`;
+	if (recorded.length !== 1) return "stale";
 	await transaction`update platform.session_sandbox_allocations set status = ${decision.status},
 		resource_observation = ${transaction.json(decision.observation as unknown as Parameters<typeof transaction.json>[0])},
 		updated_at = clock_timestamp() where sandbox_id = ${claim.sandbox.sandboxId}`;

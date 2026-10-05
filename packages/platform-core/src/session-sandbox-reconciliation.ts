@@ -34,6 +34,38 @@ export interface SessionSandboxResourceIdentityV1 {
 	readonly controllerUid?: string;
 }
 
+export type SessionSandboxDeletionProgressStateV1 =
+	| "delete-requested"
+	| "absent"
+	| "unknown";
+const sessionSandboxDeletionProgressStates = new Set([
+	"delete-requested",
+	"absent",
+	"unknown",
+]);
+
+/** Durable per-resource cleanup evidence; absence is not a DELETE ACK. */
+export interface SessionSandboxDeletionProgressV1 {
+	readonly schemaVersion: 1;
+	readonly state: SessionSandboxDeletionProgressStateV1;
+	/** Stable id for the conditional DELETE attempt; survives lost responses. */
+	readonly deleteAttemptId: string;
+	readonly deleteAttempted: boolean;
+	readonly sourceGeneration: number;
+	readonly resourceFence: number;
+	readonly managementFence: number;
+	readonly resource: SessionSandboxResourceIdentityV1;
+	readonly preconditions: {
+		readonly uid: string;
+		readonly resourceVersion: string;
+	};
+	readonly absence?: {
+		readonly kind: SessionSandboxResourceIdentityV1["kind"];
+		readonly namespace: string;
+		readonly name: string;
+	};
+}
+
 /** Resource reconciliation has no business Execution or Turn delivery fence. */
 export interface SessionSandboxReconciliationClaimV1 {
 	readonly schemaVersion: 1;
@@ -60,7 +92,48 @@ export interface SessionSandboxReconciliationClaimV1 {
 export interface SessionSandboxObservationV1 {
 	readonly status: "observed" | "ready" | "stopped" | "unknown";
 	readonly sourceStop?: SessionSandboxStopReceiptV1;
+	readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
 	readonly resources: readonly SessionSandboxResourceIdentityV1[];
+}
+
+export function isSessionSandboxDeletionProgressValidV1(
+	progress: readonly SessionSandboxDeletionProgressV1[] | undefined,
+): progress is readonly SessionSandboxDeletionProgressV1[] {
+	if (progress === undefined) return true;
+	if (!Array.isArray(progress)) return false;
+	const kinds = new Set<string>();
+	return progress.every((entry) => {
+		if (
+			entry.schemaVersion !== 1 ||
+			!sessionSandboxDeletionProgressStates.has(entry.state) ||
+			typeof entry.deleteAttemptId !== "string" ||
+			!entry.deleteAttemptId.trim() ||
+			typeof entry.deleteAttempted !== "boolean" ||
+			!Number.isSafeInteger(entry.sourceGeneration) ||
+			entry.sourceGeneration < 0 ||
+			!Number.isSafeInteger(entry.resourceFence) ||
+			entry.resourceFence < 0 ||
+			!Number.isSafeInteger(entry.managementFence) ||
+			entry.managementFence < 0 ||
+			!entry.resource ||
+			kinds.has(entry.resource.kind) ||
+			entry.resource.kind === "PersistentVolumeClaim" ||
+			entry.preconditions?.uid !== entry.resource.uid ||
+			entry.preconditions.resourceVersion !== entry.resource.resourceVersion
+		)
+			return false;
+		if (entry.state === "absent") {
+			if (
+				!entry.absence ||
+				entry.absence.kind !== entry.resource.kind ||
+				entry.absence.namespace !== entry.resource.namespace ||
+				entry.absence.name !== entry.resource.name
+			)
+				return false;
+		} else if (entry.absence) return false;
+		kinds.add(entry.resource.kind);
+		return true;
+	});
 }
 
 /** Persisted resource facts, not a grant to call or recreate the Runtime. */
@@ -95,6 +168,8 @@ export function isSessionSandboxObservationValidV1(
 		!["observed", "ready", "stopped", "unknown"].includes(observation.status) ||
 		!Array.isArray(observation.resources)
 	)
+		return false;
+	if (!isSessionSandboxDeletionProgressValidV1(observation.deletionProgress))
 		return false;
 	const required = new Set([
 		"Pod",

@@ -12,6 +12,7 @@ import {
 	planConversationGenerationConfirmationV1,
 	planConversationGenerationIsolationV1,
 	planTaskSystemControlV1,
+	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
@@ -68,6 +69,7 @@ import { readSessionSandboxRuntimeState } from "./session-sandbox.js";
 import {
 	claimSandboxReconciliation,
 	prepareSandboxReconciliation,
+	recordSandboxDeletionProgress,
 	recordSandboxObservation,
 	type SandboxClaimRequest,
 } from "./session-sandbox-reconciliation.js";
@@ -166,6 +168,28 @@ export class PostgresConversationDispatchStoreV1
 					transaction,
 					input.claim,
 					input.observation,
+					policy,
+					this.#userDirectory,
+				),
+			),
+		);
+	}
+
+	async recordSandboxDeletionProgress(input: {
+		readonly claim: SessionSandboxReconciliationClaimV1;
+		readonly progress: SessionSandboxDeletionProgressV1;
+		readonly leaseDurationMs: number;
+	}) {
+		requireLeaseDuration(input.leaseDurationMs);
+		const policy = this.#sandboxPolicy;
+		if (!policy) return { status: "stale" as const };
+		return databaseOperation(() =>
+			this.#client.begin((transaction) =>
+				recordSandboxDeletionProgress(
+					transaction,
+					input.claim,
+					input.progress,
+					input.leaseDurationMs,
 					policy,
 					this.#userDirectory,
 				),
