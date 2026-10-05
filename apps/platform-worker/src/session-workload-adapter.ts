@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import {
 	decideSessionSandboxDrainObservationV1,
+	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxLifecycleV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxResourceIdentityV1,
@@ -628,6 +630,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				readonly sourceResourceFence?: number;
 				readonly targetGeneration?: number;
 				readonly targetResourceFence?: number;
+				readonly managementFence?: number;
+				readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
+				readonly recordDeletionProgress?: (
+					progress: SessionSandboxDeletionProgressV1,
+				) => Promise<"committed" | "stale" | "unknown">;
 			} = {},
 		): Promise<SessionSandboxStopReceiptV1> {
 			if (options.client.namespace !== allocation.namespace)
@@ -639,15 +646,67 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			const deletedResources: Array<
 				SessionSandboxStopReceiptV1["removed"][number]
 			> = [];
+			const progressByKind = new Map(
+				(context.deletionProgress ?? []).map((entry) => [
+					entry.resource.kind,
+					entry,
+				]),
+			);
+			const record = async (
+				resource: SessionSandboxResourceIdentityV1,
+				state: SessionSandboxDeletionProgressV1["state"],
+				result: SessionSandboxDeletionProgressV1["deleteCallResult"],
+				absence?: SessionSandboxDeletionProgressV1["absence"],
+			) => {
+				if (!context.recordDeletionProgress) return;
+				const previousProgress = progressByKind.get(resource.kind);
+				const progress: SessionSandboxDeletionProgressV1 = {
+					schemaVersion: 1,
+					state,
+					deleteAttemptId: previousProgress?.deleteAttemptId ?? randomUUID(),
+					deleteAttempted: result !== "not-attempted",
+					deleteCallResult: result,
+					sourceGeneration: context.sourceGeneration ?? allocation.generation,
+					resourceFence:
+						context.sourceResourceFence ?? allocation.resourceFence,
+					managementFence:
+						previousProgress?.managementFence ?? context.managementFence ?? 0,
+					resource,
+					preconditions: {
+						uid: resource.uid,
+						resourceVersion: resource.resourceVersion,
+					},
+					...(absence ? { absence } : {}),
+				};
+				const status = await context.recordDeletionProgress(progress);
+				if (status !== "committed")
+					throw new WorkloadKubernetesError("unavailable");
+				progressByKind.set(resource.kind, progress);
+			};
 			const resources = expectedResources
 				.filter((resource) => resource.kind !== "PersistentVolumeClaim")
 				.reverse();
 			for (const expected of resources) {
 				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
+				const existing = progressByKind.get(kind);
 				const current = await options.client.read(
 					kind,
 					expected.metadata?.name ?? "",
 				);
+				if (!current && existing?.deleteAttempted && existing.absence) {
+					await record(
+						existing.resource,
+						"absent",
+						existing.deleteCallResult,
+						existing.absence,
+					);
+					deletedResources.push({
+						resource: existing.resource,
+						preconditions: existing.preconditions,
+						absence: existing.absence,
+					});
+					continue;
+				}
 				if (!current) throw new WorkloadKubernetesError("unavailable");
 				if (!owned(current, expected, allocation))
 					throw new WorkloadKubernetesError("conflict");
@@ -658,9 +717,28 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					prior.name !== current.metadata?.name
 				)
 					throw new WorkloadKubernetesError("conflict");
-				await options.client.delete(current);
-				if (await options.client.read(kind, expected.metadata?.name ?? ""))
+				const identity = {
+					...prior,
+					resourceVersion:
+						current.metadata?.resourceVersion ?? prior.resourceVersion,
+				};
+				if (!existing?.deleteAttempted)
+					await record(identity, "delete-requested", "not-attempted");
+				try {
+					await options.client.delete(current);
+				} catch (error) {
+					await record(identity, "unknown", "unknown");
+					throw error;
+				}
+				if (await options.client.read(kind, expected.metadata?.name ?? "")) {
+					await record(identity, "unknown", "unknown");
 					throw new WorkloadKubernetesError("unavailable");
+				}
+				await record(identity, "absent", "acknowledged", {
+					kind,
+					namespace: identity.namespace,
+					name: identity.name,
+				});
 				deletedResources.push({
 					resource: {
 						...prior,
@@ -701,7 +779,22 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						},
 					},
 				};
+				const existing = progressByKind.get(prior.kind);
 				const current = await options.client.read(prior.kind, prior.name);
+				if (!current && existing?.deleteAttempted && existing.absence) {
+					await record(
+						existing.resource,
+						"absent",
+						existing.deleteCallResult,
+						existing.absence,
+					);
+					deletedResources.push({
+						resource: existing.resource,
+						preconditions: existing.preconditions,
+						absence: existing.absence,
+					});
+					continue;
+				}
 				if (
 					!current ||
 					!owned(current, expected, allocation) ||
@@ -709,9 +802,27 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					!current.metadata.resourceVersion
 				)
 					throw new WorkloadKubernetesError("conflict");
-				await options.client.delete(current);
-				if (await options.client.read(prior.kind, prior.name))
+				const identity = {
+					...prior,
+					resourceVersion: current.metadata.resourceVersion,
+				};
+				if (!existing?.deleteAttempted)
+					await record(identity, "delete-requested", "not-attempted");
+				try {
+					await options.client.delete(current);
+				} catch (error) {
+					await record(identity, "unknown", "unknown");
+					throw error;
+				}
+				if (await options.client.read(prior.kind, prior.name)) {
+					await record(identity, "unknown", "unknown");
 					throw new WorkloadKubernetesError("unavailable");
+				}
+				await record(identity, "absent", "acknowledged", {
+					kind: prior.kind,
+					namespace: identity.namespace,
+					name: identity.name,
+				});
 				deletedResources.push({
 					resource: {
 						...prior,

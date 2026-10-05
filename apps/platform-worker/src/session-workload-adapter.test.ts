@@ -483,4 +483,34 @@ describe("session sandbox workload adapter", () => {
 			metadata: { name: allocation.pvcName },
 		});
 	});
+
+	it("records durable delete intent, call result, and absence while retaining the PVC", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const observed = await adapter.observe(allocation);
+		const progress: Array<{ kind: string; state: string; result: string }> = [];
+		const receipt = await adapter.cleanup(allocation, observed.resources, {
+			managementFence: 4,
+			recordDeletionProgress: async (entry) => {
+				progress.push({
+					kind: entry.resource.kind,
+					state: entry.state,
+					result: entry.deleteCallResult,
+				});
+				return "committed";
+			},
+		});
+		expect(receipt.retainedPVC.kind).toBe("PersistentVolumeClaim");
+		expect(progress).toHaveLength(8);
+		expect(
+			progress.filter((entry) => entry.state === "delete-requested"),
+		).toHaveLength(4);
+		expect(progress.filter((entry) => entry.state === "absent")).toHaveLength(
+			4,
+		);
+		expect(
+			progress.filter((entry) => entry.result === "acknowledged"),
+		).toHaveLength(4);
+	});
 });
