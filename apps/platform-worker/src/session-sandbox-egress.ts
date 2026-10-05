@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { V1NetworkPolicy } from "@kubernetes/client-node";
 import {
 	type WorkerKubernetesClientV1,
@@ -95,7 +94,7 @@ export function createSessionSandboxEgressV1(options: {
 			kind: "NetworkPolicy",
 			metadata: {
 				namespace: value.namespace,
-				name: `sandbox-egress-${createHash("sha256").update(value.sandboxId).digest("hex").slice(0, 40)}`,
+				name: value.networkPolicyName,
 				labels,
 				annotations: {
 					[`${prefix}managed`]: "session-sandbox-egress-v1",

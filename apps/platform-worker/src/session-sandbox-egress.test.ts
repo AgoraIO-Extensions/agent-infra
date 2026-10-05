@@ -71,6 +71,7 @@ describe("Session Sandbox egress enforcement (Kubernetes fixture, not CNI eviden
 			...binding,
 			sessionId: "session-b",
 			sandboxId: "sandbox-b",
+			networkPolicyName: "sandbox-b",
 		});
 		expect(a.name).not.toBe(b.name);
 		const policy = await api.client.read<V1NetworkPolicy>(
@@ -159,6 +160,7 @@ describe("Session Sandbox egress enforcement (Kubernetes fixture, not CNI eviden
 			...binding,
 			sessionId: "session-b",
 			sandboxId: "sandbox-b",
+			networkPolicyName: "sandbox-b",
 		});
 		const sibling = await api.client.read("NetworkPolicy", other.name);
 		const policy = api.resources.get(
