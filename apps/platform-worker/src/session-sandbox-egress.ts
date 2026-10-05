@@ -5,26 +5,20 @@ import {
 	WorkloadKubernetesError,
 } from "./kubernetes-client.js";
 import { matchesNetworkPolicySpec } from "./kubernetes-runtime-comparison.js";
+import type { SessionSandboxAllocationV1 } from "./session-workload-adapter.js";
 import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
 
 /** Worker-only projection of the original committed allocation, not a new Store/wire contract. */
-export interface SessionSandboxEgressBindingV1 {
-	readonly schemaVersion: 1;
+export type SessionSandboxEgressBindingV1 = SessionSandboxAllocationV1 & {
 	readonly principalId: string;
-	readonly agentId: string;
-	readonly sessionId: string;
-	readonly sandboxId: string;
-	readonly generation: number;
-	readonly fence: number;
 	readonly configRevision: number;
 	readonly workloadRevision: number;
-	readonly namespace: string;
 	readonly leaseId: string;
 	readonly leaseExpiresAt: number;
-}
+};
 export interface SessionSandboxEgressReceiptV1 {
 	readonly name: string;
 	readonly uid: string;
