@@ -6,6 +6,7 @@ import {
 	PostgresAgentConfigurationQueryV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
+import type postgres from "postgres";
 import {
 	afterAll,
 	afterEach,
@@ -21,24 +22,15 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.ts";
+import { markSessionSandboxReadyFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.js";
 import { workloadDesiredFixture } from "../../platform-worker/src/kubernetes.fixture.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 import { startPlatformApi } from "./index.js";
 
-interface DatabaseReader {
-	unsafe(
-		query: string,
-		parameters?: readonly unknown[],
-	): Promise<Record<string, unknown>[]>;
-	end(): Promise<void>;
-}
 const connectDatabase = createRequire(
 	import.meta.resolve("@agent-infra/platform-store"),
-)("postgres") as (
-	url: string,
-	options: { max: number; onnotice: () => void },
-) => DatabaseReader;
+)("postgres") as typeof postgres;
 const configuration = {
 	...agentConfigurationConformanceRecordV1,
 	schemaVersion: 1 as const,
@@ -78,7 +70,7 @@ const unavailable = async (): Promise<never> => {
 	throw new Error("Unexpected admission call");
 };
 let database: PostgresTestDatabase;
-let db: DatabaseReader;
+let db: postgres.Sql;
 let assembly: PlatformApiAssembly;
 let server: ReturnType<typeof startPlatformApi>;
 let origin: string;
@@ -104,6 +96,7 @@ async function createConversation() {
 	);
 	expect(response.status).toBe(201);
 	const body = (await response.json()) as { conversationId: string };
+	await markSessionSandboxReadyFixture(db, body.conversationId);
 	return body.conversationId;
 }
 async function snapshot() {
@@ -444,9 +437,17 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		expect(before).toMatchObject({
 			executions: 1,
 			authorizations: 1,
-			outbox: 1,
+			outbox: 2,
 			task_audits: 1,
 		});
+		expect(
+			await db.unsafe(
+				"select operation from platform.outbox_items order by operation",
+			),
+		).toEqual([
+			{ operation: "conversation.sandbox.reconcile.v1" },
+			{ operation: "conversation.turn.submit.v1" },
+		]);
 		const audits = await db.unsafe(
 			"select actor_id,target_id,details from platform.audit_events where action='task.authorization.accepted'",
 		);
@@ -532,7 +533,7 @@ describe("API task boundary over real HTTP and PostgreSQL", () => {
 		expect(await snapshot()).toMatchObject({
 			executions: 2,
 			authorizations: 2,
-			outbox: 2,
+			outbox: 3,
 			task_audits: 2,
 		});
 	});

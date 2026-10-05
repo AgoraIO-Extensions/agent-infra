@@ -1,6 +1,6 @@
 {
-  "id": "33972ccf-29b5-4832-95e7-a51f32eea93a",
-  "prevId": "9b9589ba-5731-4ab7-b2fd-34a292bb23f0",
+  "id": "980ab031-417e-4501-abaa-92e3d477c8f3",
+  "prevId": "33972ccf-29b5-4832-95e7-a51f32eea93a",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1133,6 +1133,12 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "principal": {
+          "name": "principal",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {

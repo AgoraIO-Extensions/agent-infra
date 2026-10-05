@@ -27,7 +27,7 @@ export class PostgresLdapSessionStoreV1 {
 			await sql`delete from platform.browser_sessions where expires_at <= clock_timestamp()`;
 			await sql`
 				insert into platform.browser_sessions (token_digest, uid, expires_at, principal)
-				values (${digest}, ${uid}, ${new Date(expiresAt)}, ${principal ?? null})
+				values (${digest}, ${uid}, ${new Date(expiresAt)}, ${principal ? sql.json(principal as postgres.JSONValue) : null})
 			`;
 		});
 	}

@@ -16,6 +16,7 @@ import { PostgresConversationEventTransactionV1 } from "../../packages/platform-
 import { migratePlatformDatabase } from "../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../packages/platform-store/src/postgres-test.js";
 import { PostgresScopedPlatformAuditQueryV1 } from "../../packages/platform-store/src/scoped-audit-query.js";
+import { seedSessionSandboxFixture } from "../../packages/platform-store/src/session-sandbox.fixture.js";
 import { insertTaskAuthorization } from "../../packages/platform-store/src/task-authorization.js";
 import { startAlertBackend } from "./alert-backend.js";
 import { evaluateAlerts } from "./alerts.js";
@@ -179,6 +180,7 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 		await sql`insert into platform.agents (id, authorization_revision) values ('agent','auth')`;
 		await sql`insert into platform.conversations (id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values (${conversationId},'agent','actor','web','active',3,'auth')`;
 		await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,model_configuration_revision,model_option_id,reasoning_level,created_at,updated_at) values (${executionId},${conversationId},'agent','actor','web','turn','unknown',3,5,'auth',1,'option-1','medium',now(),now())`;
+		await seedSessionSandboxFixture(sql, conversationId);
 		await sql.begin((transaction) =>
 			insertTaskAuthorization(transaction, {
 				executionId,

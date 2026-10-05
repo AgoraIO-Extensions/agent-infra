@@ -16,6 +16,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { seedSessionSandboxFixture } from "./session-sandbox.fixture.ts";
 
 type PostgresClient = ReturnType<typeof postgres>;
 
@@ -42,6 +43,7 @@ afterAll(async () => {
 });
 
 async function seedConformanceConversation(): Promise<void> {
+	await client`delete from platform.session_sandbox_allocations where conversation_id = ${conformanceConversationId}`;
 	await client`delete from platform.files where conversation_id = ${conformanceConversationId}`;
 	await client`
 		delete from platform.conversation_events
@@ -75,6 +77,7 @@ async function seedConformanceConversation(): Promise<void> {
 			 'turn_event_fixture', 'unknown', 3, 5,
 			 'authorization_event_fixture', now(), now())
 	`;
+	await seedSessionSandboxFixture(client, conformanceConversationId);
 	const file: FileRecordV1 = {
 		fileId: "file_fixture",
 		objectRef: "00000000-0000-4000-8000-000000000001",
@@ -230,6 +233,7 @@ async function seedConversation(): Promise<{
 			 'channel_event', 'turn_event', 'unknown', 3, 5,
 			 'authorization_event', now(), now())
 	`;
+	await seedSessionSandboxFixture(client, conversationId);
 	return { conversationId, executionId };
 }
 
@@ -899,6 +903,33 @@ describe("PostgreSQL actual operation facts and necessary audits", () => {
 });
 
 describe("PostgreSQL Conversation event transaction", () => {
+	it("rejects new and replayed events after the Execution loses its Sandbox binding", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const { events, close } = openEvents("event_sandbox_binding");
+		try {
+			const input = eventInput(conversationId, executionId);
+			await expect(events.persist(input)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			await client`update platform.conversation_executions set sandbox_id = null
+				where execution_id = ${executionId}`;
+			await expect(events.persist(input)).rejects.toMatchObject({
+				code: "unavailable",
+			});
+			await expect(
+				events.persist(
+					eventInput(conversationId, executionId, "new_after_binding_loss"),
+				),
+			).rejects.toMatchObject({ code: "unavailable" });
+			expect(
+				await client`select count(*)::int as count from platform.conversation_events
+				where execution_id = ${executionId}`,
+			).toEqual([{ count: 1 }]);
+		} finally {
+			await close();
+		}
+	});
+
 	it("atomically persists once, records the private runtime cursor, and replays before stale fencing", async () => {
 		const { conversationId, executionId } = await seedConversation();
 		const { events, close } = openEvents("event_postgres_1");

@@ -19,6 +19,7 @@ import {
 	requireConversationOperationSuccessorV2,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
+import { readSessionSandboxBinding } from "./session-sandbox.js";
 
 type Transaction = postgres.TransactionSql;
 type JsonValue = Parameters<ReturnType<typeof postgres>["json"]>[0];
@@ -565,7 +566,9 @@ async function lockConversation(
 		for update
 	`;
 	if (rows.length > 1) unavailable();
-	return rows[0];
+	if (!rows[0]) return undefined;
+	const sandbox = await readSessionSandboxBinding(transaction, conversationId);
+	return sandbox ? rows[0] : undefined;
 }
 
 async function readExecution(
@@ -574,12 +577,16 @@ async function readExecution(
 	executionId: string,
 ): Promise<ExecutionRow | undefined> {
 	const rows = await transaction<ExecutionRow[]>`
-		select execution_id, conversation_id, session_generation, delivery_fence,
-			last_event_sequence, agent_id, actor_id, channel_id,
-			model_option_id, reasoning_level
-		from platform.conversation_executions
-		where execution_id = ${executionId} and conversation_id = ${conversationId}
-		for update
+		select e.execution_id, e.conversation_id, e.session_generation, e.delivery_fence,
+			e.last_event_sequence, e.agent_id, e.actor_id, e.channel_id,
+			e.model_option_id, e.reasoning_level
+		from platform.conversation_executions e
+		join platform.session_sandbox_allocations a
+			on a.conversation_id = e.conversation_id and a.sandbox_id = e.sandbox_id
+			and a.agent_id = e.agent_id and a.actor_id = e.actor_id
+			and a.principal_type = e.principal_type and a.channel_id = e.channel_id
+		where e.execution_id = ${executionId} and e.conversation_id = ${conversationId}
+		for update of e
 	`;
 	if (rows.length > 1) unavailable();
 	return rows[0];
@@ -798,17 +805,18 @@ export class PostgresConversationEventTransactionV1
 				persistedRequest.command.executionId,
 				persistedRequest.command.adapterEventKey,
 			);
-			const execution =
-				conversation && leaseCurrent
-					? await readExecution(
-							transaction,
-							conversation.id,
-							persistedRequest.command.executionId,
-						)
-					: undefined;
+			const execution = conversation
+				? await readExecution(
+						transaction,
+						conversation.id,
+						persistedRequest.command.executionId,
+					)
+				: undefined;
+			// Immutable event replay may outlive a delivery lease, never its Session binding.
+			if (!conversation || !execution) unavailable();
 			const state: ConversationEventStateV1 = {
 				conversation: conversationState(conversation),
-				execution: executionState(execution),
+				execution: executionState(leaseCurrent ? execution : undefined),
 				existingEvent: eventState(existing),
 				...(persistedRequest.command.event.type === "execution.operation"
 					? {

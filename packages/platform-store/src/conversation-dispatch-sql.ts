@@ -27,6 +27,10 @@ import {
 	operation,
 	terminal,
 } from "./conversation-dispatch-validation.js";
+import {
+	readSessionSandboxBinding,
+	readSessionSandboxReadiness,
+} from "./session-sandbox.js";
 
 export async function readGenerationIsolation(
 	transaction: Transaction,
@@ -105,7 +109,16 @@ export async function lockConversation(
 			host_session_ref, authorization_revision
 		from platform.conversations where id = ${conversationId} for update
 	`;
-	return rows[0];
+	const row = rows[0];
+	if (!row) return undefined;
+	const sandbox = await readSessionSandboxBinding(transaction, conversationId);
+	return sandbox
+		? {
+				...row,
+				sandbox,
+				sandbox_ready: await readSessionSandboxReadiness(transaction, sandbox),
+			}
+		: undefined;
 }
 
 export async function lockExecution(
@@ -114,7 +127,7 @@ export async function lockExecution(
 	executionId: string,
 ): Promise<ExecutionRow | undefined> {
 	const rows = await transaction<ExecutionRow[]>`
-		select execution_id, conversation_id, agent_id, actor_id, principal_type, channel_id, turn_id,
+		select execution_id, conversation_id, sandbox_id, agent_id, actor_id, principal_type, channel_id, turn_id,
 			status, session_generation::text, delivery_fence::text,
 			authorization_revision, last_runtime_cursor,
 			model_configuration_revision::text, model_option_id, reasoning_level,
@@ -287,6 +300,7 @@ export function bindingMatches(
 		| "waiting-cancellation"
 		| "waiting-settlement" = "business",
 ) {
+	if (!conversation.sandbox) return false;
 	const waitingCancellation = purpose !== "business";
 	if (
 		waitingCancellation &&
@@ -329,6 +343,7 @@ export function bindingMatches(
 		conversation.id === payload.conversationId &&
 		execution.execution_id === payload.executionId &&
 		execution.conversation_id === conversation.id &&
+		execution.sandbox_id === conversation.sandbox.sandboxId &&
 		conversation.agent_id === execution.agent_id &&
 		conversation.actor_id === execution.actor_id &&
 		conversation.principal_type === execution.principal_type &&
@@ -361,6 +376,10 @@ function claimMatchesState(
 	const principal = executionPrincipalProjection(state.execution);
 	if (
 		!payload ||
+		!claim.sandbox ||
+		!state.conversation.sandbox ||
+		!isDeepStrictEqual(claim.sandbox, state.conversation.sandbox) ||
+		state.execution.sandbox_id !== claim.sandbox.sandboxId ||
 		principal.kind !== (claim.principal?.kind ?? "user") ||
 		principal.id !== (claim.principal?.id ?? claim.actorId) ||
 		state.conversation.principal_type !== principal.kind ||

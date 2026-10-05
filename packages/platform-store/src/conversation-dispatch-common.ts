@@ -8,6 +8,7 @@ import type {
 	ConversationDispatchExecutionStatusV1,
 	ConversationDispatchOperationV1,
 	ConversationMetadataRecoveryV1,
+	SessionSandboxBindingV1,
 } from "@agent-infra/platform-core";
 import {
 	conversationExecutionSourceV1,
@@ -55,6 +56,8 @@ export interface OutboxRow {
 }
 
 export interface ConversationRow {
+	sandbox?: SessionSandboxBindingV1;
+	sandbox_ready: boolean;
 	id: string;
 	agent_id: string;
 	actor_id: string;
@@ -67,6 +70,7 @@ export interface ConversationRow {
 }
 
 export interface ExecutionRow {
+	sandbox_id: string | null;
 	execution_id: string;
 	conversation_id: string;
 	agent_id: string;

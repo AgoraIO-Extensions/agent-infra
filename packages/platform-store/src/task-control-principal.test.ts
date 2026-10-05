@@ -27,6 +27,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.js";
+import { seedSessionSandboxFixture } from "./session-sandbox.fixture.ts";
 import {
 	insertTaskAuthorization,
 	PostgresTaskAuthorizationStoreV1,
@@ -94,6 +95,7 @@ async function seed(kind: TaskPrincipalV1["kind"]) {
 			requestId: "request",
 		}),
 	);
+	await seedSessionSandboxFixture(client, "conversation");
 }
 
 async function control(
@@ -566,6 +568,40 @@ describe("waiting cancellation after Conversation authorization changes", () => 
 });
 
 describe("waiting settlement and per-Conversation ordering", () => {
+	it.each(["user", "application"] as const)(
+		"keeps %s work waiting for its own Sandbox but still settles its original deadline",
+		async (kind) => {
+			await waitingTask(kind);
+			await client`update platform.session_sandbox_allocations set status = 'allocated', resource_fence = 0, resource_observation = null where conversation_id = 'conversation'`;
+			const before = await waitingSnapshot();
+			const request = {
+				schemaVersion: 1 as const,
+				itemId: "conversation:turn:execution",
+				workerId: "worker",
+				leaseDurationMs: 30_000,
+			};
+			const attempt = () =>
+				client.begin((transaction) =>
+					claimWork(transaction, request, userDirectory),
+				);
+			expect(await attempt()).toEqual({ outcome: "busy" });
+			expect(await waitingSnapshot()).toEqual(before);
+			await client`update platform.conversation_executions set created_at = clock_timestamp() - interval '2 seconds', task_wait_deadline = clock_timestamp() - interval '1 second' where execution_id = 'execution'`;
+			expect(await attempt()).toEqual({ outcome: "failed" });
+			const after = await waitingSnapshot();
+			expect(after.executions[0]).toMatchObject({
+				status: "failed",
+				delivery_fence: "0",
+			});
+			expect(after.messages[0]).toMatchObject({
+				failure_code: "TASK_WAIT_TIMEOUT",
+			});
+			expect(
+				await client`select status, resource_fence::int as fence from platform.session_sandbox_allocations where conversation_id = 'conversation'`,
+			).toEqual([{ status: "allocated", fence: 0 }]);
+		},
+	);
+
 	it.each(["user", "application"] as const)(
 		"fails a never-sent %s task when its Conversation becomes unavailable",
 		async (kind) => {

@@ -13,6 +13,7 @@ import postgres from "postgres";
 import { expect, it } from "vitest";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
+import { seedSessionSandboxFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.js";
 import { createConversationRuntimeV2 } from "./conversation-runtime.js";
 
 // Real PostgreSQL, Worker authorization/transport and Core/Store CAS. The Host
@@ -47,6 +48,7 @@ it("recovers only the original control ref through production Worker/Core and Po
 			"regenerate",
 			"stop",
 			"response_lost",
+			"malformed_response",
 			"wrong_execution",
 			"takeover",
 			"persistence_failure",
@@ -75,6 +77,7 @@ it("recovers only the original control ref through production Worker/Core and Po
 					 model_option_id, reasoning_level, last_runtime_cursor, created_at)
 					values (${executionId}, ${conversationId}, 'agent-1070', 'user-1070', 'web', ${turnId},
 					 'unknown', 1, 7, 'authorization-1070', 1, 'option-1070', 'high', 'original-cursor', now())`;
+			await seedSessionSandboxFixture(sql, conversationId);
 			// Unknown owns the active slot. A same-Conversation successor must
 			// be rejected by the real constraint, rather than seeded beside it.
 			await expect(
@@ -275,6 +278,16 @@ it("recovers only the original control ref through production Worker/Core and Po
 					);
 					if (scenario === "response_lost")
 						throw new Error("Controlled transport response loss");
+					if (scenario === "malformed_response")
+						return new Response(
+							JSON.stringify({
+								schemaVersion: 3,
+								outcome: "binding_found",
+								hostSessionRef,
+								executionId,
+								status: "running",
+							}),
+						);
 					return new Response(
 						JSON.stringify({
 							schemaVersion: 3,

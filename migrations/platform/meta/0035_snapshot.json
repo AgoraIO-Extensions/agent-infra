@@ -1,5 +1,5 @@
 {
-  "id": "c6870ac7-af65-4aaa-a842-43fa0136f8e4",
+  "id": "9b9589ba-5731-4ab7-b2fd-34a292bb23f0",
   "prevId": "ef365259-c80c-464b-92e0-40a972b74056",
   "version": "7",
   "dialect": "postgresql",
@@ -1338,11 +1338,11 @@
         },
         "conversation_audit_execution_binding": {
           "name": "conversation_audit_execution_binding",
-          "value": "(\n\t\t\t\t\t\"platform\".\"conversation_audit_events\".\"execution_id\" IS NULL\n\t\t\t\t\tAND \"platform\".\"conversation_audit_events\".\"action\" = 'conversation.model_selection.updated'\n\t\t\t\t) OR (\n\t\t\t\t\t\"platform\".\"conversation_audit_events\".\"execution_id\" IS NOT NULL\n\t\t\t\t\tAND \"platform\".\"conversation_audit_events\".\"action\" <> 'conversation.model_selection.updated'\n\t\t\t\t)"
+          "value": "(\n\t\t\t\t\t\"platform\".\"conversation_audit_events\".\"execution_id\" IS NULL\n\t\t\t\t\tAND \"platform\".\"conversation_audit_events\".\"action\" in ('conversation.model_selection.updated', 'conversation.sandbox.allocated', 'conversation.sandbox.observed')\n\t\t\t\t) OR (\n\t\t\t\t\t\"platform\".\"conversation_audit_events\".\"execution_id\" IS NOT NULL\n\t\t\t\t\tAND \"platform\".\"conversation_audit_events\".\"action\" not in ('conversation.model_selection.updated', 'conversation.sandbox.allocated', 'conversation.sandbox.observed')\n\t\t\t\t)"
         },
         "conversation_audit_details_binding": {
           "name": "conversation_audit_details_binding",
-          "value": "(\n\t\t\t\t\"platform\".\"conversation_audit_events\".\"action\" in (\n\t\t\t\t\t'conversation.model_selection.updated',\n\t\t\t\t\t'conversation.model_selection.fell_back'\n\t\t\t\t)\n\t\t\t) = (\"platform\".\"conversation_audit_events\".\"details\" IS NOT NULL)"
+          "value": "(\n\t\t\t\t\"platform\".\"conversation_audit_events\".\"action\" in (\n\t\t\t\t\t'conversation.sandbox.allocated',\n\t\t\t\t\t'conversation.sandbox.observed',\n\t\t\t\t\t'conversation.model_selection.updated',\n\t\t\t\t\t'conversation.model_selection.fell_back'\n\t\t\t\t)\n\t\t\t) = (\"platform\".\"conversation_audit_events\".\"details\" IS NOT NULL)"
         },
         "conversation_audit_trace_id_non_empty": {
           "name": "conversation_audit_trace_id_non_empty",
@@ -1753,6 +1753,12 @@
         "task_wait_deadline": {
           "name": "task_wait_deadline",
           "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sandbox_id": {
+          "name": "sandbox_id",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         }
@@ -2807,74 +2813,6 @@
         "idempotency_result_state": {
           "name": "idempotency_result_state",
           "value": "(\"platform\".\"idempotency_records\".\"status\" = 'reserved' AND \"platform\".\"idempotency_records\".\"result\" IS NULL) OR (\"platform\".\"idempotency_records\".\"status\" = 'completed' AND \"platform\".\"idempotency_records\".\"result\" IS NOT NULL)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "platform.ldap_identity_ids": {
-      "name": "ldap_identity_ids",
-      "schema": "platform",
-      "columns": {
-        "issuer": {
-          "name": "issuer",
-          "type": "varchar(256)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "uid": {
-          "name": "uid",
-          "type": "varchar(256)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "ldap_identity_user_id_unique": {
-          "name": "ldap_identity_user_id_unique",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "ldap_identity_ids_issuer_uid_pk": {
-          "name": "ldap_identity_ids_issuer_uid_pk",
-          "columns": [
-            "issuer",
-            "uid"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "ldap_identity_issuer_non_empty": {
-          "name": "ldap_identity_issuer_non_empty",
-          "value": "char_length(\"platform\".\"ldap_identity_ids\".\"issuer\") > 0"
-        },
-        "ldap_identity_uid_non_empty": {
-          "name": "ldap_identity_uid_non_empty",
-          "value": "char_length(\"platform\".\"ldap_identity_ids\".\"uid\") > 0"
-        },
-        "ldap_identity_user_id_uuid_v4": {
-          "name": "ldap_identity_user_id_uuid_v4",
-          "value": "\"platform\".\"ldap_identity_ids\".\"user_id\" ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'"
         }
       },
       "isRLSEnabled": false
@@ -4275,6 +4213,215 @@
         "secret_key_rotation_completed_empty": {
           "name": "secret_key_rotation_completed_empty",
           "value": "\"platform\".\"secret_key_rotations\".\"state\" <> 'completed' or \"platform\".\"secret_key_rotations\".\"remaining_secrets\" = 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.session_sandbox_allocations": {
+      "name": "session_sandbox_allocations",
+      "schema": "platform",
+      "columns": {
+        "sandbox_id": {
+          "name": "sandbox_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "principal_type": {
+          "name": "principal_type",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "channel_id": {
+          "name": "channel_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "session_generation": {
+          "name": "session_generation",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resource_name": {
+          "name": "resource_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_scope": {
+          "name": "workspace_scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resource_fence": {
+          "name": "resource_fence",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "desired_state": {
+          "name": "desired_state",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'running'"
+        },
+        "resource_policy": {
+          "name": "resource_policy",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resource_observation": {
+          "name": "resource_observation",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "session_sandbox_conversation_unique": {
+          "name": "session_sandbox_conversation_unique",
+          "columns": [
+            {
+              "expression": "conversation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "session_sandbox_resource_unique": {
+          "name": "session_sandbox_resource_unique",
+          "columns": [
+            {
+              "expression": "resource_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "session_sandbox_workspace_unique": {
+          "name": "session_sandbox_workspace_unique",
+          "columns": [
+            {
+              "expression": "workspace_scope",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "session_sandbox_conversation_binding_fk": {
+          "name": "session_sandbox_conversation_binding_fk",
+          "tableFrom": "session_sandbox_allocations",
+          "tableTo": "conversations",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "conversation_id",
+            "agent_id",
+            "actor_id",
+            "principal_type",
+            "channel_id"
+          ],
+          "columnsTo": [
+            "id",
+            "agent_id",
+            "actor_id",
+            "principal_type",
+            "channel_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "session_sandbox_id_uuid": {
+          "name": "session_sandbox_id_uuid",
+          "value": "\"platform\".\"session_sandbox_allocations\".\"sandbox_id\" ~ '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'"
+        },
+        "session_sandbox_generation_safe": {
+          "name": "session_sandbox_generation_safe",
+          "value": "\"platform\".\"session_sandbox_allocations\".\"session_generation\" between 1 and 9007199254740991"
+        },
+        "session_sandbox_resource_binding": {
+          "name": "session_sandbox_resource_binding",
+          "value": "\"platform\".\"session_sandbox_allocations\".\"resource_name\" = 'sandbox-' || \"platform\".\"session_sandbox_allocations\".\"sandbox_id\""
+        },
+        "session_sandbox_workspace_binding": {
+          "name": "session_sandbox_workspace_binding",
+          "value": "\"platform\".\"session_sandbox_allocations\".\"workspace_scope\" = \"platform\".\"session_sandbox_allocations\".\"sandbox_id\""
+        },
+        "session_sandbox_status_valid": {
+          "name": "session_sandbox_status_valid",
+          "value": "\"platform\".\"session_sandbox_allocations\".\"status\" in ('allocated', 'applying', 'observed', 'ready', 'stopped', 'unknown', 'unavailable')"
+        },
+        "session_sandbox_resource_fence_safe": {
+          "name": "session_sandbox_resource_fence_safe",
+          "value": "\"platform\".\"session_sandbox_allocations\".\"resource_fence\" between 0 and 9007199254740991"
+        },
+        "session_sandbox_desired_state_valid": {
+          "name": "session_sandbox_desired_state_valid",
+          "value": "\"platform\".\"session_sandbox_allocations\".\"desired_state\" in ('running', 'stopped')"
         }
       },
       "isRLSEnabled": false

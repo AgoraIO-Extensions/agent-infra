@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createAgentManagementV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -18,6 +19,7 @@ import {
 import { createConversationEventUseCaseV1 } from "../../platform-core/src/conversation-events.ts";
 import { createConversationExecutionUseCaseV1 } from "../../platform-core/src/conversation-execution.ts";
 import { FakeConversationRuntimeHostV1 } from "../../platform-core/src/fake-conversation-runtime-host.ts";
+import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
 import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.ts";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.ts";
@@ -26,6 +28,10 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import {
+	markSessionSandboxReadyFixture,
+	seedSessionSandboxFixture,
+} from "./session-sandbox.fixture.ts";
 
 let databaseUrl = "";
 let client: ReturnType<typeof postgres>;
@@ -52,6 +58,7 @@ afterEach(async () => {
 		"drop function if exists platform.conversation_dispatch_failure()",
 	);
 	await client`truncate platform.conversation_generation_tombstones,
+		platform.session_sandbox_allocations,
 		platform.task_control_records, platform.task_authorization_records,
 		platform.file_accesses, platform.files, platform.conversation_events,
 		platform.conversation_audit_events, platform.audit_events,
@@ -311,6 +318,7 @@ async function seed(
 			relay_key_id=${persistedKey.key_id}, relay_key_version=1
 			where execution_id=${executionId}`;
 	}
+	await seedSessionSandboxFixture(client, conversationId);
 	return {
 		conversationId,
 		executionId,
@@ -406,6 +414,1205 @@ async function dispatchState(work: { itemId: string; executionId: string }) {
 }
 
 describe("PostgreSQL Conversation dispatch Store", () => {
+	it.each(["stop-first", "claim-first"] as const)(
+		"serializes never-prepared stop with first resource authorization (%s)",
+		async (order) => {
+			const verified = await seedCapacityAgent("agent-dispatch", 8, "custom");
+			await client`insert into platform.agent_configuration_revisions (agent_id, revision, source_reference, created_at, configuration)
+			values ('agent-dispatch',4,'never-prepared',now(),${client.json(verified.verified.configuration)})`;
+			await client`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent-dispatch','actor-dispatch',now())`;
+			const transaction = new PostgresConversationExecutionTransactionV1({
+				databaseUrl,
+			});
+			const api = createConversationExecutionUseCaseV1({
+				transaction,
+				authorization: {
+					async authorize() {
+						return {
+							outcome: "allowed",
+							authority: {
+								schemaVersion: 1,
+								actorId: "actor-dispatch",
+								agentId: "agent-dispatch",
+								channelId: "web",
+								authorizationRevision: "authorization-dispatch",
+								supportsSupplementaryInstruction: false,
+							},
+						};
+					},
+				},
+			});
+			const managementStore = new PostgresAgentManagementTransactionV1({
+				databaseUrl,
+			});
+			const management = createAgentManagementV1(managementStore);
+			let active = true;
+			const store = new PostgresConversationDispatchStoreV1({
+				databaseUrl,
+				sandboxPolicy: {
+					namespace: workloadTestPolicy.namespace,
+					resourceConfigurationHash:
+						workloadResourceConfigurationHashV1(workloadTestPolicy),
+				},
+				userDirectory: {
+					async resolveUser(userId) {
+						return {
+							schemaVersion: 1,
+							userId,
+							accountStatus: active ? "active" : "disabled",
+							organizationIds: [],
+							authorizationRevision: "current",
+						};
+					},
+				},
+			});
+			const actor = {
+				schemaVersion: 1 as const,
+				userId: "actor-dispatch",
+				accountStatus: "active" as const,
+				organizationIds: [],
+				isAdministrator: false,
+			};
+			try {
+				const created = await api.createConversation({
+					schemaVersion: 1,
+					agentId: "agent-dispatch",
+					idempotencyKey: "unprepared-create",
+					requestId: "unprepared-create",
+					traceId: "unprepared-create",
+				});
+				if (created.outcome !== "accepted") throw new Error("Expected Session");
+				const conversationId = created.result.conversationId;
+				const request = {
+					schemaVersion: 1 as const,
+					itemId: `conversation:sandbox:${conversationId}:1`,
+					workerId: "first-resource-worker",
+					leaseDurationMs: 30_000,
+				};
+				const stopCommand = {
+					schemaVersion: 1 as const,
+					command: "stop_agent" as const,
+					agentId: "agent-dispatch",
+					expectedRevision: 1,
+					idempotencyKey: "first-stop",
+					requestId: "first-stop",
+					traceId: "first-stop",
+				};
+				if (order === "stop-first") {
+					await client.unsafe(`create function platform.fail_never_prepared_audit() returns trigger language plpgsql as $$
+					begin if new.action = 'conversation.sandbox.never_prepared_stopped' then raise exception 'controlled audit failure'; end if; return new; end $$`);
+					await client.unsafe(
+						"create trigger fail_never_prepared_audit before insert on platform.audit_events for each row execute function platform.fail_never_prepared_audit()",
+					);
+					try {
+						await expect(
+							management.executeManagementCommand(stopCommand, actor),
+						).rejects.toThrow();
+					} finally {
+						await client.unsafe(
+							"drop trigger fail_never_prepared_audit on platform.audit_events",
+						);
+						await client.unsafe(
+							"drop function platform.fail_never_prepared_audit()",
+						);
+					}
+					expect(
+						await client`select status,resource_fence::int as fence from platform.session_sandbox_allocations where conversation_id=${conversationId}`,
+					).toEqual([{ status: "allocated", fence: 0 }]);
+					expect(
+						await client`select status,delivery_fence::int as fence,payload->'lifecycle' as lifecycle from platform.outbox_items where id=${request.itemId}`,
+					).toEqual([{ status: "pending", fence: 0, lifecycle: null }]);
+				}
+
+				let stopPromise:
+					| ReturnType<typeof management.executeManagementCommand>
+					| undefined;
+				let claimPromise:
+					| ReturnType<typeof store.claimSandboxReconciliation>
+					| undefined;
+				await client.begin(async (blocker) => {
+					const [owner] = await blocker<
+						{ pid: number }[]
+					>`select pg_backend_pid() as pid`;
+					if (!owner) throw new Error("Expected blocker");
+					await blocker`select id from platform.conversations where id = ${conversationId} for update`;
+					if (order === "stop-first")
+						stopPromise = management.executeManagementCommand(
+							stopCommand,
+							actor,
+						);
+					else claimPromise = store.claimSandboxReconciliation(request);
+					await expect
+						.poll(
+							async () =>
+								(
+									await client`select 1 from pg_stat_activity where ${owner.pid} = any(pg_blocking_pids(pid))`
+								).length,
+							{
+								interval: 10,
+								timeout: 1000,
+								message:
+									"Expected first operation holding Agent authority while waiting for Conversation",
+							},
+						)
+						.toBeGreaterThan(0);
+					if (order === "stop-first")
+						claimPromise = store.claimSandboxReconciliation(request);
+					else
+						stopPromise = management.executeManagementCommand(
+							stopCommand,
+							actor,
+						);
+				});
+				expect(await stopPromise).toMatchObject({ outcome: "accepted" });
+				const first = await claimPromise;
+				const [stopped] =
+					await client`select status,payload from platform.outbox_items where id=${request.itemId}`;
+				if (order === "claim-first") {
+					if (!first) throw new Error("Expected first preparation");
+					expect(stopped?.status).toBe("pending");
+					expect(stopped?.payload.lifecycle.sourceState).toBeUndefined();
+					expect(stopped?.payload.lifecycle.source).toMatchObject({
+						resourceFence: 1,
+						policy: first.policy,
+						deployment: first.deployment,
+						observation: null,
+					});
+					expect(
+						await store.prepareSandboxReconciliation({
+							claim: first,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(false);
+					return;
+				}
+				expect(first).toBeNull();
+				expect(stopped).toMatchObject({
+					status: "succeeded",
+					payload: {
+						lifecycle: {
+							sourceState: "never-prepared",
+							stopReceipt: null,
+							source: {
+								resourceFence: 0,
+								policy: null,
+								observation: null,
+								deployment: null,
+							},
+						},
+					},
+				});
+				expect(
+					await client`select status,resource_fence::int as fence,resource_observation from platform.session_sandbox_allocations where conversation_id=${conversationId}`,
+				).toEqual([
+					{ status: "stopped", fence: 1, resource_observation: null },
+				]);
+				expect(
+					await client`select count(*)::int as count from platform.audit_events where details->>'conversationId'=${conversationId} and action='conversation.sandbox.never_prepared_stopped'`,
+				).toEqual([{ count: 1 }]);
+				expect(
+					await management.executeManagementCommand(
+						{
+							...stopCommand,
+							command: "restart_agent",
+							expectedRevision: 2,
+							idempotencyKey: "first-restart",
+						},
+						actor,
+					),
+				).toMatchObject({ outcome: "accepted" });
+				const target = structuredClone(verified);
+				target.sourceLifecycleRevision = 6;
+				target.fence = 6;
+				target.revision = 6;
+				target.candidate.deployment.workloadRevision = 6;
+				target.candidate.deployment.fence = 6;
+				target.verified.deployment.workloadRevision = 6;
+				target.verified.deployment.fence = 6;
+				await client`update platform.workload_reconciliations set revision=6,state=${client.json(target)} where agent_id='agent-dispatch'`;
+				expect(
+					await management.recordWorkloadObservation({
+						schemaVersion: 1,
+						observation: "service_ready",
+						observationId: "first-ready",
+						agentId: "agent-dispatch",
+						expectedRevision: 3,
+						workloadRevision: 6,
+						fence: 6,
+						requestId: "first-ready",
+						traceId: "first-ready",
+					}),
+				).toMatchObject({ outcome: "accepted" });
+				active = false;
+				expect(await store.claimSandboxReconciliation(request)).toBeNull();
+				active = true;
+				const prepared = await store.claimSandboxReconciliation(request);
+				if (!prepared)
+					throw new Error("Expected first authorization after restart");
+				expect(prepared).toMatchObject({
+					purpose: "prepare",
+					resourceFence: 2,
+					lifecycle: {
+						sourceState: "never-prepared",
+						preparation: { generation: 1, resourceFence: 2 },
+						stopReceipt: null,
+					},
+				});
+				expect(
+					await store.prepareSandboxReconciliation({
+						claim: prepared,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				expect(
+					await management.executeManagementCommand(
+						{
+							...stopCommand,
+							expectedRevision: 4,
+							idempotencyKey: "second-stop",
+						},
+						actor,
+					),
+				).toMatchObject({ outcome: "accepted" });
+				const [next] =
+					await client`select status,payload from platform.outbox_items where id=${request.itemId}`;
+				expect(next?.status).toBe("pending");
+				expect(next?.payload.lifecycle.sourceState).toBeUndefined();
+				expect(next?.payload.lifecycle.source).toMatchObject({
+					resourceFence: 2,
+					policy: prepared.policy,
+					deployment: prepared.deployment,
+					observation: null,
+				});
+				expect(
+					await store.prepareSandboxReconciliation({
+						claim: prepared,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(false);
+				expect(
+					await client`select count(*)::int as count from platform.conversation_executions`,
+				).toEqual([{ count: 0 }]);
+			} finally {
+				await Promise.all([
+					transaction.close(),
+					managementStore.close(),
+					store.close(),
+				]);
+			}
+		},
+	);
+
+	it.each(["recover", "stop-during-prepare", "lost-observation"] as const)(
+		"rebuilds the same allocation and PVC only after durable stop proof and fresh business authority (%s)",
+		async (mode) => {
+			const work = await seed("conversation.turn.submit.v1", {
+				executionStatus: "completed",
+			});
+			const [workload] =
+				await client`select state from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+			const verified = workload!.state;
+			await client`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent-dispatch','owner-a',now()),('agent-dispatch','actor-dispatch',now())`;
+			const policy = {
+				namespace: workloadTestPolicy.namespace,
+				resourceConfigurationHash:
+					workloadResourceConfigurationHashV1(workloadTestPolicy),
+			};
+			const sourcePolicy = {
+				...policy,
+				configurationRevision: 4,
+				workloadRevision: 4,
+				managementFence: 4,
+				imageDigest: verified.verified.deployment.imageDigest,
+			};
+			const [allocation] =
+				await client`select * from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`;
+			const originalResources = allocation!.resource_observation.resources.map(
+				(resource: {
+					kind: string;
+					name: string;
+					uid: string;
+					resourceVersion: string;
+				}) => ({ ...resource, namespace: policy.namespace }),
+			);
+			await client`update platform.session_sandbox_allocations set resource_policy = ${client.json(sourcePolicy)}, resource_observation = ${client.json({ status: "ready", resources: originalResources })} where conversation_id = ${work.conversationId}`;
+			if (mode === "lost-observation")
+				await client`update platform.session_sandbox_allocations set resource_observation = null where conversation_id = ${work.conversationId}`;
+			const managementStore = new PostgresAgentManagementTransactionV1({
+				databaseUrl,
+			});
+			const management = createAgentManagementV1(managementStore);
+			let active = true;
+			const store = new PostgresConversationDispatchStoreV1({
+				databaseUrl,
+				sandboxPolicy: policy,
+				userDirectory: {
+					async resolveUser(userId) {
+						return {
+							schemaVersion: 1,
+							userId,
+							accountStatus: active ? "active" : "disabled",
+							organizationIds: [],
+							authorizationRevision: "directory-current",
+						};
+					},
+				},
+			});
+			const actor = {
+				schemaVersion: 1 as const,
+				userId: "owner-a",
+				accountStatus: "active" as const,
+				organizationIds: [],
+				isAdministrator: false,
+			};
+			const request = {
+				schemaVersion: 1 as const,
+				itemId: `conversation:sandbox:${work.conversationId}:1`,
+				workerId: "replacement-worker",
+				leaseDurationMs: 30_000,
+			};
+			try {
+				expect(
+					await management.executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: "stop_agent",
+							agentId: "agent-dispatch",
+							expectedRevision: 1,
+							idempotencyKey: "stop-for-rebuild",
+							requestId: "stop",
+							traceId: "stop",
+						},
+						actor,
+					),
+				).toMatchObject({ outcome: "accepted" });
+				let drain = await store.claimSandboxReconciliation(request);
+				if (mode === "lost-observation") {
+					if (!drain) throw new Error("Expected unobserved source claim");
+					expect(drain.previousObservation).toBeNull();
+					expect(
+						await store.recordSandboxObservation({
+							claim: drain,
+							observation: { status: "unknown", resources: [] },
+						}),
+					).toBe("unknown");
+					await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+					drain = await store.claimSandboxReconciliation(request);
+					if (!drain) throw new Error("Expected missing source retry");
+					const partial = {
+						status: "observed" as const,
+						resources: originalResources.filter(
+							(resource: { kind: string }) =>
+								resource.kind === "ServiceAccount",
+						),
+					};
+					expect(
+						await store.recordSandboxObservation({
+							claim: drain,
+							observation: partial,
+						}),
+					).toBe("unknown");
+					expect(
+						await store.prepareSandboxReconciliation({
+							claim: drain,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(false);
+					const [partialRow] =
+						await client`select status,resource_observation from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`;
+					expect(partialRow).toMatchObject({
+						status: "unknown",
+						resource_observation: partial,
+					});
+					await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+					drain = await store.claimSandboxReconciliation(request);
+					if (!drain) throw new Error("Expected partial source retry");
+					expect(drain.lifecycle?.source.observation).toEqual(partial);
+					expect(drain.lifecycle?.stopReceipt).toBeNull();
+					expect(drain.purpose).toBe("drain");
+					expect(
+						await store.recordSandboxObservation({
+							claim: drain,
+							observation: { status: "observed", resources: originalResources },
+						}),
+					).toBe("unknown");
+					expect(
+						await store.prepareSandboxReconciliation({
+							claim: drain,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(false);
+					await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+					drain = await store.claimSandboxReconciliation(request);
+					expect(drain?.lifecycle?.source.observation).toEqual({
+						status: "observed",
+						resources: originalResources,
+					});
+				}
+				if (!drain?.lifecycle?.source.observation)
+					throw new Error("Expected drain source");
+				const resources = drain.lifecycle.source.observation.resources;
+				const pvc = resources.find(
+					(resource) => resource.kind === "PersistentVolumeClaim",
+				)!;
+				const receipt = {
+					schemaVersion: 1 as const,
+					sandboxId: drain.sandbox.sandboxId,
+					sessionId: drain.sandbox.sessionId,
+					sourceGeneration: drain.lifecycle.source.sandbox.generation,
+					sourceResourceFence: drain.lifecycle.source.resourceFence,
+					targetGeneration: drain.sandbox.generation,
+					targetResourceFence: drain.resourceFence,
+					removed: resources
+						.filter((resource) => resource.kind !== "PersistentVolumeClaim")
+						.map((resource) => ({
+							resource,
+							preconditions: {
+								uid: resource.uid,
+								resourceVersion: resource.resourceVersion,
+							},
+							absence: {
+								kind: resource.kind,
+								namespace: resource.namespace,
+								name: resource.name,
+							},
+						})),
+					retainedPVC: pvc,
+				};
+				expect(
+					await store.recordSandboxObservation({
+						claim: drain,
+						observation: {
+							status: "stopped",
+							resources: [pvc],
+							sourceStop: receipt,
+						},
+					}),
+				).toBe("committed");
+				expect(
+					await management.executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: "restart_agent",
+							agentId: "agent-dispatch",
+							expectedRevision: 2,
+							idempotencyKey: "restart-after-stop",
+							requestId: "restart",
+							traceId: "restart",
+						},
+						actor,
+					),
+				).toMatchObject({ outcome: "accepted" });
+				// Original verified Workload is a controlled receiver fixture, not runtime acceptance.
+				const target = structuredClone(verified);
+				target.sourceLifecycleRevision = 6;
+				target.fence = 6;
+				target.revision = 6;
+				target.candidate.deployment.workloadRevision = 6;
+				target.candidate.deployment.fence = 6;
+				target.verified.deployment.workloadRevision = 6;
+				target.verified.deployment.fence = 6;
+				await client`update platform.workload_reconciliations set revision = 6, state = ${client.json(target)} where agent_id = 'agent-dispatch'`;
+				expect(
+					await management.recordWorkloadObservation({
+						schemaVersion: 1,
+						observation: "service_ready",
+						observationId: "restarted-ready",
+						agentId: "agent-dispatch",
+						expectedRevision: 3,
+						workloadRevision: 6,
+						fence: 6,
+						requestId: "observed",
+						traceId: "observed",
+					}),
+				).toMatchObject({ outcome: "accepted" });
+				active = false;
+				expect(await store.claimSandboxReconciliation(request)).toBeNull();
+				active = true;
+				await client`update platform.conversation_executions set status = 'unknown' where execution_id = ${work.executionId}`;
+				expect(await store.claimSandboxReconciliation(request)).toBeNull();
+				await client`update platform.conversation_executions set status = 'completed' where execution_id = ${work.executionId}`;
+				const replacement = await store.claimSandboxReconciliation(request);
+				if (!replacement?.deployment)
+					throw new Error("Expected authorized replacement preparation");
+				expect(replacement).toMatchObject({
+					purpose: "prepare",
+					desiredState: "running",
+					sandbox: drain.sandbox,
+					resourceFence: 3,
+					previousObservation: { status: "stopped", resources: [pvc] },
+					lifecycle: { source: drain.lifecycle.source, stopReceipt: receipt },
+				});
+				expect(replacement.authorization).not.toBeNull();
+				if (mode === "stop-during-prepare") {
+					expect(
+						await management.executeManagementCommand(
+							{
+								schemaVersion: 1,
+								command: "stop_agent",
+								agentId: "agent-dispatch",
+								expectedRevision: 4,
+								idempotencyKey: "stop-new-source",
+								requestId: "stop-new",
+								traceId: "stop-new",
+							},
+							actor,
+						),
+					).toMatchObject({ outcome: "accepted" });
+					const [stopping] =
+						await client`select payload from platform.outbox_items where id = ${request.itemId}`;
+					expect(stopping?.payload.lifecycle).toMatchObject({
+						source: {
+							resourceFence: replacement.resourceFence,
+							policy: replacement.policy,
+						},
+						stopReceipt: null,
+					});
+					expect(
+						await store.prepareSandboxReconciliation({
+							claim: replacement,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(false);
+					return;
+				}
+				expect(replacement.policy).toMatchObject({
+					managementFence: 6,
+					workloadRevision: 6,
+				});
+				expect(
+					await store.prepareSandboxReconciliation({
+						claim: replacement,
+						leaseDurationMs: 30_000,
+					}),
+				).toBe(true);
+				const newResources = resources.map((resource) =>
+					resource.kind === "PersistentVolumeClaim"
+						? resource
+						: { ...resource, uid: `new-${resource.uid}`, resourceVersion: "2" },
+				);
+				expect(
+					await store.recordSandboxObservation({
+						claim: replacement,
+						observation: {
+							status: "ready",
+							resources: newResources.map((resource) =>
+								resource.kind === "PersistentVolumeClaim"
+									? { ...resource, uid: "foreign-volume" }
+									: resource,
+							),
+						},
+					}),
+				).toBe("unknown");
+				await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+				const retry = await store.claimSandboxReconciliation(request);
+				if (!retry) throw new Error("Expected original replacement retry");
+				expect(
+					await store.recordSandboxObservation({
+						claim: retry,
+						observation: { status: "ready", resources: newResources },
+					}),
+				).toBe("committed");
+				expect(
+					await client`select sandbox_id, workspace_scope, session_generation::int, status from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`,
+				).toEqual([
+					{
+						sandbox_id: allocation!.sandbox_id,
+						workspace_scope: allocation!.workspace_scope,
+						session_generation: 1,
+						status: "ready",
+					},
+				]);
+				expect(
+					await client`select count(*)::int as count from platform.outbox_items where scope_id = ${work.conversationId} and operation = 'conversation.sandbox.reconcile.v1'`,
+				).toEqual([{ count: 1 }]);
+				expect(
+					await client`select status from platform.conversation_executions where execution_id = ${work.executionId}`,
+				).toEqual([{ status: "completed" }]);
+			} finally {
+				await Promise.all([store.close(), managementStore.close()]);
+			}
+		},
+	);
+
+	it("prepares a new Session without an Execution and commits observations only under the current lease and authority", async () => {
+		const verifiedState = await seedCapacityAgent(
+			"agent-dispatch",
+			8,
+			"custom",
+		);
+		await client`insert into platform.agent_configuration_revisions
+			(agent_id, revision, source_reference, created_at, configuration)
+			values ('agent-dispatch', 4, 'resource-test-source', now(), ${client.json(verifiedState.verified.configuration)})`;
+		await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'actor-dispatch', now()), ('agent-dispatch', 'owner-a', now())`;
+		const transaction = new PostgresConversationExecutionTransactionV1({
+			databaseUrl,
+		});
+		const api = createConversationExecutionUseCaseV1({
+			transaction,
+			authorization: {
+				async authorize() {
+					return {
+						outcome: "allowed",
+						authority: {
+							schemaVersion: 1,
+							actorId: "actor-dispatch",
+							agentId: "agent-dispatch",
+							channelId: "web",
+							authorizationRevision: "authorization-dispatch",
+							supportsSupplementaryInstruction: false,
+						},
+					};
+				},
+			},
+		});
+		let expireDuringAuthorization = false;
+		const store = new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			sandboxPolicy: {
+				namespace: workloadTestPolicy.namespace,
+				resourceConfigurationHash:
+					workloadResourceConfigurationHashV1(workloadTestPolicy),
+			},
+			userDirectory: {
+				async resolveUser(userId) {
+					if (expireDuringAuthorization) {
+						// A real directory lookup can outlive the locked outbox lease.
+						await client`select pg_sleep(greatest(0, extract(epoch from (lease_expires_at - clock_timestamp()))) + 0.02)
+							from platform.outbox_items where lease_owner = 'resource-worker' and status = 'processing'`;
+					}
+
+					return {
+						schemaVersion: 1,
+						userId,
+						accountStatus: "active",
+						organizationIds: [],
+						authorizationRevision: "identity-1",
+					};
+				},
+			},
+		});
+		try {
+			const created = await api.createConversation({
+				schemaVersion: 1,
+				agentId: "agent-dispatch",
+				idempotencyKey: "resource-create",
+				requestId: "resource-request",
+				traceId: "resource-trace",
+			});
+			if (created.outcome !== "accepted") throw new Error("Expected Session");
+			const itemId = `conversation:sandbox:${created.result.conversationId}:1`;
+			expect(await store.findDispatchable({ limit: 10 })).toEqual([
+				{ itemId, operation: "conversation.sandbox.reconcile.v1" },
+			]);
+			const request = {
+				schemaVersion: 1 as const,
+				itemId,
+				workerId: "resource-worker",
+				leaseDurationMs: 30_000,
+			};
+			const claim = await store.claimSandboxReconciliation(request);
+			if (!claim?.deployment)
+				throw new Error("Expected prepare resource claim");
+			expect(claim.execution).toBeNull();
+			expect(claim.deployment).toEqual(verifiedState.verified.deployment);
+			expect(claim).not.toHaveProperty("executionDeliveryFence");
+			expect(claim.resourceFence).toBe(1);
+			expect(
+				await client`select count(*)::int as count from platform.conversation_executions`,
+			).toEqual([{ count: 0 }]);
+			await expect(
+				store.prepareSandboxReconciliation({
+					claim: { ...claim, leaseOwner: "other-worker" },
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe(false);
+			const mismatchedClaims = [
+				{
+					...claim,
+					deployment: {
+						...claim.deployment,
+						env: { ...claim.deployment.env, FORGED: "untrusted" },
+					},
+				},
+				{
+					...claim,
+					deployment: {
+						...claim.deployment,
+						service: { ...claim.deployment.service, port: 54321 },
+					},
+				},
+				{ ...claim, deliveryFence: claim.deliveryFence + 1 },
+				{ ...claim, resourceFence: claim.resourceFence + 1 },
+				{ ...claim, resourceStatus: "unknown" as const },
+				{
+					...claim,
+					previousObservation: { status: "observed" as const, resources: [] },
+				},
+				{ ...claim, desiredState: "stopped" as const },
+				{
+					...claim,
+					policy: {
+						...claim.policy,
+						configurationRevision: claim.policy.configurationRevision + 1,
+					},
+				},
+				{
+					...claim,
+					sandbox: { ...claim.sandbox, sessionId: "another-session" },
+				},
+				{ ...claim, sandbox: { ...claim.sandbox, agentId: "another-agent" } },
+				{ ...claim, sandbox: { ...claim.sandbox, channelId: "wecom" } },
+				{
+					...claim,
+					sandbox: {
+						...claim.sandbox,
+						generation: claim.sandbox.generation + 1,
+					},
+				},
+				{
+					...claim,
+					sandbox: {
+						...claim.sandbox,
+						principal: {
+							kind: "application" as const,
+							id: claim.sandbox.principal.id,
+						},
+					},
+				},
+			];
+			const unchanged =
+				await client`select status, resource_fence, resource_policy, resource_observation from platform.session_sandbox_allocations`;
+			for (const mismatched of mismatchedClaims) {
+				await expect(
+					store.prepareSandboxReconciliation({
+						claim: mismatched,
+						leaseDurationMs: 30_000,
+					}),
+				).resolves.toBe(false);
+				await expect(
+					store.recordSandboxObservation({
+						claim: mismatched,
+						observation: { status: "unknown", resources: [] },
+					}),
+				).resolves.toBe("stale");
+			}
+			expect(
+				await client`select status, resource_fence, resource_policy, resource_observation from platform.session_sandbox_allocations`,
+			).toEqual(unchanged);
+
+			await expect(
+				store.prepareSandboxReconciliation({ claim, leaseDurationMs: 30_000 }),
+			).resolves.toBe(true);
+			await expect(
+				store.recordSandboxObservation({
+					claim,
+					observation: { status: "ready", resources: [] },
+				}),
+			).rejects.toThrow();
+			await expect(
+				store.recordSandboxObservation({
+					claim,
+					observation: { status: "unknown", resources: [] },
+				}),
+			).resolves.toBe("unknown");
+			await client`update platform.outbox_items set available_at = now() where id = ${itemId}`;
+			const retry = await store.claimSandboxReconciliation(request);
+			if (!retry) throw new Error("Expected original allocation retry");
+			expect(retry.resourceFence).toBe(claim.resourceFence);
+			expect(retry.deliveryFence).toBe(claim.deliveryFence + 1);
+			expect(retry.sandbox).toEqual(claim.sandbox);
+			const resources = (
+				[
+					"Pod",
+					"Service",
+					"ServiceAccount",
+					"PersistentVolumeClaim",
+					"NetworkPolicy",
+				] as const
+			).map((kind) => ({
+				kind,
+				namespace: workloadTestPolicy.namespace,
+				name: claim.sandbox.resourceName,
+				uid: `uid-${kind}`,
+				resourceVersion: "1",
+			}));
+			await expect(
+				store.recordSandboxObservation({
+					claim,
+					observation: { status: "ready", resources },
+				}),
+			).resolves.toBe("stale");
+			await client`delete from platform.agent_owners where agent_id = 'agent-dispatch' and owner_id = 'actor-dispatch'`;
+			await expect(
+				store.recordSandboxObservation({
+					claim: retry,
+					observation: { status: "ready", resources },
+				}),
+			).resolves.toBe("stale");
+			expect(
+				await client`select status, resource_fence::int as fence from platform.session_sandbox_allocations`,
+			).toEqual([{ status: "unknown", fence: 1 }]);
+			await client`insert into platform.agent_owners (agent_id, owner_id, created_at)
+				values ('agent-dispatch', 'actor-dispatch', now())`;
+			await expect(
+				store.recordSandboxObservation({
+					claim: retry,
+					observation: { status: "ready", resources },
+				}),
+			).resolves.toBe("committed");
+			expect(
+				await client`select status, resource_fence::int as fence,
+				jsonb_array_length(resource_observation->'resources') as identities from platform.session_sandbox_allocations`,
+			).toEqual([{ status: "ready", fence: 1, identities: 5 }]);
+			expect(
+				await client`select status from platform.outbox_items where id = ${itemId}`,
+			).toEqual([{ status: "succeeded" }]);
+			const message = await api.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: created.result.conversationId,
+				text: "bounded ready Session consumer",
+				idempotencyKey: "resource-business",
+				requestId: "resource-business",
+				traceId: "resource-trace",
+			});
+			if (message.outcome !== "accepted")
+				throw new Error("Expected ready Session admission");
+			const business = await store.claim({
+				schemaVersion: 1,
+				itemId: `conversation:turn:${message.result.executionId}`,
+				workerId: "business-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (business.outcome !== "claimed")
+				throw new Error("Expected business claim");
+			expect(
+				(await store.readRuntimeState({ claim: business.claim }))
+					?.sandboxResource,
+			).toEqual({
+				sandbox: retry.sandbox,
+				resourceFence: retry.resourceFence,
+				desiredState: "running",
+				status: "ready",
+				policy: retry.policy,
+				observation: { status: "ready", resources },
+			});
+			expect(
+				await store.readRuntimeState({
+					claim: { ...business.claim, leaseOwner: "other-worker" },
+				}),
+			).toBeNull();
+
+			for (const field of [
+				"configurationRevision",
+				"workloadRevision",
+				"managementFence",
+				"imageDigest",
+			] as const) {
+				await client`update platform.session_sandbox_allocations set resource_policy = ${client.json({ ...retry.policy, [field]: field === "imageDigest" ? "sha256:stale" : Number(retry.policy[field]) + 1 })} where conversation_id = ${created.result.conversationId}`;
+				expect(
+					(await store.readRuntimeState({ claim: business.claim }))
+						?.sandboxResource,
+				).toBeNull();
+			}
+			await client`update platform.session_sandbox_allocations set resource_policy = ${client.json({ ...retry.policy })} where conversation_id = ${created.result.conversationId}`;
+
+			// Simulate the original reconciliation being requested again; no new allocation.
+			await client`update platform.outbox_items set status = 'pending', available_at = now() where id = ${itemId}`;
+			const recheck = await store.claimSandboxReconciliation(request);
+			if (!recheck) throw new Error("Expected resource recheck");
+			await expect(
+				store.recordSandboxObservation({
+					claim: recheck,
+					observation: {
+						status: "ready",
+						resources: resources.map((resource) =>
+							resource.kind === "Pod"
+								? { ...resource, uid: "unverified-replacement" }
+								: resource,
+						),
+					},
+				}),
+			).resolves.toBe("unknown");
+			expect(
+				await client`select status, resource_fence::int as fence, resource_observation->'resources' as resources from platform.session_sandbox_allocations`,
+			).toEqual([{ status: "unknown", fence: 1, resources }]);
+			expect(
+				(await store.readRuntimeState({ claim: business.claim }))
+					?.sandboxResource,
+			).toMatchObject({
+				status: "unknown",
+				resourceFence: recheck.resourceFence,
+				observation: { resources },
+			});
+			await client`update platform.session_sandbox_allocations set resource_policy = jsonb_set(resource_policy, '{resourceConfigurationHash}', '"changed-policy"') where conversation_id = ${created.result.conversationId}`;
+			expect(
+				(await store.readRuntimeState({ claim: business.claim }))
+					?.sandboxResource,
+			).toBeNull();
+			await client`update platform.session_sandbox_allocations set resource_policy = ${client.json({ ...recheck.policy })} where conversation_id = ${created.result.conversationId}`;
+
+			for (const operation of ["prepare", "record"] as const) {
+				await client`update platform.outbox_items set available_at = now() where id = ${itemId}`;
+				const expiring = await store.claimSandboxReconciliation(request);
+				if (!expiring) throw new Error("Expected current resource lease");
+				await client`update platform.outbox_items set lease_expires_at = clock_timestamp() + interval '250 milliseconds' where id = ${itemId}`;
+				const before =
+					await client`select status, resource_fence, resource_observation from platform.session_sandbox_allocations`;
+				const audits =
+					await client`select count(*)::int as count from platform.conversation_audit_events`;
+				expireDuringAuthorization = true;
+				if (operation === "prepare") {
+					await expect(
+						store.prepareSandboxReconciliation({
+							claim: expiring,
+							leaseDurationMs: 30_000,
+						}),
+					).resolves.toBe(false);
+				} else {
+					await expect(
+						store.recordSandboxObservation({
+							claim: expiring,
+							observation: { status: "ready", resources },
+						}),
+					).resolves.toBe("stale");
+				}
+				expireDuringAuthorization = false;
+				expect(
+					await client`select status, resource_fence, resource_observation from platform.session_sandbox_allocations`,
+				).toEqual(before);
+				expect(
+					await client`select count(*)::int as count from platform.conversation_audit_events`,
+				).toEqual(audits);
+				expect(
+					await client`select status, lease_expires_at <= clock_timestamp() as expired from platform.outbox_items where id = ${itemId}`,
+				).toEqual([{ status: "processing", expired: true }]);
+			}
+			// Preserve the original signed control route after management closes
+			// business readiness, even when current deployment facts are replaced.
+			const managementStore = new PostgresAgentManagementTransactionV1({
+				databaseUrl,
+			});
+			try {
+				const [managementRow] =
+					await client`select management_revision from platform.agent_applications where agent_id = 'agent-dispatch'`;
+				expect(
+					await createAgentManagementV1(
+						managementStore,
+					).executeManagementCommand(
+						{
+							schemaVersion: 1,
+							command: "stop_agent",
+							agentId: "agent-dispatch",
+							expectedRevision: Number(managementRow!.management_revision),
+							idempotencyKey: "control-source-stop",
+							requestId: "control-source-stop",
+							traceId: "control-source-stop",
+						},
+						{
+							schemaVersion: 1,
+							userId: "actor-dispatch",
+							accountStatus: "active",
+							organizationIds: [],
+							isAdministrator: false,
+						},
+					),
+				).toMatchObject({ outcome: "accepted" });
+			} finally {
+				await managementStore.close();
+			}
+			const [intent] =
+				await client`select payload from platform.outbox_items where id = ${itemId}`;
+			expect(intent!.payload.lifecycle.source.deployment).toEqual(
+				claim.deployment,
+			);
+			await client`update platform.workload_reconciliations set state = jsonb_set(state, '{verified}', 'null'::jsonb) where agent_id = 'agent-dispatch'`;
+			const sourceState = (
+				await store.readRuntimeState({ claim: business.claim })
+			)?.sandboxResource;
+			expect(sourceState).toMatchObject({
+				status: "unknown",
+				desiredState: "stopped",
+				resourceFence: 2,
+				controlSource: {
+					sandbox: claim.sandbox,
+					resourceFence: 1,
+					policy: claim.policy,
+					deployment: claim.deployment,
+					observation: { resources },
+				},
+			});
+			expect(
+				await store.readRuntimeState({
+					claim: {
+						...business.claim,
+						deliveryFence: business.claim.deliveryFence + 1,
+					},
+				}),
+			).toBeNull();
+			for (const [path, value] of [
+				["{lifecycle,source,deployment}", "null"],
+				["{lifecycle,source,deployment,agentId}", '"other-agent"'],
+				["{lifecycle,source,deployment,configRevision}", "999"],
+				["{lifecycle,source,resourceFence}", "2"],
+				["{lifecycle,source,sandbox,generation}", "2"],
+				["{lifecycle,source,sandbox,principal,id}", '"other-user"'],
+				["{lifecycle,source,observation,resources,0,uid}", '"foreign-uid"'],
+				["{lifecycle,preparation}", '{"generation":1,"resourceFence":2}'],
+				["{lifecycle,stopReceipt}", '{"schemaVersion":1}'],
+			] as const) {
+				await client`update platform.outbox_items set payload = jsonb_set(${client.json(intent!.payload)}::jsonb, ${path}::text[], ${value}::jsonb) where id = ${itemId}`;
+				expect(
+					(await store.readRuntimeState({ claim: business.claim }))
+						?.sandboxResource,
+				).toBeNull();
+			}
+			await client`update platform.outbox_items set payload = ${client.json(intent!.payload)} where id = ${itemId}`;
+			expect(
+				(await store.readRuntimeState({ claim: business.claim }))
+					?.sandboxResource,
+			).toEqual(sourceState);
+		} finally {
+			await transaction.close();
+			await store.close();
+		}
+	});
+
+	it.each([
+		"allocated",
+		"applying",
+		"observed",
+		"unknown",
+		"stopped",
+		"unavailable",
+	])(
+		"keeps business work unclaimed while its own Sandbox is %s",
+		async (status) => {
+			const work = await seed();
+			await client`update platform.session_sandbox_allocations set status = ${status} where conversation_id = ${work.conversationId}`;
+			const before = await dispatchState(work);
+			const result = await claim(work.itemId);
+			try {
+				expect(result.decision).toEqual({ outcome: "busy" });
+				expect(await dispatchState(work)).toEqual(before);
+			} finally {
+				await result.store.close();
+			}
+		},
+	);
+
+	it("reads Sandbox readiness after acquiring the Conversation lock", async () => {
+		const work = await seed();
+		const store = open();
+		const blocker = postgres(databaseUrl, { max: 1 });
+		let pending: ReturnType<typeof store.claim> | undefined;
+		try {
+			await blocker.begin(async (transaction) => {
+				const [owner] = await transaction<
+					{ pid: number }[]
+				>`select pg_backend_pid() as pid`;
+				if (!owner) throw new Error("Expected blocker process");
+				await transaction`select id from platform.conversations where id = ${work.conversationId} for update`;
+				pending = store.claim({
+					schemaVersion: 1,
+					itemId: work.itemId,
+					workerId: "waiting-worker",
+					leaseDurationMs: 30_000,
+				});
+				await expect
+					.poll(async () => {
+						const [row] = await client<{ blocked: boolean }[]>`select exists (
+						select 1 from pg_stat_activity where datname = current_database()
+						and ${owner.pid} = any(pg_blocking_pids(pid))) as blocked`;
+						return row?.blocked;
+					})
+					.toBe(true);
+				await transaction`update platform.session_sandbox_allocations set status = 'unknown' where conversation_id = ${work.conversationId}`;
+			});
+			expect(await pending).toEqual({ outcome: "busy" });
+			expect(await dispatchState(work)).toMatchObject({
+				status: "pending",
+				outbox_fence: 0,
+				execution_fence: 0,
+			});
+		} finally {
+			await blocker.end();
+			await pending;
+			await store.close();
+		}
+	});
+
+	it("still claims an existing stop while its Sandbox is unknown", async () => {
+		const work = await seed("conversation.turn.stop.v1", {
+			executionStatus: "processing",
+			executionFence: 1,
+		});
+		await client`update platform.session_sandbox_allocations set status = 'unknown' where conversation_id = ${work.conversationId}`;
+		const result = await claim(work.itemId);
+		try {
+			expect(result.decision.outcome).toBe("claimed");
+		} finally {
+			await result.store.close();
+		}
+	});
+
+	it("rechecks Sandbox readiness before Runtime preparation without changing occupancy", async () => {
+		const work = await seed();
+		const result = await claim(work.itemId);
+		try {
+			if (result.decision.outcome !== "claimed")
+				throw new Error("Expected claim");
+			await client`update platform.session_sandbox_allocations set status = 'unknown' where conversation_id = ${work.conversationId}`;
+			const before = await dispatchState(work);
+			await expect(
+				result.store.prepareRuntimeDispatch({
+					claim: result.decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe("capacity_wait");
+			expect(await dispatchState(work)).toEqual(before);
+		} finally {
+			await result.store.close();
+		}
+	});
+
+	it("rejects a persisted Sandbox swap after claim without releasing either Session", async () => {
+		const first = await seed();
+		const other = await seed();
+		const claimed = await claim(first.itemId);
+		try {
+			if (claimed.decision.outcome !== "claimed")
+				throw new Error("Expected claim");
+			const original = claimed.decision.claim;
+			expect(original.sandbox?.sessionId).toBe(first.conversationId);
+			const [otherBinding] =
+				await client`select sandbox_id from platform.session_sandbox_allocations
+				where conversation_id = ${other.conversationId}`;
+			expect(otherBinding?.sandbox_id).not.toBe(original.sandbox?.sandboxId);
+			await client`update platform.conversation_executions set sandbox_id = ${otherBinding?.sandbox_id}
+				where execution_id = ${first.executionId}`;
+			const before = await dispatchState(first);
+			await expect(
+				claimed.store.prepareRuntimeDispatch({
+					claim: original,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe(false);
+			expect(await dispatchState(first)).toEqual(before);
+			expect(
+				await client`select count(*)::int as count from platform.session_sandbox_allocations`,
+			).toEqual([{ count: 2 }]);
+			expect(await dispatchState(other)).toMatchObject({
+				status: "pending",
+				execution_status: "submitted",
+				execution_fence: 0,
+			});
+		} finally {
+			await claimed.store.close();
+		}
+	});
+
 	it("reserves verified capacity for an accepted custom Agent message without Platform model selection", async () => {
 		const agentId = "custom-dispatch";
 		const state = await seedCapacityAgent(agentId, 1, "custom");
@@ -444,6 +1651,10 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			});
 			if (created.outcome !== "accepted")
 				throw new Error("Expected custom Conversation");
+			await markSessionSandboxReadyFixture(
+				client,
+				created.result.conversationId,
+			);
 			const accepted = await api.accept({
 				schemaVersion: 1,
 				command: "message",
@@ -2275,6 +3486,22 @@ describe("durable generation isolation in the existing dispatch loop", () => {
 
 	it("survives restart and two Workers with the same tombstone and rolls back every confirmation write when audit fails", async () => {
 		const work = await seedIsolation();
+		const resourceItemId = `conversation:sandbox:${work.conversationId}:1`;
+		await client`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id, status, lease_owner, lease_expires_at)
+			values (${resourceItemId}, 'conversation', ${work.conversationId}, 'conversation.sandbox.reconcile.v1',
+			${client.json({ schemaVersion: 1, conversationId: work.conversationId, sessionGeneration: 1 })}, 'resource-trace', 'resource-request',
+			'processing', 'old-resource-worker', clock_timestamp() + interval '1 minute')`;
+		const resourceState = async () => ({
+			allocation: (
+				await client`select sandbox_id, workspace_scope, session_generation::int as generation,
+				resource_fence::int as fence, status, resource_policy, resource_observation
+				from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`
+			)[0],
+			outbox: (
+				await client`select status, lease_owner, lease_expires_at from platform.outbox_items where id = ${resourceItemId}`
+			)[0],
+		});
+		const resourceBefore = await resourceState();
 		const supplement = await seedSupplement(work);
 		await seedStop(work);
 		const first = await claim(work.itemId, "first");
@@ -2331,6 +3558,7 @@ describe("durable generation isolation in the existing dispatch loop", () => {
 				isolation_status: "pending",
 				execution_status: "unknown",
 			});
+			expect(await resourceState()).toEqual(resourceBefore);
 			expect(
 				(
 					await client`select status from platform.conversation_messages where message_id = ${supplement}`
@@ -2340,6 +3568,30 @@ describe("durable generation isolation in the existing dispatch loop", () => {
 				"drop trigger isolation_confirmation_failure on platform.audit_events",
 			);
 			expect(await store.confirmGenerationIsolation(confirmation)).toBe(true);
+			expect(await resourceState()).toEqual({
+				allocation: {
+					...resourceBefore.allocation,
+					generation: 2,
+					fence: Number(resourceBefore.allocation?.fence) + 1,
+					status: "unavailable",
+				},
+				outbox: { status: "failed", lease_owner: null, lease_expires_at: null },
+			});
+			const [retiredResourceIntent] =
+				await client`select payload from platform.outbox_items where id = ${resourceItemId}`;
+			expect(retiredResourceIntent?.payload.sourceSnapshot).toMatchObject({
+				sandbox: {
+					sandboxId: resourceBefore.allocation?.sandbox_id,
+					sessionId: work.conversationId,
+					generation: 1,
+				},
+				resourceFence: Number(resourceBefore.allocation?.fence),
+				policy: resourceBefore.allocation?.resource_policy,
+				observation: resourceBefore.allocation?.resource_observation,
+			});
+			const resourceAfter = await resourceState();
+			expect(await store.confirmGenerationIsolation(confirmation)).toBe(false);
+			expect(await resourceState()).toEqual(resourceAfter);
 			expect(await isolationState(work)).toMatchObject({
 				generation: 2,
 				isolation_status: "confirmed",
@@ -3125,8 +4377,8 @@ describe("authorized historical metadata rearm", () => {
 			if (!hostSessionRef) throw new Error("missing original Host");
 			const executionId = "new-execution";
 			const itemId = `conversation:turn:${executionId}`;
-			await client`insert into platform.conversation_executions (execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status, session_generation, delivery_fence, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version, created_at, updated_at)
-				select ${executionId}, conversation_id, agent_id, actor_id, channel_id, 'new-turn', 'submitted', session_generation, 0, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version, now(), now() from platform.conversation_executions where execution_id = ${h.work.executionId}`;
+			await client`insert into platform.conversation_executions (execution_id, conversation_id, sandbox_id, agent_id, actor_id, channel_id, turn_id, status, session_generation, delivery_fence, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version, created_at, updated_at)
+				select ${executionId}, conversation_id, sandbox_id, agent_id, actor_id, channel_id, 'new-turn', 'submitted', session_generation, 0, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, execution_source, relay_key_purpose, relay_key_subject_id, relay_key_id, relay_key_version, now(), now() from platform.conversation_executions where execution_id = ${h.work.executionId}`;
 			await client`insert into platform.conversation_messages (message_id, conversation_id, actor_id, role, text, execution_id, status, created_at, updated_at)
 				values ('new-message', ${h.work.conversationId}, 'actor-dispatch', 'user', 'new task', ${executionId}, 'submitted', now(), now())`;
 			await client`insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id)

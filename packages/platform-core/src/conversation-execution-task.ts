@@ -24,6 +24,10 @@ import {
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
+import {
+	createSessionSandboxBindingV1,
+	type SessionSandboxBindingV1,
+} from "./session-sandbox.js";
 import { isTaskApiChannelV1 } from "./task-authorization.js";
 import type { WorkloadVersionV1 } from "./workload-reconciliation.js";
 
@@ -63,6 +67,7 @@ export interface ConversationTaskAdmissionStateV1 {
 
 export interface ConversationTaskAdmissionPlanV1 {
 	readonly conversationId: string;
+	readonly sandbox: SessionSandboxBindingV1 | null;
 	readonly createConversation: boolean;
 	readonly executionId: string;
 	readonly turnId: string;
@@ -184,6 +189,7 @@ export function decideConversationTaskWaitingV1(state: {
 		readonly serviceAvailability: string | null;
 	} | null;
 	readonly conversationAvailable: boolean;
+	readonly sandboxReady: boolean;
 	readonly isolationPending: boolean;
 	readonly occupied: boolean;
 	readonly earlierWaiting: boolean;
@@ -216,6 +222,7 @@ export function decideConversationTaskWaitingV1(state: {
 		return { outcome: "fail", reason: "AGENT_UNAVAILABLE" };
 	return {
 		outcome:
+			!state.sandboxReady ||
 			state.agent.serviceAvailability !== "ready" ||
 			state.occupied ||
 			state.earlierWaiting
@@ -442,6 +449,9 @@ export function createConversationTaskAdmissionUseCaseV1(
 							: null;
 						return {
 							conversationId,
+							sandbox: conversation
+								? null
+								: createSessionSandboxBindingV1(authority, conversationId),
 							createConversation: !conversation,
 							executionId,
 							turnId,

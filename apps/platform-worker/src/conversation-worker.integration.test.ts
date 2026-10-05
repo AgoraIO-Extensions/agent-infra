@@ -29,6 +29,7 @@ import postgres from "postgres";
 import { expect, it } from "vitest";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
+import { markSessionSandboxReadyFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.js";
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
 import {
 	fakeKubernetesApi,
@@ -487,6 +488,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			});
 			if (created.outcome !== "accepted")
 				throw Error(`Create: ${created.outcome}`);
+			await markSessionSandboxReadyFixture(sql, created.result.conversationId);
 			const accepted = await api.accept({
 				schemaVersion: 1,
 				command: "message",

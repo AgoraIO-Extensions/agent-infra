@@ -1950,10 +1950,11 @@ describe("published Relay authority migration", () => {
 			34,
 			35,
 			36,
+			37,
 		]);
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 36,
-			tag: "0036_browser_session_principal",
+			idx: 37,
+			tag: "0037_browser_session_principal",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2035,7 +2036,7 @@ describe("published Relay authority migration", () => {
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			const after = await history();
 			expect(after.slice(0, before.length)).toEqual(before);
-				expect(after).toHaveLength(before.length + 7);
+			expect(after).toHaveLength(before.length + 8);
 			expect(after.slice(before.length)).toEqual(
 				migrations
 					.filter((migration) => migration.folderMillis >= relayWhen)
@@ -2047,7 +2048,7 @@ describe("published Relay authority migration", () => {
 					),
 			);
 			const afterCatalog = await relayCatalog();
-			expect(schemaDelta(catalog, afterCatalog)).toEqual({
+			const expectedDelta = {
 				columns:
 					kind === "original27"
 						? [
@@ -2061,6 +2062,7 @@ describe("published Relay authority migration", () => {
 								"conversation_executions:relay_key_subject_id",
 								"conversation_executions:relay_key_version",
 								"conversation_executions:runtime_submit_protocol",
+								"conversation_executions:sandbox_id",
 								"conversation_executions:task_wait_deadline",
 								"conversation_executions:task_wait_order",
 								"conversations:principal_type",
@@ -2068,6 +2070,7 @@ describe("published Relay authority migration", () => {
 						: [
 								"browser_sessions:principal",
 								"conversation_executions:principal_type",
+								"conversation_executions:sandbox_id",
 								"conversations:principal_type",
 							],
 				checks:
@@ -2100,7 +2103,64 @@ describe("published Relay authority migration", () => {
 					kind === "original27"
 						? ["conversation_execution_status:waiting"]
 						: [],
+			};
+			expect(schemaDelta(catalog, afterCatalog)).toEqual({
+				...expectedDelta,
+				columns: [
+					...expectedDelta.columns,
+					...[
+						"actor_id",
+						"agent_id",
+						"channel_id",
+						"conversation_id",
+						"created_at",
+						"desired_state",
+						"principal_type",
+						"resource_fence",
+						"resource_name",
+						"resource_observation",
+						"resource_policy",
+						"sandbox_id",
+						"session_generation",
+						"status",
+						"updated_at",
+						"workspace_scope",
+					].map((name) => `session_sandbox_allocations:${name}`),
+				].sort(),
+				checks: [
+					...expectedDelta.checks,
+					"conversation_audit_events:conversation_audit_details_binding",
+					"conversation_audit_events:conversation_audit_execution_binding",
+					...[
+						"desired_state_valid",
+						"generation_safe",
+						"id_uuid",
+						"resource_binding",
+						"resource_fence_safe",
+						"status_valid",
+						"workspace_binding",
+					].map(
+						(name) => `session_sandbox_allocations:session_sandbox_${name}`,
+					),
+				].sort(),
+				indexes: [
+					...expectedDelta.indexes,
+					...[
+						"allocations_pkey",
+						"conversation_unique",
+						"resource_unique",
+						"workspace_unique",
+					].map(
+						(name) => `session_sandbox_allocations:session_sandbox_${name}`,
+					),
+				].sort(),
 			});
+			expect(
+				await client`select count(*)::int as count from platform.session_sandbox_allocations`,
+			).toEqual([{ count: 0 }]);
+			expect(
+				await client`select count(*)::int as count from platform.conversation_executions where sandbox_id is not null`,
+			).toEqual([{ count: 0 }]);
 			expect(await records(kind !== "original27")).toEqual(data);
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			expect(await history()).toEqual(after);
@@ -2118,7 +2178,7 @@ describe("published Relay authority migration", () => {
 		]);
 		const after = await history();
 		expect(after.slice(0, before.length)).toEqual(before);
-		expect(after).toHaveLength(before.length + 7);
+		expect(after).toHaveLength(before.length + 8);
 		const catalog = await relayCatalog();
 		await builtStore.migratePlatformDatabase({ databaseUrl });
 		expect(await history()).toEqual(after);

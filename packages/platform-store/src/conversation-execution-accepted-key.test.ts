@@ -14,6 +14,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { seedSessionSandboxFixture } from "./session-sandbox.fixture.ts";
 
 let database: PostgresTestDatabase;
 let client: ReturnType<typeof postgres>;
@@ -126,6 +127,7 @@ async function accepted(
 		})},
     'processing', 'original-worker', clock_timestamp() + interval '1 minute', 7, 'trace', 'request')`;
 	});
+	await seedSessionSandboxFixture(client, request.conversationId);
 	store = new PostgresConversationExecutionTransactionV1({
 		databaseUrl: database.databaseUrl,
 	});

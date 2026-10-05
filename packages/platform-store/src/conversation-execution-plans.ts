@@ -10,6 +10,7 @@ import type {
 	ConversationStopWritePlanV1,
 	CreateConversationWritePlanV1,
 } from "@agent-infra/platform-core";
+import { parseSessionSandboxBindingV1 } from "@agent-infra/platform-core";
 import {
 	type CreateRequest,
 	exactRecord,
@@ -105,15 +106,24 @@ export function validateCreatePlan(
 	const authority = parseAuthority(request.authority);
 	const input = exactRecord(value, [
 		"schemaVersion",
+		"sandbox",
 		"conversation",
 		"result",
 		"idempotency",
 	]);
 	if (input.schemaVersion !== 1) unavailable();
 	const conversation = parseConversation(input.conversation);
+	const sandbox = parseSessionSandboxBindingV1(input.sandbox);
 	const result = parseCreatedResult(input.result);
 	const idempotency = parseIdempotency(input.idempotency, true);
 	if (
+		sandbox.sessionId !== conversation.conversationId ||
+		sandbox.agentId !== authority.agentId ||
+		sandbox.principal.id !== authority.actorId ||
+		sandbox.principal.kind !==
+			(authority.taskBoundary?.principal.kind ?? "user") ||
+		sandbox.channelId !== authority.channelId ||
+		sandbox.generation !== 1 ||
 		request.command.agentId !== authority.agentId ||
 		conversation.conversationId !== result.conversationId ||
 		conversation.agentId !== authority.agentId ||

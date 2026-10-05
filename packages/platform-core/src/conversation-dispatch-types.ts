@@ -1,6 +1,7 @@
 import type { ConversationExecutionSourceV1 } from "./conversation-execution-types.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 import type { ConversationOperationFactV2 } from "./conversation-operation-facts.js";
+import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 
 export type ConversationDispatchOperationV1 =
 	| "conversation.turn.submit.v1"
@@ -98,6 +99,8 @@ export interface ConversationMetadataRecoveryV1 {
 }
 
 export interface ConversationDispatchClaimV1 {
+	/** Production Store always supplies this; legacy in-memory fixtures are not a production authority. */
+	readonly sandbox?: SessionSandboxBindingV1;
 	/** Durable Execution namespace; absence preserves only historical user claims. */
 	readonly principal?: import("./task-authorization.js").TaskPrincipalV1;
 	readonly metadataRecovery?: ConversationMetadataRecoveryV1;

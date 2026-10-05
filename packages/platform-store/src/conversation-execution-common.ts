@@ -91,6 +91,7 @@ export interface ConversationRow {
 }
 
 export interface ExecutionRow {
+	readonly sandbox_id: string | null;
 	readonly execution_id: string;
 	readonly conversation_id: string;
 	readonly actor_id: string;

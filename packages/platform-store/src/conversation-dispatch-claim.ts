@@ -155,6 +155,13 @@ export async function claimWork(
 		if (decision.outcome === "wait") return { outcome: "busy" };
 	}
 	if (
+		!conversation.sandbox_ready &&
+		!isolationWork &&
+		selectedOperation !== "conversation.turn.stop.v1" &&
+		!payload.metadataRecovery
+	)
+		return { outcome: "busy" };
+	if (
 		isolation &&
 		!isolationWork &&
 		selectedOperation !== "conversation.turn.stop.v1" &&
@@ -285,6 +292,7 @@ export async function claimWork(
 		: [];
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
+		sandbox: conversation.sandbox,
 		principal: executionPrincipalProjection(execution),
 		...executionKeyProjection(execution),
 		...(execution.task_wait_order === null
