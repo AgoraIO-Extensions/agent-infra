@@ -15,7 +15,10 @@ import {
 	pendingApplication,
 } from "./test-fixtures.js";
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	vi.unstubAllGlobals();
+});
 
 type FormTestProps<T> = T extends unknown
 	? Omit<T, "deploymentConfiguration"> & {
@@ -64,6 +67,75 @@ function checkAt(label: string, index: number) {
 	fireEvent.click(at(screen.getAllByRole("checkbox", { name: label }), index));
 }
 
+function stubDirectorySearch() {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({
+						items: [
+							{
+								kind: "user",
+								canonicalId: "owner-2",
+								displayName: "Owner Two",
+								email: "owner.two@example.test",
+								organizationPath: "平台工程",
+							},
+							{
+								kind: "user",
+								canonicalId: "owner-3",
+								displayName: "Owner Three",
+								email: "owner.three@example.test",
+								organizationPath: "研发基础设施",
+							},
+							{
+								kind: "user",
+								canonicalId: "user-available",
+								displayName: "Available User",
+								email: "available@example.test",
+								organizationPath: "支持中心",
+							},
+							{
+								kind: "organization",
+								canonicalId: "organization-available",
+								displayName: "Available Organization",
+								organizationPath: "客户成功 / 支持中心",
+							},
+						],
+					}),
+					{ headers: { "Content-Type": "application/json" } },
+				),
+		),
+	);
+}
+
+async function chooseDirectory(
+	label: string,
+	query: string,
+	optionName: string,
+) {
+	const input = screen.getByRole("combobox", { name: label });
+	fireEvent.change(input, { target: { value: query } });
+	const field = input.closest<HTMLElement>(".directory-field");
+	if (!field) throw new Error(`Directory field not found: ${label}`);
+	let option: HTMLElement | undefined;
+	await waitFor(() => {
+		option = Array.from(
+			field.querySelectorAll<HTMLElement>('[role="option"]'),
+		).find((element) => element.textContent?.includes(optionName));
+		if (!option) throw new Error(`Directory option not found: ${optionName}`);
+	});
+	if (!option) throw new Error(`Directory option not found: ${optionName}`);
+	fireEvent.click(option);
+}
+
+function openAdvancedConfiguration() {
+	const toggle = screen.queryByRole("button", { name: /高级配置/ });
+	if (toggle?.getAttribute("aria-expanded") === "false")
+		fireEvent.click(toggle);
+}
+
 describe("AgentApplicationForm", () => {
 	it("shows required model fields for a standard-template application", () => {
 		const onSubmit = vi.fn();
@@ -81,7 +153,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		choose("标准模板 ID", "Codex");
+		choose("标准模板", "Codex");
 		expect(
 			(screen.getByLabelText("模型凭证") as HTMLInputElement).required,
 		).toBe(true);
@@ -109,7 +181,7 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 
-		choose("标准模板 ID", "Codex");
+		choose("标准模板", "Codex");
 		choose("模型端点", "Primary endpoint");
 		fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
 		expect(screen.getAllByRole("option", { name: "gpt-5" })).toHaveLength(1);
@@ -131,7 +203,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		choose("标准模板 ID", "Codex");
+		choose("标准模板", "Codex");
 		choose("模型端点", "Primary endpoint");
 		choose("模型", "gpt-5");
 		check("medium");
@@ -297,8 +369,11 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(await screen.findByLabelText("镜像地址"), {
 			target: { value: "registry.example/agents/release:v1" },
 		});
+		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
+		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
+		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
 		const names = screen.getAllByLabelText("变量名称");
 		const values = screen.getAllByLabelText("变量值");
@@ -341,8 +416,10 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 
-		choose("标准模板 ID", "Codex");
+		choose("标准模板", "Codex");
+		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
+		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
 		chooseAt("Secret 名称", "MODEL_API_KEY", 0);
 		chooseAt("Secret 名称", "MODEL_API_KEY", 1);
@@ -385,13 +462,14 @@ describe("AgentApplicationForm", () => {
 			/>,
 		);
 
-		choose("标准模板 ID", "Codex");
+		choose("标准模板", "Codex");
+		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
 		choose("Secret 名称", "MODEL_API_KEY");
 		fireEvent.change(screen.getByLabelText("替换值"), {
 			target: { value: "old-secret" },
 		});
-		choose("标准模板 ID", "Minimal");
+		choose("标准模板", "Minimal");
 		await waitFor(() =>
 			expect((screen.getByLabelText("替换值") as HTMLInputElement).value).toBe(
 				"",
@@ -435,7 +513,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		choose("标准模板 ID", "Codex");
+		choose("标准模板", "Codex");
 		chooseAt("模型端点", "Primary endpoint", 0);
 		chooseAt("模型", "gpt-5", 0);
 		checkAt("medium", 0);
@@ -474,7 +552,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		choose("标准模板 ID", "Codex");
+		choose("标准模板", "Codex");
 		chooseAt("模型端点", "Primary endpoint", 0);
 		chooseAt("模型", "gpt-5", 0);
 		checkAt("medium", 0);
@@ -497,8 +575,9 @@ describe("AgentApplicationForm", () => {
 		expect(screen.queryByText("模型选项不能重复。")).toBeNull();
 	});
 
-	it("submits the writable application configuration entered by the employee", () => {
+	it("submits the writable application configuration entered by the employee", async () => {
 		const onSubmit = vi.fn();
+		stubDirectorySearch();
 		render(
 			<AgentApplicationForm
 				mode="create"
@@ -513,22 +592,23 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		choose("标准模板 ID", "Codex");
-		fireEvent.change(screen.getByLabelText("共同 Owner 用户 ID"), {
-			target: { value: "owner-2\nowner-3" },
-		});
-		fireEvent.change(screen.getByLabelText("可使用的用户 ID"), {
-			target: { value: "user-available" },
-		});
-		fireEvent.change(screen.getByLabelText("可使用的组织 ID"), {
-			target: { value: "organization-available" },
-		});
+		choose("标准模板", "Codex");
+		await chooseDirectory("共同 Owner 用户", "owner", "Owner Two");
+		await chooseDirectory("共同 Owner 用户", "owner", "Owner Three");
+		await chooseDirectory("可使用的用户", "available", "Available User");
+		await chooseDirectory(
+			"可使用的组织",
+			"available",
+			"Available Organization",
+		);
 		expect(screen.queryByRole("button", { name: "Add action" })).toBeNull();
+		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
 		choose("变量名称", "LOG_LEVEL");
 		fireEvent.change(screen.getByLabelText("变量值"), {
 			target: { value: "debug" },
 		});
+		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加 Secret" }));
 		choose("Secret 名称", "MODEL_API_KEY");
 		fireEvent.change(screen.getByLabelText("替换值"), {
@@ -604,7 +684,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		choose("标准模板 ID", "Codex");
+		choose("标准模板", "Codex");
 		choose("模型端点", "Colon endpoint");
 		choose("模型", "model:primary");
 		check("medium");
@@ -645,7 +725,8 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		choose("标准模板 ID", "Codex");
+		choose("标准模板", "Codex");
+		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
 		choose("变量名称", "LOG_LEVEL");
 		expect((screen.getByLabelText("变量值") as HTMLInputElement).required).toBe(
@@ -679,51 +760,29 @@ describe("AgentApplicationForm", () => {
 		expect(screen.getByRole("status").textContent).toContain(
 			"没有可用的标准模板",
 		);
-		expect(
-			screen.getByRole("combobox", { name: "标准模板 ID" }),
-		).toHaveProperty("disabled", true);
+		expect(screen.getByRole("combobox", { name: "标准模板" })).toHaveProperty(
+			"disabled",
+			true,
+		);
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
-	it("shows duplicate owner IDs and focuses the first invalid field", () => {
-		const onSubmit = vi.fn();
+	it("keeps directory controls readable without exposing canonical IDs", () => {
 		render(
 			<AgentApplicationForm
 				mode="create"
-				onSubmit={onSubmit}
+				onSubmit={vi.fn()}
 				submitting={false}
 			/>,
 		);
-		fireEvent.change(screen.getByLabelText("Agent 名称"), {
-			target: { value: "Release assistant" },
-		});
-		fireEvent.change(screen.getByLabelText("用途说明"), {
-			target: { value: "Helps the release team" },
-		});
-		choose("标准模板 ID", "Codex");
-		fireEvent.change(screen.getByLabelText("共同 Owner 用户 ID"), {
-			target: { value: "owner-1\nowner-1" },
-		});
-		const form = screen
-			.getByRole("button", { name: "提交申请" })
-			.closest("form");
-		if (!form) throw new Error("application form missing");
-		fireEvent.submit(form);
 
-		expect(screen.getByText("共同 Owner 用户 ID不能重复。")).toBeTruthy();
-		expect(
-			screen.getByLabelText("共同 Owner 用户 ID").getAttribute("aria-invalid"),
-		).toBe("true");
-		expect(
-			screen
-				.getByLabelText("共同 Owner 用户 ID")
-				.getAttribute("aria-describedby"),
-		).toBe("application-access-help application-co-owner-ids-error");
-		expect(document.activeElement).toBe(
-			screen.getByLabelText("共同 Owner 用户 ID"),
-		);
-		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.getByText("共同 Owner 用户")).toBeTruthy();
+		expect(screen.getByText("可使用的用户")).toBeTruthy();
+		expect(screen.getByText("可使用的组织")).toBeTruthy();
+		expect(screen.queryByText("共同 Owner 用户 ID")).toBeNull();
+		expect(screen.queryByText("可使用的用户 ID")).toBeNull();
+		expect(screen.queryByText("可使用的组织 ID")).toBeNull();
 	});
 
 	it("uses custom validation before native required checks and clears fixed errors", () => {
@@ -1216,7 +1275,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		choose("标准模板 ID", "Codex");
+		choose("标准模板", "Codex");
 		choose("模型端点", "Primary endpoint");
 		choose("模型", "gpt-5");
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
@@ -1514,7 +1573,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
 		expect(
 			screen
-				.getByRole("combobox", { name: "标准模板 ID" })
+				.getByRole("combobox", { name: "标准模板" })
 				.getAttribute("aria-describedby"),
 		).toBe("application-source-help application-template-id-error");
 		expect(onSubmit).not.toHaveBeenCalled();
@@ -1602,7 +1661,7 @@ describe("AgentApplicationForm", () => {
 		fireEvent.change(screen.getByLabelText("用途说明"), {
 			target: { value: "Helps the release team" },
 		});
-		choose("标准模板 ID", "Codex");
+		choose("标准模板", "Codex");
 		choose("模型端点", "Primary endpoint");
 		choose("模型", "gpt-5");
 		check("medium");

@@ -19,6 +19,7 @@ const {
 	connectionConsumerProfile,
 	connectionConsumerProfileApproval,
 	apiInput,
+	directorySearch,
 } = await import(configurationModule);
 const databaseUrl = process.env.PLATFORM_DATABASE_URL;
 if (!databaseUrl) throw new Error("PLATFORM_DATABASE_URL is required");
@@ -44,6 +45,7 @@ export const browserAuth = browser.browserAuth;
 export function createPlatformApiAssemblyInput() {
 	return createProductionPlatformApiAssemblyInputV1({
 		...apiInput,
+		directory: { identity: browser.identity, search: directorySearch },
 		connectionConsumerProfile,
 		connectionConsumerProfileApproval,
 		databaseUrl,

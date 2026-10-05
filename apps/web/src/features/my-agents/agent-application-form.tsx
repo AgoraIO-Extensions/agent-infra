@@ -1,4 +1,4 @@
-import { PlusIcon, Trash2Icon } from "lucide-react";
+import { PlusIcon, SearchIcon, Trash2Icon, XIcon } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,6 +12,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 
 import type {
 	AgentApplicationCreateRequestV2Writable,
@@ -35,7 +36,10 @@ import {
 	agentApplicationEditActionLabels,
 } from "./my-agent-applications.js";
 
-type AgentApplicationFormProps = { cancelAction?: ReactNode } & (
+type AgentApplicationFormProps = {
+	cancelAction?: ReactNode;
+	showDeploymentStatus?: boolean;
+} & (
 	| {
 			mode: "create";
 			deploymentConfiguration: DeploymentConfigurationProjectionV2;
@@ -227,6 +231,316 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 	) : null;
 }
 
+type DirectoryPickerKind = "user" | "organization";
+type DirectoryPickerOption = {
+	id: string;
+	name: string;
+	secondary: string;
+	detail?: string;
+	type: DirectoryPickerKind;
+};
+
+function splitDirectoryValue(value: string) {
+	return value
+		.split(/\n|,/)
+		.map((item) => item.trim())
+		.filter(Boolean);
+}
+
+function DirectoryPicker({
+	id,
+	label,
+	help,
+	kind,
+	value,
+	onChange,
+	error,
+	describedBy,
+	errorFieldKey,
+}: {
+	id: string;
+	label: string;
+	help: string;
+	kind: DirectoryPickerKind;
+	value: string;
+	onChange: (value: string) => void;
+	error?: string;
+	describedBy?: string;
+	errorFieldKey?: string;
+}) {
+	const selectedIds = splitDirectoryValue(value);
+	const selectedKey = selectedIds.join(",");
+	const [query, setQuery] = useState("");
+	const [open, setOpen] = useState(false);
+	const [activeIndex, setActiveIndex] = useState(0);
+	const [loading, setLoading] = useState(false);
+	const [directoryOptions, setDirectoryOptions] = useState<
+		DirectoryPickerOption[]
+	>([]);
+	const [knownDirectoryOptions, setKnownDirectoryOptions] = useState<
+		Record<string, DirectoryPickerOption>
+	>({});
+	const [directoryError, setDirectoryError] = useState(false);
+	const pickerRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (!open) return;
+		const closeOnOutsidePointer = (event: PointerEvent) => {
+			if (
+				event.target instanceof Node &&
+				!pickerRef.current?.contains(event.target)
+			)
+				setOpen(false);
+		};
+		document.addEventListener("pointerdown", closeOnOutsidePointer);
+		return () =>
+			document.removeEventListener("pointerdown", closeOnOutsidePointer);
+	}, [open]);
+	useEffect(() => {
+		if (!open && !selectedKey) return;
+		const controller = new AbortController();
+		setLoading(true);
+		setDirectoryError(false);
+		const idsQuery =
+			!open && selectedKey ? `&ids=${encodeURIComponent(selectedKey)}` : "";
+		fetch(
+			`/api/v2/directory/search?kind=${kind}&q=${encodeURIComponent(open ? query : "")}&limit=50${idsQuery}`,
+			{
+				signal: controller.signal,
+				headers: { Accept: "application/json" },
+			},
+		)
+			.then(async (response) => {
+				if (!response.ok) throw new Error("directory search unavailable");
+				const body = (await response.json()) as {
+					items?: Array<{
+						kind: DirectoryPickerKind;
+						canonicalId: string;
+						displayName: string;
+						email?: string;
+						organizationPath?: string;
+					}>;
+				};
+				const nextOptions = (body.items ?? []).map((item) => ({
+					id: item.canonicalId,
+					name: item.displayName,
+					secondary:
+						item.kind === "user"
+							? (item.email ?? "")
+							: (item.organizationPath ?? ""),
+					detail: item.kind === "user" ? item.organizationPath : undefined,
+					type: item.kind,
+				}));
+				setDirectoryOptions(nextOptions);
+				setKnownDirectoryOptions((current) => {
+					const merged = { ...current };
+					for (const option of nextOptions) merged[option.id] = option;
+					return merged;
+				});
+			})
+			.catch((error: unknown) => {
+				if (error instanceof DOMException && error.name === "AbortError")
+					return;
+				setDirectoryOptions([]);
+				setDirectoryError(true);
+			})
+			.finally(() => {
+				if (!controller.signal.aborted) setLoading(false);
+			});
+		return () => controller.abort();
+	}, [kind, open, query, selectedKey]);
+	const options = directoryOptions;
+	const selected = selectedIds.map(
+		(id) =>
+			knownDirectoryOptions[id] ?? {
+				id,
+				name: "目录记录不可用",
+				secondary: "无法读取目录详情，请重新搜索",
+				type: kind,
+			},
+	);
+	const add = (option: DirectoryPickerOption | undefined) => {
+		if (!option || selectedIds.includes(option.id)) return;
+		onChange([...selectedIds, option.id].join("\n"));
+		setQuery("");
+		setActiveIndex(0);
+		setOpen(true);
+	};
+	const remove = (id: string) =>
+		onChange(selectedIds.filter((item) => item !== id).join("\n"));
+	return (
+		<div className="directory-field" ref={pickerRef}>
+			<Label htmlFor={id}>{label}</Label>
+			<div
+				className={cn("directory-control", error && "directory-control-error")}
+			>
+				<div className="directory-chips">
+					{selected.map((item) => (
+						<span className="directory-chip" key={item.id}>
+							<span className="directory-chip-label">
+								{item.name}
+								<small>{item.secondary}</small>
+							</span>
+							<Button
+								aria-label={`移除 ${item.name}`}
+								className="directory-chip-remove"
+								onClick={() => remove(item.id)}
+								size="icon-xs"
+								type="button"
+							>
+								<XIcon aria-hidden="true" size={14} />
+							</Button>
+						</span>
+					))}
+				</div>
+				<Input
+					role="combobox"
+					aria-activedescendant={
+						open && options[activeIndex]
+							? `${id}-${options[activeIndex].id}`
+							: undefined
+					}
+					aria-controls={`${id}-options`}
+					aria-describedby={
+						[
+							describedBy,
+							error
+								? errorId(errorFieldKey ?? id.replace("application-", ""))
+								: undefined,
+						]
+							.filter(Boolean)
+							.join(" ") || undefined
+					}
+					aria-expanded={open}
+					aria-invalid={error ? true : undefined}
+					aria-label={label}
+					className="directory-input"
+					id={id}
+					onChange={(event) => {
+						setQuery(event.target.value);
+						setActiveIndex(0);
+						setOpen(true);
+					}}
+					onFocus={() => setOpen(true)}
+					onKeyDown={(event) => {
+						if (event.key === "ArrowDown") {
+							event.preventDefault();
+							setOpen(true);
+							setActiveIndex((index) =>
+								Math.min(index + 1, Math.max(options.length - 1, 0)),
+							);
+						} else if (event.key === "ArrowUp") {
+							event.preventDefault();
+							setActiveIndex((index) => Math.max(index - 1, 0));
+						} else if (event.key === "Enter") {
+							event.preventDefault();
+							add(options[activeIndex]);
+						} else if (event.key === "Escape") {
+							setOpen(false);
+						}
+					}}
+					placeholder={
+						selected.length > 0
+							? "继续搜索姓名、邮箱或组织"
+							: kind === "user"
+								? "搜索姓名或邮箱"
+								: "搜索组织名称或路径"
+					}
+					value={query}
+				/>
+			</div>
+			{open && (
+				<div
+					aria-busy={loading}
+					className="directory-menu"
+					id={`${id}-options`}
+					role="listbox"
+				>
+					{loading ? (
+						<div className="directory-status" role="status" aria-live="polite">
+							<span className="directory-status-spinner" aria-hidden="true" />
+							<p>
+								<strong>正在读取目录</strong>
+								正在同步可搜索的人员和组织范围…
+							</p>
+						</div>
+					) : directoryError ? (
+						<div className="directory-status" role="status" aria-live="polite">
+							<SearchIcon aria-hidden="true" size={16} />
+							<p>
+								<strong>目录暂时无法读取</strong>
+								请稍后重试或联系管理员。
+							</p>
+						</div>
+					) : options.length === 0 ? (
+						<div className="directory-status" role="status" aria-live="polite">
+							<SearchIcon aria-hidden="true" size={16} />
+							<p>
+								<strong>{query ? "没有匹配结果" : "目录为空"}</strong>
+								{query
+									? "试试姓名、邮箱、组织名称或路径。"
+									: "输入关键词后开始搜索。"}
+							</p>
+						</div>
+					) : (
+						<>
+							{options.map((option, index) => (
+								<Button
+									aria-selected={selectedIds.includes(option.id)}
+									className={cn(
+										"directory-result",
+										index === activeIndex && "directory-result-active",
+									)}
+									id={`${id}-${option.id}`}
+									key={option.id}
+									onClick={() => add(option)}
+									onMouseEnter={() => setActiveIndex(index)}
+									role="option"
+									type="button"
+									variant="ghost"
+								>
+									<span className="directory-result-mark" aria-hidden="true">
+										{option.type === "user" ? "人" : "组"}
+									</span>
+									<span className="directory-result-copy">
+										<strong className="directory-result-name">
+											{option.name}
+										</strong>
+										<small className="directory-result-meta">
+											{option.secondary}
+										</small>
+										{option.detail ? (
+											<small className="directory-result-meta">
+												{option.detail}
+											</small>
+										) : null}
+									</span>
+								</Button>
+							))}
+							<Button
+								className="directory-clear"
+								onClick={() => setQuery("")}
+								size="xs"
+								type="button"
+								variant="ghost"
+							>
+								清空搜索
+							</Button>
+						</>
+					)}
+				</div>
+			)}
+			<div className="directory-help">
+				<span>{help}</span>
+				<span>已选 {selected.length} 项 · Enter 添加</span>
+			</div>
+			<FieldError
+				id={errorId(errorFieldKey ?? id.replace("application-", ""))}
+				message={error}
+			/>
+		</div>
+	);
+}
+
 function blankEnvironment(): AgentApplicationEnvironmentDraft {
 	return { name: "", value: "" };
 }
@@ -337,11 +651,11 @@ function ModelRows({
 						!persistedModelOptionIds.includes(model.optionId));
 				return (
 					<fieldset
-						className="grid min-w-0 gap-3 sm:grid-cols-2"
+						className="model-option-fieldset grid min-w-0 gap-3 sm:grid-cols-2"
 						key={`model-${index}`}
 					>
 						<legend className="mb-3 font-medium">模型选项 {index + 1}</legend>
-						<div className="space-y-2">
+						<div className="model-option-endpoint space-y-2">
 							<Label htmlFor={`application-model-option-endpoint-${index}`}>
 								模型端点
 							</Label>
@@ -383,7 +697,7 @@ function ModelRows({
 								message={errors[`model.${index}.endpointId`]}
 							/>
 						</div>
-						<div className="space-y-2">
+						<div className="model-option-model space-y-2">
 							<Label htmlFor={`application-model-option-model-${index}`}>
 								模型
 							</Label>
@@ -425,7 +739,7 @@ function ModelRows({
 								message={errors[`model.${index}.modelId`]}
 							/>
 						</div>
-						<div className="space-y-2">
+						<div className="model-reasoning-field space-y-2">
 							<fieldset
 								aria-describedby={
 									errors[`model.${index}.reasoningLevels`]
@@ -436,7 +750,7 @@ function ModelRows({
 									errors[`model.${index}.reasoningLevels`] ? true : undefined
 								}
 								aria-labelledby={`application-model-option-reasoning-label-${index}`}
-								className="flex min-h-11 flex-wrap items-center gap-4"
+								className="model-reasoning flex min-h-11 flex-wrap items-center gap-4"
 								id={`application-model-option-reasoning-${index}`}
 								tabIndex={
 									errors[`model.${index}.reasoningLevels`] ? -1 : undefined
@@ -483,7 +797,7 @@ function ModelRows({
 								message={errors[`model.${index}.reasoningLevels`]}
 							/>
 						</div>
-						<div className="space-y-2">
+						<div className="model-credential space-y-2">
 							<Label htmlFor={`application-model-option-credential-${index}`}>
 								模型凭证
 							</Label>
@@ -514,7 +828,7 @@ function ModelRows({
 						{models.length > 1 ? (
 							<Button
 								variant="outline"
-								className="self-end"
+								className="model-remove self-end"
 								onClick={() => onRemove(index)}
 								type="button"
 							>
@@ -643,6 +957,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const persistedModelOptions = configuration?.modelOptions;
 	const deployment = props.deploymentConfiguration;
 	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
+	const showDeploymentStatus = props.showDeploymentStatus ?? true;
 	const modelEndpoints = deployment.modelCatalog.endpoints;
 	const [name, setName] = useState(application?.name ?? "");
 	const [description, setDescription] = useState(
@@ -690,6 +1005,9 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	>(configuration?.environment.map((value) => ({ ...value })) ?? []);
 	const [secrets, setSecrets] = useState<AgentApplicationEnvironmentDraft[]>(
 		[],
+	);
+	const [advancedConfigurationOpen, setAdvancedConfigurationOpen] = useState(
+		() => environment.length > 0 || secrets.length > 0,
 	);
 	const [configureModels, setConfigureModels] = useState(false);
 	const [models, setModels] = useState<AgentApplicationModelDraft[]>(() => {
@@ -952,6 +1270,183 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					: staleTemplate || (modelConfigurationVisible && staleModel)
 						? "当前申请包含已移除的部署选项，请重新加载并重新选择。"
 						: undefined;
+	const sourceFields = (
+		<>
+			<p className="sr-only" id="application-source-help">
+				从部署提供的标准模板中选择，或填写自定义镜像地址。已有申请的来源不能更改。
+			</p>
+			{showDeploymentStatus && configurationMessage ? (
+				<p
+					className="alert text-destructive sm:col-span-2"
+					id="application-deployment-status"
+					role="status"
+					tabIndex={-1}
+				>
+					{configurationMessage}
+				</p>
+			) : null}
+			<div className="space-y-2">
+				<Label htmlFor="application-source-kind">来源</Label>
+				<Select
+					disabled={props.mode === "update"}
+					value={sourceKind}
+					itemToStringLabel={(value) =>
+						(
+							({
+								standard: "标准模板",
+								"custom-platform-adapter": "自定义 Agent · 平台交互入口",
+								"custom-self-managed": "自定义 Agent · 自有交互入口",
+							}) as Record<string, string>
+						)[String(value)] ?? String(value)
+					}
+					onValueChange={(value) => {
+						if (!value) return;
+						const kind = value as AgentApplicationSourceKind;
+						dismissServerFormError();
+						setSourceKind(kind);
+						if (kind === "standard") {
+							if (models.length === 0) setModels([blankModel()]);
+							if (sourceKind !== "standard") setConfigureModels(true);
+						}
+						if (kind !== "standard") setConfigureModels(false);
+						document.getElementById("application-source-kind")?.focus();
+					}}
+				>
+					<SelectTrigger
+						aria-label="Agent 来源"
+						id="application-source-kind"
+						aria-describedby="application-source-help"
+						className="h-11 w-full text-base md:text-sm"
+					>
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="standard">标准模板</SelectItem>
+						<SelectItem value="custom-platform-adapter">
+							自定义 Agent · 平台交互入口
+						</SelectItem>
+						<SelectItem value="custom-self-managed">
+							自定义 Agent · 自有交互入口
+						</SelectItem>
+					</SelectContent>
+				</Select>
+			</div>
+			{sourceKind === "standard" ? (
+				<div className="space-y-2">
+					<Label htmlFor="application-template-id">标准模板</Label>
+					<Select
+						disabled={
+							props.mode === "update" || deployment.templates.length === 0
+						}
+						value={templateId}
+						itemToStringLabel={(value) =>
+							deployment.templates.find(
+								(template) => template.templateId === value,
+							)?.displayName ??
+							(staleTemplate ? "已移除模板（请重新加载）" : String(value))
+						}
+						onValueChange={(value) => {
+							if (!value) return;
+							setTemplateId(value);
+							setSecrets((current) =>
+								current.map((item) => ({ ...item, value: "" })),
+							);
+							clearFieldErrors("templateId");
+						}}
+					>
+						<SelectTrigger
+							id="application-template-id"
+							aria-describedby={describedBy(
+								"application-source-help",
+								fieldErrors.templateId ? errorId("templateId") : undefined,
+							)}
+							aria-invalid={fieldErrors.templateId ? true : undefined}
+							className="h-11 w-full text-base md:text-sm"
+						>
+							<SelectValue placeholder="选择标准模板" />
+						</SelectTrigger>
+						<SelectContent>
+							{deployment.templates.map((template) => (
+								<SelectItem
+									key={template.templateId}
+									value={template.templateId}
+								>
+									{template.displayName}
+								</SelectItem>
+							))}
+							{staleTemplate ? (
+								<SelectItem disabled value={templateId}>
+									已移除模板（请重新加载）
+								</SelectItem>
+							) : null}
+						</SelectContent>
+					</Select>
+					<FieldError
+						id={errorId("templateId")}
+						message={fieldErrors.templateId}
+					/>
+				</div>
+			) : (
+				<div className="space-y-2">
+					<Label htmlFor="application-image-reference">镜像地址</Label>
+					<Input
+						disabled={props.mode === "update"}
+						aria-describedby={
+							fieldErrors.imageReference ? errorId("imageReference") : undefined
+						}
+						aria-invalid={fieldErrors.imageReference ? true : undefined}
+						id="application-image-reference"
+						onChange={(event) => {
+							setImageReference(event.target.value);
+							clearFieldErrors("imageReference");
+						}}
+						required
+						value={imageReference}
+					/>
+					<FieldError
+						id={errorId("imageReference")}
+						message={fieldErrors.imageReference}
+					/>
+				</div>
+			)}
+			{sourceKind === "custom-self-managed" ? (
+				<div className="space-y-2">
+					<Label htmlFor="application-identity-responsibility">
+						入口身份校验
+					</Label>
+					<Select
+						disabled={props.mode === "update"}
+						value={identityResponsibility}
+						itemToStringLabel={(value) =>
+							(
+								({
+									"platform-managed": "由平台校验",
+									"self-managed": "由自有入口校验",
+								}) as Record<string, string>
+							)[String(value)] ?? String(value)
+						}
+						onValueChange={(value) => {
+							if (value === "platform-managed" || value === "self-managed") {
+								dismissServerFormError();
+								setIdentityResponsibility(value);
+							}
+						}}
+					>
+						<SelectTrigger
+							id="application-identity-responsibility"
+							className="h-11 w-full text-base md:text-sm"
+						>
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="platform-managed">由平台校验</SelectItem>
+							<SelectItem value="self-managed">由自有入口校验</SelectItem>
+						</SelectContent>
+					</Select>
+				</div>
+			) : null}
+		</>
+	);
 
 	useEffect(() => {
 		const serverCode = props.serverError?.code;
@@ -1034,7 +1529,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			ref={formRef}
 			noValidate
 			aria-describedby={serverFormError ? "application-form-error" : undefined}
-			className="space-y-6"
+			className="application-form"
 			onSubmit={(event) => {
 				event.preventDefault();
 				if (props.submitting) return;
@@ -1053,13 +1548,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 			) : null}
 			<fieldset
 				disabled={props.submitting}
-				className="min-w-0 space-y-6"
+				className="application-form-fields min-w-0"
 				aria-label="Agent 申请"
 			>
-				<fieldset className="form-section">
+				<fieldset className="form-section application-basic-section">
 					<legend className="font-semibold text-lg">基本信息</legend>
 					<p className="text-muted-foreground text-sm">
-						说明 Agent 的用途，便于管理员审阅和使用者了解。
+						名称和描述会展示在 Agent 目录中。
 					</p>
 					<div className="form-grid">
 						<div className="space-y-2">
@@ -1079,9 +1574,11 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							/>
 							<FieldError id={errorId("name")} message={fieldErrors.name} />
 						</div>
+						{sourceFields}
 						<div className="space-y-2 sm:col-span-2">
-							<Label htmlFor="application-description">用途说明</Label>
+							<Label htmlFor="application-description">使用场景</Label>
 							<Textarea
+								aria-label="用途说明"
 								aria-describedby={
 									fieldErrors.description ? errorId("description") : undefined
 								}
@@ -1095,6 +1592,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								required
 								value={description}
 							/>
+							<span className="field-help">不填写模型内部思考或外部凭证。</span>
 							<FieldError
 								id={errorId("description")}
 								message={fieldErrors.description}
@@ -1102,430 +1600,241 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						</div>
 					</div>
 				</fieldset>
-				<fieldset className="form-section">
+				<fieldset className="form-section application-scope-section">
 					<legend className="font-semibold text-foreground text-lg">
-						Agent 来源
-					</legend>
-					<p
-						className="text-muted-foreground text-sm"
-						id="application-source-help"
-					>
-						从部署提供的标准模板中选择，或填写自定义镜像地址。已有申请的来源不能更改。
-					</p>
-					{configurationMessage ? (
-						<p
-							className="alert text-destructive"
-							id="application-deployment-status"
-							role="status"
-							tabIndex={-1}
-						>
-							{configurationMessage}
-						</p>
-					) : null}
-					<div className="form-grid">
-						<div className="space-y-2">
-							<Label htmlFor="application-source-kind">Agent 来源</Label>
-							<Select
-								disabled={props.mode === "update"}
-								value={sourceKind}
-								itemToStringLabel={(value) =>
-									(
-										({
-											standard: "标准模板",
-											"custom-platform-adapter": "自定义 Agent · 平台交互入口",
-											"custom-self-managed": "自定义 Agent · 自有交互入口",
-										}) as Record<string, string>
-									)[String(value)] ?? String(value)
-								}
-								onValueChange={(value) => {
-									if (!value) return;
-									const kind = value as AgentApplicationSourceKind;
-									dismissServerFormError();
-									setSourceKind(kind);
-									if (kind === "standard") {
-										if (models.length === 0) setModels([blankModel()]);
-										if (sourceKind !== "standard") setConfigureModels(true);
-									}
-									if (kind !== "standard") setConfigureModels(false);
-									document.getElementById("application-source-kind")?.focus();
-								}}
-							>
-								<SelectTrigger
-									id="application-source-kind"
-									aria-describedby="application-source-help"
-									className="h-11 w-full text-base md:text-sm"
-								>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="standard">标准模板</SelectItem>
-									<SelectItem value="custom-platform-adapter">
-										自定义 Agent · 平台交互入口
-									</SelectItem>
-									<SelectItem value="custom-self-managed">
-										自定义 Agent · 自有交互入口
-									</SelectItem>
-								</SelectContent>
-							</Select>
-						</div>
-						{sourceKind === "standard" ? (
-							<div className="space-y-2">
-								<Label htmlFor="application-template-id">标准模板 ID</Label>
-								<Select
-									disabled={
-										props.mode === "update" || deployment.templates.length === 0
-									}
-									value={templateId}
-									itemToStringLabel={(value) =>
-										deployment.templates.find(
-											(template) => template.templateId === value,
-										)?.displayName ??
-										(staleTemplate ? "已移除模板（请重新加载）" : String(value))
-									}
-									onValueChange={(value) => {
-										if (!value) return;
-										setTemplateId(value);
-										setSecrets((current) =>
-											current.map((item) => ({ ...item, value: "" })),
-										);
-										clearFieldErrors("templateId");
-									}}
-								>
-									<SelectTrigger
-										id="application-template-id"
-										aria-describedby={describedBy(
-											"application-source-help",
-											fieldErrors.templateId
-												? errorId("templateId")
-												: undefined,
-										)}
-										aria-invalid={fieldErrors.templateId ? true : undefined}
-										className="h-11 w-full text-base md:text-sm"
-									>
-										<SelectValue placeholder="选择标准模板" />
-									</SelectTrigger>
-									<SelectContent>
-										{deployment.templates.map((template) => (
-											<SelectItem
-												key={template.templateId}
-												value={template.templateId}
-											>
-												{template.displayName}
-											</SelectItem>
-										))}
-										{staleTemplate ? (
-											<SelectItem disabled value={templateId}>
-												已移除模板（请重新加载）
-											</SelectItem>
-										) : null}
-									</SelectContent>
-								</Select>
-								<FieldError
-									id={errorId("templateId")}
-									message={fieldErrors.templateId}
-								/>
-								{selectedTemplate ? (
-									<p className="text-muted-foreground text-sm">
-										{selectedTemplate.connectionEnabled
-											? "支持 Connection"
-											: "不支持 Connection"}
-									</p>
-								) : null}
-							</div>
-						) : (
-							<div className="space-y-2">
-								<Label htmlFor="application-image-reference">镜像地址</Label>
-								<Input
-									disabled={props.mode === "update"}
-									aria-describedby={
-										fieldErrors.imageReference
-											? errorId("imageReference")
-											: undefined
-									}
-									aria-invalid={fieldErrors.imageReference ? true : undefined}
-									id="application-image-reference"
-									onChange={(event) => {
-										setImageReference(event.target.value);
-										clearFieldErrors("imageReference");
-									}}
-									required
-									value={imageReference}
-								/>
-								<FieldError
-									id={errorId("imageReference")}
-									message={fieldErrors.imageReference}
-								/>
-							</div>
-						)}
-						{sourceKind === "custom-self-managed" ? (
-							<div className="space-y-2">
-								<Label htmlFor="application-identity-responsibility">
-									入口身份校验
-								</Label>
-								<Select
-									disabled={props.mode === "update"}
-									value={identityResponsibility}
-									itemToStringLabel={(value) =>
-										(
-											({
-												"platform-managed": "由平台校验",
-												"self-managed": "由自有入口校验",
-											}) as Record<string, string>
-										)[String(value)] ?? String(value)
-									}
-									onValueChange={(value) => {
-										if (
-											value === "platform-managed" ||
-											value === "self-managed"
-										) {
-											dismissServerFormError();
-											setIdentityResponsibility(value);
-										}
-									}}
-								>
-									<SelectTrigger
-										id="application-identity-responsibility"
-										className="h-11 w-full text-base md:text-sm"
-									>
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value="platform-managed">由平台校验</SelectItem>
-										<SelectItem value="self-managed">由自有入口校验</SelectItem>
-									</SelectContent>
-								</Select>
-							</div>
-						) : null}
-					</div>
-				</fieldset>
-				<fieldset className="form-section">
-					<legend className="font-semibold text-foreground text-lg">
-						Owner 与使用范围
+						共同 Owner 与使用范围
 					</legend>
 					<p
 						className="text-muted-foreground text-sm"
 						id="application-access-help"
 					>
-						当前申请人自动成为 Owner。可补充共同 Owner
-						及使用范围；请向部署管理员获取本环境的用户或组织 ID，每行填写一个。
+						从目录选择可读的姓名和组织路径；提交时由服务端保存稳定标识。
 					</p>
 					<div className="form-grid">
-						<div className="space-y-2">
-							<Label htmlFor="application-co-owner-ids">
-								共同 Owner 用户 ID
-							</Label>
-							<Textarea
-								className="min-h-24"
+						<div className="sm:col-span-2">
+							<DirectoryPicker
 								id="application-co-owner-ids"
-								aria-describedby={describedBy(
-									"application-access-help",
-									fieldErrors.coOwnerIds ? errorId("coOwnerIds") : undefined,
-								)}
-								aria-invalid={fieldErrors.coOwnerIds ? true : undefined}
-								onChange={(event) => {
-									setCoOwnerIds(event.target.value);
+								kind="user"
+								label="共同 Owner 用户"
+								help="至少保留一名有效 Owner"
+								value={coOwnerIds}
+								onChange={(value) => {
+									setCoOwnerIds(value);
 									clearFieldErrors("coOwnerIds");
 								}}
-								value={coOwnerIds}
-							/>
-							<FieldError
-								id={errorId("coOwnerIds")}
-								message={fieldErrors.coOwnerIds}
+								error={fieldErrors.coOwnerIds}
+								describedBy="application-access-help"
+								errorFieldKey="coOwnerIds"
 							/>
 						</div>
-						<div className="space-y-2">
-							<Label htmlFor="application-user-availability-ids">
-								可使用的用户 ID
-							</Label>
-							<Textarea
-								className="min-h-24"
-								id="application-user-availability-ids"
-								aria-describedby={describedBy(
-									"application-access-help",
-									fieldErrors.userAvailabilityIds
-										? errorId("userAvailabilityIds")
-										: undefined,
-								)}
-								aria-invalid={
-									fieldErrors.userAvailabilityIds ? true : undefined
-								}
-								onChange={(event) => {
-									setUserAvailabilityIds(event.target.value);
-									clearFieldErrors("userAvailabilityIds");
-								}}
-								value={userAvailabilityIds}
-							/>
-							<FieldError
-								id={errorId("userAvailabilityIds")}
-								message={fieldErrors.userAvailabilityIds}
-							/>
-						</div>
-						<div className="space-y-2 sm:col-span-2">
-							<Label htmlFor="application-organization-availability-ids">
-								可使用的组织 ID
-							</Label>
-							<Textarea
-								className="min-h-24"
-								id="application-organization-availability-ids"
-								aria-describedby={describedBy(
-									"application-access-help",
-									fieldErrors.organizationAvailabilityIds
-										? errorId("organizationAvailabilityIds")
-										: undefined,
-								)}
-								aria-invalid={
-									fieldErrors.organizationAvailabilityIds ? true : undefined
-								}
-								onChange={(event) => {
-									setOrganizationAvailabilityIds(event.target.value);
-									clearFieldErrors("organizationAvailabilityIds");
-								}}
-								value={organizationAvailabilityIds}
-							/>
-							<FieldError
-								id={errorId("organizationAvailabilityIds")}
-								message={fieldErrors.organizationAvailabilityIds}
-							/>
-						</div>
+						<DirectoryPicker
+							id="application-user-availability-ids"
+							kind="user"
+							label="可使用的用户"
+							help="可选；用于补充个人范围"
+							value={userAvailabilityIds}
+							onChange={(value) => {
+								setUserAvailabilityIds(value);
+								clearFieldErrors("userAvailabilityIds");
+							}}
+							error={fieldErrors.userAvailabilityIds}
+							describedBy="application-access-help"
+							errorFieldKey="userAvailabilityIds"
+						/>
+						<DirectoryPicker
+							id="application-organization-availability-ids"
+							kind="organization"
+							label="可使用的组织"
+							help="可选；组织范围会与用户范围合并"
+							value={organizationAvailabilityIds}
+							onChange={(value) => {
+								setOrganizationAvailabilityIds(value);
+								clearFieldErrors("organizationAvailabilityIds");
+							}}
+							error={fieldErrors.organizationAvailabilityIds}
+							describedBy="application-access-help"
+							errorFieldKey="organizationAvailabilityIds"
+						/>
 					</div>
 				</fieldset>
-				<fieldset className="form-section">
-					<legend className="font-semibold text-foreground text-lg">
-						环境变量
-					</legend>
-					<p className="text-muted-foreground text-sm">
-						仅填写部署允许的配置项；凭证请使用 Secret 或模型凭证字段。
-					</p>
-					<DraftRows
-						fields={[
-							{
-								key: "name",
-								label: "变量名称",
-								options:
-									sourceKind === "standard" ? environmentOptions : undefined,
-								required: true,
-							},
-							{ key: "value", label: "变量值", required: true },
-						]}
-						idPrefix="environment"
-						label="环境变量"
-						errorFor={(index, key) =>
-							fieldErrors[`environment.${index}.${key}`]
-						}
-						onChange={(index, key, value) => {
-							const next = environment.map((item, itemIndex) =>
-								itemIndex === index
-									? {
-											...item,
-											[key]: value,
-										}
-									: item,
-							);
-							setEnvironment(next);
-							updateNameField("environment", next, index, key);
-						}}
-						onRemove={(index) => {
-							dismissServerFormError();
-							const next = environment.filter(
-								(_, itemIndex) => itemIndex !== index,
-							);
-							setEnvironment(next);
-							setFieldErrors((current) => {
-								const nextErrors = reindexRowErrors(
-									current,
-									"environment",
-									index,
-								);
-								recomputeDuplicateNameErrors(nextErrors, "environment", next);
-								return nextErrors;
-							});
-						}}
-						rows={environment}
-					/>
-					<Button
-						variant="outline"
-						onClick={() => {
-							dismissServerFormError();
-							setEnvironment((current) => [...current, blankEnvironment()]);
-						}}
-						type="button"
-					>
-						<PlusIcon aria-hidden="true" data-icon="inline-start" />
-						添加环境变量
-					</Button>
-				</fieldset>
-				<fieldset className="form-section">
-					<legend className="font-semibold text-foreground text-lg">
-						Secret
-					</legend>
-					<p className="text-muted-foreground text-sm">
-						只提交新增或替换值，已有 Secret
-						不回显。提交后会清空输入，重试时需重新填写替换值。
-					</p>
-					<DraftRows
-						fields={[
-							{
-								key: "name",
-								label: "Secret 名称",
-								options: sourceKind === "standard" ? secretOptions : undefined,
-								required: true,
-							},
-							{
-								key: "value",
-								label: "替换值",
-								required: true,
-								type: "password",
-							},
-						]}
-						idPrefix="secret"
-						label="Secret"
-						errorFor={(index, key) => fieldErrors[`secret.${index}.${key}`]}
-						onChange={(index, key, value) => {
-							const next = secrets.map((item, itemIndex) =>
-								itemIndex === index
-									? {
-											...item,
-											[key]: value,
-											...(key === "name" ? { value: "" } : {}),
-										}
-									: item,
-							);
-							setSecrets(next);
-							updateNameField("secret", next, index, key);
-						}}
-						onRemove={(index) => {
-							dismissServerFormError();
-							const next = secrets.filter(
-								(_, itemIndex) => itemIndex !== index,
-							);
-							setSecrets(next);
-							setFieldErrors((current) => {
-								const nextErrors = reindexRowErrors(current, "secret", index);
-								recomputeDuplicateNameErrors(nextErrors, "secret", next);
-								return nextErrors;
-							});
-						}}
-						rows={secrets}
-					/>
-					<Button
-						variant="outline"
-						onClick={() => {
-							dismissServerFormError();
-							setSecrets((current) => [...current, blankEnvironment()]);
-						}}
-						type="button"
-					>
-						<PlusIcon aria-hidden="true" data-icon="inline-start" />
-						添加 Secret
-					</Button>
-				</fieldset>
+				<section
+					className="form-section application-advanced-section"
+					aria-labelledby="application-advanced-heading"
+				>
+					<div className="application-advanced-heading">
+						<div>
+							<h2 id="application-advanced-heading">高级配置</h2>
+							<p>环境变量和 Secret 只在部署需要时填写。</p>
+						</div>
+						<Button
+							aria-expanded={advancedConfigurationOpen}
+							className="application-advanced-toggle"
+							onClick={() => setAdvancedConfigurationOpen((open) => !open)}
+							size="sm"
+							type="button"
+							variant="outline"
+						>
+							{advancedConfigurationOpen ? "收起高级配置" : "展开高级配置"}
+						</Button>
+					</div>
+					{advancedConfigurationOpen ? (
+						<div className="application-advanced-content">
+							<fieldset className="form-section application-optional-section">
+								<legend className="font-semibold text-foreground text-lg">
+									环境变量
+								</legend>
+								<p className="text-muted-foreground text-sm">
+									仅填写部署允许的配置项；凭证请使用 Secret 或模型凭证字段。
+								</p>
+								<DraftRows
+									fields={[
+										{
+											key: "name",
+											label: "变量名称",
+											options:
+												sourceKind === "standard"
+													? environmentOptions
+													: undefined,
+											required: true,
+										},
+										{ key: "value", label: "变量值", required: true },
+									]}
+									idPrefix="environment"
+									label="环境变量"
+									errorFor={(index, key) =>
+										fieldErrors[`environment.${index}.${key}`]
+									}
+									onChange={(index, key, value) => {
+										const next = environment.map((item, itemIndex) =>
+											itemIndex === index
+												? {
+														...item,
+														[key]: value,
+													}
+												: item,
+										);
+										setEnvironment(next);
+										updateNameField("environment", next, index, key);
+									}}
+									onRemove={(index) => {
+										dismissServerFormError();
+										const next = environment.filter(
+											(_, itemIndex) => itemIndex !== index,
+										);
+										setEnvironment(next);
+										setFieldErrors((current) => {
+											const nextErrors = reindexRowErrors(
+												current,
+												"environment",
+												index,
+											);
+											recomputeDuplicateNameErrors(
+												nextErrors,
+												"environment",
+												next,
+											);
+											return nextErrors;
+										});
+									}}
+									rows={environment}
+								/>
+								<Button
+									variant="outline"
+									onClick={() => {
+										dismissServerFormError();
+										setEnvironment((current) => [
+											...current,
+											blankEnvironment(),
+										]);
+									}}
+									type="button"
+								>
+									<PlusIcon aria-hidden="true" data-icon="inline-start" />
+									添加环境变量
+								</Button>
+							</fieldset>
+							<fieldset className="form-section application-optional-section">
+								<legend className="font-semibold text-foreground text-lg">
+									Secret
+								</legend>
+								<p className="text-muted-foreground text-sm">
+									只提交新增或替换值，已有 Secret
+									不回显。提交后会清空输入，重试时需重新填写替换值。
+								</p>
+								<DraftRows
+									fields={[
+										{
+											key: "name",
+											label: "Secret 名称",
+											options:
+												sourceKind === "standard" ? secretOptions : undefined,
+											required: true,
+										},
+										{
+											key: "value",
+											label: "替换值",
+											required: true,
+											type: "password",
+										},
+									]}
+									idPrefix="secret"
+									label="Secret"
+									errorFor={(index, key) =>
+										fieldErrors[`secret.${index}.${key}`]
+									}
+									onChange={(index, key, value) => {
+										const next = secrets.map((item, itemIndex) =>
+											itemIndex === index
+												? {
+														...item,
+														[key]: value,
+														...(key === "name" ? { value: "" } : {}),
+													}
+												: item,
+										);
+										setSecrets(next);
+										updateNameField("secret", next, index, key);
+									}}
+									onRemove={(index) => {
+										dismissServerFormError();
+										const next = secrets.filter(
+											(_, itemIndex) => itemIndex !== index,
+										);
+										setSecrets(next);
+										setFieldErrors((current) => {
+											const nextErrors = reindexRowErrors(
+												current,
+												"secret",
+												index,
+											);
+											recomputeDuplicateNameErrors(nextErrors, "secret", next);
+											return nextErrors;
+										});
+									}}
+									rows={secrets}
+								/>
+								<Button
+									variant="outline"
+									onClick={() => {
+										dismissServerFormError();
+										setSecrets((current) => [...current, blankEnvironment()]);
+									}}
+									type="button"
+								>
+									<PlusIcon aria-hidden="true" data-icon="inline-start" />
+									添加 Secret
+								</Button>
+							</fieldset>
+						</div>
+					) : null}
+				</section>
 				{sourceKind === "standard" ? (
-					<fieldset className="form-section">
+					<fieldset className="form-section application-model-section">
 						<legend className="font-semibold text-foreground text-lg">
-							模型配置
+							模型与推理
 						</legend>
 						<p className="text-muted-foreground text-sm">
-							标准模板在申请时必须配置模型。选择获准模型和允许的推理档位，填写模型凭证；默认项须属于本次配置。
+							只展示部署提供且通过目录校验的模型端点。
 						</p>
 						{props.mode === "update" ? (
 							<div className="space-y-2">
@@ -1763,14 +2072,16 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 					</fieldset>
 				) : null}
 				<div className="form-footer">
-					<Button disabled={props.submitting} type="submit">
-						{props.submitting
-							? "正在提交…"
-							: props.mode === "update"
-								? agentApplicationEditActionLabels[props.action]
-								: "提交申请"}
-					</Button>
 					{props.cancelAction}
+					<div className="form-footer-actions">
+						<Button disabled={props.submitting} type="submit">
+							{props.submitting
+								? "正在提交…"
+								: props.mode === "update"
+									? agentApplicationEditActionLabels[props.action]
+									: "提交申请"}
+						</Button>
+					</div>
 				</div>
 			</fieldset>
 		</form>

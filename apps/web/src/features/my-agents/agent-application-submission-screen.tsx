@@ -97,20 +97,26 @@ export function AgentApplicationSubmissionScreen(
 						Owner、范围、模型和渠道。服务端会重新校验全部字段。
 					</p>
 				</div>
-				{props.mode === "create" ? cancelAction : null}
+				{props.mode === "create" ? (
+					<div className="application-header-exit sr-only">{cancelAction}</div>
+				) : null}
 			</header>
-			<div className="form-layout full-width-form">
-				<div className="min-w-0">
+			<div className="form-layout full-width-form application-form-layout">
+				<div className="application-form-card min-w-0">
 					{!props.result && (
 						<ol className="form-stepper" aria-label="申请填写顺序">
-							<li>基本信息</li>
-							<li>配置</li>
+							<li className="done">基本信息</li>
+							<li className="active">配置</li>
 							<li>范围</li>
 							<li>提交</li>
 						</ol>
 					)}
 					{deploymentUnavailable ? (
-						<div className="mb-4 flex items-center gap-3" role="status">
+						<div
+							className="application-deployment-status"
+							id="application-deployment-status"
+							role="status"
+						>
 							<p className="text-muted-foreground text-sm">
 								{deploymentRetryable
 									? "部署选项需要刷新后才能提交标准模板申请。"
@@ -131,7 +137,7 @@ export function AgentApplicationSubmissionScreen(
 						</div>
 					) : null}
 					{props.error ? (
-						<Alert variant="destructive" className="my-3">
+						<Alert variant="destructive" className="application-form-alert">
 							<AlertDescription>
 								{validationError
 									? "申请内容未通过服务端校验，请检查字段后重试。"
@@ -151,6 +157,7 @@ export function AgentApplicationSubmissionScreen(
 							{...props}
 							cancelAction={cancelAction}
 							serverError={props.error}
+							showDeploymentStatus={false}
 						/>
 					)}
 					{props.result ? (
