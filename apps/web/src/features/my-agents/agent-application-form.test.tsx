@@ -789,6 +789,51 @@ describe("AgentApplicationForm", () => {
 		expect(screen.queryByText("可使用的组织 ID")).toBeNull();
 	});
 
+	it("does not add a directory option after Escape or while loading", async () => {
+		let resolveSearch: ((response: Response) => void) | undefined;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				() =>
+					new Promise<Response>((resolve) => {
+						resolveSearch = resolve;
+					}),
+			),
+		);
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+
+		const input = screen.getByRole("combobox", { name: "共同 Owner 用户" });
+		fireEvent.change(input, { target: { value: "owner" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(screen.queryByText("Owner Two")).toBeNull();
+
+		resolveSearch?.(
+			new Response(
+				JSON.stringify({
+					items: [
+						{
+							kind: "user",
+							canonicalId: "owner-2",
+							displayName: "Owner Two",
+							email: "owner.two@example.test",
+						},
+					],
+				}),
+				{ headers: { "Content-Type": "application/json" } },
+			),
+		);
+		await waitFor(() => expect(screen.getByText("Owner Two")).toBeTruthy());
+		fireEvent.keyDown(input, { key: "Escape" });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(screen.queryByLabelText("移除 Owner Two")).toBeNull();
+	});
+
 	it("reopens advanced configuration when a collapsed row has errors", () => {
 		render(
 			<AgentApplicationForm
@@ -801,6 +846,10 @@ describe("AgentApplicationForm", () => {
 		fireEvent.click(screen.getByRole("button", { name: "展开高级配置" }));
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
 		fireEvent.click(screen.getByRole("button", { name: "收起高级配置" }));
+		expect(screen.getByLabelText("变量名称")).toBeTruthy();
+		expect(
+			screen.getByLabelText("变量名称").closest("[hidden]"),
+		).not.toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(screen.getByRole("button", { name: "收起高级配置" })).toBeTruthy();

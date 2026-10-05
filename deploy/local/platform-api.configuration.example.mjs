@@ -22,3 +22,7 @@ export const publicOrigin = "https://localhost:3001";
 // and waitingTimeoutMs (milliseconds) must both be positive safe integers.
 // Supply reviewed deployment values explicitly; fixture values are not defaults.
 export const apiInput = missing("apiInput");
+
+// Search must resolve current, canonical directory records for the Web
+// application pickers. It must throw on dependency failure.
+export const directorySearch = missing("directorySearch");

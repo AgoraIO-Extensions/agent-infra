@@ -103,6 +103,7 @@ async function verifyPackagedApiDeployment() {
 export const isPlatformDisabled = async () => false;
 export const organizationIds = async () => ["fixture-org"];
 export const publicOrigin = "https://localhost:3001";
+export const directorySearch = async () => [];
 export const apiInput = {};
 `,
 		);

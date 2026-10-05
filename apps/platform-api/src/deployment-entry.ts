@@ -26,6 +26,9 @@ if (!databaseUrl) throw new Error("PLATFORM_DATABASE_URL is required");
 if (typeof ldap?.verifyCurrentStatus !== "function") {
 	throw new Error("LDAP current account authority is required");
 }
+if (typeof directorySearch !== "function") {
+	throw new Error("Directory search authority is required");
+}
 const tokenFile = process.env.PLATFORM_API_PROXY_TOKEN_FILE;
 if (!tokenFile?.startsWith("/")) {
 	throw new Error("PLATFORM_API_PROXY_TOKEN_FILE must be an absolute path");

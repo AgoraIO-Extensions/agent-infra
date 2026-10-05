@@ -373,7 +373,7 @@ function DirectoryPicker({
 		onChange([...selectedIds, option.id].join("\n"));
 		setQuery("");
 		setActiveIndex(0);
-		setOpen(true);
+		setOpen(false);
 	};
 	const remove = (id: string) =>
 		onChange(selectedIds.filter((item) => item !== id).join("\n"));
@@ -1588,7 +1588,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							/>
 							<FieldError id={errorId("name")} message={fieldErrors.name} />
 						</div>
-						{sourceFields}
 						<div className="space-y-2 sm:col-span-2">
 							<Label htmlFor="application-description">使用场景</Label>
 							<Textarea
@@ -1612,6 +1611,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								message={fieldErrors.description}
 							/>
 						</div>
+						{sourceFields}
 					</div>
 				</fieldset>
 				<fieldset className="form-section application-scope-section">
@@ -1691,152 +1691,148 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							{advancedConfigurationOpen ? "收起高级配置" : "展开高级配置"}
 						</Button>
 					</div>
-					{advancedConfigurationOpen ? (
-						<div className="application-advanced-content">
-							<fieldset className="form-section application-optional-section">
-								<legend className="font-semibold text-foreground text-lg">
-									环境变量
-								</legend>
-								<p className="text-muted-foreground text-sm">
-									仅填写部署允许的配置项；凭证请使用 Secret 或模型凭证字段。
-								</p>
-								<DraftRows
-									fields={[
-										{
-											key: "name",
-											label: "变量名称",
-											required: true,
-										},
-										{ key: "value", label: "变量值", required: true },
-									]}
-									idPrefix="environment"
-									label="环境变量"
-									errorFor={(index, key) =>
-										fieldErrors[`environment.${index}.${key}`]
-									}
-									onChange={(index, key, value) => {
-										const next = environment.map((item, itemIndex) =>
-											itemIndex === index
-												? {
-														...item,
-														[key]: value,
-													}
-												: item,
+					<div
+						className="application-advanced-content"
+						hidden={!advancedConfigurationOpen}
+					>
+						<fieldset className="form-section application-optional-section">
+							<legend className="font-semibold text-foreground text-lg">
+								环境变量
+							</legend>
+							<p className="text-muted-foreground text-sm">
+								仅填写部署允许的配置项；凭证请使用 Secret 或模型凭证字段。
+							</p>
+							<DraftRows
+								fields={[
+									{
+										key: "name",
+										label: "变量名称",
+										required: true,
+									},
+									{ key: "value", label: "变量值", required: true },
+								]}
+								idPrefix="environment"
+								label="环境变量"
+								errorFor={(index, key) =>
+									fieldErrors[`environment.${index}.${key}`]
+								}
+								onChange={(index, key, value) => {
+									const next = environment.map((item, itemIndex) =>
+										itemIndex === index
+											? {
+													...item,
+													[key]: value,
+												}
+											: item,
+									);
+									setEnvironment(next);
+									updateNameField("environment", next, index, key);
+								}}
+								onRemove={(index) => {
+									dismissServerFormError();
+									const next = environment.filter(
+										(_, itemIndex) => itemIndex !== index,
+									);
+									setEnvironment(next);
+									setFieldErrors((current) => {
+										const nextErrors = reindexRowErrors(
+											current,
+											"environment",
+											index,
 										);
-										setEnvironment(next);
-										updateNameField("environment", next, index, key);
-									}}
-									onRemove={(index) => {
-										dismissServerFormError();
-										const next = environment.filter(
-											(_, itemIndex) => itemIndex !== index,
+										recomputeDuplicateNameErrors(
+											nextErrors,
+											"environment",
+											next,
 										);
-										setEnvironment(next);
-										setFieldErrors((current) => {
-											const nextErrors = reindexRowErrors(
-												current,
-												"environment",
-												index,
-											);
-											recomputeDuplicateNameErrors(
-												nextErrors,
-												"environment",
-												next,
-											);
-											return nextErrors;
-										});
-									}}
-									rows={environment}
-								/>
-								<Button
-									variant="outline"
-									onClick={() => {
-										dismissServerFormError();
-										setEnvironment((current) => [
-											...current,
-											blankEnvironment(),
-										]);
-									}}
-									type="button"
-								>
-									<PlusIcon aria-hidden="true" data-icon="inline-start" />
-									添加环境变量
-								</Button>
-							</fieldset>
-							<fieldset className="form-section application-optional-section">
-								<legend className="font-semibold text-foreground text-lg">
-									Secret
-								</legend>
-								<p className="text-muted-foreground text-sm">
-									只提交新增或替换值，已有 Secret
-									不回显。提交后会清空输入，重试时需重新填写替换值。
-								</p>
-								<DraftRows
-									fields={[
-										{
-											key: "name",
-											label: "Secret 名称",
-											options:
-												sourceKind === "standard" ? secretOptions : undefined,
-											required: true,
-										},
-										{
-											key: "value",
-											label: "替换值",
-											required: true,
-											type: "password",
-										},
-									]}
-									idPrefix="secret"
-									label="Secret"
-									errorFor={(index, key) =>
-										fieldErrors[`secret.${index}.${key}`]
-									}
-									onChange={(index, key, value) => {
-										const next = secrets.map((item, itemIndex) =>
-											itemIndex === index
-												? {
-														...item,
-														[key]: value,
-														...(key === "name" ? { value: "" } : {}),
-													}
-												: item,
+										return nextErrors;
+									});
+								}}
+								rows={environment}
+							/>
+							<Button
+								variant="outline"
+								onClick={() => {
+									dismissServerFormError();
+									setEnvironment((current) => [...current, blankEnvironment()]);
+								}}
+								type="button"
+							>
+								<PlusIcon aria-hidden="true" data-icon="inline-start" />
+								添加环境变量
+							</Button>
+						</fieldset>
+						<fieldset className="form-section application-optional-section">
+							<legend className="font-semibold text-foreground text-lg">
+								Secret
+							</legend>
+							<p className="text-muted-foreground text-sm">
+								只提交新增或替换值，已有 Secret
+								不回显。提交后会清空输入，重试时需重新填写替换值。
+							</p>
+							<DraftRows
+								fields={[
+									{
+										key: "name",
+										label: "Secret 名称",
+										options:
+											sourceKind === "standard" ? secretOptions : undefined,
+										required: true,
+									},
+									{
+										key: "value",
+										label: "替换值",
+										required: true,
+										type: "password",
+									},
+								]}
+								idPrefix="secret"
+								label="Secret"
+								errorFor={(index, key) => fieldErrors[`secret.${index}.${key}`]}
+								onChange={(index, key, value) => {
+									const next = secrets.map((item, itemIndex) =>
+										itemIndex === index
+											? {
+													...item,
+													[key]: value,
+													...(key === "name" ? { value: "" } : {}),
+												}
+											: item,
+									);
+									setSecrets(next);
+									updateNameField("secret", next, index, key);
+								}}
+								onRemove={(index) => {
+									dismissServerFormError();
+									const next = secrets.filter(
+										(_, itemIndex) => itemIndex !== index,
+									);
+									setSecrets(next);
+									setFieldErrors((current) => {
+										const nextErrors = reindexRowErrors(
+											current,
+											"secret",
+											index,
 										);
-										setSecrets(next);
-										updateNameField("secret", next, index, key);
-									}}
-									onRemove={(index) => {
-										dismissServerFormError();
-										const next = secrets.filter(
-											(_, itemIndex) => itemIndex !== index,
-										);
-										setSecrets(next);
-										setFieldErrors((current) => {
-											const nextErrors = reindexRowErrors(
-												current,
-												"secret",
-												index,
-											);
-											recomputeDuplicateNameErrors(nextErrors, "secret", next);
-											return nextErrors;
-										});
-									}}
-									rows={secrets}
-								/>
-								<Button
-									variant="outline"
-									onClick={() => {
-										dismissServerFormError();
-										setSecrets((current) => [...current, blankEnvironment()]);
-									}}
-									type="button"
-								>
-									<PlusIcon aria-hidden="true" data-icon="inline-start" />
-									添加 Secret
-								</Button>
-							</fieldset>
-						</div>
-					) : null}
+										recomputeDuplicateNameErrors(nextErrors, "secret", next);
+										return nextErrors;
+									});
+								}}
+								rows={secrets}
+							/>
+							<Button
+								variant="outline"
+								onClick={() => {
+									dismissServerFormError();
+									setSecrets((current) => [...current, blankEnvironment()]);
+								}}
+								type="button"
+							>
+								<PlusIcon aria-hidden="true" data-icon="inline-start" />
+								添加 Secret
+							</Button>
+						</fieldset>
+					</div>
 				</section>
 				{sourceKind === "standard" ? (
 					<fieldset className="form-section application-model-section">
