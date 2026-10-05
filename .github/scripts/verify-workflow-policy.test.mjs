@@ -6,7 +6,6 @@ import test from "node:test";
 import YAML from "yaml";
 
 import {
-  validateMattSkillSnapshot,
   validateWorkflowDocuments,
 } from "./verify-workflow-policy.mjs";
 
@@ -23,43 +22,6 @@ async function actualWorkflows() {
     ),
   );
 }
-
-test("locks repository Matt Skills to pinned upstream trees", async () => {
-  const repositoryRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "agent-infra-matt-skills-"),
-  );
-
-  try {
-    await fs.cp(".agents", path.join(repositoryRoot, ".agents"), {
-      recursive: true,
-    });
-    assert.deepEqual(await validateMattSkillSnapshot(repositoryRoot), []);
-
-    const lockPath = path.join(
-      repositoryRoot,
-      ".agents/skills/mattpocock.lock.json",
-    );
-    const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
-    await fs.writeFile(
-      lockPath,
-      `${JSON.stringify({ ...lock, revision: "0".repeat(40) }, null, 2)}\n`,
-    );
-    assert.ok((await validateMattSkillSnapshot(repositoryRoot)).length > 0);
-    await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
-
-    await fs.appendFile(
-      path.join(repositoryRoot, ".agents/skills/tdd/SKILL.md"),
-      "\n# drift\n",
-    );
-    assert.ok(
-      (await validateMattSkillSnapshot(repositoryRoot)).some((error) =>
-        error.includes("tdd"),
-      ),
-    );
-  } finally {
-    await fs.rm(repositoryRoot, { force: true, recursive: true });
-  }
-});
 
 test("accepts the complete trusted workflow set", async () => {
   assert.deepEqual(validateWorkflowDocuments(await actualWorkflows()), []);

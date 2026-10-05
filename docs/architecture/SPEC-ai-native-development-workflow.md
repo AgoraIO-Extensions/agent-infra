@@ -16,15 +16,6 @@ Agent Runtime 或 Connection 的运行职责。
   Blocker Reconciler 和 Workflow Outcome 通知/自动重开 Issue 链路均退役。
 - 本地验证、受控 fixture 与真实外部验收分别记录；未执行、失败或跳过不能描述为完成。
 
-### 2.1 Matt Skill 交付路径
-
-本地默认路径为 `triage -> implement`。需求需要独立 Spec 时使用 `to-spec`；工作需要拆分为
-独立交付项时使用 `to-tickets`。它们不是每个任务必须执行的阶段。
-
-保留仓库级 `implement`、`tdd`、`code-review` 的固定上游快照及 provenance。实现后按 Standards
-和 Spec 两个维度评审；需要检查过度设计时使用本地 `ponytail-review`。本地 Skill 不授予额外
-GitHub 权限，也不触发 GitHub 上的自动开发。
-
 ## 3. 需求与文档依据
 
 产品范围以 PRD 为准，实现边界以工程 Spec 为准，开发流程以本文为准。Issue、ADR 和本地
@@ -49,7 +40,7 @@ Skills 只能细化这些约束。发现需求冲突或验收不明确时，先�
 
 Implementation Issue 包含唯一的 `Problem`、`Scope`、`Acceptance criteria`、`Validation` 和
 `Blocked by` 二级标题。验收标准使用唯一且稳定的 `AC-N`，写清可观察结果和验证方式。
-负责人确认内容后再实现，可使用本地 review skills 辅助评审。
+负责人确认内容后再实现。
 
 ### 5.2 实现标签
 
@@ -117,7 +108,7 @@ Human Validation Gate、CODEOWNER approval、conversation resolution 与 PR revi
   `Automated Review Coverage` required context，不把失败改写为成功；CI、两个基础 Gate、
   CODEOWNER approval 和 required conversation resolution 保持原样。
 - PR-Agent 不 Approve、不 Merge、不修改 branch/label，也不解决自己的线程。PR-Agent
-  原生评论由人工或本地 review skill 处理，不接入自定义 repair 或 Workflow Outcome 通知。
+  原生评论由人工处理，不接入自定义 repair 或 Workflow Outcome 通知。
 - 迁移时移除旧 required context 并回读剩余 Check 的 App 绑定。工作流替换合入后，用默认分支
   重新启用 `pr-agent-review.yml`，再使用后续测试 PR 核验自动 Review/Suggestions 和两个评论命令。实现 PR 的静态检查不替代
   hosted 发布证据。
