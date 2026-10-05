@@ -34,9 +34,14 @@ export const createProductionWorkloadWorkerOptionsV1 = async (input) => { global
 `,
 	);
 	await writeFile(
+		join(directory, "workload-runtime.js"),
+		`export const workloadResourceConfigurationHashV1 = () => 'synthetic-hash';`,
+	);
+	await writeFile(
 		join(directory, "conversation-deployment.js"),
 		`
 export const createProductionConversationRuntimeResolverV2 = () => { globalThis.calls.push('conversation'); };
+export const createProductionSessionSandboxReceiverV1 = () => { globalThis.calls.push('sandbox'); return async () => ({ status: 'observed', resources: [] }); };
 `,
 	);
 	await writeFile(
@@ -85,7 +90,7 @@ it("uses the selected deployment database for all Worker consumers and prepares 
 	expect(result.status, result.stderr).toBe(0);
 	expect(JSON.parse(result.stdout)).toEqual({
 		databases: [database, database, database],
-		calls: ["readiness", "workload", "wecom", "conversation"],
+		calls: ["readiness", "workload", "wecom", "sandbox", "conversation"],
 	});
 });
 
