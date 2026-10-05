@@ -730,9 +730,9 @@ describe("AgentApplicationForm", () => {
 		choose("标准模板", "Codex");
 		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
-	fireEvent.change(screen.getByLabelText("变量名称"), {
-		target: { value: "LOG_LEVEL" },
-	});
+		fireEvent.change(screen.getByLabelText("变量名称"), {
+			target: { value: "LOG_LEVEL" },
+		});
 		expect((screen.getByLabelText("变量值") as HTMLInputElement).required).toBe(
 			true,
 		);
