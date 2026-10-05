@@ -494,7 +494,8 @@ export async function recordSandboxDeletionProgress(
 				resource.kind === progress.resource.kind &&
 				resource.namespace === progress.resource.namespace &&
 				resource.name === progress.resource.name &&
-				resource.uid === progress.resource.uid,
+				resource.uid === progress.resource.uid &&
+				resource.resourceVersion === progress.preconditions.resourceVersion,
 		) &&
 		progress.sourceGeneration === source.sandbox.generation &&
 		progress.resourceFence === source.resourceFence &&

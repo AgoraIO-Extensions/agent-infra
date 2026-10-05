@@ -892,6 +892,26 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					}),
 				).toEqual({ status: "stale" });
 
+				expect(
+					await store.recordSandboxDeletionProgress({
+						claim: drain,
+						progress: {
+							...deleteIntent,
+							resource: { ...service, resourceVersion: "unobserved-version" },
+							preconditions: {
+								...deleteIntent.preconditions,
+								resourceVersion: "unobserved-version",
+							},
+						},
+						leaseDurationMs: 30_000,
+					}),
+				).toEqual({ status: "stale" });
+				const [beforeIntent] =
+					await client`select payload from platform.outbox_items where id = ${request.itemId}`;
+				expect(beforeIntent?.payload.lifecycle.deletionProgress ?? []).toEqual(
+					[],
+				);
+
 				const intentResult = await store.recordSandboxDeletionProgress({
 					claim: drain,
 					progress: deleteIntent,
