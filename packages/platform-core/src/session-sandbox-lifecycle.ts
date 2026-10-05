@@ -1,10 +1,10 @@
 import type { AgentManagementWritePlanV1 } from "./agent-management.js";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
-	isSessionSandboxObservationValidV1,
 	isSessionSandboxDeletionProgressValidV1,
-	type SessionSandboxObservationV1,
+	isSessionSandboxObservationValidV1,
 	type SessionSandboxDeletionProgressV1,
+	type SessionSandboxObservationV1,
 	type SessionSandboxResourceIdentityV1,
 	type SessionSandboxVerifiedPolicyV1,
 } from "./session-sandbox-reconciliation.js";
@@ -142,6 +142,7 @@ export function planSessionSandboxManagementTransitionV1(input: {
 			source,
 			...(neverPrepared ? { sourceState: "never-prepared" as const } : {}),
 			stopReceipt: retained ? previous.stopReceipt : null,
+			...(retained ? { deletionProgress: previous.deletionProgress } : {}),
 		} satisfies SessionSandboxLifecycleV1,
 	};
 }
@@ -156,43 +157,15 @@ export function decideSessionSandboxDrainObservationV1(input: {
 	const { lifecycle, observation, sandbox, resourceFence } = input;
 	const source = lifecycle.source;
 	const receipt = observation.sourceStop;
-	const unknown = () => {
-		const sourceResources = source.observation?.resources ?? [];
-		const deletionProgress =
-			isSessionSandboxDeletionProgressValidV1(observation.deletionProgress) &&
-			(observation.deletionProgress ?? []).every((progress) => {
-				const original = sourceResources.find(
-					(resource) => resource.kind === progress.resource.kind,
-				);
-				return (
-					!!original &&
-					original.namespace === progress.resource.namespace &&
-					original.name === progress.resource.name &&
-					original.uid === progress.resource.uid &&
-					original.resourceVersion === progress.preconditions.resourceVersion &&
-					progress.sourceGeneration === source.sandbox.generation &&
-					progress.resourceFence === source.resourceFence &&
-					progress.managementFence === lifecycle.authority.managementFence
-				);
-			})
-				? observation.deletionProgress
-				: undefined;
-		return {
+	const unknown = () => ({
+		status: "unknown" as const,
+		observation: source.observation ?? {
 			status: "unknown" as const,
-			observation: deletionProgress
-				? {
-						...(source.observation ?? { resources: [] }),
-						status: "unknown" as const,
-						deletionProgress,
-					}
-				: (source.observation ?? {
-						status: "unknown" as const,
-						resources: [],
-					}),
-			finished: false,
-			stopReceipt: null,
-		};
-	};
+			resources: [],
+		},
+		finished: false,
+		stopReceipt: null,
+	});
 	// A prepare may have created resources before its observation committed.
 	// Keep partial owned readbacks too, preserving every previously known UID.
 	// This is evidence refinement, never readiness or stop/absence proof.
@@ -230,7 +203,9 @@ export function decideSessionSandboxDrainObservationV1(input: {
 			),
 		)
 	) {
-		return { ...unknown(), observation };
+		const { deletionProgress: _untrustedProgress, ...sourceObservation } =
+			observation;
+		return { ...unknown(), observation: sourceObservation };
 	}
 	if (
 		observation.status !== "stopped" ||
@@ -290,12 +265,25 @@ export function decideSessionSandboxDrainObservationV1(input: {
 			removed.length
 	)
 		return unknown();
+	if (!isSessionSandboxDeletionProgressValidV1(lifecycle.deletionProgress))
+		return unknown();
 	for (const old of removed) {
+		const progress = lifecycle.deletionProgress?.find(
+			(entry) => entry.resource.kind === old.kind,
+		);
 		const proof = receipt.removed.find(
 			(item) => item?.resource?.kind === old.kind,
 		);
 		if (
 			!proof ||
+			!progress ||
+			progress.state !== "absent" ||
+			progress.sourceGeneration !== source.sandbox.generation ||
+			progress.resourceFence !== source.resourceFence ||
+			progress.managementFence > lifecycle.authority.managementFence ||
+			!sameIdentity(progress.resource, proof.resource) ||
+			progress.preconditions.resourceVersion !==
+				proof.preconditions?.resourceVersion ||
 			!sameIdentity(old, proof.resource) ||
 			proof.preconditions?.uid !== proof.resource.uid ||
 			proof.preconditions.resourceVersion !== proof.resource.resourceVersion ||

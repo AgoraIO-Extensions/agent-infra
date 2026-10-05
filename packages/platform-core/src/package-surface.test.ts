@@ -57,6 +57,7 @@ describe("platform-core package surface", () => {
 			"WecomSetupError",
 			"WorkloadPreflightRejectedErrorV1",
 			"bindInputFileV1",
+			"canAdvanceSessionSandboxDeletionProgressV1",
 			"canDrainSessionSandboxComputeV1",
 			"canPrepareSessionSandboxReplacementV1",
 			"capturePersonalApiTaskAuthorizationBoundaryV1",

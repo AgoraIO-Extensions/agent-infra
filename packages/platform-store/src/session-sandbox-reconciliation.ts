@@ -6,6 +6,7 @@ import {
 } from "@agent-infra/contracts/workload";
 import {
 	type AgentManagementStateV1,
+	canAdvanceSessionSandboxDeletionProgressV1,
 	canDrainSessionSandboxComputeV1,
 	canPrepareSessionSandboxReplacementV1,
 	capturePersonalApiTaskAuthorizationBoundaryV1,
@@ -483,21 +484,33 @@ export async function recordSandboxDeletionProgress(
 	const valid =
 		!!context &&
 		context.purpose === "drain" &&
+		context.drainComputeAllowed &&
 		!!context.lifecycle &&
+		!context.lifecycle.stopReceipt &&
+		!context.lifecycle.preparation &&
 		isSessionSandboxDeletionProgressValidV1([progress]) &&
 		!!source?.observation?.resources.some(
 			(resource) =>
 				resource.kind === progress.resource.kind &&
 				resource.namespace === progress.resource.namespace &&
 				resource.name === progress.resource.name &&
-				resource.uid === progress.resource.uid &&
-				resource.resourceVersion === progress.preconditions.resourceVersion,
+				resource.uid === progress.resource.uid,
 		) &&
 		progress.sourceGeneration === source.sandbox.generation &&
 		progress.resourceFence === source.resourceFence &&
-		progress.managementFence === context.lifecycle.authority.managementFence;
+		progress.managementFence <= context.lifecycle.authority.managementFence;
 	if (!valid || !context?.lifecycle) return { status: "stale" };
 	const existing = context.lifecycle.deletionProgress ?? [];
+	const previous = existing.find(
+		(entry) => entry.resource.kind === progress.resource.kind,
+	);
+	if (
+		(!previous &&
+			progress.managementFence !==
+				context.lifecycle.authority.managementFence) ||
+		!canAdvanceSessionSandboxDeletionProgressV1(previous, progress)
+	)
+		return { status: "stale" };
 	const merged = [
 		...existing.filter(
 			(entry) => entry.resource.kind !== progress.resource.kind,
@@ -561,8 +574,9 @@ export async function recordSandboxObservation(
 		context.purpose === "drain" &&
 		context.lifecycle?.authority.targetDesiredState === "running";
 	const stopReceipt = "stopReceipt" in decision ? decision.stopReceipt : null;
+	let nextLifecycle: SessionSandboxLifecycleV1 | undefined;
 	if (context.lifecycle && context.purpose === "drain") {
-		const nextLifecycle = {
+		nextLifecycle = {
 			...context.lifecycle,
 			source: stopReceipt
 				? context.lifecycle.source
@@ -570,33 +584,17 @@ export async function recordSandboxObservation(
 						...context.lifecycle.source,
 						observation: decision.observation,
 					},
-			deletionProgress: stopReceipt
-				? []
-				: (decision.observation.deletionProgress ??
-					context.lifecycle.deletionProgress ??
-					[]),
+			deletionProgress: context.lifecycle.deletionProgress ?? [],
 			...(stopReceipt
 				? {
 						stopReceipt,
 					}
 				: {}),
 		};
-		const progressWrite = await transaction`update platform.outbox_items
-			set payload = payload || ${transaction.json({
-				schemaVersion: 1,
-				conversationId: claim.sandbox.sessionId,
-				sessionGeneration: claim.sandbox.generation,
-				lifecycle: nextLifecycle,
-			} as unknown as Parameters<typeof transaction.json>[0])}
-			where id = ${claim.itemId} and status = 'processing'
-				and lease_owner = ${claim.leaseOwner}
-				and delivery_fence = ${claim.deliveryFence}
-				and lease_expires_at > clock_timestamp()
-			returning id`;
-		if (progressWrite.length !== 1) return "stale";
 	}
 	const recorded = await transaction`update platform.outbox_items
-		set status = ${decision.finished && !continuePreparation ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
+		set payload = payload || ${transaction.json((nextLifecycle ? { lifecycle: nextLifecycle } : {}) as unknown as Parameters<typeof transaction.json>[0])},
+		status = ${decision.finished && !continuePreparation ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
 		available_at = clock_timestamp() + interval '1 second', updated_at = clock_timestamp()
 		where id = ${claim.itemId} and status = 'processing'
 			and lease_owner = ${claim.leaseOwner}
