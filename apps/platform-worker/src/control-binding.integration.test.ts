@@ -47,6 +47,7 @@ it("recovers only the original control ref through production Worker/Core and Po
 			"regenerate",
 			"stop",
 			"response_lost",
+			"malformed_response",
 			"wrong_execution",
 			"takeover",
 			"persistence_failure",
@@ -275,6 +276,16 @@ it("recovers only the original control ref through production Worker/Core and Po
 					);
 					if (scenario === "response_lost")
 						throw new Error("Controlled transport response loss");
+					if (scenario === "malformed_response")
+						return new Response(
+							JSON.stringify({
+								schemaVersion: 3,
+								outcome: "binding_found",
+								hostSessionRef,
+								executionId,
+								status: "running",
+							}),
+						);
 					return new Response(
 						JSON.stringify({
 							schemaVersion: 3,
