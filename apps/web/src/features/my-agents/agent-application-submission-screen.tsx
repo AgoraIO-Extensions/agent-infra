@@ -83,6 +83,11 @@ export function AgentApplicationSubmissionScreen(
 		props.deploymentConfiguration.status !== "populated" ||
 		props.deploymentConfiguration.modelCatalog.status !== "populated";
 	const deploymentRetryable = props.deploymentConfigurationRetryable ?? false;
+	const submissionFailureMessage =
+		props.error?.code === "DEPENDENCY_UNAVAILABLE" ||
+		props.error?.code === "INTERNAL_ERROR"
+			? "申请提交失败，部署依赖暂不可用，请稍后重试。"
+			: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。";
 
 	return (
 		<section aria-labelledby="agent-application-submission-heading">
@@ -99,18 +104,22 @@ export function AgentApplicationSubmissionScreen(
 				</div>
 				{props.mode === "create" ? cancelAction : null}
 			</header>
-			<div className="form-layout full-width-form">
-				<div className="min-w-0">
+			<div className="form-layout full-width-form application-form-layout">
+				<div className="application-form-card min-w-0">
 					{!props.result && (
 						<ol className="form-stepper" aria-label="申请填写顺序">
-							<li>基本信息</li>
-							<li>配置</li>
+							<li className="done">基本信息</li>
+							<li className="active">配置</li>
 							<li>范围</li>
 							<li>提交</li>
 						</ol>
 					)}
 					{deploymentUnavailable ? (
-						<div className="mb-4 flex items-center gap-3" role="status">
+						<div
+							className="application-deployment-status"
+							id="application-deployment-status"
+							role="status"
+						>
 							<p className="text-muted-foreground text-sm">
 								{deploymentRetryable
 									? "部署选项需要刷新后才能提交标准模板申请。"
@@ -131,13 +140,13 @@ export function AgentApplicationSubmissionScreen(
 						</div>
 					) : null}
 					{props.error ? (
-						<Alert variant="destructive" className="my-3">
+						<Alert variant="destructive" className="application-form-alert">
 							<AlertDescription>
 								{validationError
 									? "申请内容未通过服务端校验，请检查字段后重试。"
 									: props.error.retryable === false
 										? "申请已变更或当前不可用，请刷新页面后核对。"
-										: "申请提交失败，非敏感内容已保留。请重新填写 Secret 或模型凭证后再提交。"}
+										: submissionFailureMessage}
 							</AlertDescription>
 						</Alert>
 					) : null}
@@ -151,6 +160,7 @@ export function AgentApplicationSubmissionScreen(
 							{...props}
 							cancelAction={cancelAction}
 							serverError={props.error}
+							showDeploymentStatus={false}
 						/>
 					)}
 					{props.result ? (

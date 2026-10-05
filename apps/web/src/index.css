@@ -1944,6 +1944,21 @@ a[class~="group/button"]:focus-visible,
 		11px ui-monospace,
 		monospace;
 }
+.form-stepper li.done {
+	color: var(--foreground);
+}
+.form-stepper li.done::before {
+	border-color: var(--foreground);
+	background: var(--foreground);
+	color: var(--surface);
+}
+.form-stepper li.active {
+	color: var(--primary);
+}
+.form-stepper li.active::before {
+	border-color: var(--primary);
+	color: var(--primary);
+}
 .management-content .form-section > legend,
 .management-content .full-width-form legend {
 	font-family: inherit;
@@ -1973,6 +1988,184 @@ a[class~="group/button"]:focus-visible,
 }
 .management-content .full-width-form .form-footer {
 	justify-content: space-between;
+}
+
+/* The application form follows the OpenDesign handoff: one quiet surface,
+   compact responsibility sections, and the action row inside the surface. */
+.management-content .application-form-layout {
+	display: block;
+}
+.application-form-card {
+	min-width: 0;
+	padding: 20px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--surface);
+}
+.application-form-card > .form-stepper {
+	margin-bottom: 25px;
+}
+.application-form {
+	min-width: 0;
+}
+.application-form-fields {
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+.application-form-fields > .application-basic-section {
+	order: 1;
+}
+.application-form-fields > .application-scope-section {
+	order: 2;
+}
+.application-form-fields > .application-model-section {
+	order: 3;
+}
+.application-form-fields > .application-optional-section {
+	order: 4;
+}
+.application-form-fields > .application-advanced-section {
+	order: 4;
+}
+.application-form-fields > .form-footer {
+	order: 5;
+}
+.application-form .form-section {
+	min-width: 0;
+	padding: 22px 0;
+	border-top: 1px solid var(--border);
+}
+.application-form .form-section:first-child {
+	padding-top: 0;
+	border-top: 0;
+}
+.application-form .form-grid {
+	margin-top: 16px;
+}
+.application-form .form-section > p {
+	margin-top: 5px;
+}
+.application-form .field-help {
+	color: var(--muted-foreground);
+	font-size: 11px;
+}
+.application-form .application-optional-section {
+	padding-top: 14px;
+	padding-bottom: 14px;
+}
+.application-form .application-optional-section > p {
+	font-size: 11px;
+	line-height: 1.45;
+}
+.application-form .application-optional-section > [data-slot="button"] {
+	min-height: 36px;
+	margin-top: 8px;
+}
+.application-form .application-advanced-section {
+	padding: 14px 0;
+}
+.application-advanced-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+}
+.application-advanced-heading h2 {
+	font-family: inherit;
+	font-size: 16px;
+	font-weight: 650;
+	letter-spacing: 0;
+}
+.application-form .application-advanced-heading p {
+	margin-top: 4px;
+	color: var(--muted-foreground);
+	font-size: 11px;
+}
+.application-advanced-toggle {
+	min-height: 36px;
+	padding: 7px 11px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 650;
+}
+.application-advanced-toggle:hover {
+	border-color: var(--foreground);
+	color: var(--foreground);
+	background: var(--muted);
+}
+.application-advanced-content {
+	margin-top: 14px;
+}
+.application-advanced-content .application-optional-section:first-child {
+	padding-top: 0;
+	border-top: 0;
+}
+.application-form-card > .application-deployment-status,
+.application-form .application-deployment-status {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin: 0 0 16px;
+}
+.application-form-alert {
+	margin: 0 0 16px;
+}
+.application-form .form-footer {
+	align-items: center;
+	margin-top: 0;
+	padding: 20px 0 0;
+	border-top: 1px solid var(--border);
+}
+.application-form .form-footer-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.application-form .model-option-fieldset {
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+	align-items: end;
+	gap: 10px;
+}
+.application-form .model-option-fieldset > legend {
+	grid-column: 1 / -1;
+	margin-bottom: 0;
+}
+.application-form .model-option-fieldset .model-reasoning-field {
+	grid-column: 1 / -1;
+}
+.application-form .model-option-fieldset .model-credential {
+	grid-column: 2;
+}
+.application-form .model-option-fieldset .model-remove {
+	grid-column: 3;
+	grid-row: 2;
+}
+@media (max-width: 767px) {
+	.application-form-card {
+		padding: 16px;
+	}
+	.application-advanced-heading {
+		align-items: flex-start;
+	}
+	.application-form .model-option-fieldset {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.application-form .model-option-fieldset .model-reasoning-field,
+	.application-form .model-option-fieldset .model-credential,
+	.application-form .model-option-fieldset .model-remove {
+		grid-column: 1;
+		grid-row: auto;
+	}
+	.application-form .form-footer-actions {
+		width: 100%;
+		justify-content: flex-end;
+	}
 }
 .metadata-facts {
 	display: grid;
@@ -2152,6 +2345,264 @@ a[class~="group/button"]:focus-visible,
 .audit-detail-panel:focus-visible {
 	outline: 2px solid var(--primary);
 	outline-offset: 3px;
+}
+
+/* OpenDesign directory picker: compact chips, inline search and field-level menu. */
+.directory-field {
+	position: relative;
+	min-width: 0;
+}
+.directory-field > [data-slot="label"] {
+	display: block;
+	margin-bottom: 7px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 650;
+}
+.directory-control {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	gap: 6px;
+	min-height: 44px;
+	padding: 6px 10px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface);
+	transition:
+		border-color 180ms ease,
+		box-shadow 180ms ease;
+}
+.directory-control:focus-within {
+	border-color: var(--primary);
+	box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent);
+}
+.directory-control.directory-control-error {
+	border-color: var(--destructive);
+}
+.directory-chips {
+	display: flex;
+	flex: 1 1 auto;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 5px;
+	min-width: 0;
+	max-width: 100%;
+}
+.directory-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	max-width: 100%;
+	min-height: 28px;
+	padding: 3px 5px 3px 9px;
+	border: 1px solid color-mix(in oklch, var(--primary) 24%, var(--border));
+	border-radius: 7px;
+	background: color-mix(in oklch, var(--primary) 11%, var(--surface));
+	color: var(--foreground);
+	font-size: 12px;
+	line-height: 1.25;
+}
+.directory-chip-label {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.directory-chip small {
+	display: block;
+	color: var(--muted-foreground);
+	font-size: 10px;
+	line-height: 1.2;
+}
+.directory-chip-remove {
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+	min-width: 0;
+	min-height: 44px;
+	flex: none;
+	border: 0;
+	border-radius: 10px;
+	background: transparent;
+	color: var(--muted-foreground);
+}
+.directory-chip-remove:hover {
+	background: color-mix(in oklch, var(--primary) 12%, transparent);
+	color: var(--foreground);
+}
+.directory-chip-remove:focus-visible {
+	outline: 2px solid var(--primary);
+	outline-offset: 1px;
+}
+.directory-control .directory-input {
+	flex: 1 1 150px;
+	min-width: 120px;
+	min-height: 0;
+	height: 30px;
+	padding: 1px 4px;
+	background: transparent;
+	color: var(--foreground);
+	font-size: 13px;
+}
+.directory-control .directory-input,
+.directory-control .directory-input:focus,
+.directory-control .directory-input:focus-visible {
+	border: 0;
+	outline: 0;
+	box-shadow: none;
+}
+.directory-input::placeholder {
+	color: color-mix(in oklch, var(--muted-foreground) 82%, var(--surface));
+}
+.directory-menu {
+	position: absolute;
+	z-index: 45;
+	top: calc(100% + 6px);
+	right: 0;
+	left: 0;
+	max-height: 310px;
+	overflow: auto;
+	padding: 6px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface);
+	box-shadow: 0 16px 38px
+		color-mix(in oklch, var(--foreground) 14%, transparent);
+}
+.directory-result {
+	display: grid;
+	grid-template-columns: 32px minmax(0, 1fr);
+	gap: 9px;
+	width: 100%;
+	min-height: 58px;
+	padding: 9px 10px;
+	border: 1px solid transparent;
+	border-radius: 9px;
+	background: transparent;
+	color: var(--foreground);
+	text-align: left;
+}
+.directory-result:hover,
+.directory-result.directory-result-active {
+	border-color: color-mix(in oklch, var(--primary) 22%, var(--border));
+	background: color-mix(in oklch, var(--primary) 11%, var(--surface));
+}
+.directory-result[aria-selected="true"] {
+	opacity: 0.55;
+	cursor: default;
+}
+.directory-result-mark {
+	display: grid;
+	place-items: center;
+	width: 30px;
+	height: 30px;
+	border-radius: 9px;
+	background: var(--muted);
+	color: var(--primary);
+	font-size: 12px;
+	font-weight: 700;
+}
+.directory-result-copy {
+	min-width: 0;
+}
+.directory-result-name {
+	display: block;
+	overflow-wrap: anywhere;
+	font-size: 13px;
+	font-weight: 650;
+}
+.directory-result-meta {
+	display: block;
+	margin-top: 2px;
+	color: var(--muted-foreground);
+	font-size: 11px;
+	line-height: 1.45;
+	overflow-wrap: anywhere;
+}
+.directory-result-meta + .directory-result-meta {
+	margin-top: 0;
+}
+.directory-status {
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
+	min-height: 54px;
+	padding: 12px 10px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.5;
+}
+.directory-status svg {
+	width: 16px;
+	height: 16px;
+	flex: none;
+	margin-top: 1px;
+}
+.directory-status strong {
+	display: block;
+	color: var(--foreground);
+	font-size: 12px;
+}
+.directory-clear {
+	display: inline-flex;
+	align-items: center;
+	min-height: 32px;
+	margin-top: 4px;
+	padding: 5px 8px;
+	border: 0;
+	border-radius: 7px;
+	background: transparent;
+	color: var(--primary);
+	font-size: 11px;
+}
+.directory-clear:hover {
+	background: color-mix(in oklch, var(--primary) 11%, var(--surface));
+	color: var(--foreground);
+}
+.directory-status-spinner {
+	width: 16px;
+	height: 16px;
+	flex: none;
+	margin-top: 1px;
+	border: 2px solid color-mix(in oklch, var(--primary) 25%, transparent);
+	border-top-color: var(--primary);
+	border-radius: 50%;
+	animation: directory-spin 700ms linear infinite;
+}
+@keyframes directory-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+.directory-help {
+	display: flex;
+	justify-content: space-between;
+	gap: 8px;
+	margin-top: 6px;
+	color: var(--muted-foreground);
+	font-size: 11px;
+	line-height: 1.45;
+}
+.directory-help span:last-child {
+	flex: none;
+	color: color-mix(in oklch, var(--muted-foreground) 78%, var(--surface));
+}
+@media (max-width: 767px) {
+	.directory-menu {
+		position: static;
+		max-height: 246px;
+		margin-top: 6px;
+	}
+	.directory-control .directory-input {
+		flex-basis: 130px;
+	}
+	.directory-help {
+		display: block;
+	}
+	.directory-help span:last-child {
+		display: block;
+		margin-top: 2px;
+	}
 }
 @media (max-width: 767px) {
 	.management-content .owned-agent-card .metadata-facts {

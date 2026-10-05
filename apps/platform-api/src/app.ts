@@ -21,6 +21,10 @@ import {
 	registerDeploymentConfigurationRoutes,
 } from "./http/deployment-configuration-routes.js";
 import {
+	type DirectoryRouteDependencies,
+	registerDirectoryRoutes,
+} from "./http/directory-routes.js";
+import {
 	type FileRoutesDependenciesV1,
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
@@ -91,6 +95,7 @@ export interface PlatformAppDependencies {
 		typeof registerWecomSetupRoutesV1
 	>[1];
 	readonly scopedAudit?: ScopedAuditRoutesDependencies;
+	readonly directory?: DirectoryRouteDependencies;
 }
 
 export function createPlatformHealthApp(observability?: ApiObservability) {
@@ -177,6 +182,8 @@ export function createPlatformApp(
 	registerSessionAuditRoutes(app, dependencies.sessionAudit);
 	if (dependencies.scopedAudit)
 		registerScopedAuditRoutes(app, dependencies.scopedAudit);
+	if (dependencies.directory)
+		registerDirectoryRoutes(app, dependencies.directory);
 	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
 	return app;
 }

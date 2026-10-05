@@ -103,19 +103,19 @@ export function validateAgentApplicationDraft(
 	) => {
 		const values = splitValues(value);
 		if (values.some((item) => /\s/.test(item)))
-			errors[key] = `${label}格式不正确，请每行填写一个 ID。`;
+			errors[key] = `${label}格式不正确，请选择有效目录成员。`;
 		if (new Set(values).size !== values.length)
 			errors[key] = `${label}不能重复。`;
 	};
-	validateIdentifierList(draft.coOwnerIds, "共同 Owner 用户 ID", "coOwnerIds");
+	validateIdentifierList(draft.coOwnerIds, "共同 Owner 用户", "coOwnerIds");
 	validateIdentifierList(
 		draft.userAvailabilityIds,
-		"可使用的用户 ID",
+		"可使用的用户",
 		"userAvailabilityIds",
 	);
 	validateIdentifierList(
 		draft.organizationAvailabilityIds,
-		"可使用的组织 ID",
+		"可使用的组织",
 		"organizationAvailabilityIds",
 	);
 	const validateRows = (
