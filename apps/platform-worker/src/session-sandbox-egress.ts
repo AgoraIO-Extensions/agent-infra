@@ -176,10 +176,14 @@ export function createSessionSandboxEgressV1(options: {
 					(policy.spec?.policyTypes?.includes("Egress") ??
 						!!policy.spec?.egress?.length) &&
 					!!policy.spec?.egress?.length &&
-					!Object.entries(policy.spec?.podSelector?.matchLabels ?? {}).some(
-						([key, value]) =>
-							Object.hasOwn(labels, key) && labels[key] !== value,
-					),
+					// An expression may select this Sandbox even when its labels
+					// look disjoint; reject it conservatively rather than allow
+					// an unprovable additive egress policy.
+					((policy.spec?.podSelector?.matchExpressions?.length ?? 0) > 0 ||
+						!Object.entries(policy.spec?.podSelector?.matchLabels ?? {}).some(
+							([key, value]) =>
+								Object.hasOwn(labels, key) && labels[key] !== value,
+						)),
 			)
 		)
 			throw new WorkloadKubernetesError("policy");

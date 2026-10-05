@@ -176,6 +176,24 @@ describe("Session Sandbox egress enforcement (Kubernetes fixture, not CNI eviden
 		await expect(adapter.observe(binding, known)).rejects.toThrow();
 		await expect(adapter.apply(binding, known)).rejects.toThrow();
 	});
+	it("rejects additive allow policies selected by expressions", async () => {
+		const { api, adapter } = setup();
+		api.resources.set("NetworkPolicy/expression", {
+			apiVersion: "networking.k8s.io/v1",
+			kind: "NetworkPolicy",
+			metadata: { name: "expression" },
+			spec: {
+				podSelector: {
+					matchExpressions: [
+						{ key: "agent-infra.agora.io/agent-id", operator: "Exists" },
+					],
+				},
+				policyTypes: ["Egress"],
+				egress: [{}],
+			},
+		} as V1NetworkPolicy);
+		await expect(adapter.apply(binding)).rejects.toThrow();
+	});
 	it("revokes to empty egress and retains the deny until all Sandbox Pods are gone", async () => {
 		const { api, adapter } = setup();
 		const known = await adapter.apply(binding);
