@@ -1,3 +1,4 @@
+import { createPrivateKey, X509Certificate } from "node:crypto";
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import type { V1Secret } from "@kubernetes/client-node";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
@@ -24,9 +25,11 @@ function isBase64(value: unknown): value is string {
 export function validateRuntimeTlsSecretV1(
 	secret: V1Secret | null,
 	name: string,
+	serviceDnsNames: readonly string[],
 ): secret is V1Secret {
-	return Boolean(
-		secret &&
+	if (
+		!(
+			secret &&
 			secret.metadata?.name === name &&
 			!secret.metadata.deletionTimestamp &&
 			secret.type === "kubernetes.io/tls" &&
@@ -34,8 +37,63 @@ export function validateRuntimeTlsSecretV1(
 			secret.data &&
 			Object.keys(secret.data).length === 2 &&
 			isBase64(secret.data["tls.crt"]) &&
-			isBase64(secret.data["tls.key"]),
-	);
+			isBase64(secret.data["tls.key"])
+		)
+	)
+		return false;
+	try {
+		const cert = Buffer.from(secret.data["tls.crt"], "base64").toString("utf8");
+		const key = Buffer.from(secret.data["tls.key"], "base64").toString("utf8");
+		if (cert.length > 131_072 || key.length > 32_768) return false;
+		const pattern =
+			/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+		const blocks = cert.match(pattern);
+		if (!blocks?.length || cert.replace(pattern, "").trim()) return false;
+		const chain = blocks.map((pem) => new X509Certificate(pem));
+		if (chain.length < 2) return false;
+		const leaf = chain[0];
+		if (
+			!leaf ||
+			leaf.ca ||
+			!leaf.keyUsage?.includes("1.3.6.1.5.5.7.3.1") ||
+			!leaf.checkPrivateKey(createPrivateKey(key))
+		)
+			return false;
+		const now = Date.now();
+		if (
+			!chain.every((certificate, index) => {
+				if (
+					now < certificate.validFromDate.getTime() ||
+					now >= certificate.validToDate.getTime()
+				)
+					return false;
+				if (index === 0) {
+					const issuer = chain[1];
+					return Boolean(
+						issuer?.ca &&
+							leaf.checkIssued(issuer) &&
+							leaf.verify(issuer.publicKey),
+					);
+				}
+				const child = chain[index - 1];
+				return Boolean(
+					certificate.ca &&
+						child?.checkIssued(certificate) &&
+						child.verify(certificate.publicKey),
+				);
+			})
+		)
+			return false;
+		return (
+			serviceDnsNames.length > 0 &&
+			serviceDnsNames.every(
+				(dns) =>
+					leaf.checkHost(dns, { subject: "never", wildcards: false }) === dns,
+			)
+		);
+	} catch {
+		return false;
+	}
 }
 
 export function validateRuntimeTlsPolicyV1(policy: KubernetesWorkloadPolicyV1) {

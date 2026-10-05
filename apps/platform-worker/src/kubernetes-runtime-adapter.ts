@@ -315,6 +315,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			!validateRuntimeTlsSecretV1(
 				await client.read<V1Secret>("Secret", tls.serverSecretRef.name),
 				tls.serverSecretRef.name,
+				tls.serviceDnsNames,
 			)
 		)
 			return "drifted";
@@ -1111,6 +1112,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				!validateRuntimeTlsSecretV1(
 					await client.read<V1Secret>("Secret", tls.serverSecretRef.name),
 					tls.serverSecretRef.name,
+					tls.serviceDnsNames,
 				)
 			)
 				throw new WorkloadKubernetesError("policy");

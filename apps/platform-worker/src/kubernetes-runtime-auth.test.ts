@@ -11,7 +11,7 @@ import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.j
 
 function fixture() {
 	const api = fakeKubernetesApi();
-	api.seed(runtimeTlsSecretFixture("custom-agent-tls"));
+	api.seed(runtimeTlsSecretFixture("custom-agent-tls", "custom-agent"));
 	const { publicKey } = generateKeyPairSync("ed25519");
 	const runtimeAuth = {
 		workerId: "worker-a",

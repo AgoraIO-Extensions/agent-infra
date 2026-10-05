@@ -307,7 +307,7 @@ function fixture(
 	const runtimeTlsSecrets = new Map(
 		tlsAgents.map((agentId) => {
 			const name = `runtime-tls-${workloadResourceNameV1(agentId)}`;
-			return [name, runtimeTlsSecretFixture(name)] as const;
+			return [name, runtimeTlsSecretFixture(name, agentId)] as const;
 		}),
 	);
 	const readResource = api.client.read.bind(api.client);

@@ -152,6 +152,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	fake.seed(
 		runtimeTlsSecretFixture(
 			runtimeTlsBindingFixture("agent-cli").serverSecretRef.name,
+			"agent-cli",
 		),
 	);
 	const kinds: Record<string, string> = {
