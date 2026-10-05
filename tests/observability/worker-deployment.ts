@@ -1,9 +1,9 @@
 import { generateKeyPairSync } from "node:crypto";
+import type { PlatformConversationWorkerOptionsV2 } from "../../apps/platform-worker/src/conversation-worker.js";
 import type {
 	SessionSandboxObservationV1,
 	SessionSandboxReconciliationClaimV1,
 } from "../../packages/platform-core/src/session-sandbox-reconciliation.js";
-import type { PlatformConversationWorkerOptionsV2 } from "../../apps/platform-worker/src/conversation-worker.js";
 
 let databaseUrl: string | undefined;
 let log: (message: string) => void = () => {};
@@ -27,9 +27,9 @@ export async function createPlatformConversationWorkerOptionsV2(
 			namespace: "workload-test",
 			resourceConfigurationHash: "controlled-observability-sandbox-policy",
 		},
-	receiveSandbox: async (
-		_claim: SessionSandboxReconciliationClaimV1,
-		_signal: AbortSignal,
+		receiveSandbox: async (
+			_claim: SessionSandboxReconciliationClaimV1,
+			_signal: AbortSignal,
 		): Promise<SessionSandboxObservationV1> => ({
 			status: "unknown",
 			resources: [],
