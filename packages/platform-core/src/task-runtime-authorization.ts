@@ -6,6 +6,7 @@ import {
 	ConversationRuntimeHostError,
 } from "./conversation-dispatch.js";
 import type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
+import type { SessionSandboxRuntimeStateV1 } from "./session-sandbox-reconciliation.js";
 import {
 	type CurrentTaskApiUseGrantV1,
 	type CurrentTaskApplicationV1,
@@ -21,6 +22,8 @@ import {
 import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
 
 export interface TaskRuntimeRecoveryStateV1 {
+	/** Production Store supplies this under the original claim lease; absence never permits routing. */
+	readonly sandboxResource?: SessionSandboxRuntimeStateV1 | null;
 	readonly metadataRecovery?: ConversationMetadataRecoveryV1;
 	readonly generationIsolation?: ConversationGenerationIsolationV1;
 	readonly hostSessionRef: string | null;

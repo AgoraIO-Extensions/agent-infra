@@ -130,6 +130,7 @@ beforeAll(async () => {
 		{ idx: 32, tag: "0032_typed_task_principal" },
 		{ idx: 33, tag: "0033_typed_generation_principal" },
 		{ idx: 34, tag: "0034_task_status_event_source" },
+		{ idx: 35, tag: "0035_session_sandbox_allocations" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -379,6 +380,10 @@ describe("personal credential disable authority append", () => {
 						if (!row || typeof row !== "object") return row;
 						const copy = { ...(row as Record<string, unknown>) };
 						delete copy.principal_type;
+						if (table === "conversation_executions") {
+							if ("sandbox_id" in copy) expect(copy.sandbox_id).toBeNull();
+							delete copy.sandbox_id;
+						}
 						return copy;
 					}),
 				]),

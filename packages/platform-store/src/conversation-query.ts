@@ -2,9 +2,12 @@ import { Buffer } from "node:buffer";
 import { types } from "node:util";
 import type { RecentPersonalConversationsQueryV1 } from "@agent-infra/platform-core";
 import {
+	isSessionSandboxReadyV1,
 	isTaskApiChannelV1,
 	parseConversationOperationEventV2,
+	parseSessionSandboxBindingV1,
 	parseTaskPrincipalV1,
+	type SessionSandboxBindingV1,
 	type TaskPrincipalV1,
 } from "@agent-infra/platform-core";
 
@@ -12,6 +15,7 @@ import postgres from "postgres";
 import { exactRecord } from "./conversation-execution-common.js";
 import { readRecentPersonalConversations } from "./conversation-recent-query.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
+import { conversationSandboxReadBindingSql } from "./session-sandbox.js";
 
 type Database = ReturnType<typeof postgres> | postgres.TransactionSql;
 
@@ -31,6 +35,8 @@ export interface ConversationQueryPageV1 {
 }
 
 export interface ConversationQueryProjectionV1 {
+	readonly sandbox?: SessionSandboxBindingV1;
+	readonly sandboxReady?: boolean;
 	readonly conversationId: string;
 	readonly agentId: string;
 	readonly status: "ready" | "active" | "unavailable";
@@ -113,6 +119,17 @@ export interface PlatformQueueResourceSnapshot {
 }
 
 interface ConversationRow {
+	readonly sandbox_status: string | null;
+	readonly sandbox_desired_state: string | null;
+	readonly sandbox_resource_fence: number | string | null;
+	readonly sandbox_observation_status: string | null;
+	readonly sandbox_id: string | null;
+	readonly resource_name: string | null;
+	readonly workspace_scope: string | null;
+	readonly actor_id: string;
+	readonly principal_type: string;
+	readonly channel_id: string;
+	readonly session_generation: number | string;
 	readonly id: string;
 	readonly agent_id: string;
 	readonly status: "ready" | "active" | "unavailable";
@@ -363,7 +380,28 @@ function projection(row: ConversationRow): ConversationQueryProjectionV1 {
 	return {
 		conversationId: text(row.id),
 		agentId: text(row.agent_id),
+		...(row.sandbox_id === null
+			? {}
+			: {
+					sandbox: parseSessionSandboxBindingV1({
+						schemaVersion: 1,
+						sandboxId: row.sandbox_id,
+						sessionId: row.id,
+						agentId: row.agent_id,
+						principal: { kind: row.principal_type, id: row.actor_id },
+						channelId: row.channel_id,
+						generation: Number(row.session_generation),
+						resourceName: row.resource_name,
+						workspaceScope: row.workspace_scope,
+					}),
+				}),
 		status: row.status,
+		sandboxReady: isSessionSandboxReadyV1({
+			status: row.sandbox_status,
+			desiredState: row.sandbox_desired_state,
+			resourceFence: Number(row.sandbox_resource_fence),
+			observationStatus: row.sandbox_observation_status,
+		}),
 		lastConversationCursor:
 			cursor === 0 ? null : conversationCursor(row.id, cursor),
 		createdAt: timestamp(row.created_at),
@@ -416,8 +454,15 @@ function event(row: EventRow): ConversationQueryEventV1 {
 }
 
 const conversationSelection = `
-	select id, agent_id, status, last_conversation_cursor, created_at, updated_at
-	from platform.conversations
+ select id, agent_id, status, last_conversation_cursor, created_at, updated_at,
+   sandbox_id, resource_name, workspace_scope, sandbox_status, sandbox_desired_state, sandbox_resource_fence, sandbox_observation_status, actor_id, principal_type, channel_id, session_generation
+ from (select c.*, s.sandbox_id, s.resource_name, s.workspace_scope,
+   s.status as sandbox_status, s.desired_state as sandbox_desired_state,
+   s.resource_fence as sandbox_resource_fence, s.resource_observation->>'status' as sandbox_observation_status
+   from platform.conversations c left join platform.session_sandbox_allocations s
+     on s.conversation_id = c.id
+   where ${conversationSandboxReadBindingSql}
+ ) as conversations
 `;
 
 async function readConversation(
@@ -507,6 +552,11 @@ async function readEvents(
 				limit 1
 			) as trace_id
 		from platform.conversation_events e
+		join platform.conversation_executions x
+			on x.execution_id = e.execution_id and x.conversation_id = e.conversation_id
+		join platform.conversations c on c.id = x.conversation_id
+			and c.agent_id = x.agent_id and c.actor_id = x.actor_id
+			and c.principal_type = x.principal_type and c.channel_id = x.channel_id
 		where e.conversation_id = ${conversationId}
 			and e.conversation_cursor > ${options.afterCursor ?? 0}
 			${options.executionId === undefined ? database`` : database`and e.execution_id = ${options.executionId}`}

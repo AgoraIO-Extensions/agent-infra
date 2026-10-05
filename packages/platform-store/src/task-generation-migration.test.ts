@@ -96,7 +96,7 @@ describe("0033 typed generation tombstone upgrade", () => {
 		).toEqual(before);
 		expect(
 			await sql`select * from platform.conversation_executions order by execution_id`,
-		).toEqual(executionsBefore);
+		).toEqual(executionsBefore.map((row) => ({ ...row, sandbox_id: null })));
 		expect(
 			await sql`select * from platform.task_control_records order by id`,
 		).toEqual(controlsBefore);

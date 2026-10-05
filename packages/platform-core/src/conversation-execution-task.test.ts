@@ -13,6 +13,7 @@ function waiting(
 			serviceAvailability: "ready",
 		},
 		conversationAvailable: true,
+		sandboxReady: true,
 		isolationPending: false,
 		occupied: false,
 		earlierWaiting: false,
@@ -26,6 +27,7 @@ describe("never-sent task waiting decision", () => {
 			outcome: "dispatch",
 		});
 		for (const changes of [
+			{ sandboxReady: false },
 			{ occupied: true },
 			{ earlierWaiting: true },
 			{ isolationPending: true, conversationAvailable: false },
@@ -93,7 +95,12 @@ describe("never-sent task waiting decision", () => {
 	it("expires never-sent work even when capacity or earlier work still blocks it", () => {
 		expect(
 			decideConversationTaskWaitingV1(
-				waiting({ nowMs: 2_001, occupied: true, earlierWaiting: true }),
+				waiting({
+					nowMs: 2_001,
+					sandboxReady: false,
+					occupied: true,
+					earlierWaiting: true,
+				}),
 			),
 		).toEqual({ outcome: "fail", reason: "TASK_WAIT_TIMEOUT" });
 	});
