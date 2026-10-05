@@ -1001,7 +1001,6 @@ test("Owner configuration, Secret clearing, lifecycle and custom image upgrade",
 	await expect(page.getByLabel("新模型凭证")).toHaveValue("");
 	await page.keyboard.press("Space");
 	await expect(replaceModels).not.toBeChecked();
-	await page.getByRole("button", { name: "展开高级配置" }).click();
 	await page.getByRole("button", { name: "添加 Secret" }).click();
 	await page.getByLabel("Secret 名称").fill("RELEASE_KEY");
 	await page.getByLabel("新 Secret 值").fill("synthetic-browser-secret");
