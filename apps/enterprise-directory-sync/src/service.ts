@@ -1,16 +1,18 @@
 import { timingSafeEqual } from "node:crypto";
 import {
 	createDirectorySynchronizer,
-	type createWeComSource,
+	type DirectorySource,
 	type DirectoryStore,
 	requireCurrentSnapshot,
 	toDirectorySnapshotV1,
+	toDirectorySnapshotV2,
 } from "@agent-infra/enterprise-directory";
 import { Hono } from "hono";
 
 export interface DirectoryServiceInput {
 	store: DirectoryStore;
-	source: ReturnType<typeof createWeComSource>;
+	source: DirectorySource;
+	sourceId?: string;
 	readToken: string;
 	rootDepartmentId: number;
 	now?: () => number;
@@ -48,23 +50,28 @@ export function createDirectoryService(input: DirectoryServiceInput) {
 			return context.json({ status: "unavailable" }, 503);
 		}
 	});
-	app.get("/internal/directory/snapshot", async (context) => {
-		if (!tokenMatches(context.req.header("Authorization"), input.readToken)) {
-			return context.json({ error: "unauthorized" }, 401);
-		}
-		try {
-			const snapshot = requireCurrentSnapshot(
-				await input.store.latest(),
-				now(),
-			);
-			return context.json(toDirectorySnapshotV1(snapshot), 200, {
-				"Cache-Control": "no-store",
-			});
-		} catch {
-			return context.json({ error: "directory_unavailable" }, 503, {
-				"Cache-Control": "no-store",
-			});
-		}
-	});
+	for (const [path, encode] of [
+		["/internal/directory/snapshot", toDirectorySnapshotV1],
+		["/internal/directory/v2/snapshot", toDirectorySnapshotV2],
+	] as const) {
+		app.get(path, async (context) => {
+			if (!tokenMatches(context.req.header("Authorization"), input.readToken)) {
+				return context.json({ error: "unauthorized" }, 401);
+			}
+			try {
+				const snapshot = requireCurrentSnapshot(
+					await input.store.latest(),
+					now(),
+				);
+				return context.json(encode(snapshot), 200, {
+					"Cache-Control": "no-store",
+				});
+			} catch {
+				return context.json({ error: "directory_unavailable" }, 503, {
+					"Cache-Control": "no-store",
+				});
+			}
+		});
+	}
 	return { app, syncOnce: synchronizer.syncOnce };
 }

@@ -113,6 +113,7 @@ async function hydrateAuditUsers(
 	dependencies: SessionAuditRoutesDependencies,
 	items: PlatformAuditPageV1["items"],
 	traceId: string,
+	self?: { readonly userId: string; readonly displayName: string; readonly roles: readonly ("employee" | "system_admin")[] },
 ) {
 	const actorIds = [
 		...new Set(
@@ -122,12 +123,25 @@ async function hydrateAuditUsers(
 		),
 	];
 	if (actorIds.length === 0) return new Map();
+	const result = new Map<
+		string,
+		{ userId: string; displayName: string; roles: readonly ("employee" | "system_admin")[] }
+	>();
+	if (self && actorIds.includes(self.userId))
+		result.set(self.userId, {
+			userId: self.userId,
+			displayName: self.displayName,
+			roles: self.roles,
+		});
+	const remaining = actorIds.filter((id) => !result.has(id));
+	if (remaining.length === 0) return result;
 	const actors = await hydrateBrowserUsers(
 		dependencies.identity,
-		actorIds,
+		remaining,
 		traceId,
 	);
-	return new Map(actors.map((actor) => [actor.userId, actor]));
+	for (const actor of actors) result.set(actor.userId, actor);
+	return result;
 }
 
 export function registerSessionAuditRoutes(
@@ -172,6 +186,11 @@ export function registerSessionAuditRoutes(
 
 	app.get("/api/v1/admin/audit", async (context) => {
 		const metadata = requestMetadata(context.req.raw);
+		const sessionIdentity = await resolveIdentity(
+			dependencies.identity,
+			context.req.raw,
+			metadata.traceId,
+		);
 		const auditPage = await readAuditPage(
 			dependencies,
 			context.req.raw,
@@ -186,6 +205,7 @@ export function registerSessionAuditRoutes(
 				dependencies,
 				auditPage.items,
 				metadata.traceId,
+				sessionIdentity,
 			);
 			const items = auditPage.items.map((item) =>
 				PlatformAuditProjectionV1Schema.parse({
@@ -203,6 +223,11 @@ export function registerSessionAuditRoutes(
 
 	app.get("/api/v2/admin/audit", async (context) => {
 		const metadata = requestMetadata(context.req.raw);
+		const sessionIdentity = await resolveIdentity(
+			dependencies.identity,
+			context.req.raw,
+			metadata.traceId,
+		);
 		const auditPage = await readAuditPage(
 			dependencies,
 			context.req.raw,
@@ -214,6 +239,7 @@ export function registerSessionAuditRoutes(
 				dependencies,
 				auditPage.items,
 				metadata.traceId,
+				sessionIdentity,
 			);
 			const items = auditPage.items.map((item) =>
 				PlatformAuditProjectionV2Schema.parse({

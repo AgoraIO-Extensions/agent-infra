@@ -218,6 +218,20 @@
       "when": 1790898575204,
       "tag": "0034_task_status_event_source",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791135995408,
+      "tag": "0035_ldap_identity_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791160373692,
+      "tag": "0036_browser_session_principal",
+      "breakpoints": true
     }
   ]
 }

@@ -1948,10 +1948,12 @@ describe("published Relay authority migration", () => {
 			32,
 			33,
 			34,
+			35,
+			36,
 		]);
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 34,
-			tag: "0034_task_status_event_source",
+			idx: 36,
+			tag: "0036_browser_session_principal",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2033,7 +2035,7 @@ describe("published Relay authority migration", () => {
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			const after = await history();
 			expect(after.slice(0, before.length)).toEqual(before);
-			expect(after).toHaveLength(before.length + 5);
+				expect(after).toHaveLength(before.length + 7);
 			expect(after.slice(before.length)).toEqual(
 				migrations
 					.filter((migration) => migration.folderMillis >= relayWhen)
@@ -2049,6 +2051,7 @@ describe("published Relay authority migration", () => {
 				columns:
 					kind === "original27"
 						? [
+								"browser_sessions:principal",
 								"conversation_executions:execution_source",
 								"conversation_executions:original_operation_digest",
 								"conversation_executions:original_submit_host_session_ref",
@@ -2063,6 +2066,7 @@ describe("published Relay authority migration", () => {
 								"conversations:principal_type",
 							]
 						: [
+								"browser_sessions:principal",
 								"conversation_executions:principal_type",
 								"conversations:principal_type",
 							],
@@ -2114,7 +2118,7 @@ describe("published Relay authority migration", () => {
 		]);
 		const after = await history();
 		expect(after.slice(0, before.length)).toEqual(before);
-		expect(after).toHaveLength(before.length + 5);
+		expect(after).toHaveLength(before.length + 7);
 		const catalog = await relayCatalog();
 		await builtStore.migratePlatformDatabase({ databaseUrl });
 		expect(await history()).toEqual(after);

@@ -19,7 +19,6 @@ import {
 } from "./common.js";
 import {
 	type IdentityAdapter,
-	resolveCurrentTaskUser,
 	resolveIdentity,
 } from "./identity.js";
 
@@ -66,7 +65,13 @@ async function queryScope(
 	}
 	const browser = await resolveIdentity(identity, request, traceId);
 	capturePrincipal({ kind: "user", id: browser.userId });
-	const user = await resolveCurrentTaskUser(identity, browser.userId, traceId);
+	const user = {
+		schemaVersion: 1 as const,
+		userId: browser.userId,
+		accountStatus: browser.accountStatus,
+		organizationIds: browser.organizationIds,
+		authorizationRevision: browser.authorizationRevision,
+	};
 	return parsePlatformAuditQueryScopeV1({
 		kind: "execution",
 		principal: { kind: "user", id: browser.userId },

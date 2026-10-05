@@ -13,6 +13,16 @@ const wecomDeliveryAuditMetadata = {
 } as const;
 
 const platformAuditActionMetadata = {
+	"audit.query.completed": {
+		actorKind: "user",
+		subjectKind: "unknown",
+		details: false,
+	},
+	"audit.query.failed": {
+		actorKind: "user",
+		subjectKind: "unknown",
+		details: false,
+	},
 	"agent.application.submitted": {
 		actorKind: "user",
 		subjectKind: "agent_application",
@@ -343,6 +353,18 @@ function changedFields(
 	action: PlatformAuditActionV1,
 	details: unknown,
 ): readonly PlatformAuditChangedFieldV1[] {
+	if (action === "audit.query.completed" || action === "audit.query.failed") {
+		if (
+			typeof details !== "object" ||
+			details === null ||
+			Array.isArray(details) ||
+			(details as Record<string, unknown>).schemaVersion !== 1 ||
+			(details as Record<string, unknown>).result !==
+				(action === "audit.query.completed" ? "succeeded" : "failed")
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		return [];
+	}
 	const detailKind = platformAuditActionMetadata[action].details;
 	if (detailKind === false) {
 		if (details !== null) throw new PlatformAuditQueryError("unavailable");
@@ -550,7 +572,7 @@ export class PostgresPlatformAuditQueryV1 {
 						.from(auditEvents)
 						.innerJoin(cursor, sql`true`)
 						.where(
-							sql<boolean>`(${auditEvents.occurredAt}, ${auditEvents.id}) < (${cursor.occurredAt}, ${cursor.auditId})`,
+							sql<boolean>`(${auditEvents.occurredAt}, ${auditEvents.id}) < (${cursor.occurredAt}, ${cursor.auditId}) AND ${auditEvents.action} NOT LIKE 'audit.query.%'`,
 						)
 						.orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
 						.limit(page.limit + 1),
@@ -583,6 +605,7 @@ export class PostgresPlatformAuditQueryV1 {
 				rows = await this.#database
 					.select(auditSelection)
 					.from(auditEvents)
+					.where(sql<boolean>`${auditEvents.action} NOT LIKE 'audit.query.%'`)
 					.orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
 					.limit(page.limit + 1);
 			}

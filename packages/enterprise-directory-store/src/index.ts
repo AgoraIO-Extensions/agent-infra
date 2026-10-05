@@ -1,8 +1,8 @@
 import type { DirectoryStore } from "@agent-infra/enterprise-directory";
 import {
-	fromDirectorySnapshotV1,
+	fromDirectorySnapshot,
 	summarizeSnapshotChange,
-	toDirectorySnapshotV1,
+	toDirectorySnapshot,
 } from "@agent-infra/enterprise-directory";
 import { desc, sql as drizzleSql } from "drizzle-orm";
 import { bigint, jsonb, pgSchema, timestamp, uuid } from "drizzle-orm/pg-core";
@@ -36,7 +36,7 @@ export function createPostgresDirectoryStore(
 		},
 		async publish(value, generation) {
 			if (generation < 1n) throw new Error("Invalid directory scan generation");
-			const snapshot = toDirectorySnapshotV1(value);
+			const snapshot = toDirectorySnapshot(value);
 			return sql.begin(async (transaction) => {
 				await transaction`
 					SELECT pg_catalog.pg_advisory_xact_lock(
@@ -56,7 +56,7 @@ export function createPostgresDirectoryStore(
 					return { status: "superseded" } as const;
 				const summary = summarizeSnapshotChange(
 					value,
-					rows[0] ? fromDirectorySnapshotV1(rows[0].contents) : null,
+					rows[0] ? fromDirectorySnapshot(rows[0].contents) : null,
 				);
 				await transaction`
 					INSERT INTO enterprise_directory.snapshots
@@ -81,7 +81,7 @@ export function createPostgresDirectoryStore(
 					desc(snapshots.revision),
 				)
 				.limit(1);
-			return rows[0] ? fromDirectorySnapshotV1(rows[0].contents) : null;
+			return rows[0] ? fromDirectorySnapshot(rows[0].contents) : null;
 		},
 		close: () => sql.end(),
 	};

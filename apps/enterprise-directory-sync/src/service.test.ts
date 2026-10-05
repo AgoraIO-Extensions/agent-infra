@@ -13,7 +13,7 @@ import { createDirectoryService } from "./service.js";
 const now = Date.UTC(2026, 8, 28);
 const readToken = "r".repeat(32);
 
-function fixture() {
+function fixture(sourceId = "wecom") {
 	let published: DirectorySnapshot | null = null;
 	let fail = false;
 	let storeFail = false;
@@ -55,6 +55,7 @@ function fixture() {
 		},
 	} as ReturnType<typeof createWeComSource>;
 	const service = createDirectoryService({
+		sourceId,
 		store,
 		source,
 		readToken,
@@ -204,4 +205,29 @@ describe("directory service", () => {
 			).status,
 		).toBe(503);
 	});
+});
+
+it("serves generic sources only through authenticated V2 without changing V1", async () => {
+	const { service } = fixture("enterprise-tools");
+	await service.syncOnce();
+	const request = (path: string, token = readToken) =>
+		service.app.request(path, {
+			headers: { Authorization: `Bearer ${token}` },
+		});
+	expect(
+		(await request("/internal/directory/v2/snapshot", "wrong")).status,
+	).toBe(401);
+	expect((await request("/internal/directory/snapshot")).status).toBe(503);
+	const res = await request("/internal/directory/v2/snapshot");
+	expect(res.status).toBe(200);
+	expect(await res.json()).toMatchObject({
+		schemaVersion: 2,
+		source: "enterprise-tools",
+	});
+	const client = createDirectoryClient({
+		endpoint: "https://directory.internal/internal/directory/v2/snapshot",
+		token: readToken,
+		fetch: async (input, init) => service.app.request(new Request(input, init)),
+	});
+	expect((await client.loadCurrent(now)).source).toBe("enterprise-tools");
 });

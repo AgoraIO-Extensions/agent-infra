@@ -6,7 +6,9 @@ import { z } from "zod";
 import { createDocument } from "zod-openapi";
 import {
 	EnterpriseDirectorySnapshotV1Schema,
+	EnterpriseDirectorySnapshotV2Schema,
 	enterpriseDirectoryOpenApiPathsV1,
+	enterpriseDirectoryOpenApiPathsV2,
 } from "./enterprise-directory.ts";
 import {
 	fileExchangeOpenApiPathsV1,
@@ -104,6 +106,10 @@ const artifactPaths = {
 	enterpriseDirectoryOpenapi: resolve(
 		artifactRoot,
 		"openapi/enterprise-directory.v1.openapi.json",
+	),
+	enterpriseDirectoryOpenapiV2: resolve(
+		artifactRoot,
+		"openapi/enterprise-directory.v2.openapi.json",
 	),
 	platformAuthOpenapi: resolve(
 		artifactRoot,
@@ -755,6 +761,20 @@ function buildArtifacts() {
 				},
 				schemas: {
 					EnterpriseDirectorySnapshotV1: EnterpriseDirectorySnapshotV1Schema,
+				},
+			},
+		}),
+		enterpriseDirectoryOpenapiV2: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Enterprise Directory Snapshot API", version: "2.0.0" },
+			security: [{ DirectoryServiceBearer: [] }],
+			paths: enterpriseDirectoryOpenApiPathsV2,
+			components: {
+				securitySchemes: {
+					DirectoryServiceBearer: { type: "http", scheme: "bearer" },
+				},
+				schemas: {
+					EnterpriseDirectorySnapshotV2: EnterpriseDirectorySnapshotV2Schema,
 				},
 			},
 		}),

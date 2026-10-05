@@ -26,6 +26,8 @@ export interface LdapIdentityIds {
 
 export interface LdapIdentityConfiguration {
 	readonly url: string;
+	/** LDAP transport toggle: true (default) uses LDAPS; false uses LDAP. */
+	readonly tls?: boolean;
 	readonly issuer: string;
 	readonly baseDn: string;
 	readonly serviceBindDn: string;
@@ -117,12 +119,14 @@ export function createLdapIdentityDirectory(
 ) {
 	const config = { ...configuration };
 	let host: string;
+	let connectionUrl: string;
 	let timeoutMs: number;
 	let administratorUids: Set<string>;
 	try {
 		const url = new URL(config.url);
 		if (
-			url.protocol !== "ldaps:" ||
+			!["ldap:", "ldaps:"].includes(url.protocol) ||
+			(config.tls !== undefined && typeof config.tls !== "boolean") ||
 			!url.hostname ||
 			url.pathname !== "" ||
 			url.search ||
@@ -132,6 +136,9 @@ export function createLdapIdentityDirectory(
 		) {
 			throw new Error();
 		}
+		// The deployment toggle owns the protocol. An explicit port is preserved.
+		url.protocol = (config.tls ?? true) ? "ldaps:" : "ldap:";
+		connectionUrl = url.href;
 		host = url.hostname;
 		requiredText(config.issuer, 256);
 		requiredText(config.baseDn, 1024);
@@ -177,15 +184,20 @@ export function createLdapIdentityDirectory(
 		throw new LdapIdentityUnavailableError();
 	}
 	const clientOptions: ClientOptions = {
-		url: config.url,
+		url: connectionUrl,
 		timeout: timeoutMs,
 		connectTimeout: timeoutMs,
 		autoRebind: false,
-		tlsOptions: {
-			rejectUnauthorized: true,
-			servername: host,
-			...(config.ca ? { ca: config.ca } : {}),
-		},
+		// ldapts enables TLS whenever tlsOptions is present, even for ldap://.
+		...((config.tls ?? true)
+			? {
+					tlsOptions: {
+						rejectUnauthorized: true,
+						servername: host,
+						...(config.ca ? { ca: config.ca } : {}),
+					},
+				}
+			: {}),
 	};
 	const createClient =
 		config.createClient ?? ((options: ClientOptions) => new Client(options));
