@@ -122,7 +122,7 @@ describe("Conversation dispatch worker assembly", () => {
 			databaseUrl: "postgres://test",
 			authorization: dispatchAuthorization,
 			runtimeHost: {
-				baseUrl: "http://runtime.internal",
+				baseUrl: "https://runtime.internal",
 				serviceToken: "synthetic-service-token",
 				fetch: vi.fn<typeof fetch>(),
 			},

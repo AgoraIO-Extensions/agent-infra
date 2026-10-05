@@ -16,7 +16,8 @@
 		"@agent-infra/platform-store": "workspace:*",
 		"@agent-infra/secret-store": "workspace:*",
 		"@agent-infra/wecom": "workspace:*",
-		"@kubernetes/client-node": "2.0.0"
+		"@kubernetes/client-node": "2.0.0",
+		"undici": "7.29.1"
 	},
 	"scripts": {
 		"build": "tsdown",

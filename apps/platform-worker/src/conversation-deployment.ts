@@ -154,6 +154,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				deployment.runtimeManifest.interactionMode !== "platform-adapter"
 			)
 				throw new Error();
+			if (
+				!workload.policy.runtimeTls?.some(
+					(binding) => binding.agentId === input.agentId,
+				)
+			)
+				throw new Error();
 			// observe checks actual ownership, UID/generation, Pod/spec/Secret/network
 			// drift, health and signed Runtime readiness; it never changes resources.
 			const health = await (input.purpose === "control"
@@ -247,7 +253,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			input.signal.throwIfAborted();
 			const service = `${workloadResourceNameV1(input.agentId)}${input.purpose === "control" ? "-probe" : ""}`;
 			return {
-				baseUrl: `http://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
+				baseUrl: `https://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
 				serviceToken,
 				workerId: signing.workerId,
 			};
