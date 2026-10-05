@@ -258,6 +258,28 @@ async function fixture(
 			});
 			return;
 		}
+		if (request.method() === "GET" && pathname === "/api/v2/directory/search") {
+			const items = [
+				{
+					kind: "user",
+					canonicalId: "user-2",
+					displayName: "验收用户二",
+					email: "user.two@example.test",
+					organizationPath: "平台工程",
+				},
+				{
+					kind: "user",
+					canonicalId: "user-3",
+					displayName: "验收用户三",
+					email: "user.three@example.test",
+					organizationPath: "研发基础设施",
+				},
+			];
+			await route.fulfill({
+				json: { schemaVersion: 1, items },
+			});
+			return;
+		}
 		// Deliberately bypass the schema-valid mock server for protocol negatives.
 		if (
 			request.method() === "GET" &&
@@ -780,13 +802,13 @@ test("create, edit, resubmit and withdraw with native form and pending semantics
 	await expect(page.getByRole("button", { name: "撤回申请" })).toHaveCount(0);
 });
 
-test("field errors and transient submission recover on desktop and mobile", async ({
+test("directory search and transient submission recover on desktop and mobile", async ({
 	page,
 }, info) => {
 	const api = await fixture(page);
 	await page.goto("/my-agents/new");
 	const name = page.getByLabel("Agent 名称");
-	const ownerIds = page.getByLabel("共同 Owner 用户 ID");
+	const ownerInput = page.getByRole("combobox", { name: "共同 Owner 用户" });
 	const submit = page.getByRole("button", { name: "提交申请", exact: true });
 	await name.fill("中文发布 Agent");
 	await page.getByLabel("用途说明", { exact: true }).fill("用于中文发布验收");
@@ -795,29 +817,26 @@ test("field errors and transient submission recover on desktop and mobile", asyn
 		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
 		.click();
 	await page.getByLabel("镜像地址").fill("registry.example/agents/release:v1");
-	await ownerIds.fill("user-2\nuser-2");
+	await ownerInput.fill("user");
+	await page.getByRole("option", { name: "验收用户二" }).click();
+	await expect(page.getByText("验收用户二", { exact: true })).toBeVisible();
+	await page.getByRole("button", { name: "展开高级配置" }).click();
 	await page.getByRole("button", { name: "添加 Secret" }).click();
 	await page.getByLabel("Secret 名称").fill("TEST_SECRET");
 	await page.getByLabel("替换值").fill("synthetic-first-value");
-	await submit.focus();
-	await page.keyboard.press("Enter");
-	await expect(ownerIds).toBeFocused();
-	await expect(ownerIds).toHaveAttribute("aria-invalid", "true");
-	await expect(page.getByText("共同 Owner 用户 ID不能重复。")).toBeVisible();
-	expect(api.commands).toHaveLength(0);
-
-	await ownerIds.fill("user-2");
-	await expect(ownerIds).not.toHaveAttribute("aria-invalid", "true");
 	api.rejectNextApplication();
 	await submit.focus();
 	await page.keyboard.press("Enter");
 	await expect(page.getByRole("alert")).toContainText("申请提交失败");
 	await expect(name).toHaveValue("中文发布 Agent");
-	await expect(ownerIds).toHaveValue("user-2");
+	await expect(page.getByText("验收用户二", { exact: true })).toBeVisible();
 	await expect(page.getByLabel("替换值")).toHaveCount(0);
 	expect(api.commands).toHaveLength(1);
 	await capture(page, info, "application-field-recovery");
 
+	await expect(
+		page.getByRole("button", { name: "收起高级配置" }),
+	).toBeVisible();
 	await page.getByRole("button", { name: "添加 Secret" }).click();
 	await page.getByLabel("Secret 名称").fill("TEST_SECRET");
 	await page.getByLabel("替换值").fill("synthetic-retry-value");
@@ -851,7 +870,7 @@ test("stale deployment options block submission in the browser", async ({
 	await page.getByRole("button", { name: "重新加载部署选项" }).click();
 	await expect(page.locator("#application-deployment-status")).toHaveCount(0);
 	await expect(page.getByLabel("Agent 名称")).toHaveValue("中文模板 Agent");
-	await page.getByRole("combobox", { name: "标准模板 ID" }).click();
+	await page.getByRole("combobox", { name: "标准模板" }).click();
 	await page.getByRole("option", { name: "Codex" }).click();
 	await expect(page.locator("#application-template-id-error")).toHaveCount(0);
 });
@@ -868,6 +887,7 @@ test("authorization rejection keeps non-sensitive input and clears Secret", asyn
 		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
 		.click();
 	await page.getByLabel("镜像地址").fill("registry.example/agents/release:v1");
+	await page.getByRole("button", { name: "展开高级配置" }).click();
 	await page.getByRole("button", { name: "添加 Secret" }).click();
 	await page.getByLabel("Secret 名称").fill("TEST_SECRET");
 	await page.getByLabel("替换值").fill("synthetic-rejected-value");
@@ -1462,9 +1482,7 @@ test("deployment option reads recover before submitting an application", async (
 	api.recoverDeployment();
 	await page.getByRole("button", { name: "重新加载部署选项" }).click();
 	await expect(page.locator("#application-deployment-status")).toHaveCount(0);
-	await expect(
-		page.getByRole("combobox", { name: "标准模板 ID" }),
-	).toBeVisible();
+	await expect(page.getByRole("combobox", { name: "标准模板" })).toBeVisible();
 });
 
 test("deployment option authorization failures do not offer a retry action", async ({

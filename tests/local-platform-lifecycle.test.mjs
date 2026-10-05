@@ -54,6 +54,7 @@ async function fixture() {
 				"export const isPlatformDisabled = async () => false;",
 				"export const organizationIds = async () => [];",
 				'export const publicOrigin = "https://localhost:3001";',
+				"export const directorySearch = async () => [];",
 				'export const apiInput = { imageRepository: "registry.example/agent", loadAuthorityContext: async () => ({}), modelCatalog: { revision: "catalog-v1", load: async () => ({}) }, encryptionKeys: {}, resourceProfile: {} };',
 				"",
 			].join("\n"),

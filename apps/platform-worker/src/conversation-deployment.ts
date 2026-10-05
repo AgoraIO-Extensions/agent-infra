@@ -243,8 +243,9 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				)
 					throw new Error();
 				return {
-					// Preserve the Session-owned Service. Its TLS leaf provisioning
-					// remains the Session owner's responsibility; never downgrade.
+					// Session sandboxes use their own Service contract; the bound Service
+					// must be consumed through the internal HTTPS contract. TLS leaf
+					// provisioning remains the Session owner's responsibility.
 					baseUrl: `https://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
@@ -373,6 +374,8 @@ export function createProductionSessionSandboxReceiverV1(
 				source.sandbox.generation,
 				source.resourceFence,
 			);
+			if (!recordDeletionProgress)
+				throw new Error("Session Sandbox deletion CAS is unavailable");
 			const stopReceipt = await adapter.cleanup(allocation, sourceResources, {
 				sourceGeneration: source.sandbox.generation,
 				sourceResourceFence: source.resourceFence,
@@ -411,6 +414,8 @@ export function createProductionSessionSandboxReceiverV1(
 		);
 		const previous = claim.previousObservation?.resources ?? [];
 		if (claim.desiredState === "stopped") {
+			if (!recordDeletionProgress)
+				throw new Error("Session Sandbox deletion CAS is unavailable");
 			const stopReceipt = await adapter.cleanup(allocation, previous, {
 				sourceGeneration: claim.sandbox.generation,
 				sourceResourceFence: claim.resourceFence,

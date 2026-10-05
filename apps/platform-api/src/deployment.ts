@@ -24,6 +24,7 @@ import {
 import { createDeploymentPresentation } from "./deployment-presentation.js";
 import { createDeploymentSecretPreparation } from "./deployment-secrets.js";
 import { HttpProtocolError } from "./http/common.js";
+import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 
@@ -53,6 +54,7 @@ export interface ProductionPlatformApiInputV1
 	>[0]["resourceProfile"];
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
+	readonly directory?: DirectoryRouteDependencies;
 }
 
 export function createProductionPlatformApiAssemblyInputV1(
@@ -149,6 +151,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,
 		conversationReplayWindowMs: input.conversationReplayWindowMs,
+		...(input.directory ? { directory: input.directory } : {}),
 		connectionCapability,
 		allocateApplicationIds: allocateDeploymentApplicationIds,
 		...secrets,

@@ -48,6 +48,7 @@ import { createApplicationCredentialProcessDeliveryV1 } from "./http/application
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import type { ConversationAuthorization } from "./http/conversation-routes.js";
 import type { DeploymentConfigurationRoutesDependencies } from "./http/deployment-configuration-routes.js";
+import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import {
 	type IdentityAdapter,
 	resolveCurrentMaterialGrantActor,
@@ -104,6 +105,7 @@ export interface PlatformApiAssemblyInput {
 		readonly callbackKeys: WecomCallbackKeysV1;
 		readonly replyEncryptionPublicKeyPem: string;
 	};
+	readonly directory?: DirectoryRouteDependencies;
 }
 
 export interface PlatformApiAssembly {
@@ -580,6 +582,7 @@ export function assemblePlatformApi(
 				: {}),
 		},
 		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },
+		...(input.directory ? { directory: input.directory } : {}),
 	};
 	const adapters = [
 		...(wecomReceipts ? [wecomReceipts] : []),
