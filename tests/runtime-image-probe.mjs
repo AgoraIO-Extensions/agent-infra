@@ -36,6 +36,17 @@ const credentials = {
 	selected: `synthetic-${randomBytes(24).toString("hex")}`,
 };
 const serviceToken = `synthetic-${randomBytes(24).toString("hex")}`;
+const runtimeHostTlsBinding = (() => {
+	const serviceName = `agent-${createHash("sha256").update("synthetic-agent").digest("hex").slice(0, 32)}`;
+	return JSON.stringify({
+		agentId: "synthetic-agent",
+		namespace: "default",
+		serviceDnsNames: [
+			`${serviceName}.default.svc`,
+			`${serviceName}-probe.default.svc`,
+		],
+	});
+})();
 const failureMarker = `failure-${randomBytes(24).toString("hex")}`;
 const privatePath = `/synthetic/private/${randomBytes(24).toString("hex")}`;
 const expectedConfigVersion = "synthetic-active-v2";
@@ -592,6 +603,7 @@ function deployment(origin, directory) {
 		AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
 		AGENT_INFRA_RUNTIME_WORKER_ID: runtimeProbeWorkerId,
 		AGENT_INFRA_RUNTIME_DATA_DIR: directory,
+		AGENT_INFRA_RUNTIME_TLS_BINDING: runtimeHostTlsBinding,
 		AGENT_INFRA_RUNTIME_GRANT_KEY_ID: "synthetic-key",
 		AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY: publicKeyPem,
 		AGENT_INFRA_RUNTIME_GRANT_ISSUER: "synthetic-platform",
