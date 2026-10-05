@@ -95,14 +95,14 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 			let providerRequests = 0;
 			const provider = createServer((_, response) => {
 				providerRequests++;
-				response.writeHead(503);
-				response.end();
+				response.writeHead(200, { "content-type": "application/json" });
+				response.end(JSON.stringify({ model: "primary" }));
 			});
 			let secondaryProviderRequests = 0;
 			const secondaryProvider = createServer((_, response) => {
 				secondaryProviderRequests++;
-				response.writeHead(503);
-				response.end();
+				response.writeHead(200, { "content-type": "application/json" });
+				response.end(JSON.stringify({ model: "secondary" }));
 			});
 			const requests: CodexAppServerFrame[] = [];
 			const notifications: string[] = [];
@@ -134,9 +134,13 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 					throw new Error("Missing providers");
 				const endpoint = `http://127.0.0.1:${address.port}`;
 				const secondaryEndpoint = `http://127.0.0.1:${secondaryAddress.port}`;
-				for (const control of [endpoint, secondaryEndpoint]) {
+				for (const [control, model] of [
+					[endpoint, "primary"],
+					[secondaryEndpoint, "secondary"],
+				] as const) {
 					const response = await fetch(control);
-					await response.arrayBuffer();
+					expect(response.status).toBe(200);
+					await expect(response.json()).resolves.toEqual({ model });
 				}
 				expect(providerRequests).toBe(1);
 				expect(secondaryProviderRequests).toBe(1);
@@ -161,7 +165,7 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 							},
 							{
 								modelOptionId: "secondary",
-								model: "gpt-5.6-sol",
+								model: "gpt-5.6-luna",
 								reasoningLevels: ["high"],
 								endpoint: secondaryEndpoint,
 								credential: "synthetic-native-read-credential-2",
