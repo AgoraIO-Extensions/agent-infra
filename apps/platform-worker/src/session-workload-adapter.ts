@@ -411,7 +411,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				prior.name !== receipt.retainedPVC.name
 			)
 				throw new WorkloadKubernetesError("conflict");
-			const expected = sessionSandboxResourcesV1(allocation)[1];
+			const expected = sessionSandboxResourcesV1(allocation).find(
+				(resource) => resource.kind === "PersistentVolumeClaim",
+			);
+			if (!expected) throw new WorkloadKubernetesError("policy");
 			const current = await options.client.read<V1PersistentVolumeClaim>(
 				"PersistentVolumeClaim",
 				allocation.pvcName,
