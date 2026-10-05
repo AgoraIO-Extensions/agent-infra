@@ -7,6 +7,7 @@ import type { ImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import type {
 	KubernetesObject,
 	V1Pod,
+	V1Secret,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import {
@@ -41,6 +42,19 @@ export const workloadTestPolicy: KubernetesWorkloadPolicyV1 = {
 		"nginx.ingress.kubernetes.io/auth-url": "https://auth.example.test/verify",
 	},
 };
+
+export function runtimeTlsSecretFixture(name: string): V1Secret {
+	return {
+		apiVersion: "v1",
+		kind: "Secret",
+		metadata: { name, namespace: workloadTestPolicy.namespace },
+		type: "kubernetes.io/tls",
+		data: {
+			"tls.crt": Buffer.from("certificate").toString("base64"),
+			"tls.key": Buffer.from("private-key").toString("base64"),
+		},
+	};
+}
 
 export function workloadRegistryFixture(
 	manifest: unknown = {
@@ -315,6 +329,9 @@ export function fakeKubernetesApi() {
 		client,
 		resources,
 		writes,
+		seed(object: KubernetesObject) {
+			resources.set(resourceKey(object), structuredClone(object));
+		},
 		failAfter(writes: number) {
 			failAt = writeCount + writes;
 		},

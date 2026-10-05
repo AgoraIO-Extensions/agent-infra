@@ -3,6 +3,7 @@ import type { V1StatefulSet } from "@kubernetes/client-node";
 import { expect, it } from "vitest";
 import {
 	fakeKubernetesApi,
+	runtimeTlsSecretFixture,
 	workloadDesiredFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
@@ -10,6 +11,7 @@ import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.j
 
 function fixture() {
 	const api = fakeKubernetesApi();
+	api.seed(runtimeTlsSecretFixture("custom-agent-tls"));
 	const { publicKey } = generateKeyPairSync("ed25519");
 	const runtimeAuth = {
 		workerId: "worker-a",

@@ -64,6 +64,7 @@ import {
 	runtimeTlsBindingV1,
 	runtimeTlsEnvironmentV1,
 	validateRuntimeTlsPolicyV1,
+	validateRuntimeTlsSecretV1,
 } from "./kubernetes-runtime-tls.js";
 import {
 	type WorkloadEgressPolicyV1,
@@ -307,6 +308,16 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		},
 	): Promise<"pending" | "healthy" | "unhealthy" | "drifted"> {
 		const value = desired(input);
+		const tls =
+			value.replicas === 0 ? undefined : runtimeTlsBindingV1(policy, value);
+		if (
+			tls &&
+			!validateRuntimeTlsSecretV1(
+				await client.read<V1Secret>("Secret", tls.serverSecretRef.name),
+				tls.serverSecretRef.name,
+			)
+		)
+			return "drifted";
 		if (
 			closedRouteFence &&
 			(routeMode !== "closed" ||
@@ -517,7 +528,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		try {
 			return (await options.probe({
 				desired: value,
-				serviceOrigin: `${runtimeTlsBindingV1(policy, value) ? "https" : "http"}://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
+				serviceOrigin: `${tls ? "https" : "http"}://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
 			}))
 				? "healthy"
 				: "unhealthy";
@@ -1094,6 +1105,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const tls =
 				value.replicas === 0 ? undefined : runtimeTlsBindingV1(policy, value);
 			if (tls && modelInjection?.secretName === tls.serverSecretRef.name)
+				throw new WorkloadKubernetesError("policy");
+			if (
+				tls &&
+				!validateRuntimeTlsSecretV1(
+					await client.read<V1Secret>("Secret", tls.serverSecretRef.name),
+					tls.serverSecretRef.name,
+				)
+			)
 				throw new WorkloadKubernetesError("policy");
 			if (value.replicas !== 0) await assertStandardTemplateSelector(value);
 			const name = workloadResourceNameV1(value.agentId);

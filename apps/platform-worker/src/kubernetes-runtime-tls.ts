@@ -1,4 +1,5 @@
 import type { AgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
+import type { V1Secret } from "@kubernetes/client-node";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
@@ -9,6 +10,32 @@ export interface AgentRuntimeTlsBindingV1 {
 	readonly namespace: string;
 	readonly serviceDnsNames: readonly string[];
 	readonly serverSecretRef: { readonly name: string };
+}
+
+function isBase64(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length > 0 &&
+		Buffer.from(value, "base64").toString("base64") === value
+	);
+}
+
+/** Deployment-owned TLS material must be a complete Kubernetes TLS Secret. */
+export function validateRuntimeTlsSecretV1(
+	secret: V1Secret | null,
+	name: string,
+): secret is V1Secret {
+	return Boolean(
+		secret &&
+			secret.metadata?.name === name &&
+			!secret.metadata.deletionTimestamp &&
+			secret.type === "kubernetes.io/tls" &&
+			secret.stringData === undefined &&
+			secret.data &&
+			Object.keys(secret.data).length === 2 &&
+			isBase64(secret.data["tls.crt"]) &&
+			isBase64(secret.data["tls.key"]),
+	);
 }
 
 export function validateRuntimeTlsPolicyV1(policy: KubernetesWorkloadPolicyV1) {

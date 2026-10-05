@@ -7,6 +7,7 @@ import type {
 } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import {
+	runtimeTlsSecretFixture,
 	workloadDesiredFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
@@ -217,6 +218,7 @@ describe("GA Kubernetes Workload adapter", () => {
 	it("removes a stale Ingress before opening an internal-only Service", async () => {
 		const f = fixture();
 		const external = workloadDesiredFixture();
+		f.seed(runtimeTlsSecretFixture("agent-a-tls"));
 		const adapter = createKubernetesRuntimeAdapterV1({
 			client: f.client,
 			policy: {

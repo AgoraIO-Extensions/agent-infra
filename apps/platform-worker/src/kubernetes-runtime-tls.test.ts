@@ -2,6 +2,7 @@ import type { V1Pod, V1PodSpec, V1StatefulSet } from "@kubernetes/client-node";
 import { expect, it, vi } from "vitest";
 import {
 	fakeKubernetesApi,
+	runtimeTlsSecretFixture,
 	workloadDesiredFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
@@ -24,6 +25,7 @@ it("mounts the trusted Agent leaf read-only and verifies both existing Service n
 	const api = fakeKubernetesApi();
 	const probe = vi.fn(async () => true);
 	const tls = binding();
+	api.seed(runtimeTlsSecretFixture(tls.serverSecretRef.name));
 	const adapter = createKubernetesRuntimeAdapterV1({
 		client: api.client,
 		policy: { ...workloadTestPolicy, runtimeTls: [tls] },
@@ -85,6 +87,59 @@ it("mounts the trusted Agent leaf read-only and verifies both existing Service n
 	expect(api.writes.some((entry) => entry.kind === "Secret")).toBe(false);
 });
 
+it.each([
+	"missing",
+	"wrong-type",
+	"missing-key",
+	"invalid-base64",
+	"extra-key",
+])(
+	"rejects an invalid runtime TLS Secret before writing workload resources: %s",
+	async (kind) => {
+		const api = fakeKubernetesApi();
+		const tls = binding();
+		if (kind !== "missing") {
+			const secret = runtimeTlsSecretFixture(tls.serverSecretRef.name);
+			if (kind === "wrong-type") secret.type = "Opaque";
+			if (kind === "missing-key") delete secret.data?.["tls.key"];
+			if (kind === "invalid-base64" && secret.data)
+				secret.data["tls.crt"] = "not-base64";
+			if (kind === "extra-key" && secret.data)
+				secret.data.extra = Buffer.from("unexpected").toString("base64");
+			api.seed(secret);
+		}
+		const probe = vi.fn(async () => true);
+		const adapter = createKubernetesRuntimeAdapterV1({
+			client: api.client,
+			policy: { ...workloadTestPolicy, runtimeTls: [tls] },
+			probe,
+		});
+		const desired = workloadDesiredFixture(1, tls.agentId, "internal-only");
+		await expect(adapter.apply(desired)).rejects.toMatchObject({
+			code: "policy",
+		});
+		expect(api.writes).toHaveLength(0);
+
+		// Loss/corruption after creation must also block readiness and promotion.
+		const invalidSecret = await api.client.read(
+			"Secret",
+			tls.serverSecretRef.name,
+		);
+		api.seed(runtimeTlsSecretFixture(tls.serverSecretRef.name));
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		expect(await adapter.observe(desired, identity)).toBe("healthy");
+		probe.mockClear();
+		if (invalidSecret) api.seed(invalidSecret);
+		else api.resources.delete(`Secret/${tls.serverSecretRef.name}`);
+		const writesBeforeObservation = api.writes.length;
+		expect(await adapter.observe(desired, identity)).toBe("drifted");
+		await expect(adapter.promote(desired, identity)).rejects.toThrow();
+		expect(probe).not.toHaveBeenCalled();
+		expect(api.writes).toHaveLength(writesBeforeObservation);
+	},
+);
+
 it.each(["missing", "foreign", "owner-env", "leaf-as-env"])(
 	"rejects %s TLS binding before any resource write",
 	async (kind) => {
@@ -119,6 +174,17 @@ it.each(["missing", "foreign", "owner-env", "leaf-as-env"])(
 			code: "policy",
 		});
 		expect(api.writes).toHaveLength(0);
+		if (kind === "missing") {
+			const empty = createKubernetesRuntimeAdapterV1({
+				client: api.client,
+				policy: { ...workloadTestPolicy, runtimeTls: [] },
+				probe: async () => true,
+			});
+			await expect(empty.apply(desired)).rejects.toMatchObject({
+				code: "policy",
+			});
+			expect(api.writes).toHaveLength(0);
+		}
 	},
 );
 
@@ -258,6 +324,7 @@ it.each(driftMutations)(
 				probe,
 			});
 			const desired = workloadDesiredFixture(1, "agent-a", "internal-only");
+			api.seed(runtimeTlsSecretFixture(binding().serverSecretRef.name));
 			const identity = await adapter.apply(desired);
 			if (!identity || identity === "pending") throw new Error();
 			expect(await adapter.observe(desired, identity)).toBe("healthy");
@@ -303,12 +370,14 @@ it("keeps the self-managed entry outside the Runtime TLS binding contract", asyn
 it("can still disable an existing workload when its TLS binding has been withdrawn", async () => {
 	const api = fakeKubernetesApi();
 	const desired = workloadDesiredFixture(1, "agent-a", "internal-only");
+	api.seed(runtimeTlsSecretFixture(binding().serverSecretRef.name));
 	const original = createKubernetesRuntimeAdapterV1({
 		client: api.client,
 		policy: { ...workloadTestPolicy, runtimeTls: [binding()] },
 		probe: async () => true,
 	});
 	await original.apply(desired);
+	api.resources.delete(`Secret/${binding().serverSecretRef.name}`);
 	const withdrawn = createKubernetesRuntimeAdapterV1({
 		client: api.client,
 		policy: workloadTestPolicy,
