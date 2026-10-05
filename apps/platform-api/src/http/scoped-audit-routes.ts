@@ -17,7 +17,11 @@ import {
 	type RequestMetadata,
 	requestMetadata,
 } from "./common.js";
-import { type IdentityAdapter, resolveIdentity } from "./identity.js";
+import {
+	type IdentityAdapter,
+	resolveCurrentTaskUser,
+	resolveIdentity,
+} from "./identity.js";
 
 export interface ScopedAuditRoutesDependencies {
 	readonly identity: IdentityAdapter;
@@ -62,13 +66,8 @@ async function queryScope(
 	}
 	const browser = await resolveIdentity(identity, request, traceId);
 	capturePrincipal({ kind: "user", id: browser.userId });
-	const user = {
-		schemaVersion: 1 as const,
-		userId: browser.userId,
-		accountStatus: browser.accountStatus,
-		organizationIds: browser.organizationIds,
-		authorizationRevision: browser.authorizationRevision,
-	};
+	const user = await resolveCurrentTaskUser(identity, browser.userId, traceId);
+	if (!user) throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);
 	return parsePlatformAuditQueryScopeV1({
 		kind: "execution",
 		principal: { kind: "user", id: browser.userId },

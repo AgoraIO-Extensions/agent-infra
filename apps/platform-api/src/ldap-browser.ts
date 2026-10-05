@@ -165,9 +165,17 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				await input.sessions.revokeUid(session.uid);
 				return null;
 			}
-			return session.principal && session.principal.userId === userId
-				? session.principal
-				: null;
+			const account = await input.directory.current(session.uid);
+			if (account?.accountStatus !== "active") {
+				await input.sessions.revokeUid(session.uid);
+				return null;
+			}
+			const identity = await current(account);
+			if (identity.accountStatus !== "active" || identity.userId !== userId) {
+				await input.sessions.revokeUid(session.uid);
+				return null;
+			}
+			return identity;
 		},
 		async hydrateUsers(ids: readonly string[]) {
 			return Promise.all(

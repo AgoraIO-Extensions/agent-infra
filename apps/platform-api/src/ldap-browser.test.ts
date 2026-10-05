@@ -163,7 +163,7 @@ describe("LDAP browser adapter", () => {
 			organizationIds: ["org-a"],
 			roles: ["employee", "system_admin"],
 		});
-		expect(state.directory.current).not.toHaveBeenCalled();
+		expect(state.directory.current).toHaveBeenCalledOnce();
 		expect(state.isPlatformDisabled).toHaveBeenCalledWith(account.userId);
 		state.setDisabled(true);
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
@@ -231,6 +231,19 @@ describe("LDAP browser adapter", () => {
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 	});
 
+	it("revokes a session when LDAP disables the account after login", async () => {
+		const state = fixture();
+		const cookie =
+			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		const request = new Request(`${origin}/api/v1/session`, {
+			headers: { cookie },
+		});
+		state.setCurrent({ ...account, accountStatus: "disabled" });
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+		state.setCurrent(account);
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+	});
+
 	it("revokes a Platform-disabled session before an unavailable LDAP lookup", async () => {
 		const state = fixture();
 		const cookie =
@@ -262,7 +275,7 @@ describe("LDAP browser adapter", () => {
 		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(2);
 	});
 
-	it("keeps the login snapshot when LDAP mapping changes later", async () => {
+	it("revokes the session when LDAP mapping changes later", async () => {
 		const state = fixture();
 		const cookie =
 			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -271,11 +284,13 @@ describe("LDAP browser adapter", () => {
 		});
 		const reassignedUserId = "5f5a7c76-1097-462e-80d0-c60b42df978b";
 		state.setCurrent({ ...account, userId: reassignedUserId });
-		expect(await state.adapter.identityAdapter.resolve(request)).toMatchObject({
-			userId: account.userId,
-		});
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 		expect(state.isPlatformDisabled).toHaveBeenNthCalledWith(2, account.userId);
-		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(2);
+		expect(state.isPlatformDisabled).toHaveBeenNthCalledWith(
+			3,
+			reassignedUserId,
+		);
+		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(3);
 	});
 
 	it("shares revocation across instances and fails closed when session storage fails", async () => {

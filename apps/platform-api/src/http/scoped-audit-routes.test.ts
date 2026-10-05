@@ -177,7 +177,7 @@ describe("scoped audit HTTP adapter", () => {
 		expect(audit.listAudit).not.toHaveBeenCalled();
 	});
 
-	it("uses the browser session facts and forwards six filters and request metadata", async () => {
+	it("refreshes current user facts and forwards six filters and request metadata", async () => {
 		const { app, identity, audit } = fixture();
 		const response = await app.request(
 			"/api/v1/audit?limit=5&from=2026-09-25T00%3A00%3A00Z&until=2026-09-26T00%3A00%3A00Z&principalKind=user&principalId=subject-a&agentId=agent-a&action=task.status.changed&result=unknown&executionId=execution-a",
@@ -186,7 +186,9 @@ describe("scoped audit HTTP adapter", () => {
 			},
 		);
 		expect(response.status).toBe(200);
-		expect(identity.resolveUser).not.toHaveBeenCalled();
+		expect(identity.resolveUser).toHaveBeenCalledExactlyOnceWith(
+			currentUser.userId,
+		);
 		expect(audit.listAudit).toHaveBeenCalledWith(
 			{
 				kind: "execution",
@@ -331,13 +333,13 @@ describe("scoped audit HTTP adapter", () => {
 		expect(audit.getAudit).not.toHaveBeenCalled();
 	});
 
-	it("does not require a directory lookup after trusted browser identity resolution", async () => {
+	it("fails closed when current directory facts are unavailable", async () => {
 		const { app, identity, audit } = fixture();
 		identity.resolveUser.mockRejectedValue(new Error("PRIVATE_DIRECTORY"));
 		const response = await app.request("/api/v1/audit");
-		expect(response.status).toBe(200);
-		expect(audit.recordDeniedQuery).not.toHaveBeenCalled();
-		expect(audit.listAudit).toHaveBeenCalled();
+		expect(response.status).toBe(503);
+		expect(audit.recordDeniedQuery).toHaveBeenCalledOnce();
+		expect(audit.listAudit).not.toHaveBeenCalled();
 	});
 
 	it("does not trust an identity from a malformed adapter response", async () => {
