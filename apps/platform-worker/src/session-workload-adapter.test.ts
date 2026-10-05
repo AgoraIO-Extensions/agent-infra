@@ -130,6 +130,62 @@ describe("session sandbox workload adapter", () => {
 		expect(resources[2].spec?.egress).toEqual([]);
 	});
 
+	it("keeps two Session allocations fully disjoint under one Agent", () => {
+		const second: SessionSandboxAllocationV1 = {
+			...allocation,
+			sessionId: "session-b",
+			sandboxId: "sandbox-b",
+			principal: { kind: "user", id: "actor-b" },
+			channelId: "api",
+			resourceName: "sandbox-sandbox-b",
+			workspaceScope: "sandbox-b",
+			generation: 1,
+			resourceFence: 12,
+			podName: "sandbox-sandbox-b",
+			serviceName: "sandbox-sandbox-b",
+			serviceAccountName: "sandbox-sandbox-b",
+			pvcName: "sandbox-sandbox-b",
+			networkPolicyName: "sandbox-sandbox-b",
+			env: { SESSION_ID: "session-b" },
+		};
+		const firstResources = sessionSandboxResourcesV1(allocation);
+		const secondResources = sessionSandboxResourcesV1(second);
+		const firstNames = new Set(
+			firstResources.map(
+				(resource) => `${resource.kind}/${resource.metadata?.name}`,
+			),
+		);
+		const secondNames = new Set(
+			secondResources.map(
+				(resource) => `${resource.kind}/${resource.metadata?.name}`,
+			),
+		);
+		expect([...firstNames].filter((name) => secondNames.has(name))).toEqual([]);
+		expect(firstResources[1].spec?.volumeMode).toBeUndefined();
+		expect(firstResources[4].spec?.containers[0]?.workingDir).toBe(
+			"/workspace",
+		);
+		expect(secondResources[4].spec?.containers[0]?.workingDir).toBe(
+			"/workspace",
+		);
+		expect(firstResources[2].spec?.podSelector).toEqual({
+			matchLabels: firstResources[4].metadata?.labels,
+		});
+		expect(secondResources[2].spec?.podSelector).toEqual({
+			matchLabels: secondResources[4].metadata?.labels,
+		});
+		expect(firstResources[4].spec?.volumes?.[0]?.persistentVolumeClaim).toEqual(
+			{
+				claimName: allocation.pvcName,
+			},
+		);
+		expect(
+			secondResources[4].spec?.volumes?.[0]?.persistentVolumeClaim,
+		).toEqual({
+			claimName: second.pvcName,
+		});
+	});
+
 	it("reconciles an unknown attempt from absence without changing its identity", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
