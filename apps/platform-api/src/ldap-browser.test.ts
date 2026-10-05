@@ -20,14 +20,19 @@ const account: LdapAccount = {
 };
 
 function memorySessions(): LdapSessionStore {
-	const sessions = new Map<string, { uid: string; expiresAt: number }>();
+	const sessions = new Map<
+		string,
+		{ uid: string; expiresAt: number; principal?: Record<string, unknown> }
+	>();
 	return {
-		async create(digest, uid, expiresAt) {
-			sessions.set(digest, { uid, expiresAt });
+		async create(digest, uid, expiresAt, principal) {
+			sessions.set(digest, { uid, expiresAt, principal });
 		},
 		async find(digest, now) {
 			const session = sessions.get(digest);
-			return session && session.expiresAt > now ? { uid: session.uid } : null;
+			return session && session.expiresAt > now
+				? { uid: session.uid, principal: session.principal }
+				: null;
 		},
 		async revoke(digest) {
 			sessions.delete(digest);
@@ -138,7 +143,7 @@ describe("LDAP browser adapter", () => {
 		).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 	});
 
-	it("issues a secure hash-only session and resolves current LDAP and Platform facts", async () => {
+	it("issues a secure hash-only session and resolves its stored principal", async () => {
 		const state = fixture();
 		const result = await state.login();
 		expect(result?.status).toBe(204);
@@ -158,14 +163,10 @@ describe("LDAP browser adapter", () => {
 			organizationIds: ["org-a"],
 			roles: ["employee", "system_admin"],
 		});
-		expect(state.directory.current).toHaveBeenCalledWith("stable-a");
+		expect(state.directory.current).toHaveBeenCalledOnce();
 		expect(state.isPlatformDisabled).toHaveBeenCalledWith(account.userId);
 		state.setDisabled(true);
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
-		state.setDisabled(false);
-		state.setCurrent({ ...account, accountStatus: "disabled" });
-		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
-		state.setCurrent(account);
 		state.setNow(1000 + 15 * 60_000);
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 	});
@@ -230,6 +231,19 @@ describe("LDAP browser adapter", () => {
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 	});
 
+	it("revokes a session when LDAP disables the account after login", async () => {
+		const state = fixture();
+		const cookie =
+			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		const request = new Request(`${origin}/api/v1/session`, {
+			headers: { cookie },
+		});
+		state.setCurrent({ ...account, accountStatus: "disabled" });
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+		state.setCurrent(account);
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+	});
+
 	it("revokes a Platform-disabled session before an unavailable LDAP lookup", async () => {
 		const state = fixture();
 		const cookie =
@@ -247,23 +261,21 @@ describe("LDAP browser adapter", () => {
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 	});
 
-	it("does not return a principal when Platform disable arrives during resolution", async () => {
+	it("does not return a principal when Platform disable arrives", async () => {
 		const state = fixture();
 		const cookie =
 			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
 		const request = new Request(`${origin}/api/v1/session`, {
 			headers: { cookie },
 		});
-		state.isPlatformDisabled
-			.mockResolvedValueOnce(false)
-			.mockResolvedValueOnce(true);
+		state.isPlatformDisabled.mockResolvedValueOnce(true);
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
-		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(3);
+		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(2);
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
-		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(3);
+		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(2);
 	});
 
-	it("revokes a session when its UID mapping changes during resolution", async () => {
+	it("revokes the session when LDAP mapping changes later", async () => {
 		const state = fixture();
 		const cookie =
 			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -278,7 +290,6 @@ describe("LDAP browser adapter", () => {
 			3,
 			reassignedUserId,
 		);
-		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 		expect(state.isPlatformDisabled).toHaveBeenCalledTimes(3);
 	});
 

@@ -24,11 +24,12 @@ import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
-import { KubeConfig } from "@kubernetes/client-node";
+import { KubeConfig, type V1Service } from "@kubernetes/client-node";
 import postgres from "postgres";
 import { expect, it } from "vitest";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
+import { markSessionSandboxReadyFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.js";
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
 import {
 	fakeKubernetesApi,
@@ -487,6 +488,77 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			});
 			if (created.outcome !== "accepted")
 				throw Error(`Create: ${created.outcome}`);
+			await markSessionSandboxReadyFixture(sql, created.result.conversationId);
+			const [sandbox] = await sql`
+				select sandbox_id, resource_name
+				from platform.session_sandbox_allocations
+				where conversation_id = ${created.result.conversationId}`;
+			if (!sandbox) throw Error("SessionSandbox allocation was not persisted");
+			const sandboxResources = [
+				"Pod",
+				"Service",
+				"ServiceAccount",
+				"PersistentVolumeClaim",
+				"NetworkPolicy",
+				"StatefulSet",
+			].map((kind) => ({
+				kind,
+				namespace: policy.namespace,
+				name: sandbox.resource_name,
+				uid: `${sandbox.sandbox_id}-${kind}`,
+				resourceVersion: "1",
+				...(kind === "Pod"
+					? { controllerUid: `${sandbox.sandbox_id}-StatefulSet` }
+					: {}),
+			}));
+			await sql`
+				update platform.session_sandbox_allocations
+				set resource_policy = ${sql.json({
+					namespace: policy.namespace,
+					imageDigest: desired.imageDigest,
+					configurationRevision: 1,
+					managementFence: 1,
+					workloadRevision: 1,
+					resourceConfigurationHash:
+						workloadResourceConfigurationHashV1(policy),
+				})},
+				resource_observation = ${sql.json({
+					status: "ready",
+					resources: sandboxResources,
+				})}
+				where conversation_id = ${created.result.conversationId}`;
+			const sessionLabels = {
+				"agent-infra.agora.io/agent-id": desired.agentId,
+				"agent-infra.agora.io/session-id": created.result.conversationId,
+				"agent-infra.agora.io/sandbox-id": sandbox.sandbox_id,
+				"agent-infra.agora.io/generation": "1",
+			};
+			fake.resources.set(`Service/${sandbox.resource_name}`, {
+				apiVersion: "v1",
+				kind: "Service",
+				metadata: {
+					name: sandbox.resource_name,
+					namespace: policy.namespace,
+					uid: `${sandbox.sandbox_id}-Service`,
+					resourceVersion: "1",
+					labels: sessionLabels,
+					annotations: {
+						"agent-infra.agora.io/managed": "session-sandbox-v1",
+						"agent-infra.agora.io/fence": "1",
+					},
+				},
+				spec: {
+					type: "ClusterIP",
+					selector: sessionLabels,
+					ports: [
+						{
+							name: "runtime",
+							port: desired.service.port,
+							targetPort: desired.service.port,
+						},
+					],
+				},
+			} as V1Service);
 			const accepted = await api.accept({
 				schemaVersion: 1,
 				command: "message",
@@ -584,7 +656,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				and o.scope_id=${deferred.conversationId} and o.operation='conversation.turn.submit.v1'
 				and e.execution_id=${deferred.executionId} and e.conversation_id=${deferred.conversationId}
 				and o.payload->>'conversationId'=${deferred.conversationId}`;
-		if (!deferredItem || deferredItem.execution_status !== "submitted")
+		if (deferredItem?.execution_status !== "submitted")
 			throw Error("Deferred recovery identity or Execution status changed");
 		if (deferredItem.status === "processing") {
 			if (!deferredItem.lease_owner) throw Error("Dead claim has no owner");

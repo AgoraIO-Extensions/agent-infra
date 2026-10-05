@@ -47,6 +47,7 @@ export {
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
 export * from "./api-audit-identity.js";
+export * from "./application-api-credentials.js";
 export * from "./application-foundation.js";
 export * from "./application-material-grant.js";
 export * from "./application-registration.js";
@@ -56,6 +57,12 @@ export * from "./conversation-dispatch.js";
 export { decideConversationDispatchCapacityV1 } from "./conversation-dispatch-capacity.js";
 export * from "./conversation-events.js";
 export * from "./conversation-execution.js";
+export * from "./conversation-execution-task.js";
+export {
+	type ConversationExecutionSourceV1,
+	conversationExecutionKeySubjectV1,
+	conversationExecutionSourceV1,
+} from "./conversation-execution-types.js";
 export type { ConversationGenerationIsolationV1 } from "./conversation-generation-isolation.js";
 export {
 	isConversationGenerationBarrierConfirmedV1,
@@ -101,6 +108,14 @@ export type {
 	PendingSecretRecordAttachmentsV1,
 	PendingSecretRecordExpectationV1,
 } from "./secret-record-attachments.js";
+export {
+	createSessionSandboxBindingV1,
+	parseSessionSandboxBindingV1,
+	type SessionSandboxBindingV1,
+} from "./session-sandbox.js";
+export * from "./session-sandbox-lifecycle.js";
+export * from "./session-sandbox-reconciliation.js";
+export * from "./task-api-audit.js";
 export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";
 export * from "./wecom-channel.js";

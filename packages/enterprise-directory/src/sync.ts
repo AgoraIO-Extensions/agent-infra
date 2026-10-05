@@ -1,12 +1,25 @@
-import { createSnapshot, type DirectorySnapshot } from "./snapshot.js";
+import {
+	createSnapshot,
+	type DirectoryDepartment,
+	type DirectoryMember,
+	type DirectorySnapshot,
+} from "./snapshot.js";
 import type { DirectoryStore } from "./store.js";
-import type { createWeComSource } from "./wecom.js";
+/** Upstream adapters normalize data before the shared publication checks. */
+export interface DirectorySource {
+	fetchComplete(): Promise<{
+		departments: DirectoryDepartment[];
+		members: DirectoryMember[];
+	}>;
+}
 
 const SCAN_HEADROOM_MS = 4 * 60 * 60_000;
 
 export interface DirectorySyncInput {
 	store: DirectoryStore;
-	source: ReturnType<typeof createWeComSource>;
+	source: DirectorySource;
+	/** Stable provenance label; never an authorization grant. */
+	sourceId?: string;
 	rootDepartmentId: number;
 	now?: () => number;
 }
@@ -47,6 +60,7 @@ export function createDirectorySynchronizer(input: DirectorySyncInput) {
 			try {
 				snapshot = createSnapshot({
 					...complete,
+					source: input.sourceId ?? "wecom",
 					rootDepartmentId: input.rootDepartmentId,
 					startedAt,
 					completedAt: now(),

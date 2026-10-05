@@ -16,6 +16,7 @@ import {
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
 import { PostgresScopedPlatformAuditQueryV1 } from "./scoped-audit-query.ts";
+import { seedSessionSandboxFixture } from "./session-sandbox.fixture.js";
 import {
 	insertTaskAuthorization,
 	PostgresTaskAuthorizationStoreV1,
@@ -78,6 +79,7 @@ async function fixture(
 	await sql`insert into platform.conversation_executions (execution_id, conversation_id, agent_id, actor_id, channel_id, turn_id, status,
 		session_generation, delivery_fence, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, created_at, updated_at)
 		values (${executionId}, ${conversationId}, ${agentId}, ${principal.id}, ${channelId}, ${randomUUID()}, 'processing', 1, 1, 'current-agent-revision', 1, 'test-model-option', 'medium', now(), now())`;
+	await seedSessionSandboxFixture(sql, conversationId);
 	const boundary: TaskAuthorizationBoundaryV1 = {
 		schemaVersion: 1,
 		principal,

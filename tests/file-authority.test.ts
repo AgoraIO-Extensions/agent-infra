@@ -17,6 +17,7 @@ import { createConversationExecutionUseCaseV1 } from "../packages/platform-core/
 import { PostgresConversationExecutionTransactionV1 } from "../packages/platform-store/src/conversation-execution.ts";
 import { migratePlatformDatabase } from "../packages/platform-store/src/migrate.ts";
 import { startPostgresTestDatabase } from "../packages/platform-store/src/postgres-test.ts";
+import { seedSessionSandboxFixture } from "../packages/platform-store/src/session-sandbox.fixture.ts";
 
 const requireApi = createRequire(
 	new URL("../apps/platform-api/package.json", import.meta.url),
@@ -44,6 +45,7 @@ it("runs authenticated upload, history and execution results over real HTTP, Pos
 		await migratePlatformDatabase(db);
 		await sql`insert into platform.conversations (id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision) values ('conversation','agent','alice','web','active',1,'auth')`;
 		await sql`insert into platform.conversation_executions (execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,delivery_fence,authorization_revision,created_at,updated_at) values ('execution','conversation','agent','alice','web','turn','processing',1,1,'auth',now(),now())`;
+		await seedSessionSandboxFixture(sql, "conversation");
 		const keys = generateKeyPairSync("ed25519");
 		const limits = {
 			revision: "test-limits-v1",

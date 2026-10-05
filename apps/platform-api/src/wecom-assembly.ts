@@ -2,6 +2,7 @@ import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
 	createWecomReceiptAccessV1,
+	type TaskUserDirectoryV1,
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
 import { PostgresWecomChannelV1 } from "@agent-infra/platform-store";
@@ -13,6 +14,7 @@ import {
 import type { WecomRoutesDependenciesV1 } from "./http/wecom-routes.js";
 export interface WecomApiDeploymentV1 {
 	readonly identity: WecomIdentityPortV1;
+	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly verifyCallback?: (reference: string) => Promise<boolean>;
 	readonly acceptMessages?: (reference: string) => Promise<boolean>;
 	readonly resolveBinding: (
@@ -25,10 +27,18 @@ export function assembleWecomApiV1(
 	databaseUrl: string,
 	deployment: WecomApiDeploymentV1,
 ) {
+	if (typeof deployment.userDirectory?.resolveUser !== "function")
+		throw new Error(
+			"WeCom message admission requires a trusted user directory",
+		);
 	const protectReply = createWecomReplyEncryptorV1(
 		deployment.replyEncryptionPublicKeyPem,
 	);
-	const receipts = assembleWecomReceiptApiV1(databaseUrl, deployment.identity);
+	const receipts = assembleWecomReceiptApiV1(
+		databaseUrl,
+		deployment.identity,
+		deployment.userDirectory,
+	);
 	const { store, authorization } = receipts;
 	return {
 		dependencies: {
@@ -52,8 +62,12 @@ export function assembleWecomApiV1(
 export function assembleWecomReceiptApiV1(
 	databaseUrl: string,
 	identity: WecomIdentityPortV1,
+	userDirectory?: TaskUserDirectoryV1,
 ) {
-	const store = new PostgresWecomChannelV1({ databaseUrl });
+	const store = new PostgresWecomChannelV1({
+		databaseUrl,
+		userDirectory,
+	});
 	const authorization = createWecomAuthorizationV1({ identity, state: store });
 	return {
 		store,

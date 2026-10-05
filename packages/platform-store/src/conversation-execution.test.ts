@@ -5,6 +5,7 @@ import {
 	type ConversationModelConfigurationV1,
 	createConversationEventUseCaseV1,
 	createConversationExecutionUseCaseV1,
+	createSessionSandboxBindingV1,
 } from "@agent-infra/platform-core";
 import {
 	type ConversationCommandConformanceSnapshotV1,
@@ -20,10 +21,13 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { markSessionSandboxReadyFixture } from "./session-sandbox.fixture.ts";
 import {
 	insertTaskAuthorization,
 	PostgresTaskAuthorizationStoreV1,
 } from "./task-authorization.ts";
+
+const storeConformanceAuthority = conversationConformanceAuthorityV1;
 
 const authority: ConversationExecutionAuthorityV1 = {
 	schemaVersion: 1,
@@ -49,6 +53,7 @@ let client: ReturnType<typeof postgres>;
 let testDatabase: PostgresTestDatabase | undefined;
 
 const failureTable = {
+	sandbox: "platform.session_sandbox_allocations",
 	conversation: "platform.conversations",
 	idempotency: "platform.idempotency_records",
 	execution: "platform.conversation_executions",
@@ -79,6 +84,7 @@ beforeAll(async () => {
 
 afterEach(async () => {
 	await client`truncate platform.conversation_generation_tombstones,
+		platform.session_sandbox_allocations,
 		platform.task_control_records, platform.task_authorization_records,
 		platform.file_accesses, platform.files, platform.conversation_events,
 		platform.conversation_audit_events, platform.audit_events,
@@ -90,11 +96,12 @@ afterEach(async () => {
 
 async function persistConformanceModelConfiguration(
 	modelConfiguration: ConversationModelConfigurationV1 | undefined,
+	executionAuthority = storeConformanceAuthority,
 ): Promise<void> {
 	const revision = modelConfiguration?.configurationRevision ?? 1;
 	const record = {
 		schemaVersion: 1,
-		agentId: conversationConformanceAuthorityV1.agentId,
+		agentId: executionAuthority.agentId,
 		revision,
 		source: modelConfiguration
 			? {
@@ -145,8 +152,8 @@ async function persistConformanceModelConfiguration(
 		insert into platform.agents
 			(id, current_configuration_revision, authorization_revision)
 		values
-			(${conversationConformanceAuthorityV1.agentId}, ${revision},
-			 ${conversationConformanceAuthorityV1.authorizationRevision})
+			(${executionAuthority.agentId}, ${revision},
+			 ${executionAuthority.authorizationRevision})
 		on conflict (id) do update
 		set authorization_revision = excluded.authorization_revision
 	`;
@@ -154,22 +161,33 @@ async function persistConformanceModelConfiguration(
 		insert into platform.agent_configuration_revisions
 			(agent_id, revision, source_reference, created_at, configuration)
 		values
-			(${conversationConformanceAuthorityV1.agentId}, ${revision},
+			(${executionAuthority.agentId}, ${revision},
 			 ${`source_fixture_${revision}`}, now(), ${client.json(record)})
 		on conflict (agent_id, revision) do update
 		set configuration = excluded.configuration
 	`;
+	const subjectId = executionAuthority.actorId;
+	const keyId = `fixture-key:personal:${subjectId}`;
+	await client`insert into platform.relay_key_subjects
+		(purpose, subject_id, last_version, current_version)
+		values ('personal', ${subjectId}, 1, 1)
+		on conflict (purpose, subject_id) do nothing`;
+	await client`insert into platform.relay_key_versions
+		(purpose, subject_id, key_version, key_id, ciphertext)
+		values ('personal', ${subjectId}, 1, ${keyId},
+			${client.json({ purpose: "personal", subjectId, keyId, keyVersion: 1 })})
+		on conflict (purpose, subject_id, key_version) do nothing`;
 	await client`
 		update platform.agents
 		set current_configuration_revision = ${revision}
-		where id = ${conversationConformanceAuthorityV1.agentId}
+		where id = ${executionAuthority.agentId}
 	`;
 }
 
 conversationCommandConformanceV1("PostgreSQL", async () => {
 	await persistConformanceModelConfiguration(conformanceModelConfiguration);
 	let effectiveAuthority: ConversationExecutionAuthorityV1 | undefined =
-		conversationConformanceAuthorityV1;
+		storeConformanceAuthority;
 	let nextId = 1;
 	let failureCleanupRequired = false;
 	let fallbackFailureCleanupRequired = false;
@@ -177,6 +195,17 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 	let loseNextResponse = false;
 	const adapter = new PostgresConversationExecutionTransactionV1({
 		databaseUrl,
+		userDirectory: {
+			async resolveUser(userId) {
+				return {
+					schemaVersion: 1,
+					userId,
+					accountStatus: "active",
+					organizationIds: [],
+					authorizationRevision: "identity_fixture_1",
+				};
+			},
+		},
 	});
 	const eventAdapter = new PostgresConversationEventTransactionV1({
 		databaseUrl,
@@ -248,7 +277,15 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 	const useCase: ConversationExecutionUseCaseV1 = {
 		requestMetadataRecovery: (query) => inner.requestMetadataRecovery(query),
 		readConversation: (query) => inner.readConversation(query),
-		createConversation: (command) => inner.createConversation(command),
+		async createConversation(command) {
+			const result = await inner.createConversation(command);
+			if (result.outcome === "accepted")
+				await markSessionSandboxReadyFixture(
+					client,
+					result.result.conversationId,
+				);
+			return result;
+		},
 		async accept(command) {
 			const decision = await inner.accept(command);
 			if (loseNextResponse) {
@@ -448,7 +485,9 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 							? null
 							: String(payload.reasoningLevel),
 				})),
-				auditActions: auditRows.map(({ action }) => action),
+				auditActions: auditRows
+					.map(({ action }) => action)
+					.filter((action) => action !== "conversation.sandbox.allocated"),
 				fallbackFacts: auditRows.flatMap(({ action, details }) =>
 					action === "conversation.model_selection.fell_back" && details
 						? [details]
@@ -456,7 +495,20 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 				),
 			};
 		},
-		snapshot: commandEffectCounts,
+		async snapshot() {
+			// The shared command conformance counts command effects. Allocation audit
+			// atomicity and uniqueness are asserted by the PostgreSQL allocation cases.
+			const counts = await commandEffectCounts();
+			const [allocation] = await client`select count(*)::int as count
+				from platform.conversation_audit_events where action = 'conversation.sandbox.allocated'`;
+			const [preparation] =
+				await client`select count(*)::int as count from platform.outbox_items where operation = 'conversation.sandbox.reconcile.v1'`;
+			return {
+				...counts,
+				audit: counts.audit - Number(allocation?.count),
+				outbox: counts.outbox - Number(preparation?.count),
+			};
+		},
 		async close() {
 			try {
 				await Promise.all([disarmFailure("message"), disarmFailure("event")]);
@@ -478,27 +530,55 @@ afterAll(async () => {
 
 function createConversation(
 	resolvedAuthority: ConversationExecutionAuthorityV1 = authority,
+	options: { readonly sandbox?: "preparing" | "ready" } = {},
 ) {
 	let nextId = 1;
 	const transaction = new PostgresConversationExecutionTransactionV1({
 		databaseUrl,
+		userDirectory: {
+			async resolveUser(userId) {
+				return {
+					schemaVersion: 1,
+					userId,
+					accountStatus: "active",
+					organizationIds: [],
+					authorizationRevision:
+						resolvedAuthority.taskBoundary?.identityRevision ?? "identity-01",
+				};
+			},
+		},
 	});
+	const useCase = createConversationExecutionUseCaseV1(
+		{
+			authorization: {
+				async authorize() {
+					return { outcome: "allowed", authority: resolvedAuthority };
+				},
+			},
+			transaction,
+		},
+		{
+			now: () => new Date("2026-09-04T00:00:00.000Z"),
+			newId: () => `conversation_id_${nextId++}`,
+		},
+	);
 	return {
 		transaction,
-		useCase: createConversationExecutionUseCaseV1(
-			{
-				authorization: {
-					async authorize() {
-						return { outcome: "allowed", authority: resolvedAuthority };
-					},
-				},
-				transaction,
+		useCase: {
+			...useCase,
+			async createConversation(
+				command: Parameters<typeof useCase.createConversation>[0],
+			) {
+				const result = await useCase.createConversation(command);
+				// Command tests explicitly model a prepared fixture; preparation tests opt out.
+				if (result.outcome === "accepted" && options.sandbox !== "preparing")
+					await markSessionSandboxReadyFixture(
+						client,
+						result.result.conversationId,
+					);
+				return result;
 			},
-			{
-				now: () => new Date("2026-09-04T00:00:00.000Z"),
-				newId: () => `conversation_id_${nextId++}`,
-			},
-		),
+		},
 	};
 }
 
@@ -546,8 +626,108 @@ async function commandEffectCounts() {
 }
 
 describe("PostgreSQL Conversation command transaction", () => {
+	it("keeps a Web Session read-only until its own Sandbox is ready and preserves accepted replay when readiness is lost", async () => {
+		await persistConformanceModelConfiguration(
+			conformanceModelConfiguration,
+			authority,
+		);
+		const { transaction, useCase } = createConversation(authority, {
+			sandbox: "preparing",
+		});
+		try {
+			const created = await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "web-sandbox-create",
+				requestId: "web-sandbox-create",
+				traceId: "web-sandbox",
+			});
+			if (created.outcome !== "accepted")
+				throw new Error("Expected Session creation");
+			const conversationId = created.result.conversationId;
+			const command = {
+				schemaVersion: 1 as const,
+				command: "message" as const,
+				conversationId,
+				text: "controlled message",
+				idempotencyKey: "web-sandbox-message",
+				requestId: "web-sandbox-message",
+				traceId: "web-sandbox",
+			};
+			const before = await commandEffectCounts();
+			expect(await useCase.accept(command)).toEqual({ outcome: "denied" });
+			expect(await commandEffectCounts()).toEqual(before);
+			expect(
+				await useCase.readConversation({ schemaVersion: 1, conversationId }),
+			).toMatchObject({
+				outcome: "found",
+				result: { conversation: { sandboxReady: false } },
+			});
+			await markSessionSandboxReadyFixture(client, conversationId);
+			expect(
+				await useCase.readConversation({ schemaVersion: 1, conversationId }),
+			).toMatchObject({
+				outcome: "found",
+				result: { conversation: { sandboxReady: true } },
+			});
+			const accepted = await useCase.accept(command);
+			if (accepted.outcome !== "accepted" || !accepted.result.messageId)
+				throw new Error("Expected ready Session acceptance");
+			await client`update platform.session_sandbox_allocations set status = 'unknown' where conversation_id = ${conversationId}`;
+			const acceptedCounts = await commandEffectCounts();
+			expect(await useCase.accept(command)).toEqual({
+				outcome: "replayed",
+				result: accepted.result,
+			});
+			expect(
+				await useCase.accept({
+					...command,
+					idempotencyKey: "web-sandbox-supplement",
+				}),
+			).toEqual({ outcome: "denied" });
+			expect(
+				await useCase.regenerate({
+					schemaVersion: 1,
+					command: "regenerate",
+					conversationId,
+					sourceMessageId: accepted.result.messageId,
+					idempotencyKey: "web-sandbox-regenerate",
+					requestId: "web-sandbox-regenerate",
+					traceId: "web-sandbox",
+				}),
+			).toEqual({ outcome: "denied" });
+
+			expect(await commandEffectCounts()).toEqual(acceptedCounts);
+			expect(
+				await useCase.readConversation({ schemaVersion: 1, conversationId }),
+			).toMatchObject({
+				outcome: "found",
+				result: { conversation: { sandboxReady: false } },
+			});
+			expect(
+				await useCase.stop({
+					schemaVersion: 1,
+					command: "stop",
+					conversationId,
+					targetExecutionId: accepted.result.executionId,
+					idempotencyKey: "web-sandbox-stop",
+					requestId: "web-sandbox-stop",
+					traceId: "web-sandbox",
+				}),
+			).toMatchObject({ outcome: "accepted" });
+			expect(
+				await client`select status, session_generation::int as generation from platform.session_sandbox_allocations where conversation_id = ${conversationId}`,
+			).toEqual([{ status: "unknown", generation: 1 }]);
+		} finally {
+			await transaction.close();
+		}
+	});
+
 	it("commits original task authority with acceptance and rolls back control when required audit fails", async () => {
-		await client`insert into platform.agents (id, authorization_revision) values (${authority.agentId}, ${authority.authorizationRevision}) on conflict (id) do update set authorization_revision = excluded.authorization_revision`;
+		await persistConformanceModelConfiguration(
+			conformanceModelConfiguration,
+			authority,
+		);
 		const taskBoundary = {
 			schemaVersion: 1 as const,
 			principal: { kind: "user" as const, id: authority.actorId },
@@ -686,6 +866,7 @@ describe("PostgreSQL Conversation command transaction", () => {
 			);
 			await transaction.close();
 			await taskStore.close();
+			await client`delete from platform.agent_configuration_revisions where agent_id = ${authority.agentId}`;
 		}
 	});
 
@@ -862,9 +1043,9 @@ describe("PostgreSQL Conversation command transaction", () => {
 				conversations: 1,
 				messages: 1,
 				executions: 1,
-				outbox: 1,
+				outbox: 2,
 				idempotency: 2,
-				audit: 1,
+				audit: 2,
 				platform_audit: 0,
 			});
 			expect(audit).toEqual([
@@ -993,9 +1174,9 @@ describe("PostgreSQL Conversation command transaction", () => {
 				expect(counts[0]).toEqual({
 					messages: 1,
 					executions: 2,
-					outbox: 2,
+					outbox: 3,
 					idempotency: 3,
-					audit: 2,
+					audit: 3,
 				});
 				expect(outbox).toEqual([
 					{
@@ -1107,9 +1288,9 @@ describe("PostgreSQL Conversation command transaction", () => {
 			]);
 			expect(counts[0]).toEqual({
 				stops: 1,
-				outbox: 2,
+				outbox: 3,
 				idempotency: 4,
-				audit: 2,
+				audit: 3,
 			});
 			expect(stops).toEqual([
 				{
@@ -1234,9 +1415,9 @@ describe("PostgreSQL Conversation command transaction", () => {
 				{
 					messages: 2,
 					executions: 1,
-					outbox: 2,
+					outbox: 3,
 					idempotency: 3,
-					audit: 2,
+					audit: 3,
 				},
 			]);
 		} finally {
@@ -1250,8 +1431,8 @@ describe("PostgreSQL Conversation command transaction", () => {
 	});
 
 	it("serializes concurrent same-key conversation creation", async () => {
-		const first = createConversation();
-		const second = createConversation();
+		const first = createConversation(authority, { sandbox: "preparing" });
+		const second = createConversation(authority, { sandbox: "preparing" });
 		const command = {
 			schemaVersion: 1 as const,
 			agentId: authority.agentId,
@@ -1277,13 +1458,26 @@ describe("PostgreSQL Conversation command transaction", () => {
 				throw new Error("Expected accepted and replayed creates");
 			}
 			expect(results[0].result).toEqual(results[1].result);
+			const intents =
+				await client`select operation, payload from platform.outbox_items`;
+			expect(intents).toEqual([
+				{
+					operation: "conversation.sandbox.reconcile.v1",
+					payload: {
+						schemaVersion: 1,
+						conversationId: results[0].result.conversationId,
+						sessionGeneration: 1,
+					},
+				},
+			]);
 			expect(
 				await client`
 					select
 						(select count(*)::int from platform.conversations) as conversations,
+						(select count(*)::int from platform.session_sandbox_allocations) as sandboxes,
 						(select count(*)::int from platform.idempotency_records) as idempotency
 				`,
-			).toEqual([{ conversations: 1, idempotency: 1 }]);
+			).toEqual([{ conversations: 1, sandboxes: 1, idempotency: 1 }]);
 		} finally {
 			await Promise.all([
 				first.transaction.close(),
@@ -1291,6 +1485,108 @@ describe("PostgreSQL Conversation command transaction", () => {
 			]);
 		}
 	});
+
+	it("retains the allocation after Store reconnect and rejects a mismatched active Execution", async () => {
+		const initial = createConversation();
+		const command = {
+			schemaVersion: 1 as const,
+			agentId: authority.agentId,
+			idempotencyKey: "sandbox_reconnect",
+			requestId: "sandbox_reconnect_request",
+			traceId: "sandbox_reconnect_trace",
+		};
+		try {
+			await expect(
+				initial.useCase.createConversation(command),
+			).resolves.toMatchObject({ outcome: "accepted" });
+		} finally {
+			await initial.transaction.close();
+		}
+		const original =
+			await client`select sandbox_id from platform.session_sandbox_allocations`;
+		const reopened = createConversation();
+		try {
+			await expect(
+				reopened.useCase.createConversation(command),
+			).resolves.toMatchObject({ outcome: "replayed" });
+			expect(
+				await client`select sandbox_id from platform.session_sandbox_allocations`,
+			).toEqual(original);
+			const message = {
+				schemaVersion: 1 as const,
+				command: "message" as const,
+				conversationId: "conversation_id_1",
+				text: "sandbox transaction fixture",
+				idempotencyKey: "sandbox_message",
+				requestId: "sandbox_message_request",
+				traceId: "sandbox_message_trace",
+			};
+			await expect(reopened.useCase.accept(message)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			expect(
+				await client`select sandbox_id from platform.conversation_executions`,
+			).toEqual(original);
+			await client`update platform.conversation_executions set sandbox_id = null`;
+			await expect(reopened.useCase.accept(message)).rejects.toMatchObject({
+				code: "unavailable",
+			});
+			await expect(
+				reopened.useCase.accept({
+					...message,
+					idempotencyKey: "sandbox_mismatch",
+				}),
+			).rejects.toMatchObject({ code: "unavailable" });
+			expect(
+				await client`select count(*)::int as count from platform.conversation_executions`,
+			).toEqual([{ count: 1 }]);
+			expect(
+				await client`select count(*)::int as count from platform.outbox_items`,
+			).toEqual([{ count: 2 }]);
+		} finally {
+			await reopened.transaction.close();
+		}
+	});
+
+	it.each(["sandbox", "audit", "outbox", "commit"] as const)(
+		"rolls back Session allocation at the %s write boundary",
+		async (point) => {
+			const { transaction, useCase } = createConversation();
+			await armFailure(point);
+			try {
+				await expect(
+					useCase.createConversation({
+						schemaVersion: 1,
+						agentId: authority.agentId,
+						idempotencyKey: "sandbox_rollback",
+						requestId: "sandbox_rollback_request",
+						traceId: "sandbox_rollback_trace",
+					}),
+				).rejects.toMatchObject({ code: "unavailable" });
+				expect(
+					await client`
+					select
+						(select count(*)::int from platform.conversations) as conversations,
+						(select count(*)::int from platform.session_sandbox_allocations) as sandboxes,
+						(select count(*)::int from platform.outbox_items) as outbox,
+						(select count(*)::int from platform.idempotency_records) as idempotency,
+						(select count(*)::int from platform.conversation_audit_events) as audit
+				`,
+				).toEqual([
+					{
+						conversations: 0,
+						sandboxes: 0,
+						outbox: 0,
+						idempotency: 0,
+						audit: 0,
+					},
+				]);
+			} finally {
+				await disarmFailure(point);
+				await transaction.close();
+			}
+		},
+	);
 
 	it("rolls back every initial-message write boundary", async () => {
 		const { transaction, useCase } = createConversation();
@@ -1338,8 +1634,8 @@ describe("PostgreSQL Conversation command transaction", () => {
 						conversation_status: "ready",
 						messages: 0,
 						executions: 0,
-						outbox: 0,
-						audit: 0,
+						outbox: 1,
+						audit: 1,
 						idempotency: 1,
 					},
 				]);
@@ -1426,8 +1722,8 @@ describe("PostgreSQL Conversation command transaction", () => {
 				messages: 1,
 				executions: 1,
 				stops: 0,
-				outbox: 1,
-				audit: 1,
+				outbox: 2,
+				audit: 2,
 				idempotency: 2,
 			});
 		} finally {
@@ -1455,6 +1751,10 @@ describe("PostgreSQL Conversation command transaction", () => {
 					},
 					() => ({
 						schemaVersion: 1,
+						sandbox: createSessionSandboxBindingV1(
+							authority,
+							"invalid_plan_conversation",
+						),
 						conversation: {
 							schemaVersion: 1,
 							conversationId: "invalid_plan_conversation",
@@ -1601,7 +1901,7 @@ describe("PostgreSQL Conversation command transaction", () => {
 						(select count(*)::int from platform.conversation_audit_events) as audit,
 						(select count(*)::int from platform.idempotency_records) as idempotency
 				`,
-			).toEqual([{ stops: 0, outbox: 1, audit: 1, idempotency: 3 }]);
+			).toEqual([{ stops: 0, outbox: 2, audit: 2, idempotency: 3 }]);
 		} finally {
 			await transaction.close();
 		}
@@ -1792,4 +2092,79 @@ it("guards supplied Conversation SQL after the original transaction aborts and r
 	expect(
 		await client`select id from platform.idempotency_records`,
 	).toHaveLength(0);
+});
+
+it("reads legacy Session state under current authority without admitting commands or repairing its binding", async () => {
+	await persistConformanceModelConfiguration(undefined, authority);
+	await client`insert into platform.conversations
+   (id, agent_id, actor_id, channel_id, status, session_generation, authorization_revision)
+   values ('legacy-read-only', ${authority.agentId}, ${authority.actorId}, 'web', 'active', 1, ${authority.authorizationRevision})`;
+	const current = createConversation();
+	const foreign = createConversation({ ...authority, actorId: "other-user" });
+	const stale = createConversation({
+		...authority,
+		authorizationRevision: "stale-revision",
+	});
+	try {
+		expect(
+			await current.useCase.readConversation({
+				schemaVersion: 1,
+				conversationId: "legacy-read-only",
+			}),
+		).toMatchObject({
+			outcome: "found",
+			result: {
+				conversation: { conversationId: "legacy-read-only", status: "active" },
+			},
+		});
+		for (const denied of [foreign, stale]) {
+			expect(
+				await denied.useCase.readConversation({
+					schemaVersion: 1,
+					conversationId: "legacy-read-only",
+				}),
+			).toEqual({ outcome: "denied" });
+		}
+		expect(
+			await current.useCase.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId: "legacy-read-only",
+				text: "do not execute",
+				idempotencyKey: "legacy-message",
+				requestId: "legacy-message",
+				traceId: "legacy-message",
+			}),
+		).toEqual({ outcome: "denied" });
+		expect(
+			await current.useCase.stop({
+				schemaVersion: 1,
+				command: "stop",
+				conversationId: "legacy-read-only",
+				targetExecutionId: "legacy-execution",
+				idempotencyKey: "legacy-stop",
+				requestId: "legacy-stop",
+				traceId: "legacy-stop",
+			}),
+		).toEqual({ outcome: "denied" });
+		expect(
+			await current.useCase.requestMetadataRecovery({
+				schemaVersion: 1,
+				conversationId: "legacy-read-only",
+			}),
+		).toEqual({ outcome: "denied" });
+		expect(
+			await client`select count(*)::int as count from platform.session_sandbox_allocations`,
+		).toEqual([{ count: 0 }]);
+		expect(
+			await client`select count(*)::int as count from platform.outbox_items`,
+		).toEqual([{ count: 0 }]);
+		expect(
+			await client`select count(*)::int as count from platform.idempotency_records`,
+		).toEqual([{ count: 0 }]);
+	} finally {
+		await current.transaction.close();
+		await foreign.transaction.close();
+		await stale.transaction.close();
+	}
 });

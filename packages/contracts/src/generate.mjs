@@ -6,7 +6,9 @@ import { z } from "zod";
 import { createDocument } from "zod-openapi";
 import {
 	EnterpriseDirectorySnapshotV1Schema,
+	EnterpriseDirectorySnapshotV2Schema,
 	enterpriseDirectoryOpenApiPathsV1,
+	enterpriseDirectoryOpenApiPathsV2,
 } from "./enterprise-directory.ts";
 import {
 	fileExchangeOpenApiPathsV1,
@@ -40,6 +42,8 @@ import {
 	pilotScopedAuditOpenApiPathsV1,
 	pilotScopedAuditSchemasV1,
 	pilotSseSchemasV1,
+	pilotTaskOpenApiPathsV1,
+	pilotTaskSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
 } from "./pilot/index.ts";
 import { platformAuthOpenApiPathsV1 } from "./platform-auth.ts";
@@ -102,6 +106,10 @@ const artifactPaths = {
 	enterpriseDirectoryOpenapi: resolve(
 		artifactRoot,
 		"openapi/enterprise-directory.v1.openapi.json",
+	),
+	enterpriseDirectoryOpenapiV2: resolve(
+		artifactRoot,
+		"openapi/enterprise-directory.v2.openapi.json",
 	),
 	platformAuthOpenapi: resolve(
 		artifactRoot,
@@ -639,6 +647,7 @@ function buildArtifacts() {
 			...fileOpenApiPathsV1,
 			...pilotBrowserSseOpenApiPathsV1,
 			...pilotScopedAuditOpenApiPathsV1,
+			...pilotTaskOpenApiPathsV1,
 		},
 		components: {
 			securitySchemes: {
@@ -654,6 +663,7 @@ function buildArtifacts() {
 				...pilotSseSchemasV1,
 				...fileSchemasV1,
 				...pilotScopedAuditSchemasV1,
+				...pilotTaskSchemasV1,
 			},
 		},
 	});
@@ -751,6 +761,20 @@ function buildArtifacts() {
 				},
 				schemas: {
 					EnterpriseDirectorySnapshotV1: EnterpriseDirectorySnapshotV1Schema,
+				},
+			},
+		}),
+		enterpriseDirectoryOpenapiV2: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Enterprise Directory Snapshot API", version: "2.0.0" },
+			security: [{ DirectoryServiceBearer: [] }],
+			paths: enterpriseDirectoryOpenApiPathsV2,
+			components: {
+				securitySchemes: {
+					DirectoryServiceBearer: { type: "http", scheme: "bearer" },
+				},
+				schemas: {
+					EnterpriseDirectorySnapshotV2: EnterpriseDirectorySnapshotV2Schema,
 				},
 			},
 		}),

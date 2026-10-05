@@ -29,6 +29,7 @@ import {
 import {
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
+	ldapIdentityIds,
 	platformApiCredentials,
 	platformApplications,
 	platformUserDisables,
@@ -95,6 +96,7 @@ export {
 export {
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
+	ldapIdentityIds,
 	platformApiCredentials,
 	platformApplications,
 	platformUserDisables,
@@ -113,6 +115,7 @@ export { browserSessions } from "./schema-sessions";
 
 export const platformInfrastructureTables = [
 	platformUserDisables,
+	ldapIdentityIds,
 	browserSessions,
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
@@ -132,6 +135,7 @@ export const platformInfrastructureTables = [
 	agentManagementHistory,
 	conversations,
 	conversationExecutions,
+	sessionSandboxAllocations,
 	taskAuthorizationRecords,
 	taskControlRecords,
 	conversationGenerationTombstones,
@@ -150,3 +154,7 @@ export const platformInfrastructureTables = [
 	platformFileAccesses,
 	fileReconciliation,
 ] as const;
+
+import { sessionSandboxAllocations } from "./schema-session-sandboxes";
+
+export { sessionSandboxAllocations } from "./schema-session-sandboxes";

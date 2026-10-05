@@ -1,3 +1,4 @@
+export * from "./application-api-credentials.ts";
 export * from "./application-material-grants.ts";
 export * from "./application-registration.ts";
 export * from "./audit.ts";
@@ -9,5 +10,6 @@ export * from "./operation-v2.ts";
 export * from "./personal-api-credentials.ts";
 export * from "./personal-relay-key.ts";
 export * from "./sse.ts";
+export * from "./task.ts";
 export * from "./template-release.ts";
 export * from "./wecom-application.ts";

@@ -24,6 +24,7 @@ export {
 	PostgresAgentManagementTransactionV1,
 } from "./agent-management.ts";
 export * from "./api-audit-identity.js";
+export * from "./application-api-credentials.js";
 export {
 	type PostgresApplicationFoundationOptions,
 	PostgresApplicationFoundationTransactionV1,
@@ -39,6 +40,11 @@ export {
 	PostgresApplicationRevisionTransactionV1,
 } from "./application-revision.ts";
 export {
+	readCurrentTaskApiUseGrantV1,
+	readCurrentTaskApplicationV1,
+	TaskCurrentAuthorityUnavailableErrorV1,
+} from "./application-task-authorization.ts";
+export {
 	type AuditRow,
 	decodePlatformAuditRowV1,
 	type PlatformAuditActionV1,
@@ -51,7 +57,10 @@ export {
 	type PostgresPlatformAuditOptionsV1,
 	PostgresPlatformAuditQueryV1,
 } from "./audit.ts";
-export { PostgresLdapSessionStoreV1 } from "./browser-session.ts";
+export {
+	type BrowserSessionPrincipal,
+	PostgresLdapSessionStoreV1,
+} from "./browser-session.ts";
 export {
 	ConversationDispatchStoreError,
 	openPostgresConversationDispatchStoreV1,
@@ -87,6 +96,7 @@ export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,
 } from "./idempotency.ts";
+export { PostgresLdapIdentityIds } from "./ldap-identity-ids.js";
 export {
 	migratePlatformDatabase,
 	type PlatformMigrationOptions,

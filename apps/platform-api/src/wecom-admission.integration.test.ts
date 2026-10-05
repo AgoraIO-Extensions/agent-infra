@@ -86,6 +86,8 @@ async function fixture(userId = `http-user-${++sequence}`) {
 	await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${config.agentId},'controlled-owner',now())`;
 	await sql`insert into platform.agent_availability (agent_id,target_type,target_id) values (${config.agentId},'organization','controlled-org')`;
 	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${config.agentId},1,'controlled',${sql.json(configuration as unknown as postgres.JSONValue)},now())`;
+	await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('personal',${userId},1,1)`;
+	await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('personal',${userId},1,${`controlled-key-${suffix}`},${sql.json({ schemaVersion: 1, purpose: "personal", subjectId: userId, keyId: `controlled-key-${suffix}`, keyVersion: 1 })})`;
 	const identity: WecomIdentityPortV1 = {
 		resolveSender: async (scope) => user(scope.senderId),
 		activeUsers: async (ids) => ids,
@@ -93,6 +95,7 @@ async function fixture(userId = `http-user-${++sequence}`) {
 	const outcomes: string[] = [];
 	const assembly = assembleWecomApiV1(db.databaseUrl, {
 		identity,
+		userDirectory: { resolveUser: async (id) => user(id) },
 		resolveBinding: async (reference) =>
 			reference === config.bindingReference ? config : null,
 		replyEncryptionPublicKeyPem: publicKey,
@@ -228,6 +231,12 @@ afterAll(async () => {
 });
 
 describe("signed Hono callback through the original WeCom acceptance transaction", () => {
+	it("rejects a missing personal Key without accepting callback facts", async () => {
+		const f = await fixture();
+		await sql`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${f.userId}`;
+		expect((await f.app.request(f.request())).status).toBe(503);
+		await noFacts(f);
+	});
 	it("commits receipt and every acceptance fact in one transaction and replays the immutable acceptance snapshot", async () => {
 		const f = await fixture();
 		expect((await f.app.request(f.request())).status).toBe(200);
@@ -253,7 +262,15 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 		});
 		const saved = await facts(f.config.agentId);
 		for (const [kind, rows] of Object.entries(saved))
-			expect(rows).toHaveLength(kind === "idempotency" ? 2 : 1);
+			expect(rows).toHaveLength(
+				kind === "idempotency" || kind === "conversationAudit" ? 2 : 1,
+			);
+		expect(
+			await sql`select action from platform.conversation_audit_events where agent_id=${f.config.agentId} order by action`,
+		).toEqual([
+			{ action: "conversation.message.accepted" },
+			{ action: "conversation.sandbox.allocated" },
+		]);
 		const versions = await sql<{ kind: string; transaction: string }[]>`
 			select 'receipt' as kind,r.xmin::text as transaction from platform.wecom_receipts r where r.id=${f.eventKey}
 			union all select 'conversation',c.xmin::text from platform.conversations c where c.agent_id=${f.config.agentId}
@@ -268,6 +285,7 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 			"audit",
 			"authority",
 			"conversation",
+			"conversation-audit",
 			"conversation-audit",
 			"execution",
 			"idempotency",

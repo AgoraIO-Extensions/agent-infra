@@ -4,6 +4,7 @@ import type {
 	AgentManagementInterfaceV1,
 	AgentManagementStateV1,
 	AgentManagementTransactionPortV1,
+	SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
 import {
 	createAgentManagementV1,
@@ -28,12 +29,14 @@ import {
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
 } from "./agent-management.ts";
+import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.js";
 import { migratePlatformDatabase } from "./migrate.ts";
 import { isPostgresError } from "./postgres-error.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { seedSessionSandboxFixture } from "./session-sandbox.fixture.js";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -321,6 +324,336 @@ afterAll(async () => {
 });
 
 describe("PostgreSQL Agent-management Adapter", () => {
+	it("atomically fences only the managed Agent Session resources and preserves source evidence across replay", async () => {
+		const state = stateFixture();
+		const other = stateFixture({
+			agentId: "other-agent",
+			applicationId: "other-app",
+		});
+		await seedStates([state, other]);
+		for (const [id, agentId] of [
+			["ready-session", state.agentId],
+			["unknown-session", state.agentId],
+			["other-session", other.agentId],
+		]) {
+			await adminClient`insert into platform.conversations(id, agent_id, actor_id, principal_type, channel_id, status, session_generation, authorization_revision)
+				values (${id!}, ${agentId!}, ${applicant.userId}, 'user', 'web', 'ready', 1, 'test-revision')`;
+			await seedSessionSandboxFixture(adminClient, id!);
+		}
+		await adminClient`update platform.session_sandbox_allocations set status = 'unknown' where conversation_id = 'unknown-session'`;
+		const sandboxPolicy = {
+			namespace: "fixture-sandboxes",
+			resourceConfigurationHash: "a".repeat(64),
+		};
+		await adminClient`update platform.session_sandbox_allocations set resource_policy = ${adminClient.json(
+			{
+				...sandboxPolicy,
+				configurationRevision: 1,
+				workloadRevision: 1,
+				managementFence: 1,
+				imageDigest: `sha256:${"b".repeat(64)}`,
+			},
+		)}`;
+		await adminClient`insert into platform.conversation_executions (execution_id, conversation_id, sandbox_id, agent_id, actor_id, channel_id,
+			turn_id, status, session_generation, delivery_fence, authorization_revision, model_configuration_revision, model_option_id, reasoning_level, created_at, updated_at)
+			select 'unknown-execution', conversation_id, sandbox_id, agent_id, actor_id, channel_id,
+			gen_random_uuid()::text, 'unknown', 1, 1, 'test-revision', 1, 'test-model', 'medium', now(), now()
+			from platform.session_sandbox_allocations where conversation_id = 'unknown-session'`;
+		const snapshot = () =>
+			adminClient`select * from platform.session_sandbox_allocations order by conversation_id`;
+		const before = await snapshot();
+		const adapter = new PostgresAgentManagementTransactionV1({ databaseUrl });
+		adapters.push(adapter);
+		const management = createAgentManagementV1(adapter);
+		const request = command("stop_agent", state, "sandbox-stop");
+		await armFailure("audit");
+		try {
+			await expect(
+				management.executeManagementCommand(request, applicant),
+			).rejects.toThrow();
+		} finally {
+			await disarmFailure("audit");
+		}
+		expect(await snapshot()).toEqual(before);
+		expect(
+			await management.executeManagementCommand(request, applicant),
+		).toMatchObject({ outcome: "accepted" });
+		const after = await snapshot();
+		for (const row of after) {
+			const original = before.find(
+				(item) => item.sandbox_id === row.sandbox_id,
+			)!;
+			if (row.agent_id === other.agentId) {
+				expect(row).toEqual(original);
+				continue;
+			}
+			expect(row).toMatchObject({
+				...original,
+				desired_state: "stopped",
+				resource_fence: "2",
+				status: original.status === "unknown" ? "unknown" : "unavailable",
+				updated_at: expect.any(Date),
+			});
+			const [intent] =
+				await adminClient`select payload, status, lease_owner from platform.outbox_items
+				where id = ${`conversation:sandbox:${row.conversation_id}:1`}`;
+			expect(intent).toMatchObject({
+				status: "pending",
+				lease_owner: null,
+				payload: {
+					schemaVersion: 1,
+					conversationId: row.conversation_id,
+					sessionGeneration: 1,
+					lifecycle: {
+						schemaVersion: 1,
+						authority: {
+							kind: "management",
+							applicationId: state.applicationId,
+							managementRevision: 2,
+							managementFence: 2,
+							workloadRevision: 2,
+							targetDesiredState: "stopped",
+						},
+						source: {
+							resourceFence: 1,
+							observation: original.resource_observation,
+						},
+						stopReceipt: null,
+					},
+				},
+			});
+		}
+		expect(
+			await management.executeManagementCommand(request, applicant),
+		).toMatchObject({ outcome: "replayed" });
+		expect(await snapshot()).toEqual(after);
+		const transactionIds =
+			await adminClient`select xmin::text from platform.session_sandbox_allocations where agent_id = ${state.agentId}
+			union all select xmin::text from platform.outbox_items where payload->'lifecycle'->'authority'->>'applicationId' = ${state.applicationId}
+			union all select xmin::text from platform.agent_applications where id = ${state.applicationId}`;
+		expect(transactionIds).toHaveLength(5);
+		expect(new Set(transactionIds.map((row) => row.xmin)).size).toBe(1);
+		const dispatch = new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			// A new Worker policy cannot strand cleanup of source-owned old resources.
+			sandboxPolicy: {
+				...sandboxPolicy,
+				resourceConfigurationHash: "c".repeat(64),
+			},
+		});
+		adapters.push(dispatch);
+		const claimInput = {
+			schemaVersion: 1 as const,
+			itemId: "conversation:sandbox:ready-session:1",
+			workerId: "drain-worker",
+			leaseDurationMs: 30_000,
+		};
+		const drain = await dispatch.claimSandboxReconciliation(claimInput);
+		if (!drain || !drain.lifecycle)
+			throw new Error("Expected original management drain");
+		expect(drain).toMatchObject({
+			purpose: "drain",
+			authorization: null,
+			deployment: null,
+			drainComputeAllowed: true,
+		});
+		expect(drain.policy.resourceConfigurationHash).toBe(
+			sandboxPolicy.resourceConfigurationHash,
+		);
+		// A normal observation revision does not erase the still-current management obligation.
+		await adminClient`update platform.agent_applications set management_revision = management_revision + 1 where id = ${state.applicationId}`;
+		expect(
+			await dispatch.prepareSandboxReconciliation({
+				claim: drain,
+				leaseDurationMs: 30_000,
+			}),
+		).toBe(true);
+		expect(
+			await dispatch.prepareSandboxReconciliation({
+				claim: {
+					...drain,
+					lifecycle: {
+						...drain.lifecycle,
+						source: { ...drain.lifecycle.source, resourceFence: 99 },
+					},
+				},
+				leaseDurationMs: 30_000,
+			}),
+		).toBe(false);
+		const stoppedObservation = (claim: SessionSandboxReconciliationClaimV1) => {
+			const source = claim.lifecycle!.source;
+			const identities = source.observation!.resources;
+			const retainedPVC = identities.find(
+				(resource) => resource.kind === "PersistentVolumeClaim",
+			)!;
+			return {
+				status: "stopped" as const,
+				resources: [retainedPVC],
+				sourceStop: {
+					schemaVersion: 1 as const,
+					sandboxId: claim.sandbox.sandboxId,
+					sessionId: claim.sandbox.sessionId,
+					sourceGeneration: source.sandbox.generation,
+					sourceResourceFence: source.resourceFence,
+					targetGeneration: claim.sandbox.generation,
+					targetResourceFence: claim.resourceFence,
+					removed: identities
+						.filter((resource) => resource.kind !== "PersistentVolumeClaim")
+						.map((resource) => ({
+							resource,
+							preconditions: {
+								uid: resource.uid,
+								resourceVersion: resource.resourceVersion,
+							},
+							absence: {
+								kind: resource.kind,
+								namespace: resource.namespace,
+								name: resource.name,
+							},
+						})),
+					retainedPVC,
+				},
+			};
+		};
+		const observation = stoppedObservation(drain);
+		const sourceEvidence = drain.previousObservation;
+		expect(
+			await dispatch.recordSandboxObservation({
+				claim: drain,
+				observation: { ...observation, sourceStop: undefined },
+			}),
+		).toBe("unknown");
+		expect(
+			(await snapshot()).find((row) => row.conversation_id === "ready-session")
+				?.resource_observation,
+		).toEqual(sourceEvidence);
+		await adminClient`update platform.outbox_items set available_at = now() where id = ${claimInput.itemId}`;
+		let retry: SessionSandboxReconciliationClaimV1 | null =
+			await dispatch.claimSandboxReconciliation(claimInput);
+		if (!retry) throw new Error("Expected same drain retry");
+		// A synthetic complete receipt cannot replace durable pre-DELETE intent.
+		expect(
+			await dispatch.recordSandboxObservation({
+				claim: retry,
+				observation: stoppedObservation(retry),
+			}),
+		).toBe("unknown");
+		expect(
+			(await snapshot()).find((row) => row.conversation_id === "ready-session")
+				?.resource_observation,
+		).toEqual(sourceEvidence);
+		await adminClient`update platform.outbox_items set available_at = now() where id = ${claimInput.itemId}`;
+		retry = await dispatch.claimSandboxReconciliation(claimInput);
+		if (!retry?.lifecycle?.source.observation)
+			throw new Error("Expected recoverable management drain");
+		const source = retry.lifecycle.source;
+		for (const resource of source.observation!.resources.filter(
+			(resource) => resource.kind !== "PersistentVolumeClaim",
+		)) {
+			const intent = {
+				schemaVersion: 1 as const,
+				state: "delete-requested" as const,
+				deleteAttemptId: `management-stop-${resource.kind}`,
+				deleteAttempted: false,
+				deleteCallResult: "not-attempted" as const,
+				sourceGeneration: source.sandbox.generation,
+				resourceFence: source.resourceFence,
+				managementFence: retry.lifecycle!.authority.managementFence,
+				resource,
+				preconditions: {
+					uid: resource.uid,
+					resourceVersion: resource.resourceVersion,
+				},
+			};
+			const recordedIntent = await dispatch.recordSandboxDeletionProgress({
+				claim: retry,
+				progress: intent,
+				leaseDurationMs: 30_000,
+			});
+			expect(recordedIntent.status).toBe("committed");
+			if (recordedIntent.status !== "committed")
+				throw new Error("Expected persisted deletion intent");
+			retry = recordedIntent.claim;
+			const recordedAbsence = await dispatch.recordSandboxDeletionProgress({
+				claim: retry,
+				progress: {
+					...intent,
+					state: "absent",
+					deleteAttempted: true,
+					deleteCallResult: "acknowledged",
+					absence: {
+						kind: resource.kind,
+						namespace: resource.namespace,
+						name: resource.name,
+					},
+				},
+				leaseDurationMs: 30_000,
+			});
+			expect(recordedAbsence.status).toBe("committed");
+			if (recordedAbsence.status !== "committed")
+				throw new Error("Expected persisted deletion evidence");
+			retry = recordedAbsence.claim;
+		}
+
+		const beforeReceipt = await snapshot();
+		const [beforeReceiptIntent] =
+			await adminClient`select * from platform.outbox_items where id = ${claimInput.itemId}`;
+		await adminClient.unsafe(
+			"create function platform.fail_sandbox_receipt() returns trigger language plpgsql as $$ begin raise exception 'injected Sandbox receipt failure'; end $$",
+		);
+		await adminClient.unsafe(
+			"create trigger fail_sandbox_receipt before insert on platform.conversation_audit_events for each row execute function platform.fail_sandbox_receipt()",
+		);
+		try {
+			await expect(
+				dispatch.recordSandboxObservation({
+					claim: retry,
+					observation: stoppedObservation(retry),
+				}),
+			).rejects.toThrow();
+			expect(await snapshot()).toEqual(beforeReceipt);
+			expect(
+				(
+					await adminClient`select * from platform.outbox_items where id = ${claimInput.itemId}`
+				)[0],
+			).toEqual(beforeReceiptIntent);
+		} finally {
+			await adminClient.unsafe(
+				"drop trigger fail_sandbox_receipt on platform.conversation_audit_events",
+			);
+			await adminClient.unsafe("drop function platform.fail_sandbox_receipt()");
+		}
+		expect(
+			await dispatch.recordSandboxObservation({
+				claim: retry,
+				observation: stoppedObservation(retry),
+			}),
+		).toBe("committed");
+		expect(
+			(await snapshot()).find((row) => row.conversation_id === "ready-session"),
+		).toMatchObject({ status: "stopped", resource_observation: observation });
+		const occupied = await dispatch.claimSandboxReconciliation({
+			...claimInput,
+			itemId: "conversation:sandbox:unknown-session:1",
+		});
+		if (!occupied) throw new Error("Expected occupied drain");
+		expect(occupied.drainComputeAllowed).toBe(false);
+		expect(
+			await dispatch.recordSandboxObservation({
+				claim: occupied,
+				observation: stoppedObservation(occupied),
+			}),
+		).toBe("unknown");
+		expect(
+			await adminClient`select status from platform.conversation_executions where execution_id = 'unknown-execution'`,
+		).toEqual([{ status: "unknown" }]);
+		expect(
+			(await snapshot()).find(
+				(row) => row.conversation_id === "unknown-session",
+			)?.resource_observation,
+		).toEqual(occupied.previousObservation);
+	});
+
 	agentManagementV1Conformance(
 		async (
 			options: AgentManagementConformanceOptionsV1,

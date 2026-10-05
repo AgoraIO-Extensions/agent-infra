@@ -854,9 +854,8 @@ export function validateModelEndpoint(input: unknown): string {
 			endpoint.password ||
 			endpoint.search ||
 			endpoint.hash
-		) {
+		)
 			configurationInvalid();
-		}
 	} catch {
 		configurationInvalid();
 	}

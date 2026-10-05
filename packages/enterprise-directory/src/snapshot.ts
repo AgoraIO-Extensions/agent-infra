@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { DirectorySourceIdSchema } from "@agent-infra/contracts/enterprise-directory";
 import { z } from "zod";
 
 export const MAX_SNAPSHOT_AGE_MS = 24 * 60 * 60 * 1_000;
@@ -19,7 +20,7 @@ export interface DirectoryMember {
 export interface DirectorySnapshot {
 	schemaVersion: 1;
 	revision: string;
-	source: "wecom";
+	source: string;
 	rootDepartmentId: number;
 	fetchedAt: number;
 	validUntil: number;
@@ -114,7 +115,7 @@ export function validateSnapshot(
 ): DirectorySnapshot {
 	if (
 		snapshot.schemaVersion !== 1 ||
-		snapshot.source !== "wecom" ||
+		!DirectorySourceIdSchema.safeParse(snapshot.source).success ||
 		snapshot.complete !== true ||
 		!Number.isSafeInteger(snapshot.rootDepartmentId) ||
 		snapshot.rootDepartmentId < 1 ||
@@ -182,6 +183,8 @@ export function validateSnapshot(
 }
 
 export function createSnapshot(input: {
+	/** Defaults to the legacy source for existing callers. */
+	source?: string;
 	rootDepartmentId: number;
 	departments: DirectoryDepartment[];
 	members: DirectoryMember[];
@@ -191,7 +194,7 @@ export function createSnapshot(input: {
 	return validateSnapshot({
 		schemaVersion: 1,
 		revision: randomUUID(),
-		source: "wecom",
+		source: input.source ?? "wecom",
 		rootDepartmentId: input.rootDepartmentId,
 		fetchedAt: input.completedAt,
 		validUntil: input.startedAt + MAX_SNAPSHOT_AGE_MS,

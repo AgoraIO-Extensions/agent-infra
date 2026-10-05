@@ -1,0 +1,1 @@
+ALTER TABLE "platform"."browser_sessions" ADD COLUMN "principal" jsonb;

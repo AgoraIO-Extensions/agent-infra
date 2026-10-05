@@ -5,6 +5,7 @@ import type {
 	LdapAccount,
 } from "@agent-infra/identity";
 import { resolveLdapPrincipal } from "@agent-infra/identity";
+import type { BrowserSessionPrincipal } from "@agent-infra/platform-store";
 
 type Directory = ReturnType<typeof createLdapIdentityDirectory>;
 const SESSION_COOKIE = "__Host-platform-session";
@@ -99,8 +100,16 @@ export interface LdapBrowserInput {
 }
 
 export interface LdapSessionStore {
-	create(digest: string, uid: string, expiresAt: number): Promise<void>;
-	find(digest: string, now: number): Promise<{ uid: string } | null>;
+	create(
+		digest: string,
+		uid: string,
+		expiresAt: number,
+		principal?: BrowserSessionPrincipal,
+	): Promise<void>;
+	find(
+		digest: string,
+		now: number,
+	): Promise<{ uid: string; principal?: BrowserSessionPrincipal } | null>;
 	revoke(digest: string): Promise<void>;
 	revokeUid(uid: string): Promise<void>;
 }
@@ -162,7 +171,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				return null;
 			}
 			const identity = await current(account);
-			if (identity.accountStatus === "disabled" || identity.userId !== userId) {
+			if (identity.accountStatus !== "active" || identity.userId !== userId) {
 				await input.sessions.revokeUid(session.uid);
 				return null;
 			}
@@ -227,10 +236,12 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			const body = await loginBody(request);
 			if (!body) return response(400);
 			let account: LdapAccount | null;
+			let principal: Awaited<ReturnType<typeof current>>;
 			try {
 				account = await input.directory.authenticate(body.login, body.password);
-				if (!account || (await current(account)).accountStatus !== "active")
-					return response(401);
+				if (!account) return response(401);
+				principal = await current(account);
+				if (principal.accountStatus !== "active") return response(401);
 			} catch {
 				return response(503);
 			}
@@ -240,6 +251,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 					digest(token),
 					account.uid,
 					now() + SESSION_MS,
+					principal,
 				);
 			} catch {
 				return response(503);

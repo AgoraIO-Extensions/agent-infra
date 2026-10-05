@@ -6,6 +6,8 @@ import {
 	type ConversationEventTransactionPortV1,
 	type ConversationEventUseCaseV1,
 	createConversationEventUseCaseV1,
+	parseConversationPersistedEventPayloadV1,
+	publicTaskStatusEventV1,
 } from "./conversation-events.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 
@@ -247,6 +249,16 @@ describe("Conversation event ingestion", () => {
 			}),
 		).rejects.toMatchObject({ code: "invalid_input" });
 		await expect(
+			events.persist({
+				...event,
+				event: {
+					type: "execution.status",
+					status: "unknown",
+					reason: "STOP_CONFIRMATION_TIMEOUT",
+				} as never,
+			}),
+		).rejects.toMatchObject({ code: "invalid_input" });
+		await expect(
 			events.persist({ ...event, source: "platform" } as never),
 		).rejects.toMatchObject({ code: "invalid_input" });
 		await expect(
@@ -424,6 +436,123 @@ describe("Conversation event ingestion", () => {
 		};
 		const events = createConversationEventUseCaseV1({ transaction });
 
+		await expect(events.persist(event)).rejects.toMatchObject({
+			code: "unavailable",
+		});
+	});
+});
+
+describe("platform-owned task status reasons", () => {
+	it("publishes only bounded reasons for the matching state", () => {
+		expect(
+			publicTaskStatusEventV1({
+				isTask: true,
+				status: "failed",
+				reason: "TASK_WAIT_TIMEOUT",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "failed",
+			reason: "TASK_WAIT_TIMEOUT",
+		});
+		expect(
+			publicTaskStatusEventV1({
+				isTask: true,
+				status: "failed",
+				reason: "private runtime text",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "failed",
+		});
+		expect(
+			publicTaskStatusEventV1({
+				isTask: false,
+				status: "failed",
+				reason: "TASK_WAIT_TIMEOUT",
+			}),
+		).toBeNull();
+	});
+
+	it("reads bounded failure and stop reasons while rejecting invalid pairs", () => {
+		expect(
+			parseConversationPersistedEventPayloadV1({
+				type: "task.status",
+				status: "unknown",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "unknown",
+			reason: "STOP_CONFIRMATION_TIMEOUT",
+		});
+		expect(
+			parseConversationPersistedEventPayloadV1({
+				type: "task.status",
+				status: "failed",
+				reason: "AGENT_UNAVAILABLE",
+			}),
+		).toEqual({
+			type: "task.status",
+			status: "failed",
+			reason: "AGENT_UNAVAILABLE",
+		});
+		for (const payload of [
+			{
+				type: "task.status",
+				status: "processing",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			},
+			{
+				type: "task.status",
+				status: "unknown",
+				reason: "private runtime text",
+			},
+			{ type: "task.status", status: "waiting", reason: "TASK_WAIT_TIMEOUT" },
+			{
+				type: "execution.status",
+				status: "unknown",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			},
+		])
+			expect(() => parseConversationPersistedEventPayloadV1(payload)).toThrow(
+				ConversationEventError,
+			);
+	});
+});
+
+describe("waiting control event ownership", () => {
+	it("reads the platform cancellation event without exposing its internal reason", () => {
+		const payload = publicTaskStatusEventV1({
+			isTask: true,
+			status: "cancelled",
+			reason: "AUTHORIZATION_REVOKED",
+		});
+		expect(payload).toEqual({ type: "task.status", status: "cancelled" });
+		expect(parseConversationPersistedEventPayloadV1(payload)).toEqual(payload);
+	});
+
+	it("rejects a platform task event forged as a previously persisted Runtime event", async () => {
+		const transaction: ConversationEventTransactionPortV1 = {
+			persistEvent: async (request, decide) => {
+				const forged = {
+					schemaVersion: 1 as const,
+					eventId: "event_forged_task",
+					conversationId: event.conversationId,
+					executionId: event.executionId,
+					sequence: 1,
+					conversationCursor: 1,
+					occurredAt: event.occurredAt,
+					event: { type: "task.status" as const, status: "cancelled" as const },
+				};
+				decide({
+					...activeState(),
+					existingEvent: { event: forged, eventDigest: request.eventDigest },
+				} as never);
+				return { outcome: "replayed", event: forged } as never;
+			},
+		};
+		const events = createConversationEventUseCaseV1({ transaction });
 		await expect(events.persist(event)).rejects.toMatchObject({
 			code: "unavailable",
 		});

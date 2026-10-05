@@ -78,6 +78,7 @@ export interface ConversationRow {
 	readonly agent_id: string;
 	readonly actor_id: string;
 	readonly channel_id: string;
+	readonly principal_type: string;
 	readonly status: string;
 	readonly session_generation: string | number;
 	readonly host_session_ref: string | null;
@@ -90,9 +91,13 @@ export interface ConversationRow {
 }
 
 export interface ExecutionRow {
+	readonly sandbox_id: string | null;
 	readonly execution_id: string;
 	readonly conversation_id: string;
 	readonly actor_id: string;
+	readonly principal_type: string;
+	readonly agent_id: string;
+	readonly channel_id: string;
 	readonly turn_id: string;
 	readonly session_generation: string | number;
 	readonly model_configuration_revision: string | number | null;

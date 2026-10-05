@@ -323,7 +323,7 @@ function project<T>(projection: () => T, traceId: string): T {
 	}
 }
 
-function eventProjection(
+export function eventProjection(
 	input: ConversationQueryEventV1,
 ): ReturnType<typeof ConversationSseMessageV2Schema.parse> {
 	const base = {

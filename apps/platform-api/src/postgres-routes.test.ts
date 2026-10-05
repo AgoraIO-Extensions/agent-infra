@@ -42,6 +42,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
+import { markSessionSandboxReadyFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.js";
 import { createPlatformApp } from "./app.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 import { createPlatformProjectionReaders } from "./projection.js";
@@ -724,6 +725,7 @@ describe("PostgreSQL Platform HTTP integration", () => {
 		const conversation = ConversationProjectionV1Schema.parse(
 			await createdConversation.json(),
 		);
+		await markSessionSandboxReadyFixture(database, conversation.conversationId);
 		const sentMessage = await app.request(
 			`/api/v1/conversations/${conversation.conversationId}/messages`,
 			{

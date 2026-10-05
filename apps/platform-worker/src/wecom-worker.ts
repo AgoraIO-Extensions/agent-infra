@@ -4,6 +4,7 @@ import {
 	createWecomChannelV1,
 	createWecomDeliveryV1,
 	type TaskRuntimeAuthorizationRecordV1,
+	type TaskUserDirectoryV1,
 	type WecomDeliveryStatusV1,
 	type WecomIdentityPortV1,
 	type WecomSendPortV1,
@@ -20,6 +21,7 @@ import {
 
 export interface WecomWorkerDeploymentV1 {
 	readonly identity: WecomIdentityPortV1;
+	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly observe: (status: WecomDeliveryStatusV1) => void;
 	readonly sender: WecomSendPortV1;
 	readonly connections?: WecomConnectionsDeploymentV1;
@@ -36,6 +38,7 @@ export function createPlatformWecomWorkerV1(
 	const store = new PostgresWecomChannelV1({
 		connectionHolderId,
 		databaseUrl: options.databaseUrl,
+		userDirectory: options.userDirectory,
 		observe: options.observe,
 	});
 	const authorization = createWecomAuthorizationV1({

@@ -10,6 +10,11 @@ export function createPlatformApiAssemblyInput(): PlatformApiAssemblyInput {
 		throw new Error("Unused controlled admission");
 	};
 	return {
+		// Controlled fixture policy; not a production default.
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: 60_000,
+		},
 		databaseUrl,
 		identity: {
 			resolve: async () => ({

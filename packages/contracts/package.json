@@ -18,6 +18,7 @@
 			"types": "./dist/enterprise-directory.d.mts",
 			"import": "./dist/enterprise-directory.mjs"
 		},
+		"./openapi/enterprise-directory.v2": "./artifacts/openapi/enterprise-directory.v2.openapi.json",
 		"./openapi/enterprise-directory.v1": "./artifacts/openapi/enterprise-directory.v1.openapi.json",
 		"./platform-auth": {
 			"types": "./dist/platform-auth.d.mts",

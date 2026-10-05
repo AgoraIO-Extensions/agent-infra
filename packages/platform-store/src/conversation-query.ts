@@ -1,10 +1,21 @@
 import { Buffer } from "node:buffer";
+import { types } from "node:util";
 import type { RecentPersonalConversationsQueryV1 } from "@agent-infra/platform-core";
-import { parseConversationOperationEventV2 } from "@agent-infra/platform-core";
+import {
+	isSessionSandboxReadyV1,
+	isTaskApiChannelV1,
+	parseConversationOperationEventV2,
+	parseSessionSandboxBindingV1,
+	parseTaskPrincipalV1,
+	type SessionSandboxBindingV1,
+	type TaskPrincipalV1,
+} from "@agent-infra/platform-core";
 
 import postgres from "postgres";
+import { exactRecord } from "./conversation-execution-common.js";
 import { readRecentPersonalConversations } from "./conversation-recent-query.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
+import { conversationSandboxReadBindingSql } from "./session-sandbox.js";
 
 type Database = ReturnType<typeof postgres> | postgres.TransactionSql;
 
@@ -12,6 +23,8 @@ const defaultReplayWindowMs = 5 * 60 * 1000;
 const maximumReplayWindowMs = 31 * 24 * 60 * 60 * 1000;
 
 export interface ConversationQueryScopeV1 {
+	/** Required at the API boundary; never resolved from actorId or an Owner role. */
+	readonly principal?: TaskPrincipalV1;
 	readonly actorId: string;
 	readonly channelId: string;
 }
@@ -22,6 +35,8 @@ export interface ConversationQueryPageV1 {
 }
 
 export interface ConversationQueryProjectionV1 {
+	readonly sandbox?: SessionSandboxBindingV1;
+	readonly sandboxReady?: boolean;
 	readonly conversationId: string;
 	readonly agentId: string;
 	readonly status: "ready" | "active" | "unavailable";
@@ -104,6 +119,17 @@ export interface PlatformQueueResourceSnapshot {
 }
 
 interface ConversationRow {
+	readonly sandbox_status: string | null;
+	readonly sandbox_desired_state: string | null;
+	readonly sandbox_resource_fence: number | string | null;
+	readonly sandbox_observation_status: string | null;
+	readonly sandbox_id: string | null;
+	readonly resource_name: string | null;
+	readonly workspace_scope: string | null;
+	readonly actor_id: string;
+	readonly principal_type: string;
+	readonly channel_id: string;
+	readonly session_generation: number | string;
 	readonly id: string;
 	readonly agent_id: string;
 	readonly status: "ready" | "active" | "unavailable";
@@ -224,18 +250,22 @@ function timestamp(value: unknown): Date {
 
 function scope(input: ConversationQueryScopeV1): ConversationQueryScopeV1 {
 	try {
+		if (types.isProxy(input)) return invalidRequest();
+		const value = exactRecord(input, ["actorId", "channelId"], ["principal"]);
+		const actorId = requestText(value.actorId);
+		const channelId = requestText(value.channelId);
+		const principal =
+			value.principal === undefined
+				? undefined
+				: parseTaskPrincipalV1(value.principal);
+		const api = channelId === "api" || channelId.startsWith("api:");
 		if (
-			typeof input !== "object" ||
-			input === null ||
-			Array.isArray(input) ||
-			Object.keys(input).length !== 2
-		) {
+			(api && (!principal || !isTaskApiChannelV1(channelId, principal))) ||
+			(principal &&
+				(principal.id !== actorId || (!api && principal.kind !== "user")))
+		)
 			return invalidRequest();
-		}
-		return {
-			actorId: requestText(input.actorId),
-			channelId: requestText(input.channelId),
-		};
+		return { actorId, channelId, ...(principal ? { principal } : {}) };
 	} catch (error) {
 		if (error instanceof ConversationQueryError) throw error;
 		return invalidRequest();
@@ -328,7 +358,7 @@ function decodeCursor(value: string): CursorPayload {
 		) {
 			return [
 				"list",
-				requestText(payload[1]),
+				requestText(payload[1], 1024 + "application:".length),
 				requestText(payload[2]),
 				requestText(payload[3]),
 				requestText(payload[4]),
@@ -350,7 +380,28 @@ function projection(row: ConversationRow): ConversationQueryProjectionV1 {
 	return {
 		conversationId: text(row.id),
 		agentId: text(row.agent_id),
+		...(row.sandbox_id === null
+			? {}
+			: {
+					sandbox: parseSessionSandboxBindingV1({
+						schemaVersion: 1,
+						sandboxId: row.sandbox_id,
+						sessionId: row.id,
+						agentId: row.agent_id,
+						principal: { kind: row.principal_type, id: row.actor_id },
+						channelId: row.channel_id,
+						generation: Number(row.session_generation),
+						resourceName: row.resource_name,
+						workspaceScope: row.workspace_scope,
+					}),
+				}),
 		status: row.status,
+		sandboxReady: isSessionSandboxReadyV1({
+			status: row.sandbox_status,
+			desiredState: row.sandbox_desired_state,
+			resourceFence: Number(row.sandbox_resource_fence),
+			observationStatus: row.sandbox_observation_status,
+		}),
 		lastConversationCursor:
 			cursor === 0 ? null : conversationCursor(row.id, cursor),
 		createdAt: timestamp(row.created_at),
@@ -403,8 +454,15 @@ function event(row: EventRow): ConversationQueryEventV1 {
 }
 
 const conversationSelection = `
-	select id, agent_id, status, last_conversation_cursor, created_at, updated_at
-	from platform.conversations
+ select id, agent_id, status, last_conversation_cursor, created_at, updated_at,
+   sandbox_id, resource_name, workspace_scope, sandbox_status, sandbox_desired_state, sandbox_resource_fence, sandbox_observation_status, actor_id, principal_type, channel_id, session_generation
+ from (select c.*, s.sandbox_id, s.resource_name, s.workspace_scope,
+   s.status as sandbox_status, s.desired_state as sandbox_desired_state,
+   s.resource_fence as sandbox_resource_fence, s.resource_observation->>'status' as sandbox_observation_status
+   from platform.conversations c left join platform.session_sandbox_allocations s
+     on s.conversation_id = c.id
+   where ${conversationSandboxReadBindingSql}
+ ) as conversations
 `;
 
 async function readConversation(
@@ -414,9 +472,14 @@ async function readConversation(
 ): Promise<ConversationRow | undefined> {
 	const rows = await database.unsafe<ConversationRow[]>(
 		`${conversationSelection}
-		 where id = $1 and actor_id = $2 and channel_id = $3
+		 where id = $1 and actor_id = $2 and channel_id = $3 and principal_type = $4
 		 limit 1`,
-		[conversationId, readScope.actorId, readScope.channelId],
+		[
+			conversationId,
+			readScope.actorId,
+			readScope.channelId,
+			readScope.principal?.kind ?? "user",
+		],
 	);
 	if (rows.length > 1) return unavailable();
 	return rows[0];
@@ -463,6 +526,9 @@ async function readExecutions(
 				limit 1
 			) as trace_id
 		from platform.conversation_executions e
+		join platform.conversations c on c.id = e.conversation_id
+			and c.agent_id = e.agent_id and c.actor_id = e.actor_id
+			and c.channel_id = e.channel_id and c.principal_type = e.principal_type
 		where e.conversation_id = ${conversationId}
 			and (${executionId ?? null}::text is null or e.execution_id = ${executionId ?? null})
 		order by e.created_at, e.execution_id
@@ -486,6 +552,11 @@ async function readEvents(
 				limit 1
 			) as trace_id
 		from platform.conversation_events e
+		join platform.conversation_executions x
+			on x.execution_id = e.execution_id and x.conversation_id = e.conversation_id
+		join platform.conversations c on c.id = x.conversation_id
+			and c.agent_id = x.agent_id and c.actor_id = x.actor_id
+			and c.principal_type = x.principal_type and c.channel_id = x.channel_id
 		where e.conversation_id = ${conversationId}
 			and e.conversation_cursor > ${options.afterCursor ?? 0}
 			${options.executionId === undefined ? database`` : database`and e.execution_id = ${options.executionId}`}
@@ -501,6 +572,7 @@ async function isWithinReplayTimeWindow(
 	afterCursor: number,
 	latestCursor: number,
 	replayWindowMs: number,
+	executionId?: string,
 ): Promise<boolean> {
 	if (afterCursor === latestCursor) return true;
 	const anchorCursor = afterCursor + 1;
@@ -509,7 +581,8 @@ async function isWithinReplayTimeWindow(
 			as within_window
 		from platform.conversation_events
 		where conversation_id = ${conversationId}
-			and conversation_cursor = ${anchorCursor}
+			${executionId === undefined ? database`and conversation_cursor = ${anchorCursor}` : database`and execution_id = ${executionId} and conversation_cursor > ${afterCursor}`}
+		order by conversation_cursor
 		limit 1
 	`;
 	return rows[0]?.within_window === true;
@@ -756,13 +829,17 @@ export class PostgresConversationQueryV1 {
 	}> {
 		const readScope = scope(inputScope);
 		const agentId = requestText(agentIdInput);
+		const cursorActor =
+			readScope.channelId === "api"
+				? `${readScope.principal?.kind}:${readScope.actorId}`
+				: readScope.actorId;
 		const page = parsePage(pageInput);
 		let afterId: string | undefined;
 		if (page.cursor !== undefined) {
 			const cursor = decodeCursor(page.cursor);
 			if (
 				cursor[0] !== "list" ||
-				cursor[1] !== readScope.actorId ||
+				cursor[1] !== cursorActor ||
 				cursor[2] !== readScope.channelId ||
 				cursor[3] !== agentId
 			) {
@@ -773,7 +850,7 @@ export class PostgresConversationQueryV1 {
 		try {
 			const rows = await this.#client.unsafe<ConversationRow[]>(
 				`${conversationSelection}
-				 where actor_id = $1 and channel_id = $2 and agent_id = $3
+				 where actor_id = $1 and channel_id = $2 and agent_id = $3 and principal_type = $6
 					and ($4::text is null or id > $4)
 				 order by id
 				 limit $5`,
@@ -783,6 +860,7 @@ export class PostgresConversationQueryV1 {
 					agentId,
 					afterId ?? null,
 					page.limit + 1,
+					readScope.principal?.kind ?? "user",
 				],
 			);
 			const items = rows.slice(0, page.limit).map(projection);
@@ -793,7 +871,7 @@ export class PostgresConversationQueryV1 {
 				nextCursor: nextId
 					? encodeCursor([
 							"list",
-							readScope.actorId,
+							cursorActor,
 							readScope.channelId,
 							agentId,
 							nextId,
@@ -866,10 +944,15 @@ export class PostgresConversationQueryV1 {
 		selectorInput:
 			| { readonly kind: "cursor" | "last-event-id"; readonly value: string }
 			| undefined,
+		executionIdInput?: string,
 	): Promise<ConversationReplayResultV1 | undefined> {
 		const readScope = scope(inputScope);
 		const conversationId = requestText(conversationIdInput);
 		const selector = replaySelector(selectorInput);
+		const executionId =
+			executionIdInput === undefined
+				? undefined
+				: requestText(executionIdInput);
 		try {
 			return await repeatableRead(this.#client, async (transaction) => {
 				const conversation = await readConversation(
@@ -878,8 +961,23 @@ export class PostgresConversationQueryV1 {
 					conversationId,
 				);
 				if (!conversation) return undefined;
+				if (
+					executionId !== undefined &&
+					(await readExecutions(transaction, conversationId, executionId))
+						.length !== 1
+				)
+					return undefined;
 				const latest = safeInteger(conversation.last_conversation_cursor, 0);
-				const resumeCursor = conversationCursor(conversationId, latest);
+				let resumePosition = latest;
+				if (executionId !== undefined) {
+					const [last] = await transaction<EventIdentityRow[]>`
+						select conversation_cursor from platform.conversation_events
+						where conversation_id = ${conversationId} and execution_id = ${executionId}
+						order by conversation_cursor desc limit 1
+					`;
+					resumePosition = last ? safeInteger(last.conversation_cursor, 1) : 0;
+				}
+				const resumeCursor = conversationCursor(conversationId, resumePosition);
 				let after = 0;
 				if (selector?.kind === "cursor") {
 					const decoded = decodeCursor(selector.value);
@@ -891,12 +989,26 @@ export class PostgresConversationQueryV1 {
 						};
 					}
 					after = decoded[2];
+					if (executionId !== undefined && after !== 0) {
+						const [anchor] = await transaction<EventIdentityRow[]>`
+							select conversation_cursor from platform.conversation_events
+							where conversation_id = ${conversationId} and execution_id = ${executionId}
+								and conversation_cursor = ${after}
+						`;
+						if (!anchor)
+							return {
+								outcome: "reload",
+								reason: "cursor_expired",
+								resumeCursor,
+							};
+					}
 				} else if (selector?.kind === "last-event-id") {
 					const rows = await transaction<EventIdentityRow[]>`
 						select conversation_cursor
 						from platform.conversation_events
 						where event_id = ${selector.value}
 							and conversation_id = ${conversationId}
+							${executionId === undefined ? transaction`` : transaction`and execution_id = ${executionId}`}
 						limit 1
 					`;
 					const identity = rows[0];
@@ -909,15 +1021,26 @@ export class PostgresConversationQueryV1 {
 					}
 					after = safeInteger(identity.conversation_cursor, 1);
 				}
+				let exceedsWindow = after < Math.max(0, latest - this.#replayWindow);
+				if (executionId !== undefined) {
+					const [pending] = await transaction<{ count: number }[]>`
+						select count(*)::int as count from platform.conversation_events
+						where conversation_id = ${conversationId} and execution_id = ${executionId}
+							and conversation_cursor > ${after}
+					`;
+					if (!pending) return unavailable();
+					exceedsWindow = pending.count > this.#replayWindow;
+				}
 				if (
-					after > latest ||
-					after < Math.max(0, latest - this.#replayWindow) ||
+					after > resumePosition ||
+					exceedsWindow ||
 					!(await isWithinReplayTimeWindow(
 						transaction,
 						conversationId,
 						after,
-						latest,
+						resumePosition,
 						this.#replayWindowMs,
+						executionId,
 					))
 				) {
 					return {
@@ -931,6 +1054,7 @@ export class PostgresConversationQueryV1 {
 					events: await readEvents(transaction, conversationId, {
 						afterCursor: after,
 						limit: this.#replayWindow,
+						...(executionId === undefined ? {} : { executionId }),
 					}),
 					resumeCursor,
 				};
@@ -939,6 +1063,17 @@ export class PostgresConversationQueryV1 {
 			if (error instanceof ConversationQueryError) throw error;
 			return unavailable();
 		}
+	}
+
+	async replayExecution(
+		inputScope: ConversationQueryScopeV1,
+		conversationId: string,
+		executionId: string,
+		selector:
+			| { readonly kind: "cursor" | "last-event-id"; readonly value: string }
+			| undefined,
+	): Promise<ConversationReplayResultV1 | undefined> {
+		return this.replay(inputScope, conversationId, selector, executionId);
 	}
 
 	async close(): Promise<void> {

@@ -42,6 +42,11 @@ const identity = {
 
 export function createPlatformApiAssemblyInput() {
 	return {
+		// Controlled fixture policy; not a production default.
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: 60_000,
+		},
 		databaseUrl: platformDatabaseUrlFromEnvironment(),
 		identity,
 		admissions: {

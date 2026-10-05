@@ -3,6 +3,10 @@ import { createObservedConversationEvents } from "@agent-infra/observability/wor
 import {
 	createConversationDispatchUseCaseV1,
 	createConversationEventUseCaseV1,
+	type SessionSandboxDeletionProgressV1,
+	type SessionSandboxObservationV1,
+	type SessionSandboxPolicyV1,
+	type SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
 import {
 	openPostgresConversationDispatchStoreV1,
@@ -18,9 +22,21 @@ import {
 export interface PlatformConversationWorkerOptionsV2
 	extends Omit<
 		ConversationRuntimeOptionsV2,
-		"dispatchStore" | "taskAuthorizationStore" | "legacyControlStore"
+		| "dispatchStore"
+		| "taskAuthorizationStore"
+		| "legacyControlStore"
+		| "resolveCurrentApplication"
+		| "resolveCurrentApiUseGrant"
 	> {
 	readonly databaseUrl: string;
+	readonly sandboxPolicy: SessionSandboxPolicyV1;
+	readonly receiveSandbox: (
+		claim: SessionSandboxReconciliationClaimV1,
+		signal: AbortSignal,
+		recordDeletionProgress?: (
+			progress: SessionSandboxDeletionProgressV1,
+		) => Promise<"committed" | "stale" | "unknown">,
+	) => Promise<SessionSandboxObservationV1>;
 	readonly pollIntervalMs?: number;
 	readonly maximumConcurrentDispatches?: number;
 	readonly leaseDurationMs?: number;
@@ -55,6 +71,8 @@ export function createPlatformConversationWorkerV2(
 		: controller.signal;
 	const store = openPostgresConversationDispatchStoreV1({
 		databaseUrl: options.databaseUrl,
+		userDirectory: options.directory,
+		sandboxPolicy: options.sandboxPolicy,
 	});
 	const taskAuthorizationStore = new PostgresTaskAuthorizationStoreV1({
 		databaseUrl: options.databaseUrl,
@@ -74,6 +92,24 @@ export function createPlatformConversationWorkerV2(
 			dispatchStore: store,
 			taskAuthorizationStore,
 			legacyControlStore,
+			resolveCurrentApplication: async (applicationId, agentId, signal) => {
+				signal.throwIfAborted();
+				const current = await taskAuthorizationStore.readCurrentApplication({
+					applicationId,
+					agentId,
+				});
+				signal.throwIfAborted();
+				return current;
+			},
+			resolveCurrentApiUseGrant: async (principal, agentId, signal) => {
+				signal.throwIfAborted();
+				const current = await taskAuthorizationStore.readCurrentApiUseGrant({
+					principal,
+					agentId,
+				});
+				signal.throwIfAborted();
+				return current;
+			},
 		});
 		dispatch = createConversationDispatchUseCaseV1(
 			{
@@ -168,6 +204,115 @@ export function createPlatformConversationWorkerV2(
 					resourceTimer = setTimeout(sampleResources, 1000);
 			});
 	}
+	async function dispatchItem(item: {
+		readonly itemId: string;
+		readonly operation: string;
+	}) {
+		if (item.operation !== "conversation.sandbox.reconcile.v1")
+			return dispatch.dispatch({
+				schemaVersion: 1,
+				itemId: item.itemId,
+				workerId: options.workerId,
+			});
+		signal.throwIfAborted();
+		const leaseDurationMs = options.leaseDurationMs ?? 30_000;
+		const initialClaim = await store.claimSandboxReconciliation({
+			schemaVersion: 1,
+			itemId: item.itemId,
+			workerId: options.workerId,
+			leaseDurationMs,
+		});
+		if (!initialClaim) return;
+		let claim: NonNullable<typeof initialClaim> = initialClaim;
+		signal.throwIfAborted();
+		if (
+			!(await store.prepareSandboxReconciliation({
+				claim,
+				leaseDurationMs,
+			}))
+		)
+			return;
+		let observation: SessionSandboxObservationV1;
+		let renewal: ReturnType<typeof setInterval> | undefined;
+		try {
+			// Renew the original Store lease immediately before and after the Kubernetes
+			// mutation and periodically while it runs; a lost lease never gets to
+			// submit a committed observation. Kubernetes mutations are not cancellable
+			// by the client, so the receiver is allowed to finish its receipt.
+			if (
+				!(await store.prepareSandboxReconciliation({
+					claim,
+					leaseDurationMs,
+				}))
+			)
+				return;
+			let leaseLost = false;
+			renewal = setInterval(
+				() => {
+					void store
+						.prepareSandboxReconciliation({
+							claim,
+							leaseDurationMs,
+						})
+						.then((held) => {
+							if (!held) leaseLost = true;
+						})
+						.catch(() => {
+							leaseLost = true;
+						});
+				},
+				Math.max(100, Math.floor(leaseDurationMs / 3)),
+			);
+			observation = await options.receiveSandbox(
+				claim,
+				// Kubernetes mutations are not cancellable by the client. Keep the
+				// logical operation alive until the receiver returns a complete receipt;
+				// lease renewal and the subsequent CAS decide whether it may commit.
+				signal,
+				async (progress) => {
+					const result = await store.recordSandboxDeletionProgress({
+						claim,
+						progress,
+						leaseDurationMs,
+					});
+					if (result.status === "committed")
+						claim = result.claim as typeof claim;
+					return result.status;
+				},
+			);
+			clearInterval(renewal);
+			renewal = undefined;
+			if (leaseLost) {
+				observation = {
+					status: "unknown",
+					resources: claim.previousObservation?.resources ?? [],
+				};
+			}
+			if (
+				!(await store.prepareSandboxReconciliation({
+					claim,
+					leaseDurationMs,
+				}))
+			)
+				return;
+		} catch {
+			if (renewal) clearInterval(renewal);
+			// Keep the original binding and occupancy; the same outbox owns recovery.
+			observation = {
+				status: "unknown",
+				resources: claim.previousObservation?.resources ?? [],
+			};
+		}
+		signal.throwIfAborted();
+		if (
+			!(await store.prepareSandboxReconciliation({
+				claim,
+				leaseDurationMs,
+			}))
+		)
+			return;
+		await store.recordSandboxObservation({ claim, observation });
+	}
 	async function discover() {
 		if (stopped || signal.aborted) return 0;
 		const limit = 256;
@@ -177,6 +322,7 @@ export function createPlatformConversationWorkerV2(
 			signal,
 		});
 		let launched = 0;
+		let lastBusinessItemId: string | undefined;
 		for (const item of items) {
 			if (stopped || signal.aborted) break;
 			// Advance after every scanned item; the Store wraps deferred work on the next lap.
@@ -190,12 +336,7 @@ export function createPlatformConversationWorkerV2(
 			if (count >= (control ? 2 : maximum)) {
 				continue;
 			}
-			const promise = dispatch
-				.dispatch({
-					schemaVersion: 1,
-					itemId: item.itemId,
-					workerId: options.workerId,
-				})
+			const promise = dispatchItem(item)
 				.then(
 					() => undefined,
 					() => {
@@ -204,9 +345,12 @@ export function createPlatformConversationWorkerV2(
 				)
 				.finally(() => running.delete(item.itemId));
 			running.set(item.itemId, { control, promise });
+			if (!control) lastBusinessItemId = item.itemId;
 			launched += 1;
 		}
-		if (items.length < limit) afterItemId = undefined;
+		// Resume after the last business attempt, including a busy claim.
+		// When saturated, keep scanning pages so stop work remains reachable.
+		if (lastBusinessItemId) afterItemId = lastBusinessItemId;
 		return launched;
 	}
 	function tick() {

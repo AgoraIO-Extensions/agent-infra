@@ -190,6 +190,55 @@
       "when": 1790844089732,
       "tag": "0030_relay_key_authority_compatibility",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790889832289,
+      "tag": "0031_accepted_execution_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790893402698,
+      "tag": "0032_typed_task_principal",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790895708046,
+      "tag": "0033_typed_generation_principal",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790898575204,
+      "tag": "0034_task_status_event_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791095776367,
+      "tag": "0035_session_sandbox_allocations",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791135995408,
+      "tag": "0036_ldap_identity_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791160373692,
+      "tag": "0037_browser_session_principal",
+      "breakpoints": true
     }
   ]
 }

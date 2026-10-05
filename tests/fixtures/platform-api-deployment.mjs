@@ -4,6 +4,11 @@ const unavailable = async () => {
 
 export function createPlatformApiAssemblyInput() {
 	return {
+		// Controlled fixture policy; not a production default.
+		taskAdmissionPolicy: {
+			maximumWaitingTasksPerAgent: 2,
+			waitingTimeoutMs: 60_000,
+		},
 		databaseUrl: "postgres://smoke:smoke@127.0.0.1:1/smoke",
 		identity: {
 			async resolve() {

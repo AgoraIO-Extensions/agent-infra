@@ -1,10 +1,17 @@
-# 企业目录快照契约
+# 通用企业目录快照契约
+
+Platform 只消费本契约；独立同步服务是可替换的部署配套。上游 Adapter 将企微或企业内部接口转换为员工引用、邮箱、有效性和部门关系，来源名称不授予任何权限。V1 保留 `wecom` 专属格式，新增 V2 通用契约与 `/internal/directory/v2/snapshot`；其他来源使用稳定的小写标识（最多 64 字符，可含数字与连字符）；不得用接口 URL 或凭据作为来源名称。
+
+启用新来源前，先升级所有快照读取方，使其接受通用来源标识；旧读取方只接受 `wecom`，不会自动兼容新来源。回滚到旧读取方前须恢复其可识别且仍有效的来源，不能修改快照标签掩盖来源变化。
+
+默认入口装配企微 Adapter；部署可通过 `DIRECTORY_SOURCE_MODULE=file:///...` 加载本地可信模块，模块导出 `sourceId` 和实现 `fetchComplete()` 的 `source`。只允许本地 file URL，不从远程加载代码；企业 URL、凭据和协议转换留在该独立部署模块中。配置模块时无需提供企微凭据。其他上游必须先明确有效成员及部门关系语义，再提供 `DirectorySource` 并显式传入 `sourceId`。缺少字段不意味着必须新增字段，但必须有可信语义依据，不能默认所有返回成员有效。同步服务不能写入 Platform 业务授权。
+
 
 `enterprise-directory-sync` 使用独立数据库和企微通讯录读取权限，抓取配置根部门及其全部子部门的员工详情。每个部门成功返回、成员关系一致且部门图完整后，服务才将一份快照作为单条数据库记录发布。失败不会修改已发布版本；读取时仍按 `validUntil` 拒绝过期版本。
 
 数据库读写由 `enterprise-directory-store` 的 Drizzle Adapter 完成；迁移 Job 使用独立迁移账号按 `migrations/enterprise-directory/` 的 Drizzle journal 执行。每次抓取前从 PostgreSQL sequence 取得递增扫描代次；发布事务拒绝已被较新代次超越的结果，读取按代次选择当前快照，防止旧扫描晚完成后夺回权威。迁移入口要求 `DIRECTORY_RUNTIME_DATABASE_ROLE` 指定已存在、与迁移账号不同的运行数据库角色，并在迁移后授予该角色 `enterprise_directory` schema 的 `USAGE`、`snapshots` 表的 `SELECT/INSERT` 和扫描 sequence 的 `USAGE`，不授予删改或迁移 history 访问。迁移账号须能创建独立的迁移 history schema。部署方仍须分别配置迁移与运行账号凭据。
 
-内部接口为 `GET /internal/directory/snapshot`，Zod 源与生成的 OpenAPI 3.1 分别由 `@agent-infra/contracts/enterprise-directory` 和 `@agent-infra/contracts/openapi/enterprise-directory.v1` 发布；仅经带证书校验的 HTTPS 和 `Authorization: Bearer <部署密钥>` 调用。成功返回 `schemaVersion: 1`、UUID `revision`、`source: "wecom"`、`rootDepartmentId`、毫秒时间戳 `fetchedAt` 和 `validUntil`、`complete: true`、`departments` 与 `members`。`fetchedAt` 是抓取完成时间，`validUntil` 最迟为抓取开始后 24 小时；扫描超过一天时拒绝发布。无有效快照返回 503，认证失败返回 401；响应禁止缓存。调用方必须验证 Schema、完整性和时效，不能保留旧版作为权限来源。
+内部接口为 `GET /internal/directory/snapshot`，Zod 源与生成的 OpenAPI 3.1 分别由 `@agent-infra/contracts/enterprise-directory` 和 `@agent-infra/contracts/openapi/enterprise-directory.v1` 发布；仅经带证书校验的 HTTPS 和 `Authorization: Bearer <部署密钥>` 调用。V1 成功返回 `schemaVersion: 1`（仅企微）；V2 返回 `schemaVersion: 2`。两者均包含UUID `revision`、`source` 来源标识、`rootDepartmentId`、毫秒时间戳 `fetchedAt` 和 `validUntil`、`complete: true`、`departments` 与 `members`。`fetchedAt` 是抓取完成时间，`validUntil` 最迟为抓取开始后 24 小时；扫描超过一天时拒绝发布。无有效快照返回 503，认证失败返回 401；响应禁止缓存。调用方必须验证 Schema、完整性和时效，不能保留旧版作为权限来源。
 
 服务在 HTTP 与数据库边界将版本化 wire DTO 显式映射为目录领域快照，读取方再次验证完整性和时效。`/readyz` 只在持久快照有效时返回 200，并附 `fetchedAt`、`validUntil` 供部署告警核对。同步成功日志只对已发布版本记录版本、时间、耗时及聚合计数：部门/成员总数、相对实际前版的成员新增/移除/部门关系变化、inactive、缺失/无效/重复邮箱与不可唯一关联人数。首版 `baselineRevision` 和变更计数为 `null`；这些不可关联计数可能重叠，`unmappableMembers` 按人去重。被较新代次超越的扫描不输出发布计数；失败日志仅记录 `source_unavailable`、`invalid_snapshot` 或 `store_unavailable` 等受限原因及耗时。日志不记录成员标识、邮箱或企微凭据。部署方须对持续 503 和同步失败配置采集与告警。
 
@@ -15,3 +22,5 @@
 生产部署须提供独立的运行数据库账号、迁移账号、专用企微通讯录读取凭据、至少 32 字节随机内部读取密钥以及匹配 Service DNS 名称的 TLS 证书。企微应用必须被批准读取完整目标组织及邮箱；普通新建自建应用可能不返回邮箱，接口成功本身不能证明权限范围完整。真实目录权限、两名员工、停用、组织变化及跨用户映射需在受控环境分别验证；本包的受控测试只覆盖协议和失败路径。
 
 Platform 授权与任务消费由 #481/#508 集成，企微发送者映射由 #440 集成。本服务不保存 Platform 授权、LDAP 密码、机器人消息或 Connection 凭证。
+
+V1 `/internal/directory/snapshot` 不会把其他来源伪装为企微：当前快照不是企微时返回 503。升级后的客户端及存储可读历史 V1 与新 V2；存储对企微继续使用 V1、其他来源使用 V2，不改历史数据。

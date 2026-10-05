@@ -41,6 +41,7 @@ import {
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
+import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 
 export {
 	type ConversationCommandDecisionV1,
@@ -143,6 +144,8 @@ export function createConversationExecutionUseCaseV1(
 								!conversation ||
 								conversation.conversationId !== query.conversationId ||
 								conversation.actorId !== authority.actorId ||
+								(conversation.principal?.kind ?? "user") !==
+									(authority.taskBoundary?.principal.kind ?? "user") ||
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId
 							) {
@@ -202,6 +205,10 @@ export function createConversationExecutionUseCaseV1(
 							};
 							return {
 								schemaVersion: 1,
+								sandbox: createSessionSandboxBindingV1(
+									authority,
+									conversationId,
+								),
 								conversation: {
 									schemaVersion: 1,
 									conversationId,
@@ -265,6 +272,8 @@ export function createConversationExecutionUseCaseV1(
 								!conversation ||
 								conversation.conversationId !== command.conversationId ||
 								conversation.actorId !== authority.actorId ||
+								(conversation.principal?.kind ?? "user") !==
+									(authority.taskBoundary?.principal.kind ?? "user") ||
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId
 							) {
@@ -272,7 +281,10 @@ export function createConversationExecutionUseCaseV1(
 							}
 							if (
 								conversation.status === "unavailable" ||
-								conversation.isolationPending
+								conversation.isolationPending ||
+								(authority.channelId === "web" &&
+									conversation.sandbox !== undefined &&
+									conversation.sandboxReady !== true)
 							)
 								return { outcome: "denied" };
 							const modelSelection = effectiveModelSelection(
@@ -505,6 +517,8 @@ export function createConversationExecutionUseCaseV1(
 								!configuration ||
 								conversation.conversationId !== command.conversationId ||
 								conversation.actorId !== authority.actorId ||
+								(conversation.principal?.kind ?? "user") !==
+									(authority.taskBoundary?.principal.kind ?? "user") ||
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId ||
 								conversation.status === "unavailable" ||
@@ -584,6 +598,8 @@ export function createConversationExecutionUseCaseV1(
 								!conversation ||
 								conversation.conversationId !== command.conversationId ||
 								conversation.actorId !== authority.actorId ||
+								(conversation.principal?.kind ?? "user") !==
+									(authority.taskBoundary?.principal.kind ?? "user") ||
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId ||
 								!sourceMessage ||
@@ -594,7 +610,10 @@ export function createConversationExecutionUseCaseV1(
 							}
 							if (
 								conversation.status === "unavailable" ||
-								conversation.isolationPending
+								conversation.isolationPending ||
+								(authority.channelId === "web" &&
+									conversation.sandbox !== undefined &&
+									conversation.sandboxReady !== true)
 							)
 								return { outcome: "denied" };
 							if (state.activeExecution) return { outcome: "busy" };
@@ -724,6 +743,8 @@ export function createConversationExecutionUseCaseV1(
 								!conversation ||
 								conversation.conversationId !== command.conversationId ||
 								conversation.actorId !== authority.actorId ||
+								(conversation.principal?.kind ?? "user") !==
+									(authority.taskBoundary?.principal.kind ?? "user") ||
 								conversation.agentId !== authority.agentId ||
 								conversation.channelId !== authority.channelId ||
 								!targetExecution ||

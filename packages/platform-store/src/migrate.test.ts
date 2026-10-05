@@ -1776,20 +1776,132 @@ describe("published Relay authority migration", () => {
 		}
 	}
 
-	async function records() {
+	async function records(includeExecutionDeltaFields = true) {
+		const project = async (
+			table: string,
+			order: string,
+			keys: readonly string[],
+		) => {
+			const rows = await client.unsafe(
+				`select to_jsonb(t)::text as record from ${table} t order by ${order}`,
+			);
+			return rows.map(({ record }) => {
+				const value = JSON.parse(record) as Record<string, unknown>;
+				return JSON.stringify(
+					Object.fromEntries(
+						keys.filter((key) => key in value).map((key) => [key, value[key]]),
+					),
+				);
+			});
+		};
 		return {
-			subjects: [
-				...(await client`select to_jsonb(t)::text as record from platform.relay_key_subjects t order by purpose, subject_id`),
-			],
-			versions: [
-				...(await client`select to_jsonb(t)::text as record from platform.relay_key_versions t order by purpose, subject_id, key_version`),
-			],
-			conversations: [
-				...(await client`select to_jsonb(t)::text as record from platform.conversations t order by id`),
-			],
-			executions: [
-				...(await client`select to_jsonb(t)::text as record from platform.conversation_executions t order by execution_id`),
-			],
+			subjects: await project(
+				"platform.relay_key_subjects",
+				"purpose, subject_id",
+				[
+					"purpose",
+					"subject_id",
+					"last_version",
+					"current_version",
+					"updated_at",
+				],
+			),
+			versions: await project(
+				"platform.relay_key_versions",
+				"purpose, subject_id, key_version",
+				[
+					"purpose",
+					"subject_id",
+					"key_version",
+					"key_id",
+					"ciphertext",
+					"created_at",
+				],
+			),
+			conversations: await project("platform.conversations", "id", [
+				"id",
+				"agent_id",
+				"actor_id",
+				"channel_id",
+				"status",
+				"session_generation",
+				"authorization_revision",
+			]),
+			executions: await project(
+				"platform.conversation_executions",
+				"execution_id",
+				[
+					"execution_id",
+					"conversation_id",
+					"agent_id",
+					"actor_id",
+					"channel_id",
+					"turn_id",
+					"status",
+					"session_generation",
+					"delivery_fence",
+					"authorization_revision",
+					"created_at",
+					...(includeExecutionDeltaFields
+						? [
+								"execution_source",
+								"relay_key_purpose",
+								"relay_key_subject_id",
+								"relay_key_id",
+								"relay_key_version",
+							]
+						: []),
+				],
+			),
+		};
+	}
+
+	function schemaDelta(
+		before: Awaited<ReturnType<typeof relayCatalog>>,
+		after: Awaited<ReturnType<typeof relayCatalog>>,
+	) {
+		const byKey = (
+			rows: readonly Record<string, unknown>[],
+			keys: readonly string[],
+		) =>
+			new Map(
+				rows.map((row) => [
+					keys.map((key) => String(row[key])).join(":"),
+					JSON.stringify(row),
+				]),
+			);
+		const changed = (
+			rowsBefore: readonly Record<string, unknown>[],
+			rowsAfter: readonly Record<string, unknown>[],
+			keys: readonly string[],
+		) => {
+			const previous = byKey(rowsBefore, keys);
+			return rowsAfter
+				.filter(
+					(row) =>
+						previous.get(keys.map((key) => String(row[key])).join(":")) !==
+						JSON.stringify(row),
+				)
+				.map((row) => keys.map((key) => String(row[key])).join(":"))
+				.sort();
+		};
+		return {
+			columns: changed(before.catalog.columns, after.catalog.columns, [
+				"table_name",
+				"column_name",
+			]),
+			checks: changed(before.catalog.checks, after.catalog.checks, [
+				"table_name",
+				"constraint_name",
+			]),
+			indexes: changed(before.catalog.indexes, after.catalog.indexes, [
+				"tablename",
+				"indexname",
+			]),
+			enums: changed(before.catalog.enums, after.catalog.enums, [
+				"typname",
+				"enumlabel",
+			]),
 		};
 	}
 
@@ -1832,11 +1944,17 @@ describe("published Relay authority migration", () => {
 			...Array.from({ length: 25 }, (_, idx) => idx),
 			29,
 			30,
+			31,
+			32,
+			33,
+			34,
+			35,
+			36,
+			37,
 		]);
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 30,
-			when: relayWhen,
-			tag: "0030_relay_key_authority_compatibility",
+			idx: 37,
+			tag: "0037_browser_session_principal",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -1874,12 +1992,16 @@ describe("published Relay authority migration", () => {
 		await builtStore.migratePlatformDatabase({ databaseUrl });
 		const after = await history();
 		expect(after.slice(0, before.length)).toEqual(before);
-		expect(after.slice(before.length)).toEqual([
-			expect.objectContaining({
-				created_at: String(relayWhen),
-				hash: migrations.at(-1)?.hash,
-			}),
-		]);
+		expect(after.slice(before.length)).toEqual(
+			migrations
+				.filter((migration) => migration.folderMillis >= relayWhen)
+				.map((migration) =>
+					expect.objectContaining({
+						created_at: String(migration.folderMillis),
+						hash: migration.hash,
+					}),
+				),
+		);
 		const catalog = await relayCatalog();
 		await seedOriginalRecords(false);
 		const data = await records();
@@ -1896,7 +2018,7 @@ describe("published Relay authority migration", () => {
 			const originalHistory = await history();
 			expect(originalHistory).toHaveLength(kind === "original27" ? 28 : 29);
 			await seedOriginalRecords(kind === "task28");
-			const data = await records();
+			const data = await records(kind !== "original27");
 			// First consume only the already-published29 compatibility migration.
 			journal = JSON.parse(
 				await readFile(resolve(sourceFolder, "meta/_journal.json"), "utf8"),
@@ -1909,22 +2031,141 @@ describe("published Relay authority migration", () => {
 			});
 			const before = await history();
 			expect(before.slice(0, originalHistory.length)).toEqual(originalHistory);
-			expect(await records()).toEqual(data);
+			expect(await records(kind !== "original27")).toEqual(data);
 			const catalog = await relayCatalog();
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			const after = await history();
 			expect(after.slice(0, before.length)).toEqual(before);
-			expect(after).toHaveLength(before.length + 1);
-			expect(after.at(-1)).toMatchObject({
-				created_at: String(relayWhen),
-				hash: migrations.at(-1)?.hash,
+			expect(after).toHaveLength(before.length + 8);
+			expect(after.slice(before.length)).toEqual(
+				migrations
+					.filter((migration) => migration.folderMillis >= relayWhen)
+					.map((migration) =>
+						expect.objectContaining({
+							created_at: String(migration.folderMillis),
+							hash: migration.hash,
+						}),
+					),
+			);
+			const afterCatalog = await relayCatalog();
+			const expectedDelta = {
+				columns:
+					kind === "original27"
+						? [
+								"browser_sessions:principal",
+								"conversation_executions:execution_source",
+								"conversation_executions:original_operation_digest",
+								"conversation_executions:original_submit_host_session_ref",
+								"conversation_executions:principal_type",
+								"conversation_executions:relay_key_id",
+								"conversation_executions:relay_key_purpose",
+								"conversation_executions:relay_key_subject_id",
+								"conversation_executions:relay_key_version",
+								"conversation_executions:runtime_submit_protocol",
+								"conversation_executions:sandbox_id",
+								"conversation_executions:task_wait_deadline",
+								"conversation_executions:task_wait_order",
+								"conversations:principal_type",
+							]
+						: [
+								"browser_sessions:principal",
+								"conversation_executions:principal_type",
+								"conversation_executions:sandbox_id",
+								"conversations:principal_type",
+							],
+				checks:
+					kind === "original27"
+						? [
+								"conversation_events:conversation_event_source_binding",
+								"conversation_executions:conversation_execution_key_binding",
+								"conversation_executions:conversation_execution_original_digest_binding",
+								"conversation_executions:conversation_execution_principal_type_valid",
+								"conversation_executions:conversation_execution_task_wait_binding",
+								"conversation_generation_tombstones:conversation_generation_tombstone_principal_valid",
+								"conversations:conversation_principal_type_valid",
+							]
+						: [
+								"conversation_executions:conversation_execution_original_digest_binding",
+								"conversation_executions:conversation_execution_principal_type_valid",
+								"conversation_executions:conversation_execution_task_wait_binding",
+								"conversation_generation_tombstones:conversation_generation_tombstone_principal_valid",
+								"conversations:conversation_principal_type_valid",
+							],
+				indexes:
+					kind === "original27"
+						? [
+								"conversation_executions:conversation_execution_agent_wait_idx",
+								"conversation_executions:conversation_execution_task_wait_order_unique",
+								"conversations:conversation_principal_binding_unique",
+							]
+						: ["conversations:conversation_principal_binding_unique"],
+				enums:
+					kind === "original27"
+						? ["conversation_execution_status:waiting"]
+						: [],
+			};
+			expect(schemaDelta(catalog, afterCatalog)).toEqual({
+				...expectedDelta,
+				columns: [
+					...expectedDelta.columns,
+					...[
+						"actor_id",
+						"agent_id",
+						"channel_id",
+						"conversation_id",
+						"created_at",
+						"desired_state",
+						"principal_type",
+						"resource_fence",
+						"resource_name",
+						"resource_observation",
+						"resource_policy",
+						"sandbox_id",
+						"session_generation",
+						"status",
+						"updated_at",
+						"workspace_scope",
+					].map((name) => `session_sandbox_allocations:${name}`),
+				].sort(),
+				checks: [
+					...expectedDelta.checks,
+					"conversation_audit_events:conversation_audit_details_binding",
+					"conversation_audit_events:conversation_audit_execution_binding",
+					...[
+						"desired_state_valid",
+						"generation_safe",
+						"id_uuid",
+						"resource_binding",
+						"resource_fence_safe",
+						"status_valid",
+						"workspace_binding",
+					].map(
+						(name) => `session_sandbox_allocations:session_sandbox_${name}`,
+					),
+				].sort(),
+				indexes: [
+					...expectedDelta.indexes,
+					...[
+						"allocations_pkey",
+						"conversation_unique",
+						"resource_unique",
+						"workspace_unique",
+					].map(
+						(name) => `session_sandbox_allocations:session_sandbox_${name}`,
+					),
+				].sort(),
 			});
-			expect(await relayCatalog()).toEqual(catalog);
-			expect(await records()).toEqual(data);
+			expect(
+				await client`select count(*)::int as count from platform.session_sandbox_allocations`,
+			).toEqual([{ count: 0 }]);
+			expect(
+				await client`select count(*)::int as count from platform.conversation_executions where sandbox_id is not null`,
+			).toEqual([{ count: 0 }]);
+			expect(await records(kind !== "original27")).toEqual(data);
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			expect(await history()).toEqual(after);
-			expect(await relayCatalog()).toEqual(catalog);
-			expect(await records()).toEqual(data);
+			expect(await relayCatalog()).toEqual(afterCatalog);
+			expect(await records(kind !== "original27")).toEqual(data);
 		},
 	);
 
@@ -1937,7 +2178,7 @@ describe("published Relay authority migration", () => {
 		]);
 		const after = await history();
 		expect(after.slice(0, before.length)).toEqual(before);
-		expect(after).toHaveLength(before.length + 1);
+		expect(after).toHaveLength(before.length + 8);
 		const catalog = await relayCatalog();
 		await builtStore.migratePlatformDatabase({ databaseUrl });
 		expect(await history()).toEqual(after);

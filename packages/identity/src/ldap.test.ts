@@ -123,10 +123,9 @@ function fixture() {
 }
 
 describe("first-party LDAP identity directory", () => {
-	it("requires LDAPS and rejects a malformed current-status verifier", () => {
+	it("rejects malformed LDAP URLs and current-status verifiers", () => {
 		const { config } = fixture();
 		for (const url of [
-			"ldap://ldap.example.test",
 			"ldaps://user:secret@ldap.example.test",
 			"ldaps://ldap.example.test/path",
 			"ldaps://ldap.example.test?x=1",
@@ -140,6 +139,58 @@ describe("first-party LDAP identity directory", () => {
 				verifyCurrentStatus: "active" as never,
 			}),
 		).toThrow(LdapIdentityUnavailableError);
+	});
+
+	it("selects LDAP or verified LDAPS from the TLS deployment toggle", async () => {
+		const state = fixture();
+		const directory = createLdapIdentityDirectory({
+			...state.config,
+			url: "ldap://ldap.example.test:389",
+			tls: false,
+		});
+		expect(
+			(await directory.authenticate("login-a", "correct-password"))?.uid,
+		).toBe("stable-a");
+		expect(state.options[0]?.url).toBe("ldap://ldap.example.test:389");
+		expect(
+			state.options.every((options) => options.tlsOptions === undefined),
+		).toBe(true);
+		for (const tls of [undefined, true]) {
+			const secure = fixture();
+			const directory = createLdapIdentityDirectory({
+				...secure.config,
+				url: "ldap://ldap.example.test",
+				tls,
+			});
+			await directory.authenticate("login-a", "correct-password");
+			expect(secure.options[0]?.url).toBe("ldaps://ldap.example.test");
+			expect(secure.options[0]?.tlsOptions?.rejectUnauthorized).toBe(true);
+		}
+
+		for (const url of [
+			"ldap://user:secret@ldap.example.test",
+			"ldap://ldap.example.test/path",
+			"ldap://ldap.example.test?x=1",
+			"ldap://ldap.example.test#fragment",
+			"https://ldap.example.test",
+		]) {
+			expect(() =>
+				createLdapIdentityDirectory({
+					...state.config,
+					url,
+					tls: false,
+				}),
+			).toThrow(LdapIdentityUnavailableError);
+		}
+		for (const tls of ["true" as never, 1 as never]) {
+			expect(() =>
+				createLdapIdentityDirectory({
+					...state.config,
+					url: "ldap://ldap.example.test",
+					tls,
+				}),
+			).toThrow(LdapIdentityUnavailableError);
+		}
 	});
 
 	it("binds the unique employee, uses stable UID and verifies TLS settings", async () => {

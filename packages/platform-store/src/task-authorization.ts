@@ -1,24 +1,41 @@
 import { randomUUID } from "node:crypto";
 import {
 	type ConversationDispatchExecutionStatusV1,
+	type CurrentTaskApiUseGrantV1,
+	type CurrentTaskApplicationV1,
 	type CurrentTaskUserV1,
 	captureTaskAuthorizationBoundaryV1,
+	isTaskApiChannelV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
+	parseTaskPrincipalV1,
 	planTaskSystemControlV1,
 	type TaskAuthorizationBoundaryV1,
+	type TaskPrincipalV1,
 } from "@agent-infra/platform-core";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { readAgentManagementState } from "./agent-management.js";
+import {
+	readCurrentTaskApiUseGrantV1,
+	readCurrentTaskApplicationV1,
+} from "./application-task-authorization.js";
+import {
+	lockConversation,
+	lockExecution,
+	lockOutbox,
+} from "./conversation-dispatch-sql.js";
+import { finishWaitingTask } from "./conversation-dispatch-task.js";
 import { awaitConversationExecutionQueryV1 } from "./conversation-execution-abort.js";
 import {
 	agents,
 	conversationExecutions,
+	conversations,
 	taskAuthorizationRecords,
 	workloadReconciliations,
 } from "./schema.js";
+import { persistTaskControl } from "./task-control-record.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 
 export class TaskAuthorizationStoreError extends Error {
@@ -49,23 +66,35 @@ export async function insertTaskAuthorization(
 				agent_id: string;
 				actor_id: string;
 				channel_id: string;
+				principal_type: string;
+				execution_authorization_revision: string;
 				authorization_revision: string;
 			}[]
 		>`
-		select execution.agent_id, execution.actor_id, execution.channel_id, agent.authorization_revision
+		select execution.agent_id, execution.actor_id, execution.channel_id, execution.principal_type,
+			execution.authorization_revision as execution_authorization_revision, agent.authorization_revision
 		from platform.conversation_executions execution
 		join platform.agents agent on agent.id = execution.agent_id
+		join platform.conversations conversation on conversation.id = execution.conversation_id
+			and conversation.agent_id = execution.agent_id
+			and conversation.actor_id = execution.actor_id
+			and conversation.channel_id = execution.channel_id
+			and conversation.principal_type = execution.principal_type
 		where execution.execution_id = ${input.executionId}
 		for share of agent
 	`,
 	);
 	if (
 		!binding ||
-		boundary.principal.kind !== "user" ||
+		boundary.principal.kind !== binding.principal_type ||
+		(boundary.principal.kind === "application" &&
+			!isTaskApiChannelV1(boundary.channelId, boundary.principal)) ||
 		boundary.principal.id !== binding.actor_id ||
 		boundary.agentId !== binding.agent_id ||
 		boundary.channelId !== binding.channel_id ||
-		boundary.agentAuthorizationRevision !== binding.authorization_revision
+		boundary.agentAuthorizationRevision !== binding.authorization_revision ||
+		boundary.agentAuthorizationRevision !==
+			binding.execution_authorization_revision
 	)
 		throw new TaskAuthorizationStoreError();
 	const recordId = randomUUID();
@@ -131,6 +160,34 @@ export class PostgresTaskAuthorizationStoreV1 {
 		}
 	}
 
+	/** Current metadata for the original application; the Store owns its existing connection. */
+	async readCurrentApplication(input: {
+		readonly applicationId: string;
+		readonly agentId: string;
+	}): Promise<CurrentTaskApplicationV1 | null> {
+		try {
+			return await this.#client.begin("read only", (transaction) =>
+				readCurrentTaskApplicationV1(transaction, input),
+			);
+		} catch {
+			throw new TaskAuthorizationStoreError();
+		}
+	}
+
+	/** Current explicit API use grant; no credential or Owner lifetime is projected. */
+	async readCurrentApiUseGrant(input: {
+		readonly principal: TaskPrincipalV1;
+		readonly agentId: string;
+	}): Promise<CurrentTaskApiUseGrantV1 | null> {
+		try {
+			return await this.#client.begin("read only", (transaction) =>
+				readCurrentTaskApiUseGrantV1(transaction, input),
+			);
+		} catch {
+			throw new TaskAuthorizationStoreError();
+		}
+	}
+
 	/** Background callers receive metadata only; no task inputs or browser credentials. */
 	async readExecution(executionId: string) {
 		try {
@@ -147,12 +204,34 @@ export class PostgresTaskAuthorizationStoreV1 {
 						boundary.agentId,
 					);
 					const [execution] = await transaction
-						.select()
+						.select({
+							actorId: conversationExecutions.actorId,
+							principalType: conversationExecutions.principalType,
+							agentId: conversationExecutions.agentId,
+							channelId: conversationExecutions.channelId,
+							authorizationRevision:
+								conversationExecutions.authorizationRevision,
+						})
 						.from(conversationExecutions)
+						.innerJoin(
+							conversations,
+							and(
+								eq(conversations.id, conversationExecutions.conversationId),
+								eq(conversations.agentId, conversationExecutions.agentId),
+								eq(conversations.actorId, conversationExecutions.actorId),
+								eq(conversations.channelId, conversationExecutions.channelId),
+								eq(
+									conversations.principalType,
+									conversationExecutions.principalType,
+								),
+							),
+						)
 						.where(eq(conversationExecutions.executionId, record.executionId));
 					if (
 						!execution ||
-						boundary.principal.kind !== "user" ||
+						boundary.principal.kind !== execution.principalType ||
+						(boundary.principal.kind === "application" &&
+							!isTaskApiChannelV1(boundary.channelId, boundary.principal)) ||
 						boundary.principal.id !== execution.actorId ||
 						boundary.agentId !== execution.agentId ||
 						boundary.channelId !== execution.channelId ||
@@ -180,6 +259,10 @@ export class PostgresTaskAuthorizationStoreV1 {
 					return {
 						authorizationRecordId: record.id,
 						executionId: record.executionId,
+						principal: parseTaskPrincipalV1({
+							kind: execution.principalType,
+							id: execution.actorId,
+						}),
 						boundary,
 						revokedAt: record.revokedAt,
 						agent,
@@ -209,19 +292,72 @@ export class PostgresTaskAuthorizationStoreV1 {
 	}): Promise<{ controlRecordId: string }> {
 		try {
 			return await this.#client.begin(async (transaction) => {
-				await transaction`select conversation.id from platform.conversations conversation join platform.conversation_executions execution on execution.conversation_id = conversation.id where execution.execution_id = ${input.executionId} for update of conversation`;
+				await transaction`set transaction isolation level read committed`;
+				await transaction`select set_config('lock_timeout', '5s', true)`;
+				await transaction`
+					select a.id from platform.agents a join platform.conversation_executions e on e.agent_id = a.id
+					where e.execution_id = ${input.executionId} for share of a
+				`;
+				const [initialExecution] = await transaction<{ status: string }[]>`
+					select status from platform.conversation_executions where execution_id = ${input.executionId}
+				`;
+				const [original] = await transaction<{ id: string }[]>`
+					select id from platform.outbox_items
+					where scope_type = 'conversation' and payload->>'executionId' = ${input.executionId}
+						and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
+				`;
+				// Waiting dispatch and cancellation lock Conversation before the original Outbox.
+				const outbox =
+					initialExecution?.status === "waiting" && original
+						? await lockOutbox(transaction, original.id)
+						: undefined;
+				if (outbox) {
+					// READ COMMITTED: dispatch may finish while this command waits for O.
+					const [waitingExecution] = await transaction<{ status: string }[]>`
+						select status from platform.conversation_executions where execution_id = ${input.executionId}
+					`;
+					if (waitingExecution?.status !== "waiting")
+						throw new TaskAuthorizationStoreError();
+				}
+				const [conversation] = await transaction<
+					{
+						id: string;
+						principal_type: string;
+						actor_id: string;
+						agent_id: string;
+						channel_id: string;
+					}[]
+				>`select conversation.id, conversation.principal_type, conversation.actor_id,
+					conversation.agent_id, conversation.channel_id
+					from platform.conversations conversation
+					join platform.conversation_executions execution on execution.conversation_id = conversation.id
+					where execution.execution_id = ${input.executionId} for update of conversation`;
+				if (!conversation) throw new TaskAuthorizationStoreError();
 				const [execution] = await transaction<
 					{
 						conversation_id: string;
 						session_generation: number | string;
-						status: ConversationDispatchExecutionStatusV1;
+						status: ConversationDispatchExecutionStatusV1 | "waiting";
 						agent_id: string;
 						actor_id: string;
+						principal_type: string;
 						channel_id: string;
 						authorization_revision: string;
 					}[]
-				>`select conversation_id, session_generation, status, agent_id, actor_id, channel_id, authorization_revision from platform.conversation_executions where execution_id = ${input.executionId} for update`;
-				if (!execution) throw new TaskAuthorizationStoreError();
+				>`select conversation_id, session_generation, status, agent_id, actor_id, principal_type, channel_id, authorization_revision from platform.conversation_executions where execution_id = ${input.executionId} for update`;
+				if (
+					!execution ||
+					execution.conversation_id !== conversation.id ||
+					execution.principal_type !== conversation.principal_type ||
+					execution.actor_id !== conversation.actor_id ||
+					execution.agent_id !== conversation.agent_id ||
+					execution.channel_id !== conversation.channel_id
+				)
+					throw new TaskAuthorizationStoreError();
+				const principal = parseTaskPrincipalV1({
+					kind: execution.principal_type,
+					id: execution.actor_id,
+				});
 				const [record] = await transaction<{ id: string; boundary: unknown }[]>`
 					select id, boundary from platform.task_authorization_records
 					where execution_id = ${input.executionId} and id = ${input.authorizationRecordId} for update
@@ -237,6 +373,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 						conversationId: execution.conversation_id,
 						sessionGeneration: Number(execution.session_generation),
 						actorId: execution.actor_id,
+						principal,
 						agentId: execution.agent_id,
 						channelId: execution.channel_id,
 						authorizationRevision: execution.authorization_revision,
@@ -245,6 +382,31 @@ export class PostgresTaskAuthorizationStoreV1 {
 				});
 				if (plan.workerId !== input.workerId)
 					throw new TaskAuthorizationStoreError();
+				if (
+					execution.status === "waiting" &&
+					["stop", "authorization_revoked"].includes(input.reason)
+				) {
+					const waitingConversation = await lockConversation(
+						transaction,
+						execution.conversation_id,
+					);
+					const waiting = await lockExecution(
+						transaction,
+						execution.conversation_id,
+						input.executionId,
+					);
+					if (!outbox || !waitingConversation || !waiting)
+						throw new TaskAuthorizationStoreError();
+					await finishWaitingTask(
+						transaction,
+						{ outbox, conversation: waitingConversation, execution: waiting },
+						"cancelled",
+						input.reason === "stop"
+							? "TASK_CANCELLED"
+							: "AUTHORIZATION_REVOKED",
+						input.workerId,
+					);
+				}
 				if (plan.ensureStop) {
 					const [stop] = await transaction<
 						{ stop_request_id: string }[]
@@ -258,24 +420,13 @@ export class PostgresTaskAuthorizationStoreV1 {
 						`;
 					}
 				}
-				const [existing] = await transaction<{ id: string }[]>`
-					select id from platform.task_control_records where execution_id = ${input.executionId} and reason = ${input.reason}
-				`;
-				if (existing) return { controlRecordId: existing.id };
-				const controlRecordId = randomUUID();
-				if (plan.revokeAuthorization)
-					await transaction`
-					update platform.task_authorization_records set revoked_at = coalesce(revoked_at, now()) where id = ${record.id}
-				`;
-				await transaction`
-					insert into platform.task_control_records (id, execution_id, authorization_record_id, reason)
-					values (${controlRecordId}, ${input.executionId}, ${record.id}, ${input.reason})
-				`;
-				await transaction`
-					insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
-					values (${randomUUID()}, ${input.traceId}, 'system', ${plan.workerId}, ${plan.audit.action}, 'execution', ${input.executionId}, 'succeeded', ${input.requestId}, ${boundary.agentId}, ${transaction.json({ workerId: plan.workerId, originalPrincipal: plan.audit.originalPrincipal, controlRecordId, authorizationRecordId: record.id, reason: plan.audit.reason } as unknown as JsonValue)})
-				`;
-				return { controlRecordId };
+				return persistTaskControl(transaction, {
+					plan,
+					authorizationRecordId: record.id,
+					agentId: boundary.agentId,
+					traceId: input.traceId,
+					requestId: input.requestId,
+				});
 			});
 		} catch {
 			throw new TaskAuthorizationStoreError();

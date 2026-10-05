@@ -23,7 +23,11 @@ import {
 	snapshotObject,
 	unavailable,
 } from "./conversation-execution-values.js";
-import { parseTaskAuthorizationBoundaryV1 } from "./task-authorization.js";
+import {
+	isTaskApiChannelV1,
+	parseTaskAuthorizationBoundaryV1,
+	parseTaskPrincipalV1,
+} from "./task-authorization.js";
 
 export function parseState(
 	input: ConversationExecutionStateV1,
@@ -74,7 +78,7 @@ export function parseState(
 				"createdAt",
 				"updatedAt",
 			],
-			["isolationPending"],
+			["isolationPending", "principal", "sandbox", "sandboxReady"],
 		);
 		const sessionGenerationInput = conversation.sessionGeneration;
 		const lastConversationCursorInput = conversation.lastConversationCursor;
@@ -103,6 +107,22 @@ export function parseState(
 		) {
 			unavailable();
 		}
+		const principal =
+			conversation.principal === undefined
+				? undefined
+				: parseTaskPrincipalV1(conversation.principal);
+		const api =
+			conversation.channelId === "api" ||
+			conversation.channelId.startsWith("api:");
+		if (
+			(api &&
+				(!principal ||
+					!isTaskApiChannelV1(conversation.channelId, principal))) ||
+			(principal &&
+				(principal.id !== conversation.actorId ||
+					(!api && principal.kind !== "user")))
+		)
+			unavailable();
 		const createdAt = snapshotDate(conversation.createdAt);
 		const updatedAt = snapshotDate(conversation.updatedAt);
 		if (updatedAt.getTime() < createdAt.getTime()) unavailable();
@@ -181,16 +201,20 @@ export function parseState(
 		})();
 		const targetExecution = (() => {
 			if (values.targetExecution === undefined) return undefined;
-			const execution = snapshotObject(values.targetExecution, [
-				"executionId",
-				"conversationId",
-				"actorId",
-				"sessionGeneration",
-				"modelConfigurationRevision",
-				"modelOptionId",
-				"reasoningLevel",
-				"status",
-			]);
+			const execution = snapshotObject(
+				values.targetExecution,
+				[
+					"executionId",
+					"conversationId",
+					"actorId",
+					"sessionGeneration",
+					"modelConfigurationRevision",
+					"modelOptionId",
+					"reasoningLevel",
+					"status",
+				],
+				["principal"],
+			);
 			const status = execution.status;
 			if (
 				!isText(execution.executionId) ||
@@ -221,6 +245,9 @@ export function parseState(
 				executionId: execution.executionId,
 				conversationId: execution.conversationId,
 				actorId: execution.actorId,
+				...(execution.principal === undefined
+					? {}
+					: { principal: parseTaskPrincipalV1(execution.principal) }),
 				sessionGeneration: execution.sessionGeneration,
 				modelConfigurationRevision: execution.modelConfigurationRevision,
 				modelOptionId: execution.modelOptionId,
@@ -252,19 +279,23 @@ export function parseState(
 		})();
 		const activeExecution = (() => {
 			if (values.activeExecution === undefined) return undefined;
-			const execution = snapshotObject(values.activeExecution, [
-				"executionId",
-				"conversationId",
-				"actorId",
-				"turnId",
-				"sessionGeneration",
-				"modelConfigurationRevision",
-				"modelOptionId",
-				"reasoningLevel",
-				"lastEventSequence",
-				"stopPending",
-				"status",
-			]);
+			const execution = snapshotObject(
+				values.activeExecution,
+				[
+					"executionId",
+					"conversationId",
+					"actorId",
+					"turnId",
+					"sessionGeneration",
+					"modelConfigurationRevision",
+					"modelOptionId",
+					"reasoningLevel",
+					"lastEventSequence",
+					"stopPending",
+					"status",
+				],
+				["principal"],
+			);
 			const executionStatus = execution.status;
 			if (
 				!isText(execution.executionId) ||
@@ -295,6 +326,9 @@ export function parseState(
 				executionId: execution.executionId,
 				conversationId: execution.conversationId,
 				actorId: execution.actorId,
+				...(execution.principal === undefined
+					? {}
+					: { principal: parseTaskPrincipalV1(execution.principal) }),
 				turnId: execution.turnId,
 				sessionGeneration: execution.sessionGeneration,
 				modelConfigurationRevision: execution.modelConfigurationRevision,
@@ -305,6 +339,16 @@ export function parseState(
 				status: executionStatus as "submitted" | "processing" | "unknown",
 			};
 		})();
+		for (const execution of [targetExecution, activeExecution]) {
+			if (!execution) continue;
+			if (
+				execution.actorId !== conversation.actorId ||
+				(api && !execution.principal) ||
+				(execution.principal && execution.principal.id !== execution.actorId) ||
+				(execution.principal?.kind ?? "user") !== (principal?.kind ?? "user")
+			)
+				unavailable();
+		}
 		if (
 			activeExecution &&
 			activeExecution.conversationId !== conversation.conversationId
@@ -330,6 +374,21 @@ export function parseState(
 		) {
 			unavailable();
 		}
+		const sandbox =
+			conversation.sandbox === undefined
+				? undefined
+				: parseSessionSandboxBindingV1(conversation.sandbox);
+		if (
+			sandbox &&
+			(typeof conversation.sandboxReady !== "boolean" ||
+				sandbox.sessionId !== conversation.conversationId ||
+				sandbox.agentId !== conversation.agentId ||
+				sandbox.principal.id !== conversation.actorId ||
+				sandbox.principal.kind !== (principal?.kind ?? "user") ||
+				sandbox.channelId !== conversation.channelId ||
+				sandbox.generation !== conversation.sessionGeneration)
+		)
+			unavailable();
 		const sessionGeneration = conversation.sessionGeneration as number;
 		const lastConversationCursor =
 			conversation.lastConversationCursor as number;
@@ -342,6 +401,10 @@ export function parseState(
 				agentId: conversation.agentId,
 				actorId: conversation.actorId,
 				channelId: conversation.channelId,
+				...(principal ? { principal } : {}),
+				...(sandbox
+					? { sandbox, sandboxReady: conversation.sandboxReady as boolean }
+					: {}),
 				status,
 				...(conversation.isolationPending === true
 					? { isolationPending: true as const }
@@ -477,6 +540,8 @@ export function planMetadataRecovery(
 		conversation.conversationId !== query.conversationId ||
 		conversation.agentId !== authority.agentId ||
 		conversation.actorId !== authority.actorId ||
+		(conversation.principal?.kind ?? "user") !==
+			(authority.taskBoundary?.principal.kind ?? "user") ||
 		conversation.channelId !== authority.channelId
 	)
 		return { result: { outcome: "denied" }, updates: [] };
@@ -613,3 +678,5 @@ export function planMetadataRecovery(
 		updates,
 	};
 }
+
+import { parseSessionSandboxBindingV1 } from "./session-sandbox.js";

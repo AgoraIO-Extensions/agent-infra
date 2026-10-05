@@ -1,6 +1,7 @@
 import type { startObservability } from "@agent-infra/observability";
 import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
+import { registerApplicationApiCredentialRoutes } from "./http/application-api-credential-routes.js";
 import {
 	type ApplicationMaterialGrantRouteDependencies,
 	registerApplicationMaterialGrantRoutes,
@@ -40,6 +41,10 @@ import {
 	registerSessionAuditRoutes,
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
+import {
+	registerTaskRoutes,
+	type TaskRoutesDependencies,
+} from "./http/task-routes.js";
 import { registerV2ConfigurationRoutes } from "./http/v2-configuration-routes.js";
 import {
 	type ManagementRouteDependencies,
@@ -61,6 +66,9 @@ type ApiObservability = Pick<
 >;
 
 export interface PlatformAppDependencies {
+	readonly applicationApiCredentials?: Parameters<
+		typeof registerApplicationApiCredentialRoutes
+	>[1];
 	readonly requestScope?: (
 		request: Request,
 		work: () => Promise<Response>,
@@ -71,6 +79,7 @@ export interface PlatformAppDependencies {
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
+	readonly tasks?: TaskRoutesDependencies;
 	readonly management: ManagementRouteDependencies;
 	readonly personalApiCredentials?: PersonalApiCredentialRouteDependencies;
 	readonly personalRelayKeys?: PersonalRelayKeyRoutesDependencies;
@@ -139,6 +148,11 @@ export function createPlatformApp(
 	registerV2ManagementRoutes(app, dependencies.management);
 	if (dependencies.applications)
 		registerApplicationRegistrationRoutes(app, dependencies.applications);
+	if (dependencies.applicationApiCredentials)
+		registerApplicationApiCredentialRoutes(
+			app,
+			dependencies.applicationApiCredentials,
+		);
 	if (dependencies.applicationMaterialGrants)
 		registerApplicationMaterialGrantRoutes(
 			app,
@@ -159,6 +173,7 @@ export function createPlatformApp(
 		...dependencies.conversation,
 		files: dependencies.files,
 	});
+	if (dependencies.tasks) registerTaskRoutes(app, dependencies.tasks);
 	registerSessionAuditRoutes(app, dependencies.sessionAudit);
 	if (dependencies.scopedAudit)
 		registerScopedAuditRoutes(app, dependencies.scopedAudit);

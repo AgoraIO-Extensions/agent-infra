@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	find: vi.fn(),
+	claimSandbox: vi.fn(),
+	prepareSandbox: vi.fn(),
+	recordSandbox: vi.fn(),
 	dispatch: vi.fn(),
 	storeClose: vi.fn(async () => {}),
 	eventsClose: vi.fn(async () => {}),
@@ -20,6 +23,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@agent-infra/platform-store", () => ({
 	openPostgresConversationDispatchStoreV1: () => ({
 		findDispatchable: mocks.find,
+		claimSandboxReconciliation: mocks.claimSandbox,
+		prepareSandboxReconciliation: mocks.prepareSandbox,
+		recordSandboxObservation: mocks.recordSandbox,
 		close: mocks.storeClose,
 	}),
 	PostgresConversationEventTransactionV1: class {
@@ -81,6 +87,11 @@ const options = {
 		serviceToken: "synthetic",
 		workerId: "transport",
 	}),
+	sandboxPolicy: {
+		namespace: "synthetic",
+		resourceConfigurationHash: "synthetic",
+	},
+	receiveSandbox: async () => ({ status: "unknown" as const, resources: [] }),
 	maximumConcurrentDispatches: 1,
 	log: () => {},
 };
@@ -88,11 +99,35 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.signal = undefined;
 	mocks.dispatchAssemblyThrows = false;
+	mocks.claimSandbox.mockReset();
+	mocks.prepareSandbox.mockReset();
+	mocks.recordSandbox.mockReset();
+	mocks.prepareSandbox.mockResolvedValue(true);
 	mocks.transaction = undefined;
 	mocks.dispatchEvents = undefined;
 });
 
 describe("Conversation Worker discovery and shutdown", () => {
+	it("receives a sandbox reconciliation through the existing discovery lease", async () => {
+		const claim = { schemaVersion: 1, execution: null } as never;
+		mocks.find.mockResolvedValue([
+			{ itemId: "sandbox-1", operation: "conversation.sandbox.reconcile.v1" },
+		]);
+		mocks.claimSandbox.mockResolvedValue(claim);
+		mocks.recordSandbox.mockResolvedValue(undefined);
+		const worker = createPlatformConversationWorkerV2(options);
+		expect(await worker.tick()).toBe(1);
+		await vi.waitFor(() => expect(mocks.recordSandbox).toHaveBeenCalled());
+		await worker.stop();
+		expect(mocks.claimSandbox).toHaveBeenCalledWith(
+			expect.objectContaining({ itemId: "sandbox-1", workerId: "instance" }),
+		);
+		expect(mocks.prepareSandbox.mock.calls.length).toBeGreaterThanOrEqual(3);
+		expect(mocks.recordSandbox).toHaveBeenCalledWith({
+			claim,
+			observation: { status: "unknown", resources: [] },
+		});
+	});
 	it("reserves stop capacity while a business Turn occupies the dispatch slot", async () => {
 		const pending = Promise.withResolvers<void>();
 		let stoppedItem = false;
@@ -195,6 +230,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 		const worker = createPlatformConversationWorkerV2(options);
 		try {
 			expect(await worker.tick()).toBe(1);
+			expect(await worker.tick()).toBe(0);
 			expect(await worker.tick()).toBe(1);
 			expect(mocks.dispatch.mock.calls.map((call) => call[0].itemId)).toEqual([
 				"turn-000",
@@ -202,7 +238,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 			]);
 			expect(mocks.find.mock.calls[1]?.[0]).toMatchObject({
 				limit: 256,
-				afterItemId: "turn-255",
+				afterItemId: "turn-000",
 			});
 			pending.resolve();
 			await vi.waitFor(() => expect(completed.has("turn-000")).toBe(true));
@@ -213,7 +249,29 @@ describe("Conversation Worker discovery and shutdown", () => {
 			await worker.stop();
 		}
 	});
-	it("restarts discovery from the beginning after a short page", async () => {
+	it("does not starve runnable work behind a repeatedly busy short-page item", async () => {
+		const items = ["blocked-a", "runnable-b"].map((itemId) => ({
+			itemId,
+			operation: "conversation.turn.submit.v1",
+		}));
+		mocks.find.mockImplementation(async ({ afterItemId }) => [
+			...items.filter((item) => !afterItemId || item.itemId > afterItemId),
+			...items.filter((item) => afterItemId && item.itemId <= afterItemId),
+		]);
+		mocks.dispatch.mockResolvedValue({ outcome: "busy" });
+		const worker = createPlatformConversationWorkerV2(options);
+		try {
+			await worker.tick();
+			await worker.tick();
+			expect(mocks.dispatch.mock.calls.map((call) => call[0].itemId)).toEqual([
+				"blocked-a",
+				"runnable-b",
+			]);
+		} finally {
+			await worker.stop();
+		}
+	});
+	it("keeps the cursor after a short page and lets the Store wrap", async () => {
 		mocks.find
 			.mockResolvedValueOnce([
 				{ itemId: "turn-b", operation: "conversation.turn.submit.v1" },
