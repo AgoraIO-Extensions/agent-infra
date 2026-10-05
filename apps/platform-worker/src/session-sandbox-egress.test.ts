@@ -74,6 +74,7 @@ describe("Session Sandbox egress enforcement (Kubernetes fixture, not CNI eviden
 			networkPolicyName: "sandbox-b",
 		});
 		expect(a.name).not.toBe(b.name);
+		expect(a.name).toBe(binding.networkPolicyName);
 		const policy = await api.client.read<V1NetworkPolicy>(
 			"NetworkPolicy",
 			a.name,
