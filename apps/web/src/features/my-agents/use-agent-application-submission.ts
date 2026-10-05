@@ -52,6 +52,8 @@ export function useAgentApplicationSubmission(applicationId?: string) {
 				queryClient.invalidateQueries({ queryKey: ["my-agents"] }),
 				queryClient.invalidateQueries({ queryKey: ["agents"] }),
 			]),
+		onError: () =>
+			queryClient.invalidateQueries({ queryKey: ["deployment-configuration"] }),
 		onSettled: (_data, _error, attempt) => {
 			if (activeSubmission.current === attempt.idempotencyKey) {
 				activeSubmission.current = undefined;

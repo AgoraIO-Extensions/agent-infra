@@ -176,7 +176,10 @@ describe("AgentApplicationForm", () => {
 			schemaVersion: 2,
 			name: pendingApplication.name,
 			description: "Resubmitted after capacity review",
-			source: pendingApplication.source,
+			source: {
+				...pendingApplication.source,
+				templateRevision: "template-test-revision",
+			},
 			coOwnerIds: ["user-applicant-1"],
 			availability: [],
 
@@ -370,6 +373,10 @@ describe("AgentApplicationForm", () => {
 				{
 					templateId: "minimal",
 					displayName: "Minimal",
+					readiness: {
+						state: "ready" as const,
+						revision: "template-minimal-revision",
+					},
 					connectionEnabled: false,
 					allowedEnvironmentKeys: [],
 					allowedSecretKeys: ["OTHER_SECRET"],
@@ -549,7 +556,11 @@ describe("AgentApplicationForm", () => {
 			schemaVersion: 2,
 			name: "Release assistant",
 			description: "Helps the release team",
-			source: { kind: "standard", templateId: "codex" },
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				templateRevision: "template-test-revision",
+			},
 			coOwnerIds: ["owner-2", "owner-3"],
 			availability: [
 				{ kind: "user", userId: "user-available" },
@@ -1553,9 +1564,7 @@ describe("AgentApplicationForm", () => {
 		expect(screen.getByRole("status").textContent).toContain("暂不可用");
 		expect(screen.getByRole("status").textContent).not.toContain("已移除");
 		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
-		expect(onSubmit).toHaveBeenCalledWith(
-			expect.objectContaining({ source: application.source }),
-		);
+		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
 	it("blocks an unavailable model catalog without duplicate submission", () => {
@@ -1732,5 +1741,87 @@ describe("AgentApplicationForm", () => {
 		expect(
 			(screen.getByLabelText("Agent 名称") as HTMLInputElement).value,
 		).toBe("Other release assistant");
+	});
+});
+
+describe("template readiness", () => {
+	it("shows four choices on a failed read without allowing submission", () => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				submitting={false}
+				onSubmit={onSubmit}
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					status: "unavailable",
+					templates: [],
+				}}
+			/>,
+		);
+		const states = screen.getByRole("list", { name: "模板就绪状态" });
+		for (const name of ["Codex", "Claude Code", "OpenCode", "Pi"])
+			expect(states.textContent).toContain(name);
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+	it.each([
+		"unverified",
+		"failed",
+		"disabled",
+		"stale",
+		"unavailable",
+	] as const)("disables %s choices and displays the reason", (state) => {
+		const onSubmit = vi.fn();
+		render(
+			<AgentApplicationForm
+				mode="create"
+				submitting={false}
+				onSubmit={onSubmit}
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					templates: deploymentConfiguration.templates.map((t) => ({
+						...t,
+						readiness: { state, revision: null },
+					})),
+				}}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("combobox", { name: "标准模板 ID" }));
+		expect(
+			screen
+				.getByRole("option", { name: "Codex" })
+				.getAttribute("aria-disabled"),
+		).toBe("true");
+		expect(
+			screen.getByRole("list", { name: "模板就绪状态" }).textContent,
+		).toContain("Codex：");
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+	it("does not silently adopt a new ready revision after refresh", () => {
+		const onSubmit = vi.fn();
+		const props = { mode: "create" as const, submitting: false, onSubmit };
+		const view = render(
+			<AgentApplicationForm
+				{...props}
+				deploymentConfiguration={deploymentConfiguration}
+			/>,
+		);
+		choose("标准模板 ID", "Codex");
+		view.rerender(
+			<AgentApplicationForm
+				{...props}
+				deploymentConfiguration={{
+					...deploymentConfiguration,
+					templates: deploymentConfiguration.templates.map((t) => ({
+						...t,
+						readiness: { state: "ready", revision: "new-revision" },
+					})),
+				}}
+			/>,
+		);
+		expect(screen.getByText("模板已更新，请确认后再提交。")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+		expect(onSubmit).not.toHaveBeenCalled();
 	});
 });

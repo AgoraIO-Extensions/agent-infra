@@ -11,6 +11,7 @@ export const deploymentConfiguration =
 			{
 				templateId: "codex",
 				displayName: "Codex",
+				readiness: { state: "ready", revision: "template-test-revision" },
 				connectionEnabled: false,
 				allowedEnvironmentKeys: ["LOG_LEVEL"],
 				allowedSecretKeys: ["MODEL_API_KEY"],

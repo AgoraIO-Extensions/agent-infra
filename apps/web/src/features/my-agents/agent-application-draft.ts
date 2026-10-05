@@ -38,6 +38,7 @@ export type AgentApplicationFormDraft = {
 	source?: AgentApplicationCreateRequestV2Writable["source"];
 	sourceKind: AgentApplicationSourceKind;
 	templateId: string;
+	templateRevision?: string;
 	userAvailabilityIds: string;
 };
 
@@ -222,7 +223,11 @@ function requestBody(
 	const source: AgentApplicationCreateRequestV2Writable["source"] =
 		draft.source ??
 		(draft.sourceKind === "standard"
-			? { kind: "standard", templateId: draft.templateId.trim() }
+			? {
+					kind: "standard",
+					templateId: draft.templateId.trim(),
+					templateRevision: draft.templateRevision ?? "",
+				}
 			: draft.sourceKind === "custom-platform-adapter"
 				? {
 						kind: "custom",

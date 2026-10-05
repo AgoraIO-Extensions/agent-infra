@@ -320,13 +320,25 @@ export const AgentConfigurationUpdateRequestV1Schema = z.strictObject({
 
 // Independent Connection authorization retires Platform-owned Action selection.
 // Keep the published V1 schemas intact for historical consumers.
+// A displayed choice is bound to the current deployment validation, not a browser readiness claim.
+const applicationSourceV2Schema = z.union([
+	z.strictObject({
+		kind: z.literal("standard"),
+		templateId: OpaqueIdV1Schema,
+		templateRevision: OpaqueIdV1Schema.optional(),
+	}),
+	...AgentSourceInputV1Schema.options.slice(1),
+]);
+
 export const AgentApplicationCreateRequestV2Schema =
 	AgentApplicationCreateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
+		source: applicationSourceV2Schema,
 	});
 export const AgentApplicationUpdateRequestV2Schema =
 	AgentApplicationUpdateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
+		source: applicationSourceV2Schema,
 	});
 export const AgentConfigurationUpdateRequestV2Schema =
 	AgentConfigurationUpdateRequestV1Schema.omit({ actions: true }).extend({
@@ -548,6 +560,20 @@ export const DeploymentConfigurationStatusV2Schema = z.enum([
 ]);
 
 export const DeploymentTemplateProjectionV2Schema = z.strictObject({
+	readiness: z
+		.strictObject({
+			state: z.enum([
+				"ready",
+				"unregistered",
+				"unverified",
+				"failed",
+				"disabled",
+				"stale",
+				"unavailable",
+			]),
+			revision: OpaqueIdV1Schema.nullable(),
+		})
+		.optional(),
 	templateId: OpaqueIdV1Schema,
 	displayName: nonEmptyString(),
 	connectionEnabled: z.boolean(),

@@ -6,6 +6,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import {
 	createDeploymentAdmissionsV1,
+	createDeploymentConfigurationProjectionV2,
 	type DeploymentAdmissionInputV1,
 } from "./deployment-admissions.js";
 import { createDeploymentIdentityScope } from "./deployment-identity.js";
@@ -116,6 +117,19 @@ function fixture(
 		],
 	};
 	const load = vi.fn(async (_signal: AbortSignal): Promise<unknown> => catalog);
+	const validation = {
+		schemaVersion: 1,
+		templateId: "codex",
+		imageDigest,
+		driver: "codex",
+		configurationRevision: "config-a",
+		status: "passed",
+		evidenceKind: "real-runtime-model",
+		executionId: "test-execution",
+		modelId: "model-a",
+		validatedAt: Date.now() - 1000,
+		validUntil: Date.now() + 60_000,
+	};
 	const input: DeploymentAdmissionInputV1 = {
 		currentIdentity: vi.fn(async () => actor),
 		registry: {
@@ -128,6 +142,14 @@ function fixture(
 		templates: [
 			{
 				templateId: "codex",
+				modelBinding: {
+					templateId: "codex",
+					imageDigest,
+					driver: "codex",
+					protocol: "openai-responses-v1",
+				},
+				configurationRevision: "config-a",
+				loadValidation: async () => validation,
 				imageDigest,
 				imageReference: `registry.example.test/agents/codex@${imageDigest}`,
 				allowedEnvironmentKeys: ["LANG"],
@@ -149,7 +171,17 @@ function fixture(
 			],
 		},
 	};
-	return { input, authorize, fetch, imageDigest, catalog, load };
+	return { input, authorize, fetch, imageDigest, catalog, load, validation };
+}
+
+async function selectedTemplate(input: DeploymentAdmissionInputV1) {
+	const selected = (await createDeploymentConfigurationProjectionV2(input)())
+		.templates[0];
+	return {
+		kind: "standard" as const,
+		templateId: "codex",
+		templateRevision: selected?.readiness?.revision ?? "missing",
+	};
 }
 
 function modelInput(replaceCredential = true): AgentConfigurationModelInputV1 {
@@ -197,7 +229,7 @@ describe("production deployment admissions", () => {
 		const admissions = createDeploymentAdmissionsV1(input);
 		const result = await admissions.imageAdmission.admitImage({
 			...request,
-			requested: { kind: "standard", templateId: "codex" },
+			requested: await selectedTemplate(input),
 		});
 		expect(result).toMatchObject({
 			schemaVersion: 1,
@@ -231,7 +263,7 @@ describe("production deployment admissions", () => {
 		});
 		const changed = await admissions.imageAdmission.admitImage({
 			...request,
-			requested: { kind: "standard", templateId: "codex" },
+			requested: await selectedTemplate(input),
 		});
 		if (result.status !== "admitted" || changed.status !== "admitted")
 			throw new Error("Expected actual registry admission");
@@ -348,7 +380,7 @@ describe("production deployment admissions", () => {
 							await admissions.imageAdmission.admitImage({
 								...request,
 								requestId: user,
-								requested: { kind: "standard", templateId: "codex" },
+								requested: await selectedTemplate(f.input),
 							}),
 						).toMatchObject({ status: "admitted" });
 					},
@@ -696,6 +728,7 @@ describe("production deployment admissions", () => {
 		const f = fixture();
 		const template = f.input.templates[0];
 		if (!template) throw new Error();
+
 		const input: DeploymentAdmissionInputV1 = {
 			...f.input,
 			...(kind === "model-revision"
@@ -741,4 +774,168 @@ describe("production deployment admissions", () => {
 		);
 		expect(f.fetch).not.toHaveBeenCalled();
 	});
+});
+
+// Simulated trusted evidence exercises the consumer only; it is not deployment acceptance.
+describe("standard template readiness admission", () => {
+	it("keeps all four discoverable and denies registration without real validation", async () => {
+		const f = fixture();
+		f.validation.evidenceKind = "simulation";
+		const projection = await createDeploymentConfigurationProjectionV2(
+			f.input,
+		)();
+		expect(projection.templates.map((t) => t.displayName)).toEqual([
+			"Codex",
+			"Claude Code",
+			"OpenCode",
+			"Pi",
+		]);
+		expect(projection.templates.map((t) => t.readiness?.state)).toEqual([
+			"unverified",
+			"unregistered",
+			"unregistered",
+			"unregistered",
+		]);
+		const decision = await createDeploymentAdmissionsV1(
+			f.input,
+		).imageAdmission.admitImage({
+			...request,
+			requested: { kind: "standard", templateId: "codex" },
+		});
+		expect(decision.status).toBe("rejected");
+		expect(f.fetch).not.toHaveBeenCalled();
+	});
+	it.each([
+		"disabled",
+		"failed",
+		"expired",
+		"configuration",
+		"driver",
+		"digest",
+	])("rechecks %s after selection", async (change) => {
+		const f = fixture();
+		const read = createDeploymentConfigurationProjectionV2(f.input);
+		const choice = (await read()).templates[0];
+		expect(choice?.readiness?.state).toBe("ready");
+		const admissions = createDeploymentAdmissionsV1(f.input);
+		if (change === "disabled" || change === "failed")
+			f.validation.status = change;
+		if (change === "expired") f.validation.validUntil = Date.now() - 1;
+		if (change === "configuration")
+			f.validation.configurationRevision = "config-b";
+		if (change === "driver") f.validation.driver = "pi";
+		if (change === "digest")
+			f.validation.imageDigest = `sha256:${"f".repeat(64)}`;
+		expect((await read()).templates[0]?.readiness?.state).not.toBe("ready");
+		expect(
+			(
+				await admissions.imageAdmission.admitImage({
+					...request,
+					requested: {
+						kind: "standard",
+						templateId: "codex",
+						templateRevision: choice?.readiness?.revision ?? "missing",
+					},
+				})
+			).status,
+		).toBe("rejected");
+	});
+	it("rejects a forged or replaced selection and a validation outage during Registry I/O", async () => {
+		const f = fixture();
+		const read = createDeploymentConfigurationProjectionV2(f.input);
+		const choice = (await read()).templates[0];
+		const admissions = createDeploymentAdmissionsV1(f.input);
+		const selected = {
+			kind: "standard" as const,
+			templateId: "codex",
+			templateRevision: choice?.readiness?.revision ?? "missing",
+		};
+		expect(
+			(
+				await admissions.imageAdmission.admitImage({
+					...request,
+					requested: selected,
+				})
+			).status,
+		).toBe("admitted");
+		expect(
+			(
+				await admissions.imageAdmission.admitImage({
+					...request,
+					requested: { ...selected, templateRevision: "forged" },
+				})
+			).status,
+		).toBe("rejected");
+		expect(
+			(
+				await admissions.imageAdmission.admitImage({
+					...request,
+					requested: { ...selected, templateId: "unknown" },
+				})
+			).status,
+		).toBe("rejected");
+		f.validation.executionId = "new-validation";
+		expect(
+			(
+				await admissions.imageAdmission.admitImage({
+					...request,
+					requested: selected,
+				})
+			).status,
+		).toBe("rejected");
+		f.validation.executionId = "test-execution";
+		f.authorize.mockImplementationOnce(async () => {
+			f.validation.status = "disabled";
+			return {
+				status: "admitted",
+				decisionRef: "decision-a",
+				evaluatedAt: "2026-09-14T00:00:00Z",
+			};
+		});
+		expect(
+			(
+				await admissions.imageAdmission.admitImage({
+					...request,
+					requested: selected,
+				})
+			).status,
+		).toBe("rejected");
+	});
+	it("fails closed on validation load errors and refreshes the same fact", async () => {
+		const f = fixture();
+		let unavailable = true;
+		const templates = f.input.templates.map((t) => ({
+			...t,
+			loadValidation: async () => {
+				if (unavailable) throw new Error("private detail");
+				return f.validation;
+			},
+		}));
+		const input = { ...f.input, templates };
+		const read = createDeploymentConfigurationProjectionV2(input);
+		expect((await read()).templates[0]?.readiness?.state).toBe("unavailable");
+		expect(
+			(
+				await createDeploymentAdmissionsV1(input).imageAdmission.admitImage({
+					...request,
+					requested: { kind: "standard", templateId: "codex" },
+				})
+			).status,
+		).toBe("rejected");
+		unavailable = false;
+		expect((await read()).templates[0]?.readiness?.state).toBe("ready");
+	});
+});
+
+it("does not allow an applicant to omit the displayed template revision", async () => {
+	const f = fixture();
+	expect(
+		(
+			await createDeploymentAdmissionsV1(f.input).imageAdmission.admitImage({
+				...request,
+				requested: { kind: "standard", templateId: "codex" },
+			})
+		).status,
+	).toBe("rejected");
+	expect(f.fetch).not.toHaveBeenCalled();
 });
