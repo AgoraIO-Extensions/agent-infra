@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Listbox } from "@/components/ui/listbox";
+import { Listbox, ListboxOption } from "@/components/ui/listbox";
 import {
 	Select,
 	SelectContent,
@@ -493,7 +493,7 @@ function DirectoryPicker({
 					) : (
 						<>
 							{options.map((option, index) => (
-								<Button
+								<ListboxOption
 									aria-selected={selectedIds.includes(option.id)}
 									className={cn(
 										"directory-result",
@@ -503,7 +503,6 @@ function DirectoryPicker({
 									key={option.id}
 									onClick={() => add(option)}
 									onMouseEnter={() => setActiveIndex(index)}
-									role="option"
 									type="button"
 									variant="ghost"
 								>
@@ -523,7 +522,7 @@ function DirectoryPicker({
 											</small>
 										) : null}
 									</span>
-								</Button>
+								</ListboxOption>
 							))}
 							<Button
 								className="directory-clear"
@@ -1165,16 +1164,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				: current;
 		});
 	}, [modelEndpoints, persistedModelOptions, props.mode]);
-	const environmentOptions = Array.from(
-		new Set([
-			...(selectedTemplate?.allowedEnvironmentKeys ?? []),
-			...environment.map((item) => item.name).filter(Boolean),
-		]),
-	).map((value) => ({
-		value,
-		label: value,
-		disabled: !selectedTemplate?.allowedEnvironmentKeys.includes(value),
-	}));
 	const secretOptions = (selectedTemplate?.allowedSecretKeys ?? []).map(
 		(value) => ({ value, label: value }),
 	);
@@ -1716,10 +1705,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 										{
 											key: "name",
 											label: "变量名称",
-											options:
-												sourceKind === "standard"
-													? environmentOptions
-													: undefined,
 											required: true,
 										},
 										{ key: "value", label: "变量值", required: true },
