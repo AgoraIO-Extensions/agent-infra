@@ -604,7 +604,9 @@ describe("AgentApplicationForm", () => {
 		expect(screen.queryByRole("button", { name: "Add action" })).toBeNull();
 		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
-		choose("变量名称", "LOG_LEVEL");
+		fireEvent.change(screen.getByLabelText("变量名称"), {
+			target: { value: "LOG_LEVEL" },
+		});
 		fireEvent.change(screen.getByLabelText("变量值"), {
 			target: { value: "debug" },
 		});
@@ -728,7 +730,9 @@ describe("AgentApplicationForm", () => {
 		choose("标准模板", "Codex");
 		openAdvancedConfiguration();
 		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
-		choose("变量名称", "LOG_LEVEL");
+	fireEvent.change(screen.getByLabelText("变量名称"), {
+		target: { value: "LOG_LEVEL" },
+	});
 		expect((screen.getByLabelText("变量值") as HTMLInputElement).required).toBe(
 			true,
 		);
