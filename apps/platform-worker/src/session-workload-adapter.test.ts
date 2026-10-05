@@ -18,7 +18,9 @@ import {
 const api = () => {
 	const resources = new Map<string, KubernetesObject>();
 	const key = (kind: string, name: string) => `${kind}/${name}`;
-	const client: WorkerKubernetesClientV1 = {
+	const client: WorkerKubernetesClientV1 & {
+		deleteResult: NonNullable<WorkerKubernetesClientV1["deleteResult"]>;
+	} = {
 		namespace: "workload-test",
 		async read<T extends KubernetesObject>(
 			kind: WorkloadResourceKind,
@@ -60,6 +62,10 @@ const api = () => {
 		},
 		async delete(object: KubernetesObject) {
 			resources.delete(key(object.kind ?? "", object.metadata?.name ?? ""));
+		},
+		async deleteResult(object: KubernetesObject) {
+			resources.delete(key(object.kind ?? "", object.metadata?.name ?? ""));
+			return "acknowledged" as const;
 		},
 	};
 	return Object.assign(client, { resources });
@@ -216,10 +222,10 @@ describe("session sandbox workload adapter", () => {
 			resource: pod,
 			preconditions: { uid: pod.uid, resourceVersion: pod.resourceVersion },
 		};
-		const originalDelete = client.delete;
-		client.delete = async (resource) => {
+		const originalDeleteResult = client.deleteResult;
+		client.deleteResult = async (resource) => {
 			if (resource.kind === "Pod") throw new Error("delete transport lost");
-			return originalDelete(resource);
+			return originalDeleteResult(resource);
 		};
 		const progress: SessionSandboxDeletionProgressV1[] = [];
 		await expect(
@@ -641,6 +647,7 @@ describe("session sandbox workload adapter", () => {
 		const guarded = createSessionSandboxWorkloadAdapterV1({
 			client: {
 				...client,
+				deleteResult: undefined,
 				async delete(object) {
 					deletes++;
 					return client.delete(object);
@@ -653,6 +660,41 @@ describe("session sandbox workload adapter", () => {
 			code: "unavailable",
 		});
 		expect(deletes).toBe(0);
+	});
+
+	it("fails closed before DELETE when the durable delete result is absent", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const observed = await adapter.observe(allocation);
+		let deletes = 0;
+		const progress: SessionSandboxDeletionProgressV1[] = [];
+		const guarded = createSessionSandboxWorkloadAdapterV1({
+			client: {
+				...client,
+				deleteResult: undefined,
+				async delete(object) {
+					deletes++;
+					return client.delete(object);
+				},
+			},
+		});
+		await expect(
+			guarded.cleanup(allocation, observed.resources, {
+				recordDeletionProgress: async (entry) => {
+					progress.push(entry);
+					return "committed";
+				},
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
+		expect(deletes).toBe(0);
+		expect(progress).toContainEqual(
+			expect.objectContaining({
+				resource: expect.objectContaining({ kind: "Pod" }),
+				state: "unknown",
+				deleteCallResult: "unknown",
+			}),
+		);
 	});
 
 	it("does not treat a Kubernetes 404 delete response as acknowledged", async () => {
@@ -690,18 +732,18 @@ describe("session sandbox workload adapter", () => {
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 		await adapter.apply(allocation);
 		const observed = await adapter.observe(allocation);
-		const originalDelete = client.delete;
+		const originalDeleteResult = client.deleteResult;
 		let deletes = 0;
-		client.delete = async (object) => {
+		client.deleteResult = async (object) => {
 			deletes++;
 			if (object.kind === "Pod") {
 				const pod = resources.get(`Pod/${allocation.podName}`);
 				if (!pod?.metadata) throw new Error("Missing Pod");
 				pod.metadata.deletionTimestamp = new Date();
 				pod.metadata.resourceVersion = "terminating";
-				return;
+				return "acknowledged";
 			}
-			return originalDelete(object);
+			return originalDeleteResult(object);
 		};
 		const progress: SessionSandboxDeletionProgressV1[] = [];
 		const record = async (entry: SessionSandboxDeletionProgressV1) => {

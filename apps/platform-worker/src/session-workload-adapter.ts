@@ -753,13 +753,9 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					throw new WorkloadKubernetesError("unavailable");
 				let callResult: SessionSandboxDeletionProgressV1["deleteCallResult"];
 				try {
-					let result: "acknowledged" | "absent";
-					if (options.client.deleteResult)
-						result = await options.client.deleteResult(current);
-					else {
-						await options.client.delete(current);
-						result = "acknowledged";
-					}
+					if (!options.client.deleteResult)
+						throw new WorkloadKubernetesError("unavailable");
+					const result = await options.client.deleteResult(current);
 					callResult = result === "absent" ? "unknown" : result;
 				} catch (error) {
 					if (existing?.deleteCallResult !== "acknowledged")
@@ -869,13 +865,9 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					throw new WorkloadKubernetesError("unavailable");
 				let callResult: SessionSandboxDeletionProgressV1["deleteCallResult"];
 				try {
-					let result: "acknowledged" | "absent";
-					if (options.client.deleteResult)
-						result = await options.client.deleteResult(current);
-					else {
-						await options.client.delete(current);
-						result = "acknowledged";
-					}
+					if (!options.client.deleteResult)
+						throw new WorkloadKubernetesError("unavailable");
+					const result = await options.client.deleteResult(current);
 					callResult = result === "absent" ? "unknown" : result;
 				} catch (error) {
 					if (existing?.deleteCallResult !== "acknowledged")
