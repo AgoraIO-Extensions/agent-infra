@@ -339,7 +339,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					metadata: { name: tlsSecretName, namespace },
 					type: "kubernetes.io/tls",
 					data: {
-						"tls.crt": Buffer.from(tls.cert).toString("base64"),
+						"tls.crt": Buffer.from(tls.cert + tls.ca).toString("base64"),
 						"tls.key": Buffer.from(tls.key).toString("base64"),
 					},
 				});
