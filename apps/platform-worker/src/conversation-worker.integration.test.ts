@@ -489,6 +489,44 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			if (created.outcome !== "accepted")
 				throw Error(`Create: ${created.outcome}`);
 			await markSessionSandboxReadyFixture(sql, created.result.conversationId);
+			const [sandbox] = await sql`
+				select sandbox_id, resource_name
+				from platform.session_sandbox_allocations
+				where conversation_id = ${created.result.conversationId}`;
+			if (!sandbox) throw Error("SessionSandbox allocation was not persisted");
+			const sandboxResources = [
+				"Pod",
+				"Service",
+				"ServiceAccount",
+				"PersistentVolumeClaim",
+				"NetworkPolicy",
+				"StatefulSet",
+			].map((kind) => ({
+				kind,
+				namespace: policy.namespace,
+				name: sandbox.resource_name,
+				uid: `${sandbox.sandbox_id}-${kind}`,
+				resourceVersion: "1",
+				...(kind === "Pod"
+					? { controllerUid: `${sandbox.sandbox_id}-StatefulSet` }
+					: {}),
+			}));
+			await sql`
+				update platform.session_sandbox_allocations
+				set resource_policy = ${sql.json({
+					namespace: policy.namespace,
+					imageDigest: desired.imageDigest,
+					configurationRevision: 1,
+					managementFence: 1,
+					workloadRevision: 1,
+					resourceConfigurationHash:
+						workloadResourceConfigurationHashV1(policy),
+				})},
+				resource_observation = ${sql.json({
+					status: "ready",
+					resources: sandboxResources,
+				})}
+				where conversation_id = ${created.result.conversationId}`;
 			const accepted = await api.accept({
 				schemaVersion: 1,
 				command: "message",

@@ -22,6 +22,7 @@ import {
 	runtimeModelInjectionV1,
 	validateRuntimeModelProjectionV1,
 } from "@agent-infra/model-catalog";
+import type { SessionSandboxRuntimeStateV1 } from "@agent-infra/platform-core";
 import {
 	type AgentConfigurationRecordV2,
 	createWorkloadReconciliationV1,
@@ -3137,6 +3138,217 @@ it("persists exact capacity and binds readiness to fence/image while preserving 
 		code: "RUNTIME_WORKLOAD_UNAVAILABLE",
 	});
 });
+
+it("fails closed when a production conversation has no current SessionSandbox allocation", async () => {
+	const keys = generateKeyPairSync("ed25519");
+	const signing = {
+		workerId: "worker-a",
+		issuer: "platform",
+		keyId: "key",
+		privateKey: keys.privateKey,
+	};
+	const f = fixture({
+		policy: {
+			...workloadTestPolicy,
+			runtimeAuth: {
+				workerId: signing.workerId,
+				grantIssuer: signing.issuer,
+				grantKeyId: signing.keyId,
+				grantPublicKey: keys.publicKey
+					.export({ type: "spki", format: "pem" })
+					.toString(),
+				serviceTokenSecret: { name: "transport", key: "token" },
+			},
+		},
+	});
+	await f.tick(8);
+	const ready = f.state;
+	if (!ready) throw Error("Expected ready fixture");
+	const resolver = createProductionConversationRuntimeResolverV2({
+		workload: f.options,
+		signing,
+		serviceToken: "synthetic-transport",
+	});
+	await expect(
+		resolver({
+			agentId: ready.agentId,
+			conversationId: "conversation-missing",
+			actorId: "actor-missing",
+			channelId: "web",
+			principal: { kind: "user", id: "actor-missing" },
+			sessionGeneration: 1,
+			deliveryFence: 1,
+			workload: ready,
+			signal: new AbortController().signal,
+			purpose: "control",
+			command: "session.status",
+		}),
+	).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+});
+
+it.each(["unchanged", "uid", "selector", "port", "fence"] as const)(
+	"routes stopped SessionSandbox control only through its verified source Service (%s)",
+	async (drift) => {
+		const keys = generateKeyPairSync("ed25519");
+		const signing = {
+			workerId: "worker-a",
+			issuer: "platform",
+			keyId: "key",
+			privateKey: keys.privateKey,
+		};
+		const f = fixture({
+			policy: {
+				...workloadTestPolicy,
+				runtimeAuth: {
+					workerId: signing.workerId,
+					grantIssuer: signing.issuer,
+					grantKeyId: signing.keyId,
+					grantPublicKey: keys.publicKey
+						.export({ type: "spki", format: "pem" })
+						.toString(),
+					serviceTokenSecret: { name: "transport", key: "token" },
+				},
+			},
+		});
+		await f.tick(8);
+		const ready = f.state;
+		if (!ready?.verified?.deployment) throw Error("Expected verified fixture");
+		const verifiedDeployment = validateAgentWorkloadDesiredV1(
+			ready.verified.deployment,
+		);
+		const sandboxId = "00000000-0000-4000-8000-000000000001";
+		const sandbox = {
+			schemaVersion: 1 as const,
+			sandboxId,
+			sessionId: "conversation-source",
+			agentId: ready.agentId,
+			principal: { kind: "user" as const, id: "actor-source" },
+			channelId: "web",
+			generation: 1,
+			resourceName: `sandbox-${sandboxId}`,
+			workspaceScope: sandboxId,
+		};
+		const sourcePolicy = {
+			namespace: f.options.policy.namespace,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(
+				f.options.policy,
+			),
+			configurationRevision: ready.verified.configuration.revision,
+			workloadRevision: verifiedDeployment.workloadRevision,
+			managementFence: 1,
+			imageDigest: verifiedDeployment.imageDigest,
+		};
+		const sourceKinds = [
+			"Pod",
+			"Service",
+			"ServiceAccount",
+			"PersistentVolumeClaim",
+			"NetworkPolicy",
+			"StatefulSet",
+		] as const;
+		const sourceResources = sourceKinds.map((kind) => ({
+			kind,
+			namespace: sourcePolicy.namespace,
+			name: sandbox.resourceName,
+			uid: `${kind}-source`,
+			resourceVersion: "7",
+			...(kind === "Pod" ? { controllerUid: "StatefulSet-source" } : {}),
+		}));
+		const sourceLabels = {
+			"agent-infra.agora.io/agent-id": sandbox.agentId,
+			"agent-infra.agora.io/session-id": sandbox.sessionId,
+			"agent-infra.agora.io/sandbox-id": sandbox.sandboxId,
+			"agent-infra.agora.io/generation": String(sandbox.generation),
+		};
+		const liveService = await f.client.create<V1Service>({
+			apiVersion: "v1",
+			kind: "Service",
+			metadata: {
+				name: sandbox.resourceName,
+				namespace: sourcePolicy.namespace,
+				labels: sourceLabels,
+				annotations: {
+					"agent-infra.agora.io/managed": "session-sandbox-v1",
+					"agent-infra.agora.io/fence": "1",
+				},
+			},
+			spec: {
+				type: "ClusterIP",
+				selector: sourceLabels,
+				ports: [
+					{
+						name: "runtime",
+						port: verifiedDeployment.service.port,
+						targetPort: verifiedDeployment.service.port,
+					},
+				],
+			},
+		});
+		const serviceReceipt = sourceResources.find(
+			(resource) => resource.kind === "Service",
+		);
+		if (!serviceReceipt || !liveService.metadata?.uid)
+			throw Error("Missing Service fixture");
+		serviceReceipt.uid =
+			drift === "uid" ? "replaced-source-uid" : liveService.metadata.uid;
+		if (drift === "selector" && liveService.spec)
+			liveService.spec.selector = {
+				...sourceLabels,
+				"agent-infra.agora.io/session-id": "another-session",
+			};
+		if (drift === "port" && liveService.spec?.ports?.[0])
+			liveService.spec.ports[0].targetPort = 9090;
+		if (drift === "fence" && liveService.metadata.annotations)
+			liveService.metadata.annotations["agent-infra.agora.io/fence"] = "2";
+		if (drift !== "unchanged" && drift !== "uid")
+			await f.client.replace(liveService);
+		const sandboxResource: SessionSandboxRuntimeStateV1 = {
+			sandbox,
+			resourceFence: 2,
+			desiredState: "stopped",
+			status: "stopped",
+			policy: sourcePolicy,
+			observation: {
+				status: "ready",
+				resources: sourceResources,
+			},
+			controlSource: {
+				sandbox,
+				resourceFence: 1,
+				policy: sourcePolicy,
+				observation: {
+					status: "ready",
+					resources: sourceResources,
+				},
+				deployment: verifiedDeployment,
+			},
+		};
+		const resolver = createProductionConversationRuntimeResolverV2({
+			workload: f.options,
+			signing,
+			serviceToken: "synthetic-transport",
+		});
+		const resolution = resolver({
+			agentId: ready.agentId,
+			conversationId: sandbox.sessionId,
+			sessionGeneration: sandbox.generation,
+			workload: null,
+			sandboxResource,
+			signal: new AbortController().signal,
+			purpose: "control",
+			command: "session.status",
+		});
+		if (drift !== "unchanged") {
+			await expect(resolution).rejects.toMatchObject({
+				code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+			});
+			return;
+		}
+		await expect(resolution).resolves.toMatchObject({
+			baseUrl: `http://${sandbox.resourceName}.${sourcePolicy.namespace}.svc:${verifiedDeployment.service.port}`,
+		});
+	},
+);
 
 it("preserves cancellation and only reopens a closing verified route", async () => {
 	const keys = generateKeyPairSync("ed25519");
