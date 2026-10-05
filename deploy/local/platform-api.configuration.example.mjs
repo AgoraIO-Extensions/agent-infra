@@ -6,7 +6,9 @@ const missing = (name) => {
 	throw new Error(`Configure deployment export: ${name}`);
 };
 
-// Must be an ldaps:// configuration with PostgreSQL-backed identityIds and a
+// TLS is enabled by default (ldaps://); set tls: false for ldap://.
+// identityIds: new PostgresLdapIdentityIds(PLATFORM_DATABASE_URL) from
+// @agent-infra/platform-store. Supply a deployment-owned
 // verifyCurrentStatus function. A dedicated activeAttribute is not required.
 export const ldap = missing("ldap");
 

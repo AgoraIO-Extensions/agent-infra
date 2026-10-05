@@ -2,13 +2,13 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:https";
 import { pathToFileURL } from "node:url";
 import {
-	createWeComSource,
 	DirectorySyncError,
 	nextSyncDelay,
 } from "@agent-infra/enterprise-directory";
 import { createPostgresDirectoryStore } from "@agent-infra/enterprise-directory-store";
 import { serve } from "@hono/node-server";
 import { createDirectoryService } from "./service.js";
+import { loadDirectorySource } from "./source.js";
 
 const RETRY_MS = 5 * 60_000;
 type SyncResult = Awaited<
@@ -61,25 +61,18 @@ export async function startDirectorySync() {
 	const readToken = (
 		await readFile(required("DIRECTORY_READ_TOKEN_FILE"), "utf8")
 	).trim();
-	const corpSecret = (
-		await readFile(required("WECOM_CORP_SECRET_FILE"), "utf8")
-	).trim();
+	const source = await loadDirectorySource(process.env, rootDepartmentId);
 	const [key, cert] = await Promise.all([
 		readFile(required("DIRECTORY_TLS_KEY_FILE")),
 		readFile(required("DIRECTORY_TLS_CERT_FILE")),
 	]);
-	if (!readToken || !corpSecret)
-		throw new Error("Directory credentials are invalid");
+	if (!readToken) throw new Error("Directory credentials are invalid");
 	const store = createPostgresDirectoryStore(
 		required("DIRECTORY_DATABASE_URL"),
 	);
 	const service = createDirectoryService({
 		store,
-		source: createWeComSource({
-			corpId: required("WECOM_CORP_ID"),
-			corpSecret,
-			rootDepartmentId,
-		}),
+		...source,
 		readToken,
 		rootDepartmentId,
 	});

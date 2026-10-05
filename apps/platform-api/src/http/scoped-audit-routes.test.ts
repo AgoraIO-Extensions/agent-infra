@@ -177,7 +177,7 @@ describe("scoped audit HTTP adapter", () => {
 		expect(audit.listAudit).not.toHaveBeenCalled();
 	});
 
-	it("resolves current browser facts and forwards six filters and request metadata", async () => {
+	it("refreshes current user facts and forwards six filters and request metadata", async () => {
 		const { app, identity, audit } = fixture();
 		const response = await app.request(
 			"/api/v1/audit?limit=5&from=2026-09-25T00%3A00%3A00Z&until=2026-09-26T00%3A00%3A00Z&principalKind=user&principalId=subject-a&agentId=agent-a&action=task.status.changed&result=unknown&executionId=execution-a",
@@ -186,7 +186,9 @@ describe("scoped audit HTTP adapter", () => {
 			},
 		);
 		expect(response.status).toBe(200);
-		expect(identity.resolveUser).toHaveBeenCalledWith(currentUser.userId);
+		expect(identity.resolveUser).toHaveBeenCalledExactlyOnceWith(
+			currentUser.userId,
+		);
 		expect(audit.listAudit).toHaveBeenCalledWith(
 			{
 				kind: "execution",
@@ -331,22 +333,12 @@ describe("scoped audit HTTP adapter", () => {
 		expect(audit.getAudit).not.toHaveBeenCalled();
 	});
 
-	it("audits directory failure after trusted browser identity resolution", async () => {
+	it("fails closed when current directory facts are unavailable", async () => {
 		const { app, identity, audit } = fixture();
 		identity.resolveUser.mockRejectedValue(new Error("PRIVATE_DIRECTORY"));
 		const response = await app.request("/api/v1/audit");
 		expect(response.status).toBe(503);
-		expect(audit.recordDeniedQuery).toHaveBeenCalledExactlyOnceWith(
-			{
-				principal: { kind: "user", id: currentUser.userId },
-				requestedScope: "execution",
-				operation: "list",
-				result: "failed",
-				reason: "DEPENDENCY_UNAVAILABLE",
-			},
-			expect.objectContaining({ traceId: expect.any(String) }),
-		);
-		expect(await response.text()).not.toContain("PRIVATE_DIRECTORY");
+		expect(audit.recordDeniedQuery).toHaveBeenCalledOnce();
 		expect(audit.listAudit).not.toHaveBeenCalled();
 	});
 

@@ -225,6 +225,20 @@
       "when": 1791095776367,
       "tag": "0035_session_sandbox_allocations",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791135995408,
+      "tag": "0036_ldap_identity_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791160373692,
+      "tag": "0037_browser_session_principal",
+      "breakpoints": true
     }
   ]
 }

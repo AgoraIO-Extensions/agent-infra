@@ -57,7 +57,10 @@ export {
 	type PostgresPlatformAuditOptionsV1,
 	PostgresPlatformAuditQueryV1,
 } from "./audit.ts";
-export { PostgresLdapSessionStoreV1 } from "./browser-session.ts";
+export {
+	type BrowserSessionPrincipal,
+	PostgresLdapSessionStoreV1,
+} from "./browser-session.ts";
 export {
 	ConversationDispatchStoreError,
 	openPostgresConversationDispatchStoreV1,
@@ -93,6 +96,7 @@ export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,
 } from "./idempotency.ts";
+export { PostgresLdapIdentityIds } from "./ldap-identity-ids.js";
 export {
 	migratePlatformDatabase,
 	type PlatformMigrationOptions,

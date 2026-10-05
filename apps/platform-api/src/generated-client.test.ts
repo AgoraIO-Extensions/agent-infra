@@ -440,7 +440,7 @@ describe("generated Pilot browser client", () => {
 			200, 200, 201, 200, 200, 200, 200, 200, 200, 200, 200, 202, 200, 200,
 		]);
 		expect(results.every(({ error }) => error === undefined)).toBe(true);
-		expect(resolve).toHaveBeenCalledTimes(results.length);
+		expect(resolve).toHaveBeenCalledTimes(results.length + 2);
 	});
 });
 

@@ -131,6 +131,8 @@ beforeAll(async () => {
 		{ idx: 33, tag: "0033_typed_generation_principal" },
 		{ idx: 34, tag: "0034_task_status_event_source" },
 		{ idx: 35, tag: "0035_session_sandbox_allocations" },
+		{ idx: 36, tag: "0036_ldap_identity_ids" },
+		{ idx: 37, tag: "0037_browser_session_principal" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({

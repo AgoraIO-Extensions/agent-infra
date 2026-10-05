@@ -1,6 +1,6 @@
 {
-  "id": "9b9589ba-5731-4ab7-b2fd-34a292bb23f0",
-  "prevId": "ef365259-c80c-464b-92e0-40a972b74056",
+  "id": "980ab031-417e-4501-abaa-92e3d477c8f3",
+  "prevId": "33972ccf-29b5-4832-95e7-a51f32eea93a",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1133,6 +1133,12 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "principal": {
+          "name": "principal",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -5165,6 +5171,74 @@
         "workload_reconciliation_identity": {
           "name": "workload_reconciliation_identity",
           "value": "jsonb_typeof(\"platform\".\"workload_reconciliations\".\"state\") = 'object' and \"platform\".\"workload_reconciliations\".\"state\" @> jsonb_build_object('schemaVersion', 1, 'agentId', \"platform\".\"workload_reconciliations\".\"agent_id\", 'revision', \"platform\".\"workload_reconciliations\".\"revision\")"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.ldap_identity_ids": {
+      "name": "ldap_identity_ids",
+      "schema": "platform",
+      "columns": {
+        "issuer": {
+          "name": "issuer",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "uid": {
+          "name": "uid",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ldap_identity_user_id_unique": {
+          "name": "ldap_identity_user_id_unique",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "ldap_identity_ids_issuer_uid_pk": {
+          "name": "ldap_identity_ids_issuer_uid_pk",
+          "columns": [
+            "issuer",
+            "uid"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ldap_identity_issuer_non_empty": {
+          "name": "ldap_identity_issuer_non_empty",
+          "value": "char_length(\"platform\".\"ldap_identity_ids\".\"issuer\") > 0"
+        },
+        "ldap_identity_uid_non_empty": {
+          "name": "ldap_identity_uid_non_empty",
+          "value": "char_length(\"platform\".\"ldap_identity_ids\".\"uid\") > 0"
+        },
+        "ldap_identity_user_id_uuid_v4": {
+          "name": "ldap_identity_user_id_uuid_v4",
+          "value": "\"platform\".\"ldap_identity_ids\".\"user_id\" ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'"
         }
       },
       "isRLSEnabled": false

@@ -9,6 +9,57 @@ const hour = 60 * 60_000;
 const initial = Date.UTC(2026, 8, 28);
 
 describe("directory synchronization", () => {
+	it("preserves independent source provenance through publication and wire readback", async () => {
+		const { fromDirectorySnapshot, toDirectorySnapshot } = await import(
+			"./wire.js"
+		);
+		let current: DirectorySnapshot | null = null;
+		const store: DirectoryStore = {
+			beginScan: async () => 1n,
+			publish: async (snapshot) => {
+				current = snapshot;
+				return {
+					status: "published",
+					summary: summarizeSnapshotChange(snapshot, null),
+				};
+			},
+			latest: async () => current,
+			close: async () => {},
+		};
+		const sync = createDirectorySynchronizer({
+			store,
+			sourceId: "enterprise-tools",
+			rootDepartmentId: 1,
+			now: () => initial,
+			source: {
+				fetchComplete: async () => ({
+					departments: [{ id: 1, name: "Company", parentId: 0 }],
+					members: [],
+				}),
+			},
+		});
+		expect((await sync.syncOnce()).status).toBe("published");
+		const published = await store.latest();
+		if (!published) throw new Error("missing snapshot");
+		expect(fromDirectorySnapshot(toDirectorySnapshot(published)).source).toBe(
+			"enterprise-tools",
+		);
+		const invalid = createDirectorySynchronizer({
+			store,
+			sourceId: "https://source.test",
+			rootDepartmentId: 1,
+			source: {
+				fetchComplete: async () => ({
+					departments: [{ id: 1, name: "Company", parentId: 0 }],
+					members: [],
+				}),
+			},
+		});
+		await expect(invalid.syncOnce()).rejects.toMatchObject({
+			reason: "invalid_snapshot",
+		});
+		expect(await store.latest()).toEqual(published);
+	});
 	it("starts the next full scan before a slow prior snapshot expires", async () => {
 		let clock = initial;
 		let generation = 0n;

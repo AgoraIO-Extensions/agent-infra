@@ -29,6 +29,7 @@ import {
 import {
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
+	ldapIdentityIds,
 	platformApiCredentials,
 	platformApplications,
 	platformUserDisables,
@@ -95,6 +96,7 @@ export {
 export {
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,
+	ldapIdentityIds,
 	platformApiCredentials,
 	platformApplications,
 	platformUserDisables,
@@ -113,6 +115,7 @@ export { browserSessions } from "./schema-sessions";
 
 export const platformInfrastructureTables = [
 	platformUserDisables,
+	ldapIdentityIds,
 	browserSessions,
 	agentPrincipalGrants,
 	apiCredentialDeliveryGrants,

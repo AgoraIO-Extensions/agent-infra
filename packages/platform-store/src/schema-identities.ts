@@ -7,6 +7,7 @@ import {
 	primaryKey,
 	text,
 	timestamp,
+	uniqueIndex,
 	varchar,
 } from "drizzle-orm/pg-core";
 import { agents } from "./schema-agents";
@@ -204,5 +205,31 @@ export const apiCredentialDeliveryGrants = platformSchema.table(
 			foreignColumns: [platformApplications.id],
 			name: "api_credential_delivery_application_fk",
 		}),
+	],
+);
+
+/** First-party LDAP references; never an employee directory or password store. */
+export const ldapIdentityIds = platformSchema.table(
+	"ldap_identity_ids",
+	{
+		issuer: varchar("issuer", { length: 256 }).notNull(),
+		uid: varchar("uid", { length: 256 }).notNull(),
+		userId: text("user_id").notNull(),
+	},
+	(table) => [
+		primaryKey({
+			name: "ldap_identity_ids_issuer_uid_pk",
+			columns: [table.issuer, table.uid],
+		}),
+		uniqueIndex("ldap_identity_user_id_unique").on(table.userId),
+		check(
+			"ldap_identity_issuer_non_empty",
+			sql`char_length(${table.issuer}) > 0`,
+		),
+		check("ldap_identity_uid_non_empty", sql`char_length(${table.uid}) > 0`),
+		check(
+			"ldap_identity_user_id_uuid_v4",
+			sql`${table.userId} ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'`,
+		),
 	],
 );

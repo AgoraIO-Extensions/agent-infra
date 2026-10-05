@@ -60,6 +60,7 @@ describe("platform-store package surface", () => {
 			"PostgresConversationExecutionTransactionV1",
 			"PostgresConversationQueryV1",
 			"PostgresFileStoreV1",
+			"PostgresLdapIdentityIds",
 			"PostgresLdapSessionStoreV1",
 			"PostgresLegacyTaskAuthorizationMigrationV1",
 			"PostgresLegacyTaskRecoveryReaderV1",

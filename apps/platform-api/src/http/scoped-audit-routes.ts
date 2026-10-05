@@ -67,6 +67,7 @@ async function queryScope(
 	const browser = await resolveIdentity(identity, request, traceId);
 	capturePrincipal({ kind: "user", id: browser.userId });
 	const user = await resolveCurrentTaskUser(identity, browser.userId, traceId);
+	if (!user) throw new HttpProtocolError("AUTHENTICATION_REQUIRED", traceId);
 	return parsePlatformAuditQueryScopeV1({
 		kind: "execution",
 		principal: { kind: "user", id: browser.userId },
