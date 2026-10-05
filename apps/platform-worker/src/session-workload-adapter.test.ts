@@ -265,7 +265,7 @@ describe("session sandbox workload adapter", () => {
 		await adapter.apply(allocation);
 		const pod = await client.read("Pod", allocation.podName);
 		if (!pod?.metadata) throw new Error("Missing Pod");
-		pod.metadata.deletionTimestamp = new Date().toISOString();
+		pod.metadata.deletionTimestamp = new Date();
 		await expect(adapter.observe(allocation)).resolves.toMatchObject({
 			status: "unknown",
 		});
