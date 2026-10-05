@@ -693,17 +693,22 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					kind,
 					expected.metadata?.name ?? "",
 				);
-				if (!current && existing?.deleteAttempted && existing.absence) {
+				if (!current && existing?.deleteAttempted) {
+					const absence = existing.absence ?? {
+						kind: existing.resource.kind,
+						namespace: existing.resource.namespace,
+						name: existing.resource.name,
+					};
 					await record(
 						existing.resource,
 						"absent",
 						existing.deleteCallResult,
-						existing.absence,
+						absence,
 					);
 					deletedResources.push({
 						resource: existing.resource,
 						preconditions: existing.preconditions,
-						absence: existing.absence,
+						absence,
 					});
 					continue;
 				}
@@ -717,11 +722,19 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					prior.name !== current.metadata?.name
 				)
 					throw new WorkloadKubernetesError("conflict");
-				const identity = {
-					...prior,
-					resourceVersion:
-						current.metadata?.resourceVersion ?? prior.resourceVersion,
-				};
+				const currentResourceVersion = current.metadata?.resourceVersion;
+				if (
+					existing &&
+					(existing.resource.uid !== current.metadata?.uid ||
+						existing.preconditions.resourceVersion !== currentResourceVersion)
+				)
+					throw new WorkloadKubernetesError("conflict");
+				const identity = existing
+					? existing.resource
+					: {
+							...prior,
+							resourceVersion: currentResourceVersion ?? prior.resourceVersion,
+						};
 				if (!existing?.deleteAttempted)
 					await record(identity, "delete-requested", "not-attempted");
 				try {
@@ -730,8 +743,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					await record(identity, "unknown", "unknown");
 					throw error;
 				}
+				await record(identity, "delete-requested", "acknowledged");
 				if (await options.client.read(kind, expected.metadata?.name ?? "")) {
-					await record(identity, "unknown", "unknown");
 					throw new WorkloadKubernetesError("unavailable");
 				}
 				await record(identity, "absent", "acknowledged", {
@@ -781,17 +794,22 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				};
 				const existing = progressByKind.get(prior.kind);
 				const current = await options.client.read(prior.kind, prior.name);
-				if (!current && existing?.deleteAttempted && existing.absence) {
+				if (!current && existing?.deleteAttempted) {
+					const absence = existing.absence ?? {
+						kind: existing.resource.kind,
+						namespace: existing.resource.namespace,
+						name: existing.resource.name,
+					};
 					await record(
 						existing.resource,
 						"absent",
 						existing.deleteCallResult,
-						existing.absence,
+						absence,
 					);
 					deletedResources.push({
 						resource: existing.resource,
 						preconditions: existing.preconditions,
-						absence: existing.absence,
+						absence,
 					});
 					continue;
 				}
@@ -802,10 +820,19 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					!current.metadata.resourceVersion
 				)
 					throw new WorkloadKubernetesError("conflict");
-				const identity = {
-					...prior,
-					resourceVersion: current.metadata.resourceVersion,
-				};
+				if (
+					existing &&
+					(existing.resource.uid !== current.metadata?.uid ||
+						existing.preconditions.resourceVersion !==
+							current.metadata.resourceVersion)
+				)
+					throw new WorkloadKubernetesError("conflict");
+				const identity = existing
+					? existing.resource
+					: {
+							...prior,
+							resourceVersion: current.metadata.resourceVersion,
+						};
 				if (!existing?.deleteAttempted)
 					await record(identity, "delete-requested", "not-attempted");
 				try {
@@ -814,8 +841,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					await record(identity, "unknown", "unknown");
 					throw error;
 				}
+				await record(identity, "delete-requested", "acknowledged");
 				if (await options.client.read(prior.kind, prior.name)) {
-					await record(identity, "unknown", "unknown");
 					throw new WorkloadKubernetesError("unavailable");
 				}
 				await record(identity, "absent", "acknowledged", {
