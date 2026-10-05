@@ -53,6 +53,8 @@ import {
 import { createProductionConversationRuntimeResolverV2 } from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
+	runtimeTlsBindingFixture,
+	runtimeTlsSecretFixture,
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
@@ -295,6 +297,27 @@ function fixture(
 	> = {},
 ) {
 	const api = fakeKubernetesApi();
+	const tlsAgents = [
+		"agent-a",
+		"agent-codex",
+		"agent-claude",
+		"agent-acp",
+		"agent-pi",
+	];
+	const runtimeTlsSecrets = new Map(
+		tlsAgents.map((agentId) => {
+			const name = `runtime-tls-${workloadResourceNameV1(agentId)}`;
+			return [name, runtimeTlsSecretFixture(name, agentId)] as const;
+		}),
+	);
+	const readResource = api.client.read.bind(api.client);
+	api.client.read = (async (
+		kind: Parameters<typeof api.client.read>[0],
+		name: string,
+	) => {
+		const secret = kind === "Secret" ? runtimeTlsSecrets.get(name) : undefined;
+		return secret ? structuredClone(secret) : readResource(kind, name);
+	}) as typeof api.client.read;
 	let configuration = inputOverrides.configuration ?? configurationFixture();
 	let state: WorkloadReconciliationStateV1 | null = null;
 	let management: WorkloadReconciliationInputV1["management"] = {
@@ -314,6 +337,7 @@ function fixture(
 		approvalRevision: 1,
 		failureCode: null,
 	};
+	const runtimeFetch = vi.fn(async () => new Response("ok"));
 	const options: WorkloadRuntimeOptionsV1 = {
 		templateModelBindings: [
 			{
@@ -325,7 +349,10 @@ function fixture(
 		],
 		workerId: "worker-a",
 		client: api.client,
-		policy: workloadTestPolicy,
+		policy: {
+			...workloadTestPolicy,
+			runtimeTls: tlsAgents.map(runtimeTlsBindingFixture),
+		},
 		registry: workloadRegistryFixture({
 			schemaVersion: 1,
 			interactionMode: "platform-adapter",
@@ -346,10 +373,19 @@ function fixture(
 				code: "SECRET_KEY_UNAVAILABLE",
 			}),
 		},
-		fetch: vi.fn(async () => new Response("ok")),
+		fetch: runtimeFetch,
+		runtimeTlsFetch: () => runtimeFetch,
 		probeRuntime: async () => ({ core: "passed", capabilities: {} }),
 		...overrides,
 	};
+	if (overrides.policy && overrides.policy.runtimeTls === undefined)
+		(options as { policy: WorkloadRuntimeOptionsV1["policy"] }).policy = {
+			...overrides.policy,
+			runtimeTls: tlsAgents.map(runtimeTlsBindingFixture),
+		};
+	if (overrides.fetch && !overrides.runtimeTlsFetch)
+		(options as { runtimeTlsFetch?: () => typeof fetch }).runtimeTlsFetch =
+			() => options.fetch ?? runtimeFetch;
 	return {
 		...api,
 		options,
@@ -1804,7 +1840,7 @@ describe("assembled Workload Runtime contracts", () => {
 			if (lifecycle === "active") {
 				const adapter = createKubernetesRuntimeAdapterV1({
 					client: f.client,
-					policy: workloadTestPolicy,
+					policy: f.options.policy,
 					probe: async () => true,
 				});
 				await adapter.applyImmutableSecret(
@@ -1897,7 +1933,7 @@ describe("assembled Workload Runtime contracts", () => {
 			expect(record.kubernetesSecretRef).toEqual(ref);
 			const adapter = createKubernetesRuntimeAdapterV1({
 				client: f.client,
-				policy: workloadTestPolicy,
+				policy: f.options.policy,
 				probe: async () => true,
 			});
 			const secretUid = await adapter.applyImmutableSecret(
@@ -2046,7 +2082,7 @@ describe("assembled Workload Runtime contracts", () => {
 			});
 			const adapter = createKubernetesRuntimeAdapterV1({
 				client: f.client,
-				policy: workloadTestPolicy,
+				policy: f.options.policy,
 				probe: async () => true,
 			});
 			const secretUid = await adapter.applyImmutableSecret(
@@ -2160,7 +2196,7 @@ describe("assembled Workload Runtime contracts", () => {
 			});
 			const adapter = createKubernetesRuntimeAdapterV1({
 				client: f.client,
-				policy: workloadTestPolicy,
+				policy: f.options.policy,
 				probe: async () => true,
 			});
 			const secretUid = await adapter.applyImmutableSecret(
@@ -2935,7 +2971,7 @@ describe("assembled Workload Runtime contracts", () => {
 		await f.tick(5);
 		expect(fetcher).toHaveBeenCalledWith(
 			expect.stringMatching(
-				/^http:\/\/agent-[a-f0-9]+-probe\.workload-test\.svc:8080\/healthz$/,
+				/^https:\/\/agent-[a-f0-9]+-probe\.workload-test\.svc:8080\/healthz$/,
 			),
 			expect.objectContaining({
 				redirect: "error",
@@ -2957,6 +2993,7 @@ it("persists exact capacity and binds readiness to fence/image while preserving 
 	};
 	const policy = {
 		...workloadTestPolicy,
+		runtimeTls: [runtimeTlsBindingFixture("agent-a")],
 		runtimeAuth: {
 			workerId: signing.workerId,
 			grantIssuer: signing.issuer,

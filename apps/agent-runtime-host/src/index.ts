@@ -1,4 +1,5 @@
 import { createPublicKey, type KeyObject } from "node:crypto";
+import { createServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -46,10 +47,16 @@ import {
 	readRuntimeLegacyJournal,
 } from "./legacy-migration-journal.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
+import {
+	type RuntimeHostTls,
+	readRuntimeHostTls,
+	validateRuntimeHostTls,
+} from "./runtime-tls.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 
 interface StartOptions {
+	tls: RuntimeHostTls;
 	readinessWorkerId?: string;
 	runtimeWorkerId?: string;
 	verifyGrantV2?: (
@@ -82,10 +89,17 @@ function requiredEnvironment(environment: NodeJS.ProcessEnv, name: string) {
 }
 
 export function startRuntimeHost(options: StartOptions) {
+	validateRuntimeHostTls(options.tls);
 	const port = options.port ?? runtimePort(process.env.PORT, 3003);
 	const log = options.log ?? console.info;
 	return serve(
 		{
+			createServer,
+			serverOptions: {
+				cert: options.tls.cert,
+				key: options.tls.key,
+				minVersion: "TLSv1.2",
+			},
 			fetch: createRuntimeHostApp(options).fetch,
 			port,
 		},
@@ -361,8 +375,16 @@ export async function closeRuntimeHost(
 }
 
 async function startFromEnvironment() {
+	assertRuntimeProcessProtection();
+	const tls = await readRuntimeHostTls(process.env);
 	const runtime = await assembleRuntimeHost(process.env);
-	const server = startRuntimeHost(runtime);
+	let server: ReturnType<typeof startRuntimeHost>;
+	try {
+		server = startRuntimeHost({ ...runtime, tls });
+	} catch (error) {
+		await runtime.close();
+		throw error;
+	}
 	let stopping = false;
 	const stop = () => {
 		if (stopping) return;
@@ -396,6 +418,7 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 				: error instanceof Error &&
 						[
 							"RUNTIME_CONFIGURATION_INVALID",
+							"RUNTIME_TLS_CONFIGURATION_INVALID",
 							"RUNTIME_CODEX_PROVENANCE_MISMATCH",
 						].includes(error.message)
 					? error.message

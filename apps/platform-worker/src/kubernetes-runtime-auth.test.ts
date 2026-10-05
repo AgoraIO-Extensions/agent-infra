@@ -3,6 +3,7 @@ import type { V1StatefulSet } from "@kubernetes/client-node";
 import { expect, it } from "vitest";
 import {
 	fakeKubernetesApi,
+	runtimeTlsSecretFixture,
 	workloadDesiredFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
@@ -10,6 +11,7 @@ import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.j
 
 function fixture() {
 	const api = fakeKubernetesApi();
+	api.seed(runtimeTlsSecretFixture("custom-agent-tls", "custom-agent"));
 	const { publicKey } = generateKeyPairSync("ed25519");
 	const runtimeAuth = {
 		workerId: "worker-a",
@@ -22,7 +24,21 @@ function fixture() {
 	};
 	const adapter = createKubernetesRuntimeAdapterV1({
 		client: api.client,
-		policy: { ...workloadTestPolicy, runtimeAuth },
+		policy: {
+			...workloadTestPolicy,
+			runtimeAuth,
+			runtimeTls: [
+				{
+					agentId: "custom-agent",
+					namespace: workloadTestPolicy.namespace,
+					serviceDnsNames: ["", "-probe"].map(
+						(suffix) =>
+							`${workloadDesiredFixture(2, "custom-agent", "internal-only").service.name}${suffix}.${workloadTestPolicy.namespace}.svc`,
+					),
+					serverSecretRef: { name: "custom-agent-tls" },
+				},
+			],
+		},
 		probe: async () => true,
 	});
 	return { ...api, adapter, runtimeAuth };

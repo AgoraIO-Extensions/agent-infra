@@ -99,7 +99,7 @@ function probeInput(signal = new AbortController().signal) {
 		workloadRevision: desired.workloadRevision,
 		fence: desired.fence,
 		imageDigest: desired.imageDigest,
-		baseUrl: `http://${workloadResourceNameV1(desired.agentId)}-probe.${workloadTestPolicy.namespace}.svc:${desired.service.port}`,
+		baseUrl: `https://${workloadResourceNameV1(desired.agentId)}-probe.${workloadTestPolicy.namespace}.svc:${desired.service.port}`,
 		manifest: desired.runtimeManifest,
 		signal,
 	};
@@ -160,6 +160,7 @@ describe("production Worker deployment", () => {
 			modelCatalog: { load: async () => catalogFixture() },
 			templateModelBindings: [],
 			runtimeProbe: authorize(),
+			runtimeFetch: fetch,
 		};
 	}
 	it.each([
@@ -505,7 +506,7 @@ describe("authenticated Workload Runtime probe", () => {
 		await expect(
 			probe({
 				...probeInput(),
-				baseUrl: "http://another-agent.workload-test.svc:8080",
+				baseUrl: "https://another-agent.workload-test.svc:8080",
 			}),
 		).rejects.toThrow("WORKER_RUNTIME_PROBE_FAILED");
 		expect(authorization.authorize).not.toHaveBeenCalled();

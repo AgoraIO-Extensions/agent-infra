@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import {
 	ExecutionGrantV1Schema,
@@ -46,6 +45,7 @@ import {
 	type ConversationRuntimeOperationEventV2,
 	type ConversationRuntimeStatusRequestV2,
 } from "@agent-infra/platform-core";
+import { runtimeTlsFetch } from "./runtime-tls-transport.js";
 
 export interface WorkerRuntimeHostClientOptionsV1 {
 	readonly baseUrl: string;
@@ -64,7 +64,7 @@ function endpoint(baseUrl: string, path: string) {
 		throw new TypeError("RuntimeHost base URL is invalid");
 	}
 	if (
-		(base.protocol !== "http:" && base.protocol !== "https:") ||
+		base.protocol !== "https:" ||
 		base.username ||
 		base.password ||
 		base.search ||
@@ -134,6 +134,7 @@ function requestInit(
 ): RequestInit {
 	return {
 		method: "POST",
+		redirect: "error",
 		headers: {
 			authorization: `Bearer ${serviceToken}`,
 			"content-type": "application/json",
@@ -375,8 +376,8 @@ export function createWorkerRuntimeHostClientV1(
 	if (!options || typeof options !== "object" || !options.serviceToken) {
 		throw new TypeError("RuntimeHost client options are invalid");
 	}
-	const fetcher = options.fetch ?? fetch;
 	const dispatchBase = endpoint(options.baseUrl, "/");
+	const fetcher = options.fetch ?? runtimeTlsFetch();
 	return {
 		async dispatch(request, signal) {
 			let selected: ReturnType<typeof dispatchBody>;
@@ -543,8 +544,8 @@ export function createWorkerRuntimeHostClientV3(
 ) {
 	if (!options || typeof options !== "object" || !options.serviceToken)
 		throw new TypeError("RuntimeHost client options are invalid");
-	const fetcher = options.fetch ?? fetch;
 	const base = endpoint(options.baseUrl, "/");
+	const fetcher = options.fetch ?? runtimeTlsFetch();
 	async function request<T extends { traceId: string }, R>(
 		path: string,
 		value: T,

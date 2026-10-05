@@ -1,7 +1,10 @@
 import type { ExecutionGrantV1 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 
-import { createWorkerRuntimeHostClientV1 } from "./runtime-host-client.js";
+import {
+	createWorkerRuntimeHostClientV1,
+	createWorkerRuntimeHostClientV3,
+} from "./runtime-host-client.js";
 
 const grant: ExecutionGrantV1 = {
 	schemaVersion: 1,
@@ -96,6 +99,17 @@ function response(
 }
 
 describe("Worker RuntimeHost HTTP/SSE client", () => {
+	it.each([createWorkerRuntimeHostClientV1, createWorkerRuntimeHostClientV3])(
+		"rejects plaintext before any Runtime credentials can be sent",
+		(createClient) => {
+			expect(() =>
+				createClient({
+					baseUrl: "http://runtime.internal/",
+					serviceToken: "synthetic-service-token",
+				}),
+			).toThrow("RuntimeHost base URL is invalid");
+		},
+	);
 	it.each([
 		["turn.submit", "/internal/runtime/v2/turns"],
 		["turn.supplement", "/internal/runtime/v1/instructions"],

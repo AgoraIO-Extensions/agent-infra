@@ -226,7 +226,7 @@ function harness(
 		throw new Error(`Unexpected runtime request: ${path}`);
 	});
 	const resolver = vi.fn(async () => ({
-		baseUrl: "http://runtime.test",
+		baseUrl: "https://runtime.test",
 		serviceToken: "synthetic-transport-proof",
 		workerId: "transport",
 	}));
@@ -591,7 +591,7 @@ describe("Trusted conversation Runtime adapter", () => {
 			if (!record) throw new Error("missing fixture");
 			h.setRecord({ ...record, configurationRevision: 2 });
 			return {
-				baseUrl: "http://runtime.test",
+				baseUrl: "https://runtime.test",
 				serviceToken: "synthetic",
 				workerId: "transport",
 			};
@@ -755,7 +755,7 @@ describe("Trusted conversation Runtime adapter", () => {
 			}),
 		).rejects.toMatchObject({ code: "RUNTIME_ACCEPTANCE_UNKNOWN" });
 		expect(h.sent().url).toBe(
-			"http://runtime.test/internal/runtime/v3/original-binding",
+			"https://runtime.test/internal/runtime/v3/original-binding",
 		);
 		expect(h.sent().claims).toMatchObject({
 			purpose: "control",
@@ -815,7 +815,7 @@ describe("Trusted conversation Runtime adapter", () => {
 			}),
 		).resolves.toMatchObject({ outcome: "found", status: "running" });
 		expect(String(h.fetcher.mock.calls[1]?.[0])).toBe(
-			"http://runtime.test/internal/runtime/v3/status",
+			"https://runtime.test/internal/runtime/v3/status",
 		);
 		h.runtime.close();
 	});
@@ -1604,7 +1604,7 @@ describe("Trusted conversation Runtime adapter", () => {
 		h.resolver.mockImplementation(async () => {
 			h.store.readRuntimeState.mockResolvedValue(null);
 			return {
-				baseUrl: "http://runtime.test",
+				baseUrl: "https://runtime.test",
 				serviceToken: "synthetic",
 				workerId: "transport",
 			};
@@ -1666,7 +1666,7 @@ describe("durable generation isolation Worker wiring", () => {
 					result: { outcome: "accepted", status: "cancelled" },
 				});
 				expect(h.sent()).toMatchObject({
-					url: "http://runtime.test/internal/runtime/v3/generations/cancel",
+					url: "https://runtime.test/internal/runtime/v3/generations/cancel",
 					claims: {
 						principal: { kind: "user", id: "user" },
 						purpose: "control",
