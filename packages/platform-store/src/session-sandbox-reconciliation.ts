@@ -511,7 +511,9 @@ export async function recordSandboxDeletionProgress(
 				!source?.observation?.resources.some(
 					(resource) =>
 						resource.kind === progress.resource.kind &&
-						resource.resourceVersion === progress.preconditions.resourceVersion,
+						resource.resourceVersion ===
+							progress.preconditions.resourceVersion &&
+						resource.controllerUid === progress.resource.controllerUid,
 				))) ||
 		!canAdvanceSessionSandboxDeletionProgressV1(previous, progress)
 	)

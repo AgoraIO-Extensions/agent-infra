@@ -906,6 +906,25 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						leaseDurationMs: 30_000,
 					}),
 				).toEqual({ status: "stale" });
+				const pod = resources.find((resource) => resource.kind === "Pod");
+				if (!pod) throw new Error("Expected original Pod identity");
+				expect(pod.controllerUid).toBeUndefined();
+				expect(
+					await store.recordSandboxDeletionProgress({
+						claim: drain,
+						progress: {
+							...deleteIntent,
+							deleteAttemptId: "sandbox-delete-pod",
+							resource: { ...pod, controllerUid: "unobserved-controller" },
+							preconditions: {
+								uid: pod.uid,
+								resourceVersion: pod.resourceVersion,
+							},
+						},
+						leaseDurationMs: 30_000,
+					}),
+				).toEqual({ status: "stale" });
+
 				const [beforeIntent] =
 					await client`select payload from platform.outbox_items where id = ${request.itemId}`;
 				expect(beforeIntent?.payload.lifecycle.deletionProgress ?? []).toEqual(
