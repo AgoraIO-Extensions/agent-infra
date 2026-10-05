@@ -79,7 +79,10 @@ export function createSessionSandboxEgressV1(options: {
 		)
 			throw new WorkloadKubernetesError("policy");
 	}
-	function expected(value: SessionSandboxEgressBindingV1, revoked = false) {
+	function buildExpectedPolicy(
+		value: SessionSandboxEgressBindingV1,
+		revoked = false,
+	) {
 		assertValidBinding(value);
 		const labels = {
 			[`${prefix}agent-id`]: value.agentId,
@@ -117,7 +120,7 @@ export function createSessionSandboxEgressV1(options: {
 			throw new WorkloadKubernetesError("conflict");
 		return { name, uid, resourceVersion };
 	}
-	function owned(
+	function assertOwnedPolicy(
 		actual: V1NetworkPolicy,
 		desired: V1NetworkPolicy,
 		known: SessionSandboxEgressReceiptV1 | undefined,
@@ -182,7 +185,7 @@ export function createSessionSandboxEgressV1(options: {
 		)
 			throw new WorkloadKubernetesError("policy");
 	}
-	async function write(
+	async function applyPolicy(
 		value: SessionSandboxEgressBindingV1,
 		known: SessionSandboxEgressReceiptV1 | undefined,
 		revoked: boolean,
@@ -192,13 +195,13 @@ export function createSessionSandboxEgressV1(options: {
 			binding,
 			revoked ? "revoke" : "apply",
 			async () => {
-				const desired = expected(binding, revoked);
+				const desired = buildExpectedPolicy(binding, revoked);
 				await exclusive(desired);
 				const current = await client.read<V1NetworkPolicy>(
 					"NetworkPolicy",
 					desired.metadata.name,
 				);
-				if (current) owned(current, desired, known, true);
+				if (current) assertOwnedPolicy(current, desired, known, true);
 				else if (known) throw new WorkloadKubernetesError("conflict");
 				assertValidBinding(binding); // Lease can expire during API reads.
 				const applied = current
@@ -222,7 +225,7 @@ export function createSessionSandboxEgressV1(options: {
 					result.name,
 				);
 				if (!observed) throw new WorkloadKubernetesError("conflict");
-				owned(observed, desired, result);
+				assertOwnedPolicy(observed, desired, result);
 				if (!matchesNetworkPolicySpec(observed.spec, desired.spec))
 					throw new WorkloadKubernetesError("conflict");
 				await exclusive(desired);
@@ -235,24 +238,24 @@ export function createSessionSandboxEgressV1(options: {
 		apply: (
 			value: SessionSandboxEgressBindingV1,
 			known?: SessionSandboxEgressReceiptV1,
-		) => write(value, known, false),
+		) => applyPolicy(value, known, false),
 		revoke: (
 			value: SessionSandboxEgressBindingV1,
 			known: SessionSandboxEgressReceiptV1,
-		) => write(value, known, true),
+		) => applyPolicy(value, known, true),
 		async observe(
 			value: SessionSandboxEgressBindingV1,
 			known: SessionSandboxEgressReceiptV1,
 		) {
 			const binding = structuredClone(value);
 			return options.withCurrentAllocation(binding, "observe", async () => {
-				const desired = expected(binding);
+				const desired = buildExpectedPolicy(binding);
 				const current = await client.read<V1NetworkPolicy>(
 					"NetworkPolicy",
 					desired.metadata.name,
 				);
 				if (!current) return false;
-				owned(current, desired, known);
+				assertOwnedPolicy(current, desired, known);
 				await exclusive(desired);
 				assertValidBinding(binding);
 				return matchesNetworkPolicySpec(current.spec, desired.spec);
@@ -264,13 +267,13 @@ export function createSessionSandboxEgressV1(options: {
 		) {
 			const binding = structuredClone(value);
 			return options.withCurrentAllocation(binding, "remove", async () => {
-				const desired = expected(binding, true);
+				const desired = buildExpectedPolicy(binding, true);
 				const current = await client.read<V1NetworkPolicy>(
 					"NetworkPolicy",
 					desired.metadata.name,
 				);
 				if (!current) return;
-				owned(current, desired, known);
+				assertOwnedPolicy(current, desired, known);
 				// Never remove the last deny while any generation of this Sandbox has a Pod.
 				if (
 					(await client.list("Pod", `${prefix}sandbox-id=${binding.sandboxId}`))
