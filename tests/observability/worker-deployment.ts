@@ -1,5 +1,8 @@
 import { generateKeyPairSync } from "node:crypto";
-import type { SessionSandboxObservationV1 } from "@agent-infra/platform-core";
+import type {
+	SessionSandboxObservationV1,
+	SessionSandboxReconciliationClaimV1,
+} from "../../packages/platform-core/src/session-sandbox-reconciliation.js";
 import type { PlatformConversationWorkerOptionsV2 } from "../../apps/platform-worker/src/conversation-worker.js";
 
 let databaseUrl: string | undefined;
@@ -24,8 +27,9 @@ export async function createPlatformConversationWorkerOptionsV2(
 			namespace: "workload-test",
 			resourceConfigurationHash: "controlled-observability-sandbox-policy",
 		},
-		receiveSandbox: async (
-			_signal: AbortSignal,
+	receiveSandbox: async (
+		_claim: SessionSandboxReconciliationClaimV1,
+		_signal: AbortSignal,
 		): Promise<SessionSandboxObservationV1> => ({
 			status: "unknown",
 			resources: [],
@@ -63,7 +67,7 @@ export async function createPlatformConversationWorkerOptionsV2(signal) {
   signal.throwIfAborted();
   return {
     sandboxPolicy: { namespace: 'workload-test', resourceConfigurationHash: 'controlled-observability-sandbox-policy' },
-    receiveSandbox: async (sandboxSignal) => { sandboxSignal.throwIfAborted(); return { status: 'unknown', resources: [] }; },
+    receiveSandbox: async (_claim, sandboxSignal) => { sandboxSignal.throwIfAborted(); return { status: 'unknown', resources: [] }; },
     databaseUrl: ${JSON.stringify(input.databaseUrl)},
     pollIntervalMs: 30_000,
     workerId: 'worker-queue-child',
