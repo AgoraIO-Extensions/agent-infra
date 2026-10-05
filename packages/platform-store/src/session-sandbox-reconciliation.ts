@@ -494,8 +494,7 @@ export async function recordSandboxDeletionProgress(
 				resource.kind === progress.resource.kind &&
 				resource.namespace === progress.resource.namespace &&
 				resource.name === progress.resource.name &&
-				resource.uid === progress.resource.uid &&
-				resource.resourceVersion === progress.preconditions.resourceVersion,
+				resource.uid === progress.resource.uid,
 		) &&
 		progress.sourceGeneration === source.sandbox.generation &&
 		progress.resourceFence === source.resourceFence &&
@@ -507,8 +506,13 @@ export async function recordSandboxDeletionProgress(
 	);
 	if (
 		(!previous &&
-			progress.managementFence !==
-				context.lifecycle.authority.managementFence) ||
+			(progress.managementFence !==
+				context.lifecycle.authority.managementFence ||
+				!source?.observation?.resources.some(
+					(resource) =>
+						resource.kind === progress.resource.kind &&
+						resource.resourceVersion === progress.preconditions.resourceVersion,
+				))) ||
 		!canAdvanceSessionSandboxDeletionProgressV1(previous, progress)
 	)
 		return { status: "stale" };

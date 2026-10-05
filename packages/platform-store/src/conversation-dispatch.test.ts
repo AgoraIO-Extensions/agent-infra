@@ -976,6 +976,34 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						}),
 					).toEqual({ status: "stale" });
 
+				if (mode === "recover") {
+					// A terminating readback may advance the object's RV, not the original DELETE conditions.
+					expect(
+						await store.recordSandboxObservation({
+							claim: drain,
+							observation: {
+								status: "observed",
+								resources: resources.map((resource) =>
+									resource.kind === "Service"
+										? { ...resource, resourceVersion: "terminating-version" }
+										: resource,
+								),
+							},
+						}),
+					).toBe("unknown");
+					await client`update platform.outbox_items set available_at = now() where id = ${request.itemId}`;
+					drain = await store.claimSandboxReconciliation(request);
+					if (!drain?.lifecycle)
+						throw new Error(
+							"Expected original attempt after updated observation",
+						);
+					expect(drain.lifecycle.deletionProgress).toEqual([deleteIntent]);
+					expect(drain.lifecycle.source.observation?.resources).toContainEqual({
+						...service,
+						resourceVersion: "terminating-version",
+					});
+				}
+
 				const attemptResult = await store.recordSandboxDeletionProgress({
 					claim: drain,
 					progress: {
