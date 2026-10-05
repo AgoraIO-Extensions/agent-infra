@@ -27,12 +27,16 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { parseAllDocuments } from "yaml";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
 import { seedStandardWorkloadHostV1 } from "../../../tests/fixtures/standard-workload-host-deployment.js";
+import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import {
 	workloadDesiredFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
-import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import {
+	createKubernetesRuntimeAdapterV1,
+	workloadResourceNameV1,
+} from "./kubernetes-runtime-adapter.js";
 import { createPlatformWorkloadWorkerV1 } from "./workload-worker.js";
 
 const execFile = promisify(execFileCallback);
@@ -315,12 +319,30 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			const database = await startPostgresTestDatabase("selector-host");
 			const sql = postgres(database.databaseUrl, { onnotice: () => undefined });
 			let worker: ReturnType<typeof createPlatformWorkloadWorkerV1> | undefined;
+			let tls: Awaited<ReturnType<typeof runtimeTlsFixture>> | undefined;
 			try {
 				await migratePlatformDatabase(database);
 				const seed = await seedStandardWorkloadHostV1(
 					database.databaseUrl,
 					imageDigest,
 				);
+				const runtimeName = workloadResourceNameV1(seed.agentId);
+				const serviceDnsNames = [
+					`${runtimeName}.${namespace}.svc`,
+					`${runtimeName}-probe.${namespace}.svc`,
+				];
+				tls = await runtimeTlsFixture({ dnsNames: serviceDnsNames });
+				const tlsSecretName = "selector-host-runtime-tls";
+				apply({
+					apiVersion: "v1",
+					kind: "Secret",
+					metadata: { name: tlsSecretName, namespace },
+					type: "kubernetes.io/tls",
+					data: {
+						"tls.crt": Buffer.from(tls.cert).toString("base64"),
+						"tls.key": Buffer.from(tls.key).toString("base64"),
+					},
+				});
 				const publicKey = generateKeyPairSync("ed25519")
 					.publicKey.export({ type: "spki", format: "pem" })
 					.toString();
@@ -355,6 +377,14 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						...workloadTestPolicy,
 						imageRepository: process.env.WORKLOAD_KIND_REPOSITORY ?? "",
 						routeNamespace: namespace,
+						runtimeTls: [
+							{
+								agentId: seed.agentId,
+								namespace,
+								serviceDnsNames,
+								serverSecretRef: { name: tlsSecretName },
+							},
+						],
 						resources: {
 							requests: { cpu: "100m", memory: "128Mi" },
 							limits: { cpu: "1000m", memory: "512Mi" },
@@ -523,6 +553,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			} finally {
 				try {
 					await worker?.stop();
+					await tls?.cleanup();
 				} finally {
 					await sql.end().finally(() => database.stop());
 				}

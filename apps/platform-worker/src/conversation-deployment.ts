@@ -132,7 +132,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				)
 					throw new Error();
 				return {
-					baseUrl: `http://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
+					baseUrl: `https://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
 				};
@@ -152,6 +152,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			if (
 				deployment.agentId !== input.agentId ||
 				deployment.runtimeManifest.interactionMode !== "platform-adapter"
+			)
+				throw new Error();
+			if (
+				!workload.policy.runtimeTls?.some(
+					(binding) => binding.agentId === input.agentId,
+				)
 			)
 				throw new Error();
 			// observe checks actual ownership, UID/generation, Pod/spec/Secret/network
@@ -237,9 +243,9 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				)
 					throw new Error();
 				return {
-					// Session sandboxes use their own Service contract; Agent runtime TLS
-					// policy does not imply that sandbox resources expose TLS.
-					baseUrl: `http://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
+					// Preserve the Session-owned Service. Its TLS leaf provisioning
+					// remains the Session owner's responsibility; never downgrade.
+					baseUrl: `https://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
 				};
@@ -247,7 +253,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			input.signal.throwIfAborted();
 			const service = `${workloadResourceNameV1(input.agentId)}${input.purpose === "control" ? "-probe" : ""}`;
 			return {
-				baseUrl: `http://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
+				baseUrl: `https://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
 				serviceToken,
 				workerId: signing.workerId,
 			};

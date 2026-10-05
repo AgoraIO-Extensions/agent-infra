@@ -43,6 +43,19 @@ export const workloadTestPolicy: KubernetesWorkloadPolicyV1 = {
 	},
 };
 
+export function runtimeTlsBindingFixture(agentId: string) {
+	const name = workloadResourceNameV1(agentId);
+	return {
+		agentId,
+		namespace: workloadTestPolicy.namespace,
+		serviceDnsNames: [
+			`${name}.${workloadTestPolicy.namespace}.svc`,
+			`${name}-probe.${workloadTestPolicy.namespace}.svc`,
+		],
+		serverSecretRef: { name: `runtime-tls-${name}` },
+	};
+}
+
 export function runtimeTlsSecretFixture(name: string): V1Secret {
 	return {
 		apiVersion: "v1",

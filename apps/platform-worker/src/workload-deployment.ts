@@ -27,6 +27,7 @@ import {
 	createKubernetesRuntimeAdapterV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
+import { runtimeTlsFetch } from "./runtime-tls-transport.js";
 import type { PlatformWorkloadWorkerOptionsV1 } from "./workload-worker.js";
 
 type ProbeRequest = Omit<WorkloadReadinessRequestV1, "grant">;
@@ -182,11 +183,15 @@ export async function createProductionWorkloadWorkerOptionsV1(
 		const modelAccess = createModelAccessValidatorV1({
 			fetch: input.modelFetch,
 		});
+		const runtimeFetch = input.runtimeFetch;
+		const managedRuntimeFetch = runtimeFetch
+			? () => runtimeFetch
+			: runtimeTlsFetch;
 		const probeRuntime = createWorkloadRuntimeProbeV1({
 			namespace: input.policy.namespace,
 			workerId: input.workerId,
 			authorization: input.runtimeProbe,
-			fetch: input.runtimeFetch,
+			fetch: runtimeFetch,
 		});
 		signal.throwIfAborted();
 		return {
@@ -206,7 +211,8 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			executionCapacityProfiles: structuredClone(
 				input.executionCapacityProfiles,
 			),
-			fetch: input.runtimeFetch,
+			fetch: runtimeFetch,
+			runtimeTlsFetch: managedRuntimeFetch,
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,
 			log: input.log,
@@ -234,7 +240,7 @@ export function createWorkloadRuntimeProbeV1(options: {
 					signal.addEventListener("abort", abort, { once: true });
 				}),
 				(async () => {
-					const origin = `http://${workloadResourceNameV1(input.agentId)}-probe.${options.namespace}.svc:${input.manifest.service.port}`;
+					const origin = `https://${workloadResourceNameV1(input.agentId)}-probe.${options.namespace}.svc:${input.manifest.service.port}`;
 					if (
 						input.baseUrl !== origin ||
 						!Number.isSafeInteger(input.workloadRevision) ||
@@ -285,7 +291,7 @@ export function createWorkloadRuntimeProbeV1(options: {
 						)
 					)
 						throw new Error();
-					const response = await (options.fetch ?? fetch)(
+					const response = await (options.fetch ?? runtimeTlsFetch())(
 						`${origin}/internal/runtime/v1/readiness`,
 						{
 							method: "POST",
