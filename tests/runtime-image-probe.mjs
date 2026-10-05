@@ -15,6 +15,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -757,26 +758,41 @@ function assertRedacted(text) {
 }
 
 async function request(path, body, token = serviceToken) {
-	const response = await fetch(
-		`http://127.0.0.1:3003/internal/runtime/${path}`,
-		{
-			method: "POST",
-			headers: {
-				authorization: `Bearer ${token}`,
-				"content-type": "application/json",
+	const response = await new Promise((resolve, reject) => {
+		const request = httpsRequest(
+			`https://127.0.0.1:3003/internal/runtime/${path}`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
+				},
+				rejectUnauthorized: false,
+				signal: AbortSignal.timeout(30_000),
 			},
-			body: JSON.stringify(body),
-			signal: AbortSignal.timeout(30_000),
-		},
-	);
-	const text = await response.text();
+			(response) => {
+				const chunks = [];
+				response.on("data", (chunk) => chunks.push(chunk));
+				response.on("end", () =>
+					resolve({
+						status: response.statusCode ?? 0,
+						text: Buffer.concat(chunks).toString("utf8"),
+						contentType: response.headers["content-type"] ?? null,
+					}),
+				);
+			},
+		);
+		request.on("error", reject);
+		request.end(JSON.stringify(body));
+	});
+	const text = response.text;
 	httpStatus = response.status;
 	responseCode = text.match(/"code":"(RUNTIME_[A-Z_]+)"/)?.[1];
 	assertRedacted(text);
 	return {
 		status: response.status,
 		text,
-		contentType: response.headers.get("content-type"),
+		contentType: response.contentType,
 	};
 }
 
