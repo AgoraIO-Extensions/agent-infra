@@ -3,6 +3,7 @@ import { createObservedConversationEvents } from "@agent-infra/observability/wor
 import {
 	createConversationDispatchUseCaseV1,
 	createConversationEventUseCaseV1,
+	type SessionSandboxDeletionProgressV1,
 	type SessionSandboxObservationV1,
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
@@ -32,6 +33,9 @@ export interface PlatformConversationWorkerOptionsV2
 	readonly receiveSandbox: (
 		claim: SessionSandboxReconciliationClaimV1,
 		signal: AbortSignal,
+		recordDeletionProgress?: (
+			progress: SessionSandboxDeletionProgressV1,
+		) => Promise<"committed" | "stale" | "unknown">,
 	) => Promise<SessionSandboxObservationV1>;
 	readonly pollIntervalMs?: number;
 	readonly maximumConcurrentDispatches?: number;
@@ -212,13 +216,14 @@ export function createPlatformConversationWorkerV2(
 			});
 		signal.throwIfAborted();
 		const leaseDurationMs = options.leaseDurationMs ?? 30_000;
-		const claim = await store.claimSandboxReconciliation({
+		const initialClaim = await store.claimSandboxReconciliation({
 			schemaVersion: 1,
 			itemId: item.itemId,
 			workerId: options.workerId,
 			leaseDurationMs,
 		});
-		if (!claim) return;
+		if (!initialClaim) return;
+		let claim: NonNullable<typeof initialClaim> = initialClaim;
 		signal.throwIfAborted();
 		if (
 			!(await store.prepareSandboxReconciliation({
@@ -264,6 +269,16 @@ export function createPlatformConversationWorkerV2(
 				// logical operation alive until the receiver returns a complete receipt;
 				// lease renewal and the subsequent CAS decide whether it may commit.
 				signal,
+				async (progress) => {
+					const result = await store.recordSandboxDeletionProgress({
+						claim,
+						progress,
+						leaseDurationMs,
+					});
+					if (result.status === "committed")
+						claim = result.claim as typeof claim;
+					return result.status;
+				},
 			);
 			clearInterval(renewal);
 			renewal = undefined;

@@ -1,3 +1,4 @@
+import type { SessionSandboxDeletionProgressV1 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
 	V1PersistentVolumeClaim,
@@ -121,6 +122,118 @@ describe("session sandbox workload adapter", () => {
 			{ ports: [{ port: 8080 }] },
 		]);
 		expect(resources[2].spec?.egress).toEqual([]);
+	});
+
+	it("reconciles an unknown attempt from absence without changing its identity", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const observed = await adapter.observe(allocation);
+		const pod = observed.resources.find((resource) => resource.kind === "Pod");
+		if (!pod) throw new Error("Missing Pod observation");
+		const originalResourceVersion = pod.resourceVersion;
+		await client.delete({
+			kind: "Pod",
+			metadata: { name: allocation.podName },
+		});
+		const intent: SessionSandboxDeletionProgressV1 = {
+			schemaVersion: 1,
+			state: "unknown",
+			deleteAttemptId: "attempt-lost",
+			deleteAttempted: true,
+			deleteCallResult: "unknown",
+			sourceGeneration: allocation.generation,
+			resourceFence: allocation.resourceFence,
+			managementFence: 4,
+			resource: pod,
+			preconditions: { uid: pod.uid, resourceVersion: originalResourceVersion },
+		};
+		const progress: SessionSandboxDeletionProgressV1[] = [];
+		await adapter.cleanup(allocation, observed.resources, {
+			managementFence: 4,
+			deletionProgress: [intent],
+			recordDeletionProgress: async (entry) => {
+				progress.push(entry);
+				return "committed";
+			},
+		});
+		const recovered = progress.find((entry) => entry.resource.kind === "Pod");
+		expect(recovered).toMatchObject({
+			state: "absent",
+			deleteAttemptId: "attempt-lost",
+			deleteCallResult: "unknown",
+			preconditions: intent.preconditions,
+		});
+	});
+
+	it("fails closed when an existing delete attempt sees resourceVersion drift", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const observed = await adapter.observe(allocation);
+		const pod = observed.resources.find((resource) => resource.kind === "Pod");
+		if (!pod) throw new Error("Missing Pod observation");
+		const current = await client.read("Pod", allocation.podName);
+		if (!current?.metadata) throw new Error("Missing Pod resource");
+		current.metadata.resourceVersion = "drifted";
+		const intent: SessionSandboxDeletionProgressV1 = {
+			schemaVersion: 1,
+			state: "delete-requested",
+			deleteAttemptId: "attempt-drift",
+			deleteAttempted: false,
+			deleteCallResult: "not-attempted",
+			sourceGeneration: allocation.generation,
+			resourceFence: allocation.resourceFence,
+			managementFence: 4,
+			resource: pod,
+			preconditions: { uid: pod.uid, resourceVersion: pod.resourceVersion },
+		};
+		await expect(
+			adapter.cleanup(allocation, observed.resources, {
+				managementFence: 4,
+				deletionProgress: [intent],
+			}),
+		).rejects.toMatchObject({ code: "conflict" });
+	});
+
+	it("does not downgrade an acknowledged delete after a later call error", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const observed = await adapter.observe(allocation);
+		const pod = observed.resources.find((resource) => resource.kind === "Pod");
+		if (!pod) throw new Error("Missing Pod observation");
+		const acknowledged: SessionSandboxDeletionProgressV1 = {
+			schemaVersion: 1,
+			state: "delete-requested",
+			deleteAttemptId: "attempt-ack",
+			deleteAttempted: true,
+			deleteCallResult: "acknowledged",
+			sourceGeneration: allocation.generation,
+			resourceFence: allocation.resourceFence,
+			managementFence: 4,
+			resource: pod,
+			preconditions: { uid: pod.uid, resourceVersion: pod.resourceVersion },
+		};
+		const originalDelete = client.delete;
+		client.delete = async (resource) => {
+			if (resource.kind === "Pod") throw new Error("delete transport lost");
+			return originalDelete(resource);
+		};
+		const progress: SessionSandboxDeletionProgressV1[] = [];
+		await expect(
+			adapter.cleanup(allocation, observed.resources, {
+				managementFence: 4,
+				deletionProgress: [acknowledged],
+				recordDeletionProgress: async (entry) => {
+					progress.push(entry);
+					return "committed";
+				},
+			}),
+		).rejects.toThrow("delete transport lost");
+		expect(
+			progress.every((entry) => entry.deleteCallResult === "acknowledged"),
+		).toBe(true);
 	});
 
 	it("creates idempotently and rejects a stale fence or foreign resource", async () => {
@@ -482,5 +595,35 @@ describe("session sandbox workload adapter", () => {
 		).resolves.toMatchObject({
 			metadata: { name: allocation.pvcName },
 		});
+	});
+
+	it("records durable delete intent, call result, and absence while retaining the PVC", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const observed = await adapter.observe(allocation);
+		const progress: Array<{ kind: string; state: string; result: string }> = [];
+		const receipt = await adapter.cleanup(allocation, observed.resources, {
+			managementFence: 4,
+			recordDeletionProgress: async (entry) => {
+				progress.push({
+					kind: entry.resource.kind,
+					state: entry.state,
+					result: entry.deleteCallResult,
+				});
+				return "committed";
+			},
+		});
+		expect(receipt.retainedPVC.kind).toBe("PersistentVolumeClaim");
+		expect(progress).toHaveLength(12);
+		expect(
+			progress.filter((entry) => entry.state === "delete-requested"),
+		).toHaveLength(8);
+		expect(progress.filter((entry) => entry.state === "absent")).toHaveLength(
+			4,
+		);
+		expect(
+			progress.filter((entry) => entry.result === "acknowledged"),
+		).toHaveLength(8);
 	});
 });

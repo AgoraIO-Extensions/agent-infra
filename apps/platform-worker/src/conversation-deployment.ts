@@ -3,6 +3,7 @@ import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
 } from "@agent-infra/contracts/workload";
+import type { SessionSandboxDeletionProgressV1 } from "@agent-infra/platform-core";
 import {
 	ConversationRuntimeHostError,
 	type SessionSandboxReconciliationClaimV1,
@@ -297,6 +298,9 @@ export function createProductionSessionSandboxReceiverV1(
 	return async (
 		claim: SessionSandboxReconciliationClaimV1,
 		signal: AbortSignal,
+		recordDeletionProgress?: (
+			progress: SessionSandboxDeletionProgressV1,
+		) => Promise<"committed" | "stale" | "unknown">,
 	) => {
 		signal.throwIfAborted();
 		if (claim.execution !== null)
@@ -368,6 +372,9 @@ export function createProductionSessionSandboxReceiverV1(
 				sourceResourceFence: source.resourceFence,
 				targetGeneration: claim.sandbox.generation,
 				targetResourceFence: claim.resourceFence,
+				managementFence: lifecycle.authority.managementFence,
+				deletionProgress: lifecycle.deletionProgress,
+				recordDeletionProgress,
 			});
 			signal.throwIfAborted();
 			return {
@@ -403,6 +410,9 @@ export function createProductionSessionSandboxReceiverV1(
 				sourceResourceFence: claim.resourceFence,
 				targetGeneration: claim.sandbox.generation,
 				targetResourceFence: claim.resourceFence,
+				managementFence: claim.lifecycle?.authority.managementFence,
+				deletionProgress: claim.lifecycle?.deletionProgress,
+				recordDeletionProgress,
 			});
 			signal.throwIfAborted();
 			return {
