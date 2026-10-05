@@ -1,5 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
+import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,8 +15,10 @@ import * as contracts from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import {
 	createRuntimeProbeProtocol,
+	createRuntimeProbeTransport,
 	runtimeProbeWorkerId,
 } from "../../../tests/runtime-image-probe.mjs";
+import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.ts";
 import { createRuntimeHostApp } from "./app.ts";
 
 const cleanups = [];
@@ -363,4 +367,149 @@ it("the probe consumes mixed event versions and acknowledges only delivered curs
 		executionId: submitted.lookup.executionId,
 		confirmedCursor: fact.cursor,
 	});
+});
+
+it("the image probe sends POST and SSE over verified TLS to the bound Service DNS", async () => {
+	const serviceDnsName = "agent-probe.default.svc";
+	const material = await runtimeTlsFixture({ dnsNames: [serviceDnsName] });
+	cleanups.push(material.cleanup);
+	const seen = [];
+	const server = createServer(
+		{ cert: material.cert, key: material.key },
+		async (req, res) => {
+			let text = "";
+			for await (const chunk of req) text += chunk;
+			seen.push({
+				path: req.url,
+				token: req.headers.authorization,
+				body: JSON.parse(text),
+				servername: req.socket.servername,
+			});
+			res.writeHead(200, {
+				"content-type": req.url.endsWith("stream")
+					? "text/event-stream"
+					: "application/json",
+			});
+			res.end(
+				req.url.endsWith("stream")
+					? "data: synthetic-event\n\n"
+					: '{"outcome":"accepted"}',
+			);
+		},
+	);
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	cleanups.unshift(
+		() =>
+			new Promise((resolve) => {
+				server.closeAllConnections();
+				server.close(resolve);
+			}),
+	);
+	const send = createRuntimeProbeTransport({
+		ca: material.ca,
+		serviceDnsName,
+		port: server.address().port,
+	});
+	for (const path of ["v3/turns", "v3/events/stream"]) {
+		const response = await send(
+			path,
+			{ grant: "synthetic-grant" },
+			"synthetic-token",
+		);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe(
+			path.endsWith("stream")
+				? "data: synthetic-event\n\n"
+				: '{"outcome":"accepted"}',
+		);
+	}
+	expect(seen).toEqual(
+		["v3/turns", "v3/events/stream"].map((path) => ({
+			path: `/internal/runtime/${path}`,
+			token: "Bearer synthetic-token",
+			body: { grant: "synthetic-grant" },
+			servername: serviceDnsName,
+		})),
+	);
+});
+
+it("the image probe rejects wrong CA, DNS, expired leaf and redirects before forwarding credentials", async () => {
+	const serviceDnsName = "agent-probe.default.svc";
+	const material = await runtimeTlsFixture({ dnsNames: [serviceDnsName] });
+	const foreign = await runtimeTlsFixture();
+	const expired = await runtimeTlsFixture({
+		dnsNames: [serviceDnsName],
+		days: -1,
+	});
+	cleanups.push(material.cleanup, foreign.cleanup, expired.cleanup);
+	let requests = 0;
+	let forwarded = 0;
+	let redirectStatus;
+	const target = createHttpServer((_req, res) => {
+		forwarded++;
+		res.end("forbidden");
+	});
+	await new Promise((resolve) => target.listen(0, "127.0.0.1", resolve));
+	const server = createServer(
+		{ cert: material.cert, key: material.key },
+		(_req, res) => {
+			requests++;
+			res.writeHead(
+				redirectStatus ?? 200,
+				redirectStatus
+					? { location: `http://127.0.0.1:${target.address().port}/forbidden` }
+					: {},
+			);
+			res.end("synthetic");
+		},
+	);
+	const expiredServer = createServer(
+		{ cert: expired.cert, key: expired.key },
+		(_req, res) => {
+			requests++;
+			res.end("forbidden");
+		},
+	);
+	for (const listener of [server, expiredServer])
+		await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
+	for (const listener of [server, expiredServer, target])
+		cleanups.unshift(
+			() =>
+				new Promise((resolve) => {
+					listener.closeAllConnections();
+					listener.close(resolve);
+				}),
+		);
+	for (const options of [
+		{ ca: foreign.ca, serviceDnsName, port: server.address().port },
+		{
+			ca: material.ca,
+			serviceDnsName: "other.default.svc",
+			port: server.address().port,
+		},
+		{ ca: "invalid-ca", serviceDnsName, port: server.address().port },
+		{ ca: expired.ca, serviceDnsName, port: expiredServer.address().port },
+	]) {
+		await expect(
+			createRuntimeProbeTransport(options)(
+				"v3/turns",
+				{ grant: "synthetic-grant" },
+				"synthetic-token",
+			),
+		).rejects.toThrow();
+		expect(requests).toBe(0);
+	}
+	const send = createRuntimeProbeTransport({
+		ca: material.ca,
+		serviceDnsName,
+		port: server.address().port,
+	});
+	for (const status of [301, 302, 303, 307, 308]) {
+		redirectStatus = status;
+		await expect(
+			send("v3/turns", { grant: "synthetic-grant" }, "synthetic-token"),
+		).rejects.toThrow("Runtime probe redirect rejected");
+	}
+	expect(requests).toBe(5);
+	expect(forwarded).toBe(0);
 });

@@ -5,6 +5,7 @@ import {
 	generateKeyPairSync,
 	randomBytes,
 	sign,
+	X509Certificate,
 } from "node:crypto";
 import {
 	chmod,
@@ -15,8 +16,10 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
+import { request as requestHttps } from "node:https";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { checkServerIdentity } from "node:tls";
 import { pathToFileURL } from "node:url";
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
@@ -756,19 +759,73 @@ function assertRedacted(text) {
 	}
 }
 
+export function createRuntimeProbeTransport({
+	ca,
+	serviceDnsName,
+	port = 3003,
+}) {
+	return (path, body, token) =>
+		new Promise((resolve, reject) => {
+			const request = requestHttps(
+				`https://${serviceDnsName}:${port}/internal/runtime/${path}`,
+				{
+					method: "POST",
+					ca,
+					rejectUnauthorized: true,
+					minVersion: "TLSv1.2",
+					agent: false,
+					family: 4,
+					// The network-isolated image uses loopback, but authenticates its
+					// actual Service DNS SAN and SNI rather than an IP or localhost.
+					lookup: (_hostname, _options, callback) =>
+						callback(null, "127.0.0.1", 4),
+					checkServerIdentity(hostname, certificate) {
+						const error = checkServerIdentity(hostname, certificate);
+						if (error) return error;
+						if (
+							new X509Certificate(certificate.raw).checkHost(hostname, {
+								subject: "never",
+								wildcards: false,
+							}) !== hostname
+						)
+							return new Error("Runtime probe TLS Service DNS mismatch");
+					},
+					headers: {
+						authorization: `Bearer ${token}`,
+						"content-type": "application/json",
+					},
+					signal: AbortSignal.timeout(30_000),
+				},
+				async (response) => {
+					try {
+						// node:https never follows redirects; reject them explicitly.
+						if (response.statusCode >= 300 && response.statusCode < 400) {
+							response.destroy();
+							throw new Error("Runtime probe redirect rejected");
+						}
+						const chunks = [];
+						for await (const chunk of response) chunks.push(chunk);
+						resolve(
+							new Response(Buffer.concat(chunks), {
+								status: response.statusCode,
+								headers: {
+									"content-type": response.headers["content-type"] ?? "",
+								},
+							}),
+						);
+					} catch (error) {
+						reject(error);
+					}
+				},
+			);
+			request.on("error", reject);
+			request.end(JSON.stringify(body));
+		});
+}
+
+let runtimeRequest;
 async function request(path, body, token = serviceToken) {
-	const response = await fetch(
-		`http://127.0.0.1:3003/internal/runtime/${path}`,
-		{
-			method: "POST",
-			headers: {
-				authorization: `Bearer ${token}`,
-				"content-type": "application/json",
-			},
-			body: JSON.stringify(body),
-			signal: AbortSignal.timeout(30_000),
-		},
-	);
+	const response = await runtimeRequest(path, body, token);
 	const text = await response.text();
 	httpStatus = response.status;
 	responseCode = text.match(/"code":"(RUNTIME_[A-Z_]+)"/)?.[1];
@@ -942,6 +999,10 @@ async function assertNoSensitiveDataOnDisk(directory) {
 }
 
 async function runImageProbe() {
+	runtimeRequest = createRuntimeProbeTransport({
+		ca: await readFile("/var/run/agent-infra/runtime-tls/ca.crt", "utf8"),
+		serviceDnsName: JSON.parse(runtimeHostTlsBinding).serviceDnsNames[0],
+	});
 	// These are the deployed Host dependencies, never a source checkout fallback.
 	const contracts = await import(
 		"/app/node_modules/@agent-infra/contracts/dist/runtime/index.mjs"
