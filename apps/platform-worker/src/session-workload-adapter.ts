@@ -412,7 +412,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			)
 				throw new WorkloadKubernetesError("conflict");
 			const expected = sessionSandboxResourcesV1(allocation).find(
-				(resource) => resource.kind === "PersistentVolumeClaim",
+				(resource): resource is V1PersistentVolumeClaim =>
+					resource.kind === "PersistentVolumeClaim",
 			);
 			if (!expected) throw new WorkloadKubernetesError("policy");
 			const current = await options.client.read<V1PersistentVolumeClaim>(
@@ -435,7 +436,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				generation: source.sandbox.generation,
 				resourceFence: source.resourceFence,
 			};
-			const sourceExpected = sessionSandboxResourcesV1(sourceAllocation)[1];
+			const sourceExpected = sessionSandboxResourcesV1(sourceAllocation).find(
+				(resource): resource is V1PersistentVolumeClaim =>
+					resource.kind === "PersistentVolumeClaim",
+			);
+			if (!sourceExpected) throw new WorkloadKubernetesError("policy");
 			if (!owned(current, sourceExpected, sourceAllocation))
 				throw new WorkloadKubernetesError("conflict");
 			// Preserve the volume and use the observed UID/resourceVersion for this
