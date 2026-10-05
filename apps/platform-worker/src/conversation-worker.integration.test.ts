@@ -24,7 +24,7 @@ import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
-import { KubeConfig } from "@kubernetes/client-node";
+import { KubeConfig, type V1Service } from "@kubernetes/client-node";
 import postgres from "postgres";
 import { expect, it } from "vitest";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
@@ -527,6 +527,38 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					resources: sandboxResources,
 				})}
 				where conversation_id = ${created.result.conversationId}`;
+			const sessionLabels = {
+				"agent-infra.agora.io/agent-id": desired.agentId,
+				"agent-infra.agora.io/session-id": created.result.conversationId,
+				"agent-infra.agora.io/sandbox-id": sandbox.sandbox_id,
+				"agent-infra.agora.io/generation": "1",
+			};
+			fake.resources.set(`Service/${sandbox.resource_name}`, {
+				apiVersion: "v1",
+				kind: "Service",
+				metadata: {
+					name: sandbox.resource_name,
+					namespace: policy.namespace,
+					uid: `${sandbox.sandbox_id}-Service`,
+					resourceVersion: "1",
+					labels: sessionLabels,
+					annotations: {
+						"agent-infra.agora.io/managed": "session-sandbox-v1",
+						"agent-infra.agora.io/fence": "1",
+					},
+				},
+				spec: {
+					type: "ClusterIP",
+					selector: sessionLabels,
+					ports: [
+						{
+							name: "runtime",
+							port: desired.service.port,
+							targetPort: desired.service.port,
+						},
+					],
+				},
+			} as V1Service);
 			const accepted = await api.accept({
 				schemaVersion: 1,
 				command: "message",
