@@ -2434,18 +2434,22 @@ a[class~="group/button"]:focus-visible,
 	outline: 2px solid var(--primary);
 	outline-offset: 1px;
 }
-.directory-input {
+.directory-control .directory-input {
 	flex: 1 1 150px;
 	min-width: 120px;
 	min-height: 0;
 	height: 30px;
 	padding: 1px 4px;
-	border: 0 !important;
-	outline: 0 !important;
-	box-shadow: none !important;
+	border: 0;
+	outline: 0;
+	box-shadow: none;
 	background: transparent;
 	color: var(--foreground);
 	font-size: 13px;
+}
+.directory-control .directory-input:focus-visible {
+	border-color: transparent;
+	box-shadow: none;
 }
 .directory-input::placeholder {
 	color: color-mix(in oklch, var(--muted-foreground) 82%, var(--surface));
@@ -2589,7 +2593,7 @@ a[class~="group/button"]:focus-visible,
 		max-height: 246px;
 		margin-top: 6px;
 	}
-	.directory-input {
+	.directory-control .directory-input {
 		flex-basis: 130px;
 	}
 	.directory-help {

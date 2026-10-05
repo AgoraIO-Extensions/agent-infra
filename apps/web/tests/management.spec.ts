@@ -820,6 +820,7 @@ test("directory search and transient submission recover on desktop and mobile", 
 	await ownerInput.fill("user");
 	await page.getByRole("option", { name: "验收用户二" }).click();
 	await expect(page.getByText("验收用户二", { exact: true })).toBeVisible();
+	await page.getByRole("button", { name: "展开高级配置" }).click();
 	await page.getByRole("button", { name: "添加 Secret" }).click();
 	await page.getByLabel("Secret 名称").fill("TEST_SECRET");
 	await page.getByLabel("替换值").fill("synthetic-first-value");
@@ -833,6 +834,9 @@ test("directory search and transient submission recover on desktop and mobile", 
 	expect(api.commands).toHaveLength(1);
 	await capture(page, info, "application-field-recovery");
 
+	await expect(
+		page.getByRole("button", { name: "收起高级配置" }),
+	).toBeVisible();
 	await page.getByRole("button", { name: "添加 Secret" }).click();
 	await page.getByLabel("Secret 名称").fill("TEST_SECRET");
 	await page.getByLabel("替换值").fill("synthetic-retry-value");
@@ -883,6 +887,7 @@ test("authorization rejection keeps non-sensitive input and clears Secret", asyn
 		.getByRole("option", { name: "自定义 Agent · 平台交互入口" })
 		.click();
 	await page.getByLabel("镜像地址").fill("registry.example/agents/release:v1");
+	await page.getByRole("button", { name: "展开高级配置" }).click();
 	await page.getByRole("button", { name: "添加 Secret" }).click();
 	await page.getByLabel("Secret 名称").fill("TEST_SECRET");
 	await page.getByLabel("替换值").fill("synthetic-rejected-value");
@@ -996,6 +1001,7 @@ test("Owner configuration, Secret clearing, lifecycle and custom image upgrade",
 	await expect(page.getByLabel("新模型凭证")).toHaveValue("");
 	await page.keyboard.press("Space");
 	await expect(replaceModels).not.toBeChecked();
+	await page.getByRole("button", { name: "展开高级配置" }).click();
 	await page.getByRole("button", { name: "添加 Secret" }).click();
 	await page.getByLabel("Secret 名称").fill("RELEASE_KEY");
 	await page.getByLabel("新 Secret 值").fill("synthetic-browser-secret");

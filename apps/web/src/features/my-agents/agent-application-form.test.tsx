@@ -785,6 +785,25 @@ describe("AgentApplicationForm", () => {
 		expect(screen.queryByText("可使用的组织 ID")).toBeNull();
 	});
 
+	it("reopens advanced configuration when a collapsed row has errors", () => {
+		render(
+			<AgentApplicationForm
+				mode="create"
+				onSubmit={vi.fn()}
+				submitting={false}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "展开高级配置" }));
+		fireEvent.click(screen.getByRole("button", { name: "添加环境变量" }));
+		fireEvent.click(screen.getByRole("button", { name: "收起高级配置" }));
+		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
+
+		expect(screen.getByRole("button", { name: "收起高级配置" })).toBeTruthy();
+		expect(screen.getByLabelText("变量名称")).toBeTruthy();
+		expect(screen.getByText("请选择或填写名称。")).toBeTruthy();
+	});
+
 	it("uses custom validation before native required checks and clears fixed errors", () => {
 		const onSubmit = vi.fn();
 		render(

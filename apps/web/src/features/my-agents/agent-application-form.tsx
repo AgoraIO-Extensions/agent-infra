@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Listbox } from "@/components/ui/listbox";
 import {
 	Select,
 	SelectContent,
@@ -298,6 +299,8 @@ function DirectoryPicker({
 	useEffect(() => {
 		if (!open && !selectedKey) return;
 		const controller = new AbortController();
+		setDirectoryOptions([]);
+		setActiveIndex(0);
 		setLoading(true);
 		setDirectoryError(false);
 		const idsQuery =
@@ -359,7 +362,14 @@ function DirectoryPicker({
 			},
 	);
 	const add = (option: DirectoryPickerOption | undefined) => {
-		if (!option || selectedIds.includes(option.id)) return;
+		if (
+			!open ||
+			loading ||
+			directoryError ||
+			!option ||
+			selectedIds.includes(option.id)
+		)
+			return;
 		onChange([...selectedIds, option.id].join("\n"));
 		setQuery("");
 		setActiveIndex(0);
@@ -449,11 +459,10 @@ function DirectoryPicker({
 				/>
 			</div>
 			{open && (
-				<div
+				<Listbox
 					aria-busy={loading}
 					className="directory-menu"
 					id={`${id}-options`}
-					role="listbox"
 				>
 					{loading ? (
 						<div className="directory-status" role="status" aria-live="polite">
@@ -527,7 +536,7 @@ function DirectoryPicker({
 							</Button>
 						</>
 					)}
-				</div>
+				</Listbox>
 			)}
 			<div className="directory-help">
 				<span>{help}</span>
@@ -951,7 +960,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		focusRequest: number;
 		formError?: string;
 		serverCode?: string;
-	}>({ focusRequest: -1 });
+		advancedConfigurationOpen: boolean;
+	}>({ advancedConfigurationOpen: false, focusRequest: -1 });
 	const application = props.mode === "update" ? props.application : undefined;
 	const configuration = application?.configuration;
 	const persistedModelOptions = configuration?.modelOptions;
@@ -1243,6 +1253,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		() => ({ ...serverFieldErrors, ...localFieldErrors }),
 		[serverFieldErrors, localFieldErrors],
 	);
+	const advancedConfigurationHasErrors = Object.keys(fieldErrors).some(
+		(key) => key.startsWith("environment.") || key.startsWith("secret."),
+	);
+	useEffect(() => {
+		if (advancedConfigurationHasErrors && !advancedConfigurationOpen)
+			setAdvancedConfigurationOpen(true);
+	}, [advancedConfigurationHasErrors, advancedConfigurationOpen]);
 	const defaultModel = models.find(
 		(model) => model.optionId === defaultModelOptionId,
 	);
@@ -1454,8 +1471,10 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		const shouldFocus =
 			focusRequest !== previous.focusRequest ||
 			serverCode !== previous.serverCode ||
-			serverFormError !== previous.formError;
+			serverFormError !== previous.formError ||
+			advancedConfigurationOpen !== previous.advancedConfigurationOpen;
 		focusStateRef.current = {
+			advancedConfigurationOpen,
 			focusRequest,
 			formError: serverFormError,
 			serverCode,
@@ -1468,7 +1487,13 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		const first = firstFieldError(fieldErrors);
 		if (first instanceof HTMLElement) first.focus();
 		else if (serverFormError) formRef.current?.focus();
-	}, [fieldErrors, focusRequest, props.serverError?.code, serverFormError]);
+	}, [
+		advancedConfigurationOpen,
+		fieldErrors,
+		focusRequest,
+		props.serverError?.code,
+		serverFormError,
+	]);
 
 	const submit = () => {
 		const draft = {
