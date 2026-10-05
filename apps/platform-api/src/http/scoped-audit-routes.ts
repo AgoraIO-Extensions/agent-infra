@@ -17,10 +17,7 @@ import {
 	type RequestMetadata,
 	requestMetadata,
 } from "./common.js";
-import {
-	type IdentityAdapter,
-	resolveIdentity,
-} from "./identity.js";
+import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 
 export interface ScopedAuditRoutesDependencies {
 	readonly identity: IdentityAdapter;

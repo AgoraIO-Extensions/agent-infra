@@ -1,5 +1,12 @@
 import { sql } from "drizzle-orm";
-import { char, check, index, jsonb, text, timestamp } from "drizzle-orm/pg-core";
+import {
+	char,
+	check,
+	index,
+	jsonb,
+	text,
+	timestamp,
+} from "drizzle-orm/pg-core";
 import { platformSchema } from "./schema-common";
 
 export const browserSessions = platformSchema.table(

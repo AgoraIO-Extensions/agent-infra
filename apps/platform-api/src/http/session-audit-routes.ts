@@ -113,7 +113,11 @@ async function hydrateAuditUsers(
 	dependencies: SessionAuditRoutesDependencies,
 	items: PlatformAuditPageV1["items"],
 	traceId: string,
-	self?: { readonly userId: string; readonly displayName: string; readonly roles: readonly ("employee" | "system_admin")[] },
+	self?: {
+		readonly userId: string;
+		readonly displayName: string;
+		readonly roles: readonly ("employee" | "system_admin")[];
+	},
 ) {
 	const actorIds = [
 		...new Set(
@@ -125,7 +129,11 @@ async function hydrateAuditUsers(
 	if (actorIds.length === 0) return new Map();
 	const result = new Map<
 		string,
-		{ userId: string; displayName: string; roles: readonly ("employee" | "system_admin")[] }
+		{
+			userId: string;
+			displayName: string;
+			roles: readonly ("employee" | "system_admin")[];
+		}
 	>();
 	if (self && actorIds.includes(self.userId))
 		result.set(self.userId, {

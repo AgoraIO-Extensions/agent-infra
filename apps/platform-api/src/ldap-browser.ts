@@ -166,8 +166,8 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				return null;
 			}
 			return session.principal && session.principal.userId === userId
-			? session.principal
-			: null;
+				? session.principal
+				: null;
 		},
 		async hydrateUsers(ids: readonly string[]) {
 			return Promise.all(
@@ -231,8 +231,9 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			let principal: Awaited<ReturnType<typeof current>>;
 			try {
 				account = await input.directory.authenticate(body.login, body.password);
-				if (!account || (principal = await current(account)).accountStatus !== "active")
-					return response(401);
+				if (!account) return response(401);
+				principal = await current(account);
+				if (principal.accountStatus !== "active") return response(401);
 			} catch {
 				return response(503);
 			}
