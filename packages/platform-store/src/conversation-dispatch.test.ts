@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { createAgentManagementV1 } from "@agent-infra/platform-core";
+import {
+	createAgentManagementV1,
+	type SessionSandboxReconciliationClaimV1,
+} from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -788,7 +791,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						actor,
 					),
 				).toMatchObject({ outcome: "accepted" });
-				let drain = await store.claimSandboxReconciliation(request);
+				let drain: SessionSandboxReconciliationClaimV1 | null =
+					await store.claimSandboxReconciliation(request);
 				if (mode === "lost-observation") {
 					if (!drain) throw new Error("Expected unobserved source claim");
 					expect(drain.previousObservation).toBeNull();
@@ -1031,6 +1035,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						throw new Error("Expected durable absence");
 					drain = result.claim;
 				}
+				if (!drain?.lifecycle)
+					throw new Error("Expected completed progress lifecycle");
 				const pvc = resources.find(
 					(resource) => resource.kind === "PersistentVolumeClaim",
 				)!;
