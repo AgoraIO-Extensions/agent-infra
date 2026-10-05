@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
+import type { SessionSandboxObservationV1 } from "@agent-infra/platform-core";
 import type { PlatformConversationWorkerOptionsV2 } from "../../apps/platform-worker/src/conversation-worker.js";
 
 let databaseUrl: string | undefined;
@@ -19,6 +20,16 @@ export async function createPlatformConversationWorkerOptionsV2(
 	signal.throwIfAborted();
 	if (!databaseUrl) throw new Error("Worker test database is not configured");
 	return {
+		sandboxPolicy: {
+			namespace: "workload-test",
+			resourceConfigurationHash: "controlled-observability-sandbox-policy",
+		},
+		receiveSandbox: async (
+			_signal: AbortSignal,
+		): Promise<SessionSandboxObservationV1> => ({
+			status: "unknown",
+			resources: [],
+		}),
 		databaseUrl,
 		pollIntervalMs: 30_000,
 		workerId: "worker-queue-acceptance",
@@ -51,6 +62,8 @@ const keys = generateKeyPairSync('ed25519');
 export async function createPlatformConversationWorkerOptionsV2(signal) {
   signal.throwIfAborted();
   return {
+    sandboxPolicy: { namespace: 'workload-test', resourceConfigurationHash: 'controlled-observability-sandbox-policy' },
+    receiveSandbox: async (sandboxSignal) => { sandboxSignal.throwIfAborted(); return { status: 'unknown', resources: [] }; },
     databaseUrl: ${JSON.stringify(input.databaseUrl)},
     pollIntervalMs: 30_000,
     workerId: 'worker-queue-child',
