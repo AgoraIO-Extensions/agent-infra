@@ -387,7 +387,7 @@ function DirectoryPicker({
 					{selected.map((item) => (
 						<span className="directory-chip" key={item.id}>
 							<span className="directory-chip-label">
-								{item.name}
+								<span className="directory-chip-name">{item.name}</span>
 								<small>{item.secondary}</small>
 							</span>
 							<Button

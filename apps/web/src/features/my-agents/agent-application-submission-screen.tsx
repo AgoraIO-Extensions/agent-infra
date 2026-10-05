@@ -102,9 +102,7 @@ export function AgentApplicationSubmissionScreen(
 						Owner、范围、模型和渠道。服务端会重新校验全部字段。
 					</p>
 				</div>
-				{props.mode === "create" ? (
-					<div className="application-header-exit sr-only">{cancelAction}</div>
-				) : null}
+				{props.mode === "create" ? cancelAction : null}
 			</header>
 			<div className="form-layout full-width-form application-form-layout">
 				<div className="application-form-card min-w-0">

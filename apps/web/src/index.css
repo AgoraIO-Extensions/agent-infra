@@ -2416,13 +2416,13 @@ a[class~="group/button"]:focus-visible,
 .directory-chip-remove {
 	display: grid;
 	place-items: center;
-	width: 24px;
-	height: 24px;
+	width: 44px;
+	height: 44px;
 	min-width: 0;
-	min-height: 0;
+	min-height: 44px;
 	flex: none;
 	border: 0;
-	border-radius: 6px;
+	border-radius: 10px;
 	background: transparent;
 	color: var(--muted-foreground);
 }
