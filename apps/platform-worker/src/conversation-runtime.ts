@@ -553,8 +553,15 @@ export function createConversationRuntimeV2(
 		const target = await bounded(
 			options.resolveRuntimeHost({
 				agentId: prepared.context.claim.agentId,
+				conversationId: prepared.context.claim.conversationId,
+				actorId: prepared.context.claim.actorId,
+				channelId: prepared.context.claim.channelId,
+				principal: prepared.context.claim.principal,
+				sessionGeneration: prepared.context.claim.sessionGeneration,
+				deliveryFence: prepared.context.claim.deliveryFence,
 				signal,
 				workload: decision.record.workload,
+				sandboxResource: state.sandboxResource,
 				purpose: decision.authority.purpose,
 				command,
 			}),
