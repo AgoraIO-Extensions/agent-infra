@@ -944,6 +944,219 @@
                       ],
                       "type": "object"
                     },
+                    "skills": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "agentVersion": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "grant": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "connections": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              },
+                              "fileRoots": {
+                                "items": {
+                                  "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "networkOrigins": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "scripts": {
+                                "const": false,
+                                "type": "boolean"
+                              },
+                              "tools": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "tools",
+                              "connections",
+                              "fileRoots",
+                              "networkOrigins",
+                              "scripts"
+                            ],
+                            "type": "object"
+                          },
+                          "manifest": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "entryPath": {
+                                "const": "SKILL.md",
+                                "type": "string"
+                              },
+                              "files": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "path": {
+                                      "maxLength": 512,
+                                      "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "pattern": "^[a-f0-9]{64}$",
+                                      "type": "string"
+                                    },
+                                    "sizeBytes": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "sizeBytes",
+                                    "sha256"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 2000,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "name": {
+                                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "name",
+                              "version",
+                              "entryPath",
+                              "files",
+                              "packageDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "readOnly": {
+                            "const": true,
+                            "type": "boolean"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "skillVersion": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "manifestDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageObjectVersion": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "provider": {
+                                "enum": [
+                                  "system",
+                                  "my_library",
+                                  "market",
+                                  "clawhub",
+                                  "skillhub",
+                                  "npx",
+                                  "github"
+                                ],
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "skillId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "skillVersionId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "skillId",
+                              "skillVersionId",
+                              "provider",
+                              "version",
+                              "packageObjectVersion",
+                              "packageDigest",
+                              "manifestDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "targetPath": {
+                            "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "agentId",
+                          "agentVersion",
+                          "skillVersion",
+                          "manifest",
+                          "targetPath",
+                          "readOnly",
+                          "grant"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
+                    },
                     "traceId": {
                       "minLength": 1,
                       "type": "string"
@@ -1643,6 +1856,219 @@
                       ],
                       "type": "object"
                     },
+                    "skills": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "agentVersion": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "grant": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "connections": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              },
+                              "fileRoots": {
+                                "items": {
+                                  "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "networkOrigins": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "scripts": {
+                                "const": false,
+                                "type": "boolean"
+                              },
+                              "tools": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "tools",
+                              "connections",
+                              "fileRoots",
+                              "networkOrigins",
+                              "scripts"
+                            ],
+                            "type": "object"
+                          },
+                          "manifest": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "entryPath": {
+                                "const": "SKILL.md",
+                                "type": "string"
+                              },
+                              "files": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "path": {
+                                      "maxLength": 512,
+                                      "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "pattern": "^[a-f0-9]{64}$",
+                                      "type": "string"
+                                    },
+                                    "sizeBytes": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "sizeBytes",
+                                    "sha256"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 2000,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "name": {
+                                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "name",
+                              "version",
+                              "entryPath",
+                              "files",
+                              "packageDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "readOnly": {
+                            "const": true,
+                            "type": "boolean"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "skillVersion": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "manifestDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageObjectVersion": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "provider": {
+                                "enum": [
+                                  "system",
+                                  "my_library",
+                                  "market",
+                                  "clawhub",
+                                  "skillhub",
+                                  "npx",
+                                  "github"
+                                ],
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "skillId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "skillVersionId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "skillId",
+                              "skillVersionId",
+                              "provider",
+                              "version",
+                              "packageObjectVersion",
+                              "packageDigest",
+                              "manifestDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "targetPath": {
+                            "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "agentId",
+                          "agentVersion",
+                          "skillVersion",
+                          "manifest",
+                          "targetPath",
+                          "readOnly",
+                          "grant"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
+                    },
                     "traceId": {
                       "minLength": 1,
                       "type": "string"
@@ -2342,6 +2768,219 @@
                       ],
                       "type": "object"
                     },
+                    "skills": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "agentVersion": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "grant": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "connections": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              },
+                              "fileRoots": {
+                                "items": {
+                                  "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "networkOrigins": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "scripts": {
+                                "const": false,
+                                "type": "boolean"
+                              },
+                              "tools": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "tools",
+                              "connections",
+                              "fileRoots",
+                              "networkOrigins",
+                              "scripts"
+                            ],
+                            "type": "object"
+                          },
+                          "manifest": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "entryPath": {
+                                "const": "SKILL.md",
+                                "type": "string"
+                              },
+                              "files": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "path": {
+                                      "maxLength": 512,
+                                      "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "pattern": "^[a-f0-9]{64}$",
+                                      "type": "string"
+                                    },
+                                    "sizeBytes": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "sizeBytes",
+                                    "sha256"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 2000,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "name": {
+                                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "name",
+                              "version",
+                              "entryPath",
+                              "files",
+                              "packageDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "readOnly": {
+                            "const": true,
+                            "type": "boolean"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "skillVersion": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "manifestDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageObjectVersion": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "provider": {
+                                "enum": [
+                                  "system",
+                                  "my_library",
+                                  "market",
+                                  "clawhub",
+                                  "skillhub",
+                                  "npx",
+                                  "github"
+                                ],
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "skillId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "skillVersionId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "skillId",
+                              "skillVersionId",
+                              "provider",
+                              "version",
+                              "packageObjectVersion",
+                              "packageDigest",
+                              "manifestDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "targetPath": {
+                            "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "agentId",
+                          "agentVersion",
+                          "skillVersion",
+                          "manifest",
+                          "targetPath",
+                          "readOnly",
+                          "grant"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
+                    },
                     "traceId": {
                       "minLength": 1,
                       "type": "string"
@@ -3035,6 +3674,219 @@
                         "kubernetesApiAccess"
                       ],
                       "type": "object"
+                    },
+                    "skills": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "agentVersion": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "grant": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "connections": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              },
+                              "fileRoots": {
+                                "items": {
+                                  "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "networkOrigins": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "scripts": {
+                                "const": false,
+                                "type": "boolean"
+                              },
+                              "tools": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "tools",
+                              "connections",
+                              "fileRoots",
+                              "networkOrigins",
+                              "scripts"
+                            ],
+                            "type": "object"
+                          },
+                          "manifest": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "entryPath": {
+                                "const": "SKILL.md",
+                                "type": "string"
+                              },
+                              "files": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "path": {
+                                      "maxLength": 512,
+                                      "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "pattern": "^[a-f0-9]{64}$",
+                                      "type": "string"
+                                    },
+                                    "sizeBytes": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "sizeBytes",
+                                    "sha256"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 2000,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "name": {
+                                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "name",
+                              "version",
+                              "entryPath",
+                              "files",
+                              "packageDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "readOnly": {
+                            "const": true,
+                            "type": "boolean"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "skillVersion": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "manifestDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageObjectVersion": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "provider": {
+                                "enum": [
+                                  "system",
+                                  "my_library",
+                                  "market",
+                                  "clawhub",
+                                  "skillhub",
+                                  "npx",
+                                  "github"
+                                ],
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "skillId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "skillVersionId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "skillId",
+                              "skillVersionId",
+                              "provider",
+                              "version",
+                              "packageObjectVersion",
+                              "packageDigest",
+                              "manifestDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "targetPath": {
+                            "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "agentId",
+                          "agentVersion",
+                          "skillVersion",
+                          "manifest",
+                          "targetPath",
+                          "readOnly",
+                          "grant"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
                     },
                     "traceId": {
                       "minLength": 1,
@@ -3730,6 +4582,219 @@
                       ],
                       "type": "object"
                     },
+                    "skills": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "agentVersion": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "grant": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "connections": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              },
+                              "fileRoots": {
+                                "items": {
+                                  "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "networkOrigins": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "scripts": {
+                                "const": false,
+                                "type": "boolean"
+                              },
+                              "tools": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "tools",
+                              "connections",
+                              "fileRoots",
+                              "networkOrigins",
+                              "scripts"
+                            ],
+                            "type": "object"
+                          },
+                          "manifest": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "entryPath": {
+                                "const": "SKILL.md",
+                                "type": "string"
+                              },
+                              "files": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "path": {
+                                      "maxLength": 512,
+                                      "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "pattern": "^[a-f0-9]{64}$",
+                                      "type": "string"
+                                    },
+                                    "sizeBytes": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "sizeBytes",
+                                    "sha256"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 2000,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "name": {
+                                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "name",
+                              "version",
+                              "entryPath",
+                              "files",
+                              "packageDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "readOnly": {
+                            "const": true,
+                            "type": "boolean"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "skillVersion": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "manifestDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageObjectVersion": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "provider": {
+                                "enum": [
+                                  "system",
+                                  "my_library",
+                                  "market",
+                                  "clawhub",
+                                  "skillhub",
+                                  "npx",
+                                  "github"
+                                ],
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "skillId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "skillVersionId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "skillId",
+                              "skillVersionId",
+                              "provider",
+                              "version",
+                              "packageObjectVersion",
+                              "packageDigest",
+                              "manifestDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "targetPath": {
+                            "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "agentId",
+                          "agentVersion",
+                          "skillVersion",
+                          "manifest",
+                          "targetPath",
+                          "readOnly",
+                          "grant"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
+                    },
                     "traceId": {
                       "minLength": 1,
                       "type": "string"
@@ -4423,6 +5488,219 @@
                         "kubernetesApiAccess"
                       ],
                       "type": "object"
+                    },
+                    "skills": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "agentVersion": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "grant": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "connections": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              },
+                              "fileRoots": {
+                                "items": {
+                                  "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "networkOrigins": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "scripts": {
+                                "const": false,
+                                "type": "boolean"
+                              },
+                              "tools": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "tools",
+                              "connections",
+                              "fileRoots",
+                              "networkOrigins",
+                              "scripts"
+                            ],
+                            "type": "object"
+                          },
+                          "manifest": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "entryPath": {
+                                "const": "SKILL.md",
+                                "type": "string"
+                              },
+                              "files": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "path": {
+                                      "maxLength": 512,
+                                      "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "pattern": "^[a-f0-9]{64}$",
+                                      "type": "string"
+                                    },
+                                    "sizeBytes": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "sizeBytes",
+                                    "sha256"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 2000,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "name": {
+                                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "name",
+                              "version",
+                              "entryPath",
+                              "files",
+                              "packageDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "readOnly": {
+                            "const": true,
+                            "type": "boolean"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "skillVersion": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "manifestDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageObjectVersion": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "provider": {
+                                "enum": [
+                                  "system",
+                                  "my_library",
+                                  "market",
+                                  "clawhub",
+                                  "skillhub",
+                                  "npx",
+                                  "github"
+                                ],
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "skillId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "skillVersionId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "skillId",
+                              "skillVersionId",
+                              "provider",
+                              "version",
+                              "packageObjectVersion",
+                              "packageDigest",
+                              "manifestDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "targetPath": {
+                            "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "agentId",
+                          "agentVersion",
+                          "skillVersion",
+                          "manifest",
+                          "targetPath",
+                          "readOnly",
+                          "grant"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
                     },
                     "traceId": {
                       "minLength": 1,
@@ -5118,6 +6396,219 @@
                       ],
                       "type": "object"
                     },
+                    "skills": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "agentVersion": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "grant": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "connections": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              },
+                              "fileRoots": {
+                                "items": {
+                                  "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "networkOrigins": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "scripts": {
+                                "const": false,
+                                "type": "boolean"
+                              },
+                              "tools": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "tools",
+                              "connections",
+                              "fileRoots",
+                              "networkOrigins",
+                              "scripts"
+                            ],
+                            "type": "object"
+                          },
+                          "manifest": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "entryPath": {
+                                "const": "SKILL.md",
+                                "type": "string"
+                              },
+                              "files": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "path": {
+                                      "maxLength": 512,
+                                      "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "pattern": "^[a-f0-9]{64}$",
+                                      "type": "string"
+                                    },
+                                    "sizeBytes": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "sizeBytes",
+                                    "sha256"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 2000,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "name": {
+                                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "name",
+                              "version",
+                              "entryPath",
+                              "files",
+                              "packageDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "readOnly": {
+                            "const": true,
+                            "type": "boolean"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "skillVersion": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "manifestDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageObjectVersion": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "provider": {
+                                "enum": [
+                                  "system",
+                                  "my_library",
+                                  "market",
+                                  "clawhub",
+                                  "skillhub",
+                                  "npx",
+                                  "github"
+                                ],
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "skillId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "skillVersionId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "skillId",
+                              "skillVersionId",
+                              "provider",
+                              "version",
+                              "packageObjectVersion",
+                              "packageDigest",
+                              "manifestDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "targetPath": {
+                            "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "agentId",
+                          "agentVersion",
+                          "skillVersion",
+                          "manifest",
+                          "targetPath",
+                          "readOnly",
+                          "grant"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
+                    },
                     "traceId": {
                       "minLength": 1,
                       "type": "string"
@@ -5812,6 +7303,219 @@
                       ],
                       "type": "object"
                     },
+                    "skills": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "agentVersion": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "grant": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "connections": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              },
+                              "fileRoots": {
+                                "items": {
+                                  "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "networkOrigins": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "scripts": {
+                                "const": false,
+                                "type": "boolean"
+                              },
+                              "tools": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "tools",
+                              "connections",
+                              "fileRoots",
+                              "networkOrigins",
+                              "scripts"
+                            ],
+                            "type": "object"
+                          },
+                          "manifest": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "entryPath": {
+                                "const": "SKILL.md",
+                                "type": "string"
+                              },
+                              "files": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "path": {
+                                      "maxLength": 512,
+                                      "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "pattern": "^[a-f0-9]{64}$",
+                                      "type": "string"
+                                    },
+                                    "sizeBytes": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "sizeBytes",
+                                    "sha256"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 2000,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "name": {
+                                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "name",
+                              "version",
+                              "entryPath",
+                              "files",
+                              "packageDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "readOnly": {
+                            "const": true,
+                            "type": "boolean"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "skillVersion": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "manifestDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageObjectVersion": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "provider": {
+                                "enum": [
+                                  "system",
+                                  "my_library",
+                                  "market",
+                                  "clawhub",
+                                  "skillhub",
+                                  "npx",
+                                  "github"
+                                ],
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "skillId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "skillVersionId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "skillId",
+                              "skillVersionId",
+                              "provider",
+                              "version",
+                              "packageObjectVersion",
+                              "packageDigest",
+                              "manifestDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "targetPath": {
+                            "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "agentId",
+                          "agentVersion",
+                          "skillVersion",
+                          "manifest",
+                          "targetPath",
+                          "readOnly",
+                          "grant"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
+                    },
                     "traceId": {
                       "minLength": 1,
                       "type": "string"
@@ -6505,6 +8209,219 @@
                         "kubernetesApiAccess"
                       ],
                       "type": "object"
+                    },
+                    "skills": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "agentVersion": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                            "type": "string"
+                          },
+                          "grant": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "connections": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              },
+                              "fileRoots": {
+                                "items": {
+                                  "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "networkOrigins": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "type": "array"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "scripts": {
+                                "const": false,
+                                "type": "boolean"
+                              },
+                              "tools": {
+                                "items": {
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 128,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "tools",
+                              "connections",
+                              "fileRoots",
+                              "networkOrigins",
+                              "scripts"
+                            ],
+                            "type": "object"
+                          },
+                          "manifest": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "entryPath": {
+                                "const": "SKILL.md",
+                                "type": "string"
+                              },
+                              "files": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "path": {
+                                      "maxLength": 512,
+                                      "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "pattern": "^[a-f0-9]{64}$",
+                                      "type": "string"
+                                    },
+                                    "sizeBytes": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "sizeBytes",
+                                    "sha256"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 2000,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "name": {
+                                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "name",
+                              "version",
+                              "entryPath",
+                              "files",
+                              "packageDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "readOnly": {
+                            "const": true,
+                            "type": "boolean"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "skillVersion": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "manifestDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "packageObjectVersion": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "provider": {
+                                "enum": [
+                                  "system",
+                                  "my_library",
+                                  "market",
+                                  "clawhub",
+                                  "skillhub",
+                                  "npx",
+                                  "github"
+                                ],
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "skillId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "skillVersionId": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              },
+                              "version": {
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "skillId",
+                              "skillVersionId",
+                              "provider",
+                              "version",
+                              "packageObjectVersion",
+                              "packageDigest",
+                              "manifestDigest"
+                            ],
+                            "type": "object"
+                          },
+                          "targetPath": {
+                            "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "agentId",
+                          "agentVersion",
+                          "skillVersion",
+                          "manifest",
+                          "targetPath",
+                          "readOnly",
+                          "grant"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
                     },
                     "traceId": {
                       "minLength": 1,
@@ -8772,6 +10689,219 @@
                               "minLength": 1,
                               "type": "string"
                             },
+                            "skills": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "agentId": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "agentVersion": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "grant": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "connections": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      },
+                                      "fileRoots": {
+                                        "items": {
+                                          "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "networkOrigins": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "scripts": {
+                                        "const": false,
+                                        "type": "boolean"
+                                      },
+                                      "tools": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "tools",
+                                      "connections",
+                                      "fileRoots",
+                                      "networkOrigins",
+                                      "scripts"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "manifest": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "entryPath": {
+                                        "const": "SKILL.md",
+                                        "type": "string"
+                                      },
+                                      "files": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "path": {
+                                              "maxLength": 512,
+                                              "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                              "type": "string"
+                                            },
+                                            "sha256": {
+                                              "pattern": "^[a-f0-9]{64}$",
+                                              "type": "string"
+                                            },
+                                            "sizeBytes": {
+                                              "maximum": 9007199254740991,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            }
+                                          },
+                                          "required": [
+                                            "path",
+                                            "sizeBytes",
+                                            "sha256"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 2000,
+                                        "minItems": 1,
+                                        "type": "array"
+                                      },
+                                      "name": {
+                                        "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "name",
+                                      "version",
+                                      "entryPath",
+                                      "files",
+                                      "packageDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "readOnly": {
+                                    "const": true,
+                                    "type": "boolean"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "skillVersion": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "manifestDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageObjectVersion": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "provider": {
+                                        "enum": [
+                                          "system",
+                                          "my_library",
+                                          "market",
+                                          "clawhub",
+                                          "skillhub",
+                                          "npx",
+                                          "github"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "skillId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "skillVersionId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "skillId",
+                                      "skillVersionId",
+                                      "provider",
+                                      "version",
+                                      "packageObjectVersion",
+                                      "packageDigest",
+                                      "manifestDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "targetPath": {
+                                    "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "agentId",
+                                  "agentVersion",
+                                  "skillVersion",
+                                  "manifest",
+                                  "targetPath",
+                                  "readOnly",
+                                  "grant"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 32,
+                              "type": "array"
+                            },
                             "state": {
                               "const": "applying",
                               "type": "string"
@@ -9217,6 +11347,219 @@
                             "serviceRef": {
                               "minLength": 1,
                               "type": "string"
+                            },
+                            "skills": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "agentId": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "agentVersion": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "grant": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "connections": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      },
+                                      "fileRoots": {
+                                        "items": {
+                                          "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "networkOrigins": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "scripts": {
+                                        "const": false,
+                                        "type": "boolean"
+                                      },
+                                      "tools": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "tools",
+                                      "connections",
+                                      "fileRoots",
+                                      "networkOrigins",
+                                      "scripts"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "manifest": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "entryPath": {
+                                        "const": "SKILL.md",
+                                        "type": "string"
+                                      },
+                                      "files": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "path": {
+                                              "maxLength": 512,
+                                              "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                              "type": "string"
+                                            },
+                                            "sha256": {
+                                              "pattern": "^[a-f0-9]{64}$",
+                                              "type": "string"
+                                            },
+                                            "sizeBytes": {
+                                              "maximum": 9007199254740991,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            }
+                                          },
+                                          "required": [
+                                            "path",
+                                            "sizeBytes",
+                                            "sha256"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 2000,
+                                        "minItems": 1,
+                                        "type": "array"
+                                      },
+                                      "name": {
+                                        "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "name",
+                                      "version",
+                                      "entryPath",
+                                      "files",
+                                      "packageDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "readOnly": {
+                                    "const": true,
+                                    "type": "boolean"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "skillVersion": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "manifestDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageObjectVersion": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "provider": {
+                                        "enum": [
+                                          "system",
+                                          "my_library",
+                                          "market",
+                                          "clawhub",
+                                          "skillhub",
+                                          "npx",
+                                          "github"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "skillId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "skillVersionId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "skillId",
+                                      "skillVersionId",
+                                      "provider",
+                                      "version",
+                                      "packageObjectVersion",
+                                      "packageDigest",
+                                      "manifestDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "targetPath": {
+                                    "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "agentId",
+                                  "agentVersion",
+                                  "skillVersion",
+                                  "manifest",
+                                  "targetPath",
+                                  "readOnly",
+                                  "grant"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 32,
+                              "type": "array"
                             },
                             "state": {
                               "const": "ready",
@@ -9907,6 +12250,219 @@
                               "minLength": 1,
                               "type": "string"
                             },
+                            "skills": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "agentId": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "agentVersion": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "grant": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "connections": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      },
+                                      "fileRoots": {
+                                        "items": {
+                                          "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "networkOrigins": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "scripts": {
+                                        "const": false,
+                                        "type": "boolean"
+                                      },
+                                      "tools": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "tools",
+                                      "connections",
+                                      "fileRoots",
+                                      "networkOrigins",
+                                      "scripts"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "manifest": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "entryPath": {
+                                        "const": "SKILL.md",
+                                        "type": "string"
+                                      },
+                                      "files": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "path": {
+                                              "maxLength": 512,
+                                              "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                              "type": "string"
+                                            },
+                                            "sha256": {
+                                              "pattern": "^[a-f0-9]{64}$",
+                                              "type": "string"
+                                            },
+                                            "sizeBytes": {
+                                              "maximum": 9007199254740991,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            }
+                                          },
+                                          "required": [
+                                            "path",
+                                            "sizeBytes",
+                                            "sha256"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 2000,
+                                        "minItems": 1,
+                                        "type": "array"
+                                      },
+                                      "name": {
+                                        "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "name",
+                                      "version",
+                                      "entryPath",
+                                      "files",
+                                      "packageDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "readOnly": {
+                                    "const": true,
+                                    "type": "boolean"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "skillVersion": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "manifestDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageObjectVersion": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "provider": {
+                                        "enum": [
+                                          "system",
+                                          "my_library",
+                                          "market",
+                                          "clawhub",
+                                          "skillhub",
+                                          "npx",
+                                          "github"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "skillId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "skillVersionId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "skillId",
+                                      "skillVersionId",
+                                      "provider",
+                                      "version",
+                                      "packageObjectVersion",
+                                      "packageDigest",
+                                      "manifestDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "targetPath": {
+                                    "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "agentId",
+                                  "agentVersion",
+                                  "skillVersion",
+                                  "manifest",
+                                  "targetPath",
+                                  "readOnly",
+                                  "grant"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 32,
+                              "type": "array"
+                            },
                             "state": {
                               "const": "degraded",
                               "type": "string"
@@ -10330,6 +12886,219 @@
                             "serviceRef": {
                               "minLength": 1,
                               "type": "string"
+                            },
+                            "skills": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "agentId": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "agentVersion": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "grant": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "connections": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      },
+                                      "fileRoots": {
+                                        "items": {
+                                          "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "networkOrigins": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "scripts": {
+                                        "const": false,
+                                        "type": "boolean"
+                                      },
+                                      "tools": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "tools",
+                                      "connections",
+                                      "fileRoots",
+                                      "networkOrigins",
+                                      "scripts"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "manifest": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "entryPath": {
+                                        "const": "SKILL.md",
+                                        "type": "string"
+                                      },
+                                      "files": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "path": {
+                                              "maxLength": 512,
+                                              "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                              "type": "string"
+                                            },
+                                            "sha256": {
+                                              "pattern": "^[a-f0-9]{64}$",
+                                              "type": "string"
+                                            },
+                                            "sizeBytes": {
+                                              "maximum": 9007199254740991,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            }
+                                          },
+                                          "required": [
+                                            "path",
+                                            "sizeBytes",
+                                            "sha256"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 2000,
+                                        "minItems": 1,
+                                        "type": "array"
+                                      },
+                                      "name": {
+                                        "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "name",
+                                      "version",
+                                      "entryPath",
+                                      "files",
+                                      "packageDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "readOnly": {
+                                    "const": true,
+                                    "type": "boolean"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "skillVersion": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "manifestDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageObjectVersion": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "provider": {
+                                        "enum": [
+                                          "system",
+                                          "my_library",
+                                          "market",
+                                          "clawhub",
+                                          "skillhub",
+                                          "npx",
+                                          "github"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "skillId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "skillVersionId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "skillId",
+                                      "skillVersionId",
+                                      "provider",
+                                      "version",
+                                      "packageObjectVersion",
+                                      "packageDigest",
+                                      "manifestDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "targetPath": {
+                                    "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "agentId",
+                                  "agentVersion",
+                                  "skillVersion",
+                                  "manifest",
+                                  "targetPath",
+                                  "readOnly",
+                                  "grant"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 32,
+                              "type": "array"
                             },
                             "state": {
                               "const": "scaled-down",
@@ -11626,6 +14395,219 @@
                               "minLength": 1,
                               "type": "string"
                             },
+                            "skills": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "agentId": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "agentVersion": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "grant": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "connections": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      },
+                                      "fileRoots": {
+                                        "items": {
+                                          "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "networkOrigins": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "scripts": {
+                                        "const": false,
+                                        "type": "boolean"
+                                      },
+                                      "tools": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "tools",
+                                      "connections",
+                                      "fileRoots",
+                                      "networkOrigins",
+                                      "scripts"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "manifest": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "entryPath": {
+                                        "const": "SKILL.md",
+                                        "type": "string"
+                                      },
+                                      "files": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "path": {
+                                              "maxLength": 512,
+                                              "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                              "type": "string"
+                                            },
+                                            "sha256": {
+                                              "pattern": "^[a-f0-9]{64}$",
+                                              "type": "string"
+                                            },
+                                            "sizeBytes": {
+                                              "maximum": 9007199254740991,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            }
+                                          },
+                                          "required": [
+                                            "path",
+                                            "sizeBytes",
+                                            "sha256"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 2000,
+                                        "minItems": 1,
+                                        "type": "array"
+                                      },
+                                      "name": {
+                                        "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "name",
+                                      "version",
+                                      "entryPath",
+                                      "files",
+                                      "packageDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "readOnly": {
+                                    "const": true,
+                                    "type": "boolean"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "skillVersion": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "manifestDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageObjectVersion": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "provider": {
+                                        "enum": [
+                                          "system",
+                                          "my_library",
+                                          "market",
+                                          "clawhub",
+                                          "skillhub",
+                                          "npx",
+                                          "github"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "skillId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "skillVersionId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "skillId",
+                                      "skillVersionId",
+                                      "provider",
+                                      "version",
+                                      "packageObjectVersion",
+                                      "packageDigest",
+                                      "manifestDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "targetPath": {
+                                    "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "agentId",
+                                  "agentVersion",
+                                  "skillVersion",
+                                  "manifest",
+                                  "targetPath",
+                                  "readOnly",
+                                  "grant"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 32,
+                              "type": "array"
+                            },
                             "state": {
                               "const": "applying",
                               "type": "string"
@@ -12071,6 +15053,219 @@
                             "serviceRef": {
                               "minLength": 1,
                               "type": "string"
+                            },
+                            "skills": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "agentId": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "agentVersion": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "grant": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "connections": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      },
+                                      "fileRoots": {
+                                        "items": {
+                                          "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "networkOrigins": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "scripts": {
+                                        "const": false,
+                                        "type": "boolean"
+                                      },
+                                      "tools": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "tools",
+                                      "connections",
+                                      "fileRoots",
+                                      "networkOrigins",
+                                      "scripts"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "manifest": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "entryPath": {
+                                        "const": "SKILL.md",
+                                        "type": "string"
+                                      },
+                                      "files": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "path": {
+                                              "maxLength": 512,
+                                              "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                              "type": "string"
+                                            },
+                                            "sha256": {
+                                              "pattern": "^[a-f0-9]{64}$",
+                                              "type": "string"
+                                            },
+                                            "sizeBytes": {
+                                              "maximum": 9007199254740991,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            }
+                                          },
+                                          "required": [
+                                            "path",
+                                            "sizeBytes",
+                                            "sha256"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 2000,
+                                        "minItems": 1,
+                                        "type": "array"
+                                      },
+                                      "name": {
+                                        "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "name",
+                                      "version",
+                                      "entryPath",
+                                      "files",
+                                      "packageDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "readOnly": {
+                                    "const": true,
+                                    "type": "boolean"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "skillVersion": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "manifestDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageObjectVersion": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "provider": {
+                                        "enum": [
+                                          "system",
+                                          "my_library",
+                                          "market",
+                                          "clawhub",
+                                          "skillhub",
+                                          "npx",
+                                          "github"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "skillId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "skillVersionId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "skillId",
+                                      "skillVersionId",
+                                      "provider",
+                                      "version",
+                                      "packageObjectVersion",
+                                      "packageDigest",
+                                      "manifestDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "targetPath": {
+                                    "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "agentId",
+                                  "agentVersion",
+                                  "skillVersion",
+                                  "manifest",
+                                  "targetPath",
+                                  "readOnly",
+                                  "grant"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 32,
+                              "type": "array"
                             },
                             "state": {
                               "const": "ready",
@@ -12761,6 +15956,219 @@
                               "minLength": 1,
                               "type": "string"
                             },
+                            "skills": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "agentId": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "agentVersion": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "grant": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "connections": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      },
+                                      "fileRoots": {
+                                        "items": {
+                                          "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "networkOrigins": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "scripts": {
+                                        "const": false,
+                                        "type": "boolean"
+                                      },
+                                      "tools": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "tools",
+                                      "connections",
+                                      "fileRoots",
+                                      "networkOrigins",
+                                      "scripts"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "manifest": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "entryPath": {
+                                        "const": "SKILL.md",
+                                        "type": "string"
+                                      },
+                                      "files": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "path": {
+                                              "maxLength": 512,
+                                              "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                              "type": "string"
+                                            },
+                                            "sha256": {
+                                              "pattern": "^[a-f0-9]{64}$",
+                                              "type": "string"
+                                            },
+                                            "sizeBytes": {
+                                              "maximum": 9007199254740991,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            }
+                                          },
+                                          "required": [
+                                            "path",
+                                            "sizeBytes",
+                                            "sha256"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 2000,
+                                        "minItems": 1,
+                                        "type": "array"
+                                      },
+                                      "name": {
+                                        "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "name",
+                                      "version",
+                                      "entryPath",
+                                      "files",
+                                      "packageDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "readOnly": {
+                                    "const": true,
+                                    "type": "boolean"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "skillVersion": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "manifestDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageObjectVersion": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "provider": {
+                                        "enum": [
+                                          "system",
+                                          "my_library",
+                                          "market",
+                                          "clawhub",
+                                          "skillhub",
+                                          "npx",
+                                          "github"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "skillId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "skillVersionId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "skillId",
+                                      "skillVersionId",
+                                      "provider",
+                                      "version",
+                                      "packageObjectVersion",
+                                      "packageDigest",
+                                      "manifestDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "targetPath": {
+                                    "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "agentId",
+                                  "agentVersion",
+                                  "skillVersion",
+                                  "manifest",
+                                  "targetPath",
+                                  "readOnly",
+                                  "grant"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 32,
+                              "type": "array"
+                            },
                             "state": {
                               "const": "degraded",
                               "type": "string"
@@ -13184,6 +16592,219 @@
                             "serviceRef": {
                               "minLength": 1,
                               "type": "string"
+                            },
+                            "skills": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "agentId": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "agentVersion": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "grant": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "connections": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      },
+                                      "fileRoots": {
+                                        "items": {
+                                          "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "networkOrigins": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "type": "array"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "scripts": {
+                                        "const": false,
+                                        "type": "boolean"
+                                      },
+                                      "tools": {
+                                        "items": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "maxItems": 128,
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "tools",
+                                      "connections",
+                                      "fileRoots",
+                                      "networkOrigins",
+                                      "scripts"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "manifest": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "entryPath": {
+                                        "const": "SKILL.md",
+                                        "type": "string"
+                                      },
+                                      "files": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "path": {
+                                              "maxLength": 512,
+                                              "pattern": "^(?!\\/)(?!.*\\\\)(?!.*(?:^|\\/)\\.\\.(?:\\/|$))(?:[A-Za-z0-9._-]+\\/)*[A-Za-z0-9._-]+$",
+                                              "type": "string"
+                                            },
+                                            "sha256": {
+                                              "pattern": "^[a-f0-9]{64}$",
+                                              "type": "string"
+                                            },
+                                            "sizeBytes": {
+                                              "maximum": 9007199254740991,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            }
+                                          },
+                                          "required": [
+                                            "path",
+                                            "sizeBytes",
+                                            "sha256"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 2000,
+                                        "minItems": 1,
+                                        "type": "array"
+                                      },
+                                      "name": {
+                                        "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "name",
+                                      "version",
+                                      "entryPath",
+                                      "files",
+                                      "packageDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "readOnly": {
+                                    "const": true,
+                                    "type": "boolean"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "skillVersion": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "manifestDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageDigest": {
+                                        "pattern": "^[a-f0-9]{64}$",
+                                        "type": "string"
+                                      },
+                                      "packageObjectVersion": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "provider": {
+                                        "enum": [
+                                          "system",
+                                          "my_library",
+                                          "market",
+                                          "clawhub",
+                                          "skillhub",
+                                          "npx",
+                                          "github"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "skillId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "skillVersionId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "version": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "skillId",
+                                      "skillVersionId",
+                                      "provider",
+                                      "version",
+                                      "packageObjectVersion",
+                                      "packageDigest",
+                                      "manifestDigest"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "targetPath": {
+                                    "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "agentId",
+                                  "agentVersion",
+                                  "skillVersion",
+                                  "manifest",
+                                  "targetPath",
+                                  "readOnly",
+                                  "grant"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 32,
+                              "type": "array"
                             },
                             "state": {
                               "const": "scaled-down",
