@@ -1,5 +1,9 @@
 import { createPublicKey } from "node:crypto";
 import {
+	type ApprovedConnectionConsumerProfileV1,
+	resolveApprovedConnectionConsumerProfileV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
+import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
 } from "@agent-infra/contracts/workload";
@@ -23,13 +27,38 @@ import {
 } from "./workload-runtime.js";
 import { validateWorkloadRuntimeAuthV1 } from "./workload-runtime-auth.js";
 
+type ConnectionConsumerTargetV1 = Extract<
+	ApprovedConnectionConsumerProfileV1,
+	{ readonly status: "available" }
+> & { readonly url: string };
+
+export function resolveApprovedConnectionConsumerTargetV1(
+	profile: unknown,
+	approval: unknown,
+): ConnectionConsumerTargetV1 | undefined {
+	if (profile === undefined) return undefined;
+	const result = resolveApprovedConnectionConsumerProfileV1(profile, approval);
+	if (result.status !== "available")
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	return {
+		...result,
+		url: `${result.profile.publicOrigin}${result.profile.mcpPath}`,
+	};
+}
+
 /** Resolve only a currently observed Workload through the existing deployment adapter. */
 export function createProductionConversationRuntimeResolverV2(options: {
 	readonly workload: WorkloadRuntimeOptionsV1;
 	readonly signing: ConversationRuntimeOptionsV2["signing"];
 	readonly serviceToken: string;
+	readonly connectionConsumerProfile?: unknown;
+	readonly connectionConsumerApproval?: unknown;
 }): ConversationRuntimeOptionsV2["resolveRuntimeHost"] {
 	const { workload, signing, serviceToken } = options;
+	const connectionConsumer = resolveApprovedConnectionConsumerTargetV1(
+		options.connectionConsumerProfile,
+		options.connectionConsumerApproval,
+	);
 	const auth = workload.policy.runtimeAuth;
 	try {
 		if (!auth) throw new Error();
@@ -135,6 +164,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					baseUrl: `https://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
+					connectionConsumer,
 				};
 			}
 			if (
@@ -248,6 +278,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					baseUrl: `https://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
+					connectionConsumer,
 				};
 			}
 			input.signal.throwIfAborted();
@@ -256,6 +287,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				baseUrl: `https://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
 				serviceToken,
 				workerId: signing.workerId,
+				connectionConsumer,
 			};
 		} catch {
 			input.signal.throwIfAborted();

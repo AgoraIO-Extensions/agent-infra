@@ -11,6 +11,7 @@ import type {
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
 import { createConversationDispatchUseCaseV1 } from "../../../packages/platform-core/src/conversation-dispatch.js";
+import { resolveApprovedConnectionConsumerTargetV1 } from "./conversation-deployment.js";
 import {
 	type ConversationLegacyControlRecoveryV2,
 	type ConversationRuntimeOptionsV2,
@@ -314,6 +315,55 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it("rejects a changed Connection snapshot at the final route recheck without dispatch", async () => {
+		const h = harness();
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp/v1",
+			consumerId: "platform-worker",
+			audience: "connection-api",
+			egressProfile: { ref: "egress-platform", revision: "r1" },
+		};
+		const approval = {
+			schemaVersion: 1 as const,
+			configFingerprint:
+				"26062a8f8e5a003ff8047fead83d76c254d9b54834ca5348fb7e4ceee67d205b",
+			egressEnforced: true as const,
+			source: { ref: "platform-deployment", revision: "r1" },
+		};
+		const first = resolveApprovedConnectionConsumerTargetV1(profile, approval);
+		const changed = resolveApprovedConnectionConsumerTargetV1(profile, {
+			...approval,
+			source: { ...approval.source, revision: "r2" },
+		});
+		if (!first || !changed) throw new Error("Expected approved snapshots");
+		const stableTarget = {
+			baseUrl: "https://runtime.test",
+			serviceToken: "synthetic-transport-proof",
+			workerId: "transport",
+			connectionConsumer: first,
+		};
+		const changedTarget = { ...stableTarget, connectionConsumer: changed };
+		const grant = await h.authorize();
+		h.resolver.mockClear();
+		h.resolver
+			.mockResolvedValueOnce(stableTarget)
+			.mockResolvedValueOnce(stableTarget)
+			.mockResolvedValueOnce(changedTarget);
+		try {
+			await expect(
+				h.runtime.runtimeHost.dispatch(
+					h.request(grant),
+					new AbortController().signal,
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_ROUTE_STALE" });
+			expect(h.resolver).toHaveBeenCalledTimes(3);
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			h.runtime.close();
+		}
+	});
 	it.each(["web", "partner:channel", "wecom_bot:bot", "wecom_app:app"])(
 		"does not authorize %s without a current channel authority",
 		async (channelId) => {

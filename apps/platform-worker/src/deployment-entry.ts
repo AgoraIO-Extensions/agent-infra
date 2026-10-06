@@ -21,6 +21,8 @@ type DeploymentConfiguration = {
 		readonly privateKeyPkcs8DerBase64: string;
 	}[];
 	readonly wecom: unknown;
+	readonly connectionConsumerProfile?: unknown;
+	readonly connectionConsumerApproval?: unknown;
 };
 
 // Deployment-owned code supplies current IdentityAdapter facts and Worker-only material.
@@ -32,6 +34,8 @@ const {
 	directory,
 	relayKeyDecryptionKeys,
 	wecom,
+	connectionConsumerProfile,
+	connectionConsumerApproval,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
@@ -123,6 +127,8 @@ async function createPrepared(signal: AbortSignal) {
 					workload: { ...workload, workerId: signing.workerId },
 					signing,
 					serviceToken,
+					connectionConsumerProfile,
+					connectionConsumerApproval,
 				}),
 			fetch: workload.fetch,
 		},
