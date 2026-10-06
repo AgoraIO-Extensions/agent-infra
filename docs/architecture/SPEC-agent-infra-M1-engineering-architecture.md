@@ -1731,50 +1731,10 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 - OpenAPI 生成结果无漂移
 - Drizzle migration 校验
 - Docker image build
-- 依赖漏洞和镜像扫描
 
-PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
+依赖和镜像漏洞发现使用 GitHub repository security alerts 及其维护的依赖图，不在仓库 CI 中复制一套 Trivy 扫描、漏洞库快照、例外审批或漏洞判定门禁。GitHub 安全告警负责报告已知依赖风险；依赖升级 PR、风险处置和安全设置由仓库维护者管理。
 
-- 对根 `pnpm-lock.yaml` 启用 `--include-dev-deps`，扫描根 workspace、`apps/*` 和
-  `packages/*` 的生产、开发/构建、可选及传递依赖；解析出的包清单必须覆盖 lockfile
-  的全部精确包版本，workspace 清单必须与 lockfile importers 一致。
-- 镜像清单为 `web`、`platform-api`、`platform-worker`、`enterprise-directory-sync`、`connection-api`、
-  `agent-runtime-host`、`custom-agent-base`。复用本次 CI 构建的最终运行镜像，以 Docker image ID（Docker
-  存储后端的不可变 SHA-256）及 rootfs layers 绑定 OS 与应用扫描；此 CI 扫描步骤不发布镜像。
-  镜像发布使用独立的 [release 入口](../../deploy/README.md#不可变镜像与-release-检查)。新增
-  Dockerfile 必须同步覆盖清单。Connection 此项仅提供 HLD §14/§16 的镜像证据，不替代其 Pilot 门禁。
-- 使用 Trivy 输出的 `Severity` 识别所有 High/Critical，包括无修复版本。仅
-  `pull_request` CI 将这些发现作为警告，不因发现本身阻塞 PR；`main` push、默认本地
-  调用和发布入口仍阻断未获有效例外的 High/Critical。中低等级及 Unknown 保留报告。
-  报告保留严格漏洞判定及数量，并单独记录本次 CI 门禁结果；PR 警告不表示漏洞已修复。
-  severity 来源采用 Trivy 的 vendor 优先策略：OS 使用发行版
-  advisory，应用包使用其生态数据源（npm 使用 GitHub Advisory Database）；报告保留
-  `SeveritySource`、`VendorSeverity` 和 `DataSource`，不改用仅新增或仅有补丁策略。
-  Trivy 未输出可选 `SeveritySource` 时，摘要注明 `Trivy auto (source unspecified)`，
-  保留原始 vendor/advisory 数据，不自行重算或降低 severity。
-  选择规则以[固定版本的 Trivy 文档](https://github.com/aquasecurity/trivy/blob/v0.74.0/docs/guide/scanner/vulnerability.md#severity-selection)为依据。
-- 每次从漏洞库获取可用的当前快照，然后在本轮扫描中固定该快照。报告绑定源 commit、
-  lockfile SHA-256、CI run/attempt、workspace/镜像清单、image ID/rootfs layers、Trivy
-  版本、数据库 schema/更新时间/下次更新时间和数据库文件 SHA-256。工具/网络失败、
-  数据库不可用或过期、报告缺失/无效、覆盖不全、来源不一致均失败。
-- 原始 Trivy JSON、构建清单、扫描元数据、逐项可读摘要与最终判定作为同一 CI artifact
-  保存 30 天，失败时也上传；CI 下载同一 run 的 artifact 后重新校验来源和判定。
-  扫描只读取构建产物及外部漏洞数据，不扫描 Secret/用户数据、不使用仓库忽略文件。
-- 必要例外经过现有 CODEOWNERS 人工 review 后，由仓库管理员登记到 Actions repository
-  variable `VULNERABILITY_EXCEPTIONS`（JSON 数组，未配置等于空数组）。记录必须含
-  `scope`（`lockfile` 或精确镜像名）、`vulnerability`、`package`、`version`、镜像
-  `imageId`（lockfile 使用 `null`）、`reason`、UTC `expiresAt`、`approvalUrl`。
-  审批 Review 正文必须单独包含 `vulnerability-exception sha256:<摘要>`；摘要为以上
-  字段（不含 `approvalUrl`）按此顺序 JSON 编码的 SHA-256。CI 只读回查本仓库的
-  未关闭或已合并 PR、当前 head 的最新有效 `APPROVED` Review 及审批人的实时
-  maintain/admin 权限；后续 `CHANGES_REQUESTED` 或 `DISMISSED` 使旧批准失效。
-  仓库配置登记与可回读 Review 缺一不可，不能由 PR 文件自填审批人。
-  无效/到期记录、通配范围、版本/Digest 不匹配、审批撤销或回查失败不能豁免。
-  普通基础设施 waiver 不参与漏洞判定，例外不改变其他人工门禁。
-
-真实扫描命中 High/Critical 时保留完整证据，并跟踪修复 Issue；严格门禁下也可由维护者批准
-精确例外。不得自动升级、修复或降低严重性。PR 仍须通过扫描执行与证据完整性检查；报告性
-发现不阻塞 PR readiness，不代表生产或完整人工安全审计完成。
+CI 仍验证构建出的镜像、不可变 image ID、Runtime probe、Web smoke、Custom Base Image inheritance 及其他产品契约。上述构建和运行验证不等同于漏洞扫描，也不因 GitHub Advisory 数据库更新而失败。依赖和镜像漏洞的修复、风险接受及生产发布审批沿用仓库外部安全流程；不得把普通 CI 通过表述为漏洞已修复。
 
 ### 21.2 发布
 
