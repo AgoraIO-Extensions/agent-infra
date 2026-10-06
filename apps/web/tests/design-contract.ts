@@ -27,7 +27,7 @@ export async function captureDesignContract(
 		const root = getComputedStyle(document.documentElement);
 		const button = [
 			...document.querySelectorAll(
-				'main [data-slot="button"], main a[class~="group/button"]',
+				'main [data-slot="button"]:not(.directory-chip-remove), main a[class~="group/button"]',
 			),
 		].find((node) => node.getBoundingClientRect().width > 0);
 		const input = [
