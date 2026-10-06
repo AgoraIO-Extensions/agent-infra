@@ -445,8 +445,8 @@ export function createWorkerRuntimeHostClientV1(
 	if (!options || typeof options !== "object" || !options.serviceToken) {
 		throw new TypeError("RuntimeHost client options are invalid");
 	}
-	const fetcher = options.fetch ?? runtimeTlsFetch();
 	const dispatchBase = endpoint(options.baseUrl, "/");
+	const fetcher = options.fetch ?? runtimeTlsFetch();
 	return {
 		async dispatch(request, signal) {
 			let selected: ReturnType<typeof dispatchBody>;
@@ -613,8 +613,8 @@ export function createWorkerRuntimeHostClientV3(
 ) {
 	if (!options || typeof options !== "object" || !options.serviceToken)
 		throw new TypeError("RuntimeHost client options are invalid");
-	const fetcher = options.fetch ?? runtimeTlsFetch();
 	const base = endpoint(options.baseUrl, "/");
+	const fetcher = options.fetch ?? runtimeTlsFetch();
 	async function request<T extends { traceId: string }, R>(
 		path: string,
 		value: T,
