@@ -129,7 +129,6 @@ async function createPrepared(signal: AbortSignal) {
 					serviceToken,
 					connectionConsumerProfile,
 					connectionConsumerApproval,
-					requireConnectionConsumerProfile: true,
 				}),
 			fetch: workload.fetch,
 		},

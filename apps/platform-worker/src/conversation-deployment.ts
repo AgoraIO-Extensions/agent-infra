@@ -34,10 +34,14 @@ function approvedConnectionConsumerTarget(
 	approval: unknown,
 	required = false,
 ): ConnectionConsumerTargetV1 | undefined {
-	if (profile === undefined || approval === undefined) {
+	const hasProfile = profile !== undefined;
+	const hasApproval = approval !== undefined;
+	if (!hasProfile && !hasApproval) {
 		if (!required) return undefined;
 		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 	}
+	if (!hasProfile || !hasApproval)
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 	const result = resolveApprovedConnectionConsumerProfileV1(profile, approval);
 	if (result.status !== "available")
 		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
