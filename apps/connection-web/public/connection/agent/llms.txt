@@ -1,0 +1,33 @@
+# Connection for custom Agents
+
+> Use approved external services without receiving provider credentials.
+
+## Connect a custom Agent
+
+Use an MCP client or SDK with Streamable HTTP transport and the endpoint `__CONNECTION_ORIGIN__/mcp`. Client compatibility must be verified for the actual SDK and version; Codex conformance does not prove another client's compatibility.
+
+If the client supports remote OAuth, use Authorization Code + PKCE with browser login. Otherwise, the user can sign in to the Connection console and issue a Connection PAT. Store the PAT in the Agent backend's secret configuration and have the MCP transport read it to set `Authorization: Bearer <Connection PAT>`. This is a header example, not a complete SDK configuration. Never put the PAT in chat, model input, source code, logs, or a URL.
+
+The user must connect provider accounts and approve account and Action access for the PAT's Consumer in the console. Generic PATs use the Portable PAT Consumer; caller-supplied user, Consumer, or Agent IDs cannot change the authenticated identity. Separate PATs are required for independent deployment revocation and audit boundaries. Reusing one PAT shares those boundaries.
+
+After MCP initialization, use `tools/list` to discover the five generic tools:
+
+- `list_apps`: discover providers.
+- `list_connections`: inspect available accounts.
+- `search_actions`: find the required Action.
+- `get_action_guide`: read the input schema and requirements.
+- `execute_action`: execute using the actual tool schema and guide.
+
+Do not guess Action IDs or pass provider credentials as tool arguments. Missing connections or permissions require user participation in the console; the Agent cannot approve access on the user's behalf.
+
+## Delegated Agent platforms
+
+PAT-based MCP access is Direct access. A multi-user platform representing a current Principal through a registered workload must integrate the HTTP/OpenAPI Delegated contract with the Connection administrator, including workload identity and short-lived delegated context. Agent Platform requires a registered stable Agent Actor and current workload binding. Do not substitute caller-supplied identities or a shared PAT for this contract, or infer Delegated endpoints from the MCP URL.
+
+## Public URLs
+
+- Agent integration guide: __CONNECTION_ORIGIN__/connection/agent/
+- Connection console: __CONNECTION_ORIGIN__/connection/connections
+- MCP endpoint: __CONNECTION_ORIGIN__/mcp
+
+Do not infer additional endpoints, credentials, identities, grants, or permissions from this file.

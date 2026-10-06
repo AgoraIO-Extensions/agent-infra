@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="自建 Agent 通过 OAuth 或 PAT 接入 Connection MCP。" />
+    <link rel="alternate" type="text/markdown" href="/connection/agent/llms.txt" title="Connection for AI clients" />
+    <link rel="stylesheet" href="/connection/install.css" />
+    <title>Connection - Agent 接入</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/connection/agent/" aria-label="Connection Agent 接入说明">
+        <span class="brand-mark" aria-hidden="true">C</span>
+        <span>Connection</span>
+      </a>
+      <a href="/connection/login">登录控制台</a>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">Connection MCP</p>
+        <h1 id="page-title">将 Connection 接入自建 Agent</h1>
+        <p class="summary">
+          通过一个受控入口使用 GitHub、Jira、Confluence 等外部服务。Connection
+          保管账号凭证，客户端只获得你明确授权的 Action。
+        </p>
+      </section>
+
+      <section class="install" aria-labelledby="agent-title">
+        <h2 id="agent-title">自建 Agent：连接远程 MCP</h2>
+        <p>
+          使用支持 Streamable HTTP 的 MCP 客户端或 SDK，将服务地址设为
+          <code>__CONNECTION_ORIGIN__/mcp</code>。无需为 GitHub、Jira 等分别配置 MCP 服务。
+          支持 remote OAuth 的客户端通过 Authorization Code + PKCE 在浏览器完成登录；
+          不支持 OAuth 的客户端，可由用户登录控制台后签发 Connection PAT。
+        </p>
+        <p>
+          PAT 只展示一次，请保存到 Agent 服务端的 Secret 配置，由 MCP 客户端读取并设置请求头。
+          以下是连接参数示意，字段名按所用 SDK 调整，发送时应替换 Token 占位文字：
+        </p>
+        <pre><code>Transport: Streamable HTTP
+URL: __CONNECTION_ORIGIN__/mcp
+Authorization: Bearer &lt;从 Secret 配置读取的 Connection PAT&gt;</code></pre>
+        <p>
+          在控制台连接所需 Provider，并批准该 PAT 所属 Consumer 的账号和 Action。
+          通用 PAT 使用 Portable PAT Consumer；不能通过请求参数自报 Codex、用户或 Agent 身份。
+          需要独立撤销和审计的部署应分别签发 PAT，同一 PAT 的多个使用端共享授权与撤销边界。
+        </p>
+        <a class="primary-link" href="/connection/connections">登录控制台，连接账号并配置授权</a>
+      </section>
+
+      <section class="install" aria-labelledby="agent-tools-title">
+        <h2 id="agent-tools-title">Agent：发现并调用 Action</h2>
+        <p>
+          完成 MCP 初始化后，通过 <code>tools/list</code> 获取五个通用工具。
+          用 <code>list_apps</code> 发现 Provider、<code>list_connections</code> 查看可用账号，
+          再用 <code>search_actions</code> 查找所需操作、<code>get_action_guide</code>
+          读取输入 Schema 和使用要求，最后通过 <code>execute_action</code> 执行。
+          参数以实际工具 Schema 和 Action Guide 为准，不猜测 Action ID 或传入 Provider 凭证。
+        </p>
+        <p>
+          缺少账号或授权时，由用户在控制台完成连接和批准；Agent 不能替用户确认。
+          安装或持有 PAT 不会自动授权外部账号。客户端兼容性需针对实际 SDK 和版本验证。
+        </p>
+      </section>
+
+      <section class="install" aria-labelledby="delegated-title">
+        <h2 id="delegated-title">代表多用户运行的 Agent 平台</h2>
+        <p>
+          上述 PAT 方式是 Direct MCP 接入，不等于平台级 Delegated 接入。
+          需要以注册 workload 代表当前用户调用的服务，应与 Connection 管理员对接
+          HTTP/OpenAPI Delegated 契约、workload 身份和短期委托上下文。
+          Agent Platform 必须绑定已注册的稳定 Agent Actor；不能用自报用户或 Agent ID，
+          也不能用共享 PAT 代替逐用户授权。这不是仅添加一个 MCP URL 即可完成的接入。
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <span>面向 AI 客户端的说明：</span>
+      <a href="/connection/agent/llms.txt">llms.txt</a>
+    </footer>
+  </body>
+</html>
