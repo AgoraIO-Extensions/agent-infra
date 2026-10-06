@@ -63,6 +63,10 @@ export type BrowserSideEffectConfirmationV1 = Readonly<{
 
 export type BrowserActionRequestV1 = Readonly<{
 	actionId?: string;
+	/** Allocated by the Platform operation boundary; never generated per retry. */
+	operationRef?: string;
+	/** Allocated for this concrete attempt by the Platform operation boundary. */
+	attemptRef?: string;
 	idempotencyKey?: string;
 	kind: BrowserActionKindV1;
 	page: BrowserPageReferenceV1;
@@ -79,6 +83,8 @@ export type BrowserActionRequestV1 = Readonly<{
 
 export type BrowserActionRecordV1 = Readonly<{
 	actionId: string;
+	operationRef?: string;
+	attemptRef?: string;
 	kind: BrowserActionKindV1;
 	status:
 		| "accepted"
@@ -117,6 +123,8 @@ export type BrowserUploadRequestV1 = Readonly<{
 	page: BrowserPageReferenceV1;
 	target: BrowserElementReferenceV1;
 	file: Readonly<{ descriptor: FileDescriptorV1; bytes: Uint8Array }>;
+	operationRef?: string;
+	attemptRef?: string;
 	idempotencyKey?: string;
 	authorization?: BrowserActionAuthorizationV1;
 	confirmation?: BrowserSideEffectConfirmationV1;
@@ -494,8 +502,11 @@ export function createBrowserObserveControllerV1(input: {
 		createdAt: string,
 		fields: Partial<BrowserActionRecordV1> = {},
 	): BrowserActionRecordV1 {
+		const actionId = request.actionId ?? `action-${randomUUID()}`;
 		return {
-			actionId: request.actionId ?? `action-${randomUUID()}`,
+			actionId,
+			...(request.operationRef ? { operationRef: request.operationRef } : {}),
+			...(request.attemptRef ? { attemptRef: request.attemptRef } : {}),
 			kind: request.kind,
 			status,
 			page,
@@ -510,6 +521,11 @@ export function createBrowserObserveControllerV1(input: {
 	): Promise<BrowserActionRecordV1> {
 		const createdAt = new Date().toISOString();
 		const actionId = request.actionId ?? `action-${randomUUID()}`;
+		if (!request.operationRef || !request.attemptRef)
+			return actionRecord(request, "rejected", request.page, createdAt, {
+				actionId,
+				reasonCode: "BROWSER_ACTION_OPERATION_REQUIRED",
+			});
 		const requestDigest = actionDigest(request);
 		const previous = request.idempotencyKey
 			? actions.get(request.idempotencyKey)
@@ -1018,12 +1034,16 @@ export function createBrowserObserveControllerV1(input: {
 	async function screenshot(
 		reference: BrowserPageReferenceV1,
 		idempotencyKey = `screenshot:${reference.pageId}:${reference.pageRevision}`,
+		operationRef?: string,
+		attemptRef?: string,
 	): Promise<BrowserArtifactV1> {
 		return artifactResult(
 			await executeAction({
 				kind: "screenshot",
 				page: reference,
 				idempotencyKey,
+				operationRef,
+				attemptRef,
 			}),
 		);
 	}
@@ -1032,6 +1052,8 @@ export function createBrowserObserveControllerV1(input: {
 		reference: BrowserPageReferenceV1,
 		target: BrowserElementReferenceV1,
 		idempotencyKey = `download:${target.elementId}`,
+		operationRef?: string,
+		attemptRef?: string,
 	): Promise<BrowserArtifactV1> {
 		return artifactResult(
 			await executeAction({
@@ -1039,6 +1061,8 @@ export function createBrowserObserveControllerV1(input: {
 				page: reference,
 				target,
 				idempotencyKey,
+				operationRef,
+				attemptRef,
 			}),
 		);
 	}
@@ -1049,6 +1073,8 @@ export function createBrowserObserveControllerV1(input: {
 			page: input_.page,
 			target: input_.target,
 			file: input_.file,
+			operationRef: input_.operationRef,
+			attemptRef: input_.attemptRef,
 			idempotencyKey:
 				input_.idempotencyKey ?? `upload:${input_.target.elementId}`,
 			authorization: input_.authorization,

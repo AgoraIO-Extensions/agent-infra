@@ -175,6 +175,10 @@ describe("Browser interaction controller", () => {
 		const field = observation.elements[0];
 		const submit = observation.elements[1];
 		if (!field || !submit) throw new Error("expected observed controls");
+		const operation = (name: string) => ({
+			operationRef: `browser-operation-${name}`,
+			attemptRef: `browser-attempt-${name}`,
+		});
 
 		await expect(
 			controller.act({
@@ -182,6 +186,7 @@ describe("Browser interaction controller", () => {
 				page: pageReference,
 				target: field,
 				value: "alice@example.test",
+				...operation("fill"),
 			}),
 		).resolves.toMatchObject({ status: "completed", kind: "fill" });
 		await expect(
@@ -190,6 +195,7 @@ describe("Browser interaction controller", () => {
 				page: pageReference,
 				target: field,
 				key: "Enter",
+				...operation("press"),
 			}),
 		).resolves.toMatchObject({ status: "completed", kind: "press" });
 		await expect(
@@ -198,6 +204,7 @@ describe("Browser interaction controller", () => {
 				page: pageReference,
 				target: submit,
 				sideEffect: true,
+				...operation("missing-authorization"),
 			}),
 		).resolves.toMatchObject({
 			status: "rejected",
@@ -210,6 +217,7 @@ describe("Browser interaction controller", () => {
 			target: submit,
 			sideEffect: true,
 			idempotencyKey: "submit-once",
+			...operation("submit"),
 			authorization: {
 				subjectId: "subject-1",
 				agentId: "agent-1",
@@ -251,6 +259,7 @@ describe("Browser interaction controller", () => {
 				kind: "switch_tab",
 				page: pageReference,
 				targetPage: tabs[1],
+				...operation("switch-tab"),
 			}),
 		).resolves.toMatchObject({ status: "completed", page: tabs[1] });
 	});

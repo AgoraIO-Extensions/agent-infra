@@ -46,6 +46,20 @@ interface ConversationOperationBaseV2 {
 	readonly failureCode?: ConversationOperationFailureV2;
 }
 
+/**
+ * Browser action identity carried by the existing operation fact. This is a
+ * projection only; execution/session authority remains in the event command
+ * and the dispatch/authorization transaction.
+ */
+export interface ConversationBrowserActionBindingV1 {
+	readonly actionId: string;
+	readonly capabilityVersion: number;
+	readonly pageRevision: number;
+	readonly sessionGeneration: number;
+	readonly resourceFence: number;
+	readonly sideEffect: boolean;
+}
+
 export type ConversationOperationFactV2 = ConversationOperationBaseV2 &
 	(
 		| {
@@ -67,6 +81,7 @@ export type ConversationOperationFactV2 = ConversationOperationBaseV2 &
 				readonly toolId: string;
 				readonly resultRef?: string;
 				readonly connection?: ConversationConnectionAssociationV1;
+				readonly browser?: ConversationBrowserActionBindingV1;
 		  }
 	);
 
@@ -109,6 +124,12 @@ function count(input: unknown): number {
 	if (typeof input !== "number" || !Number.isSafeInteger(input) || input < 0)
 		invalid();
 	return input;
+}
+
+function positiveCount(input: unknown): number {
+	const value = count(input);
+	if (value < 1) invalid();
+	return value;
 }
 
 function time(input: unknown): string {
@@ -171,6 +192,32 @@ function connectionAssociation(
 	};
 }
 
+function browserActionBinding(
+	input: unknown,
+): ConversationBrowserActionBindingV1 {
+	const value = record(input, [
+		"actionId",
+		"capabilityVersion",
+		"pageRevision",
+		"sessionGeneration",
+		"resourceFence",
+		"sideEffect",
+	]);
+	if (
+		!isAgentManagementText(value.actionId) ||
+		typeof value.sideEffect !== "boolean"
+	)
+		invalid();
+	return {
+		actionId: value.actionId,
+		capabilityVersion: positiveCount(value.capabilityVersion),
+		pageRevision: positiveCount(value.pageRevision),
+		sessionGeneration: positiveCount(value.sessionGeneration),
+		resourceFence: positiveCount(value.resourceFence),
+		sideEffect: value.sideEffect,
+	};
+}
+
 /** Domain facts, deliberately independent from transport Zod schemas. */
 export function parseConversationOperationFactV2(
 	input: unknown,
@@ -191,7 +238,9 @@ export function parseConversationOperationFactV2(
 			"finishedAt",
 			"durationMs",
 			"failureCode",
-			...(shape.kind === "model" ? ["usage"] : ["resultRef", "connection"]),
+			...(shape.kind === "model"
+				? ["usage"]
+				: ["resultRef", "connection", "browser"]),
 		],
 	);
 	if (value.kind !== "model" && value.kind !== "tool") invalid();
@@ -259,6 +308,9 @@ export function parseConversationOperationFactV2(
 			...(value.connection === undefined
 				? {}
 				: { connection: connectionAssociation(value.connection) }),
+			...(value.browser === undefined
+				? {}
+				: { browser: browserActionBinding(value.browser) }),
 		};
 	const model = record(
 		value.model,
@@ -327,7 +379,9 @@ function operationBinding(fact: ConversationOperationFactV2) {
 	return JSON.stringify([
 		fact.kind,
 		fact.parentOperationRef ?? null,
-		fact.kind === "model" ? fact.model : fact.toolId,
+		fact.kind === "model"
+			? fact.model
+			: { toolId: fact.toolId, browser: fact.browser ?? null },
 	]);
 }
 
