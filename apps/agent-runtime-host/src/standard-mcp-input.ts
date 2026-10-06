@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -156,22 +156,65 @@ async function protectedBytes(
 }
 
 /** Host-only SecretRef material; neither API/Worker nor native receives this resolver. */
-export function createProtectedStandardMcpInput(options: {
+export async function createProtectedStandardMcpInput(options: {
 	dataDirectory: string;
 	target: ApprovedConnectionConsumerTargetV1;
 	store: Pick<FileRuntimeStore, "resolveOriginalExecutionBinding">;
-}): StandardMcpClientOptions {
+}): Promise<StandardMcpClientOptions | undefined> {
 	const target = structuredClone(options.target);
+	const { dataDirectory, store } = options;
 	// Place Host material inside the Bridge's existing shared deny tree. Its
 	// Landlock allow() rejects every external PATH/program/system directory that
 	// overlaps this boundary in either direction; only each 64-hex Conversation's
 	// home/workspace is allowed. This non-Conversation child is never allowed.
 	const base = join(
-		options.dataDirectory,
+		dataDirectory,
 		"codex-driver.json.native",
 		"conversations",
 		"standard-mcp-input",
 	);
+	try {
+		if (
+			!isAbsolute(dataDirectory) ||
+			resolve(dataDirectory) !== dataDirectory ||
+			dataDirectory === "/" ||
+			(await realpath(dataDirectory)) !== dataDirectory
+		)
+			unavailable();
+		let current = dataDirectory;
+		for (const part of [
+			"codex-driver.json.native",
+			"conversations",
+			"standard-mcp-input",
+		]) {
+			current = join(current, part);
+			let entry: Stats;
+			try {
+				entry = await lstat(current);
+			} catch (error) {
+				// Absence is deployment configuration, never a token/permission
+				// fallback. Do not read material or claim Connection capability.
+				if (
+					error &&
+					typeof error === "object" &&
+					"code" in error &&
+					error.code === "ENOENT"
+				)
+					return undefined;
+				throw error;
+			}
+			if (!entry.isDirectory()) unavailable();
+			if (
+				current === base &&
+				(entry.uid !== process.getuid?.() || (entry.mode & 0o777) !== 0o700)
+			)
+				unavailable();
+		}
+	} catch {
+		// Invalid installed input still selects the Connection path, but cannot
+		// admit business or read material. Keep Host control/recovery available.
+		return { target, resolveInput: async () => unavailable() };
+	}
 	return {
 		target,
 		resolveInput: async (
@@ -181,7 +224,7 @@ export function createProtectedStandardMcpInput(options: {
 			try {
 				assertStandardMcpProcessProtection();
 				signal.throwIfAborted();
-				const original = await options.store.resolveOriginalExecutionBinding(
+				const original = await store.resolveOriginalExecutionBinding(
 					reference,
 					Date.now,
 				);
@@ -233,7 +276,7 @@ export function createProtectedStandardMcpInput(options: {
 				);
 				signal.throwIfAborted();
 				assertStandardMcpProcessProtection();
-				const current = await options.store.resolveOriginalExecutionBinding(
+				const current = await store.resolveOriginalExecutionBinding(
 					reference,
 					Date.now,
 				);

@@ -30,6 +30,7 @@ vi.mock("./standard-mcp-protection.js", () => ({
 }));
 const directories: string[] = [];
 afterEach(async () => {
+	vi.restoreAllMocks();
 	protection.check.mockReset();
 	for (const path of directories.splice(0))
 		await rm(path, { recursive: true, force: true });
@@ -78,11 +79,12 @@ async function setup() {
 			structuredClone(binding),
 		),
 	};
-	const options = createProtectedStandardMcpInput({
+	const options = await createProtectedStandardMcpInput({
 		dataDirectory: directory,
 		target: fixture.target,
 		store,
 	});
+	if (!options) throw new Error("Missing fixture installation");
 	return {
 		fixture,
 		directory,
@@ -102,6 +104,66 @@ it("reads separate protected material only for the original approved installatio
 	expect(env.store.resolveOriginalExecutionBinding).toHaveBeenCalledTimes(2);
 	expect(protection.check).toHaveBeenCalledTimes(4);
 });
+
+it("does not configure a client from a snapshot without a dedicated installation", async () => {
+	const fixture = await standardMcpFixture();
+	const directory = await realpath(
+		await mkdtemp(join(tmpdir(), "standard-mcp-absent-")),
+	);
+	directories.push(directory);
+	const resolveOriginalExecutionBinding = vi.fn();
+	expect(
+		await createProtectedStandardMcpInput({
+			dataDirectory: directory,
+			target: fixture.target,
+			store: { resolveOriginalExecutionBinding },
+		}),
+	).toBeUndefined();
+	expect(resolveOriginalExecutionBinding).not.toHaveBeenCalled();
+	expect(protection.check).not.toHaveBeenCalled();
+	expect(fixture.trace).toHaveLength(0);
+});
+
+it.each(["symlink", "parent-alias", "file", "readable", "owner"])(
+	"does not treat %s installation configuration as absent",
+	async (kind) => {
+		const env = await setup();
+		const parent = join(
+			env.directory,
+			"codex-driver.json.native",
+			"conversations",
+		);
+		const base = join(parent, "standard-mcp-input");
+		if (kind === "parent-alias") {
+			await rm(parent, { recursive: true });
+			await symlink(join(env.directory, "missing-directory"), parent);
+		} else if (kind === "symlink" || kind === "file") {
+			await rm(base, { recursive: true });
+			if (kind === "file")
+				await writeFile(base, "synthetic-invalid-installation", {
+					mode: 0o600,
+				});
+			else {
+				const external = join(env.directory, "other-installation");
+				await mkdir(external, { mode: 0o700 });
+				await symlink(external, base);
+			}
+		} else if (kind === "readable") await chmod(base, 0o755);
+		else if (process.getuid)
+			vi.spyOn(process, "getuid").mockReturnValue(process.getuid() + 1);
+		const configured = await createProtectedStandardMcpInput({
+			dataDirectory: env.directory,
+			target: env.fixture.target,
+			store: env.store,
+		});
+		expect(configured).toBeDefined();
+		await expect(
+			configured?.resolveInput(reference, new AbortController().signal),
+		).rejects.toMatchObject({ code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE" });
+		expect(env.store.resolveOriginalExecutionBinding).not.toHaveBeenCalled();
+		expect(env.fixture.trace).toHaveLength(0);
+	},
+);
 
 it("does not touch materials when actual process protection is unavailable", async () => {
 	const env = await setup();

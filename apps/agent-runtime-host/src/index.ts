@@ -255,17 +255,17 @@ export async function assembleRuntimeHost(
 		const store = await FileRuntimeStore.open(storePath);
 		openedStore = store;
 		await legacyMigration?.apply(store);
+		const standardConnectionClient =
+			configuration && connectionConsumer?.status === "available"
+				? await createProtectedStandardMcpInput({
+						dataDirectory,
+						target: connectionConsumer,
+						store,
+					})
+				: undefined;
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
-					...(connectionConsumer?.status === "available"
-						? {
-								standardConnectionClient: createProtectedStandardMcpInput({
-									dataDirectory,
-									target: connectionConsumer,
-									store,
-								}),
-							}
-						: {}),
+					...(standardConnectionClient ? { standardConnectionClient } : {}),
 					...(connectionProfile
 						? {
 								connectionClient: createIndependentConnectionClientInput({
