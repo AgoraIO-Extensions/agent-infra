@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createProductionSessionSandboxReceiverV1 } from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
+	runtimeTlsSecretFixture,
 	workloadDesiredFixture,
 	workloadRegistryFixture,
 	workloadTestPolicy,
@@ -15,7 +16,24 @@ import {
 
 function fixture() {
 	const api = fakeKubernetesApi();
+	api.seed(
+		runtimeTlsSecretFixture(
+			"sandbox-allocation-a-tls",
+			"agent-a",
+			["sandbox-allocation-a.workload-test.svc"],
+		),
+	);
 	const deployment = workloadDesiredFixture(1, "agent-a", "internal-only");
+	const sessionRuntimeTlsBindings = [
+		{
+			sessionId: "conversation-a",
+			sandboxId: "allocation-a",
+			generation: 2,
+			resourceFence: 3,
+			serviceName: "sandbox-allocation-a",
+			secretName: "sandbox-allocation-a-tls",
+		},
+	] as const;
 	const options: WorkloadRuntimeOptionsV1 = {
 		workerId: "worker-a",
 		client: api.client,
@@ -65,6 +83,9 @@ function fixture() {
 			workloadRevision: 1,
 			managementFence: 1,
 			imageDigest: deployment.imageDigest,
+			sessionRuntimeTlsBindings,
+		} as SessionSandboxReconciliationClaimV1["policy"] & {
+			readonly sessionRuntimeTlsBindings: typeof sessionRuntimeTlsBindings;
 		},
 		deployment,
 		previousObservation: null,
