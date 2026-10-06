@@ -259,7 +259,20 @@ async function fixture(
 			return;
 		}
 		if (request.method() === "GET" && pathname === "/api/v2/directory/search") {
+			const url = new URL(request.url());
 			const items = [
+				{
+					kind: "user",
+					canonicalId: "user-owner-1",
+					displayName: "当前 Owner",
+					email: "owner@example.test",
+				},
+				{
+					kind: "organization",
+					canonicalId: "org-platform",
+					displayName: "平台工程",
+					organizationPath: "研发 / 平台工程",
+				},
 				{
 					kind: "user",
 					canonicalId: "user-2",
@@ -276,7 +289,21 @@ async function fixture(
 				},
 			];
 			await route.fulfill({
-				json: { schemaVersion: 1, items },
+				json: {
+					schemaVersion: 1,
+					items: items.filter(
+						(item) =>
+							item.kind === url.searchParams.get("kind") &&
+							(!url.searchParams.has("ids") ||
+								url.searchParams
+									.get("ids")
+									?.split(",")
+									.includes(item.canonicalId)) &&
+							JSON.stringify(item)
+								.toLowerCase()
+								.includes((url.searchParams.get("q") ?? "").toLowerCase()),
+					),
+				},
 			});
 			return;
 		}
@@ -2070,3 +2097,81 @@ for (const route of [
 		}
 	});
 }
+
+test("Agent detail and configuration use readable directory records with canonical submissions", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	await page.goto("/agents/agent-pilot-1");
+	await expect(page.getByText("平台工程", { exact: true })).toBeVisible();
+	await expect(
+		page.getByText("研发 / 平台工程", { exact: true }),
+	).toBeVisible();
+	await expect(page.locator("main")).not.toContainText("org-platform");
+	await capture(page, info, "directory-detail-readable");
+	await page.getByRole("link", { name: "配置与管理" }).click();
+	const owner = page.getByRole("combobox", { name: "共同 Owner 用户" });
+	await expect(
+		page.getByRole("button", { name: "移除 当前 Owner" }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "移除 平台工程" }),
+	).toBeVisible();
+	await owner.fill("user.two");
+	await expect(page.getByRole("option", { name: /验收用户二/ })).toBeVisible();
+	await page.keyboard.press("Enter");
+	await expect(
+		page.getByRole("button", { name: "移除 验收用户二" }),
+	).toBeVisible();
+	await expect(owner).toHaveAttribute("aria-expanded", "false");
+	const user = page.getByRole("combobox", { name: "可使用的用户" });
+	await user.fill("user.three");
+	await page.getByRole("option", { name: /验收用户三/ }).click();
+	await capture(page, info, "directory-configuration-readable");
+	const width = await page.evaluate(() => ({
+		viewport: innerWidth,
+		content: document.documentElement.scrollWidth,
+	}));
+	expect(width.content).toBeLessThanOrEqual(width.viewport);
+	await page.getByRole("button", { name: "校验并保存" }).click();
+	await expect(
+		page.getByRole("status").filter({ hasText: "配置已提交" }),
+	).toBeVisible();
+	expect(api.commands.at(-1)?.body).toMatchObject({
+		schemaVersion: 2,
+		coOwnerIds: ["user-owner-1", "user-2"],
+		availability: [
+			{ kind: "user", userId: "user-3" },
+			{ kind: "organization", organizationId: "org-platform" },
+		],
+	});
+});
+
+test("Agent detail directory failure stays readable and configuration preserves existing IDs", async ({
+	page,
+}, info) => {
+	const api = await fixture(page);
+	await page.route("**/api/v2/directory/search?**", (route) =>
+		route.fulfill({ status: 503, json: {} }),
+	);
+	await page.goto("/agents/agent-pilot-1");
+	await expect(page.getByText("目录暂时无法读取")).toBeVisible();
+	await expect(page.locator("main")).not.toContainText("org-platform");
+	await capture(page, info, "directory-detail-error");
+	await page.getByRole("link", { name: "配置与管理" }).click();
+	await expect(page.getByText("目录记录不可用")).toHaveCount(2);
+	await page.getByRole("combobox", { name: "共同 Owner 用户" }).fill("owner");
+	await expect(page.getByText("目录暂时无法读取")).toBeVisible();
+	await page.keyboard.press("Enter");
+	await expect(page.getByRole("option")).toHaveCount(0);
+	await page.keyboard.press("Escape");
+	await capture(page, info, "directory-configuration-error");
+	await page.getByRole("button", { name: "校验并保存" }).click();
+	await expect(
+		page.getByRole("status").filter({ hasText: "配置已提交" }),
+	).toBeVisible();
+	expect(api.commands.at(-1)?.body).toMatchObject({
+		coOwnerIds: ["user-owner-1"],
+		availability: [{ kind: "organization", organizationId: "org-platform" }],
+	});
+});

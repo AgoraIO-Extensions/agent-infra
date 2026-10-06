@@ -2437,8 +2437,8 @@ a[class~="group/button"]:focus-visible,
 .directory-control .directory-input {
 	flex: 1 1 150px;
 	min-width: 120px;
-	min-height: 0;
-	height: 30px;
+	min-height: 44px;
+	height: 44px;
 	padding: 1px 4px;
 	background: transparent;
 	color: var(--foreground);

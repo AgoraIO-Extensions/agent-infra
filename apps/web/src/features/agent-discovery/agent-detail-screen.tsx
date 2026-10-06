@@ -16,6 +16,7 @@ import {
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
+import { DirectoryRecords } from "../directory-fields.js";
 import { PageLoadingState } from "../page-loading-state.js";
 import {
 	type AgentDetailState,
@@ -233,13 +234,27 @@ export function AgentDetailScreen({
 							</dd>
 							<dt className="text-muted-foreground">可用范围</dt>
 							<dd className="break-words">
-								{agent.configuration.availability
-									.map((entry) =>
-										entry.kind === "user"
-											? `用户 ${entry.userId}`
-											: `组织 ${entry.organizationId}`,
-									)
-									.join("、") || "未提供范围信息"}
+								{agent.configuration.availability.length ? (
+									<div
+										key={`${agent.agentId}:${JSON.stringify(agent.configuration.availability)}`}
+										className="space-y-2"
+									>
+										{(["user", "organization"] as const).map((kind) => {
+											const ids = agent.configuration.availability
+												.filter((entry) => entry.kind === kind)
+												.map((entry) =>
+													entry.kind === "user"
+														? entry.userId
+														: entry.organizationId,
+												);
+											return ids.length ? (
+												<DirectoryRecords key={kind} kind={kind} ids={ids} />
+											) : null;
+										})}
+									</div>
+								) : (
+									"未提供范围信息"
+								)}
 							</dd>
 							{!selfManaged && (
 								<>

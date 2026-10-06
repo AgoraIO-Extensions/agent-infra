@@ -1,10 +1,9 @@
-import { PlusIcon, SearchIcon, Trash2Icon, XIcon } from "lucide-react";
+import { PlusIcon, Trash2Icon } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Listbox, ListboxOption } from "@/components/ui/listbox";
 import {
 	Select,
 	SelectContent,
@@ -13,8 +12,6 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
-
 import type {
 	AgentApplicationCreateRequestV2Writable,
 	AgentApplicationProjectionV2,
@@ -22,6 +19,7 @@ import type {
 	DeploymentConfigurationProjectionV2,
 	DeploymentModelEndpointProjectionV2,
 } from "../../pilot/generated-v2/types.gen.js";
+import { DirectoryPicker } from "../directory-fields.js";
 import {
 	type AgentApplicationEnvironmentDraft,
 	type AgentApplicationFieldErrors,
@@ -230,323 +228,6 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 			{message}
 		</p>
 	) : null;
-}
-
-type DirectoryPickerKind = "user" | "organization";
-type DirectoryPickerOption = {
-	id: string;
-	name: string;
-	secondary: string;
-	detail?: string;
-	type: DirectoryPickerKind;
-};
-
-function splitDirectoryValue(value: string) {
-	return value
-		.split(/\n|,/)
-		.map((item) => item.trim())
-		.filter(Boolean);
-}
-
-function DirectoryPicker({
-	id,
-	label,
-	help,
-	kind,
-	value,
-	onChange,
-	error,
-	describedBy,
-	errorFieldKey,
-}: {
-	id: string;
-	label: string;
-	help: string;
-	kind: DirectoryPickerKind;
-	value: string;
-	onChange: (value: string) => void;
-	error?: string;
-	describedBy?: string;
-	errorFieldKey?: string;
-}) {
-	const selectedIds = splitDirectoryValue(value);
-	const selectedKey = selectedIds.join(",");
-	const [query, setQuery] = useState("");
-	const [open, setOpen] = useState(false);
-	const [activeIndex, setActiveIndex] = useState(0);
-	const [loading, setLoading] = useState(false);
-	const [directoryOptions, setDirectoryOptions] = useState<
-		DirectoryPickerOption[]
-	>([]);
-	const [knownDirectoryOptions, setKnownDirectoryOptions] = useState<
-		Record<string, DirectoryPickerOption>
-	>({});
-	const [directoryError, setDirectoryError] = useState(false);
-	const pickerRef = useRef<HTMLDivElement>(null);
-	useEffect(() => {
-		if (!open) return;
-		const closeOnOutsidePointer = (event: PointerEvent) => {
-			if (
-				event.target instanceof Node &&
-				!pickerRef.current?.contains(event.target)
-			)
-				setOpen(false);
-		};
-		document.addEventListener("pointerdown", closeOnOutsidePointer);
-		return () =>
-			document.removeEventListener("pointerdown", closeOnOutsidePointer);
-	}, [open]);
-	useEffect(() => {
-		if (!open && !selectedKey) return;
-		const controller = new AbortController();
-		setDirectoryOptions([]);
-		setActiveIndex(0);
-		setLoading(true);
-		setDirectoryError(false);
-		const idsQuery =
-			!open && selectedKey ? `&ids=${encodeURIComponent(selectedKey)}` : "";
-		fetch(
-			`/api/v2/directory/search?kind=${kind}&q=${encodeURIComponent(open ? query : "")}&limit=50${idsQuery}`,
-			{
-				signal: controller.signal,
-				headers: { Accept: "application/json" },
-			},
-		)
-			.then(async (response) => {
-				if (!response.ok) throw new Error("directory search unavailable");
-				const body = (await response.json()) as {
-					items?: Array<{
-						kind: DirectoryPickerKind;
-						canonicalId: string;
-						displayName: string;
-						email?: string;
-						organizationPath?: string;
-					}>;
-				};
-				const nextOptions = (body.items ?? []).map((item) => ({
-					id: item.canonicalId,
-					name: item.displayName,
-					secondary:
-						item.kind === "user"
-							? (item.email ?? "")
-							: (item.organizationPath ?? ""),
-					detail: item.kind === "user" ? item.organizationPath : undefined,
-					type: item.kind,
-				}));
-				setDirectoryOptions(nextOptions);
-				setKnownDirectoryOptions((current) => {
-					const merged = { ...current };
-					for (const option of nextOptions) merged[option.id] = option;
-					return merged;
-				});
-			})
-			.catch((error: unknown) => {
-				if (error instanceof DOMException && error.name === "AbortError")
-					return;
-				setDirectoryOptions([]);
-				setDirectoryError(true);
-			})
-			.finally(() => {
-				if (!controller.signal.aborted) setLoading(false);
-			});
-		return () => controller.abort();
-	}, [kind, open, query, selectedKey]);
-	const options = directoryOptions;
-	const selected = selectedIds.map(
-		(id) =>
-			knownDirectoryOptions[id] ?? {
-				id,
-				name: "目录记录不可用",
-				secondary: "无法读取目录详情，请重新搜索",
-				type: kind,
-			},
-	);
-	const add = (option: DirectoryPickerOption | undefined) => {
-		if (
-			!open ||
-			loading ||
-			directoryError ||
-			!option ||
-			selectedIds.includes(option.id)
-		)
-			return;
-		onChange([...selectedIds, option.id].join("\n"));
-		setQuery("");
-		setActiveIndex(0);
-		setOpen(false);
-	};
-	const remove = (id: string) =>
-		onChange(selectedIds.filter((item) => item !== id).join("\n"));
-	return (
-		<div className="directory-field" ref={pickerRef}>
-			<Label htmlFor={id}>{label}</Label>
-			<div
-				className={cn("directory-control", error && "directory-control-error")}
-			>
-				<div className="directory-chips">
-					{selected.map((item) => (
-						<span className="directory-chip" key={item.id}>
-							<span className="directory-chip-label">
-								<span className="directory-chip-name">{item.name}</span>
-								<small>{item.secondary}</small>
-							</span>
-							<Button
-								aria-label={`移除 ${item.name}`}
-								className="directory-chip-remove"
-								onClick={() => remove(item.id)}
-								size="icon-xs"
-								type="button"
-							>
-								<XIcon aria-hidden="true" size={14} />
-							</Button>
-						</span>
-					))}
-				</div>
-				<Input
-					role="combobox"
-					aria-activedescendant={
-						open && options[activeIndex]
-							? `${id}-${options[activeIndex].id}`
-							: undefined
-					}
-					aria-controls={`${id}-options`}
-					aria-describedby={
-						[
-							describedBy,
-							error
-								? errorId(errorFieldKey ?? id.replace("application-", ""))
-								: undefined,
-						]
-							.filter(Boolean)
-							.join(" ") || undefined
-					}
-					aria-expanded={open}
-					aria-invalid={error ? true : undefined}
-					aria-label={label}
-					className="directory-input"
-					id={id}
-					onChange={(event) => {
-						setQuery(event.target.value);
-						setActiveIndex(0);
-						setOpen(true);
-					}}
-					onFocus={() => setOpen(true)}
-					onKeyDown={(event) => {
-						if (event.key === "ArrowDown") {
-							event.preventDefault();
-							setOpen(true);
-							setActiveIndex((index) =>
-								Math.min(index + 1, Math.max(options.length - 1, 0)),
-							);
-						} else if (event.key === "ArrowUp") {
-							event.preventDefault();
-							setActiveIndex((index) => Math.max(index - 1, 0));
-						} else if (event.key === "Enter") {
-							event.preventDefault();
-							add(options[activeIndex]);
-						} else if (event.key === "Escape") {
-							setOpen(false);
-						}
-					}}
-					placeholder={
-						selected.length > 0
-							? "继续搜索姓名、邮箱或组织"
-							: kind === "user"
-								? "搜索姓名或邮箱"
-								: "搜索组织名称或路径"
-					}
-					value={query}
-				/>
-			</div>
-			{open && (
-				<Listbox
-					aria-busy={loading}
-					className="directory-menu"
-					id={`${id}-options`}
-				>
-					{loading ? (
-						<div className="directory-status" role="status" aria-live="polite">
-							<span className="directory-status-spinner" aria-hidden="true" />
-							<p>
-								<strong>正在读取目录</strong>
-								正在同步可搜索的人员和组织范围…
-							</p>
-						</div>
-					) : directoryError ? (
-						<div className="directory-status" role="status" aria-live="polite">
-							<SearchIcon aria-hidden="true" size={16} />
-							<p>
-								<strong>目录暂时无法读取</strong>
-								请稍后重试或联系管理员。
-							</p>
-						</div>
-					) : options.length === 0 ? (
-						<div className="directory-status" role="status" aria-live="polite">
-							<SearchIcon aria-hidden="true" size={16} />
-							<p>
-								<strong>{query ? "没有匹配结果" : "目录为空"}</strong>
-								{query
-									? "试试姓名、邮箱、组织名称或路径。"
-									: "输入关键词后开始搜索。"}
-							</p>
-						</div>
-					) : (
-						<>
-							{options.map((option, index) => (
-								<ListboxOption
-									aria-selected={selectedIds.includes(option.id)}
-									className={cn(
-										"directory-result",
-										index === activeIndex && "directory-result-active",
-									)}
-									id={`${id}-${option.id}`}
-									key={option.id}
-									onClick={() => add(option)}
-									onMouseEnter={() => setActiveIndex(index)}
-									type="button"
-									variant="ghost"
-								>
-									<span className="directory-result-mark" aria-hidden="true">
-										{option.type === "user" ? "人" : "组"}
-									</span>
-									<span className="directory-result-copy">
-										<strong className="directory-result-name">
-											{option.name}
-										</strong>
-										<small className="directory-result-meta">
-											{option.secondary}
-										</small>
-										{option.detail ? (
-											<small className="directory-result-meta">
-												{option.detail}
-											</small>
-										) : null}
-									</span>
-								</ListboxOption>
-							))}
-							<Button
-								className="directory-clear"
-								onClick={() => setQuery("")}
-								size="xs"
-								type="button"
-								variant="ghost"
-							>
-								清空搜索
-							</Button>
-						</>
-					)}
-				</Listbox>
-			)}
-			<div className="directory-help">
-				<span>{help}</span>
-				<span>已选 {selected.length} 项 · Enter 添加</span>
-			</div>
-			<FieldError
-				id={errorId(errorFieldKey ?? id.replace("application-", ""))}
-				message={error}
-			/>
-		</div>
-	);
 }
 
 function blankEnvironment(): AgentApplicationEnvironmentDraft {
@@ -1638,7 +1319,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 								}}
 								error={fieldErrors.coOwnerIds}
 								describedBy="application-access-help"
-								errorFieldKey="coOwnerIds"
+								errorId={errorId("coOwnerIds")}
 							/>
 						</div>
 						<DirectoryPicker
@@ -1653,7 +1334,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							}}
 							error={fieldErrors.userAvailabilityIds}
 							describedBy="application-access-help"
-							errorFieldKey="userAvailabilityIds"
+							errorId={errorId("userAvailabilityIds")}
 						/>
 						<DirectoryPicker
 							id="application-organization-availability-ids"
@@ -1667,7 +1348,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 							}}
 							error={fieldErrors.organizationAvailabilityIds}
 							describedBy="application-access-help"
-							errorFieldKey="organizationAvailabilityIds"
+							errorId={errorId("organizationAvailabilityIds")}
 						/>
 					</div>
 				</fieldset>
