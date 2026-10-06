@@ -10,6 +10,7 @@ import {
 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
+	V1Container,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
@@ -285,19 +286,46 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		stableJson(currentContainer.resources) ===
 			stableJson(expectedContainer.resources) &&
 		currentContainer.workingDir === expectedContainer.workingDir &&
-		stableJson(currentContainer.ports ?? []) ===
-			stableJson(expectedContainer.ports ?? []) &&
+		stableJson(
+			(currentContainer.ports ?? []).map((port) => ({
+				name: port.name,
+				containerPort: port.containerPort,
+				protocol: port.protocol ?? "TCP",
+			})),
+		) ===
+			stableJson(
+				(expectedContainer.ports ?? []).map((port) => ({
+					name: port.name,
+					containerPort: port.containerPort,
+					protocol: port.protocol ?? "TCP",
+				})),
+			) &&
 		stableJson(normalizeEnv(currentContainer.env)) ===
 			stableJson(normalizeEnv(expectedContainer.env)) &&
 		stableJson(currentContainer.volumeMounts ?? []) ===
 			stableJson(expectedContainer.volumeMounts ?? []) &&
 		stableJson(currentContainer.securityContext ?? {}) ===
 			stableJson(expectedContainer.securityContext ?? {}) &&
-		stableJson(currentContainer.readinessProbe ?? {}) ===
-			stableJson(expectedContainer.readinessProbe ?? {}) &&
+		stableJson(readinessProbeShape(currentContainer.readinessProbe)) ===
+			stableJson(readinessProbeShape(expectedContainer.readinessProbe)) &&
 		stableJson(currentSpec.volumes ?? []) ===
 			stableJson(expectedSpec.volumes ?? [])
 	);
+}
+
+function readinessProbeShape(probe: V1Container["readinessProbe"]) {
+	return probe
+		? {
+				httpGet: probe.httpGet
+					? {
+							path: probe.httpGet.path,
+							port: probe.httpGet.port,
+							host: probe.httpGet.host,
+						}
+					: undefined,
+				periodSeconds: probe.periodSeconds,
+			}
+		: undefined;
 }
 
 function resourceSpecMatches(
@@ -315,8 +343,12 @@ function resourceSpecMatches(
 			);
 		case "NetworkPolicy":
 			return (
-				stableJson((current as V1NetworkPolicy).spec) ===
-				stableJson((expected as V1NetworkPolicy).spec)
+				stableJson(
+					normalizeNetworkPolicySpec((current as V1NetworkPolicy).spec),
+				) ===
+				stableJson(
+					normalizeNetworkPolicySpec((expected as V1NetworkPolicy).spec),
+				)
 			);
 		case "Service": {
 			const actual = (current as V1Service).spec;
@@ -339,6 +371,19 @@ function resourceSpecMatches(
 		default:
 			return false;
 	}
+}
+
+function normalizeNetworkPolicySpec(spec: V1NetworkPolicy["spec"]) {
+	return {
+		...spec,
+		egress: spec?.egress ?? [],
+		ingress: spec?.ingress?.map((rule) => ({
+			...rule,
+			_from:
+				rule._from ?? (rule as typeof rule & { from?: typeof rule._from }).from,
+			from: undefined,
+		})),
+	};
 }
 
 function owned(
@@ -540,6 +585,20 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						throw new WorkloadKubernetesError("conflict");
 				} else if (expected.kind === "Pod") {
 					if (!podSpecMatches(current, expected as V1Pod))
+						throw new WorkloadKubernetesError("conflict");
+				} else if (expected.kind === "Service") {
+					// Keep the API-assigned address and version on lawful retries.
+					// An owned Service with a different route is drift, not an update.
+					if (!resourceSpecMatches(current, expected))
+						throw new WorkloadKubernetesError("conflict");
+				} else if (
+					expected.kind === "ServiceAccount" ||
+					expected.kind === "NetworkPolicy"
+				) {
+					// Kube may add defaulted fields to these owned resources. A
+					// matching object is already converged; replacing it can turn a
+					// harmless retry into a 409 on immutable/defaulted fields.
+					if (!resourceSpecMatches(current, expected))
 						throw new WorkloadKubernetesError("conflict");
 				} else
 					await options.client.replace({

@@ -313,6 +313,39 @@ describe("session sandbox workload adapter", () => {
 		).rejects.toMatchObject({ code: "conflict" });
 	});
 
+	it("retains a matching allocated Service without replacing it during an unready Pod retry", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const service = await client.read<
+			import("@kubernetes/client-node").V1Service
+		>("Service", allocation.serviceName);
+		if (!service?.spec) throw new Error("Missing fixture Service");
+		Object.assign(service.spec, {
+			clusterIP: "10.43.0.17",
+			clusterIPs: ["10.43.0.17"],
+			ipFamilies: ["IPv4"],
+			ipFamilyPolicy: "SingleStack",
+		});
+		const before = structuredClone(service);
+		const retry = createSessionSandboxWorkloadAdapterV1({
+			client: {
+				...client,
+				async replace(object) {
+					if (object.kind === "Service")
+						throw new Error("K3s Service replace 409");
+					return client.replace(object);
+				},
+			},
+		});
+		await expect(retry.apply(allocation)).resolves.toMatchObject({
+			sandboxId: allocation.sandboxId,
+		});
+		expect(await client.read("Service", allocation.serviceName)).toEqual(
+			before,
+		);
+	});
+
 	it("records each resource identity and blocks UID drift before any mutation", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
