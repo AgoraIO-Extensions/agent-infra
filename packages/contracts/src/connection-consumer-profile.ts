@@ -27,6 +27,26 @@ const profileSchema = z
 	.readonly();
 
 export type ConnectionConsumerProfileV1 = z.infer<typeof profileSchema>;
+
+export interface ConnectionConsumerApprovalV1 {
+	readonly schemaVersion: 1;
+	readonly configFingerprint: string;
+	readonly egressEnforced: true;
+	readonly source: { readonly ref: string; readonly revision: string };
+}
+
+export interface ConnectionConsumerTargetV1 {
+	readonly url: string;
+	readonly publicOrigin: string;
+	readonly mcpPath: string;
+	readonly consumerId: string;
+	readonly audience: string;
+	readonly egressProfile: ConnectionConsumerProfileV1["egressProfile"];
+	readonly schemaVersion: 1;
+	readonly configFingerprint: string;
+	readonly source: ConnectionConsumerApprovalV1["source"];
+}
+
 export type ApprovedConnectionConsumerProfileV1 =
 	| {
 			readonly status: "unavailable";
@@ -40,6 +60,11 @@ export type ApprovedConnectionConsumerProfileV1 =
 			readonly configFingerprint: string;
 			readonly source: z.infer<typeof sourceSchema>;
 	  };
+
+export type ApprovedConnectionConsumerTargetV1 = Extract<
+	ApprovedConnectionConsumerProfileV1,
+	{ readonly status: "available" }
+> & { readonly url: string };
 
 function validOrigin(value: string): boolean {
 	try {
@@ -58,6 +83,25 @@ function validPath(value: string): boolean {
 		!/%(?:2f|2e|5c)/i.test(value) &&
 		!value.split("/").some((part) => part === "." || part === "..")
 	);
+}
+
+export function connectionConsumerProfileFingerprintV1(
+	profile: ConnectionConsumerProfileV1,
+): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify([
+				profile.schemaVersion,
+				profile.publicOrigin,
+				profile.mcpPath,
+				profile.consumerId,
+				profile.audience,
+				profile.egressProfile.ref,
+				profile.egressProfile.revision,
+			]),
+			"utf8",
+		)
+		.digest("hex");
 }
 
 /** Validates trusted deployment input; it does not attest egress or authorize MCP calls. */
@@ -82,20 +126,7 @@ export function resolveApprovedConnectionConsumerProfileV1(
 	) {
 		return { status: "unavailable", schemaVersion: 1, reason: "invalid" };
 	}
-	const fingerprint = createHash("sha256")
-		.update(
-			JSON.stringify([
-				parsed.data.schemaVersion,
-				parsed.data.publicOrigin,
-				parsed.data.mcpPath,
-				parsed.data.consumerId,
-				parsed.data.audience,
-				parsed.data.egressProfile.ref,
-				parsed.data.egressProfile.revision,
-			]),
-			"utf8",
-		)
-		.digest("hex");
+	const fingerprint = connectionConsumerProfileFingerprintV1(parsed.data);
 	if (fingerprint !== approved.data.configFingerprint) {
 		return { status: "unavailable", schemaVersion: 1, reason: "invalid" };
 	}
@@ -106,4 +137,37 @@ export function resolveApprovedConnectionConsumerProfileV1(
 		configFingerprint: fingerprint,
 		source: approved.data.source,
 	};
+}
+
+/**
+ * Resolves the approved profile to the flattened target shape used by the
+ * Worker runtime route. Invalid or stale approvals fail closed.
+ */
+export function validateConnectionConsumerProfileV1(
+	value: unknown,
+	approval: unknown,
+): ConnectionConsumerTargetV1 {
+	const result = resolveApprovedConnectionConsumerProfileV1(value, approval);
+	if (result.status !== "available") throw unavailable();
+	return {
+		...result.profile,
+		configFingerprint: result.configFingerprint,
+		source: result.source,
+		url: new URL(
+			result.profile.mcpPath,
+			`${result.profile.publicOrigin}/`,
+		).toString(),
+	};
+}
+
+export function resolveConnectionConsumerTargetV1(
+	target: ConnectionConsumerTargetV1,
+	overrides?: Record<string, unknown>,
+): ConnectionConsumerTargetV1 {
+	if (overrides && Object.keys(overrides).length > 0) throw unavailable();
+	return structuredClone(target);
+}
+
+function unavailable(): never {
+	throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 }

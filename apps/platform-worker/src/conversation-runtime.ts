@@ -1,6 +1,6 @@
 import type { KeyObject } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { ApprovedConnectionConsumerProfileV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
 
 import type {
 	RuntimeBusinessCommandV2,
@@ -124,10 +124,7 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly baseUrl: string;
 		readonly serviceToken: string;
 		readonly workerId: string;
-		readonly connectionConsumer?: Extract<
-			ApprovedConnectionConsumerProfileV1,
-			{ readonly status: "available" }
-		> & { readonly url: string };
+		readonly connectionConsumer?: ApprovedConnectionConsumerTargetV1;
 	}>;
 	readonly executionKeys?: WorkerExecutionKeyReaderV4;
 	readonly relayKeyDecryptor?: RelayKeyWorkerDecryptorV1;

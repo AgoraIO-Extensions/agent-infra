@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { isDeepStrictEqual } from "node:util";
-
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
+import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
 	ExecutionGrantV1Schema,
 	type RuntimeAuthorizationRenewRequestV3,
@@ -72,6 +72,8 @@ import { runtimeTlsFetch } from "./runtime-tls-transport.js";
 export interface WorkerRuntimeHostClientOptionsV1 {
 	readonly baseUrl: string;
 	readonly serviceToken: string;
+	/** Trusted, approval-bound non-sensitive Connection target; never request supplied. */
+	readonly connectionConsumer?: ApprovedConnectionConsumerTargetV1;
 	readonly fetch?: typeof fetch;
 }
 
@@ -121,6 +123,19 @@ export class RuntimeRelayKeyDeliveryError extends ConversationRuntimeHostError {
 
 const maximumResponseBytes = 65_536;
 const maximumEventFrameBytes = 131_072;
+
+function bindConnectionConsumer(
+	fetcher: typeof fetch,
+	target: WorkerRuntimeHostClientOptionsV1["connectionConsumer"],
+): typeof fetch {
+	if (!target) return fetcher;
+	const value = JSON.stringify(target);
+	return (input, init) => {
+		const headers = new Headers(init?.headers);
+		headers.set("x-agent-infra-connection-consumer", value);
+		return fetcher(input, { ...init, headers });
+	};
+}
 
 function endpoint(baseUrl: string, path: string) {
 	let base: URL;
@@ -614,7 +629,13 @@ export function createWorkerRuntimeHostClientV3(
 	if (!options || typeof options !== "object" || !options.serviceToken)
 		throw new TypeError("RuntimeHost client options are invalid");
 	const base = endpoint(options.baseUrl, "/");
-	const fetcher = options.fetch ?? runtimeTlsFetch();
+	const connectionConsumer = options.connectionConsumer
+		? structuredClone(options.connectionConsumer)
+		: undefined;
+	const fetcher = bindConnectionConsumer(
+		options.fetch ?? runtimeTlsFetch(),
+		connectionConsumer,
+	);
 	async function request<T extends { traceId: string }, R>(
 		path: string,
 		value: T,
@@ -645,6 +666,8 @@ export function createWorkerRuntimeHostClientV3(
 		}
 	}
 	return {
+		connectionConsumerTarget: () =>
+			connectionConsumer ? structuredClone(connectionConsumer) : undefined,
 		submitTurn: (value: RuntimeSubmitTurnRequestV3, signal?: AbortSignal) =>
 			request(
 				"turns",
@@ -791,7 +814,13 @@ export function createWorkerRuntimeHostClientV4(
 		base.protocol !== "https:"
 	)
 		throw new TypeError("RuntimeHost V4 transport must be confidential");
-	const fetcher = options.fetch ?? runtimeTlsFetch();
+	const connectionConsumer = options.connectionConsumer
+		? structuredClone(options.connectionConsumer)
+		: undefined;
+	const fetcher = bindConnectionConsumer(
+		options.fetch ?? runtimeTlsFetch(),
+		connectionConsumer,
+	);
 	async function send(value: RuntimeBusinessRequestV4, signal?: AbortSignal) {
 		try {
 			signal?.throwIfAborted();

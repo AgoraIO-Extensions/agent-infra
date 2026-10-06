@@ -21,6 +21,10 @@ describe("contracts package surface", () => {
 			types: "./dist/enterprise-directory.d.mts",
 			import: "./dist/enterprise-directory.mjs",
 		});
+		expect(manifest.exports["./connection-consumer-profile"]).toEqual({
+			types: "./dist/connection-consumer-profile.d.mts",
+			import: "./dist/connection-consumer-profile.mjs",
+		});
 		expect(manifest.exports["./openapi/enterprise-directory.v1"]).toBe(
 			"./artifacts/openapi/enterprise-directory.v1.openapi.json",
 		);
@@ -96,6 +100,7 @@ describe("contracts package surface", () => {
 		const packedFiles = pack.files.map((file: { path: string }) => file.path);
 		expect(packedFiles).toContain("dist/index.d.mts");
 		expect(packedFiles).toContain("dist/enterprise-directory.d.mts");
+		expect(packedFiles).toContain("dist/connection-consumer-profile.d.mts");
 		expect(packedFiles).toContain(
 			"artifacts/openapi/enterprise-directory.v1.openapi.json",
 		);
