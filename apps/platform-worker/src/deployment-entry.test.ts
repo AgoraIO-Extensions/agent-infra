@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { transform } from "esbuild";
+import { build, transform } from "esbuild";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
 let directory: string;
@@ -34,6 +34,21 @@ beforeAll(async () => {
 	});
 	await writeFile(join(directory, "package.json"), '{"type":"module"}');
 	await writeFile(join(directory, "deployment.mjs"), code);
+	await build({
+		entryPoints: [
+			new URL("./connection-consumer-projection.ts", import.meta.url).pathname,
+		],
+		bundle: true,
+		packages: "external",
+		platform: "node",
+		format: "esm",
+		outfile: join(directory, "connection-consumer-projection.js"),
+	});
+	await symlink(
+		new URL("../node_modules", import.meta.url).pathname,
+		join(directory, "node_modules"),
+		"dir",
+	);
 	await writeFile(
 		join(directory, "configuration.mjs"),
 		`
@@ -47,7 +62,7 @@ export const connectionConsumerApproval = ${JSON.stringify(connectionConsumerApp
 		join(directory, "workload-deployment.js"),
 		`
 export const createWorkloadReadinessAuthorizationV1 = () => { globalThis.calls.push('readiness'); };
-export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); return input; };
+export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); globalThis.snapshot = input.policy.connectionConsumerSnapshot; return input; };
 `,
 	);
 	await writeFile(
@@ -57,7 +72,7 @@ export const createProductionWorkloadWorkerOptionsV1 = async (input) => { global
 	await writeFile(
 		join(directory, "conversation-deployment.js"),
 		`
-export const createProductionConversationRuntimeResolverV2 = (input) => { globalThis.calls.push('conversation'); globalThis.connection = { profile: input.connectionConsumerProfile, approval: input.connectionConsumerApproval }; };
+export const createProductionConversationRuntimeResolverV2 = (input) => { globalThis.calls.push('conversation'); globalThis.connection = { profile: input.connectionConsumerProfile, approval: input.connectionConsumerApproval }; return async () => 'original-control'; };
 export const createProductionSessionSandboxReceiverV1 = () => { globalThis.calls.push('sandbox'); return async () => ({ status: 'observed', resources: [] }); };
 `,
 	);
@@ -75,8 +90,15 @@ try {
  const entry = await import('./deployment.mjs');
  const signal = new AbortController().signal;
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
- const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
- console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls, connection: globalThis.connection }));
+	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
+	if (process.env.RUN_INVALID_PROFILE === 'true') {
+	 const control = await conversation.resolveRuntimeHost({ purpose: 'control' });
+	 let business;
+	 try { await conversation.resolveRuntimeHost({ purpose: 'business' }); } catch (error) { business = error.message; }
+	 console.log(JSON.stringify({ control, business, snapshot: globalThis.snapshot }));
+	 process.exit(0);
+	}
+ console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls, connection: globalThis.connection, snapshot: JSON.parse(globalThis.snapshot) }));
 } catch (error) {
  console.log(JSON.stringify({ error: error.message, calls: globalThis.calls }));
  process.exitCode = 1;
@@ -107,12 +129,36 @@ it("uses the selected deployment database for all Worker consumers and prepares 
 	expect(result.status, result.stderr).toBe(0);
 	expect(JSON.parse(result.stdout)).toEqual({
 		databases: [database, database, database],
-		calls: ["readiness", "workload", "wecom", "sandbox", "conversation"],
+		calls: ["readiness", "workload", "wecom", "conversation", "sandbox"],
 		connection: {
 			profile: connectionConsumerProfile,
 			approval: connectionConsumerApproval,
 		},
+		snapshot: {
+			profile: connectionConsumerProfile,
+			approval: connectionConsumerApproval,
+		},
 	});
+});
+
+it("keeps the original control resolver when configured approval is unavailable", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	await writeFile(
+		path,
+		original.replace('"egressEnforced":true', '"egressEnforced":false'),
+	);
+	try {
+		const result = run({ RUN_INVALID_PROFILE: "true" });
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			control: "original-control",
+			business: "CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
+			snapshot: null,
+		});
+	} finally {
+		await writeFile(path, original);
+	}
 });
 
 it.each([

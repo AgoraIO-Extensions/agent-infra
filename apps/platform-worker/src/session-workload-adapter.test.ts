@@ -1,3 +1,4 @@
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type { SessionSandboxDeletionProgressV1 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
@@ -5,6 +6,11 @@ import type {
 	V1Pod,
 } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
+import {
+	createRuntimeConnectionConsumerSnapshotV1,
+	runtimeConnectionConsumerAnnotation,
+	runtimeConnectionConsumerFileEnvironment,
+} from "./connection-consumer-projection.js";
 import { runtimeTlsSecretFixture } from "./kubernetes.fixture.js";
 import type {
 	WorkerKubernetesClientV1,
@@ -110,6 +116,103 @@ const allocation: SessionSandboxAllocationV1 = {
 };
 
 describe("session sandbox workload adapter", () => {
+	it("projects a complete approved file on the real Session Pod and rejects drift without changing cleanup authority", async () => {
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "platform-consumer",
+			audience: "connection-resource",
+			egressProfile: { ref: "approved-egress", revision: "r1" },
+		};
+		const snapshot = createRuntimeConnectionConsumerSnapshotV1(profile, {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			egressEnforced: true,
+			source: { ref: "approved-deployment", revision: "r1" },
+		});
+		const selected = { ...allocation, connectionConsumerSnapshot: snapshot };
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(selected);
+		const pod = await client.read<V1Pod>("Pod", selected.podName);
+		if (!pod?.spec || !pod.metadata) throw new Error("Missing fixture Pod");
+		expect(
+			pod.metadata.annotations?.[runtimeConnectionConsumerAnnotation],
+		).toBe(snapshot);
+		expect(pod.spec.containers[0]?.env).toContainEqual({
+			name: runtimeConnectionConsumerFileEnvironment,
+			value: "/var/run/agent-infra/connection-consumer/snapshot.json",
+		});
+		expect(
+			pod.spec.containers[0]?.volumeMounts?.find(
+				(item) => item.name === "connection-consumer",
+			)?.readOnly,
+		).toBe(true);
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		};
+		expect((await adapter.observe(selected)).status).toBe("ready");
+		const updatedApproval = {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			egressEnforced: true,
+			source: { ref: "approved-deployment", revision: "r2" },
+		};
+		const updatedSnapshot = createRuntimeConnectionConsumerSnapshotV1(
+			profile,
+			updatedApproval,
+		);
+		pod.metadata.annotations = {
+			...pod.metadata.annotations,
+			[runtimeConnectionConsumerAnnotation]: updatedSnapshot ?? "",
+		};
+		// Downward API may update the file, but it cannot change the old process's
+		// immutable PodSpec revision or captured Host snapshot.
+		expect(
+			(
+				await adapter.observe({
+					...selected,
+					connectionConsumerSnapshot: updatedSnapshot,
+				})
+			).status,
+		).toBe("unknown");
+		pod.metadata.annotations = {
+			...pod.metadata.annotations,
+			[runtimeConnectionConsumerAnnotation]: "{}",
+		};
+		expect((await adapter.observe(selected)).status).toBe("unknown");
+		await expect(adapter.apply(selected)).rejects.toThrow();
+		const previous = (await adapter.observe(selected)).resources;
+		const unavailable = {
+			...selected,
+			connectionConsumerSnapshot: null,
+			env: {
+				...selected.env,
+				[runtimeConnectionConsumerFileEnvironment]: "/invalid-current-config",
+			},
+		};
+		const controlObservation = await adapter.observe(
+			unavailable,
+			previous,
+			"control",
+		);
+		expect(controlObservation.status).toBe("observed");
+		expect(controlObservation.resources).toHaveLength(5);
+		await adapter.cleanup(unavailable, previous, {
+			recordDeletionProgress: async () => "committed",
+		});
+		expect(await client.read("Pod", selected.podName)).toBeNull();
+	});
+	it("rejects a Session env file override before Pod creation", () => {
+		expect(() =>
+			sessionSandboxResourcesV1({
+				...allocation,
+				env: { [runtimeConnectionConsumerFileEnvironment]: "/caller" },
+			}),
+		).toThrow();
+	});
 	it("renders one Pod, Service, SA, retained PVC and isolated NetworkPolicy with allocation fence", () => {
 		const resources = sessionSandboxResourcesV1(allocation);
 		expect(resources.map((resource) => resource.kind)).toEqual([

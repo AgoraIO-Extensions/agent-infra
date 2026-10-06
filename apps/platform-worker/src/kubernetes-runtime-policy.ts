@@ -20,6 +20,11 @@ import type {
 	V1ServiceAccount,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
+import {
+	runtimeConnectionConsumerFileEnvironment,
+	runtimeConnectionConsumerProjectionV1,
+	runtimeConnectionConsumerRevisionEnvironment,
+} from "./connection-consumer-projection.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
 import {
@@ -39,6 +44,7 @@ import { createKubernetesPodValidationV1 } from "./kubernetes-runtime-pod-valida
 import type { workloadEgressRulesV1 } from "./workload-network.js";
 import { workloadRuntimeAuthEnvironmentV1 } from "./workload-runtime-auth.js";
 export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
+	readonly connectionConsumerControl?: boolean;
 	readonly policy: KubernetesWorkloadPolicyV1;
 	readonly modelProjection:
 		| RuntimeModelProjectionV1
@@ -51,6 +57,11 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	readonly egress: ReturnType<typeof workloadEgressRulesV1>;
 }) {
 	const { policy, modelProjection, modelInjection, egress } = dependencies;
+	const connection = runtimeConnectionConsumerProjectionV1(
+		dependencies.connectionConsumerControl
+			? undefined
+			: policy.connectionConsumerSnapshot,
+	);
 	function modelBindings(value: AgentWorkloadDesiredV1) {
 		if (!modelProjection || !modelInjection) return undefined;
 		if (
@@ -73,6 +84,13 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		return modelInjection;
 	}
 	function workloadEnvironment(value: AgentWorkloadDesiredV1) {
+		if (
+			!dependencies.connectionConsumerControl &&
+			value.replicas !== 0 &&
+			(Object.hasOwn(value.env, runtimeConnectionConsumerFileEnvironment) ||
+				Object.hasOwn(value.env, runtimeConnectionConsumerRevisionEnvironment))
+		)
+			throw new WorkloadKubernetesError("policy");
 		const injection = modelBindings(value);
 		const binding = modelProjection?.standardTemplateBinding;
 		if (
@@ -96,12 +114,22 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		if (runtimeAuth.some((entry) => Object.hasOwn(value.env, entry.name)))
 			throw new WorkloadKubernetesError("policy");
 		return [
-			...Object.entries(value.env).map(([name, value]) => ({ name, value })),
+			...Object.entries(value.env)
+				.filter(
+					([name]) =>
+						!(
+							dependencies.connectionConsumerControl &&
+							(name === runtimeConnectionConsumerFileEnvironment ||
+								name === runtimeConnectionConsumerRevisionEnvironment)
+						),
+				)
+				.map(([name, value]) => ({ name, value })),
 			...(injection?.env ?? []),
 			...(injection && binding
 				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: binding.driver }]
 				: []),
 			...runtimeAuth,
+			...connection.env,
 		];
 	}
 	function environmentSecrets(value: AgentWorkloadDesiredV1) {
@@ -188,6 +216,13 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		secret.type === "Opaque";
 	function desired(input: unknown) {
 		const value = validateAgentWorkloadDesiredV1(input);
+		if (
+			!dependencies.connectionConsumerControl &&
+			value.replicas !== 0 &&
+			(Object.hasOwn(value.env, runtimeConnectionConsumerFileEnvironment) ||
+				Object.hasOwn(value.env, runtimeConnectionConsumerRevisionEnvironment))
+		)
+			throw new WorkloadKubernetesError("policy");
 		const name = workloadResourceNameV1(value.agentId);
 		if (
 			value.namespaceRef !== policy.namespaceRef ||
@@ -358,6 +393,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		canResumeScaledDownStatefulSet,
 		hasDriftedPodSpec,
 	} = createKubernetesPodValidationV1({
+		connectionConsumerControl: dependencies.connectionConsumerControl,
 		policy,
 		workloadEnvironment,
 		environmentSecrets,

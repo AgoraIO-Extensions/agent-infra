@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createRuntimeConnectionConsumerSnapshotV1 } from "./connection-consumer-projection.js";
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { createWecomDeploymentCoordinatorV1 } from "./wecom-deployment.js";
@@ -40,6 +41,17 @@ const {
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
 
+// Both the Pod file and Runtime HTTP assertion consume this captured source.
+const connectionConsumerSnapshot = createRuntimeConnectionConsumerSnapshotV1(
+	connectionConsumerProfile,
+	connectionConsumerApproval,
+);
+if (Object.hasOwn(workloadInput.policy, "connectionConsumerSnapshot"))
+	throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+const connectionConsumer = connectionConsumerSnapshot
+	? JSON.parse(connectionConsumerSnapshot)
+	: undefined;
+
 const instanceId = randomUUID();
 let prepared: ReturnType<typeof createPrepared> | undefined;
 let conversationPrepared:
@@ -73,6 +85,7 @@ async function createPrepared(signal: AbortSignal) {
 	const workload = await createProductionWorkloadWorkerOptionsV1(
 		{
 			...workloadInput,
+			policy: { ...workloadInput.policy, connectionConsumerSnapshot },
 			databaseUrl,
 			workerId: signing.workerId,
 			runtimeProbe: createWorkloadReadinessAuthorizationV1({
@@ -101,6 +114,14 @@ async function createPrepared(signal: AbortSignal) {
 		databaseUrl: workload.databaseUrl,
 		configuration: wecom,
 	});
+	const resolveRuntimeHost =
+		conversationDeployment.createProductionConversationRuntimeResolverV2({
+			workload: { ...workload, workerId: signing.workerId },
+			signing,
+			serviceToken,
+			connectionConsumerProfile: connectionConsumer?.profile,
+			connectionConsumerApproval: connectionConsumer?.approval,
+		});
 	return {
 		// Database lease ownership is per process; Runtime service identity is deployment-bound.
 		workload: { ...workload, workerId: instanceId },
@@ -122,14 +143,16 @@ async function createPrepared(signal: AbortSignal) {
 					...workload,
 					workerId: signing.workerId,
 				}),
-			resolveRuntimeHost:
-				conversationDeployment.createProductionConversationRuntimeResolverV2({
-					workload: { ...workload, workerId: signing.workerId },
-					signing,
-					serviceToken,
-					connectionConsumerProfile,
-					connectionConsumerApproval,
-				}),
+			resolveRuntimeHost: async (
+				request: Parameters<typeof resolveRuntimeHost>[0],
+			) => {
+				if (
+					connectionConsumerSnapshot === null &&
+					request.purpose !== "control"
+				)
+					throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+				return resolveRuntimeHost(request);
+			},
 			fetch: workload.fetch,
 		},
 		wecom: wecomDeployment,
