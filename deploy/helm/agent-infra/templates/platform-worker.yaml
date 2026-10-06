@@ -68,6 +68,8 @@ spec:
         app.kubernetes.io/name: {{ .Chart.Name }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: platform-worker
+      annotations:
+        agent-infra.agora.io/connection-profile-version: {{ include "agent-infra.connectionProfileVersion" . | quote }}
     spec:
       serviceAccountName: {{ $name }}
       securityContext:
@@ -114,9 +116,11 @@ spec:
             - name: NODE_EXTRA_CA_CERTS
               value: /var/run/agent-infra/trusted-ca/ca.crt
             {{- end }}
+            {{- include "agent-infra.connectionEnv" . | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ $bindings }}
+            {{- include "agent-infra.connectionEnvFrom" . | nindent 12 }}
           volumeMounts:
             {{- if not .Values.workloadTopology.enabled }}
             - name: deployment-module
