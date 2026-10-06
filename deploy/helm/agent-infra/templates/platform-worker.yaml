@@ -23,7 +23,8 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    # Session Sandbox Pods are created, replaced and deleted directly by the Worker adapter.
+    verbs: ["create", "delete", "get", "list", "update", "watch"]
   - apiGroups: [""]
     resources: ["configmaps", "persistentvolumeclaims", "secrets", "serviceaccounts", "services"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
