@@ -126,4 +126,77 @@ describe("Browser observe controller", () => {
 			controller.navigate("https://other.example/app"),
 		).rejects.toThrow("BROWSER_NAVIGATION_ORIGIN_DENIED");
 	});
+
+	it("rebinds persisted page metadata and invalidates old elements", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability,
+			recoveryBinding: { sessionGeneration: 2, resourceFence: 7 },
+		});
+		const reference = await controller.navigate("https://example.test/app");
+		const observation = await controller.observe(reference);
+		const element = observation.elements[0];
+		if (!element) throw new Error("expected element");
+		const rebound = await controller.recoverPage({
+			pageId: reference.pageId,
+			pageRevision: reference.pageRevision,
+			tabIndex: 0,
+			origin: "https://example.test",
+			capabilityVersion: 1,
+			sessionGeneration: 2,
+			resourceFence: 7,
+		});
+		expect(rebound).toEqual(reference);
+		expect(() => controller.resolveElement(element)).toThrow(
+			"BROWSER_ELEMENT_REFERENCE_STALE",
+		);
+	});
+
+	it("rejects recovery for missing pages and mismatched bindings", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability,
+			recoveryBinding: { sessionGeneration: 2, resourceFence: 7 },
+		});
+		const reference = await controller.navigate("https://example.test/app");
+		context.pages.mockReturnValue([]);
+		await expect(
+			controller.recoverPage({
+				pageId: reference.pageId,
+				pageRevision: reference.pageRevision,
+				tabIndex: 0,
+				origin: "https://example.test",
+				capabilityVersion: 1,
+				sessionGeneration: 2,
+				resourceFence: 7,
+			}),
+		).rejects.toThrow("BROWSER_PAGE_RECOVERY_PAGE_MISSING");
+		context.pages.mockReturnValue([page]);
+		await expect(
+			controller.recoverPage({
+				pageId: reference.pageId,
+				pageRevision: reference.pageRevision,
+				tabIndex: 0,
+				origin: "https://example.test",
+				capabilityVersion: 1,
+				sessionGeneration: 3,
+				resourceFence: 7,
+			}),
+		).rejects.toThrow("BROWSER_PAGE_RECOVERY_BINDING_MISMATCH");
+		await expect(
+			controller.recoverPage({
+				pageId: reference.pageId,
+				pageRevision: reference.pageRevision + 1,
+				tabIndex: 0,
+				origin: "https://example.test",
+				capabilityVersion: 1,
+				sessionGeneration: 2,
+				resourceFence: 7,
+			}),
+		).rejects.toThrow("BROWSER_PAGE_RECOVERY_REVISION_MISMATCH");
+	});
 });
