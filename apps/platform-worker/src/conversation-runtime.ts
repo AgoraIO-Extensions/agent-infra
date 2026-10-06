@@ -501,12 +501,10 @@ export function createConversationRuntimeV2(
 		)
 			unavailable("RELAY_KEY_UNAVAILABLE");
 		if (source?.kind === "standard") {
-			// The persisted Store protocol is the V4 rollout authority. A V2
-			// record with no pinned Key is an explicit fail-closed state.
+			// The persisted Store protocol is the V4 rollout authority. Historical
+			// or V2 records must never fall back to a static business Key.
 			if (prepared.state.runtimeSubmitProtocol === "v4") return false;
-			if (prepared.state.runtimeSubmitProtocol === "v2")
-				unavailable("RELAY_KEY_UNAVAILABLE");
-			return true;
+			unavailable("RELAY_KEY_UNAVAILABLE");
 		}
 		if (
 			source?.kind !== "custom" ||

@@ -99,19 +99,25 @@ describe("trusted custom platform adapter business delivery", () => {
 		},
 	);
 
-	it("keeps standard missing-Key admission closed instead of selecting custom", async () => {
-		const h = runtimeV4Harness();
-		try {
-			Object.assign(h.claim, { executionSource: null, relayKeyBinding: null });
-			Object.assign(h.state, { runtimeSubmitProtocol: "v2" });
-			const reference = await h.authorize();
-			await expect(
-				h.runtime.runtimeHost.dispatch(h.request(reference)),
-			).rejects.toMatchObject({ code: "RELAY_KEY_UNAVAILABLE" });
-			expect(h.fetcher).not.toHaveBeenCalled();
-			expect(h.relayKeyDecryptor.decrypt).not.toHaveBeenCalled();
-		} finally {
-			h.runtime.close();
-		}
-	});
+	it.each([undefined, "v2"] as const)(
+		"keeps standard missing-Key admission closed for protocol %s",
+		async (protocol) => {
+			const h = runtimeV4Harness();
+			try {
+				Object.assign(h.claim, {
+					executionSource: null,
+					relayKeyBinding: null,
+				});
+				Object.assign(h.state, { runtimeSubmitProtocol: protocol });
+				const reference = await h.authorize();
+				await expect(
+					h.runtime.runtimeHost.dispatch(h.request(reference)),
+				).rejects.toMatchObject({ code: "RELAY_KEY_UNAVAILABLE" });
+				expect(h.fetcher).not.toHaveBeenCalled();
+				expect(h.relayKeyDecryptor.decrypt).not.toHaveBeenCalled();
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
 });
