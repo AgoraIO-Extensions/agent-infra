@@ -12,6 +12,7 @@ import type {
 import type { RelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 import { vi } from "vitest";
 import {
+	type ConversationRuntimeOptionsV2,
 	type ConversationRuntimeStateV2,
 	createConversationRuntimeV2,
 } from "../conversation-runtime.js";
@@ -50,6 +51,7 @@ export function runtimeV4Harness(
 		agentId: "agent",
 		actorId: "user",
 		channelId: "web",
+		principal: { kind: "user", id: "user" },
 		conversationId: "conversation",
 		executionId: "execution",
 		turnId: "turn",
@@ -210,7 +212,9 @@ export function runtimeV4Harness(
 		serviceToken: "synthetic-service-token",
 		workerId: "transport",
 	};
-	const resolveRuntimeHost = vi.fn(async () => ({ ...target }));
+	const resolveRuntimeHost = vi.fn<
+		ConversationRuntimeOptionsV2["resolveRuntimeHost"]
+	>(async () => ({ ...target }));
 	const fetcher = vi.fn<typeof fetch>(async (url, init) => {
 		const body = JSON.parse(init?.body as string);
 		if (String(url).endsWith("/events/read"))

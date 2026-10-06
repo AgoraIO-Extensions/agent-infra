@@ -158,6 +158,27 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		}
 	});
 
+	it("rechecks the Runtime route with the original Session binding", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			await h.runtime.runtimeHost.dispatch(h.request(reference));
+			const recheck = h.resolveRuntimeHost.mock.calls.at(-1)?.[0];
+			expect(recheck).toMatchObject({
+				agentId: "agent",
+				actorId: "user",
+				channelId: "web",
+				conversationId: "conversation",
+				principal: { kind: "user", id: "user" },
+				sessionGeneration: 1,
+				deliveryFence: 2,
+				purpose: "business",
+			});
+		} finally {
+			h.runtime.close();
+		}
+	});
+
 	it.each([
 		"principal",
 		"source",
