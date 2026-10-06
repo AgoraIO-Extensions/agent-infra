@@ -132,7 +132,7 @@ describe("Worker Connection Consumer profile boundary", () => {
 		};
 		let received: Headers | undefined;
 		const client = createWorkerRuntimeHostClientV3({
-			baseUrl: "https://runtime.example.test",
+			baseUrl: "http://runtime.example.test",
 			serviceToken: "worker-token",
 			connectionConsumer: target,
 			fetch: async (_input, init) => {

@@ -35,16 +35,12 @@ import {
 } from "vitest";
 import {
 	fakeKubernetesApi,
-	runtimeTlsSecretFixture,
 	workloadDesiredFixture,
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "../../../apps/platform-worker/src/kubernetes.fixture.js";
 import { WorkloadKubernetesError } from "../../../apps/platform-worker/src/kubernetes-client.js";
-import {
-	createKubernetesRuntimeAdapterV1,
-	workloadResourceNameV1,
-} from "../../../apps/platform-worker/src/kubernetes-runtime-adapter.js";
+import { createKubernetesRuntimeAdapterV1 } from "../../../apps/platform-worker/src/kubernetes-runtime-adapter.js";
 import { createWorkloadRuntimeV1 } from "../../../apps/platform-worker/src/workload-runtime.js";
 import { catalogFixture } from "../../model-catalog/src/catalog.fixture.js";
 import { agentConfigurationConformanceRecordV1 } from "../../platform-core/src/agent-configuration.conformance.ts";
@@ -1492,9 +1488,6 @@ describe("PostgreSQL Workload steps", () => {
 	it("persists model projections across Workers, activates atomically and retains active models after candidate rejection", async () => {
 		const crypto = secretCryptoFixture();
 		const api = fakeKubernetesApi();
-		const runtimeName = workloadResourceNameV1("agent-a");
-		const tlsSecretName = "model-projection-runtime-tls";
-		api.seed(runtimeTlsSecretFixture(tlsSecretName));
 		const catalog = catalogFixture();
 		const catalogEndpoint = catalog.endpoints[0];
 		if (!catalogEndpoint) throw new Error();
@@ -1557,17 +1550,6 @@ describe("PostgreSQL Workload steps", () => {
 			client: api.client,
 			policy: {
 				...workloadTestPolicy,
-				runtimeTls: [
-					{
-						agentId: "agent-a",
-						namespace: workloadTestPolicy.namespace,
-						serviceDnsNames: [
-							`${runtimeName}.${workloadTestPolicy.namespace}.svc`,
-							`${runtimeName}-probe.${workloadTestPolicy.namespace}.svc`,
-						],
-						serverSecretRef: { name: tlsSecretName },
-					},
-				],
 			},
 			registry: workloadRegistryFixture({
 				schemaVersion: 1,
@@ -1608,7 +1590,6 @@ describe("PostgreSQL Workload steps", () => {
 				},
 			},
 			fetch: (async () => new Response("ok")) as typeof fetch,
-			runtimeTlsFetch: () => (async () => new Response("ok")) as typeof fetch,
 			probeRuntime: async () => {
 				const core: "passed" | "failed" = failNextProbe ? "failed" : "passed";
 				failNextProbe = false;

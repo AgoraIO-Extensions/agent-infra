@@ -2,21 +2,16 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import dns from "node:dns/promises";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import {
-	bindingsKey,
 	corefileWithForwardZones,
 	fingerprint,
 	harnessOwner,
 	isUsableCa,
-	isUsableLeaf,
-	issueCa,
-	issueLeaf,
 	ownerLabel,
 	parseDnsForward,
-	runtimeTlsBinding,
 	selectPlatformManifest,
 } from "./runtime-material.mjs";
 
@@ -535,60 +530,7 @@ function ensureClusterDns() {
 	console.log(`E2E cluster DNS forward zones=${zones.length}`);
 }
 
-/** Agents come from the fixed Platform DB, never from request or Owner input. */
-function readAgentIds() {
-	const project = process.env.PLATFORM_LOCAL_PROJECT;
-	const containers = docker([
-		"ps",
-		"--quiet",
-		"--filter",
-		`label=com.docker.compose.project=${project}`,
-		"--filter",
-		"label=com.docker.compose.service=postgres",
-	])
-		.split("\n")
-		.filter(Boolean);
-	if (containers.length !== 1) fail("Fixed E2E PostgreSQL container is unavailable");
-	const ids = docker([
-		"exec",
-		containers[0],
-		"psql",
-		"--username=agent_infra",
-		"--dbname=agent_infra",
-		"--no-align",
-		"--tuples-only",
-		"--no-psqlrc",
-		"--command=select id from platform.agents order by id",
-	])
-		.split("\n")
-		.map((id) => id.trim())
-		.filter(Boolean);
-	if (!ids.every((id) => /^[A-Za-z0-9_.:-]{1,256}$/.test(id)))
-		fail("Platform Agent IDs are invalid");
-	return ids;
-}
-
-async function ensureRuntimeCa() {
-	const directory = join(stateRoot, "runtime-tls");
-	await mkdir(directory, { recursive: true, mode: 0o700 });
-	await chmod(directory, 0o700);
-	const certPath = join(directory, "ca.crt");
-	const keyPath = join(directory, "ca.key");
-	try {
-		const ca = {
-			cert: await readFile(certPath, "utf8"),
-			key: await readFile(keyPath, "utf8"),
-		};
-		if (isUsableCa(ca.cert)) return { ...ca, directory };
-	} catch {}
-	const ca = await issueCa(directory);
-	await writeFile(keyPath, ca.key, { mode: 0o600 });
-	await writeFile(certPath, ca.cert, { mode: 0o644 });
-	console.log("E2E Runtime CA issued");
-	return { ...ca, directory };
-}
-
-async function trustedCaBundle(runtimeCa) {
+async function trustedCaBundle() {
 	const files = (process.env.E2E_WORKER_TRUSTED_CA_FILES ?? "")
 		.split(":")
 		.filter(Boolean);
@@ -600,13 +542,13 @@ async function trustedCaBundle(runtimeCa) {
 			fail(`Worker trusted CA file is not a valid CA bundle: ${file}`);
 		parts.push(pem.trim());
 	}
-	parts.push(runtimeCa.cert.trim());
+	if (!parts.length) fail("E2E_WORKER_TRUSTED_CA_FILES must list at least one CA");
 	return `${parts.join("\n")}\n`;
 }
 
 /**
- * Engineering Spec "内部 Runtime TLS 身份与传输": the deployment delivers each
- * Agent's server leaf, the Worker trust set, the runtimeTls bindings and the
+ * Worker -> Runtime is in-cluster plaintext (ADR-0020): the deployment delivers
+ * the Worker trust set (directory, Registry), private adapter inputs and the
  * Host transport token. Worker loads them once, so changes restart it.
  */
 async function provisionRuntimeMaterial() {
@@ -624,34 +566,17 @@ async function provisionRuntimeMaterial() {
 
 	ensureClusterDns();
 
-	const runtimeCa = await ensureRuntimeCa();
-	const bindings = readAgentIds().map((agentId) => runtimeTlsBinding(agentId, namespace));
-	for (const binding of bindings) {
-		const name = binding.serverSecretRef.name;
-		const existing = readKubeObject("secret", name, namespace);
-		const current = {
-			cert: decodeSecret(existing, "tls.crt") ?? "",
-			key: decodeSecret(existing, "tls.key") ?? "",
-		};
-		const leaf =
-			isHarnessOwned(existing) && isUsableLeaf(current, binding.serviceDnsNames, runtimeCa.cert)
-				? current
-				: await issueLeaf(runtimeCa.directory, runtimeCa, binding.serviceDnsNames);
-		applyOwnedSecret(namespace, name, "kubernetes.io/tls", { "tls.crt": leaf.cert, "tls.key": leaf.key }, existing);
-	}
-
-	const bundle = await trustedCaBundle(runtimeCa);
+	const bundle = await trustedCaBundle();
 	applyOwnedSecret(namespace, caRef.name, "Opaque", { [caRef.key]: bundle }, readKubeObject("secret", caRef.name, namespace));
 
 	const configuration = await readFile(requiredAbsoluteEnv("PLATFORM_LOCAL_WORKER_CONFIGURATION"), "utf8");
-	const bindingsJson = `${JSON.stringify({ schemaVersion: 1, bindings }, null, 2)}\n`;
 	// Private read-only adapter inputs (for example directory identity bindings)
 	// travel in the same reviewed module Secret; values never enter Git or argv.
 	const deploymentFiles = {};
 	for (const file of (process.env.E2E_WORKER_DEPLOYMENT_FILES ?? "").split(":").filter(Boolean)) {
 		if (!isAbsolute(file)) fail("E2E_WORKER_DEPLOYMENT_FILES must list absolute paths");
 		const key = basename(file);
-		if (!/^[-._a-zA-Z0-9]{1,253}$/.test(key) || key === moduleRef.key || key === bindingsKey || key in deploymentFiles)
+		if (!/^[-._a-zA-Z0-9]{1,253}$/.test(key) || key === moduleRef.key || key in deploymentFiles)
 			fail(`Worker deployment file name is not a unique Secret key: ${key}`);
 		deploymentFiles[key] = await readFile(file, "utf8");
 	}
@@ -659,7 +584,7 @@ async function provisionRuntimeMaterial() {
 		namespace,
 		moduleRef.name,
 		"Opaque",
-		{ ...deploymentFiles, [moduleRef.key]: configuration, [bindingsKey]: bindingsJson },
+		{ ...deploymentFiles, [moduleRef.key]: configuration },
 		readKubeObject("secret", moduleRef.name, namespace),
 	);
 
@@ -679,11 +604,10 @@ async function provisionRuntimeMaterial() {
 		"--output",
 		"jsonpath={.items[*].metadata.name}",
 	]).trim();
-	console.log(`E2E Runtime TLS bindings=${bindings.length}`);
 	if (!deployment) return;
 	if (deployment.includes(" ")) fail("Fixed Worker Deployment is ambiguous");
 	const annotation = "agent-infra.agora.io/e2e-runtime-material";
-	const material = fingerprint([configuration, bindingsJson, bundle, ...Object.entries(deploymentFiles).flat()]);
+	const material = fingerprint([configuration, bundle, ...Object.entries(deploymentFiles).flat()]);
 	const live = readKubeObject("deployment", deployment, namespace)?.spec?.template?.metadata?.annotations?.[annotation];
 	if (live === material) return;
 	kubectl(["--namespace", namespace, "patch", "deployment", deployment, "--type", "merge", "--patch", JSON.stringify({ spec: { template: { metadata: { annotations: { [annotation]: material } } } } })]);

@@ -11,7 +11,6 @@ import {
 	signV3Fixture,
 	submitV3Fixture,
 } from "../../../packages/agent-runtime/src/grant-v2-fixture.test-support.js";
-import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import { resolveApprovedConnectionConsumerTargetV1 } from "../../platform-worker/src/conversation-deployment.js";
 import { createWorkerRuntimeHostClientV3 } from "../../platform-worker/src/runtime-host-client.js";
 import { readRuntimeConnectionConsumerProfile } from "./connection-consumer-profile.js";
@@ -114,7 +113,7 @@ async function setup(
 	const app = createRuntimeHostApp(runtime);
 	const submit = vi.spyOn(runtime.host, "submitTurnV3");
 	const client = createWorkerRuntimeHostClientV3({
-		baseUrl: "https://runtime.example.test",
+		baseUrl: "http://runtime.example.test",
 		serviceToken: "synthetic-service-token",
 		...(configured ? { connectionConsumer: target(mcpPath) } : {}),
 		fetch: async (input, init) => app.request(String(input), init),
@@ -588,13 +587,11 @@ describe("Worker to RuntimeHost Connection profile reception", () => {
 			if (restart !== "none") expect(newSubmit).not.toHaveBeenCalled();
 		},
 	);
-	it("reports the same captured nonsecret revision at real HTTPS startup", async () => {
+	it("reports the same captured nonsecret revision at real HTTP startup", async () => {
 		const { runtime } = await setup();
-		const material = await runtimeTlsFixture();
 		const ready = Promise.withResolvers<string>();
 		const server = startRuntimeHost({
 			...runtime,
-			tls: { ...material, serviceDnsNames: ["localhost"] },
 			port: 0,
 			log: ready.resolve,
 		});

@@ -20,6 +20,6 @@ export const workloadInput = missing("workloadInput");
 // supplied by the Harness; the model catalog and admission policy remain
 // deployment-owned code.
 //
-// policy.runtimeTls comes from the Harness-published
-// /var/run/agent-infra/deployment/runtime-tls-bindings.json `bindings` array;
-// never derive Agent IDs from requests, Owner input or live annotations.
+// Worker -> Runtime uses in-cluster plaintext HTTP (ADR-0020); no Runtime TLS
+// policy is configured. Private inputs listed in E2E_WORKER_DEPLOYMENT_FILES
+// are mounted read-only under /var/run/agent-infra/deployment/.

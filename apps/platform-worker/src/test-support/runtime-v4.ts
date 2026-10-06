@@ -208,7 +208,7 @@ export function runtimeV4Harness(
 		}),
 	};
 	const target = {
-		baseUrl: "https://runtime.test",
+		baseUrl: "http://runtime.test",
 		serviceToken: "synthetic-service-token",
 		workerId: "transport",
 	};

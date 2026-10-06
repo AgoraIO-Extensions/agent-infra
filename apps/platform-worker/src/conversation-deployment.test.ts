@@ -12,7 +12,6 @@ import {
 } from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
-	runtimeTlsSecretFixture,
 	workloadDesiredFixture,
 	workloadRegistryFixture,
 	workloadTestPolicy,
@@ -22,35 +21,9 @@ import {
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
 
-type SessionRuntimeTlsPolicy = SessionSandboxReconciliationClaimV1["policy"] & {
-	readonly sessionRuntimeTlsBindings: readonly {
-		readonly sessionId: string;
-		readonly sandboxId: string;
-		readonly generation: number;
-		readonly resourceFence: number;
-		readonly serviceName: string;
-		readonly secretName: string;
-	}[];
-};
-
 function fixture() {
 	const api = fakeKubernetesApi();
-	api.seed(
-		runtimeTlsSecretFixture("sandbox-allocation-a-tls", "agent-a", [
-			"sandbox-allocation-a.workload-test.svc",
-		]),
-	);
 	const deployment = workloadDesiredFixture(1, "agent-a", "internal-only");
-	const sessionRuntimeTlsBindings = [
-		{
-			sessionId: "conversation-a",
-			sandboxId: "allocation-a",
-			generation: 2,
-			resourceFence: 3,
-			serviceName: "sandbox-allocation-a",
-			secretName: "sandbox-allocation-a-tls",
-		},
-	] as const;
 	const options: WorkloadRuntimeOptionsV1 = {
 		workerId: "worker-a",
 		client: api.client,
@@ -100,8 +73,7 @@ function fixture() {
 			workloadRevision: 1,
 			managementFence: 1,
 			imageDigest: deployment.imageDigest,
-			sessionRuntimeTlsBindings,
-		} as SessionRuntimeTlsPolicy,
+		},
 		deployment,
 		previousObservation: null,
 	};
@@ -216,7 +188,7 @@ describe("production SessionSandbox resource receiver", () => {
 			url: "https://connection.example.test/mcp/v1",
 		});
 		expect(target.baseUrl).toBe(
-			"https://sandbox-allocation-a.workload-test.svc:8080",
+			"http://sandbox-allocation-a.workload-test.svc:8080",
 		);
 	});
 	it("applies the Store allocation using Worker policy and records readiness with the resource fence", async () => {
@@ -261,27 +233,21 @@ describe("production SessionSandbox resource receiver", () => {
 		expect(f.writes).toHaveLength(0);
 	});
 
-	it("rejects an ambiguous Session TLS binding tuple before any resource write", async () => {
+	it("prepares Session resources without any Session TLS input (ADR-0020)", async () => {
 		const f = fixture();
-		const policy = f.claim.policy as SessionRuntimeTlsPolicy;
-		const binding = policy.sessionRuntimeTlsBindings[0];
-		if (!binding) throw new Error("missing Session TLS binding");
-		await expect(
-			f.receive(
-				{
-					...f.claim,
-					policy: {
-						...policy,
-						sessionRuntimeTlsBindings: [
-							...policy.sessionRuntimeTlsBindings,
-							{ ...binding, secretName: "sandbox-allocation-a-tls-alt" },
-						],
-					} as SessionRuntimeTlsPolicy,
-				},
-				new AbortController().signal,
+		await f.receive(f.claim, new AbortController().signal);
+		const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+		const container = pod.spec?.containers[0];
+		expect(container?.readinessProbe?.httpGet?.scheme).toBe("HTTP");
+		expect(
+			container?.volumeMounts?.some((mount) =>
+				mount.mountPath.startsWith("/var/run/agent-infra/runtime-tls"),
 			),
-		).rejects.toThrow("Session Runtime TLS binding is ambiguous");
-		expect(f.writes).toHaveLength(0);
+		).toBe(false);
+		expect(pod.spec?.volumes?.some((volume) => volume.secret)).toBe(false);
+		expect(
+			[...f.resources.keys()].some((key) => key.startsWith("Secret/")),
+		).toBe(false);
 	});
 
 	it("keeps source resources and returns unknown while an original execution prevents drain", async () => {

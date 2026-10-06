@@ -146,10 +146,11 @@ describe("V4 authenticated confidential private Key client", () => {
 	});
 
 	it.each([
-		"http://runtime.test",
-		"https://user:password@runtime.test",
-		"https://runtime.test?override=1",
-	])("rejects unconfined transport %s", (baseUrl) => {
+		"https://runtime.test",
+		"http://user:password@runtime.test",
+		"http://runtime.test?override=1",
+		"http://runtime.test#fragment",
+	])("rejects a non in-cluster plaintext origin %s", (baseUrl) => {
 		const { h, options } = clientHarness();
 		try {
 			expect(() =>

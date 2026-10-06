@@ -5,7 +5,6 @@ import {
 	generateKeyPairSync,
 	randomBytes,
 	sign,
-	X509Certificate,
 } from "node:crypto";
 import {
 	chmod,
@@ -15,11 +14,9 @@ import {
 	unlink,
 	writeFile,
 } from "node:fs/promises";
-import { createServer } from "node:http";
-import { request as requestHttps } from "node:https";
+import { createServer, request as requestHttp } from "node:http";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { checkServerIdentity } from "node:tls";
 import { pathToFileURL } from "node:url";
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 
@@ -39,17 +36,8 @@ const credentials = {
 	selected: `synthetic-${randomBytes(24).toString("hex")}`,
 };
 const serviceToken = `synthetic-${randomBytes(24).toString("hex")}`;
-const runtimeHostTlsBinding = (() => {
-	const serviceName = `agent-${createHash("sha256").update("synthetic-agent").digest("hex").slice(0, 32)}`;
-	return JSON.stringify({
-		agentId: "synthetic-agent",
-		namespace: "default",
-		serviceDnsNames: [
-			`${serviceName}.default.svc`,
-			`${serviceName}-probe.default.svc`,
-		],
-	});
-})();
+// The in-cluster Service DNS the Worker uses; plaintext per ADR-0020.
+const runtimeServiceDnsName = `agent-${createHash("sha256").update("synthetic-agent").digest("hex").slice(0, 32)}.default.svc`;
 const failureMarker = `failure-${randomBytes(24).toString("hex")}`;
 const privatePath = `/synthetic/private/${randomBytes(24).toString("hex")}`;
 const expectedConfigVersion = "synthetic-active-v2";
@@ -606,7 +594,6 @@ function deployment(origin, directory) {
 		AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
 		AGENT_INFRA_RUNTIME_WORKER_ID: runtimeProbeWorkerId,
 		AGENT_INFRA_RUNTIME_DATA_DIR: directory,
-		AGENT_INFRA_RUNTIME_TLS_BINDING: runtimeHostTlsBinding,
 		AGENT_INFRA_RUNTIME_GRANT_KEY_ID: "synthetic-key",
 		AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY: publicKeyPem,
 		AGENT_INFRA_RUNTIME_GRANT_ISSUER: "synthetic-platform",
@@ -759,37 +746,19 @@ function assertRedacted(text) {
 	}
 }
 
-export function createRuntimeProbeTransport({
-	ca,
-	serviceDnsName,
-	port = 3003,
-}) {
+export function createRuntimeProbeTransport({ serviceDnsName, port = 3003 }) {
 	return (path, body, token) =>
 		new Promise((resolve, reject) => {
-			const request = requestHttps(
-				`https://${serviceDnsName}:${port}/internal/runtime/${path}`,
+			const request = requestHttp(
+				`http://${serviceDnsName}:${port}/internal/runtime/${path}`,
 				{
 					method: "POST",
-					ca,
-					rejectUnauthorized: true,
-					minVersion: "TLSv1.2",
 					agent: false,
 					family: 4,
-					// The network-isolated image uses loopback, but authenticates its
-					// actual Service DNS SAN and SNI rather than an IP or localhost.
+					// The network-isolated image uses loopback, but addresses its
+					// actual in-cluster Service DNS name rather than an IP or localhost.
 					lookup: (_hostname, _options, callback) =>
 						callback(null, "127.0.0.1", 4),
-					checkServerIdentity(hostname, certificate) {
-						const error = checkServerIdentity(hostname, certificate);
-						if (error) return error;
-						if (
-							new X509Certificate(certificate.raw).checkHost(hostname, {
-								subject: "never",
-								wildcards: false,
-							}) !== hostname
-						)
-							return new Error("Runtime probe TLS Service DNS mismatch");
-					},
 					headers: {
 						authorization: `Bearer ${token}`,
 						"content-type": "application/json",
@@ -798,7 +767,7 @@ export function createRuntimeProbeTransport({
 				},
 				async (response) => {
 					try {
-						// node:https never follows redirects; reject them explicitly.
+						// node:http never follows redirects; reject them explicitly.
 						if (response.statusCode >= 300 && response.statusCode < 400) {
 							response.destroy();
 							throw new Error("Runtime probe redirect rejected");
@@ -1000,8 +969,7 @@ async function assertNoSensitiveDataOnDisk(directory) {
 
 async function runImageProbe() {
 	runtimeRequest = createRuntimeProbeTransport({
-		ca: await readFile("/var/run/agent-infra/runtime-tls/ca.crt", "utf8"),
-		serviceDnsName: JSON.parse(runtimeHostTlsBinding).serviceDnsNames[0],
+		serviceDnsName: runtimeServiceDnsName,
 	});
 	// These are the deployed Host dependencies, never a source checkout fallback.
 	const contracts = await import(

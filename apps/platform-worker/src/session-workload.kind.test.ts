@@ -205,7 +205,7 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 					}),
 				},
 				resolveRuntimeHost: async () => ({
-					baseUrl: "https://unused.invalid",
+					baseUrl: "http://unused.invalid",
 					serviceToken: "kind",
 					workerId: "kind-session-worker",
 				}),

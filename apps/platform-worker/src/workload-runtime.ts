@@ -44,7 +44,7 @@ import {
 	type KubernetesWorkloadPolicyV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
-import { runtimeTlsFetch } from "./runtime-tls-transport.js";
+import { runtimeFetch } from "./runtime-transport.js";
 
 export interface WorkloadRuntimeOptionsV1 {
 	readonly workerId: string;
@@ -63,7 +63,6 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
 	readonly executionCapacityProfiles?: readonly WorkloadExecutionCapacityV1[];
 	readonly fetch?: typeof fetch;
-	readonly runtimeTlsFetch?: () => typeof fetch;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
 		readonly workloadRevision: number;
@@ -431,7 +430,7 @@ export function createWorkloadRuntimeV1(
 				const healthFetch =
 					desired.runtimeManifest.interactionMode === "self-managed"
 						? fetcher
-						: (options.runtimeTlsFetch?.() ?? runtimeTlsFetch());
+						: (options.fetch ?? runtimeFetch);
 				const response = await healthFetch(`${baseUrl}${desired.health.path}`, {
 					redirect: "error",
 					signal: AbortSignal.timeout(desired.health.timeoutSeconds * 1000),

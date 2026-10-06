@@ -84,7 +84,7 @@ const options = {
 	},
 	directory: { resolveUser: async () => null },
 	resolveRuntimeHost: async () => ({
-		baseUrl: "https://runtime.test",
+		baseUrl: "http://runtime.test",
 		serviceToken: "synthetic",
 		workerId: "transport",
 	}),
