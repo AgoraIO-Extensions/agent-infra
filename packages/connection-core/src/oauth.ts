@@ -503,6 +503,12 @@ export class ConnectionOAuthService {
 	private readonly protector: IdentityProtector;
 	private readonly refreshTokenTtlMs: number;
 	private readonly scopes: Set<string>;
+	// Only coalesce work in flight in this process; completed-token replay still
+	// reaches the repository. Cross-process recovery needs a reviewed DB protocol.
+	private readonly refreshes = new Map<
+		string,
+		ReturnType<ConnectionOAuthService["issueTokenPair"]>
+	>();
 
 	constructor(private readonly options: OAuthServiceOptions) {
 		if (
@@ -1191,6 +1197,27 @@ export class ConnectionOAuthService {
 	}
 
 	async refresh(input: {
+		clientId: string;
+		refreshToken: string;
+		resource: string;
+	}) {
+		const key = JSON.stringify([
+			tokenHash(input.refreshToken),
+			input.clientId,
+			input.resource,
+		]);
+		const existing = this.refreshes.get(key);
+		if (existing) return existing;
+		const pending = this.refreshOnce(input);
+		this.refreshes.set(key, pending);
+		try {
+			return await pending;
+		} finally {
+			this.refreshes.delete(key);
+		}
+	}
+
+	private async refreshOnce(input: {
 		clientId: string;
 		refreshToken: string;
 		resource: string;
