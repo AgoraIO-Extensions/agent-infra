@@ -65,12 +65,15 @@ const tlsMaterials = new Map<string, { cert: string; key: string }>();
 export function runtimeTlsSecretFixture(
 	name: string,
 	agentId = "agent-a",
+	serviceDnsNames?: readonly string[],
 ): V1Secret {
-	let material = tlsMaterials.get(agentId);
+	const materialKey = `${agentId}:${serviceDnsNames?.join(",") ?? ""}`;
+	let material = tlsMaterials.get(materialKey);
 	if (!material) {
 		const directory = mkdtempSync(join(tmpdir(), "runtime-tls-fixture-"));
 		try {
-			const dnsNames = runtimeTlsBindingFixture(agentId).serviceDnsNames;
+			const dnsNames =
+				serviceDnsNames ?? runtimeTlsBindingFixture(agentId).serviceDnsNames;
 			writeFileSync(
 				join(directory, "ext.cnf"),
 				`basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=${dnsNames.map((dns) => `DNS:${dns}`).join(",")}\n`,
@@ -140,7 +143,7 @@ export function runtimeTlsSecretFixture(
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}
-		tlsMaterials.set(agentId, material);
+		tlsMaterials.set(materialKey, material);
 	}
 	return {
 		apiVersion: "v1",
