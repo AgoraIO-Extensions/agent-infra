@@ -906,7 +906,7 @@ test("Adapter bindings and Worker authority stay namespace scoped", () => {
 	assert.deepEqual(
 		role.rules.map((rule) => [rule.apiGroups, rule.resources, rule.verbs]),
 		[
-			[[""], ["pods"], ["get", "list", "watch"]],
+			[[""], ["pods"], ["create", "delete", "get", "list", "update", "watch"]],
 			[
 				[""],
 				[
