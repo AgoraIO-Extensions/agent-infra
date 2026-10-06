@@ -39,6 +39,10 @@ import {
 	createIndependentConnectionClientInput,
 	readConnectionClientProfile,
 } from "./connection-client-input.js";
+import {
+	type RuntimeConnectionConsumerProfile,
+	readRuntimeConnectionConsumerProfile,
+} from "./connection-consumer-profile.js";
 
 import {
 	type RuntimeLegacyMigrationFilesystem,
@@ -59,6 +63,7 @@ export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 
 interface StartOptions {
 	tls: RuntimeHostTls;
+	connectionConsumer?: RuntimeConnectionConsumerProfile;
 	readinessWorkerId?: string;
 	runtimeWorkerId?: string;
 	verifyGrantV2?: (
@@ -98,6 +103,9 @@ export function startRuntimeHost(options: StartOptions) {
 	validateRuntimeHostTls(options.tls);
 	const port = options.port ?? runtimePort(process.env.PORT, 3003);
 	const log = options.log ?? console.info;
+	const connectionConsumer = options.connectionConsumer
+		? structuredClone(options.connectionConsumer)
+		: undefined;
 	return serve(
 		{
 			createServer,
@@ -106,7 +114,7 @@ export function startRuntimeHost(options: StartOptions) {
 				key: options.tls.key,
 				minVersion: "TLSv1.2",
 			},
-			fetch: createRuntimeHostApp(options).fetch,
+			fetch: createRuntimeHostApp({ ...options, connectionConsumer }).fetch,
 			port,
 		},
 		(info) =>
@@ -116,6 +124,18 @@ export function startRuntimeHost(options: StartOptions) {
 					status: "ready",
 					...(options.configVersion
 						? { configVersion: options.configVersion }
+						: {}),
+					...(connectionConsumer
+						? {
+								connectionConsumerProfile:
+									connectionConsumer.status === "available"
+										? {
+												schemaVersion: connectionConsumer.schemaVersion,
+												configFingerprint: connectionConsumer.configFingerprint,
+												source: connectionConsumer.source,
+											}
+										: connectionConsumer,
+							}
 						: {}),
 					port: info.port,
 				}),
@@ -181,6 +201,9 @@ export async function assembleRuntimeHost(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
 	);
 	if (connectionProfile && binding !== "codex") runtimeConfigurationInvalid();
+	const connectionConsumer = await readRuntimeConnectionConsumerProfile(
+		environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE,
+	);
 	const messagesConfiguration =
 		binding === "claude" || binding === "acp" || binding === "pi"
 			? readRuntimeModelConfigurationV3(environment, binding)
@@ -340,6 +363,7 @@ export async function assembleRuntimeHost(
 		const verify = createExecutionGrantVerifier(new Map([[keyId, publicKey]]));
 		return {
 			host,
+			...(connectionConsumer ? { connectionConsumer } : {}),
 			...(readinessBinding
 				? { readinessWorkerId: readinessBinding.workerId }
 				: {}),
