@@ -77,6 +77,47 @@ test("family WRITE actions require explicit grants and never accept identity sel
 	);
 });
 
+test("resource dot segments are rejected before fetching", async () => {
+	let requests = 0;
+	const adapter = new RehoboamAdapter(async () => {
+		requests++;
+		return Response.json({ success: true, data: {} });
+	}, "machine-key");
+	const properties = rehoboamConnectionCatalog.actions.find(
+		(action) => action.name === "rehoboam.get_release_family",
+	)?.inputSchema.properties as Record<string, { pattern: string }>;
+	const schema = properties.familyId;
+	assert.ok(schema);
+	for (const value of [".", ".."]) {
+		assert.equal(new RegExp(schema.pattern).test(value), false);
+		for (const field of ["familyId", "memberId", "taskId"]) {
+			await assert.rejects(
+				adapter.execute({
+					action: "rehoboam.preview_release_family_task",
+					credential: { accessToken: "stored-token" },
+					input: { familyId: "f", memberId: "m", taskId: "t", [field]: value },
+				}),
+				/Dot-segment/,
+			);
+		}
+		for (const [action, field] of [
+			["get_release_family_operation", "operationId"],
+			["get_release", "releaseId"],
+			["get_execution_request", "requestId"],
+		] as const) {
+			await assert.rejects(
+				adapter.execute({
+					action: `rehoboam.${action}`,
+					credential: { accessToken: "stored-token" },
+					input: { [field]: value },
+				}),
+				/Dot-segment/,
+			);
+		}
+	}
+	assert.equal(requests, 0);
+});
+
 test("family task routing preserves exact preview credentials and fixed origin", async () => {
 	const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
 	const adapter = new RehoboamAdapter(async (url, init) => {

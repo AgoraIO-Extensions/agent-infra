@@ -27,6 +27,7 @@ const requestIdSchema = { minLength: 1, type: "string" } as const;
 const familyIdSchema = {
 	minLength: 1,
 	maxLength: 128,
+	pattern: "^(?!\\.{1,2}$)[\\s\\S]+$",
 	type: "string",
 } as const;
 const objectSchema = { type: "object", maxProperties: 100 } as const;
@@ -1003,6 +1004,13 @@ export class RehoboamAdapter
 	}
 
 	private async requestJson(path: string, init: RequestInit) {
+		if (
+			path
+				.split("?")[0]
+				?.split("/")
+				.some((segment) => segment === "." || segment === "..")
+		)
+			throw providerError("Dot-segment resource IDs are not allowed");
 		const response = await this.fetcher(new URL(path, apiOrigin), {
 			...init,
 			headers: {
