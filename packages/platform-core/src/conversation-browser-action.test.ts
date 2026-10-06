@@ -283,4 +283,33 @@ describe("Conversation Browser action adapter", () => {
 		).rejects.toThrow("external result uncertain");
 		expect(phases).toEqual(["intent", "started", "unknown"]);
 	});
+
+	it("does not return success when terminal persistence fails", async () => {
+		const phases: string[] = [];
+		const useCase: ConversationEventUseCaseV1 = {
+			persist: async (command) => {
+				if (command.event.type !== "execution.operation")
+					throw new Error("unexpected event");
+				const phase = command.event.fact.phase;
+				phases.push(phase);
+				if (phase === "completed")
+					throw new Error("terminal persistence failed");
+				return { outcome: "accepted", event: command } as never;
+			},
+		};
+		await expect(
+			executeConversationBrowserActionV1(useCase, {
+				...input,
+				adapterEventKeyPrefix: "browser-action-terminal-failure",
+				runtimeCursorPrefix: "browser-cursor-terminal-failure",
+				now: () => "2026-10-06T12:00:01.000Z",
+				signal: new AbortController().signal,
+				run: async (markStarted) => {
+					await markStarted();
+					return {};
+				},
+			}),
+		).rejects.toThrow("terminal persistence failed");
+		expect(phases).toEqual(["intent", "started", "completed", "unknown"]);
+	});
 });

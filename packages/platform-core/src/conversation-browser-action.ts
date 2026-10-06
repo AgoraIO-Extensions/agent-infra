@@ -151,6 +151,17 @@ export async function executeConversationBrowserActionV1(
 		return decision;
 	};
 	const intentDecision = await persistPhase("intent");
+	if (input.signal.aborted) {
+		await persistPhase("failed", {
+			finishedAt: input.now(),
+			failureCode: "interrupted",
+		});
+		throw new ConversationBrowserActionExecutionError(
+			"failed",
+			"Browser action was cancelled after intent",
+			"interrupted",
+		);
+	}
 	if (intentDecision.outcome === "replayed") {
 		if (intentDecision.event.event.type !== "execution.operation")
 			throw new Error("BROWSER_ACTION_RECOVERY_INVALID");
