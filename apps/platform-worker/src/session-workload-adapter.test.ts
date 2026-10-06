@@ -583,6 +583,38 @@ describe("session sandbox workload adapter", () => {
 				port.containerPort = 9090;
 			},
 		],
+		[
+			"host port",
+			(pod: V1Pod) => {
+				const port = pod.spec?.containers[0]?.ports?.[0];
+				if (!port) throw new Error("missing container port");
+				port.hostPort = 8080;
+			},
+		],
+		[
+			"host IP",
+			(pod: V1Pod) => {
+				const port = pod.spec?.containers[0]?.ports?.[0];
+				if (!port) throw new Error("missing container port");
+				port.hostIP = "127.0.0.1";
+			},
+		],
+		[
+			"readiness probe scheme",
+			(pod: V1Pod) => {
+				const probe = pod.spec?.containers[0]?.readinessProbe;
+				if (!probe?.httpGet) throw new Error("missing readiness probe");
+				probe.httpGet.scheme = "HTTPS";
+			},
+		],
+		[
+			"readiness probe timeout",
+			(pod: V1Pod) => {
+				const probe = pod.spec?.containers[0]?.readinessProbe;
+				if (!probe) throw new Error("missing readiness probe");
+				probe.timeoutSeconds = 2;
+			},
+		],
 	] as const)("rejects owned Pod %s drift", async (_field, mutate) => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });

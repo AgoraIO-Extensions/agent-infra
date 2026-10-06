@@ -288,15 +288,13 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		currentContainer.workingDir === expectedContainer.workingDir &&
 		stableJson(
 			(currentContainer.ports ?? []).map((port) => ({
-				name: port.name,
-				containerPort: port.containerPort,
+				...port,
 				protocol: port.protocol ?? "TCP",
 			})),
 		) ===
 			stableJson(
 				(expectedContainer.ports ?? []).map((port) => ({
-					name: port.name,
-					containerPort: port.containerPort,
+					...port,
 					protocol: port.protocol ?? "TCP",
 				})),
 			) &&
@@ -316,14 +314,18 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 function readinessProbeShape(probe: V1Container["readinessProbe"]) {
 	return probe
 		? {
+				...probe,
 				httpGet: probe.httpGet
 					? {
-							path: probe.httpGet.path,
-							port: probe.httpGet.port,
-							host: probe.httpGet.host,
+							...probe.httpGet,
+							scheme: probe.httpGet.scheme ?? "HTTP",
 						}
 					: undefined,
-				periodSeconds: probe.periodSeconds,
+				initialDelaySeconds: probe.initialDelaySeconds ?? 0,
+				timeoutSeconds: probe.timeoutSeconds ?? 1,
+				periodSeconds: probe.periodSeconds ?? 10,
+				successThreshold: probe.successThreshold ?? 1,
+				failureThreshold: probe.failureThreshold ?? 3,
 			}
 		: undefined;
 }

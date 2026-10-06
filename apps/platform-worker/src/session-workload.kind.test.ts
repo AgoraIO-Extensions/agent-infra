@@ -345,7 +345,7 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 						"--",
 						"node",
 						"-e",
-						`fetch('http://${targetIp}:8080/healthz',{signal:AbortSignal.timeout(2500)}).then(r=>{if(r.status===403){console.log('DENIED_HTTP_403');process.exit(0)}process.exit(2)}).catch(()=>{console.log('DENIED_NETWORK_POLICY');process.exit(0)})`,
+						`fetch('http://${targetIp}:8080/healthz',{signal:AbortSignal.timeout(2500)}).then(()=>process.exit(2)).catch(error=>{if(error.name==='TimeoutError'){console.log('DENIED_NETWORK_POLICY');process.exit(0)}console.error('UNEXPECTED_FETCH_FAILURE',error.name);process.exit(3)})`,
 					],
 					{ timeout: 30_000 },
 				);
