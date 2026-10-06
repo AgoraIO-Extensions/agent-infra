@@ -34,6 +34,7 @@ class StandardToolNativeFixture {
 	private wake?: () => void;
 	closed = false;
 	status = "inProgress";
+	turnId = "fixture-turn";
 	options?: CodexAppServerBridgeOptions;
 	push(frame: CodexAppServerFrame) {
 		this.queue.push(frame);
@@ -117,10 +118,10 @@ class StandardToolNativeFixture {
 		} else if (frame.method === "thread/resume")
 			result = { thread: { id: "fixture-thread" } };
 		else if (frame.method === "turn/start") {
-			result = { turn: { id: "fixture-turn", status: this.status } };
+			result = { turn: { id: this.turnId, status: this.status } };
 		} else if (frame.method === "thread/turns/list")
 			result = {
-				data: [{ id: "fixture-turn", status: this.status, items: [] }],
+				data: [{ id: this.turnId, status: this.status, items: [] }],
 				nextCursor: null,
 			};
 		else if (frame.method === "thread/items/list")
@@ -134,7 +135,7 @@ class StandardToolNativeFixture {
 				method: "turn/started",
 				params: {
 					threadId: "fixture-thread",
-					turn: { id: "fixture-turn", status: "inProgress", items: [] },
+					turn: { id: this.turnId, status: "inProgress", items: [] },
 				},
 			});
 	}
@@ -160,7 +161,7 @@ class StandardToolNativeFixture {
 			method: "item/tool/call",
 			params: {
 				threadId: "fixture-thread",
-				turnId: "fixture-turn",
+				turnId: this.turnId,
 				callId: "fixture-call",
 				namespace: "connection",
 				tool: alias,
@@ -185,7 +186,7 @@ const command: RuntimeDriverSubmitTurnCommandV2 = {
 	},
 };
 
-async function setup() {
+async function setup(standardInstalled = true) {
 	const fixture = await standardMcpFixture();
 	const directory = await mkdtemp(join(tmpdir(), "standard-mcp-driver-"));
 	closes.push(() => rm(directory, { recursive: true, force: true }));
@@ -230,8 +231,9 @@ async function setup() {
 		},
 	};
 	const native = new StandardToolNativeFixture();
+	const { standardConnectionClient: _standard, ...modelOnlyOptions } = options;
 	const driver = await openCodexRuntimeDriverForTest(
-		options,
+		standardInstalled ? options : modelOnlyOptions,
 		async (opened) => {
 			native.options = opened;
 			return native;
@@ -254,6 +256,65 @@ async function setup() {
 		fetchMethods,
 	};
 }
+
+it.each([false, true])(
+	"preserves existing Thread tool binding across standard installation changes, previous=%s",
+	async (previous) => {
+		const env = await setup(previous);
+		env.native.status = "completed";
+		env.native.push({
+			method: "turn/completed",
+			params: {
+				threadId: "fixture-thread",
+				turn: { id: "fixture-turn", status: "completed", items: [] },
+			},
+		});
+		await waitFor(
+			async () =>
+				(await env.driver.getStatus(env.ref, reference.executionId)) ===
+				"completed",
+		);
+		await env.driver.close();
+		const { standardConnectionClient: _standard, ...modelOnlyOptions } =
+			env.options;
+		const native = new StandardToolNativeFixture();
+		native.turnId = "fixture-turn-b";
+		const restored = await openCodexRuntimeDriverForTest(
+			previous ? modelOnlyOptions : env.options,
+			async (opened) => {
+				native.options = opened;
+				return native;
+			},
+		);
+		closes.push(() => restored.close());
+		const before = env.fixture.trace.length;
+		const next = {
+			...command,
+			executionId: "execution-b",
+			operationId: "execution-b",
+			turnId: "turn-b",
+		};
+		if (previous)
+			await expect(restored.execute(next)).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+		else
+			expect((await restored.execute(next)).result).toMatchObject({
+				outcome: "accepted",
+				status: "running",
+			});
+		expect(env.fixture.trace).toHaveLength(before);
+		expect(
+			native.sent.filter((frame) => frame.method === "thread/start"),
+		).toHaveLength(0);
+		expect(
+			native.sent.filter((frame) => frame.method === "turn/start"),
+		).toHaveLength(previous ? 0 : 1);
+		expect(await restored.getStatus(env.ref, reference.executionId)).toBe(
+			"completed",
+		);
+	},
+);
 
 async function waitFor(predicate: () => Promise<boolean> | boolean) {
 	await expect.poll(predicate, { timeout: 4000, interval: 10 }).toBe(true);
@@ -528,58 +589,65 @@ it("actual Driver waits for original intent and result ACKs and sends MCP only o
 	});
 });
 
-it("unknown WRITE is persisted, closes native and keeps original occupancy across restart", async () => {
-	const env = await setup();
-	env.fixture.setBehavior("unknown");
-	env.native.call();
-	await waitFor(async () =>
-		(await operationEvents(env.driver, env.ref)).some(
-			(event) => event.payload.phase === "intent",
-		),
-	);
-	const intent = (await operationEvents(env.driver, env.ref)).at(-1);
-	if (!intent) throw new Error("Missing intent");
-	await env.driver.acknowledgeEvents(
-		env.ref,
-		reference.executionId,
-		intent.cursor,
-	);
-	await waitFor(async () =>
-		(await operationEvents(env.driver, env.ref)).some(
-			(event) => event.payload.phase === "unknown",
-		),
-	);
-	const unknown = (await operationEvents(env.driver, env.ref)).at(-1);
-	if (!unknown) throw new Error("Missing unknown");
-	await env.driver.acknowledgeEvents(
-		env.ref,
-		reference.executionId,
-		unknown.cursor,
-	);
-	await waitFor(() => env.native.closed);
-	expect(env.native.replies).toHaveLength(0);
-	expect(await env.driver.getStatus(env.ref, reference.executionId)).toBe(
-		"unknown",
-	);
-	await env.driver.close();
-	const restored = await openCodexRuntimeDriverForTest(
-		env.options,
-		async (opened) => {
-			const native = new StandardToolNativeFixture();
-			native.options = opened;
-			return native;
-		},
-	);
-	closes.push(() => restored.close());
-	expect(await restored.getStatus(env.ref, reference.executionId)).toBe(
-		"unknown",
-	);
-	expect(
-		env.fixture.trace.filter((request) => request.method === "tools/call"),
-	).toHaveLength(1);
-	const state = JSON.parse(await readFile(env.path, "utf8"));
-	expect(state.sessions[env.ref].activeExecutionId).toBe(reference.executionId);
-});
+it.each([false, true])(
+	"unknown WRITE keeps original occupancy across restart with installed input=%s",
+	async (installedAfterRestart) => {
+		const env = await setup();
+		env.fixture.setBehavior("unknown");
+		env.native.call();
+		await waitFor(async () =>
+			(await operationEvents(env.driver, env.ref)).some(
+				(event) => event.payload.phase === "intent",
+			),
+		);
+		const intent = (await operationEvents(env.driver, env.ref)).at(-1);
+		if (!intent) throw new Error("Missing intent");
+		await env.driver.acknowledgeEvents(
+			env.ref,
+			reference.executionId,
+			intent.cursor,
+		);
+		await waitFor(async () =>
+			(await operationEvents(env.driver, env.ref)).some(
+				(event) => event.payload.phase === "unknown",
+			),
+		);
+		const unknown = (await operationEvents(env.driver, env.ref)).at(-1);
+		if (!unknown) throw new Error("Missing unknown");
+		await env.driver.acknowledgeEvents(
+			env.ref,
+			reference.executionId,
+			unknown.cursor,
+		);
+		await waitFor(() => env.native.closed);
+		expect(env.native.replies).toHaveLength(0);
+		expect(await env.driver.getStatus(env.ref, reference.executionId)).toBe(
+			"unknown",
+		);
+		await env.driver.close();
+		const { standardConnectionClient: _standard, ...modelOnlyOptions } =
+			env.options;
+		const restored = await openCodexRuntimeDriverForTest(
+			installedAfterRestart ? env.options : modelOnlyOptions,
+			async (opened) => {
+				const native = new StandardToolNativeFixture();
+				native.options = opened;
+				return native;
+			},
+		);
+		closes.push(() => restored.close());
+		expect(await restored.getStatus(env.ref, reference.executionId)).toBe(
+			"unknown",
+		);
+		expect(
+			env.fixture.trace.filter((request) => request.method === "tools/call"),
+		).toHaveLength(1);
+		const state = JSON.parse(await readFile(env.path, "utf8"));
+		expect(state.sessions[env.ref].activeExecutionId).toBe(
+			reference.executionId,
+		);
+	},
+);
 
 it.each([
 	{ threadId: "foreign-thread" },

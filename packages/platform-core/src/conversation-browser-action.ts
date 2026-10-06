@@ -41,11 +41,19 @@ export interface ConversationBrowserActionInputV1 {
 
 export class ConversationBrowserActionExecutionError extends Error {
 	readonly phase: "failed" | "unknown";
+	readonly failureCode: ConversationOperationFailureV2;
 
-	constructor(phase: "failed" | "unknown", message: string = phase) {
+	constructor(
+		phase: "failed" | "unknown",
+		message: string = phase,
+		failureCode: ConversationOperationFailureV2 = phase === "unknown"
+			? "recovery_unconfirmed"
+			: "operation_failed",
+	) {
 		super(message);
 		this.name = "ConversationBrowserActionExecutionError";
 		this.phase = phase;
+		this.failureCode = failureCode;
 	}
 }
 
@@ -57,8 +65,10 @@ export interface ConversationBrowserActionExecutionInputV1
 	readonly adapterEventKeyPrefix: string;
 	readonly runtimeCursorPrefix: string;
 	readonly now: () => string;
+	readonly signal: AbortSignal;
 	readonly run: (
 		markStarted: () => Promise<void>,
+		signal: AbortSignal,
 	) => Promise<{ readonly resultRef?: string }>;
 }
 
@@ -116,6 +126,12 @@ export async function executeConversationBrowserActionV1(
 	input: ConversationBrowserActionExecutionInputV1,
 ): Promise<{ readonly resultRef?: string }> {
 	let started = false;
+	if (input.signal.aborted)
+		throw new ConversationBrowserActionExecutionError(
+			"failed",
+			"Browser action was cancelled before intent",
+			"interrupted",
+		);
 	const persistPhase = async (
 		phase: ConversationOperationFactV2["phase"],
 		fields: Pick<
@@ -146,8 +162,25 @@ export async function executeConversationBrowserActionV1(
 			"Browser action already has a persisted attempt",
 		);
 	}
+	if (input.signal.aborted) {
+		await persistPhase("failed", {
+			finishedAt: input.now(),
+			failureCode: "interrupted",
+		});
+		throw new ConversationBrowserActionExecutionError(
+			"failed",
+			"Browser action was cancelled after intent",
+			"interrupted",
+		);
+	}
 	const markStarted = async () => {
 		if (started) return;
+		if (input.signal.aborted)
+			throw new ConversationBrowserActionExecutionError(
+				"failed",
+				"Browser action was cancelled before start",
+				"interrupted",
+			);
 		const decision = await persistPhase("started", {
 			startedAt: input.now(),
 		});
@@ -157,13 +190,25 @@ export async function executeConversationBrowserActionV1(
 				"Browser action start already exists",
 			);
 		started = true;
+		if (input.signal.aborted)
+			throw new ConversationBrowserActionExecutionError(
+				"unknown",
+				"Browser action was cancelled during start persistence",
+				"interrupted",
+			);
 	};
 	try {
-		const result = await input.run(markStarted);
+		const result = await input.run(markStarted, input.signal);
 		if (!started)
 			throw new ConversationBrowserActionExecutionError(
 				"failed",
 				"Browser action did not cross the started barrier",
+			);
+		if (input.signal.aborted)
+			throw new ConversationBrowserActionExecutionError(
+				"unknown",
+				"Browser action was cancelled after start",
+				"interrupted",
 			);
 		await persistPhase("completed", {
 			finishedAt: input.now(),
@@ -178,7 +223,13 @@ export async function executeConversationBrowserActionV1(
 					? "unknown"
 					: "failed";
 		const failureCode: ConversationOperationFailureV2 =
-			phase === "unknown" ? "recovery_unconfirmed" : "operation_failed";
+			error instanceof ConversationBrowserActionExecutionError
+				? error.failureCode
+				: input.signal.aborted
+					? "interrupted"
+					: phase === "unknown"
+						? "recovery_unconfirmed"
+						: "operation_failed";
 		await persistPhase(phase, {
 			finishedAt: input.now(),
 			failureCode,
