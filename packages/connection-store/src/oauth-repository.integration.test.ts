@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ConnectionOAuthService } from "@agent-infra/connection-core";
 import postgres from "postgres";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { migrateConnectionDatabase } from "./migrations";
 import { PostgresConnectionOAuthRepository } from "./oauth-repository";
@@ -459,6 +459,8 @@ describe("PostgreSQL Connection OAuth", () => {
 				};
 			};
 
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const info = vi.spyOn(console, "info").mockImplementation(() => {});
 			try {
 				const rootColumns = await sql<{ column_name: string }[]>`
 						SELECT column_name FROM information_schema.columns
@@ -647,10 +649,103 @@ describe("PostgreSQL Connection OAuth", () => {
 					}),
 				).rejects.toMatchObject({ error: "invalid_grant" });
 
+				const refreshInput = {
+					clientId: first.client.clientId,
+					refreshTokenHash: createHash("sha256")
+						.update(first.tokens.refresh_token)
+						.digest("hex"),
+					resource: "https://connection.example/mcp",
+				};
+				const expectRejected = async (
+					input: typeof refreshInput,
+					reasonCode: string,
+				) => {
+					await expect(
+						repository.readRefreshToken(input),
+					).rejects.toMatchObject({
+						error: "invalid_grant",
+						message: "Invalid or expired grant",
+					});
+					expect(JSON.parse(String(warn.mock.lastCall?.[0]))).toMatchObject({
+						event: "connection_oauth_refresh_rejected",
+						stage: "read",
+						reasonCode,
+					});
+					await expect(
+						repository.rotateRefreshToken({
+							...input,
+							oldRefreshTokenHash: input.refreshTokenHash,
+							accessTokenHash: randomUUID(),
+							refreshTokenHash: randomUUID(),
+							accessTokenExpiresAt: new Date(Date.now() + 60_000),
+							refreshTokenExpiresAt: new Date(Date.now() + 120_000),
+						}),
+					).rejects.toMatchObject({ error: "invalid_grant" });
+					expect(JSON.parse(String(warn.mock.lastCall?.[0]))).toMatchObject({
+						stage: "rotate",
+						reasonCode,
+					});
+				};
+				await expectRejected(
+					{ ...refreshInput, refreshTokenHash: randomUUID() },
+					"TOKEN_UNAVAILABLE",
+				);
+				await expectRejected(
+					{ ...refreshInput, clientId: randomUUID() },
+					"CLIENT_MISMATCH",
+				);
+				await expectRejected(
+					{
+						...refreshInput,
+						resource: `https://other.example/?secret=${randomUUID()}`,
+					},
+					"RESOURCE_MISMATCH",
+				);
+				const [source] = await sql<
+					{
+						expires_at: Date;
+						session_id: string;
+						recovery_generation: string;
+					}[]
+				>`SELECT token.expires_at, token.session_id, session.recovery_generation
+					FROM connection_oauth_refresh_tokens token
+					JOIN connection_oauth_sessions session ON session.id = token.session_id
+					WHERE token.token_hash = ${refreshInput.refreshTokenHash}`;
+				if (!source) throw new Error("Missing test refresh token");
+				try {
+					await sql`UPDATE connection_oauth_refresh_tokens SET expires_at = now() - interval '1 second'
+						WHERE token_hash = ${refreshInput.refreshTokenHash}`;
+					await expectRejected(refreshInput, "TOKEN_EXPIRED");
+				} finally {
+					await sql`UPDATE connection_oauth_refresh_tokens SET expires_at = ${source.expires_at}
+						WHERE token_hash = ${refreshInput.refreshTokenHash}`;
+				}
+				try {
+					await sql`UPDATE connection_oauth_sessions SET recovery_generation = (recovery_generation::bigint + 1)::text
+						WHERE id = ${source.session_id}`;
+					await expectRejected(refreshInput, "RECOVERY_GENERATION_MISMATCH");
+				} finally {
+					await sql`UPDATE connection_oauth_sessions SET recovery_generation = ${source.recovery_generation}
+						WHERE id = ${source.session_id}`;
+				}
+				try {
+					await sql`UPDATE connection_principal_identities SET status = 'DISABLED'
+						WHERE principal_id = ${first.identity.principalId}`;
+					await expectRejected(refreshInput, "IDENTITY_INACTIVE");
+				} finally {
+					await sql`UPDATE connection_principal_identities SET status = 'ACTIVE'
+						WHERE principal_id = ${first.identity.principalId}`;
+				}
+
 				const rotated = await service.refresh({
 					clientId: first.client.clientId,
 					refreshToken: first.tokens.refresh_token,
 					resource: "https://connection.example/mcp",
+				});
+				expect(JSON.parse(String(info.mock.lastCall?.[0]))).toMatchObject({
+					event: "connection_oauth_refresh_rotation_committed",
+					sessionId: source.session_id,
+					tokenUsedAt: expect.any(String),
 				});
 				await expect(
 					service.refresh({
@@ -662,6 +757,25 @@ describe("PostgreSQL Connection OAuth", () => {
 				await expect(
 					service.verifyAccessToken(`Bearer ${rotated.access_token}`),
 				).rejects.toMatchObject({ error: "invalid_token" });
+				expect(JSON.parse(String(warn.mock.lastCall?.[0]))).toMatchObject({
+					reasonCode: "TOKEN_REPLAY",
+					sessionId: source.session_id,
+				});
+				await expect(
+					repository.readRefreshToken(refreshInput),
+				).rejects.toMatchObject({ error: "invalid_grant" });
+				expect(JSON.parse(String(warn.mock.lastCall?.[0]))).toMatchObject({
+					reasonCode: "TOKEN_REVOKED",
+				});
+				await service.revokeToken(rotated.access_token);
+				const explicit = await login(`explicit-revoke-${randomUUID()}`);
+				await service.revokeToken(explicit.tokens.refresh_token);
+				await service.revokeToken(explicit.tokens.access_token);
+				const disabled = await login(
+					`disable-${randomUUID()}`,
+					`disabled-subject-${randomUUID()}`,
+				);
+				await repository.disablePrincipal(disabled.identity.principalId);
 				await expect(
 					service.revokeInstance(
 						`Bearer ${second.tokens.access_token}`,
@@ -696,6 +810,50 @@ describe("PostgreSQL Connection OAuth", () => {
 					expect(record.detail.consumerId).toBeTruthy();
 					expect(record.detail.consumerInstanceId).toBeTruthy();
 				}
+				const revocations = await sql<
+					{
+						detail: {
+							consumerInstanceId: string;
+							sessionId: string;
+							reasonCode: string;
+						};
+					}[]
+				>`
+					SELECT detail FROM connection_audit_records
+					WHERE event = 'DIRECT_SESSION_REVOKED'
+						AND principal_id IN (${first.identity.principalId}, ${disabled.identity.principalId})`;
+				for (const [instanceId, reasonCode] of [
+					[first.identity.instanceId, "REFRESH_TOKEN_REPLAY"],
+					[second.identity.instanceId, "CONSUMER_INSTANCE_REVOKED"],
+					[explicit.identity.instanceId, "TOKEN_REVOKED"],
+					[disabled.identity.instanceId, "PRINCIPAL_DISABLED"],
+				]) {
+					const records = revocations.filter(
+						(row) => row.detail.consumerInstanceId === instanceId,
+					);
+					expect(records).toHaveLength(1);
+					expect(records[0]?.detail).toMatchObject({
+						reasonCode,
+						sessionId: expect.stringMatching(/^session-/),
+					});
+				}
+				const diagnostics = JSON.stringify([
+					warn.mock.calls,
+					info.mock.calls,
+					revocations,
+				]);
+				for (const secret of [
+					first.tokens.access_token,
+					first.tokens.refresh_token,
+					rotated.access_token,
+					rotated.refresh_token,
+					explicit.tokens.access_token,
+					explicit.tokens.refresh_token,
+					refreshInput.refreshTokenHash,
+				])
+					expect(diagnostics).not.toContain(secret);
+				expect(diagnostics).not.toContain("identity_reference");
+				expect(diagnostics).not.toContain("identityReference");
 
 				const recoveryClient = await service.registerClient({
 					clientName: `recovery-${randomUUID()}`,
@@ -730,6 +888,8 @@ describe("PostgreSQL Connection OAuth", () => {
 					}),
 				).rejects.toMatchObject({ error: "invalid_grant" });
 			} finally {
+				warn.mockRestore();
+				info.mockRestore();
 				await sql.end();
 				await repository.close();
 			}

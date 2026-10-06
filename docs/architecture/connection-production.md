@@ -159,6 +159,34 @@ Consumer 名称来自当前身份目录，不表示执行时的 profile 快照�
 该 Call 的诊断。历史数据不回填；进程崩溃前未提交的诊断可能缺失，不能用它代替持久
 Attempt、Effect receipt、完整审计或恢复证据，数据保留门禁不因此关闭。
 
+### Direct OAuth 刷新排查
+
+API 运行日志输出以下结构化事件，遵循 [HLD 18.1、26 节](HLD-connection-M1.md#18-direct-sessiondelegated-assertion-与-authorizedinvocation)：
+
+- `connection_oauth_request_rejected`：HTTP 边界拒绝，只记录固定 operation、OAuth error code 和实际响应 status。
+- `connection_oauth_refresh_rejected`：记录 `read` 或 `rotate` 阶段、reasonCode、服务端解析的
+  Principal/Consumer/instance/session ID、状态和 Token 的签发、消费、撤销、到期时间。
+- `connection_oauth_refresh_rotation_committed`：轮换事务提交后记录；不证明客户端收到响应或保存了新 Token。
+
+| reasonCode | 含义 |
+| --- | --- |
+| `TOKEN_UNAVAILABLE` | Token 未找到，或其关联对象被当前资格查询过滤；不能只据此认定 Token 不存在 |
+| `TOKEN_REPLAY` / `TOKEN_REVOKED` | 已消费或已撤销 Token 再次使用 |
+| `TOKEN_EXPIRED` | Token 已到期 |
+| `CLIENT_MISMATCH` / `RESOURCE_MISMATCH` | client 或 resource 绑定不匹配 |
+| `RECOVERY_GENERATION_MISMATCH` | 签发时与当前恢复代际不匹配 |
+| `IDENTITY_INACTIVE` | Principal、identity、instance 或 session 非 ACTIVE；结合状态字段判断 |
+
+刷新拒绝不等于会话被撤销。会话首次从 ACTIVE 变为 REVOKED 时，同事务写入
+`connection_audit_records` 的 `DIRECT_SESSION_REVOKED` 事件。detail 只保存 sessionId、consumerId、
+consumerInstanceId 和 reasonCode：`REFRESH_TOKEN_REPLAY`、`REFRESH_TOKEN_REVOKED`、
+`TOKEN_REVOKED`（显式 Token 撤销）、`CONSUMER_INSTANCE_REVOKED` 或 `PRINCIPAL_DISABLED`。
+后续重复撤销不覆盖首次原因，也不重复生成该状态转换事件；Pod 重启后仍可由有权限的运维按 sessionId 查证。
+
+所有诊断均不保存 Token、Authorization Code 及其 hash、Credential、identityReference、用户 profile、原始请求/响应、
+URL/query 或任意 Header。用同一 sessionId 和生命周期时间关联轮换、拒绝与首次撤销，不能仅凭时间接近
+认定客户端并发。历史事件不回填，缺失撤销原因记录不能证明主动退出。
+
 ### 发布步骤
 
 GZ3 pilot 的首次 GitHub OAuth 直连回退依照[区域出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md#gz3-pilotgithub-oauth-出口回退)发布，不再要求单独的 Security/SRE NetworkPolicy 签收。当前网络层出口范围未核实，应用白名单不能证明隔离；部署就绪后仍须由申请人重新发起真实 GitHub OAuth，确认回调和连接状态，未验证时不得宣称该功能已验收。

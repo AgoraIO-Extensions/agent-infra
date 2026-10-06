@@ -552,6 +552,19 @@ export function createConnectionOAuthApp(
 			});
 		}
 		if (error instanceof OAuthProtocolError) {
+			console.warn(
+				JSON.stringify({
+					event: "connection_oauth_request_rejected",
+					operation:
+						context.req.path === "/oauth/token"
+							? "token"
+							: context.req.path === "/oauth/revoke"
+								? "revoke"
+								: "oauth",
+					code: error.error,
+					status: error.status === 401 ? 401 : 400,
+				}),
+			);
 			context.header("cache-control", "no-store");
 			return context.json(oauthError(error), error.status === 401 ? 401 : 400);
 		}
