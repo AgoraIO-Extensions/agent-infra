@@ -114,9 +114,11 @@ spec:
             - name: NODE_EXTRA_CA_CERTS
               value: /var/run/agent-infra/trusted-ca/ca.crt
             {{- end }}
+            {{- include "agent-infra.connectionEnv" . | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ $bindings }}
+            {{- include "agent-infra.connectionEnvFrom" . | nindent 12 }}
           volumeMounts:
             {{- if not .Values.workloadTopology.enabled }}
             - name: deployment-module

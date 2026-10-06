@@ -56,6 +56,10 @@ spec:
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
+          env:
+            {{- include "agent-infra.connectionEnv" . | nindent 12 }}
+          envFrom:
+            {{- include "agent-infra.connectionEnvFrom" . | nindent 12 }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp

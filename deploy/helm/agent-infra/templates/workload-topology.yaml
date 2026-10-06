@@ -71,6 +71,10 @@ spec:
               const serve=(port)=>http.createServer((_,res)=>{res.end('ok')}).listen(port);
               serve({{ .Values.workloadTopology.service.runtimePort }});
               serve({{ .Values.workloadTopology.service.routePort }});
+          env:
+            {{- include "agent-infra.connectionEnv" . | nindent 12 }}
+          envFrom:
+            {{- include "agent-infra.connectionEnvFrom" . | nindent 12 }}
           ports:
             - name: runtime-host
               containerPort: {{ .Values.workloadTopology.service.runtimePort }}

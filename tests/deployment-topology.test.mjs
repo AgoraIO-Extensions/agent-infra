@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	access,
 	chmod,
@@ -143,6 +144,196 @@ test("kind values render the reviewable Kubernetes workload-plane topology", () 
 		route.spec.template.spec.volumes[0].secret.secretName,
 		"agent-infra-kind-topology-tls",
 	);
+});
+
+test("renders one Connection Consumer snapshot and the same fingerprint to every consumer", () => {
+	const result = render();
+	assert.equal(result.status, 0, result.stderr);
+	const resources = objects(result.stdout);
+	const profile = resource(
+		resources,
+		"ConfigMap",
+		"topology-agent-infra-connection-consumer",
+	);
+	assert.ok(profile);
+	const content = JSON.parse(profile.data.AGENT_INFRA_CONNECTION_PROFILE);
+	const fingerprint = createHash("sha256")
+		.update(
+			JSON.stringify([
+				content.schemaVersion,
+				content.publicOrigin,
+				content.mcpPath,
+				content.consumerId,
+				content.audience,
+				content.egressProfile.ref,
+				content.egressProfile.revision,
+			]),
+		)
+		.digest("hex");
+	assert.equal(
+		profile.metadata.annotations["agent-infra.agora.io/config-fingerprint"],
+		fingerprint,
+	);
+	assert.equal(
+		profile.data.AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT,
+		fingerprint,
+	);
+	assert.equal(
+		profile.data.AGENT_INFRA_CONNECTION_CONFIG_VERSION,
+		`1-${fingerprint}`,
+	);
+	for (const name of [
+		"topology-agent-infra-platform-worker",
+		"topology-agent-infra-workload",
+	]) {
+		const workload = resources.find(
+			(item) =>
+				["Deployment", "StatefulSet"].includes(item.kind) &&
+				item.metadata?.name === name,
+		);
+		assert.ok(
+			workload.spec.template.spec.containers[0].envFrom.some(
+				(entry) =>
+					entry.configMapRef?.name ===
+					"topology-agent-infra-connection-consumer",
+			),
+		);
+	}
+	assert.equal(
+		resources.some((item) => /Connection|Mcp|MCP/i.test(item.kind ?? "")),
+		false,
+	);
+});
+
+test("injects the same profile ConfigMap into in-cluster API and Web pods", () => {
+	const result = render(
+		"--set",
+		"web.placement=in-cluster",
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set-string",
+		`images.web.digest=${validDigest}`,
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const resources = objects(result.stdout);
+	for (const name of [
+		"topology-agent-infra-web",
+		"topology-agent-infra-platform-api",
+	]) {
+		const pod = resource(resources, "Deployment", name);
+		assert.ok(
+			pod.spec.template.spec.containers[0].envFrom.some(
+				(entry) =>
+					entry.configMapRef?.name ===
+					"topology-agent-infra-connection-consumer",
+			),
+		);
+	}
+});
+
+test("fails closed for incomplete, unsafe, and conflicting Connection Consumer values", () => {
+	for (const args of [
+		["--set", "connectionConsumer.inline.publicOrigin=http://unsafe.example"],
+		["--set", "connectionConsumer.inline.publicOrigin=https://bad..example"],
+		["--set", "connectionConsumer.inline.publicOrigin=https://EXAMPLE.example"],
+		[
+			"--set",
+			"connectionConsumer.inline.publicOrigin=https://valid.example:99999",
+		],
+		["--set", "connectionConsumer.inline.mcpPath=/mcp/../admin"],
+		["--set", "connectionConsumer.inline.mcpPath=/mcp/%2Fadmin"],
+		["--set", "connectionConsumer.inline.mcpPath=/mcp/%2fadmin"],
+		["--set", "connectionConsumer.inline.consumerId="],
+		["--set", "connectionConsumer.source=external"],
+	]) {
+		const result = render(...args);
+		assert.notEqual(result.status, 0, args.join(" "));
+		assert.match(
+			result.stderr,
+			/connectionConsumer|publicOrigin|mcpPath|consumerId/,
+		);
+	}
+});
+
+test("supports an approved external snapshot without rendering an inline fallback", () => {
+	const fingerprint = "a".repeat(64);
+	const result = render(
+		"--set",
+		"connectionConsumer.source=external",
+		"--set-json",
+		"connectionConsumer.inline=null",
+		"--set-string",
+		"connectionConsumer.external.configMapName=approved-connection-profile",
+		"--set-string",
+		"connectionConsumer.external.configMapKey=profile.json",
+		"--set-string",
+		`connectionConsumer.external.configVersion=1-${fingerprint}`,
+		"--set-string",
+		`connectionConsumer.external.configFingerprint=${fingerprint}`,
+		"--set-string",
+		"connectionConsumer.external.sourceRef=approved-deployment",
+		"--set-string",
+		"connectionConsumer.external.sourceRevision=r7",
+		"--set",
+		"web.placement=in-cluster",
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set-string",
+		`images.web.digest=${validDigest}`,
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const resources = objects(result.stdout);
+	assert.equal(
+		resource(
+			resources,
+			"ConfigMap",
+			"topology-agent-infra-connection-consumer",
+		),
+		undefined,
+	);
+	const worker = resource(
+		resources,
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	);
+	const profileEnv = worker.spec.template.spec.containers[0].env.find(
+		(entry) => entry.name === "AGENT_INFRA_CONNECTION_PROFILE",
+	);
+	assert.deepEqual(profileEnv.valueFrom, {
+		configMapKeyRef: {
+			name: "approved-connection-profile",
+			key: "profile.json",
+			optional: false,
+		},
+	});
+	assert.equal(
+		worker.spec.template.spec.containers[0].env.find(
+			(entry) => entry.name === "AGENT_INFRA_CONNECTION_CONFIG_FINGERPRINT",
+		)?.value,
+		fingerprint,
+	);
+	for (const name of [
+		"topology-agent-infra-web",
+		"topology-agent-infra-platform-api",
+		"topology-agent-infra-platform-worker",
+		"topology-agent-infra-workload",
+	]) {
+		const pod = resources.find(
+			(item) =>
+				["Deployment", "StatefulSet"].includes(item.kind) &&
+				item.metadata?.name === name,
+		);
+		assert.equal(
+			pod.spec.template.spec.containers[0].env.find(
+				(entry) => entry.name === "AGENT_INFRA_CONNECTION_CONFIG_VERSION",
+			)?.value,
+			`1-${fingerprint}`,
+		);
+	}
 });
 
 test("production Worker requires a private module and runtime authorization mounts", () => {
