@@ -47,10 +47,7 @@ function approvedConnectionConsumerTarget(
 		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 	return {
 		...result,
-		url: new URL(
-			result.profile.mcpPath,
-			`${result.profile.publicOrigin}/`,
-		).toString(),
+		url: result.profile.publicOrigin + result.profile.mcpPath,
 	};
 }
 
