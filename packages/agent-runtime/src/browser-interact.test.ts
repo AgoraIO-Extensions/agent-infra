@@ -163,6 +163,30 @@ function fakeContext(page: FakePage) {
 }
 
 describe("Browser interaction controller", () => {
+	it("rejects an action without a Platform operation attempt before page I/O", async () => {
+		const page = new FakePage();
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability,
+		});
+		const pageReference = await controller.navigate("https://example.test/");
+		const observation = await controller.observe(pageReference);
+		const field = observation.elements[0];
+		if (!field) throw new Error("expected observed field");
+		await expect(
+			controller.act({
+				kind: "fill",
+				page: pageReference,
+				target: field,
+				value: "blocked@example.test",
+			}),
+		).resolves.toMatchObject({
+			status: "rejected",
+			reasonCode: "BROWSER_ACTION_OPERATION_REQUIRED",
+		});
+		expect(page.calls.fill ?? []).toHaveLength(0);
+	});
+
 	it("executes bounded actions and requires an immutable side-effect confirmation", async () => {
 		const page = new FakePage();
 		const context = fakeContext(page);
@@ -175,6 +199,10 @@ describe("Browser interaction controller", () => {
 		const field = observation.elements[0];
 		const submit = observation.elements[1];
 		if (!field || !submit) throw new Error("expected observed controls");
+		const operation = (name: string) => ({
+			operationRef: `browser-operation-${name}`,
+			attemptRef: `browser-attempt-${name}`,
+		});
 
 		await expect(
 			controller.act({
@@ -182,6 +210,7 @@ describe("Browser interaction controller", () => {
 				page: pageReference,
 				target: field,
 				value: "alice@example.test",
+				...operation("fill"),
 			}),
 		).resolves.toMatchObject({ status: "completed", kind: "fill" });
 		await expect(
@@ -190,6 +219,7 @@ describe("Browser interaction controller", () => {
 				page: pageReference,
 				target: field,
 				key: "Enter",
+				...operation("press"),
 			}),
 		).resolves.toMatchObject({ status: "completed", kind: "press" });
 		await expect(
@@ -198,6 +228,7 @@ describe("Browser interaction controller", () => {
 				page: pageReference,
 				target: submit,
 				sideEffect: true,
+				...operation("missing-authorization"),
 			}),
 		).resolves.toMatchObject({
 			status: "rejected",
@@ -210,6 +241,7 @@ describe("Browser interaction controller", () => {
 			target: submit,
 			sideEffect: true,
 			idempotencyKey: "submit-once",
+			...operation("submit"),
 			authorization: {
 				subjectId: "subject-1",
 				agentId: "agent-1",
@@ -251,6 +283,7 @@ describe("Browser interaction controller", () => {
 				kind: "switch_tab",
 				page: pageReference,
 				targetPage: tabs[1],
+				...operation("switch-tab"),
 			}),
 		).resolves.toMatchObject({ status: "completed", page: tabs[1] });
 	});

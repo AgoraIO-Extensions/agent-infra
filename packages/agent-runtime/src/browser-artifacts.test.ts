@@ -156,12 +156,23 @@ describe("Browser artifact producer", () => {
 		const downloadTarget = observation.elements[1];
 		if (!uploadTarget || !downloadTarget) throw new Error("missing controls");
 
-		const screenshot = await controller.screenshot(reference);
+		const screenshot = await controller.screenshot(
+			reference,
+			undefined,
+			"browser-operation-screenshot",
+			"browser-attempt-screenshot",
+		);
 		expect(screenshot.kind).toBe("screenshot");
 		expect(screenshot.descriptor.mediaType).toBe("image/png");
 		expect(screenshot.descriptor.sizeBytes).toBe(3);
 
-		const download = await controller.download(reference, downloadTarget);
+		const download = await controller.download(
+			reference,
+			downloadTarget,
+			undefined,
+			"browser-operation-download",
+			"browser-attempt-download",
+		);
 		expect(download.kind).toBe("download");
 		expect(download.descriptor.name).toBe("invoice.pdf");
 		expect(download.bytes).toEqual(Buffer.from("pdf"));
@@ -182,6 +193,8 @@ describe("Browser artifact producer", () => {
 				bytes: uploadBytes,
 			},
 			idempotencyKey: "upload-1",
+			operationRef: "browser-operation-upload",
+			attemptRef: "browser-attempt-upload",
 			authorization: {
 				subjectId: "subject-1",
 				agentId: "agent-1",

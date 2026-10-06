@@ -53,6 +53,7 @@ export * from "./application-material-grant.js";
 export * from "./application-registration.js";
 export * from "./application-revision.js";
 export * from "./audit-query.js";
+export * from "./conversation-browser-action.js";
 export * from "./conversation-dispatch.js";
 export { decideConversationDispatchCapacityV1 } from "./conversation-dispatch-capacity.js";
 export * from "./conversation-events.js";
