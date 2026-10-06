@@ -777,6 +777,20 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		const directory = mkdtempSync(join(tmpdir(), "agent-runtime-codex-pvc-"));
 		directories.push(directory);
 		const dataDirectory = join(directory, "native");
+		const protectedMaterial = join(
+			dataDirectory,
+			"conversations",
+			"standard-mcp-input",
+			"materials",
+		);
+		await mkdir(protectedMaterial, { recursive: true, mode: 0o700 });
+		const canonicalMaterial = await realpath(protectedMaterial);
+		const launchPath = [
+			dirname(capturePath),
+			dirname(process.execPath),
+			canonicalMaterial,
+			dirname(canonicalMaterial),
+		].join(delimiter);
 		const keys = [`${"1".repeat(63)}b`, `${"2".repeat(63)}c`];
 		const launches: {
 			cwd: string;
@@ -785,7 +799,7 @@ describe.sequential("Codex app-server v2 bridge", () => {
 		}[] = [];
 		for (const conversationKey of keys) {
 			const bridge = await CodexAppServerBridge.open(
-				options({ dataDirectory, conversationKey }),
+				options({ dataDirectory, conversationKey, launchPath }),
 			);
 			await bridge.close();
 			const captures = await readCaptures(capturePath, 4);
@@ -829,6 +843,16 @@ describe.sequential("Codex app-server v2 bridge", () => {
 					`path-beneath:${landlockDataRights}:${path}`,
 				);
 			}
+			// Adding protected Host material or its ancestor to the trusted PATH
+			// must not produce an additive Landlock read grant.
+			for (const path of [canonicalMaterial, dirname(canonicalMaterial)])
+				expect(
+					launch.boundary.some(
+						(argument) =>
+							argument.startsWith("path-beneath:") &&
+							argument.endsWith(`:${path}`),
+					),
+				).toBe(false);
 			// `/proc` is only ever listed, never readable: a sibling native
 			// process's environment would otherwise expose its model credential.
 			// The directory only exists on Linux hosts, so this asserts the rights

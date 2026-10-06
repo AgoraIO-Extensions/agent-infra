@@ -7,6 +7,7 @@ import {
 	type CodexRuntimeDriverOptions,
 	FakeRuntimeDriver,
 } from "@agent-infra/agent-runtime";
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { RuntimeSubmitTurnRequestV4Schema } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -535,6 +536,22 @@ describe("RuntimeHost environment assembly", () => {
 	);
 	it("assembles the keyless V4 model schema without a static credential", async () => {
 		const values = await environment();
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "platform",
+			audience: "fixture-resource",
+			egressProfile: { ref: "fixture-egress", revision: "r1" },
+		};
+		const approval = {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			source: { ref: "fixture-deployment", revision: "r1" },
+			egressEnforced: true,
+		};
+		const file = join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "consumer.json");
+		await writeFile(file, JSON.stringify({ profile, approval }));
 		let openedWith: CodexRuntimeDriverOptions | undefined;
 		runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({
 			protocolVersion: 2,
@@ -553,6 +570,12 @@ describe("RuntimeHost environment assembly", () => {
 		);
 		const runtime = await assembleRuntimeHost({
 			...values,
+			AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE: file,
+			AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION: JSON.stringify([
+				approval.configFingerprint,
+				approval.source.ref,
+				approval.source.revision,
+			]),
 			AGENT_INFRA_RUNTIME_DRIVER: "codex",
 			AGENT_INFRA_RUNTIME_WORKER_ID: "synthetic-worker",
 			AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
@@ -575,6 +598,16 @@ describe("RuntimeHost environment assembly", () => {
 		});
 		try {
 			expect(runtime.verifyGrantV4).toBeTypeOf("function");
+			expect(openedWith?.standardConnectionClient?.target).toMatchObject({
+				status: "available",
+				configFingerprint: approval.configFingerprint,
+				source: approval.source,
+				url: profile.publicOrigin + profile.mcpPath,
+			});
+			expect(openedWith?.standardConnectionClient?.resolveInput).toBeTypeOf(
+				"function",
+			);
+			expect(openedWith?.connectionClient).toBeUndefined();
 			const invalidGrantRequest = RuntimeSubmitTurnRequestV4Schema.parse({
 				schemaVersion: 4,
 				requestId: "assembly-request",

@@ -86,6 +86,11 @@ export interface CodexModelRequestJournal {
 	readonly credential?: string;
 	/** Synchronous original Driver state check at the actual fetch boundary. */
 	readonly assertCurrent?: () => void;
+	/** Deployment-owned Driver tool selection for this original Conversation. */
+	readonly allowsClientTool?: (
+		name: string,
+		namespace: string | undefined,
+	) => boolean;
 	/** Durable dispatch barrier, awaited before the actual fetch is invoked. */
 	started(startedAt: string): Promise<void>;
 	/** Must commit before a terminal response can be published to native. */
@@ -723,6 +728,8 @@ function encodeValidatedEvent(
 	event: EventSourceMessage,
 	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
 	modelOnly: boolean,
+	allowsClientTool?: CodexModelRequestJournal["allowsClientTool"],
+	clientToolItems = new Set<string>(),
 ) {
 	if (
 		event.id !== undefined ||
@@ -740,7 +747,8 @@ function encodeValidatedEvent(
 		!isPlainRecord(value) ||
 		typeof value.type !== "string" ||
 		(event.event !== undefined && event.event !== value.type) ||
-		(modelOnly && !isModelOnlyEvent(value)) ||
+		(modelOnly &&
+			!isModelOnlyEvent(value, allowsClientTool, clientToolItems)) ||
 		containsUnsafeModelData(value, credentialMatcher)
 	) {
 		return { state: "invalid" as const };
@@ -784,23 +792,49 @@ function encodeValidatedEvent(
 	};
 }
 
-function isModelOnlyEvent(value: Record<string, unknown>) {
+function isModelOnlyEvent(
+	value: Record<string, unknown>,
+	allowsClientTool?: CodexModelRequestJournal["allowsClientTool"],
+	clientToolItems = new Set<string>(),
+) {
 	// Reject before projection, including tool data carried only in the terminal
 	// response. Native must never see a partial or complete tool invocation.
-	if (typeof value.type !== "string" || /tool|function_call/.test(value.type))
-		return false;
+	if (typeof value.type !== "string") return false;
+	if (/^response\.function_call_arguments\.(?:delta|done)$/.test(value.type))
+		return (
+			!!allowsClientTool &&
+			typeof value.item_id === "string" &&
+			clientToolItems.has(value.item_id)
+		);
+	if (/tool|function_call/.test(value.type)) return false;
 	const items = value.item === undefined ? [] : [value.item];
 	if (isPlainRecord(value.response) && value.response.output !== undefined) {
 		if (!Array.isArray(value.response.output)) return false;
 		items.push(...value.response.output);
 	}
-	return items.every(
-		(item) =>
-			isPlainRecord(item) &&
+	return items.every((item) => {
+		if (!isPlainRecord(item)) return false;
+		if (
 			["message", "reasoning", "compaction", "compaction_summary"].includes(
 				String(item.type),
-			),
-	);
+			)
+		)
+			return true;
+		if (
+			item.type !== "function_call" ||
+			typeof item.name !== "string" ||
+			(item.namespace !== undefined &&
+				item.namespace !== null &&
+				typeof item.namespace !== "string") ||
+			!allowsClientTool?.(
+				item.name,
+				typeof item.namespace === "string" ? item.namespace : undefined,
+			)
+		)
+			return false;
+		if (typeof item.id === "string") clientToolItems.add(item.id);
+		return true;
+	});
 }
 
 // Matcher state retains only a possible credential prefix per semantic channel.
@@ -855,6 +889,7 @@ async function forwardValidatedStream(
 	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
 	recordOutcome: (outcome: CodexModelRequestOutcome) => Promise<void>,
 	modelOnly: boolean,
+	allowsClientTool?: CodexModelRequestJournal["allowsClientTool"],
 ) {
 	const decoder = new TextDecoder("utf-8", { fatal: true });
 	let failed = false;
@@ -870,6 +905,7 @@ async function forwardValidatedStream(
 	let pending: string[] = [];
 	let pendingBytes = 0;
 	const guard = credentialStreamGuard(credentialMatcher);
+	const clientToolItems = new Set<string>();
 	const parser = createParser({
 		maxBufferSize: maximumEventBytes,
 		onComment: () => {},
@@ -886,7 +922,13 @@ async function forwardValidatedStream(
 				failed = true;
 				return;
 			}
-			const result = encodeValidatedEvent(event, credentialMatcher, modelOnly);
+			const result = encodeValidatedEvent(
+				event,
+				credentialMatcher,
+				modelOnly,
+				allowsClientTool,
+				clientToolItems,
+			);
 			if (result.state === "invalid" || result.state === "failed") {
 				if (result.state === "failed") failure.code = "provider_error";
 				failed = true;
@@ -1594,6 +1636,7 @@ export async function openCodexModelTransport(
 				credentialMatcher,
 				recordOutcome,
 				modelOnly,
+				journal.allowsClientTool,
 			);
 		} catch {
 			responseFailed = outcomeReported || outcomeReport !== undefined;
