@@ -247,10 +247,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					sandboxResource.policy.workloadRevision !==
 						state.sourceLifecycleRevision ||
 					sandboxResource.policy.resourceConfigurationHash !==
-						workloadResourceConfigurationHashV1(
-							workload.policy,
-							workload.connectionConsumerSnapshotConfigMapVersion,
-						)
+						workloadResourceConfigurationHashV1(workload.policy)
 				)
 					throw new Error();
 				const liveService = await workload.client.read<V1Service>(
@@ -545,10 +542,7 @@ export function createProductionSessionSandboxReceiverV1(
 			deployment.imageDigest !== claim.policy.imageDigest ||
 			claim.policy.namespace !== workload.policy.namespace ||
 			claim.policy.resourceConfigurationHash !==
-				workloadResourceConfigurationHashV1(
-					workload.policy,
-					workload.connectionConsumerSnapshotConfigMapVersion,
-				)
+				workloadResourceConfigurationHashV1(workload.policy)
 		)
 			throw new Error("SessionSandbox verified policy is unavailable");
 		const allocation = allocationFor(

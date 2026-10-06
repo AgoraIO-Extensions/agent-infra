@@ -162,7 +162,6 @@ describe("production SessionSandbox resource receiver", () => {
 				...f.claim.policy,
 				resourceConfigurationHash: workloadResourceConfigurationHashV1(
 					options.policy,
-					version,
 				),
 			},
 		};

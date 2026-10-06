@@ -88,7 +88,6 @@ export interface WorkloadRuntimeOptionsV1 {
 
 export function workloadResourceConfigurationHashV1(
 	policy: WorkloadRuntimeOptionsV1["policy"],
-	connectionConsumerSnapshotConfigMapVersion?: string,
 ): string {
 	return createHash("sha256")
 		.update(
@@ -102,9 +101,6 @@ export function workloadResourceConfigurationHashV1(
 					cpu: policy.resources.limits.cpu,
 					memory: policy.resources.limits.memory,
 				},
-				...(connectionConsumerSnapshotConfigMapVersion
-					? { connectionConsumerSnapshotConfigMapVersion }
-					: {}),
 			}),
 		)
 		.digest("hex");

@@ -157,7 +157,6 @@ async function createPrepared(signal: AbortSignal) {
 				namespace: workload.policy.namespace,
 				resourceConfigurationHash: workloadResourceConfigurationHashV1(
 					workload.policy,
-					workloadWithConnectionSnapshot.connectionConsumerSnapshotConfigMapVersion,
 				),
 			},
 			receiveSandbox:
