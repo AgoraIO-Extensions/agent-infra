@@ -288,6 +288,49 @@ export function createProductionSessionSandboxReceiverV1(
 		namespace: policy.namespace,
 		podName: binding.resourceName,
 		serviceName: binding.resourceName,
+		runtimeTlsSecretName: (() => {
+			const bindings = (
+				policy as typeof policy & {
+					readonly sessionRuntimeTlsBindings?: readonly {
+						readonly sessionId: string;
+						readonly sandboxId: string;
+						readonly generation: number;
+						readonly resourceFence: number;
+						readonly serviceName: string;
+						readonly secretName: string;
+					}[];
+				}
+			).sessionRuntimeTlsBindings;
+			if (!bindings)
+				throw new Error("Session Runtime TLS input is unavailable");
+			const secretNames = new Set(bindings.map((item) => item.secretName));
+			if (secretNames.size !== bindings.length)
+				throw new Error("Session Runtime TLS Secret is reused");
+			const allocationKeys = new Set(
+				bindings.map((item) =>
+					[
+						item.sessionId,
+						item.sandboxId,
+						item.generation,
+						item.resourceFence,
+						item.serviceName,
+					].join("\u0000"),
+				),
+			);
+			if (allocationKeys.size !== bindings.length)
+				throw new Error("Session Runtime TLS binding is ambiguous");
+			const match = bindings.find(
+				(item) =>
+					item.sessionId === binding.sessionId &&
+					item.sandboxId === binding.sandboxId &&
+					item.generation === generation &&
+					item.resourceFence === resourceFence &&
+					item.serviceName === binding.resourceName,
+			);
+			if (!match?.secretName)
+				throw new Error("Session Runtime TLS Secret input is unavailable");
+			return match.secretName;
+		})(),
 		serviceAccountName: binding.resourceName,
 		pvcName: binding.resourceName,
 		networkPolicyName: binding.resourceName,
