@@ -176,6 +176,9 @@ export const browserCapabilityOpenApiPathsV1 = {
 export type BrowserCapabilityOperationV1 = z.infer<
 	typeof BrowserCapabilityOperationV1Schema
 >;
+export type BrowserCapabilityAvailableV1 = z.infer<
+	typeof BrowserCapabilityAvailableV1Schema
+>;
 export type BrowserCapabilityDeclarationV1 = z.infer<
 	typeof BrowserCapabilityDeclarationV1Schema
 >;

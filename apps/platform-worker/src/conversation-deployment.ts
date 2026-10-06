@@ -54,6 +54,14 @@ function approvedConnectionConsumerTarget(
 	};
 }
 
+/** Resolve the immutable target prepared from a deployment-owned profile. */
+export function resolveApprovedConnectionConsumerTargetV1(
+	profile: unknown,
+	approval: unknown,
+): ConnectionConsumerTargetV1 | undefined {
+	return approvedConnectionConsumerTarget(profile, approval);
+}
+
 /** Resolve only a currently observed Workload through the existing deployment adapter. */
 export function createProductionConversationRuntimeResolverV2(options: {
 	readonly workload: WorkloadRuntimeOptionsV1;
