@@ -17,11 +17,9 @@ import {
 function fixture() {
 	const api = fakeKubernetesApi();
 	api.seed(
-		runtimeTlsSecretFixture(
-			"sandbox-allocation-a-tls",
-			"agent-a",
-			["sandbox-allocation-a.workload-test.svc"],
-		),
+		runtimeTlsSecretFixture("sandbox-allocation-a-tls", "agent-a", [
+			"sandbox-allocation-a.workload-test.svc",
+		]),
 	);
 	const deployment = workloadDesiredFixture(1, "agent-a", "internal-only");
 	const sessionRuntimeTlsBindings = [
