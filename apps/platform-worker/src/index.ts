@@ -374,6 +374,11 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	});
 }
 
+export {
+	type BrowserFileExecutionBindingV1,
+	type BrowserFileGrantBridgeV1,
+	createBrowserFileGrantBridgeV1,
+} from "./browser-file-bridge.js";
 export { createWorkerFileClientV1 } from "./file-client.js";
 export { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
 export {
