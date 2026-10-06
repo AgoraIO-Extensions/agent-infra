@@ -46,6 +46,45 @@ function snapshot() {
 }
 
 describe("runtime Connection snapshot projection", () => {
+	it("delivers the rendered file bytes to the actual merged Host receiver", async () => {
+		const bytes = snapshot();
+		const projection = runtimeConnectionConsumerProjectionV1(bytes);
+		const file = projection.volumes[0]?.downwardAPI?.items?.[0];
+		if (!file?.fieldRef || !file.path)
+			throw new Error("Missing file projection");
+		expect(file.fieldRef.fieldPath).toBe(
+			`metadata.annotations['${runtimeConnectionConsumerAnnotation}']`,
+		);
+		const directory = await mkdtemp(
+			join(tmpdir(), "consumer-projection-host-"),
+		);
+		try {
+			const path = join(directory, file.path);
+			await writeFile(
+				path,
+				projection.annotations[runtimeConnectionConsumerAnnotation] ?? "",
+			);
+			const consumed = await readRuntimeConnectionConsumerProfile(path);
+			expect(consumed).toMatchObject({
+				status: "available",
+				profile: source().profile,
+				configFingerprint: source().approval.configFingerprint,
+				source: source().approval.source,
+			});
+			await writeFile(
+				path,
+				JSON.stringify({
+					...source(),
+					approval: { ...source().approval, egressEnforced: false },
+				}),
+			);
+			expect(await readRuntimeConnectionConsumerProfile(path)).toMatchObject({
+				status: "unavailable",
+			});
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("captures the complete approved source and keeps unconfigured delivery empty", () => {
 		const input = source();
 		const captured = createRuntimeConnectionConsumerSnapshotV1(
@@ -216,3 +255,8 @@ describe("runtime Connection snapshot projection", () => {
 		expect(create).not.toHaveBeenCalled();
 	});
 });
+
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readRuntimeConnectionConsumerProfile } from "../../agent-runtime-host/src/connection-consumer-profile.js";
