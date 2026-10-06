@@ -25,16 +25,24 @@ export async function captureDesignContract(
 		const sidebar = document.querySelector(".platform-sidebar");
 		if (!topbar || !sidebar) throw new Error("Missing application shell");
 		const root = getComputedStyle(document.documentElement);
-		const button = [
+		const largestVisible = (nodes: Element[]) =>
+			nodes
+				.filter((node) => node.getBoundingClientRect().width > 0)
+				.toSorted(
+					(a, b) =>
+						b.getBoundingClientRect().height - a.getBoundingClientRect().height,
+				)
+				.at(0);
+		const button = largestVisible([
 			...document.querySelectorAll(
-				'main [data-slot="button"], main a[class~="group/button"]',
+				'main [data-slot="button"]:not(.directory-chip-remove), main a[class~="group/button"]',
 			),
-		].find((node) => node.getBoundingClientRect().width > 0);
-		const input = [
+		]);
+		const input = largestVisible([
 			...document.querySelectorAll(
-				'main [data-slot="input"], main [data-slot="select-trigger"], main [data-slot="native-select"]',
+				'main .directory-control, main [data-slot="input"], main [data-slot="select-trigger"], main [data-slot="native-select"]',
 			),
-		].find((node) => node.getBoundingClientRect().width > 0);
+		]);
 		return {
 			viewport: { width: innerWidth, height: innerHeight },
 			pageWidth: Math.max(
