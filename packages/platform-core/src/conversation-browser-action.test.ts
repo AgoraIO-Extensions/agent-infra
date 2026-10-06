@@ -122,6 +122,7 @@ describe("Conversation Browser action adapter", () => {
 				adapterEventKeyPrefix: "browser-action-1",
 				runtimeCursorPrefix: "browser-cursor-1",
 				now: () => "2026-10-06T12:00:01.000Z",
+				signal: new AbortController().signal,
 				run: async (markStarted) => {
 					await markStarted();
 					ioStarted = true;
@@ -144,6 +145,7 @@ describe("Conversation Browser action adapter", () => {
 				adapterEventKeyPrefix: "browser-action-1",
 				runtimeCursorPrefix: "browser-cursor-1",
 				now: () => "2026-10-06T12:00:01.000Z",
+				signal: new AbortController().signal,
 				run: async () => {
 					called = true;
 					return {};
@@ -186,6 +188,7 @@ describe("Conversation Browser action adapter", () => {
 			adapterEventKeyPrefix: "browser-action-1",
 			runtimeCursorPrefix: "browser-cursor-1",
 			now: () => "2026-10-06T12:00:01.000Z",
+			signal: new AbortController().signal,
 			run: async () => {
 				called = true;
 				return {};
@@ -193,5 +196,91 @@ describe("Conversation Browser action adapter", () => {
 		});
 		expect(result).toEqual({ resultRef: "file-1" });
 		expect(called).toBe(false);
+	});
+
+	it("cancels before intent without invoking persistence or I/O", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		let persisted = false;
+		let called = false;
+		await expect(
+			executeConversationBrowserActionV1(
+				{
+					persist: async () => {
+						persisted = true;
+						return { outcome: "stale" as const };
+					},
+				},
+				{
+					...input,
+					adapterEventKeyPrefix: "browser-action-cancelled",
+					runtimeCursorPrefix: "browser-cursor-cancelled",
+					now: () => "2026-10-06T12:00:01.000Z",
+					signal: controller.signal,
+					run: async () => {
+						called = true;
+						return {};
+					},
+				},
+			),
+		).rejects.toMatchObject({ failureCode: "interrupted" });
+		expect(persisted).toBe(false);
+		expect(called).toBe(false);
+	});
+
+	it("records interruption before started without invoking external I/O", async () => {
+		const controller = new AbortController();
+		const phases: string[] = [];
+		const useCase: ConversationEventUseCaseV1 = {
+			persist: async (command) => {
+				if (command.event.type !== "execution.operation")
+					throw new Error("unexpected event");
+				phases.push(command.event.fact.phase);
+				return { outcome: "accepted", event: command } as never;
+			},
+		};
+		await expect(
+			executeConversationBrowserActionV1(useCase, {
+				...input,
+				adapterEventKeyPrefix: "browser-action-before-start",
+				runtimeCursorPrefix: "browser-cursor-before-start",
+				now: () => "2026-10-06T12:00:01.000Z",
+				signal: controller.signal,
+				run: async (markStarted) => {
+					controller.abort();
+					await markStarted();
+					return {};
+				},
+			}),
+		).rejects.toMatchObject({ failureCode: "interrupted" });
+		expect(phases).toEqual(["intent", "failed"]);
+	});
+
+	it("records unknown when cancellation arrives after started", async () => {
+		const controller = new AbortController();
+		const phases: string[] = [];
+		const useCase: ConversationEventUseCaseV1 = {
+			persist: async (command) => {
+				if (command.event.type !== "execution.operation")
+					throw new Error("unexpected event");
+				phases.push(command.event.fact.phase);
+				return { outcome: "accepted", event: command } as never;
+			},
+		};
+		await expect(
+			executeConversationBrowserActionV1(useCase, {
+				...input,
+				adapterEventKeyPrefix: "browser-action-after-start",
+				runtimeCursorPrefix: "browser-cursor-after-start",
+				now: () => "2026-10-06T12:00:01.000Z",
+				signal: controller.signal,
+				run: async (markStarted) => {
+					await markStarted();
+					controller.abort();
+					throw new Error("external result uncertain");
+				},
+			}),
+		).rejects.toThrow("external result uncertain");
+		expect(phases).toEqual(["intent", "started", "unknown"]);
 	});
 });
