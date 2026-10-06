@@ -13,7 +13,7 @@ const forbiddenImports = [
 ];
 
 describe("agent-runtime dependency direction", () => {
-	it("depends only on wire contracts, the official Claude, ACP and Pi packages, JSON Schema validation and the SSE parser at runtime", async () => {
+	it("depends only on approved Runtime protocol and browser packages at runtime", async () => {
 		const packageJson = JSON.parse(
 			await readFile(new URL("../package.json", import.meta.url), "utf8"),
 		) as { dependencies?: Record<string, string> };
@@ -22,9 +22,10 @@ describe("agent-runtime dependency direction", () => {
 			"@agent-infra/contracts",
 			"@agentclientprotocol/sdk",
 			"@anthropic-ai/claude-agent-sdk",
-			"ajv",
 			"@earendil-works/pi-coding-agent",
+			"ajv",
 			"eventsource-parser",
+			"playwright-core",
 		]);
 	});
 

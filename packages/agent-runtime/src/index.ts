@@ -1,4 +1,5 @@
 export * from "./acp-runtime-driver.js";
+export * from "./browser-context.js";
 export {
 	CLAUDE_NATIVE_PROVENANCE,
 	verifyClaudeInstallation,
