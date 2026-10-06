@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { BrowserCapabilityDeclarationV1Schema } from "../runtime/browser-capability.ts";
 import { WorkloadSchemaVersionV1Schema } from "./common.ts";
 
 const healthPathPattern =
@@ -11,6 +12,15 @@ export const RuntimeCapabilitySetV1Schema = z.strictObject({
 	resultFiles: z.boolean().default(false),
 	connection: z.boolean().default(false),
 	supplementaryInstruction: z.boolean().default(false),
+});
+
+export const RuntimeManifestCapabilitySetV1Schema = z.strictObject({
+	modelSelection: z.boolean().default(false),
+	attachments: z.boolean().default(false),
+	resultFiles: z.boolean().default(false),
+	connection: z.boolean().default(false),
+	supplementaryInstruction: z.boolean().default(false),
+	browser: BrowserCapabilityDeclarationV1Schema.optional(),
 });
 
 export const RuntimeServiceV1Schema = z.strictObject({
@@ -26,7 +36,7 @@ export const SelfManagedRuntimeManifestV1Schema = z.strictObject({
 	interactionMode: z.literal("self-managed"),
 	service: RuntimeServiceV1Schema,
 	health: RuntimeHealthV1Schema,
-	capabilities: RuntimeCapabilitySetV1Schema.optional(),
+	capabilities: RuntimeManifestCapabilitySetV1Schema.optional(),
 });
 
 export const PlatformAdapterRuntimeManifestV1Schema = z.strictObject({
@@ -35,7 +45,7 @@ export const PlatformAdapterRuntimeManifestV1Schema = z.strictObject({
 	protocol: z.literal("acp"),
 	service: RuntimeServiceV1Schema,
 	health: RuntimeHealthV1Schema,
-	capabilities: RuntimeCapabilitySetV1Schema.optional(),
+	capabilities: RuntimeManifestCapabilitySetV1Schema.optional(),
 });
 
 export const RuntimeManifestV1Schema = z.discriminatedUnion("interactionMode", [
@@ -46,15 +56,18 @@ export const RuntimeManifestV1Schema = z.discriminatedUnion("interactionMode", [
 export type RuntimeCapabilitySetV1 = z.infer<
 	typeof RuntimeCapabilitySetV1Schema
 >;
+export type RuntimeManifestCapabilitySetV1 = z.infer<
+	typeof RuntimeManifestCapabilitySetV1Schema
+>;
 export type RuntimeManifestV1 = z.infer<typeof RuntimeManifestV1Schema>;
 
 export function resolveRuntimeManifestCapabilitiesV1(
 	manifestInput: unknown,
 ): RuntimeCapabilitySetV1 {
 	const manifest = RuntimeManifestV1Schema.parse(manifestInput);
-	return RuntimeCapabilitySetV1Schema.parse(
+	const { browser: _browser, ...legacyCapabilities } =
 		manifest.interactionMode === "platform-adapter"
 			? (manifest.capabilities ?? {})
-			: {},
-	);
+			: {};
+	return RuntimeCapabilitySetV1Schema.parse(legacyCapabilities);
 }

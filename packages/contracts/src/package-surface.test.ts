@@ -42,8 +42,14 @@ describe("contracts package surface", () => {
 		expect(manifest.exports["./openapi/common.v1"]).toBe(
 			"./artifacts/openapi/common.v1.openapi.json",
 		);
+		expect(manifest.exports["./openapi/browser-capability.v1"]).toBe(
+			"./artifacts/openapi/browser-capability.v1.openapi.json",
+		);
 		expect(manifest.exports["./json-schema/common.v1"]).toBe(
 			"./artifacts/json-schema/common.v1.schema.json",
+		);
+		expect(manifest.exports["./json-schema/browser-capability.v1"]).toBe(
+			"./artifacts/json-schema/browser-capability.v1.schema.json",
 		);
 		expect(manifest.exports["./json-schema/kubernetes-workload.v1"]).toBe(
 			"./artifacts/json-schema/kubernetes-workload.v1.schema.json",
@@ -101,6 +107,12 @@ describe("contracts package surface", () => {
 		expect(packedFiles).toContain("dist/workload/index.d.mts");
 		expect(packedFiles).toContain("dist/runtime/index.d.mts");
 		expect(packedFiles).toContain("artifacts/openapi/common.v1.openapi.json");
+		expect(packedFiles).toContain(
+			"artifacts/openapi/browser-capability.v1.openapi.json",
+		);
+		expect(packedFiles).toContain(
+			"artifacts/json-schema/browser-capability.v1.schema.json",
+		);
 		expect(packedFiles).toContain(
 			"artifacts/json-schema/kubernetes-workload.v1.schema.json",
 		);

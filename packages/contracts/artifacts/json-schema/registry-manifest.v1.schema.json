@@ -1,5 +1,151 @@
 {
   "$defs": {
+    "BrowserCapabilityDeclarationV1": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilityVersion": {
+          "exclusiveMinimum": 0,
+          "maximum": 100,
+          "type": "integer"
+        },
+        "operations": {
+          "items": {
+            "enum": [
+              "navigate",
+              "observe",
+              "interact",
+              "files",
+              "handoff",
+              "side_effects"
+            ],
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "policy": {
+          "additionalProperties": false,
+          "properties": {
+            "actionTimeoutMs": {
+              "maximum": 120000,
+              "minimum": 100,
+              "type": "integer"
+            },
+            "allowUserHandoff": {
+              "type": "boolean"
+            },
+            "allowedOrigins": {
+              "items": {
+                "pattern": "^https?:\\/\\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/$",
+                "type": "string"
+              },
+              "maxItems": 128,
+              "type": "array"
+            },
+            "maxBrowserDurationMs": {
+              "maximum": 86400000,
+              "minimum": 1000,
+              "type": "integer"
+            },
+            "maxConcurrentActions": {
+              "maximum": 16,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxContexts": {
+              "maximum": 4,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxDownloadBytes": {
+              "maximum": 10000000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxDownloads": {
+              "maximum": 256,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxPages": {
+              "maximum": 64,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxRetainedProfileBytes": {
+              "maximum": 10000000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxScreenshotBytes": {
+              "maximum": 100000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxTabs": {
+              "maximum": 32,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxUploadBytes": {
+              "maximum": 10000000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxViewportHeight": {
+              "maximum": 4320,
+              "minimum": 240,
+              "type": "integer"
+            },
+            "maxViewportWidth": {
+              "maximum": 7680,
+              "minimum": 320,
+              "type": "integer"
+            },
+            "navigationTimeoutMs": {
+              "maximum": 300000,
+              "minimum": 100,
+              "type": "integer"
+            },
+            "requireSideEffectConfirmation": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "allowedOrigins",
+            "maxContexts",
+            "maxTabs",
+            "maxPages",
+            "maxViewportWidth",
+            "maxViewportHeight",
+            "maxConcurrentActions",
+            "maxDownloads",
+            "maxDownloadBytes",
+            "maxUploadBytes",
+            "maxScreenshotBytes",
+            "maxBrowserDurationMs",
+            "maxRetainedProfileBytes",
+            "navigationTimeoutMs",
+            "actionTimeoutMs",
+            "requireSideEffectConfirmation",
+            "allowUserHandoff"
+          ],
+          "type": "object"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "capabilityVersion",
+        "operations",
+        "policy"
+      ],
+      "type": "object"
+    },
     "ImageAdmissionPolicyEvidenceV1": {
       "additionalProperties": false,
       "properties": {
@@ -487,6 +633,152 @@
                           "default": false,
                           "type": "boolean"
                         },
+                        "browser": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "capabilityVersion": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 100,
+                              "type": "integer"
+                            },
+                            "operations": {
+                              "items": {
+                                "enum": [
+                                  "navigate",
+                                  "observe",
+                                  "interact",
+                                  "files",
+                                  "handoff",
+                                  "side_effects"
+                                ],
+                                "type": "string"
+                              },
+                              "maxItems": 16,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "policy": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "actionTimeoutMs": {
+                                  "maximum": 120000,
+                                  "minimum": 100,
+                                  "type": "integer"
+                                },
+                                "allowUserHandoff": {
+                                  "type": "boolean"
+                                },
+                                "allowedOrigins": {
+                                  "items": {
+                                    "pattern": "^https?:\\/\\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 128,
+                                  "type": "array"
+                                },
+                                "maxBrowserDurationMs": {
+                                  "maximum": 86400000,
+                                  "minimum": 1000,
+                                  "type": "integer"
+                                },
+                                "maxConcurrentActions": {
+                                  "maximum": 16,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "maxContexts": {
+                                  "maximum": 4,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "maxDownloadBytes": {
+                                  "maximum": 10000000000,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "maxDownloads": {
+                                  "maximum": 256,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "maxPages": {
+                                  "maximum": 64,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "maxRetainedProfileBytes": {
+                                  "maximum": 10000000000,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "maxScreenshotBytes": {
+                                  "maximum": 100000000,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "maxTabs": {
+                                  "maximum": 32,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "maxUploadBytes": {
+                                  "maximum": 10000000000,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "maxViewportHeight": {
+                                  "maximum": 4320,
+                                  "minimum": 240,
+                                  "type": "integer"
+                                },
+                                "maxViewportWidth": {
+                                  "maximum": 7680,
+                                  "minimum": 320,
+                                  "type": "integer"
+                                },
+                                "navigationTimeoutMs": {
+                                  "maximum": 300000,
+                                  "minimum": 100,
+                                  "type": "integer"
+                                },
+                                "requireSideEffectConfirmation": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "allowedOrigins",
+                                "maxContexts",
+                                "maxTabs",
+                                "maxPages",
+                                "maxViewportWidth",
+                                "maxViewportHeight",
+                                "maxConcurrentActions",
+                                "maxDownloads",
+                                "maxDownloadBytes",
+                                "maxUploadBytes",
+                                "maxScreenshotBytes",
+                                "maxBrowserDurationMs",
+                                "maxRetainedProfileBytes",
+                                "navigationTimeoutMs",
+                                "actionTimeoutMs",
+                                "requireSideEffectConfirmation",
+                                "allowUserHandoff"
+                              ],
+                              "type": "object"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "capabilityVersion",
+                            "operations",
+                            "policy"
+                          ],
+                          "type": "object"
+                        },
                         "connection": {
                           "default": false,
                           "type": "boolean"
@@ -559,6 +851,152 @@
                         "attachments": {
                           "default": false,
                           "type": "boolean"
+                        },
+                        "browser": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "capabilityVersion": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 100,
+                              "type": "integer"
+                            },
+                            "operations": {
+                              "items": {
+                                "enum": [
+                                  "navigate",
+                                  "observe",
+                                  "interact",
+                                  "files",
+                                  "handoff",
+                                  "side_effects"
+                                ],
+                                "type": "string"
+                              },
+                              "maxItems": 16,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "policy": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "actionTimeoutMs": {
+                                  "maximum": 120000,
+                                  "minimum": 100,
+                                  "type": "integer"
+                                },
+                                "allowUserHandoff": {
+                                  "type": "boolean"
+                                },
+                                "allowedOrigins": {
+                                  "items": {
+                                    "pattern": "^https?:\\/\\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 128,
+                                  "type": "array"
+                                },
+                                "maxBrowserDurationMs": {
+                                  "maximum": 86400000,
+                                  "minimum": 1000,
+                                  "type": "integer"
+                                },
+                                "maxConcurrentActions": {
+                                  "maximum": 16,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "maxContexts": {
+                                  "maximum": 4,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "maxDownloadBytes": {
+                                  "maximum": 10000000000,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "maxDownloads": {
+                                  "maximum": 256,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "maxPages": {
+                                  "maximum": 64,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "maxRetainedProfileBytes": {
+                                  "maximum": 10000000000,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "maxScreenshotBytes": {
+                                  "maximum": 100000000,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "maxTabs": {
+                                  "maximum": 32,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "maxUploadBytes": {
+                                  "maximum": 10000000000,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "maxViewportHeight": {
+                                  "maximum": 4320,
+                                  "minimum": 240,
+                                  "type": "integer"
+                                },
+                                "maxViewportWidth": {
+                                  "maximum": 7680,
+                                  "minimum": 320,
+                                  "type": "integer"
+                                },
+                                "navigationTimeoutMs": {
+                                  "maximum": 300000,
+                                  "minimum": 100,
+                                  "type": "integer"
+                                },
+                                "requireSideEffectConfirmation": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "allowedOrigins",
+                                "maxContexts",
+                                "maxTabs",
+                                "maxPages",
+                                "maxViewportWidth",
+                                "maxViewportHeight",
+                                "maxConcurrentActions",
+                                "maxDownloads",
+                                "maxDownloadBytes",
+                                "maxUploadBytes",
+                                "maxScreenshotBytes",
+                                "maxBrowserDurationMs",
+                                "maxRetainedProfileBytes",
+                                "navigationTimeoutMs",
+                                "actionTimeoutMs",
+                                "requireSideEffectConfirmation",
+                                "allowUserHandoff"
+                              ],
+                              "type": "object"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "capabilityVersion",
+                            "operations",
+                            "policy"
+                          ],
+                          "type": "object"
                         },
                         "connection": {
                           "default": false,
@@ -1107,6 +1545,178 @@
       ],
       "type": "object"
     },
+    "RuntimeManifestCapabilitySetV1": {
+      "additionalProperties": false,
+      "properties": {
+        "attachments": {
+          "default": false,
+          "type": "boolean"
+        },
+        "browser": {
+          "additionalProperties": false,
+          "properties": {
+            "capabilityVersion": {
+              "exclusiveMinimum": 0,
+              "maximum": 100,
+              "type": "integer"
+            },
+            "operations": {
+              "items": {
+                "enum": [
+                  "navigate",
+                  "observe",
+                  "interact",
+                  "files",
+                  "handoff",
+                  "side_effects"
+                ],
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array"
+            },
+            "policy": {
+              "additionalProperties": false,
+              "properties": {
+                "actionTimeoutMs": {
+                  "maximum": 120000,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                "allowUserHandoff": {
+                  "type": "boolean"
+                },
+                "allowedOrigins": {
+                  "items": {
+                    "pattern": "^https?:\\/\\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/$",
+                    "type": "string"
+                  },
+                  "maxItems": 128,
+                  "type": "array"
+                },
+                "maxBrowserDurationMs": {
+                  "maximum": 86400000,
+                  "minimum": 1000,
+                  "type": "integer"
+                },
+                "maxConcurrentActions": {
+                  "maximum": 16,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "maxContexts": {
+                  "maximum": 4,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "maxDownloadBytes": {
+                  "maximum": 10000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxDownloads": {
+                  "maximum": 256,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxPages": {
+                  "maximum": 64,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "maxRetainedProfileBytes": {
+                  "maximum": 10000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxScreenshotBytes": {
+                  "maximum": 100000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxTabs": {
+                  "maximum": 32,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "maxUploadBytes": {
+                  "maximum": 10000000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxViewportHeight": {
+                  "maximum": 4320,
+                  "minimum": 240,
+                  "type": "integer"
+                },
+                "maxViewportWidth": {
+                  "maximum": 7680,
+                  "minimum": 320,
+                  "type": "integer"
+                },
+                "navigationTimeoutMs": {
+                  "maximum": 300000,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                "requireSideEffectConfirmation": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "allowedOrigins",
+                "maxContexts",
+                "maxTabs",
+                "maxPages",
+                "maxViewportWidth",
+                "maxViewportHeight",
+                "maxConcurrentActions",
+                "maxDownloads",
+                "maxDownloadBytes",
+                "maxUploadBytes",
+                "maxScreenshotBytes",
+                "maxBrowserDurationMs",
+                "maxRetainedProfileBytes",
+                "navigationTimeoutMs",
+                "actionTimeoutMs",
+                "requireSideEffectConfirmation",
+                "allowUserHandoff"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "capabilityVersion",
+            "operations",
+            "policy"
+          ],
+          "type": "object"
+        },
+        "connection": {
+          "default": false,
+          "type": "boolean"
+        },
+        "modelSelection": {
+          "default": false,
+          "type": "boolean"
+        },
+        "resultFiles": {
+          "default": false,
+          "type": "boolean"
+        },
+        "supplementaryInstruction": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "RuntimeManifestParsingEvidenceV1": {
       "additionalProperties": false,
       "properties": {
@@ -1158,6 +1768,152 @@
                 "attachments": {
                   "default": false,
                   "type": "boolean"
+                },
+                "browser": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "capabilityVersion": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 100,
+                      "type": "integer"
+                    },
+                    "operations": {
+                      "items": {
+                        "enum": [
+                          "navigate",
+                          "observe",
+                          "interact",
+                          "files",
+                          "handoff",
+                          "side_effects"
+                        ],
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "policy": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "actionTimeoutMs": {
+                          "maximum": 120000,
+                          "minimum": 100,
+                          "type": "integer"
+                        },
+                        "allowUserHandoff": {
+                          "type": "boolean"
+                        },
+                        "allowedOrigins": {
+                          "items": {
+                            "pattern": "^https?:\\/\\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/$",
+                            "type": "string"
+                          },
+                          "maxItems": 128,
+                          "type": "array"
+                        },
+                        "maxBrowserDurationMs": {
+                          "maximum": 86400000,
+                          "minimum": 1000,
+                          "type": "integer"
+                        },
+                        "maxConcurrentActions": {
+                          "maximum": 16,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "maxContexts": {
+                          "maximum": 4,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "maxDownloadBytes": {
+                          "maximum": 10000000000,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxDownloads": {
+                          "maximum": 256,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxPages": {
+                          "maximum": 64,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "maxRetainedProfileBytes": {
+                          "maximum": 10000000000,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxScreenshotBytes": {
+                          "maximum": 100000000,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxTabs": {
+                          "maximum": 32,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "maxUploadBytes": {
+                          "maximum": 10000000000,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxViewportHeight": {
+                          "maximum": 4320,
+                          "minimum": 240,
+                          "type": "integer"
+                        },
+                        "maxViewportWidth": {
+                          "maximum": 7680,
+                          "minimum": 320,
+                          "type": "integer"
+                        },
+                        "navigationTimeoutMs": {
+                          "maximum": 300000,
+                          "minimum": 100,
+                          "type": "integer"
+                        },
+                        "requireSideEffectConfirmation": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "allowedOrigins",
+                        "maxContexts",
+                        "maxTabs",
+                        "maxPages",
+                        "maxViewportWidth",
+                        "maxViewportHeight",
+                        "maxConcurrentActions",
+                        "maxDownloads",
+                        "maxDownloadBytes",
+                        "maxUploadBytes",
+                        "maxScreenshotBytes",
+                        "maxBrowserDurationMs",
+                        "maxRetainedProfileBytes",
+                        "navigationTimeoutMs",
+                        "actionTimeoutMs",
+                        "requireSideEffectConfirmation",
+                        "allowUserHandoff"
+                      ],
+                      "type": "object"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "capabilityVersion",
+                    "operations",
+                    "policy"
+                  ],
+                  "type": "object"
                 },
                 "connection": {
                   "default": false,
@@ -1231,6 +1987,152 @@
                 "attachments": {
                   "default": false,
                   "type": "boolean"
+                },
+                "browser": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "capabilityVersion": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 100,
+                      "type": "integer"
+                    },
+                    "operations": {
+                      "items": {
+                        "enum": [
+                          "navigate",
+                          "observe",
+                          "interact",
+                          "files",
+                          "handoff",
+                          "side_effects"
+                        ],
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "policy": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "actionTimeoutMs": {
+                          "maximum": 120000,
+                          "minimum": 100,
+                          "type": "integer"
+                        },
+                        "allowUserHandoff": {
+                          "type": "boolean"
+                        },
+                        "allowedOrigins": {
+                          "items": {
+                            "pattern": "^https?:\\/\\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/$",
+                            "type": "string"
+                          },
+                          "maxItems": 128,
+                          "type": "array"
+                        },
+                        "maxBrowserDurationMs": {
+                          "maximum": 86400000,
+                          "minimum": 1000,
+                          "type": "integer"
+                        },
+                        "maxConcurrentActions": {
+                          "maximum": 16,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "maxContexts": {
+                          "maximum": 4,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "maxDownloadBytes": {
+                          "maximum": 10000000000,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxDownloads": {
+                          "maximum": 256,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxPages": {
+                          "maximum": 64,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "maxRetainedProfileBytes": {
+                          "maximum": 10000000000,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxScreenshotBytes": {
+                          "maximum": 100000000,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxTabs": {
+                          "maximum": 32,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "maxUploadBytes": {
+                          "maximum": 10000000000,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxViewportHeight": {
+                          "maximum": 4320,
+                          "minimum": 240,
+                          "type": "integer"
+                        },
+                        "maxViewportWidth": {
+                          "maximum": 7680,
+                          "minimum": 320,
+                          "type": "integer"
+                        },
+                        "navigationTimeoutMs": {
+                          "maximum": 300000,
+                          "minimum": 100,
+                          "type": "integer"
+                        },
+                        "requireSideEffectConfirmation": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "allowedOrigins",
+                        "maxContexts",
+                        "maxTabs",
+                        "maxPages",
+                        "maxViewportWidth",
+                        "maxViewportHeight",
+                        "maxConcurrentActions",
+                        "maxDownloads",
+                        "maxDownloadBytes",
+                        "maxUploadBytes",
+                        "maxScreenshotBytes",
+                        "maxBrowserDurationMs",
+                        "maxRetainedProfileBytes",
+                        "navigationTimeoutMs",
+                        "actionTimeoutMs",
+                        "requireSideEffectConfirmation",
+                        "allowUserHandoff"
+                      ],
+                      "type": "object"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "capabilityVersion",
+                    "operations",
+                    "policy"
+                  ],
+                  "type": "object"
                 },
                 "connection": {
                   "default": false,
