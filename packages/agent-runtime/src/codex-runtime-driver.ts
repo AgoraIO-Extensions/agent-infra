@@ -9419,6 +9419,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private async ensureThread(nativeSessionRef: string, executionId: string) {
 		const session = this.session(nativeSessionRef);
+		if (
+			this.heldStandardExecutions.has(executionId) ||
+			Object.values(session.journals ?? {}).some(standardCallsHeld)
+		)
+			unavailable();
+		// A persisted Thread retains the tool snapshot with which it started.
+		// Deployment of an installation cannot add tools to a model-only Thread.
+		if (session.threadId && !session.standardMcp) {
+			await this.resumeSession(nativeSessionRef);
+			return this.session(nativeSessionRef);
+		}
+		if (session.standardMcp && !this.standardConnectionOptions) unavailable();
 		const standard = this.standardConnectionOptions
 			? await this.standardMcpClientFor(nativeSessionRef, executionId)
 			: undefined;
