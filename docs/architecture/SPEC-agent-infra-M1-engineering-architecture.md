@@ -1064,7 +1064,7 @@ Worker 首次提交前持久保存批次、业务幂等键、确切输入及实�
 原任务当前业务权限和后端自身授权；服务身份不能代替用户授权或获得外部账号凭据。
 若构建后端使用 Connection，实际提交、查询、停止和清理由 [§13.1](#131-独立直连与权威边界)的
 Agent 独立客户端路径执行，Worker 只编排原任务并消费绑定原 Execution 的可信结果。
-该客户端的独立 Consumer/Instance/Actor、安装级证明、Grant、WRITE 确认、撤权与 Dispatch
+该客户端的独立 Consumer/Instance/Actor、token 绑定及 profile 明确要求的持有证明、Grant、WRITE 确认、撤权与 Dispatch
 必须满足 [Connection HLD](HLD-connection-M1.md)；没有合法实际客户端时该绑定不启用。
 按 [§13.2](#132-调用与审计关联)，Platform API/Worker 不代理 Connection 调用或持有其查询
 凭据，不借用 Owner 身份、跨库读取凭据或把 Platform 授权当作 Connection Grant。
@@ -1286,11 +1286,11 @@ sequenceDiagram
 
 Runtime callback/client 的准备契约边界见 [Runtime HLD §9.1](HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)。
 其 bootstrap/provenance 投影校验不构成 Connection conformance；真实 HTTP/MCP 接入仍须满足
-Connection HLD 的 ConsumerInstance 安装绑定、sender-constrained token 或获准 PAT 规则。
+Connection HLD 的 token/ConsumerInstance 绑定及 profile 明确要求的 sender constraint。
 
 可信采集在发起工具调用前绑定原 Execution、操作和尝试，并从同一次经过服务端认证的 Connection 请求/响应中取得由 Connection 生成的原调用引用。引用须能在 Connection 自身授权下核实其服务端解析的调用主体、操作和真实记录；受信采集再核对该记录确实属于本次请求。难以猜测的引用、签名、同一主体或相近时间都不能单独证明执行绑定，也不能接受模型或客户端从其他任务转交的真实引用。重试核实只查询原记录，不再次执行 Provider 操作；缺失任一侧证据保持未核实。
 
-Connection HLD 的 [§5.2](HLD-connection-M1.md#52-consumer-与-instance) 与 [§7](HLD-connection-M1.md#7-mcpapi-调用流程) 定义独立客户端的安装绑定、身份解析和调用准入；[§11](HLD-connection-M1.md#11-审计与跨系统关联) 定义真实调用关联与分别授权查询。Runtime HLD 的[身份上下文](HLD-agent-runtime-M1.md#9-runtime-身份上下文)定义原执行 slot、受保护 FD3 交付及真实 MCP leaf 的可靠采集；这些字段不构成 Platform 签发的 Connection 授权。Platform API/Worker 不为核实建立 Connection 代理或获得 Connection 查询凭据，也不签发供 Connection 授权的上下文。平台只接收受信采集产生的关联引用与核实状态；Connection 调用详情仍在其独立授权入口查询。
+Connection HLD 的 [§5.2](HLD-connection-M1.md#52-consumer-与-instance) 与 [§7](HLD-connection-M1.md#7-mcpapi-调用流程) 定义独立客户端的 token 绑定、身份解析和调用准入；[§11](HLD-connection-M1.md#11-审计与跨系统关联) 定义真实调用关联与分别授权查询。Runtime HLD 的[身份上下文](HLD-agent-runtime-M1.md#9-runtime-身份上下文)定义原执行客户端绑定、受保护凭据消费与真实 MCP 调用的可靠采集；私有 FD3 只约束明确启用的 native lane。这些字段不构成 Platform 签发的 Connection 授权。Platform API/Worker 不为核实建立 Connection 代理或获得 Connection 查询凭据，也不签发供 Connection 授权的上下文。平台只接收受信采集产生的关联引用与核实状态；Connection 调用详情仍在其独立授权入口查询。
 
 关联信息不是授权。调用方与两侧管理员分别在各自受控 API/页面查询；无权访问时不返回对方对象、状态或存在性。平台工具成功只表示自身已确认的执行事实，不能替代 Connection 对外部效果的结论。响应丢失、关联缺失或无法核实时如实标记，沿原调用补充核实，不把猜测写为成功。
 
@@ -1368,7 +1368,7 @@ Connection 的 LDAP、OAuth 客户端、MCP/API、Grant、凭证保护、Provide
 SecretRef 和受保护客户端边界提供；SecretRef 只定位安装隔离的受控凭据，不构成授权，
 不得来自请求或 Agent 输入。引用必须解析到与原 Principal、ConsumerInstance、Actor（如适用）、
 audience 和凭据修订一致的安装；缺失、失效或绑定不符时拒绝，不能跨安装共享。
-具体签发、持有证明、撤销和刷新遵循 Connection HLD §5.2；Codex 的交付与隔离遵循
+具体签发、token 绑定、撤销和刷新遵循 Connection HLD §5.2；profile 明确要求的持有证明另行验证。Codex 的交付与隔离遵循
 [Runtime HLD §9.1](HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)，
 不能把 SecretRef 解释为普通 env、argv 或工具进程可读的 token 注入许可。
 
@@ -1378,11 +1378,38 @@ Platform 在 Connection 相关数据中只保存 Consumer 非敏感配置和 §1
 客户端凭据和原始秘密不得进入 Platform DB、ConfigMap、普通配置、日志/错误、模型上下文、
 前端 bundle、Issue 或 PR 文本；SecretRef 的解析仅发生在已批准的安装凭据/客户端边界。
 
+**标准 MCP 与 Agent token 消费。** 固定官方 Runtime 的标准 MCP 客户端优先使用 Connection
+签发的 OAuth token 或获准 PAT。每个原用户/独立应用与 Agent 组合使用独立 token；不同
+Platform Session 仍按所属 Sandbox 隔离客户端状态，不能由 token 共享合并会话、工作区或记忆。
+同一获准 Consumer 可管理多个独立 token/ConsumerInstance，不默认为每个 Agent 新建 Consumer；
+只有所需外部账号或 Action 权限不同，才消费能表达差异的 Consumer/Actor/Grant 配置。
+
+客户端复用 Connection 的用户确认、固定 callback、不透明 binding 与单次 claim；只保存
+消费方需要的非秘密主体/Agent/binding/实例引用。服务端先从当前身份与持久关系固定主体及
+Agent，再由获准的受保护客户端领取、保存、选择和撤销 token。callback/query/body、token 名称、
+Owner 或 Runtime 自报字段不能改绑；binding 服务凭据与 MCP token 不互换，API/Worker
+不领取 token 来代调用。原主体与 Agent、Consumer/实例、issuer/resource、凭据修订/期限
+或当前授权无法确认时拒绝，不回退到另一 token、Owner、责任人或共享部署凭据。
+
+标准 MCP/token 接入不以私有 FD3、native callback 或 DPoP 为通用前置。选用额外证明的
+profile 必须明确配置、两端可互操作且保持自身门禁；不允许凭兼容开关跳过必需证明。
+任何客户端只有在真实版本的凭据保护、主体/Agent 选择、撤权、原执行事实及恢复验证通过后
+才开放对应能力。token 接入与可信关联分别验证：没有同次原调用证据时保持未核实，不能
+以完成登录、获得 token 或模型返回 callId 宣称关联通过；原执行前意图、必要审计与 unknown
+不重放的要求不变。实现与取舍见 [ADR 0018](../adr/0018-use-standard-mcp-with-agent-scoped-tokens.md)。
+
+本消费契约的正式修订由 Platform API/Web、Runtime 客户端和 Connection 契约原 owner
+评审，按 PRD → Spec → HLD 的共同版本合入；CODEOWNER、Human Validation 与适用 CI
+门禁仍由当前工作流维护。未完成共同文档对齐与消费方评审时，不据文档候选启用客户端。
+后续 #851/#1271 只消费已合入版本及具名接收接口；本节不改变 Connection 运行实现、
+部署、Provider 或其原 owner 的 tickets，也不签收客户端和真实双系统验收。
+
 本节不实现 API/Worker/Web 接线（分别由
 [#1270](https://github.com/AgoraIO-Extensions/agent-infra/issues/1270)、
 [#1271](https://github.com/AgoraIO-Extensions/agent-infra/issues/1271)、
 [#1272](https://github.com/AgoraIO-Extensions/agent-infra/issues/1272)承接）。
-[#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851)负责真实客户端的安装证明和
+[#1378](https://github.com/AgoraIO-Extensions/agent-infra/issues/1378)负责本消费契约对齐；
+[#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851)负责真实客户端的 token 绑定验证和
 受保护交付；[#395](https://github.com/AgoraIO-Extensions/agent-infra/issues/395)负责独立
 Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agent-infra/issues/435)
 是已关闭（NOT_PLANNED）的历史联合验收回链，不恢复该入口或已停止探针；当前代表旅程由

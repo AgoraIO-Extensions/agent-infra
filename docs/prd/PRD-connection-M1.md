@@ -23,7 +23,7 @@ Pilot 成功只适用于具名环境、测试主体、专用账号、受控 priv
 | --- | --- |
 | Principal | Connection 识别的稳定员工主体 |
 | Consumer | 使用 Connection MCP/API 的客户端或服务；每种产品独立注册 |
-| ConsumerInstance | Consumer 的独立登录实例，可单独撤销 |
+| ConsumerInstance | Consumer 的独立登录或 token 实例，可单独撤销 |
 | Actor | Consumer 内由 Connection 解析并单独授权的稳定单元 |
 | Provider | GitHub 等外部平台 |
 | Action | Provider 的一项受控能力 |
@@ -62,9 +62,10 @@ Platform 不保存 Connection Grant、Provider Credential、Connection Catalog �
 
 ## 4. Direct MCP/API 入口
 
-- Direct MCP Client 只配置 Connection MCP endpoint，例如 `https://agent-connector.la3.agoralab.co/mcp`。
+- Direct MCP Client 使用部署批准的标准 MCP endpoint，通过 Connection OAuth 或获准 PAT 访问；客户端和服务端分别完成兼容性验证，不要求为接入统一采用私有原生协议。
 - Connection OAuth 使用 Authorization Code + PKCE；OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience 和 scope；ConsumerInstance 定义多个 Actor 时，token 或服务端受信 session 还必须绑定唯一 Actor，无法唯一解析时拒绝调用。
 - Connection PAT 只适用于经过注册和批准的 Consumer，不能替代 OAuth 的主体隔离规则。
+- Agent Consumer 可通过用户确认的 token binding 取得独立 PAT；确认、领取和撤销均绑定实际主体及 ConsumerInstance。不同用户或应用、不同 Agent 使用不同 token，客户端不能回退到 Owner 或共享部署 token。
 - BrowserSession 只用于 Connection Web 管理操作，不能作为 MCP 调用凭据。
 - MCP、浏览器管理 API 和内部 HTTP API 共享同一 Connection application service 与授权权威。
 
@@ -82,7 +83,8 @@ Platform 不保存 Connection Grant、Provider Credential、Connection Catalog �
 - Connection 使用部署批准的公司 LDAP 建立 `issuer + stable uid` Principal；邮箱、显示名和登录名只用于展示。
 - LDAP 密码不保存、不记录、不进入 Token、Cookie、错误、审计或模型上下文。
 - OAuth 客户端注册、ConsumerInstance、token、Grant 和撤销均由 Connection 服务端解析和持久化。
-- Grant 始终绑定当前 Principal、Consumer、ConsumerInstance、Connection 和用户确认的精确 ActionVersion 集合；Consumer 定义 Actor 时还必须绑定由 Connection 解析的唯一 Actor，不能以 Actor 取代 ConsumerInstance 绑定。
+- Grant 绑定当前 Principal、Consumer、Connection 和用户确认的精确 ActionVersion 集合；Consumer 定义 Actor 或实例级授权时还须绑定服务端解析的对应范围。相同 Principal/Consumer 的获准实例可以使用同一 Grant，调用仍须分别验证当前 token 与 ConsumerInstance；共享 Grant 不允许共享 token。
+- 一个 Consumer 下可以为不同 Agent 提供独立 token，不要求每个 Agent 新建 Consumer。若需要不同 Agent 的外部账号或能力权限不同，须使用能表达该差异的 Consumer/Actor/Grant 授权，不能仅以 token 名称推断权限。
 - Provider OAuth 只建立或更新 Connection，不自动创建 Grant。
 - Owner 或 Consumer policy 不能替 Principal 创建、扩大或替换 Grant；能力扩张必须由授权主体在 Connection 中重新确认。
 - 拒绝响应不能泄露其他 Principal、Connection、Grant、Credential、调用或审计是否存在。
@@ -116,7 +118,7 @@ Provider/Action、共享 Connection、审计和未知结果处理属于独立的
 | 场景 | 验收结果 |
 | --- | --- |
 | 测试主体 | 两个 LDAP Principal 分别绑定两个专用 GitHub 测试账号和同一受控 private 仓库 |
-| Direct MCP | 客户端只配置 Connection MCP endpoint，OAuth 登录成功并获得绑定当前 ConsumerInstance 的 sender-constrained token；伪造或选择其他实例必须拒绝 |
+| Direct MCP | 标准 MCP OAuth 或获准 PAT 绑定当前主体与 ConsumerInstance；客户端拒绝跨用户/Agent 的 token 选取或交付，Connection 拒绝伪造身份、无效、过期及撤销后的凭据；选用持有证明的 profile 另验该证明 |
 | 两次确认 | GitHub OAuth 后仍须在 Connection 中确认具体 Consumer/Actor 和三项 Action；伪造、跨实例、非唯一或已撤销 Actor 绑定必须拒绝 |
 | 真实调用 | 两名测试主体分别读取账号/仓库并创建真实 Pull Request |
 | 幂等 | 同一请求重试复用原调用和 PR，不产生第二个 PR |
