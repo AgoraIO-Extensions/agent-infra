@@ -198,6 +198,12 @@ test("renders one Connection Consumer snapshot and the same fingerprint to every
 					"topology-agent-infra-connection-consumer",
 			),
 		);
+		assert.match(
+			workload.spec.template.metadata.annotations[
+				"agent-infra.agora.io/connection-profile-version"
+			],
+			/^1-[a-f0-9]{64}$/,
+		);
 	}
 	assert.equal(
 		resources.some((item) => /Connection|Mcp|MCP/i.test(item.kind ?? "")),
@@ -237,6 +243,14 @@ test("fails closed for incomplete, unsafe, and conflicting Connection Consumer v
 	for (const args of [
 		["--set", "connectionConsumer.inline.publicOrigin=http://unsafe.example"],
 		["--set", "connectionConsumer.inline.publicOrigin=https://bad..example"],
+		["--set", "connectionConsumer.inline.publicOrigin=https://[:]"],
+		["--set", "connectionConsumer.inline.publicOrigin=https://[::::]"],
+		["--set", "connectionConsumer.inline.publicOrigin=https://[abcd]"],
+		[
+			"--set",
+			"connectionConsumer.inline.publicOrigin=https://[1:2:3:4:5:6:7:8:9]",
+		],
+		["--set", "connectionConsumer.inline.publicOrigin=https://[1::2::3]"],
 		["--set", "connectionConsumer.inline.publicOrigin=https://EXAMPLE.example"],
 		[
 			"--set",
@@ -328,12 +342,89 @@ test("supports an approved external snapshot without rendering an inline fallbac
 				item.metadata?.name === name,
 		);
 		assert.equal(
+			pod.spec.template.metadata.annotations[
+				"agent-infra.agora.io/connection-profile-version"
+			],
+			`1-${fingerprint}`,
+		);
+		assert.equal(
 			pod.spec.template.spec.containers[0].env.find(
 				(entry) => entry.name === "AGENT_INFRA_CONNECTION_CONFIG_VERSION",
 			)?.value,
 			`1-${fingerprint}`,
 		);
 	}
+});
+
+test("profile changes roll every consuming Pod template", () => {
+	const profileArgs = [
+		"--set",
+		"web.placement=in-cluster",
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set-string",
+		`images.web.digest=${validDigest}`,
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+	];
+	const baselineResult = render(...profileArgs);
+	const changedResult = render(
+		...profileArgs,
+		"--set-string",
+		"connectionConsumer.inline.approval.source.revision=changed-revision",
+	);
+	assert.equal(baselineResult.status, 0, baselineResult.stderr);
+	assert.equal(changedResult.status, 0, changedResult.stderr);
+	const baseline = objects(baselineResult.stdout);
+	const changed = objects(changedResult.stdout);
+	const key = "agent-infra.agora.io/connection-profile-version";
+	for (const [kind, name] of [
+		["Deployment", "topology-agent-infra-platform-api"],
+		["Deployment", "topology-agent-infra-platform-worker"],
+		["StatefulSet", "topology-agent-infra-workload"],
+		["Deployment", "topology-agent-infra-web"],
+		["Deployment", "topology-agent-infra-route"],
+	]) {
+		const before = resource(baseline, kind, name);
+		const after = resource(changed, kind, name);
+		assert.ok(before && after, `${kind}/${name} should render`);
+		assert.notEqual(
+			before.spec.template.metadata.annotations[key],
+			after.spec.template.metadata.annotations[key],
+		);
+	}
+});
+
+test("fingerprint uses raw JSON serialization for HTML characters", () => {
+	const result = render(
+		"--set-string",
+		"connectionConsumer.inline.consumerId=id<&>",
+	);
+	assert.equal(result.status, 0, result.stderr);
+	const resources = objects(result.stdout);
+	const profile = resource(
+		resources,
+		"ConfigMap",
+		"topology-agent-infra-connection-consumer",
+	);
+	const content = JSON.parse(profile.data.AGENT_INFRA_CONNECTION_PROFILE);
+	const expected = createHash("sha256")
+		.update(
+			JSON.stringify([
+				content.schemaVersion,
+				content.publicOrigin,
+				content.mcpPath,
+				content.consumerId,
+				content.audience,
+				content.egressProfile.ref,
+				content.egressProfile.revision,
+			]),
+		)
+		.digest("hex");
+	assert.equal(
+		profile.metadata.annotations["agent-infra.agora.io/config-fingerprint"],
+		expected,
+	);
 });
 
 test("production Worker requires a private module and runtime authorization mounts", () => {

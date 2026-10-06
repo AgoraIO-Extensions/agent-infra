@@ -62,7 +62,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if gt (len $external) 0 -}}{{- fail "connectionConsumer.inline and external sources conflict" -}}{{- end -}}
 {{- if ne (int ($inline.schemaVersion | default 0)) 1 -}}{{- fail "connectionConsumer.inline.schemaVersion must be 1" -}}{{- end -}}
 {{- $origin := required "connectionConsumer.inline.publicOrigin is required" $inline.publicOrigin -}}
-{{- if not (regexMatch `^https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:]+\])(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$` $origin) -}}{{- fail "connectionConsumer.inline.publicOrigin must be a canonical HTTPS origin without path, query, fragment, or credentials" -}}{{- end -}}
+{{- if or (not (regexMatch `^https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[[0-9a-f:]+\])(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$` $origin)) (regexMatch `^https://\[(?::+|[0-9a-f]+)\](?::[0-9]+)?$` $origin) (regexMatch `^https://\[[0-9a-f:]*::[0-9a-f:]*::[0-9a-f:]*\](?::[0-9]+)?$` $origin) (regexMatch `^https://\[(?:[0-9a-f]{1,4}:){8}[0-9a-f]{1,4}\](?::[0-9]+)?$` $origin) -}}{{- fail "connectionConsumer.inline.publicOrigin must be a canonical HTTPS origin without path, query, fragment, or credentials" -}}{{- end -}}
 {{- $path := required "connectionConsumer.inline.mcpPath is required" $inline.mcpPath -}}
 {{- if or (not (hasPrefix "/" $path)) (hasPrefix "//" $path) (regexMatch `[?#\\\s]` $path) (regexMatch `(^|/)\.\.?(/|$)` $path) (regexMatch `(?i)%(?:2f|2e|5c)` $path) -}}{{- fail "connectionConsumer.inline.mcpPath must be a safe absolute path" -}}{{- end -}}
 {{- if not ($inline.consumerId | default "") -}}{{- fail "connectionConsumer.inline.consumerId is required" -}}{{- end -}}
@@ -90,7 +90,15 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "agent-infra.connectionFingerprint" -}}
 {{- $profile := .Values.connectionConsumer.inline -}}
-{{- sha256sum (toJson (list $profile.schemaVersion $profile.publicOrigin $profile.mcpPath $profile.consumerId $profile.audience $profile.egressProfile.ref $profile.egressProfile.revision)) -}}
+{{- sha256sum (toRawJson (list $profile.schemaVersion $profile.publicOrigin $profile.mcpPath $profile.consumerId $profile.audience $profile.egressProfile.ref $profile.egressProfile.revision)) -}}
+{{- end -}}
+
+{{- define "agent-infra.connectionProfileVersion" -}}
+{{- if eq .Values.connectionConsumer.source "inline" -}}
+{{- printf "1-%s" (sha256sum (toRawJson .Values.connectionConsumer.inline)) -}}
+{{- else -}}
+{{- .Values.connectionConsumer.external.configVersion -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "agent-infra.connectionEnv" -}}

@@ -36,6 +36,8 @@ spec:
         app.kubernetes.io/name: {{ .Chart.Name }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: web
+      annotations:
+        agent-infra.agora.io/connection-profile-version: {{ include "agent-infra.connectionProfileVersion" . | quote }}
     spec:
       automountServiceAccountToken: false
       securityContext:
