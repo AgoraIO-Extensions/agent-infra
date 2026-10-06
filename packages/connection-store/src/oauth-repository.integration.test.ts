@@ -705,9 +705,10 @@ describe("PostgreSQL Connection OAuth", () => {
 					{
 						expires_at: Date;
 						session_id: string;
+						principal_id: string;
 						recovery_generation: string;
 					}[]
-				>`SELECT token.expires_at, token.session_id, session.recovery_generation
+				>`SELECT token.expires_at, token.session_id, session.principal_id, session.recovery_generation
 					FROM connection_oauth_refresh_tokens token
 					JOIN connection_oauth_sessions session ON session.id = token.session_id
 					WHERE token.token_hash = ${refreshInput.refreshTokenHash}`;
@@ -730,11 +731,11 @@ describe("PostgreSQL Connection OAuth", () => {
 				}
 				try {
 					await sql`UPDATE connection_principal_identities SET status = 'DISABLED'
-						WHERE principal_id = ${first.identity.principalId}`;
+						WHERE principal_id = ${source.principal_id}`;
 					await expectRejected(refreshInput, "IDENTITY_INACTIVE");
 				} finally {
 					await sql`UPDATE connection_principal_identities SET status = 'ACTIVE'
-						WHERE principal_id = ${first.identity.principalId}`;
+						WHERE principal_id = ${source.principal_id}`;
 				}
 
 				const rotated = await service.refresh({
@@ -821,7 +822,7 @@ describe("PostgreSQL Connection OAuth", () => {
 				>`
 					SELECT detail FROM connection_audit_records
 					WHERE event = 'DIRECT_SESSION_REVOKED'
-						AND principal_id IN (${first.identity.principalId}, ${disabled.identity.principalId})`;
+						AND principal_id IN (${source.principal_id}, ${disabled.identity.principalId})`;
 				for (const [instanceId, reasonCode] of [
 					[first.identity.instanceId, "REFRESH_TOKEN_REPLAY"],
 					[second.identity.instanceId, "CONSUMER_INSTANCE_REVOKED"],
