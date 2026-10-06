@@ -27,6 +27,7 @@ import type {
 	V1ServiceAccount,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
+import { runtimeConnectionConsumerProjectionV1 } from "./connection-consumer-projection.js";
 import {
 	type WorkerKubernetesClientV1,
 	WorkloadKubernetesError,
@@ -78,6 +79,8 @@ import {
 export { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 
 export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
+	/** Validated deployment copy, never an Agent/request environment value. */
+	readonly connectionConsumerSnapshot?: string | null;
 	readonly namespace: string;
 	readonly namespaceRef: string;
 	readonly resourceProfileRef: string;
@@ -103,6 +106,8 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 }
 
 export function createKubernetesRuntimeAdapterV1(options: {
+	/** Original verified control observes identity/spec without current delivery assertions. */
+	readonly connectionConsumerControl?: boolean;
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
 	/** Supplied from Worker persistent state, never restored from live annotations. */
@@ -115,6 +120,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	}) => Promise<boolean>;
 }) {
 	const { client, policy } = options;
+	const connection = runtimeConnectionConsumerProjectionV1(
+		options.connectionConsumerControl
+			? undefined
+			: policy.connectionConsumerSnapshot,
+	);
 	const egress = workloadEgressRulesV1(policy);
 	if (policy.runtimeAuth) validateWorkloadRuntimeAuthV1(policy.runtimeAuth);
 	validateRuntimeTlsPolicyV1(policy);
@@ -168,6 +178,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		hasDriftedPodSpec,
 		networkPolicy,
 	} = createKubernetesWorkloadPolicyHelpersV1({
+		connectionConsumerControl: options.connectionConsumerControl,
 		policy,
 		modelProjection,
 		modelInjection,
@@ -1102,6 +1113,10 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
+			if (options.connectionConsumerControl && value.replicas !== 0)
+				throw new WorkloadKubernetesError("policy");
+			if (value.replicas !== 0 && policy.connectionConsumerSnapshot === null)
+				throw new WorkloadKubernetesError("policy");
 			// Missing serving material must not prevent an existing workload closing.
 			const tls =
 				value.replicas === 0 ? undefined : runtimeTlsBindingV1(policy, value);
@@ -1385,7 +1400,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					selector: { matchLabels: { [ownerLabel]: name } },
 					updateStrategy: { type: "RollingUpdate" },
 					template: {
-						metadata: { labels: podLabels },
+						metadata: {
+							labels: podLabels,
+							...(policy.connectionConsumerSnapshot === undefined
+								? {}
+								: { annotations: connection.annotations }),
+						},
 						spec: {
 							serviceAccountName: name,
 							automountServiceAccountToken: false,
@@ -1422,6 +1442,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 									},
 									securityContext: agentContainerSecurityContext(),
 									volumeMounts: [
+										...connection.volumeMounts,
 										{
 											name: "data",
 											mountPath: value.persistentVolume.mountPath,
@@ -1440,6 +1461,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 								},
 							],
 							volumes: [
+								...connection.volumes,
 								{
 									name: "data",
 									persistentVolumeClaim: {

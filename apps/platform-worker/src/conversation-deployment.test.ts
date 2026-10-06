@@ -3,6 +3,10 @@ import type { SessionSandboxReconciliationClaimV1 } from "@agent-infra/platform-
 import type { V1Pod } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import {
+	createRuntimeConnectionConsumerSnapshotV1,
+	runtimeConnectionConsumerAnnotation,
+} from "./connection-consumer-projection.js";
+import {
 	createProductionConversationRuntimeResolverV2,
 	createProductionSessionSandboxReceiverV1,
 } from "./conversation-deployment.js";
@@ -113,7 +117,6 @@ describe("production SessionSandbox resource receiver", () => {
 	it("preserves the approved Connection snapshot through the production control resolver", async () => {
 		const f = fixture();
 		const signal = new AbortController().signal;
-		const observation = await f.receive(f.claim, signal);
 		const keys = generateKeyPairSync("ed25519");
 		const signing = {
 			workerId: "worker-a",
@@ -137,11 +140,25 @@ describe("production SessionSandbox resource receiver", () => {
 			source: { ref: "platform-deployment", revision: "r1" },
 		};
 		const expected = structuredClone({ profile, source: approval.source });
+		const snapshot = createRuntimeConnectionConsumerSnapshotV1(
+			profile,
+			approval,
+		);
+		const selectedWorkload = {
+			...f.options,
+			policy: { ...f.options.policy, connectionConsumerSnapshot: snapshot },
+		};
+		const receive = createProductionSessionSandboxReceiverV1(selectedWorkload);
+		const observation = await receive(f.claim, signal);
+		const pod = await f.client.read<V1Pod>("Pod", "sandbox-allocation-a");
+		expect(
+			pod?.metadata?.annotations?.[runtimeConnectionConsumerAnnotation],
+		).toBe(snapshot);
 		const resolver = createProductionConversationRuntimeResolverV2({
 			workload: {
-				...f.options,
+				...selectedWorkload,
 				policy: {
-					...f.options.policy,
+					...selectedWorkload.policy,
 					runtimeAuth: {
 						workerId: signing.workerId,
 						grantIssuer: signing.issuer,

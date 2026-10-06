@@ -384,6 +384,7 @@ export function createProductionSessionSandboxReceiverV1(
 		imageDigest: `${workload.policy.imageRepository}@${deployment.imageDigest}`,
 		containerPort: deployment.service.port,
 		env: deployment.env,
+		connectionConsumerSnapshot: workload.policy.connectionConsumerSnapshot,
 		authorizedIngressSelector: workload.policy.workerSelector,
 		resources: workload.policy.resources,
 		storageSize: workload.policy.storageSize,
@@ -433,6 +434,7 @@ export function createProductionSessionSandboxReceiverV1(
 				const observed = await adapter.observe(
 					sourceAllocation,
 					sourceResources,
+					"control",
 				);
 				signal.throwIfAborted();
 				return {

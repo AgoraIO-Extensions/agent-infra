@@ -6,6 +6,10 @@ import type {
 	V1PodSpec,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
+import {
+	runtimeConnectionConsumerControlPodV1,
+	runtimeConnectionConsumerProjectionV1,
+} from "./connection-consumer-projection.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	agentContainerSecurityContext,
@@ -22,6 +26,7 @@ import {
 	runtimeTlsEnvironmentV1,
 } from "./kubernetes-runtime-tls.js";
 export function createKubernetesPodValidationV1(dependencies: {
+	readonly connectionConsumerControl?: boolean;
 	readonly policy: KubernetesWorkloadPolicyV1;
 	readonly workloadEnvironment: (value: AgentWorkloadDesiredV1) => V1EnvVar[];
 	readonly environmentSecrets: (
@@ -29,11 +34,20 @@ export function createKubernetesPodValidationV1(dependencies: {
 	) => AgentWorkloadDesiredV1["secretRefs"];
 }) {
 	const { policy, workloadEnvironment, environmentSecrets } = dependencies;
+	const connection = runtimeConnectionConsumerProjectionV1(
+		dependencies.connectionConsumerControl
+			? undefined
+			: policy.connectionConsumerSnapshot,
+	);
 	function hasSafePodMetadata(
 		value: AgentWorkloadDesiredV1,
-		actual: V1Pod["metadata"],
+		metadataInput: V1Pod["metadata"],
 		live?: { pod: V1Pod; workload: V1StatefulSet },
 	) {
+		const actual = dependencies.connectionConsumerControl
+			? runtimeConnectionConsumerControlPodV1({ metadata: metadataInput })
+					.metadata
+			: metadataInput;
 		const name = workloadResourceNameV1(value.agentId);
 		const expectedLabels: Record<string, string> = {
 			[ownerLabel]: name,
@@ -56,8 +70,18 @@ export function createKubernetesPodValidationV1(dependencies: {
 			}
 		}
 		if (!hasSameStructure(actual?.labels, expectedLabels)) return false;
+		if (
+			Object.entries(connection.annotations).some(
+				([key, value]) => actual?.annotations?.[key] !== value,
+			)
+		)
+			return false;
 		const annotations = Object.entries(actual?.annotations ?? {});
-		if (!live) return annotations.length === 0;
+		if (!live)
+			return hasSameStructure(
+				actual?.annotations ?? {},
+				connection.annotations,
+			);
 		const podIPs =
 			live.pod.status?.podIPs?.map((entry) => entry.ip) ??
 			(live.pod.status?.podIP ? [live.pod.status.podIP] : []);
@@ -73,6 +97,8 @@ export function createKubernetesPodValidationV1(dependencies: {
 			);
 		};
 		return annotations.every(([key, content]) => {
+			if (Object.hasOwn(connection.annotations, key))
+				return content === connection.annotations[key];
 			if (key === "cni.projectcalico.org/containerID")
 				return /^[a-f0-9]{64}$/.test(content);
 			if (key === "cni.projectcalico.org/podIP")
@@ -377,12 +403,15 @@ export function createKubernetesPodValidationV1(dependencies: {
 	}
 	function hasDriftedPodSpec(
 		value: AgentWorkloadDesiredV1,
-		pod: V1PodSpec | undefined,
+		specInput: V1PodSpec | undefined,
 		expectedIdentity?: {
 			readonly hostname: string;
 			readonly subdomain: string;
 		},
 	) {
+		const pod = dependencies.connectionConsumerControl
+			? runtimeConnectionConsumerControlPodV1({ spec: specInput }).spec
+			: specInput;
 		if (hasUnsafePodSpec(pod, expectedIdentity)) return true;
 		const tls = runtimeTlsBindingV1(policy, value);
 		const container = pod?.containers.find((entry) => entry.name === "agent");
@@ -457,6 +486,12 @@ export function createKubernetesPodValidationV1(dependencies: {
 					mountPropagation: mount.mountPropagation ?? "None",
 				})),
 				[
+					...connection.volumeMounts.map((mount) => ({
+						...mount,
+						subPath: "",
+						subPathExpr: "",
+						mountPropagation: "None",
+					})),
 					{
 						name: "data",
 						mountPath: value.persistentVolume.mountPath,
@@ -520,6 +555,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 					};
 				}),
 				[
+					...connection.volumes,
 					{
 						name: "data",
 						persistentVolumeClaim: {

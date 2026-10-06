@@ -398,6 +398,7 @@ export function createWorkloadRuntimeV1(
 		recordCapabilities: (value: Record<string, boolean>) => void = () => {},
 		state?: Pick<WorkloadReconciliationStateV1, "candidate">,
 		purpose: "authorize" | "cleanup" = "authorize",
+		connectionConsumerControl = false,
 	) {
 		const modelProjection =
 			state?.candidate.configuration.source.kind === "standard"
@@ -420,6 +421,8 @@ export function createWorkloadRuntimeV1(
 				throw new ModelConfigurationErrorV1();
 		}
 		return createKubernetesRuntimeAdapterV1({
+			connectionConsumerControl:
+				purpose === "cleanup" || connectionConsumerControl,
 			client: options.client,
 			policy: options.policy,
 			modelProjection,
@@ -1009,9 +1012,14 @@ export function createWorkloadRuntimeV1(
 					state.verified.configuration.source.imageDigest
 			)
 				return "drifted";
-			const observation = createAdapter(undefined, {
-				candidate: state.verified,
-			});
+			const observation = createAdapter(
+				undefined,
+				{
+					candidate: state.verified,
+				},
+				"authorize",
+				true,
+			);
 			const original = validateAgentWorkloadDesiredV1({
 				...deployment,
 				workloadRevision: state.verifiedRevision,

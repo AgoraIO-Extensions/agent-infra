@@ -18,6 +18,13 @@ import type {
 	V1Service,
 	V1ServiceAccount,
 } from "@kubernetes/client-node";
+import {
+	runtimeConnectionConsumerAnnotation,
+	runtimeConnectionConsumerControlPodV1,
+	runtimeConnectionConsumerFileEnvironment,
+	runtimeConnectionConsumerProjectionV1,
+	runtimeConnectionConsumerRevisionEnvironment,
+} from "./connection-consumer-projection.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { validateRuntimeTlsSecretV1 } from "./kubernetes-runtime-tls.js";
@@ -46,6 +53,7 @@ export interface SessionSandboxAllocationV1 {
 	readonly containerPort: number;
 	readonly workspaceMountPath: string;
 	readonly env?: Readonly<Record<string, string>>;
+	readonly connectionConsumerSnapshot?: string | null;
 	readonly resources: {
 		readonly requests: { readonly cpu: string; readonly memory: string };
 		readonly limits: { readonly cpu: string; readonly memory: string };
@@ -132,6 +140,24 @@ export function sessionSandboxResourcesV1(
 	allocation: SessionSandboxAllocationV1,
 ): SessionSandboxResourceSetV1 {
 	validateAllocation(allocation);
+	if (
+		allocation.desiredState === "running" &&
+		(allocation.connectionConsumerSnapshot === null ||
+			Object.hasOwn(
+				allocation.env ?? {},
+				runtimeConnectionConsumerFileEnvironment,
+			) ||
+			Object.hasOwn(
+				allocation.env ?? {},
+				runtimeConnectionConsumerRevisionEnvironment,
+			))
+	)
+		throw new WorkloadKubernetesError("policy");
+	const connection = runtimeConnectionConsumerProjectionV1(
+		allocation.desiredState === "running"
+			? allocation.connectionConsumerSnapshot
+			: undefined,
+	);
 	const resourceLabels = labels(allocation);
 	const account: V1ServiceAccount = {
 		apiVersion: "v1",
@@ -174,7 +200,13 @@ export function sessionSandboxResourcesV1(
 	const pod: V1Pod = {
 		apiVersion: "v1",
 		kind: "Pod",
-		metadata: metadata(allocation, allocation.podName),
+		metadata: {
+			...metadata(allocation, allocation.podName),
+			annotations: {
+				...metadata(allocation, allocation.podName).annotations,
+				...connection.annotations,
+			},
+		},
 		spec: {
 			serviceAccountName: allocation.serviceAccountName,
 			automountServiceAccountToken: false,
@@ -186,12 +218,16 @@ export function sessionSandboxResourcesV1(
 					imagePullPolicy: "IfNotPresent",
 					resources: structuredClone(allocation.resources),
 					ports: [{ containerPort: allocation.containerPort }],
-					env: Object.entries(allocation.env ?? {}).map(([name, value]) => ({
-						name,
-						value,
-					})),
+					env: [
+						...Object.entries(allocation.env ?? {}).map(([name, value]) => ({
+							name,
+							value,
+						})),
+						...connection.env,
+					],
 					workingDir: allocation.workspaceMountPath,
 					volumeMounts: [
+						...connection.volumeMounts,
 						{ name: "workspace", mountPath: allocation.workspaceMountPath },
 						{
 							name: "runtime-tls",
@@ -215,6 +251,7 @@ export function sessionSandboxResourcesV1(
 				},
 			],
 			volumes: [
+				...connection.volumes,
 				{
 					name: "workspace",
 					persistentVolumeClaim: { claimName: allocation.pvcName },
@@ -281,6 +318,11 @@ function stableJson(value: unknown): string {
 }
 
 function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
+	if (
+		current.metadata?.annotations?.[runtimeConnectionConsumerAnnotation] !==
+		expected.metadata?.annotations?.[runtimeConnectionConsumerAnnotation]
+	)
+		return false;
 	const currentSpec = (current as V1Pod).spec;
 	const expectedSpec = expected.spec;
 	const currentContainer = currentSpec?.containers?.[0];
@@ -648,6 +690,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 		async observe(
 			allocation: SessionSandboxAllocationV1,
 			previous: readonly SessionSandboxResourceIdentityV1[] = [],
+			purpose: "business" | "control" = "business",
 		): Promise<SessionSandboxObservationV1> {
 			if (options.client.namespace !== allocation.namespace)
 				throw new WorkloadKubernetesError("policy");
@@ -669,7 +712,12 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			const resources: SessionSandboxResourceIdentityV1[] = [];
 			let status: SessionSandboxObservationV1["status"] =
 				allocation.desiredState === "stopped" ? "stopped" : "ready";
-			for (const expected of sessionSandboxResourcesV1(allocation)) {
+			const expectedResources = sessionSandboxResourcesV1(
+				purpose === "control"
+					? { ...allocation, desiredState: "stopped" }
+					: allocation,
+			);
+			for (const expected of expectedResources) {
 				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
 				const name = expected.metadata?.name ?? "";
 				const current = await options.client.read(kind, name);
@@ -709,7 +757,14 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						prior.uid !== identity.uid)
 				)
 					status = "unknown";
-				if (!resourceSpecMatches(current, expected)) status = "unknown";
+				const matches =
+					purpose === "control" && kind === "Pod"
+						? podSpecMatches(
+								runtimeConnectionConsumerControlPodV1(current as V1Pod),
+								runtimeConnectionConsumerControlPodV1(expected as V1Pod),
+							)
+						: resourceSpecMatches(current, expected);
+				if (!matches) status = "unknown";
 				if (kind === "Pod") {
 					const pod = current as V1Pod;
 					if (
@@ -723,7 +778,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						status = "observed";
 				}
 			}
-			return { status, resources };
+			return {
+				status:
+					purpose === "control" && status === "ready" ? "observed" : status,
+				resources,
+			};
 		},
 		async cleanup(
 			allocation: SessionSandboxAllocationV1,
@@ -745,7 +804,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			const recordDeletionProgress = context.recordDeletionProgress;
 			if (!recordDeletionProgress)
 				throw new WorkloadKubernetesError("unavailable");
-			const expectedResources = sessionSandboxResourcesV1(allocation);
+			const expectedResources = sessionSandboxResourcesV1({
+				...allocation,
+				desiredState: "stopped",
+			});
 			const previousByKind = new Map(
 				previous.map((resource) => [resource.kind, resource]),
 			);
