@@ -33,9 +33,16 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
+import {
+	assertRuntimeConnectionConsumerHeader,
+	type RuntimeConnectionConsumerProfile,
+} from "./connection-consumer-profile.js";
+
 export const runtimeHostService = "agent-runtime-host";
 
 interface RuntimeHostAppOptions {
+	/** Local approved deployment snapshot; transport headers cannot select it. */
+	connectionConsumer?: RuntimeConnectionConsumerProfile;
 	/** Identity authenticated by this deployment's service token. Never a caller field. */
 	runtimeWorkerId?: string;
 	verifyGrantV2?: (
@@ -84,6 +91,9 @@ function authorized(header: string | undefined, expectedToken: string) {
 
 export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 	const app = new Hono();
+	const connectionConsumer = options.connectionConsumer
+		? structuredClone(options.connectionConsumer)
+		: undefined;
 
 	app.get("/healthz", (context) =>
 		context.json({ service: runtimeHostService, status: "ok" }),
@@ -102,6 +112,22 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 					traceId: context.req.header("x-trace-id") ?? crypto.randomUUID(),
 				},
 				401,
+			);
+		}
+		await next();
+	});
+	app.use("/internal/runtime/*", async (context, next) => {
+		// Gate new business only. Stop, event reads and original-operation recovery
+		// must remain usable when a deployment profile changes or disappears.
+		if (
+			context.req.method === "POST" &&
+			/^\/internal\/runtime\/v(?:[1-4]\/turns|[134]\/instructions)$/.test(
+				context.req.path,
+			)
+		) {
+			assertRuntimeConnectionConsumerHeader(
+				context.req.header("x-agent-infra-connection-consumer"),
+				connectionConsumer,
 			);
 		}
 		await next();
