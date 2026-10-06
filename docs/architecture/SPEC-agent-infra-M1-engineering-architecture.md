@@ -985,6 +985,11 @@ M1 的标准 Codex 路径使用固定的官方 upstream release。现有
 发行路径如何，PRD 要求的每次实际外部动作持久 intent、当前授权、结果或 unknown 确认仍是
 准入前置；官方路径无法在该边界可靠控制的操作必须拒绝或标记未支持，不能作为正式 conformance。
 
+Runtime Driver 直接执行的标准 MCP 路径按 [§13.5.4](#1354-runtime-driver-直接消费标准-mcp)
+使用官方工具请求/结果接缝：网络动作与秘密读取留在受保护 Driver 内，在原生工具响应前完成
+持久确认。此覆盖仅适用于该 Driver 执行的 MCP 操作，不授予其他原生工具 native barrier
+conformance，也不改变下述私有 lane 的前置。
+
 需要私有 FD callback、Connection bootstrap/recovery 或等价 native lane 的能力，只有在部署
 provenance 明确声明该 lane、协议/Schema 与工具覆盖，并实际验证不可关闭的 native barrier 后
 才能启用。该 barrier 在每个真实外部动作前等待 Driver 的持久 intent 与 Host 当前授权，在
@@ -1430,6 +1435,76 @@ Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agen
 配置契约或静态校验通过不代表这些验收完成，也不接管
 [#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907)、
 [#601](https://github.com/AgoraIO-Extensions/agent-infra/issues/601)或 Connection 服务端实现。
+
+#### 13.5.4 Runtime Driver 直接消费标准 MCP
+
+当固定原生客户端不能满足 §13.5.3 的凭据保护与持久确认时，Runtime 可明确选择由其
+Driver 内的 TypeScript 标准 MCP 客户端执行 Connection 操作。客户端只存在于所属 Sandbox
+的 RuntimeHost/Driver 受保护范围，直接连接完整获准 profile 的固定 HTTPS endpoint；
+API/Worker/Web 仍只交付非敏感配置与自身执行授权，不取得 token，不转发 MCP，也不创建
+MCP server、Provider 执行器、Connection 目录或授权/审计投影。产品边界与 token 选择以
+§13.5.3 为准。本路径的取舍见 [ADR 0019](../adr/0019-run-standard-mcp-in-protected-runtime-driver.md)。
+
+固定官方 Codex 通过 `thread/start.dynamicTools` 安装有界工具定义，由 `item/tool/call`
+向 Driver 请求操作并等待工具响应。此字段属于固定版本的 experimental API，须显式 opt-in，
+固定协议/schema，并在最终产物验证；不修改原生 release。定义只来自当前受信 MCP 发现快照，
+每个工具名、输入 schema 和修订绑定原 Conversation/generation；它是会话内的客户端元数据，
+不成为平台工具目录或 Grant 权威。原生只取得工具定义及按业务权限可见的脱敏结果，token、
+SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空，
+同一会话不同时启用另一 native MCP、private bootstrap 或 token helper 路径。
+
+**受保护输入。** Host 从当前经过验证且已持久接受的原执行解析 principal、Agent、
+Conversation、Sandbox、generation 与授权修订，再定位获准安装的 SecretRef。安装的
+Consumer/实例、issuer/resource、凭据修订与期限必须与该原执行及完整 profile 一致。
+callback、请求字段、模型/工具参数和 token 名称不能选择安装；SecretRef 或安装映射缺失
+时不可用，不尝试其他 token。领取、刷新与撤销只消费 Connection 实际发布且匹配部署的
+合同，不发明 identity、binder 或 record-query 路由，不把 metadata 声明当作服务端身份验证。
+
+秘密输入属于 Host 的专用受保护材料，不能写入普通配置、native home/workspace 或原
+journal。原生及其工具的真实文件边界必须排除这些材料、父 Host 状态、路径别名与可重开的
+FD；传给原生的 stdin/stdout 只携带当前协议内容，秘密句柄不继承。客户端在自身内存中
+构造固定目标的认证请求，拒绝重定向、caller header/URL 覆盖和跨安装复用；SDK、错误、
+trace、dump 与诊断不能把秘密输出给模型或持久记录。关闭或撤销时停止客户端并释放引用，
+不把 JavaScript 引用释放或 Buffer 清零宣称为完整内存保护。
+
+初始受保护 Host profile 限 Linux：真实非 root UID、无有效/许可/继承/ambient capabilities、
+`no_new_privs`、原有无 inspector/loader/dump 的进程准入，以及对 native/tool 子进程落实的
+文件边界须同时有效。另须从可信内核读取 Yama `ptrace_scope=2` 或 `3`，以阻止同 UID
+进程的 attach-mode 内存访问及 `pidfd_getfd`；proc FD/link/fdinfo 读取与重开另由真实
+文件边界限制，不能以 Yama 数值代替。最终镜像须分别验证 `ptrace`、`process_vm_readv`、
+`/proc/*/mem`、`pidfd_getfd`、`/proc/*/fd`、`fdinfo` 重开与继承攻击实际被拒绝。缺失、不可核实或
+策略变化时，先封闭该能力且不读取/领取新 token；原控制与只读恢复仍沿原执行可用。
+Runtime 不修改节点 sysctl、不提升权限、不接受 env 的保护声明，不回退另一 OS/profile。
+
+**执行与确认。** 每次工具请求严格复用原 Driver/Host 的 journal、fence、事务/游标和
+取消流程；标准 SDK 及 MCP session 只属于原主体/Agent/Conversation/generation，不能
+跨 Sandbox 共享。当前 token 与 Connection 自身授权仍由服务端逐次验证。安全分类不
+以模型声明或 MCP annotations 为授权；不能确认的副作用按可能有 WRITE 处理。
+
+1. Driver 从受信原生进程的 thread/Turn/callId 映射原 Execution，验证已安装工具及参数
+   schema；重复相同请求复用原 operation/attempt，身份、参数或映射冲突拒绝。
+2. 在原持久层确认 intent，释放持久队列后等待 Host 当前业务授权，再核对原代次、
+   fence、deadline、安装修订、token 期限及保护状态；任一 await 后都重验。
+3. 标准客户端发出一次具名 MCP 工具操作，采集同次请求身份/摘要及实际响应；实际开始与
+   远端已接受分别记录，不以前置 intent 冒充已执行。所有 SDK 内部实际工具发送也经过此
+   边界；无法阻断隐藏重试时不启用该操作。响应丢失或提交不确定的 WRITE 保持 unknown，
+   不重发。初始化/发现只做固定目标下的有界协议读取，不代替业务工具意图或授权。
+4. 实际结果或 unknown、必要事实与审计沿原 journal 和原 ACK 可靠保存。只有可确认终态
+   才回答原生 `item/tool/call`；unknown WRITE 即使已保存，也须封闭原 Turn 的新模型/工具
+   动作，保留 Conversation 占用并停止或隔离原生，不能用普通工具错误让推理继续。不能
+   确认副作用类别的 unknown 同样处理。Connection 引用仅从同次认证响应采集，并按已发布
+   的原记录合同核对；缺失或不能核实保持 unverified，MCP success 不等于外部效果已核实。
+
+结果保存失败时不能发送普通工具错误并任由原生继续推理：官方断连可能产生 fallback 工具
+响应。Driver 必须先封闭该原执行的新模型/工具准入，保留已有 intent/未决事实，并按原停止
+流程终止或隔离原生进程后处理协议连接；未确认退出不释放会话。崩溃、断连、取消与恢复
+均不能新建业务 Session/Turn 或重放未决 MCP；只在当前有效原 token 和两侧独立查询权限下
+核实原记录，缺少查询合同则保持 unknown。此流程不新增调度器、事实来源或恢复真值。
+
+源码实现可先以固定官方协议、真实标准 SDK 与受控安装输入开发；功能启用还须通过
+Runtime HLD §11.2 的最终产物、主体/Agent、秘密保护、撤销、确认/故障与恢复验证。
+文档合入与 fixture 不签收这些结果。该路径只声明 Driver 所执行 MCP 的覆盖，其他原生
+外部工具继续按 §10.11 准入；不得以本路径批准隐藏原生动作或私有 lane。
 
 ## 14. 使用渠道
 
