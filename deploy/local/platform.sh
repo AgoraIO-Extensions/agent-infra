@@ -528,6 +528,7 @@ check_directory_resource_ownership() {
 
 connect_directory_sync() {
   local container aliases network_alias directory_ip
+  check_directory_resource_ownership || return 1
   container=$("${compose[@]}" ps -q "$directory_service")
   [[ -n "$container" ]] || { echo "Local directory sync container is missing" >&2; return 1; }
   aliases=$(directory_network_aliases "$container")

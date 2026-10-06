@@ -33,6 +33,11 @@ jobs:
       fail-fast: false
       matrix:
         platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            architecture: amd64
+          - platform: linux/arm64
+            architecture: arm64
     steps:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,7 +66,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
           if-no-files-found: error
-          name: infrastructure-images-${{ matrix.platform }}-${{ github.sha }}
+          name: infrastructure-images-${{ matrix.architecture }}-${{ github.sha }}
           path: |
             ${{ runner.temp }}/infrastructure-images.json
             ${{ runner.temp }}/infrastructure-images.json.runtime-probe.json
@@ -97,6 +102,11 @@ jobs:
       fail-fast: false
       matrix:
         platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            architecture: amd64
+          - platform: linux/arm64
+            architecture: arm64
     steps:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -117,15 +127,15 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          node deploy/release/build-images.mjs "$RUNNER_TEMP/platform-images.json"
+          node deploy/release/build-images.mjs "$RUNNER_TEMP/platform-images.json" \
+            --images=web,platformApi
       - name: Upload Platform receipts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
           if-no-files-found: error
-          name: platform-images-${{ matrix.platform }}-${{ github.sha }}
+          name: platform-images-${{ matrix.architecture }}-${{ github.sha }}
           path: |
             ${{ runner.temp }}/platform-images.json
-            ${{ runner.temp }}/platform-images.json.runtime-probe.json
 
   platform-index:
     name: Publish Platform indexes
@@ -142,7 +152,7 @@ jobs:
       - name: Publish multi-architecture Platform indexes
         run: |
           set -euo pipefail
-          for image in web platform-api platform-worker enterprise-directory-sync agent-runtime-host; do
+          for image in web platform-api; do
             docker buildx imagetools create \
               --tag "$IMAGE_REPOSITORY_PREFIX/$image:sha-$GITHUB_SHA" \
               "$IMAGE_REPOSITORY_PREFIX/$image:$GITHUB_SHA-linux-amd64" \
