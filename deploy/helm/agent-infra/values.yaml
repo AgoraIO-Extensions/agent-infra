@@ -45,6 +45,26 @@ adapters:
   kubernetesRuntime: in-cluster
   workloadRoute: ingress
 
+# The non-sensitive snapshot consumed by every Platform component. Connection
+# resources and credentials are owned by the separate Connection deployment.
+connectionConsumer:
+  source: inline
+  inline:
+    schemaVersion: 1
+    publicOrigin: https://connection.example.invalid
+    mcpPath: /mcp
+    consumerId: platform
+    audience: connection-api
+    egressProfile:
+      ref: platform-egress
+      revision: r1
+    approval:
+      egressEnforced: true
+      source:
+        ref: platform-deployment
+        revision: r1
+  external: {}
+
 web:
   placement: external
   externalBaseUrl: https://web.example.invalid
