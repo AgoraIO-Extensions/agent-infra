@@ -288,12 +288,16 @@ export async function assembleRuntimeHost(
 		closeDriver = async () => {
 			if ("close" in driver) await driver.close();
 		};
-		const rawValidateV4 = runtimeWorkerId
-			? createRuntimeExecutionGrantValidatorV4(new Map([[keyId, publicKey]]), {
-					expectedIssuer,
-					expectedWorkerId: runtimeWorkerId,
-				})
-			: undefined;
+		const rawValidateV4 =
+			runtimeWorkerId && configuration?.schemaVersion === 4
+				? createRuntimeExecutionGrantValidatorV4(
+						new Map([[keyId, publicKey]]),
+						{
+							expectedIssuer,
+							expectedWorkerId: runtimeWorkerId,
+						},
+					)
+				: undefined;
 		const validateV4 = rawValidateV4
 			? async (request: unknown) => {
 					const verified = await rawValidateV4(request);

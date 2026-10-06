@@ -316,6 +316,7 @@ describe("RuntimeHost environment assembly", () => {
 			});
 			try {
 				expect(runtime.configVersion).toBe("claude-active-17");
+				expect(runtime.verifyGrantV4).toBeUndefined();
 				expect(
 					(await createRuntimeHostApp(runtime).request("/healthz")).status,
 				).toBe(200);
@@ -807,6 +808,7 @@ describe("RuntimeHost environment assembly", () => {
 			AGENT_INFRA_RUNTIME_CONNECTION_PROFILE: JSON.stringify(profile),
 		});
 		try {
+			expect(runtime.verifyGrantV4).toBeUndefined();
 			expect(openedWith?.connectionClient).toMatchObject({
 				profile,
 				authorizedService: {

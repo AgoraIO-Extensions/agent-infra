@@ -47,6 +47,7 @@ export function readRuntimeModelConfigurationV3(
 			},
 		);
 		return {
+			schemaVersion: 3 as const,
 			configVersion: value.configVersion,
 			defaultModelOptionId: value.defaultModelOptionId,
 			defaultReasoningLevel: value.defaultReasoningLevel,
@@ -78,6 +79,7 @@ export function readRuntimeModelConfigurationV4(
 			};
 		});
 		return {
+			schemaVersion: 4 as const,
 			configVersion: value.configVersion,
 			defaultModelOptionId: value.defaultModelOptionId,
 			defaultReasoningLevel: value.defaultReasoningLevel,
@@ -89,6 +91,7 @@ export function readRuntimeModelConfigurationV4(
 }
 
 export interface CodexPilotConfiguration {
+	readonly schemaVersion: 2 | 3 | 4;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
@@ -209,6 +212,7 @@ export function readCodexPilotConfiguration(
 		runtimeConfigurationInvalid();
 	}
 	return {
+		schemaVersion: 2 as const,
 		configVersion: value.configVersion,
 		defaultModelOptionId: value.defaultModelOptionId,
 		defaultReasoningLevel: value.defaultReasoningLevel,
