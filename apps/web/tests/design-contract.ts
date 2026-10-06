@@ -32,7 +32,7 @@ export async function captureDesignContract(
 		].find((node) => node.getBoundingClientRect().width > 0);
 		const input = [
 			...document.querySelectorAll(
-				'main [data-slot="input"], main [data-slot="select-trigger"], main [data-slot="native-select"]',
+				'main .directory-control, main [data-slot="input"], main [data-slot="select-trigger"], main [data-slot="native-select"]',
 			),
 		].find((node) => node.getBoundingClientRect().width > 0);
 		return {
