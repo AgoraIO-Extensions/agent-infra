@@ -48,6 +48,14 @@ import { runtimeTlsFetch } from "./runtime-tls-transport.js";
 
 export interface WorkloadRuntimeOptionsV1 {
 	readonly workerId: string;
+	/** Deployment-owned ConfigMap carrying the approved non-sensitive Connection snapshot. */
+	readonly connectionConsumerSnapshotConfigMapName?: string;
+	readonly connectionConsumerSnapshotConfigMapKey?: string;
+	readonly connectionConsumerSnapshotConfigMapVersion?: string;
+	readonly connectionConsumerSnapshot?: Readonly<{
+		readonly profile: unknown;
+		readonly approval: unknown;
+	}>;
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
 	readonly registry: ImageRegistryAdapterV1;
@@ -80,6 +88,7 @@ export interface WorkloadRuntimeOptionsV1 {
 
 export function workloadResourceConfigurationHashV1(
 	policy: WorkloadRuntimeOptionsV1["policy"],
+	connectionConsumerSnapshotConfigMapVersion?: string,
 ): string {
 	return createHash("sha256")
 		.update(
@@ -93,6 +102,9 @@ export function workloadResourceConfigurationHashV1(
 					cpu: policy.resources.limits.cpu,
 					memory: policy.resources.limits.memory,
 				},
+				...(connectionConsumerSnapshotConfigMapVersion
+					? { connectionConsumerSnapshotConfigMapVersion }
+					: {}),
 			}),
 		)
 		.digest("hex");

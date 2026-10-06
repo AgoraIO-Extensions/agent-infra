@@ -59,6 +59,7 @@ connectionConsumer:
       ref: platform-egress
       revision: r1
     approval:
+      schemaVersion: 1
       egressEnforced: true
       source:
         ref: platform-deployment

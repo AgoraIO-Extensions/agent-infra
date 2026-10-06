@@ -194,6 +194,55 @@ describe("session sandbox workload adapter", () => {
 		});
 	});
 
+	it("projects the approved Connection snapshot through a fixed read-only ConfigMap path", () => {
+		const resources = sessionSandboxResourcesV1({
+			...allocation,
+			connectionConsumerSnapshotConfigMapName: "connection-consumer",
+			connectionConsumerSnapshotConfigMapKey:
+				"AGENT_INFRA_CONNECTION_CONSUMER_SNAPSHOT",
+			connectionConsumerSnapshotConfigMapVersion: `1-${"a".repeat(64)}`,
+		});
+		const pod = resources[4];
+		expect(pod.spec?.containers[0]?.volumeMounts).toContainEqual({
+			name: "connection-consumer",
+			mountPath: "/var/run/agent-infra/connection-consumer",
+			readOnly: true,
+		});
+		expect(pod.spec?.volumes).toContainEqual({
+			name: "connection-consumer",
+			configMap: {
+				name: "connection-consumer",
+				items: [
+					{
+						key: "AGENT_INFRA_CONNECTION_CONSUMER_SNAPSHOT",
+						path: "snapshot.json",
+					},
+				],
+				optional: false,
+			},
+		});
+		expect(
+			pod.metadata?.annotations?.[
+				"agent-infra.agora.io/connection-profile-version"
+			],
+		).toBe(`1-${"a".repeat(64)}`);
+	});
+
+	it("rejects deployment env attempts to override the snapshot source", () => {
+		expect(() =>
+			sessionSandboxResourcesV1({
+				...allocation,
+				connectionConsumerSnapshotConfigMapName: "connection-consumer",
+				connectionConsumerSnapshotConfigMapKey:
+					"AGENT_INFRA_CONNECTION_CONSUMER_SNAPSHOT",
+				connectionConsumerSnapshotConfigMapVersion: `1-${"a".repeat(64)}`,
+				env: {
+					AGENT_INFRA_RUNTIME_CONNECTION_PROFILE: "override",
+				},
+			}),
+		).toThrow("Kubernetes Workload operation failed");
+	});
+
 	it("reconciles an unknown attempt from absence without changing its identity", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });

@@ -42,6 +42,9 @@ export interface SessionSandboxAllocationV1 {
 	readonly pvcName: string;
 	readonly networkPolicyName: string;
 	readonly imageDigest: string;
+	readonly connectionConsumerSnapshotConfigMapName?: string;
+	readonly connectionConsumerSnapshotConfigMapKey?: string;
+	readonly connectionConsumerSnapshotConfigMapVersion?: string;
 	readonly authorizedIngressSelector: Readonly<Record<string, string>>;
 	readonly containerPort: number;
 	readonly workspaceMountPath: string;
@@ -80,6 +83,12 @@ function metadata(allocation: SessionSandboxAllocationV1, name: string) {
 		annotations: {
 			"agent-infra.agora.io/fence": String(allocation.resourceFence),
 			"agent-infra.agora.io/managed": "session-sandbox-v1",
+			...(allocation.connectionConsumerSnapshotConfigMapVersion
+				? {
+						"agent-infra.agora.io/connection-profile-version":
+							allocation.connectionConsumerSnapshotConfigMapVersion,
+					}
+				: {}),
 		},
 	};
 }
@@ -118,6 +127,31 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 			value.networkPolicyName,
 		].some((name) => name !== value.resourceName) ||
 		!/^[^\s@]+@sha256:[0-9a-f]{64}$/.test(value.imageDigest) ||
+		(value.connectionConsumerSnapshotConfigMapName !== undefined &&
+			!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(
+				value.connectionConsumerSnapshotConfigMapName,
+			)) ||
+		(value.connectionConsumerSnapshotConfigMapKey !== undefined &&
+			!/^[A-Za-z0-9._-]{1,253}$/.test(
+				value.connectionConsumerSnapshotConfigMapKey,
+			)) ||
+		(value.connectionConsumerSnapshotConfigMapVersion !== undefined &&
+			!/^1-[a-f0-9]{64}$/.test(
+				value.connectionConsumerSnapshotConfigMapVersion,
+			)) ||
+		(value.connectionConsumerSnapshotConfigMapName !== undefined &&
+			value.connectionConsumerSnapshotConfigMapVersion === undefined) ||
+		(value.connectionConsumerSnapshotConfigMapName !== undefined &&
+			value.connectionConsumerSnapshotConfigMapKey === undefined) ||
+		(value.connectionConsumerSnapshotConfigMapName === undefined &&
+			(value.connectionConsumerSnapshotConfigMapKey !== undefined ||
+				value.connectionConsumerSnapshotConfigMapVersion !== undefined)) ||
+		Object.keys(value.env ?? {}).some(
+			(key) =>
+				key.startsWith("AGENT_INFRA_CONNECTION_") ||
+				key === "AGENT_INFRA_RUNTIME_CONNECTION_PROFILE" ||
+				key === "AGENT_INFRA_CONNECTION_CONSUMER_SNAPSHOT_PATH",
+		) ||
 		Object.keys(value.authorizedIngressSelector).length === 0 ||
 		Object.values(value.authorizedIngressSelector).some((item) => !item) ||
 		!Number.isSafeInteger(value.containerPort) ||
@@ -186,10 +220,21 @@ export function sessionSandboxResourcesV1(
 					imagePullPolicy: "IfNotPresent",
 					resources: structuredClone(allocation.resources),
 					ports: [{ containerPort: allocation.containerPort }],
-					env: Object.entries(allocation.env ?? {}).map(([name, value]) => ({
-						name,
-						value,
-					})),
+					env: [
+						...Object.entries(allocation.env ?? {}).map(([name, value]) => ({
+							name,
+							value,
+						})),
+						...(allocation.connectionConsumerSnapshotConfigMapVersion
+							? [
+									{
+										name: "AGENT_INFRA_CONNECTION_CONSUMER_CONFIGMAP_VERSION",
+										value:
+											allocation.connectionConsumerSnapshotConfigMapVersion,
+									},
+								]
+							: []),
+					],
 					workingDir: allocation.workspaceMountPath,
 					volumeMounts: [
 						{ name: "workspace", mountPath: allocation.workspaceMountPath },
@@ -198,6 +243,15 @@ export function sessionSandboxResourcesV1(
 							mountPath: "/var/run/agent-infra/runtime-tls",
 							readOnly: true,
 						},
+						...(allocation.connectionConsumerSnapshotConfigMapName
+							? [
+									{
+										name: "connection-consumer",
+										mountPath: "/var/run/agent-infra/connection-consumer",
+										readOnly: true,
+									},
+								]
+							: []),
 					],
 					readinessProbe: {
 						httpGet: {
@@ -230,6 +284,24 @@ export function sessionSandboxResourcesV1(
 						optional: false,
 					},
 				},
+				...(allocation.connectionConsumerSnapshotConfigMapName
+					? [
+							{
+								name: "connection-consumer",
+								configMap: {
+									name: allocation.connectionConsumerSnapshotConfigMapName,
+									items: [
+										{
+											key:
+												allocation.connectionConsumerSnapshotConfigMapKey ?? "",
+											path: "snapshot.json",
+										},
+									],
+									optional: false,
+								},
+							},
+						]
+					: []),
 			],
 		},
 	};

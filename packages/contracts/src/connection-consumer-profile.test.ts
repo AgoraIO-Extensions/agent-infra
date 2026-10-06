@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
 	connectionConsumerProfileFingerprintV1,
+	parseConnectionConsumerSnapshotV1,
 	resolveConnectionConsumerTargetV1,
 	validateConnectionConsumerProfileV1,
 } from "./connection-consumer-profile.js";
@@ -77,5 +78,18 @@ describe("Connection Consumer profile", () => {
 				approval,
 			),
 		).toThrow();
+	});
+
+	it("accepts only an approved profile and approval snapshot", () => {
+		expect(parseConnectionConsumerSnapshotV1({ profile, approval })).toEqual({
+			profile,
+			approval,
+		});
+		expect(() =>
+			parseConnectionConsumerSnapshotV1({
+				profile,
+				approval: { ...approval, configFingerprint: "0".repeat(64) },
+			}),
+		).toThrow("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
 	});
 });

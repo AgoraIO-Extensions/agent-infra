@@ -1,6 +1,8 @@
 import { createPublicKey } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type ApprovedConnectionConsumerTargetV1,
+	parseConnectionConsumerSnapshotV1,
 	resolveApprovedConnectionConsumerProfileV1,
 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
@@ -12,7 +14,7 @@ import {
 	ConversationRuntimeHostError,
 	type SessionSandboxReconciliationClaimV1,
 } from "@agent-infra/platform-core";
-import type { V1Service } from "@kubernetes/client-node";
+import type { V1ConfigMap, V1Service } from "@kubernetes/client-node";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import {
@@ -245,7 +247,10 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					sandboxResource.policy.workloadRevision !==
 						state.sourceLifecycleRevision ||
 					sandboxResource.policy.resourceConfigurationHash !==
-						workloadResourceConfigurationHashV1(workload.policy)
+						workloadResourceConfigurationHashV1(
+							workload.policy,
+							workload.connectionConsumerSnapshotConfigMapVersion,
+						)
 				)
 					throw new Error();
 				const liveService = await workload.client.read<V1Service>(
@@ -324,6 +329,45 @@ export function createProductionSessionSandboxReceiverV1(
 	const adapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,
 	});
+	async function verifyConnectionConsumerSnapshot(): Promise<void> {
+		const expected = workload.connectionConsumerSnapshot;
+		const name = workload.connectionConsumerSnapshotConfigMapName;
+		const key = workload.connectionConsumerSnapshotConfigMapKey;
+		if (!expected && !name && !key) return;
+		if (!expected || !name || !key)
+			throw new Error("CONNECTION_CONSUMER_SNAPSHOT_UNAVAILABLE");
+		const configMap = await workload.client.read<V1ConfigMap>(
+			"ConfigMap",
+			name,
+		);
+		const raw = configMap?.data?.[key];
+		if (!raw) throw new Error("CONNECTION_CONSUMER_SNAPSHOT_UNAVAILABLE");
+		const actual = parseConnectionConsumerSnapshotV1(JSON.parse(raw));
+		const approved = resolveApprovedConnectionConsumerProfileV1(
+			expected.profile,
+			expected.approval,
+		);
+		const annotations = configMap.metadata?.annotations;
+		if (
+			approved.status !== "available" ||
+			workload.connectionConsumerSnapshotConfigMapVersion !==
+				`1-${approved.configFingerprint}` ||
+			annotations?.["agent-infra.agora.io/config-version"] !==
+				`1-${approved.configFingerprint}` ||
+			annotations?.["agent-infra.agora.io/config-fingerprint"] !==
+				approved.configFingerprint ||
+			annotations?.["agent-infra.agora.io/config-source-ref"] !==
+				approved.source.ref ||
+			annotations?.["agent-infra.agora.io/config-source-revision"] !==
+				approved.source.revision
+		)
+			throw new Error("CONNECTION_CONSUMER_SNAPSHOT_METADATA_MISMATCH");
+		if (
+			!isDeepStrictEqual(actual.profile, expected.profile) ||
+			!isDeepStrictEqual(actual.approval, expected.approval)
+		)
+			throw new Error("CONNECTION_CONSUMER_SNAPSHOT_MISMATCH");
+	}
 	const allocationFor = (
 		binding: SessionSandboxReconciliationClaimV1["sandbox"],
 		policy: SessionSandboxReconciliationClaimV1["policy"],
@@ -385,6 +429,12 @@ export function createProductionSessionSandboxReceiverV1(
 		pvcName: binding.resourceName,
 		networkPolicyName: binding.resourceName,
 		imageDigest: `${workload.policy.imageRepository}@${deployment.imageDigest}`,
+		connectionConsumerSnapshotConfigMapName:
+			workload.connectionConsumerSnapshotConfigMapName,
+		connectionConsumerSnapshotConfigMapKey:
+			workload.connectionConsumerSnapshotConfigMapKey,
+		connectionConsumerSnapshotConfigMapVersion:
+			workload.connectionConsumerSnapshotConfigMapVersion,
 		containerPort: deployment.service.port,
 		env: deployment.env,
 		authorizedIngressSelector: workload.policy.workerSelector,
@@ -401,6 +451,8 @@ export function createProductionSessionSandboxReceiverV1(
 			progress: SessionSandboxDeletionProgressV1,
 		) => Promise<"committed" | "stale" | "unknown">,
 	) => {
+		signal.throwIfAborted();
+		if (claim.purpose === "prepare") await verifyConnectionConsumerSnapshot();
 		signal.throwIfAborted();
 		if (claim.execution !== null)
 			throw new Error("Sandbox reconcile has no execution");
@@ -493,7 +545,10 @@ export function createProductionSessionSandboxReceiverV1(
 			deployment.imageDigest !== claim.policy.imageDigest ||
 			claim.policy.namespace !== workload.policy.namespace ||
 			claim.policy.resourceConfigurationHash !==
-				workloadResourceConfigurationHashV1(workload.policy)
+				workloadResourceConfigurationHashV1(
+					workload.policy,
+					workload.connectionConsumerSnapshotConfigMapVersion,
+				)
 		)
 			throw new Error("SessionSandbox verified policy is unavailable");
 		const allocation = allocationFor(

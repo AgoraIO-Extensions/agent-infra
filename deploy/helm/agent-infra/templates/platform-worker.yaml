@@ -102,6 +102,12 @@ spec:
                   fieldPath: metadata.namespace
             - name: PLATFORM_WORKER_WECOM_ENABLED
               value: {{ .Values.platformWorker.wecomEnabled | quote }}
+            - name: AGENT_INFRA_CONNECTION_CONSUMER_CONFIGMAP_NAME
+              value: {{ include "agent-infra.connectionSnapshotConfigMapName" . | quote }}
+            - name: AGENT_INFRA_CONNECTION_CONSUMER_CONFIGMAP_KEY
+              value: {{ include "agent-infra.connectionSnapshotConfigMapKey" . | quote }}
+            - name: AGENT_INFRA_CONNECTION_CONSUMER_CONFIGMAP_VERSION
+              value: {{ include "agent-infra.connectionProfileVersion" . | quote }}
             {{- end }}
             - name: PLATFORM_DATABASE_URL
               valueFrom:

@@ -13,6 +13,7 @@ export const workloadApiVersions = {
 	ServiceAccount: "v1",
 	PersistentVolumeClaim: "v1",
 	Secret: "v1",
+	ConfigMap: "v1",
 	Pod: "v1",
 	NetworkPolicy: "networking.k8s.io/v1",
 	Ingress: "networking.k8s.io/v1",

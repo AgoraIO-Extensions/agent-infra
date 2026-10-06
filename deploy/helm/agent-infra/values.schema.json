@@ -143,6 +143,7 @@
           "properties": {
             "configMapName": { "$ref": "#/$defs/kubernetesName" },
             "configMapKey": { "$ref": "#/$defs/secretKey" },
+            "snapshotKey": { "$ref": "#/$defs/secretKey" },
             "configVersion": { "type": "string", "pattern": "^1-[a-f0-9]{64}$" },
             "configFingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
             "sourceRef": { "type": "string", "minLength": 1 },
@@ -333,8 +334,9 @@
     "connectionApproval": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["egressEnforced", "source"],
+      "required": ["schemaVersion", "egressEnforced", "source"],
       "properties": {
+        "schemaVersion": { "const": 1 },
         "egressEnforced": { "const": true },
         "source": {
           "type": "object",

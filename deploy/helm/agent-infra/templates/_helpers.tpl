@@ -88,6 +88,22 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- include "agent-infra.componentName" (dict "root" . "suffix" "connection-consumer") -}}
 {{- end -}}
 
+{{- define "agent-infra.connectionSnapshotConfigMapName" -}}
+{{- if eq .Values.connectionConsumer.source "inline" -}}
+{{- include "agent-infra.connectionProfileName" . -}}
+{{- else -}}
+{{- .Values.connectionConsumer.external.configMapName -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "agent-infra.connectionSnapshotConfigMapKey" -}}
+{{- if eq .Values.connectionConsumer.source "inline" -}}
+AGENT_INFRA_CONNECTION_CONSUMER_SNAPSHOT
+{{- else -}}
+{{- .Values.connectionConsumer.external.snapshotKey | default "AGENT_INFRA_CONNECTION_CONSUMER_SNAPSHOT" -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "agent-infra.connectionFingerprint" -}}
 {{- $profile := .Values.connectionConsumer.inline -}}
 {{- sha256sum (toRawJson (list $profile.schemaVersion $profile.publicOrigin $profile.mcpPath $profile.consumerId $profile.audience $profile.egressProfile.ref $profile.egressProfile.revision)) -}}
@@ -95,7 +111,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "agent-infra.connectionProfileVersion" -}}
 {{- if eq .Values.connectionConsumer.source "inline" -}}
-{{- printf "1-%s" (sha256sum (toRawJson .Values.connectionConsumer.inline)) -}}
+{{- printf "1-%s" (include "agent-infra.connectionFingerprint" .) -}}
 {{- else -}}
 {{- .Values.connectionConsumer.external.configVersion -}}
 {{- end -}}

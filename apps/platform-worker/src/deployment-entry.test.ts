@@ -47,7 +47,7 @@ export const connectionConsumerApproval = ${JSON.stringify(connectionConsumerApp
 		join(directory, "workload-deployment.js"),
 		`
 export const createWorkloadReadinessAuthorizationV1 = () => { globalThis.calls.push('readiness'); };
-export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); return input; };
+export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); return { ...input, client: { read: async () => ({ data: { AGENT_INFRA_CONNECTION_CONSUMER_SNAPSHOT: ${JSON.stringify(JSON.stringify({ profile: connectionConsumerProfile, approval: connectionConsumerApproval }))} } }) } }; };
 `,
 	);
 	await writeFile(
@@ -57,7 +57,7 @@ export const createProductionWorkloadWorkerOptionsV1 = async (input) => { global
 	await writeFile(
 		join(directory, "conversation-deployment.js"),
 		`
-export const createProductionConversationRuntimeResolverV2 = (input) => { globalThis.calls.push('conversation'); globalThis.connection = { profile: input.connectionConsumerProfile, approval: input.connectionConsumerApproval }; };
+export const createProductionConversationRuntimeResolverV2 = (input) => { globalThis.calls.push('conversation'); globalThis.connection = { profile: input.connectionConsumerProfile, approval: input.connectionConsumerApproval, snapshotVersion: input.workload.connectionConsumerSnapshotConfigMapVersion }; };
 export const createProductionSessionSandboxReceiverV1 = () => { globalThis.calls.push('sandbox'); return async () => ({ status: 'observed', resources: [] }); };
 `,
 	);
@@ -97,6 +97,11 @@ function run(overrides: Record<string, string | undefined> = {}) {
 			...process.env,
 			PLATFORM_DATABASE_URL: database,
 			PLATFORM_WORKER_NAMESPACE: "worker-binding",
+			AGENT_INFRA_CONNECTION_CONSUMER_CONFIGMAP_NAME: "connection-consumer",
+			AGENT_INFRA_CONNECTION_CONSUMER_CONFIGMAP_KEY:
+				"AGENT_INFRA_CONNECTION_CONSUMER_SNAPSHOT",
+			AGENT_INFRA_CONNECTION_CONSUMER_CONFIGMAP_VERSION:
+				"1-26062a8f8e5a003ff8047fead83d76c254d9b54834ca5348fb7e4ceee67d205b",
 			...overrides,
 		},
 	});
@@ -111,6 +116,8 @@ it("uses the selected deployment database for all Worker consumers and prepares 
 		connection: {
 			profile: connectionConsumerProfile,
 			approval: connectionConsumerApproval,
+			snapshotVersion:
+				"1-26062a8f8e5a003ff8047fead83d76c254d9b54834ca5348fb7e4ceee67d205b",
 		},
 	});
 });
@@ -134,6 +141,17 @@ it.each([
 		});
 	},
 );
+
+it("rejects approved Connection configuration without a snapshot ConfigMap", () => {
+	const result = run({
+		AGENT_INFRA_CONNECTION_CONSUMER_CONFIGMAP_NAME: undefined,
+	});
+	expect(result.status).toBe(1);
+	expect(JSON.parse(result.stdout)).toEqual({
+		error: "CONNECTION_CONSUMER_SNAPSHOT_CONFIGMAP_UNAVAILABLE",
+		calls: [],
+	});
+});
 
 it.each([
 	undefined,

@@ -41,6 +41,12 @@ const {
 )) as DeploymentConfiguration;
 
 const instanceId = randomUUID();
+const connectionConsumerSnapshotConfigMapName =
+	process.env.AGENT_INFRA_CONNECTION_CONSUMER_CONFIGMAP_NAME;
+const connectionConsumerSnapshotConfigMapKey =
+	process.env.AGENT_INFRA_CONNECTION_CONSUMER_CONFIGMAP_KEY;
+const connectionConsumerSnapshotConfigMapVersion =
+	process.env.AGENT_INFRA_CONNECTION_CONSUMER_CONFIGMAP_VERSION;
 let prepared: ReturnType<typeof createPrepared> | undefined;
 let conversationPrepared:
 	| ReturnType<typeof createConversationPrepared>
@@ -70,6 +76,23 @@ async function createPrepared(signal: AbortSignal) {
 		throw new Error(
 			"PLATFORM_WORKER_NAMESPACE must match the workload policy namespace",
 		);
+	const hasConnectionConsumerConfiguration =
+		connectionConsumerProfile !== undefined ||
+		connectionConsumerApproval !== undefined;
+	if (
+		hasConnectionConsumerConfiguration &&
+		(!connectionConsumerSnapshotConfigMapName ||
+			!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(
+				connectionConsumerSnapshotConfigMapName,
+			) ||
+			!connectionConsumerSnapshotConfigMapKey ||
+			!/^[A-Za-z0-9._-]{1,253}$/.test(connectionConsumerSnapshotConfigMapKey) ||
+			!connectionConsumerSnapshotConfigMapVersion ||
+			!/^1-[a-f0-9]{64}$/.test(connectionConsumerSnapshotConfigMapVersion))
+	)
+		throw new Error("CONNECTION_CONSUMER_SNAPSHOT_CONFIGMAP_UNAVAILABLE");
+	const snapshotConfigMapName = connectionConsumerSnapshotConfigMapName ?? "";
+	const snapshotConfigMapKey = connectionConsumerSnapshotConfigMapKey ?? "";
 	const workload = await createProductionWorkloadWorkerOptionsV1(
 		{
 			...workloadInput,
@@ -82,6 +105,25 @@ async function createPrepared(signal: AbortSignal) {
 		},
 		signal,
 	);
+	const workloadWithConnectionSnapshot = {
+		...workload,
+		connectionConsumerSnapshotConfigMapName: hasConnectionConsumerConfiguration
+			? snapshotConfigMapName
+			: undefined,
+		connectionConsumerSnapshotConfigMapKey: hasConnectionConsumerConfiguration
+			? snapshotConfigMapKey
+			: undefined,
+		connectionConsumerSnapshotConfigMapVersion:
+			hasConnectionConsumerConfiguration
+				? connectionConsumerSnapshotConfigMapVersion
+				: undefined,
+		connectionConsumerSnapshot: hasConnectionConsumerConfiguration
+			? {
+					profile: connectionConsumerProfile,
+					approval: connectionConsumerApproval,
+				}
+			: undefined,
+	};
 	let relayKeyDecryptor: ConversationRuntimeOptionsV2["relayKeyDecryptor"];
 	if (workloadInput.runtimeModelVersion === 4) {
 		if (!relayKeyDecryptionKeys)
@@ -103,7 +145,7 @@ async function createPrepared(signal: AbortSignal) {
 	});
 	return {
 		// Database lease ownership is per process; Runtime service identity is deployment-bound.
-		workload: { ...workload, workerId: instanceId },
+		workload: { ...workloadWithConnectionSnapshot, workerId: instanceId },
 		conversation: {
 			databaseUrl: workload.databaseUrl,
 			workerId: instanceId,
@@ -115,16 +157,20 @@ async function createPrepared(signal: AbortSignal) {
 				namespace: workload.policy.namespace,
 				resourceConfigurationHash: workloadResourceConfigurationHashV1(
 					workload.policy,
+					workloadWithConnectionSnapshot.connectionConsumerSnapshotConfigMapVersion,
 				),
 			},
 			receiveSandbox:
 				conversationDeployment.createProductionSessionSandboxReceiverV1({
-					...workload,
+					...workloadWithConnectionSnapshot,
 					workerId: signing.workerId,
 				}),
 			resolveRuntimeHost:
 				conversationDeployment.createProductionConversationRuntimeResolverV2({
-					workload: { ...workload, workerId: signing.workerId },
+					workload: {
+						...workloadWithConnectionSnapshot,
+						workerId: signing.workerId,
+					},
 					signing,
 					serviceToken,
 					connectionConsumerProfile,

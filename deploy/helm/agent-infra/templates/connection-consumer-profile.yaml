@@ -14,6 +14,7 @@ metadata:
     agent-infra.agora.io/config-source-ref: {{ $profile.approval.source.ref | quote }}
     agent-infra.agora.io/config-source-revision: {{ $profile.approval.source.revision | quote }}
 data:
+  AGENT_INFRA_CONNECTION_CONSUMER_SNAPSHOT: {{ toJson (dict "profile" (dict "schemaVersion" $profile.schemaVersion "publicOrigin" $profile.publicOrigin "mcpPath" $profile.mcpPath "consumerId" $profile.consumerId "audience" $profile.audience "egressProfile" $profile.egressProfile) "approval" (dict "schemaVersion" 1 "configFingerprint" $fingerprint "egressEnforced" $profile.approval.egressEnforced "source" $profile.approval.source)) | quote }}
   AGENT_INFRA_CONNECTION_PROFILE_SCHEMA_VERSION: {{ $profile.schemaVersion | quote }}
   AGENT_INFRA_CONNECTION_PROFILE: {{ toJson (dict "schemaVersion" $profile.schemaVersion "publicOrigin" $profile.publicOrigin "mcpPath" $profile.mcpPath "consumerId" $profile.consumerId "audience" $profile.audience "egressProfile" $profile.egressProfile) | quote }}
   AGENT_INFRA_CONNECTION_CONFIG_VERSION: {{ printf "%v-%s" $profile.schemaVersion $fingerprint | quote }}

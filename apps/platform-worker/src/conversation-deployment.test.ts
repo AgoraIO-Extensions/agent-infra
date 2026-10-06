@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import type { SessionSandboxReconciliationClaimV1 } from "@agent-infra/platform-core";
-import type { V1Pod } from "@kubernetes/client-node";
+import type { V1ConfigMap, V1Pod } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import {
 	createProductionConversationRuntimeResolverV2,
@@ -110,6 +110,69 @@ function fixture() {
 }
 
 describe("production SessionSandbox resource receiver", () => {
+	it("rejects a mismatched approved Connection snapshot before creating a Session Pod", async () => {
+		const f = fixture();
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp/v1",
+			consumerId: "platform-worker",
+			audience: "connection-api",
+			egressProfile: { ref: "egress-platform", revision: "r1" },
+		};
+		const approval = {
+			schemaVersion: 1 as const,
+			configFingerprint:
+				"26062a8f8e5a003ff8047fead83d76c254d9b54834ca5348fb7e4ceee67d205b",
+			egressEnforced: true as const,
+			source: { ref: "platform-deployment", revision: "r1" },
+		};
+		f.seed({
+			apiVersion: "v1",
+			kind: "ConfigMap",
+			metadata: {
+				namespace: workloadTestPolicy.namespace,
+				name: "connection-consumer",
+				annotations: {
+					"agent-infra.agora.io/config-version": `1-${approval.configFingerprint}`,
+					"agent-infra.agora.io/config-fingerprint": approval.configFingerprint,
+					"agent-infra.agora.io/config-source-ref": approval.source.ref,
+					"agent-infra.agora.io/config-source-revision":
+						approval.source.revision,
+				},
+			},
+			data: {
+				SNAPSHOT: JSON.stringify({
+					profile: { ...profile, audience: "wrong-audience" },
+					approval,
+				}),
+			},
+		} as V1ConfigMap);
+		const version = `1-${approval.configFingerprint}`;
+		const options = {
+			...f.options,
+			connectionConsumerSnapshotConfigMapName: "connection-consumer",
+			connectionConsumerSnapshotConfigMapKey: "SNAPSHOT",
+			connectionConsumerSnapshotConfigMapVersion: version,
+			connectionConsumerSnapshot: { profile, approval },
+		};
+		const claim = {
+			...f.claim,
+			policy: {
+				...f.claim.policy,
+				resourceConfigurationHash: workloadResourceConfigurationHashV1(
+					options.policy,
+					version,
+				),
+			},
+		};
+		const receive = createProductionSessionSandboxReceiverV1(options);
+		await expect(receive(claim, new AbortController().signal)).rejects.toThrow(
+			"CONNECTION_CONSUMER_PROFILE_UNAVAILABLE",
+		);
+		expect(f.resources.has("Pod/sandbox-allocation-a")).toBe(false);
+	});
+
 	it("preserves the approved Connection snapshot through the production control resolver", async () => {
 		const f = fixture();
 		const signal = new AbortController().signal;

@@ -28,6 +28,27 @@ const profileSchema = z
 
 export type ConnectionConsumerProfileV1 = z.infer<typeof profileSchema>;
 
+export const ConnectionConsumerSnapshotV1Schema = z.strictObject({
+	profile: profileSchema,
+	approval: approvalSchema,
+});
+export type ConnectionConsumerSnapshotV1 = z.infer<
+	typeof ConnectionConsumerSnapshotV1Schema
+>;
+
+export function parseConnectionConsumerSnapshotV1(
+	input: unknown,
+): ConnectionConsumerSnapshotV1 {
+	const snapshot = ConnectionConsumerSnapshotV1Schema.parse(input);
+	const resolved = resolveApprovedConnectionConsumerProfileV1(
+		snapshot.profile,
+		snapshot.approval,
+	);
+	if (resolved.status !== "available")
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	return snapshot;
+}
+
 export interface ConnectionConsumerApprovalV1 {
 	readonly schemaVersion: 1;
 	readonly configFingerprint: string;
