@@ -138,6 +138,62 @@ describe("session sandbox workload adapter", () => {
 		expect(resources[2].spec?.egress).toEqual([]);
 	});
 
+	it("keeps two Session allocations fully disjoint under one Agent", () => {
+		const second: SessionSandboxAllocationV1 = {
+			...allocation,
+			sessionId: "session-b",
+			sandboxId: "sandbox-b",
+			principal: { kind: "user", id: "actor-b" },
+			channelId: "api",
+			resourceName: "sandbox-sandbox-b",
+			workspaceScope: "sandbox-b",
+			generation: 1,
+			resourceFence: 12,
+			podName: "sandbox-sandbox-b",
+			serviceName: "sandbox-sandbox-b",
+			serviceAccountName: "sandbox-sandbox-b",
+			pvcName: "sandbox-sandbox-b",
+			networkPolicyName: "sandbox-sandbox-b",
+			env: { SESSION_ID: "session-b" },
+		};
+		const firstResources = sessionSandboxResourcesV1(allocation);
+		const secondResources = sessionSandboxResourcesV1(second);
+		const firstNames = new Set(
+			firstResources.map(
+				(resource) => `${resource.kind}/${resource.metadata?.name}`,
+			),
+		);
+		const secondNames = new Set(
+			secondResources.map(
+				(resource) => `${resource.kind}/${resource.metadata?.name}`,
+			),
+		);
+		expect([...firstNames].filter((name) => secondNames.has(name))).toEqual([]);
+		expect(firstResources[1].spec?.volumeMode).toBeUndefined();
+		expect(firstResources[4].spec?.containers[0]?.workingDir).toBe(
+			"/workspace",
+		);
+		expect(secondResources[4].spec?.containers[0]?.workingDir).toBe(
+			"/workspace",
+		);
+		expect(firstResources[2].spec?.podSelector).toEqual({
+			matchLabels: firstResources[4].metadata?.labels,
+		});
+		expect(secondResources[2].spec?.podSelector).toEqual({
+			matchLabels: secondResources[4].metadata?.labels,
+		});
+		expect(firstResources[4].spec?.volumes?.[0]?.persistentVolumeClaim).toEqual(
+			{
+				claimName: allocation.pvcName,
+			},
+		);
+		expect(
+			secondResources[4].spec?.volumes?.[0]?.persistentVolumeClaim,
+		).toEqual({
+			claimName: second.pvcName,
+		});
+	});
+
 	it("reconciles an unknown attempt from absence without changing its identity", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
@@ -292,6 +348,39 @@ describe("session sandbox workload adapter", () => {
 		await expect(adapter.observe(allocation)).resolves.toMatchObject({
 			status: "unknown",
 		});
+	});
+
+	it("retains a matching allocated Service without replacing it during an unready Pod retry", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const service = await client.read<
+			import("@kubernetes/client-node").V1Service
+		>("Service", allocation.serviceName);
+		if (!service?.spec) throw new Error("Missing fixture Service");
+		Object.assign(service.spec, {
+			clusterIP: "10.43.0.17",
+			clusterIPs: ["10.43.0.17"],
+			ipFamilies: ["IPv4"],
+			ipFamilyPolicy: "SingleStack",
+		});
+		const before = structuredClone(service);
+		const retry = createSessionSandboxWorkloadAdapterV1({
+			client: {
+				...client,
+				async replace(object) {
+					if (object.kind === "Service")
+						throw new Error("K3s Service replace 409");
+					return client.replace(object);
+				},
+			},
+		});
+		await expect(retry.apply(allocation)).resolves.toMatchObject({
+			sandboxId: allocation.sandboxId,
+		});
+		expect(await client.read("Service", allocation.serviceName)).toEqual(
+			before,
+		);
 	});
 
 	it("records each resource identity and blocks UID drift before any mutation", async () => {
@@ -529,6 +618,38 @@ describe("session sandbox workload adapter", () => {
 				const port = pod.spec?.containers[0]?.ports?.[0];
 				if (!port) throw new Error("missing container port");
 				port.containerPort = 9090;
+			},
+		],
+		[
+			"host port",
+			(pod: V1Pod) => {
+				const port = pod.spec?.containers[0]?.ports?.[0];
+				if (!port) throw new Error("missing container port");
+				port.hostPort = 8080;
+			},
+		],
+		[
+			"host IP",
+			(pod: V1Pod) => {
+				const port = pod.spec?.containers[0]?.ports?.[0];
+				if (!port) throw new Error("missing container port");
+				port.hostIP = "127.0.0.1";
+			},
+		],
+		[
+			"readiness probe scheme",
+			(pod: V1Pod) => {
+				const probe = pod.spec?.containers[0]?.readinessProbe;
+				if (!probe?.httpGet) throw new Error("missing readiness probe");
+				probe.httpGet.scheme = "HTTP";
+			},
+		],
+		[
+			"readiness probe timeout",
+			(pod: V1Pod) => {
+				const probe = pod.spec?.containers[0]?.readinessProbe;
+				if (!probe) throw new Error("missing readiness probe");
+				probe.timeoutSeconds = 2;
 			},
 		],
 	] as const)("rejects owned Pod %s drift", async (_field, mutate) => {

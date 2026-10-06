@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -49,5 +50,15 @@ export async function renderWithAgentRouter(content: ReactNode) {
 		]),
 	});
 	await router.load();
-	return render(<RouterProvider router={router} />);
+	return render(
+		<QueryClientProvider
+			client={
+				new QueryClient({
+					defaultOptions: { queries: { retry: false, gcTime: 0 } },
+				})
+			}
+		>
+			<RouterProvider router={router} />
+		</QueryClientProvider>,
+	);
 }

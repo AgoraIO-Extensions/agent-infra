@@ -4,6 +4,7 @@ import {
 } from "@agent-infra/agent-runtime";
 import {
 	RuntimeModelConfigurationV3Schema,
+	RuntimeModelConfigurationV4Schema,
 	WorkloadReadinessBindingV1Schema,
 } from "@agent-infra/contracts/runtime";
 
@@ -46,6 +47,39 @@ export function readRuntimeModelConfigurationV3(
 			},
 		);
 		return {
+			schemaVersion: 3 as const,
+			configVersion: value.configVersion,
+			defaultModelOptionId: value.defaultModelOptionId,
+			defaultReasoningLevel: value.defaultReasoningLevel,
+			modelOptions,
+		};
+	} catch {
+		runtimeConfigurationInvalid();
+	}
+}
+
+export function readRuntimeModelConfigurationV4(
+	environment: NodeJS.ProcessEnv,
+): CodexPilotConfiguration {
+	try {
+		const value = RuntimeModelConfigurationV4Schema.parse(
+			JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? ""),
+		);
+		const modelOptions = value.modelOptions.map((option) => {
+			if (
+				option.protocol !== "openai-responses-v1" ||
+				option.authentication !== "bearer"
+			)
+				runtimeConfigurationInvalid();
+			return {
+				modelOptionId: option.modelOptionId,
+				endpoint: option.endpoint,
+				model: option.model,
+				reasoningLevels: option.reasoningLevels,
+			};
+		});
+		return {
+			schemaVersion: 4 as const,
 			configVersion: value.configVersion,
 			defaultModelOptionId: value.defaultModelOptionId,
 			defaultReasoningLevel: value.defaultReasoningLevel,
@@ -57,6 +91,7 @@ export function readRuntimeModelConfigurationV3(
 }
 
 export interface CodexPilotConfiguration {
+	readonly schemaVersion: 2 | 3 | 4;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
@@ -94,6 +129,8 @@ export function readCodexPilotConfiguration(
 	}
 	if (record(value) && value.schemaVersion === 3)
 		return readRuntimeModelConfigurationV3(environment, "codex");
+	if (record(value) && value.schemaVersion === 4)
+		return readRuntimeModelConfigurationV4(environment);
 	if (
 		!record(value) ||
 		!keys(value, [
@@ -175,6 +212,7 @@ export function readCodexPilotConfiguration(
 		runtimeConfigurationInvalid();
 	}
 	return {
+		schemaVersion: 2 as const,
 		configVersion: value.configVersion,
 		defaultModelOptionId: value.defaultModelOptionId,
 		defaultReasoningLevel: value.defaultReasoningLevel,

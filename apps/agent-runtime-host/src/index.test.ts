@@ -7,6 +7,7 @@ import {
 	type CodexRuntimeDriverOptions,
 	FakeRuntimeDriver,
 } from "@agent-infra/agent-runtime";
+import { RuntimeSubmitTurnRequestV4Schema } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	runtimeV2Keys,
@@ -14,6 +15,7 @@ import {
 	submitV3Fixture,
 } from "../../../packages/agent-runtime/src/grant-v2-fixture.test-support.js";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
+import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.js";
 import { createRuntimeTlsTransport } from "../../platform-worker/src/runtime-tls-transport.js";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
@@ -61,7 +63,7 @@ import {
 } from "./legacy-migration.test-support.js";
 
 const directories: string[] = [];
-const { publicKey } = generateKeyPairSync("ed25519");
+const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 
 async function environment() {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-assembly-"));
@@ -314,6 +316,7 @@ describe("RuntimeHost environment assembly", () => {
 			});
 			try {
 				expect(runtime.configVersion).toBe("claude-active-17");
+				expect(runtime.verifyGrantV4).toBeUndefined();
 				expect(
 					(await createRuntimeHostApp(runtime).request("/healthz")).status,
 				).toBe(200);
@@ -530,6 +533,140 @@ describe("RuntimeHost environment assembly", () => {
 			}
 		},
 	);
+	it("assembles the keyless V4 model schema without a static credential", async () => {
+		const values = await environment();
+		let openedWith: CodexRuntimeDriverOptions | undefined;
+		runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({
+			protocolVersion: 2,
+			codexVersion: "synthetic-codex",
+			upstreamTag: "synthetic-tag",
+			upstreamCommit: "synthetic-commit",
+			schemaSha256: "synthetic-schema-sha256",
+		});
+		runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+			async (options: CodexRuntimeDriverOptions) => {
+				openedWith = options;
+				return FakeRuntimeDriver.open(
+					join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "v4-driver.json"),
+				);
+			},
+		);
+		const runtime = await assembleRuntimeHost({
+			...values,
+			AGENT_INFRA_RUNTIME_DRIVER: "codex",
+			AGENT_INFRA_RUNTIME_WORKER_ID: "synthetic-worker",
+			AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+				schemaVersion: 4,
+				configVersion: "configuration-4-fingerprint",
+				defaultModelOptionId: "model-option-primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "model-option-primary",
+						protocol: "openai-responses-v1",
+						authentication: "bearer",
+						endpoint: "https://models.example.test/v1",
+						model: "gpt-5.3-codex",
+						reasoningLevels: ["high"],
+					},
+				],
+			}),
+		});
+		try {
+			expect(runtime.verifyGrantV4).toBeTypeOf("function");
+			const invalidGrantRequest = RuntimeSubmitTurnRequestV4Schema.parse({
+				schemaVersion: 4,
+				requestId: "assembly-request",
+				traceId: "assembly-trace",
+				principal: { kind: "user", id: "alice" },
+				executionSource: "web",
+				channelId: "web",
+				agentId: "synthetic-agent",
+				conversationId: "assembly-conversation",
+				executionId: "assembly-execution",
+				turnId: "assembly-turn",
+				sessionGeneration: 1,
+				hostSessionRef: null,
+				operation: {
+					kind: "execution",
+					id: "assembly-execution",
+					deliveryFence: 1,
+					executionDeliveryFence: 1,
+				},
+				grant: {
+					schemaVersion: 4,
+					format: "runtime-execution-jws",
+					token: "a.b.c",
+				},
+				keyBinding: {
+					purpose: "personal",
+					subjectId: "alice",
+					ciphertextRef: "key-1",
+					version: 1,
+				},
+				input: { text: "assembly-input", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "model-option-primary",
+					reasoningLevel: "high",
+				},
+			});
+			await expect(
+				runtime.verifyGrantV4?.(invalidGrantRequest),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			const signer = createWorkerRuntimeGrantSignerV4({
+				issuer: "synthetic-platform",
+				workerId: "synthetic-worker",
+				keyId: "synthetic-key",
+				privateKey,
+			});
+			const signed = (request: typeof invalidGrantRequest) => ({
+				...request,
+				grant: signer.sign(request, "synthetic-authorization"),
+			});
+			await expect(
+				runtime.verifyGrantV4?.(signed(invalidGrantRequest)),
+			).resolves.toMatchObject({ claims: { agentId: "synthetic-agent" } });
+			await expect(
+				runtime.verifyGrantV4?.(
+					signed({ ...invalidGrantRequest, agentId: "another-agent" }),
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			expect(openedWith).toMatchObject({
+				configVersion: "configuration-4-fingerprint",
+				modelOptions: [
+					{
+						modelOptionId: "model-option-primary",
+						endpoint: "https://models.example.test/v1",
+						model: "gpt-5.3-codex",
+						reasoningLevels: ["high"],
+					},
+				],
+			});
+			expect(openedWith?.modelOptions[0]).not.toHaveProperty("credential");
+			const action = {
+				nativeSessionRef: "synthetic-native-session",
+				executionId: "synthetic-execution",
+				operationRef: "synthetic-operation",
+				attemptRef: "synthetic-attempt",
+				runtimeOperationId: "synthetic-runtime-operation",
+				kind: "model" as const,
+			};
+			const revalidate = vi.fn();
+			const authorization = vi
+				.spyOn(runtime.host, "authorizeExternalAction")
+				.mockResolvedValue({ relayKey: "synthetic-relay-key", revalidate });
+			const delivered = await openedWith?.authorizeExternalAction?.(action);
+			expect(delivered).toEqual({
+				relayKey: "synthetic-relay-key",
+				revalidate,
+			});
+			expect(authorization).toHaveBeenCalledWith(action);
+		} finally {
+			await runtime.close();
+		}
+	});
 
 	it.each([false, true])(
 		"consumes fixed installed Skill deployment before Driver activation, invalid=%s",
@@ -671,6 +808,7 @@ describe("RuntimeHost environment assembly", () => {
 			AGENT_INFRA_RUNTIME_CONNECTION_PROFILE: JSON.stringify(profile),
 		});
 		try {
+			expect(runtime.verifyGrantV4).toBeUndefined();
 			expect(openedWith?.connectionClient).toMatchObject({
 				profile,
 				authorizedService: {
