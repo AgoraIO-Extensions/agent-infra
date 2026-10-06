@@ -13,8 +13,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-import { imageDockerfiles, sha256 } from "../../.github/scripts/vulnerability-policy.mjs";
-import { scanCustomBaseImage, verifyCustomBaseImage } from "./custom-base-image.mjs";
+import { imageDockerfiles, sha256 } from "./image-manifest.mjs";
+import { verifyCustomBaseImage } from "./custom-base-image.mjs";
 
 import { runCommand } from "./run-command.mjs";
 import {
@@ -529,7 +529,6 @@ async function main() {
 				parentImage,
 				dockerfileSha256: sha256(dockerfile),
 				localInheritance: await verifyCustomBaseImage(buildResults.customBase.reference, { contextPath }),
-				scan: await scanCustomBaseImage(buildResults.customBase.reference, `${manifestPath}.scan`),
 			};
 		}
 		const builtImages = {};

@@ -1,16 +1,32 @@
 import { createHash } from "node:crypto";
+import { z } from "zod";
 
-export interface ConnectionConsumerProfileV1 {
-	readonly schemaVersion: 1;
-	readonly publicOrigin: string;
-	readonly mcpPath: string;
-	readonly consumerId: string;
-	readonly audience: string;
-	readonly egressProfile: {
-		readonly ref: string;
-		readonly revision: string;
-	};
-}
+const sourceSchema = z
+	.strictObject({
+		ref: z.string().min(1),
+		revision: z.string().min(1),
+	})
+	.readonly();
+
+const approvalSchema = z.strictObject({
+	schemaVersion: z.literal(1),
+	configFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+	egressEnforced: z.literal(true),
+	source: sourceSchema,
+});
+
+const profileSchema = z
+	.strictObject({
+		schemaVersion: z.literal(1),
+		publicOrigin: z.string(),
+		mcpPath: z.string(),
+		consumerId: z.string().min(1),
+		audience: z.string().min(1),
+		egressProfile: sourceSchema,
+	})
+	.readonly();
+
+export type ConnectionConsumerProfileV1 = z.infer<typeof profileSchema>;
 
 export interface ConnectionConsumerApprovalV1 {
 	readonly schemaVersion: 1;
@@ -31,33 +47,24 @@ export interface ConnectionConsumerTargetV1 {
 	readonly source: ConnectionConsumerApprovalV1["source"];
 }
 
+export type ApprovedConnectionConsumerProfileV1 =
+	| {
+			readonly status: "unavailable";
+			readonly schemaVersion: 1;
+			readonly reason: "missing" | "invalid" | "unapproved";
+	  }
+	| {
+			readonly status: "available";
+			readonly schemaVersion: 1;
+			readonly profile: ConnectionConsumerProfileV1;
+			readonly configFingerprint: string;
+			readonly source: z.infer<typeof sourceSchema>;
+	  };
+
 export type ApprovedConnectionConsumerTargetV1 = Extract<
 	ApprovedConnectionConsumerProfileV1,
 	{ readonly status: "available" }
 > & { readonly url: string };
-
-export type ApprovedConnectionConsumerProfileV1 =
-	| ({ readonly status: "available"; readonly profile: ConnectionConsumerProfileV1 } & Omit<
-			ConnectionConsumerTargetV1,
-			"url" | "publicOrigin" | "mcpPath" | "consumerId" | "audience" | "egressProfile" | "schemaVersion"
-		> )
-	| { readonly status: "unavailable" };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
-
-function isNonEmptyString(value: unknown): value is string {
-	return typeof value === "string" && value.length > 0;
-}
-
-function hasKeys(value: Record<string, unknown>, keys: readonly string[]) {
-	const actual = Object.keys(value).sort();
-	return (
-		actual.length === keys.length &&
-		actual.every((key, index) => key === keys[index])
-	);
-}
 
 function validOrigin(value: string): boolean {
 	try {
@@ -72,7 +79,7 @@ function validPath(value: string): boolean {
 	return (
 		value.startsWith("/") &&
 		!value.startsWith("//") &&
-		!/\s|\p{Cc}|\\|\?|#/u.test(value) &&
+		!/[\s\p{Cc}\\?#]/u.test(value) &&
 		!/%(?:2f|2e|5c)/i.test(value) &&
 		!value.split("/").some((part) => part === "." || part === "..")
 	);
@@ -97,84 +104,60 @@ export function connectionConsumerProfileFingerprintV1(
 		.digest("hex");
 }
 
+/** Validates trusted deployment input; it does not attest egress or authorize MCP calls. */
+export function resolveApprovedConnectionConsumerProfileV1(
+	input: unknown,
+	approval: unknown,
+): ApprovedConnectionConsumerProfileV1 {
+	if (input === undefined || input === null) {
+		return { status: "unavailable", schemaVersion: 1, reason: "missing" };
+	}
+	const parsed = profileSchema.safeParse(input);
+	if (!parsed.success) {
+		return { status: "unavailable", schemaVersion: 1, reason: "invalid" };
+	}
+	const approved = approvalSchema.safeParse(approval);
+	if (!approved.success) {
+		return { status: "unavailable", schemaVersion: 1, reason: "unapproved" };
+	}
+	if (
+		!validOrigin(parsed.data.publicOrigin) ||
+		!validPath(parsed.data.mcpPath)
+	) {
+		return { status: "unavailable", schemaVersion: 1, reason: "invalid" };
+	}
+	const fingerprint = connectionConsumerProfileFingerprintV1(parsed.data);
+	if (fingerprint !== approved.data.configFingerprint) {
+		return { status: "unavailable", schemaVersion: 1, reason: "invalid" };
+	}
+	return {
+		status: "available",
+		schemaVersion: 1,
+		profile: parsed.data,
+		configFingerprint: fingerprint,
+		source: approved.data.source,
+	};
+}
+
+/**
+ * Resolves the approved profile to the flattened target shape used by the
+ * Worker runtime route. Invalid or stale approvals fail closed.
+ */
 export function validateConnectionConsumerProfileV1(
 	value: unknown,
 	approval: unknown,
 ): ConnectionConsumerTargetV1 {
-	if (
-		!isRecord(value) ||
-		!hasKeys(value, [
-			"audience",
-			"consumerId",
-			"egressProfile",
-			"mcpPath",
-			"publicOrigin",
-			"schemaVersion",
-		]) ||
-		value.schemaVersion !== 1
-	)
-		throw unavailable();
-	if (
-		!isNonEmptyString(value.publicOrigin) ||
-		!isNonEmptyString(value.mcpPath) ||
-		!isNonEmptyString(value.consumerId) ||
-		!isNonEmptyString(value.audience) ||
-		!isRecord(value.egressProfile) ||
-		!hasKeys(value.egressProfile, ["ref", "revision"]) ||
-		!isNonEmptyString(value.egressProfile.ref) ||
-		!isNonEmptyString(value.egressProfile.revision) ||
-		!validOrigin(value.publicOrigin) ||
-		!validPath(value.mcpPath)
-	)
-		throw unavailable();
-	if (
-		!isRecord(approval) ||
-		!hasKeys(approval, [
-			"configFingerprint",
-			"egressEnforced",
-			"schemaVersion",
-			"source",
-		]) ||
-		approval.schemaVersion !== 1 ||
-		approval.egressEnforced !== true ||
-		!isNonEmptyString(approval.configFingerprint) ||
-		!/^[a-f0-9]{64}$/.test(approval.configFingerprint) ||
-		!isRecord(approval.source) ||
-		!hasKeys(approval.source, ["ref", "revision"]) ||
-		!isNonEmptyString(approval.source.ref) ||
-		!isNonEmptyString(approval.source.revision)
-	)
-		throw unavailable();
-	const profile = value as unknown as ConnectionConsumerProfileV1;
-	const fingerprint = connectionConsumerProfileFingerprintV1(profile);
-	if (fingerprint !== approval.configFingerprint) throw unavailable();
+	const result = resolveApprovedConnectionConsumerProfileV1(value, approval);
+	if (result.status !== "available") throw unavailable();
 	return {
-		schemaVersion: 1,
-		publicOrigin: profile.publicOrigin,
-		mcpPath: profile.mcpPath,
-		consumerId: profile.consumerId,
-		audience: profile.audience,
-		egressProfile: { ...profile.egressProfile },
-		configFingerprint: fingerprint,
-		source: {
-			ref: approval.source.ref as string,
-			revision: approval.source.revision as string,
-		},
-		url: new URL(profile.mcpPath, `${profile.publicOrigin}/`).toString(),
+		...result.profile,
+		configFingerprint: result.configFingerprint,
+		source: result.source,
+		url: new URL(
+			result.profile.mcpPath,
+			`${result.profile.publicOrigin}/`,
+		).toString(),
 	};
-}
-
-export function resolveApprovedConnectionConsumerProfileV1(
-	value: unknown,
-	approval: unknown,
-): ApprovedConnectionConsumerProfileV1 {
-	try {
-		const target = validateConnectionConsumerProfileV1(value, approval);
-		const profile = value as ConnectionConsumerProfileV1;
-		return { status: "available", profile: structuredClone(profile), ...target };
-	} catch {
-		return { status: "unavailable" };
-	}
 }
 
 export function resolveConnectionConsumerTargetV1(

@@ -86,6 +86,55 @@ describe("ImageRegistryAdapter V1 contract", () => {
 		});
 	});
 
+	it("preserves the Browser declaration during registry canonicalization", () => {
+		const browserManifestLabel = JSON.stringify({
+			...JSON.parse(runtimeManifestLabel),
+			capabilities: {
+				modelSelection: true,
+				connection: true,
+				browser: {
+					schemaVersion: 1,
+					capabilityVersion: 1,
+					operations: ["navigate", "observe"],
+					policy: {
+						allowedOrigins: ["https://example.test/"],
+						maxContexts: 1,
+						maxTabs: 2,
+						maxPages: 4,
+						maxViewportWidth: 1920,
+						maxViewportHeight: 1080,
+						maxConcurrentActions: 2,
+						maxDownloads: 4,
+						maxDownloadBytes: 1_000_000,
+						maxUploadBytes: 1_000_000,
+						maxScreenshotBytes: 1_000_000,
+						maxBrowserDurationMs: 60_000,
+						maxRetainedProfileBytes: 10_000_000,
+						navigationTimeoutMs: 10_000,
+						actionTimeoutMs: 5_000,
+						requireSideEffectConfirmation: true,
+						allowUserHandoff: true,
+					},
+				},
+			},
+		});
+		const parsed = parseRuntimeManifestLabelV1(browserManifestLabel);
+		expect(parsed.runtimeManifest.capabilities?.browser).toMatchObject({
+			capabilityVersion: 1,
+			operations: ["navigate", "observe"],
+		});
+		const selfManaged = JSON.parse(browserManifestLabel) as Record<
+			string,
+			unknown
+		>;
+		selfManaged.interactionMode = "self-managed";
+		delete selfManaged.protocol;
+		expect(
+			parseRuntimeManifestLabelV1(JSON.stringify(selfManaged)).runtimeManifest
+				.capabilities?.browser,
+		).toBeUndefined();
+	});
+
 	it("classifies a correlation-safe invalid image reference without echoing it", () => {
 		expect(
 			parseImageRegistryAdmissionRequestV1({

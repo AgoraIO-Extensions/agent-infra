@@ -40,6 +40,31 @@ function ruleParts(network: V1NetworkPolicy, index = 0) {
 }
 
 describe("deployment-owned Workload egress", () => {
+	it("compiles an approved Connection destination with an exact TCP port", () => {
+		expect(
+			workloadEgressRulesV1({
+				connectionEgress: [{ destination: { ip: "203.0.113.9" }, port: 443 }],
+			}),
+		).toEqual([
+			{
+				to: [{ ipBlock: { cidr: "203.0.113.9/32" } }],
+				ports: [{ protocol: "TCP", port: 443 }],
+			},
+		]);
+	});
+	it.each([
+		{ destination: { ip: "0.0.0.0/0" }, port: 443 },
+		{ destination: { namespace: "connection", podLabels: {} }, port: 443 },
+		{ destination: { ip: "203.0.113.9" }, port: 0 },
+		{ destination: { ip: "203.0.113.9" }, port: 443, endPort: 65535 },
+	])("rejects widened Connection profiles: %j", (entry) => {
+		expect(() =>
+			workloadEgressRulesV1({
+				connectionEgress: [entry] as WorkloadEgressPolicyV1["connectionEgress"],
+			}),
+		).toThrow();
+	});
+
 	it("keeps absent profiles closed and limits configured destinations to exact hosts, Pods and ports", async () => {
 		expect(workloadEgressRulesV1({})).toEqual([]);
 		const api = fakeKubernetesApi();

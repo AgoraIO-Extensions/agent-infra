@@ -3,8 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { evaluate, sha256, validateDatabase, validateReport } from "../../.github/scripts/vulnerability-policy.mjs";
-import { approvedExceptions, scanImages, source } from "../../.github/scripts/vulnerability-scan.mjs";
+import { sha256 } from "./image-manifest.mjs";
 import { runCommand } from "./run-command.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
@@ -36,32 +35,6 @@ async function configDigest(image) {
 	} finally {
 		await rm(temp, { recursive: true, force: true });
 	}
-}
-
-export async function scanCustomBaseImage(image, reportDirectory) {
-	const expected = await source();
-	const actual = inspect(image);
-	const target = {
-		name: "custom-agent-base",
-		imageId: actual.Id,
-		diffIds: actual.RootFS.Layers,
-		os: actual.Os,
-		architecture: actual.Architecture,
-	};
-	const bundle = await scanImages({ expected, images: [target], reportDirectory });
-	assert.deepEqual(bundle.errors, [], "Custom Base Image scan failed");
-	const report = bundle.reports[0];
-	assert.equal(report.exitCode, 0);
-	const bytes = await readFile(join(reportDirectory, report.file));
-	assert.equal(sha256(bytes), report.sha256);
-	const exceptions = await approvedExceptions();
-	validateDatabase(bundle.database);
-	const findings = evaluate(validateReport(JSON.parse(bytes), target, expected), exceptions);
-	const blocked = findings.filter((finding) => finding.blocked).length;
-	const verdict = { passed: blocked === 0, blocked, source: expected, exceptions, findings };
-	await writeFile(join(reportDirectory, "verdict.json"), `${JSON.stringify(verdict, null, 2)}\n`);
-	assert.equal(blocked, 0, "Custom Base Image has blocking vulnerabilities");
-	return { scanner: bundle.scanner, database: bundle.database, reportSha256: report.sha256, imageId: actual.Id, blocked };
 }
 
 export async function verifyCustomBaseImage(image, { published = false, contextPath = root } = {}) {

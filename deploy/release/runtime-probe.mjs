@@ -193,7 +193,7 @@ export function validateRuntimeProbe(result, releaseBytes, architecture) {
 	return result;
 }
 
-export function runtimeImageFromScanBuild(manifest, commitSha) {
+export function runtimeImageFromBuildManifest(manifest, commitSha) {
 	const images = Array.isArray(manifest?.images)
 		? manifest.images.filter((image) => image?.name === "agent-runtime-host")
 		: [];
@@ -204,7 +204,7 @@ export function runtimeImageFromScanBuild(manifest, commitSha) {
 		images.length !== 1 ||
 		!digestPattern.test(images[0].imageId)
 	) {
-		throw new Error("Runtime image scanner build reference is invalid");
+		throw new Error("Runtime image build manifest reference is invalid");
 	}
 	return images[0].imageId;
 }
@@ -417,8 +417,8 @@ if (
 			name: "Runtime probe source",
 			timeoutMs: 30_000,
 		});
-		if (image === "--scan-build") {
-			image = runtimeImageFromScanBuild(
+		if (image === "--build-manifest") {
+			image = runtimeImageFromBuildManifest(
 				JSON.parse(await readFile(output, "utf8")),
 				commitSha,
 			);

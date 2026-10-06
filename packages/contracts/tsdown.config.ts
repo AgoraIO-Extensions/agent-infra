@@ -7,6 +7,7 @@ export default defineConfig({
 		"./src/files.ts",
 		"./src/connection-consumer-profile.ts",
 		"./src/platform-auth.ts",
+		"./src/connection-consumer-profile.ts",
 		"./src/pilot/index.ts",
 		"./src/runtime/index.ts",
 		"./src/workload/index.ts",
