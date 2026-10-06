@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import type { BrowserCapabilityAvailableV1 } from "@agent-infra/contracts/runtime";
 import type {
@@ -22,6 +22,74 @@ export type BrowserElementReferenceV1 = Readonly<{
 	name: string;
 }>;
 
+export type BrowserActionKindV1 =
+	| "click"
+	| "fill"
+	| "select"
+	| "check"
+	| "uncheck"
+	| "press"
+	| "hover"
+	| "scroll"
+	| "wait"
+	| "switch_tab"
+	| "switch_frame";
+
+export type BrowserActionAuthorizationV1 = Readonly<{
+	subjectId: string;
+	agentId: string;
+	conversationId: string;
+	executionId: string;
+}>;
+
+export type BrowserSideEffectConfirmationV1 = Readonly<{
+	confirmationId: string;
+	actionId: string;
+	subjectId: string;
+	agentId: string;
+	conversationId: string;
+	executionId: string;
+	origin: string;
+	pageRevision: number;
+	elementId?: string;
+	parameterDigest: string;
+	capabilityVersion: number;
+	preview: Readonly<{ kind: BrowserActionKindV1; name: string }>;
+}>;
+
+export type BrowserActionRequestV1 = Readonly<{
+	actionId?: string;
+	idempotencyKey?: string;
+	kind: BrowserActionKindV1;
+	page: BrowserPageReferenceV1;
+	target?: BrowserElementReferenceV1;
+	targetPage?: BrowserPageReferenceV1;
+	value?: string;
+	key?: string;
+	durationMs?: number;
+	sideEffect?: boolean;
+	authorization?: BrowserActionAuthorizationV1;
+	confirmation?: BrowserSideEffectConfirmationV1;
+}>;
+
+export type BrowserActionRecordV1 = Readonly<{
+	actionId: string;
+	kind: BrowserActionKindV1;
+	status:
+		| "accepted"
+		| "processing"
+		| "completed"
+		| "failed"
+		| "rejected"
+		| "unknown";
+	page: BrowserPageReferenceV1;
+	sideEffect: boolean;
+	createdAt: string;
+	completedAt?: string;
+	reasonCode?: string;
+	confirmation?: BrowserSideEffectConfirmationV1;
+}>;
+
 export type BrowserObservationV1 = Readonly<{
 	page: BrowserPageReferenceV1;
 	origin: string;
@@ -36,8 +104,55 @@ type PageState = {
 	readonly pageId: string;
 	readonly page: Page;
 	revision: number;
-	readonly elements: Map<string, { revision: number; index: number }>;
+	readonly elements: Map<
+		string,
+		{ revision: number; index: number; frame?: Frame }
+	>;
+	activeFrame?: Frame;
 };
+
+class BrowserActionRejectedError extends Error {
+	readonly code: string;
+	constructor(code: string) {
+		super(code);
+		this.code = code;
+	}
+}
+
+function nonEmpty(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && value.length <= 256;
+}
+
+function canonicalize(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(canonicalize);
+	if (!value || typeof value !== "object") return value;
+	return Object.fromEntries(
+		Object.entries(value as Record<string, unknown>)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([key, entry]) => [key, canonicalize(entry)]),
+	);
+}
+
+function digest(value: unknown): string {
+	return createHash("sha256")
+		.update(JSON.stringify(canonicalize(value)))
+		.digest("hex");
+}
+
+function sideEffectName(name: string): boolean {
+	return /(submit|send|publish|delete|remove|buy|purchase|pay|grant|revoke|confirm|提交|发送|发布|删除|购买|支付|授权|撤销)/iu.test(
+		name,
+	);
+}
+
+function isPrintableKey(value: string): boolean {
+	return (
+		/^[\x20-\x7e]$/u.test(value) ||
+		/^(Enter|Tab|Escape|Backspace|Delete|Space|Arrow(?:Up|Down|Left|Right)|Home|End|PageUp|PageDown)$/u.test(
+			value,
+		)
+	);
+}
 
 function normalizeOrigin(value: string): string {
 	const url = new URL(value);
@@ -115,10 +230,9 @@ function pageStateFor(page: Page, pages: Map<string, PageState>): PageState {
 		elements: new Map(),
 	};
 	page.on("framenavigated", (frame: Frame) => {
-		if (frame === page.mainFrame()) {
-			state.revision += 1;
-			state.elements.clear();
-		}
+		state.revision += 1;
+		state.elements.clear();
+		if (frame === page.mainFrame()) state.activeFrame = undefined;
 	});
 	page.on("close", () => pages.delete(state.pageId));
 	pages.set(state.pageId, state);
@@ -127,21 +241,35 @@ function pageStateFor(page: Page, pages: Map<string, PageState>): PageState {
 
 export function createBrowserObserveControllerV1(input: {
 	readonly context: BrowserContext;
-	readonly capability: BrowserCapabilityAvailableV1;
+	readonly capability:
+		| BrowserCapabilityAvailableV1
+		| (() => BrowserCapabilityAvailableV1);
 	readonly maxTextBytes?: number;
 }) {
-	const allowedOrigins: ReadonlySet<string> = new Set<string>(
-		input.capability.policy.allowedOrigins.map(normalizeOrigin),
-	);
+	const readCapability = (): BrowserCapabilityAvailableV1 =>
+		typeof input.capability === "function"
+			? input.capability()
+			: input.capability;
 	const pages = new Map<string, PageState>();
 	const maxTextBytes = input.maxTextBytes ?? 32_768;
 	let policyInstalled = false;
+	let inFlightActions = 0;
+	const actions = new Map<string, BrowserActionRecordV1>();
+	const actionDigests = new Map<string, string>();
+	const confirmations = new Map<
+		string,
+		{ confirmation: BrowserSideEffectConfirmationV1; digest: string }
+	>();
+
+	function allowedOrigins(): ReadonlySet<string> {
+		return new Set(readCapability().policy.allowedOrigins.map(normalizeOrigin));
+	}
 
 	async function installPolicy() {
 		if (policyInstalled) return;
 		await input.context.route("**/*", async (route: Route) => {
 			try {
-				assertAllowedUrl(route.request().url(), allowedOrigins);
+				assertAllowedUrl(route.request().url(), allowedOrigins());
 				await route.continue();
 			} catch {
 				await route.abort("blockedbyclient");
@@ -159,16 +287,17 @@ export function createBrowserObserveControllerV1(input: {
 
 	async function navigate(url: string): Promise<BrowserPageReferenceV1> {
 		await installPolicy();
-		assertAllowedUrl(url, allowedOrigins);
-		if (input.context.pages().length >= input.capability.policy.maxPages)
+		const capability = readCapability();
+		assertAllowedUrl(url, allowedOrigins());
+		if (input.context.pages().length >= capability.policy.maxPages)
 			throw new Error("BROWSER_PAGE_LIMIT_EXCEEDED");
 		const page = input.context.pages()[0] ?? (await input.context.newPage());
 		const state = pageStateFor(page, pages);
 		await page.goto(url, {
 			waitUntil: "domcontentloaded",
-			timeout: input.capability.policy.navigationTimeoutMs,
+			timeout: capability.policy.navigationTimeoutMs,
 		});
-		assertAllowedUrl(page.url(), allowedOrigins);
+		assertAllowedUrl(page.url(), allowedOrigins());
 		return { pageId: state.pageId, pageRevision: state.revision };
 	}
 
@@ -176,14 +305,15 @@ export function createBrowserObserveControllerV1(input: {
 		reference: BrowserPageReferenceV1,
 	): Promise<BrowserObservationV1> {
 		const state = requirePage(reference);
+		const root = state.activeFrame ?? state.page;
 		const origin = new URL(state.page.url()).origin;
-		const body = state.page.locator("body");
+		const body = root.locator("body");
 		const text = (
 			await body.innerText({
-				timeout: input.capability.policy.actionTimeoutMs,
+				timeout: readCapability().policy.actionTimeoutMs,
 			})
 		).slice(0, maxTextBytes);
-		const candidates = state.page.locator("a,button,input,textarea,select");
+		const candidates = root.locator("a,button,input,textarea,select");
 		const elements: BrowserElementReferenceV1[] = [];
 		for (
 			let index = 0;
@@ -202,7 +332,11 @@ export function createBrowserObserveControllerV1(input: {
 				.trim()
 				.slice(0, 256);
 			const elementId = `element-${randomUUID()}`;
-			state.elements.set(elementId, { revision: state.revision, index });
+			state.elements.set(elementId, {
+				revision: state.revision,
+				index,
+				frame: state.activeFrame,
+			});
 			elements.push({
 				elementId,
 				pageId: state.pageId,
@@ -222,17 +356,475 @@ export function createBrowserObserveControllerV1(input: {
 		};
 	}
 
+	function listPages(): readonly BrowserPageReferenceV1[] {
+		const maxTabs = readCapability().policy.maxTabs;
+		return input.context
+			.pages()
+			.slice(0, maxTabs)
+			.map((page) => pageReference(pageStateFor(page, pages)));
+	}
+
 	function resolveElement(reference: BrowserElementReferenceV1): Locator {
 		const state = pages.get(reference.pageId);
 		if (!state || state.revision !== reference.pageRevision)
 			throw new Error("BROWSER_ELEMENT_REFERENCE_STALE");
 		const stored = state.elements.get(reference.elementId);
-		if (!stored || stored.revision !== reference.pageRevision)
+		if (
+			!stored ||
+			stored.revision !== reference.pageRevision ||
+			stored.frame !== state.activeFrame
+		)
 			throw new Error("BROWSER_ELEMENT_REFERENCE_STALE");
-		return state.page
+		return (state.activeFrame ?? state.page)
 			.locator("a,button,input,textarea,select")
 			.nth(stored.index);
 	}
 
-	return { navigate, observe, resolveElement };
+	function pageReference(state: PageState): BrowserPageReferenceV1 {
+		return { pageId: state.pageId, pageRevision: state.revision };
+	}
+
+	function actionDigest(request: BrowserActionRequestV1): string {
+		return digest({
+			kind: request.kind,
+			page: request.page,
+			target: request.target,
+			targetPage: request.targetPage,
+			value: request.value,
+			key: request.key,
+			durationMs: request.durationMs,
+			sideEffect: request.sideEffect,
+			authorization: request.authorization,
+		});
+	}
+
+	function requireAuthorization(
+		request: BrowserActionRequestV1,
+	): BrowserActionAuthorizationV1 {
+		const authorization = request.authorization;
+		if (
+			!authorization ||
+			!nonEmpty(authorization.subjectId) ||
+			!nonEmpty(authorization.agentId) ||
+			!nonEmpty(authorization.conversationId) ||
+			!nonEmpty(authorization.executionId)
+		)
+			throw new BrowserActionRejectedError(
+				"BROWSER_ACTION_AUTHORIZATION_REQUIRED",
+			);
+		return authorization;
+	}
+
+	function actionRecord(
+		request: BrowserActionRequestV1,
+		status: BrowserActionRecordV1["status"],
+		page: BrowserPageReferenceV1,
+		createdAt: string,
+		fields: Partial<BrowserActionRecordV1> = {},
+	): BrowserActionRecordV1 {
+		return {
+			actionId: request.actionId ?? `action-${randomUUID()}`,
+			kind: request.kind,
+			status,
+			page,
+			sideEffect: request.sideEffect === true,
+			createdAt,
+			...fields,
+		};
+	}
+
+	async function executeAction(
+		request: BrowserActionRequestV1,
+	): Promise<BrowserActionRecordV1> {
+		const createdAt = new Date().toISOString();
+		const actionId = request.actionId ?? `action-${randomUUID()}`;
+		const requestDigest = actionDigest(request);
+		const previous = request.idempotencyKey
+			? actions.get(request.idempotencyKey)
+			: undefined;
+		if (previous) {
+			if (actionDigests.get(request.idempotencyKey as string) !== requestDigest)
+				return actionRecord(request, "rejected", previous.page, createdAt, {
+					actionId,
+					reasonCode: "BROWSER_ACTION_IDEMPOTENCY_CONFLICT",
+				});
+			if (
+				previous.status !== "rejected" ||
+				previous.reasonCode !== "BROWSER_SIDE_EFFECT_CONFIRMATION_REQUIRED"
+			)
+				return previous;
+		}
+
+		let state: PageState;
+		try {
+			state = requirePage(request.page);
+		} catch (error) {
+			return actionRecord(request, "rejected", request.page, createdAt, {
+				actionId,
+				reasonCode:
+					error instanceof Error
+						? error.message
+						: "BROWSER_PAGE_REFERENCE_STALE",
+			});
+		}
+		const capability = readCapability();
+		try {
+			assertAllowedUrl(state.page.url(), allowedOrigins());
+		} catch (error) {
+			return actionRecord(
+				request,
+				"rejected",
+				pageReference(state),
+				createdAt,
+				{
+					actionId,
+					reasonCode:
+						error instanceof Error
+							? error.message
+							: "BROWSER_NAVIGATION_ORIGIN_DENIED",
+				},
+			);
+		}
+		if (!capability.operations.includes("interact"))
+			return actionRecord(
+				request,
+				"rejected",
+				pageReference(state),
+				createdAt,
+				{
+					actionId,
+					reasonCode: "BROWSER_CAPABILITY_INTERACT_UNAVAILABLE",
+				},
+			);
+		if (inFlightActions >= capability.policy.maxConcurrentActions)
+			return actionRecord(
+				request,
+				"rejected",
+				pageReference(state),
+				createdAt,
+				{
+					actionId,
+					reasonCode: "BROWSER_ACTION_CONCURRENCY_LIMIT",
+				},
+			);
+
+		let locator: Locator | undefined;
+		if (request.target) {
+			if (
+				request.target.pageId !== request.page.pageId ||
+				request.target.pageRevision !== request.page.pageRevision
+			)
+				return actionRecord(
+					request,
+					"rejected",
+					pageReference(state),
+					createdAt,
+					{
+						actionId,
+						reasonCode: "BROWSER_ELEMENT_PAGE_MISMATCH",
+					},
+				);
+			try {
+				locator = resolveElement(request.target);
+			} catch (error) {
+				return actionRecord(
+					request,
+					"rejected",
+					pageReference(state),
+					createdAt,
+					{
+						actionId,
+						reasonCode:
+							error instanceof Error
+								? error.message
+								: "BROWSER_ELEMENT_REFERENCE_STALE",
+					},
+				);
+			}
+		}
+		const inferredSideEffect =
+			request.sideEffect === true ||
+			(request.kind === "click" && sideEffectName(request.target?.name ?? ""));
+		let authorization: BrowserActionAuthorizationV1 | undefined;
+		if (inferredSideEffect) {
+			try {
+				authorization = requireAuthorization(request);
+			} catch (error) {
+				return actionRecord(
+					request,
+					"rejected",
+					pageReference(state),
+					createdAt,
+					{
+						actionId,
+						sideEffect: true,
+						reasonCode:
+							error instanceof BrowserActionRejectedError
+								? error.code
+								: "BROWSER_ACTION_AUTHORIZATION_REQUIRED",
+					},
+				);
+			}
+		}
+		if (inferredSideEffect && !capability.operations.includes("side_effects"))
+			return actionRecord(
+				request,
+				"rejected",
+				pageReference(state),
+				createdAt,
+				{
+					actionId,
+					sideEffect: true,
+					reasonCode: "BROWSER_SIDE_EFFECTS_UNAVAILABLE",
+				},
+			);
+		if (inferredSideEffect && capability.policy.requireSideEffectConfirmation) {
+			if (!authorization)
+				return actionRecord(
+					request,
+					"rejected",
+					pageReference(state),
+					createdAt,
+					{
+						actionId,
+						sideEffect: true,
+						reasonCode: "BROWSER_ACTION_AUTHORIZATION_REQUIRED",
+					},
+				);
+			const currentOrigin = new URL(state.page.url()).origin;
+			const confirmation = request.confirmation;
+			if (!confirmation) {
+				const preview: BrowserSideEffectConfirmationV1 = Object.freeze({
+					confirmationId: `confirmation-${randomUUID()}`,
+					actionId,
+					subjectId: authorization.subjectId,
+					agentId: authorization.agentId,
+					conversationId: authorization.conversationId,
+					executionId: authorization.executionId,
+					origin: currentOrigin,
+					pageRevision: state.revision,
+					...(request.target ? { elementId: request.target.elementId } : {}),
+					parameterDigest: requestDigest,
+					capabilityVersion: capability.capabilityVersion,
+					preview: { kind: request.kind, name: request.target?.name ?? "" },
+				});
+				confirmations.set(preview.confirmationId, {
+					confirmation: preview,
+					digest: requestDigest,
+				});
+				const record = actionRecord(
+					request,
+					"rejected",
+					pageReference(state),
+					createdAt,
+					{
+						actionId,
+						sideEffect: true,
+						reasonCode: "BROWSER_SIDE_EFFECT_CONFIRMATION_REQUIRED",
+						confirmation: preview,
+					},
+				);
+				if (request.idempotencyKey) {
+					actions.set(request.idempotencyKey, record);
+					actionDigests.set(request.idempotencyKey, requestDigest);
+				}
+				return record;
+			}
+			const pending = confirmations.get(confirmation.confirmationId);
+			if (
+				!pending ||
+				pending.digest !== requestDigest ||
+				confirmation.actionId !== actionId ||
+				confirmation.parameterDigest !== pending.digest ||
+				confirmation.capabilityVersion !== capability.capabilityVersion ||
+				confirmation.origin !== currentOrigin ||
+				confirmation.pageRevision !== state.revision ||
+				confirmation.subjectId !== authorization.subjectId ||
+				confirmation.agentId !== authorization.agentId ||
+				confirmation.conversationId !== authorization.conversationId ||
+				confirmation.executionId !== authorization.executionId ||
+				confirmation.elementId !== request.target?.elementId ||
+				confirmation.preview.kind !== pending.confirmation.preview.kind ||
+				confirmation.preview.name !== pending.confirmation.preview.name
+			)
+				return actionRecord(
+					request,
+					"rejected",
+					pageReference(state),
+					createdAt,
+					{
+						actionId,
+						sideEffect: true,
+						reasonCode: "BROWSER_SIDE_EFFECT_CONFIRMATION_INVALID",
+					},
+				);
+			confirmations.delete(confirmation.confirmationId);
+		}
+
+		const targetPageState = request.targetPage
+			? pages.get(request.targetPage.pageId)
+			: undefined;
+		if (request.kind === "switch_tab") {
+			if (
+				!targetPageState ||
+				targetPageState.revision !== request.targetPage?.pageRevision
+			)
+				return actionRecord(
+					request,
+					"rejected",
+					pageReference(state),
+					createdAt,
+					{
+						actionId,
+						reasonCode: "BROWSER_TAB_REFERENCE_STALE",
+					},
+				);
+		}
+		if (
+			[
+				"click",
+				"fill",
+				"select",
+				"check",
+				"uncheck",
+				"press",
+				"hover",
+				"scroll",
+				"switch_frame",
+			].includes(request.kind) &&
+			!locator
+		)
+			return actionRecord(
+				request,
+				"rejected",
+				pageReference(state),
+				createdAt,
+				{
+					actionId,
+					reasonCode: "BROWSER_ACTION_TARGET_REQUIRED",
+				},
+			);
+
+		inFlightActions += 1;
+		try {
+			await installPolicy();
+			const timeout = capability.policy.actionTimeoutMs;
+			switch (request.kind) {
+				case "click":
+					await locator?.click({ timeout });
+					break;
+				case "fill": {
+					const type = await locator?.getAttribute("type");
+					const name = await locator?.getAttribute("name");
+					if (
+						type === "hidden" ||
+						type === "password" ||
+						/(password|token|secret|key)/iu.test(name ?? "")
+					)
+						throw new BrowserActionRejectedError(
+							"BROWSER_SENSITIVE_FIELD_DENIED",
+						);
+					if (typeof request.value !== "string" || request.value.length > 4096)
+						throw new BrowserActionRejectedError(
+							"BROWSER_ACTION_VALUE_INVALID",
+						);
+					await locator?.fill(request.value, { timeout });
+					break;
+				}
+				case "select":
+					if (typeof request.value !== "string" || request.value.length > 256)
+						throw new BrowserActionRejectedError(
+							"BROWSER_ACTION_VALUE_INVALID",
+						);
+					await locator?.selectOption(request.value, { timeout });
+					break;
+				case "check":
+					await locator?.check({ timeout });
+					break;
+				case "uncheck":
+					await locator?.uncheck({ timeout });
+					break;
+				case "press":
+					if (typeof request.key !== "string" || !isPrintableKey(request.key))
+						throw new BrowserActionRejectedError("BROWSER_ACTION_KEY_INVALID");
+					await locator?.press(request.key, { timeout });
+					break;
+				case "hover":
+					await locator?.hover({ timeout });
+					break;
+				case "scroll":
+					await locator?.scrollIntoViewIfNeeded({ timeout });
+					break;
+				case "wait": {
+					const durationMs = request.durationMs ?? 0;
+					if (
+						!Number.isSafeInteger(durationMs) ||
+						durationMs < 0 ||
+						durationMs > timeout
+					)
+						throw new BrowserActionRejectedError("BROWSER_ACTION_WAIT_INVALID");
+					await new Promise<void>((resolve) => setTimeout(resolve, durationMs));
+					break;
+				}
+				case "switch_tab":
+					break;
+				case "switch_frame": {
+					const handle = await locator?.elementHandle({ timeout });
+					const frame = await handle?.contentFrame();
+					if (!frame)
+						throw new BrowserActionRejectedError("BROWSER_FRAME_UNAVAILABLE");
+					state.activeFrame = frame;
+					state.elements.clear();
+					break;
+				}
+			}
+			const resultPage = targetPageState
+				? pageReference(targetPageState)
+				: pageReference(state);
+			const record = actionRecord(request, "completed", resultPage, createdAt, {
+				actionId,
+				sideEffect: inferredSideEffect,
+				completedAt: new Date().toISOString(),
+			});
+			if (request.idempotencyKey) {
+				actions.set(request.idempotencyKey, record);
+				actionDigests.set(request.idempotencyKey, requestDigest);
+			}
+			return record;
+		} catch (error) {
+			const rejected = error instanceof BrowserActionRejectedError;
+			const record = actionRecord(
+				request,
+				rejected ? "rejected" : inferredSideEffect ? "unknown" : "failed",
+				pageReference(state),
+				createdAt,
+				{
+					actionId,
+					sideEffect: inferredSideEffect,
+					reasonCode: rejected
+						? error.code
+						: inferredSideEffect
+							? "BROWSER_ACTION_RESULT_UNCONFIRMED"
+							: "BROWSER_ACTION_FAILED",
+					completedAt: new Date().toISOString(),
+				},
+			);
+			if (request.idempotencyKey) {
+				actions.set(request.idempotencyKey, record);
+				actionDigests.set(request.idempotencyKey, requestDigest);
+			}
+			return record;
+		} finally {
+			inFlightActions -= 1;
+		}
+	}
+
+	return {
+		navigate,
+		observe,
+		resolveElement,
+		listPages,
+		act: executeAction,
+		executeAction,
+	};
 }
