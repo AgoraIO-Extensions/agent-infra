@@ -14,6 +14,17 @@ import {
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
 
+type SessionRuntimeTlsPolicy = SessionSandboxReconciliationClaimV1["policy"] & {
+	readonly sessionRuntimeTlsBindings: readonly {
+		readonly sessionId: string;
+		readonly sandboxId: string;
+		readonly generation: number;
+		readonly resourceFence: number;
+		readonly serviceName: string;
+		readonly secretName: string;
+	}[];
+};
+
 function fixture() {
 	const api = fakeKubernetesApi();
 	api.seed(
@@ -82,9 +93,7 @@ function fixture() {
 			managementFence: 1,
 			imageDigest: deployment.imageDigest,
 			sessionRuntimeTlsBindings,
-		} as SessionSandboxReconciliationClaimV1["policy"] & {
-			readonly sessionRuntimeTlsBindings: typeof sessionRuntimeTlsBindings;
-		},
+		} as SessionRuntimeTlsPolicy,
 		deployment,
 		previousObservation: null,
 	};
@@ -135,6 +144,29 @@ describe("production SessionSandbox resource receiver", () => {
 				new AbortController().signal,
 			),
 		).rejects.toThrow("verified policy");
+		expect(f.writes).toHaveLength(0);
+	});
+
+	it("rejects an ambiguous Session TLS binding tuple before any resource write", async () => {
+		const f = fixture();
+		const policy = f.claim.policy as SessionRuntimeTlsPolicy;
+		const binding = policy.sessionRuntimeTlsBindings[0];
+		if (!binding) throw new Error("missing Session TLS binding");
+		await expect(
+			f.receive(
+				{
+					...f.claim,
+					policy: {
+						...policy,
+						sessionRuntimeTlsBindings: [
+							...policy.sessionRuntimeTlsBindings,
+							{ ...binding, secretName: "sandbox-allocation-a-tls-alt" },
+						],
+					} as SessionRuntimeTlsPolicy,
+				},
+				new AbortController().signal,
+			),
+		).rejects.toThrow("Session Runtime TLS binding is ambiguous");
 		expect(f.writes).toHaveLength(0);
 	});
 

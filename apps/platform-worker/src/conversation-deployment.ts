@@ -306,6 +306,19 @@ export function createProductionSessionSandboxReceiverV1(
 			const secretNames = new Set(bindings.map((item) => item.secretName));
 			if (secretNames.size !== bindings.length)
 				throw new Error("Session Runtime TLS Secret is reused");
+			const allocationKeys = new Set(
+				bindings.map((item) =>
+					[
+						item.sessionId,
+						item.sandboxId,
+						item.generation,
+						item.resourceFence,
+						item.serviceName,
+					].join("\u0000"),
+				),
+			);
+			if (allocationKeys.size !== bindings.length)
+				throw new Error("Session Runtime TLS binding is ambiguous");
 			const match = bindings.find(
 				(item) =>
 					item.sessionId === binding.sessionId &&
