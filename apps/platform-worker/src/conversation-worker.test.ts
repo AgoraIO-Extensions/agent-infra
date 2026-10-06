@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 	eventsClose: vi.fn(async () => {}),
 	authorizationClose: vi.fn(async () => {}),
 	legacyClose: vi.fn(async () => {}),
+	deploymentClose: vi.fn(async () => {}),
 	runtimeClose: vi.fn(),
 	dispatchAssemblyThrows: false,
 	signal: undefined as AbortSignal | undefined,
@@ -93,6 +94,7 @@ const options = {
 	},
 	receiveSandbox: async () => ({ status: "unknown" as const, resources: [] }),
 	maximumConcurrentDispatches: 1,
+	closeDeployment: mocks.deploymentClose,
 	log: () => {},
 };
 beforeEach(() => {
@@ -163,6 +165,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 		expect(mocks.eventsClose).toHaveBeenCalledTimes(1);
 		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
 		expect(mocks.legacyClose).toHaveBeenCalledTimes(1);
+		expect(mocks.deploymentClose).toHaveBeenCalledTimes(1);
 		expect(await worker.tick()).toBe(0);
 	});
 	it("shares overlapping discovery and never claims from a duplicate tick", async () => {
@@ -303,6 +306,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 		expect(mocks.eventsClose).toHaveBeenCalledTimes(1);
 		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
 		expect(mocks.legacyClose).toHaveBeenCalledTimes(1);
+		expect(mocks.deploymentClose).toHaveBeenCalledTimes(1);
 	});
 	it("closes every database resource when one close throws synchronously", async () => {
 		mocks.find.mockResolvedValue([]);

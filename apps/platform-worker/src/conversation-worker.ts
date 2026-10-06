@@ -29,6 +29,8 @@ export interface PlatformConversationWorkerOptionsV2
 		| "resolveCurrentApiUseGrant"
 	> {
 	readonly databaseUrl: string;
+	/** Closes deployment-owned stores assembled outside the Worker process. */
+	readonly closeDeployment?: () => Promise<void>;
 	readonly sandboxPolicy: SessionSandboxPolicyV1;
 	readonly receiveSandbox: (
 		claim: SessionSandboxReconciliationClaimV1,
@@ -139,6 +141,7 @@ export function createPlatformConversationWorkerV2(
 			Promise.resolve().then(() => store.close()),
 			Promise.resolve().then(() => taskAuthorizationStore.close()),
 			Promise.resolve().then(() => legacyControlStore.close()),
+			Promise.resolve().then(() => options.closeDeployment?.()),
 		]);
 		throw error;
 	}
@@ -397,6 +400,7 @@ export function createPlatformConversationWorkerV2(
 					Promise.resolve().then(() => store.close()),
 					Promise.resolve().then(() => taskAuthorizationStore.close()),
 					Promise.resolve().then(() => legacyControlStore.close()),
+					Promise.resolve().then(() => options.closeDeployment?.()),
 				]);
 				const failure = [...runningResults, ...closeResults].find(
 					(result): result is PromiseRejectedResult =>

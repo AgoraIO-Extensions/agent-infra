@@ -1397,24 +1397,15 @@ describe("Trusted conversation Runtime adapter", () => {
 		);
 		h.runtime.close();
 	});
-	it("signs the original principal/input/selection after a fresh directory check", async () => {
+	it("rejects historical standard business after a fresh directory check", async () => {
 		const h = harness();
 		const context = await h.authorize();
 		const before = h.directory.resolveUser.mock.calls.length;
-		await h.runtime.runtimeHost.dispatch(h.request(context));
+		await expect(
+			h.runtime.runtimeHost.dispatch(h.request(context)),
+		).rejects.toMatchObject({ code: "RELAY_KEY_UNAVAILABLE" });
 		expect(h.directory.resolveUser.mock.calls.length).toBeGreaterThan(before);
-		expect(h.sent().url).toContain("/v3/turns");
-		expect(h.sent().body).toMatchObject({
-			principal: { kind: "user", id: "user" },
-			input: { text: "original accepted input" },
-			selection: { modelOptionId: "option", reasoningLevel: "high" },
-		});
-		expect(h.sent().claims).toMatchObject({
-			purpose: "business",
-			authorizationRecordId: "original-authorization",
-			workerId: "transport",
-		});
-		expect(h.sent().body).not.toHaveProperty("actorId");
+		expect(h.fetcher).not.toHaveBeenCalled();
 		h.runtime.close();
 	});
 	it("rechecks authorization immediately before signing the runtime grant", async () => {
