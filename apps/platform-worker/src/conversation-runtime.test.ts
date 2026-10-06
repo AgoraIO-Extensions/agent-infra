@@ -315,6 +315,33 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it("rechecks the trusted Worker identity when resolver outputs share a mutable object", async () => {
+		const h = harness();
+		const target = {
+			baseUrl: "https://runtime.test",
+			serviceToken: "synthetic-transport-proof",
+			workerId: "transport",
+		};
+		const grant = await h.authorize();
+		let resolutions = 0;
+		h.resolver.mockClear();
+		h.resolver.mockImplementation(async () => {
+			if (++resolutions === 3) target.workerId = "other-worker";
+			return target;
+		});
+		try {
+			await expect(
+				h.runtime.runtimeHost.dispatch(
+					h.request(grant),
+					new AbortController().signal,
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_ROUTE_STALE" });
+			expect(h.resolver).toHaveBeenCalledTimes(3);
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			h.runtime.close();
+		}
+	});
 	it("rejects a changed Connection snapshot at the final route recheck without dispatch", async () => {
 		const h = harness();
 		const profile = {
