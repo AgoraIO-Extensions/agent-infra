@@ -34,10 +34,12 @@ flowchart LR
 Platform 不通过自身 API 代理 MCP 调用，不读取 Connection DB，不传递 Provider Credential，不签发 Connection 授权证明。Platform 只保存自身 Agent、Execution、工具事实和受信采集得到的关联引用。
 
 Runtime callback/client 准备层的范围见 [Runtime HLD §9.1](HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)。
-其 bootstrap/provenance 投影和内部 slot 不替代本 HLD 的安装注册、请求证明与服务端校验；
+其 bootstrap/provenance 投影和内部 slot 不替代本 HLD 的 token 绑定与服务端校验；
 准备层通过不构成 ConsumerInstance 或 Direct MCP conformance。
 
-Direct MCP Client 需配置 Connection endpoint，并使用已注册 Consumer 的 OAuth Authorization Code + PKCE 安装流程或获准 PAT 访问。每个 ConsumerInstance 必须绑定安装级公钥；OAuth access token 必须通过部署明确选定且可互操作验证的 sender-constrained 方案绑定该公钥；MCP/API 默认使用 DPoP，仅在明确配置并验证客户端证书时使用 mTLS；授权码兑换、刷新和每次调用都必须验证安装私钥持有权，不得接受未绑定安装的 bearer access token。PAT 必须是该安装独立的高熵凭据，签发和每次调用都必须验证已注册 ConsumerInstance 的安装绑定及撤销状态，调用方不得仅提交或选择 ConsumerInstance 标识。Consumer 定义 Actor 时还必须绑定由 Connection 解析的唯一 Actor，无法验证安装绑定或唯一解析主体时，在签发凭据和每次调用前均拒绝。Connection 必须在每次调用时验证 token/PAT 的签名或 hash、issuer、audience、scope、有效期、Principal、Consumer、ConsumerInstance、Actor（如适用）及 recovery generation，并在 ConsumerInstance 或授权撤销后拒绝旧凭据。
+Direct MCP Client 使用已注册 Consumer 的标准 MCP OAuth Authorization Code + PKCE 流程或获准 PAT。Connection 从 token 的签名/hash 与持久绑定解析唯一 Principal、Consumer、ConsumerInstance 和 Actor（如适用），每次调用校验 issuer、audience、scope、期限、当前实例/主体状态及 recovery generation。客户端不能仅提交实例标识或主体字段取得权限；无效、撤销或无法唯一解析的 token 在调用前拒绝。凭据保管与 Agent 选择遵循 [工程 Spec §13.5.3](SPEC-agent-infra-M1-engineering-architecture.md#1353-secretref权威与交付边界)。
+
+安装公钥与 DPoP/mTLS 不是所有标准 MCP/token 客户端的通用前置。只有部署批准的 Consumer profile 明确选择 sender constraint，且两端具备互操作能力时，才另行绑定安装公钥并在授权码兑换、刷新及每次请求验证持有证明、请求绑定和重放；该 profile 缺少证明时拒绝，不能回退为普通 token。标准 token 路径仍必须通过主体/实例隔离、受保护保管、期限、撤销与恢复验证。
 
 ## 4. 部署与模块
 
@@ -62,13 +64,15 @@ Principal 状态由 Connection 自己复核。LDAP 不可用、结果非法、Pr
 
 ### 5.2 Consumer 与 Instance
 
-每个 Direct MCP 产品独立注册 Consumer。每次 OAuth client installation 由 Connection 创建独立 ConsumerInstance，并向该安装绑定不可导出的安装级公钥或一次性注册凭据；后续授权请求必须证明当前安装对该 ConsumerInstance 的持有权。客户端不得提交或选择其他已存在的 ConsumerInstance，无法验证安装绑定时必须拒绝授权。ConsumerInstance 可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间、过期时间和 recovery generation；服务端保存并在每次调用校验该 generation，generation 变化立即使旧 token 失效；若 ConsumerInstance 细分为多个 Actor，则 token 或服务端保存的受信 session 必须同时绑定 Actor，调用方不得自行提交 Actor 身份。没有唯一 Actor 绑定时，调用拒绝而不是猜测。
+每个 Direct MCP 产品独立注册 Consumer。Connection 为每次 OAuth client installation 或 PAT binding 创建独立 ConsumerInstance，并将签发的凭据绑定到该实例与当前 Principal；调用方不能选择已有的其他实例。ConsumerInstance 可单独撤销。OAuth access token 绑定 Principal、Consumer、ConsumerInstance、audience、scope、签发时间、过期时间和 recovery generation；服务端保存并在每次调用校验该 generation，generation 变化立即使旧 token 失效。定义 Actor 的 Consumer 还须由 token 或受信服务端 session 解析唯一 Actor；无法解析时拒绝，调用方不得自报 Actor。只有选用 sender constraint 的 profile 另验安装公钥持有证明，规则见第 3 节。
 
 Connection OAuth 使用 Authorization Code + PKCE。客户端提供的 `state` 对 Connection 保持 opaque，授权响应必须原样返回并由客户端校验；Connection 使用独立生成的一次性、短期、高熵服务端交互标识，将 BrowserSession、Principal、Consumer、ConsumerInstance、原始授权事务和精确受控 `redirect_uri` 绑定并原子消费。authorization code 必须绑定同一 Principal、client、ConsumerInstance、`redirect_uri`、PKCE challenge、audience 和 scope，并在兑换时原子消费。Refresh token 只保存 hash，采用轮换与重放检测；检测到旧 token 重用或执行 revoke 时撤销整个 token family，并记录脱敏审计。BrowserSession 只用于 Web 管理，不可调用 MCP Action。BrowserSession 必须使用 host-only `__Host-` Cookie，并设置 `Secure`、`HttpOnly`、`SameSite=Strict` 和 `Path=/`，不得设置 `Domain`；除按下文独立校验的 Provider OAuth callback 外，所有使用 BrowserSession 的状态变更请求，包括 OAuth 授权确认、Grant、Connection、账号、Provider/Action、管理员角色和未知结果人工处理，都必须校验 CSRF token、exact Origin，并结合 Fetch Metadata 拒绝跨站请求。
 
 作为 GitHub OAuth Client 时，Provider callback 使用独立的一次性、短期、高熵服务端 state，原子绑定发起 BrowserSession、Principal、Provider、原始事务和精确受控回跳地址；callback 不依赖 BrowserSession Cookie、CSRF token、Origin 或 Fetch Metadata。Callback 只能完成原 Provider OAuth 事务，不创建 Grant，不接受调用方提交的 Principal、Connection 归属或任意跳转地址；state 缺失、重复、过期或绑定不一致时 fail closed。
 
 Connection PAT 只对经过注册和批准的 Consumer 开放。每个 PAT 必须绑定唯一 Principal、Consumer、ConsumerInstance、audience、scope、签发时间、过期时间和 recovery generation；定义 Actor 的 Consumer 还必须绑定唯一 Actor，无法唯一解析时拒绝调用。PAT 仅以 hash 持久化，支持单独轮换和撤销，并执行与 OAuth access token 相同的 Principal/Consumer/Instance/Actor/Grant/Action 检查；PAT 不包含 Provider Credential。
+
+Agent PAT binding 复用获准 Consumer 的固定 HTTPS callback 与服务认证。创建 binding 时绑定原授权事务，用户在 Connection 中确认当前 Principal；callback 只携带不透明 binding 引用，不在 URL 返回 PAT。只有相同 Consumer 的受认证客户端可单次领取，跨 Consumer、重复、过期或取消的领取拒绝；服务认证凭据不能作为 MCP PAT 使用。PAT 与 TOKEN ConsumerInstance 单独撤销，不影响其他实例，也不删除 Provider Credential。客户端将该绑定与自己的可信主体/Agent 消费用途对应，细则见工程 Spec §13.5.3。
 
 ## 6. Catalog 与授权
 
@@ -77,12 +81,14 @@ Catalog 是只读投影，只包含 Provider、immutable ActionVersion、输入/
 Grant 绑定：
 
 - 当前 Principal；
-- Consumer 与始终绑定的 ConsumerInstance；Consumer 定义 Actor 时还必须绑定由 Connection 解析的唯一 Actor，Actor 不能替代 ConsumerInstance；
+- Consumer；Consumer 定义 Actor 或实例级授权时，还须绑定由 Connection 解析的对应范围；
 - Connection；
 - 用户确认的精确 ActionVersion 集合；
 - 当前 Grant revision、签发和过期信息。
 
 Connection OAuth 不自动创建 Grant。Owner、Client、Agent 或 Platform 不能替 Principal 创建、扩大或替换 Grant。能力增加必须由 Principal 在 Connection 中重新确认，撤权由 Connection 线性化并立即阻止新调用。
+
+Grant 与 token/ConsumerInstance 分别管理。相同 Principal/Consumer 的获准实例可复用 Grant，每次调用仍验证各自当前 token 和实例；单独撤销一个 token 不撤销其他实例，撤销 Grant 则阻止全部使用该 Grant 的新调用。不同 Agent 的权限差异由明确的 Consumer/Actor/Grant 配置表达，token 名称或客户端映射不成为 Connection 的授权 selector。
 
 ## 7. MCP/API 调用流程
 
@@ -93,8 +99,8 @@ sequenceDiagram
     participant D as Connection DB
     participant P as Provider
 
-    C->>A: DPoP/mTLS-bound access token + proof + Action + arguments + idempotencyKey
-    A->>D: 验证 proof、token 绑定与 ConsumerInstance 安装密钥持有权
+    C->>A: OAuth access token / PAT + Action + arguments + idempotencyKey
+    A->>D: 验证 token 与实例绑定、期限、撤销及 profile 要求的 proof
     A->>D: 解析 Principal/Consumer/Instance/Actor/Grant
     A->>D: 校验 ActionVersion、Credential、Provider、Schema、幂等
     A->>D: 持久化 ActionCall/Effect/Dispatch
@@ -104,7 +110,7 @@ sequenceDiagram
     A-->>C: 脱敏结果、错误和真实调用关联引用
 ```
 
-Connection 只接受 Action ID、ActionVersion、参数和业务幂等键，以及由已注册 ConsumerInstance 的安装级证明认证出的调用上下文。Principal、Consumer、ConsumerInstance 和 Actor 均由 Connection 服务端解析并验证；无法验证安装绑定、无法唯一解析 ConsumerInstance 或发现调用方提交的主体字段与认证上下文不一致时，必须在创建 ActionCall 和访问 Provider 前拒绝请求；目标 Connection、外部账号和 Credential 必须由当前有效 Grant 的受信绑定唯一确定。创建或替换 Grant 时，Connection 必须以数据库唯一约束或等价的原子事务保证同一 Principal、Consumer、ConsumerInstance、Actor 和 ActionVersion 最多对应一个当前有效 Connection；切换 Connection 必须由 Principal 明确确认并原子终结旧绑定。若没有匹配 Grant、发现违反该不变量的多个匹配 Grant/Connection，或绑定状态不完整，调用必须在创建 ActionCall 和访问 Provider 前 fail closed，禁止按默认值、最近使用记录或调用方字段猜测目标。
+Connection 只接受 Action ID、ActionVersion、参数和业务幂等键，以及由当前有效 token 认证出的调用上下文。Principal、Consumer、ConsumerInstance 和 Actor 均由 Connection 服务端解析并验证；无法验证 token/实例绑定、profile 必需 proof、唯一主体或发现调用方身份字段与认证上下文不一致时，必须在创建 ActionCall 和访问 Provider 前拒绝；目标 Connection、外部账号和 Credential 由当前有效 Grant 的受信绑定唯一确定。创建或替换 Grant 时，数据库唯一约束或等价原子事务保证同一 Principal、Consumer、Actor（如适用）、实例范围（如适用）和 ActionVersion 最多对应一个当前有效 Connection；切换 Connection 由 Principal 明确确认并原子终结旧绑定。没有匹配、存在多个匹配或绑定不完整时 fail closed，禁止按默认值、最近使用或调用方字段猜测。
 
 ## 8. 幂等与线性化
 

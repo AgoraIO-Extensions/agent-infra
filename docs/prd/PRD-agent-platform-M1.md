@@ -311,6 +311,7 @@ Agent 平台与 Connection 的边界如下：
 - Platform 校验自身 API 身份、Agent 权限和任务归属，仅保存自身任务、模型及工具执行事实与审计。Connection 独立校验直连客户端的用户或应用身份及当前授权，并保存外部账号、凭证、授权、外部调用结果和审计。
 - 用户或应用在独立 Connection 入口管理自己有权使用的个人或公司 Connection 及调用授权；Agent Owner 不能替其他主体选择外部账号或授予 Connection 权限。能力扩张须由授权主体在 Connection 确认，撤权后由 Connection 拒绝新调用。
 - Connection 的直连客户端访问凭证与 Platform API 凭证分别管理，按原执行主体隔离，不能进入模型上下文、任务结果或其他主体可读的持久数据；外部账号原始凭证始终保留在 Connection，Agent、模型和调用方不能获得。
+- 不同用户或应用、不同 Agent 使用独立的 Connection 客户端 token，可分别失效或撤销；增加 Agent 不自动复用另一 Agent 的 token。独立 token 不自动扩大外部能力授权，所需账号和能力仍由实际主体在 Connection 确认。
 - 后台 Agent 同样须使用原执行用户或应用在 Connection 独立取得的客户端访问凭据；仅有 Agent 工作负载身份不能代替该主体或其授权。缺少有效凭据时拒绝外部调用，不能回退到 Owner、应用责任人或平台服务身份。
 - M1 必须能从实际执行定位对应的直连调用，并同时核对本次任务实际发起的工具操作、Connection 确认的调用主体和原调用记录，再关联两侧审计。其他任务的真实调用记录即使属于同一主体和 Agent，也不能冒充本次调用；无法核实时明确显示关联未核实。两侧各自在授权入口查询，不在 Platform 复制 Connection 状态或审计；关联标识不授予访问权，也不能仅凭调用方提交的相同字符串认定关联成立。
 - 四个标准模板必须完成 Connection 接入；首个受监督 Connection Pilot 仅使用 Codex 标准模板、两个测试用户、专用 GitHub 测试账号和一个受控 private 仓库，验收读取、真实创建 PR、隔离、幂等、审计和撤权；Pilot 通过结论不能外推到其他模板、账号、Provider 或生产环境。
