@@ -190,6 +190,12 @@ export async function executeConversationBrowserActionV1(
 				"Browser action start already exists",
 			);
 		started = true;
+		if (input.signal.aborted)
+			throw new ConversationBrowserActionExecutionError(
+				"unknown",
+				"Browser action was cancelled during start persistence",
+				"interrupted",
+			);
 	};
 	try {
 		const result = await input.run(markStarted, input.signal);

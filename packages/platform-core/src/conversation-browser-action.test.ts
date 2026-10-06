@@ -284,6 +284,49 @@ describe("Conversation Browser action adapter", () => {
 		expect(phases).toEqual(["intent", "started", "unknown"]);
 	});
 
+	it("blocks the start barrier when cancellation arrives during persistence", async () => {
+		const controller = new AbortController();
+		let releaseStarted: (() => void) | undefined;
+		const phases: string[] = [];
+		const useCase: ConversationEventUseCaseV1 = {
+			persist: async (command) => {
+				if (command.event.type !== "execution.operation")
+					throw new Error("unexpected event");
+				const phase = command.event.fact.phase;
+				phases.push(phase);
+				if (phase === "started") {
+					await new Promise<void>((resolve) => {
+						releaseStarted = resolve;
+					});
+				}
+				return { outcome: "accepted", event: command } as never;
+			},
+		};
+		let called = false;
+		const execution = executeConversationBrowserActionV1(useCase, {
+			...input,
+			adapterEventKeyPrefix: "browser-action-start-pending",
+			runtimeCursorPrefix: "browser-cursor-start-pending",
+			now: () => "2026-10-06T12:00:01.000Z",
+			signal: controller.signal,
+			run: async (markStarted) => {
+				await markStarted();
+				called = true;
+				return {};
+			},
+		});
+		for (let index = 0; index < 10 && !releaseStarted; index++)
+			await Promise.resolve();
+		if (!releaseStarted) throw new Error("started persistence did not begin");
+		controller.abort();
+		releaseStarted();
+		await expect(execution).rejects.toMatchObject({
+			failureCode: "interrupted",
+		});
+		expect(called).toBe(false);
+		expect(phases).toEqual(["intent", "started", "unknown"]);
+	});
+
 	it("does not return success when terminal persistence fails", async () => {
 		const phases: string[] = [];
 		const useCase: ConversationEventUseCaseV1 = {
