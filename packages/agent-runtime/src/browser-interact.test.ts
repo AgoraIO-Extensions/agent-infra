@@ -163,6 +163,30 @@ function fakeContext(page: FakePage) {
 }
 
 describe("Browser interaction controller", () => {
+	it("rejects an action without a Platform operation attempt before page I/O", async () => {
+		const page = new FakePage();
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability,
+		});
+		const pageReference = await controller.navigate("https://example.test/");
+		const observation = await controller.observe(pageReference);
+		const field = observation.elements[0];
+		if (!field) throw new Error("expected observed field");
+		await expect(
+			controller.act({
+				kind: "fill",
+				page: pageReference,
+				target: field,
+				value: "blocked@example.test",
+			}),
+		).resolves.toMatchObject({
+			status: "rejected",
+			reasonCode: "BROWSER_ACTION_OPERATION_REQUIRED",
+		});
+		expect(page.calls.fill ?? []).toHaveLength(0);
+	});
+
 	it("executes bounded actions and requires an immutable side-effect confirmation", async () => {
 		const page = new FakePage();
 		const context = fakeContext(page);
