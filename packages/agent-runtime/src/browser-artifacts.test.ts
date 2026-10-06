@@ -7,7 +7,7 @@ const capability: BrowserCapabilityAvailableV1 = {
 	schemaVersion: 1,
 	capabilityVersion: 1,
 	status: "available",
-	operations: ["navigate", "observe", "interact", "files"],
+	operations: ["navigate", "observe", "interact", "files", "side_effects"],
 	policy: {
 		allowedOrigins: ["https://example.test/"],
 		maxContexts: 1,
@@ -167,7 +167,8 @@ describe("Browser artifact producer", () => {
 		expect(download.bytes).toEqual(Buffer.from("pdf"));
 
 		const uploadBytes = new TextEncoder().encode("input");
-		await controller.upload({
+		const uploadRequest = {
+			kind: "upload" as const,
 			page: reference,
 			target: uploadTarget,
 			file: {
@@ -180,7 +181,26 @@ describe("Browser artifact producer", () => {
 				},
 				bytes: uploadBytes,
 			},
-		});
+			idempotencyKey: "upload-1",
+			authorization: {
+				subjectId: "subject-1",
+				agentId: "agent-1",
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+			},
+		};
+		const preview = await controller.executeAction(uploadRequest);
+		expect(preview.reasonCode).toBe(
+			"BROWSER_SIDE_EFFECT_CONFIRMATION_REQUIRED",
+		);
+		if (!preview.confirmation) throw new Error("missing upload confirmation");
+		await expect(
+			controller.executeAction({
+				...uploadRequest,
+				actionId: preview.actionId,
+				confirmation: preview.confirmation,
+			}),
+		).resolves.toMatchObject({ status: "completed" });
 		expect(page.calls.upload).toHaveLength(1);
 	});
 });

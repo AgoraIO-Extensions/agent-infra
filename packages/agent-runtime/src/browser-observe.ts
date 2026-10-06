@@ -34,7 +34,10 @@ export type BrowserActionKindV1 =
 	| "scroll"
 	| "wait"
 	| "switch_tab"
-	| "switch_frame";
+	| "switch_frame"
+	| "screenshot"
+	| "download"
+	| "upload";
 
 export type BrowserActionAuthorizationV1 = Readonly<{
 	subjectId: string;
@@ -68,6 +71,7 @@ export type BrowserActionRequestV1 = Readonly<{
 	value?: string;
 	key?: string;
 	durationMs?: number;
+	file?: Readonly<{ descriptor: FileDescriptorV1; bytes: Uint8Array }>;
 	sideEffect?: boolean;
 	authorization?: BrowserActionAuthorizationV1;
 	confirmation?: BrowserSideEffectConfirmationV1;
@@ -89,6 +93,7 @@ export type BrowserActionRecordV1 = Readonly<{
 	completedAt?: string;
 	reasonCode?: string;
 	confirmation?: BrowserSideEffectConfirmationV1;
+	artifact?: BrowserArtifactV1;
 }>;
 
 export type BrowserObservationV1 = Readonly<{
@@ -112,6 +117,9 @@ export type BrowserUploadRequestV1 = Readonly<{
 	page: BrowserPageReferenceV1;
 	target: BrowserElementReferenceV1;
 	file: Readonly<{ descriptor: FileDescriptorV1; bytes: Uint8Array }>;
+	idempotencyKey?: string;
+	authorization?: BrowserActionAuthorizationV1;
+	confirmation?: BrowserSideEffectConfirmationV1;
 }>;
 
 type PageState = {
@@ -449,6 +457,14 @@ export function createBrowserObserveControllerV1(input: {
 			value: request.value,
 			key: request.key,
 			durationMs: request.durationMs,
+			file: request.file
+				? {
+						descriptor: request.file.descriptor,
+						sha256: createHash("sha256")
+							.update(request.file.bytes)
+							.digest("hex"),
+					}
+				: undefined,
 			sideEffect: request.sideEffect,
 			authorization: request.authorization,
 		});
@@ -541,7 +557,13 @@ export function createBrowserObserveControllerV1(input: {
 				},
 			);
 		}
-		if (!capability.operations.includes("interact"))
+		const isArtifactAction = ["screenshot", "download", "upload"].includes(
+			request.kind,
+		);
+		if (
+			(!isArtifactAction && !capability.operations.includes("interact")) ||
+			(isArtifactAction && !capability.operations.includes("files"))
+		)
 			return actionRecord(
 				request,
 				"rejected",
@@ -549,7 +571,9 @@ export function createBrowserObserveControllerV1(input: {
 				createdAt,
 				{
 					actionId,
-					reasonCode: "BROWSER_CAPABILITY_INTERACT_UNAVAILABLE",
+					reasonCode: isArtifactAction
+						? "BROWSER_CAPABILITY_FILES_UNAVAILABLE"
+						: "BROWSER_CAPABILITY_INTERACT_UNAVAILABLE",
 				},
 			);
 		if (inFlightActions >= capability.policy.maxConcurrentActions)
@@ -600,6 +624,7 @@ export function createBrowserObserveControllerV1(input: {
 		}
 		const inferredSideEffect =
 			request.sideEffect === true ||
+			request.kind === "upload" ||
 			(request.kind === "click" && sideEffectName(request.target?.name ?? ""));
 		let authorization: BrowserActionAuthorizationV1 | undefined;
 		if (inferredSideEffect) {
@@ -747,6 +772,8 @@ export function createBrowserObserveControllerV1(input: {
 				"hover",
 				"scroll",
 				"switch_frame",
+				"download",
+				"upload",
 			].includes(request.kind) &&
 			!locator
 		)
@@ -762,6 +789,7 @@ export function createBrowserObserveControllerV1(input: {
 			);
 
 		inFlightActions += 1;
+		let artifact: BrowserArtifactV1 | undefined;
 		try {
 			await installPolicy();
 			const timeout = capability.policy.actionTimeoutMs;
@@ -833,6 +861,15 @@ export function createBrowserObserveControllerV1(input: {
 					state.elements.clear();
 					break;
 				}
+				case "screenshot":
+					artifact = await screenshotForState(state, capability);
+					break;
+				case "download":
+					artifact = await downloadForState(state, locator, capability);
+					break;
+				case "upload":
+					await uploadForState(state, locator, request.file, capability);
+					break;
 			}
 			const resultPage = targetPageState
 				? pageReference(targetPageState)
@@ -841,6 +878,7 @@ export function createBrowserObserveControllerV1(input: {
 				actionId,
 				sideEffect: inferredSideEffect,
 				completedAt: new Date().toISOString(),
+				artifact,
 			});
 			if (request.idempotencyKey) {
 				actions.set(request.idempotencyKey, record);
@@ -875,31 +913,10 @@ export function createBrowserObserveControllerV1(input: {
 		}
 	}
 
-	function requireFilesCapability() {
-		const capability = readCapability();
-		if (!capability.operations.includes("files"))
-			throw new Error("BROWSER_CAPABILITY_FILES_UNAVAILABLE");
-		return capability;
-	}
-
-	function requireArtifactTarget(
-		page: BrowserPageReferenceV1,
-		target: BrowserElementReferenceV1,
-	): { state: PageState; locator: Locator } {
-		const state = requirePage(page);
-		if (
-			target.pageId !== page.pageId ||
-			target.pageRevision !== page.pageRevision
-		)
-			throw new Error("BROWSER_ELEMENT_PAGE_MISMATCH");
-		return { state, locator: resolveElement(target) };
-	}
-
-	async function screenshot(
-		reference: BrowserPageReferenceV1,
+	async function screenshotForState(
+		state: PageState,
+		capability: BrowserCapabilityAvailableV1,
 	): Promise<BrowserArtifactV1> {
-		const capability = requireFilesCapability();
-		const state = requirePage(reference);
 		const bytes = await state.page.screenshot({
 			type: "png",
 			timeout: capability.policy.actionTimeoutMs,
@@ -919,14 +936,14 @@ export function createBrowserObserveControllerV1(input: {
 		};
 	}
 
-	async function download(
-		reference: BrowserPageReferenceV1,
-		target: BrowserElementReferenceV1,
+	async function downloadForState(
+		state: PageState,
+		locator: Locator | undefined,
+		capability: BrowserCapabilityAvailableV1,
 	): Promise<BrowserArtifactV1> {
-		const capability = requireFilesCapability();
 		if (downloadCount >= capability.policy.maxDownloads)
 			throw new Error("BROWSER_DOWNLOAD_LIMIT_EXCEEDED");
-		const { state, locator } = requireArtifactTarget(reference, target);
+		if (!locator) throw new Error("BROWSER_ACTION_TARGET_REQUIRED");
 		downloadCount += 1;
 		const [download] = await Promise.all([
 			state.page.waitForEvent("download", {
@@ -935,19 +952,27 @@ export function createBrowserObserveControllerV1(input: {
 			locator.click({ timeout: capability.policy.actionTimeoutMs }),
 		]);
 		const stream = await download.createReadStream();
-		if (!stream) throw new Error("BROWSER_DOWNLOAD_UNAVAILABLE");
+		if (!stream) {
+			await download.delete().catch(() => undefined);
+			throw new Error("BROWSER_DOWNLOAD_UNAVAILABLE");
+		}
 		const chunks: Buffer[] = [];
 		let size = 0;
 		for await (const chunk of stream) {
 			const value = Buffer.from(chunk as Uint8Array);
 			size += value.byteLength;
 			if (size > capability.policy.maxDownloadBytes) {
+				await download.cancel().catch(() => undefined);
 				stream.destroy();
+				await download.delete().catch(() => undefined);
 				throw new Error("BROWSER_DOWNLOAD_LIMIT_EXCEEDED");
 			}
 			chunks.push(value);
 		}
-		if (await download.failure()) throw new Error("BROWSER_DOWNLOAD_FAILED");
+		if (await download.failure()) {
+			await download.delete().catch(() => undefined);
+			throw new Error("BROWSER_DOWNLOAD_FAILED");
+		}
 		const bytes = Buffer.concat(chunks);
 		const descriptor = descriptorForBytes(
 			download.suggestedFilename(),
@@ -957,10 +982,15 @@ export function createBrowserObserveControllerV1(input: {
 		return { page: pageReference(state), descriptor, bytes, kind: "download" };
 	}
 
-	async function upload(input_: BrowserUploadRequestV1): Promise<void> {
-		const capability = requireFilesCapability();
-		const { locator } = requireArtifactTarget(input_.page, input_.target);
-		const { descriptor, bytes } = input_.file;
+	async function uploadForState(
+		_state: PageState,
+		locator: Locator | undefined,
+		file: BrowserUploadRequestV1["file"] | undefined,
+		capability: BrowserCapabilityAvailableV1,
+	): Promise<void> {
+		if (!locator) throw new Error("BROWSER_ACTION_TARGET_REQUIRED");
+		if (!file) throw new Error("BROWSER_UPLOAD_FILE_REQUIRED");
+		const { descriptor, bytes } = file;
 		assertArtifactDescriptor(descriptor);
 		if (
 			descriptor.sizeBytes > capability.policy.maxUploadBytes ||
@@ -977,6 +1007,55 @@ export function createBrowserObserveControllerV1(input: {
 			},
 			{ timeout: capability.policy.actionTimeoutMs },
 		);
+	}
+
+	function artifactResult(record: BrowserActionRecordV1): BrowserArtifactV1 {
+		if (record.status !== "completed" || !record.artifact)
+			throw new Error(record.reasonCode ?? "BROWSER_ARTIFACT_UNAVAILABLE");
+		return record.artifact;
+	}
+
+	async function screenshot(
+		reference: BrowserPageReferenceV1,
+		idempotencyKey = `screenshot:${reference.pageId}:${reference.pageRevision}`,
+	): Promise<BrowserArtifactV1> {
+		return artifactResult(
+			await executeAction({
+				kind: "screenshot",
+				page: reference,
+				idempotencyKey,
+			}),
+		);
+	}
+
+	async function download(
+		reference: BrowserPageReferenceV1,
+		target: BrowserElementReferenceV1,
+		idempotencyKey = `download:${target.elementId}`,
+	): Promise<BrowserArtifactV1> {
+		return artifactResult(
+			await executeAction({
+				kind: "download",
+				page: reference,
+				target,
+				idempotencyKey,
+			}),
+		);
+	}
+
+	async function upload(input_: BrowserUploadRequestV1): Promise<void> {
+		const result = await executeAction({
+			kind: "upload",
+			page: input_.page,
+			target: input_.target,
+			file: input_.file,
+			idempotencyKey:
+				input_.idempotencyKey ?? `upload:${input_.target.elementId}`,
+			authorization: input_.authorization,
+			confirmation: input_.confirmation,
+		});
+		if (result.status !== "completed")
+			throw new Error(result.reasonCode ?? "BROWSER_UPLOAD_UNAVAILABLE");
 	}
 
 	return {
