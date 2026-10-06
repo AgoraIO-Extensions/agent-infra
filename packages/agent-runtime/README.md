@@ -20,4 +20,4 @@
 | read/write/edit 文件策略 | [pi-policy.test.ts](src/pi-policy.test.ts) | 3/3 通过；仅验证 read/write/edit 策略判断 |
 | 统一 Host/Grant/Store conformance | [runtime-driver-conformance.test.ts](src/runtime-driver-conformance.test.ts) | 46/46 通过；共享 fixture 覆盖 Pi 与其他 Driver，不代表真实模型或部署授权验收 |
 
-本矩阵只记录固定 Pi 版本与上述测试入口的兼容性。锁文件和镜像的漏洞扫描，以及标准模板、真实模型、附件、Connection 和生产环境验收，须按仓库各自的门禁单独验证。
+本矩阵只记录固定 Pi 版本与上述测试入口的兼容性。漏洞告警由 GitHub 仓库安全功能维护；标准模板、真实模型、附件、Connection 和生产环境验收仍须按各自的验证入口执行。

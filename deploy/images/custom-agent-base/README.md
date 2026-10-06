@@ -13,7 +13,6 @@ Node.js、npm 和上游基础工具，默认使用 `node` 用户及 `/workspace`
 在已批准 Registry 登录完成、当前提交 CI 通过的 clean checkout 中执行：
 
 ```bash
-node .github/scripts/install-trivy.mjs .trivy-tool
 IMAGE_REPOSITORY_PREFIX=registry.example/agent-infra \
   PLATFORM=linux/amd64 \
   node deploy/release/build-images.mjs /tmp/custom-base-image.json --custom-base-image
@@ -27,12 +26,12 @@ Docker daemon 需要能读取探针的绑定挂载路径；使用虚拟机中的
 把构建临时目录放到该虚拟机已共享的文件系统中。
 
 该入口复用现有 Git archive、两次无缓存构建和 Digest 一致性检查，验证 non-root、只读根文件
-系统和明确可写挂载；对实际待发布 OCI 产物执行现有 Trivy 政策，通过后才推送。扫描失败、
-High/Critical 或不合格例外都会阻止发布，例外仍由仓库既有政策校验。
+系统和明确可写挂载；通过后才推送。漏洞告警由 GitHub 仓库安全功能维护，不在该构建入口内
+复制一套漏洞判定或例外审批逻辑。
 
 发布后按 Digest 拉取，回读远端 manifest/config，再从该 Digest 构建并运行下游样例。输出 JSON
-记录 source commit、父镜像 Digest、Dockerfile SHA-256、目标平台、Base Image Digest、扫描器/
-漏洞库版本与摘要、子镜像 Digest 和运行结果；原始扫描证据位于相邻的 `.scan` 目录。
+记录 source commit、父镜像 Digest、Dockerfile SHA-256、目标平台、Base Image Digest、子镜像
+Digest 和运行结果。
 输出 JSON 仅在全部步骤通过后生成，不供 Platform Helm 的 release validator 使用。
 
 本地 CI 继承检查可能使用只返回 config ID 的 Docker 存储后端，此时 `childDigest` 为 `null`，
