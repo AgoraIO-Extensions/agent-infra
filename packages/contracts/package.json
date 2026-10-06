@@ -24,6 +24,10 @@
 			"types": "./dist/platform-auth.d.mts",
 			"import": "./dist/platform-auth.mjs"
 		},
+		"./connection-consumer-profile": {
+			"types": "./dist/connection-consumer-profile.d.mts",
+			"import": "./dist/connection-consumer-profile.mjs"
+		},
 		"./openapi/platform-auth.v1": "./artifacts/openapi/platform-auth.v1.openapi.json",
 		"./runtime": {
 			"types": "./dist/runtime/index.d.mts",
