@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import dns from "node:dns/promises";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import {
 	bindingsKey,
 	corefileWithForwardZones,
@@ -645,11 +645,21 @@ async function provisionRuntimeMaterial() {
 
 	const configuration = await readFile(requiredAbsoluteEnv("PLATFORM_LOCAL_WORKER_CONFIGURATION"), "utf8");
 	const bindingsJson = `${JSON.stringify({ schemaVersion: 1, bindings }, null, 2)}\n`;
+	// Private read-only adapter inputs (for example directory identity bindings)
+	// travel in the same reviewed module Secret; values never enter Git or argv.
+	const deploymentFiles = {};
+	for (const file of (process.env.E2E_WORKER_DEPLOYMENT_FILES ?? "").split(":").filter(Boolean)) {
+		if (!isAbsolute(file)) fail("E2E_WORKER_DEPLOYMENT_FILES must list absolute paths");
+		const key = basename(file);
+		if (!/^[-._a-zA-Z0-9]{1,253}$/.test(key) || key === moduleRef.key || key === bindingsKey || key in deploymentFiles)
+			fail(`Worker deployment file name is not a unique Secret key: ${key}`);
+		deploymentFiles[key] = await readFile(file, "utf8");
+	}
 	applyOwnedSecret(
 		namespace,
 		moduleRef.name,
 		"Opaque",
-		{ [moduleRef.key]: configuration, [bindingsKey]: bindingsJson },
+		{ ...deploymentFiles, [moduleRef.key]: configuration, [bindingsKey]: bindingsJson },
 		readKubeObject("secret", moduleRef.name, namespace),
 	);
 
@@ -673,7 +683,7 @@ async function provisionRuntimeMaterial() {
 	if (!deployment) return;
 	if (deployment.includes(" ")) fail("Fixed Worker Deployment is ambiguous");
 	const annotation = "agent-infra.agora.io/e2e-runtime-material";
-	const material = fingerprint([configuration, bindingsJson, bundle]);
+	const material = fingerprint([configuration, bindingsJson, bundle, ...Object.entries(deploymentFiles).flat()]);
 	const live = readKubeObject("deployment", deployment, namespace)?.spec?.template?.metadata?.annotations?.[annotation];
 	if (live === material) return;
 	kubectl(["--namespace", namespace, "patch", "deployment", deployment, "--type", "merge", "--patch", JSON.stringify({ spec: { template: { metadata: { annotations: { [annotation]: material } } } } })]);
