@@ -268,6 +268,7 @@ M1 的 Schema family 由以下主责 artifact 维护；表中 Issue 是既有交
 | 企微目录快照内部 HTTP/OpenAPI | 目录服务，Platform 消费方评审 | [#889](https://github.com/AgoraIO-Extensions/agent-infra/issues/889) |
 | RuntimeHost/Driver wire Schema | Codex Runtime，Worker 消费方评审 | [#181](https://github.com/AgoraIO-Extensions/agent-infra/issues/181) |
 | Registry、Secret、Kubernetes Workload 与 Runtime Manifest Contract | Agent Workload，Core/Delivery 消费方评审 | [#182](https://github.com/AgoraIO-Extensions/agent-infra/issues/182)；OCI admission 由 [#188](https://github.com/AgoraIO-Extensions/agent-infra/issues/188) 实现 |
+| Browser Capability declaration、内部 probe 与 conformance artifact | Runtime/Workload，#1252/#508/#992 消费方评审；Platform/API projection 后续接收 | [#1370](https://github.com/AgoraIO-Extensions/agent-infra/issues/1370) |
 
 生成工具固定版本；产物使用稳定 key/property 顺序、LF 和一个末尾换行，不能包含时间戳、绝对路径或工具版本等易漂移字段。`packages/contracts` 必须在现有 `pnpm test` 路径中执行生成漂移、基于 pull-request merge-base 的 breaking-change 和 consumer contract 检查。test-only Client smoke 只验证 OpenAPI 到浏览器 TypeScript Client 的单向链路，不进入 package exports、`files` 或 `dist`；`packages/test-support` 只提供由正式 Schema 校验的静态 builder/fixture，生产代码不得依赖它。Connection 的 MCP/API、客户端身份、OAuth、Grant、凭证和 Action Schema 由 Connection 自己维护；Platform Schema 不定义 Connection 代调用协议或数据投影。
 
@@ -1064,7 +1065,7 @@ Worker 首次提交前持久保存批次、业务幂等键、确切输入及实�
 原任务当前业务权限和后端自身授权；服务身份不能代替用户授权或获得外部账号凭据。
 若构建后端使用 Connection，实际提交、查询、停止和清理由 [§13.1](#131-独立直连与权威边界)的
 Agent 独立客户端路径执行，Worker 只编排原任务并消费绑定原 Execution 的可信结果。
-该客户端的独立 Consumer/Instance/Actor、安装级证明、Grant、WRITE 确认、撤权与 Dispatch
+该客户端的独立 Consumer/Instance/Actor、token 绑定及 profile 明确要求的持有证明、Grant、WRITE 确认、撤权与 Dispatch
 必须满足 [Connection HLD](HLD-connection-M1.md)；没有合法实际客户端时该绑定不启用。
 按 [§13.2](#132-调用与审计关联)，Platform API/Worker 不代理 Connection 调用或持有其查询
 凭据，不借用 Owner 身份、跨库读取凭据或把 Platform 授权当作 Connection Grant。
@@ -1192,6 +1193,17 @@ Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的�
 - 原生 CLI 支持不等于 SDK/API 支持。公开接口缺少所需绑定、事实或恢复接缝时，按具体能力拒绝并记录差额；不能用普通提示、模型自报、私有协议或修改上游产物补齐。尤其不能以 Skill 作为绕过 §10.8–10.13 或文件、隔离、授权门禁的入口。
 - 新契约采用显式版本协商；旧 Driver/Host 缺少命令或 Skill 语义时返回不支持，不把新输入降级为旧文本 submit。旧消息、控制、任务与恢复语义保持；新增能力不能迫使旧任务重建或重放。
 
+### 11.5 Browser Capability 边界
+
+Browser Capability 复用 Platform Conversation Contract、Session-owned Sandbox、RuntimeHost、Execution 事件和 File Grant，不新增浏览器调度器、共享浏览器服务或第二套 Session 权威。共享契约位于 `packages/contracts/src/runtime/browser-capability.ts`，同时作为 Runtime Manifest declaration、Runtime capability projection 和 Platform/API projection 的唯一来源。
+
+- Manifest declaration 只声明 capability version、操作类别和 policy limits；它不能证明 Chromium/Playwright 已安装或可用。只有当前 Sandbox 内固定 Browser Runtime probe 通过后，Runtime 才能返回 `available`。
+- `available` projection 必须绑定 Chromium/Playwright provenance、不可变镜像 Digest、操作类别、域/资源 policy 和 conformance receipt。`not_configured`、`probe_failed`、`unavailable`、`stale` 和版本不支持必须返回稳定脱敏错误码；调用方不能把缺少投影解释为可用。
+- Browser Runtime 不把 Cookie、Storage、BrowserContext、页面原生标识、凭证或无关页面内容带出 RuntimeHost。浏览器动作继续绑定当前 Agent、Conversation、Execution、Session generation 和 fence。
+- 导航和观察属于普通 Browser operation；提交、发布、删除、购买、权限变更等动作必须进入现有持久确认与审计协议。超时、连接中断、进程退出或 ACK 丢失时沿原 operation 查询，不自动重放副作用。
+- 截图、下载和上传只能经现有 File Grant。Runtime 不能读取任意 Sandbox 路径、枚举对象或取得长期对象存储凭证；File Grant 的对象、主体、Execution、generation 和 operation 绑定保持不变。
+- Web/API 只消费版本化 projection；能力状态读取失败必须明确报错，不能返回空能力或由 prompt、env、Skill、Owner 配置伪造。四个标准模板和 `platform-adapter` 的实际可用能力取 Manifest、probe 和启动 conformance 的交集。
+
 ## 12. 对话与长任务
 
 ### 12.1 数据流
@@ -1286,11 +1298,11 @@ sequenceDiagram
 
 Runtime callback/client 的准备契约边界见 [Runtime HLD §9.1](HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)。
 其 bootstrap/provenance 投影校验不构成 Connection conformance；真实 HTTP/MCP 接入仍须满足
-Connection HLD 的 ConsumerInstance 安装绑定、sender-constrained token 或获准 PAT 规则。
+Connection HLD 的 token/ConsumerInstance 绑定及 profile 明确要求的 sender constraint。
 
 可信采集在发起工具调用前绑定原 Execution、操作和尝试，并从同一次经过服务端认证的 Connection 请求/响应中取得由 Connection 生成的原调用引用。引用须能在 Connection 自身授权下核实其服务端解析的调用主体、操作和真实记录；受信采集再核对该记录确实属于本次请求。难以猜测的引用、签名、同一主体或相近时间都不能单独证明执行绑定，也不能接受模型或客户端从其他任务转交的真实引用。重试核实只查询原记录，不再次执行 Provider 操作；缺失任一侧证据保持未核实。
 
-Connection HLD 的 [§5.2](HLD-connection-M1.md#52-consumer-与-instance) 与 [§7](HLD-connection-M1.md#7-mcpapi-调用流程) 定义独立客户端的安装绑定、身份解析和调用准入；[§11](HLD-connection-M1.md#11-审计与跨系统关联) 定义真实调用关联与分别授权查询。Runtime HLD 的[身份上下文](HLD-agent-runtime-M1.md#9-runtime-身份上下文)定义原执行 slot、受保护 FD3 交付及真实 MCP leaf 的可靠采集；这些字段不构成 Platform 签发的 Connection 授权。Platform API/Worker 不为核实建立 Connection 代理或获得 Connection 查询凭据，也不签发供 Connection 授权的上下文。平台只接收受信采集产生的关联引用与核实状态；Connection 调用详情仍在其独立授权入口查询。
+Connection HLD 的 [§5.2](HLD-connection-M1.md#52-consumer-与-instance) 与 [§7](HLD-connection-M1.md#7-mcpapi-调用流程) 定义独立客户端的 token 绑定、身份解析和调用准入；[§11](HLD-connection-M1.md#11-审计与跨系统关联) 定义真实调用关联与分别授权查询。Runtime HLD 的[身份上下文](HLD-agent-runtime-M1.md#9-runtime-身份上下文)定义原执行客户端绑定、受保护凭据消费与真实 MCP 调用的可靠采集；私有 FD3 只约束明确启用的 native lane。这些字段不构成 Platform 签发的 Connection 授权。Platform API/Worker 不为核实建立 Connection 代理或获得 Connection 查询凭据，也不签发供 Connection 授权的上下文。平台只接收受信采集产生的关联引用与核实状态；Connection 调用详情仍在其独立授权入口查询。
 
 关联信息不是授权。调用方与两侧管理员分别在各自受控 API/页面查询；无权访问时不返回对方对象、状态或存在性。平台工具成功只表示自身已确认的执行事实，不能替代 Connection 对外部效果的结论。响应丢失、关联缺失或无法核实时如实标记，沿原调用补充核实，不把猜测写为成功。
 
@@ -1368,7 +1380,7 @@ Connection 的 LDAP、OAuth 客户端、MCP/API、Grant、凭证保护、Provide
 SecretRef 和受保护客户端边界提供；SecretRef 只定位安装隔离的受控凭据，不构成授权，
 不得来自请求或 Agent 输入。引用必须解析到与原 Principal、ConsumerInstance、Actor（如适用）、
 audience 和凭据修订一致的安装；缺失、失效或绑定不符时拒绝，不能跨安装共享。
-具体签发、持有证明、撤销和刷新遵循 Connection HLD §5.2；Codex 的交付与隔离遵循
+具体签发、token 绑定、撤销和刷新遵循 Connection HLD §5.2；profile 明确要求的持有证明另行验证。Codex 的交付与隔离遵循
 [Runtime HLD §9.1](HLD-agent-runtime-M1.md#91-codex-独立-connection-consumer-profile)，
 不能把 SecretRef 解释为普通 env、argv 或工具进程可读的 token 注入许可。
 
@@ -1378,11 +1390,38 @@ Platform 在 Connection 相关数据中只保存 Consumer 非敏感配置和 §1
 客户端凭据和原始秘密不得进入 Platform DB、ConfigMap、普通配置、日志/错误、模型上下文、
 前端 bundle、Issue 或 PR 文本；SecretRef 的解析仅发生在已批准的安装凭据/客户端边界。
 
+**标准 MCP 与 Agent token 消费。** 固定官方 Runtime 的标准 MCP 客户端优先使用 Connection
+签发的 OAuth token 或获准 PAT。每个原用户/独立应用与 Agent 组合使用独立 token；不同
+Platform Session 仍按所属 Sandbox 隔离客户端状态，不能由 token 共享合并会话、工作区或记忆。
+同一获准 Consumer 可管理多个独立 token/ConsumerInstance，不默认为每个 Agent 新建 Consumer；
+只有所需外部账号或 Action 权限不同，才消费能表达差异的 Consumer/Actor/Grant 配置。
+
+客户端复用 Connection 的用户确认、固定 callback、不透明 binding 与单次 claim；只保存
+消费方需要的非秘密主体/Agent/binding/实例引用。服务端先从当前身份与持久关系固定主体及
+Agent，再由获准的受保护客户端领取、保存、选择和撤销 token。callback/query/body、token 名称、
+Owner 或 Runtime 自报字段不能改绑；binding 服务凭据与 MCP token 不互换，API/Worker
+不领取 token 来代调用。原主体与 Agent、Consumer/实例、issuer/resource、凭据修订/期限
+或当前授权无法确认时拒绝，不回退到另一 token、Owner、责任人或共享部署凭据。
+
+标准 MCP/token 接入不以私有 FD3、native callback 或 DPoP 为通用前置。选用额外证明的
+profile 必须明确配置、两端可互操作且保持自身门禁；不允许凭兼容开关跳过必需证明。
+任何客户端只有在真实版本的凭据保护、主体/Agent 选择、撤权、原执行事实及恢复验证通过后
+才开放对应能力。token 接入与可信关联分别验证：没有同次原调用证据时保持未核实，不能
+以完成登录、获得 token 或模型返回 callId 宣称关联通过；原执行前意图、必要审计与 unknown
+不重放的要求不变。实现与取舍见 [ADR 0018](../adr/0018-use-standard-mcp-with-agent-scoped-tokens.md)。
+
+本消费契约的正式修订由 Platform API/Web、Runtime 客户端和 Connection 契约原 owner
+评审，按 PRD → Spec → HLD 的共同版本合入；CODEOWNER、Human Validation 与适用 CI
+门禁仍由当前工作流维护。未完成共同文档对齐与消费方评审时，不据文档候选启用客户端。
+后续 #851/#1271 只消费已合入版本及具名接收接口；本节不改变 Connection 运行实现、
+部署、Provider 或其原 owner 的 tickets，也不签收客户端和真实双系统验收。
+
 本节不实现 API/Worker/Web 接线（分别由
 [#1270](https://github.com/AgoraIO-Extensions/agent-infra/issues/1270)、
 [#1271](https://github.com/AgoraIO-Extensions/agent-infra/issues/1271)、
 [#1272](https://github.com/AgoraIO-Extensions/agent-infra/issues/1272)承接）。
-[#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851)负责真实客户端的安装证明和
+[#1378](https://github.com/AgoraIO-Extensions/agent-infra/issues/1378)负责本消费契约对齐；
+[#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851)负责真实客户端的 token 绑定验证和
 受保护交付；[#395](https://github.com/AgoraIO-Extensions/agent-infra/issues/395)负责独立
 Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agent-infra/issues/435)
 是已关闭（NOT_PLANNED）的历史联合验收回链，不恢复该入口或已停止探针；当前代表旅程由
@@ -1704,50 +1743,10 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 - OpenAPI 生成结果无漂移
 - Drizzle migration 校验
 - Docker image build
-- 依赖漏洞和镜像扫描
 
-PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
+依赖和镜像漏洞发现使用 GitHub repository security alerts 及其维护的依赖图，不在仓库 CI 中复制一套 Trivy 扫描、漏洞库快照、例外审批或漏洞判定门禁。GitHub 安全告警负责报告已知依赖风险；依赖升级 PR、风险处置和安全设置由仓库维护者管理。
 
-- 对根 `pnpm-lock.yaml` 启用 `--include-dev-deps`，扫描根 workspace、`apps/*` 和
-  `packages/*` 的生产、开发/构建、可选及传递依赖；解析出的包清单必须覆盖 lockfile
-  的全部精确包版本，workspace 清单必须与 lockfile importers 一致。
-- 镜像清单为 `web`、`platform-api`、`platform-worker`、`enterprise-directory-sync`、`connection-api`、
-  `agent-runtime-host`、`custom-agent-base`。复用本次 CI 构建的最终运行镜像，以 Docker image ID（Docker
-  存储后端的不可变 SHA-256）及 rootfs layers 绑定 OS 与应用扫描；此 CI 扫描步骤不发布镜像。
-  镜像发布使用独立的 [release 入口](../../deploy/README.md#不可变镜像与-release-检查)。新增
-  Dockerfile 必须同步覆盖清单。Connection 此项仅提供 HLD §14/§16 的镜像证据，不替代其 Pilot 门禁。
-- 使用 Trivy 输出的 `Severity` 识别所有 High/Critical，包括无修复版本。仅
-  `pull_request` CI 将这些发现作为警告，不因发现本身阻塞 PR；`main` push、默认本地
-  调用和发布入口仍阻断未获有效例外的 High/Critical。中低等级及 Unknown 保留报告。
-  报告保留严格漏洞判定及数量，并单独记录本次 CI 门禁结果；PR 警告不表示漏洞已修复。
-  severity 来源采用 Trivy 的 vendor 优先策略：OS 使用发行版
-  advisory，应用包使用其生态数据源（npm 使用 GitHub Advisory Database）；报告保留
-  `SeveritySource`、`VendorSeverity` 和 `DataSource`，不改用仅新增或仅有补丁策略。
-  Trivy 未输出可选 `SeveritySource` 时，摘要注明 `Trivy auto (source unspecified)`，
-  保留原始 vendor/advisory 数据，不自行重算或降低 severity。
-  选择规则以[固定版本的 Trivy 文档](https://github.com/aquasecurity/trivy/blob/v0.74.0/docs/guide/scanner/vulnerability.md#severity-selection)为依据。
-- 每次从漏洞库获取可用的当前快照，然后在本轮扫描中固定该快照。报告绑定源 commit、
-  lockfile SHA-256、CI run/attempt、workspace/镜像清单、image ID/rootfs layers、Trivy
-  版本、数据库 schema/更新时间/下次更新时间和数据库文件 SHA-256。工具/网络失败、
-  数据库不可用或过期、报告缺失/无效、覆盖不全、来源不一致均失败。
-- 原始 Trivy JSON、构建清单、扫描元数据、逐项可读摘要与最终判定作为同一 CI artifact
-  保存 30 天，失败时也上传；CI 下载同一 run 的 artifact 后重新校验来源和判定。
-  扫描只读取构建产物及外部漏洞数据，不扫描 Secret/用户数据、不使用仓库忽略文件。
-- 必要例外经过现有 CODEOWNERS 人工 review 后，由仓库管理员登记到 Actions repository
-  variable `VULNERABILITY_EXCEPTIONS`（JSON 数组，未配置等于空数组）。记录必须含
-  `scope`（`lockfile` 或精确镜像名）、`vulnerability`、`package`、`version`、镜像
-  `imageId`（lockfile 使用 `null`）、`reason`、UTC `expiresAt`、`approvalUrl`。
-  审批 Review 正文必须单独包含 `vulnerability-exception sha256:<摘要>`；摘要为以上
-  字段（不含 `approvalUrl`）按此顺序 JSON 编码的 SHA-256。CI 只读回查本仓库的
-  未关闭或已合并 PR、当前 head 的最新有效 `APPROVED` Review 及审批人的实时
-  maintain/admin 权限；后续 `CHANGES_REQUESTED` 或 `DISMISSED` 使旧批准失效。
-  仓库配置登记与可回读 Review 缺一不可，不能由 PR 文件自填审批人。
-  无效/到期记录、通配范围、版本/Digest 不匹配、审批撤销或回查失败不能豁免。
-  普通基础设施 waiver 不参与漏洞判定，例外不改变其他人工门禁。
-
-真实扫描命中 High/Critical 时保留完整证据，并跟踪修复 Issue；严格门禁下也可由维护者批准
-精确例外。不得自动升级、修复或降低严重性。PR 仍须通过扫描执行与证据完整性检查；报告性
-发现不阻塞 PR readiness，不代表生产或完整人工安全审计完成。
+CI 仍验证构建出的镜像、不可变 image ID、Runtime probe、Web smoke、Custom Base Image inheritance 及其他产品契约。上述构建和运行验证不等同于漏洞扫描，也不因 GitHub Advisory 数据库更新而失败。依赖和镜像漏洞的修复、风险接受及生产发布审批沿用仓库外部安全流程；不得把普通 CI 通过表述为漏洞已修复。
 
 ### 21.2 发布
 

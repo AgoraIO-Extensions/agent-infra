@@ -6,6 +6,21 @@ import { transform } from "esbuild";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
 let directory: string;
+const connectionConsumerProfile = {
+	schemaVersion: 1,
+	publicOrigin: "https://connection.example.test",
+	mcpPath: "/mcp/v1",
+	consumerId: "platform-worker",
+	audience: "connection-api",
+	egressProfile: { ref: "egress-platform", revision: "r1" },
+};
+const connectionConsumerApproval = {
+	schemaVersion: 1,
+	configFingerprint:
+		"26062a8f8e5a003ff8047fead83d76c254d9b54834ca5348fb7e4ceee67d205b",
+	egressEnforced: true,
+	source: { ref: "platform-deployment", revision: "r1" },
+};
 beforeAll(async () => {
 	directory = await mkdtemp(join(tmpdir(), "worker-binding-"));
 	const source = await readFile(
@@ -24,6 +39,8 @@ beforeAll(async () => {
 		`
 export const workloadInput = { databaseUrl: 'postgresql://stale.example.test/stale', policy: { namespace: 'worker-binding' } };
 export const signing = { workerId: 'worker' };
+export const connectionConsumerProfile = ${JSON.stringify(connectionConsumerProfile)};
+export const connectionConsumerApproval = ${JSON.stringify(connectionConsumerApproval)};
 `,
 	);
 	await writeFile(
@@ -40,7 +57,7 @@ export const createProductionWorkloadWorkerOptionsV1 = async (input) => { global
 	await writeFile(
 		join(directory, "conversation-deployment.js"),
 		`
-export const createProductionConversationRuntimeResolverV2 = () => { globalThis.calls.push('conversation'); };
+export const createProductionConversationRuntimeResolverV2 = (input) => { globalThis.calls.push('conversation'); globalThis.connection = { profile: input.connectionConsumerProfile, approval: input.connectionConsumerApproval }; };
 export const createProductionSessionSandboxReceiverV1 = () => { globalThis.calls.push('sandbox'); return async () => ({ status: 'observed', resources: [] }); };
 `,
 	);
@@ -59,7 +76,7 @@ try {
  const signal = new AbortController().signal;
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
  const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
- console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls }));
+ console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls, connection: globalThis.connection }));
 } catch (error) {
  console.log(JSON.stringify({ error: error.message, calls: globalThis.calls }));
  process.exitCode = 1;
@@ -91,6 +108,10 @@ it("uses the selected deployment database for all Worker consumers and prepares 
 	expect(JSON.parse(result.stdout)).toEqual({
 		databases: [database, database, database],
 		calls: ["readiness", "workload", "wecom", "sandbox", "conversation"],
+		connection: {
+			profile: connectionConsumerProfile,
+			approval: connectionConsumerApproval,
+		},
 	});
 });
 

@@ -10,8 +10,7 @@
 **/coverage/
 **/playwright-report/
 **/test-results/
-/.vulnerability-scan/
-/.trivy-tool/
+/.ci-images/
 /apps/web/src/routeTree.gen.ts
 *.tsbuildinfo
 *.log

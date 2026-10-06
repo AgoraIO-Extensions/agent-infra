@@ -1,7 +1,11 @@
+import { generateKeyPairSync } from "node:crypto";
 import type { SessionSandboxReconciliationClaimV1 } from "@agent-infra/platform-core";
 import type { V1Pod } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
-import { createProductionSessionSandboxReceiverV1 } from "./conversation-deployment.js";
+import {
+	createProductionConversationRuntimeResolverV2,
+	createProductionSessionSandboxReceiverV1,
+} from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
 	runtimeTlsSecretFixture,
@@ -100,11 +104,104 @@ function fixture() {
 	return {
 		...api,
 		claim,
+		options,
 		receive: createProductionSessionSandboxReceiverV1(options),
 	};
 }
 
 describe("production SessionSandbox resource receiver", () => {
+	it("preserves the approved Connection snapshot through the production control resolver", async () => {
+		const f = fixture();
+		const signal = new AbortController().signal;
+		const observation = await f.receive(f.claim, signal);
+		const keys = generateKeyPairSync("ed25519");
+		const signing = {
+			workerId: "worker-a",
+			issuer: "platform",
+			keyId: "connection-profile-test",
+			privateKey: keys.privateKey,
+		};
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp/v1",
+			consumerId: "platform-worker",
+			audience: "connection-api",
+			egressProfile: { ref: "egress-platform", revision: "r1" },
+		};
+		const approval = {
+			schemaVersion: 1 as const,
+			configFingerprint:
+				"26062a8f8e5a003ff8047fead83d76c254d9b54834ca5348fb7e4ceee67d205b",
+			egressEnforced: true as const,
+			source: { ref: "platform-deployment", revision: "r1" },
+		};
+		const expected = structuredClone({ profile, source: approval.source });
+		const resolver = createProductionConversationRuntimeResolverV2({
+			workload: {
+				...f.options,
+				policy: {
+					...f.options.policy,
+					runtimeAuth: {
+						workerId: signing.workerId,
+						grantIssuer: signing.issuer,
+						grantKeyId: signing.keyId,
+						grantPublicKey: keys.publicKey
+							.export({ type: "spki", format: "pem" })
+							.toString(),
+						serviceTokenSecret: { name: "transport", key: "token" },
+					},
+				},
+			},
+			signing,
+			serviceToken: "synthetic-transport-proof",
+			connectionConsumerProfile: profile,
+			connectionConsumerApproval: approval,
+		});
+		profile.audience = "changed-input";
+		approval.source.revision = "changed-input";
+		const target = await resolver({
+			agentId: f.claim.sandbox.agentId,
+			conversationId: f.claim.sandbox.sessionId,
+			sessionGeneration: f.claim.sandbox.generation,
+			purpose: "control",
+			command: "turn.stop",
+			workload: null,
+			signal,
+			sandboxResource: {
+				sandbox: f.claim.sandbox,
+				resourceFence: f.claim.resourceFence + 1,
+				desiredState: "stopped",
+				status: "observed",
+				policy: f.claim.policy,
+				observation,
+				controlSource: {
+					sandbox: f.claim.sandbox,
+					resourceFence: f.claim.resourceFence,
+					policy: f.claim.policy,
+					observation,
+					deployment: f.claim.deployment,
+				},
+			},
+			...{
+				url: "https://caller.example.test/mcp",
+				headers: { Authorization: "synthetic-caller-proof" },
+				consumerId: "caller-consumer",
+				audience: "caller-audience",
+				connectionConsumerProfile: profile,
+			},
+		});
+		expect(target.connectionConsumer).toEqual({
+			status: "available",
+			schemaVersion: 1,
+			...expected,
+			configFingerprint: approval.configFingerprint,
+			url: "https://connection.example.test/mcp/v1",
+		});
+		expect(target.baseUrl).toBe(
+			"https://sandbox-allocation-a.workload-test.svc:8080",
+		);
+	});
 	it("applies the Store allocation using Worker policy and records readiness with the resource fence", async () => {
 		const f = fixture();
 		const signal = new AbortController().signal;

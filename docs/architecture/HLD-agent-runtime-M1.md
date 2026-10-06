@@ -56,10 +56,10 @@ M1 Registry 是平台维护的固定配置，不支持运行时插件发现。
 
 | 标准模板 | Platform Adapter | `driver` | 补充指令 | M1 平台能力 |
 | --- | --- | --- | --- | --- |
-| Codex | Codex Native | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
+| Codex | Codex Native | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 
 Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查、capability 和 Owner 可配置的 env/Secret 键。每个模板的 `supplementaryInstruction` 只作为 capability 集合中的一个布尔键维护，不存在独立的第二声明源；缺失时按 `false` 处理，只有对应 Adapter 通过持久幂等 Conformance 后才能设为 `true`，不能按协议名称推断。Owner 不选择或覆盖标准模板的 Adapter，也不能提交 Registry 未声明的 env/Secret。
 
@@ -111,7 +111,7 @@ Native 与 OpenCode 的 Generic ACP 模板消费 Messages；支持某种原生�
 | `protocol` | `platform-adapter` 必填且只能为 `acp`；`self-managed` 必须省略，出现时拒绝 |
 | `service.port` | 必填；整数 `1..65535`，Agent Service 和健康检查使用的容器端口 |
 | `health.path` | 必填；必须是以单个 `/` 开头的 origin-form 本地 HTTP 路径，其余字符只允许 ASCII 字母、数字、`/`、`.`、`_`、`~` 或 `-`；拒绝 `//`、`.` 或 `..` 路径段、反斜杠、`%` 编码、外部 URL、查询参数、片段、控制字符或凭证。平台使用校验后的原始路径和固定 Agent Service origin 构造探针请求，不再解码或规范化，且禁止跟随 HTTP 重定向 |
-| `capabilities` | 可选 Object；只允许布尔值 `modelSelection`、`attachments`、`resultFiles`、`connection` 和 `supplementaryInstruction`，缺失键按 `false`；仅 `platform-adapter` 读取，`self-managed` 的声明忽略，不能据此开放平台任务、Conversation、观测、Eval 或 Connection 能力 |
+| `capabilities` | 可选 Object；允许既有布尔能力 `modelSelection`、`attachments`、`resultFiles`、`connection` 和 `supplementaryInstruction`，以及版本化 `browser` 声明；缺失布尔键按 `false`。Browser 声明只描述候选能力和限制，必须与真实 Browser Runtime probe 取交集；仅 `platform-adapter` 读取，`self-managed` 的声明忽略 |
 
 Owner 不在产品页面填写协议、端口或探针。创建或升级时，Runtime 按以下顺序验证：
 
@@ -148,6 +148,12 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，Ru
 
 **业务 Session Sandbox。** Agent 级上述现状不能证明平台会话已按独立 Sandbox 路由。Session 的分配、Service、原 PVC、resourceFence 与真实 UID/version 继续以 [Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定) 为准；五类必需资源及可选 StatefulSet 的澄清归 #1322。TLS 只消费该分配已有 Service 的实际 DNS/端口与原 Session/Sandbox/代次绑定，不套用 Agent 级 `N`/`N-probe`，不新增 Sandbox probe Service，不让两个 Session 共享 leaf 私钥或后端。准确 Sandbox Service 命名与接线由该 owner 的受审阅交付给出；缺少时拒绝该路由，不能回退到 Agent 级 Service，也不能以本票签收 Sandbox 资源或 Host/Grant/Driver wire。
 
+### 4.2 Browser Capability
+
+Browser Capability 使用 `packages/contracts/src/runtime/browser-capability.ts` 的版本化契约，分为 Manifest declaration、Runtime probe projection 和后续 Platform/API projection。当前交付的 OpenAPI 是内部 Runtime probe；Platform/API consumer 仍须在现有认证上下文中解析 Agent、Conversation、Session generation、fence 和 Grant 后再暴露 projection。可用投影必须同时包含 Chromium/Playwright provenance、操作类别、域和资源 policy，以及不可伪造的 conformance receipt；不可用投影必须返回脱敏状态、稳定错误码和 retryable 属性。
+
+Manifest declaration 不能证明浏览器已装配或可用。Worker/Host 只有在当前 Session-owned Sandbox 内的固定 Browser Runtime 完成 probe 后，才能把声明与实际结果取交集并向 Platform 返回 `available`。该契约不创建 Browser 专用调度器、不改变 Conversation/Execution/Sandbox 权威，也不把 BrowserContext、Cookie、Storage 或原生页面标识暴露给 Platform API。
+
 ## 5. Platform Conversation Contract
 
 Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation Contract；Runtime 不另建身份、任务队列或 Eval 状态权威。Contract 定义以下语义，不暴露具体 Runtime 协议：
@@ -157,7 +163,7 @@ Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation
 - 停止当前 Turn，以及在 capability 支持时提交补充指令。
 - 查询 Session 和 Turn 状态。
 - 订阅并归一化文本、状态、文件、完成和错误事件；实际模型/工具事实按 8.5 生产，不把自由文本摘要当作可信操作结果。
-- 探测模型、附件、结果文件、Connection 和补充指令 capability。
+- 探测模型、附件、结果文件、Connection 和补充指令 capability；Browser Capability 的内部 probe 另由 §4.2 的版本化契约定义，尚不等同于 Platform/API Agent projection。
 
 `packages/agent-runtime` 实现 RuntimeHost 深 Module 和四个固定 Runtime Driver；`apps/agent-runtime-host` 只负责 Agent Pod 内的进程入口、依赖装配和 HTTP/SSE 接入。worker 侧 RuntimeHost Client Adapter 只依赖版本化 Host Contract，不依赖该 package 或任何 Native/ACP library。Agent Service 对 `platform-worker` 始终提供同一内部 HTTP/SSE Interface。
 
@@ -601,23 +607,46 @@ Platform 在受理、实际投递及数据读取前校验当前 Agent 使用权�
 
 ### 9.1 Codex 独立 Connection consumer profile
 
-本节的 Runtime callback/client 准备层只消费受信 bootstrap/provenance 投影，按原 Execution
-校验调用证据；它不实现 ConsumerInstance 注册、安装私钥持有证明、DPoP/mTLS 请求证明或
-PAT 安装绑定。投影内的 clientId、token 或内部 slot 不能替代 ConsumerInstance 或发送者证明。
-真实 HTTP/MCP 客户端必须按 Connection HLD 完成安装注册和请求证明，Connection 服务端在
-签发、刷新和每次调用时独立校验。callback/client prep 的通过不构成 Connection conformance。普通官方 Codex release 没有可验证私有 callback 时，不得
-把该能力降级为 bearer token、Owner 或平台服务身份；需要私有 FD3 bootstrap/recovery 时，
-必须先满足 8.5.1 的 native barrier，否则 fail closed。
+固定官方 Runtime 的标准 MCP 客户端优先消费 Connection 签发的 OAuth token 或获准 PAT。
+主体/Agent 独立 token、binding、SecretRef 与保管边界以
+[工程 Spec §13.5.3](SPEC-agent-infra-M1-engineering-architecture.md#1353-secretref权威与交付边界)
+为唯一权威。配置和 token 可用不证明真实工具事实或完整 Connection conformance；各模板的
+固定版本、实际客户端与凭据保护须分别验证，不能从 Codex 安装说明外推其他 Driver。
 
-客户端使用 Connection HLD 的固定 HTTPS origin、主体映射、回执与核实契约；安装绑定和发送者约束以 [§5.2](HLD-connection-M1.md#52-consumer-与-instance) 和 [§7](HLD-connection-M1.md#7-mcpapi-调用流程) 为准。RuntimeHost 已验证的原 Execution principal、Agent、Conversation 和 generation 只用于选取私有客户端 slot；Connection 仍在每次请求及其 Dispatch 边界独立鉴权。控制命令、Owner、应用责任人或 workload 身份不能替换原主体。子 Agent 和 hook 继续绑定原 source owner。
+客户端使用完整获准 profile 的 HTTPS origin/resource 与当前 token。RuntimeHost 已验证的
+原 Execution principal、Agent、Conversation 和 generation 只用于选择受保护客户端绑定；
+Connection 仍在每次请求及 Dispatch 边界独立鉴权。Owner、应用责任人、控制命令或 workload
+身份不能替换原主体。token 不进入普通配置、env、argv、模型、工具子进程、持久 journal
+或日志；缺失/失效时拒绝，不使用其他主体或共享部署 token fallback。相同用户的不同 Agent
+使用独立 token，Session 恢复不能借另一主体、Agent 或 Sandbox 的客户端状态。
 
-客户端访问 token 由 Connection 独立授权流程交付，经版本化私有 FD3 bootstrap 输入原 native 进程的 HTTP 客户端内存，不经过公开 app-server RPC。slot 绑定原主体、Agent、issuer/resource 和凭据 revision/期限；每次真实传输重新核对绑定。token 不进入普通配置、env、argv、模型内容、工具子进程、持久 journal 或日志；缺失/失效时拒绝，不使用存储 OAuth、ChatGPT、匿名或其他主体 fallback。FD3 在任何子进程前关闭继承。首次凭据交付前必须已建立覆盖 native 与 Node Bridge 的同 UID 进程读取隔离；Linux profile 在进程启动时叠加会被后代继承的进程内存访问 syscall 过滤，保留现有文件隔离和 HTTP 能力。该保护与 Darwin Seatbelt 均须通过各自最终二进制的实际工具负例，不能以配置存在代替验证。
+标准客户端需实证 token 只被获准 HTTP/MCP 消费边界读取，工具子进程和其他主体/Agent
+不能读取文件、内存或继承凭据。仅有普通配置 Header、环境变量名或文件权限声明不能证明
+隔离；当前官方版本不具备所需保护时，该能力保持未通过，不通过新增代理或 token 暴露绕过。
+sender constraint 仅在获准 profile 明确要求时按 Connection HLD §3/§5.2 验证，缺少必需证明
+仍 fail closed；普通 token profile 不以 DPoP、私有 callback 或 FD3 为通用接入前置。
 
-受信 rmcp leaf 在发送前生成并持久绑定原操作 nonce、真实 attempt nonce 及最终请求摘要，拒绝模型参数或 `_meta` 覆盖。leaf 仅从固定 origin、匹配本次原生 request ID 的同次认证响应采集原调用回执，再在 Connection 自身当前权限下只读核对原记录的主体、Agent、nonce、摘要和实际 Action。摘要、身份映射与回执证据留在受保护的 Runtime journal；Platform 仅接收关联引用与核实状态。回执字段不进入模型可编辑结果，工具完成不等于 Provider 成功。
+可信采集在实际请求前沿原 journal 固定 Execution、operation/attempt 与请求身份/摘要，
+从固定 origin 的同次认证 MCP 响应读取真实调用引用；在 Connection 自身授权下核对原调用
+主体、Action、参数与本次实际请求。已有标准 MCP 结果可以成为采集来源，但模型转交的
+structuredContent、任意 callId、相同参数、时间或其他执行的真实引用不能证明绑定。
+具体结果/查询格式消费服务发布的版本化合同，不假设存在特定 identity、calls 路由、签名
+receipt 或私有 nonce 字段；缺失或无法核实保持 unverified/unknown，不降低产品关联义务。
 
-核实恢复复用原执行的查询/恢复入口，只查询原记录，不建立第二调度循环或 Platform Connection 代理。完整丢失原调用回执时保持 unknown/unverified；模型转交、相同参数或查询到另一真实引用不能补齐原响应证据。关联状态更新保留原 operation/attempt、工具终态与计数，不能触发工具重发。
+原业务进程退出后，只从受保护 journal 中已有的原请求/响应事实恢复核实，使用原主体与
+Agent 当前有效 token 只读查询原记录；不新建业务 Session/Turn、不重发 MCP 工具或 Provider
+操作，也不建立第二调度循环。原 operation/attempt、终态、计数、outbox/游标/事务 ACK 与
+第 7.3 节代次屏障继续有效，不能用当前身份或另一真实调用补造丢失证据。
 
-原业务 native 进程退出后，受保护的原 journal 可将调用前保存的非秘密主体/Agent/Execution/generation/客户端绑定、原实际请求以及同次认证响应证据，经私有 FD3 交给同一经验证具备该 lane 的 binary 的原执行只读恢复进程。该进程适用相同的进程内存、FD 与文件隔离，只使用原主体当前独立凭据访问固定 identity 与原调用记录，不创建业务 Session/Turn、MCP session 或工具调用。恢复由已有授权的原执行查询/恢复工作触发，公共关联仍沿原 outbox、事件游标、持久事务和 ACK 交付；受第 7.3 节代次屏障确认限制。缺失调用前绑定或原响应不得以当前身份或其他真实引用补造。
+若另行批准并启用私有 native callback/FD3 bootstrap/recovery，则只在该 lane 按 8.5.1
+验证 provenance、版本化输入、不可关闭的 native barrier、slot 绑定及持久结果确认。
+FD3 在任何子进程前关闭继承；token 只进入获准原 native HTTP 客户端内存，交付前验证
+native 与 Node Bridge 的同 UID 文件/内存读取隔离。Linux syscall 过滤与 Darwin Seatbelt
+均须通过最终产物的真实负向测试。私有 rmcp leaf 的 nonce/receipt 和只读恢复格式仅用于
+其获准合同，不能反向作为所有标准客户端或 Connection 系统的接口要求。
+
+Runtime callback/client 准备层只校验受信投影和原执行绑定，不签发 Connection token、
+不注册 ConsumerInstance、不替服务端验证当前 Grant；内部 slot/clientId 也不构成授权。
 执行期文件访问由可信 Worker 经 Platform 文件服务签发独立对象级授权，RuntimeHost 消费 `FileAccessGrantV1` 并通过平台认证数据面传输；旧 Execution Grant 仅保留输入附件读取范围。结果必须在对象确认和文件记录提交后才能引用。签发、audience、当前授权、代次、重放及撤权以 [工程 Spec 文件条款](SPEC-agent-infra-M1-engineering-architecture.md#154-文件) 为唯一权威；Driver 不持有对象存储凭证。
 
 ## 10. Runtime 安全约束
@@ -707,8 +736,9 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
 ### 11.2 Codex 与 Connection 接缝验收
 
 - 官方 Codex release 与启用私有 native lane 的 target 分别记录 provenance、协议/schema、sandbox、能力覆盖和准入结果；官方路径不把不存在的 vendor barrier 当作验收前置，私有 lane 缺少 barrier 或验证不可回读时 fail closed。
-- callback/client 准备层按 [§9.1](#91-codex-独立-connection-consumer-profile) 验证受信投影及原调用关联。真实 HTTP/MCP 接入另按 [Connection HLD §5.2](HLD-connection-M1.md#52-consumer-与-instance)、[§7](HLD-connection-M1.md#7-mcpapi-调用流程)、[§8](HLD-connection-M1.md#8-幂等与线性化) 和 [§13](HLD-connection-M1.md#13-pilot-验收与成功声明) 验证安装绑定、发送者证明、PAT、跨实例隔离和撤权；准备层通过不替代该验收。
-- 私有 FD callback、bootstrap 或 recovery 的 intent/permit/结果确认失败、断连、过期、跨代次或主体绑定不一致，均不得产生 Provider/工具副作用；普通官方路径在没有该接缝时应明确能力不可用，而不是降级到 bearer token、Owner 或平台服务身份。
+- 标准 MCP/OAuth/PAT 路径按 [§9.1](#91-codex-独立-connection-consumer-profile) 与 [Connection HLD §5.2](HLD-connection-M1.md#52-consumer-与-instance)、[§7](HLD-connection-M1.md#7-mcpapi-调用流程)、[§8](HLD-connection-M1.md#8-幂等与线性化) 和 [§13](HLD-connection-M1.md#13-pilot-验收与成功声明) 验证 token 当前主体/实例、user/application + Agent 选择、工具子进程不可读取、独立撤销、跨实例隔离、幂等和未知不重放；缺 token 不回退 Owner 或共享凭据。profile 明确要求 sender constraint 时另验持有证明，准备层或 token 签发通过不替代真实运行。
+- 可信关联另验同次实际请求/响应、服务端原调用、跨 Execution/attempt 替换、丢响应与只读核实；缺失保持未核实，标准 token 接入不能代签关联。
+- 明确启用的私有 FD callback、bootstrap 或 recovery 在 intent/permit/结果确认失败、断连、过期、跨代次或主体绑定不一致时，不得产生 Provider/工具副作用。该 lane 未通过不按普通 token 绕过；标准 MCP 路径按自己的获准合同验证，不要求具备未启用的私有接缝。
 
 ## 12. RuntimeHost 未来抽取与维护标准
 
@@ -769,7 +799,7 @@ Claude 的首个复用基线为 Paseo
 以下内容不进入 M1：
 
 - 动态 Adapter 插件、未知协议自动发现和协议版本兼容矩阵。
-- Hermes 或 Magic 的特殊 Runtime/渠道语义。
+- 未经 Browser Capability 契约纳入的其他特殊 Runtime/渠道语义。
 - 将 ACP、Pi RPC 或原生事件直接暴露给 Web 和企微。
 - Redis、Kafka、NATS、Temporal 或其他消息中间件。
 - Kubernetes CRD、Operator 框架和 PVC 自动快照。

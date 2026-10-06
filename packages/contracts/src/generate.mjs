@@ -48,6 +48,17 @@ import {
 } from "./pilot/index.ts";
 import { platformAuthOpenApiPathsV1 } from "./platform-auth.ts";
 import {
+	BrowserCapabilityAvailableV1Schema,
+	BrowserCapabilityConformanceReceiptV1Schema,
+	BrowserCapabilityDeclarationV1Schema,
+	BrowserCapabilityDiscoveryRequestV1Schema,
+	BrowserCapabilityErrorV1Schema,
+	BrowserCapabilityProjectionV1Schema,
+	BrowserCapabilityProvenanceV1Schema,
+	BrowserCapabilityUnavailableV1Schema,
+	browserCapabilityOpenApiPathsV1,
+} from "./runtime/browser-capability.ts";
+import {
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesResponseV1Schema,
 	RuntimeDriverV1SchemaDefinitions,
@@ -103,6 +114,14 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 	throw new Error("--root requires a directory");
 }
 const artifactPaths = {
+	browserCapabilityJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/browser-capability.v1.schema.json",
+	),
+	browserCapabilityOpenapi: resolve(
+		artifactRoot,
+		"openapi/browser-capability.v1.openapi.json",
+	),
 	enterpriseDirectoryOpenapi: resolve(
 		artifactRoot,
 		"openapi/enterprise-directory.v1.openapi.json",
@@ -750,6 +769,45 @@ function buildArtifacts() {
 		io: "input",
 	});
 	return {
+		browserCapabilityJsonSchema: jsonSchemaDocument({
+			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/browser-capability.v1.schema.json",
+			title: "Agent Infra Browser Capability Contracts V1",
+			definitions: {
+				BrowserCapabilityAvailableV1: BrowserCapabilityAvailableV1Schema,
+				BrowserCapabilityConformanceReceiptV1:
+					BrowserCapabilityConformanceReceiptV1Schema,
+				BrowserCapabilityDeclarationV1: BrowserCapabilityDeclarationV1Schema,
+				BrowserCapabilityDiscoveryRequestV1:
+					BrowserCapabilityDiscoveryRequestV1Schema,
+				BrowserCapabilityErrorV1: BrowserCapabilityErrorV1Schema,
+				BrowserCapabilityProjectionV1: BrowserCapabilityProjectionV1Schema,
+				BrowserCapabilityProvenanceV1: BrowserCapabilityProvenanceV1Schema,
+				BrowserCapabilityUnavailableV1: BrowserCapabilityUnavailableV1Schema,
+			},
+		}),
+		browserCapabilityOpenapi: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Agent Infra Browser Capability", version: "1.0.0" },
+			security: [{ RuntimeServiceBearer: [] }],
+			paths: browserCapabilityOpenApiPathsV1,
+			components: {
+				securitySchemes: {
+					RuntimeServiceBearer: { type: "http", scheme: "bearer" },
+				},
+				schemas: {
+					BrowserCapabilityAvailableV1: BrowserCapabilityAvailableV1Schema,
+					BrowserCapabilityConformanceReceiptV1:
+						BrowserCapabilityConformanceReceiptV1Schema,
+					BrowserCapabilityDeclarationV1: BrowserCapabilityDeclarationV1Schema,
+					BrowserCapabilityDiscoveryRequestV1:
+						BrowserCapabilityDiscoveryRequestV1Schema,
+					BrowserCapabilityErrorV1: BrowserCapabilityErrorV1Schema,
+					BrowserCapabilityProjectionV1: BrowserCapabilityProjectionV1Schema,
+					BrowserCapabilityProvenanceV1: BrowserCapabilityProvenanceV1Schema,
+					BrowserCapabilityUnavailableV1: BrowserCapabilityUnavailableV1Schema,
+				},
+			},
+		}),
 		enterpriseDirectoryOpenapi: createDocument({
 			openapi: "3.1.0",
 			info: { title: "Enterprise Directory Snapshot API", version: "1.0.0" },

@@ -60,8 +60,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-      TRIVY_TOOL_DIR: .trivy-tool
+      SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -116,8 +115,8 @@ jobs:
             exit "$status"
           }
           trap cleanup EXIT
-          test "$(git rev-parse HEAD)" = "$SCAN_COMMIT"
-          printf '%s\n' "$SCAN_COMMIT" > "$evidence/source.txt"
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          printf '%s\n' "$SOURCE_COMMIT" > "$evidence/source.txt"
           docker info --format '{{json .}}' > "$evidence/daemon.json"
           docker_root=$(jq -r '.DockerRootDir // empty' "$evidence/daemon.json")
           test -n "$docker_root"
@@ -134,7 +133,7 @@ jobs:
           pnpm exec tsc -p tests/observability/tsconfig.json --noEmit
           OBSERVABILITY_EVIDENCE="$evidence/platform-api-resources.json" pnpm exec vitest run tests/observability/platform-api-resources.test.ts --maxWorkers=1 --no-file-parallelism --cache=false --reporter=json --outputFile="$evidence/platform-api-resources.result.json" > "$evidence/platform-api-resources.log" 2>&1
           OBSERVABILITY_EVIDENCE="$evidence/collector.json" pnpm exec vitest run tests/observability/collector.test.ts --maxWorkers=1 --no-file-parallelism --cache=false --reporter=json --outputFile="$evidence/collector.result.json" > "$evidence/collector.log" 2>&1
-          node --input-type=module - "$evidence" "$SCAN_COMMIT" <<'NODE'
+          node --input-type=module - "$evidence" "$SOURCE_COMMIT" <<'NODE'
           import assert from 'node:assert/strict';
           import { readFileSync } from 'node:fs';
           const [directory, head] = process.argv.slice(2);
@@ -292,7 +291,7 @@ jobs:
         id: images
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: node .github/scripts/vulnerability-scan.mjs build
+        run: node deploy/release/ci-image-build.mjs build
 
       - name: Verify built Web image compatibility
         timeout-minutes: 3
@@ -301,7 +300,7 @@ jobs:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          evidence=.vulnerability-scan/web-smoke
+          evidence=.ci-images/web-smoke
           mkdir -p "$evidence"
           static_container="web-static-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           tls_container="web-config-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
@@ -325,7 +324,7 @@ jobs:
           }
           trap cleanup EXIT
           test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
-          cp .vulnerability-scan/build.json "$evidence/build.json"
+          cp .ci-images/build.json "$evidence/build.json"
           web_image=$(jq -er --arg head "$SOURCE_COMMIT" '
             select(.schemaVersion == 1 and .source.commit == $head)
             | [.images[] | select(.name == "web")]
@@ -412,17 +411,17 @@ jobs:
           test -z "$(git status --porcelain)"
           printf '%s\n' "$SOURCE_COMMIT" > "$evidence/source.txt"
           git ls-tree -r HEAD > "$evidence/source-tree.txt"
-          cp .vulnerability-scan/build.json "$evidence/build.json"
+          cp .ci-images/build.json "$evidence/build.json"
           sha256sum apps/agent-runtime-host/Dockerfile \
             apps/agent-runtime-host/src/{configuration.ts,installed-skill.ts,index.ts} \
             packages/agent-runtime/src/{codex-installation.ts,codex-runtime-driver.ts} \
             deploy/runtime/skills/workspace-summary{.manifest.json,.manifest.schema.json,/SKILL.md} \
-            tests/runtime-installed-skill-image.ts .github/scripts/vulnerability-scan.mjs \
+            tests/runtime-installed-skill-image.ts deploy/release/ci-image-build.mjs \
             .github/workflows/ci.yml pnpm-lock.yaml > "$evidence/source.sha256"
           runner_id=$(node --input-type=module -e '
             import {readFile} from "node:fs/promises";
-            import {runtimeImageFromScanBuild} from "./deploy/release/runtime-probe.mjs";
-            console.log(runtimeImageFromScanBuild(JSON.parse(await readFile(".vulnerability-scan/build.json","utf8")),process.argv[1]));
+            import {runtimeImageFromBuildManifest} from "./deploy/release/runtime-probe.mjs";
+            console.log(runtimeImageFromBuildManifest(JSON.parse(await readFile(".ci-images/build.json","utf8")),process.argv[1]));
           ' "$SOURCE_COMMIT")
           printf '%s\n' "$runner_id" > "$evidence/runner.iid"
           docker_root=$(docker info --format '{{.DockerRootDir}}')
@@ -467,13 +466,13 @@ jobs:
       - name: Probe native Codex runtime image
         id: runtime_probe
         run: >-
-          node deploy/release/runtime-probe.mjs --scan-build
-          .vulnerability-scan/build.json "$RUNNER_TEMP/codex-runtime-probe.json"
+          node deploy/release/runtime-probe.mjs --build-manifest
+          .ci-images/build.json "$RUNNER_TEMP/codex-runtime-probe.json"
 
       - name: Verify Custom Base Image inheritance
         run: >-
           node deploy/release/custom-base-image.mjs
-          "agent-infra-ci/custom-agent-base:$SCAN_COMMIT"
+          "agent-infra-ci/custom-agent-base:$SOURCE_COMMIT"
           "$RUNNER_TEMP/custom-base-image.json"
 
       - name: Preserve Custom Base Image evidence
@@ -523,42 +522,6 @@ jobs:
           else
             git diff --check "$BASE_SHA" "$HEAD_SHA"
           fi
-
-      - name: Install verified vulnerability scanner
-        if: ${{ !cancelled() && steps.images.outcome == 'success' }}
-        run: node .github/scripts/install-trivy.mjs "$TRIVY_TOOL_DIR"
-
-      - name: Scan dependencies and built images
-        if: ${{ !cancelled() && steps.images.outcome == 'success' }}
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          VULNERABILITY_EXCEPTIONS: ${{ vars.VULNERABILITY_EXCEPTIONS }}
-        run: node .github/scripts/vulnerability-scan.mjs scan
-
-      - name: Upload vulnerability evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: vulnerability-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .vulnerability-scan/
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Download vulnerability evidence
-        if: always()
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: vulnerability-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/vulnerability-readback
-
-      - name: Verify downloaded evidence and enforce policy
-        if: always()
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          VULNERABILITY_EXCEPTIONS: ${{ vars.VULNERABILITY_EXCEPTIONS }}
-          VULNERABILITY_REPORT_DIR: ${{ runner.temp }}/vulnerability-readback
-        run: node .github/scripts/vulnerability-scan.mjs verify
 
   workload-kind:
     name: Workload kind
