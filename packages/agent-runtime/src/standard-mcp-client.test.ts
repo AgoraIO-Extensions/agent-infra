@@ -59,6 +59,64 @@ it("uses actual standard initialize/discovery/call once without exporting creden
 	expect(JSON.stringify([client.toolDefinitions, result])).not.toContain(token);
 });
 
+it.each(["persisted", "failed", "revoked"] as const)(
+	"waits for the started record and rechecks authority when it is %s",
+	async (outcome) => {
+		const fixture = await standardMcpFixture();
+		let persisted = false;
+		let authorized = true;
+		const sends: boolean[] = [];
+		const client = await StandardMcpClient.open(
+			{
+				target: fixture.target,
+				resolveInput: async () => fixture.input,
+				fetch: (url, init) => {
+					if (
+						typeof init?.body === "string" &&
+						JSON.parse(init.body).method === "tools/call"
+					)
+						sends.push(persisted);
+					return fixture.fetch(url, init);
+				},
+			},
+			reference,
+			new AbortController().signal,
+		);
+		closes.push(() => client.close());
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const pending = client.call(
+			client.toolDefinitions[0]?.tools[0]?.name ?? "",
+			{ text: "fixture" },
+			{
+				block: () => {},
+				confirm: async () => {},
+				assertCurrent: async () => () => {
+					if (!authorized) throw new Error("Controlled revocation");
+				},
+				started: async () => {
+					entered.resolve();
+					await release.promise;
+					if (outcome === "failed")
+						throw new Error("Controlled journal failure");
+					persisted = true;
+				},
+			},
+			new AbortController().signal,
+		);
+		await entered.promise;
+		const sendsBeforePersistence = sends.length;
+		if (outcome === "revoked") authorized = false;
+		release.resolve();
+		const result = await pending;
+		expect(sendsBeforePersistence).toBe(0);
+		expect(sends).toEqual(outcome === "persisted" ? [true] : []);
+		expect(result.phase).toBe(
+			outcome === "persisted" ? "completed" : "unknown",
+		);
+	},
+);
+
 it.each(["unknown", "lost", "leak", "key-leak"] as const)(
 	"keeps %s results unknown and does not resend",
 	async (behavior) => {

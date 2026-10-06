@@ -191,6 +191,7 @@ async function setup() {
 	closes.push(() => rm(directory, { recursive: true, force: true }));
 	const path = join(directory, "driver.json");
 	const authorization: string[] = [];
+	const fetchMethods: string[] = [];
 	const options: CodexRuntimeDriverOptions = {
 		nativeLane: "official-model-only",
 		path,
@@ -221,7 +222,11 @@ async function setup() {
 					sessionGeneration: ref.sessionGeneration,
 				},
 			}),
-			fetch: fixture.fetch,
+			fetch: (url, init) => {
+				if (typeof init?.body === "string")
+					fetchMethods.push(JSON.parse(init.body).method);
+				return fixture.fetch(url, init);
+			},
 		},
 	};
 	const native = new StandardToolNativeFixture();
@@ -246,6 +251,7 @@ async function setup() {
 		options,
 		ref: accepted.nativeSessionRef,
 		authorization,
+		fetchMethods,
 	};
 }
 
@@ -289,6 +295,72 @@ interface DriverFailureFixture {
 		signal: AbortSignal,
 	): Promise<void>;
 }
+
+it("keeps the original execution held without sending when the started write fails", async () => {
+	const env = await setup();
+	const internal = env.driver as unknown as DriverFailureFixture;
+	const update = internal.update.bind(internal);
+	let startedFailed = false;
+	internal.update = async (change) => {
+		const probe = structuredClone(internal.readState());
+		change(probe);
+		const started = Object.values(probe.sessions).some((session) =>
+			Object.values(session.journals).some((journal) =>
+				Object.values(journal.standardMcpCalls ?? {}).some(
+					(call) => call.phase === "started",
+				),
+			),
+		);
+		if (started && !startedFailed) {
+			startedFailed = true;
+			throw new Error("Controlled started write failure");
+		}
+		return update(change);
+	};
+	try {
+		env.native.call();
+		await waitFor(async () =>
+			(await operationEvents(env.driver, env.ref)).some(
+				(event) => event.payload.phase === "intent",
+			),
+		);
+		const intent = (await operationEvents(env.driver, env.ref)).at(-1);
+		if (!intent) throw new Error("Missing intent");
+		await env.driver.acknowledgeEvents(
+			env.ref,
+			reference.executionId,
+			intent.cursor,
+		);
+		await waitFor(async () =>
+			(await operationEvents(env.driver, env.ref)).some(
+				(event) => event.payload.phase === "unknown",
+			),
+		);
+		const unknown = (await operationEvents(env.driver, env.ref)).at(-1);
+		if (!unknown) throw new Error("Missing unknown result");
+		await env.driver.acknowledgeEvents(
+			env.ref,
+			reference.executionId,
+			unknown.cursor,
+		);
+		await waitFor(() => env.native.closed);
+		expect(startedFailed).toBe(true);
+		expect(
+			env.fetchMethods.filter((method) => method === "tools/call"),
+		).toHaveLength(0);
+		expect(
+			env.fixture.trace.filter((request) => request.method === "tools/call"),
+		).toHaveLength(0);
+		expect(internal.readState().sessions[env.ref]?.activeExecutionId).toBe(
+			reference.executionId,
+		);
+		expect(await env.driver.getStatus(env.ref, reference.executionId)).toBe(
+			"unknown",
+		);
+	} finally {
+		internal.update = update;
+	}
+});
 
 it("does not release occupancy after a transient failed hold write and native completion", async () => {
 	const env = await setup();
@@ -418,6 +490,9 @@ it("actual Driver waits for original intent and result ACKs and sends MCP only o
 	await waitFor(() => env.native.replies.length === 2);
 	expect(
 		env.fixture.trace.filter((request) => request.method === "tools/call"),
+	).toHaveLength(1);
+	expect(
+		env.fetchMethods.filter((method) => method === "tools/call"),
 	).toHaveLength(1);
 	expect(JSON.stringify(env.native.sent)).not.toContain(token);
 	expect(await readFile(env.path, "utf8")).not.toContain(token);

@@ -612,13 +612,10 @@ export class StandardMcpClient {
 			unavailable();
 		await this.assertCurrent();
 		const method = init?.method ?? "GET";
-		let toolSend = false;
-		let message: Record<string, unknown> | undefined;
 		if (method === "POST") {
 			if (typeof init?.body !== "string") unavailable();
 			const parsed: unknown = JSON.parse(init.body);
 			if (!record(parsed)) unavailable();
-			message = parsed;
 			if (parsed.method === "tools/call") {
 				const active = this.#active;
 				if (
@@ -639,7 +636,22 @@ export class StandardMcpClient {
 				)
 					unavailable();
 				active.sends++;
-				toolSend = true;
+				// Reserve the attempt, but do not dispatch before its RPC identity
+				// and digest are durable. A failed write retains the unknown hold.
+				await active.operation.started({
+					rpcRequestId: parsed.id as string | number,
+					requestDigest: standardMcpDigest(parsed.params),
+					startedAt: new Date().toISOString(),
+				});
+				const finalRevalidate = await active.operation.assertCurrent();
+				await this.assertCurrent();
+				const finalGuarded: unknown = finalRevalidate();
+				if (
+					finalGuarded !== undefined ||
+					this.#closed ||
+					this.#input.expiresAt <= Date.now()
+				)
+					unavailable();
 			} else if (this.#active?.sends || ++this.#discoveryRequests > 16)
 				unavailable();
 		} else if (method !== "GET") unavailable();
@@ -656,13 +668,6 @@ export class StandardMcpClient {
 			]),
 		});
 		void pending.catch(() => {});
-		if (toolSend && message) {
-			await this.#active?.operation.started({
-				rpcRequestId: message.id as string | number,
-				requestDigest: standardMcpDigest(message.params),
-				startedAt: new Date().toISOString(),
-			});
-		}
 		const response = await pending;
 		if (response.status >= 300 && response.status < 400) unavailable();
 		if (!response.body) return response;
