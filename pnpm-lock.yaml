@@ -420,6 +420,9 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: 0.86.0
         version: 0.86.0(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)
+      '@modelcontextprotocol/sdk':
+        specifier: 1.30.0
+        version: 1.30.0(zod@4.4.3)
       ajv:
         specifier: 'catalog:'
         version: 8.20.0

@@ -43,7 +43,6 @@ import {
 	type RuntimeConnectionConsumerProfile,
 	readRuntimeConnectionConsumerProfile,
 } from "./connection-consumer-profile.js";
-
 import {
 	type RuntimeLegacyMigrationFilesystem,
 	readRuntimeLegacyMigrationV1,
@@ -58,6 +57,8 @@ import {
 	readRuntimeHostTls,
 	validateRuntimeHostTls,
 } from "./runtime-tls.js";
+import { createProtectedStandardMcpInput } from "./standard-mcp-input.js";
+import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 
@@ -205,6 +206,8 @@ export async function assembleRuntimeHost(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE,
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION,
 	);
+	if (connectionProfile && connectionConsumer !== undefined)
+		runtimeConfigurationInvalid();
 	const messagesConfiguration =
 		binding === "claude" || binding === "acp" || binding === "pi"
 			? readRuntimeModelConfigurationV3(environment, binding)
@@ -254,6 +257,15 @@ export async function assembleRuntimeHost(
 		await legacyMigration?.apply(store);
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
+					...(connectionConsumer?.status === "available"
+						? {
+								standardConnectionClient: createProtectedStandardMcpInput({
+									dataDirectory,
+									target: connectionConsumer,
+									store,
+								}),
+							}
+						: {}),
 					...(connectionProfile
 						? {
 								connectionClient: createIndependentConnectionClientInput({
@@ -280,7 +292,20 @@ export async function assembleRuntimeHost(
 								"Runtime authorization is not ready",
 								403,
 							);
-						return assembledHost.authorizeExternalAction(action);
+						const authorized =
+							await assembledHost.authorizeExternalAction(action);
+						if (
+							action.kind !== "tool" ||
+							connectionConsumer?.status !== "available"
+						)
+							return authorized;
+						return {
+							...authorized,
+							revalidate: () => {
+								assertStandardMcpProcessProtection();
+								store.assertExternalActionCurrent(action, Date.now);
+							},
+						};
 					},
 					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 					path: join(dataDirectory, "codex-driver.json"),

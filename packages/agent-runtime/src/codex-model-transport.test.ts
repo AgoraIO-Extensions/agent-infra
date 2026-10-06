@@ -90,6 +90,54 @@ const defaultNativeTurn = {
 const close: (() => Promise<void>)[] = [];
 
 describe("official model-only transport", () => {
+	it.each([true, false])(
+		"only admits the Driver-selected Connection tool (approved: %s)",
+		async (approved) => {
+			const item = {
+				type: "function_call",
+				id: "selected-item",
+				name: approved ? "mcp_selected" : "exec_command",
+				namespace: "connection",
+				call_id: "selected-call",
+				arguments: "{}",
+			};
+			const target = await listen(
+				createServer((_request, response) => {
+					response.writeHead(200, { "content-type": "text/event-stream" });
+					response.end(
+						event({ type: "response.output_item.added", item }) +
+							event({
+								type: "response.function_call_arguments.delta",
+								item_id: "selected-item",
+								delta: "{}",
+							}) +
+							event({
+								type: "response.completed",
+								response: {
+									id: "selected-response",
+									status: "completed",
+									output: [item],
+								},
+							}),
+					);
+				}),
+			);
+			const value = await transport(target, true, {
+				modelOnly: true,
+				beforeRequest: async () => ({
+					started: async () => {},
+					finish: async () => {},
+					allowsClientTool: (name, namespace) =>
+						name === "mcp_selected" && namespace === "connection",
+				}),
+			});
+			const response = await request(value.modelAccess);
+			expect(response.status).toBe(approved ? 200 : 502);
+			const body = await response.text();
+			if (approved) expect(body).toContain("selected-call");
+			else expect(body).not.toContain("exec_command");
+		},
+	);
 	const toolItems = [
 		{
 			type: "function_call",

@@ -23,10 +23,14 @@ describe("agent-runtime dependency direction", () => {
 			"@agentclientprotocol/sdk",
 			"@anthropic-ai/claude-agent-sdk",
 			"@earendil-works/pi-coding-agent",
+			"@modelcontextprotocol/sdk",
 			"ajv",
 			"eventsource-parser",
 			"playwright-core",
 		]);
+		expect(packageJson.dependencies?.["@modelcontextprotocol/sdk"]).toBe(
+			"1.30.0",
+		);
 	});
 
 	it("keeps Platform, identity, Connection, and deployment modules out of production imports", async () => {
@@ -48,9 +52,14 @@ describe("agent-runtime dependency direction", () => {
 		for (const forbidden of forbiddenImports) {
 			expect(
 				imports.some((specifier) =>
-					forbidden === "connection"
-						? /(?:^|\/)connection(?:[-/]|$)/.test(specifier)
-						: specifier.includes(forbidden),
+					// The canonical shared Consumer type is a contracts subpath, not
+					// a Connection domain/adapter import (Spec §13.5.4 and HLD §12.1).
+					forbidden === "connection" &&
+					specifier === "@agent-infra/contracts/connection-consumer-profile"
+						? false
+						: forbidden === "connection"
+							? /(?:^|\/)connection(?:[-/]|$)/.test(specifier)
+							: specifier.includes(forbidden),
 				),
 				`forbidden runtime import: ${forbidden}`,
 			).toBe(false);
