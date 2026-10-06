@@ -102,6 +102,14 @@ spec:
                   fieldPath: metadata.namespace
             - name: PLATFORM_WORKER_WECOM_ENABLED
               value: {{ .Values.platformWorker.wecomEnabled | quote }}
+            - name: PLATFORM_WORKER_SERVICE_TOKEN_FILE
+              value: /var/run/agent-infra/runtime-auth/service-token
+            {{- if .Values.platformWorker.runtimeImageRepository }}
+            - name: AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY
+              value: {{ .Values.platformWorker.runtimeImageRepository | quote }}
+            - name: AGENT_INFRA_RUNTIME_IMAGE_DIGEST
+              value: {{ required "platformWorker.runtimeImageDigest is required with runtimeImageRepository" .Values.platformWorker.runtimeImageDigest | quote }}
+            {{- end }}
             {{- end }}
             - name: PLATFORM_DATABASE_URL
               valueFrom:

@@ -16,17 +16,31 @@ local_state_root=${PLATFORM_LOCAL_STATE_DIRECTORY:-${XDG_STATE_HOME:-$HOME/.loca
 }
 export PLATFORM_LOCAL_NGINX_CONFIG="$local_state_root/$PLATFORM_LOCAL_PROJECT/nginx.conf"
 export PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE="$local_state_root/$PLATFORM_LOCAL_PROJECT/proxy-token"
+build_context_root=${PLATFORM_LOCAL_BUILD_CONTEXT:-$repository_root}
+[[ "$build_context_root" = /* && -f "$build_context_root/docker-compose.yml" ]] || {
+  echo "PLATFORM_LOCAL_BUILD_CONTEXT must contain a docker-compose.yml" >&2
+  exit 1
+}
 docker_target=(docker --context "$PLATFORM_LOCAL_DOCKER_CONTEXT")
 docker_endpoint=$("${docker_target[@]}" context inspect "$PLATFORM_LOCAL_DOCKER_CONTEXT" --format '{{.Endpoints.docker.Host}}')
 [[ "$docker_endpoint" == unix://* ]] || {
   echo "Local Platform requires a local Docker socket" >&2
   exit 1
 }
-compose=("${docker_target[@]}" compose --project-name "$PLATFORM_LOCAL_PROJECT" -f docker-compose.yml -f deploy/local/compose.yaml)
+compose=("${docker_target[@]}" compose --project-name "$PLATFORM_LOCAL_PROJECT" --profile enterprise-directory -f "$build_context_root/docker-compose.yml" -f "$repository_root/deploy/local/compose.yaml")
+if [[ -n "${PLATFORM_LOCAL_BUILD_COMPOSE_OVERRIDE:-}" ]]; then
+  [[ "$PLATFORM_LOCAL_BUILD_COMPOSE_OVERRIDE" = /* && -r "$PLATFORM_LOCAL_BUILD_COMPOSE_OVERRIDE" ]] || {
+    echo "PLATFORM_LOCAL_BUILD_COMPOSE_OVERRIDE must be an absolute readable file" >&2
+    exit 1
+  }
+  compose+=( -f "$PLATFORM_LOCAL_BUILD_COMPOSE_OVERRIDE" )
+fi
 worker_release="$PLATFORM_LOCAL_PROJECT"
 worker_deployment="$worker_release-agent-infra-platform-worker"
 database_service="$worker_release-postgres"
 database_endpoint="$database_service-docker"
+directory_service="enterprise-directory-sync"
+directory_endpoint="enterprise-directory-sync-e2e"
 helm_target=(helm)
 
 worker_context() {
@@ -136,6 +150,23 @@ worker_values() {
     --set-string database.secretRef.key=url
     --set-string platformWorker.deploymentModule=file:///app/dist/deployment.mjs
   )
+  if [[ -n "${PLATFORM_LOCAL_HELM_POST_RENDERER:-}" ]]; then
+    [[ "$PLATFORM_LOCAL_HELM_POST_RENDERER" = /* && -x "$PLATFORM_LOCAL_HELM_POST_RENDERER" ]] || {
+      echo "PLATFORM_LOCAL_HELM_POST_RENDERER must be an executable absolute path" >&2
+      exit 1
+    }
+    worker_options+=( --post-renderer "$PLATFORM_LOCAL_HELM_POST_RENDERER" )
+  fi
+  if [[ -n "${AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY:-}" || -n "${AGENT_INFRA_RUNTIME_IMAGE_DIGEST:-}" ]]; then
+    [[ -n "${AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY:-}" && -n "${AGENT_INFRA_RUNTIME_IMAGE_DIGEST:-}" ]] || {
+      echo "Runtime image repository and Digest must be supplied together" >&2
+      exit 1
+    }
+    worker_options+=(
+      --set-string "platformWorker.runtimeImageRepository=$AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY"
+      --set-string "platformWorker.runtimeImageDigest=$AGENT_INFRA_RUNTIME_IMAGE_DIGEST"
+    )
+  fi
 }
 
 validate_deployment_material() {
@@ -443,6 +474,129 @@ disconnect_worker_database() {
   "${kube_target[@]}" delete "endpointslice/$database_endpoint" "service/$database_service" "secret/$database_service" --ignore-not-found
 }
 
+directory_network_aliases() {
+  "${docker_target[@]}" container inspect "$1" --format '{{with index .NetworkSettings.Networks "kind"}}{{join .Aliases " "}}{{end}}'
+}
+
+directory_route_alias() {
+  "${kube_target[@]}" get "endpointslice/$directory_endpoint" --ignore-not-found -o json | node -e '
+    let input = "";
+    process.stdin.on("data", (chunk) => { input += chunk; });
+    process.stdin.on("end", () => {
+      if (!input.trim()) return;
+      try {
+        const resource = JSON.parse(input);
+        const labels = resource.metadata?.labels ?? {};
+        const alias = resource.metadata?.annotations?.["agent-infra.agora.io/local-network-alias"];
+        if (labels["app.kubernetes.io/managed-by"] !== "agent-infra-local" ||
+            labels["agent-infra.agora.io/local-project"] !== process.argv[1] ||
+            typeof alias !== "string" ||
+            !new RegExp("^" + process.argv[2] + "-[0-9a-f]{16}$").test(alias)) process.exitCode = 1;
+        else process.stdout.write(alias);
+      } catch {
+        process.exitCode = 1;
+      }
+    });
+  ' "$PLATFORM_LOCAL_PROJECT" "$directory_service"
+}
+
+check_directory_resource_ownership() {
+  local resource name
+  for resource in service endpointslice; do
+    name="$directory_service"
+    [[ "$resource" == endpointslice ]] && name="$directory_endpoint"
+    if ! "${kube_target[@]}" get "$resource/$name" --ignore-not-found -o json |
+      node -e '
+        let input = "";
+        process.stdin.on("data", (chunk) => { input += chunk; });
+        process.stdin.on("end", () => {
+          if (!input.trim()) return;
+          try {
+            const labels = JSON.parse(input).metadata?.labels ?? {};
+            if (!["agent-infra-local", "agent-infra-e2e"].includes(labels["app.kubernetes.io/managed-by"]) ||
+                labels["agent-infra.agora.io/local-project"] !== process.argv[1]) process.exitCode = 1;
+          } catch {
+            process.exitCode = 1;
+          }
+        });
+      ' "$PLATFORM_LOCAL_PROJECT"; then
+      echo "Local directory $resource/$name is not owned by this project" >&2
+      return 1
+    fi
+  done
+}
+
+connect_directory_sync() {
+  local container aliases network_alias directory_ip
+  container=$("${compose[@]}" ps -q "$directory_service")
+  [[ -n "$container" ]] || { echo "Local directory sync container is missing" >&2; return 1; }
+  aliases=$(directory_network_aliases "$container")
+  if [[ -z "$aliases" ]]; then
+    network_alias="$directory_service-$(node -e 'process.stdout.write(require("node:crypto").randomBytes(8).toString("hex"))')"
+    "${docker_target[@]}" network connect --alias "$network_alias" kind "$container"
+  else
+    network_alias=$(directory_route_alias)
+    [[ "$aliases" == "$network_alias" ]] || {
+      echo "Local directory sync is connected to kind outside this project" >&2
+      return 1
+    }
+  fi
+  directory_ip=$("${docker_target[@]}" container inspect "$container" --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}')
+  [[ "$directory_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "Local directory sync has no IPv4 address on the kind network" >&2
+    return 1
+  }
+  "${kube_target[@]}" apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: $directory_service
+  labels:
+    app.kubernetes.io/managed-by: agent-infra-local
+    agent-infra.agora.io/local-project: $PLATFORM_LOCAL_PROJECT
+spec:
+  ports:
+    - name: https
+      port: 3004
+      targetPort: 3004
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: $directory_endpoint
+  labels:
+    app.kubernetes.io/managed-by: agent-infra-local
+    agent-infra.agora.io/local-project: $PLATFORM_LOCAL_PROJECT
+    kubernetes.io/service-name: $directory_service
+    endpointslice.kubernetes.io/managed-by: agent-infra-local
+  annotations:
+    agent-infra.agora.io/local-network-alias: $network_alias
+addressType: IPv4
+ports:
+  - name: https
+    port: 3004
+    protocol: TCP
+endpoints:
+  - addresses: ["$directory_ip"]
+    conditions:
+      ready: true
+EOF
+}
+
+disconnect_directory_sync() {
+  local container aliases
+  check_directory_resource_ownership
+  container=$("${compose[@]}" ps --all -q "$directory_service")
+  if [[ -n "$container" ]]; then
+    aliases=$(directory_network_aliases "$container")
+    if [[ -n "$aliases" ]]; then
+      "${docker_target[@]}" network disconnect kind "$container"
+    fi
+  fi
+  "${kube_target[@]}" delete "endpointslice/$directory_endpoint" "service/$directory_service" --ignore-not-found
+}
+
 delete_owned_agent_pvcs() {
   local names name pvc_json agent_identity agent_name agent_id
   [[ -n "${PLATFORM_LOCAL_AGENT_PVC_NAMES:-}" ]] || return 0
@@ -520,7 +674,9 @@ delete_owned_agent_pvcs() {
 
 case "${1:-}" in
   build)
-    "${compose[@]}" --profile runtime build web platform-api platform-worker agent-runtime-host
+    read -r -a build_services <<< "${PLATFORM_LOCAL_BUILD_SERVICES:-web platform-api platform-worker connection-api enterprise-directory-sync agent-runtime-host}"
+    [[ ${#build_services[@]} -gt 0 ]] || { echo "PLATFORM_LOCAL_BUILD_SERVICES must not be empty" >&2; exit 1; }
+    "${compose[@]}" --profile runtime build "${build_services[@]}"
     ;;
   data)
     "${compose[@]}" up --detach --wait postgres object-storage
@@ -539,6 +695,8 @@ case "${1:-}" in
     "${compose[@]}" stop web platform-api
     "${compose[@]}" up --detach --wait postgres object-storage
     connect_worker_database
+    "${compose[@]}" up --detach --wait "$directory_service"
+    connect_directory_sync
     check_worker_secret_material
     "${helm_target[@]}" upgrade --install "$worker_release" deploy/helm/agent-infra "${worker_options[@]}" --wait --timeout 5m
     worker_replicas=$("${helm_target[@]}" get values "$worker_release" --all --output json | node -e '
@@ -553,6 +711,7 @@ case "${1:-}" in
     ')
     "${kube_target[@]}" scale "deployment/$worker_deployment" --replicas="$worker_replicas"
     "${kube_target[@]}" rollout status "deployment/$worker_deployment" --timeout=5m
+    "${compose[@]}" up --detach --wait connection-api
     "${compose[@]}" up --detach --wait --force-recreate --no-deps platform-api
     if ! node deploy/local/check-api-auth.ts "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE" "${PLATFORM_LOCAL_API_PORT:-3000}" "${PLATFORM_LOCAL_WEB_PORT:-3001}"; then
       "${compose[@]}" stop platform-api
@@ -563,10 +722,10 @@ case "${1:-}" in
     ;;
   status)
     worker_context
-    "${compose[@]}" ps postgres object-storage platform-api web
+    "${compose[@]}" ps postgres object-storage enterprise-directory-sync connection-api platform-api web
     "${helm_target[@]}" status "$worker_release"
     "${kube_target[@]}" get deployment "$worker_deployment"
-    "${kube_target[@]}" get "service/$database_service" "endpointslice/$database_endpoint" "secret/$database_service"
+    "${kube_target[@]}" get "service/$database_service" "endpointslice/$database_endpoint" "secret/$database_service" "service/$directory_service" "endpointslice/$directory_endpoint"
     ;;
   stop)
     worker_context
@@ -581,6 +740,8 @@ case "${1:-}" in
       fi
       ensure_agents_stopped
       "${compose[@]}" stop web platform-api
+      "${compose[@]}" stop enterprise-directory-sync connection-api
+      disconnect_directory_sync
       disconnect_worker_database
       "${compose[@]}" stop object-storage postgres
       rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE"
@@ -603,6 +764,8 @@ case "${1:-}" in
     if ! ensure_agents_stopped || ! "${helm_target[@]}" uninstall "$worker_release" --ignore-not-found --wait --timeout 5m; then
       abort_stop
     fi
+    "${compose[@]}" stop enterprise-directory-sync connection-api
+    disconnect_directory_sync
     disconnect_worker_database
     "${compose[@]}" stop object-storage postgres
     rm -f "$PLATFORM_LOCAL_NGINX_CONFIG" "$PLATFORM_LOCAL_PROXY_RUNTIME_TOKEN_FILE"
