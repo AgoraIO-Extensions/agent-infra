@@ -1,5 +1,6 @@
 import type { KeyObject } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type { ConnectionConsumerTargetV1 } from "@agent-infra/contracts";
 
 import type {
 	RuntimeBusinessCommandV2,
@@ -123,6 +124,7 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly baseUrl: string;
 		readonly serviceToken: string;
 		readonly workerId: string;
+		readonly connectionConsumer?: ConnectionConsumerTargetV1;
 	}>;
 	readonly executionKeys?: WorkerExecutionKeyReaderV4;
 	readonly relayKeyDecryptor?: RelayKeyWorkerDecryptorV1;
@@ -430,11 +432,7 @@ export function createConversationRuntimeV2(
 			}),
 			signal,
 		);
-		if (
-			postTarget.workerId !== options.signing.workerId ||
-			postTarget.baseUrl !== finalTarget.baseUrl ||
-			postTarget.serviceToken !== finalTarget.serviceToken
-		)
+		if (!isDeepStrictEqual(postTarget, finalTarget))
 			unavailable("RUNTIME_ROUTE_STALE");
 		state = await stateFor(context, signal);
 		const afterTargetRoute = await current(context, state, command, signal);

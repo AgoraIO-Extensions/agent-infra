@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { isDeepStrictEqual } from "node:util";
-
+import type { ConnectionConsumerTargetV1 } from "@agent-infra/contracts";
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import {
 	ExecutionGrantV1Schema,
@@ -72,6 +72,8 @@ import { runtimeTlsFetch } from "./runtime-tls-transport.js";
 export interface WorkerRuntimeHostClientOptionsV1 {
 	readonly baseUrl: string;
 	readonly serviceToken: string;
+	/** Trusted, approval-bound non-sensitive Connection target; never request supplied. */
+	readonly connectionConsumer?: ConnectionConsumerTargetV1;
 	readonly fetch?: typeof fetch;
 }
 
@@ -615,6 +617,9 @@ export function createWorkerRuntimeHostClientV3(
 		throw new TypeError("RuntimeHost client options are invalid");
 	const base = endpoint(options.baseUrl, "/");
 	const fetcher = options.fetch ?? runtimeTlsFetch();
+	const connectionConsumer = options.connectionConsumer
+		? structuredClone(options.connectionConsumer)
+		: undefined;
 	async function request<T extends { traceId: string }, R>(
 		path: string,
 		value: T,
@@ -645,6 +650,8 @@ export function createWorkerRuntimeHostClientV3(
 		}
 	}
 	return {
+		connectionConsumerTarget: () =>
+			connectionConsumer ? structuredClone(connectionConsumer) : undefined,
 		submitTurn: (value: RuntimeSubmitTurnRequestV3, signal?: AbortSignal) =>
 			request(
 				"turns",

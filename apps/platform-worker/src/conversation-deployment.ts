@@ -1,5 +1,9 @@
 import { createPublicKey } from "node:crypto";
 import {
+	type ConnectionConsumerTargetV1,
+	validateConnectionConsumerProfileV1,
+} from "@agent-infra/contracts";
+import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
 } from "@agent-infra/contracts/workload";
@@ -28,8 +32,17 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	readonly workload: WorkloadRuntimeOptionsV1;
 	readonly signing: ConversationRuntimeOptionsV2["signing"];
 	readonly serviceToken: string;
+	readonly connectionConsumerProfile?: unknown;
+	readonly connectionConsumerApproval?: unknown;
 }): ConversationRuntimeOptionsV2["resolveRuntimeHost"] {
 	const { workload, signing, serviceToken } = options;
+	let connectionConsumer: ConnectionConsumerTargetV1 | undefined;
+	if (options.connectionConsumerProfile !== undefined) {
+		connectionConsumer = validateConnectionConsumerProfileV1(
+			options.connectionConsumerProfile,
+			options.connectionConsumerApproval,
+		);
+	}
 	const auth = workload.policy.runtimeAuth;
 	try {
 		if (!auth) throw new Error();
@@ -135,6 +148,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					baseUrl: `https://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
+					connectionConsumer,
 				};
 			}
 			if (
@@ -248,6 +262,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					baseUrl: `https://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
+					connectionConsumer,
 				};
 			}
 			input.signal.throwIfAborted();
@@ -256,6 +271,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				baseUrl: `https://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
 				serviceToken,
 				workerId: signing.workerId,
+				connectionConsumer,
 			};
 		} catch {
 			input.signal.throwIfAborted();
