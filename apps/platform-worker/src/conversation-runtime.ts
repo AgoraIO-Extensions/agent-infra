@@ -432,7 +432,10 @@ export function createConversationRuntimeV2(
 			}),
 			signal,
 		);
-		if (!isDeepStrictEqual(postTarget, finalTarget))
+		if (
+			postTarget.workerId !== options.signing.workerId ||
+			!isDeepStrictEqual(postTarget, finalTarget)
+		)
 			unavailable("RUNTIME_ROUTE_STALE");
 		state = await stateFor(context, signal);
 		const afterTargetRoute = await current(context, state, command, signal);
