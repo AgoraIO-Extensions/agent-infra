@@ -180,6 +180,12 @@ Release-scoped Job READ 查询；其余 Actions 只更新 immutable 绑定版本
 MCP API 拥有错误码与安全详情，Connection 只透传有界错误 envelope 并按 HTTP/提交结果分类；旧 ProviderRelease
 继续可路由，不为错误解释增加 Rehoboam 业务规则。
 
+Rehoboam 发布族能力以新的 immutable `rehoboam-connection-v9` 提供给 Direct MCP Client，作为 AI 发版主入口。
+Codex 等 Consumer 负责对话、分析与编排；Rehoboam 拥有发布族、模板、审批、Job 和审计。
+接口仅接受固定资源 ID 与声明的业务参数，身份由个人 PAT 派生。创建预览持久化草案，声明为 WRITE；任务预览声明为 READ。
+确认复用 Rehoboam 的 owner、确认 token、revision、模板签名和 durable operation，不运行下游 Job。
+新增 Actions 不进入旧 Grant，既有 ProviderRelease 与账号继续可路由，用户显式升级和授权后才使用新增能力。
+
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
 `apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；
