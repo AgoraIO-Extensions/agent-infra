@@ -101,8 +101,14 @@ describe("Worker Connection Consumer profile boundary", () => {
 			},
 			hostSessionRef: null,
 			originalOperationDigest: "a".repeat(43),
-			grant: { schemaVersion: 2, format: "runtime-execution-jws", token: "a.b.c" },
+			grant: {
+				schemaVersion: 2,
+				format: "runtime-execution-jws",
+				token: "a.b.c",
+			},
 		} as never);
-		expect(received?.get("x-agent-infra-connection-consumer")).toBe(JSON.stringify(target));
+		expect(received?.get("x-agent-infra-connection-consumer")).toBe(
+			JSON.stringify(target),
+		);
 	});
 });
