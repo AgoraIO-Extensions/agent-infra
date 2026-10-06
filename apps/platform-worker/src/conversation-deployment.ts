@@ -1,8 +1,8 @@
 import { createPublicKey } from "node:crypto";
 import {
-	type ConnectionConsumerTargetV1,
-	validateConnectionConsumerProfileV1,
-} from "@agent-infra/contracts";
+	type ApprovedConnectionConsumerTargetV1,
+	resolveApprovedConnectionConsumerProfileV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
 import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
@@ -27,6 +27,29 @@ import {
 } from "./workload-runtime.js";
 import { validateWorkloadRuntimeAuthV1 } from "./workload-runtime-auth.js";
 
+type ConnectionConsumerTargetV1 = ApprovedConnectionConsumerTargetV1;
+
+function approvedConnectionConsumerTarget(
+	profile: unknown,
+	approval: unknown,
+	required = false,
+): ConnectionConsumerTargetV1 | undefined {
+	if (profile === undefined || approval === undefined) {
+		if (!required) return undefined;
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	}
+	const result = resolveApprovedConnectionConsumerProfileV1(profile, approval);
+	if (result.status !== "available")
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	return {
+		...result,
+		url: new URL(
+			result.profile.mcpPath,
+			`${result.profile.publicOrigin}/`,
+		).toString(),
+	};
+}
+
 /** Resolve only a currently observed Workload through the existing deployment adapter. */
 export function createProductionConversationRuntimeResolverV2(options: {
 	readonly workload: WorkloadRuntimeOptionsV1;
@@ -34,15 +57,14 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	readonly serviceToken: string;
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
+	readonly requireConnectionConsumerProfile?: boolean;
 }): ConversationRuntimeOptionsV2["resolveRuntimeHost"] {
 	const { workload, signing, serviceToken } = options;
-	let connectionConsumer: ConnectionConsumerTargetV1 | undefined;
-	if (options.connectionConsumerProfile !== undefined) {
-		connectionConsumer = validateConnectionConsumerProfileV1(
-			options.connectionConsumerProfile,
-			options.connectionConsumerApproval,
-		);
-	}
+	const connectionConsumer = approvedConnectionConsumerTarget(
+		options.connectionConsumerProfile,
+		options.connectionConsumerApproval,
+		options.requireConnectionConsumerProfile,
+	);
 	const auth = workload.policy.runtimeAuth;
 	try {
 		if (!auth) throw new Error();

@@ -63,6 +63,10 @@
 		"./files": {
 			"types": "./dist/files.d.mts",
 			"import": "./dist/files.mjs"
+		},
+		"./connection-consumer-profile": {
+			"types": "./dist/connection-consumer-profile.d.mts",
+			"import": "./dist/connection-consumer-profile.mjs"
 		}
 	},
 	"files": [

@@ -31,6 +31,18 @@ export interface ConnectionConsumerTargetV1 {
 	readonly source: ConnectionConsumerApprovalV1["source"];
 }
 
+export type ApprovedConnectionConsumerTargetV1 = Extract<
+	ApprovedConnectionConsumerProfileV1,
+	{ readonly status: "available" }
+> & { readonly url: string };
+
+export type ApprovedConnectionConsumerProfileV1 =
+	| ({ readonly status: "available"; readonly profile: ConnectionConsumerProfileV1 } & Omit<
+			ConnectionConsumerTargetV1,
+			"url" | "publicOrigin" | "mcpPath" | "consumerId" | "audience" | "egressProfile" | "schemaVersion"
+		> )
+	| { readonly status: "unavailable" };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
@@ -150,6 +162,19 @@ export function validateConnectionConsumerProfileV1(
 		},
 		url: new URL(profile.mcpPath, `${profile.publicOrigin}/`).toString(),
 	};
+}
+
+export function resolveApprovedConnectionConsumerProfileV1(
+	value: unknown,
+	approval: unknown,
+): ApprovedConnectionConsumerProfileV1 {
+	try {
+		const target = validateConnectionConsumerProfileV1(value, approval);
+		const profile = value as ConnectionConsumerProfileV1;
+		return { status: "available", profile: structuredClone(profile), ...target };
+	} catch {
+		return { status: "unavailable" };
+	}
 }
 
 export function resolveConnectionConsumerTargetV1(
