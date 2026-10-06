@@ -329,9 +329,16 @@ export function parseRuntimeManifestLabelV1(label: string): {
 
 function canonicalRuntimeManifest(manifestInput: unknown) {
 	const manifest = RuntimeManifestV1Schema.parse(manifestInput);
+	const browser =
+		manifest.interactionMode === "platform-adapter"
+			? manifest.capabilities?.browser
+			: undefined;
 	return {
 		...manifest,
-		capabilities: resolveRuntimeManifestCapabilitiesV1(manifest),
+		capabilities: {
+			...resolveRuntimeManifestCapabilitiesV1(manifest),
+			...(browser === undefined ? {} : { browser }),
+		},
 	};
 }
 

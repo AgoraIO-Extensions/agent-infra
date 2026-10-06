@@ -56,10 +56,10 @@ M1 Registry 是平台维护的固定配置，不支持运行时插件发现。
 
 | 标准模板 | Platform Adapter | `driver` | 补充指令 | M1 平台能力 |
 | --- | --- | --- | --- | --- |
-| Codex | Codex Native | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
+| Codex | Codex Native | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 
 Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查、capability 和 Owner 可配置的 env/Secret 键。每个模板的 `supplementaryInstruction` 只作为 capability 集合中的一个布尔键维护，不存在独立的第二声明源；缺失时按 `false` 处理，只有对应 Adapter 通过持久幂等 Conformance 后才能设为 `true`，不能按协议名称推断。Owner 不选择或覆盖标准模板的 Adapter，也不能提交 Registry 未声明的 env/Secret。
 
@@ -111,7 +111,7 @@ Native 与 OpenCode 的 Generic ACP 模板消费 Messages；支持某种原生�
 | `protocol` | `platform-adapter` 必填且只能为 `acp`；`self-managed` 必须省略，出现时拒绝 |
 | `service.port` | 必填；整数 `1..65535`，Agent Service 和健康检查使用的容器端口 |
 | `health.path` | 必填；必须是以单个 `/` 开头的 origin-form 本地 HTTP 路径，其余字符只允许 ASCII 字母、数字、`/`、`.`、`_`、`~` 或 `-`；拒绝 `//`、`.` 或 `..` 路径段、反斜杠、`%` 编码、外部 URL、查询参数、片段、控制字符或凭证。平台使用校验后的原始路径和固定 Agent Service origin 构造探针请求，不再解码或规范化，且禁止跟随 HTTP 重定向 |
-| `capabilities` | 可选 Object；只允许布尔值 `modelSelection`、`attachments`、`resultFiles`、`connection` 和 `supplementaryInstruction`，缺失键按 `false`；仅 `platform-adapter` 读取，`self-managed` 的声明忽略，不能据此开放平台任务、Conversation、观测、Eval 或 Connection 能力 |
+| `capabilities` | 可选 Object；允许既有布尔能力 `modelSelection`、`attachments`、`resultFiles`、`connection` 和 `supplementaryInstruction`，以及版本化 `browser` 声明；缺失布尔键按 `false`。Browser 声明只描述候选能力和限制，必须与真实 Browser Runtime probe 取交集；仅 `platform-adapter` 读取，`self-managed` 的声明忽略 |
 
 Owner 不在产品页面填写协议、端口或探针。创建或升级时，Runtime 按以下顺序验证：
 
@@ -148,6 +148,12 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，Ru
 
 **业务 Session Sandbox。** Agent 级上述现状不能证明平台会话已按独立 Sandbox 路由。Session 的分配、Service、原 PVC、resourceFence 与真实 UID/version 继续以 [Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定) 为准；五类必需资源及可选 StatefulSet 的澄清归 #1322。TLS 只消费该分配已有 Service 的实际 DNS/端口与原 Session/Sandbox/代次绑定，不套用 Agent 级 `N`/`N-probe`，不新增 Sandbox probe Service，不让两个 Session 共享 leaf 私钥或后端。准确 Sandbox Service 命名与接线由该 owner 的受审阅交付给出；缺少时拒绝该路由，不能回退到 Agent 级 Service，也不能以本票签收 Sandbox 资源或 Host/Grant/Driver wire。
 
+### 4.2 Browser Capability
+
+Browser Capability 使用 `packages/contracts/src/runtime/browser-capability.ts` 的版本化契约，分为 Manifest declaration、Runtime probe projection 和后续 Platform/API projection。当前交付的 OpenAPI 是内部 Runtime probe；Platform/API consumer 仍须在现有认证上下文中解析 Agent、Conversation、Session generation、fence 和 Grant 后再暴露 projection。可用投影必须同时包含 Chromium/Playwright provenance、操作类别、域和资源 policy，以及不可伪造的 conformance receipt；不可用投影必须返回脱敏状态、稳定错误码和 retryable 属性。
+
+Manifest declaration 不能证明浏览器已装配或可用。Worker/Host 只有在当前 Session-owned Sandbox 内的固定 Browser Runtime 完成 probe 后，才能把声明与实际结果取交集并向 Platform 返回 `available`。该契约不创建 Browser 专用调度器、不改变 Conversation/Execution/Sandbox 权威，也不把 BrowserContext、Cookie、Storage 或原生页面标识暴露给 Platform API。
+
 ## 5. Platform Conversation Contract
 
 Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation Contract；Runtime 不另建身份、任务队列或 Eval 状态权威。Contract 定义以下语义，不暴露具体 Runtime 协议：
@@ -157,7 +163,7 @@ Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation
 - 停止当前 Turn，以及在 capability 支持时提交补充指令。
 - 查询 Session 和 Turn 状态。
 - 订阅并归一化文本、状态、文件、完成和错误事件；实际模型/工具事实按 8.5 生产，不把自由文本摘要当作可信操作结果。
-- 探测模型、附件、结果文件、Connection 和补充指令 capability。
+- 探测模型、附件、结果文件、Connection 和补充指令 capability；Browser Capability 的内部 probe 另由 §4.2 的版本化契约定义，尚不等同于 Platform/API Agent projection。
 
 `packages/agent-runtime` 实现 RuntimeHost 深 Module 和四个固定 Runtime Driver；`apps/agent-runtime-host` 只负责 Agent Pod 内的进程入口、依赖装配和 HTTP/SSE 接入。worker 侧 RuntimeHost Client Adapter 只依赖版本化 Host Contract，不依赖该 package 或任何 Native/ACP library。Agent Service 对 `platform-worker` 始终提供同一内部 HTTP/SSE Interface。
 
@@ -793,7 +799,7 @@ Claude 的首个复用基线为 Paseo
 以下内容不进入 M1：
 
 - 动态 Adapter 插件、未知协议自动发现和协议版本兼容矩阵。
-- Hermes 或 Magic 的特殊 Runtime/渠道语义。
+- 未经 Browser Capability 契约纳入的其他特殊 Runtime/渠道语义。
 - 将 ACP、Pi RPC 或原生事件直接暴露给 Web 和企微。
 - Redis、Kafka、NATS、Temporal 或其他消息中间件。
 - Kubernetes CRD、Operator 框架和 PVC 自动快照。
