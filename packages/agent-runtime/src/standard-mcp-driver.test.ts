@@ -279,7 +279,15 @@ interface FixtureDriverState {
 						type: string;
 						payload: { phase?: string };
 					}[];
-					standardMcpCalls?: Record<string, { phase: string; held?: true }>;
+					standardMcpCalls?: Record<
+						string,
+						{
+							phase: string;
+							held?: true;
+							rpcRequestId?: string | number;
+							requestDigest?: string;
+						}
+					>;
 				}
 			>;
 		}
@@ -296,71 +304,90 @@ interface DriverFailureFixture {
 	): Promise<void>;
 }
 
-it("keeps the original execution held without sending when the started write fails", async () => {
-	const env = await setup();
-	const internal = env.driver as unknown as DriverFailureFixture;
-	const update = internal.update.bind(internal);
-	let startedFailed = false;
-	internal.update = async (change) => {
-		const probe = structuredClone(internal.readState());
-		change(probe);
-		const started = Object.values(probe.sessions).some((session) =>
-			Object.values(session.journals).some((journal) =>
-				Object.values(journal.standardMcpCalls ?? {}).some(
-					(call) => call.phase === "started",
+it.each(["failed", "changed"] as const)(
+	"holds the original execution without sending after RPC preparation is %s",
+	async (outcome) => {
+		const env = await setup();
+		const internal = env.driver as unknown as DriverFailureFixture;
+		const update = internal.update.bind(internal);
+		let requestPrepared = false;
+		internal.update = async (change) => {
+			const probe = structuredClone(internal.readState());
+			change(probe);
+			const prepared = Object.values(probe.sessions).some((session) =>
+				Object.values(session.journals).some((journal) =>
+					Object.values(journal.standardMcpCalls ?? {}).some(
+						(call) =>
+							call.phase === "intent" && call.rpcRequestId !== undefined,
+					),
 				),
-			),
-		);
-		if (started && !startedFailed) {
-			startedFailed = true;
-			throw new Error("Controlled started write failure");
+			);
+			if (prepared && !requestPrepared) {
+				requestPrepared = true;
+				if (outcome === "failed")
+					throw new Error("Controlled request write failure");
+				const committed = await update(change);
+				env.fixture.input = { ...env.fixture.input, credentialRevision: "r2" };
+				return committed;
+			}
+			return update(change);
+		};
+		try {
+			env.native.call();
+			await waitFor(async () =>
+				(await operationEvents(env.driver, env.ref)).some(
+					(event) => event.payload.phase === "intent",
+				),
+			);
+			const intent = (await operationEvents(env.driver, env.ref)).at(-1);
+			if (!intent) throw new Error("Missing intent");
+			await env.driver.acknowledgeEvents(
+				env.ref,
+				reference.executionId,
+				intent.cursor,
+			);
+			await waitFor(async () =>
+				(await operationEvents(env.driver, env.ref)).some(
+					(event) => event.payload.phase === "unknown",
+				),
+			);
+			const unknown = (await operationEvents(env.driver, env.ref)).at(-1);
+			if (!unknown) throw new Error("Missing unknown result");
+			await env.driver.acknowledgeEvents(
+				env.ref,
+				reference.executionId,
+				unknown.cursor,
+			);
+			await waitFor(() => env.native.closed);
+			expect(requestPrepared).toBe(true);
+			expect(
+				(await operationEvents(env.driver, env.ref)).map(
+					(event) => event.payload.phase,
+				),
+			).toEqual(["intent", "unknown"]);
+			const calls = Object.values(
+				internal.readState().sessions[env.ref]?.journals ?? {},
+			).flatMap((journal) => Object.values(journal.standardMcpCalls ?? {}));
+			expect(calls[0]?.rpcRequestId !== undefined).toBe(outcome === "changed");
+			if (outcome === "changed")
+				expect(calls[0]?.requestDigest).toMatch(/^[a-f0-9]{64}$/);
+			expect(
+				env.fetchMethods.filter((method) => method === "tools/call"),
+			).toHaveLength(0);
+			expect(
+				env.fixture.trace.filter((request) => request.method === "tools/call"),
+			).toHaveLength(0);
+			expect(internal.readState().sessions[env.ref]?.activeExecutionId).toBe(
+				reference.executionId,
+			);
+			expect(await env.driver.getStatus(env.ref, reference.executionId)).toBe(
+				"unknown",
+			);
+		} finally {
+			internal.update = update;
 		}
-		return update(change);
-	};
-	try {
-		env.native.call();
-		await waitFor(async () =>
-			(await operationEvents(env.driver, env.ref)).some(
-				(event) => event.payload.phase === "intent",
-			),
-		);
-		const intent = (await operationEvents(env.driver, env.ref)).at(-1);
-		if (!intent) throw new Error("Missing intent");
-		await env.driver.acknowledgeEvents(
-			env.ref,
-			reference.executionId,
-			intent.cursor,
-		);
-		await waitFor(async () =>
-			(await operationEvents(env.driver, env.ref)).some(
-				(event) => event.payload.phase === "unknown",
-			),
-		);
-		const unknown = (await operationEvents(env.driver, env.ref)).at(-1);
-		if (!unknown) throw new Error("Missing unknown result");
-		await env.driver.acknowledgeEvents(
-			env.ref,
-			reference.executionId,
-			unknown.cursor,
-		);
-		await waitFor(() => env.native.closed);
-		expect(startedFailed).toBe(true);
-		expect(
-			env.fetchMethods.filter((method) => method === "tools/call"),
-		).toHaveLength(0);
-		expect(
-			env.fixture.trace.filter((request) => request.method === "tools/call"),
-		).toHaveLength(0);
-		expect(internal.readState().sessions[env.ref]?.activeExecutionId).toBe(
-			reference.executionId,
-		);
-		expect(await env.driver.getStatus(env.ref, reference.executionId)).toBe(
-			"unknown",
-		);
-	} finally {
-		internal.update = update;
-	}
-});
+	},
+);
 
 it("does not release occupancy after a transient failed hold write and native completion", async () => {
 	const env = await setup();

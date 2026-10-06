@@ -41,6 +41,7 @@ it("uses actual standard initialize/discovery/call once without exporting creden
 				ordering.push("authorize");
 				return () => {};
 			},
+			prepare: async () => {},
 			started: async (actual) => {
 				ordering.push("started");
 				expect(actual.requestDigest).toMatch(/^[a-f0-9]{64}$/);
@@ -60,11 +61,12 @@ it("uses actual standard initialize/discovery/call once without exporting creden
 });
 
 it.each(["persisted", "failed", "revoked"] as const)(
-	"waits for the started record and rechecks authority when it is %s",
+	"waits for RPC identity persistence and rechecks authority when it is %s",
 	async (outcome) => {
 		const fixture = await standardMcpFixture();
 		let persisted = false;
 		let authorized = true;
+		let starts = 0;
 		const sends: boolean[] = [];
 		const client = await StandardMcpClient.open(
 			{
@@ -94,12 +96,16 @@ it.each(["persisted", "failed", "revoked"] as const)(
 				assertCurrent: async () => () => {
 					if (!authorized) throw new Error("Controlled revocation");
 				},
-				started: async () => {
+				prepare: async () => {
 					entered.resolve();
 					await release.promise;
 					if (outcome === "failed")
 						throw new Error("Controlled journal failure");
 					persisted = true;
+				},
+				started: async () => {
+					starts++;
+					expect(sends).toEqual([true]);
 				},
 			},
 			new AbortController().signal,
@@ -111,6 +117,7 @@ it.each(["persisted", "failed", "revoked"] as const)(
 		const result = await pending;
 		expect(sendsBeforePersistence).toBe(0);
 		expect(sends).toEqual(outcome === "persisted" ? [true] : []);
+		expect(starts).toBe(outcome === "persisted" ? 1 : 0);
 		expect(result.phase).toBe(
 			outcome === "persisted" ? "completed" : "unknown",
 		);
@@ -139,6 +146,7 @@ it.each(["unknown", "lost", "leak", "key-leak"] as const)(
 				block: () => {},
 				confirm: async () => {},
 				assertCurrent: async () => () => {},
+				prepare: async () => {},
 				started: async () => {},
 			},
 			new AbortController().signal,
@@ -193,6 +201,7 @@ it("rechecks original authorization after the final awaited installation read", 
 		{
 			block: () => {},
 			confirm: async () => {},
+			prepare: async () => {},
 			started: async () => {},
 			assertCurrent: async () => {
 				checks++;
@@ -233,6 +242,7 @@ it.each(["completed", "unknown"] as const)(
 			{ text: "first" },
 			{
 				assertCurrent: async () => () => {},
+				prepare: async () => {},
 				started: async () => {},
 				block: () => {
 					blocked = true;
@@ -251,6 +261,7 @@ it.each(["completed", "unknown"] as const)(
 			{ text: "second" },
 			{
 				assertCurrent: async () => () => {},
+				prepare: async () => {},
 				started: async () => {},
 				block: () => {},
 				confirm: async () => {},
@@ -295,6 +306,7 @@ it("denies installation drift and native argument overrides before sending tools
 			block: () => {},
 			confirm: async () => {},
 			assertCurrent: async () => () => {},
+			prepare: async () => {},
 			started: async () => {},
 		},
 		new AbortController().signal,

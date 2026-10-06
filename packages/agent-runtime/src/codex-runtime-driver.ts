@@ -7627,6 +7627,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 							signal,
 						);
 					},
+					prepare: async (request) => {
+						await this.update((state) => {
+							const resolved = locate(state);
+							const call = resolved.journal.standardMcpCalls?.[callKey];
+							if (
+								!call ||
+								call.fingerprint !== fingerprint ||
+								call.phase !== "intent" ||
+								call.rpcRequestId !== undefined ||
+								call.requestDigest !== undefined
+							)
+								stateInvalid();
+							call.rpcRequestId = request.rpcRequestId;
+							call.requestDigest = request.requestDigest;
+						});
+					},
 					started: async (request) => {
 						await save(
 							"started",

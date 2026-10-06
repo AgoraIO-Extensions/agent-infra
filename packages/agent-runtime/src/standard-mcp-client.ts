@@ -67,6 +67,11 @@ export interface StandardMcpOperation {
 	block(): void;
 	/** Own result persistence and the original ACK before another MCP action. */
 	confirm(result: StandardMcpResult): Promise<void>;
+	/** Persist RPC identity in the original intent before any dispatch. */
+	prepare(request: {
+		rpcRequestId: string | number;
+		requestDigest: string;
+	}): Promise<void>;
 	started(request: {
 		rpcRequestId: string | number;
 		requestDigest: string;
@@ -612,6 +617,7 @@ export class StandardMcpClient {
 			unavailable();
 		await this.assertCurrent();
 		const method = init?.method ?? "GET";
+		let recordStarted: (() => Promise<void>) | undefined;
 		if (method === "POST") {
 			if (typeof init?.body !== "string") unavailable();
 			const parsed: unknown = JSON.parse(init.body);
@@ -638,11 +644,11 @@ export class StandardMcpClient {
 				active.sends++;
 				// Reserve the attempt, but do not dispatch before its RPC identity
 				// and digest are durable. A failed write retains the unknown hold.
-				await active.operation.started({
+				const request = {
 					rpcRequestId: parsed.id as string | number,
 					requestDigest: standardMcpDigest(parsed.params),
-					startedAt: new Date().toISOString(),
-				});
+				};
+				await active.operation.prepare(request);
 				const finalRevalidate = await active.operation.assertCurrent();
 				await this.assertCurrent();
 				const finalGuarded: unknown = finalRevalidate();
@@ -652,6 +658,11 @@ export class StandardMcpClient {
 					this.#input.expiresAt <= Date.now()
 				)
 					unavailable();
+				recordStarted = () =>
+					active.operation.started({
+						...request,
+						startedAt: new Date().toISOString(),
+					});
 			} else if (this.#active?.sends || ++this.#discoveryRequests > 16)
 				unavailable();
 		} else if (method !== "GET") unavailable();
@@ -668,6 +679,7 @@ export class StandardMcpClient {
 			]),
 		});
 		void pending.catch(() => {});
+		await recordStarted?.();
 		const response = await pending;
 		if (response.status >= 300 && response.status < 400) unavailable();
 		if (!response.body) return response;
