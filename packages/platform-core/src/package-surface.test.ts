@@ -46,6 +46,7 @@ describe("platform-core package surface", () => {
 			"ConversationExecutionError",
 			"ConversationRuntimeHostError",
 			"FileAuthorityError",
+			"MagicSkillProviderOrderV1",
 			"PersonalApiCredentialErrorV1",
 			"PersonalRelayKeyErrorV1",
 			"PlatformAuditScopeErrorV1",
@@ -53,6 +54,7 @@ describe("platform-core package surface", () => {
 			"RecentPersonalConversationsError",
 			"SecretActivationError",
 			"SecretKeyRotationError",
+			"SkillPackageValidationErrorV1",
 			"TaskApiAuditError",
 			"WecomSetupError",
 			"WorkloadPreflightRejectedErrorV1",
@@ -177,6 +179,7 @@ describe("platform-core package surface", () => {
 			"snapshotApplicationFoundationWritePlanV1",
 			"snapshotApplicationRevisionWritePlanV1",
 			"taskApiSubscriptionEndAuditIdV1",
+			"validateSkillPackageEntriesV1",
 			"wecomChannelIdV1",
 			"workloadManagementObservationV1",
 		]);
