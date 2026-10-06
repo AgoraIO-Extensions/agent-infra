@@ -22,17 +22,24 @@ function invalidProfile(): RuntimeConnectionConsumerProfile {
 
 /**
  * Read one deployment-mounted, nonsecret { profile, approval } snapshot.
- * The file is the complete source; individual env fields and request headers
- * cannot supplement it. Updates take effect through deployment restart.
+ * The file is the complete source; the immutable PodSpec revision is only an
+ * assertion of its fingerprint/source. Neither env fields nor request headers
+ * can supplement it. Updates require a matching deployment revision/restart.
  */
 export async function readRuntimeConnectionConsumerProfile(
 	filePath: string | undefined,
+	revision: string | undefined,
 ): Promise<RuntimeConnectionConsumerProfile | undefined> {
-	if (filePath === undefined) return undefined;
-	if (!isAbsolute(filePath) || resolve(filePath) !== filePath)
+	if (filePath === undefined && revision === undefined) return undefined;
+	if (
+		filePath === undefined ||
+		revision === undefined ||
+		!isAbsolute(filePath) ||
+		resolve(filePath) !== filePath
+	)
 		return invalidProfile();
 	try {
-		// ConfigMap projection symlinks are supported. Reject special files and
+		// Kubernetes projection symlinks are supported. Reject special files and
 		// bound the actual read as well as the initial file size.
 		const file = await open(
 			filePath,
@@ -73,6 +80,15 @@ export async function readRuntimeConnectionConsumerProfile(
 				snapshot.approval,
 			);
 			if (approved.status === "unavailable") return approved;
+			if (
+				revision !==
+				JSON.stringify([
+					approved.configFingerprint,
+					approved.source.ref,
+					approved.source.revision,
+				])
+			)
+				return invalidProfile();
 			const target = {
 				...approved,
 				url: approved.profile.publicOrigin + approved.profile.mcpPath,

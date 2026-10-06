@@ -203,6 +203,7 @@ export async function assembleRuntimeHost(
 	if (connectionProfile && binding !== "codex") runtimeConfigurationInvalid();
 	const connectionConsumer = await readRuntimeConnectionConsumerProfile(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE,
+		environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION,
 	);
 	const messagesConfiguration =
 		binding === "claude" || binding === "acp" || binding === "pi"
