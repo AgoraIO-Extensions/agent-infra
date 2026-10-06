@@ -1314,85 +1314,180 @@
 		},
 		{
 			"provider": "rehoboam",
-			"providerReleaseId": "rehoboam-connection-v8",
-			"executorDigest": "sha256:b0b1c702ad85276090777c7201692433ca22990c56fe4b52a30415245940950f",
+			"providerReleaseId": "rehoboam-connection-v9",
+			"executorDigest": "sha256:6449a841d3d6267beade2a6fe2d317c09dc504a7d292b5c8fb0e4989513b6372",
 			"sourceCommit": "connection-native",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:d6e6d6e0f7399fc140d027982bcdd0dcd82bcf4447b01be20f26960ff498d844",
 			"deploymentDigest": "sha256:be43a253fdc7c091a74e16e1b5cbe69d8fbbcd4b806ca1a2dfab89e075609040",
 			"actions": [
 				{
-					"id": "rehoboam.approve_execution_request@v5",
+					"id": "rehoboam.approve_execution_request@v9",
 					"name": "rehoboam.approve_execution_request",
 					"authorizationDigest": "sha256:d4e685d0452cf8d28bc40d683338825e837d7a56c3f450a4828d0b8bc827993e"
 				},
 				{
-					"id": "rehoboam.execute_release_pipeline@v5",
+					"id": "rehoboam.confirm_release_family@v9",
+					"name": "rehoboam.confirm_release_family",
+					"authorizationDigest": "sha256:60c3097667548fb10cc012ea412e366e198a3cbb83d188b14b9409946fe5fe42"
+				},
+				{
+					"id": "rehoboam.confirm_release_family_pr@v9",
+					"name": "rehoboam.confirm_release_family_pr",
+					"authorizationDigest": "sha256:d7d653f9301cad2e2ab30430c6161123ddf5fa6e97792f5efbd21cabf3c4d617"
+				},
+				{
+					"id": "rehoboam.execute_release_pipeline@v9",
 					"name": "rehoboam.execute_release_pipeline",
 					"authorizationDigest": "sha256:266d72e68f413389cde509791f2d6b75d35836c421c10805bc7fb28e92d8f0ed"
 				},
 				{
-					"id": "rehoboam.get_current_user@v8",
+					"id": "rehoboam.get_current_user@v9",
 					"name": "rehoboam.get_current_user",
 					"authorizationDigest": "sha256:324b98b3c9f68bb0788d13fd01530428acd127de1b434216972f37eeb0e94a3f"
 				},
 				{
-					"id": "rehoboam.get_execution_request@v5",
+					"id": "rehoboam.get_execution_request@v9",
 					"name": "rehoboam.get_execution_request",
 					"authorizationDigest": "sha256:1c702a9d79ba855532f96f31fc569860ba8a883658c7057b71aa5307b82a8bfa"
 				},
 				{
-					"id": "rehoboam.get_release@v5",
+					"id": "rehoboam.get_release@v9",
 					"name": "rehoboam.get_release",
 					"authorizationDigest": "sha256:178fad296183ee35d3f1588f7c776d82562ab6b261c5190321f25f4aacde9fc5"
 				},
 				{
-					"id": "rehoboam.get_release_pipeline@v5",
+					"id": "rehoboam.get_release_family@v9",
+					"name": "rehoboam.get_release_family",
+					"authorizationDigest": "sha256:efb62318ba1bf7dc8c596b51956957ec62b3a5eab899049fead7b40cdf4ccdce"
+				},
+				{
+					"id": "rehoboam.get_release_family_operation@v9",
+					"name": "rehoboam.get_release_family_operation",
+					"authorizationDigest": "sha256:5cdf55d340f7aae4c00c18663bc6dc8f08cf808eb5c1582d14c80df7d2ec9d50"
+				},
+				{
+					"id": "rehoboam.get_release_family_timeline@v9",
+					"name": "rehoboam.get_release_family_timeline",
+					"authorizationDigest": "sha256:0d2772c47cbc981032f776363737ec8cf71b44aeba7154a16fdcf38babed3b37"
+				},
+				{
+					"id": "rehoboam.get_release_family_upstream_results@v9",
+					"name": "rehoboam.get_release_family_upstream_results",
+					"authorizationDigest": "sha256:cf456807255d808b4d906b75d8088b617a252236ba7cc6d6feefdd5096551581"
+				},
+				{
+					"id": "rehoboam.get_release_pipeline@v9",
 					"name": "rehoboam.get_release_pipeline",
 					"authorizationDigest": "sha256:492d448517609c034acd394a89ebe2fbe781810ed140213bb4d2b6f6c4ea42b8"
 				},
 				{
-					"id": "rehoboam.get_release_pipeline_run@v5",
+					"id": "rehoboam.get_release_pipeline_run@v9",
 					"name": "rehoboam.get_release_pipeline_run",
 					"authorizationDigest": "sha256:402833e9dd7f16e32e242a54d34b591f87efc73dd5b9df0f072300ca9928243b"
 				},
 				{
-					"id": "rehoboam.get_release_result@v1",
+					"id": "rehoboam.get_release_result@v9",
 					"name": "rehoboam.get_release_result",
 					"authorizationDigest": "sha256:73a003e454716aaf10f3136757f1451a96485bbb5273afd3477f327174a4401c"
 				},
 				{
-					"id": "rehoboam.list_execution_requests@v5",
+					"id": "rehoboam.initialize_release_family_plans@v9",
+					"name": "rehoboam.initialize_release_family_plans",
+					"authorizationDigest": "sha256:45cd14f7d234d95c82650798ff8d58b37bb2d0c0112c9de046169367088dcbb1"
+				},
+				{
+					"id": "rehoboam.list_execution_requests@v9",
 					"name": "rehoboam.list_execution_requests",
 					"authorizationDigest": "sha256:f726362809faeb4a85ac75aa8b378faad680d953cfd8f2b371d39098bc3f69f2"
 				},
 				{
-					"id": "rehoboam.list_release_pipeline_runs@v5",
+					"id": "rehoboam.list_release_families@v9",
+					"name": "rehoboam.list_release_families",
+					"authorizationDigest": "sha256:692fe03fb282c796f8147afad9c2c2927ebfd3e05949604eeb06756810037aa0"
+				},
+				{
+					"id": "rehoboam.list_release_family_templates@v9",
+					"name": "rehoboam.list_release_family_templates",
+					"authorizationDigest": "sha256:32b1cba4d0949923d317c9c2689df8092059aec93ddc9d294a0634ed6b0c5025"
+				},
+				{
+					"id": "rehoboam.list_release_pipeline_runs@v9",
 					"name": "rehoboam.list_release_pipeline_runs",
 					"authorizationDigest": "sha256:78909e4fe7a288711909b37b7da9439eee584fe3eb520d76c481e6b0d2334a78"
 				},
 				{
-					"id": "rehoboam.list_release_pipelines@v5",
+					"id": "rehoboam.list_release_pipelines@v9",
 					"name": "rehoboam.list_release_pipelines",
 					"authorizationDigest": "sha256:d263c4cb43b6992a5dceb3d467531a99b511cc592b4aed6033bffd6b3129e492"
 				},
 				{
-					"id": "rehoboam.list_releases@v5",
+					"id": "rehoboam.list_releases@v9",
 					"name": "rehoboam.list_releases",
 					"authorizationDigest": "sha256:b30b94ee49f8c6e07d4aac9c493f6c984fe4c3bc263fe0b65faa6763ae48414a"
 				},
 				{
-					"id": "rehoboam.prepare_release_pipeline_run@v5",
+					"id": "rehoboam.prepare_release_pipeline_run@v9",
 					"name": "rehoboam.prepare_release_pipeline_run",
 					"authorizationDigest": "sha256:7db2068d681bd4b0e7bc97eb43c840e27f39f2f1ecbc7231901364a4bc852e00"
 				},
 				{
-					"id": "rehoboam.reject_execution_request@v5",
+					"id": "rehoboam.preview_release_family@v9",
+					"name": "rehoboam.preview_release_family",
+					"authorizationDigest": "sha256:22087a9c640a5c7c9338bf25f1efe5bf929c724ef96c0ae21f6396bc9df7bd27"
+				},
+				{
+					"id": "rehoboam.preview_release_family_notice@v9",
+					"name": "rehoboam.preview_release_family_notice",
+					"authorizationDigest": "sha256:8b9f359bcfd39e5d199b1fe34e2c086f4a520121e345e6cfb9be64f8bf42408c"
+				},
+				{
+					"id": "rehoboam.preview_release_family_plans@v9",
+					"name": "rehoboam.preview_release_family_plans",
+					"authorizationDigest": "sha256:6f782080198b9ea42ed38da0747793b4493423d3659aa80d235c9053dba1f1c3"
+				},
+				{
+					"id": "rehoboam.preview_release_family_pr@v9",
+					"name": "rehoboam.preview_release_family_pr",
+					"authorizationDigest": "sha256:c906cffdba80bbd92b2851ab07dc7a0c082fa1a11109b06d18c981666f5ff061"
+				},
+				{
+					"id": "rehoboam.preview_release_family_task@v9",
+					"name": "rehoboam.preview_release_family_task",
+					"authorizationDigest": "sha256:760d98513befc8cf6f2046200995a2eb8b96e5b18d65c903edbe0f3f56245dec"
+				},
+				{
+					"id": "rehoboam.preview_restore_release_family_task@v9",
+					"name": "rehoboam.preview_restore_release_family_task",
+					"authorizationDigest": "sha256:a6457616a5453c91088039d535fa26d70499963a1bf58db75e1a50d6f944b37f"
+				},
+				{
+					"id": "rehoboam.record_release_family_task@v9",
+					"name": "rehoboam.record_release_family_task",
+					"authorizationDigest": "sha256:7bb7c8e826f27bdd40c2d70738692dcaf61059fed748304a05ac6e6c48e7a2b2"
+				},
+				{
+					"id": "rehoboam.reject_execution_request@v9",
 					"name": "rehoboam.reject_execution_request",
 					"authorizationDigest": "sha256:370d95d615c90127d6cb3a5f7a8af19768a8da8f3c4002c0518da365edea73d4"
 				},
 				{
-					"id": "rehoboam.withdraw_execution_request@v5",
+					"id": "rehoboam.restore_release_family_task@v9",
+					"name": "rehoboam.restore_release_family_task",
+					"authorizationDigest": "sha256:ad116459220634dc167a0fd872d3d8b7e72048cb784cb4c2324e7c630dd2fabd"
+				},
+				{
+					"id": "rehoboam.start_release_family_task@v9",
+					"name": "rehoboam.start_release_family_task",
+					"authorizationDigest": "sha256:c4ad88af5516dd32a492ac03587fee1f8117ab9ef6e3a438f00c26f24fd91775"
+				},
+				{
+					"id": "rehoboam.submit_release_family_notice@v9",
+					"name": "rehoboam.submit_release_family_notice",
+					"authorizationDigest": "sha256:f92fcdab977f75f7843673fd0e14ff9567cd89ae21f207c9e09642333c07ce48"
+				},
+				{
+					"id": "rehoboam.withdraw_execution_request@v9",
 					"name": "rehoboam.withdraw_execution_request",
 					"authorizationDigest": "sha256:47cf9d25e132f046b517b5f7ad55f3a02343dba1d99f90ef73c4fb2966ad3bca"
 				}

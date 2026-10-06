@@ -19,38 +19,196 @@ test("Rehoboam executor digest pins its reviewed source", () => {
 
 test("Rehoboam catalog exposes bounded release workflow actions", () => {
 	assert.deepEqual(rehoboamLegacyProviderReleaseIds, [
+		"rehoboam-connection-v8",
 		"rehoboam-connection-v4",
 		"rehoboam-connection-v5",
 		"rehoboam-connection-v6",
 		"rehoboam-connection-v7",
 	]);
 	assert.deepEqual(
-		rehoboamConnectionCatalog.actions.map((action) => action.id),
+		rehoboamConnectionCatalog.actions.slice(-15).map((action) => action.id),
 		[
-			"rehoboam.get_current_user@v8",
-			"rehoboam.list_releases@v5",
-			"rehoboam.get_release@v5",
-			"rehoboam.get_release_result@v1",
-			"rehoboam.list_release_pipelines@v5",
-			"rehoboam.get_release_pipeline@v5",
-			"rehoboam.prepare_release_pipeline_run@v5",
-			"rehoboam.execute_release_pipeline@v5",
-			"rehoboam.list_execution_requests@v5",
-			"rehoboam.get_execution_request@v5",
-			"rehoboam.approve_execution_request@v5",
-			"rehoboam.withdraw_execution_request@v5",
-			"rehoboam.reject_execution_request@v5",
-			"rehoboam.list_release_pipeline_runs@v5",
-			"rehoboam.get_release_pipeline_run@v5",
+			"rehoboam.get_current_user@v9",
+			"rehoboam.list_releases@v9",
+			"rehoboam.get_release@v9",
+			"rehoboam.get_release_result@v9",
+			"rehoboam.list_release_pipelines@v9",
+			"rehoboam.get_release_pipeline@v9",
+			"rehoboam.prepare_release_pipeline_run@v9",
+			"rehoboam.execute_release_pipeline@v9",
+			"rehoboam.list_execution_requests@v9",
+			"rehoboam.get_execution_request@v9",
+			"rehoboam.approve_execution_request@v9",
+			"rehoboam.withdraw_execution_request@v9",
+			"rehoboam.reject_execution_request@v9",
+			"rehoboam.list_release_pipeline_runs@v9",
+			"rehoboam.get_release_pipeline_run@v9",
 		],
 	);
-	assert.equal(rehoboamConnectionCatalog.actions[0]?.effect, "READ");
+	assert.equal(
+		rehoboamConnectionCatalog.actions.find(
+			(action) => action.name === "rehoboam.get_current_user",
+		)?.effect,
+		"READ",
+	);
 	assert.equal(
 		rehoboamConnectionCatalog.actions.find(
 			(action) => action.name === "rehoboam.execute_release_pipeline",
 		)?.effect,
 		"WRITE",
 	);
+});
+
+test("family WRITE actions require explicit grants and never accept identity selectors", () => {
+	const preview = rehoboamConnectionCatalog.actions.find(
+		(action) => action.name === "rehoboam.preview_release_family",
+	);
+	assert.equal(preview?.effect, "WRITE");
+	assert.deepEqual(preview?.requiredScopes, ["rehoboam.release.write"]);
+	assert.ok(
+		preview?.inputSchema.required.map(String).includes("idempotencyKey"),
+	);
+	assert.equal(preview?.inputSchema.additionalProperties, false);
+	assert.ok(!("username" in (preview?.inputSchema.properties || {})));
+	assert.ok(!("credential" in (preview?.inputSchema.properties || {})));
+	assert.equal(
+		rehoboamConnectionCatalog.providerReleaseId,
+		"rehoboam-connection-v9",
+	);
+});
+
+test("family task routing preserves exact preview credentials and fixed origin", async () => {
+	const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+	const adapter = new RehoboamAdapter(async (url, init) => {
+		requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+		return Response.json({ success: true, data: { accepted: true } });
+	}, "machine-key");
+	await adapter.execute({
+		action: "rehoboam.start_release_family_task",
+		credential: { accessToken: "stored-token" },
+		input: {
+			familyId: "f",
+			memberId: "m",
+			taskId: "t",
+			expectedRevision: 3,
+			templateSignature: "signature",
+			executionActions: { card: "request_approval" },
+			params: { card: { version: "1.0" } },
+		},
+	});
+	assert.equal(
+		requests[0]?.url,
+		"https://justinia.gz3.agoralab.co/mcp/v1/release-families/f/members/m/tasks/t/start",
+	);
+	assert.deepEqual(requests[0]?.body, {
+		expected_revision: 3,
+		template_signature: "signature",
+		execution_actions: { card: "request_approval" },
+		params: { card: { version: "1.0" } },
+	});
+});
+
+test("valid PAT permission failures do not invalidate the Connection", async () => {
+	for (const code of ["FORBIDDEN", "MCP_ACCESS_DISABLED"]) {
+		const adapter = new RehoboamAdapter(
+			async () =>
+				Response.json(
+					{ success: false, error: { code, message: "Permission denied" } },
+					{ status: 403 },
+				),
+			"machine-key",
+		);
+		await assert.rejects(
+			adapter.execute({
+				action: "rehoboam.get_release_family",
+				credential: { accessToken: "stored-token" },
+				input: { familyId: "f" },
+			}),
+			(error: unknown) => {
+				assert.equal(
+					(error as { providerCredentialInvalid?: boolean })
+						.providerCredentialInvalid,
+					undefined,
+				);
+				assert.equal((error as { providerCode?: string }).providerCode, code);
+				return true;
+			},
+		);
+	}
+});
+
+test("notice submission preserves the reviewed content and fingerprint", async () => {
+	let body: Record<string, unknown> = {};
+	const adapter = new RehoboamAdapter(async (_url, init) => {
+		body = JSON.parse(String(init?.body));
+		return Response.json({ success: true, data: { success: true } });
+	}, "machine-key");
+	await adapter.execute({
+		action: "rehoboam.submit_release_family_notice",
+		credential: { accessToken: "stored-token" },
+		input: {
+			familyId: "f",
+			memberId: "m",
+			taskId: "complete",
+			kind: "release",
+			content: "<p>Released</p>",
+			expectedRevision: 4,
+			templateSignature: "sig",
+			noticeFingerprint: "fingerprint",
+			idempotencyKey: "key",
+		},
+	});
+	assert.deepEqual(body, {
+		kind: "release",
+		content: "<p>Released</p>",
+		expected_revision: 4,
+		template_signature: "sig",
+		notice_fingerprint: "fingerprint",
+	});
+});
+
+test("family creation preview sends business fields but never caller identity or credentials", async () => {
+	let body: Record<string, unknown> = {};
+	const adapter = new RehoboamAdapter(async (_url, init) => {
+		body = JSON.parse(String(init?.body));
+		return Response.json({ success: true, data: { ready: true } });
+	}, "machine-key");
+	await adapter.execute({
+		action: "rehoboam.preview_release_family",
+		credential: { accessToken: "stored-token" },
+		input: {
+			members: [
+				{
+					framework: "native",
+					newRelease: {
+						title: "Test",
+						version: "1",
+						baseBranch: "main",
+						targetBranch: "release",
+					},
+				},
+			],
+			suite: "weekly",
+			jiraId: "ASS-1",
+			apiStatus: "unchanged",
+			note: "checked",
+			username: "spoofed",
+			idempotencyKey: "key",
+		},
+	});
+	assert.ok(!("username" in body));
+	assert.ok(!("idempotencyKey" in body));
+	assert.deepEqual(body.members, [
+		{
+			framework: "native",
+			new_release: {
+				title: "Test",
+				version: "1",
+				base_branch: "main",
+				target_branch: "release",
+			},
+		},
+	]);
 });
 
 test("Rehoboam reads only the time-bound release result cursor", async () => {
