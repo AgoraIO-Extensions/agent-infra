@@ -6,7 +6,6 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type {
@@ -18,6 +17,7 @@ import {
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
+import { DirectoryPicker } from "../directory-fields.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import {
 	type AgentConfigurationModelDraft,
@@ -149,6 +149,7 @@ export function AgentConfigurationScreen({
 	submitting,
 }: AgentConfigurationScreenProps) {
 	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
+	const [ownerError, setOwnerError] = useState<string>();
 	const [imageReference, setImageReference] = useState("");
 	const submittedResult =
 		commandResult?.agentId === agent.agentId ? commandResult : undefined;
@@ -197,6 +198,12 @@ export function AgentConfigurationScreen({
 		}));
 	const submitConfiguration = () => {
 		const request = buildAgentConfigurationRequest(draft);
+		if (!request.coOwnerIds?.length) {
+			setOwnerError("请选择至少一名有效 Owner。");
+			document.getElementById("configuration-owner-ids")?.focus();
+			return;
+		}
+		setOwnerError(undefined);
 		setDraft((current) => ({
 			...current,
 			secrets: [],
@@ -280,68 +287,61 @@ export function AgentConfigurationScreen({
 								className="min-w-0 space-y-6"
 								aria-label="Agent 配置"
 							>
-								<fieldset className="space-y-4">
+								<fieldset className="min-w-0 space-y-4">
 									<legend className="font-semibold text-foreground text-sm">
 										Owner
 									</legend>
-									<p className="text-muted-foreground text-sm">
-										填写真实用户 ID，每行一个或用逗号分隔。
-									</p>
-									<div className="space-y-2">
-										<Label htmlFor="configuration-owner-ids">
-											Owner 用户 ID
-										</Label>
-										<Textarea
-											className="min-h-24"
-											id="configuration-owner-ids"
-											onChange={(event) =>
-												setDraft((current) => ({
-													...current,
-													coOwnerIds: event.target.value,
-												}))
-											}
-											required
-											value={draft.coOwnerIds}
-										/>
-									</div>
+									<DirectoryPicker
+										id="configuration-owner-ids"
+										kind="user"
+										label="共同 Owner 用户"
+										required
+										help="至少保留一名有效 Owner"
+										value={draft.coOwnerIds}
+										disabled={isDisabled}
+										error={ownerError}
+										onChange={(value) => {
+											setDraft((current) => ({
+												...current,
+												coOwnerIds: value,
+											}));
+											setOwnerError(undefined);
+										}}
+									/>
 								</fieldset>
-								<fieldset className="detail-section space-y-4 border-border border-t pt-5">
+								<fieldset className="detail-section min-w-0 space-y-4 border-border border-t pt-5">
 									<legend className="font-semibold text-foreground text-sm">
 										使用范围
 									</legend>
-									<div className="grid gap-4 sm:grid-cols-2">
-										<div className="space-y-2">
-											<Label htmlFor="configuration-user-availability">
-												可用员工 ID
-											</Label>
-											<Textarea
-												className="min-h-24"
-												id="configuration-user-availability"
-												onChange={(event) =>
-													setDraft((current) => ({
-														...current,
-														userAvailabilityIds: event.target.value,
-													}))
-												}
-												value={draft.userAvailabilityIds}
-											/>
-										</div>
-										<div className="space-y-2">
-											<Label htmlFor="configuration-organization-availability">
-												可用组织 ID
-											</Label>
-											<Textarea
-												className="min-h-24"
-												id="configuration-organization-availability"
-												onChange={(event) =>
-													setDraft((current) => ({
-														...current,
-														organizationAvailabilityIds: event.target.value,
-													}))
-												}
-												value={draft.organizationAvailabilityIds}
-											/>
-										</div>
+									<div className="grid min-w-0 gap-4 sm:grid-cols-2">
+										<DirectoryPicker
+											id="configuration-user-availability"
+											kind="user"
+											label="可使用的用户"
+											help="可选；用于补充个人范围"
+											value={draft.userAvailabilityIds}
+											disabled={isDisabled}
+											onChange={(value) =>
+												setDraft((current) => ({
+													...current,
+													userAvailabilityIds: value,
+												}))
+											}
+										/>
+										<DirectoryPicker
+											id="configuration-organization-availability"
+											kind="organization"
+											label="可使用的组织"
+											help="可选；组织范围会与用户范围合并"
+											value={draft.organizationAvailabilityIds}
+											disabled={isDisabled}
+											onChange={(value) =>
+												setDraft((current) => ({
+													...current,
+													organizationAvailabilityIds: value,
+												}))
+											}
+										/>
 									</div>
 								</fieldset>
 								{!(
