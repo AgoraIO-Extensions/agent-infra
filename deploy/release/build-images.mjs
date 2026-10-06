@@ -446,14 +446,36 @@ function publishImage({ image, builtImage, registryInsecure, git, commitSha }) {
 
 async function main() {
 	const [manifestArgument, ...extra] = process.argv.slice(2);
-	const customBase = extra.length === 1 && extra[0] === "--custom-base-image";
-	if (!manifestArgument || (extra.length > 0 && !customBase)) {
-		fail("usage: build-images.mjs <image-manifest.json> [--custom-base-image]");
+	const customBase = extra.includes("--custom-base-image");
+	const imageOption = extra.find((value) => value.startsWith("--images="));
+	if (
+		!manifestArgument ||
+		extra.some((value) => value !== "--custom-base-image" && value !== imageOption)
+	) {
+		fail(
+			"usage: build-images.mjs <image-manifest.json> [--images=web,platformApi,platformWorker,enterpriseDirectorySync,runtimeHost] [--custom-base-image]",
+		);
 	}
-	const selectedImages = customBase ? [customBaseImage] : images;
+	if (customBase && imageOption) fail("custom base image cannot be combined with --images");
+	const selectedImages = customBase
+		? [customBaseImage]
+		: (() => {
+			const names = imageOption
+				? imageOption.slice("--images=".length).split(",").filter(Boolean)
+				: images.map((image) => image.key);
+			if (names.length === 0 || new Set(names).size !== names.length) {
+				fail("image selection must contain at least one unique image key");
+			}
+			const selected = images.filter((image) => names.includes(image.key));
+			if (selected.length !== names.length) {
+				fail(`unknown image selection: ${names.join(",")}`);
+			}
+			return selected;
+		})();
 	const manifestPath = resolve(manifestArgument);
 	const runtimeProbePath = `${manifestPath}.runtime-probe.json`;
-	if (!customBase && !(await unavailable(runtimeProbePath))) {
+	const includesRuntimeHost = selectedImages.some((image) => image.key === "runtimeHost");
+	if (includesRuntimeHost && !(await unavailable(runtimeProbePath))) {
 		fail("runtime probe evidence already exists");
 	}
 	if (!(await unavailable(manifestPath))) {
@@ -548,7 +570,7 @@ async function main() {
 				published: true, contextPath,
 			});
 			assertCheckout(git, commitSha);
-		} else {
+		} else if (includesRuntimeHost) {
 			await writeFile(
 				runtimeProbePath,
 				`${JSON.stringify(buildResults.runtimeHost.runtimeProbe, null, 2)}\n`,

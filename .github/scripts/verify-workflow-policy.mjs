@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 
-const REQUIRED_WORKFLOWS = ["auto-merge.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml"];
+const REQUIRED_WORKFLOWS = ["auto-merge.yml", "ci.yml", "connection-github-e2e.yml", "pr-agent-review.yml", "pr-gates.yml", "publish-images.yml"];
 
 const FULL_SHA_ACTION = /^[^@]+@[0-9a-f]{40}$/;
 
@@ -211,6 +211,13 @@ export function validateWorkflowDocuments(workflows) {
   if (enrollmentStep?.run !== "node .github/scripts/auto-merge.mjs" ||
       !sameObject(enrollmentStep?.env, {GITHUB_TOKEN: "${{ secrets.GH_TOKEN }}"})) {
     errors.push("Auto-merge Enrollment must use the fixed repository Secret");
+  }
+  const publish = workflows["publish-images.yml"];
+  if (publish?.name !== "Publish images" ||
+      !sameObject(publish?.permissions, { contents: "read", packages: "write" }) ||
+      !publish?.jobs?.infrastructure || !publish?.jobs?.["infrastructure-index"] ||
+      !publish?.jobs?.platform || !publish?.jobs?.["platform-index"]) {
+    errors.push("Publish images must keep the GHCR jobs and minimal package permissions");
   }
   return errors;
 }
