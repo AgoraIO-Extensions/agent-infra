@@ -62,6 +62,8 @@ spec:
           env:
             - name: PLATFORM_API_DEPLOYMENT_MODULE
               value: {{ .Values.platformApi.deploymentModule | quote }}
+            - name: PLATFORM_PUBLIC_ORIGIN
+              value: {{ .Values.web.externalBaseUrl | quote }}
             - name: PLATFORM_DATABASE_URL
               valueFrom:
                 secretKeyRef:

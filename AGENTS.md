@@ -109,6 +109,14 @@ node .github/scripts/verify-workflow-policy.mjs
 git diff --check
 ```
 
+## Local E2E Harness
+
+涉及本地 E2E、镜像装配、固定 kind 集群或 Platform/Runtime 部署时，先阅读
+[本地 E2E Harness](deploy/local/E2E-HARNESS.md)，再使用
+`node deploy/local/e2e-harness.mjs`。Harness 按当前 worktree 的 upstream 同步源码，
+为基础设施镜像优先复用 GHCR Digest，为 Platform 业务镜像在本地构建；不要直接从脏工作树
+执行 Compose/Helm，不要操作未声明的 Docker context、kind 集群、namespace 或保留入口。
+
 ## Security
 
 - 不提交 Token、API Key、OAuth Secret、真实凭证或包含它们的示例。

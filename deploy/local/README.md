@@ -1,5 +1,9 @@
 # 本地 Platform 生命周期
 
+完整本地 E2E 的固定环境、GHCR 镜像来源和编译部署入口见[本地 E2E Harness](./E2E-HARNESS.md)。
+涉及 E2E 时先使用 `node deploy/local/e2e-harness.mjs`，本页的 `platform.sh` 是它复用的
+生命周期底层入口。
+
 本入口运行持久 PostgreSQL、对象存储、HTTPS Web 和正式 Platform API；Worker 使用同一
 本地 kind 的正式 Helm 部署。申请、审批、配置与 Workload 调谐复用生产 Core/Store。
 任务投递仍由 [#482](https://github.com/AgoraIO-Extensions/agent-infra/issues/482) 的唯一生产

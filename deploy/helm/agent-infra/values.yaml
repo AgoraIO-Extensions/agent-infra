@@ -76,6 +76,8 @@ platformApi:
 
 platformWorker:
   deploymentModule: ""
+  runtimeImageRepository: ""
+  runtimeImageDigest: ""
   replicas: 1
   wecomEnabled: false
 
