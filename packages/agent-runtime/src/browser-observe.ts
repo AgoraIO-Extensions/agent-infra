@@ -19,6 +19,7 @@ export type BrowserPageRecoveryInputV1 = Readonly<{
 	pageId: string;
 	pageRevision: number;
 	tabIndex: number;
+	url: string;
 	origin: string;
 	capabilityVersion: number;
 	sessionGeneration: number;
@@ -462,6 +463,9 @@ export function createBrowserObserveControllerV1(input: {
 		await installPolicy();
 		const capability = readCapability();
 		if (
+			nonEmpty(recovery.pageId) === false ||
+			nonEmpty(recovery.url) === false ||
+			nonEmpty(recovery.origin) === false ||
 			!Number.isSafeInteger(recovery.tabIndex) ||
 			recovery.tabIndex < 0 ||
 			recovery.tabIndex >= capability.policy.maxTabs ||
@@ -486,6 +490,8 @@ export function createBrowserObserveControllerV1(input: {
 			throw new Error("BROWSER_PAGE_RECOVERY_CAPABILITY_MISMATCH");
 		const page = input.context.pages()[recovery.tabIndex];
 		if (!page) throw new Error("BROWSER_PAGE_RECOVERY_PAGE_MISSING");
+		if (page.url() !== recovery.url)
+			throw new Error("BROWSER_PAGE_RECOVERY_URL_MISMATCH");
 		const origin = new URL(page.url()).origin;
 		if (origin !== normalizeOrigin(recovery.origin))
 			throw new Error("BROWSER_PAGE_RECOVERY_ORIGIN_MISMATCH");

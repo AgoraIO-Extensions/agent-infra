@@ -143,6 +143,7 @@ describe("Browser observe controller", () => {
 			pageId: reference.pageId,
 			pageRevision: reference.pageRevision,
 			tabIndex: 0,
+			url: "https://example.test/app",
 			origin: "https://example.test",
 			capabilityVersion: 1,
 			sessionGeneration: 2,
@@ -169,6 +170,7 @@ describe("Browser observe controller", () => {
 				pageId: reference.pageId,
 				pageRevision: reference.pageRevision,
 				tabIndex: 0,
+				url: "https://example.test/app",
 				origin: "https://example.test",
 				capabilityVersion: 1,
 				sessionGeneration: 2,
@@ -181,6 +183,7 @@ describe("Browser observe controller", () => {
 				pageId: reference.pageId,
 				pageRevision: reference.pageRevision,
 				tabIndex: 0,
+				url: "https://example.test/app",
 				origin: "https://example.test",
 				capabilityVersion: 1,
 				sessionGeneration: 3,
@@ -192,11 +195,24 @@ describe("Browser observe controller", () => {
 				pageId: reference.pageId,
 				pageRevision: reference.pageRevision + 1,
 				tabIndex: 0,
+				url: "https://example.test/app",
 				origin: "https://example.test",
 				capabilityVersion: 1,
 				sessionGeneration: 2,
 				resourceFence: 7,
 			}),
 		).rejects.toThrow("BROWSER_PAGE_RECOVERY_REVISION_MISMATCH");
+		await expect(
+			controller.recoverPage({
+				pageId: reference.pageId,
+				pageRevision: reference.pageRevision,
+				tabIndex: 0,
+				url: "https://example.test/other",
+				origin: "https://example.test",
+				capabilityVersion: 1,
+				sessionGeneration: 2,
+				resourceFence: 7,
+			}),
+		).rejects.toThrow("BROWSER_PAGE_RECOVERY_URL_MISMATCH");
 	});
 });
