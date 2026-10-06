@@ -52,7 +52,7 @@ Agent / Client --Connection 独立身份--> Connection MCP/API --> External Prov
 
 ### 3.1 标准 Runtime
 
-M1 Registry 是平台维护的固定配置，不支持运行时插件发现。
+M1 Driver Registry 是平台维护的固定配置，不支持运行时 Driver 插件发现。Skill Provider Registry 是独立的受控来源目录，按工程 Spec §11.5 固定顺序聚合 Provider；Provider 不能由 Skill、Owner、浏览器或 Runtime 动态注册。
 
 | 标准模板 | Platform Adapter | `driver` | 补充指令 | M1 平台能力 |
 | --- | --- | --- | --- | --- |
@@ -195,7 +195,7 @@ Claude 的持久请求、accepted/unknown、状态和恢复继续遵循 §§7–
 
 ### 5.1 命令与 Skill 目录及调用
 
-本节细化 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界)。固定 Driver 的能力目录是受控装配与原生实际发现的交集，不动态发现 Driver。平台控制保持既有入口，命令目录不能注册第二个停止、补充指令或重新生成实现。
+本节细化 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界) 与 [工程 Spec §11.5](SPEC-agent-infra-M1-engineering-architecture.md#115-skill-hub-版本绑定与-worker-装配)。Skill Hub 的不可变 Skill Version、Agent Version 绑定和 Worker Applied 是目录与调用的前置事实；#992 的 Web 会话 command/skill 消费这些同一修订，不建立第二套目录或绑定。固定 Driver 的能力目录是受控装配与原生实际发现的交集，不动态发现 Driver。平台控制保持既有入口，命令目录不能注册第二个停止、补充指令或重新生成实现。
 
 | 契约 | 最小语义 |
 | --- | --- |
@@ -271,7 +271,9 @@ thread/read、skills/list 等等待边界同样受当前读取确认约束，不
 
 Codex 的首个只读原生命令定义为“查看原生会话状态”：目录显式绑定 `thread/read`，不假称 CLI `/status`。Driver 只用当前 Conversation 已持久绑定的 threadId，禁用历史正文投影，只返回映射后的状态及读取时间；原生未装载不触发 resume。它证明真实原生查询闭环，不代替产生 Turn 的命令验收。原生 `/compact` 作为独立有状态命令交付，返回空 ACK 后必须跟踪原 `contextCompaction` item 与 Turn 终态；不伪造普通 prompt 代跑，不绕过 §8.5.2 的当前模型和事实约束。
 
-Codex 已安装 Skill 的首条路径：部署提供固定来源/内容摘要的 Skill 包，作为只读资源装配在已获文件准入的固定 Runtime 资源根 `/opt/codex/agent-infra-skills/workspace-summary/SKILL.md` 及配套资源中，不放进可被模型工具改写的 Conversation 工作区或原生 HOME。该名称是实施验收包，不声称官方内置。每个 Conversation 独立 app-server 进程仅把获准的 `/opt/codex/agent-infra-skills` 交给固定版本公开的 `skills/extraRoots/set`；调用前以 `skills/list` 实际返回且 enabled、来源路径及内容摘要匹配作为目录准入，出现额外的个人或项目 Skill 时拒绝该次调用。Host 将能力 ID 解析为本机获准路径，向原 `turn/start` 传递 `skill {name,path}` 与有界任务文本，保持本次模型/reasoning/Key。路径不由 Web 提供；用受控工作区样本验证原生加载该确定内容、只读挂载和跨 Conversation 文件隔离，以及实际工具读取/摘要结果。官方[输入类型](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/protocol/src/user_input.rs)证明结构化入口存在，不能证明既有部署已允许该目录或工具屏障已经通过；缺少这些前置时保持未验证，由原 owner 补齐，禁止以派生二进制或普通提示绕过。
+Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，但不再是 Skill Hub 的权威模型。Skill Hub 的运行时投影遵循工程 Spec §11.5：Platform DB 保存 Skill Version 与 Agent Version 绑定，Platform Worker 消费不可变包对象版本、manifest、digest/signature 和只读策略，异步 materialize 到 Agent project 的 `.agents/skills/<name>` 并维护 .agents/SKILLS.md，再随受控 workspace 挂载到 Sandbox。.magic/skills 不属于本平台规范路径。
+
+每个 Conversation 独立 Runtime 进程只接收当前 Agent Version 已批准且同步成功的 Skill 根；调用前以 Runtime 实际返回的目录修订、enabled 状态、来源/版本、包摘要和加载证据作为准入。Host 将能力 ID 解析为受控相对路径，向固定 Driver 传递已冻结版本与有界任务文本；路径不由 Web 提供，Runtime 不能静默下载、改写或替换 Skill。初始 Prompt 只包含有界 metadata，read_skills 按需读取正文和配套资源。受控工作区样本、真实包摘要、只读挂载、跨 Conversation 文件隔离、实际 Skill 加载和工具结果必须分别验证；上游接口存在不能证明本仓已完成装配或权限门禁。
 
 本节源码与官方 SDK 声明属于静态证据；上游测试属于上游证据。运行证据须另列原生版本及发行摘要、受控 Skill 摘要、实际发现/调用、加载及工具事实、平台持久结果与浏览器回读。没有这些证据不得写“支持已验收”；本节不授权新增隔离探针或修改上游实现。
 
@@ -285,6 +287,7 @@ Codex 已安装 Skill 的首条路径：部署提供固定来源/内容摘要的
 | 授权与来源 | 两个独立主体、跨 Agent/Conversation/能力 ID 替换、撤权、依赖不可确认、Owner 越权、来源越界均拒绝；个人 HOME 不参与装配，目录/错误/遥测不泄露内容或凭据 |
 | 串行与恢复 | 活跃/等待/unknown 时不发新 Turn；同键重投/异参冲突、受理响应丢失、原生 ACK 后失败、停止竞态、重启和 SSE 重连保持原操作及结果；不重复模型/工具副作用，不提前释放占用 |
 | 其余模板 | Claude/OpenCode/Pi 各按上表真实 SDK/ACP/RPC 路径核对发现、调用、加载/工具及终态；缺口绑定版本、原因、原 owner 与实施 AC，不能以四行 unsupported 结案 |
+| Skill Hub 挂载 | 真实控制面完成发布/审核/安装/Agent Version 绑定后，Worker Applied 与 Runtime 目录修订、按需读取和真实工具结果均绑定同一 Skill Version；同步、撤销、升级、回滚、重启和重复提交均保留可回读状态 |
 
 [#992](https://github.com/AgoraIO-Extensions/agent-infra/issues/992) 以 [#991](https://github.com/AgoraIO-Extensions/agent-infra/issues/991) 契约评审合入为 native blocker；仅文档完成不签收功能或原票 AC。实施前逐 hunk 交接：Web owner 在 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 唯一输入框/时间线消费生成 Client，遵循 [#400](https://github.com/AgoraIO-Extensions/agent-infra/issues/400) 固定 `agent-infra/index.html`、`screens/chat.html` IA，旧 Pilot 及按当前实现生成的变体不作依据；[#482](https://github.com/AgoraIO-Extensions/agent-infra/issues/482) 拥有任务 API/Store；[#508](https://github.com/AgoraIO-Extensions/agent-infra/issues/508) 拥有公共执行/Host/控制恢复；Runtime 原 owner 拥有各 Driver；正式装配归 [#504](https://github.com/AgoraIO-Extensions/agent-infra/issues/504)。本新增能力不反向阻塞这些票，不接管其未完成验收，也不重定义 OpenCode 工具来源或原控制恢复条款。
 
@@ -301,6 +304,9 @@ Codex 已安装 Skill 的首条路径：部署提供固定来源/内容摘要的
 | RuntimeHost Session 引用 | Platform DB 的 Client Adapter 内部存储 | 保存不透明、不可猜测且不能作为授权依据的 Host Session Ref 和单调递增的 `sessionGeneration`，调用方不能解释或覆盖该引用 |
 | Host Session 到原生 Session 的映射 | Sandbox PVC 上的 RuntimeHost 状态 | 保存 Host Session Ref 与 `agentId`、`conversationId`、Sandbox、`sessionGeneration` 及原生 Session ID 的绑定；只有对应 Driver 解释原生 Session ID |
 | Runtime 工作区和原生 Session 数据 | 所属 Sandbox PVC | Runtime 自己解释，平台不读取内容 |
+| Skill、Skill Version、发布/审核/安装/绑定/同步状态 | Platform DB | 版本与关系是唯一业务权威；Agent Version 固定具体 Skill Version，不静默升级 |
+| Skill ZIP、manifest、digest/signature | 版本化 S3 兼容对象存储 | 对象不可变；Worker 只消费不可变对象版本和受控摘要 |
+| Agent project 的 Skill materialization | 所属 Sandbox PVC 的 .agents/skills | 由 Worker/RuntimeHost 受控同步和只读挂载，Runtime 按需读取，平台不以工作区文件反推业务授权 |
 
 Session/Sandbox 的标识、分配、资源和授权权威统一遵循
 [工程 Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定)。
@@ -793,7 +799,7 @@ Claude 的首个复用基线为 Paseo
 以下内容不进入 M1：
 
 - 动态 Adapter 插件、未知协议自动发现和协议版本兼容矩阵。
-- Hermes 或 Magic 的特殊 Runtime/渠道语义。
+- Hermes 或 Magic 的非 Skill Hub Runtime/渠道语义；Magic 对齐的 Skill Hub 语义按本节与工程 Spec §11.5 纳入。
 - 将 ACP、Pi RPC 或原生事件直接暴露给 Web 和企微。
 - Redis、Kafka、NATS、Temporal 或其他消息中间件。
 - Kubernetes CRD、Operator 框架和 PVC 自动快照。
