@@ -49,6 +49,10 @@ describe("runtime Connection snapshot projection", () => {
 	it("delivers the rendered file bytes to the actual merged Host receiver", async () => {
 		const bytes = snapshot();
 		const projection = runtimeConnectionConsumerProjectionV1(bytes);
+		const revision = projection.env.find(
+			(entry) => entry.name === runtimeConnectionConsumerRevisionEnvironment,
+		)?.value;
+		if (!revision) throw new Error("Missing revision projection");
 		const file = projection.volumes[0]?.downwardAPI?.items?.[0];
 		if (!file?.fieldRef || !file.path)
 			throw new Error("Missing file projection");
@@ -64,12 +68,24 @@ describe("runtime Connection snapshot projection", () => {
 				path,
 				projection.annotations[runtimeConnectionConsumerAnnotation] ?? "",
 			);
-			const consumed = await readRuntimeConnectionConsumerProfile(path);
+			const consumed = await readRuntimeConnectionConsumerProfile(
+				path,
+				revision,
+			);
 			expect(consumed).toMatchObject({
 				status: "available",
 				profile: source().profile,
 				configFingerprint: source().approval.configFingerprint,
 				source: source().approval.source,
+			});
+			// The annotation can update while the old PodSpec assertion stays fixed.
+			const changed = source();
+			changed.approval.source.revision = "r2";
+			await writeFile(path, JSON.stringify(changed));
+			expect(
+				await readRuntimeConnectionConsumerProfile(path, revision),
+			).toMatchObject({
+				status: "unavailable",
 			});
 			await writeFile(
 				path,
@@ -78,7 +94,9 @@ describe("runtime Connection snapshot projection", () => {
 					approval: { ...source().approval, egressEnforced: false },
 				}),
 			);
-			expect(await readRuntimeConnectionConsumerProfile(path)).toMatchObject({
+			expect(
+				await readRuntimeConnectionConsumerProfile(path, revision),
+			).toMatchObject({
 				status: "unavailable",
 			});
 		} finally {

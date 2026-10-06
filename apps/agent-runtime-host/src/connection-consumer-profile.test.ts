@@ -64,6 +64,14 @@ function target(mcpPath = "/mcp") {
 	return approved;
 }
 
+function revision(input = snapshot()) {
+	return JSON.stringify([
+		input.approval.configFingerprint,
+		input.approval.source.ref,
+		input.approval.source.revision,
+	]);
+}
+
 async function configurationFile(bytes: string | Uint8Array) {
 	const directory = await mkdtemp(join(tmpdir(), "host-consumer-profile-"));
 	directories.push(directory);
@@ -72,7 +80,11 @@ async function configurationFile(bytes: string | Uint8Array) {
 	return path;
 }
 
-async function setup(configured = true, mcpPath = "/mcp") {
+async function setup(
+	configured = true,
+	mcpPath = "/mcp",
+	fixedRevision: string | null = revision(snapshot(mcpPath)),
+) {
 	const directory = await mkdtemp(join(tmpdir(), "host-consumer-http-"));
 	directories.push(directory);
 	const environment: NodeJS.ProcessEnv = {
@@ -90,9 +102,13 @@ async function setup(configured = true, mcpPath = "/mcp") {
 			consumerId: "unapproved",
 		}),
 	};
-	if (configured)
+	if (configured) {
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE =
 			await configurationFile(JSON.stringify(snapshot(mcpPath)));
+		if (fixedRevision !== null)
+			environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION =
+				fixedRevision;
+	}
 	const runtime = await assembleRuntimeHost(environment);
 	runtimes.push(runtime);
 	const app = createRuntimeHostApp(runtime);
@@ -129,11 +145,11 @@ describe("RuntimeHost deployment Connection snapshot", () => {
 		const file = await configurationFile(JSON.stringify(snapshot()));
 		const projection = `${file}.projection`;
 		await symlink(file, projection);
-		expect(await readRuntimeConnectionConsumerProfile(projection)).toEqual(
-			target(),
-		);
 		expect(
-			await readRuntimeConnectionConsumerProfile(undefined),
+			await readRuntimeConnectionConsumerProfile(projection, revision()),
+		).toEqual(target());
+		expect(
+			await readRuntimeConnectionConsumerProfile(undefined, undefined),
 		).toBeUndefined();
 	});
 	it("keeps the endpoint bytes exact rather than normalizing the path", async () => {
@@ -143,7 +159,9 @@ describe("RuntimeHost deployment Connection snapshot", () => {
 			input.profile,
 		);
 		const file = await configurationFile(JSON.stringify(input));
-		expect(await readRuntimeConnectionConsumerProfile(file)).toMatchObject({
+		expect(
+			await readRuntimeConnectionConsumerProfile(file, revision(input)),
+		).toMatchObject({
 			url: "https://connection.example.test/mcp/工具",
 		});
 	});
@@ -179,7 +197,10 @@ describe("RuntimeHost deployment Connection snapshot", () => {
 		["invalid UTF-8", new Uint8Array([255])],
 	])("rejects %s without exposing input", async (_name, bytes) => {
 		const file = await configurationFile(bytes);
-		const unavailable = await readRuntimeConnectionConsumerProfile(file);
+		const unavailable = await readRuntimeConnectionConsumerProfile(
+			file,
+			revision(),
+		);
 		expect(unavailable).toMatchObject({
 			status: "unavailable",
 			schemaVersion: 1,
@@ -189,17 +210,91 @@ describe("RuntimeHost deployment Connection snapshot", () => {
 	it("does not fall back when a selected file is missing or not a regular file", async () => {
 		const file = await configurationFile("{}");
 		for (const path of ["relative.json", `${file}.missing`, join(file, "..")])
-			await expect(readRuntimeConnectionConsumerProfile(path)).resolves.toEqual(
-				{
-					status: "unavailable",
-					schemaVersion: 1,
-					reason: "invalid",
-				},
-			);
+			await expect(
+				readRuntimeConnectionConsumerProfile(path, revision()),
+			).resolves.toEqual({
+				status: "unavailable",
+				schemaVersion: 1,
+				reason: "invalid",
+			});
+	});
+	it.each([
+		["missing", undefined],
+		["empty", ""],
+		["malformed", "{"],
+		["object", JSON.stringify(snapshot().approval)],
+		[
+			"extra entry",
+			JSON.stringify([...JSON.parse(revision()), "input-sentinel"]),
+		],
+		[
+			"fingerprint",
+			JSON.stringify(["0".repeat(64), "deployment-config", "r1"]),
+		],
+		[
+			"source reference",
+			JSON.stringify([
+				snapshot().approval.configFingerprint,
+				"another-source",
+				"r1",
+			]),
+		],
+		[
+			"source revision",
+			JSON.stringify([
+				snapshot().approval.configFingerprint,
+				"deployment-config",
+				"r2",
+			]),
+		],
+	])(
+		"rejects a %s fixed revision without exposing it",
+		async (_name, marker) => {
+			const file = await configurationFile(JSON.stringify(snapshot()));
+			await expect(
+				readRuntimeConnectionConsumerProfile(file, marker),
+			).resolves.toEqual({
+				status: "unavailable",
+				schemaVersion: 1,
+				reason: "invalid",
+			});
+		},
+	);
+	it("does not use an orphan revision to bootstrap configuration", async () => {
+		await expect(
+			readRuntimeConnectionConsumerProfile(undefined, revision()),
+		).resolves.toEqual({
+			status: "unavailable",
+			schemaVersion: 1,
+			reason: "invalid",
+		});
 	});
 });
 
 describe("Worker to RuntimeHost Connection profile reception", () => {
+	it.each([
+		null,
+		"",
+		JSON.stringify([
+			snapshot().approval.configFingerprint,
+			"deployment-config",
+			"r2",
+		]),
+	])(
+		"blocks new dispatch when actual startup lacks the matching revision (%s)",
+		async (marker) => {
+			const { runtime, app, submit } = await setup(true, "/mcp", marker);
+			expect(runtime.connectionConsumer).toMatchObject({
+				status: "unavailable",
+			});
+			const response = await app.request(
+				"/internal/runtime/v3/turns",
+				post(businessRequest(), JSON.stringify(target())),
+			);
+			expect(response.status).toBe(503);
+			expect(submit).not.toHaveBeenCalled();
+		},
+	);
 	it.each(["/mcp", "/mcp/café"])(
 		"accepts the real Worker resolver snapshot for %s",
 		async (path) => {
@@ -220,6 +315,19 @@ describe("Worker to RuntimeHost Connection profile reception", () => {
 			result: { outcome: "accepted" },
 		});
 		expect(submit).toHaveBeenCalledTimes(1);
+	});
+	it("keeps the captured snapshot after a file update without restart", async () => {
+		const { runtime, client, environment } = await setup();
+		const changed = snapshot();
+		changed.approval.source.revision = "r2";
+		await writeFile(
+			environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE ?? "",
+			JSON.stringify(changed),
+		);
+		expect(runtime.connectionConsumer).toEqual(target());
+		await expect(client.submitTurn(businessRequest())).resolves.toMatchObject({
+			result: { outcome: "accepted" },
+		});
 	});
 	it.each([
 		["missing", undefined],
@@ -351,21 +459,30 @@ describe("Worker to RuntimeHost Connection profile reception", () => {
 		);
 		expect(response.status).toBe(200);
 	});
-	it.each([false, true])(
-		"retains original status and stop after profile drift (unavailable restart: %s)",
+	it.each(["none", "missing-file", "changed-revision"])(
+		"retains original status and stop after profile drift (%s)",
 		async (restart) => {
 			const initial = await setup();
 			const { client, submit, environment } = initial;
 			let { runtime, app } = initial;
 			const original = businessRequest();
 			const accepted = await client.submitTurn(original);
-			if (restart) {
+			if (restart !== "none") {
 				await runtime.close();
 				runtimes.splice(runtimes.indexOf(runtime), 1);
-				environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE = join(
-					environment.AGENT_INFRA_RUNTIME_DATA_DIR ?? "",
-					"missing-profile.json",
-				);
+				if (restart === "missing-file") {
+					environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE = join(
+						environment.AGENT_INFRA_RUNTIME_DATA_DIR ?? "",
+						"missing-profile.json",
+					);
+				} else {
+					const changed = snapshot();
+					changed.approval.source.revision = "r2";
+					await writeFile(
+						environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE ?? "",
+						JSON.stringify(changed),
+					);
+				}
 				runtime = await assembleRuntimeHost(environment);
 				runtimes.push(runtime);
 				app = createRuntimeHostApp(runtime);
@@ -374,6 +491,17 @@ describe("Worker to RuntimeHost Connection profile reception", () => {
 				});
 			}
 			const newSubmit = vi.spyOn(runtime.host, "submitTurnV3");
+			if (restart === "changed-revision") {
+				const latest = {
+					...target(),
+					source: { ...target().source, revision: "r2" },
+				};
+				const response = await app.request(
+					"/internal/runtime/v3/turns",
+					post(businessRequest(), JSON.stringify(latest)),
+				);
+				expect(response.status).toBe(503);
+			}
 			const rejected = await app.request(
 				"/internal/runtime/v3/turns",
 				post(
@@ -385,7 +513,7 @@ describe("Worker to RuntimeHost Connection profile reception", () => {
 				),
 			);
 			expect(rejected.status).toBe(503);
-			if (restart) {
+			if (restart !== "none") {
 				const withoutHeader = await app.request(
 					"/internal/runtime/v3/turns",
 					post(businessRequest()),
@@ -457,7 +585,7 @@ describe("Worker to RuntimeHost Connection profile reception", () => {
 			expect(recover).toHaveBeenCalledTimes(1);
 			expect(stop).toHaveBeenCalledTimes(1);
 			expect(submit).toHaveBeenCalledTimes(1);
-			if (restart) expect(newSubmit).not.toHaveBeenCalled();
+			if (restart !== "none") expect(newSubmit).not.toHaveBeenCalled();
 		},
 	);
 	it("reports the same captured nonsecret revision at real HTTPS startup", async () => {
