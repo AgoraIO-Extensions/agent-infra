@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
+import type { FileDescriptorV1 } from "@agent-infra/contracts/files";
 import type { BrowserCapabilityAvailableV1 } from "@agent-infra/contracts/runtime";
 import type {
 	BrowserContext,
@@ -100,6 +101,19 @@ export type BrowserObservationV1 = Readonly<{
 	elements: readonly BrowserElementReferenceV1[];
 }>;
 
+export type BrowserArtifactV1 = Readonly<{
+	page: BrowserPageReferenceV1;
+	descriptor: FileDescriptorV1;
+	bytes: Uint8Array;
+	kind: "screenshot" | "download";
+}>;
+
+export type BrowserUploadRequestV1 = Readonly<{
+	page: BrowserPageReferenceV1;
+	target: BrowserElementReferenceV1;
+	file: Readonly<{ descriptor: FileDescriptorV1; bytes: Uint8Array }>;
+}>;
+
 type PageState = {
 	readonly pageId: string;
 	readonly page: Page;
@@ -152,6 +166,47 @@ function isPrintableKey(value: string): boolean {
 			value,
 		)
 	);
+}
+
+function assertArtifactName(name: string): void {
+	if (
+		name.length < 1 ||
+		name.length > 255 ||
+		![...name].every((character) => {
+			const code = character.codePointAt(0) ?? 0;
+			return (
+				code >= 0x20 && code !== 0x7f && character !== "/" && character !== "\\"
+			);
+		})
+	)
+		throw new Error("BROWSER_ARTIFACT_NAME_INVALID");
+}
+
+function assertArtifactDescriptor(descriptor: FileDescriptorV1): void {
+	assertArtifactName(descriptor.name);
+	if (
+		!Number.isSafeInteger(descriptor.sizeBytes) ||
+		descriptor.sizeBytes < 0 ||
+		!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(descriptor.mediaType) ||
+		!/^[a-f0-9]{64}$/u.test(descriptor.sha256)
+	)
+		throw new Error("BROWSER_ARTIFACT_DESCRIPTOR_INVALID");
+}
+
+function descriptorForBytes(
+	name: string,
+	mediaType: string,
+	bytes: Uint8Array,
+): FileDescriptorV1 {
+	assertArtifactName(name);
+	if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u.test(mediaType))
+		throw new Error("BROWSER_ARTIFACT_MEDIA_TYPE_INVALID");
+	return {
+		name,
+		mediaType,
+		sizeBytes: bytes.byteLength,
+		sha256: createHash("sha256").update(bytes).digest("hex"),
+	};
 }
 
 function normalizeOrigin(value: string): string {
@@ -256,6 +311,7 @@ export function createBrowserObserveControllerV1(input: {
 	let inFlightActions = 0;
 	const actions = new Map<string, BrowserActionRecordV1>();
 	const actionDigests = new Map<string, string>();
+	let downloadCount = 0;
 	const confirmations = new Map<
 		string,
 		{ confirmation: BrowserSideEffectConfirmationV1; digest: string }
@@ -819,6 +875,110 @@ export function createBrowserObserveControllerV1(input: {
 		}
 	}
 
+	function requireFilesCapability() {
+		const capability = readCapability();
+		if (!capability.operations.includes("files"))
+			throw new Error("BROWSER_CAPABILITY_FILES_UNAVAILABLE");
+		return capability;
+	}
+
+	function requireArtifactTarget(
+		page: BrowserPageReferenceV1,
+		target: BrowserElementReferenceV1,
+	): { state: PageState; locator: Locator } {
+		const state = requirePage(page);
+		if (
+			target.pageId !== page.pageId ||
+			target.pageRevision !== page.pageRevision
+		)
+			throw new Error("BROWSER_ELEMENT_PAGE_MISMATCH");
+		return { state, locator: resolveElement(target) };
+	}
+
+	async function screenshot(
+		reference: BrowserPageReferenceV1,
+	): Promise<BrowserArtifactV1> {
+		const capability = requireFilesCapability();
+		const state = requirePage(reference);
+		const bytes = await state.page.screenshot({
+			type: "png",
+			timeout: capability.policy.actionTimeoutMs,
+		});
+		if (bytes.byteLength > capability.policy.maxScreenshotBytes)
+			throw new Error("BROWSER_SCREENSHOT_LIMIT_EXCEEDED");
+		const descriptor = descriptorForBytes(
+			`screenshot-${state.revision}.png`,
+			"image/png",
+			bytes,
+		);
+		return {
+			page: pageReference(state),
+			descriptor,
+			bytes,
+			kind: "screenshot",
+		};
+	}
+
+	async function download(
+		reference: BrowserPageReferenceV1,
+		target: BrowserElementReferenceV1,
+	): Promise<BrowserArtifactV1> {
+		const capability = requireFilesCapability();
+		if (downloadCount >= capability.policy.maxDownloads)
+			throw new Error("BROWSER_DOWNLOAD_LIMIT_EXCEEDED");
+		const { state, locator } = requireArtifactTarget(reference, target);
+		downloadCount += 1;
+		const [download] = await Promise.all([
+			state.page.waitForEvent("download", {
+				timeout: capability.policy.actionTimeoutMs,
+			}),
+			locator.click({ timeout: capability.policy.actionTimeoutMs }),
+		]);
+		const stream = await download.createReadStream();
+		if (!stream) throw new Error("BROWSER_DOWNLOAD_UNAVAILABLE");
+		const chunks: Buffer[] = [];
+		let size = 0;
+		for await (const chunk of stream) {
+			const value = Buffer.from(chunk as Uint8Array);
+			size += value.byteLength;
+			if (size > capability.policy.maxDownloadBytes) {
+				stream.destroy();
+				throw new Error("BROWSER_DOWNLOAD_LIMIT_EXCEEDED");
+			}
+			chunks.push(value);
+		}
+		if (await download.failure()) throw new Error("BROWSER_DOWNLOAD_FAILED");
+		const bytes = Buffer.concat(chunks);
+		const descriptor = descriptorForBytes(
+			download.suggestedFilename(),
+			"application/octet-stream",
+			bytes,
+		);
+		return { page: pageReference(state), descriptor, bytes, kind: "download" };
+	}
+
+	async function upload(input_: BrowserUploadRequestV1): Promise<void> {
+		const capability = requireFilesCapability();
+		const { locator } = requireArtifactTarget(input_.page, input_.target);
+		const { descriptor, bytes } = input_.file;
+		assertArtifactDescriptor(descriptor);
+		if (
+			descriptor.sizeBytes > capability.policy.maxUploadBytes ||
+			descriptor.sizeBytes !== bytes.byteLength
+		)
+			throw new Error("BROWSER_UPLOAD_LIMIT_EXCEEDED");
+		if (createHash("sha256").update(bytes).digest("hex") !== descriptor.sha256)
+			throw new Error("BROWSER_UPLOAD_DIGEST_MISMATCH");
+		await locator.setInputFiles(
+			{
+				name: descriptor.name,
+				mimeType: descriptor.mediaType,
+				buffer: Buffer.from(bytes),
+			},
+			{ timeout: capability.policy.actionTimeoutMs },
+		);
+	}
+
 	return {
 		navigate,
 		observe,
@@ -826,5 +986,8 @@ export function createBrowserObserveControllerV1(input: {
 		listPages,
 		act: executeAction,
 		executeAction,
+		screenshot,
+		download,
+		upload,
 	};
 }
