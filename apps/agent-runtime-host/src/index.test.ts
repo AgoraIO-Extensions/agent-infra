@@ -15,6 +15,7 @@ import {
 	submitV3Fixture,
 } from "../../../packages/agent-runtime/src/grant-v2-fixture.test-support.js";
 import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
+import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.js";
 import { createRuntimeTlsTransport } from "../../platform-worker/src/runtime-tls-transport.js";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
@@ -62,7 +63,7 @@ import {
 } from "./legacy-migration.test-support.js";
 
 const directories: string[] = [];
-const { publicKey } = generateKeyPairSync("ed25519");
+const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 
 async function environment() {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-assembly-"));
@@ -612,6 +613,24 @@ describe("RuntimeHost environment assembly", () => {
 			});
 			await expect(
 				runtime.verifyGrantV4?.(invalidGrantRequest),
+			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+			const signer = createWorkerRuntimeGrantSignerV4({
+				issuer: "synthetic-platform",
+				workerId: "synthetic-worker",
+				keyId: "synthetic-key",
+				privateKey,
+			});
+			const signed = (request: typeof invalidGrantRequest) => ({
+				...request,
+				grant: signer.sign(request, "synthetic-authorization"),
+			});
+			await expect(
+				runtime.verifyGrantV4?.(signed(invalidGrantRequest)),
+			).resolves.toMatchObject({ claims: { agentId: "synthetic-agent" } });
+			await expect(
+				runtime.verifyGrantV4?.(
+					signed({ ...invalidGrantRequest, agentId: "another-agent" }),
+				),
 			).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
 			expect(openedWith).toMatchObject({
 				configVersion: "configuration-4-fingerprint",

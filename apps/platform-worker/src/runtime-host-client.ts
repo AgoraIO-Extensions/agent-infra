@@ -200,7 +200,6 @@ function requestInit(
 	traceId: string,
 	body: unknown,
 	signal?: AbortSignal,
-	_confidential = false,
 ): RequestInit {
 	return {
 		method: "POST",
@@ -222,13 +221,12 @@ async function post(
 	traceId: string,
 	body: unknown,
 	signal?: AbortSignal,
-	confidential = false,
 ) {
 	let response: Response;
 	try {
 		response = await fetcher(
 			url,
-			requestInit(serviceToken, traceId, body, signal, confidential),
+			requestInit(serviceToken, traceId, body, signal),
 		);
 	} catch {
 		return failure("RUNTIME_UNAVAILABLE", true);
@@ -911,7 +909,6 @@ export function createWorkerRuntimeHostClientV4(
 				request.traceId,
 				transport,
 				signal,
-				true,
 			);
 			try {
 				const result = RuntimeOperationResponseV4Schema.parse(
@@ -947,7 +944,6 @@ export function createWorkerRuntimeHostClientV4(
 				parsed.data.traceId,
 				parsed.data,
 				signal,
-				true,
 			);
 			try {
 				const replay = validateRuntimeReplayResponseV4(
@@ -993,7 +989,6 @@ export function createWorkerRuntimeHostClientV4(
 				parsed.data.traceId,
 				parsed.data,
 				signal,
-				true,
 			);
 			try {
 				const ack = RuntimeEventAckResponseV4Schema.parse(
