@@ -28,6 +28,71 @@ type IdentityRow = {
 	session_status: string;
 };
 
+type RefreshTokenRow = IdentityRow & {
+	created_at: Date;
+	expires_at: Date;
+	revoked_at: Date | null;
+	used_at: Date | null;
+};
+
+type RefreshRejection =
+	| "TOKEN_UNAVAILABLE"
+	| "TOKEN_REPLAY"
+	| "TOKEN_REVOKED"
+	| "TOKEN_EXPIRED"
+	| "CLIENT_MISMATCH"
+	| "RESOURCE_MISMATCH"
+	| "RECOVERY_GENERATION_MISMATCH"
+	| "IDENTITY_INACTIVE";
+
+function refreshDiagnostic(row?: RefreshTokenRow) {
+	return row
+		? {
+				consumerId: row.consumer_id,
+				consumerInstanceId: row.instance_id,
+				principalId: row.principal_id,
+				sessionId: row.session_id,
+				sessionStatus: row.session_status,
+				principalStatus: row.principal_status,
+				instanceStatus: row.instance_status,
+				identityStatus: row.identity_status,
+				tokenIssuedAt: row.created_at,
+				tokenExpiresAt: row.expires_at,
+				tokenUsedAt: row.used_at,
+				tokenRevokedAt: row.revoked_at,
+			}
+		: {};
+}
+
+function rejectRefresh(
+	stage: "read" | "rotate",
+	reasonCode: RefreshRejection,
+	row?: RefreshTokenRow,
+): never {
+	console.warn(
+		JSON.stringify({
+			event: "connection_oauth_refresh_rejected",
+			stage,
+			reasonCode,
+			...refreshDiagnostic(row),
+		}),
+	);
+	invalidGrant();
+}
+
+function refreshRejection(
+	row: RefreshTokenRow,
+	input: { clientId: string; resource: string },
+): RefreshRejection | undefined {
+	if (row.expires_at.getTime() <= Date.now()) return "TOKEN_EXPIRED";
+	if (row.client_id !== input.clientId) return "CLIENT_MISMATCH";
+	if (row.resource !== input.resource) return "RESOURCE_MISMATCH";
+	if (row.session_recovery_generation !== row.recovery_generation)
+		return "RECOVERY_GENERATION_MISMATCH";
+	if (!activeIdentity(row)) return "IDENTITY_INACTIVE";
+	return undefined;
+}
+
 type BrowserSessionRow = {
 	display_name: string;
 	email: string | null;
@@ -987,14 +1052,11 @@ export class PostgresConnectionOAuthRepository
 		refreshTokenHash: string;
 		resource: string;
 	}) {
+		let rejectedRow: RefreshTokenRow | undefined;
 		const identity = await this.sql.begin(async (sql) => {
 			const [row] = await sql<
-				(IdentityRow & {
-					expires_at: Date;
+				(RefreshTokenRow & {
 					refresh_family_id: string;
-					revoked_at: Date | null;
-					session_recovery_generation: string;
-					used_at: Date | null;
 				})[]
 			>`
 				SELECT
@@ -1002,7 +1064,7 @@ export class PostgresConnectionOAuthRepository
 					s.principal_id, s.resource,
 					s.recovery_generation AS session_recovery_generation,
 					s.status AS session_status, token.family_id AS refresh_family_id,
-					token.expires_at, token.used_at, token.revoked_at,
+					token.created_at, token.expires_at, token.used_at, token.revoked_at,
 					instance.status AS instance_status, p.status AS principal_status,
 					p.last_verified_at, identity.status AS identity_status,
 					identity.identity_reference, recovery.generation AS recovery_generation
@@ -1021,23 +1083,26 @@ export class PostgresConnectionOAuthRepository
 					AND instance.kind = 'DEVICE'
 				FOR UPDATE OF token, s
 			`;
-			if (!row) invalidGrant();
+			if (!row) rejectRefresh("read", "TOKEN_UNAVAILABLE");
 			if (row.used_at || row.revoked_at) {
-				await this.revokeSession(sql, row.session_id);
+				rejectedRow = row;
+				await this.revokeSession(
+					sql,
+					row.session_id,
+					row.revoked_at ? "REFRESH_TOKEN_REVOKED" : "REFRESH_TOKEN_REPLAY",
+				);
 				return undefined;
 			}
-			if (
-				row.expires_at.getTime() <= Date.now() ||
-				row.client_id !== input.clientId ||
-				row.resource !== input.resource ||
-				row.session_recovery_generation !== row.recovery_generation ||
-				!activeIdentity(row)
-			) {
-				invalidGrant();
-			}
+			const reasonCode = refreshRejection(row, input);
+			if (reasonCode) rejectRefresh("read", reasonCode, row);
 			return tokenIdentity(row);
 		});
-		if (!identity) invalidGrant();
+		if (!identity)
+			rejectRefresh(
+				"read",
+				rejectedRow?.revoked_at ? "TOKEN_REVOKED" : "TOKEN_REPLAY",
+				rejectedRow,
+			);
 		return identity;
 	}
 
@@ -1050,14 +1115,11 @@ export class PostgresConnectionOAuthRepository
 		refreshTokenHash: string;
 		resource: string;
 	}) {
+		let diagnosticRow: RefreshTokenRow | undefined;
 		const identity = await this.sql.begin(async (sql) => {
 			const [row] = await sql<
-				(IdentityRow & {
-					expires_at: Date;
+				(RefreshTokenRow & {
 					family_id: string;
-					revoked_at: Date | null;
-					session_recovery_generation: string;
-					used_at: Date | null;
 				})[]
 			>`
 				SELECT
@@ -1065,7 +1127,7 @@ export class PostgresConnectionOAuthRepository
 					s.principal_id, s.resource,
 					s.recovery_generation AS session_recovery_generation,
 					s.status AS session_status, token.family_id, token.expires_at,
-					token.used_at, token.revoked_at,
+					token.created_at, token.used_at, token.revoked_at,
 					instance.status AS instance_status, p.status AS principal_status,
 					p.last_verified_at, identity.status AS identity_status,
 					identity.identity_reference, recovery.generation AS recovery_generation
@@ -1084,24 +1146,24 @@ export class PostgresConnectionOAuthRepository
 					AND instance.kind = 'DEVICE'
 				FOR UPDATE OF token, s
 			`;
-			if (!row) invalidGrant();
+			if (!row) rejectRefresh("rotate", "TOKEN_UNAVAILABLE");
+			diagnosticRow = row;
 			if (row.used_at || row.revoked_at) {
-				await this.revokeSession(sql, row.session_id);
+				await this.revokeSession(
+					sql,
+					row.session_id,
+					row.revoked_at ? "REFRESH_TOKEN_REVOKED" : "REFRESH_TOKEN_REPLAY",
+				);
 				return undefined;
 			}
-			if (
-				row.expires_at.getTime() <= Date.now() ||
-				row.client_id !== input.clientId ||
-				row.resource !== input.resource ||
-				row.session_recovery_generation !== row.recovery_generation ||
-				!activeIdentity(row)
-			) {
-				invalidGrant();
-			}
-			await sql`
+			const reasonCode = refreshRejection(row, input);
+			if (reasonCode) rejectRefresh("rotate", reasonCode, row);
+			const [consumed] = await sql<{ used_at: Date }[]>`
 				UPDATE connection_oauth_refresh_tokens SET used_at = now()
 				WHERE token_hash = ${input.oldRefreshTokenHash} AND used_at IS NULL
+				RETURNING used_at
 			`;
+			row.used_at = consumed?.used_at ?? null;
 			await sql`
 				INSERT INTO connection_oauth_access_tokens (token_hash, session_id, expires_at)
 				VALUES (${input.accessTokenHash}, ${row.session_id}, ${input.accessTokenExpiresAt})
@@ -1117,7 +1179,18 @@ export class PostgresConnectionOAuthRepository
 			`;
 			return tokenIdentity(row);
 		});
-		if (!identity) invalidGrant();
+		if (!identity)
+			rejectRefresh(
+				"rotate",
+				diagnosticRow?.revoked_at ? "TOKEN_REVOKED" : "TOKEN_REPLAY",
+				diagnosticRow,
+			);
+		console.info(
+			JSON.stringify({
+				event: "connection_oauth_refresh_rotation_committed",
+				...refreshDiagnostic(diagnosticRow),
+			}),
+		);
 		return identity;
 	}
 
@@ -1128,7 +1201,8 @@ export class PostgresConnectionOAuthRepository
 				UNION
 				SELECT session_id FROM connection_oauth_refresh_tokens WHERE token_hash = ${tokenHash}
 			`;
-			for (const row of sessions) await this.revokeSession(sql, row.session_id);
+			for (const row of sessions)
+				await this.revokeSession(sql, row.session_id, "TOKEN_REVOKED");
 			const pats = await sql<
 				{ instance_id: string; principal_id: string; token_id: string }[]
 			>`
@@ -1176,7 +1250,8 @@ export class PostgresConnectionOAuthRepository
 				SELECT id FROM connection_oauth_sessions
 				WHERE instance_id = ${input.instanceId} AND principal_id = ${input.principalId}
 			`;
-			for (const row of sessions) await this.revokeSession(sql, row.id);
+			for (const row of sessions)
+				await this.revokeSession(sql, row.id, "CONSUMER_INSTANCE_REVOKED");
 			await sql`
 				UPDATE connection_personal_access_tokens
 				SET revoked_at = COALESCE(revoked_at, now())
@@ -1233,7 +1308,8 @@ export class PostgresConnectionOAuthRepository
 			const sessions = await sql<{ id: string }[]>`
 				SELECT id FROM connection_oauth_sessions WHERE principal_id = ${principalId}
 			`;
-			for (const row of sessions) await this.revokeSession(sql, row.id);
+			for (const row of sessions)
+				await this.revokeSession(sql, row.id, "PRINCIPAL_DISABLED");
 		});
 	}
 
@@ -1252,11 +1328,28 @@ export class PostgresConnectionOAuthRepository
 		});
 	}
 
-	private async revokeSession(sql: postgres.TransactionSql, sessionId: string) {
+	private async revokeSession(
+		sql: postgres.TransactionSql,
+		sessionId: string,
+		reasonCode:
+			| "REFRESH_TOKEN_REPLAY"
+			| "REFRESH_TOKEN_REVOKED"
+			| "TOKEN_REVOKED"
+			| "CONSUMER_INSTANCE_REVOKED"
+			| "PRINCIPAL_DISABLED",
+	) {
 		await sql`
-			UPDATE connection_oauth_sessions
-			SET status = 'REVOKED', revoked_at = COALESCE(revoked_at, now())
-			WHERE id = ${sessionId}
+			WITH revoked AS (
+				UPDATE connection_oauth_sessions
+				SET status = 'REVOKED', revoked_at = COALESCE(revoked_at, now())
+				WHERE id = ${sessionId} AND status = 'ACTIVE'
+				RETURNING id, principal_id, consumer_id, instance_id
+			)
+			INSERT INTO connection_audit_records (principal_id, event, detail)
+			SELECT principal_id, 'DIRECT_SESSION_REVOKED', jsonb_build_object(
+				'sessionId', id, 'consumerId', consumer_id,
+				'consumerInstanceId', instance_id, 'reasonCode', ${reasonCode}::text
+			) FROM revoked
 		`;
 		await sql`
 			UPDATE connection_oauth_access_tokens
