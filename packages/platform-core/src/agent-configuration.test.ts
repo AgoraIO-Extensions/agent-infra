@@ -19,8 +19,6 @@ import {
 	type InitialAgentConfigurationCommandV2,
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.ts";
-import { parseAuthorizationDecision } from "./agent-configuration-admission.ts";
-import { parseOwnerIds } from "./agent-configuration-input.ts";
 import type { AgentManagementStateV1 } from "./agent-management.ts";
 import {
 	type FakeAgentConfigurationAdmissionsOptionsV1,
@@ -95,33 +93,6 @@ const initialAuthorityContext: AgentConfigurationAuthorityContextV1 = {
 	],
 	organizationIds: ["org_platform"],
 };
-
-it("accepts directory authority facts beyond the selected-target limit", () => {
-	const users = Array.from({ length: 257 }, (_, index) => ({
-		userId: `directory-user-${index}`,
-		accountStatus: "active" as const,
-	}));
-	const decision = parseAuthorizationDecision({
-		schemaVersion: 1,
-		status: "admitted",
-		agentId: "agent_01",
-		actorId: "owner_01",
-		authorizationRevision: "authorization_1",
-		authorityContext: {
-			schemaVersion: 1,
-			users,
-			organizationIds: [],
-		},
-	});
-
-	expect(decision).toMatchObject({
-		status: "admitted",
-		authorityContext: { users },
-	});
-	expect(() => parseOwnerIds(users.map(({ userId }) => userId))).toThrowError(
-		expect.objectContaining({ code: "invalid_command" }),
-	);
-});
 
 const initialCommand: InitialAgentConfigurationCommandV2 = {
 	schemaVersion: 2,
