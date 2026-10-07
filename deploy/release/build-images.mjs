@@ -96,6 +96,21 @@ const images = [
 	},
 ];
 
+
+const standardTemplateImages = ["codex", "claude", "opencode", "pi"].map((key) => ({
+	key,
+	name: `agent-runtime-${key}`,
+	dockerfile: "apps/agent-runtime-host/Dockerfile",
+	target: key,
+	command: [
+		"node", "--input-type=module", "-e",
+		`${assertInjectedRuntime}const runtime=await import('@agent-infra/agent-runtime');` +
+		(key === "claude" ? "await runtime.verifyClaudeInstallation()" :
+			key === "opencode" ? "await runtime.verifyOpenCodeInstallation('/opt/opencode/bin/opencode')" :
+			key === "pi" ? "await runtime.verifyPiInstallation()" : "await import('./dist/index.mjs')"),
+	],
+}));
+
 const customBaseImage = {
 	key: "customBase",
 	name: "custom-agent-base",
@@ -254,13 +269,14 @@ async function buildImage({
 	platform,
 	platformTag,
 	prefix,
+	imageTag,
 	temp,
 	contextPath,
 	git,
 }) {
 	const docker = process.env.DOCKER_BIN ?? "docker";
 	const repository = `${prefix}/${image.name}`;
-	const reference = `${repository}:${commitSha}-${platformTag}`;
+	const reference = `${repository}:${imageTag}-${platformTag}`;
 	const labels = image.key === "customBase" ? [
 		"--label", `org.opencontainers.image.revision=${commitSha}`,
 		"--label", `agent-infra.lockfile-sha256=${sha256(await readFile(join(contextPath, "pnpm-lock.yaml")))}`,
@@ -282,9 +298,10 @@ async function buildImage({
 				platform,
 				"--build-arg",
 				`SOURCE_DATE_EPOCH=${epoch}`,
-				...(image.key === "runtimeHost"
+				...(image.dockerfile === "apps/agent-runtime-host/Dockerfile"
 					? ["--build-arg", `SOURCE_COMMIT=${commitSha}`]
 					: []),
+				...(image.target ? ["--target", image.target] : []),
 				...labels,
 				"--provenance=false",
 				"--sbom=false",
@@ -382,7 +399,7 @@ async function buildImage({
 	);
 	const source = assertCheckout(git, commitSha);
 	const runtimeProbe =
-		image.key === "runtimeHost"
+		(image.key === "runtimeHost" || image.key === "codex")
 			? await probeRuntimeImage({
 					image: reference,
 					source,
@@ -453,7 +470,7 @@ async function main() {
 		extra.some((value) => value !== "--custom-base-image" && value !== imageOption)
 	) {
 		fail(
-			"usage: build-images.mjs <image-manifest.json> [--images=web,platformApi,platformWorker,enterpriseDirectorySync,runtimeHost] [--custom-base-image]",
+			"usage: build-images.mjs <image-manifest.json> [--images=web,platformApi,platformWorker,enterpriseDirectorySync,runtimeHost,codex,claude,opencode,pi] [--custom-base-image]",
 		);
 	}
 	if (customBase && imageOption) fail("custom base image cannot be combined with --images");
@@ -466,7 +483,7 @@ async function main() {
 			if (names.length === 0 || new Set(names).size !== names.length) {
 				fail("image selection must contain at least one unique image key");
 			}
-			const selected = images.filter((image) => names.includes(image.key));
+			const selected = [...images, ...standardTemplateImages].filter((image) => names.includes(image.key));
 			if (selected.length !== names.length) {
 				fail(`unknown image selection: ${names.join(",")}`);
 			}
@@ -474,8 +491,8 @@ async function main() {
 		})();
 	const manifestPath = resolve(manifestArgument);
 	const runtimeProbePath = `${manifestPath}.runtime-probe.json`;
-	const includesRuntimeHost = selectedImages.some((image) => image.key === "runtimeHost");
-	if (includesRuntimeHost && !(await unavailable(runtimeProbePath))) {
+	const runtimeProbeImage = selectedImages.find((image) => image.key === "runtimeHost" || image.key === "codex");
+	if (runtimeProbeImage && !(await unavailable(runtimeProbePath))) {
 		fail("runtime probe evidence already exists");
 	}
 	if (!(await unavailable(manifestPath))) {
@@ -511,6 +528,8 @@ async function main() {
 	const platform = process.env.PLATFORM ?? "linux/amd64";
 	if (!/^linux\/(?:amd64|arm64)$/.test(platform)) fail("PLATFORM is invalid");
 	const platformTag = platform.replace("/", "-");
+	const imageTag = process.env.IMAGE_TAG ?? commitSha;
+	if (!/^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,114}$/.test(imageTag)) fail("IMAGE_TAG is invalid");
 	const prefix = process.env.IMAGE_REPOSITORY_PREFIX;
 	if (!prefix) fail("image repository prefix is required");
 	if (!repositoryPattern.test(prefix)) {
@@ -537,6 +556,7 @@ async function main() {
 				platform,
 				platformTag,
 				prefix,
+				imageTag,
 				temp,
 				contextPath,
 				git,
@@ -570,10 +590,10 @@ async function main() {
 				published: true, contextPath,
 			});
 			assertCheckout(git, commitSha);
-		} else if (includesRuntimeHost) {
+		} else if (runtimeProbeImage) {
 			await writeFile(
 				runtimeProbePath,
-				`${JSON.stringify(buildResults.runtimeHost.runtimeProbe, null, 2)}\n`,
+				`${JSON.stringify(buildResults[runtimeProbeImage.key].runtimeProbe, null, 2)}\n`,
 				{ flag: "wx" },
 			);
 		}

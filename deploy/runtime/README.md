@@ -25,6 +25,36 @@
 Node 绝对路径（`--dev <path>`）；需要自动构建时另开
 `pnpm build --watch`。Worker 同样在创建 Workload 前拒绝上述 loader 环境或 Secret 名称。
 
+## 自动发布
+
+main 的 `Publish images` 自动发布以下五个镜像到
+`ghcr.io/agoraio-extensions/agent-infra/`，每个镜像以固定 `main` Tag 合并
+`linux/amd64` 与 `linux/arm64`：
+
+- `agent-runtime-codex`
+- `agent-runtime-claude`
+- `agent-runtime-opencode`
+- `agent-runtime-pi`
+- `custom-agent-base`
+
+四模板使用同一 Dockerfile 的同名 target，共用经过验证的 RuntimeHost 安装层；模板产物标签
+只标识构建用途，不提供默认 Driver，不替代部署 Registry 的模板、Digest、Driver 与协议绑定。
+`custom-agent-base` 是[自定义父镜像](../images/custom-agent-base/README.md)，不包含 RuntimeHost。
+
+main 只更新固定 Tag，不创建 commit SHA Tag；两个架构的中间 Tag 分别为
+`main-linux-amd64`、`main-linux-arm64`。索引从本次构建回执里的不可变 Digest 合并并回读，
+构建来源仍保存在 OCI revision label 与 Actions 回执中。GHCR 可保留旧的无 Tag 版本；固定 Tag
+不等于删除历史 Digest。模板目录及部署继续保存经过原有准入的不可变 Digest，不直接跟随 Tag。
+
+Web、Platform API、Worker、目录同步镜像只在 `v*` Tag 或显式手动设置
+`publish_platform=true` 时发布。版本 Tag 使用版本名，main 手动发布使用 `main`。
+例如推送 Git Tag `v1.2.3` 时，五个模板/base 镜像的版本引用均为 `:v1.2.3`；
+后续 `main` 或 `v1.2.4` 发布不覆盖 `:v1.2.3`。稳定 Git Tag（`vMAJOR.MINOR.PATCH`）
+的所有版本索引校验通过后，将 `:latest` 更新到同一索引 Digest 并回读比对；例如稳定版本
+`v1.2.4` 成功发布后，`:latest` 与 `:v1.2.4` 指向相同 Digest。main 和 `v1.2.4-rc.1`
+等预发布 Tag 不更新 `latest`。实际部署选择版本并固定其 Digest。
+发布镜像不登记模板、不提升 readiness，也不代替各模板的真实模型或部署验收。
+
 ## 部署输入
 
 以下 `AGENT_INFRA_*` 输入只能由受信部署装配。Owner 与 HTTP 请求不能选择 Driver、原生路径、
