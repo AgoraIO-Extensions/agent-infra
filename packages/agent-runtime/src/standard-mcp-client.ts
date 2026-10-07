@@ -178,11 +178,40 @@ function schemaValidator(schema: unknown): ValidateFunction {
 	]);
 	let nodes = 0;
 	type Context = "schema" | "map" | "array" | "data";
-	const inspect = (value: unknown, depth: number, context: Context) => {
+	const references: { locations: Set<string>; ref: string }[] = [];
+	const inspect = (
+		value: unknown,
+		depth: number,
+		context: Context,
+		path: string,
+		locations: Set<string>,
+	) => {
 		if (++nodes > 1024 || depth > 24) unavailable();
+		if (context === "schema") {
+			locations.add(path);
+			if (record(value)) {
+				if (typeof value.$id === "string" && !value.$id.startsWith("#")) {
+					locations = new Set<string>();
+					path = "#";
+					locations.add(path);
+				}
+				for (const anchor of [value.$anchor, value.$dynamicAnchor])
+					if (typeof anchor === "string") locations.add(`#${anchor}`);
+				if (typeof value.$id === "string" && value.$id.startsWith("#"))
+					locations.add(value.$id);
+				if (typeof value.$ref === "string")
+					references.push({ locations, ref: value.$ref });
+			}
+		}
 		if (Array.isArray(value)) {
-			for (const child of value)
-				inspect(child, depth + 1, context === "array" ? "schema" : "data");
+			for (const [index, child] of value.entries())
+				inspect(
+					child,
+					depth + 1,
+					context === "array" ? "schema" : "data",
+					`${path}/${index}`,
+					locations,
+				);
 		} else if (record(value)) {
 			// One compiler cannot silently reinterpret another resource's dialect.
 			// Literal const/default/enum/examples data is budgeted but not a schema.
@@ -209,12 +238,22 @@ function schemaValidator(schema: unknown): ValidateFunction {
 					else if (singles.has(key))
 						next = Array.isArray(child) ? "array" : "schema";
 				}
-				inspect(child, depth + 1, next);
+				inspect(
+					child,
+					depth + 1,
+					next,
+					`${path}/${key.replace(/~/g, "~0").replace(/\//g, "~1")}`,
+					locations,
+				);
 			}
 		}
 	};
-	inspect(schema, 0, "schema");
+	inspect(schema, 0, "schema", "#", new Set());
 	try {
+		// References into annotations/unknown keywords have undefined semantics.
+		// Keep the same resource's recognized schema locations, including booleans.
+		for (const { locations, ref } of references)
+			if (!locations.has(decodeURIComponent(ref))) unavailable();
 		return new Validator({
 			strict: false,
 			logger: false,

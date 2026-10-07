@@ -771,3 +771,89 @@ it("accepts same-dialect resources and literal directive-shaped data without cha
 	);
 	expect(result.phase).toBe("completed");
 });
+
+it.each(["custom", "default"])(
+	"rejects local references into non-schema %s data",
+	async (location) => {
+		const fixture = await standardMcpFixture({
+			type: "object",
+			properties: { payload: { $ref: `#/${location}` } },
+			[location]: {
+				$id: "urn:hidden-resource",
+				$schema: "https://unsupported.example.test/schema",
+				type: "string",
+			},
+		});
+		await expect(
+			StandardMcpClient.open(
+				{
+					target: fixture.target,
+					resolveInput: async () => fixture.input,
+					fetch: fixture.fetch,
+				},
+				reference,
+				new AbortController().signal,
+			).then((client) => {
+				closes.push(() => client.close());
+				return client;
+			}),
+		).rejects.toMatchObject({ code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE" });
+		expect(
+			fixture.trace.filter((event) => event.method === "tools/call"),
+		).toHaveLength(0);
+	},
+);
+
+it.each([
+	["pointer", { $defs: { "a/b": { type: "string" } } }, "#/$defs/a~1b"],
+	["boolean", { $defs: { allowed: true } }, "#/$defs/allowed"],
+	["anchor", { $defs: { text: { $anchor: "text", type: "string" } } }, "#text"],
+	["embedded resource", {}, undefined],
+] as const)(
+	"preserves recognized local %s schema references",
+	async (_name, definitions, ref) => {
+		const fixture = await standardMcpFixture({
+			type: "object",
+			...definitions,
+			properties: {
+				payload: ref
+					? { $ref: ref }
+					: {
+							$id: "urn:fixture:embedded-resource",
+							$schema: schema2020,
+							type: "object",
+							$defs: { text: { type: "string" } },
+							properties: { text: { $ref: "#/$defs/text" } },
+							required: ["text"],
+						},
+			},
+			required: ["payload"],
+		});
+		const client = await StandardMcpClient.open(
+			{
+				target: fixture.target,
+				resolveInput: async () => fixture.input,
+				fetch: fixture.fetch,
+			},
+			reference,
+			new AbortController().signal,
+		);
+		closes.push(() => client.close());
+		const alias = client.toolDefinitions[0]?.tools[0]?.name ?? "";
+		const arguments_ = { payload: ref ? "fixture" : { text: "fixture" } };
+		expect(client.validateArguments(alias, arguments_)).toBe(true);
+		expect(
+			(
+				await client.call(
+					alias,
+					arguments_,
+					operation(),
+					new AbortController().signal,
+				)
+			).phase,
+		).toBe("completed");
+		expect(
+			fixture.trace.filter((event) => event.method === "tools/call"),
+		).toHaveLength(1);
+	},
+);

@@ -39,7 +39,8 @@ Host 启动时可消费部署批准的私有文件 export，随后使用已有�
 需要显式声明 draft-07。未知版本或非标准 `$async` validator 拒绝，不静默回退。嵌入 schema resource 可声明同一
 版本，未知或不同版本拒绝；const/default/enum/examples 中的 JSON 数据不改作 schema。
 
-仍限制 schema 字节数、节点与深度，只允许本地 `$ref`，拒绝原 profile 未批准的
+仍限制 schema 字节数、节点与深度，本地 `$ref` 仅允许指向同一 resource 的已识别 schema/boolean 位置，
+拒绝将数据、注释或未知 keyword 中的未定义目标改作 schema。拒绝原 profile 未批准的
 `$dynamicRef` / `$recursiveRef`；不会联网加载 schema。此校验不扩大工具或 Grant 权限，
 结果不满足批准合同仍保持原 unknown。依据见
 [MCP 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic/index#json-schema-usage)
