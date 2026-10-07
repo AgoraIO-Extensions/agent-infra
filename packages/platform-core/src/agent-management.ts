@@ -194,6 +194,7 @@ export interface AgentManagementWritePlanV1 {
 		readonly occurredAt: Date;
 	};
 	readonly auditEvent: {
+		readonly actorType?: "user" | "application";
 		readonly action:
 			| "agent.application.updated"
 			| "agent.application.resubmitted"
@@ -282,6 +283,7 @@ export interface AgentManagementInterfaceV1 {
 }
 
 export interface AgentManagementTransactionRequestV1 {
+	readonly actorType?: "user" | "application";
 	readonly operation: AgentManagementOperationV1;
 	readonly subjectType: "agent_application" | "agent";
 	readonly subjectId: string;
@@ -413,7 +415,9 @@ export function snapshotAgentManagementWritePlanV1(
 		"to",
 		"occurredAt",
 	]);
+	const auditValues = snapshotDataObject(values.auditEvent);
 	const audit = planObject(values.auditEvent, [
+		...(Object.hasOwn(auditValues, "actorType") ? ["actorType"] : []),
 		"action",
 		"actorId",
 		"subjectType",
@@ -455,6 +459,9 @@ export function snapshotAgentManagementWritePlanV1(
 		) ||
 		transition.to !== state.status ||
 		audit.action !== expectedAction ||
+		(audit.actorType !== undefined &&
+			((audit.actorType !== "user" && audit.actorType !== "application") ||
+				(operation !== "stop_agent" && operation !== "restart_agent"))) ||
 		!capturedText(audit.actorId) ||
 		audit.subjectType !== expectedSubjectType ||
 		audit.subjectId !== subjectId ||
@@ -536,6 +543,9 @@ export function snapshotAgentManagementWritePlanV1(
 		},
 		outboxIntent: outbox,
 		auditEvent: {
+			...(audit.actorType === undefined
+				? {}
+				: { actorType: audit.actorType as "user" | "application" }),
 			action:
 				audit.action as AgentManagementWritePlanV1["auditEvent"]["action"],
 			actorId: audit.actorId as string,
@@ -699,7 +709,7 @@ function requireAggregateIdentity(actual: string, expected: string): void {
 function accepted(
 	state: AgentManagementStateV1,
 	command: AgentManagementCommandV1,
-	actor: AgentManagementActorContextV1,
+	actorId: string,
 	nextStateInput: AgentManagementStateV1,
 	action: AgentManagementWritePlanV1["auditEvent"]["action"],
 	outboxDesiredState: "running" | "stopped" | null,
@@ -749,7 +759,7 @@ function accepted(
 						},
 			auditEvent: {
 				action,
-				actorId: actor.userId,
+				actorId,
 				subjectType,
 				subjectId,
 				traceId: command.traceId,
@@ -810,6 +820,88 @@ function acceptedObservation(
 			},
 		},
 	};
+}
+
+/** Shared lifecycle transitions; each caller must supply its own current authorization. */
+export function planAgentLifecycleCommandV1(
+	state: AgentManagementStateV1,
+	command: Extract<AgentManagementCommandV1, { readonly agentId: string }>,
+	actorId: string,
+	requestDigest: string,
+	now: () => Date = systemNow,
+): AgentManagementCommandDecisionV1 {
+	if (state.revision !== command.expectedRevision)
+		return { outcome: "conflict", reason: "stale_revision", writePlan: null };
+	if (
+		[state.revision, state.workloadRevision, state.fence].includes(
+			Number.MAX_SAFE_INTEGER,
+		)
+	)
+		return { outcome: "conflict", reason: "counter_overflow", writePlan: null };
+
+	const validTransition =
+		(command.command === "stop_agent" && state.status === "available") ||
+		(command.command === "restart_agent" &&
+			(state.status === "stopped" || state.status === "available")) ||
+		(command.command === "retry_agent_creation" &&
+			state.status === "creation_failed") ||
+		(command.command === "disable_agent" &&
+			(state.status === "creating" ||
+				state.status === "available" ||
+				state.status === "stopped" ||
+				state.status === "creation_failed"));
+	if (!validTransition) {
+		return {
+			outcome: "conflict",
+			reason: "invalid_transition",
+			writePlan: null,
+		};
+	}
+	const transition = {
+		stop_agent: {
+			status: "stopped",
+			serviceAvailability: null,
+			desiredState: "stopped",
+			action: "agent.lifecycle.stopped",
+		},
+		restart_agent: {
+			status: "available",
+			serviceAvailability: "starting",
+			desiredState: "running",
+			action: "agent.lifecycle.restarted",
+		},
+		retry_agent_creation: {
+			status: "creating",
+			serviceAvailability: null,
+			desiredState: "running",
+			action: "agent.lifecycle.creation_retried",
+		},
+		disable_agent: {
+			status: "disabled",
+			serviceAvailability: null,
+			desiredState: "stopped",
+			action: "agent.lifecycle.disabled",
+		},
+	} as const;
+	const selected = transition[command.command];
+	return accepted(
+		state,
+		command,
+		actorId,
+		{
+			...state,
+			status: selected.status,
+			revision: state.revision + 1,
+			serviceAvailability: selected.serviceAvailability,
+			desiredState: selected.desiredState,
+			workloadRevision: state.workloadRevision + 1,
+			fence: state.fence + 1,
+		},
+		selected.action,
+		selected.desiredState,
+		requestDigest,
+		now,
+	);
 }
 
 export function createAgentManagementV1(
@@ -902,7 +994,7 @@ export function createAgentManagementV1(
 							return accepted(
 								state,
 								command,
-								actorContext,
+								actorContext.userId,
 								{
 									...state,
 									status: "pending_approval",
@@ -938,7 +1030,7 @@ export function createAgentManagementV1(
 							return accepted(
 								state,
 								command,
-								actorContext,
+								actorContext.userId,
 								nextState,
 								"agent.application.approved",
 								"running",
@@ -957,7 +1049,7 @@ export function createAgentManagementV1(
 							return accepted(
 								state,
 								command,
-								actorContext,
+								actorContext.userId,
 								{
 									...state,
 									status: "rejected",
@@ -970,74 +1062,11 @@ export function createAgentManagementV1(
 								now,
 							);
 						}
-						if (
-							command.command === "stop_agent" ||
-							command.command === "restart_agent" ||
-							command.command === "retry_agent_creation" ||
-							command.command === "disable_agent"
-						) {
-							const validTransition =
-								(command.command === "stop_agent" &&
-									state.status === "available") ||
-								(command.command === "restart_agent" &&
-									(state.status === "stopped" ||
-										state.status === "available")) ||
-								(command.command === "retry_agent_creation" &&
-									state.status === "creation_failed") ||
-								(command.command === "disable_agent" &&
-									(state.status === "creating" ||
-										state.status === "available" ||
-										state.status === "stopped" ||
-										state.status === "creation_failed"));
-							if (!validTransition) {
-								return {
-									outcome: "conflict",
-									reason: "invalid_transition",
-									writePlan: null,
-								};
-							}
-							const transition = {
-								stop_agent: {
-									status: "stopped",
-									serviceAvailability: null,
-									desiredState: "stopped",
-									action: "agent.lifecycle.stopped",
-								},
-								restart_agent: {
-									status: "available",
-									serviceAvailability: "starting",
-									desiredState: "running",
-									action: "agent.lifecycle.restarted",
-								},
-								retry_agent_creation: {
-									status: "creating",
-									serviceAvailability: null,
-									desiredState: "running",
-									action: "agent.lifecycle.creation_retried",
-								},
-								disable_agent: {
-									status: "disabled",
-									serviceAvailability: null,
-									desiredState: "stopped",
-									action: "agent.lifecycle.disabled",
-								},
-							} as const;
-							const selected = transition[command.command];
-							return accepted(
+						if ("agentId" in command) {
+							return planAgentLifecycleCommandV1(
 								state,
 								command,
-								actorContext,
-								{
-									...state,
-									status: selected.status,
-									revision: state.revision + 1,
-									serviceAvailability: selected.serviceAvailability,
-									desiredState: selected.desiredState,
-									workloadRevision: state.workloadRevision + 1,
-									fence: state.fence + 1,
-								},
-								selected.action,
-								selected.desiredState,
+								actorContext.userId,
 								requestDigest,
 								now,
 							);
@@ -1052,7 +1081,7 @@ export function createAgentManagementV1(
 						return accepted(
 							state,
 							command,
-							actorContext,
+							actorContext.userId,
 							{
 								...state,
 								status: "withdrawn",

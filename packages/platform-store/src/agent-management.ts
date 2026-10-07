@@ -2,18 +2,32 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
 import {
+	type AgentApiAuditContextV1,
+	type AgentApiLifecycleTransactionV1,
+	type AgentApplicationGrantCommandV1,
+	type AgentApplicationGrantResultV1,
 	type AgentManagementAcceptedResultV1,
 	type AgentManagementDecisionV1,
 	AgentManagementError,
 	type AgentManagementStateV1,
 	type AgentManagementTransactionPortV1,
 	type AgentManagementTransactionRequestV1,
+	PersonalApiCredentialErrorV1,
+	parseAgentApiLifecycleCommandV1,
+	parseAgentApplicationGrantCommandV1,
 	personalApiAgentMetadataGrantTypesV1,
+	planAgentApplicationGrantV1,
+	platformIdempotencyV1,
+	requireAgentApplicationGrantAuthorityV1,
+	resolveCurrentPersonalApiUserV1,
 	snapshotAgentManagementWritePlanV1,
+	type TaskUserDirectoryV1,
+	withAgentApiAuditContextV1,
 } from "@agent-infra/platform-core";
 import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
 import {
 	agentManagementStateUpdate,
 	insertAgentManagementEffects,
@@ -27,11 +41,16 @@ import {
 	agentOwners,
 	agentPrincipalGrants,
 	agents,
+	auditEvents,
 	idempotencyRecords,
+	platformApiCredentials,
+	platformApplications,
+	platformUserDisables,
 } from "./schema.js";
 
 export interface PostgresAgentManagementOptionsV1 {
 	readonly databaseUrl: string;
+	readonly userDirectory?: TaskUserDirectoryV1;
 }
 
 interface IdempotencyRow {
@@ -49,6 +68,11 @@ type Transaction = Parameters<
 >[0];
 
 const idempotencyCommandType = "agent.management.v1";
+function managementCommandType(request: AgentManagementTransactionRequestV1) {
+	return request.actorType === undefined
+		? idempotencyCommandType
+		: `agent.api.lifecycle.${request.actorType}.v1`;
+}
 const managementStatuses = new Set([
 	"pending_approval",
 	"withdrawn",
@@ -135,7 +159,7 @@ function idempotencyWhere(request: AgentManagementTransactionRequestV1) {
 		eq(idempotencyRecords.scopeType, request.subjectType),
 		eq(idempotencyRecords.scopeId, request.subjectId),
 		eq(idempotencyRecords.actorId, request.actorId),
-		eq(idempotencyRecords.commandType, idempotencyCommandType),
+		eq(idempotencyRecords.commandType, managementCommandType(request)),
 		eq(idempotencyRecords.idempotencyKey, request.idempotencyKey),
 	);
 }
@@ -275,6 +299,7 @@ function requireAcceptedEnvelope(
 		!sameValue(writePlan.state.availability, current.availability) ||
 		writePlan.transition.from !== current.status ||
 		writePlan.auditEvent.actorId !== request.actorId ||
+		writePlan.auditEvent.actorType !== request.actorType ||
 		result.applicationId !== writePlan.state.applicationId ||
 		result.agentId !== writePlan.state.agentId ||
 		result.status !== writePlan.state.status ||
@@ -332,7 +357,7 @@ export async function persistAcceptedAgentManagement(
 		scopeType: request.subjectType,
 		scopeId: request.subjectId,
 		actorId: request.actorId,
-		commandType: idempotencyCommandType,
+		commandType: managementCommandType(request),
 		idempotencyKey: request.idempotencyKey,
 		requestDigest: request.requestDigest,
 		status: "completed",
@@ -344,12 +369,14 @@ export async function persistAcceptedAgentManagement(
 }
 
 export class PostgresAgentManagementTransactionV1
-	implements AgentManagementTransactionPortV1
+	implements AgentManagementTransactionPortV1, AgentApiLifecycleTransactionV1
 {
 	readonly #client;
 	readonly #database;
+	readonly #userDirectory;
 
 	constructor(options: PostgresAgentManagementOptionsV1) {
+		this.#userDirectory = options.userDirectory;
 		this.#client = postgres(options.databaseUrl, { max: 1 });
 		this.#database = drizzle(this.#client);
 	}
@@ -387,6 +414,503 @@ export class PostgresAgentManagementTransactionV1
 			});
 		} catch {
 			throw new AgentManagementError("unavailable");
+		}
+	}
+
+	async executeAgentApiLifecycleTransaction(
+		input: Parameters<
+			AgentApiLifecycleTransactionV1["executeAgentApiLifecycleTransaction"]
+		>[0],
+		decide: Parameters<
+			AgentApiLifecycleTransactionV1["executeAgentApiLifecycleTransaction"]
+		>[1],
+	): Promise<AgentManagementDecisionV1> {
+		const command = parseAgentApiLifecycleCommandV1(input.command);
+		const digest = platformIdempotencyV1.canonicalRequestDigest({
+			schemaVersion: 1,
+			agentId: command.agentId,
+			command: command.command,
+		});
+		if (input.requestDigest !== digest)
+			throw new PersonalApiCredentialErrorV1("invalid_input");
+		let auditContext: AgentApiAuditContextV1 = { command: command.command };
+		try {
+			return await this.#database.transaction(async (transaction) => {
+				await transaction.execute(sql`set local lock_timeout = '5s'`);
+				await transaction.execute(sql`set local statement_timeout = '30s'`);
+				const authenticated = await resolveAgentApiIdentityV1(
+					transaction,
+					input.material,
+					this.#userDirectory,
+					"agent:manage",
+				);
+				const principal = authenticated.identity.principal;
+				auditContext = { ...auditContext, principal };
+				const request: AgentManagementTransactionRequestV1 = {
+					operation:
+						command.command === "stop" ? "stop_agent" : "restart_agent",
+					subjectType: "agent",
+					subjectId: command.agentId,
+					actorId: principal.id,
+					actorType: principal.kind,
+					idempotencyKey: command.idempotencyKey,
+					requestDigest: digest,
+				};
+				const database = transaction;
+				const state = await lockState(database, request);
+				if (!state) throw new PersonalApiCredentialErrorV1("not_found");
+				auditContext = { ...auditContext, agentId: state.agentId };
+				const requireManage = async () => {
+					const rows = await transaction
+						.select({
+							authorization_revision:
+								agentPrincipalGrants.authorizationRevision,
+							revoked_at: agentPrincipalGrants.revokedAt,
+						})
+						.from(agentPrincipalGrants)
+						.where(
+							and(
+								eq(agentPrincipalGrants.agentId, command.agentId),
+								eq(agentPrincipalGrants.principalType, principal.kind),
+								eq(agentPrincipalGrants.principalId, principal.id),
+								eq(agentPrincipalGrants.grantType, "manage"),
+							),
+						)
+						.for("share");
+					if (rows.length !== 1 || rows[0]?.revoked_at !== null)
+						throw new PersonalApiCredentialErrorV1("not_found");
+					const revision = rows[0].authorization_revision;
+					if (!validText(revision))
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					return revision;
+				};
+				const grantRevision = await requireManage();
+				const existing = await replay(
+					database,
+					await readIdempotency(database, request),
+					request,
+				);
+				const decision =
+					existing ??
+					decide(
+						structuredClone(state),
+						Object.freeze({
+							principal,
+							agentId: command.agentId,
+							manageGrantRevision: grantRevision,
+						}),
+					);
+				const result =
+					decision.outcome === "accepted"
+						? await persistAcceptedAgentManagement(
+								database,
+								request,
+								state,
+								decision,
+							)
+						: decision;
+				if (result.outcome === "denied")
+					throw new PersonalApiCredentialErrorV1("not_found");
+				if (result.outcome === "conflict")
+					throw new PersonalApiCredentialErrorV1("idempotency_conflict");
+				await transaction
+					.update(platformApiCredentials)
+					.set({ lastUsedAt: sql`clock_timestamp()` })
+					.where(
+						eq(
+							platformApiCredentials.id,
+							authenticated.identity.credential.credentialId,
+						),
+					);
+				await authenticated.revalidate();
+				if ((await requireManage()) !== grantRevision)
+					throw new PersonalApiCredentialErrorV1("unavailable");
+				return result;
+			});
+		} catch (error) {
+			const failure =
+				error instanceof PersonalApiCredentialErrorV1
+					? error
+					: new PersonalApiCredentialErrorV1("unavailable");
+			throw withAgentApiAuditContextV1(failure, auditContext);
+		}
+	}
+
+	async readApiState(
+		request: {
+			readonly agentId: string;
+			readonly requestId: string;
+			readonly traceId: string;
+		},
+		material: string,
+	) {
+		if (
+			![request.agentId, request.requestId, request.traceId].every((value) =>
+				validText(value),
+			)
+		)
+			throw new PersonalApiCredentialErrorV1("invalid_input");
+		let auditContext: AgentApiAuditContextV1 = { command: "read_state" };
+		try {
+			return await this.#database.transaction(async (transaction) => {
+				await transaction.execute(sql`set local lock_timeout = '5s'`);
+				await transaction.execute(sql`set local statement_timeout = '30s'`);
+				const authenticated = await resolveAgentApiIdentityV1(
+					transaction,
+					material,
+					this.#userDirectory,
+					"agent:read",
+				);
+				const principal = authenticated.identity.principal;
+				auditContext = { ...auditContext, principal };
+				const currentGrants = async () => {
+					const rows = await transaction
+						.select({
+							type: agentPrincipalGrants.grantType,
+							revision: agentPrincipalGrants.authorizationRevision,
+							revokedAt: agentPrincipalGrants.revokedAt,
+						})
+						.from(agentPrincipalGrants)
+						.where(
+							and(
+								eq(agentPrincipalGrants.agentId, request.agentId),
+								eq(agentPrincipalGrants.principalType, principal.kind),
+								eq(agentPrincipalGrants.principalId, principal.id),
+								inArray(agentPrincipalGrants.grantType, [
+									...personalApiAgentMetadataGrantTypesV1,
+								]),
+							),
+						)
+						.orderBy(asc(agentPrincipalGrants.grantType))
+						.for("share");
+					const active = rows.filter((row) => row.revokedAt === null);
+					if (!active.length)
+						throw new PersonalApiCredentialErrorV1("not_found");
+					if (active.some((row) => !validText(row.revision)))
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					return active;
+				};
+				const grants = await currentGrants();
+				const state = await readAgentManagementState(
+					transaction,
+					request.agentId,
+				);
+				if (!state) throw new PersonalApiCredentialErrorV1("not_found");
+				auditContext = { ...auditContext, agentId: state.agentId };
+				const result = {
+					schemaVersion: 1 as const,
+					agentId: state.agentId,
+					status: state.status,
+					serviceAvailability: state.serviceAvailability,
+					revision: state.revision,
+				};
+				await transaction.insert(auditEvents).values({
+					id: randomUUID(),
+					...request,
+					actorType: principal.kind,
+					actorId: principal.id,
+					action: "api.agent.state.read",
+					targetType: "agent",
+					targetId: request.agentId,
+					outcome: "succeeded",
+				});
+				await transaction
+					.update(platformApiCredentials)
+					.set({ lastUsedAt: sql`clock_timestamp()` })
+					.where(
+						eq(
+							platformApiCredentials.id,
+							authenticated.identity.credential.credentialId,
+						),
+					);
+				await authenticated.revalidate();
+				if (!sameValue(await currentGrants(), grants))
+					throw new PersonalApiCredentialErrorV1("unavailable");
+				return result;
+			});
+		} catch (error) {
+			const failure =
+				error instanceof PersonalApiCredentialErrorV1
+					? error
+					: new PersonalApiCredentialErrorV1("unavailable");
+			throw withAgentApiAuditContextV1(failure, auditContext);
+		}
+	}
+
+	async changeApplicationGrant(
+		input: AgentApplicationGrantCommandV1,
+		grantType: "manage" | "use",
+	): Promise<AgentApplicationGrantResultV1> {
+		const command = parseAgentApplicationGrantCommandV1(input);
+		const digest = platformIdempotencyV1.canonicalRequestDigest({
+			schemaVersion: 1,
+			agentId: command.agentId,
+			applicationId: command.applicationId,
+			granted: command.granted,
+		});
+		const commandType =
+			grantType === "manage"
+				? "agent.application.manager.v1"
+				: "agent.application.use.v1";
+		let auditContext: AgentApiAuditContextV1 = {
+			command:
+				grantType === "manage"
+					? command.granted
+						? "grant_manager"
+						: "revoke_manager"
+					: command.granted
+						? "grant_use"
+						: "revoke_use",
+		};
+		try {
+			return await this.#database.transaction(async (transaction) => {
+				await transaction.execute(sql`set local lock_timeout = '5s'`);
+				await transaction.execute(sql`set local statement_timeout = '30s'`);
+				await transaction.execute(
+					sql`lock table platform.platform_user_disables in share mode`,
+				);
+				const readActor = () =>
+					resolveCurrentPersonalApiUserV1(this.#userDirectory, command.actorId);
+				const firstActor = await readActor();
+				auditContext = {
+					...auditContext,
+					principal: { kind: "user", id: firstActor.userId },
+				};
+				const [disabled] = await transaction
+					.select()
+					.from(platformUserDisables)
+					.where(eq(platformUserDisables.userId, command.actorId));
+				const [application] = await transaction
+					.select({
+						id: platformApplications.id,
+						status: platformApplications.status,
+						authorizationRevision: platformApplications.authorizationRevision,
+					})
+					.from(platformApplications)
+					.where(eq(platformApplications.id, command.applicationId))
+					.for("share");
+				const state = await lockState(transaction, {
+					operation: "stop_agent",
+					subjectType: "agent",
+					subjectId: command.agentId,
+					actorId: command.actorId,
+					idempotencyKey: command.idempotencyKey,
+					requestDigest: digest,
+				});
+				const check = (actor: typeof firstActor) =>
+					requireAgentApplicationGrantAuthorityV1({
+						command,
+						state,
+						actor,
+						actorDisabled: disabled !== undefined,
+						application: application ?? null,
+					});
+				auditContext = { ...auditContext, agentId: state?.agentId };
+				const actorRevision = check(firstActor);
+				const idempotencyScope = and(
+					eq(idempotencyRecords.scopeType, "agent"),
+					eq(idempotencyRecords.scopeId, command.agentId),
+					eq(idempotencyRecords.actorId, command.actorId),
+					eq(idempotencyRecords.commandType, commandType),
+					eq(idempotencyRecords.idempotencyKey, command.idempotencyKey),
+				);
+				const [existing] = await transaction
+					.select()
+					.from(idempotencyRecords)
+					.where(idempotencyScope);
+				if (
+					existing &&
+					(existing.requestDigest !== digest || existing.status !== "completed")
+				)
+					throw new PersonalApiCredentialErrorV1(
+						existing.requestDigest !== digest
+							? "idempotency_conflict"
+							: "unavailable",
+					);
+				if (existing) {
+					const saved = existing.result as Record<string, unknown> | null;
+					if (
+						!saved ||
+						typeof saved !== "object" ||
+						Array.isArray(saved) ||
+						Object.keys(saved).length !== 6 ||
+						saved.schemaVersion !== 1 ||
+						saved.agentId !== command.agentId ||
+						saved.applicationId !== command.applicationId ||
+						typeof saved.granted !== "boolean" ||
+						saved.replayed !== false ||
+						(saved.authorizationRevision !== null &&
+							!validText(saved.authorizationRevision))
+					)
+						throw new PersonalApiCredentialErrorV1("unavailable");
+				}
+				const target = and(
+					eq(agentPrincipalGrants.agentId, command.agentId),
+					eq(agentPrincipalGrants.principalType, "application"),
+					eq(agentPrincipalGrants.principalId, command.applicationId),
+					eq(agentPrincipalGrants.grantType, grantType),
+				);
+				let [grant] = await transaction
+					.select()
+					.from(agentPrincipalGrants)
+					.where(target)
+					.for("update");
+				const plan = planAgentApplicationGrantV1({
+					command,
+					grantType,
+					current: grant
+						? {
+								granted: grant.revokedAt === null,
+								authorizationRevision: grant.authorizationRevision,
+							}
+						: null,
+					replayed: existing !== undefined,
+					nextRevision: randomUUID(),
+					occurredAt: new Date(),
+				});
+				if (plan.mutation === "grant") {
+					[grant] = await transaction
+						.insert(agentPrincipalGrants)
+						.values({
+							agentId: command.agentId,
+							principalType: "application",
+							principalId: command.applicationId,
+							grantType,
+							authorizationRevision: plan.result.authorizationRevision ?? "",
+						})
+						.onConflictDoUpdate({
+							target: [
+								agentPrincipalGrants.agentId,
+								agentPrincipalGrants.principalType,
+								agentPrincipalGrants.principalId,
+								agentPrincipalGrants.grantType,
+							],
+							set: {
+								revokedAt: null,
+								authorizationRevision: plan.result.authorizationRevision ?? "",
+							},
+						})
+						.returning();
+				} else if (plan.mutation === "revoke") {
+					[grant] = await transaction
+						.update(agentPrincipalGrants)
+						.set({
+							revokedAt: plan.occurredAt,
+							authorizationRevision: plan.result.authorizationRevision ?? "",
+						})
+						.where(target)
+						.returning();
+				}
+				const result = plan.result;
+				await transaction
+					.insert(auditEvents)
+					.values({ id: randomUUID(), ...plan.audit });
+				if (!existing)
+					await transaction.insert(idempotencyRecords).values({
+						id: randomUUID(),
+						scopeType: "agent",
+						scopeId: command.agentId,
+						actorId: command.actorId,
+						commandType,
+						idempotencyKey: command.idempotencyKey,
+						requestDigest: digest,
+						status: "completed",
+						result: { ...result },
+					});
+				const finalActor = await readActor();
+				const [finalDisabled] = await transaction
+					.select()
+					.from(platformUserDisables)
+					.where(eq(platformUserDisables.userId, command.actorId));
+				const finalState = await readAgentManagementState(
+					transaction,
+					command.agentId,
+				);
+				const [finalApplication] = await transaction
+					.select({
+						id: platformApplications.id,
+						status: platformApplications.status,
+						authorizationRevision: platformApplications.authorizationRevision,
+					})
+					.from(platformApplications)
+					.where(eq(platformApplications.id, command.applicationId));
+				if (
+					requireAgentApplicationGrantAuthorityV1({
+						command,
+						state: finalState,
+						actor: finalActor,
+						actorDisabled: finalDisabled !== undefined,
+						application: finalApplication ?? null,
+					}) !== actorRevision
+				)
+					throw new PersonalApiCredentialErrorV1("unavailable");
+				const [finalGrant] = await transaction
+					.select()
+					.from(agentPrincipalGrants)
+					.where(target);
+				if (
+					(finalGrant?.authorizationRevision ?? null) !==
+						result.authorizationRevision ||
+					(finalGrant !== undefined && finalGrant.revokedAt === null) !==
+						result.granted
+				)
+					throw new PersonalApiCredentialErrorV1("unavailable");
+				return result;
+			});
+		} catch (error) {
+			const failure =
+				error instanceof PersonalApiCredentialErrorV1
+					? error
+					: new PersonalApiCredentialErrorV1("unavailable");
+			throw withAgentApiAuditContextV1(failure, auditContext);
+		}
+	}
+
+	async recordApiManagementRefusal(input: {
+		readonly requestId: string;
+		readonly traceId: string;
+		readonly reason: string;
+		readonly failed: boolean;
+		readonly operation: "lifecycle" | "manager" | "use" | "state";
+		readonly context?: AgentApiAuditContextV1;
+	}) {
+		try {
+			if (
+				!validText(input.requestId) ||
+				!validText(input.traceId) ||
+				typeof input.failed !== "boolean" ||
+				!["lifecycle", "manager", "use", "state"].includes(input.operation) ||
+				![
+					"invalid_input",
+					"authentication_required",
+					"forbidden",
+					"not_found",
+					"unavailable",
+					"idempotency_conflict",
+					"conflict",
+					"denied",
+				].includes(input.reason)
+			)
+				throw new Error();
+			await this.#database.insert(auditEvents).values({
+				id: randomUUID(),
+				requestId: input.requestId,
+				traceId: input.traceId,
+				actorType: input.context?.principal?.kind ?? "unknown",
+				actorId: input.context?.principal?.id ?? "unknown",
+				action: `api.agent.${input.operation}.refused`,
+				...(input.context?.agentId ? { agentId: input.context.agentId } : {}),
+				targetType: input.context?.agentId ? "agent" : "unknown",
+				targetId: input.context?.agentId ?? "unknown",
+				outcome: input.failed ? "failed" : "rejected",
+				occurredAt: new Date(),
+				details: {
+					reason: input.reason,
+					...(input.context?.command ? { command: input.context.command } : {}),
+				},
+			});
+		} catch {
+			throw new PersonalApiCredentialErrorV1("unavailable");
 		}
 	}
 

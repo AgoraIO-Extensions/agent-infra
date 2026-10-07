@@ -6,7 +6,9 @@ import {
 import type { ApiCredentialMetadataV1, ApiPrincipalV1 } from "./audit-query.js";
 import {
 	PersonalApiCredentialErrorV1,
+	type PersonalApiCredentialScopeV1,
 	parsePersonalApiCredentialScopesV1,
+	personalApiCredentialScopesV1,
 } from "./personal-api-credentials.js";
 import {
 	type CurrentTaskUserV1,
@@ -27,16 +29,23 @@ function date(input: unknown): Date {
 	return new Date(time);
 }
 
-/** Existing audit reads require agent:use plus the consumer's current use grant. */
-export function requireApiAuditCredentialIdentityV1(input: {
-	readonly credential: unknown;
-	readonly user?: unknown;
-	readonly application?: unknown;
-	readonly disabled: boolean;
-	readonly now: Date;
-}): ApiAuditCredentialIdentityV1 {
+/** Authenticate a current subject and credential scope; consumers still enforce object grants. */
+export function requireApiCredentialIdentityV1(
+	input: {
+		readonly credential: unknown;
+		readonly user?: unknown;
+		readonly application?: unknown;
+		readonly disabled: boolean;
+		readonly now: Date;
+	},
+	requiredScope: PersonalApiCredentialScopeV1,
+): ApiAuditCredentialIdentityV1 {
 	try {
-		if (typeof input.disabled !== "boolean") throw new TypeError();
+		if (
+			!personalApiCredentialScopesV1.includes(requiredScope) ||
+			typeof input.disabled !== "boolean"
+		)
+			throw new TypeError();
 		const value = snapshotAgentManagementDataObject(input.credential);
 		requireAgentManagementExactKeys(value, [
 			"schemaVersion",
@@ -75,7 +84,7 @@ export function requireApiAuditCredentialIdentityV1(input: {
 			(credential.expiresAt !== null && credential.expiresAt <= now)
 		)
 			throw new PersonalApiCredentialErrorV1("authentication_required");
-		if (!credential.scopes.includes("agent:use"))
+		if (!credential.scopes.includes(requiredScope))
 			throw new PersonalApiCredentialErrorV1("forbidden");
 		if (principal.kind === "user") {
 			if (input.application !== undefined) throw new TypeError();
@@ -118,4 +127,11 @@ export function requireApiAuditCredentialIdentityV1(input: {
 			throw error;
 		throw new PersonalApiCredentialErrorV1("unavailable");
 	}
+}
+
+/** Audit queries retain their existing agent:use requirement. */
+export function requireApiAuditCredentialIdentityV1(
+	input: Parameters<typeof requireApiCredentialIdentityV1>[0],
+): ApiAuditCredentialIdentityV1 {
+	return requireApiCredentialIdentityV1(input, "agent:use");
 }

@@ -8,6 +8,15 @@ import {
 	TraceIdV1Schema,
 } from "../index.ts";
 import {
+	AgentApiLifecycleRequestV1Schema,
+	AgentApiLifecycleResponseV1Schema,
+	AgentApiStateResponseV1Schema,
+} from "./agent-api-lifecycle.ts";
+import {
+	AgentApplicationManagerRequestV1Schema,
+	AgentApplicationManagerResponseV1Schema,
+} from "./agent-application-manager.ts";
+import {
 	ApplicationApiCredentialRequestV1Schema,
 	ApplicationApiCredentialResponseV1Schema,
 } from "./application-api-credentials.ts";
@@ -51,6 +60,9 @@ const idempotencyHeader = z.strictObject({
 });
 const personalCredentialSecurity: Record<string, never[]>[] = [
 	{ PlatformSession: [] },
+];
+const agentApiCredentialSecurity: Record<string, never[]>[] = [
+	{ platformApiCredential: [] },
 ];
 const agentListSecurity: Record<string, never[]>[] = [
 	{ PlatformSession: [] },
@@ -531,8 +543,23 @@ export const PlatformAuditProjectionV1Schema = z.strictObject({
 export const PlatformAuditProjectionV2Schema =
 	PlatformAuditProjectionV1Schema.extend({
 		schemaVersion: z.literal(2),
+		subjectType: z.enum([
+			"agent_application",
+			"agent",
+			"configuration",
+			"grant",
+			"unknown",
+		]),
 		actor: z.union([
 			BrowserUserProjectionV1Schema,
+			z.strictObject({
+				kind: z.literal("application"),
+				actorId: OpaqueIdV1Schema,
+			}),
+			z.strictObject({
+				kind: z.literal("unknown"),
+				actorId: z.literal("unknown"),
+			}),
 			z.strictObject({
 				kind: z.literal("system"),
 				actorId: OpaqueIdV1Schema,
@@ -1150,6 +1177,111 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/agents/{agentId}/state": {
+		get: {
+			operationId: "getAgentApiStateV1",
+			security: agentApiCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse(
+					"Current authorized Agent lifecycle state",
+					AgentApiStateResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/application-managers/{applicationId}": {
+		put: {
+			operationId: "grantAgentApplicationManagerV1",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ agentId: pathId(), applicationId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationManagerRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Explicit application manage grant",
+					AgentApplicationManagerResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		delete: {
+			operationId: "revokeAgentApplicationManagerV1",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ agentId: pathId(), applicationId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationManagerRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Explicit application manage revocation",
+					AgentApplicationManagerResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/application-use-grants/{applicationId}": {
+		put: {
+			operationId: "grantAgentApplicationUseV1",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ agentId: pathId(), applicationId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationManagerRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Explicit application use grant",
+					AgentApplicationManagerResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		delete: {
+			operationId: "revokeAgentApplicationUseV1",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ agentId: pathId(), applicationId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(
+				AgentApplicationManagerRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Explicit application use revocation",
+					AgentApplicationManagerResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/commands": {
+		post: {
+			operationId: "commandAgentApiLifecycleV1",
+			security: agentApiCredentialSecurity,
+			requestParams: { path: agentPath, header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(AgentApiLifecycleRequestV1Schema),
+			responses: {
+				"202": jsonResponse(
+					"Agent lifecycle command accepted",
+					AgentApiLifecycleResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/applications/{applicationId}/credentials": {
 		post: {
 			operationId: "issueOrRotateApplicationApiCredentialV2",
@@ -1649,6 +1781,11 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	AgentApiStateResponseV1: AgentApiStateResponseV1Schema,
+	AgentApplicationManagerRequestV1: AgentApplicationManagerRequestV1Schema,
+	AgentApplicationManagerResponseV1: AgentApplicationManagerResponseV1Schema,
+	AgentApiLifecycleRequestV1: AgentApiLifecycleRequestV1Schema,
+	AgentApiLifecycleResponseV1: AgentApiLifecycleResponseV1Schema,
 	ApplicationMetadataV1: ApplicationMetadataV1Schema,
 	ApplicationDisableRequestV1: ApplicationDisableRequestV1Schema,
 	ApplicationRegistrationRequestV1: ApplicationRegistrationRequestV1Schema,

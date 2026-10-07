@@ -32,3 +32,26 @@ Kubernetes 凭证或模型原始凭据。issuer/UID 映射由 `@agent-infra/plat
 启动和验收入口见[本地生命周期](../local/README.md)。镜像内模块可加载、
 代理令牌正确与否及 PostgreSQL 会话装配属于部署证据；实际 LDAP 登录、
 停用传播、申请审批、Worker Pod/PVC、模型访问和重启持久化须单独实测。
+
+## 应用 Token 管理 Agent
+
+机器人或服务复用独立应用及其 API Token；同一应用可获得多个 Agent 的显式授权。
+个人 Token 继续使用用户主体。两种主体的同名 ID、幂等记录和审计归属分别处理。
+
+| 操作 | HTTP 入口 | 当前权限 |
+| --- | --- | --- |
+| 授予、撤销应用管理权限 | `PUT` / `DELETE /api/v2/agents/{agentId}/application-managers/{applicationId}` | 当前有效的 Agent Owner 浏览器会话；责任人或管理员身份不替代 Owner |
+| 授予、撤销应用使用权限 | `PUT` / `DELETE /api/v2/agents/{agentId}/application-use-grants/{applicationId}` | 当前有效的 Agent Owner 浏览器会话；与 manage 独立 |
+| 查询 Agent 状态 | `GET /api/v2/agents/{agentId}/state` | Token 的 `agent:read` 范围与该主体当前 manage/use 授权 |
+| 启动、停止、重启 | `POST /api/v2/agents/{agentId}/commands` | Token 的 `agent:manage` 范围与该主体当前 manage 授权 |
+
+授予、撤销的请求体为 `{"schemaVersion":1}`。生命周期请求体为
+`{"schemaVersion":1,"command":"start"}`，`command` 也可为 `stop` 或 `restart`。
+写入操作均需 `Idempotency-Key`；重试仍复核当前权限，撤权后的旧请求不能恢复权限。
+`start` 只接受已停止 Agent；管理员停用的 Agent 不可通过这些命令恢复。
+
+调用接口使用 `Authorization: Bearer <API Token>`，不混用浏览器 Cookie 或自报身份字段。
+Owner 治理入口分别修改应用 manage 或 use 授权，撤销一项不隐式撤销另一项，也不授予应用凭证材料权限。两项授权使用不同幂等命名空间；use 变更由原任务当前授权读取链路消费，不另建授权事实或取消状态机。凭证材料继续按
+[工程 Spec §9.2](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#92-权限顺序)
+独立处理。Token 范围、到期、撤销及当前主体状态在原管理事务内复核，状态、outbox、
+幂等与必要审计共同提交。HTTP 返回管理状态，不等同于 Workload 已就绪。

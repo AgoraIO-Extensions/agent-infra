@@ -31,6 +31,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { readAgentManagementState } from "./agent-management.js";
 import { resolveApiAuditCredentialIdentityV1 } from "./api-audit-identity.js";
+import { readCurrentTaskApiUseGrantV1 } from "./application-task-authorization.js";
 import {
 	type AuditRow,
 	decodePlatformAuditRowV1,
@@ -176,7 +177,7 @@ function candidates(
 				? transaction`exists (select 1 from platform.agent_principal_grants g
 				where g.agent_id = agent.id and g.principal_type = ${scope.principal.kind}
 					and g.principal_id = ${scope.principal.id} and g.grant_type = 'use'
-					and g.revoked_at is null and g.authorization_revision = agent.authorization_revision)`
+					and g.revoked_at is null)`
 				: transaction`(exists (select 1 from platform.agent_owners o where o.agent_id = agent.id and o.owner_id = ${scope.principal.id})
 				or exists (select 1 from platform.agent_availability av where av.agent_id = agent.id
 					and ((av.target_type = 'user' and av.target_id = ${scope.principal.id})
@@ -666,9 +667,16 @@ export class PostgresScopedPlatformAuditQueryV1 {
 				select agent_id from platform.agent_principal_grants
 				where agent_id = ${agentId} and principal_type = ${scope.principal.kind}
 					and principal_id = ${scope.principal.id} and grant_type = 'use'
-					and revoked_at is null and authorization_revision = ${agent.authorization_revision}
+					and revoked_at is null
 				for share`;
 			if (!grant) deny();
+			// Grant and Agent epochs are independent. Reuse the original current-use
+			// parser under this locked row instead of inventing an epoch comparison.
+			const currentGrant = await readCurrentTaskApiUseGrantV1(transaction, {
+				principal: scope.principal,
+				agentId,
+			});
+			if (!currentGrant || currentGrant.revoked) deny();
 			return;
 		}
 		if (!scope.user) deny();

@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { parseTaskApiAuditInputV1 } from "@agent-infra/platform-core";
 
 import { desc, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -13,6 +14,78 @@ const wecomDeliveryAuditMetadata = {
 } as const;
 
 const platformAuditActionMetadata = {
+	"task.api.access": {
+		actorKind: "user",
+		subjectKind: "unknown",
+		details: "task_api",
+	},
+	"task.api.subscription.started": {
+		actorKind: "user",
+		subjectKind: "unknown",
+		details: "task_api",
+	},
+	"task.api.subscription.ended": {
+		actorKind: "user",
+		subjectKind: "unknown",
+		details: "task_api",
+	},
+	"api.agent.state.read": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
+	"api.agent.manager.granted": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
+	"api.agent.manager.revoked": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
+	"api.agent.manager.replayed": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
+	"api.agent.lifecycle.refused": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
+	"api.agent.manager.refused": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
+	"api.agent.state.refused": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
+
+	"api.agent.use.granted": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
+	"api.agent.use.revoked": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
+	"api.agent.use.replayed": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
+	"api.agent.use.refused": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
+
 	"audit.query.completed": {
 		actorKind: "user",
 		subjectKind: "unknown",
@@ -366,6 +439,68 @@ function changedFields(
 		return [];
 	}
 	const detailKind = platformAuditActionMetadata[action].details;
+	if (detailKind === "api_management") {
+		if (action === "api.agent.state.read") {
+			if (details !== null) throw new PlatformAuditQueryError("unavailable");
+			return [];
+		}
+		if (action.endsWith(".refused")) {
+			const value = details as Record<string, unknown> | null;
+			const keys =
+				value && Object.hasOwn(value, "command")
+					? ["reason", "command"]
+					: ["reason"];
+			const commands =
+				action === "api.agent.lifecycle.refused"
+					? ["start", "stop", "restart"]
+					: action === "api.agent.manager.refused"
+						? ["grant_manager", "revoke_manager"]
+						: action === "api.agent.use.refused"
+							? ["grant_use", "revoke_use"]
+							: ["read_state"];
+			if (
+				!exactObject(details, keys) ||
+				!value ||
+				![
+					"invalid_input",
+					"authentication_required",
+					"forbidden",
+					"not_found",
+					"unavailable",
+					"idempotency_conflict",
+					"conflict",
+					"denied",
+				].includes(value.reason as string) ||
+				(Object.hasOwn(value, "command") &&
+					!commands.includes(value.command as string))
+			)
+				throw new PlatformAuditQueryError("unavailable");
+			return [];
+		}
+		if (
+			!exactObject(details, [
+				"applicationId",
+				"grantType",
+				"granted",
+				"authorizationRevision",
+			])
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		const value = details as Record<string, unknown>;
+		if (
+			!validText(value.applicationId) ||
+			value.grantType !==
+				(action.startsWith("api.agent.use.") ? "use" : "manage") ||
+			typeof value.granted !== "boolean" ||
+			(value.authorizationRevision !== null &&
+				!validText(value.authorizationRevision)) ||
+			(value.granted && value.authorizationRevision === null) ||
+			(action.endsWith(".granted") && value.granted !== true) ||
+			(action.endsWith(".revoked") && value.granted !== false)
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		return [];
+	}
 	if (detailKind === false) {
 		if (details !== null) throw new PlatformAuditQueryError("unavailable");
 		return [];
@@ -461,6 +596,7 @@ function changedFields(
 export interface AuditRow {
 	readonly auditId: string;
 	readonly traceId: string;
+	readonly requestId?: string | null;
 	readonly actorType: string;
 	readonly actorId: string;
 	readonly action: string;
@@ -475,6 +611,88 @@ export function decodePlatformAuditRowV1(
 	row: AuditRow,
 ): PlatformAuditProjectionV1 {
 	if (
+		[
+			"task.api.access",
+			"task.api.subscription.started",
+			"task.api.subscription.ended",
+		].includes(row.action)
+	) {
+		try {
+			const value = row.details as Record<string, unknown>;
+			const keys =
+				value && Object.hasOwn(value, "subscriptionId")
+					? [
+							"schemaVersion",
+							"operation",
+							"phase",
+							"reason",
+							"target",
+							"subscriptionId",
+						]
+					: ["schemaVersion", "operation", "phase", "reason", "target"];
+			if (
+				!exactObject(value, keys) ||
+				!["user", "application", "unknown"].includes(row.actorType) ||
+				(row.actorType === "unknown" && row.actorId !== "unknown")
+			)
+				throw new Error();
+			const parsed = parseTaskApiAuditInputV1({
+				...value,
+				auditId: row.auditId,
+				principal:
+					row.actorType === "unknown"
+						? { kind: "unknown" }
+						: { kind: row.actorType, id: row.actorId },
+				result: row.outcome,
+				requestId: row.requestId,
+				traceId: row.traceId,
+				occurredAt: row.occurredAt,
+			});
+			const target = parsed.target;
+			const targetId =
+				target.kind === "unknown"
+					? "unknown"
+					: target.kind === "agent"
+						? target.agentId
+						: target.kind === "conversation"
+							? target.conversationId
+							: target.executionId;
+			const action =
+				parsed.phase === "access"
+					? "task.api.access"
+					: `task.api.${parsed.phase}`;
+			if (
+				action !== row.action ||
+				target.kind !== row.targetType ||
+				targetId !== row.targetId
+			)
+				throw new Error();
+			return {
+				schemaVersion: 1,
+				auditId: row.auditId,
+				actor: {
+					kind: row.actorType as "user" | "application" | "unknown",
+					actorId: row.actorId,
+				},
+				action: row.action as PlatformAuditActionV1,
+				subject: {
+					kind: row.targetType as
+						| "unknown"
+						| "agent"
+						| "conversation"
+						| "execution",
+					subjectId: row.targetId,
+				},
+				result: row.outcome === "succeeded" ? "succeeded" : "failed",
+				summary: `operation=${parsed.operation}; phase=${parsed.phase}; reason=${parsed.reason}`,
+				occurredAt: new Date(row.occurredAt),
+				traceId: row.traceId,
+			};
+		} catch {
+			throw new PlatformAuditQueryError("unavailable");
+		}
+	}
+	if (
 		!validText(row.auditId) ||
 		!validText(row.traceId) ||
 		!validText(row.actorId) ||
@@ -486,8 +704,33 @@ export function decodePlatformAuditRowV1(
 	}
 	const action = row.action as PlatformAuditActionV1;
 	const metadata = platformAuditActionMetadata[action];
-	const expectedActorType = metadata.actorKind;
-	const expectedTargetType = metadata.subjectKind;
+	const api = metadata.details === "api_management";
+	const refusal = api && action.endsWith(".refused");
+	const applicationLifecycle =
+		row.actorType === "application" &&
+		(action === "agent.lifecycle.stopped" ||
+			action === "agent.lifecycle.restarted");
+	const expectedActorType: PlatformAuditProjectionV1["actor"]["kind"] = api
+		? (row.actorType as PlatformAuditProjectionV1["actor"]["kind"])
+		: applicationLifecycle
+			? "application"
+			: metadata.actorKind;
+	const expectedTargetType: PlatformAuditProjectionV1["subject"]["kind"] =
+		refusal ? (row.targetType as "agent" | "unknown") : metadata.subjectKind;
+	if (
+		api &&
+		(refusal
+			? !["user", "application", "unknown"].includes(row.actorType) ||
+				!["agent", "unknown"].includes(row.targetType) ||
+				(row.actorType === "unknown" && row.actorId !== "unknown") ||
+				(row.targetType === "unknown" && row.targetId !== "unknown") ||
+				!["rejected", "failed"].includes(row.outcome)
+			: row.outcome !== "succeeded" ||
+				!(action === "api.agent.state.read"
+					? ["user", "application"].includes(row.actorType)
+					: row.actorType === "user"))
+	)
+		throw new PlatformAuditQueryError("unavailable");
 	const subjectKind: PlatformAuditProjectionV1["subject"]["kind"] =
 		action === "agent.configuration.revised" &&
 		row.targetType === "configuration"
@@ -526,6 +769,7 @@ export function decodePlatformAuditRowV1(
 const auditSelection = {
 	auditId: auditEvents.id,
 	traceId: auditEvents.traceId,
+	requestId: auditEvents.requestId,
 	actorType: auditEvents.actorType,
 	actorId: auditEvents.actorId,
 	action: auditEvents.action,

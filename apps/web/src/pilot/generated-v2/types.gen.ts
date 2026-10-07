@@ -4,6 +4,27 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
+export type AgentApiLifecycleRequestV1 = {
+    command: 'start' | 'stop' | 'restart';
+    schemaVersion: 1;
+};
+
+export type AgentApiLifecycleResponseV1 = {
+    agentId: string;
+    replayed: boolean;
+    revision: number;
+    schemaVersion: 1;
+    status: 'available' | 'stopped';
+};
+
+export type AgentApiStateResponseV1 = {
+    agentId: string;
+    revision: number;
+    schemaVersion: 1;
+    serviceAvailability: 'ready' | 'starting' | 'updating' | 'unavailable' | null;
+    status: 'pending_approval' | 'withdrawn' | 'rejected' | 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
+};
+
 export type AgentApplicationCreateRequestV2 = {
     availability: Array<{
         kind: 'user';
@@ -46,6 +67,19 @@ export type AgentApplicationCreateRequestV2 = {
         interactionMode: 'platform-adapter';
         kind: 'custom';
     };
+};
+
+export type AgentApplicationManagerRequestV1 = {
+    schemaVersion: 1;
+};
+
+export type AgentApplicationManagerResponseV1 = {
+    agentId: string;
+    applicationId: string;
+    authorizationRevision: string | null;
+    granted: boolean;
+    replayed: boolean;
+    schemaVersion: 1;
 };
 
 export type AgentApplicationProjectionV2 = {
@@ -658,6 +692,12 @@ export type PlatformAuditProjectionV2 = {
         userId: string;
     } | {
         actorId: string;
+        kind: 'application';
+    } | {
+        actorId: 'unknown';
+        kind: 'unknown';
+    } | {
+        actorId: string;
         kind: 'system';
     };
     auditId: string;
@@ -665,7 +705,7 @@ export type PlatformAuditProjectionV2 = {
     result: 'succeeded' | 'failed';
     schemaVersion: 2;
     subjectId: string;
-    subjectType: 'agent_application' | 'agent' | 'configuration' | 'grant';
+    subjectType: 'agent_application' | 'agent' | 'configuration' | 'grant' | 'unknown';
     summary: string;
     traceId: string;
 };
@@ -1452,6 +1492,280 @@ export type GetAgentV2Responses = {
 
 export type GetAgentV2Response = GetAgentV2Responses[keyof GetAgentV2Responses];
 
+export type RevokeAgentApplicationManagerV1Data = {
+    body: AgentApplicationManagerRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/application-managers/{applicationId}';
+};
+
+export type RevokeAgentApplicationManagerV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeAgentApplicationManagerV1Error = RevokeAgentApplicationManagerV1Errors[keyof RevokeAgentApplicationManagerV1Errors];
+
+export type RevokeAgentApplicationManagerV1Responses = {
+    /**
+     * Explicit application manage revocation
+     */
+    200: AgentApplicationManagerResponseV1;
+};
+
+export type RevokeAgentApplicationManagerV1Response = RevokeAgentApplicationManagerV1Responses[keyof RevokeAgentApplicationManagerV1Responses];
+
+export type GrantAgentApplicationManagerV1Data = {
+    body: AgentApplicationManagerRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/application-managers/{applicationId}';
+};
+
+export type GrantAgentApplicationManagerV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GrantAgentApplicationManagerV1Error = GrantAgentApplicationManagerV1Errors[keyof GrantAgentApplicationManagerV1Errors];
+
+export type GrantAgentApplicationManagerV1Responses = {
+    /**
+     * Explicit application manage grant
+     */
+    200: AgentApplicationManagerResponseV1;
+};
+
+export type GrantAgentApplicationManagerV1Response = GrantAgentApplicationManagerV1Responses[keyof GrantAgentApplicationManagerV1Responses];
+
+export type RevokeAgentApplicationUseV1Data = {
+    body: AgentApplicationManagerRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/application-use-grants/{applicationId}';
+};
+
+export type RevokeAgentApplicationUseV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeAgentApplicationUseV1Error = RevokeAgentApplicationUseV1Errors[keyof RevokeAgentApplicationUseV1Errors];
+
+export type RevokeAgentApplicationUseV1Responses = {
+    /**
+     * Explicit application use revocation
+     */
+    200: AgentApplicationManagerResponseV1;
+};
+
+export type RevokeAgentApplicationUseV1Response = RevokeAgentApplicationUseV1Responses[keyof RevokeAgentApplicationUseV1Responses];
+
+export type GrantAgentApplicationUseV1Data = {
+    body: AgentApplicationManagerRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+        applicationId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/application-use-grants/{applicationId}';
+};
+
+export type GrantAgentApplicationUseV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GrantAgentApplicationUseV1Error = GrantAgentApplicationUseV1Errors[keyof GrantAgentApplicationUseV1Errors];
+
+export type GrantAgentApplicationUseV1Responses = {
+    /**
+     * Explicit application use grant
+     */
+    200: AgentApplicationManagerResponseV1;
+};
+
+export type GrantAgentApplicationUseV1Response = GrantAgentApplicationUseV1Responses[keyof GrantAgentApplicationUseV1Responses];
+
+export type CommandAgentApiLifecycleV1Data = {
+    body: AgentApiLifecycleRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/commands';
+};
+
+export type CommandAgentApiLifecycleV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CommandAgentApiLifecycleV1Error = CommandAgentApiLifecycleV1Errors[keyof CommandAgentApiLifecycleV1Errors];
+
+export type CommandAgentApiLifecycleV1Responses = {
+    /**
+     * Agent lifecycle command accepted
+     */
+    202: AgentApiLifecycleResponseV1;
+};
+
+export type CommandAgentApiLifecycleV1Response = CommandAgentApiLifecycleV1Responses[keyof CommandAgentApiLifecycleV1Responses];
+
 export type UpdateAgentConfigurationV2Data = {
     body: AgentConfigurationUpdateRequestV2Writable;
     headers: {
@@ -1559,6 +1873,57 @@ export type CommandAgentLifecycleV2Responses = {
 };
 
 export type CommandAgentLifecycleV2Response = CommandAgentLifecycleV2Responses[keyof CommandAgentLifecycleV2Responses];
+
+export type GetAgentApiStateV1Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/state';
+};
+
+export type GetAgentApiStateV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentApiStateV1Error = GetAgentApiStateV1Errors[keyof GetAgentApiStateV1Errors];
+
+export type GetAgentApiStateV1Responses = {
+    /**
+     * Current authorized Agent lifecycle state
+     */
+    200: AgentApiStateResponseV1;
+};
+
+export type GetAgentApiStateV1Response = GetAgentApiStateV1Responses[keyof GetAgentApiStateV1Responses];
 
 export type RegisterApplicationV2Data = {
     body: ApplicationRegistrationRequestV1;
