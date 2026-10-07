@@ -587,7 +587,7 @@ export function createBrowserObserveControllerV1(input: {
 		fields: Partial<BrowserActionRecordV1> = {},
 	): BrowserActionRecordV1 {
 		const actionId = request.actionId ?? `action-${randomUUID()}`;
-		return {
+		const record = {
 			actionId,
 			...(request.operationRef ? { operationRef: request.operationRef } : {}),
 			...(request.attemptRef ? { attemptRef: request.attemptRef } : {}),
@@ -598,6 +598,8 @@ export function createBrowserObserveControllerV1(input: {
 			createdAt,
 			...fields,
 		};
+		actionsById.set(record.actionId, record);
+		return record;
 	}
 
 	function cancelAction(actionId: string): boolean {
@@ -834,7 +836,6 @@ export function createBrowserObserveControllerV1(input: {
 				);
 				if (request.idempotencyKey) {
 					actions.set(request.idempotencyKey, record);
-					actionsById.set(record.actionId, record);
 					actionDigests.set(request.idempotencyKey, requestDigest);
 				}
 				return record;
@@ -934,7 +935,6 @@ export function createBrowserObserveControllerV1(input: {
 				);
 				if (request.idempotencyKey) {
 					actions.set(request.idempotencyKey, record);
-					actionsById.set(record.actionId, record);
 					actionDigests.set(request.idempotencyKey, requestDigest);
 				}
 				return record;
@@ -1039,7 +1039,6 @@ export function createBrowserObserveControllerV1(input: {
 			);
 			if (request.idempotencyKey) {
 				actions.set(request.idempotencyKey, record);
-				actionsById.set(record.actionId, record);
 				actionDigests.set(request.idempotencyKey, requestDigest);
 			}
 			return record;
@@ -1072,7 +1071,6 @@ export function createBrowserObserveControllerV1(input: {
 			);
 			if (request.idempotencyKey) {
 				actions.set(request.idempotencyKey, record);
-				actionsById.set(record.actionId, record);
 				actionDigests.set(request.idempotencyKey, requestDigest);
 			}
 			return record;

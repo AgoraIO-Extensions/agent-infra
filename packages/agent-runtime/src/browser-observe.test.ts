@@ -255,6 +255,12 @@ describe("Browser action cancellation barrier", () => {
 			status: "unknown",
 			reasonCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
 		});
+		expect(
+			controller.readAction({ actionId: "cancelled-action" }),
+		).toMatchObject({
+			status: "unknown",
+			reasonCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
+		});
 		expect(controller.cancelAction("cancelled-action")).toBe(false);
 		await expect(controller.executeAction(request)).resolves.toMatchObject({
 			status: "unknown",
@@ -307,5 +313,84 @@ describe("Browser action outcome readback", () => {
 				idempotencyKey: "missing",
 			}),
 		).toThrow("BROWSER_ACTION_READBACK_CONFLICT");
+	});
+
+	it("indexes actionId-only completed, failed, and rejected outcomes", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability: {
+				...capability,
+				operations: ["navigate", "observe", "interact"],
+			},
+		});
+		const reference = await controller.navigate("https://example.test/app");
+		const observation = await controller.observe(reference);
+		const target = observation.elements[0];
+		if (!target) throw new Error("expected element");
+		const base = {
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			kind: "click" as const,
+			page: reference,
+			target,
+		};
+
+		await expect(
+			controller.executeAction({ ...base, actionId: "completed-action" }),
+		).resolves.toMatchObject({ status: "completed" });
+		expect(
+			controller.readAction({ actionId: "completed-action" }),
+		).toMatchObject({ status: "completed" });
+
+		let releaseClick!: () => void;
+		page.pageLocator.click = vi.fn(
+			() => new Promise<void>((resolve) => (releaseClick = resolve)),
+		);
+		const pending = controller.executeAction({
+			...base,
+			actionId: "unknown-action",
+		});
+		await Promise.resolve();
+		expect(controller.cancelAction("unknown-action")).toBe(true);
+		releaseClick();
+		await expect(pending).resolves.toMatchObject({
+			status: "unknown",
+			reasonCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
+		});
+		expect(controller.readAction({ actionId: "unknown-action" })).toMatchObject(
+			{
+				status: "unknown",
+			},
+		);
+
+		page.pageLocator.click = vi.fn(async () => {
+			throw new Error("fixture failure");
+		});
+		await expect(
+			controller.executeAction({ ...base, actionId: "failed-action" }),
+		).resolves.toMatchObject({ status: "failed" });
+		expect(controller.readAction({ actionId: "failed-action" })).toMatchObject({
+			status: "failed",
+		});
+
+		await expect(
+			controller.executeAction({
+				...base,
+				actionId: "rejected-action",
+				operationRef: undefined,
+				attemptRef: undefined,
+			}),
+		).resolves.toMatchObject({
+			status: "rejected",
+			reasonCode: "BROWSER_ACTION_OPERATION_REQUIRED",
+		});
+		expect(
+			controller.readAction({ actionId: "rejected-action" }),
+		).toMatchObject({
+			status: "rejected",
+			reasonCode: "BROWSER_ACTION_OPERATION_REQUIRED",
+		});
 	});
 });
