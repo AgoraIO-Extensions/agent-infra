@@ -20,6 +20,7 @@ import nativeBarrierManifest from "../../../deploy/runtime/vendor/codex/native-b
 };
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
+	CODEX_MODEL_ONLY_CONFIG,
 	type CodexAppServerBridgeOptions,
 	type CodexAppServerFrame,
 	type CodexModelAccess,
@@ -31,13 +32,19 @@ import type {
 	CodexNativeTurn,
 } from "./codex-model-transport.js";
 import * as codexModelTransport from "./codex-model-transport.js";
+import { seedNativeCommandState } from "./codex-native-command.test-support.js";
 import codexRelease from "./codex-release.json" with { type: "json" };
 import {
 	type CodexInstalledSkillDescriptorV1,
+	type CodexNativeCommandReadContext,
 	CodexRuntimeDriver,
 	type CodexRuntimeDriverOptions,
 } from "./codex-runtime-driver.js";
 import { openCodexRuntimeDriverForTest } from "./codex-runtime-driver.test-support.js";
+import {
+	type CodexSkillLaunchProvenance,
+	codexSkillLaunch,
+} from "./codex-skill-launch.internal.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
@@ -617,7 +624,7 @@ function openDriverWithModelEndpoint(
 	endpoint: string,
 	onOpen?: (options: CodexAppServerBridgeOptions) => void,
 	configVersion?: string,
-	credential = upstreamModelAccess.credential,
+	credential: string | null = upstreamModelAccess.credential,
 	authorizeExternalAction?: CodexRuntimeDriverOptions["authorizeExternalAction"],
 	waitForInitialModelRequest = false,
 ) {
@@ -630,7 +637,7 @@ function openDriverWithModelEndpoint(
 			modelOptions: driverOptions(path).modelOptions.map((option) => ({
 				...option,
 				endpoint,
-				credential,
+				credential: credential ?? undefined,
 			})),
 		},
 		async (options) => {
@@ -9920,4 +9927,738 @@ describe("Codex model started Driver state guard", () => {
 			}
 		},
 	);
+});
+
+// Complete-entry scripted tests. These mappings/configs are not native acceptance.
+class SkillDiscoveryBridge extends TestCodexBridge {
+	launch?: CodexSkillLaunchProvenance;
+	metadata: Record<string, unknown> = {
+		name: "workspace-summary",
+		description:
+			"显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。",
+		path: "/opt/codex/agent-infra-skills/workspace-summary/SKILL.md",
+		scope: "user",
+		enabled: true,
+		pluginId: null,
+	};
+	result?: unknown;
+	setResult: unknown = {};
+	setError?: number;
+	holdSet = false;
+	beforeResponse?: (method: string) => void;
+	holdList = false;
+	held: CodexAppServerFrame[] = [];
+	listError?: number;
+	listSendFailure?: () => Promise<void>;
+	closedCount = 0;
+
+	nativeSkillLaunch() {
+		if (!this.launch || this.closedCount) throw new Error("No current launch");
+		return this.launch;
+	}
+
+	get [codexSkillLaunch]() {
+		return this.nativeSkillLaunch();
+	}
+
+	override async send(frame: CodexAppServerFrame) {
+		const method = frame.method;
+		if (
+			method !== "skills/extraRoots/set" &&
+			method !== "skills/list" &&
+			method !== "thread/read"
+		) {
+			if (typeof method === "string") this.beforeResponse?.(method);
+			return super.send(frame);
+		}
+		this.requests.push({ method, params: frame.params });
+		if (method === "skills/extraRoots/set") {
+			void this.emitFrame({ method: "skills/changed", params: {} });
+			this.beforeResponse?.(method);
+			if (!this.holdSet)
+				void this.emitFrame(
+					this.setError === undefined
+						? { id: frame.id, result: this.setResult }
+						: {
+								id: frame.id,
+								error: { code: this.setError, message: "private /secret/root" },
+							},
+				);
+		} else if (method === "skills/list") {
+			if (this.listSendFailure) return this.listSendFailure();
+			if (this.holdList) this.held.push(frame);
+			else this.release(frame);
+		} else
+			void this.emitFrame({
+				id: frame.id,
+				result: {
+					thread: {
+						id: this.nativeThreadId,
+						status: { type: "notLoaded" },
+						turns: [],
+					},
+				},
+			});
+	}
+
+	release(frame = this.held.shift()) {
+		if (!frame) throw new Error("Missing held Skill read");
+		this.beforeResponse?.("skills/list");
+		void this.emitFrame(
+			this.listError === undefined
+				? {
+						id: frame.id,
+						result: this.result ?? {
+							data: [
+								{
+									cwd: this.launch?.cwd,
+									skills: [this.metadata],
+									errors: [],
+								},
+							],
+						},
+					}
+				: {
+						id: frame.id,
+						error: { code: this.listError, message: "private /secret/skill" },
+					},
+		);
+	}
+
+	override async close() {
+		this.closedCount++;
+		await super.close();
+	}
+}
+
+async function skillDiscoveryFixture(
+	configure?: (
+		bridge: SkillDiscoveryBridge,
+		config: {
+			config: Record<string, unknown>;
+			origins: Record<string, unknown>;
+		},
+	) => void,
+	optionsOverride: Partial<CodexRuntimeDriverOptions> = {},
+) {
+	const directory = await runtimeDirectory();
+	const seeded = await seedNativeCommandState(
+		directory,
+		"codex-native-thread-private",
+	);
+	const bridge = new SkillDiscoveryBridge();
+	const options: CodexRuntimeDriverOptions = {
+		...driverOptions(seeded.path),
+		nativeLane: "official-model-only",
+		configVersion: "config-1",
+		installedSkill: installedSkillDescriptor("config-1"),
+		modelOptions: driverOptions(seeded.path).modelOptions.map((model) => ({
+			...model,
+			...upstreamModelAccess,
+		})),
+		authorizeExternalAction: async () => {
+			throw new Error("Unexpected business HTTP");
+		},
+		...optionsOverride,
+	};
+	const driver = await RuntimeBindingDriver.openBound(
+		options,
+		async (launch) => {
+			if (!launch.modelAccess) throw new Error("Missing model access");
+			bridge.launch = Object.freeze({
+				transport: bridge,
+				processId: "controlled-process-1",
+				conversationKey: launch.conversationKey,
+				cwd: join(directory, "actual-spawn-workspace"),
+				bundledSkillsDisabled: launch.disableBundledSkills === true,
+			});
+			const result = modelAccessConfigReadResult(launch.modelAccess) as {
+				config: Record<string, unknown>;
+				origins: Record<string, unknown>;
+			};
+			const config = result.config as Record<string, unknown>;
+			for (const [key, value] of Object.entries(CODEX_MODEL_ONLY_CONFIG)) {
+				const parts = key.split(".");
+				let target = config;
+				for (const part of parts.slice(0, -1)) {
+					target[part] ??= {};
+					target = target[part] as Record<string, unknown>;
+				}
+				target[parts.at(-1) as string] = value;
+				result.origins[key] = sessionFlagOrigin();
+			}
+			if (launch.disableBundledSkills) {
+				config.skills = { bundled: { enabled: false } };
+				result.origins["skills.bundled.enabled"] = sessionFlagOrigin();
+			}
+			configure?.(bridge, result);
+			bridge.setConfigReadResult(result);
+			return bridge;
+		},
+	);
+	drivers.push(driver);
+	const abort = new AbortController();
+	const read = {
+		nativeSessionRef: seeded.nativeSessionRef,
+		signal: abort.signal,
+		expiresAt: Date.now() + 10_000,
+		assertCurrent: () => seeded.binding,
+		revalidate: async () => seeded.binding,
+	} satisfies CodexNativeCommandReadContext;
+	return { ...seeded, driver, bridge, read, abort, directory };
+}
+
+describe("installed Codex Skill complete discovery (controlled behavior only)", () => {
+	it.each(["null metadata", "null interface fields"])(
+		"admits the official absent %s shape without accepting assets or dependencies",
+		async (kind) => {
+			const f = await skillDiscoveryFixture();
+			Object.assign(f.bridge.metadata, {
+				shortDescription: null,
+				interface:
+					kind === "null metadata"
+						? null
+						: {
+								displayName: null,
+								shortDescription: null,
+								iconSmall: null,
+								iconLarge: null,
+								iconSmallUrl: null,
+								iconLargeUrl: null,
+								brandColor: null,
+								defaultPrompt: null,
+							},
+				dependencies: null,
+			});
+			await expect(
+				f.driver.discoverNativeSkills(f.read),
+			).resolves.toMatchObject({
+				capabilities: [
+					{
+						availability: "discovered",
+						description:
+							"显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。",
+					},
+				],
+			});
+		},
+	);
+
+	it("rejects a supplier description that does not match the trusted fixed package", async () => {
+		const f = await skillDiscoveryFixture();
+		f.bridge.metadata.description =
+			"private conversation body with correct Skill identity";
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+			message: expect.not.stringMatching(/private|conversation|body/),
+		});
+	});
+
+	it("rejects description approval when the trusted package entry digest is a different package", async () => {
+		const descriptor = installedSkillDescriptor("config-1");
+		descriptor.manifest.files[0].sha256 = "b".repeat(64);
+		const f = await skillDiscoveryFixture(undefined, {
+			installedSkill: descriptor,
+		});
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+		});
+	});
+
+	it.each([
+		"initialize",
+		"config/read",
+		"model/list",
+		"skills/extraRoots/set",
+		"skills/list",
+		"projection",
+	])(
+		"awaits async current authority after %s before admitting the next Skill dependency",
+		async (stage) => {
+			const f = await skillDiscoveryFixture();
+			let projected = false;
+			Object.defineProperty(f.bridge.metadata, "description", {
+				enumerable: true,
+				get: () => {
+					projected = true;
+					return "显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。";
+				},
+			});
+			const held = Promise.withResolvers<typeof f.binding>();
+			let reached = false;
+			f.read.revalidate = async () => {
+				if (
+					stage === "projection"
+						? projected
+						: f.bridge.requests.at(-1)?.method === stage
+				) {
+					reached = true;
+					return held.promise;
+				}
+				return f.binding;
+			};
+			const query = f.driver.discoverNativeSkills(f.read);
+			const rejected = expect(query).rejects.toMatchObject({
+				code: "RUNTIME_GRANT_INVALID",
+			});
+			await vi.waitFor(() => expect(reached).toBe(true));
+			const requests = [...f.bridge.requests];
+			held.resolve({
+				...f.binding,
+				principal: { kind: "user", id: "remote-revoked-reader" },
+			});
+			await rejected;
+			expect(f.bridge.requests).toEqual(requests);
+		},
+	);
+
+	it.each(["epoch", "process"])(
+		"checks the original Skill %s after awaiting current authority at final projection",
+		async (kind) => {
+			const f = await skillDiscoveryFixture();
+			let projected = false;
+			Object.defineProperty(f.bridge.metadata, "description", {
+				enumerable: true,
+				get: () => {
+					projected = true;
+					return "显式选择本 Skill 后，读取当前授权工作区中的指定文本文件并给出有来源依据的摘要。";
+				},
+			});
+			const held = Promise.withResolvers<typeof f.binding>();
+			let reached = false;
+			f.read.revalidate = async () => {
+				if (projected) {
+					reached = true;
+					return held.promise;
+				}
+				return f.binding;
+			};
+			const query = f.driver.discoverNativeSkills(f.read);
+			const rejected = expect(query).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_SKILL_DIRECTORY_STALE",
+			});
+			await vi.waitFor(() => expect(reached).toBe(true));
+			if (kind === "epoch")
+				await f.bridge.emitFrame({ method: "skills/changed", params: {} });
+			else if (f.bridge.launch)
+				f.bridge.launch = Object.freeze({
+					...f.bridge.launch,
+					processId: "foreign-process",
+				});
+			held.resolve(f.binding);
+			await rejected;
+			expect(f.bridge.closedCount).toBe(0);
+		},
+	);
+
+	it("bounds a cached Skill query awaiting current confirmation and preserves its ordinary RPC", async () => {
+		const f = await skillDiscoveryFixture();
+		await f.driver.discoverNativeSkills(f.read);
+		const held = Promise.withResolvers<typeof f.binding>();
+		let reached = false;
+		f.read.revalidate = async () => {
+			if (f.bridge.requests.at(-1)?.method === "skills/list") {
+				reached = true;
+				return held.promise;
+			}
+			return f.binding;
+		};
+		const before = f.bridge.requests.length;
+		const query = f.driver.discoverNativeSkills(f.read);
+		const rejected = expect(query).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		await vi.waitFor(() => expect(reached).toBe(true));
+		f.abort.abort();
+		await rejected;
+		held.resolve(f.binding);
+		f.read.revalidate = async () => f.binding;
+		await expect(
+			f.driver.discoverNativeCommands({
+				...f.read,
+				signal: new AbortController().signal,
+			}),
+		).resolves.toBeDefined();
+		expect(
+			f.bridge.requests
+				.slice(before)
+				.filter((request) => request.method === "skills/list"),
+		).toEqual([]);
+		expect(f.bridge.closedCount).toBe(0);
+	});
+
+	it("consumes actual spawn provenance, admits complete directory and sets roots only once", async () => {
+		const f = await skillDiscoveryFixture();
+		const first = await f.driver.discoverNativeSkills(f.read);
+		const second = await f.driver.discoverNativeSkills(f.read);
+		expect(second).toEqual(first);
+		expect(first.capabilities[0]).toMatchObject({
+			name: "workspace-summary",
+			kind: "skill",
+			availability: "discovered",
+			description: f.bridge.metadata.description,
+			source: { version: "0.1.0-candidate.1" },
+		});
+		expect(JSON.stringify(first)).not.toMatch(
+			/\/opt\/|actual-spawn|session-private/,
+		);
+		expect(f.bridge.requests.map((r) => r.method)).toEqual([
+			"initialize",
+			"config/read",
+			"model/list",
+			"skills/extraRoots/set",
+			"skills/list",
+			"skills/list",
+		]);
+		expect(f.bridge.requests[3]?.params).toEqual({
+			extraRoots: ["/opt/codex/agent-infra-skills"],
+		});
+		expect(f.bridge.requests[4]?.params).toEqual({
+			cwds: [f.bridge.launch?.cwd],
+			forceReload: true,
+		});
+	});
+
+	it.each([true, undefined, "false", 0])(
+		"rejects actual bundled.enabled=%s before set",
+		async (value) => {
+			const f = await skillDiscoveryFixture((_bridge, config) => {
+				(config.config as Record<string, unknown>).skills = {
+					bundled: { enabled: value },
+				};
+			});
+			await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject(
+				{ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" },
+			);
+			expect(
+				f.bridge.requests.some((r) => r.method.startsWith("skills/")),
+			).toBe(false);
+		},
+	);
+
+	it.each(["missing", "foreign"])("rejects %s bundled origin", async (kind) => {
+		const f = await skillDiscoveryFixture((_bridge, config) => {
+			if (kind === "missing") delete config.origins["skills.bundled.enabled"];
+			else
+				config.origins["skills.bundled.enabled"] = {
+					name: { type: "user", file: "/personal/config" },
+					version: "1",
+				};
+		});
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toBeDefined();
+		expect(
+			f.bridge.requests.some((r) => r.method === "skills/extraRoots/set"),
+		).toBe(false);
+	});
+
+	it.each([
+		"missing",
+		"foreign transport",
+		"foreign Conversation",
+		"relative",
+		"control character",
+		"changed receipt",
+	])("rejects %s cwd provenance without fallback", async (kind) => {
+		const f = await skillDiscoveryFixture((bridge) => {
+			if (kind === "missing") bridge.launch = undefined;
+			else if (bridge.launch)
+				bridge.launch = Object.freeze({
+					...bridge.launch,
+					...(kind === "foreign transport" ? { transport: {} } : {}),
+					...(kind === "foreign Conversation"
+						? { conversationKey: "f".repeat(64) }
+						: {}),
+					...(kind === "relative" ? { cwd: "caller/path" } : {}),
+					...(kind === "control character"
+						? { cwd: "/caller/\u0000workspace" }
+						: {}),
+				});
+		});
+		if (kind === "changed receipt") {
+			await f.driver.discoverNativeSkills(f.read);
+			f.bridge.launch = Object.freeze({ ...f.bridge.nativeSkillLaunch() });
+		}
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toBeDefined();
+		if (kind !== "changed receipt") expect(f.bridge.requests).toEqual([]);
+	});
+
+	it.each([
+		["missing", {}],
+		["wrong name", { name: "other" }],
+		["wrong path", { path: "/personal/SKILL.md" }],
+		["disabled", { enabled: false }],
+		["wrong enabled type", { enabled: "true" }],
+		["repo", { scope: "repo" }],
+		["system", { scope: "system" }],
+		["admin", { scope: "admin" }],
+		["plugin", { pluginId: "extra-plugin" }],
+		["missing plugin tag", { pluginId: undefined }],
+		["description type", { description: {} }],
+		["oversized description", { description: "x".repeat(4097) }],
+		["extra metadata", { hiddenSource: "personal" }],
+		["tool dependency", { dependencies: { tools: [{}] } }],
+		[
+			"remote icon",
+			{
+				interface: {
+					iconSmallUrl: "https://personal/icon",
+					iconLargeUrl: null,
+				},
+			},
+		],
+	] as const)(
+		"rejects whole directory with %s metadata",
+		async (kind, override) => {
+			const f = await skillDiscoveryFixture();
+			f.bridge.metadata =
+				kind === "missing" ? {} : { ...f.bridge.metadata, ...override };
+			await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject(
+				{ code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID" },
+			);
+		},
+	);
+
+	it.each([
+		"empty",
+		"extra skill",
+		"duplicate skill",
+		"errors",
+		"foreign cwd",
+		"duplicate cwd",
+		"wrong shape",
+		"extra response",
+	])("rejects the complete %s response instead of filtering", async (kind) => {
+		const f = await skillDiscoveryFixture();
+		await f.driver.discoverNativeSkills(f.read);
+		const entry = {
+			cwd: f.bridge.launch?.cwd,
+			skills: [f.bridge.metadata],
+			errors: [] as unknown[],
+		};
+		if (kind === "empty") entry.skills = [];
+		if (kind === "extra skill")
+			entry.skills.push({
+				...f.bridge.metadata,
+				path: "/home/personal/SKILL.md",
+			});
+		if (kind === "duplicate skill") entry.skills.push(f.bridge.metadata);
+		if (kind === "errors")
+			entry.errors.push({ path: "/secret", message: "private body" });
+		if (kind === "foreign cwd") entry.cwd = "/caller/fallback";
+		f.bridge.result =
+			kind === "wrong shape"
+				? { data: {} }
+				: {
+						data: kind === "duplicate cwd" ? [entry, entry] : [entry],
+						...(kind === "extra response" ? { hidden: "source" } : {}),
+					};
+		const result = f.driver.discoverNativeSkills(f.read);
+		await expect(result).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+		});
+	});
+
+	it("binds revision to complete metadata and invalidation epoch without treating changed as a new directory", async () => {
+		const f = await skillDiscoveryFixture();
+		const first = await f.driver.discoverNativeSkills(f.read);
+		f.bridge.metadata = {
+			...f.bridge.metadata,
+			shortDescription: "unprojected approved metadata",
+		};
+		const second = await f.driver.discoverNativeSkills(f.read);
+		expect(second.revision).not.toBe(first.revision);
+		await f.bridge.emitFrame({ method: "skills/changed", params: {} });
+		const third = await f.driver.discoverNativeSkills(f.read);
+		expect(third.revision).not.toBe(second.revision);
+		expect(
+			f.bridge.requests.filter((r) => r.method === "skills/extraRoots/set"),
+		).toHaveLength(1);
+	});
+
+	it.each([
+		"initialize",
+		"config/read",
+		"model/list",
+		"skills/extraRoots/set",
+		"skills/list",
+	])("rechecks authority after awaited %s", async (method) => {
+		const f = await skillDiscoveryFixture();
+		f.bridge.beforeResponse = (at) => {
+			if (at === method) f.binding.principal.id = "revoked-reader";
+		};
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		const index = f.bridge.requests.findIndex((r) => r.method === method);
+		expect(f.bridge.requests.slice(index + 1)).toEqual([]);
+	});
+
+	it.each(["scope", "config", "throw", "deadline", "abort"])(
+		"rejects current %s changes during list",
+		async (kind) => {
+			const f = await skillDiscoveryFixture();
+			f.bridge.beforeResponse = (method) => {
+				if (method !== "skills/list") return;
+				if (kind === "scope") f.binding.scope.executionId = "foreign-execution";
+				if (kind === "throw")
+					f.read.assertCurrent = () => {
+						throw new Error("revoked");
+					};
+				if (kind === "deadline") f.read.expiresAt = Date.now() - 1;
+				if (kind === "abort") f.abort.abort();
+				if (kind === "config")
+					(f.driver as unknown as { configVersion: string }).configVersion =
+						"changed-config";
+			};
+			await expect(f.driver.discoverNativeSkills(f.read)).rejects.toBeDefined();
+		},
+	);
+
+	it("rejects changed during list and reuses the same process on the next explicit read", async () => {
+		const f = await skillDiscoveryFixture();
+		f.bridge.beforeResponse = (method) => {
+			if (method === "skills/list")
+				void f.bridge.emitFrame({ method: "skills/changed", params: {} });
+		};
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_SKILL_DIRECTORY_STALE",
+			message: expect.not.stringMatching(/private|secret/),
+		});
+		f.bridge.beforeResponse = undefined;
+		await expect(f.driver.discoverNativeSkills(f.read)).resolves.toBeDefined();
+		expect(f.bridge.closedCount).toBe(0);
+	});
+
+	it.each(["abort", "timeout"])(
+		"abandons a waiting %s read, ignores its late frame and preserves ordinary command reuse",
+		async (kind) => {
+			const f = await skillDiscoveryFixture();
+			await f.driver.discoverNativeSkills(f.read);
+			f.bridge.holdList = true;
+			if (kind === "timeout") f.read.expiresAt = Date.now() + 100;
+			const pending = f.driver.discoverNativeSkills(f.read);
+			const assertion = expect(pending).rejects.toBeDefined();
+			await vi.waitFor(() => expect(f.bridge.held).toHaveLength(1));
+			if (kind === "abort") f.abort.abort();
+			await assertion;
+			f.bridge.release();
+			const read = {
+				...f.read,
+				signal: new AbortController().signal,
+				expiresAt: Date.now() + 10_000,
+			};
+			await expect(
+				f.driver.discoverNativeCommands(read),
+			).resolves.toBeDefined();
+			expect(f.bridge.closedCount).toBe(0);
+		},
+	);
+
+	it("rejects original process retirement while list is waiting", async () => {
+		const f = await skillDiscoveryFixture();
+		f.bridge.holdList = true;
+		const pending = f.driver.discoverNativeSkills(f.read);
+		const assertion = expect(pending).rejects.toBeDefined();
+		await vi.waitFor(() => expect(f.bridge.held).toHaveLength(1));
+		await f.bridge.close();
+		await assertion;
+	});
+
+	it("retires on genuine list send failure and never exposes the supplier message", async () => {
+		const f = await skillDiscoveryFixture();
+		f.bridge.listSendFailure = async () => {
+			throw new Error("private /secret");
+		};
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_SKILL_DIRECTORY_STALE",
+		});
+		expect(f.bridge.closedCount).toBeGreaterThan(0);
+	});
+
+	it.each([-32601, -32600, -32000])(
+		"rejects native list error %s locally and preserves ordinary command reuse",
+		async (code) => {
+			const f = await skillDiscoveryFixture();
+			f.bridge.listError = code;
+			await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject(
+				{
+					code:
+						code === -32601
+							? "RUNTIME_CODEX_COMMAND_UNSUPPORTED"
+							: "RUNTIME_CODEX_UNAVAILABLE",
+					message: expect.not.stringMatching(/private|secret/),
+				},
+			);
+			await expect(
+				f.driver.discoverNativeCommands(f.read),
+			).resolves.toBeDefined();
+			expect(f.bridge.closedCount).toBe(0);
+			f.bridge.listError = undefined;
+			await expect(
+				f.driver.discoverNativeSkills(f.read),
+			).resolves.toBeDefined();
+			expect(
+				f.bridge.requests.filter((r) => r.method === "skills/extraRoots/set"),
+			).toHaveLength(1);
+		},
+	);
+
+	it.each(["malformed ACK", "native error"])(
+		"rejects fixed-root %s before list",
+		async (kind) => {
+			const f = await skillDiscoveryFixture();
+			if (kind === "malformed ACK")
+				f.bridge.setResult = { extraRoots: ["/secret/root"] };
+			else f.bridge.setError = -32601;
+			await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject(
+				{
+					code: "RUNTIME_CODEX_PROTOCOL_INVALID",
+					message: expect.not.stringMatching(/private|secret/),
+				},
+			);
+			expect(f.bridge.requests.some((r) => r.method === "skills/list")).toBe(
+				false,
+			);
+			expect(f.bridge.closedCount).toBeGreaterThan(0);
+		},
+	);
+
+	it("does not list after a timed-out fixed-root assembly", async () => {
+		const f = await skillDiscoveryFixture();
+		f.bridge.holdSet = true;
+		vi.useFakeTimers();
+		try {
+			const pending = f.driver.discoverNativeSkills({
+				...f.read,
+				expiresAt: Date.now() + 60_000,
+			});
+			const assertion = expect(pending).rejects.toBeDefined();
+			await vi.waitFor(() =>
+				expect(
+					f.bridge.requests.some((r) => r.method === "skills/extraRoots/set"),
+				).toBe(true),
+			);
+			await vi.advanceTimersByTimeAsync(60_000);
+			await assertion;
+			expect(f.bridge.requests.some((r) => r.method === "skills/list")).toBe(
+				false,
+			);
+			expect(f.bridge.closedCount).toBeGreaterThan(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not configure roots or advertise Skills without an installed descriptor", async () => {
+		const f = await skillDiscoveryFixture(undefined, {
+			installedSkill: undefined,
+		});
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toBeDefined();
+		await expect(
+			f.driver.discoverNativeCommands(f.read),
+		).resolves.toBeDefined();
+		expect(f.bridge.requests.some((r) => r.method.startsWith("skills/"))).toBe(
+			false,
+		);
+	});
 });
