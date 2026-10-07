@@ -48,6 +48,11 @@ export interface StandardMcpInput extends RuntimeOriginalEvidenceBinding {
 	};
 }
 
+export type StandardMcpInstallationMetadata = Omit<
+	StandardMcpInput,
+	"scope" | "token"
+> & { readonly agentId: string };
+
 export interface StandardMcpClientOptions {
 	/** The local Host producer output; never a transport assertion. */
 	readonly target: ApprovedConnectionConsumerTargetV1;
@@ -157,17 +162,17 @@ function schemaValidator(schema: unknown): ValidateFunction {
 	}
 }
 
-export function validateStandardMcpMetadata(
+/** Installation fields only; no fabricated original execution scope. */
+export function validateStandardMcpInstallationMetadata(
 	value: unknown,
-	reference: RuntimeOriginalExecutionRef,
 	target: ApprovedConnectionConsumerTargetV1,
-): Omit<StandardMcpInput, "token"> {
+): StandardMcpInstallationMetadata {
 	if (
 		!record(value) ||
 		!keys(value, [
 			"schemaVersion",
 			"principal",
-			"scope",
+			"agentId",
 			"serviceRef",
 			"consumerId",
 			"instanceRef",
@@ -183,12 +188,7 @@ export function validateStandardMcpMetadata(
 		]) ||
 		value.schemaVersion !== 1 ||
 		!RuntimePrincipalV1Schema.safeParse(value.principal).success ||
-		!isDeepStrictEqual(value.scope, {
-			agentId: reference.agentId,
-			conversationId: reference.conversationId,
-			sessionGeneration: reference.sessionGeneration,
-			executionId: reference.executionId,
-		}) ||
+		typeof value.agentId !== "string" ||
 		value.consumerId !== target.profile.consumerId ||
 		value.resource !== target.url ||
 		value.audience !== target.profile.audience ||
@@ -255,7 +255,41 @@ export function validateStandardMcpMetadata(
 			schemaValidator(policy.failedResultSchema);
 	}
 	boundedJson(contract);
-	return structuredClone(value) as unknown as Omit<StandardMcpInput, "token">;
+	return structuredClone(value) as unknown as StandardMcpInstallationMetadata;
+}
+
+export function validateStandardMcpMetadata(
+	value: unknown,
+	reference: RuntimeOriginalExecutionRef,
+	target: ApprovedConnectionConsumerTargetV1,
+): Omit<StandardMcpInput, "token"> {
+	if (
+		!record(value) ||
+		"agentId" in value ||
+		!isDeepStrictEqual(value.scope, {
+			agentId: reference.agentId,
+			conversationId: reference.conversationId,
+			sessionGeneration: reference.sessionGeneration,
+			executionId: reference.executionId,
+		})
+	)
+		unavailable();
+	const { scope, ...installation } = value;
+	const { agentId: _agentId, ...metadata } =
+		validateStandardMcpInstallationMetadata(
+			{ ...installation, agentId: reference.agentId },
+			target,
+		);
+	return { ...metadata, scope: structuredClone(scope) } as Omit<
+		StandardMcpInput,
+		"token"
+	>;
+}
+
+export function validateStandardMcpToken(value: unknown): string {
+	if (typeof value !== "string" || !/^[\x21-\x7e]{16,4096}$/.test(value))
+		unavailable();
+	return value;
 }
 
 export function validateStandardMcpInput(
@@ -263,14 +297,12 @@ export function validateStandardMcpInput(
 	reference: RuntimeOriginalExecutionRef,
 	target: ApprovedConnectionConsumerTargetV1,
 ): StandardMcpInput {
-	if (
-		!record(value) ||
-		typeof value.token !== "string" ||
-		!/^[\x21-\x7e]{16,4096}$/.test(value.token)
-	)
-		unavailable();
+	if (!record(value)) unavailable();
 	const { token, ...metadata } = value;
-	return { ...validateStandardMcpMetadata(metadata, reference, target), token };
+	return {
+		...validateStandardMcpMetadata(metadata, reference, target),
+		token: validateStandardMcpToken(token),
+	};
 }
 
 function containsCredential(value: unknown, token: string) {

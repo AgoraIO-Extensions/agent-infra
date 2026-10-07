@@ -22,7 +22,14 @@ import {
 	signV3Fixture,
 	submitV3Fixture,
 } from "../../../packages/agent-runtime/src/grant-v2-fixture.test-support.js";
+import {
+	closeStandardMcpFixtures,
+	reference,
+	standardMcpFixture,
+	token,
+} from "../../../packages/agent-runtime/src/standard-mcp.fixture.js";
 import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.js";
+import { writeStandardMcpExport } from "./standard-mcp-installation.test-support.js";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
@@ -39,6 +46,11 @@ vi.mock("./installed-skill.js", () => ({
 vi.mock("./process-protection.js", () => ({
 	assertRuntimeProcessProtection:
 		runtimeAssemblyMocks.assertRuntimeProcessProtection,
+}));
+
+// Assembly tests exercise real private file reception, not Linux acceptance.
+vi.mock("./standard-mcp-protection.js", () => ({
+	assertStandardMcpProcessProtection: vi.fn(),
 }));
 
 vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
@@ -94,10 +106,11 @@ afterEach(async () => {
 	for (const directory of directories.splice(0)) {
 		await rm(directory, { recursive: true, force: true });
 	}
+	await closeStandardMcpFixtures();
 });
 
 describe("RuntimeHost environment assembly", () => {
-	it("retains signed control and original facts after an installation becomes invalid", async () => {
+	async function retainSignedControl(failure: string) {
 		const values = await environment();
 		values.AGENT_INFRA_RUNTIME_DATA_DIR = await realpath(
 			values.AGENT_INFRA_RUNTIME_DATA_DIR,
@@ -198,7 +211,15 @@ describe("RuntimeHost environment assembly", () => {
 			),
 			{ recursive: true, mode: 0o755 },
 		);
-		const restored = await assembleRuntimeHost(configured);
+		const restored = await assembleRuntimeHost({
+			...configured,
+			...(failure === "missing export"
+				? {
+						AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION:
+							JSON.stringify(["fixture-protected-supply", "r1"]),
+					}
+				: {}),
+		});
 		try {
 			expect(selected?.standardConnectionClient).toBeDefined();
 			await expect(
@@ -283,6 +304,91 @@ describe("RuntimeHost environment assembly", () => {
 			});
 		} finally {
 			await restored.close();
+		}
+	}
+	it.each(["invalid namespace", "missing export"])(
+		"retains signed control and original facts after %s",
+		retainSignedControl,
+	);
+
+	it("receives the selected private export before the actual Driver assembly", async () => {
+		const values = await environment();
+		values.AGENT_INFRA_RUNTIME_DATA_DIR = await realpath(
+			values.AGENT_INFRA_RUNTIME_DATA_DIR,
+		);
+		const fixture = await standardMcpFixture();
+		const source = await writeStandardMcpExport(
+			values.AGENT_INFRA_RUNTIME_DATA_DIR,
+			fixture.target,
+			[fixture.input],
+		);
+		const approval = {
+			schemaVersion: 1,
+			configFingerprint: fixture.target.configFingerprint,
+			source: fixture.target.source,
+			egressEnforced: true,
+		};
+		const file = join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "consumer.json");
+		await writeFile(
+			file,
+			JSON.stringify({ profile: fixture.target.profile, approval }),
+		);
+		let selected: CodexRuntimeDriverOptions | undefined;
+		runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({});
+		runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+			async (options: CodexRuntimeDriverOptions) => {
+				selected = options;
+				// The receiver must already have published the existing reader layout.
+				expect(
+					await readFile(
+						join(
+							source.inputDirectory,
+							"materials",
+							`${source.record.material}.token`,
+						),
+						"utf8",
+					),
+				).toBe(token);
+				return FakeRuntimeDriver.open(
+					join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "fixture-driver.json"),
+				);
+			},
+		);
+		const runtime = await assembleRuntimeHost({
+			...values,
+			AGENT_INFRA_RUNTIME_DRIVER: "codex",
+			AGENT_INFRA_RUNTIME_AGENT_ID: reference.agentId,
+			AGENT_INFRA_RUNTIME_WORKER_ID: "fixture-worker",
+			AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE: file,
+			AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION: JSON.stringify([
+				approval.configFingerprint,
+				approval.source.ref,
+				approval.source.revision,
+			]),
+			AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION: source.revision,
+			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+				schemaVersion: 4,
+				configVersion: "fixture-v4",
+				defaultModelOptionId: "primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "primary",
+						protocol: "openai-responses-v1",
+						authentication: "bearer",
+						endpoint: "https://models.example.test/v1",
+						model: "fixture-model",
+						reasoningLevels: ["high"],
+					},
+				],
+			}),
+		});
+		try {
+			expect(selected?.standardConnectionClient?.target).toEqual(
+				fixture.target,
+			);
+		} finally {
+			await runtime.close();
 		}
 	});
 	it.each(["codex", "claude", "acp", "pi", "fake"])(
