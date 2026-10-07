@@ -26,8 +26,9 @@ NetworkPolicy 的出站规则；部署未批准目标时出站为空，即全部
   [Consumer 配置](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#135-platform-外部-connection-consumer-配置契约)
   与 `egressProfile` 编译而来；本 seam 不定义另一份 endpoint 配置，也不提供 TLS、
   Connection 授权或客户端安装身份。缺少接线时不能开启 Connection 调用。
-- #1251 在 Pod 创建前 `apply`，并在准入前 `observe`。Pod 标签必须精确包含 Agent、Session、
-  Sandbox 与 generation 四项；标签命名与 #1251 的 Session workload 接口对齐。
+- #1251 在 Pod 创建前 `apply`，并在准入前 `observe`。podSelector 与 Session
+  workload 共用 `sessionSandboxLabelsV1`：有界的 `agent-ref`、`session-ref` 与 `sandbox-id`、
+  `generation` 四项；完整 Agent/Session ID 写入 annotation 核对（#1461）。
   不得将此策略应用于现有 Agent 共享 Pod 并宣称完成 Session 隔离。
 - 创建返回的 name/UID/resourceVersion 必须交回原分配权威保存。已存在资源若没有原 UID
   receipt，或同名 UID 更换，均不接管；创建后 receipt 未持久保存属于待核实，不能凭标签补认。

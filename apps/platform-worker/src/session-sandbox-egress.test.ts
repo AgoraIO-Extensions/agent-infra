@@ -5,6 +5,7 @@ import {
 	createSessionSandboxEgressV1,
 	type SessionSandboxEgressBindingV1,
 } from "./session-sandbox-egress.js";
+import { sessionSandboxLabelsV1 } from "./session-workload-adapter.js";
 
 const binding: SessionSandboxEgressBindingV1 = {
 	schemaVersion: 1,
@@ -67,11 +68,17 @@ describe("Session Sandbox egress enforcement (Kubernetes fixture, not CNI eviden
 			"NetworkPolicy",
 			a.name,
 		);
-		expect(policy?.spec?.podSelector?.matchLabels).toEqual({
+		expect(policy?.spec?.podSelector?.matchLabels).toEqual(
+			sessionSandboxLabelsV1({
+				agentId: "agent-a",
+				sessionId: "session-a",
+				sandboxId: "sandbox-a",
+				generation: 1,
+			}),
+		);
+		expect(policy?.metadata?.annotations).toMatchObject({
 			"agent-infra.agora.io/agent-id": "agent-a",
 			"agent-infra.agora.io/session-id": "session-a",
-			"agent-infra.agora.io/sandbox-id": "sandbox-a",
-			"agent-infra.agora.io/generation": "1",
 		});
 		expect(policy?.spec?.policyTypes).toEqual(["Egress"]);
 		expect(policy?.spec?.egress).toHaveLength(3);

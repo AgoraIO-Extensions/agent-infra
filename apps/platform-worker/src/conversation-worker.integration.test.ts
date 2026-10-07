@@ -37,6 +37,10 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import {
+	sessionSandboxIdentityAnnotationsV1,
+	sessionSandboxLabelsV1,
+} from "./session-workload-adapter.js";
 import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 
 const execFile = promisify(execFileCallback);
@@ -528,11 +532,17 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				})}
 				where conversation_id = ${created.result.conversationId}`;
 			const sessionLabels = {
-				"agent-infra.agora.io/agent-id": desired.agentId,
-				"agent-infra.agora.io/session-id": created.result.conversationId,
-				"agent-infra.agora.io/sandbox-id": sandbox.sandbox_id,
-				"agent-infra.agora.io/generation": "1",
+				...sessionSandboxLabelsV1({
+					agentId: desired.agentId,
+					sessionId: created.result.conversationId,
+					sandboxId: sandbox.sandbox_id,
+					generation: 1,
+				}),
 			};
+			const sessionIdentity = sessionSandboxIdentityAnnotationsV1({
+				agentId: desired.agentId,
+				sessionId: created.result.conversationId,
+			});
 			fake.resources.set(`Service/${sandbox.resource_name}`, {
 				apiVersion: "v1",
 				kind: "Service",
@@ -543,6 +553,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					resourceVersion: "1",
 					labels: sessionLabels,
 					annotations: {
+						...sessionIdentity,
 						"agent-infra.agora.io/managed": "session-sandbox-v1",
 						"agent-infra.agora.io/fence": "1",
 					},
