@@ -17,12 +17,26 @@ export const RuntimeStatusV1Schema = z.enum([
 	"unknown",
 ]);
 
+export const RuntimeSkillCapabilityV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	name: z.string().min(1).max(128),
+	version: z.string().min(1).max(128),
+	manifestSha256: z.string().regex(/^[a-f0-9]{64}$/),
+	packageDigest: z.string().regex(/^[a-f0-9]{64}$/),
+	readOnly: z.literal(true),
+});
+
+export type RuntimeSkillCapabilityV1 = z.infer<
+	typeof RuntimeSkillCapabilityV1Schema
+>;
+
 export const RuntimeCapabilitiesV1Schema = z.strictObject({
 	modelSelection: z.boolean(),
 	attachments: z.boolean(),
 	resultFiles: z.boolean(),
 	connection: z.boolean(),
 	supplementaryInstruction: z.boolean(),
+	skills: z.array(RuntimeSkillCapabilityV1Schema).max(150).optional(),
 });
 
 const runtimeEventBase = {

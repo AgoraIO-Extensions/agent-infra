@@ -3010,6 +3010,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly recoveryDirectory?: string,
 		private readonly recoveryLaunchPath?: string,
 		private readonly standardConnectionOptions?: StandardMcpClientOptions,
+		private readonly installedSkill?: CodexInstalledSkillDescriptorV1,
 	) {}
 
 	private readonly connectionRecoveries = new Map<
@@ -4257,6 +4258,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				`${options.path}.native`,
 				options.launchPath,
 				standardConnection,
+				installedSkill,
 			);
 		} catch (error) {
 			await modelTransport?.close().catch(() => {});
@@ -5485,6 +5487,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			connection:
 				this.connectionClientOptions !== undefined ||
 				this.standardConnectionOptions !== undefined,
+			...(this.installedSkill
+				? {
+						skills: [
+							{
+								schemaVersion: 1 as const,
+								name: this.installedSkill.manifest.name,
+								version: this.installedSkill.manifest.version,
+								manifestSha256: this.installedSkill.manifestSha256,
+								packageDigest:
+									this.installedSkill.manifest.packageDigest.sha256,
+								readOnly: true as const,
+							},
+						],
+					}
+				: {}),
 		};
 	}
 

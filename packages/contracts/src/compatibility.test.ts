@@ -185,6 +185,77 @@ function restorePreAgentApiManagementContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it.each(["runtime-host.v1", "runtime-readiness.v1"])(
+		"admits only the exact optional Skill metadata addition in %s",
+		async (artifact) => {
+			const current = JSON.parse(
+				await readFile(
+					new URL(
+						`../artifacts/openapi/${artifact}.openapi.json`,
+						import.meta.url,
+					),
+					"utf8",
+				),
+			);
+			const capability = (document: typeof current) =>
+				artifact === "runtime-host.v1"
+					? document.components.schemas.RuntimeCapabilitiesV1
+					: document.components.schemas.WorkloadReadinessResponseV1.properties
+							.capabilities;
+			const item = (document: typeof current) =>
+				artifact === "runtime-host.v1"
+					? document.components.schemas.RuntimeSkillCapabilityV1
+					: capability(document).properties.skills.items;
+			const previous = structuredClone(current);
+			delete capability(previous).properties.skills;
+			delete previous.components.schemas.RuntimeSkillCapabilityV1;
+			const directory = await mkdtemp(
+				resolve(tmpdir(), "runtime-skill-compat-"),
+			);
+			const previousPath = resolve(directory, "previous.json");
+			const currentPath = resolve(directory, "current.json");
+			try {
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const mutations: ((document: typeof current) => void)[] = [
+					(document) => {
+						item(document).properties.readOnly.const = false;
+					},
+					(document) => {
+						delete item(document).properties.packageDigest.pattern;
+					},
+					(document) => {
+						capability(document).properties.skills.maxItems = 151;
+					},
+					(document) => {
+						capability(document).required.push("skills");
+					},
+					(document) => {
+						item(document).properties.path = { type: "string" };
+					},
+					(document) => {
+						item(document).required.pop();
+					},
+					(document) => {
+						document.info.title = "Changed Runtime API";
+					},
+					(document) => {
+						delete capability(document).properties.connection;
+					},
+				];
+				for (const mutate of mutations) {
+					const altered = structuredClone(current);
+					mutate(altered);
+					await writeFile(currentPath, JSON.stringify(altered));
+					expect(comparePaths(currentPath, previousPath).status).not.toBe(0);
+				}
+			} finally {
+				await rm(directory, { recursive: true });
+			}
+		},
+	);
+
 	it("reads the current merge-base artifacts without child-process buffer failure", () => {
 		const result = spawnSync(process.execPath, [cliPath], {
 			cwd: repositoryRoot,

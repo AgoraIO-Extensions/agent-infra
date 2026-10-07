@@ -1861,6 +1861,47 @@ function isAgentApiManagementOpenApiAddition(previous, current) {
 	return changed && sameValue(previous, normalized);
 }
 
+// #1494 adds optional verified Skill metadata to Runtime capabilities.
+function isRuntimeSkillCapabilityOpenApiAddition(previous, current) {
+	const previousSchemas = previous.components?.schemas;
+	if (previousSchemas?.RuntimeSkillCapabilityV1 !== undefined) return false;
+	const currentSchemas = current.components?.schemas;
+	const isHost = currentSchemas?.RuntimeCapabilitiesV1 !== undefined;
+	const oldCapabilities = isHost
+		? previousSchemas?.RuntimeCapabilitiesV1
+		: previousSchemas?.WorkloadReadinessResponseV1?.properties?.capabilities;
+	const newCapabilities = isHost
+		? currentSchemas.RuntimeCapabilitiesV1
+		: currentSchemas?.WorkloadReadinessResponseV1?.properties?.capabilities;
+	if (
+		oldCapabilities === undefined ||
+		oldCapabilities.properties?.skills !== undefined ||
+		newCapabilities?.properties?.skills === undefined
+	)
+		return false;
+	const addition = {
+		skills: newCapabilities.properties.skills,
+		...(isHost ? { definition: currentSchemas.RuntimeSkillCapabilityV1 } : {}),
+	};
+	const expectedDigest = isHost
+		? "3e354b1142891161f39da6b1668873acd62f36b6f56a81f2c1ba440734976ee0"
+		: "f677042fd2ebf9e3969365c59461a698e76ce511e764a6ffff743edfa1fb76ff";
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		expectedDigest
+	)
+		return false;
+	const normalized = structuredClone(current);
+	const capabilities = normalized.components.schemas.RuntimeCapabilitiesV1;
+	const readiness = normalized.components.schemas.WorkloadReadinessResponseV1;
+	const capabilitySchema = capabilities ?? readiness?.properties?.capabilities;
+	const skillContainer = capabilitySchema?.properties;
+	if (skillContainer?.skills === undefined) return false;
+	delete skillContainer.skills;
+	delete normalized.components.schemas.RuntimeSkillCapabilityV1;
+	return sameValue(previous, normalized);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -1875,6 +1916,7 @@ function findBreakingChanges(previous, current) {
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
+			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
