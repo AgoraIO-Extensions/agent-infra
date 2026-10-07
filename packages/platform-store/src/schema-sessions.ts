@@ -15,10 +15,10 @@ export const browserSessions = platformSchema.table(
 		tokenDigest: char("token_digest", { length: 64 }).primaryKey(),
 		uid: text("uid").notNull(),
 		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		principal: jsonb("principal"),
 		absoluteExpiresAt: timestamp("absolute_expires_at", {
 			withTimezone: true,
 		}).notNull(),
-		principal: jsonb("principal"),
 	},
 	(table) => [
 		check(

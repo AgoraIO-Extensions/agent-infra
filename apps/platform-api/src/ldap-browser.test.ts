@@ -230,6 +230,19 @@ describe("LDAP browser adapter", () => {
 		).toBeNull();
 	});
 
+	it("renews after activity before the original idle deadline", async () => {
+		const state = fixture();
+		const cookie =
+			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		const request = new Request(`${origin}/api/v1/session`, {
+			headers: { cookie },
+		});
+		state.setNow(1000 + 59 * 60_000);
+		expect(await state.adapter.identityAdapter.resolve(request)).not.toBeNull();
+		state.setNow(1000 + 121 * 60_000);
+		expect(await state.adapter.identityAdapter.resolve(request)).not.toBeNull();
+	});
+
 	it("does not renew a session after current identity validation fails", async () => {
 		const sessions = memorySessions();
 		const renew = vi.spyOn(sessions, "renew");

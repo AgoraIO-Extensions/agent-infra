@@ -1951,10 +1951,11 @@ describe("published Relay authority migration", () => {
 			35,
 			36,
 			37,
+			38,
 		]);
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 37,
-			tag: "0037_browser_session_principal",
+			idx: 38,
+			tag: "0038_browser_session_absolute_expiry",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2036,7 +2037,11 @@ describe("published Relay authority migration", () => {
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			const after = await history();
 			expect(after.slice(0, before.length)).toEqual(before);
-			expect(after).toHaveLength(before.length + 8);
+			expect(after).toHaveLength(
+				before.length +
+					migrations.filter((migration) => migration.folderMillis >= relayWhen)
+						.length,
+			);
 			expect(after.slice(before.length)).toEqual(
 				migrations
 					.filter((migration) => migration.folderMillis >= relayWhen)
@@ -2178,7 +2183,11 @@ describe("published Relay authority migration", () => {
 		]);
 		const after = await history();
 		expect(after.slice(0, before.length)).toEqual(before);
-		expect(after).toHaveLength(before.length + 8);
+		expect(after).toHaveLength(
+			before.length +
+				migrations.filter((migration) => migration.folderMillis >= relayWhen)
+					.length,
+		);
 		const catalog = await relayCatalog();
 		await builtStore.migratePlatformDatabase({ databaseUrl });
 		expect(await history()).toEqual(after);

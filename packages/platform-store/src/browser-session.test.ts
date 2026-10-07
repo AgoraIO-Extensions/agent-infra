@@ -177,7 +177,7 @@ describe("PostgreSQL browser sessions", () => {
 			expect(new Date(row.absolute_expires_at).getTime()).toBe(expiresAt);
 
 			const legacyWriteExpiresAt = Date.UTC(2030, 0, 2);
-			const legacyWriteDigest = "g".repeat(64);
+			const legacyWriteDigest = "a".repeat(64);
 			await sql`
 				insert into platform.browser_sessions (token_digest, uid, expires_at, principal)
 				values (
