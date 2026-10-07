@@ -12,6 +12,7 @@ import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	runtimeConnectionConsumerAnnotation,
 	runtimeConnectionConsumerFileEnvironment,
+	runtimeConnectionInstallationRevisionEnvironment,
 } from "./connection-consumer-projection.js";
 import type {
 	WorkerKubernetesClientV1,
@@ -129,7 +130,15 @@ describe("session sandbox workload adapter", () => {
 			egressEnforced: true,
 			source: { ref: "approved-deployment", revision: "r1" },
 		});
-		const selected = { ...allocation, connectionConsumerSnapshot: snapshot };
+		const installationRevision = JSON.stringify([
+			"private-session-supply",
+			"r7",
+		]);
+		const selected = {
+			...allocation,
+			connectionConsumerSnapshot: snapshot,
+			connectionInstallationRevision: installationRevision,
+		};
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 		await adapter.apply(selected);
@@ -152,6 +161,21 @@ describe("session sandbox workload adapter", () => {
 			conditions: [{ type: "Ready", status: "True" }],
 		};
 		expect((await adapter.observe(selected)).status).toBe("ready");
+		const installation = pod.spec.containers[0]?.env?.find(
+			(entry) =>
+				entry.name === runtimeConnectionInstallationRevisionEnvironment,
+		);
+		if (!installation) throw new Error("Missing installation selector");
+		expect(installation.value).toBe(installationRevision);
+		for (const changed of [
+			["other-supply", "r7"],
+			["private-session-supply", "r8"],
+		]) {
+			installation.value = JSON.stringify(changed);
+			expect((await adapter.observe(selected)).status).toBe("unknown");
+			await expect(adapter.apply(selected)).rejects.toThrow();
+		}
+		installation.value = installationRevision;
 		const updatedApproval = {
 			schemaVersion: 1,
 			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
@@ -186,9 +210,11 @@ describe("session sandbox workload adapter", () => {
 		const unavailable = {
 			...selected,
 			connectionConsumerSnapshot: null,
+			connectionInstallationRevision: null,
 			env: {
 				...selected.env,
 				[runtimeConnectionConsumerFileEnvironment]: "/invalid-current-config",
+				[runtimeConnectionInstallationRevisionEnvironment]: '["caller","r9"]',
 			},
 		};
 		const controlObservation = await adapter.observe(
@@ -210,6 +236,19 @@ describe("session sandbox workload adapter", () => {
 				env: { [runtimeConnectionConsumerFileEnvironment]: "/caller" },
 			}),
 		).toThrow();
+	});
+	it("rejects caller Session installation selection and invalid source before rendering", () => {
+		for (const input of [
+			{
+				...allocation,
+				env: {
+					[runtimeConnectionInstallationRevisionEnvironment]: '["caller","r1"]',
+				},
+			},
+			{ ...allocation, connectionInstallationRevision: null },
+			{ ...allocation, connectionInstallationRevision: '["unapproved","r1"]' },
+		])
+			expect(() => sessionSandboxResourcesV1(input)).toThrow();
 	});
 	it("renders one Pod, Service, SA, retained PVC and isolated NetworkPolicy with allocation fence", () => {
 		const resources = sessionSandboxResourcesV1(allocation);

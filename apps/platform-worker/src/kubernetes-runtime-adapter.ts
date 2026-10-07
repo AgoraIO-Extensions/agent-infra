@@ -74,6 +74,8 @@ export { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	/** Validated deployment copy, never an Agent/request environment value. */
 	readonly connectionConsumerSnapshot?: string | null;
+	/** Captured nonsecret supply ref/revision tuple; null keeps selection unavailable. */
+	readonly connectionInstallationRevision?: string | null;
 	readonly namespace: string;
 	readonly namespaceRef: string;
 	readonly resourceProfileRef: string;
@@ -112,10 +114,14 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	}) => Promise<boolean>;
 }) {
 	const { client, policy } = options;
+	const connectionInstallationRevision = policy.connectionInstallationRevision;
 	const connection = runtimeConnectionConsumerProjectionV1(
 		options.connectionConsumerControl
 			? undefined
 			: policy.connectionConsumerSnapshot,
+		options.connectionConsumerControl
+			? undefined
+			: policy.connectionInstallationRevision,
 	);
 	const egress = workloadEgressRulesV1(policy);
 	if (policy.runtimeAuth) validateWorkloadRuntimeAuthV1(policy.runtimeAuth);
@@ -310,6 +316,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		},
 	): Promise<"pending" | "healthy" | "unhealthy" | "drifted"> {
 		const value = desired(input);
+		if (
+			!options.connectionConsumerControl &&
+			connectionInstallationRevision === null
+		)
+			return "unhealthy";
 		if (
 			closedRouteFence &&
 			(routeMode !== "closed" ||
@@ -1096,7 +1107,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			const value = desired(input);
 			if (options.connectionConsumerControl && value.replicas !== 0)
 				throw new WorkloadKubernetesError("policy");
-			if (value.replicas !== 0 && policy.connectionConsumerSnapshot === null)
+			if (
+				value.replicas !== 0 &&
+				(policy.connectionConsumerSnapshot === null ||
+					connectionInstallationRevision === null)
+			)
 				throw new WorkloadKubernetesError("policy");
 			if (value.replicas !== 0) await assertStandardTemplateSelector(value);
 			const name = workloadResourceNameV1(value.agentId);

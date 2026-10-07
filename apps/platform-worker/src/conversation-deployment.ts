@@ -330,6 +330,8 @@ export function createProductionSessionSandboxReceiverV1(
 	const adapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,
 	});
+	const connectionInstallationRevision =
+		workload.policy.connectionInstallationRevision;
 	const allocationFor = (
 		binding: SessionSandboxReconciliationClaimV1["sandbox"],
 		policy: SessionSandboxReconciliationClaimV1["policy"],
@@ -353,6 +355,7 @@ export function createProductionSessionSandboxReceiverV1(
 		containerPort: deployment.service.port,
 		env: deployment.env,
 		connectionConsumerSnapshot: workload.policy.connectionConsumerSnapshot,
+		connectionInstallationRevision,
 		authorizedIngressSelector: workload.policy.workerSelector,
 		resources: workload.policy.resources,
 		storageSize: workload.policy.storageSize,

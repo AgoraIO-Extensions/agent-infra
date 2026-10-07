@@ -13,6 +13,17 @@ export const runtimeConnectionConsumerFileEnvironment =
 	"AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE";
 export const runtimeConnectionConsumerRevisionEnvironment =
 	"AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION";
+export const runtimeConnectionInstallationRevisionEnvironment =
+	"AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION";
+
+export function isRuntimeConnectionEnvironmentV1(name: string): boolean {
+	return [
+		runtimeConnectionConsumerFileEnvironment,
+		runtimeConnectionConsumerRevisionEnvironment,
+		runtimeConnectionInstallationRevisionEnvironment,
+	].includes(name);
+}
+
 const directory = "/var/run/agent-infra/connection-consumer";
 const fileName = "snapshot.json";
 const maximumSnapshotBytes = 8192;
@@ -24,9 +35,7 @@ export function runtimeConnectionConsumerControlPodV1(pod: V1Pod): V1Pod {
 		delete copy.metadata.annotations[runtimeConnectionConsumerAnnotation];
 	for (const container of copy.spec?.containers ?? []) {
 		container.env = container.env?.filter(
-			(entry) =>
-				entry.name !== runtimeConnectionConsumerFileEnvironment &&
-				entry.name !== runtimeConnectionConsumerRevisionEnvironment,
+			(entry) => !isRuntimeConnectionEnvironmentV1(entry.name),
 		);
 		container.volumeMounts = container.volumeMounts?.filter(
 			(entry) => entry.name !== "connection-consumer",
@@ -65,19 +74,63 @@ export function createRuntimeConnectionConsumerSnapshotV1(
 	}
 }
 
+/** Only deployment-approved nonsecret references select the Host's fixed export. */
+export function createRuntimeConnectionInstallationRevisionV1(
+	supply: unknown,
+	consumerSnapshot: string | null | undefined,
+): string | null | undefined {
+	if (supply === undefined) return undefined;
+	try {
+		const input = structuredClone(supply) as Record<string, unknown> | null;
+		if (
+			!consumerSnapshot ||
+			!input ||
+			typeof input !== "object" ||
+			Array.isArray(input) ||
+			Object.keys(input).sort().join(",") !== "ref,revision" ||
+			[input.ref, input.revision].some(
+				(value) =>
+					typeof value !== "string" ||
+					!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value),
+			)
+		)
+			throw new Error();
+		return JSON.stringify([input.ref, input.revision]);
+	} catch {
+		return null;
+	}
+}
+
 /** A delivery projection of the approved source, not another configuration source. */
 export function runtimeConnectionConsumerProjectionV1(
 	snapshot?: string | null,
+	installationRevision?: string | null,
 ): {
 	annotations: Record<string, string>;
 	env: V1EnvVar[];
 	volumeMounts: V1VolumeMount[];
 	volumes: V1Volume[];
 } {
+	if (installationRevision != null && !snapshot)
+		throw new WorkloadKubernetesError("policy");
 	if (snapshot === undefined || snapshot === null)
 		return { annotations: {}, env: [], volumeMounts: [], volumes: [] };
 	let revision: string;
 	try {
+		if (installationRevision != null) {
+			if (Buffer.byteLength(installationRevision, "utf8") > 512)
+				throw new Error();
+			const selected: unknown = JSON.parse(installationRevision);
+			if (
+				!Array.isArray(selected) ||
+				selected.length !== 2 ||
+				createRuntimeConnectionInstallationRevisionV1(
+					{ ref: selected[0], revision: selected[1] },
+					snapshot,
+				) !== installationRevision
+			)
+				throw new Error();
+		}
 		if (Buffer.byteLength(snapshot, "utf8") > maximumSnapshotBytes)
 			throw new Error();
 		const input = JSON.parse(snapshot);
@@ -106,6 +159,14 @@ export function runtimeConnectionConsumerProjectionV1(
 	return {
 		annotations: { [runtimeConnectionConsumerAnnotation]: snapshot },
 		env: [
+			...(installationRevision != null
+				? [
+						{
+							name: runtimeConnectionInstallationRevisionEnvironment,
+							value: installationRevision,
+						},
+					]
+				: []),
 			{
 				name: runtimeConnectionConsumerFileEnvironment,
 				value: `${directory}/${fileName}`,

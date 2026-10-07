@@ -154,6 +154,18 @@ Workload revision 和固定 Service origin；`platform-adapter` 的核心探测�
 [Runtime HLD](../docs/architecture/HLD-agent-runtime-M1.md#4-runtime-manifest)。
 Worker 不从 API RPC 获取期望状态，也不加载 Runtime Driver。
 
+受保护 Connection 安装的 Worker 接线由同一受信 `configuration.mjs` 可选导出
+`connectionInstallationSupply = { ref: "approved-runtime-export", revision: "r1" }`。
+两个非秘密引用均限 1–128 个字母、数字、点、下划线、冒号或连字符，首字符为字母或数字。
+Worker 仅在已有完整批准的 Consumer profile 可用时捕获此来源，向 Agent StatefulSet 和
+Session Runtime Pod 投射 `AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION`，值为
+exact JSON tuple `[ref, revision]`；供应引用与 Consumer 的 `source` 分别核对。不要在
+`workloadInput.policy` 或 Agent env 中配置/覆盖该值，也不要在此配置 token 或供应路径。
+非法来源阻止新业务；来源漂移不通过 Pod 就绪观察，原控制与清理仍可处理原资源。
+此接线不供应 export、读取 token 或证明合法领取；Host 接收格式和真实启用条件见
+[受保护安装交付](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1355-受保护安装交付)
+及 [Host 安装说明](../apps/agent-runtime-host/README.md)。
+
 部署包必须显式提供 `templateModelBindings`，将标准模板 ID、实际镜像 Digest、必需 `driver` 与模型协议
 绑定；支持标准 Agent 时还须装配 `modelCatalog` 和 `modelAccess`。升级已有部署包时需一起
 补齐此字段，缺失会在 Worker 打开 Store 前拒绝启动。仅支持自定义 Agent 的部署包传入空

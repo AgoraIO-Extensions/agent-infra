@@ -34,6 +34,9 @@ export function createKubernetesPodValidationV1(dependencies: {
 		dependencies.connectionConsumerControl
 			? undefined
 			: policy.connectionConsumerSnapshot,
+		dependencies.connectionConsumerControl
+			? undefined
+			: policy.connectionInstallationRevision,
 	);
 	function hasSafePodMetadata(
 		value: AgentWorkloadDesiredV1,

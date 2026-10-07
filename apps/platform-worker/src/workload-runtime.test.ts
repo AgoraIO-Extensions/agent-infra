@@ -2956,7 +2956,12 @@ describe("assembled Workload Runtime contracts", () => {
 	});
 });
 
-it.each(["unavailable", "changed-source"] as const)(
+it.each([
+	"unavailable",
+	"changed-source",
+	"unavailable-supply",
+	"changed-supply",
+] as const)(
 	"preserves the real original control resolver after Connection %s",
 	async (change) => {
 		const keys = generateKeyPairSync("ed25519");
@@ -2987,6 +2992,7 @@ it.each(["unavailable", "changed-source"] as const)(
 		const policy = {
 			...workloadTestPolicy,
 			connectionConsumerSnapshot: snapshot,
+			connectionInstallationRevision: '["approved-export","r1"]',
 			runtimeAuth: {
 				workerId: signing.workerId,
 				grantIssuer: signing.issuer,
@@ -3013,7 +3019,15 @@ it.each(["unavailable", "changed-source"] as const)(
 				connectionConsumerSnapshot:
 					change === "unavailable"
 						? null
-						: createRuntimeConnectionConsumerSnapshotV1(profile, nextApproval),
+						: change === "changed-source"
+							? createRuntimeConnectionConsumerSnapshotV1(profile, nextApproval)
+							: snapshot,
+				connectionInstallationRevision:
+					change === "unavailable-supply" || change === "unavailable"
+						? null
+						: change === "changed-supply"
+							? '["approved-export","r2"]'
+							: policy.connectionInstallationRevision,
 			},
 		};
 		const runtime = createWorkloadRuntimeV1(updated);
