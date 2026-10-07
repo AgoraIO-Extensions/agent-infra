@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -17,12 +24,24 @@ const manifest = JSON.stringify({ config: { digest: configDigest } });
 const manifestDigest = `sha256:${createHash("sha256").update(manifest).digest("hex")}`;
 
 async function verify({ published = false, mode = "classic" } = {}) {
-	const rawManifest = mode === "whitespace" ? ` \n${manifest}\n` : manifest;
+	const rawManifest =
+		mode === "whitespace"
+			? ` \n${manifest}\n`
+			: mode === "unbound-config"
+				? JSON.stringify({ config: { digest: `sha256:${"b".repeat(64)}` } })
+				: manifest;
 	const manifestDigest = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
 	const directory = await mkdtemp(join(tmpdir(), "agent-infra-base-metadata-"));
 	try {
 		const docker = join(directory, "docker.mjs");
 		await writeFile(join(directory, `${configDigest.slice(7)}.json`), config);
+		await mkdir(join(directory, "blobs/sha256"), { recursive: true });
+		await writeFile(
+			join(directory, "blobs/sha256", manifestDigest.slice(7)),
+			mode === "bad-manifest"
+				? JSON.stringify({ config: { digest: `sha256:${"b".repeat(64)}` } })
+				: rawManifest,
+		);
 		await writeFile(
 			join(directory, "manifest.json"),
 			JSON.stringify([{ Config: `${configDigest.slice(7)}.json` }]),
@@ -40,7 +59,9 @@ if (args[0] === "buildx" && args[1] === "imagetools") process.stdout.write(${JSO
 else if (args[0] === "build" || (args[0] === "buildx" && args[1] === "build")) {
   writeFileSync(args[args.indexOf("--metadata-file") + 1], JSON.stringify({
     "containerimage.digest": mode === "classic" ? configDigest : manifestDigest,
-    "containerimage.config.digest": mode === "bad-config" ? "sha256:" + "b".repeat(64) : configDigest,
+    ...(mode === "missing-config" || mode === "bad-manifest" || mode === "unbound-config" ? {} : {
+      "containerimage.config.digest": mode === "bad-config" ? "sha256:" + "b".repeat(64) : configDigest,
+    }),
   }));
 } else if (args[0] === "image" && args[1] === "inspect") {
   const child = args.at(-1).startsWith("agent-infra-verification/");
@@ -50,7 +71,7 @@ else if (args[0] === "build" || (args[0] === "buildx" && args[1] === "build")) {
     Config: { User: "node", WorkingDir: "/workspace", Env: ["NODE_VERSION=24", "PATH=/usr/bin", "YARN_VERSION=1"] },
   }));
 } else if (args[0] === "image" && args[1] === "save") {
-  const result = spawnSync("tar", ["-cf", args[args.indexOf("--output") + 1], "-C", import.meta.dirname, "manifest.json", configDigest.slice(7) + ".json"]);
+  const result = spawnSync("tar", ["-cf", args[args.indexOf("--output") + 1], "-C", import.meta.dirname, "manifest.json", configDigest.slice(7) + ".json", "blobs"]);
   process.exit(result.status ?? 1);
 } else if (args[0] === "run") console.log(JSON.stringify({ status: "passed" }));
 else if (args[0] !== "pull" && !(args[0] === "image" && args[1] === "rm")) process.exit(1);
@@ -119,3 +140,23 @@ for (const mode of ["bad-config", "bad-descriptor"]) {
 		assert.equal(result.report, null);
 	});
 }
+
+test("Buildx 0.37 metadata without config Digest still binds actual config bytes to child manifest", async () => {
+	const result = await verify({ published: true, mode: "missing-config" });
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.report.childDigest, manifestDigest);
+	assert.equal(result.report.childConfigDigest, configDigest);
+});
+
+test("missing config metadata never admits a mismatching saved child manifest", async () => {
+	const result = await verify({ published: true, mode: "bad-manifest" });
+	assert.notEqual(result.status, 0);
+	assert.equal(result.report, null);
+});
+
+test("missing config metadata rejects valid manifest bytes that bind a different config", async () => {
+	const result = await verify({ mode: "unbound-config" });
+	assert.notEqual(result.status, 0);
+	assert.equal(result.report, null);
+	assert.match(result.stderr, /saved child config differs from its manifest/);
+});

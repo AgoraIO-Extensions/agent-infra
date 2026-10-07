@@ -19,19 +19,25 @@ function inspect(image) {
 	return JSON.parse(docker(["image", "inspect", "--format", "{{json .}}", image], "Custom Base Image inspection"));
 }
 
-async function configDigest(image) {
+async function configDigest(image, manifestDigest) {
 	const temp = await mkdtemp(join(tmpdir(), "agent-infra-image-config-"));
 	try {
 		const archive = join(temp, "image.tar");
 		docker(["image", "save", "--output", archive, image], "Custom Base Image config export", 5 * 60_000);
 		const tar = process.env.TAR_BIN ?? "tar";
-		const options = { cwd: root, name: "Custom Base Image config readback", timeoutMs: 60_000 };
+		const options = { cwd: root, name: "Custom Base Image config readback", timeoutMs: 60_000, trimOutput: false };
 		const manifests = JSON.parse(runCommand(tar, ["-xOf", archive, "manifest.json"], options));
 		assert.equal(manifests.length, 1);
 		const config = manifests[0].Config;
 		assert.match(config, /^(?:blobs\/sha256\/[a-f0-9]{64}|[a-f0-9]{64}\.json)$/);
 		runCommand(tar, ["-xf", archive, "-C", temp, config], options);
-		return `sha256:${sha256(await readFile(join(temp, config)))}`;
+		const digest = `sha256:${sha256(await readFile(join(temp, config)))}`;
+		if (manifestDigest && manifestDigest !== digest) {
+			const bytes = runCommand(tar, ["-xOf", archive, `blobs/sha256/${manifestDigest.slice(7)}`], options);
+			assert.equal(`sha256:${sha256(bytes)}`, manifestDigest, "saved child manifest differs from build Digest");
+			assert.equal(JSON.parse(bytes).config?.digest, digest, "saved child config differs from its manifest");
+		}
+		return digest;
 	} finally {
 		await rm(temp, { recursive: true, force: true });
 	}
@@ -86,15 +92,19 @@ export async function verifyCustomBaseImage(image, { published = false, contextP
 		childLoaded = true;
 		const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
 		const exportedDigest = metadata["containerimage.digest"];
-		const childConfigDigest = metadata["containerimage.config.digest"];
 		const child = inspect(childReference);
 		assert.equal(`${child.Os}/${child.Architecture}`, platform, "child platform differs from Base Image");
 		const childImageId = child.Id;
 		assert.match(exportedDigest, digestPattern);
-		assert.match(childConfigDigest, digestPattern);
 		assert.match(childImageId, digestPattern);
 		if (child.Descriptor) assert.equal(child.Descriptor.digest, exportedDigest);
-		assert.equal(await configDigest(childReference), childConfigDigest);
+		// Buildx 0.37 omits config Digest metadata. Read actual bytes and bind them
+		// to the exported child manifest; any supplied metadata must still match.
+		const childConfigDigest = await configDigest(childReference, exportedDigest);
+		if (metadata["containerimage.config.digest"] !== undefined) {
+			assert.equal(metadata["containerimage.config.digest"], childConfigDigest,
+				"child config metadata differs from saved config");
+		}
 		// Classic Docker's load exporter reports the config ID instead of a manifest Digest.
 		const childDigest = exportedDigest === childConfigDigest ? null : exportedDigest;
 		assert.ok(!published || childDigest, "published acceptance requires a child manifest Digest; use OCI-capable Docker storage");
