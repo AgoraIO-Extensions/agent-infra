@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { RuntimeCapabilitiesV1Schema } from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
 	type PlatformSecretRecordV1,
@@ -30,6 +31,7 @@ import {
 	parseWorkloadExecutionCapacityV1,
 	type SecretActivationDecryptorPortV1,
 	type SecretActivationReferenceV1,
+	type WorkloadCapabilitiesV1,
 	type WorkloadExecutionCapacityV1,
 	WorkloadPreflightRejectedErrorV1,
 	type WorkloadReconciliationInputV1,
@@ -366,7 +368,7 @@ export function createWorkloadRuntimeV1(
 	const fetcher = options.fetch ?? globalThis.fetch;
 	const observedCapabilities = new WeakMap<
 		WorkloadReconciliationStateV1,
-		Record<string, boolean>
+		WorkloadCapabilitiesV1
 	>();
 	function candidateKeyless(
 		state: Pick<WorkloadReconciliationStateV1, "candidate">,
@@ -394,7 +396,7 @@ export function createWorkloadRuntimeV1(
 	}
 
 	function createAdapter(
-		recordCapabilities: (value: Record<string, boolean>) => void = () => {},
+		recordCapabilities: (value: WorkloadCapabilitiesV1) => void = () => {},
 		state?: Pick<WorkloadReconciliationStateV1, "candidate">,
 		purpose: "authorize" | "cleanup" = "authorize",
 		connectionConsumerControl = false,
@@ -468,23 +470,38 @@ export function createWorkloadRuntimeV1(
 				} finally {
 					clearTimeout(timer);
 				}
+				const runtimeCapabilities = RuntimeCapabilitiesV1Schema.safeParse(
+					probe.capabilities,
+				);
 				const optional = RuntimeCapabilitySetV1Schema.safeParse(
 					probe.capabilities,
 				);
-				const detected = optional.success
-					? optional.data
-					: RuntimeCapabilitySetV1Schema.parse({});
+				const detected = runtimeCapabilities.success
+					? {
+							modelSelection: runtimeCapabilities.data.modelSelection,
+							attachments: runtimeCapabilities.data.attachments,
+							resultFiles: runtimeCapabilities.data.resultFiles,
+							connection: runtimeCapabilities.data.connection,
+							supplementaryInstruction:
+								runtimeCapabilities.data.supplementaryInstruction,
+						}
+					: optional.success
+						? optional.data
+						: RuntimeCapabilitySetV1Schema.parse({});
 				const declared = RuntimeCapabilitySetV1Schema.parse(
 					desired.runtimeManifest.capabilities ?? {},
 				);
-				recordCapabilities(
-					Object.fromEntries(
+				recordCapabilities({
+					...Object.fromEntries(
 						Object.entries(declared).map(([name, value]) => [
 							name,
 							value && detected[name as keyof typeof detected],
 						]),
 					),
-				);
+					...(runtimeCapabilities.success && runtimeCapabilities.data.skills
+						? { skills: runtimeCapabilities.data.skills }
+						: {}),
+				});
 				return probe.core === "passed";
 			},
 		});

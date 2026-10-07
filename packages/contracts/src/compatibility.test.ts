@@ -185,7 +185,12 @@ function restorePreAgentApiManagementContract(value: {
 }
 
 describe("contract compatibility command", () => {
-	it.each(["runtime-host.v1", "runtime-readiness.v1"])(
+	it.each([
+		"runtime-host.v1",
+		"runtime-readiness.v1",
+		"pilot-browser.v1",
+		"pilot-browser.v2",
+	])(
 		"admits only the exact optional Skill metadata addition in %s",
 		async (artifact) => {
 			const current = JSON.parse(
@@ -200,8 +205,14 @@ describe("contract compatibility command", () => {
 			const capability = (document: typeof current) =>
 				artifact === "runtime-host.v1"
 					? document.components.schemas.RuntimeCapabilitiesV1
-					: document.components.schemas.WorkloadReadinessResponseV1.properties
-							.capabilities;
+					: artifact === "runtime-readiness.v1"
+						? document.components.schemas.WorkloadReadinessResponseV1.properties
+								.capabilities
+						: document.components.schemas[
+								artifact === "pilot-browser.v1"
+									? "AgentProjectionV1"
+									: "AgentProjectionV2"
+							].properties.capabilities;
 			const item = (document: typeof current) =>
 				artifact === "runtime-host.v1"
 					? document.components.schemas.RuntimeSkillCapabilityV1
