@@ -23,7 +23,10 @@ import {
 	runtimeModelInjectionV1,
 	validateRuntimeModelProjectionV1,
 } from "@agent-infra/model-catalog";
-import type { SessionSandboxRuntimeStateV1 } from "@agent-infra/platform-core";
+import type {
+	SessionSandboxReconciliationClaimV1,
+	SessionSandboxRuntimeStateV1,
+} from "@agent-infra/platform-core";
 import {
 	type AgentConfigurationRecordV2,
 	createWorkloadReconciliationV1,
@@ -52,7 +55,10 @@ import {
 	readRuntimeModelConfigurationV3,
 } from "../../agent-runtime-host/src/configuration.js";
 import { createRuntimeConnectionConsumerSnapshotV1 } from "./connection-consumer-projection.js";
-import { createProductionConversationRuntimeResolverV2 } from "./conversation-deployment.js";
+import {
+	createProductionConversationRuntimeResolverV2,
+	createProductionSessionSandboxReceiverV1,
+} from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
 	workloadRegistryFixture,
@@ -68,6 +74,10 @@ import {
 	sessionSandboxLabelsV1,
 	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
+import {
+	sessionSandboxModelProjectionFixture,
+	sessionSandboxTemplateBindingFixture,
+} from "./test-support/session-sandbox-v4.js";
 import {
 	createWorkloadRuntimeV1,
 	isWorkloadExecutionCapacityCurrentV1,
@@ -3655,3 +3665,268 @@ it("preserves cancellation and only reopens a closing verified route", async () 
 		}),
 	).rejects.toMatchObject({ name: "AbortError" });
 });
+
+it.each([
+	"current",
+	"unconfigured",
+	"supply-ref",
+	"supply-revision",
+	"supply-missing",
+	"consumer-source",
+	"consumer",
+	"pod-uid",
+	"pod-receipt",
+	"pod-ready",
+	"pod-read",
+	"pod-agent",
+	"pod-session",
+	"principal-id",
+	"principal-kind",
+	"principal-missing",
+] as const)(
+	"revalidates selected Session Connection installation before business routing (%s)",
+	async (change) => {
+		const keys = generateKeyPairSync("ed25519");
+		const signing = {
+			workerId: "worker-a",
+			issuer: "platform",
+			keyId: "route-installation",
+			privateKey: keys.privateKey,
+		};
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "platform-consumer",
+			audience: "connection-resource",
+			egressProfile: { ref: "egress-approved", revision: "r1" },
+		};
+		const approval = {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			egressEnforced: true,
+			source: { ref: "approved-deployment", revision: "r2" },
+		};
+		const snapshot = createRuntimeConnectionConsumerSnapshotV1(
+			profile,
+			approval,
+		);
+		const f = fixture({
+			policy: {
+				...workloadTestPolicy,
+				connectionConsumerSnapshot:
+					change === "unconfigured" ? undefined : snapshot,
+				connectionInstallationRevision:
+					change === "unconfigured" ? undefined : '["approved-export","r2"]',
+				runtimeAuth: {
+					workerId: signing.workerId,
+					grantIssuer: signing.issuer,
+					grantKeyId: signing.keyId,
+					grantPublicKey: keys.publicKey
+						.export({ type: "spki", format: "pem" })
+						.toString(),
+					serviceTokenSecret: { name: "transport", key: "token" },
+				},
+			},
+		});
+		await f.tick(8);
+		const ready = f.state;
+		if (!ready?.verified?.deployment) throw new Error("Expected ready fixture");
+		const deployment = validateAgentWorkloadDesiredV1(
+			ready.verified.deployment,
+		);
+		const sandboxId = "00000000-0000-4000-8000-000000000014";
+		const sandbox = {
+			schemaVersion: 1 as const,
+			sandboxId,
+			sessionId: "conversation-selected",
+			agentId: ready.agentId,
+			principal: { kind: "user" as const, id: "actor-selected" },
+			channelId: "web",
+			generation: 1,
+			resourceName: `sandbox-${sandboxId}`,
+			workspaceScope: sandboxId,
+		};
+		const policy = {
+			namespace: f.options.policy.namespace,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(
+				f.options.policy,
+			),
+			configurationRevision: ready.sourceConfigurationRevision,
+			workloadRevision: ready.sourceLifecycleRevision,
+			managementFence: 1,
+			imageDigest: deployment.imageDigest,
+		};
+		const sourcePolicy = { ...f.options.policy };
+		if (change === "supply-ref")
+			sourcePolicy.connectionInstallationRevision = '["previous-export","r2"]';
+		if (change === "supply-revision")
+			sourcePolicy.connectionInstallationRevision = '["approved-export","r1"]';
+		if (change === "supply-missing")
+			sourcePolicy.connectionInstallationRevision = undefined;
+		if (change === "consumer-source")
+			sourcePolicy.connectionConsumerSnapshot =
+				createRuntimeConnectionConsumerSnapshotV1(profile, {
+					...approval,
+					source: { ...approval.source, revision: "r1" },
+				});
+		if (change === "consumer") {
+			const previousProfile = { ...profile, consumerId: "previous-consumer" };
+			sourcePolicy.connectionConsumerSnapshot =
+				createRuntimeConnectionConsumerSnapshotV1(previousProfile, {
+					...approval,
+					configFingerprint:
+						connectionConsumerProfileFingerprintV1(previousProfile),
+				});
+		}
+		// Session Sandboxes accept only a keyless V4 projection (#1466).
+		const modelProjection = sessionSandboxModelProjectionFixture({
+			agentId: ready.agentId,
+			configurationRevision: deployment.configRevision,
+			imageDigest: deployment.imageDigest,
+		});
+		Object.assign(f.options, {
+			templateModelBindings: [
+				sessionSandboxTemplateBindingFixture(deployment.imageDigest),
+			],
+		});
+		const readyV4 = {
+			...ready,
+			candidate: { ...ready.candidate, modelProjection },
+			verified: { ...ready.verified, modelProjection },
+		};
+		const receive = createProductionSessionSandboxReceiverV1(
+			{ ...f.options, policy: sourcePolicy },
+			{ serviceToken: "synthetic-transport" },
+		);
+		const claim: SessionSandboxReconciliationClaimV1 = {
+			schemaVersion: 1,
+			operation: "conversation.sandbox.reconcile.v1",
+			execution: null,
+			itemId: "selected-session-intent",
+			leaseOwner: signing.workerId,
+			deliveryFence: 1,
+			resourceFence: 3,
+			resourceStatus: "applying",
+			desiredState: "running",
+			authorization: null,
+			purpose: "prepare",
+			drainComputeAllowed: false,
+			lifecycle: null,
+			sandbox,
+			policy,
+			deployment,
+			modelProjection,
+			previousObservation: null,
+		};
+		await receive(claim, new AbortController().signal);
+		const pod = await f.client.read<V1Pod>("Pod", sandbox.resourceName);
+		if (!pod?.metadata || !pod.spec) throw new Error("Expected Session Pod");
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		};
+		await f.client.replace(pod);
+		const observation = await receive(claim, new AbortController().signal);
+		if (observation.status !== "ready")
+			throw new Error("Expected ready Session receipt");
+		const stored: SessionSandboxRuntimeStateV1 = {
+			sandbox,
+			resourceFence: claim.resourceFence,
+			desiredState: "running",
+			status: "ready",
+			policy,
+			observation:
+				change === "pod-receipt"
+					? {
+							...observation,
+							resources: observation.resources.filter(
+								(resource) => resource.kind !== "Pod",
+							),
+						}
+					: observation,
+		};
+		if (change === "pod-uid") {
+			pod.metadata.uid = "replaced-session-pod";
+			f.seed(pod);
+		}
+
+		if (change === "pod-ready") {
+			pod.status.conditions = [{ type: "Ready", status: "False" }];
+			f.seed(pod);
+		}
+		if (["pod-agent", "pod-session"].includes(change)) {
+			const other = {
+				...sandbox,
+				...(change === "pod-agent" ? { agentId: "agent-other" } : {}),
+				...(change === "pod-session"
+					? { sessionId: "conversation-other" }
+					: {}),
+			};
+			pod.metadata.labels = { ...sessionSandboxLabelsV1(other) };
+			pod.metadata.annotations = {
+				...pod.metadata.annotations,
+				...sessionSandboxIdentityAnnotationsV1(other),
+			};
+			f.seed(pod);
+		}
+		const read = f.client.read.bind(f.client);
+		if (change === "pod-read")
+			vi.spyOn(f.client, "read").mockImplementation(async (kind, name) => {
+				if (kind === "Pod" && name === sandbox.resourceName)
+					throw new WorkloadKubernetesError("unavailable");
+				return read(kind, name);
+			});
+		const resolver = createProductionConversationRuntimeResolverV2({
+			workload: f.options,
+			signing,
+			serviceToken: "synthetic-transport",
+			...(change === "unconfigured"
+				? {}
+				: {
+						connectionConsumerProfile: profile,
+						connectionConsumerApproval: approval,
+					}),
+		});
+		const request = {
+			agentId: ready.agentId,
+			conversationId: sandbox.sessionId,
+			principal:
+				change === "principal-missing"
+					? undefined
+					: change === "principal-kind"
+						? { ...sandbox.principal, kind: "application" as const }
+						: change === "principal-id"
+							? { ...sandbox.principal, id: "actor-other" }
+							: sandbox.principal,
+			actorId: sandbox.principal.id,
+			channelId: sandbox.channelId,
+			sessionGeneration: sandbox.generation,
+			workload: readyV4,
+			sandboxResource: stored,
+			signal: new AbortController().signal,
+		};
+		const persisted = structuredClone(stored);
+		const writes = f.writes.length;
+		const resolution = resolver({
+			...request,
+			purpose: "business",
+			command: "turn.supplement",
+		});
+		if (change === "current" || change === "unconfigured")
+			await expect(resolution).resolves.toMatchObject({
+				baseUrl: `http://${sandbox.resourceName}.${policy.namespace}.svc:${deployment.service.port}`,
+			});
+		else
+			await expect(resolution).rejects.toMatchObject({
+				code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+			});
+		await expect(
+			resolver({ ...request, purpose: "control", command: "session.status" }),
+		).resolves.toMatchObject({
+			baseUrl: `http://${sandbox.resourceName}.${policy.namespace}.svc:${deployment.service.port}`,
+		});
+		expect(f.writes).toHaveLength(writes);
+		expect(stored).toEqual(persisted);
+	},
+);

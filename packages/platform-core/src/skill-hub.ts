@@ -123,6 +123,7 @@ export type SkillHubVersionV1 = Readonly<{
 	packageObjectVersion: string;
 	packageDigest: string;
 	manifestDigest: string;
+	signatureDigest: string;
 	state: SkillHubVersionStateV1;
 	needUpgrade: boolean;
 	reviewedBy: string | null;
@@ -140,6 +141,7 @@ export type SkillHubVersionCreateInputV1 = Readonly<{
 	packageObjectVersion: string;
 	packageDigest: string;
 	manifestDigest: string;
+	signatureDigest: string;
 }>;
 
 export class SkillHubLifecycleErrorV1 extends Error {

@@ -107,6 +107,15 @@ export function createProductionConversationRuntimeResolverV2(options: {
 		);
 	}
 	const runtime = createWorkloadRuntimeV1(workload);
+	const allocationFor = createSessionSandboxAllocationResolverV1(workload, {
+		serviceToken,
+	});
+	const sandboxAdapter = createSessionSandboxWorkloadAdapterV1({
+		client: workload.client,
+	});
+	const connectionDeliveryConfigured =
+		workload.policy.connectionConsumerSnapshot !== undefined ||
+		workload.policy.connectionInstallationRevision !== undefined;
 	return async (input) => {
 		try {
 			input.signal.throwIfAborted();
@@ -297,6 +306,41 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					liveService.spec.externalName
 				)
 					throw new Error();
+				if (input.purpose === "business" && connectionDeliveryConfigured) {
+					// Both principal facts come from the server's original execution/Store.
+					if (
+						!input.principal ||
+						input.principal.kind !== sandboxResource.sandbox.principal.kind ||
+						input.principal.id !== sandboxResource.sandbox.principal.id
+					)
+						throw new Error();
+					// A ready Store receipt does not attest today's Session Pod delivery.
+					const resources = sandboxResource.observation?.resources;
+					const pods = resources?.filter((resource) => resource.kind === "Pod");
+					const pod = pods?.[0];
+					if (
+						pods?.length !== 1 ||
+						!pod?.uid ||
+						pod.namespace !== workload.policy.namespace ||
+						pod.name !== sandboxResource.sandbox.resourceName
+					)
+						throw new Error();
+					const observed = await sandboxAdapter.observe(
+						allocationFor(
+							sandboxResource.sandbox,
+							sandboxResource.policy,
+							deployment,
+							// The verified projection the Sandbox was prepared from (#1466).
+							state.candidate.modelProjection,
+							"running",
+							sandboxResource.sandbox.generation,
+							sandboxResource.resourceFence,
+						),
+						resources,
+					);
+					input.signal.throwIfAborted();
+					if (observed.status !== "ready") throw new Error();
+				}
 				return {
 					// Session sandboxes use their own Service contract; the bound Service
 					// is consumed in-cluster over plaintext HTTP (ADR-0020).
@@ -342,14 +386,12 @@ function sessionSandboxEgressPolicyV1(
 	};
 }
 
-/** Production resource receiver; invoked only under the original Store lease. */
-export function createProductionSessionSandboxReceiverV1(
+/** One deployment capture shared by Session reception and read-only route checks. */
+function createSessionSandboxAllocationResolverV1(
 	workload: WorkloadRuntimeOptionsV1,
 	options: { readonly serviceToken: string },
 ) {
-	const adapter = createSessionSandboxWorkloadAdapterV1({
-		client: workload.client,
-	});
+	const connectionConsumerSnapshot = workload.policy.connectionConsumerSnapshot;
 	const connectionInstallationRevision =
 		workload.policy.connectionInstallationRevision;
 	/**
@@ -407,11 +449,11 @@ export function createProductionSessionSandboxReceiverV1(
 			),
 		};
 	};
-	const allocationFor = (
+	return (
 		binding: SessionSandboxReconciliationClaimV1["sandbox"],
 		policy: SessionSandboxReconciliationClaimV1["policy"],
 		deployment: AgentWorkloadDesiredV1,
-		runtime: SessionSandboxRuntimeInputV1,
+		modelProjection: unknown,
 		desiredState: "running" | "stopped",
 		generation: number,
 		resourceFence: number,
@@ -431,8 +473,9 @@ export function createProductionSessionSandboxReceiverV1(
 		imageDigest: `${workload.policy.imageRepository}@${deployment.imageDigest}`,
 		containerPort: deployment.service.port,
 		env: deployment.env,
-		runtime,
-		connectionConsumerSnapshot: workload.policy.connectionConsumerSnapshot,
+		// V4-only: a static-key or missing projection fails before any write.
+		runtime: runtimeFor(binding, policy, deployment, modelProjection),
+		connectionConsumerSnapshot,
 		connectionInstallationRevision,
 		authorizedIngressSelector: workload.policy.workerSelector,
 		resources: workload.policy.resources,
@@ -441,6 +484,20 @@ export function createProductionSessionSandboxReceiverV1(
 		workspaceMountPath: "/workspace",
 		desiredState,
 	});
+}
+
+/** Production resource receiver; invoked only under the original Store lease. */
+export function createProductionSessionSandboxReceiverV1(
+	workload: WorkloadRuntimeOptionsV1,
+	options: { readonly serviceToken: string },
+) {
+	const adapter = createSessionSandboxWorkloadAdapterV1({
+		client: workload.client,
+	});
+	const allocationFor = createSessionSandboxAllocationResolverV1(
+		workload,
+		options,
+	);
 	return async (
 		claim: SessionSandboxReconciliationClaimV1,
 		signal: AbortSignal,
@@ -460,17 +517,11 @@ export function createProductionSessionSandboxReceiverV1(
 				source.deployment,
 			);
 			// The source keeps the projection it was prepared with (#1466).
-			const sourceRuntime = runtimeFor(
-				source.sandbox,
-				source.policy,
-				sourceDeployment,
-				source.modelProjection,
-			);
 			const sourceAllocation = allocationFor(
 				source.sandbox,
 				source.policy,
 				sourceDeployment,
-				sourceRuntime,
+				source.modelProjection,
 				"running",
 				source.sandbox.generation,
 				source.resourceFence,
@@ -519,7 +570,7 @@ export function createProductionSessionSandboxReceiverV1(
 				claim.sandbox,
 				source.policy,
 				sourceDeployment,
-				sourceRuntime,
+				source.modelProjection,
 				"stopped",
 				source.sandbox.generation,
 				source.resourceFence,
@@ -554,18 +605,11 @@ export function createProductionSessionSandboxReceiverV1(
 				workloadResourceConfigurationHashV1(workload.policy)
 		)
 			throw new Error("SessionSandbox verified policy is unavailable");
-		// V4-only: a static-key or missing projection fails before any write.
-		const runtime = runtimeFor(
-			claim.sandbox,
-			claim.policy,
-			deployment,
-			claim.modelProjection,
-		);
 		const allocation = allocationFor(
 			claim.sandbox,
 			claim.policy,
 			deployment,
-			runtime,
+			claim.modelProjection,
 			claim.desiredState,
 			claim.sandbox.generation,
 			claim.resourceFence,
