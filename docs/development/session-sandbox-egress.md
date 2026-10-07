@@ -6,7 +6,7 @@
 ## 当前落实方式
 
 [#1445](https://github.com/AgoraIO-Extensions/agent-infra/issues/1445) 起，Session Sandbox 的出站
-由五类必需资源中的 NetworkPolicy 落实：Worker 从受审阅部署 policy 取 `dnsEgress`、`modelEgress`
+由六类必需资源中的 NetworkPolicy 落实：Worker 从受审阅部署 policy 取 `dnsEgress`、`modelEgress`
 与 `connectionEgress`，用与 Agent 级 Workload 相同的 `workloadEgressRulesV1` 编译为该 Sandbox
 NetworkPolicy 的出站规则；部署未批准目标时出站为空，即全部拒绝。Store claim、请求、镜像和 Runtime
 回包都不能提供或扩大目标。该 NetworkPolicy 已随 Sandbox 就绪回执记录 UID/resourceVersion；同 UID

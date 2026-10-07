@@ -64,6 +64,7 @@ export async function persistSessionSandboxManagementIntents(
 				lifecycle?: SessionSandboxLifecycleV1;
 				sourceSnapshot?: SessionSandboxSourceV1;
 				deployment?: unknown;
+				modelProjection?: unknown;
 			};
 		}>(sql`select id, status, attempt_count, delivery_fence::text, payload from platform.outbox_items
 			where scope_type = 'conversation' and scope_id = ${id} and operation = 'conversation.sandbox.reconcile.v1' for update`);
@@ -79,6 +80,7 @@ export async function persistSessionSandboxManagementIntents(
 				policy: row.resource_policy,
 				observation: row.resource_observation,
 				deployment: intent?.payload.deployment ?? null,
+				modelProjection: intent?.payload.modelProjection ?? null,
 			},
 			previous: intent?.payload.lifecycle ?? null,
 			sourceSnapshot: intent?.payload.sourceSnapshot,
@@ -102,6 +104,7 @@ export async function persistSessionSandboxManagementIntents(
 			sessionGeneration: sandbox.generation,
 			lifecycle: next.lifecycle,
 			deployment: intent?.payload.deployment ?? null,
+			modelProjection: intent?.payload.modelProjection ?? null,
 		};
 		await transaction.execute(sql`update platform.session_sandbox_allocations
 			set desired_state = ${next.desiredState}, status = ${next.status}, resource_fence = ${next.resourceFence}, updated_at = ${plan.outboxIntent.occurredAt.toISOString()}

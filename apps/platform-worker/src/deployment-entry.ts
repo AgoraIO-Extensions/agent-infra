@@ -155,10 +155,13 @@ async function createPrepared(signal: AbortSignal) {
 				),
 			},
 			receiveSandbox:
-				conversationDeployment.createProductionSessionSandboxReceiverV1({
-					...workload,
-					workerId: signing.workerId,
-				}),
+				conversationDeployment.createProductionSessionSandboxReceiverV1(
+					{
+						...workload,
+						workerId: signing.workerId,
+					},
+					{ serviceToken },
+				),
 			resolveRuntimeHost: async (
 				request: Parameters<typeof resolveRuntimeHost>[0],
 			) => {

@@ -5,6 +5,7 @@ import type {
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
+	V1Secret,
 	V1Service,
 } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
@@ -24,7 +25,12 @@ import {
 	type SessionSandboxAllocationV1,
 	sessionSandboxLabelsV1,
 	sessionSandboxResourcesV1,
+	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
+import {
+	sessionSandboxDeploymentTokenFixture,
+	sessionSandboxRuntimeInputFixture,
+} from "./test-support/session-sandbox-v4.js";
 import { workloadEgressRulesV1 } from "./workload-network.js";
 
 const api = () => {
@@ -100,6 +106,7 @@ const allocation: SessionSandboxAllocationV1 = {
 	serviceAccountName: "sandbox-sandbox-a",
 	pvcName: "sandbox-sandbox-a",
 	networkPolicyName: "sandbox-sandbox-a",
+	secretName: "sandbox-sandbox-a",
 	egress: {},
 	imageDigest: `registry.example.test/runtime@sha256:${"a".repeat(64)}`,
 	authorizedIngressSelector: { component: "dispatcher" },
@@ -111,6 +118,11 @@ const allocation: SessionSandboxAllocationV1 = {
 	},
 	storageSize: "1Gi",
 	env: { SESSION_ID: "session-a" },
+	runtime: sessionSandboxRuntimeInputFixture({
+		agentId: "agent-a",
+		namespace: "workload-test",
+		sandboxId: "sandbox-a",
+	}),
 	desiredState: "running",
 };
 
@@ -223,7 +235,7 @@ describe("session sandbox workload adapter", () => {
 			"control",
 		);
 		expect(controlObservation.status).toBe("observed");
-		expect(controlObservation.resources).toHaveLength(5);
+		expect(controlObservation.resources).toHaveLength(6);
 		await adapter.cleanup(unavailable, previous, {
 			recordDeletionProgress: async () => "committed",
 		});
@@ -250,13 +262,14 @@ describe("session sandbox workload adapter", () => {
 		])
 			expect(() => sessionSandboxResourcesV1(input)).toThrow();
 	});
-	it("renders one Pod, Service, SA, retained PVC and isolated NetworkPolicy with allocation fence", () => {
+	it("renders one Pod, Service, SA, retained PVC, isolated NetworkPolicy and own Secret with allocation fence", () => {
 		const resources = sessionSandboxResourcesV1(allocation);
 		expect(resources.map((resource) => resource.kind)).toEqual([
 			"ServiceAccount",
 			"PersistentVolumeClaim",
 			"NetworkPolicy",
 			"Service",
+			"Secret",
 			"Pod",
 		]);
 		for (const resource of resources) {
@@ -430,6 +443,12 @@ describe("session sandbox workload adapter", () => {
 			serviceAccountName: `sandbox-${sandboxId}`,
 			pvcName: `sandbox-${sandboxId}`,
 			networkPolicyName: `sandbox-${sandboxId}`,
+			secretName: `sandbox-${sandboxId}`,
+			runtime: sessionSandboxRuntimeInputFixture({
+				agentId,
+				namespace: allocation.namespace,
+				sandboxId,
+			}),
 		};
 		expect(agentId).toHaveLength(70);
 		const kubernetesLabelValue =
@@ -459,7 +478,7 @@ describe("session sandbox workload adapter", () => {
 	});
 
 	it("is never selected by the Agent-level Workload selectors", () => {
-		const [, , , , pod] = sessionSandboxResourcesV1(allocation);
+		const [, , , , , pod] = sessionSandboxResourcesV1(allocation);
 		const podLabels = pod.metadata?.labels ?? {};
 		const agentSelector = {
 			"agent-infra.agora.io/agent": workloadResourceNameV1(allocation.agentId),
@@ -509,7 +528,13 @@ describe("session sandbox workload adapter", () => {
 			serviceAccountName: "sandbox-sandbox-b",
 			pvcName: "sandbox-sandbox-b",
 			networkPolicyName: "sandbox-sandbox-b",
+			secretName: "sandbox-sandbox-b",
 			env: { SESSION_ID: "session-b" },
+			runtime: sessionSandboxRuntimeInputFixture({
+				agentId: allocation.agentId,
+				namespace: allocation.namespace,
+				sandboxId: "sandbox-b",
+			}),
 		};
 		const firstResources = sessionSandboxResourcesV1(allocation);
 		const secondResources = sessionSandboxResourcesV1(second);
@@ -525,25 +550,28 @@ describe("session sandbox workload adapter", () => {
 		);
 		expect([...firstNames].filter((name) => secondNames.has(name))).toEqual([]);
 		expect(firstResources[1].spec?.volumeMode).toBeUndefined();
-		expect(firstResources[4].spec?.containers[0]?.workingDir).toBe(
-			"/workspace",
+		// Each Sandbox gets its own derived token; neither is the deployment token.
+		expect(firstResources[4].data?.token).not.toBe(
+			secondResources[4].data?.token,
 		);
-		expect(secondResources[4].spec?.containers[0]?.workingDir).toBe(
-			"/workspace",
-		);
+		for (const secret of [firstResources[4], secondResources[4]])
+			expect(
+				Buffer.from(secret.data?.token ?? "", "base64").toString(),
+			).not.toBe(sessionSandboxDeploymentTokenFixture);
+		expect(firstResources[5].spec?.containers[0]?.workingDir).toBeUndefined();
 		expect(firstResources[2].spec?.podSelector).toEqual({
-			matchLabels: firstResources[4].metadata?.labels,
+			matchLabels: firstResources[5].metadata?.labels,
 		});
 		expect(secondResources[2].spec?.podSelector).toEqual({
-			matchLabels: secondResources[4].metadata?.labels,
+			matchLabels: secondResources[5].metadata?.labels,
 		});
-		expect(firstResources[4].spec?.volumes?.[0]?.persistentVolumeClaim).toEqual(
+		expect(firstResources[5].spec?.volumes?.[0]?.persistentVolumeClaim).toEqual(
 			{
 				claimName: allocation.pvcName,
 			},
 		);
 		expect(
-			secondResources[4].spec?.volumes?.[0]?.persistentVolumeClaim,
+			secondResources[5].spec?.volumes?.[0]?.persistentVolumeClaim,
 		).toEqual({
 			claimName: second.pvcName,
 		});
@@ -730,10 +758,10 @@ describe("session sandbox workload adapter", () => {
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 		await adapter.apply(allocation);
 		const before = await adapter.observe(allocation);
-		expect(before.resources).toHaveLength(5);
+		expect(before.resources).toHaveLength(6);
 		expect(
 			new Set(before.resources.map((resource) => resource.kind)).size,
-		).toBe(5);
+		).toBe(6);
 		for (const identity of before.resources) {
 			expect(identity).toMatchObject({
 				namespace: allocation.namespace,
@@ -806,7 +834,7 @@ describe("session sandbox workload adapter", () => {
 		await expect(client.read("Pod", allocation.podName)).resolves.toBeNull();
 	});
 
-	it("closes Pod and Service before stopped state returns", async () => {
+	it("closes Pod, Service and Secret before stopped state returns", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 		await adapter.apply(allocation);
@@ -814,6 +842,9 @@ describe("session sandbox workload adapter", () => {
 		await expect(client.read("Pod", allocation.podName)).resolves.toBeNull();
 		await expect(
 			client.read("Service", allocation.serviceName),
+		).resolves.toBeNull();
+		await expect(
+			client.read("Secret", allocation.secretName),
 		).resolves.toBeNull();
 		await expect(
 			client.read("PersistentVolumeClaim", allocation.pvcName),
@@ -912,8 +943,13 @@ describe("session sandbox workload adapter", () => {
 		const pod = (await client.read("Pod", allocation.podName)) as V1Pod | null;
 		if (!pod?.spec?.containers[0]) throw new Error("missing runtime container");
 		pod.spec.containers[0].securityContext = {
+			procMount: "Default",
+			seccompProfile: { type: "RuntimeDefault" },
+			runAsGroup: 1000,
+			runAsUser: 1000,
 			runAsNonRoot: true,
-			readOnlyRootFilesystem: false,
+			capabilities: { drop: ["ALL"] },
+			readOnlyRootFilesystem: true,
 			allowPrivilegeEscalation: false,
 		};
 		await expect(adapter.apply(allocation)).resolves.toMatchObject({
@@ -1010,6 +1046,7 @@ describe("session sandbox workload adapter", () => {
 		"NetworkPolicy",
 		"PersistentVolumeClaim",
 		"ServiceAccount",
+		"Secret",
 	] as const)(
 		"fails closed on same-UID %s drift during readback",
 		async (kind) => {
@@ -1048,6 +1085,11 @@ describe("session sandbox workload adapter", () => {
 				(
 					resource as import("@kubernetes/client-node").V1ServiceAccount
 				).automountServiceAccountToken = true;
+			if (kind === "Secret")
+				(resource as V1Secret).data = {
+					...(resource as V1Secret).data,
+					token: Buffer.from("foreign-token").toString("base64"),
+				};
 			expect((await adapter.observe(pinned, before.resources)).status).toBe(
 				"unknown",
 			);
@@ -1088,6 +1130,7 @@ describe("session sandbox workload adapter", () => {
 			"NetworkPolicy",
 			"Pod",
 			"Service",
+			"Secret",
 		] as const)
 			await expect(
 				client.read(
@@ -1098,7 +1141,9 @@ describe("session sandbox workload adapter", () => {
 							? allocation.serviceName
 							: kind === "ServiceAccount"
 								? allocation.serviceAccountName
-								: allocation.networkPolicyName,
+								: kind === "Secret"
+									? allocation.secretName
+									: allocation.networkPolicyName,
 				),
 			).resolves.toBeNull();
 		await expect(
@@ -1126,16 +1171,22 @@ describe("session sandbox workload adapter", () => {
 			},
 		});
 		expect(receipt.retainedPVC.kind).toBe("PersistentVolumeClaim");
-		expect(progress).toHaveLength(12);
+		expect(progress).toHaveLength(15);
 		expect(
 			progress.filter((entry) => entry.state === "delete-requested"),
-		).toHaveLength(8);
+		).toHaveLength(10);
 		expect(progress.filter((entry) => entry.state === "absent")).toHaveLength(
-			4,
+			5,
 		);
 		expect(
 			progress.filter((entry) => entry.result === "acknowledged"),
-		).toHaveLength(8);
+		).toHaveLength(10);
+		// The Pod goes before the Secret it references.
+		expect(
+			progress
+				.filter((entry) => entry.state === "absent")
+				.map((entry) => entry.kind),
+		).toEqual(["Pod", "Secret", "Service", "NetworkPolicy", "ServiceAccount"]);
 	});
 
 	it("fails closed before DELETE when the durable CAS callback is absent", async () => {
@@ -1274,5 +1325,330 @@ describe("session sandbox workload adapter", () => {
 				(entry) => entry.resource.kind === "Pod" && entry.state === "absent",
 			),
 		).toBe(true);
+	});
+});
+
+describe("Session Sandbox Runtime projection (#1466)", () => {
+	const ready = async (client: ReturnType<typeof api>) => {
+		const pod = await client.read<V1Pod>("Pod", allocation.podName);
+		if (!pod) throw new Error("Missing Pod");
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		};
+	};
+
+	it("projects Runtime inputs by name and keeps both credentials in this Sandbox's Secret", () => {
+		const [, , , , secret, pod] = sessionSandboxResourcesV1(allocation);
+		const container = pod.spec?.containers[0];
+		expect(pod.spec?.securityContext).toEqual({
+			runAsNonRoot: true,
+			runAsUser: 1000,
+			runAsGroup: 1000,
+			fsGroup: 1000,
+			seccompProfile: { type: "RuntimeDefault" },
+		});
+		expect(container?.securityContext).toMatchObject({
+			allowPrivilegeEscalation: false,
+			readOnlyRootFilesystem: true,
+			capabilities: { drop: ["ALL"] },
+			runAsUser: 1000,
+		});
+		expect(pod.spec?.enableServiceLinks).toBe(false);
+		expect(container?.workingDir).toBeUndefined();
+		expect(container?.volumeMounts).toEqual([
+			{ name: "workspace", mountPath: "/workspace" },
+			{ name: "runtime-tmp", mountPath: "/tmp" },
+		]);
+		expect(pod.spec?.volumes?.[1]).toEqual({
+			name: "runtime-tmp",
+			emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
+		});
+		const env = new Map(
+			(container?.env ?? []).map((entry) => [entry.name, entry]),
+		);
+		expect([...env.keys()].sort()).toEqual(
+			[
+				"SESSION_ID",
+				"AGENT_INFRA_RUNTIME_MODEL_CONFIG",
+				"AGENT_INFRA_RUNTIME_DRIVER",
+				"AGENT_INFRA_RUNTIME_AGENT_ID",
+				"AGENT_INFRA_RUNTIME_WORKER_ID",
+				"AGENT_INFRA_RUNTIME_DATA_DIR",
+				"PORT",
+				"AGENT_INFRA_RUNTIME_GRANT_KEY_ID",
+				"AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY",
+				"AGENT_INFRA_RUNTIME_GRANT_ISSUER",
+				"AGENT_INFRA_RUNTIME_SERVICE_TOKEN",
+			].sort(),
+		);
+		expect(env.get("AGENT_INFRA_RUNTIME_DATA_DIR")?.value).toBe(
+			"/workspace/runtime",
+		);
+		expect(env.get("AGENT_INFRA_RUNTIME_AGENT_ID")?.value).toBe("agent-a");
+		expect(env.get("PORT")?.value).toBe("8080");
+		for (const [name, key] of [
+			["AGENT_INFRA_RUNTIME_MODEL_CONFIG", "model-config"],
+			["AGENT_INFRA_RUNTIME_SERVICE_TOKEN", "token"],
+		] as const) {
+			expect(env.get(name)?.value).toBeUndefined();
+			expect(env.get(name)?.valueFrom).toEqual({
+				secretKeyRef: { name: allocation.secretName, key, optional: false },
+			});
+		}
+		// No static model Key and no deployment-level token anywhere in the Pod.
+		const podJson = JSON.stringify(pod);
+		expect(podJson).not.toContain("MODEL_CREDENTIAL");
+		expect(podJson).not.toContain(sessionSandboxDeploymentTokenFixture);
+		expect(podJson).not.toContain(allocation.runtime.serviceToken);
+		expect(container?.envFrom).toBeUndefined();
+		expect(secret).toMatchObject({
+			kind: "Secret",
+			type: "Opaque",
+			immutable: true,
+			metadata: {
+				name: allocation.resourceName,
+				labels: sessionSandboxLabelsV1(allocation),
+			},
+		});
+		expect(Object.keys(secret.data ?? {}).sort()).toEqual([
+			"model-config",
+			"token",
+		]);
+		const token = Buffer.from(secret.data?.token ?? "", "base64").toString();
+		expect(token).toBe(
+			sessionSandboxServiceTokenV1(
+				sessionSandboxDeploymentTokenFixture,
+				allocation.namespace,
+				allocation.sandboxId,
+			),
+		);
+		const modelConfig = JSON.parse(
+			Buffer.from(secret.data?.["model-config"] ?? "", "base64").toString(),
+		);
+		expect(modelConfig.schemaVersion).toBe(4);
+		expect(JSON.stringify(modelConfig)).not.toMatch(/credential/i);
+	});
+
+	it("derives a distinct token per Sandbox and namespace, never the deployment token", () => {
+		const token = (namespace: string, sandboxId: string) =>
+			sessionSandboxServiceTokenV1(
+				sessionSandboxDeploymentTokenFixture,
+				namespace,
+				sandboxId,
+			);
+		const a = token("workload-test", "sandbox-a");
+		expect(a).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect(a).toBe(token("workload-test", "sandbox-a"));
+		expect(new Set([a, token("workload-test", "sandbox-b")]).size).toBe(2);
+		expect(new Set([a, token("other-namespace", "sandbox-a")]).size).toBe(2);
+		// Separator-bound: concatenation cannot alias another namespace/Sandbox.
+		expect(token("workload-tes", "tsandbox-a")).not.toBe(a);
+		expect(a).not.toBe(sessionSandboxDeploymentTokenFixture);
+		expect(
+			sessionSandboxServiceTokenV1(
+				"rotated-deployment-proof",
+				"workload-test",
+				"sandbox-a",
+			),
+		).not.toBe(a);
+	});
+
+	it.each([
+		[
+			"a deployment-level token",
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		],
+		[
+			"a static-key model configuration",
+			{
+				modelConfiguration: JSON.stringify({
+					...JSON.parse(allocation.runtime.modelConfiguration),
+					schemaVersion: 3,
+				}),
+			},
+		],
+		["another driver", { driver: "claude" }],
+		["an extra input", { credential: "synthetic" }],
+	])("rejects %s before any resource write", async (_name, override) => {
+		const client = api();
+		let writes = 0;
+		const adapter = createSessionSandboxWorkloadAdapterV1({
+			client: {
+				...client,
+				async create(object) {
+					writes++;
+					return client.create(object);
+				},
+			},
+		});
+		await expect(
+			adapter.apply({
+				...allocation,
+				runtime: { ...allocation.runtime, ...override },
+			} as SessionSandboxAllocationV1),
+		).rejects.toMatchObject({ code: "policy" });
+		expect(writes).toBe(0);
+	});
+
+	it.each([
+		"AGENT_INFRA_RUNTIME_SERVICE_TOKEN",
+		"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_X",
+		"PORT",
+	])("rejects owner env %s that would shadow Runtime inputs", (name) => {
+		expect(() =>
+			sessionSandboxResourcesV1({
+				...allocation,
+				env: { ...allocation.env, [name]: "caller" },
+			}),
+		).toThrow();
+	});
+
+	it.each([
+		[
+			"a runtime env value",
+			(pod: V1Pod) => {
+				const entry = pod.spec?.containers[0]?.env?.find(
+					(item) => item.name === "AGENT_INFRA_RUNTIME_AGENT_ID",
+				);
+				if (!entry) throw new Error("missing env");
+				entry.value = "agent-b";
+			},
+		],
+		[
+			"a credential reference",
+			(pod: V1Pod) => {
+				const entry = pod.spec?.containers[0]?.env?.find(
+					(item) => item.name === "AGENT_INFRA_RUNTIME_SERVICE_TOKEN",
+				);
+				if (!entry?.valueFrom?.secretKeyRef) throw new Error("missing env");
+				entry.valueFrom.secretKeyRef.name = "platform-runtime-transport";
+			},
+		],
+		[
+			"an added static model Key",
+			(pod: V1Pod) => {
+				pod.spec?.containers[0]?.env?.push({
+					name: "AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_X",
+					value: "synthetic",
+				});
+			},
+		],
+		[
+			"the Pod security context",
+			(pod: V1Pod) => {
+				if (!pod.spec) throw new Error("missing spec");
+				pod.spec.securityContext = { runAsNonRoot: true };
+			},
+		],
+		[
+			"a writable root filesystem",
+			(pod: V1Pod) => {
+				const context = pod.spec?.containers[0]?.securityContext;
+				if (!context) throw new Error("missing security context");
+				context.readOnlyRootFilesystem = false;
+			},
+		],
+		[
+			"the /tmp volume",
+			(pod: V1Pod) => {
+				if (!pod.spec) throw new Error("missing spec");
+				pod.spec.volumes = pod.spec.volumes?.filter(
+					(volume) => volume.name !== "runtime-tmp",
+				);
+			},
+		],
+		[
+			"service links",
+			(pod: V1Pod) => {
+				if (!pod.spec) throw new Error("missing spec");
+				pod.spec.enableServiceLinks = true;
+			},
+		],
+	] as const)(
+		"fails closed on Session Pod drift in %s",
+		async (_name, mutate) => {
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+			await adapter.apply(allocation);
+			await ready(client);
+			const before = await adapter.observe(allocation);
+			expect(before.status).toBe("ready");
+			mutate((await client.read<V1Pod>("Pod", allocation.podName)) as V1Pod);
+			expect((await adapter.observe(allocation, before.resources)).status).toBe(
+				"unknown",
+			);
+			await expect(
+				adapter.apply(allocation, before.resources),
+			).rejects.toMatchObject({ code: "conflict" });
+		},
+	);
+
+	it("records the Secret UID/resourceVersion in the readiness receipt", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		await ready(client);
+		const observed = await adapter.observe(allocation);
+		expect(observed.status).toBe("ready");
+		const live = await client.read<V1Secret>("Secret", allocation.secretName);
+		expect(
+			observed.resources.find((resource) => resource.kind === "Secret"),
+		).toEqual({
+			kind: "Secret",
+			namespace: allocation.namespace,
+			name: allocation.secretName,
+			uid: live?.metadata?.uid,
+			resourceVersion: live?.metadata?.resourceVersion,
+		});
+	});
+
+	it("reports unknown when the Secret is replaced or missing", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		await ready(client);
+		const before = await adapter.observe(allocation);
+		const live = await client.read<V1Secret>("Secret", allocation.secretName);
+		if (!live?.metadata) throw new Error("Missing Secret");
+		live.metadata.uid = "replacement-secret";
+		expect((await adapter.observe(allocation, before.resources)).status).toBe(
+			"unknown",
+		);
+		await client.delete(live);
+		expect((await adapter.observe(allocation, before.resources)).status).toBe(
+			"unknown",
+		);
+		await expect(
+			adapter.apply(allocation, before.resources),
+		).rejects.toMatchObject({ code: "conflict" });
+	});
+
+	it("does not take over a same-name external Secret", async () => {
+		const client = api();
+		const foreign: V1Secret = {
+			apiVersion: "v1",
+			kind: "Secret",
+			type: "Opaque",
+			metadata: {
+				namespace: allocation.namespace,
+				name: allocation.secretName,
+				labels: { ...sessionSandboxLabelsV1(allocation) },
+			},
+			data: { token: Buffer.from("foreign").toString("base64") },
+		};
+		await client.create(foreign);
+		const before = structuredClone(
+			await client.read<V1Secret>("Secret", allocation.secretName),
+		);
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await expect(adapter.apply(allocation)).rejects.toMatchObject({
+			code: "conflict",
+		});
+		expect(await client.read("Secret", allocation.secretName)).toEqual(before);
+		expect(await client.read("Pod", allocation.podName)).toBeNull();
+		await expect(adapter.observe(allocation)).resolves.toMatchObject({
+			status: "unknown",
+		});
 	});
 });

@@ -17,6 +17,8 @@ export interface SessionSandboxSourceV1 {
 	readonly observation: SessionSandboxObservationV1 | null;
 	/** Original verified preparation input; absent for allocations never prepared. */
 	readonly deployment?: unknown;
+	/** Verified model projection captured with `deployment`; null when not prepared. */
+	readonly modelProjection?: unknown;
 }
 
 export interface SessionSandboxStopReceiptV1 {

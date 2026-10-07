@@ -1,4 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
+import { posix } from "node:path";
+import { RuntimeModelConfigurationV4Schema } from "@agent-infra/contracts/runtime";
 import {
 	decideSessionSandboxDrainObservationV1,
 	type SessionSandboxDeletionProgressV1,
@@ -11,9 +13,11 @@ import {
 import type {
 	KubernetesObject,
 	V1Container,
+	V1EnvVar,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
+	V1Secret,
 	V1Service,
 	V1ServiceAccount,
 } from "@kubernetes/client-node";
@@ -26,9 +30,54 @@ import {
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import {
+	agentContainerSecurityContext,
+	agentPodSecurityContext,
+} from "./kubernetes-runtime-comparison.js";
+import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
+
+/**
+ * Runtime inputs for one Session Sandbox (#1466). `modelConfiguration` and
+ * `serviceToken` are written only to that Sandbox's own Secret; the Pod refers
+ * to them by key and never receives a deployment-level credential.
+ */
+export interface SessionSandboxRuntimeInputV1 {
+	readonly driver: "codex";
+	/** Non-sensitive keyless V4 configuration from the verified projection. */
+	readonly modelConfiguration: string;
+	readonly workerId: string;
+	readonly grantKeyId: string;
+	readonly grantPublicKey: string;
+	readonly grantIssuer: string;
+	/** Per-Sandbox transport token from {@link sessionSandboxServiceTokenV1}. */
+	readonly serviceToken: string;
+}
+
+/**
+ * Transport token bound to one Sandbox. The Worker recomputes it for each
+ * route, so nothing extra is stored and rotating the deployment token rotates
+ * every Sandbox token. It is not valid for another Sandbox or an Agent Workload.
+ */
+export function sessionSandboxServiceTokenV1(
+	deploymentServiceToken: string,
+	namespace: string,
+	sandboxId: string,
+): string {
+	if (!deploymentServiceToken || !namespace || !sandboxId)
+		throw new WorkloadKubernetesError("policy");
+	return createHmac("sha256", deploymentServiceToken)
+		.update(`session-sandbox-v1\0${namespace}\0${sandboxId}`)
+		.digest("base64url");
+}
+
+const sessionSandboxTokenPattern = /^[A-Za-z0-9_-]{43}$/;
+const runtimeTextPattern = /^[\x21-\x7e]{1,256}$/;
+const runtimeTmpVolume = {
+	name: "runtime-tmp",
+	emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
+} as const;
 
 /** Typed handoff for the #1250 Store allocation authority. */
 export interface SessionSandboxAllocationV1 {
@@ -48,6 +97,8 @@ export interface SessionSandboxAllocationV1 {
 	readonly serviceAccountName: string;
 	readonly pvcName: string;
 	readonly networkPolicyName: string;
+	/** This Sandbox's own credential Secret; never shared with another Sandbox. */
+	readonly secretName: string;
 	/**
 	 * Deployment-approved egress (Spec §10.1.1), assembled by the Worker from its
 	 * reviewed policy; never from Store claims, requests or Runtime replies.
@@ -58,6 +109,8 @@ export interface SessionSandboxAllocationV1 {
 	readonly containerPort: number;
 	readonly workspaceMountPath: string;
 	readonly env?: Readonly<Record<string, string>>;
+	/** Verified V4 projection and Worker runtime auth, assembled by the Worker. */
+	readonly runtime: SessionSandboxRuntimeInputV1;
 	readonly connectionConsumerSnapshot?: string | null;
 	readonly connectionInstallationRevision?: string | null;
 	readonly resources: {
@@ -74,8 +127,12 @@ export type SessionSandboxResourceSetV1 = readonly [
 	V1PersistentVolumeClaim,
 	V1NetworkPolicy,
 	V1Service,
+	V1Secret,
 	V1Pod,
 ];
+
+/** Kinds that hold compute, routing or credentials; absent once stopped. */
+const stoppedAbsentKinds = new Set(["Pod", "Service", "Secret"]);
 
 export type SessionSandboxPrincipalV1 = TaskPrincipalV1;
 
@@ -184,6 +241,7 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 			value.serviceAccountName,
 			value.pvcName,
 			value.networkPolicyName,
+			value.secretName,
 		].some((name) => name !== value.resourceName) ||
 		!/^[^\s@]+@sha256:[0-9a-f]{64}$/.test(value.imageDigest) ||
 		Object.keys(value.authorizedIngressSelector).length === 0 ||
@@ -192,6 +250,12 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		value.containerPort < 1 ||
 		value.containerPort > 65535 ||
 		!value.workspaceMountPath.startsWith("/") ||
+		// The Host requires a normalized data directory below this mount.
+		value.workspaceMountPath === "/" ||
+		posix.normalize(value.workspaceMountPath) !== value.workspaceMountPath ||
+		value.workspaceMountPath.endsWith("/") ||
+		value.workspaceMountPath === "/tmp" ||
+		value.workspaceMountPath.startsWith("/tmp/") ||
 		!value.egress ||
 		typeof value.egress !== "object" ||
 		Array.isArray(value.egress) ||
@@ -202,17 +266,89 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		throw new WorkloadKubernetesError("policy");
 	// Rejects any destination the shared Agent-level compiler would reject.
 	workloadEgressRulesV1(value.egress);
+	validateRuntimeInput(value.runtime);
+}
+
+function validateRuntimeInput(runtime: SessionSandboxRuntimeInputV1) {
+	try {
+		if (
+			!runtime ||
+			typeof runtime !== "object" ||
+			Object.keys(runtime).sort().join(",") !==
+				"driver,grantIssuer,grantKeyId,grantPublicKey,modelConfiguration,serviceToken,workerId" ||
+			runtime.driver !== "codex" ||
+			![runtime.workerId, runtime.grantKeyId, runtime.grantIssuer].every(
+				(item) => typeof item === "string" && runtimeTextPattern.test(item),
+			) ||
+			typeof runtime.grantPublicKey !== "string" ||
+			!runtime.grantPublicKey.startsWith("-----BEGIN PUBLIC KEY-----") ||
+			// Only the derived per-Sandbox token shape (32-byte HMAC, base64url).
+			typeof runtime.serviceToken !== "string" ||
+			!sessionSandboxTokenPattern.test(runtime.serviceToken) ||
+			typeof runtime.modelConfiguration !== "string"
+		)
+			throw new Error();
+		// Keyless V4 only: static model credentials are never projected here.
+		RuntimeModelConfigurationV4Schema.parse(
+			JSON.parse(runtime.modelConfiguration),
+		);
+	} catch {
+		throw new WorkloadKubernetesError("policy");
+	}
+}
+
+/** Runtime Host inputs; both credentials are references into this Sandbox's Secret. */
+function runtimeEnvironment(
+	allocation: SessionSandboxAllocationV1,
+): V1EnvVar[] {
+	const { runtime } = allocation;
+	const secretRef = (key: "model-config" | "token") => ({
+		secretKeyRef: { name: allocation.secretName, key, optional: false },
+	});
+	return [
+		{
+			name: "AGENT_INFRA_RUNTIME_MODEL_CONFIG",
+			valueFrom: secretRef("model-config"),
+		},
+		{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: runtime.driver },
+		{ name: "AGENT_INFRA_RUNTIME_AGENT_ID", value: allocation.agentId },
+		{ name: "AGENT_INFRA_RUNTIME_WORKER_ID", value: runtime.workerId },
+		{
+			name: "AGENT_INFRA_RUNTIME_DATA_DIR",
+			value: `${allocation.workspaceMountPath}/runtime`,
+		},
+		{ name: "PORT", value: String(allocation.containerPort) },
+		{ name: "AGENT_INFRA_RUNTIME_GRANT_KEY_ID", value: runtime.grantKeyId },
+		{
+			name: "AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY",
+			value: runtime.grantPublicKey,
+		},
+		{ name: "AGENT_INFRA_RUNTIME_GRANT_ISSUER", value: runtime.grantIssuer },
+		{
+			name: "AGENT_INFRA_RUNTIME_SERVICE_TOKEN",
+			valueFrom: secretRef("token"),
+		},
+	];
 }
 
 export function sessionSandboxResourcesV1(
 	allocation: SessionSandboxAllocationV1,
 ): SessionSandboxResourceSetV1 {
 	validateAllocation(allocation);
+	const runtimeEnv = runtimeEnvironment(allocation);
 	if (
 		allocation.desiredState === "running" &&
 		(allocation.connectionConsumerSnapshot === null ||
 			allocation.connectionInstallationRevision === null ||
-			Object.keys(allocation.env ?? {}).some(isRuntimeConnectionEnvironmentV1))
+			Object.keys(allocation.env ?? {}).some(
+				isRuntimeConnectionEnvironmentV1,
+			) ||
+			// Owner env cannot shadow or add platform Runtime inputs.
+			Object.keys(allocation.env ?? {}).some(
+				(name) =>
+					name.startsWith("AGENT_INFRA_") ||
+					runtimeEnv.some((entry) => entry.name === name),
+			))
 	)
 		throw new WorkloadKubernetesError("policy");
 	const connection = runtimeConnectionConsumerProjectionV1(
@@ -276,7 +412,11 @@ export function sessionSandboxResourcesV1(
 		spec: {
 			serviceAccountName: allocation.serviceAccountName,
 			automountServiceAccountToken: false,
+			// Other Sandboxes' Service addresses are not injected into this one.
+			enableServiceLinks: false,
 			restartPolicy: "Always",
+			// Same non-root identity as the Agent-level Workload (#1466).
+			securityContext: agentPodSecurityContext(),
 			containers: [
 				{
 					name: "runtime",
@@ -289,12 +429,13 @@ export function sessionSandboxResourcesV1(
 							name,
 							value,
 						})),
+						...runtimeEnv,
 						...connection.env,
 					],
-					workingDir: allocation.workspaceMountPath,
 					volumeMounts: [
 						...connection.volumeMounts,
 						{ name: "workspace", mountPath: allocation.workspaceMountPath },
+						{ name: runtimeTmpVolume.name, mountPath: "/tmp" },
 					],
 					// In-cluster plaintext (ADR-0020); NetworkPolicy admits only the Worker.
 					readinessProbe: {
@@ -305,11 +446,7 @@ export function sessionSandboxResourcesV1(
 						},
 						periodSeconds: 5,
 					},
-					securityContext: {
-						allowPrivilegeEscalation: false,
-						readOnlyRootFilesystem: false,
-						runAsNonRoot: true,
-					},
+					securityContext: agentContainerSecurityContext(),
 				},
 			],
 			volumes: [
@@ -318,7 +455,21 @@ export function sessionSandboxResourcesV1(
 					name: "workspace",
 					persistentVolumeClaim: { claimName: allocation.pvcName },
 				},
+				structuredClone(runtimeTmpVolume),
 			],
+		},
+	};
+	const secret: V1Secret = {
+		apiVersion: "v1",
+		kind: "Secret",
+		metadata: metadata(allocation, allocation.secretName),
+		type: "Opaque",
+		immutable: true,
+		data: {
+			token: Buffer.from(allocation.runtime.serviceToken).toString("base64"),
+			"model-config": Buffer.from(
+				allocation.runtime.modelConfiguration,
+			).toString("base64"),
 		},
 	};
 	const service: V1Service = {
@@ -337,7 +488,8 @@ export function sessionSandboxResourcesV1(
 			],
 		},
 	};
-	return [account, pvc, policy, service, pod];
+	// The Secret precedes the Pod that references it; cleanup runs in reverse.
+	return [account, pvc, policy, service, secret, pod];
 }
 
 function pvcSpecMatches(
@@ -396,6 +548,9 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		currentSpec.serviceAccountName === expectedSpec.serviceAccountName &&
 		currentSpec.automountServiceAccountToken ===
 			expectedSpec.automountServiceAccountToken &&
+		currentSpec.enableServiceLinks === expectedSpec.enableServiceLinks &&
+		stableJson(currentSpec.securityContext ?? {}) ===
+			stableJson(expectedSpec.securityContext ?? {}) &&
 		currentSpec.restartPolicy === expectedSpec.restartPolicy &&
 		currentSpec.hostNetwork === expectedSpec.hostNetwork &&
 		currentSpec.hostPID === expectedSpec.hostPID &&
@@ -463,6 +618,17 @@ function resourceSpecMatches(
 			return (
 				(current as V1ServiceAccount).automountServiceAccountToken === false
 			);
+		case "Secret": {
+			// Immutable: any data drift is a replaced object, never an update.
+			const actual = current as V1Secret;
+			const wanted = expected as V1Secret;
+			return (
+				actual.type === wanted.type &&
+				actual.immutable === true &&
+				actual.stringData === undefined &&
+				stableJson(actual.data ?? {}) === stableJson(wanted.data ?? {})
+			);
+		}
 		case "NetworkPolicy":
 			return (
 				stableJson(
@@ -672,22 +838,19 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			for (const expected of resources) {
 				if (
 					allocation.desiredState === "stopped" &&
-					(expected.kind === "Pod" || expected.kind === "Service")
+					stoppedAbsentKinds.has(expected.kind ?? "")
 				) {
+					const kind =
+						expected.kind as SessionSandboxResourceIdentityV1["kind"];
 					const current = await options.client.read(
-						expected.kind,
+						kind,
 						expected.metadata?.name ?? "",
 					);
 					if (current) {
 						if (!owned(current, expected, allocation))
 							throw new WorkloadKubernetesError("conflict");
 						await options.client.delete(current);
-						if (
-							await options.client.read(
-								expected.kind,
-								expected.metadata?.name ?? "",
-							)
-						)
+						if (await options.client.read(kind, expected.metadata?.name ?? ""))
 							throw new WorkloadKubernetesError("unavailable");
 					}
 					continue;
@@ -719,7 +882,8 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						throw new WorkloadKubernetesError("conflict");
 				} else if (
 					expected.kind === "ServiceAccount" ||
-					expected.kind === "NetworkPolicy"
+					expected.kind === "NetworkPolicy" ||
+					expected.kind === "Secret"
 				) {
 					// Kube may add defaulted fields to these owned resources. A
 					// matching object is already converged; replacing it can turn a
@@ -764,7 +928,7 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				const current = await options.client.read(kind, name);
 				if (
 					allocation.desiredState === "stopped" &&
-					(kind === "Pod" || kind === "Service")
+					stoppedAbsentKinds.has(kind)
 				) {
 					if (current) status = "unknown";
 					continue;

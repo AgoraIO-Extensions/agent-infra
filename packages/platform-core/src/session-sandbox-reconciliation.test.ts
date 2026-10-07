@@ -41,6 +41,7 @@ const requiredKinds = [
 	"ServiceAccount",
 	"PersistentVolumeClaim",
 	"NetworkPolicy",
+	"Secret",
 ] as const;
 const ready: SessionSandboxObservationV1 = {
 	status: "ready",
@@ -132,8 +133,33 @@ describe("Session Sandbox actual resource receipt", () => {
 			]),
 		).toBe(false);
 	});
-	it("accepts the five actual direct-Pod resources without a fabricated controller", () => {
+	it("accepts the six actual direct-Pod resources without a fabricated controller", () => {
 		expect(isSessionSandboxObservationValidV1(claim, ready)).toBe(true);
+	});
+	it("accepts delete progress for the per-Sandbox Secret (#1466)", () => {
+		const secret = ready.resources.find(
+			(resource) => resource.kind === "Secret",
+		);
+		if (!secret) throw new Error("Missing Secret fixture");
+		expect(
+			isSessionSandboxDeletionProgressValidV1([
+				{
+					schemaVersion: 1,
+					state: "delete-requested",
+					deleteAttemptId: "attempt-secret",
+					deleteAttempted: false,
+					deleteCallResult: "not-attempted",
+					sourceGeneration: 1,
+					resourceFence: 2,
+					managementFence: 3,
+					resource: secret,
+					preconditions: {
+						uid: secret.uid,
+						resourceVersion: secret.resourceVersion,
+					},
+				},
+			]),
+		).toBe(true);
 	});
 	it.each(requiredKinds)("rejects readiness without actual %s", (kind) => {
 		expect(

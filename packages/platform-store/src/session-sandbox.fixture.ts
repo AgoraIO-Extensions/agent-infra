@@ -30,7 +30,7 @@ export async function markSessionSandboxReadyFixture(
 			resource_observation = jsonb_build_object('status', 'ready', 'resources',
 				(select jsonb_agg(jsonb_build_object('kind', kind, 'namespace', 'fixture-sandboxes',
 					'name', a.resource_name, 'uid', a.sandbox_id || '-' || kind, 'resourceVersion', '1'))
-				from unnest(array['Pod','Service','ServiceAccount','PersistentVolumeClaim','NetworkPolicy']) as kind))
+				from unnest(array['Pod','Service','ServiceAccount','PersistentVolumeClaim','NetworkPolicy','Secret']) as kind))
 		where a.conversation_id = ${conversationId}`;
 	await client`update platform.outbox_items set status = 'succeeded', lease_owner = null, lease_expires_at = null
 		where scope_type = 'conversation' and scope_id = ${conversationId} and operation = 'conversation.sandbox.reconcile.v1'`;

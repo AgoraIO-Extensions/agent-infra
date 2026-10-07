@@ -40,6 +40,7 @@ import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.j
 import {
 	sessionSandboxIdentityAnnotationsV1,
 	sessionSandboxLabelsV1,
+	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
 import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 
@@ -129,6 +130,8 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		deliveryFence?: number;
 		confirmedCursor?: string;
 		responseStatus?: number;
+		/** True when the bearer is a Session Sandbox token, never the deployment one. */
+		sandboxToken?: boolean;
 	}[] = [];
 	const keys = generateKeyPairSync("ed25519");
 	const wrapping = generateKeyPairSync("rsa", { modulusLength: 3072 });
@@ -206,6 +209,13 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	});
 	let host: RuntimeHost | undefined;
 	let runtimeServer: ReturnType<typeof createServer> | undefined;
+	const sandboxApps = new Map<
+		string,
+		ReturnType<typeof createRuntimeHostApp>
+	>();
+	let registerSandboxHost: (sandboxId: string) => void = () => {
+		throw Error("Runtime Host is not ready");
+	};
 	let execution: PostgresConversationExecutionTransactionV1 | undefined;
 	let authorization: PostgresTaskAuthorizationStoreV1 | undefined;
 	let moduleDirectory: string | undefined;
@@ -302,7 +312,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				expectedWorkerId: signing.workerId,
 			},
 		});
-		const app = createRuntimeHostApp({
+		const hostAppOptions = {
 			host,
 			runtimeWorkerId: signing.workerId,
 			readinessWorkerId: signing.workerId,
@@ -313,7 +323,20 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			verifyGrantV2: createRuntimeExecutionGrantVerifierV2(
 				new Map([[signing.keyId, keys.publicKey]]),
 			),
-		});
+		};
+		const app = createRuntimeHostApp(hostAppOptions);
+		// Each Session Sandbox Host knows only its own derived token (#1466).
+		registerSandboxHost = (sandboxId) => {
+			const token = sessionSandboxServiceTokenV1(
+				"synthetic-runtime-token",
+				policy.namespace,
+				sandboxId,
+			);
+			sandboxApps.set(
+				token,
+				createRuntimeHostApp({ ...hostAppOptions, serviceToken: token }),
+			);
+		};
 		let ackCount = 0;
 		runtimeServer = createServer(async (req, res) => {
 			traces.push(`runtime:${req.method}:${req.url}`);
@@ -325,21 +348,30 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			for await (const chunk of req) chunks.push(chunk);
 			const body = Buffer.concat(chunks).toString();
 			const parsed = body ? JSON.parse(body) : {};
+			const bearer = String(req.headers.authorization ?? "").replace(
+				/^Bearer /,
+				"",
+			);
+			const sandboxApp = sandboxApps.get(bearer);
 			const observedRequest: (typeof requests)[number] = {
 				path: req.url ?? "",
 				executionId: parsed.executionId,
 				deliveryFence: parsed.operation?.executionDeliveryFence,
 				confirmedCursor: parsed.confirmedCursor,
+				sandboxToken: sandboxApp !== undefined,
 			};
 			requests.push(observedRequest);
 			const requestController = new AbortController();
 			res.on("close", () => requestController.abort());
-			const response = await app.request(`http://runtime${req.url}`, {
-				signal: requestController.signal,
-				method: req.method,
-				headers: req.headers as Record<string, string>,
-				...(body ? { body } : {}),
-			});
+			const response = await (sandboxApp ?? app).request(
+				`http://runtime${req.url}`,
+				{
+					signal: requestController.signal,
+					method: req.method,
+					headers: req.headers as Record<string, string>,
+					...(body ? { body } : {}),
+				},
+			);
 			observedRequest.responseStatus = response.status;
 			if (req.url?.endsWith("/ack") && response.ok) ackCount++;
 			traces.push(`response:${req.url}:${response.status}`);
@@ -498,12 +530,14 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				from platform.session_sandbox_allocations
 				where conversation_id = ${created.result.conversationId}`;
 			if (!sandbox) throw Error("SessionSandbox allocation was not persisted");
+			registerSandboxHost(sandbox.sandbox_id);
 			const sandboxResources = [
 				"Pod",
 				"Service",
 				"ServiceAccount",
 				"PersistentVolumeClaim",
 				"NetworkPolicy",
+				"Secret",
 				"StatefulSet",
 			].map((kind) => ({
 				kind,
@@ -727,6 +761,29 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		expect(
 			requests.filter((request) => request.path.endsWith("/turns")),
 		).toHaveLength(1);
+		// Session business calls carry only the target Sandbox's token (#1466).
+		expect(
+			requests
+				.filter((request) => request.executionId)
+				.every((request) => request.sandboxToken),
+		).toBe(true);
+		// A Sandbox Host rejects the deployment token and every other Sandbox's token.
+		const sandboxHosts = [...sandboxApps.entries()];
+		expect(sandboxHosts.length).toBeGreaterThanOrEqual(2);
+		const [[, firstHost] = [], [secondToken] = []] = sandboxHosts;
+		for (const token of ["synthetic-runtime-token", secondToken])
+			expect(
+				(
+					await firstHost?.request("http://runtime/internal/runtime/v1/turns", {
+						method: "POST",
+						headers: {
+							authorization: `Bearer ${token}`,
+							"content-type": "application/json",
+						},
+						body: "{}",
+					})
+				)?.status,
+			).toBe(401);
 		const [after] =
 			await sql`select delivery_fence::int as fence, host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
 		expect(after?.host_session_ref).toBe(before?.host_session_ref);

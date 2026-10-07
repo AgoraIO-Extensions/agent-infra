@@ -31,6 +31,7 @@ function fixture() {
 			"ServiceAccount",
 			"PersistentVolumeClaim",
 			"NetworkPolicy",
+			"Secret",
 		] as const
 	).map((kind) => ({
 		kind,
