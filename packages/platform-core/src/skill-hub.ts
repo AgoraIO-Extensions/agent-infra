@@ -89,9 +89,7 @@ export function validateSkillPackageEntriesV1(
 		}
 	}
 	if (
-		!entries.some(
-			(entry) => entry.path === "SKILL.md" && entry.kind === "file",
-		)
+		!entries.some((entry) => entry.path === "SKILL.md" && entry.kind === "file")
 	) {
 		throw new SkillPackageValidationErrorV1("missing_entry");
 	}
