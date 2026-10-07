@@ -42,6 +42,10 @@ export const skillHubSkills = platformSchema.table(
 			table.ownerId,
 			table.name,
 		),
+		uniqueIndex("skill_hub_skill_id_owner_unique").on(
+			table.id,
+			table.ownerId,
+		),
 		index("skill_hub_skill_owner_idx").on(table.ownerId),
 	],
 );
@@ -101,7 +105,7 @@ export const skillHubVersions = platformSchema.table(
 		),
 		check(
 			"skill_hub_version_review_binding",
-			sql`(${table.state} in ('pending_review', 'published', 'rejected') and (${table.visibility} = 'PRIVATE' or ${table.reviewedBy} is not null)) or (${table.state} = 'revoked' and ${table.revokedAt} is not null)`,
+			sql`${table.state} = 'pending_review' or (${table.state} in ('published', 'rejected') and (${table.visibility} = 'PRIVATE' or ${table.reviewedBy} is not null)) or (${table.state} = 'revoked' and ${table.revokedAt} is not null)`,
 		),
 		uniqueIndex("skill_hub_version_skill_version_unique").on(
 			table.skillId,

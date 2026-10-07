@@ -1,5 +1,5 @@
 {
-  "id": "98c1c37c-c550-41ac-b707-88c009763616",
+  "id": "b4e63bc3-b203-49b8-9f94-3d1e8d0315ae",
   "prevId": "980ab031-417e-4501-abaa-92e3d477c8f3",
   "version": "7",
   "dialect": "postgresql",
@@ -4852,6 +4852,27 @@
           "method": "btree",
           "with": {}
         },
+        "skill_hub_skill_id_owner_unique": {
+          "name": "skill_hub_skill_id_owner_unique",
+          "columns": [
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "owner_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "skill_hub_skill_owner_idx": {
           "name": "skill_hub_skill_owner_idx",
           "columns": [
@@ -5106,7 +5127,7 @@
         },
         "skill_hub_version_review_binding": {
           "name": "skill_hub_version_review_binding",
-          "value": "(\"platform\".\"skill_hub_versions\".\"state\" in ('pending_review', 'published', 'rejected') and (\"platform\".\"skill_hub_versions\".\"visibility\" = 'PRIVATE' or \"platform\".\"skill_hub_versions\".\"reviewed_by\" is not null)) or (\"platform\".\"skill_hub_versions\".\"state\" = 'revoked' and \"platform\".\"skill_hub_versions\".\"revoked_at\" is not null)"
+          "value": "\"platform\".\"skill_hub_versions\".\"state\" = 'pending_review' or (\"platform\".\"skill_hub_versions\".\"state\" in ('published', 'rejected') and (\"platform\".\"skill_hub_versions\".\"visibility\" = 'PRIVATE' or \"platform\".\"skill_hub_versions\".\"reviewed_by\" is not null)) or (\"platform\".\"skill_hub_versions\".\"state\" = 'revoked' and \"platform\".\"skill_hub_versions\".\"revoked_at\" is not null)"
         }
       },
       "isRLSEnabled": false
