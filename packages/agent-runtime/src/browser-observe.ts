@@ -15,6 +15,22 @@ export type BrowserPageReferenceV1 = Readonly<{
 	pageRevision: number;
 }>;
 
+export type BrowserPageRecoveryInputV1 = Readonly<{
+	pageId: string;
+	pageRevision: number;
+	tabIndex: number;
+	url: string;
+	origin: string;
+	capabilityVersion: number;
+	sessionGeneration: number;
+	resourceFence: number;
+}>;
+
+export type BrowserContextRecoveryBindingV1 = Readonly<{
+	sessionGeneration: number;
+	resourceFence: number;
+}>;
+
 export type BrowserElementReferenceV1 = Readonly<{
 	elementId: string;
 	pageId: string;
@@ -291,13 +307,17 @@ function assertAllowedUrl(
 	return url;
 }
 
-function pageStateFor(page: Page, pages: Map<string, PageState>): PageState {
+function pageStateFor(
+	page: Page,
+	pages: Map<string, PageState>,
+	recovery?: Pick<BrowserPageRecoveryInputV1, "pageId" | "pageRevision">,
+): PageState {
 	const existing = [...pages.values()].find((entry) => entry.page === page);
 	if (existing) return existing;
 	const state: PageState = {
-		pageId: `page-${randomUUID()}`,
+		pageId: recovery?.pageId ?? `page-${randomUUID()}`,
 		page,
-		revision: 1,
+		revision: recovery?.pageRevision ?? 1,
 		elements: new Map(),
 	};
 	page.on("framenavigated", (frame: Frame) => {
@@ -315,6 +335,7 @@ export function createBrowserObserveControllerV1(input: {
 	readonly capability:
 		| BrowserCapabilityAvailableV1
 		| (() => BrowserCapabilityAvailableV1);
+	readonly recoveryBinding?: BrowserContextRecoveryBindingV1;
 	readonly maxTextBytes?: number;
 }) {
 	const readCapability = (): BrowserCapabilityAvailableV1 =>
@@ -434,6 +455,66 @@ export function createBrowserObserveControllerV1(input: {
 			.pages()
 			.slice(0, maxTabs)
 			.map((page) => pageReference(pageStateFor(page, pages)));
+	}
+
+	async function recoverPage(
+		recovery: BrowserPageRecoveryInputV1,
+	): Promise<BrowserPageReferenceV1> {
+		await installPolicy();
+		const capability = readCapability();
+		if (
+			nonEmpty(recovery.pageId) === false ||
+			nonEmpty(recovery.url) === false ||
+			nonEmpty(recovery.origin) === false ||
+			!Number.isSafeInteger(recovery.tabIndex) ||
+			recovery.tabIndex < 0 ||
+			recovery.tabIndex >= capability.policy.maxTabs ||
+			!Number.isSafeInteger(recovery.pageRevision) ||
+			recovery.pageRevision < 1 ||
+			!Number.isSafeInteger(recovery.capabilityVersion) ||
+			recovery.capabilityVersion < 1 ||
+			!Number.isSafeInteger(recovery.sessionGeneration) ||
+			recovery.sessionGeneration < 1 ||
+			!Number.isSafeInteger(recovery.resourceFence) ||
+			recovery.resourceFence < 1
+		)
+			throw new Error("BROWSER_PAGE_RECOVERY_INVALID");
+		const binding = input.recoveryBinding;
+		if (
+			!binding ||
+			binding.sessionGeneration !== recovery.sessionGeneration ||
+			binding.resourceFence !== recovery.resourceFence
+		)
+			throw new Error("BROWSER_PAGE_RECOVERY_BINDING_MISMATCH");
+		if (capability.capabilityVersion !== recovery.capabilityVersion)
+			throw new Error("BROWSER_PAGE_RECOVERY_CAPABILITY_MISMATCH");
+		const page = input.context.pages()[recovery.tabIndex];
+		if (!page) throw new Error("BROWSER_PAGE_RECOVERY_PAGE_MISSING");
+		if (page.url() !== recovery.url)
+			throw new Error("BROWSER_PAGE_RECOVERY_URL_MISMATCH");
+		const origin = new URL(page.url()).origin;
+		if (origin !== normalizeOrigin(recovery.origin))
+			throw new Error("BROWSER_PAGE_RECOVERY_ORIGIN_MISMATCH");
+		assertAllowedUrl(page.url(), allowedOrigins());
+		for (const state of pages.values()) state.elements.clear();
+		const existingByPage = [...pages.values()].find(
+			(state) => state.page === page,
+		);
+		if (
+			existingByPage &&
+			(existingByPage.pageId !== recovery.pageId ||
+				existingByPage.revision !== recovery.pageRevision)
+		)
+			throw new Error("BROWSER_PAGE_RECOVERY_REVISION_MISMATCH");
+		const existing = [...pages.values()].find(
+			(state) => state.pageId === recovery.pageId,
+		);
+		if (existing && existing.page !== page)
+			throw new Error("BROWSER_PAGE_RECOVERY_PAGE_CONFLICT");
+		const state = pageStateFor(page, pages, recovery);
+		state.elements.clear();
+		state.activeFrame = undefined;
+		return { pageId: state.pageId, pageRevision: state.revision };
 	}
 
 	function resolveElement(reference: BrowserElementReferenceV1): Locator {
@@ -1089,6 +1170,7 @@ export function createBrowserObserveControllerV1(input: {
 		observe,
 		resolveElement,
 		listPages,
+		recoverPage,
 		act: executeAction,
 		executeAction,
 		screenshot,
