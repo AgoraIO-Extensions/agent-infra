@@ -1,10 +1,7 @@
 import { readFileSync } from "node:fs";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
-import {
-	skillHubSkills,
-	skillHubVersions,
-} from "./schema-skill-hub.ts";
+import { skillHubSkills, skillHubVersions } from "./schema-skill-hub.ts";
 
 describe("Skill Hub persistence schema", () => {
 	it("supports the composite version owner foreign key", () => {
@@ -22,7 +19,10 @@ describe("Skill Hub persistence schema", () => {
 		expect(reviewCheck).toBeDefined();
 		expect(
 			readFileSync(
-				new URL("../../../migrations/platform/0039_skill_hub.sql", import.meta.url),
+				new URL(
+					"../../../migrations/platform/0039_skill_hub.sql",
+					import.meta.url,
+				),
 				"utf8",
 			),
 		).toContain(`"state" = 'pending_review' or`);

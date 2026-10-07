@@ -72,6 +72,7 @@ CREATE TABLE "platform"."skill_hub_versions" (
 	CONSTRAINT "skill_hub_version_review_binding" CHECK ("platform"."skill_hub_versions"."state" = 'pending_review' or ("platform"."skill_hub_versions"."state" in ('published', 'rejected') and ("platform"."skill_hub_versions"."visibility" = 'PRIVATE' or "platform"."skill_hub_versions"."reviewed_by" is not null)) or ("platform"."skill_hub_versions"."state" = 'revoked' and "platform"."skill_hub_versions"."revoked_at" is not null))
 );
 --> statement-breakpoint
+CREATE UNIQUE INDEX "skill_hub_skill_id_owner_unique" ON "platform"."skill_hub_skills" USING btree ("id","owner_id");--> statement-breakpoint
 ALTER TABLE "platform"."skill_hub_agent_bindings" ADD CONSTRAINT "skill_hub_agent_bindings_agent_id_agents_id_fk" FOREIGN KEY ("agent_id") REFERENCES "platform"."agents"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "platform"."skill_hub_agent_bindings" ADD CONSTRAINT "skill_hub_agent_bindings_skill_version_id_skill_hub_versions_id_fk" FOREIGN KEY ("skill_version_id") REFERENCES "platform"."skill_hub_versions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "platform"."skill_hub_installations" ADD CONSTRAINT "skill_hub_installations_skill_version_id_skill_hub_versions_id_fk" FOREIGN KEY ("skill_version_id") REFERENCES "platform"."skill_hub_versions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -81,7 +82,6 @@ CREATE INDEX "skill_hub_agent_binding_agent_idx" ON "platform"."skill_hub_agent_
 CREATE UNIQUE INDEX "skill_hub_installation_principal_version_unique" ON "platform"."skill_hub_installations" USING btree ("principal_type","principal_id","skill_version_id");--> statement-breakpoint
 CREATE INDEX "skill_hub_installation_principal_idx" ON "platform"."skill_hub_installations" USING btree ("principal_type","principal_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "skill_hub_skill_owner_name_unique" ON "platform"."skill_hub_skills" USING btree ("owner_id","name");--> statement-breakpoint
-CREATE UNIQUE INDEX "skill_hub_skill_id_owner_unique" ON "platform"."skill_hub_skills" USING btree ("id","owner_id");--> statement-breakpoint
 CREATE INDEX "skill_hub_skill_owner_idx" ON "platform"."skill_hub_skills" USING btree ("owner_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "skill_hub_version_skill_version_unique" ON "platform"."skill_hub_versions" USING btree ("skill_id","version");--> statement-breakpoint
 CREATE INDEX "skill_hub_version_state_idx" ON "platform"."skill_hub_versions" USING btree ("state");

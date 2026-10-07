@@ -42,10 +42,7 @@ export const skillHubSkills = platformSchema.table(
 			table.ownerId,
 			table.name,
 		),
-		uniqueIndex("skill_hub_skill_id_owner_unique").on(
-			table.id,
-			table.ownerId,
-		),
+		uniqueIndex("skill_hub_skill_id_owner_unique").on(table.id, table.ownerId),
 		index("skill_hub_skill_owner_idx").on(table.ownerId),
 	],
 );
