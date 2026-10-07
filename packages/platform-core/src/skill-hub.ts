@@ -88,7 +88,11 @@ export function validateSkillPackageEntriesV1(
 			throw new SkillPackageValidationErrorV1("size_limit");
 		}
 	}
-	if (!paths.has("SKILL.md")) {
+	if (
+		!entries.some(
+			(entry) => entry.path === "SKILL.md" && entry.kind === "file",
+		)
+	) {
 		throw new SkillPackageValidationErrorV1("missing_entry");
 	}
 	return { fileCount, totalBytes };

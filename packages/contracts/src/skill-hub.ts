@@ -6,22 +6,26 @@ const packageName = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/);
 const relativePackagePath = z
 	.string()
 	.regex(
-		/^(?!\/)(?!.*\\)(?!.*(?:^|\/)\.\.(?:\/|$))(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/,
+		/^(?!\/)(?!.*\\)(?!.*(?:^|\/)\.{1,2}(?:\/|$))(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/,
 	);
 const fileRoot = z
 	.string()
 	.regex(/^\/[A-Za-z0-9._/-]{1,255}$/)
 	.refine((value) => !value.split("/").includes(".."));
 const networkOrigin = z.string().refine((value) => {
-	const url = new URL(value);
-	return (
-		url.protocol === "https:" &&
-		url.username === "" &&
-		url.password === "" &&
-		url.pathname === "/" &&
-		url.search === "" &&
-		url.hash === ""
-	);
+	try {
+		const url = new URL(value);
+		return (
+			url.protocol === "https:" &&
+			url.username === "" &&
+			url.password === "" &&
+			url.pathname === "/" &&
+			url.search === "" &&
+			url.hash === ""
+		);
+	} catch {
+		return false;
+	}
 });
 
 export const SkillProviderIdV1Schema = z.enum([
