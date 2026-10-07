@@ -28,6 +28,7 @@ export const operationalStages = [
 	"runtime",
 	"model",
 	"tool",
+	"browser",
 	"result_persist",
 	"sse",
 	"audit_write",
