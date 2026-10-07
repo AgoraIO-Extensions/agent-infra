@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { readCodexInstalledSkillDeployment } from "../../../apps/agent-runtime-host/src/installed-skill.ts";
+import { readCodexInstalledSkillDeployment } from "../../../apps/agent-runtime-host/src/configuration.ts";
 import {
 	CodexAppServerBridge,
 	type CodexAppServerFrame,
@@ -84,7 +84,7 @@ class ObservedNativeSkillDriver extends CodexRuntimeDriver {
 describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 	"Codex native installed Skill discovery",
 	() => {
-		it("consumes the official set/list frames and invalidates on changed", async () => {
+		it("consumes the official set/list frames and records changed", async () => {
 			await verifyCodexPilotInstallation("workspace-summary-v1");
 			const descriptor = await readCodexInstalledSkillDeployment(
 				process.env,
@@ -184,7 +184,7 @@ describe.skipIf(process.env.AGENT_INFRA_CODEX_NATIVE_TEST !== "1")(
 				const read = {
 					nativeSessionRef: seeded.nativeSessionRef,
 					signal: new AbortController().signal,
-					expiresAt: Date.now() + 60_000,
+					expiresAt: Date.now() + 30_000,
 					assertCurrent: () => seeded.binding,
 					revalidate: async () => seeded.binding,
 				};
