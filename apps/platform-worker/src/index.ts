@@ -379,6 +379,12 @@ export {
 	type BrowserFileGrantBridgeV1,
 	createBrowserFileGrantBridgeV1,
 } from "./browser-file-bridge.js";
+export {
+	type BrowserResultFileEventBindingV1,
+	type BrowserResultFileEventInputV1,
+	type BrowserResultFileEventResultV1,
+	createBrowserResultFileEventAdapterV1,
+} from "./browser-result-file-event.js";
 export { createWorkerFileClientV1 } from "./file-client.js";
 export { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
 export {
