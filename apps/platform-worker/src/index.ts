@@ -387,6 +387,12 @@ export {
 	createBrowserFileGrantBridgeV1,
 } from "./browser-file-bridge.js";
 export {
+	type BrowserRecoveryBindingV1,
+	type BrowserRecoveryResultV1,
+	type BrowserRecoveryStatusV1,
+	createBrowserRecoveryConsumerV1,
+} from "./browser-recovery-consumer.js";
+export {
 	type BrowserResultFileEventBindingV1,
 	type BrowserResultFileEventInputV1,
 	type BrowserResultFileEventResultV1,
