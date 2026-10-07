@@ -551,7 +551,7 @@ StatefulSet 仅为可选 Pod 控制器，不是所有 Sandbox 就绪回执的必
 
 - `token`：该 Sandbox 的 transport token，为部署级 service token 对
   `session-sandbox-v1`、namespace 与 Sandbox ID 的 HMAC-SHA256（base64url）。Worker 每次路由
-  该 Sandbox 时重新计算，不另行存储；部署 token 轮换时一并更换。Sandbox 的 business 与 control
+  该 Sandbox 时重新计算，不另行存储；部署 token 轮换按下述受控停止与重建流程更换。Sandbox 的 business 与 control
   路由只发送该值，Agent 级路由不变；部署 token 和其他 Sandbox 的 token 均被该 Host 拒绝。
 - `model-config`：Store 随 claim 交付的 verified 模型投影的非敏感配置。只接受 V4 无 Key 投影；
   不是 V4、模板绑定不再受信，或 verified 部署含 Agent 级 `secretRefs` 时，Session prepare 在
@@ -563,6 +563,13 @@ Pod 以 secretKeyRef 引用这两项，并直接获得 Driver、Agent ID、Worke
 1000、只读根文件系统且 `/tmp` 使用内存 emptyDir、去掉全部 capabilities、seccomp RuntimeDefault，
 且不注入其他 Service 的地址。上述任一字段或 Secret 内容漂移均判为 unknown 或 conflict，
 不原地修复。Secret 随计算资源一起停止和回收，只保留 PVC；同名外部 Secret 不被接管。
+
+部署 token 轮换须沿现有 Agent 管理停止/重启意图进行：先关闭业务路由并确认原执行和停止
+屏障，再以原资源 UID/resourceVersion 回收 Pod 和 Secret；轮换后在同一 Sandbox/PVC 上重新
+准备专属 Secret 和 Pod，并取得新的逐资源就绪回执。轮换尚未完成时不继续发送新业务。
+原执行或删除结果仍为 unknown 时保留占用，不能把 token 内容漂移当作自动替换资源的授权。
+drain 保留原 V4 投影、资源身份与删除 CAS 校验，但不重新要求原模板处于当前 prepare allowlist；
+模板撤销不得阻断已获管理授权的原资源回收。
 
 Pod 重建仍沿同一 Session、Sandbox、PVC 和原 allocation 恢复，先证明旧执行源不能双活，
 再在当前 `resourceFence` 下由原 Store CAS 接受新 Pod UID 与逐资源版本；不能凭 Pod 消失

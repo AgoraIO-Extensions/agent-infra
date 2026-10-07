@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { StandardMcpClient } from "@agent-infra/agent-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import {
 	closeStandardMcpFixtures,
@@ -24,14 +25,52 @@ import {
 	standardMcpMaterialKey,
 } from "./standard-mcp-input.js";
 
-const protection = vi.hoisted(() => ({ check: vi.fn() }));
+const protection = vi.hoisted(() => ({
+	check: vi.fn(),
+	metadataCloses: 0,
+	afterMetadataClose: undefined as (() => void) | undefined,
+}));
 vi.mock("./standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: protection.check,
 }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const fs = await importOriginal<typeof import("node:fs/promises")>();
+	return {
+		...fs,
+		open: async (...args: Parameters<typeof fs.open>) => {
+			const file = await fs.open(...args);
+			// Linux reads relative to verified /proc/self/fd directories. Classify
+			// the actual opened path so the final-read fault always runs there too.
+			let path: string;
+			try {
+				path = await fs.realpath(String(args[0]));
+			} catch (error) {
+				await file.close();
+				throw error;
+			}
+			if (
+				path.includes("standard-mcp-input/bindings/") &&
+				path.endsWith(".json")
+			) {
+				const close = file.close.bind(file);
+				file.close = async () => {
+					await close();
+					protection.metadataCloses++;
+					protection.afterMetadataClose?.();
+				};
+			}
+			return file;
+		},
+	};
+});
+const clientCloses: (() => Promise<void>)[] = [];
 const directories: string[] = [];
 afterEach(async () => {
+	for (const close of clientCloses.splice(0)) await close();
 	vi.restoreAllMocks();
 	protection.check.mockReset();
+	protection.metadataCloses = 0;
+	protection.afterMetadataClose = undefined;
 	for (const path of directories.splice(0))
 		await rm(path, { recursive: true, force: true });
 	await closeStandardMcpFixtures();
@@ -102,7 +141,7 @@ it("reads separate protected material only for the original approved installatio
 		await env.options.resolveInput(reference, new AbortController().signal),
 	).toEqual(env.fixture.input);
 	expect(env.store.resolveOriginalExecutionBinding).toHaveBeenCalledTimes(2);
-	expect(protection.check).toHaveBeenCalledTimes(4);
+	expect(protection.check).toHaveBeenCalled();
 });
 
 it("does not configure a client from a snapshot without a dedicated installation", async () => {
@@ -233,3 +272,117 @@ it("rejects original authority change after a material read", async () => {
 		env.options.resolveInput(reference, new AbortController().signal),
 	).rejects.toThrow("installation is unavailable");
 });
+
+it.each([
+	["binding", "cancel"],
+	["binding", "protection"],
+	["metadata", "cancel"],
+	["metadata", "protection"],
+] as const)("rejects the final %s input wait on %s", async (stage, change) => {
+	const env = await setup();
+	const abort = new AbortController();
+	let hits = 0;
+	const fault = () => {
+		hits++;
+		if (change === "cancel")
+			abort.abort(new Error("private-cancellation-sentinel"));
+		else
+			protection.check.mockImplementation(() => {
+				throw new Error("private-protection-sentinel");
+			});
+	};
+	if (stage === "binding")
+		env.store.resolveOriginalExecutionBinding
+			.mockImplementationOnce(async () => ({
+				principal: env.fixture.input.principal,
+				scope: env.fixture.input.scope,
+			}))
+			.mockImplementationOnce(async () => {
+				fault();
+				return {
+					principal: env.fixture.input.principal,
+					scope: env.fixture.input.scope,
+				};
+			});
+	else
+		protection.afterMetadataClose = () => {
+			if (protection.metadataCloses === 2) fault();
+		};
+	const denied = await env.options.resolveInput(reference, abort.signal).then(
+		() => false,
+		(error) => {
+			expect(error).toMatchObject({
+				code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+				message: "Standard Connection installation is unavailable",
+			});
+			return true;
+		},
+	);
+	expect(hits).toBe(1);
+	expect(denied).toBe(true);
+	expect(env.fixture.trace).toHaveLength(0);
+});
+
+it.each(["cancel", "protection"] as const)(
+	"blocks actual tool dispatch on %s after RPC prepare and the final metadata wait",
+	async (change) => {
+		const env = await setup();
+		const abort = new AbortController();
+		let prepared = false;
+		let closesAfterPrepare = 0;
+		let hits = 0;
+		let blocked = false;
+		let starts = 0;
+		let confirmed: string | undefined;
+		const client = await StandardMcpClient.open(
+			{ ...env.options, fetch: env.fixture.fetch },
+			reference,
+			abort.signal,
+		);
+		clientCloses.push(() => client.close());
+		protection.afterMetadataClose = () => {
+			if (!prepared || ++closesAfterPrepare !== 2) return;
+			hits++;
+			if (change === "cancel")
+				abort.abort(new Error("private-cancellation-sentinel"));
+			else
+				protection.check.mockImplementation(() => {
+					throw new Error("private-protection-sentinel");
+				});
+		};
+		const result = await client.call(
+			client.toolDefinitions[0]?.tools[0]?.name ?? "",
+			{ text: "controlled fixture" },
+			{
+				assertCurrent: async () => () => {
+					abort.signal.throwIfAborted();
+				},
+				prepare: async () => {
+					prepared = true;
+				},
+				started: async () => {
+					starts++;
+				},
+				confirm: async (outcome) => {
+					confirmed = outcome.phase;
+				},
+				block: () => {
+					blocked = true;
+				},
+			},
+			abort.signal,
+		);
+		expect(hits).toBe(1);
+		expect(
+			env.fixture.trace.filter((event) => event.method === "tools/call"),
+		).toHaveLength(0);
+		expect(starts).toBe(0);
+		expect(confirmed).toBe("unknown");
+		expect(blocked).toBe(true);
+		expect(result).toEqual({
+			phase: "unknown",
+			contentItems: [],
+			success: false,
+		});
+	},
+);

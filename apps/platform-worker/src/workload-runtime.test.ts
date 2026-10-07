@@ -3275,6 +3275,131 @@ it("persists exact capacity and binds readiness to fence/image while preserving 
 	});
 });
 
+it("routes a ready Session after configuration re-verification advances only the Workload revision (#1480)", async () => {
+	const keys = generateKeyPairSync("ed25519");
+	const signing = {
+		workerId: "worker-a",
+		issuer: "platform",
+		keyId: "key",
+		privateKey: keys.privateKey,
+	};
+	const f = fixture({
+		policy: {
+			...workloadTestPolicy,
+			runtimeAuth: {
+				workerId: signing.workerId,
+				grantIssuer: signing.issuer,
+				grantKeyId: signing.keyId,
+				grantPublicKey: keys.publicKey
+					.export({ type: "spki", format: "pem" })
+					.toString(),
+				serviceTokenSecret: { name: "transport", key: "token" },
+			},
+		},
+	});
+	await f.tick(8);
+	f.setConfiguration(configurationFixture({ revision: 2 }));
+	await f.tick(12);
+	const ready = f.state;
+	if (ready?.phase !== "ready") throw Error("Expected re-verified fixture");
+	const deployment = validateAgentWorkloadDesiredV1(ready.candidate.deployment);
+	// The two counters diverge once a configuration change is re-verified.
+	expect(deployment.workloadRevision).toBe(ready.verifiedRevision);
+	expect(deployment.workloadRevision).not.toBe(ready.sourceLifecycleRevision);
+	const sandboxId = "00000000-0000-4000-8000-000000001480";
+	const sandbox = {
+		schemaVersion: 1 as const,
+		sandboxId,
+		sessionId: "conversation-1480",
+		agentId: ready.agentId,
+		principal: { kind: "user" as const, id: "actor-a" },
+		channelId: "web",
+		generation: 1,
+		resourceName: `sandbox-${sandboxId}`,
+		workspaceScope: sandboxId,
+	};
+	const labels = { ...sessionSandboxLabelsV1(sandbox) };
+	const live = await f.client.create<V1Service>({
+		apiVersion: "v1",
+		kind: "Service",
+		metadata: {
+			name: sandbox.resourceName,
+			namespace: f.options.policy.namespace,
+			labels,
+			annotations: {
+				...sessionSandboxIdentityAnnotationsV1(sandbox),
+				"agent-infra.agora.io/managed": "session-sandbox-v1",
+				"agent-infra.agora.io/fence": "1",
+			},
+		},
+		spec: {
+			type: "ClusterIP",
+			selector: labels,
+			ports: [
+				{
+					name: "runtime",
+					port: deployment.service.port,
+					targetPort: deployment.service.port,
+				},
+			],
+		},
+	});
+	const resolver = createProductionConversationRuntimeResolverV2({
+		workload: f.options,
+		signing,
+		serviceToken: "synthetic-transport",
+	});
+	const route = (workloadRevision: number) =>
+		resolver({
+			agentId: ready.agentId,
+			conversationId: sandbox.sessionId,
+			sessionGeneration: 1,
+			workload: ready,
+			signal: new AbortController().signal,
+			purpose: "business",
+			command: "session.status",
+			sandboxResource: {
+				sandbox,
+				resourceFence: 1,
+				desiredState: "running",
+				status: "ready",
+				policy: {
+					namespace: f.options.policy.namespace,
+					resourceConfigurationHash: workloadResourceConfigurationHashV1(
+						f.options.policy,
+					),
+					configurationRevision: ready.sourceConfigurationRevision,
+					workloadRevision,
+					managementFence: 1,
+					imageDigest: deployment.imageDigest,
+				},
+				observation: {
+					status: "ready",
+					resources: [
+						{
+							kind: "Service",
+							namespace: f.options.policy.namespace,
+							name: sandbox.resourceName,
+							uid: live.metadata?.uid ?? "",
+							resourceVersion: live.metadata?.resourceVersion ?? "",
+						},
+					],
+				},
+			},
+		});
+	await expect(route(deployment.workloadRevision)).resolves.toMatchObject({
+		baseUrl: `http://${sandbox.resourceName}.${f.options.policy.namespace}.svc:${deployment.service.port}`,
+	});
+	// A policy bound to the lifecycle revision, or any other Workload, is stale.
+	for (const stale of [
+		ready.sourceLifecycleRevision,
+		deployment.workloadRevision + 1,
+	])
+		await expect(route(stale)).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+		});
+});
+
 it("fails closed when a production conversation has no current SessionSandbox allocation", async () => {
 	const keys = generateKeyPairSync("ed25519");
 	const signing = {

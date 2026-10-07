@@ -1,6 +1,10 @@
 import { generateKeyPairSync } from "node:crypto";
 import { runtimeModelInjectionV4 } from "@agent-infra/model-catalog";
-import type { SessionSandboxReconciliationClaimV1 } from "@agent-infra/platform-core";
+import type {
+	SessionSandboxDeletionProgressV1,
+	SessionSandboxObservationV1,
+	SessionSandboxReconciliationClaimV1,
+} from "@agent-infra/platform-core";
 import type { V1NetworkPolicy, V1Pod, V1Secret } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import {
@@ -33,10 +37,17 @@ import {
 
 function fixture() {
 	const api = fakeKubernetesApi();
+	const client = {
+		...api.client,
+		async deleteResult(resource: Parameters<typeof api.client.delete>[0]) {
+			await api.client.delete(resource);
+			return "acknowledged" as const;
+		},
+	};
 	const deployment = workloadDesiredFixture(1, "agent-a", "internal-only");
 	const options: WorkloadRuntimeOptionsV1 = {
 		workerId: "worker-a",
-		client: api.client,
+		client,
 		policy: {
 			...workloadTestPolicy,
 			runtimeAuth: sessionSandboxRuntimeAuthFixture,
@@ -100,11 +111,46 @@ function fixture() {
 	};
 	return {
 		...api,
+		client,
 		claim,
 		options,
 		receive: createProductionSessionSandboxReceiverV1(options, {
 			serviceToken: sessionSandboxDeploymentTokenFixture,
 		}),
+	};
+}
+
+function drainClaim(
+	f: ReturnType<typeof fixture>,
+	observation: SessionSandboxObservationV1,
+): SessionSandboxReconciliationClaimV1 {
+	return {
+		...f.claim,
+		purpose: "drain",
+		desiredState: "stopped",
+		drainComputeAllowed: true,
+		resourceFence: f.claim.resourceFence + 1,
+		sandbox: { ...f.claim.sandbox, generation: f.claim.sandbox.generation + 1 },
+		lifecycle: {
+			schemaVersion: 1,
+			authority: {
+				kind: "management",
+				applicationId: "application-a",
+				managementRevision: 2,
+				managementFence: 2,
+				workloadRevision: 2,
+				targetDesiredState: "running",
+			},
+			source: {
+				sandbox: f.claim.sandbox,
+				resourceFence: f.claim.resourceFence,
+				policy: f.claim.policy,
+				deployment: f.claim.deployment,
+				modelProjection: f.claim.modelProjection,
+				observation,
+			},
+			stopReceipt: null,
+		},
 	};
 }
 
@@ -454,6 +500,164 @@ describe("production SessionSandbox resource receiver", () => {
 			receive(f.claim, new AbortController().signal),
 		).rejects.toMatchObject({ code: "policy" });
 		expect(f.writes).toHaveLength(0);
+	});
+
+	it.each(["template-revoked", "token-rotated", "both"] as const)(
+		"drains the captured Sandbox under management authority after %s",
+		async (change) => {
+			const f = fixture();
+			const signal = new AbortController().signal;
+			await f.receive(f.claim, signal);
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				f.claim.sandbox.resourceName,
+			);
+			if (!pod) throw new Error("Expected prepared Pod");
+			pod.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			await f.client.replace(pod);
+			const observation = await f.receive(f.claim, signal);
+			const originalSecret = await f.client.read<V1Secret>(
+				"Secret",
+				f.claim.sandbox.resourceName,
+			);
+			const rotatedToken =
+				change === "template-revoked"
+					? sessionSandboxDeploymentTokenFixture
+					: "synthetic-rotated-deployment-token";
+			const receive = createProductionSessionSandboxReceiverV1(
+				{
+					...f.options,
+					templateModelBindings:
+						change === "token-rotated" ? f.options.templateModelBindings : [],
+				},
+				{ serviceToken: rotatedToken },
+			);
+			const claim = drainClaim(f, observation);
+			const writes = f.writes.length;
+			await expect(
+				receive({ ...f.claim, previousObservation: observation }, signal),
+			).rejects.toMatchObject({
+				code: change === "token-rotated" ? "conflict" : "policy",
+			});
+			expect(f.writes).toHaveLength(writes);
+			await expect(
+				receive({ ...claim, drainComputeAllowed: false }, signal),
+			).resolves.toEqual({
+				status: "unknown",
+				resources: observation.resources,
+			});
+			expect(f.writes).toHaveLength(writes);
+			if (!claim.lifecycle) throw new Error("Expected management lifecycle");
+			const progress = new Map<string, SessionSandboxDeletionProgressV1>();
+			const stopped = await receive(claim, signal, async (entry) => {
+				progress.set(entry.resource.kind, entry);
+				return "committed";
+			});
+			expect(stopped.status).toBe("stopped");
+			if (!("sourceStop" in stopped) || !stopped.sourceStop)
+				throw new Error("Expected complete source stop proof");
+			expect(
+				stopped.sourceStop.removed.map(({ resource }) => resource.kind),
+			).toEqual([
+				"Pod",
+				"Secret",
+				"Service",
+				"NetworkPolicy",
+				"ServiceAccount",
+			]);
+			expect(
+				await f.client.read("Pod", f.claim.sandbox.resourceName),
+			).toBeNull();
+			expect(
+				await f.client.read("Secret", f.claim.sandbox.resourceName),
+			).toBeNull();
+			const sourcePVC = observation.resources.find(
+				(resource) => resource.kind === "PersistentVolumeClaim",
+			);
+			expect(stopped.sourceStop.retainedPVC.uid).toBe(sourcePVC?.uid);
+			if (change !== "token-rotated") return;
+			const replacement: SessionSandboxReconciliationClaimV1 = {
+				...claim,
+				purpose: "prepare",
+				desiredState: "running",
+				drainComputeAllowed: false,
+				policy: { ...f.claim.policy, workloadRevision: 2, managementFence: 2 },
+				deployment: {
+					...(f.claim.deployment as ReturnType<typeof workloadDesiredFixture>),
+					workloadRevision: 2,
+				},
+				previousObservation: stopped,
+				lifecycle: {
+					...claim.lifecycle,
+					stopReceipt: stopped.sourceStop,
+					deletionProgress: [...progress.values()],
+					preparation: {
+						generation: claim.sandbox.generation,
+						resourceFence: claim.resourceFence,
+					},
+				},
+			};
+			await receive(replacement, signal);
+			const secret = await f.client.read<V1Secret>(
+				"Secret",
+				f.claim.sandbox.resourceName,
+			);
+			expect(secret?.metadata?.uid).not.toBe(originalSecret?.metadata?.uid);
+			expect(secret?.data?.token).toBe(
+				Buffer.from(
+					sessionSandboxServiceTokenV1(
+						rotatedToken,
+						f.claim.policy.namespace,
+						f.claim.sandbox.sandboxId,
+					),
+				).toString("base64"),
+			);
+			expect(secret?.data?.token).not.toBe(originalSecret?.data?.token);
+			const replacementPod = await f.client.read<V1Pod>(
+				"Pod",
+				f.claim.sandbox.resourceName,
+			);
+			expect(replacementPod?.metadata?.uid).not.toBe(pod.metadata?.uid);
+			expect(
+				(
+					await f.client.read(
+						"PersistentVolumeClaim",
+						f.claim.sandbox.resourceName,
+					)
+				)?.metadata?.uid,
+			).toBe(sourcePVC?.uid);
+		},
+	);
+
+	it("rejects a tampered captured projection before drain writes", async () => {
+		const f = fixture();
+		const signal = new AbortController().signal;
+		const observation = await f.receive(f.claim, signal);
+		const claim = drainClaim(f, observation);
+		if (!claim.lifecycle) throw new Error("Expected management lifecycle");
+		const writes = f.writes.length;
+		await expect(
+			f.receive(
+				{
+					...claim,
+					lifecycle: {
+						...claim.lifecycle,
+						source: {
+							...claim.lifecycle.source,
+							modelProjection: {
+								...(f.claim.modelProjection as Record<string, unknown>),
+								agentId: "other-agent",
+							},
+						},
+					},
+				},
+				signal,
+			),
+		).rejects.toMatchObject({ code: "policy" });
+		expect(f.writes).toHaveLength(writes);
 	});
 
 	it("keeps source resources and returns unknown while an original execution prevents drain", async () => {

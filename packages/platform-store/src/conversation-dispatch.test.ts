@@ -35,6 +35,7 @@ import {
 	markSessionSandboxReadyFixture,
 	seedSessionSandboxFixture,
 } from "./session-sandbox.fixture.ts";
+import { readSessionSandboxRuntimeState } from "./session-sandbox.ts";
 
 let databaseUrl = "";
 let client: ReturnType<typeof postgres>;
@@ -628,6 +629,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				target.sourceLifecycleRevision = 6;
 				target.fence = 6;
 				target.revision = 6;
+				// A re-verified Workload records its own revision as verified (#1480).
+				target.verifiedRevision = 6;
 				target.candidate.deployment.workloadRevision = 6;
 				target.candidate.deployment.fence = 6;
 				target.verified.deployment.workloadRevision = 6;
@@ -1174,6 +1177,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				target.sourceLifecycleRevision = 6;
 				target.fence = 6;
 				target.revision = 6;
+				// A re-verified Workload records its own revision as verified (#1480).
+				target.verifiedRevision = 6;
 				target.candidate.deployment.workloadRevision = 6;
 				target.candidate.deployment.fence = 6;
 				target.verified.deployment.workloadRevision = 6;
@@ -1300,6 +1305,169 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			}
 		},
 	);
+
+	it("prepares a new Session after configuration changes advance only the Workload revision (#1480)", async () => {
+		await seedCapacityAgent("agent-dispatch", 8, "custom");
+		// A configuration change re-verifies the Workload (revision 7) while the
+		// management lifecycle stays at revision 4: two independent counters.
+		const setRevisions = (input: {
+			verified: number;
+			deployment: number;
+			lifecycle: number;
+			management: number;
+		}) =>
+			client.begin(async (tx) => {
+				await tx`update platform.workload_reconciliations set revision = ${input.deployment}, state = state
+					|| jsonb_build_object('revision', ${input.deployment}::int, 'verifiedRevision', ${input.verified}::int,
+						'sourceLifecycleRevision', ${input.lifecycle}::int)
+					|| jsonb_build_object(
+						'candidate', jsonb_set(state->'candidate', '{deployment,workloadRevision}', to_jsonb(${input.deployment}::int)),
+						'verified', jsonb_set(state->'verified', '{deployment,workloadRevision}', to_jsonb(${input.deployment}::int)))
+					where agent_id = 'agent-dispatch'`;
+				await tx`update platform.agent_applications set workload_revision = ${input.management} where agent_id = 'agent-dispatch'`;
+			});
+		const [seeded] =
+			await client`select state->'verified'->'configuration' as configuration from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+		await client`insert into platform.agent_configuration_revisions
+			(agent_id, revision, source_reference, created_at, configuration)
+			values ('agent-dispatch', 4, 'revision-test-source', now(), ${client.json(seeded?.configuration)})`;
+		await client`insert into platform.agent_owners (agent_id, owner_id, created_at) values ('agent-dispatch', 'actor-dispatch', now()), ('agent-dispatch', 'owner-a', now())`;
+		const transaction = new PostgresConversationExecutionTransactionV1({
+			databaseUrl,
+		});
+		const api = createConversationExecutionUseCaseV1({
+			transaction,
+			authorization: {
+				async authorize() {
+					return {
+						outcome: "allowed",
+						authority: {
+							schemaVersion: 1,
+							actorId: "actor-dispatch",
+							agentId: "agent-dispatch",
+							channelId: "web",
+							authorizationRevision: "authorization-dispatch",
+							supportsSupplementaryInstruction: false,
+						},
+					};
+				},
+			},
+		});
+		const sandboxPolicy = {
+			namespace: workloadTestPolicy.namespace,
+			resourceConfigurationHash:
+				workloadResourceConfigurationHashV1(workloadTestPolicy),
+		};
+		const store = new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			sandboxPolicy,
+			userDirectory: {
+				async resolveUser(userId) {
+					return {
+						schemaVersion: 1,
+						userId,
+						accountStatus: "active",
+						organizationIds: [],
+						authorizationRevision: "identity-1",
+					};
+				},
+			},
+		});
+		try {
+			const created = await api.createConversation({
+				schemaVersion: 1,
+				agentId: "agent-dispatch",
+				idempotencyKey: "revision-create",
+				requestId: "revision-request",
+				traceId: "revision-trace",
+			});
+			if (created.outcome !== "accepted") throw new Error("Expected Session");
+			const conversationId = created.result.conversationId;
+			const request = {
+				schemaVersion: 1 as const,
+				itemId: `conversation:sandbox:${conversationId}:1`,
+				workerId: "revision-worker",
+				leaseDurationMs: 30_000,
+			};
+			const unchanged = async () => ({
+				allocation:
+					await client`select status, resource_fence, resource_policy from platform.session_sandbox_allocations where conversation_id = ${conversationId}`,
+				outbox:
+					await client`select status, attempt_count, delivery_fence from platform.outbox_items where id = ${request.itemId}`,
+			});
+			const before = await unchanged();
+			for (const stale of [
+				// Deployment is not the verified one.
+				{ verified: 8, deployment: 7, lifecycle: 4, management: 4 },
+				// Lifecycle source is behind the current management lifecycle.
+				{ verified: 7, deployment: 7, lifecycle: 3, management: 4 },
+				{ verified: 7, deployment: 7, lifecycle: 4, management: 5 },
+			]) {
+				await setRevisions(stale);
+				expect(await store.claimSandboxReconciliation(request)).toBeNull();
+				expect(await unchanged()).toEqual(before);
+			}
+			await setRevisions({
+				verified: 7,
+				deployment: 7,
+				lifecycle: 4,
+				management: 4,
+			});
+			const claim = await store.claimSandboxReconciliation(request);
+			if (!claim)
+				throw new Error("Expected prepare claim after reconfiguration");
+			expect(claim.purpose).toBe("prepare");
+			expect(claim.policy.workloadRevision).toBe(7);
+			expect(claim.resourceFence).toBe(1);
+			const resources = (
+				[
+					"Pod",
+					"Service",
+					"ServiceAccount",
+					"PersistentVolumeClaim",
+					"NetworkPolicy",
+				] as const
+			).map((kind) => ({
+				kind,
+				namespace: workloadTestPolicy.namespace,
+				name: claim.sandbox.resourceName,
+				uid: `uid-${kind}`,
+				resourceVersion: "1",
+			}));
+			await expect(
+				store.recordSandboxObservation({
+					claim,
+					observation: { status: "ready", resources },
+				}),
+			).resolves.toBe("committed");
+			const read = () =>
+				client.begin((tx) =>
+					readSessionSandboxRuntimeState(tx, claim.sandbox, sandboxPolicy),
+				);
+			await expect(read()).resolves.toMatchObject({
+				status: "ready",
+				policy: { workloadRevision: 7 },
+			});
+			// The persisted binding still fails closed for a different verified
+			// Workload or a stale lifecycle.
+			await setRevisions({
+				verified: 9,
+				deployment: 9,
+				lifecycle: 4,
+				management: 4,
+			});
+			await expect(read()).resolves.toBeNull();
+			await setRevisions({
+				verified: 7,
+				deployment: 7,
+				lifecycle: 4,
+				management: 5,
+			});
+			await expect(read()).resolves.toBeNull();
+		} finally {
+			await Promise.allSettled([store.close(), transaction.close()]);
+		}
+	});
 
 	it("prepares a new Session without an Execution and commits observations only under the current lease and authority", async () => {
 		const verifiedState = await seedCapacityAgent(

@@ -258,8 +258,9 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					sandboxResource.policy.imageDigest !== deployment.imageDigest ||
 					sandboxResource.policy.configurationRevision !==
 						state.sourceConfigurationRevision ||
+					// The verified Workload revision, not the lifecycle revision (#1480).
 					sandboxResource.policy.workloadRevision !==
-						state.sourceLifecycleRevision ||
+						deployment.workloadRevision ||
 					sandboxResource.policy.resourceConfigurationHash !==
 						workloadResourceConfigurationHashV1(workload.policy)
 				)
@@ -403,6 +404,7 @@ function createSessionSandboxAllocationResolverV1(
 		policy: SessionSandboxReconciliationClaimV1["policy"],
 		deployment: AgentWorkloadDesiredV1,
 		modelProjection: unknown,
+		requireCurrentTemplateTrust: boolean,
 	): SessionSandboxRuntimeInputV1 => {
 		const auth = workload.policy.runtimeAuth;
 		let projection: RuntimeModelProjectionV4;
@@ -428,9 +430,10 @@ function createSessionSandboxAllocationResolverV1(
 			templateBinding.imageDigest !== deployment.imageDigest ||
 			templateBinding.driver !== "codex" ||
 			deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
-			!workload.templateModelBindings.some((trusted) =>
-				isDeepStrictEqual({ ...trusted }, templateBinding),
-			) ||
+			(requireCurrentTemplateTrust &&
+				!workload.templateModelBindings.some((trusted) =>
+					isDeepStrictEqual({ ...trusted }, templateBinding),
+				)) ||
 			// Agent-level Secrets are never mounted into a Session Sandbox.
 			deployment.secretRefs.length > 0
 		)
@@ -457,6 +460,7 @@ function createSessionSandboxAllocationResolverV1(
 		desiredState: "running" | "stopped",
 		generation: number,
 		resourceFence: number,
+		requireCurrentTemplateTrust = true,
 	): SessionSandboxAllocationV1 => ({
 		...binding,
 		generation,
@@ -474,7 +478,13 @@ function createSessionSandboxAllocationResolverV1(
 		containerPort: deployment.service.port,
 		env: deployment.env,
 		// V4-only: a static-key or missing projection fails before any write.
-		runtime: runtimeFor(binding, policy, deployment, modelProjection),
+		runtime: runtimeFor(
+			binding,
+			policy,
+			deployment,
+			modelProjection,
+			requireCurrentTemplateTrust,
+		),
 		connectionConsumerSnapshot,
 		connectionInstallationRevision,
 		authorizedIngressSelector: workload.policy.workerSelector,
@@ -525,6 +535,8 @@ export function createProductionSessionSandboxReceiverV1(
 				"running",
 				source.sandbox.generation,
 				source.resourceFence,
+				// Drain validates the captured source, not today's preparation allowlist.
+				false,
 			);
 			const sourceResources = source.observation?.resources ?? [];
 			const completeSource =
@@ -574,6 +586,7 @@ export function createProductionSessionSandboxReceiverV1(
 				"stopped",
 				source.sandbox.generation,
 				source.resourceFence,
+				false,
 			);
 			if (!recordDeletionProgress)
 				throw new Error("Session Sandbox deletion CAS is unavailable");
@@ -613,6 +626,7 @@ export function createProductionSessionSandboxReceiverV1(
 			claim.desiredState,
 			claim.sandbox.generation,
 			claim.resourceFence,
+			claim.desiredState === "running",
 		);
 		const previous = claim.previousObservation?.resources ?? [];
 		if (claim.desiredState === "stopped") {
