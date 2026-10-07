@@ -72,7 +72,11 @@ export {
 	validateLegacyInitialActionsV1,
 } from "./agent-configuration-input.js";
 export { snapshotAgentConfigurationWritePlanV1 } from "./agent-configuration-plan.js";
-export { decodeAgentConfigurationRecordV2 } from "./agent-configuration-record.js";
+export {
+	decodeAgentConfigurationRecord,
+	decodeAgentConfigurationRecordV2,
+	decodeAgentConfigurationRecordV3,
+} from "./agent-configuration-record.js";
 export {
 	type AdmittedInitialAgentConfigurationV1,
 	type AgentConfigurationAccessAuthorityV1,
@@ -93,9 +97,13 @@ export {
 	type AgentConfigurationModelInputV1,
 	type AgentConfigurationModelOptionInputV1,
 	type AgentConfigurationModelOptionV1,
+	type AgentConfigurationModelOptionV2,
 	type AgentConfigurationModelV1,
+	type AgentConfigurationModelV2,
+	type AgentConfigurationRecord,
 	type AgentConfigurationRecordV1,
 	type AgentConfigurationRecordV2,
+	type AgentConfigurationRecordV3,
 	type AgentConfigurationResultV1,
 	type AgentConfigurationSecretAdmissionPortV1,
 	type AgentConfigurationSecretMetadataV1,

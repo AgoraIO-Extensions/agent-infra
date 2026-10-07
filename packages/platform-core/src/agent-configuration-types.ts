@@ -71,6 +71,28 @@ export interface AgentConfigurationRecordV2 {
 	readonly channelRevision: string;
 }
 
+/** Configuration V3 selects models; Relay Keys are separately bound per Execution. */
+export type AgentConfigurationModelOptionV2 = Omit<
+	AgentConfigurationModelOptionV1,
+	"credential"
+>;
+export interface AgentConfigurationModelV2
+	extends Omit<AgentConfigurationModelV1, "options"> {
+	readonly options: readonly AgentConfigurationModelOptionV2[];
+}
+export interface AgentConfigurationRecordV3
+	extends Omit<
+		AgentConfigurationRecordV2,
+		"schemaVersion" | "modelConfiguration" | "source"
+	> {
+	readonly schemaVersion: 3;
+	readonly source: Extract<AgentConfigurationSourceV1, { kind: "standard" }>;
+	readonly modelConfiguration: AgentConfigurationModelV2;
+}
+export type AgentConfigurationRecord =
+	| AgentConfigurationRecordV2
+	| AgentConfigurationRecordV3;
+
 /** Historical persisted shape; never a current policy or new write. */
 export interface AgentConfigurationRecordV1
 	extends Omit<AgentConfigurationRecordV2, "schemaVersion"> {
