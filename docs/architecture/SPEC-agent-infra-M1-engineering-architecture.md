@@ -539,12 +539,30 @@ ownership、UID、配置/Workload 修订和租约/fence 必须绑定同一 Sandb
 均拒绝接管；部分创建失败从原分配幂等恢复，不删除其他 Sandbox。只有实例身份、路由、健康、
 Runtime readiness 和出站策略全部符合当前期望时才能投递业务；healthz 成功不单独证明隔离。
 
-Session Sandbox 的必需实际资源为 Pod、Service、ServiceAccount、PVC、NetworkPolicy 五类。
+Session Sandbox 的必需实际资源为 Pod、Service、ServiceAccount、PVC、NetworkPolicy 和
+该 Sandbox 专属 Secret 六类。
 就绪回执须逐资源回读真实 UID、resourceVersion 与归属，绑定原 allocation、主体、渠道、
 租约、代次及当前 `resourceFence`；不能用资源名、期望清单或合成 receipt 代替实际对象。
 StatefulSet 仅为可选 Pod 控制器，不是所有 Sandbox 就绪回执的必选资源；实际使用时，
 须同时核验其真实 UID/resourceVersion、owner 及与 Pod 的控制关系，不得忽略实际控制器。
 此可选性不改变 `self-managed` 部署、独立验证 Workload 及 §10.6 的既有 StatefulSet 规则。
+
+专属 Secret 是该 Sandbox 的受控 Secret materialization，与 Sandbox 同名、`immutable`，只含两项：
+
+- `token`：该 Sandbox 的 transport token，为部署级 service token 对
+  `session-sandbox-v1`、namespace 与 Sandbox ID 的 HMAC-SHA256（base64url）。Worker 每次路由
+  该 Sandbox 时重新计算，不另行存储；部署 token 轮换时一并更换。Sandbox 的 business 与 control
+  路由只发送该值，Agent 级路由不变；部署 token 和其他 Sandbox 的 token 均被该 Host 拒绝。
+- `model-config`：Store 随 claim 交付的 verified 模型投影的非敏感配置。只接受 V4 无 Key 投影；
+  不是 V4、模板绑定不再受信，或 verified 部署含 Agent 级 `secretRefs` 时，Session prepare 在
+  任何写入前以 policy 失败，Worker 不自行推导投影，也不挂载 Agent 级 Secret 或静态模型 Key。
+  模型 Key 仍按 [ADR-0016](../adr/0016-bind-relay-key-to-execution.md) 随执行交付。
+
+Pod 以 secretKeyRef 引用这两项，并直接获得 Driver、Agent ID、Worker ID、端口、Grant key ID、
+公钥与 issuer；数据目录位于 Sandbox PVC。安全上下文与 Agent 级 Workload 一致：UID/GID/fsGroup
+1000、只读根文件系统且 `/tmp` 使用内存 emptyDir、去掉全部 capabilities、seccomp RuntimeDefault，
+且不注入其他 Service 的地址。上述任一字段或 Secret 内容漂移均判为 unknown 或 conflict，
+不原地修复。Secret 随计算资源一起停止和回收，只保留 PVC；同名外部 Secret 不被接管。
 
 Pod 重建仍沿同一 Session、Sandbox、PVC 和原 allocation 恢复，先证明旧执行源不能双活，
 再在当前 `resourceFence` 下由原 Store CAS 接受新 Pod UID 与逐资源版本；不能凭 Pod 消失
@@ -612,7 +630,7 @@ Platform DB 保存：
 
 1. 读取待处理修订号。
 2. 通过 ImageRegistryAdapter 解析并校验获准 OCI Digest、Runtime Manifest 和访问政策。
-3. 按已提交 Sandbox 分配生成或更新 §10.1.1 的五类资源和内部路由；实际使用 StatefulSet 时一并调谐并核验。自有入口与独立验证 Workload 保留原 StatefulSet 规则。
+3. 按已提交 Sandbox 分配生成或更新 §10.1.1 的六类资源和内部路由；实际使用 StatefulSet 时一并调谐并核验。自有入口与独立验证 Workload 保留原 StatefulSet 规则。
 4. 根据探针和 Workload 状态计算产品服务可用性。
 5. 写回已应用修订号、可用性和脱敏失败原因。
 
@@ -677,7 +695,7 @@ Manifest 字段、交互模式、Runtime 探测顺序和 capability 派生规则
 
 审批通过后，只有 ImageRegistryAdapter 准入与 Manifest 预检通过才启动 Workload。自有入口与 §10.1.1 的独立验证 Workload 沿既有规则，由 `platform-worker` 创建 StatefulSet、Service、部署访问路由、NetworkPolicy、Kubernetes 配置、Secret 和新 PVC，验证健康检查，再请求 HLD 定义的 Runtime 探测；自有入口的访问路由只有在健康检查和所需核心探测通过后才接收用户流量，独立验证 Workload 不加入业务路由。任一步失败时产品状态为“创建失败”，并返回脱敏且可修复的原因。
 
-业务 Session Sandbox 消费已验证修订，资源准备与就绪遵循 §10.1.1；StatefulSet 可选，不能用 Agent 级验证 Workload 或其就绪结果替代 Session 的五类实际资源证据。
+业务 Session Sandbox 消费已验证修订，资源准备与就绪遵循 §10.1.1；StatefulSet 可选，不能用 Agent 级验证 Workload 或其就绪结果替代 Session 的六类实际资源证据。
 
 启动 Workload 后创建失败时，`platform-worker` 必须先关闭访问路由，再幂等清理本次创建的 Kubernetes Workload、访问资源、配置、Secret 和尚未进入“可用”的新 PVC；Platform DB 中的申请、Agent 配置、失败原因和审计保留，重试时重新创建运行资源。升级的候选修订、路由切换和失败恢复见 10.4。
 
@@ -1833,7 +1851,7 @@ Evaluation 是 `platform-core` 内部模块，API 提供管理与查询，Store 
 - PostgreSQL 与对象存储使用容器化真实依赖。
 - Conversation、Execution、outbox、双 Worker 和 Pod 重启的集成与故障注入测试执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
 - Kubernetes `kind` 测试覆盖创建失败后无可路由入口、运行中 Workload 或遗留新 PVC，自有入口与独立验证 Workload 停止或停用后 StatefulSet 缩容到 0、重启后从 0 恢复且保留原 PVC 与 Platform DB 状态，候选 Service/健康检查变更，候选提升任一步骤的 Worker 重启和部分切换恢复，升级失败后恢复旧 Digest、路由、渠道和平台历史，切换期间不出现双路由或失败候选继续接收流量，原 PVC 复用，以及第 17 节的安全与网络边界。自有交互入口的两种身份责任选择分别只产生一条用户路由；切换并重新调谐后旧路由被删除，Agent Service、Pod 地址和未选入口均不可达。Pod 重启和 Session 恢复执行 [Agent Runtime M1 HLD 验证矩阵](HLD-agent-runtime-M1.md#11-验证)。
-- Session Sandbox 的 `kind` 验证覆盖 §10.1.1 五类实际资源及使用时的 StatefulSet 身份与控制关系；未使用 StatefulSet 时不得要求或合成其 receipt。覆盖逐资源 UID/resourceVersion 漂移、旧 resourceFence、同名外部对象、停止删除前置条件与 absence 回读、原 PVC 保留、Pod 重建的旧执行源排除与 Store CAS，以及 unknown 保留原身份和占用而不重放业务。
+- Session Sandbox 的 `kind` 验证覆盖 §10.1.1 六类实际资源及使用时的 StatefulSet 身份与控制关系；未使用 StatefulSet 时不得要求或合成其 receipt。覆盖逐资源 UID/resourceVersion 漂移、旧 resourceFence、同名外部对象、停止删除前置条件与 absence 回读、原 PVC 保留、Pod 重建的旧执行源排除与 Store CAS，以及 unknown 保留原身份和占用而不重放业务。
 - API 受理事务、同会话串行、双 Worker/取消竞态、等待容量/到期、服务重启与未知结果验证持久状态不丢失；凭证失效任务继续与主体撤权系统取消分别注入故障验证。
 - 审计事务失败、执行前意图保存失败、查询故障、Trace 采样/导出失败与事件重放分别验证，不能丢必要审计、伪造成功或重复计数。Eval 评分失败、版本变化、数据撤权/删除与用量缺失使用受控样本验证。
 - Identity、OCI Registry、模型端点、对象存储和企微边界提供可控 Fake；Fake 使用与正式 Contract 相同的 Schema，不维护第二套接口。

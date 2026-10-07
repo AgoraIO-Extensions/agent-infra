@@ -22,6 +22,12 @@ import {
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { sessionSandboxLabelsV1 } from "./session-workload-adapter.js";
 import {
+	sessionSandboxDeploymentTokenFixture,
+	sessionSandboxModelProjectionFixture,
+	sessionSandboxRuntimeAuthFixture,
+	sessionSandboxTemplateBindingFixture,
+} from "./test-support/session-sandbox-v4.js";
+import {
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
 } from "./workload-runtime.js";
@@ -120,10 +126,17 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 			conformanceEvidenceHash: "c".repeat(64),
 			maximumConcurrentExecutions: 1,
 		};
+		// Session Sandboxes accept only a keyless V4 projection (#1466).
+		const modelProjection = sessionSandboxModelProjectionFixture({
+			agentId: desired.agentId,
+			configurationRevision: 1,
+			imageDigest: desired.imageDigest,
+		});
 		const version = {
 			configuration,
 			deployment: desired,
 			executionCapacity: capacity,
+			modelProjection,
 		};
 		const state = {
 			schemaVersion: 1,
@@ -172,11 +185,13 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 			const workload: WorkloadRuntimeOptionsV1 = {
 				workerId: "kind-session-worker",
 				client,
-				policy,
+				policy: { ...policy, runtimeAuth: sessionSandboxRuntimeAuthFixture },
 				registry: workloadRegistryFixture(),
 				admissionPolicyRef: "kind-policy",
 				registrySubjectRef: "kind-subject",
-				templateModelBindings: [],
+				templateModelBindings: [
+					sessionSandboxTemplateBindingFixture(desired.imageDigest),
+				],
 				decryptor: {
 					decrypt: async () => ({
 						outcome: "failed",
@@ -185,7 +200,10 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 				},
 				probeRuntime: async () => ({ core: "passed", capabilities: {} }),
 			};
-			const receiveSandbox = createProductionSessionSandboxReceiverV1(workload);
+			const receiveSandbox = createProductionSessionSandboxReceiverV1(
+				workload,
+				{ serviceToken: sessionSandboxDeploymentTokenFixture },
+			);
 			const keys = generateKeyPairSync("ed25519");
 			worker = createPlatformConversationWorkerV2({
 				databaseUrl: database.databaseUrl,
@@ -241,7 +259,7 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 					},
 			);
 			for (const observation of observations) {
-				expect(observation.resources).toHaveLength(5);
+				expect(observation.resources).toHaveLength(6);
 				expect(
 					new Set(observation.resources.map((resource) => resource.kind)),
 				).toEqual(
@@ -251,6 +269,7 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 						"ServiceAccount",
 						"PersistentVolumeClaim",
 						"NetworkPolicy",
+						"Secret",
 					]),
 				);
 				for (const resource of observation.resources) {
@@ -402,6 +421,9 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 				).toBeNull();
 				expect(
 					await client.read("NetworkPolicy", row.resource_name as string),
+				).toBeNull();
+				expect(
+					await client.read("Secret", row.resource_name as string),
 				).toBeNull();
 				expect(
 					await client.read(

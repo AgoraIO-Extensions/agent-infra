@@ -1371,6 +1371,12 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			expect(await store.findDispatchable({ limit: 10 })).toEqual([
 				{ itemId, operation: "conversation.sandbox.reconcile.v1" },
 			]);
+			// The verified projection is passed through unchanged (#1466); the
+			// Worker, not the Store, decides it must be keyless V4.
+			const verifiedProjection = { schemaVersion: 4, marker: "verified" };
+			await client`update platform.workload_reconciliations
+				set state = jsonb_set(state, '{verified,modelProjection}', ${client.json(verifiedProjection)})
+				where agent_id = 'agent-dispatch'`;
 			const request = {
 				schemaVersion: 1 as const,
 				itemId,
@@ -1382,6 +1388,10 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				throw new Error("Expected prepare resource claim");
 			expect(claim.execution).toBeNull();
 			expect(claim.deployment).toEqual(verifiedState.verified.deployment);
+			expect(claim.modelProjection).toEqual(verifiedProjection);
+			expect(
+				await client`select payload->'modelProjection' as projection from platform.outbox_items where id = ${itemId}`,
+			).toEqual([{ projection: verifiedProjection }]);
 			expect(claim).not.toHaveProperty("executionDeliveryFence");
 			expect(claim.resourceFence).toBe(1);
 			expect(
@@ -1408,6 +1418,11 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 						service: { ...claim.deployment.service, port: 54321 },
 					},
 				},
+				{
+					...claim,
+					modelProjection: { ...verifiedProjection, marker: "forged" },
+				},
+				{ ...claim, modelProjection: null },
 				{ ...claim, deliveryFence: claim.deliveryFence + 1 },
 				{ ...claim, resourceFence: claim.resourceFence + 1 },
 				{ ...claim, resourceStatus: "unknown" as const },
@@ -1495,6 +1510,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					"ServiceAccount",
 					"PersistentVolumeClaim",
 					"NetworkPolicy",
+					"Secret",
 				] as const
 			).map((kind) => ({
 				kind,
@@ -1530,7 +1546,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			expect(
 				await client`select status, resource_fence::int as fence,
 				jsonb_array_length(resource_observation->'resources') as identities from platform.session_sandbox_allocations`,
-			).toEqual([{ status: "ready", fence: 1, identities: 5 }]);
+			).toEqual([{ status: "ready", fence: 1, identities: 6 }]);
 			expect(
 				await client`select status from platform.outbox_items where id = ${itemId}`,
 			).toEqual([{ status: "succeeded" }]);

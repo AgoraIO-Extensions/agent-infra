@@ -117,7 +117,10 @@ async function lockedContext(
 		!isDeepStrictEqual(
 			Object.fromEntries(
 				Object.entries(payload).filter(
-					([key]) => key !== "lifecycle" && key !== "deployment",
+					([key]) =>
+						key !== "lifecycle" &&
+						key !== "deployment" &&
+						key !== "modelProjection",
 				),
 			),
 			{
@@ -207,6 +210,7 @@ async function lockedContext(
 				),
 				policy: source.policy,
 				deployment: null,
+				modelProjection: null,
 			};
 		}
 	}
@@ -300,6 +304,8 @@ async function lockedContext(
 		authorization,
 		policy: currentPolicy,
 		deployment,
+		// Passed through unchanged; the Worker admits only a keyless V4 projection.
+		modelProjection: verified.modelProjection ?? null,
 		purpose: "prepare" as const,
 		lifecycle,
 		drainComputeAllowed: false,
@@ -370,7 +376,8 @@ export async function claimSandboxReconciliation(
 	}
 	if (context.purpose === "prepare") {
 		await transaction`update platform.outbox_items set payload = payload || jsonb_build_object('deployment',
-			${transaction.json(context.deployment as unknown as Parameters<typeof transaction.json>[0])}::jsonb) where id = ${input.itemId}`;
+			${transaction.json(context.deployment as unknown as Parameters<typeof transaction.json>[0])}::jsonb,
+			'modelProjection', ${transaction.json(context.modelProjection as Parameters<typeof transaction.json>[0])}::jsonb) where id = ${input.itemId}`;
 	}
 	await transaction`update platform.outbox_items set status = 'processing', lease_owner = ${input.workerId},
 		lease_expires_at = clock_timestamp() + (${input.leaseDurationMs}::bigint * interval '1 millisecond'),
@@ -394,6 +401,7 @@ export async function claimSandboxReconciliation(
 		drainComputeAllowed: context.drainComputeAllowed,
 		policy: context.policy,
 		deployment: context.deployment,
+		modelProjection: context.modelProjection,
 		previousObservation: allocation.resource_observation,
 	};
 }
@@ -436,6 +444,7 @@ async function ownedContext(
 		!isDeepStrictEqual(context.authorization, claim.authorization) ||
 		!isDeepStrictEqual(context.policy, claim.policy) ||
 		!isDeepStrictEqual(context.deployment, claim.deployment) ||
+		!isDeepStrictEqual(context.modelProjection, claim.modelProjection) ||
 		!isDeepStrictEqual(context.allocation.resource_policy, claim.policy)
 	)
 		return null;

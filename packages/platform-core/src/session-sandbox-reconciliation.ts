@@ -25,7 +25,8 @@ export interface SessionSandboxResourceIdentityV1 {
 		| "Service"
 		| "ServiceAccount"
 		| "PersistentVolumeClaim"
-		| "NetworkPolicy";
+		| "NetworkPolicy"
+		| "Secret";
 	readonly namespace: string;
 	readonly name: string;
 	readonly uid: string;
@@ -91,6 +92,11 @@ export interface SessionSandboxReconciliationClaimV1 {
 	readonly policy: SessionSandboxVerifiedPolicyV1;
 	/** Original verified configuration; resource names still come from the Session binding. */
 	readonly deployment: unknown;
+	/**
+	 * Verified Runtime model projection captured with `deployment`; the Worker
+	 * accepts only a keyless V4 projection and never derives one itself.
+	 */
+	readonly modelProjection: unknown;
 	readonly previousObservation: SessionSandboxObservationV1 | null;
 }
 
@@ -132,6 +138,7 @@ export function isSessionSandboxDeletionProgressValidV1(
 				"Service",
 				"ServiceAccount",
 				"NetworkPolicy",
+				"Secret",
 			].includes(entry.resource.kind) ||
 			![
 				entry.resource.namespace,
@@ -227,6 +234,7 @@ export function isSessionSandboxObservationValidV1(
 		"ServiceAccount",
 		"PersistentVolumeClaim",
 		"NetworkPolicy",
+		"Secret",
 	]);
 	const seen = new Set<string>();
 	for (const resource of observation.resources) {

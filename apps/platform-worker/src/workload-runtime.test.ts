@@ -66,6 +66,7 @@ import {
 import {
 	sessionSandboxIdentityAnnotationsV1,
 	sessionSandboxLabelsV1,
+	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
 import {
 	createWorkloadRuntimeV1,
@@ -3152,6 +3153,8 @@ it("persists exact capacity and binds readiness to fence/image while preserving 
 		command: "turn.submit" as const,
 	};
 	expect((await resolver(request)).baseUrl).not.toContain("-probe");
+	// Agent-level routes keep the deployment transport token (#1466).
+	expect((await resolver(request)).serviceToken).toBe("synthetic-transport");
 	await expect(
 		resolver({ ...request, agentId: "other" }),
 	).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
@@ -3465,9 +3468,137 @@ it.each(["unchanged", "uid", "selector", "port", "fence"] as const)(
 		}
 		await expect(resolution).resolves.toMatchObject({
 			baseUrl: `http://${sandbox.resourceName}.${sourcePolicy.namespace}.svc:${verifiedDeployment.service.port}`,
+			// The source Sandbox's own token, not the deployment token (#1466).
+			serviceToken: sessionSandboxServiceTokenV1(
+				"synthetic-transport",
+				sourcePolicy.namespace,
+				sandboxId,
+			),
 		});
 	},
 );
+
+it("routes a ready Session business call with only that Sandbox's token (#1466)", async () => {
+	const keys = generateKeyPairSync("ed25519");
+	const signing = {
+		workerId: "worker-a",
+		issuer: "platform",
+		keyId: "key",
+		privateKey: keys.privateKey,
+	};
+	const f = fixture({
+		policy: {
+			...workloadTestPolicy,
+			runtimeAuth: {
+				workerId: signing.workerId,
+				grantIssuer: signing.issuer,
+				grantKeyId: signing.keyId,
+				grantPublicKey: keys.publicKey
+					.export({ type: "spki", format: "pem" })
+					.toString(),
+				serviceTokenSecret: { name: "transport", key: "token" },
+			},
+		},
+	});
+	await f.tick(8);
+	const ready = f.state;
+	if (ready?.phase !== "ready") throw Error("Expected ready fixture");
+	const deployment = validateAgentWorkloadDesiredV1(ready.candidate.deployment);
+	const resolver = createProductionConversationRuntimeResolverV2({
+		workload: f.options,
+		signing,
+		serviceToken: "synthetic-transport",
+	});
+	const route = async (sandboxId: string) => {
+		const sandbox = {
+			schemaVersion: 1 as const,
+			sandboxId,
+			sessionId: `conversation-${sandboxId}`,
+			agentId: ready.agentId,
+			principal: { kind: "user" as const, id: "actor-a" },
+			channelId: "web",
+			generation: 1,
+			resourceName: `sandbox-${sandboxId}`,
+			workspaceScope: sandboxId,
+		};
+		const labels = { ...sessionSandboxLabelsV1(sandbox) };
+		const live = await f.client.create<V1Service>({
+			apiVersion: "v1",
+			kind: "Service",
+			metadata: {
+				name: sandbox.resourceName,
+				namespace: f.options.policy.namespace,
+				labels,
+				annotations: {
+					...sessionSandboxIdentityAnnotationsV1(sandbox),
+					"agent-infra.agora.io/managed": "session-sandbox-v1",
+					"agent-infra.agora.io/fence": "1",
+				},
+			},
+			spec: {
+				type: "ClusterIP",
+				selector: labels,
+				ports: [
+					{
+						name: "runtime",
+						port: deployment.service.port,
+						targetPort: deployment.service.port,
+					},
+				],
+			},
+		});
+		const policy = {
+			namespace: f.options.policy.namespace,
+			resourceConfigurationHash: workloadResourceConfigurationHashV1(
+				f.options.policy,
+			),
+			configurationRevision: ready.sourceConfigurationRevision,
+			workloadRevision: ready.sourceLifecycleRevision,
+			managementFence: 1,
+			imageDigest: deployment.imageDigest,
+		};
+		return resolver({
+			agentId: ready.agentId,
+			conversationId: sandbox.sessionId,
+			sessionGeneration: 1,
+			workload: ready,
+			signal: new AbortController().signal,
+			purpose: "business",
+			command: "session.status",
+			sandboxResource: {
+				sandbox,
+				resourceFence: 1,
+				desiredState: "running",
+				status: "ready",
+				policy,
+				observation: {
+					status: "ready",
+					resources: [
+						{
+							kind: "Service",
+							namespace: policy.namespace,
+							name: sandbox.resourceName,
+							uid: live.metadata?.uid ?? "",
+							resourceVersion: live.metadata?.resourceVersion ?? "",
+						},
+					],
+				},
+			},
+		});
+	};
+	const a = await route("00000000-0000-4000-8000-00000000000a");
+	const b = await route("00000000-0000-4000-8000-00000000000b");
+	expect(a.serviceToken).toBe(
+		sessionSandboxServiceTokenV1(
+			"synthetic-transport",
+			f.options.policy.namespace,
+			"00000000-0000-4000-8000-00000000000a",
+		),
+	);
+	expect(
+		new Set([a.serviceToken, b.serviceToken, "synthetic-transport"]).size,
+	).toBe(3);
+});
 
 it("preserves cancellation and only reopens a closing verified route", async () => {
 	const keys = generateKeyPairSync("ed25519");

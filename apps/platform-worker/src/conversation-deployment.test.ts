@@ -1,6 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
+import { runtimeModelInjectionV4 } from "@agent-infra/model-catalog";
 import type { SessionSandboxReconciliationClaimV1 } from "@agent-infra/platform-core";
-import type { V1NetworkPolicy, V1Pod } from "@kubernetes/client-node";
+import type { V1NetworkPolicy, V1Pod, V1Secret } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
@@ -17,6 +18,13 @@ import {
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
+import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
+import {
+	sessionSandboxDeploymentTokenFixture,
+	sessionSandboxModelProjectionFixture,
+	sessionSandboxRuntimeAuthFixture,
+	sessionSandboxTemplateBindingFixture,
+} from "./test-support/session-sandbox-v4.js";
 import { workloadEgressRulesV1 } from "./workload-network.js";
 import {
 	type WorkloadRuntimeOptionsV1,
@@ -29,11 +37,16 @@ function fixture() {
 	const options: WorkloadRuntimeOptionsV1 = {
 		workerId: "worker-a",
 		client: api.client,
-		policy: workloadTestPolicy,
+		policy: {
+			...workloadTestPolicy,
+			runtimeAuth: sessionSandboxRuntimeAuthFixture,
+		},
 		registry: workloadRegistryFixture(),
 		admissionPolicyRef: "policy-a",
 		registrySubjectRef: "subject-a",
-		templateModelBindings: [],
+		templateModelBindings: [
+			sessionSandboxTemplateBindingFixture(deployment.imageDigest),
+		],
 		decryptor: {
 			decrypt: async () => ({
 				outcome: "failed",
@@ -42,6 +55,11 @@ function fixture() {
 		},
 		probeRuntime: async () => ({ core: "passed", capabilities: {} }),
 	};
+	const modelProjection = sessionSandboxModelProjectionFixture({
+		agentId: deployment.agentId,
+		configurationRevision: deployment.configRevision,
+		imageDigest: deployment.imageDigest,
+	});
 	const claim: SessionSandboxReconciliationClaimV1 = {
 		schemaVersion: 1,
 		operation: "conversation.sandbox.reconcile.v1",
@@ -77,13 +95,16 @@ function fixture() {
 			imageDigest: deployment.imageDigest,
 		},
 		deployment,
+		modelProjection,
 		previousObservation: null,
 	};
 	return {
 		...api,
 		claim,
 		options,
-		receive: createProductionSessionSandboxReceiverV1(options),
+		receive: createProductionSessionSandboxReceiverV1(options, {
+			serviceToken: sessionSandboxDeploymentTokenFixture,
+		}),
 	};
 }
 
@@ -129,7 +150,9 @@ describe("production SessionSandbox resource receiver", () => {
 				]),
 			},
 		};
-		const receive = createProductionSessionSandboxReceiverV1(selectedWorkload);
+		const receive = createProductionSessionSandboxReceiverV1(selectedWorkload, {
+			serviceToken: sessionSandboxDeploymentTokenFixture,
+		});
 		// Later dependency mutation and Store claims cannot replace the captured selector.
 		selectedWorkload.policy.connectionInstallationRevision = '["mutated","r8"]';
 		const observation = await receive(
@@ -188,6 +211,7 @@ describe("production SessionSandbox resource receiver", () => {
 					policy: f.claim.policy,
 					observation,
 					deployment: f.claim.deployment,
+					modelProjection: f.claim.modelProjection,
 				},
 			},
 			...{
@@ -208,6 +232,15 @@ describe("production SessionSandbox resource receiver", () => {
 		expect(target.baseUrl).toBe(
 			"http://sandbox-allocation-a.workload-test.svc:8080",
 		);
+		// The control route uses the source Sandbox's own token (#1466).
+		expect(target.serviceToken).toBe(
+			sessionSandboxServiceTokenV1(
+				"synthetic-transport-proof",
+				"workload-test",
+				f.claim.sandbox.sandboxId,
+			),
+		);
+		expect(target.serviceToken).not.toBe("synthetic-transport-proof");
 	});
 	it("compiles Session egress only from the Worker deployment policy (#1445)", async () => {
 		const f = fixture();
@@ -217,10 +250,13 @@ describe("production SessionSandbox resource receiver", () => {
 			],
 			modelEgress: [{ destination: { ip: "203.0.113.10" }, port: 443 }],
 		};
-		const receive = createProductionSessionSandboxReceiverV1({
-			...f.options,
-			policy: { ...f.options.policy, ...approved },
-		});
+		const receive = createProductionSessionSandboxReceiverV1(
+			{
+				...f.options,
+				policy: { ...f.options.policy, ...approved },
+			},
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
 		await receive(
 			{
 				...f.claim,
@@ -251,7 +287,7 @@ describe("production SessionSandbox resource receiver", () => {
 		const signal = new AbortController().signal;
 		const observed = await f.receive(f.claim, signal);
 		expect(observed.status).toBe("observed");
-		expect(observed.resources).toHaveLength(5);
+		expect(observed.resources).toHaveLength(6);
 		const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
 		expect(pod.metadata?.annotations?.["agent-infra.agora.io/fence"]).toBe("3");
 		expect(pod.spec?.containers[0]?.resources).toEqual(
@@ -300,9 +336,124 @@ describe("production SessionSandbox resource receiver", () => {
 			),
 		).toBe(false);
 		expect(pod.spec?.volumes?.some((volume) => volume.secret)).toBe(false);
+		// Only this Sandbox's own Runtime Secret (#1466); no TLS material.
 		expect(
-			[...f.resources.keys()].some((key) => key.startsWith("Secret/")),
-		).toBe(false);
+			[...f.resources.keys()].filter((key) => key.startsWith("Secret/")),
+		).toEqual(["Secret/sandbox-allocation-a"]);
+	});
+
+	it("writes only the derived Sandbox token and verified V4 configuration (#1466)", async () => {
+		const f = fixture();
+		await f.receive(f.claim, new AbortController().signal);
+		const secret = f.resources.get("Secret/sandbox-allocation-a") as V1Secret;
+		const decoded = (key: string) =>
+			Buffer.from(secret.data?.[key] ?? "", "base64").toString();
+		expect(decoded("token")).toBe(
+			sessionSandboxServiceTokenV1(
+				sessionSandboxDeploymentTokenFixture,
+				"workload-test",
+				"allocation-a",
+			),
+		);
+		expect(decoded("model-config")).toBe(
+			runtimeModelInjectionV4(
+				f.claim.modelProjection as Parameters<
+					typeof runtimeModelInjectionV4
+				>[0],
+			).configuration,
+		);
+		const pod = f.resources.get("Pod/sandbox-allocation-a") as V1Pod;
+		const env = pod.spec?.containers[0]?.env ?? [];
+		expect(env.find(({ name }) => name === "LOG_LEVEL")?.value).toBe("info");
+		expect(
+			env.find(({ name }) => name === "AGENT_INFRA_RUNTIME_WORKER_ID")?.value,
+		).toBe(sessionSandboxRuntimeAuthFixture.workerId);
+		expect(JSON.stringify(pod)).not.toContain(
+			sessionSandboxDeploymentTokenFixture,
+		);
+		expect(JSON.stringify(pod)).not.toContain(
+			sessionSandboxRuntimeAuthFixture.serviceTokenSecret.name,
+		);
+	});
+
+	it.each([
+		["a missing projection", () => ({ modelProjection: null })],
+		[
+			"a static-key V1 projection",
+			(f: ReturnType<typeof fixture>) => ({
+				modelProjection: {
+					...(f.claim.modelProjection as Record<string, unknown>),
+					schemaVersion: 1,
+				},
+			}),
+		],
+		[
+			"a tampered projection fingerprint",
+			(f: ReturnType<typeof fixture>) => ({
+				modelProjection: {
+					...(f.claim.modelProjection as Record<string, unknown>),
+					defaultReasoningLevel: "high",
+				},
+			}),
+		],
+		[
+			"another Agent's projection",
+			(f: ReturnType<typeof fixture>) => ({
+				modelProjection: sessionSandboxModelProjectionFixture({
+					agentId: "agent-b",
+					configurationRevision: 1,
+					imageDigest: (f.claim.deployment as { imageDigest: string })
+						.imageDigest,
+				}),
+			}),
+		],
+		[
+			"an Agent-level Secret reference",
+			(f: ReturnType<typeof fixture>) => ({
+				deployment: {
+					...(f.claim.deployment as Record<string, unknown>),
+					secretRefs: [
+						{
+							schemaVersion: 1,
+							agentId: "agent-a",
+							ownerType: "agent-owner",
+							ownerId: "owner-a",
+							secretId: "secret-a",
+							secretVersion: 1,
+							configRevision: 1,
+							algorithmVersion: "aes-256-gcm:v1",
+							wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+							wrappingKeyVersion: "key-a",
+							name: "agent-secret-1",
+						},
+					],
+				},
+			}),
+		],
+	])(
+		"fails Session prepare with policy before any write for %s (AC-5)",
+		async (_name, override) => {
+			const f = fixture();
+			await expect(
+				f.receive(
+					{ ...f.claim, ...override(f) } as SessionSandboxReconciliationClaimV1,
+					new AbortController().signal,
+				),
+			).rejects.toMatchObject({ code: "policy" });
+			expect(f.writes).toHaveLength(0);
+		},
+	);
+
+	it("fails before any write when the Worker no longer trusts the template binding", async () => {
+		const f = fixture();
+		const receive = createProductionSessionSandboxReceiverV1(
+			{ ...f.options, templateModelBindings: [] },
+			{ serviceToken: sessionSandboxDeploymentTokenFixture },
+		);
+		await expect(
+			receive(f.claim, new AbortController().signal),
+		).rejects.toMatchObject({ code: "policy" });
+		expect(f.writes).toHaveLength(0);
 	});
 
 	it("keeps source resources and returns unknown while an original execution prevents drain", async () => {
@@ -331,6 +482,7 @@ describe("production SessionSandbox resource receiver", () => {
 						resourceFence: 3,
 						policy: f.claim.policy,
 						deployment: f.claim.deployment,
+						modelProjection: f.claim.modelProjection,
 						observation,
 					},
 					stopReceipt: null,

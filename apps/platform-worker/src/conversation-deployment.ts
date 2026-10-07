@@ -1,4 +1,5 @@
 import { createPublicKey } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type ApprovedConnectionConsumerTargetV1,
 	resolveApprovedConnectionConsumerProfileV1,
@@ -7,6 +8,11 @@ import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
 } from "@agent-infra/contracts/workload";
+import {
+	type RuntimeModelProjectionV4,
+	runtimeModelInjectionV4,
+	validateRuntimeModelProjectionV4,
+} from "@agent-infra/model-catalog";
 import type { SessionSandboxDeletionProgressV1 } from "@agent-infra/platform-core";
 import {
 	ConversationRuntimeHostError,
@@ -14,12 +20,15 @@ import {
 } from "@agent-infra/platform-core";
 import type { V1Service } from "@kubernetes/client-node";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
+import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	createSessionSandboxWorkloadAdapterV1,
 	type SessionSandboxAllocationV1,
+	type SessionSandboxRuntimeInputV1,
 	sessionSandboxIdentityAnnotationsV1,
 	sessionSandboxLabelsV1,
+	sessionSandboxServiceTokenV1,
 } from "./session-workload-adapter.js";
 import {
 	createWorkloadRuntimeV1,
@@ -179,7 +188,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					throw new Error();
 				return {
 					baseUrl: `http://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
-					serviceToken,
+					// The source Sandbox's own token; the deployment token is never sent.
+					serviceToken: sessionSandboxServiceTokenV1(
+						serviceToken,
+						service.namespace,
+						controlSource.sandbox.sandboxId,
+					),
 					workerId: signing.workerId,
 					connectionConsumer,
 				};
@@ -287,7 +301,12 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					// Session sandboxes use their own Service contract; the bound Service
 					// is consumed in-cluster over plaintext HTTP (ADR-0020).
 					baseUrl: `http://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
-					serviceToken,
+					// Bound to this Sandbox (#1466); Agent-level routes keep the deployment token.
+					serviceToken: sessionSandboxServiceTokenV1(
+						serviceToken,
+						service.namespace,
+						sandboxResource.sandbox.sandboxId,
+					),
 					workerId: signing.workerId,
 					connectionConsumer,
 				};
@@ -326,16 +345,73 @@ function sessionSandboxEgressPolicyV1(
 /** Production resource receiver; invoked only under the original Store lease. */
 export function createProductionSessionSandboxReceiverV1(
 	workload: WorkloadRuntimeOptionsV1,
+	options: { readonly serviceToken: string },
 ) {
 	const adapter = createSessionSandboxWorkloadAdapterV1({
 		client: workload.client,
 	});
 	const connectionInstallationRevision =
 		workload.policy.connectionInstallationRevision;
+	/**
+	 * Session Runtime inputs come only from the Store-verified V4 projection and
+	 * the Worker's runtime auth (#1466). Anything else fails before any write.
+	 */
+	const runtimeFor = (
+		binding: SessionSandboxReconciliationClaimV1["sandbox"],
+		policy: SessionSandboxReconciliationClaimV1["policy"],
+		deployment: AgentWorkloadDesiredV1,
+		modelProjection: unknown,
+	): SessionSandboxRuntimeInputV1 => {
+		const auth = workload.policy.runtimeAuth;
+		let projection: RuntimeModelProjectionV4;
+		try {
+			if (
+				!auth ||
+				!modelProjection ||
+				typeof modelProjection !== "object" ||
+				(modelProjection as { schemaVersion?: unknown }).schemaVersion !== 4
+			)
+				throw new Error();
+			validateWorkloadRuntimeAuthV1(auth);
+			projection = validateRuntimeModelProjectionV4(modelProjection);
+		} catch {
+			throw new WorkloadKubernetesError("policy");
+		}
+		const templateBinding = projection.standardTemplateBinding;
+		if (
+			!auth ||
+			projection.agentId !== deployment.agentId ||
+			projection.agentId !== binding.agentId ||
+			projection.configurationRevision !== deployment.configRevision ||
+			templateBinding.imageDigest !== deployment.imageDigest ||
+			templateBinding.driver !== "codex" ||
+			deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
+			!workload.templateModelBindings.some((trusted) =>
+				isDeepStrictEqual({ ...trusted }, templateBinding),
+			) ||
+			// Agent-level Secrets are never mounted into a Session Sandbox.
+			deployment.secretRefs.length > 0
+		)
+			throw new WorkloadKubernetesError("policy");
+		return {
+			driver: "codex",
+			modelConfiguration: runtimeModelInjectionV4(projection).configuration,
+			workerId: auth.workerId,
+			grantKeyId: auth.grantKeyId,
+			grantPublicKey: auth.grantPublicKey,
+			grantIssuer: auth.grantIssuer,
+			serviceToken: sessionSandboxServiceTokenV1(
+				options.serviceToken,
+				policy.namespace,
+				binding.sandboxId,
+			),
+		};
+	};
 	const allocationFor = (
 		binding: SessionSandboxReconciliationClaimV1["sandbox"],
 		policy: SessionSandboxReconciliationClaimV1["policy"],
 		deployment: AgentWorkloadDesiredV1,
+		runtime: SessionSandboxRuntimeInputV1,
 		desiredState: "running" | "stopped",
 		generation: number,
 		resourceFence: number,
@@ -349,11 +425,13 @@ export function createProductionSessionSandboxReceiverV1(
 		serviceAccountName: binding.resourceName,
 		pvcName: binding.resourceName,
 		networkPolicyName: binding.resourceName,
+		secretName: binding.resourceName,
 		// Only the reviewed deployment egress, identical to the Agent Workload's.
 		egress: sessionSandboxEgressPolicyV1(workload.policy),
 		imageDigest: `${workload.policy.imageRepository}@${deployment.imageDigest}`,
 		containerPort: deployment.service.port,
 		env: deployment.env,
+		runtime,
 		connectionConsumerSnapshot: workload.policy.connectionConsumerSnapshot,
 		connectionInstallationRevision,
 		authorizedIngressSelector: workload.policy.workerSelector,
@@ -381,23 +459,32 @@ export function createProductionSessionSandboxReceiverV1(
 			const sourceDeployment = validateAgentWorkloadDesiredV1(
 				source.deployment,
 			);
+			// The source keeps the projection it was prepared with (#1466).
+			const sourceRuntime = runtimeFor(
+				source.sandbox,
+				source.policy,
+				sourceDeployment,
+				source.modelProjection,
+			);
 			const sourceAllocation = allocationFor(
 				source.sandbox,
 				source.policy,
 				sourceDeployment,
+				sourceRuntime,
 				"running",
 				source.sandbox.generation,
 				source.resourceFence,
 			);
 			const sourceResources = source.observation?.resources ?? [];
 			const completeSource =
-				sourceResources.length >= 5 &&
+				sourceResources.length >= 6 &&
 				[
 					"Pod",
 					"Service",
 					"ServiceAccount",
 					"PersistentVolumeClaim",
 					"NetworkPolicy",
+					"Secret",
 				].every((kind) =>
 					sourceResources.some((resource) => resource.kind === kind),
 				);
@@ -432,6 +519,7 @@ export function createProductionSessionSandboxReceiverV1(
 				claim.sandbox,
 				source.policy,
 				sourceDeployment,
+				sourceRuntime,
 				"stopped",
 				source.sandbox.generation,
 				source.resourceFence,
@@ -466,10 +554,18 @@ export function createProductionSessionSandboxReceiverV1(
 				workloadResourceConfigurationHashV1(workload.policy)
 		)
 			throw new Error("SessionSandbox verified policy is unavailable");
+		// V4-only: a static-key or missing projection fails before any write.
+		const runtime = runtimeFor(
+			claim.sandbox,
+			claim.policy,
+			deployment,
+			claim.modelProjection,
+		);
 		const allocation = allocationFor(
 			claim.sandbox,
 			claim.policy,
 			deployment,
+			runtime,
 			claim.desiredState,
 			claim.sandbox.generation,
 			claim.resourceFence,

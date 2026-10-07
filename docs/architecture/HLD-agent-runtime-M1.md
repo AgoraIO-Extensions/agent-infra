@@ -144,7 +144,7 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，Ru
 
 **kubelet 探针与 Worker 验证分离。** Adapter 的 `readinessProbe.httpGet` 使用 HTTP；`hasDriftedPodSpec`（[Pod drift 校验](../../apps/platform-worker/src/kubernetes-runtime-pod-validation.ts)）按 HTTP 比较 scheme、原 path/port 与禁止覆盖项。该探针只判断容器可用性，不携带 service token 或 Grant；promotion 和 Runtime 调用仍须经过 Worker 的精确 origin 与 signed readiness。
 
-**业务 Session Sandbox。** Agent 级上述现状不能证明平台会话已按独立 Sandbox 路由。Session 的分配、Service、原 PVC、resourceFence 与真实 UID/version 继续以 [Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定) 为准；五类必需资源及可选 StatefulSet 的澄清归 #1322。Worker 只消费该分配已有 Service 的实际 DNS/端口 `http://<sandbox Service>.NS.svc:P` 与原 Session/Sandbox/代次绑定，不套用 Agent 级 `N`/`N-probe`，不新增 Sandbox probe Service，不让两个 Session 共享后端。缺少有效分配时拒绝该路由，不能回退到 Agent 级 Service。
+**业务 Session Sandbox。** Agent 级上述现状不能证明平台会话已按独立 Sandbox 路由。Session 的分配、Service、原 PVC、resourceFence 与真实 UID/version 继续以 [Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定) 为准；六类必需资源（#1466 增加该 Sandbox 专属 Secret）及可选 StatefulSet 的澄清归 #1322。Worker 只消费该分配已有 Service 的实际 DNS/端口 `http://<sandbox Service>.NS.svc:P` 与原 Session/Sandbox/代次绑定，不套用 Agent 级 `N`/`N-probe`，不新增 Sandbox probe Service，不让两个 Session 共享后端。缺少有效分配时拒绝该路由，不能回退到 Agent 级 Service。
 
 ### 4.2 Browser Capability
 
