@@ -148,17 +148,6 @@ function restorePreAgentApiManagementContract(value: {
 		"AgentApplicationManagerResponseV1",
 	])
 		delete value.components.schemas[name];
-	for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
-		const schema = value.components.schemas[name] as
-			| {
-					properties?: {
-						capabilities?: { properties?: Record<string, unknown> };
-					};
-			  }
-			| undefined;
-		const capabilities = schema?.properties?.capabilities;
-		if (capabilities?.properties) delete capabilities.properties.skills;
-	}
 	const audit = value.components.schemas.PlatformAuditProjectionV2 as
 		| {
 				properties: {
@@ -374,6 +363,13 @@ describe("contract compatibility command", () => {
 			);
 			const previous = structuredClone(current);
 			restorePreAgentApiManagementContract(previous);
+			for (const document of [current, previous]) {
+				for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
+					const schema = document.components.schemas[name];
+					if (schema?.properties?.capabilities?.properties)
+						delete schema.properties.capabilities.properties.skills;
+				}
+			}
 			const directory = await mkdtemp(
 				resolve(tmpdir(), "agent-infra-agent-management-compat-"),
 			);
@@ -1986,6 +1982,11 @@ describe("contract compatibility command", () => {
 			delete current.components.schemas[name];
 		delete current.paths["/api/v2/agents"].get.security;
 		delete current.paths["/api/v2/agents"].get.description;
+		for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
+			const schema = current.components.schemas[name];
+			if (schema?.properties?.capabilities?.properties)
+				delete schema.properties.capabilities.properties.skills;
+		}
 		const previous = structuredClone(current);
 		for (const path of Object.keys(previous.paths)) {
 			if (
