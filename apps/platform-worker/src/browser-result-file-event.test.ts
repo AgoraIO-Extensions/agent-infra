@@ -9,7 +9,10 @@ import type {
 	PersistedRuntimeConversationEventV1,
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserFileGrantBridgeV1 } from "./browser-file-bridge.js";
+import {
+	type BrowserFileGrantBridgeV1,
+	createBrowserFileGrantBridgeV1,
+} from "./browser-file-bridge.js";
 
 type FileProjectionV1 = ReturnType<typeof FileProjectionV1Schema.parse>;
 
@@ -139,6 +142,34 @@ describe("Browser result file event adapter", () => {
 		});
 	});
 
+	it("replays the same operation without creating a second file or event", async () => {
+		const accepted = { outcome: "accepted" as const, event: persistedEvent() };
+		const replayed = { outcome: "replayed" as const, event: persistedEvent() };
+		const repeated = setup(accepted);
+		repeated.persist
+			.mockResolvedValueOnce(accepted)
+			.mockResolvedValueOnce(replayed);
+
+		await expect(
+			repeated.adapter.persist(repeated.input),
+		).resolves.toMatchObject({
+			outcome: "accepted",
+		});
+		await expect(
+			repeated.adapter.persist(repeated.input),
+		).resolves.toMatchObject({
+			outcome: "replayed",
+		});
+		expect(repeated.writeResult).toHaveBeenCalledTimes(2);
+		expect(repeated.persist).toHaveBeenCalledTimes(2);
+		expect(repeated.writeResult).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				idempotencyKey: repeated.input.fileIdempotencyKey,
+			}),
+		);
+	});
+
 	it("returns the existing event on a legitimate replay", async () => {
 		const replayed = { outcome: "replayed" as const, event: persistedEvent() };
 		const { adapter, input, persist } = setup(replayed);
@@ -148,6 +179,32 @@ describe("Browser result file event adapter", () => {
 			event: replayed.event,
 		});
 		expect(persist).toHaveBeenCalledOnce();
+	});
+
+	it("rejects verified File Grant claims for another execution before file access", async () => {
+		const { input, persist } = setup();
+		const clientWriteResult = vi.fn(async () => projection);
+		const bridge = createBrowserFileGrantBridgeV1({
+			binding: executionBinding,
+			client: {
+				readInput: async () => new ReadableStream<Uint8Array>(),
+				writeResult: clientWriteResult,
+			},
+			verifyExecutionGrant: async () => ({
+				...executionBinding,
+				executionId: "other-execution",
+			}),
+		});
+		const adapter = createBrowserResultFileEventAdapterV1({
+			bridge,
+			events: { persist } as unknown as ConversationEventUseCaseV1,
+		});
+
+		await expect(adapter.persist(input)).rejects.toThrow(
+			"BROWSER_FILE_GRANT_BINDING_CONFLICT",
+		);
+		expect(clientWriteResult).not.toHaveBeenCalled();
+		expect(persist).not.toHaveBeenCalled();
 	});
 
 	it("rejects a binding that does not match the bridge before writing a file", async () => {
@@ -161,6 +218,25 @@ describe("Browser result file event adapter", () => {
 		).rejects.toThrow("BROWSER_RESULT_BINDING_CONFLICT");
 		expect(writeResult).not.toHaveBeenCalled();
 		expect(persist).not.toHaveBeenCalled();
+	});
+
+	it("keeps file write failures and failed projections out of the event path", async () => {
+		const failedWrite = setup();
+		failedWrite.writeResult.mockRejectedValue(new Error("file write unknown"));
+		await expect(
+			failedWrite.adapter.persist(failedWrite.input),
+		).rejects.toThrow("file write unknown");
+		expect(failedWrite.persist).not.toHaveBeenCalled();
+
+		const failedProjection = setup();
+		failedProjection.writeResult.mockResolvedValue({
+			...projection,
+			status: "failed",
+		});
+		await expect(
+			failedProjection.adapter.persist(failedProjection.input),
+		).rejects.toThrow("BROWSER_RESULT_FILE_UNAVAILABLE");
+		expect(failedProjection.persist).not.toHaveBeenCalled();
 	});
 
 	it("does not publish an event for a non-confirmed file projection", async () => {
@@ -181,6 +257,29 @@ describe("Browser result file event adapter", () => {
 		await expect(unknown.adapter.persist(unknown.input)).rejects.toThrow(
 			"BROWSER_RESULT_EVENT_UNAVAILABLE",
 		);
+	});
+
+	it("rejects a different file under the same event idempotency key", async () => {
+		const conflict = setup();
+		const otherProjection = {
+			...projection,
+			fileId: "file-2",
+		};
+		conflict.writeResult
+			.mockResolvedValueOnce(projection)
+			.mockResolvedValueOnce(otherProjection);
+		conflict.persist
+			.mockResolvedValueOnce({
+				outcome: "accepted",
+				event: persistedEvent(),
+			})
+			.mockRejectedValueOnce(new Error("event idempotency conflict"));
+
+		await conflict.adapter.persist(conflict.input);
+		await expect(conflict.adapter.persist(conflict.input)).rejects.toThrow(
+			"BROWSER_RESULT_EVENT_UNAVAILABLE",
+		);
+		expect(conflict.persist).toHaveBeenCalledTimes(2);
 	});
 
 	it("keeps stale or unavailable event persistence from becoming a completed result", async () => {
