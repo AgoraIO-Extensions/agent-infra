@@ -22,17 +22,45 @@ const account: LdapAccount = {
 function memorySessions(): LdapSessionStore {
 	const sessions = new Map<
 		string,
-		{ uid: string; expiresAt: number; principal?: Record<string, unknown> }
+		{
+			uid: string;
+			expiresAt: number;
+			absoluteExpiresAt: number;
+			principal?: Record<string, unknown>;
+		}
 	>();
 	return {
-		async create(digest, uid, expiresAt, principal) {
-			sessions.set(digest, { uid, expiresAt, principal });
+		async create(digest, uid, expiresAt, absoluteExpiresAt, principal) {
+			sessions.set(digest, {
+				uid,
+				expiresAt,
+				absoluteExpiresAt,
+				principal,
+			});
 		},
 		async find(digest, now) {
 			const session = sessions.get(digest);
-			return session && session.expiresAt > now
-				? { uid: session.uid, principal: session.principal }
+			return session &&
+				session.expiresAt > now &&
+				session.absoluteExpiresAt > now
+				? {
+						uid: session.uid,
+						expiresAt: session.expiresAt,
+						absoluteExpiresAt: session.absoluteExpiresAt,
+						principal: session.principal,
+					}
 				: null;
+		},
+		async renew(digest, now, expiresAt) {
+			const session = sessions.get(digest);
+			if (
+				!session ||
+				session.expiresAt <= now ||
+				session.absoluteExpiresAt <= now
+			)
+				return false;
+			session.expiresAt = Math.min(expiresAt, session.absoluteExpiresAt);
+			return true;
 		},
 		async revoke(digest) {
 			sessions.delete(digest);
@@ -149,7 +177,7 @@ describe("LDAP browser adapter", () => {
 		expect(result?.status).toBe(204);
 		const setCookie = result?.headers.get("set-cookie") ?? "";
 		expect(setCookie).toMatch(
-			/^__Host-platform-session=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=900$/u,
+			/^__Host-platform-session=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=43200$/u,
 		);
 		expect(setCookie).not.toContain("correct-password");
 		const cookie = setCookie.split(";")[0];
@@ -169,6 +197,75 @@ describe("LDAP browser adapter", () => {
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 		state.setNow(1000 + 15 * 60_000);
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+	});
+
+	it("slides an active session after validation but enforces idle and absolute expiry", async () => {
+		const state = fixture();
+		const cookie =
+			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		const request = new Request(`${origin}/api/v1/session`, {
+			headers: { cookie },
+		});
+
+		for (const minutes of [90, 180, 270, 360, 450, 540, 630]) {
+			state.setNow(1000 + minutes * 60_000);
+			expect(
+				await state.adapter.identityAdapter.resolve(request),
+			).not.toBeNull();
+		}
+
+		state.setNow(1000 + 12 * 60 * 60_000);
+		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+	});
+
+	it("expires an inactive session at the idle deadline", async () => {
+		const state = fixture();
+		const cookie =
+			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		state.setNow(1000 + 2 * 60 * 60_000 + 1);
+		expect(
+			await state.adapter.identityAdapter.resolve(
+				new Request(`${origin}/api/v1/session`, { headers: { cookie } }),
+			),
+		).toBeNull();
+	});
+
+	it("does not renew a session after current identity validation fails", async () => {
+		const sessions = memorySessions();
+		const renew = vi.spyOn(sessions, "renew");
+		const state = fixture(sessions);
+		const cookie =
+			(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		state.setNow(1000 + 90 * 60_000);
+		state.setDisabled(true);
+		expect(
+			await state.adapter.identityAdapter.resolve(
+				new Request(`${origin}/api/v1/session`, { headers: { cookie } }),
+			),
+		).toBeNull();
+		expect(renew).not.toHaveBeenCalled();
+	});
+
+	it("does not renew a session after LDAP status or identity mapping changes", async () => {
+		for (const change of ["disabled", "reassigned"] as const) {
+			const sessions = memorySessions();
+			const renew = vi.spyOn(sessions, "renew");
+			const state = fixture(sessions);
+			const cookie =
+				(await state.login())?.headers.get("set-cookie")?.split(";")[0] ?? "";
+			state.setNow(1000 + 90 * 60_000);
+			state.setCurrent(
+				change === "disabled"
+					? { ...account, accountStatus: "disabled" }
+					: { ...account, userId: "reassigned-user" },
+			);
+			expect(
+				await state.adapter.identityAdapter.resolve(
+					new Request(`${origin}/api/v1/session`, { headers: { cookie } }),
+				),
+			).toBeNull();
+			expect(renew).not.toHaveBeenCalled();
+		}
 	});
 
 	it("refuses login before creating a session when identity authority is disabled or unavailable", async () => {

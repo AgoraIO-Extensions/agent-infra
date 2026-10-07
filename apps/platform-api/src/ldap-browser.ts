@@ -9,7 +9,8 @@ import type { BrowserSessionPrincipal } from "@agent-infra/platform-store";
 
 type Directory = ReturnType<typeof createLdapIdentityDirectory>;
 const SESSION_COOKIE = "__Host-platform-session";
-const SESSION_MS = 15 * 60_000;
+const SESSION_IDLE_MS = 2 * 60 * 60_000;
+const SESSION_ABSOLUTE_MS = 12 * 60 * 60_000;
 const MAX_LOGIN_BYTES = 32_768;
 const LOGIN_BODY_TIMEOUT_MS = 5000;
 
@@ -104,12 +105,19 @@ export interface LdapSessionStore {
 		digest: string,
 		uid: string,
 		expiresAt: number,
+		absoluteExpiresAt: number,
 		principal?: BrowserSessionPrincipal,
 	): Promise<void>;
 	find(
 		digest: string,
 		now: number,
-	): Promise<{ uid: string; principal?: BrowserSessionPrincipal } | null>;
+	): Promise<{
+		uid: string;
+		expiresAt: number;
+		absoluteExpiresAt: number;
+		principal?: BrowserSessionPrincipal;
+	} | null>;
+	renew(digest: string, now: number, expiresAt: number): Promise<boolean>;
 	revoke(digest: string): Promise<void>;
 	revokeUid(uid: string): Promise<void>;
 }
@@ -126,7 +134,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			!input.directory ||
 			typeof input.directory.userIdForUid !== "function" ||
 			!input.sessions ||
-			["create", "find", "revoke", "revokeUid"].some(
+			["create", "find", "renew", "revoke", "revokeUid"].some(
 				(method) =>
 					typeof input.sessions[method as keyof LdapSessionStore] !==
 					"function",
@@ -148,10 +156,12 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 	const identityAdapter = {
 		async resolve(request: Request) {
 			const token = cookie(request);
-			const session = token
-				? await input.sessions.find(digest(token), now())
+			const requestNow = now();
+			const tokenDigest = token ? digest(token) : null;
+			const session = tokenDigest
+				? await input.sessions.find(tokenDigest, requestNow)
 				: null;
-			if (!session) return null;
+			if (!tokenDigest || !session) return null;
 			if (
 				!/^(GET|HEAD|OPTIONS)$/u.test(request.method) &&
 				request.headers.get("origin") !== origin.origin
@@ -174,6 +184,15 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			if (identity.accountStatus !== "active" || identity.userId !== userId) {
 				await input.sessions.revokeUid(session.uid);
 				return null;
+			}
+			const renewalNow = now();
+			if (session.expiresAt - renewalNow < SESSION_IDLE_MS / 2) {
+				const renewed = await input.sessions.renew(
+					tokenDigest,
+					renewalNow,
+					Math.min(renewalNow + SESSION_IDLE_MS, session.absoluteExpiresAt),
+				);
+				if (!renewed) return null;
 			}
 			return identity;
 		},
@@ -246,11 +265,13 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				return response(503);
 			}
 			const token = randomBytes(32).toString("base64url");
+			const loginNow = now();
 			try {
 				await input.sessions.create(
 					digest(token),
 					account.uid,
-					now() + SESSION_MS,
+					loginNow + SESSION_IDLE_MS,
+					loginNow + SESSION_ABSOLUTE_MS,
 					principal,
 				);
 			} catch {
@@ -259,7 +280,7 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 			const result = response(204);
 			result.headers.append(
 				"Set-Cookie",
-				sessionCookie(token, SESSION_MS / 1000),
+				sessionCookie(token, SESSION_ABSOLUTE_MS / 1000),
 			);
 			return result;
 		}

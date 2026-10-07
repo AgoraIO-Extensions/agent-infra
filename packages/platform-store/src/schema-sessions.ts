@@ -15,6 +15,9 @@ export const browserSessions = platformSchema.table(
 		tokenDigest: char("token_digest", { length: 64 }).primaryKey(),
 		uid: text("uid").notNull(),
 		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		absoluteExpiresAt: timestamp("absolute_expires_at", {
+			withTimezone: true,
+		}).notNull(),
 		principal: jsonb("principal"),
 	},
 	(table) => [
@@ -25,5 +28,6 @@ export const browserSessions = platformSchema.table(
 		check("browser_session_uid_nonempty", sql`char_length(${table.uid}) > 0`),
 		index("browser_sessions_uid").on(table.uid),
 		index("browser_sessions_expires_at").on(table.expiresAt),
+		index("browser_sessions_absolute_expires_at").on(table.absoluteExpiresAt),
 	],
 );
