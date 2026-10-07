@@ -59,7 +59,7 @@ function firstOperationOutcome(
 				? undefined
 				: failureCodes[fact.failureCode];
 	return {
-		stage: fact.kind,
+		stage: fact.kind === "tool" && fact.browser ? "browser" : fact.kind,
 		outcome,
 		...(code === undefined ? {} : { code }),
 		...(fact.durationMs === undefined ? {} : { durationMs: fact.durationMs }),

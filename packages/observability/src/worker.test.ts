@@ -426,6 +426,49 @@ it("does not recount an unknown attempt on recovery, but counts a real new attem
 	expect(fixture.snapshot().auditCount).toBe(7);
 });
 
+it("classifies Browser operation outcomes separately from ordinary tools", async () => {
+	const fixture = transactionFixture();
+	const observations: OperationalEvent[] = [];
+	const events = createObservedConversationEvents({
+		transaction: fixture.transaction,
+		telemetry: { record: (event) => observations.push(event) },
+	});
+	const intent: ConversationOperationFactV2 = {
+		kind: "tool",
+		operationRef: "browser-operation",
+		attemptRef: "browser-attempt",
+		phase: "intent",
+		toolId: "browser.click",
+		browser: {
+			actionId: "browser-action",
+			capabilityVersion: 1,
+			pageRevision: 2,
+			sessionGeneration: 3,
+			resourceFence: 4,
+			sideEffect: true,
+		},
+	};
+	await events.persist(operation(intent, "browser-intent"));
+	await events.persist(
+		operation({ ...intent, phase: "started" }, "browser-started"),
+	);
+	await events.persist(
+		operation(
+			{ ...intent, phase: "unknown", failureCode: "recovery_unconfirmed" },
+			"browser-unknown",
+		),
+	);
+	expect(observations.filter((event) => event.stage === "browser")).toEqual([
+		expect.objectContaining({
+			stage: "browser",
+			outcome: "unknown",
+			code: "OPERATION_UNKNOWN",
+			operationRef: "browser-operation",
+			attemptRef: "browser-attempt",
+		}),
+	]);
+});
+
 it("does not recount later Connection metadata on a completed tool attempt", async () => {
 	const fixture = transactionFixture();
 	const observations: OperationalEvent[] = [];
