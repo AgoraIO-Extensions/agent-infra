@@ -314,6 +314,19 @@ export function createProductionConversationRuntimeResolverV2(options: {
 	};
 }
 
+/** Picks the deployment-approved egress fields; other policy fields never widen it. */
+function sessionSandboxEgressPolicyV1(
+	policy: WorkloadRuntimeOptionsV1["policy"],
+): SessionSandboxAllocationV1["egress"] {
+	return {
+		...(policy.modelEgress ? { modelEgress: policy.modelEgress } : {}),
+		...(policy.connectionEgress
+			? { connectionEgress: policy.connectionEgress }
+			: {}),
+		...(policy.dnsEgress ? { dnsEgress: policy.dnsEgress } : {}),
+	};
+}
+
 /** Production resource receiver; invoked only under the original Store lease. */
 export function createProductionSessionSandboxReceiverV1(
 	workload: WorkloadRuntimeOptionsV1,
@@ -381,6 +394,8 @@ export function createProductionSessionSandboxReceiverV1(
 		serviceAccountName: binding.resourceName,
 		pvcName: binding.resourceName,
 		networkPolicyName: binding.resourceName,
+		// Only the reviewed deployment egress, identical to the Agent Workload's.
+		egress: sessionSandboxEgressPolicyV1(workload.policy),
 		imageDigest: `${workload.policy.imageRepository}@${deployment.imageDigest}`,
 		containerPort: deployment.service.port,
 		env: deployment.env,

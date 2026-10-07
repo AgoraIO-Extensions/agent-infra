@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import type { SessionSandboxReconciliationClaimV1 } from "@agent-infra/platform-core";
-import type { V1Pod } from "@kubernetes/client-node";
+import type { V1NetworkPolicy, V1Pod } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
@@ -17,6 +17,7 @@ import {
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
+import { workloadEgressRulesV1 } from "./workload-network.js";
 import {
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
@@ -218,6 +219,43 @@ describe("production SessionSandbox resource receiver", () => {
 		expect(target.baseUrl).toBe(
 			"https://sandbox-allocation-a.workload-test.svc:8080",
 		);
+	});
+	it("compiles Session egress only from the Worker deployment policy (#1445)", async () => {
+		const f = fixture();
+		const approved = {
+			dnsEgress: [
+				{ namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
+			],
+			modelEgress: [{ destination: { ip: "203.0.113.10" }, port: 443 }],
+		};
+		const receive = createProductionSessionSandboxReceiverV1({
+			...f.options,
+			policy: { ...f.options.policy, ...approved },
+		});
+		await receive(
+			{
+				...f.claim,
+				// A Store claim cannot widen the deployment-approved destinations.
+				policy: {
+					...f.claim.policy,
+					modelEgress: [{ destination: { ip: "198.51.100.7" }, port: 443 }],
+				} as typeof f.claim.policy,
+			},
+			new AbortController().signal,
+		);
+		const policy = f.resources.get(
+			"NetworkPolicy/sandbox-allocation-a",
+		) as V1NetworkPolicy;
+		expect(policy.spec?.egress).toEqual(workloadEgressRulesV1(approved));
+	});
+	it("denies all Session egress when the deployment approves none", async () => {
+		const f = fixture();
+		await f.receive(f.claim, new AbortController().signal);
+		const policy = f.resources.get(
+			"NetworkPolicy/sandbox-allocation-a",
+		) as V1NetworkPolicy;
+		expect(policy.spec?.policyTypes).toEqual(["Ingress", "Egress"]);
+		expect(policy.spec?.egress).toEqual([]);
 	});
 	it("applies the Store allocation using Worker policy and records readiness with the resource fence", async () => {
 		const f = fixture();

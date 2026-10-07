@@ -2,8 +2,18 @@
 
 本实现对应 [#1255](https://github.com/AgoraIO-Extensions/agent-infra/issues/1255)，
 消费[工程 Spec §10.1.1](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定)。
-`createSessionSandboxEgressV1` 是 Worker 内部 Kubernetes enforcement seam，不是新的分配、
-授权、Store 事务或调度入口。未完成下述接线和真实验收前，#1255 保持 blocker。
+
+## 当前落实方式
+
+[#1445](https://github.com/AgoraIO-Extensions/agent-infra/issues/1445) 起，Session Sandbox 的出站
+由五类必需资源中的 NetworkPolicy 落实：Worker 从受审阅部署 policy 取 `dnsEgress`、`modelEgress`
+与 `connectionEgress`，用与 Agent 级 Workload 相同的 `workloadEgressRulesV1` 编译为该 Sandbox
+NetworkPolicy 的出站规则；部署未批准目标时出站为空，即全部拒绝。Store claim、请求、镜像和 Runtime
+回包都不能提供或扩大目标。该 NetworkPolicy 已随 Sandbox 就绪回执记录 UID/resourceVersion；同 UID
+漂移沿 adapter 既有语义判定 unknown 并拒绝原地更新。部署出站策略变化后既有 Session 的恢复路径尚未定义。
+
+下文的 `createSessionSandboxEgressV1` 是另一种独立策略的 Worker 内部 enforcement seam，不是新的
+分配、授权、Store 事务或调度入口；当前未接入 Session 生命周期，以下接线要求仅在启用该 seam 时适用。
 
 ## 接收边界
 
