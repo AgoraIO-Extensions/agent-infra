@@ -183,9 +183,11 @@ function schemaValidator(schema: unknown): ValidateFunction {
 		value: unknown,
 		depth: number,
 		context: Context,
-		path: string,
-		locations: Set<string>,
+		parentPath: string,
+		parentLocations: Set<string>,
 	) => {
+		let path = parentPath;
+		let locations = parentLocations;
 		if (++nodes > 1024 || depth > 24) unavailable();
 		if (context === "schema") {
 			locations.add(path);
