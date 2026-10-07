@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
 	validateStandardMcpInstallationMetadata,
@@ -38,11 +38,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function ensurePrivateDirectory(path: string) {
-	await mkdir(path, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
-		if (error.code !== "EEXIST") throw error;
-	});
-	const directory = await openProtectedStandardMcpDirectory(path);
-	await directory.close();
+	const parentPath = dirname(path);
+	const parent = await openProtectedStandardMcpDirectory(parentPath);
+	try {
+		await mkdir(protectedStandardMcpPath(parent, parentPath, basename(path)), {
+			mode: 0o700,
+		}).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "EEXIST") throw error;
+		});
+		const directory = await openProtectedStandardMcpDirectory(path);
+		try {
+			await directory.sync();
+			await parent.sync();
+			await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+			await assertProtectedStandardMcpDirectoryCurrent(parentPath, parent);
+		} finally {
+			await directory.close();
+		}
+	} finally {
+		await parent.close();
+	}
 }
 
 async function publishMaterial(path: string, name: string, token: string) {
@@ -250,6 +265,12 @@ export async function receiveProtectedStandardMcpInstallation(options: {
 				0o600,
 			);
 			try {
+				await lock.sync();
+				await directory.sync();
+				await assertProtectedStandardMcpDirectoryCurrent(
+					destination,
+					directory,
+				);
 				// Serialize only reception, not business state. A crash leaves a lock:
 				// fail closed until controlled ownership/recovery, never guess by PID.
 				for (const key of keys) {

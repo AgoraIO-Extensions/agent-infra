@@ -56,7 +56,12 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 					event = "material-sync";
 				else if (path.includes(".stage-")) event = "metadata-sync";
 				else if (path.endsWith("standard-mcp-input/bindings"))
-					event = "metadata-directory-sync";
+					event = faults.renamed
+						? "metadata-directory-sync"
+						: "initial-directory-sync";
+				else if (path.endsWith("/conversations"))
+					event = "parent-directory-sync";
+				else if (path.endsWith("/.receive.lock")) event = "lock-sync";
 				if (event) faults.events.push(event);
 				if (event && faults.failure === event)
 					throw new Error("synthetic-private-diagnostic");
@@ -169,6 +174,19 @@ it("preserves the absent source state without any protection or material access"
 	expect(faults.protection).not.toHaveBeenCalled();
 	expect(faults.materialOpens).toBe(0);
 });
+
+it.each(["parent-directory-sync", "initial-directory-sync", "lock-sync"])(
+	"cannot publish after %s fails on first reception",
+	async (failure) => {
+		const env = await setup();
+		faults.failure = failure;
+		expect(await receiveProtectedStandardMcpInstallation(env.options)).toEqual({
+			status: "unavailable",
+		});
+		expect(faults.materialOpens).toBe(0);
+		expect(faults.renamed).toBe(false);
+	},
+);
 
 it.each([
 	"missing",
