@@ -772,17 +772,21 @@ it("accepts same-dialect resources and literal directive-shaped data without cha
 	expect(result.phase).toBe("completed");
 });
 
-it.each(["custom", "default"])(
+it.each(["custom", "default", "dependencies/x"])(
 	"rejects local references into non-schema %s data",
 	async (location) => {
 		const fixture = await standardMcpFixture({
 			type: "object",
 			properties: { payload: { $ref: `#/${location}` } },
-			[location]: {
-				$id: "urn:hidden-resource",
-				$schema: "https://unsupported.example.test/schema",
-				type: "string",
-			},
+			...(location === "dependencies/x"
+				? { dependencies: { x: ["required"] } }
+				: {
+						[location]: {
+							$id: "urn:hidden-resource",
+							$schema: "https://unsupported.example.test/schema",
+							type: "string",
+						},
+					}),
 		});
 		await expect(
 			StandardMcpClient.open(

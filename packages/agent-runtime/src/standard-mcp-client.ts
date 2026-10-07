@@ -189,7 +189,7 @@ function schemaValidator(schema: unknown): ValidateFunction {
 		let path = parentPath;
 		let locations = parentLocations;
 		if (++nodes > 1024 || depth > 24) unavailable();
-		if (context === "schema") {
+		if (context === "schema" && (record(value) || typeof value === "boolean")) {
 			locations.add(path);
 			if (record(value)) {
 				if (typeof value.$id === "string" && !value.$id.startsWith("#")) {
