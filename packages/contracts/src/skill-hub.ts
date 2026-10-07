@@ -92,6 +92,7 @@ export const SkillVersionRefV1Schema = z.strictObject({
 	packageObjectVersion: identifier,
 	packageDigest: sha256,
 	manifestDigest: sha256,
+	signatureDigest: sha256,
 });
 export type SkillVersionRefV1 = z.infer<typeof SkillVersionRefV1Schema>;
 
@@ -136,6 +137,13 @@ export const SkillWorkloadProjectionV1Schema = z
 				code: z.ZodIssueCode.custom,
 				path: ["targetPath"],
 				message: "targetPath must match manifest.name",
+			});
+		}
+		if (value.manifest.packageDigest !== value.skillVersion.packageDigest) {
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["manifest", "packageDigest"],
+				message: "manifest packageDigest must match skillVersion packageDigest",
 			});
 		}
 	});

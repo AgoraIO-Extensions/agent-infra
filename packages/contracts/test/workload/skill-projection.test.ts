@@ -14,6 +14,7 @@ const projection = {
 		packageObjectVersion: "object-1",
 		packageDigest: "a".repeat(64),
 		manifestDigest: "b".repeat(64),
+		signatureDigest: "d".repeat(64),
 	},
 	manifest: {
 		schemaVersion: 1 as const,

@@ -832,6 +832,10 @@
                         "const": 1,
                         "type": "number"
                       },
+                      "signatureDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
                       "skillId": {
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                         "type": "string"
@@ -853,7 +857,8 @@
                       "version",
                       "packageObjectVersion",
                       "packageDigest",
-                      "manifestDigest"
+                      "manifestDigest",
+                      "signatureDigest"
                     ],
                     "type": "object"
                   },
@@ -1744,6 +1749,10 @@
                         "const": 1,
                         "type": "number"
                       },
+                      "signatureDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
                       "skillId": {
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                         "type": "string"
@@ -1765,7 +1774,8 @@
                       "version",
                       "packageObjectVersion",
                       "packageDigest",
-                      "manifestDigest"
+                      "manifestDigest",
+                      "signatureDigest"
                     ],
                     "type": "object"
                   },
@@ -2656,6 +2666,10 @@
                         "const": 1,
                         "type": "number"
                       },
+                      "signatureDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
                       "skillId": {
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                         "type": "string"
@@ -2677,7 +2691,8 @@
                       "version",
                       "packageObjectVersion",
                       "packageDigest",
-                      "manifestDigest"
+                      "manifestDigest",
+                      "signatureDigest"
                     ],
                     "type": "object"
                   },
@@ -3563,6 +3578,10 @@
                         "const": 1,
                         "type": "number"
                       },
+                      "signatureDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
                       "skillId": {
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                         "type": "string"
@@ -3584,7 +3603,8 @@
                       "version",
                       "packageObjectVersion",
                       "packageDigest",
-                      "manifestDigest"
+                      "manifestDigest",
+                      "signatureDigest"
                     ],
                     "type": "object"
                   },
@@ -4470,6 +4490,10 @@
                         "const": 1,
                         "type": "number"
                       },
+                      "signatureDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
                       "skillId": {
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                         "type": "string"
@@ -4491,7 +4515,8 @@
                       "version",
                       "packageObjectVersion",
                       "packageDigest",
-                      "manifestDigest"
+                      "manifestDigest",
+                      "signatureDigest"
                     ],
                     "type": "object"
                   },
@@ -5377,6 +5402,10 @@
                         "const": 1,
                         "type": "number"
                       },
+                      "signatureDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
                       "skillId": {
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                         "type": "string"
@@ -5398,7 +5427,8 @@
                       "version",
                       "packageObjectVersion",
                       "packageDigest",
-                      "manifestDigest"
+                      "manifestDigest",
+                      "signatureDigest"
                     ],
                     "type": "object"
                   },
@@ -6284,6 +6314,10 @@
                         "const": 1,
                         "type": "number"
                       },
+                      "signatureDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
                       "skillId": {
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                         "type": "string"
@@ -6305,7 +6339,8 @@
                       "version",
                       "packageObjectVersion",
                       "packageDigest",
-                      "manifestDigest"
+                      "manifestDigest",
+                      "signatureDigest"
                     ],
                     "type": "object"
                   },
@@ -7191,6 +7226,10 @@
                         "const": 1,
                         "type": "number"
                       },
+                      "signatureDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
                       "skillId": {
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                         "type": "string"
@@ -7212,7 +7251,8 @@
                       "version",
                       "packageObjectVersion",
                       "packageDigest",
-                      "manifestDigest"
+                      "manifestDigest",
+                      "signatureDigest"
                     ],
                     "type": "object"
                   },
@@ -8098,6 +8138,10 @@
                         "const": 1,
                         "type": "number"
                       },
+                      "signatureDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
                       "skillId": {
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                         "type": "string"
@@ -8119,7 +8163,8 @@
                       "version",
                       "packageObjectVersion",
                       "packageDigest",
-                      "manifestDigest"
+                      "manifestDigest",
+                      "signatureDigest"
                     ],
                     "type": "object"
                   },
@@ -9094,6 +9139,10 @@
                                 "const": 1,
                                 "type": "number"
                               },
+                              "signatureDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
                               "skillId": {
                                 "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                 "type": "string"
@@ -9115,7 +9164,8 @@
                               "version",
                               "packageObjectVersion",
                               "packageDigest",
-                              "manifestDigest"
+                              "manifestDigest",
+                              "signatureDigest"
                             ],
                             "type": "object"
                           },
@@ -9753,6 +9803,10 @@
                                 "const": 1,
                                 "type": "number"
                               },
+                              "signatureDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
                               "skillId": {
                                 "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                 "type": "string"
@@ -9774,7 +9828,8 @@
                               "version",
                               "packageObjectVersion",
                               "packageDigest",
-                              "manifestDigest"
+                              "manifestDigest",
+                              "signatureDigest"
                             ],
                             "type": "object"
                           },
@@ -10655,6 +10710,10 @@
                                 "const": 1,
                                 "type": "number"
                               },
+                              "signatureDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
                               "skillId": {
                                 "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                 "type": "string"
@@ -10676,7 +10735,8 @@
                               "version",
                               "packageObjectVersion",
                               "packageDigest",
-                              "manifestDigest"
+                              "manifestDigest",
+                              "signatureDigest"
                             ],
                             "type": "object"
                           },
@@ -11292,6 +11352,10 @@
                                 "const": 1,
                                 "type": "number"
                               },
+                              "signatureDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
                               "skillId": {
                                 "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                 "type": "string"
@@ -11313,7 +11377,8 @@
                               "version",
                               "packageObjectVersion",
                               "packageDigest",
-                              "manifestDigest"
+                              "manifestDigest",
+                              "signatureDigest"
                             ],
                             "type": "object"
                           },

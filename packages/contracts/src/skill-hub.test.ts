@@ -26,6 +26,7 @@ const ref = {
 	packageObjectVersion: "object-1",
 	packageDigest: digest,
 	manifestDigest: digest,
+	signatureDigest: digest,
 };
 
 describe("Skill Hub contracts", () => {
