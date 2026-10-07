@@ -1739,6 +1739,21 @@ function isConnectionCapabilityOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #1494 adds optional verified Skill metadata to Runtime capabilities.
+function isRuntimeSkillCapabilityOpenApiAddition(previous, current) {
+	const previousSchemas = previous.components?.schemas;
+	if (previousSchemas?.RuntimeSkillCapabilityV1 !== undefined) return false;
+	const normalized = structuredClone(current);
+	const capabilities = normalized.components.schemas.RuntimeCapabilitiesV1;
+	const readiness = normalized.components.schemas.WorkloadReadinessResponseV1;
+	const capabilitySchema = capabilities ?? readiness?.properties?.capabilities;
+	const skillContainer = capabilitySchema?.properties;
+	if (skillContainer?.skills === undefined) return false;
+	delete skillContainer.skills;
+	delete normalized.components.schemas.RuntimeSkillCapabilityV1;
+	return sameValue(previous, normalized);
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -1751,6 +1766,7 @@ function findBreakingChanges(previous, current) {
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
+			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
