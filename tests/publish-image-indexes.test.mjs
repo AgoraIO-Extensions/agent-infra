@@ -42,7 +42,7 @@ test("index publication uses same-source architecture Digests and fails closed o
 import { appendFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 appendFileSync(process.env.DOCKER_LOG, JSON.stringify(args) + '\\n');
-if(args[1] === 'imagetools' && args[2] === 'inspect') console.log(JSON.stringify({manifests:['amd64','arm64'].map((architecture,index)=>({digest:'sha256:'+(process.env.FAKE_WRONG_INDEX ? "9" : String(index+2)).repeat(64),platform:{os:'linux',architecture}}))}));
+if(args[1] === 'imagetools' && args[2] === 'inspect') console.log(JSON.stringify({manifests:['amd64','arm64'].map((architecture,index)=>({digest:'sha256:'+((process.env.FAKE_WRONG_INDEX || (process.env.FAKE_WRONG_LATEST && args.at(-1).endsWith(":latest"))) ? "9" : String(index+2)).repeat(64),platform:{os:'linux',architecture}}))}));
 `,
 		);
 		await chmod(docker, 0o755);
@@ -60,6 +60,7 @@ if(args[1] === 'imagetools' && args[2] === 'inspect') console.log(JSON.stringify
 					env: {
 						...process.env,
 						GITHUB_SHA: sha,
+						GITHUB_REF: "refs/heads/main",
 						IMAGE_REPOSITORY_PREFIX: prefix,
 						DOCKER_BIN: docker,
 						DOCKER_LOG: log,
@@ -87,7 +88,7 @@ if(args[1] === 'imagetools' && args[2] === 'inspect') console.log(JSON.stringify
 				`${prefix}/${names[index]}@sha256:${"2".repeat(64)}`,
 				`${prefix}/${names[index]}@sha256:${"3".repeat(64)}`,
 			]);
-		const release = run({}, "v1.2.3");
+		const release = run({ GITHUB_REF: "refs/tags/v1.2.3" }, "v1.2.3");
 		assert.equal(release.status, 0, release.stderr);
 		const releaseCalls = (await readFile(log, "utf8"))
 			.trim()
@@ -95,11 +96,50 @@ if(args[1] === 'imagetools' && args[2] === 'inspect') console.log(JSON.stringify
 			.map(JSON.parse);
 		assert.deepEqual(
 			releaseCalls
-				.filter((args) => args[2] === "create")
-				.slice(-5)
+				.filter((args) => args[2] === "create" && args[4].endsWith(":v1.2.3"))
 				.map((args) => args[4]),
 			names.map((name) => `${prefix}/${name}:v1.2.3`),
 		);
+		const latestCalls = releaseCalls.filter(
+			(args) => args[2] === "create" && args[4].endsWith(":latest"),
+		);
+		assert.equal(latestCalls.length, 5);
+		const versionIndexes = release.stdout
+			.trim()
+			.split("\n")
+			.map(JSON.parse)
+			.filter((value) => value.reference.endsWith(":v1.2.3"));
+		const lastVersionReadback = releaseCalls.findLastIndex(
+			(args) => args[2] === "inspect" && args.at(-1).endsWith(":v1.2.3"),
+		);
+		for (const [index, args] of latestCalls.entries()) {
+			assert.deepEqual(args, [
+				"buildx",
+				"imagetools",
+				"create",
+				"--tag",
+				`${prefix}/${names[index]}:latest`,
+				`${prefix}/${names[index]}@${versionIndexes[index].digest}`,
+			]);
+			assert.ok(releaseCalls.indexOf(args) > lastVersionReadback);
+		}
+		for (const [tag, ref] of [
+			["v1.2.4-rc.1", "refs/tags/v1.2.4-rc.1"],
+			["v1.2.4", "refs/heads/main"],
+		]) {
+			await rm(log, { force: true });
+			const result = run({ GITHUB_REF: ref }, tag);
+			assert.equal(result.status, 0, result.stderr);
+			const calls = (await readFile(log, "utf8"))
+				.trim()
+				.split("\n")
+				.map(JSON.parse);
+			assert.ok(
+				!calls.some(
+					(args) => args[2] === "create" && args[4].endsWith(":latest"),
+				),
+			);
+		}
 		for (const mutate of [
 			(value) => {
 				value.commitSha = "9".repeat(40);
@@ -131,11 +171,32 @@ if(args[1] === 'imagetools' && args[2] === 'inspect') console.log(JSON.stringify
 		}
 
 		await writeFile(paths[1], JSON.stringify(receipts[1]));
-		const wrongIndex = run({ FAKE_WRONG_INDEX: "true" });
+		const wrongIndex = run(
+			{ FAKE_WRONG_INDEX: "true", GITHUB_REF: "refs/tags/v1.2.3" },
+			"v1.2.3",
+		);
 		assert.notEqual(wrongIndex.status, 0);
 		assert.match(
 			wrongIndex.stderr,
 			/published index differs from verified receipts/,
+		);
+		const failureCalls = (await readFile(log, "utf8"))
+			.trim()
+			.split("\n")
+			.map(JSON.parse);
+		assert.ok(
+			!failureCalls.some(
+				(args) => args[2] === "create" && args[4].endsWith(":latest"),
+			),
+		);
+		const wrongLatest = run(
+			{ FAKE_WRONG_LATEST: "true", GITHUB_REF: "refs/tags/v1.2.3" },
+			"v1.2.3",
+		);
+		assert.notEqual(wrongLatest.status, 0);
+		assert.match(
+			wrongLatest.stderr,
+			/latest differs from verified version index/,
 		);
 	} finally {
 		await rm(temp, { recursive: true, force: true });

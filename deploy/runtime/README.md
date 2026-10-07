@@ -49,7 +49,10 @@ main 只更新固定 Tag，不创建 commit SHA Tag；两个架构的中间 Tag 
 Web、Platform API、Worker、目录同步镜像只在 `v*` Tag 或显式手动设置
 `publish_platform=true` 时发布。版本 Tag 使用版本名，main 手动发布使用 `main`。
 例如推送 Git Tag `v1.2.3` 时，五个模板/base 镜像的版本引用均为 `:v1.2.3`；
-后续 `main` 或 `v1.2.4` 发布不覆盖 `:v1.2.3`。实际部署选择版本并固定其 Digest。
+后续 `main` 或 `v1.2.4` 发布不覆盖 `:v1.2.3`。稳定 Git Tag（`vMAJOR.MINOR.PATCH`）
+的所有版本索引校验通过后，将 `:latest` 更新到同一索引 Digest 并回读比对；例如稳定版本
+`v1.2.4` 成功发布后，`:latest` 与 `:v1.2.4` 指向相同 Digest。main 和 `v1.2.4-rc.1`
+等预发布 Tag 不更新 `latest`。实际部署选择版本并固定其 Digest。
 发布镜像不登记模板、不提升 readiness，也不代替各模板的真实模型或部署验收。
 
 ## 部署输入

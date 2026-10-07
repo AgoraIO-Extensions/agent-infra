@@ -34,6 +34,7 @@ async function main() {
 	const command = (args) => runCommand(docker, ["buildx", "imagetools", ...args], {
 		name: "Image index publication", timeoutMs: 10 * 60_000, trimOutput: false,
 	});
+	const verifiedIndexes = [];
 	for (const [repository, platforms] of images) {
 		const reference = `${repository}:${tag}`;
 		command(["create", "--tag", reference,
@@ -45,7 +46,19 @@ async function main() {
 			`${manifest.platform?.os}/${manifest.platform?.architecture}`, manifest.digest,
 		]));
 		assert.deepEqual([...actual].sort(), [...platforms].sort(), "published index differs from verified receipts");
-		console.info(JSON.stringify({commitSha, reference, digest: `sha256:${sha256(bytes)}`, platforms: Object.fromEntries(actual)}));
+		const digest = `sha256:${sha256(bytes)}`;
+		verifiedIndexes.push({repository, digest});
+		console.info(JSON.stringify({commitSha, reference, digest, platforms: Object.fromEntries(actual)}));
+	}
+	// A stable Git tag may promote latest only after every version index passes.
+	if (process.env.GITHUB_REF === `refs/tags/${tag}` && /^v[0-9]+\.[0-9]+\.[0-9]+$/.test(tag)) {
+		for (const {repository, digest} of verifiedIndexes) {
+			const reference = `${repository}:latest`;
+			command(["create", "--tag", reference, `${repository}@${digest}`]);
+			const bytes = command(["inspect", "--raw", reference]);
+			assert.equal(`sha256:${sha256(bytes)}`, digest, "latest differs from verified version index");
+			console.info(JSON.stringify({commitSha, sourceTag: tag, reference, digest}));
+		}
 	}
 }
 
