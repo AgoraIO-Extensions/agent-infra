@@ -184,15 +184,17 @@ export async function createProtectedStandardMcpInput(options: {
 					reference,
 					Date.now,
 				);
-				if (
-					!isDeepStrictEqual(current, original) ||
-					(await readProtectedStandardMcpBytes(
-						join(base, "bindings"),
-						`${key}.json`,
-						65_536,
-					)) !== metadataText
-				)
-					unavailable();
+				signal.throwIfAborted();
+				assertStandardMcpProcessProtection();
+				if (!isDeepStrictEqual(current, original)) unavailable();
+				const currentMetadata = await readProtectedStandardMcpBytes(
+					join(base, "bindings"),
+					`${key}.json`,
+					65_536,
+				);
+				signal.throwIfAborted();
+				assertStandardMcpProcessProtection();
+				if (currentMetadata !== metadataText) unavailable();
 				return validateStandardMcpInput(
 					{ ...publicInput, scope: current.scope, token },
 					reference,
