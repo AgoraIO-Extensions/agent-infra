@@ -36,6 +36,8 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/openapi/runtime-readiness.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/standard-template-release.v1.openapi.json",
 ];
+const gitArtifactMaxBufferBytes = 16 * 1024 * 1024;
+
 const unsupportedConstraintKeywords = [
 	"dependentSchemas",
 	"if",
@@ -1813,6 +1815,7 @@ function readMergeBaseArtifact(artifactRelativePath) {
 		execFileSync("git", ["show", `${mergeBase}:${artifactRelativePath}`], {
 			cwd: repositoryRoot,
 			encoding: "utf8",
+			maxBuffer: gitArtifactMaxBufferBytes,
 		}),
 	);
 }

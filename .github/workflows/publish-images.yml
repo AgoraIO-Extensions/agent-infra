@@ -24,11 +24,13 @@ concurrency:
 
 env:
   IMAGE_REPOSITORY_PREFIX: ghcr.io/agoraio-extensions/agent-infra
+  IMAGE_TAG: ${{ github.ref == 'refs/heads/main' && 'main' || github.ref_name }}
 
 jobs:
   infrastructure:
-    name: Infrastructure images (${{ matrix.platform }})
-    runs-on: ubuntu-24.04
+    name: Standard template images (${{ matrix.platform }})
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -36,8 +38,10 @@ jobs:
         include:
           - platform: linux/amd64
             architecture: amd64
+            runner: ubuntu-24.04
           - platform: linux/arm64
             architecture: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,58 +50,77 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5028 # v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
+      - name: Set up Docker OCI image store
+        uses: docker/setup-docker-action@e43656e248c0bd0647d3f5c195d116aacf6fcaf4 # v4
+        with:
+          daemon-config: |
+            {"features":{"containerd-snapshotter":true}}
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
-      - name: Build and publish infrastructure images
+      - name: Build and publish standard templates and custom base
         env:
           PLATFORM: ${{ matrix.platform }}
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          node deploy/release/build-images.mjs "$RUNNER_TEMP/infrastructure-images.json" \
-            --images=platformWorker,enterpriseDirectorySync,runtimeHost
+          node deploy/release/build-images.mjs "$RUNNER_TEMP/templates.json" \
+            --images=codex,claude,opencode,pi
           node deploy/release/build-images.mjs "$RUNNER_TEMP/custom-agent-base.json" \
             --custom-base-image
-      - name: Upload infrastructure receipts
+      - name: Upload template receipts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
           if-no-files-found: error
-          name: infrastructure-images-${{ matrix.architecture }}-${{ github.sha }}
+          name: template-images-${{ matrix.architecture }}-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/infrastructure-images.json
-            ${{ runner.temp }}/infrastructure-images.json.runtime-probe.json
+            ${{ runner.temp }}/templates.json
+            ${{ runner.temp }}/templates.json.runtime-probe.json
             ${{ runner.temp }}/custom-agent-base.json
 
   infrastructure-index:
-    name: Publish infrastructure indexes
+    name: Publish template indexes
     needs: infrastructure
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Download verified image receipts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: template-images-*-${{ github.sha }}
+          path: ${{ runner.temp }}/receipts
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
       - name: Publish multi-architecture indexes
         run: |
-          set -euo pipefail
-          for image in platform-worker enterprise-directory-sync agent-runtime-host custom-agent-base; do
-            docker buildx imagetools create \
-              --tag "$IMAGE_REPOSITORY_PREFIX/$image:sha-$GITHUB_SHA" \
-              "$IMAGE_REPOSITORY_PREFIX/$image:$GITHUB_SHA-linux-amd64" \
-              "$IMAGE_REPOSITORY_PREFIX/$image:$GITHUB_SHA-linux-arm64"
-            docker buildx imagetools inspect "$IMAGE_REPOSITORY_PREFIX/$image:sha-$GITHUB_SHA"
-          done
+          node deploy/release/publish-image-indexes.mjs "$IMAGE_TAG" \
+            agent-runtime-codex,agent-runtime-claude,agent-runtime-opencode,agent-runtime-pi,custom-agent-base \
+            "$RUNNER_TEMP/receipts"/*/templates.json \
+            "$RUNNER_TEMP/receipts"/*/custom-agent-base.json
 
   platform:
     name: Platform business images (${{ matrix.platform }})
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
       (github.event_name == 'workflow_dispatch' && inputs.publish_platform == true)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -105,8 +128,10 @@ jobs:
         include:
           - platform: linux/amd64
             architecture: amd64
+            runner: ubuntu-24.04
           - platform: linux/arm64
             architecture: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -115,9 +140,16 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5028 # v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
+      - name: Set up Docker OCI image store
+        uses: docker/setup-docker-action@e43656e248c0bd0647d3f5c195d116aacf6fcaf4 # v4
+        with:
+          daemon-config: |
+            {"features":{"containerd-snapshotter":true}}
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ github.token }}
@@ -128,7 +160,7 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           node deploy/release/build-images.mjs "$RUNNER_TEMP/platform-images.json" \
-            --images=web,platformApi
+            --images=web,platformApi,platformWorker,enterpriseDirectorySync
       - name: Upload Platform receipts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
         with:
@@ -145,17 +177,28 @@ jobs:
     needs: platform
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Download verified image receipts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: platform-images-*-${{ github.sha }}
+          path: ${{ runner.temp }}/receipts
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
       - name: Publish multi-architecture Platform indexes
         run: |
-          set -euo pipefail
-          for image in web platform-api; do
-            docker buildx imagetools create \
-              --tag "$IMAGE_REPOSITORY_PREFIX/$image:sha-$GITHUB_SHA" \
-              "$IMAGE_REPOSITORY_PREFIX/$image:$GITHUB_SHA-linux-amd64" \
-              "$IMAGE_REPOSITORY_PREFIX/$image:$GITHUB_SHA-linux-arm64"
-            docker buildx imagetools inspect "$IMAGE_REPOSITORY_PREFIX/$image:sha-$GITHUB_SHA"
-          done
+          node deploy/release/publish-image-indexes.mjs "$IMAGE_TAG" \
+            web,platform-api,platform-worker,enterprise-directory-sync \
+            "$RUNNER_TEMP/receipts"/*/platform-images.json

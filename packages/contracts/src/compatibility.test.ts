@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const cliPath = fileURLToPath(new URL("./compatibility.mjs", import.meta.url));
+const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const fixturePath = (name: string) =>
 	fileURLToPath(new URL(`../test/compatibility/${name}.json`, import.meta.url));
 const pilotBrowserArtifactPath = fileURLToPath(
@@ -106,6 +107,15 @@ function restorePreRelayKeyContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it("reads the current merge-base artifacts without child-process buffer failure", () => {
+		const result = spawnSync(process.execPath, [cliPath], {
+			cwd: repositoryRoot,
+			encoding: "utf8",
+		});
+		expect(result.status).toBe(0);
+		expect(result.stderr).toBe("");
+	});
+
 	it("admits only the known credential audit subject and preserves privacy and security", async () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),

@@ -219,6 +219,23 @@ export function validateWorkflowDocuments(workflows) {
       !publish?.jobs?.platform || !publish?.jobs?.["platform-index"]) {
     errors.push("Publish images must keep the GHCR jobs and minimal package permissions");
   }
+  const templates = publish?.jobs?.infrastructure;
+  const templateBuild = templates?.steps?.find((step) => step.run?.includes("--images="));
+  const templateMatrix = templates?.strategy?.matrix?.include;
+  if (publish?.env?.IMAGE_TAG !== "${{ github.ref == 'refs/heads/main' && 'main' || github.ref_name }}" ||
+      !templateBuild?.run?.includes("--images=codex,claude,opencode,pi") ||
+      !templateBuild?.run?.includes("--custom-base-image") ||
+      !sameObject(publish?.concurrency, {group: "publish-images-${{ github.ref }}", "cancel-in-progress": false}) ||
+      templates?.["runs-on"] !== "${{ matrix.runner }}" ||
+      JSON.stringify(templateMatrix) !== JSON.stringify([
+        {platform: "linux/amd64", architecture: "amd64", runner: "ubuntu-24.04"},
+        {platform: "linux/arm64", architecture: "arm64", runner: "ubuntu-24.04-arm"},
+      ]) ||
+      Object.values(publish?.jobs ?? {}).some((job) => (job.steps ?? []).some((step) =>
+        step.uses?.startsWith("actions/setup-node@") &&
+        step.uses !== "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020"))) {
+    errors.push("Publish images must publish standard templates with stable main tags and valid native build setup");
+  }
   return errors;
 }
 
