@@ -2054,9 +2054,88 @@ describe("published Relay authority migration", () => {
 					),
 			);
 			const afterCatalog = await relayCatalog();
+			const skillHubColumns = [
+				"skill_hub_agent_bindings:agent_id",
+				"skill_hub_agent_bindings:agent_version",
+				"skill_hub_agent_bindings:created_at",
+				"skill_hub_agent_bindings:failure_reason",
+				"skill_hub_agent_bindings:grant",
+				"skill_hub_agent_bindings:skill_version_id",
+				"skill_hub_agent_bindings:state",
+				"skill_hub_agent_bindings:sync_revision",
+				"skill_hub_agent_bindings:updated_at",
+				"skill_hub_installations:id",
+				"skill_hub_installations:installed_at",
+				"skill_hub_installations:need_upgrade",
+				"skill_hub_installations:principal_id",
+				"skill_hub_installations:principal_type",
+				"skill_hub_installations:skill_version_id",
+				"skill_hub_installations:state",
+				"skill_hub_installations:updated_at",
+				"skill_hub_skills:created_at",
+				"skill_hub_skills:id",
+				"skill_hub_skills:name",
+				"skill_hub_skills:owner_id",
+				"skill_hub_skills:status",
+				"skill_hub_skills:updated_at",
+				"skill_hub_versions:created_at",
+				"skill_hub_versions:id",
+				"skill_hub_versions:manifest_digest",
+				"skill_hub_versions:need_upgrade",
+				"skill_hub_versions:owner_id",
+				"skill_hub_versions:package_digest",
+				"skill_hub_versions:package_object_version",
+				"skill_hub_versions:provider",
+				"skill_hub_versions:review_reason",
+				"skill_hub_versions:reviewed_by",
+				"skill_hub_versions:revoked_at",
+				"skill_hub_versions:signature_digest",
+				"skill_hub_versions:skill_id",
+				"skill_hub_versions:state",
+				"skill_hub_versions:version",
+				"skill_hub_versions:visibility",
+			];
+			const skillHubChecks = [
+				"skill_hub_agent_bindings:skill_hub_agent_binding_failure_binding",
+				"skill_hub_agent_bindings:skill_hub_agent_binding_state_valid",
+				"skill_hub_agent_bindings:skill_hub_agent_binding_sync_revision_safe",
+				"skill_hub_agent_bindings:skill_hub_agent_binding_version_non_empty",
+				"skill_hub_installations:skill_hub_installation_id_non_empty",
+				"skill_hub_installations:skill_hub_installation_principal_non_empty",
+				"skill_hub_installations:skill_hub_installation_principal_type_valid",
+				"skill_hub_installations:skill_hub_installation_state_valid",
+				"skill_hub_skills:skill_hub_skill_id_non_empty",
+				"skill_hub_skills:skill_hub_skill_name_non_empty",
+				"skill_hub_skills:skill_hub_skill_owner_non_empty",
+				"skill_hub_skills:skill_hub_skill_status_valid",
+				"skill_hub_versions:skill_hub_version_id_non_empty",
+				"skill_hub_versions:skill_hub_version_manifest_digest_hex",
+				"skill_hub_versions:skill_hub_version_object_version_non_empty",
+				"skill_hub_versions:skill_hub_version_owner_non_empty",
+				"skill_hub_versions:skill_hub_version_package_digest_hex",
+				"skill_hub_versions:skill_hub_version_provider_valid",
+				"skill_hub_versions:skill_hub_version_review_binding",
+				"skill_hub_versions:skill_hub_version_signature_digest_hex",
+				"skill_hub_versions:skill_hub_version_state_valid",
+				"skill_hub_versions:skill_hub_version_visibility_valid",
+			];
+			const skillHubIndexes = [
+				"skill_hub_agent_bindings:skill_hub_agent_binding_agent_idx",
+				"skill_hub_agent_bindings:skill_hub_agent_binding_pk",
+				"skill_hub_installations:skill_hub_installation_principal_idx",
+				"skill_hub_installations:skill_hub_installation_principal_version_unique",
+				"skill_hub_installations:skill_hub_installations_pkey",
+				"skill_hub_skills:skill_hub_skill_id_owner_unique",
+				"skill_hub_skills:skill_hub_skill_owner_idx",
+				"skill_hub_skills:skill_hub_skill_owner_name_unique",
+				"skill_hub_skills:skill_hub_skills_pkey",
+				"skill_hub_versions:skill_hub_version_skill_version_unique",
+				"skill_hub_versions:skill_hub_version_state_idx",
+				"skill_hub_versions:skill_hub_versions_pkey",
+			];
 			const expectedDelta = {
-				columns:
-					kind === "original27"
+				columns: [
+					...(kind === "original27"
 						? [
 								"browser_sessions:principal",
 								"conversation_executions:execution_source",
@@ -2078,9 +2157,12 @@ describe("published Relay authority migration", () => {
 								"conversation_executions:principal_type",
 								"conversation_executions:sandbox_id",
 								"conversations:principal_type",
-							],
-				checks:
-					kind === "original27"
+							]),
+					"browser_sessions:absolute_expires_at",
+					...skillHubColumns,
+				],
+				checks: [
+					...(kind === "original27"
 						? [
 								"conversation_events:conversation_event_source_binding",
 								"conversation_executions:conversation_execution_key_binding",
@@ -2096,20 +2178,26 @@ describe("published Relay authority migration", () => {
 								"conversation_executions:conversation_execution_task_wait_binding",
 								"conversation_generation_tombstones:conversation_generation_tombstone_principal_valid",
 								"conversations:conversation_principal_type_valid",
-							],
-				indexes:
-					kind === "original27"
+							]),
+					...skillHubChecks,
+				],
+				indexes: [
+					...(kind === "original27"
 						? [
 								"conversation_executions:conversation_execution_agent_wait_idx",
 								"conversation_executions:conversation_execution_task_wait_order_unique",
 								"conversations:conversation_principal_binding_unique",
 							]
-						: ["conversations:conversation_principal_binding_unique"],
+						: ["conversations:conversation_principal_binding_unique"]),
+					"browser_sessions:browser_sessions_absolute_expires_at",
+					...skillHubIndexes,
+				],
 				enums:
 					kind === "original27"
 						? ["conversation_execution_status:waiting"]
 						: [],
 			};
+
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,
 				columns: [
