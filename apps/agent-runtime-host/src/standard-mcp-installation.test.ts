@@ -40,8 +40,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 	return {
 		...fs,
 		open: async (...args: Parameters<typeof fs.open>) => {
-			const path = String(args[0]);
 			const file = await fs.open(...args);
+			// Linux opens files relative to a verified directory FD. Classify the
+			// real opened location so /proc/self/fd aliases cannot skip a fault.
+			const path = await fs.realpath(String(args[0]));
 			if (path.includes("standard-mcp-export") && path.endsWith(".token")) {
 				faults.materialOpens++;
 				await faults.mutate?.();
@@ -123,6 +125,7 @@ it("publishes durable separated input and resolves only its authenticated origin
 	const env = await setup();
 	const receipt = await receiveProtectedStandardMcpInstallation(env.options);
 	expect(receipt.status).toBe("available");
+	expect(faults.materialOpens).toBeGreaterThan(0);
 	const input = await createProtectedStandardMcpInput({
 		...env.options,
 		store: env.store,
@@ -149,6 +152,13 @@ it("publishes durable separated input and resolves only its authenticated origin
 			"utf8",
 		),
 	).not.toContain(token);
+	for (const phase of [
+		"material-sync",
+		"metadata-sync",
+		"metadata-rename",
+		"metadata-directory-sync",
+	])
+		expect(faults.events).toContain(phase);
 	expect(faults.events.indexOf("material-sync")).toBeLessThan(
 		faults.events.indexOf("metadata-sync"),
 	);
@@ -185,6 +195,7 @@ it.each(["parent-directory-sync", "initial-directory-sync", "lock-sync"])(
 		});
 		expect(faults.materialOpens).toBe(0);
 		expect(faults.renamed).toBe(false);
+		expect(faults.events).toContain(failure);
 	},
 );
 
@@ -262,6 +273,7 @@ it("rejects changed source metadata across the material read", async () => {
 		status: "unavailable",
 	});
 	expect(faults.renamed).toBe(false);
+	expect(faults.materialOpens).toBe(1);
 });
 
 it("rejects different material or instance under the same credential revision", async () => {
@@ -321,6 +333,7 @@ it.each([
 			revision: next.revision,
 		});
 		expect(receipt).toEqual({ status: "unavailable" });
+		expect(faults.events).toContain(failure);
 		const stored = JSON.parse(
 			await readFile(
 				join(
