@@ -1,3 +1,4 @@
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type { SessionSandboxDeletionProgressV1 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
@@ -5,6 +6,12 @@ import type {
 	V1Pod,
 } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
+import {
+	createRuntimeConnectionConsumerSnapshotV1,
+	runtimeConnectionConsumerAnnotation,
+	runtimeConnectionConsumerFileEnvironment,
+} from "./connection-consumer-projection.js";
+import { runtimeTlsSecretFixture } from "./kubernetes.fixture.js";
 import type {
 	WorkerKubernetesClientV1,
 	WorkloadResourceKind,
@@ -18,6 +25,12 @@ import {
 const api = () => {
 	const resources = new Map<string, KubernetesObject>();
 	const key = (kind: string, name: string) => `${kind}/${name}`;
+	resources.set(
+		"Secret/sandbox-sandbox-a-tls",
+		runtimeTlsSecretFixture("sandbox-sandbox-a-tls", "session-a", [
+			"sandbox-sandbox-a.workload-test.svc",
+		]),
+	);
 	const client: WorkerKubernetesClientV1 & {
 		deleteResult: NonNullable<WorkerKubernetesClientV1["deleteResult"]>;
 	} = {
@@ -85,6 +98,7 @@ const allocation: SessionSandboxAllocationV1 = {
 	namespace: "workload-test",
 	podName: "sandbox-sandbox-a",
 	serviceName: "sandbox-sandbox-a",
+	runtimeTlsSecretName: "sandbox-sandbox-a-tls",
 	serviceAccountName: "sandbox-sandbox-a",
 	pvcName: "sandbox-sandbox-a",
 	networkPolicyName: "sandbox-sandbox-a",
@@ -102,6 +116,103 @@ const allocation: SessionSandboxAllocationV1 = {
 };
 
 describe("session sandbox workload adapter", () => {
+	it("projects a complete approved file on the real Session Pod and rejects drift without changing cleanup authority", async () => {
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "platform-consumer",
+			audience: "connection-resource",
+			egressProfile: { ref: "approved-egress", revision: "r1" },
+		};
+		const snapshot = createRuntimeConnectionConsumerSnapshotV1(profile, {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			egressEnforced: true,
+			source: { ref: "approved-deployment", revision: "r1" },
+		});
+		const selected = { ...allocation, connectionConsumerSnapshot: snapshot };
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(selected);
+		const pod = await client.read<V1Pod>("Pod", selected.podName);
+		if (!pod?.spec || !pod.metadata) throw new Error("Missing fixture Pod");
+		expect(
+			pod.metadata.annotations?.[runtimeConnectionConsumerAnnotation],
+		).toBe(snapshot);
+		expect(pod.spec.containers[0]?.env).toContainEqual({
+			name: runtimeConnectionConsumerFileEnvironment,
+			value: "/var/run/agent-infra/connection-consumer/snapshot.json",
+		});
+		expect(
+			pod.spec.containers[0]?.volumeMounts?.find(
+				(item) => item.name === "connection-consumer",
+			)?.readOnly,
+		).toBe(true);
+		pod.status = {
+			phase: "Running",
+			conditions: [{ type: "Ready", status: "True" }],
+		};
+		expect((await adapter.observe(selected)).status).toBe("ready");
+		const updatedApproval = {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			egressEnforced: true,
+			source: { ref: "approved-deployment", revision: "r2" },
+		};
+		const updatedSnapshot = createRuntimeConnectionConsumerSnapshotV1(
+			profile,
+			updatedApproval,
+		);
+		pod.metadata.annotations = {
+			...pod.metadata.annotations,
+			[runtimeConnectionConsumerAnnotation]: updatedSnapshot ?? "",
+		};
+		// Downward API may update the file, but it cannot change the old process's
+		// immutable PodSpec revision or captured Host snapshot.
+		expect(
+			(
+				await adapter.observe({
+					...selected,
+					connectionConsumerSnapshot: updatedSnapshot,
+				})
+			).status,
+		).toBe("unknown");
+		pod.metadata.annotations = {
+			...pod.metadata.annotations,
+			[runtimeConnectionConsumerAnnotation]: "{}",
+		};
+		expect((await adapter.observe(selected)).status).toBe("unknown");
+		await expect(adapter.apply(selected)).rejects.toThrow();
+		const previous = (await adapter.observe(selected)).resources;
+		const unavailable = {
+			...selected,
+			connectionConsumerSnapshot: null,
+			env: {
+				...selected.env,
+				[runtimeConnectionConsumerFileEnvironment]: "/invalid-current-config",
+			},
+		};
+		const controlObservation = await adapter.observe(
+			unavailable,
+			previous,
+			"control",
+		);
+		expect(controlObservation.status).toBe("observed");
+		expect(controlObservation.resources).toHaveLength(5);
+		await adapter.cleanup(unavailable, previous, {
+			recordDeletionProgress: async () => "committed",
+		});
+		expect(await client.read("Pod", selected.podName)).toBeNull();
+	});
+	it("rejects a Session env file override before Pod creation", () => {
+		expect(() =>
+			sessionSandboxResourcesV1({
+				...allocation,
+				env: { [runtimeConnectionConsumerFileEnvironment]: "/caller" },
+			}),
+		).toThrow();
+	});
 	it("renders one Pod, Service, SA, retained PVC and isolated NetworkPolicy with allocation fence", () => {
 		const resources = sessionSandboxResourcesV1(allocation);
 		expect(resources.map((resource) => resource.kind)).toEqual([
@@ -128,6 +239,62 @@ describe("session sandbox workload adapter", () => {
 			{ ports: [{ port: 8080 }] },
 		]);
 		expect(resources[2].spec?.egress).toEqual([]);
+	});
+
+	it("keeps two Session allocations fully disjoint under one Agent", () => {
+		const second: SessionSandboxAllocationV1 = {
+			...allocation,
+			sessionId: "session-b",
+			sandboxId: "sandbox-b",
+			principal: { kind: "user", id: "actor-b" },
+			channelId: "api",
+			resourceName: "sandbox-sandbox-b",
+			workspaceScope: "sandbox-b",
+			generation: 1,
+			resourceFence: 12,
+			podName: "sandbox-sandbox-b",
+			serviceName: "sandbox-sandbox-b",
+			serviceAccountName: "sandbox-sandbox-b",
+			pvcName: "sandbox-sandbox-b",
+			networkPolicyName: "sandbox-sandbox-b",
+			env: { SESSION_ID: "session-b" },
+		};
+		const firstResources = sessionSandboxResourcesV1(allocation);
+		const secondResources = sessionSandboxResourcesV1(second);
+		const firstNames = new Set(
+			firstResources.map(
+				(resource) => `${resource.kind}/${resource.metadata?.name}`,
+			),
+		);
+		const secondNames = new Set(
+			secondResources.map(
+				(resource) => `${resource.kind}/${resource.metadata?.name}`,
+			),
+		);
+		expect([...firstNames].filter((name) => secondNames.has(name))).toEqual([]);
+		expect(firstResources[1].spec?.volumeMode).toBeUndefined();
+		expect(firstResources[4].spec?.containers[0]?.workingDir).toBe(
+			"/workspace",
+		);
+		expect(secondResources[4].spec?.containers[0]?.workingDir).toBe(
+			"/workspace",
+		);
+		expect(firstResources[2].spec?.podSelector).toEqual({
+			matchLabels: firstResources[4].metadata?.labels,
+		});
+		expect(secondResources[2].spec?.podSelector).toEqual({
+			matchLabels: secondResources[4].metadata?.labels,
+		});
+		expect(firstResources[4].spec?.volumes?.[0]?.persistentVolumeClaim).toEqual(
+			{
+				claimName: allocation.pvcName,
+			},
+		);
+		expect(
+			secondResources[4].spec?.volumes?.[0]?.persistentVolumeClaim,
+		).toEqual({
+			claimName: second.pvcName,
+		});
 	});
 
 	it("reconciles an unknown attempt from absence without changing its identity", async () => {
@@ -255,6 +422,68 @@ describe("session sandbox workload adapter", () => {
 		await expect(
 			adapter.apply({ ...allocation, resourceFence: 8 }),
 		).rejects.toMatchObject({ code: "conflict" });
+	});
+
+	it("fails closed when the Session leaf SAN is for another Service", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		(
+			client as typeof client & { resources: Map<string, KubernetesObject> }
+		).resources.set(
+			"Secret/sandbox-sandbox-a-tls",
+			runtimeTlsSecretFixture("sandbox-sandbox-a-tls", "session-a", [
+				"other-sandbox.workload-test.svc",
+			]),
+		);
+		await expect(adapter.observe(allocation)).resolves.toMatchObject({
+			status: "unknown",
+		});
+	});
+
+	it("fails closed when the Session leaf Secret is absent", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		(
+			client as typeof client & { resources: Map<string, KubernetesObject> }
+		).resources.delete("Secret/sandbox-sandbox-a-tls");
+		await expect(adapter.observe(allocation)).resolves.toMatchObject({
+			status: "unknown",
+		});
+	});
+
+	it("retains a matching allocated Service without replacing it during an unready Pod retry", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const service = await client.read<
+			import("@kubernetes/client-node").V1Service
+		>("Service", allocation.serviceName);
+		if (!service?.spec) throw new Error("Missing fixture Service");
+		Object.assign(service.spec, {
+			clusterIP: "10.43.0.17",
+			clusterIPs: ["10.43.0.17"],
+			ipFamilies: ["IPv4"],
+			ipFamilyPolicy: "SingleStack",
+		});
+		const before = structuredClone(service);
+		const retry = createSessionSandboxWorkloadAdapterV1({
+			client: {
+				...client,
+				async replace(object) {
+					if (object.kind === "Service")
+						throw new Error("K3s Service replace 409");
+					return client.replace(object);
+				},
+			},
+		});
+		await expect(retry.apply(allocation)).resolves.toMatchObject({
+			sandboxId: allocation.sandboxId,
+		});
+		expect(await client.read("Service", allocation.serviceName)).toEqual(
+			before,
+		);
 	});
 
 	it("records each resource identity and blocks UID drift before any mutation", async () => {
@@ -492,6 +721,38 @@ describe("session sandbox workload adapter", () => {
 				const port = pod.spec?.containers[0]?.ports?.[0];
 				if (!port) throw new Error("missing container port");
 				port.containerPort = 9090;
+			},
+		],
+		[
+			"host port",
+			(pod: V1Pod) => {
+				const port = pod.spec?.containers[0]?.ports?.[0];
+				if (!port) throw new Error("missing container port");
+				port.hostPort = 8080;
+			},
+		],
+		[
+			"host IP",
+			(pod: V1Pod) => {
+				const port = pod.spec?.containers[0]?.ports?.[0];
+				if (!port) throw new Error("missing container port");
+				port.hostIP = "127.0.0.1";
+			},
+		],
+		[
+			"readiness probe scheme",
+			(pod: V1Pod) => {
+				const probe = pod.spec?.containers[0]?.readinessProbe;
+				if (!probe?.httpGet) throw new Error("missing readiness probe");
+				probe.httpGet.scheme = "HTTP";
+			},
+		],
+		[
+			"readiness probe timeout",
+			(pod: V1Pod) => {
+				const probe = pod.spec?.containers[0]?.readinessProbe;
+				if (!probe) throw new Error("missing readiness probe");
+				probe.timeoutSeconds = 2;
 			},
 		],
 	] as const)("rejects owned Pod %s drift", async (_field, mutate) => {

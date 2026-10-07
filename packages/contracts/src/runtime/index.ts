@@ -1,3 +1,4 @@
+export * from "./browser-capability.ts";
 export * from "./configuration.ts";
 export * from "./configuration-v4.ts";
 export * from "./driver.ts";

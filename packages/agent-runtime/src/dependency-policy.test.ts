@@ -13,7 +13,7 @@ const forbiddenImports = [
 ];
 
 describe("agent-runtime dependency direction", () => {
-	it("depends only on wire contracts, the official Claude, ACP and Pi packages, JSON Schema validation and the SSE parser at runtime", async () => {
+	it("depends only on approved Runtime protocol and browser packages at runtime", async () => {
 		const packageJson = JSON.parse(
 			await readFile(new URL("../package.json", import.meta.url), "utf8"),
 		) as { dependencies?: Record<string, string> };
@@ -22,10 +22,15 @@ describe("agent-runtime dependency direction", () => {
 			"@agent-infra/contracts",
 			"@agentclientprotocol/sdk",
 			"@anthropic-ai/claude-agent-sdk",
-			"ajv",
 			"@earendil-works/pi-coding-agent",
+			"@modelcontextprotocol/sdk",
+			"ajv",
 			"eventsource-parser",
+			"playwright-core",
 		]);
+		expect(packageJson.dependencies?.["@modelcontextprotocol/sdk"]).toBe(
+			"1.30.0",
+		);
 	});
 
 	it("keeps Platform, identity, Connection, and deployment modules out of production imports", async () => {
@@ -47,9 +52,14 @@ describe("agent-runtime dependency direction", () => {
 		for (const forbidden of forbiddenImports) {
 			expect(
 				imports.some((specifier) =>
-					forbidden === "connection"
-						? /(?:^|\/)connection(?:[-/]|$)/.test(specifier)
-						: specifier.includes(forbidden),
+					// The canonical shared Consumer type is a contracts subpath, not
+					// a Connection domain/adapter import (Spec §13.5.4 and HLD §12.1).
+					forbidden === "connection" &&
+					specifier === "@agent-infra/contracts/connection-consumer-profile"
+						? false
+						: forbidden === "connection"
+							? /(?:^|\/)connection(?:[-/]|$)/.test(specifier)
+							: specifier.includes(forbidden),
 				),
 				`forbidden runtime import: ${forbidden}`,
 			).toBe(false);

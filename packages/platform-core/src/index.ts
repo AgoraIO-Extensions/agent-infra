@@ -53,6 +53,7 @@ export * from "./application-material-grant.js";
 export * from "./application-registration.js";
 export * from "./application-revision.js";
 export * from "./audit-query.js";
+export * from "./conversation-browser-action.js";
 export * from "./conversation-dispatch.js";
 export { decideConversationDispatchCapacityV1 } from "./conversation-dispatch-capacity.js";
 export * from "./conversation-events.js";
@@ -115,6 +116,7 @@ export {
 } from "./session-sandbox.js";
 export * from "./session-sandbox-lifecycle.js";
 export * from "./session-sandbox-reconciliation.js";
+export * from "./skill-hub.js";
 export * from "./task-api-audit.js";
 export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";

@@ -1,7 +1,6 @@
 **/node_modules
 .git
-.vulnerability-scan
-.trivy-tool
+.ci-images
 
 **/dist
 **/build

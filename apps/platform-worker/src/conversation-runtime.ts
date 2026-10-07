@@ -1,10 +1,18 @@
 import type { KeyObject } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
 
 import type {
 	RuntimeBusinessCommandV2,
+	RuntimeBusinessRequestV4,
 	RuntimeControlCommandV2,
 	RuntimeControlReasonV2,
+	RuntimeEventAckRequestV4,
+	RuntimeEventReadRequestV4,
+} from "@agent-infra/contracts/runtime";
+import {
+	RuntimeEventAckRequestV4Schema,
+	RuntimeEventReadRequestV4Schema,
 } from "@agent-infra/contracts/runtime";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import {
@@ -27,11 +35,21 @@ import {
 	type TaskUserDirectoryV1,
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
+import type { RelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
 
 import { createWorkerRuntimeGrantSignerV2 } from "./runtime-grant-signer.js";
-import { createWorkerRuntimeHostClientV3 } from "./runtime-host-client.js";
+import { createWorkerRuntimeGrantSignerV4 } from "./runtime-grant-signer-v4.js";
+import {
+	createWorkerRuntimeHostClientV3,
+	createWorkerRuntimeHostClientV4,
+	type WorkerExecutionKeyReaderV4,
+} from "./runtime-host-client.js";
 
-export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1;
+export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1 & {
+	/** Immutable Store pin; absent on historical, Key-free control recovery. */
+	readonly runtimeSubmitProtocol?: string;
+	readonly originalSubmitHostSessionRef?: string | null;
+};
 
 export interface ConversationTaskAuthorizationStoreV2 {
 	readExecution(
@@ -106,7 +124,10 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly baseUrl: string;
 		readonly serviceToken: string;
 		readonly workerId: string;
+		readonly connectionConsumer?: ApprovedConnectionConsumerTargetV1;
 	}>;
+	readonly executionKeys?: WorkerExecutionKeyReaderV4;
+	readonly relayKeyDecryptor?: RelayKeyWorkerDecryptorV1;
 	readonly fetch?: typeof fetch;
 	readonly reconnectDelayMs?: number;
 	readonly signal?: AbortSignal;
@@ -170,8 +191,38 @@ export function createConversationRuntimeV2(
 		? AbortSignal.any([controller.signal, options.signal])
 		: controller.signal;
 	const signRequest = createWorkerRuntimeGrantSignerV2(options.signing);
+	const signV4 = createWorkerRuntimeGrantSignerV4(options.signing);
 	const combined = (signal?: AbortSignal) =>
 		signal ? AbortSignal.any([lifetime, signal]) : lifetime;
+
+	const keyDependencies = new Set<Promise<unknown>>();
+	function trackKeyDependency<T>(work: () => Promise<T>): Promise<T> {
+		if (lifetime.aborted)
+			throw new ConversationRuntimeHostError("RUNTIME_INTERRUPTED", true);
+		const promise = work();
+		keyDependencies.add(promise);
+		void promise.then(
+			() => keyDependencies.delete(promise),
+			() => keyDependencies.delete(promise),
+		);
+		return promise;
+	}
+	const originalExecutionKeys = options.executionKeys;
+	const executionKeys: WorkerExecutionKeyReaderV4 | undefined =
+		originalExecutionKeys && {
+			readAcceptedExecution: (request) =>
+				trackKeyDependency(() =>
+					originalExecutionKeys.readAcceptedExecution(request),
+				),
+			readCiphertext: (binding) =>
+				trackKeyDependency(() => originalExecutionKeys.readCiphertext(binding)),
+		};
+	const originalDecryptor = options.relayKeyDecryptor;
+	const decryptor: RelayKeyWorkerDecryptorV1 | undefined =
+		originalDecryptor && {
+			decrypt: (input) =>
+				trackKeyDependency(() => originalDecryptor.decrypt(input)),
+		};
 
 	const legacyControlStore = options.legacyControlStore;
 	const resolveCurrentApplication = options.resolveCurrentApplication;
@@ -383,8 +434,7 @@ export function createConversationRuntimeV2(
 		);
 		if (
 			postTarget.workerId !== options.signing.workerId ||
-			postTarget.baseUrl !== finalTarget.baseUrl ||
-			postTarget.serviceToken !== finalTarget.serviceToken
+			!isDeepStrictEqual(postTarget, finalTarget)
 		)
 			unavailable("RUNTIME_ROUTE_STALE");
 		state = await stateFor(context, signal);
@@ -435,12 +485,233 @@ export function createConversationRuntimeV2(
 		};
 		return {
 			context,
-			state,
+			state: structuredClone(state) as ConversationRuntimeStateV2,
 			authority,
 			client,
 			base,
-			route: afterTargetRoute.record,
+			target: postTarget,
+			route: structuredClone(afterTargetRoute.record),
 		};
+	}
+	function customBusiness(prepared: Awaited<ReturnType<typeof prepare>>) {
+		const source = prepared.route.workload?.candidate.configuration.source;
+		if (
+			prepared.state.runtimeSubmitProtocol !== undefined &&
+			prepared.state.runtimeSubmitProtocol !== "v2" &&
+			prepared.state.runtimeSubmitProtocol !== "v4"
+		)
+			unavailable("RELAY_KEY_UNAVAILABLE");
+		if (source?.kind === "standard") {
+			// The persisted Store protocol is the V4 rollout authority. Historical
+			// or V2 records must never fall back to a static business Key.
+			if (prepared.state.runtimeSubmitProtocol === "v4") return false;
+			unavailable("RELAY_KEY_UNAVAILABLE");
+		}
+		if (
+			source?.kind !== "custom" ||
+			source.interactionMode !== "platform-adapter"
+		)
+			unavailable("RUNTIME_WORKLOAD_UNAVAILABLE");
+		if (
+			prepared.state.runtimeSubmitProtocol === "v4" ||
+			prepared.context.claim.executionSource != null ||
+			prepared.context.claim.relayKeyBinding != null
+		)
+			unavailable("RUNTIME_REQUEST_INVALID");
+		return true;
+	}
+	function keyedIdentity(prepared: Awaited<ReturnType<typeof prepare>>) {
+		const claim = prepared.context.claim;
+		const binding = claim.relayKeyBinding;
+		if (
+			prepared.state.runtimeSubmitProtocol !== "v4" ||
+			!claim.executionSource ||
+			!binding
+		)
+			unavailable("RELAY_KEY_UNAVAILABLE");
+		return {
+			executionSource: claim.executionSource,
+			keyBinding: {
+				purpose: binding.purpose,
+				subjectId: binding.subjectId,
+				ciphertextRef: binding.keyId,
+				version: binding.keyVersion,
+			},
+		};
+	}
+	async function assertCurrentPrepared(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		command: Command,
+		signal: AbortSignal,
+	) {
+		const state = await stateFor(prepared.context, signal);
+		const decision = await current(prepared.context, state, command, signal);
+		if (!isDeepStrictEqual(decision.authority, prepared.authority))
+			unavailable("RUNTIME_ROUTE_STALE");
+		if (!isDeepStrictEqual(decision.record, prepared.route))
+			unavailable("RUNTIME_ROUTE_STALE");
+		const target = await bounded(
+			options.resolveRuntimeHost({
+				agentId: prepared.context.claim.agentId,
+				conversationId: prepared.context.claim.conversationId,
+				actorId: prepared.context.claim.actorId,
+				channelId: prepared.context.claim.channelId,
+				principal: prepared.context.claim.principal,
+				sessionGeneration: prepared.context.claim.sessionGeneration,
+				deliveryFence: prepared.context.claim.deliveryFence,
+				signal,
+				workload: decision.record.workload,
+				sandboxResource: state.sandboxResource,
+				purpose: decision.authority.purpose,
+				command,
+			}),
+			signal,
+		);
+		if (!isDeepStrictEqual(target, prepared.target))
+			unavailable("RUNTIME_ROUTE_STALE");
+		const latestState = await stateFor(prepared.context, signal);
+		const latest = await current(
+			prepared.context,
+			latestState,
+			command,
+			signal,
+		);
+		if (
+			!isDeepStrictEqual(latest.authority, prepared.authority) ||
+			!isDeepStrictEqual(latest.record, prepared.route)
+		)
+			unavailable("RUNTIME_ROUTE_STALE");
+		// The last await revalidates the owned lease/fence after directory and route waits.
+		const fenced = await stateFor(prepared.context, signal);
+		if (!isDeepStrictEqual(fenced, prepared.state))
+			unavailable("RUNTIME_FENCE_STALE");
+		signal.throwIfAborted();
+	}
+	function v4Client(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		command: Command,
+		signal: AbortSignal,
+	) {
+		const claim = prepared.context.claim;
+		return createWorkerRuntimeHostClientV4({
+			...prepared.target,
+			fetch: options.fetch,
+			verifyGrant: signV4.verify,
+			executionKeys,
+			decryptor,
+			...(claim.modelOptionId && claim.reasoningLevel
+				? {
+						selection: {
+							schemaVersion: 1 as const,
+							modelOptionId: claim.modelOptionId,
+							reasoningLevel: claim.reasoningLevel,
+						},
+					}
+				: {}),
+			assertCurrentAuthorization: () =>
+				assertCurrentPrepared(prepared, command, signal),
+		});
+	}
+	async function dispatchBusinessV4(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		signal: AbortSignal,
+	) {
+		const { context, state, authority, base } = prepared;
+		if (authority.purpose !== "business")
+			denied("TASK_AUTHORIZATION_CONTROL_ONLY");
+		const claim = context.claim;
+		if (!claim.input || !claim.modelOptionId || !claim.reasoningLevel)
+			unavailable("RUNTIME_REQUEST_INVALID");
+		const identity = keyedIdentity(prepared);
+		const submit = claim.operation !== "conversation.turn.supplement.v1";
+		if (submit && state.originalSubmitHostSessionRef === undefined)
+			unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+		if (!submit && (!state.hostSessionRef || !claim.messageId))
+			unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+		const unsigned: RuntimeBusinessRequestV4 = submit
+			? {
+					...base,
+					schemaVersion: 4,
+					...identity,
+					hostSessionRef: state.originalSubmitHostSessionRef as string | null,
+					input: { ...claim.input, attachments: [...claim.input.attachments] },
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: claim.modelOptionId,
+						reasoningLevel: claim.reasoningLevel,
+					},
+					grant: {
+						schemaVersion: 4,
+						format: "runtime-execution-jws",
+						token: "unsigned.unsigned.unsigned",
+					},
+				}
+			: {
+					...base,
+					schemaVersion: 4,
+					...identity,
+					hostSessionRef: state.hostSessionRef as string,
+					operation: {
+						kind: "message",
+						id: claim.messageId as string,
+						deliveryFence: claim.deliveryFence,
+						executionDeliveryFence: claim.executionDeliveryFence,
+					},
+					input: { ...claim.input, attachments: [...claim.input.attachments] },
+					grant: {
+						schemaVersion: 4,
+						format: "runtime-execution-jws",
+						token: "unsigned.unsigned.unsigned",
+					},
+				};
+		const command = submit ? "turn.submit" : "turn.supplement";
+		const client = v4Client(prepared, command, signal);
+		const request = {
+			...unsigned,
+			grant: signV4.sign(unsigned, authority.authorizationRecordId),
+		};
+		const response = await (submit
+			? client.submitTurn(request, signal)
+			: client.supplement(request, signal));
+		return { ...response, schemaVersion: submit ? (2 as const) : (1 as const) };
+	}
+	async function* readPreparedEvents(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		signal: AbortSignal,
+	) {
+		const { state, authority, client, base } = prepared;
+		if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+		const body = {
+			...base,
+			hostSessionRef: state.hostSessionRef,
+			consumer: "platform_worker_persistence" as const,
+			afterCursor: state.runtimeCursor,
+		};
+		if (state.runtimeSubmitProtocol !== "v4") {
+			yield* client.events(
+				{ ...body, grant: signRequest(body, authority, "events.persist") },
+				signal,
+			);
+			return;
+		}
+		const request: RuntimeEventReadRequestV4 =
+			RuntimeEventReadRequestV4Schema.parse({
+				...body,
+				schemaVersion: 4,
+				...keyedIdentity(prepared),
+				grant: {
+					schemaVersion: 2,
+					format: "runtime-execution-jws",
+					token: "unsigned.unsigned.unsigned",
+				},
+			});
+		const grant = await signV4.signEvent(request, authority);
+		const replay = await v4Client(
+			prepared,
+			"events.persist",
+			signal,
+		).readEvents({ ...request, grant }, signal);
+		yield* replay.events;
 	}
 	async function latch(
 		prepared: Awaited<ReturnType<typeof prepare>>,
@@ -586,6 +857,8 @@ export function createConversationRuntimeV2(
 				denied();
 			}
 			if (request.operation === "turn.submit") {
+				if (!customBusiness(prepared))
+					return dispatchBusinessV4(prepared, active);
 				if (!context.claim.input) unavailable("RUNTIME_REQUEST_INVALID");
 				const body = {
 					...base,
@@ -617,6 +890,8 @@ export function createConversationRuntimeV2(
 					request.messageId !== context.claim.messageId
 				)
 					unavailable("RUNTIME_REQUEST_INVALID");
+				if (!customBusiness(prepared))
+					return dispatchBusinessV4(prepared, active);
 				const body = {
 					...base,
 					hostSessionRef: state.hostSessionRef,
@@ -697,27 +972,14 @@ export function createConversationRuntimeV2(
 		},
 		async *drainGenerationEvents(request, signal) {
 			const active = combined(signal);
-			const { state, authority, client, base } = await prepare(
-				request,
-				"events.persist",
-				active,
-			);
+			const prepared = await prepare(request, "events.persist", active);
 			if (
-				!state.generationIsolation ||
-				!state.hostSessionRef ||
-				authority.purpose !== "control"
+				!prepared.state.generationIsolation ||
+				!prepared.state.hostSessionRef ||
+				prepared.authority.purpose !== "control"
 			)
 				denied("TASK_AUTHORIZATION_CONTROL_ONLY");
-			const body = {
-				...base,
-				hostSessionRef: state.hostSessionRef,
-				consumer: "platform_worker_persistence" as const,
-				afterCursor: state.runtimeCursor,
-			};
-			yield* client.events(
-				{ ...body, grant: signRequest(body, authority, "events.persist") },
-				active,
-			);
+			yield* readPreparedEvents(prepared, active);
 		},
 		recoverOriginalStatus: recover,
 		recoverStatus: recover,
@@ -744,11 +1006,8 @@ export function createConversationRuntimeV2(
 		},
 		async acknowledge(request, signal) {
 			const active = combined(signal);
-			const { state, authority, client, base } = await prepare(
-				request,
-				"events.ack",
-				active,
-			);
+			const prepared = await prepare(request, "events.ack", active);
+			const { state, authority, client, base } = prepared;
 			if (state.runtimeCursor !== request.confirmedCursor) return;
 			if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
 			const body = {
@@ -757,8 +1016,28 @@ export function createConversationRuntimeV2(
 				consumer: "platform_worker_persistence" as const,
 				confirmedCursor: request.confirmedCursor,
 			};
-			await client.acknowledgeEvents(
-				{ ...body, grant: signRequest(body, authority, "events.ack") },
+			if (state.runtimeSubmitProtocol !== "v4") {
+				await client.acknowledgeEvents(
+					{ ...body, grant: signRequest(body, authority, "events.ack") },
+					active,
+				);
+				return;
+			}
+			const v4: RuntimeEventAckRequestV4 = RuntimeEventAckRequestV4Schema.parse(
+				{
+					...body,
+					schemaVersion: 4,
+					...keyedIdentity(prepared),
+					grant: {
+						schemaVersion: 2,
+						format: "runtime-execution-jws",
+						token: "unsigned.unsigned.unsigned",
+					},
+				},
+			);
+			const grant = await signV4.signEvent(v4, authority);
+			await v4Client(prepared, "events.ack", active).acknowledgeEvents(
+				{ ...v4, grant },
 				active,
 			);
 		},
@@ -766,25 +1045,13 @@ export function createConversationRuntimeV2(
 			const active = combined(signal);
 			for (;;) {
 				active.throwIfAborted();
-				const { state, authority, client, base } = await prepare(
-					request,
-					"events.persist",
-					active,
-				);
+				const prepared = await prepare(request, "events.persist", active);
+				const { state, authority } = prepared;
 				if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
-				const body = {
-					...base,
-					hostSessionRef: state.hostSessionRef,
-					consumer: "platform_worker_persistence" as const,
-					afterCursor: state.runtimeCursor,
-				};
 				let terminal = false;
 				let streamFailure: ConversationRuntimeHostError | undefined;
 				try {
-					for await (const event of client.events(
-						{ ...body, grant: signRequest(body, authority, "events.persist") },
-						active,
-					)) {
+					for await (const event of readPreparedEvents(prepared, active)) {
 						yield event;
 						if (event.type === "completed") terminal = true;
 					}
@@ -829,5 +1096,12 @@ export function createConversationRuntimeV2(
 			}
 		},
 	};
-	return { authorization, runtimeHost, close: () => controller.abort() };
+	return {
+		authorization,
+		runtimeHost,
+		async close() {
+			controller.abort();
+			await Promise.allSettled([...keyDependencies]);
+		},
+	};
 }

@@ -23,7 +23,8 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    # Session Sandbox Pods are created, replaced and deleted directly by the Worker adapter.
+    verbs: ["create", "delete", "get", "list", "update", "watch"]
   - apiGroups: [""]
     resources: ["configmaps", "persistentvolumeclaims", "secrets", "serviceaccounts", "services"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
@@ -68,6 +69,8 @@ spec:
         app.kubernetes.io/name: {{ .Chart.Name }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: platform-worker
+      annotations:
+        agent-infra.agora.io/connection-profile-version: {{ include "agent-infra.connectionProfileVersion" . | quote }}
     spec:
       serviceAccountName: {{ $name }}
       securityContext:
@@ -100,6 +103,14 @@ spec:
                   fieldPath: metadata.namespace
             - name: PLATFORM_WORKER_WECOM_ENABLED
               value: {{ .Values.platformWorker.wecomEnabled | quote }}
+            - name: PLATFORM_WORKER_SERVICE_TOKEN_FILE
+              value: /var/run/agent-infra/runtime-auth/service-token
+            {{- if .Values.platformWorker.runtimeImageRepository }}
+            - name: AGENT_INFRA_RUNTIME_IMAGE_REPOSITORY
+              value: {{ .Values.platformWorker.runtimeImageRepository | quote }}
+            - name: AGENT_INFRA_RUNTIME_IMAGE_DIGEST
+              value: {{ required "platformWorker.runtimeImageDigest is required with runtimeImageRepository" .Values.platformWorker.runtimeImageDigest | quote }}
+            {{- end }}
             {{- end }}
             - name: PLATFORM_DATABASE_URL
               valueFrom:
@@ -114,9 +125,11 @@ spec:
             - name: NODE_EXTRA_CA_CERTS
               value: /var/run/agent-infra/trusted-ca/ca.crt
             {{- end }}
+            {{- include "agent-infra.connectionEnv" . | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ $bindings }}
+            {{- include "agent-infra.connectionEnvFrom" . | nindent 12 }}
           volumeMounts:
             {{- if not .Values.workloadTopology.enabled }}
             - name: deployment-module

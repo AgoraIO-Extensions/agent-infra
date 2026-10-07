@@ -1,5 +1,9 @@
 import { createPublicKey } from "node:crypto";
 import {
+	type ApprovedConnectionConsumerTargetV1,
+	resolveApprovedConnectionConsumerProfileV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
+import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
 } from "@agent-infra/contracts/workload";
@@ -23,13 +27,53 @@ import {
 } from "./workload-runtime.js";
 import { validateWorkloadRuntimeAuthV1 } from "./workload-runtime-auth.js";
 
+type ConnectionConsumerTargetV1 = ApprovedConnectionConsumerTargetV1;
+
+function approvedConnectionConsumerTarget(
+	profile: unknown,
+	approval: unknown,
+	required = false,
+): ConnectionConsumerTargetV1 | undefined {
+	const hasProfile = profile !== undefined;
+	const hasApproval = approval !== undefined;
+	if (!hasProfile && !hasApproval) {
+		if (!required) return undefined;
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	}
+	if (!hasProfile || !hasApproval)
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	const result = resolveApprovedConnectionConsumerProfileV1(profile, approval);
+	if (result.status !== "available")
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	return {
+		...result,
+		url: result.profile.publicOrigin + result.profile.mcpPath,
+	};
+}
+
+/** Resolve the immutable target prepared from a deployment-owned profile. */
+export function resolveApprovedConnectionConsumerTargetV1(
+	profile: unknown,
+	approval: unknown,
+): ConnectionConsumerTargetV1 | undefined {
+	return approvedConnectionConsumerTarget(profile, approval);
+}
+
 /** Resolve only a currently observed Workload through the existing deployment adapter. */
 export function createProductionConversationRuntimeResolverV2(options: {
 	readonly workload: WorkloadRuntimeOptionsV1;
 	readonly signing: ConversationRuntimeOptionsV2["signing"];
 	readonly serviceToken: string;
+	readonly connectionConsumerProfile?: unknown;
+	readonly connectionConsumerApproval?: unknown;
+	readonly requireConnectionConsumerProfile?: boolean;
 }): ConversationRuntimeOptionsV2["resolveRuntimeHost"] {
 	const { workload, signing, serviceToken } = options;
+	const connectionConsumer = approvedConnectionConsumerTarget(
+		options.connectionConsumerProfile,
+		options.connectionConsumerApproval,
+		options.requireConnectionConsumerProfile,
+	);
 	const auth = workload.policy.runtimeAuth;
 	try {
 		if (!auth) throw new Error();
@@ -135,6 +179,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					baseUrl: `https://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
+					connectionConsumer,
 				};
 			}
 			if (
@@ -248,6 +293,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					baseUrl: `https://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
+					connectionConsumer,
 				};
 			}
 			input.signal.throwIfAborted();
@@ -256,6 +302,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				baseUrl: `https://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
 				serviceToken,
 				workerId: signing.workerId,
+				connectionConsumer,
 			};
 		} catch {
 			input.signal.throwIfAborted();
@@ -288,12 +335,56 @@ export function createProductionSessionSandboxReceiverV1(
 		namespace: policy.namespace,
 		podName: binding.resourceName,
 		serviceName: binding.resourceName,
+		runtimeTlsSecretName: (() => {
+			const bindings = (
+				policy as typeof policy & {
+					readonly sessionRuntimeTlsBindings?: readonly {
+						readonly sessionId: string;
+						readonly sandboxId: string;
+						readonly generation: number;
+						readonly resourceFence: number;
+						readonly serviceName: string;
+						readonly secretName: string;
+					}[];
+				}
+			).sessionRuntimeTlsBindings;
+			if (!bindings)
+				throw new Error("Session Runtime TLS input is unavailable");
+			const secretNames = new Set(bindings.map((item) => item.secretName));
+			if (secretNames.size !== bindings.length)
+				throw new Error("Session Runtime TLS Secret is reused");
+			const allocationKeys = new Set(
+				bindings.map((item) =>
+					[
+						item.sessionId,
+						item.sandboxId,
+						item.generation,
+						item.resourceFence,
+						item.serviceName,
+					].join("\u0000"),
+				),
+			);
+			if (allocationKeys.size !== bindings.length)
+				throw new Error("Session Runtime TLS binding is ambiguous");
+			const match = bindings.find(
+				(item) =>
+					item.sessionId === binding.sessionId &&
+					item.sandboxId === binding.sandboxId &&
+					item.generation === generation &&
+					item.resourceFence === resourceFence &&
+					item.serviceName === binding.resourceName,
+			);
+			if (!match?.secretName)
+				throw new Error("Session Runtime TLS Secret input is unavailable");
+			return match.secretName;
+		})(),
 		serviceAccountName: binding.resourceName,
 		pvcName: binding.resourceName,
 		networkPolicyName: binding.resourceName,
 		imageDigest: `${workload.policy.imageRepository}@${deployment.imageDigest}`,
 		containerPort: deployment.service.port,
 		env: deployment.env,
+		connectionConsumerSnapshot: workload.policy.connectionConsumerSnapshot,
 		authorizedIngressSelector: workload.policy.workerSelector,
 		resources: workload.policy.resources,
 		storageSize: workload.policy.storageSize,
@@ -343,6 +434,7 @@ export function createProductionSessionSandboxReceiverV1(
 				const observed = await adapter.observe(
 					sourceAllocation,
 					sourceResources,
+					"control",
 				);
 				signal.throwIfAborted();
 				return {
