@@ -418,7 +418,7 @@ jobs:
             deploy/runtime/skills/workspace-summary{.manifest.json,.manifest.schema.json,/SKILL.md} \
             tests/runtime-installed-skill-image.ts deploy/release/ci-image-build.mjs \
             packages/agent-runtime/src/codex-native-skill-discovery.native.test.ts \
-            .github/scripts/vulnerability-scan.mjs .github/workflows/ci.yml \
+            .github/workflows/ci.yml \
             pnpm-lock.yaml > "$evidence/source.sha256"
           runner_id=$(node --input-type=module -e '
             import {readFile} from "node:fs/promises";
