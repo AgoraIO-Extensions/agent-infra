@@ -348,6 +348,8 @@ export function createBrowserObserveControllerV1(input: {
 	let inFlightActions = 0;
 	const actions = new Map<string, BrowserActionRecordV1>();
 	const actionDigests = new Map<string, string>();
+	const activeActionIds = new Set<string>();
+	const cancelledActionIds = new Set<string>();
 	let downloadCount = 0;
 	const confirmations = new Map<
 		string,
@@ -595,6 +597,12 @@ export function createBrowserObserveControllerV1(input: {
 			createdAt,
 			...fields,
 		};
+	}
+
+	function cancelAction(actionId: string): boolean {
+		if (!nonEmpty(actionId) || !activeActionIds.has(actionId)) return false;
+		cancelledActionIds.add(actionId);
+		return true;
 	}
 
 	async function executeAction(
@@ -885,10 +893,28 @@ export function createBrowserObserveControllerV1(input: {
 				},
 			);
 
+		activeActionIds.add(actionId);
 		inFlightActions += 1;
 		let artifact: BrowserArtifactV1 | undefined;
 		try {
 			await installPolicy();
+			if (cancelledActionIds.delete(actionId)) {
+				const record = actionRecord(
+					request,
+					"rejected",
+					pageReference(state),
+					createdAt,
+					{
+						actionId,
+						reasonCode: "BROWSER_ACTION_CANCELLED_BEFORE_START",
+					},
+				);
+				if (request.idempotencyKey) {
+					actions.set(request.idempotencyKey, record);
+					actionDigests.set(request.idempotencyKey, requestDigest);
+				}
+				return record;
+			}
 			const timeout = capability.policy.actionTimeoutMs;
 			switch (request.kind) {
 				case "click":
@@ -971,32 +997,51 @@ export function createBrowserObserveControllerV1(input: {
 			const resultPage = targetPageState
 				? pageReference(targetPageState)
 				: pageReference(state);
-			const record = actionRecord(request, "completed", resultPage, createdAt, {
-				actionId,
-				sideEffect: inferredSideEffect,
-				completedAt: new Date().toISOString(),
-				artifact,
-			});
+			const cancelled = cancelledActionIds.delete(actionId);
+			const record = actionRecord(
+				request,
+				cancelled ? "unknown" : "completed",
+				resultPage,
+				createdAt,
+				{
+					actionId,
+					sideEffect: inferredSideEffect,
+					reasonCode: cancelled
+						? "BROWSER_ACTION_CANCELLED_UNCONFIRMED"
+						: undefined,
+					completedAt: new Date().toISOString(),
+					artifact: cancelled ? undefined : artifact,
+				},
+			);
 			if (request.idempotencyKey) {
 				actions.set(request.idempotencyKey, record);
 				actionDigests.set(request.idempotencyKey, requestDigest);
 			}
 			return record;
 		} catch (error) {
+			const cancelled = cancelledActionIds.delete(actionId);
 			const rejected = error instanceof BrowserActionRejectedError;
 			const record = actionRecord(
 				request,
-				rejected ? "rejected" : inferredSideEffect ? "unknown" : "failed",
+				cancelled
+					? "unknown"
+					: rejected
+						? "rejected"
+						: inferredSideEffect
+							? "unknown"
+							: "failed",
 				pageReference(state),
 				createdAt,
 				{
 					actionId,
 					sideEffect: inferredSideEffect,
-					reasonCode: rejected
-						? error.code
-						: inferredSideEffect
-							? "BROWSER_ACTION_RESULT_UNCONFIRMED"
-							: "BROWSER_ACTION_FAILED",
+					reasonCode: cancelled
+						? "BROWSER_ACTION_CANCELLED_UNCONFIRMED"
+						: rejected
+							? error.code
+							: inferredSideEffect
+								? "BROWSER_ACTION_RESULT_UNCONFIRMED"
+								: "BROWSER_ACTION_FAILED",
 					completedAt: new Date().toISOString(),
 				},
 			);
@@ -1007,6 +1052,8 @@ export function createBrowserObserveControllerV1(input: {
 			return record;
 		} finally {
 			inFlightActions -= 1;
+			activeActionIds.delete(actionId);
+			cancelledActionIds.delete(actionId);
 		}
 	}
 
@@ -1173,6 +1220,7 @@ export function createBrowserObserveControllerV1(input: {
 		recoverPage,
 		act: executeAction,
 		executeAction,
+		cancelAction,
 		screenshot,
 		download,
 		upload,

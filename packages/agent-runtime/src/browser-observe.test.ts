@@ -55,6 +55,7 @@ class FakePage {
 		getAttribute: vi.fn(async (name: string) =>
 			name === "role" ? "button" : "Run",
 		),
+		click: vi.fn(async (): Promise<void> => undefined),
 		evaluate: vi.fn(async () => "button"),
 	};
 
@@ -214,5 +215,50 @@ describe("Browser observe controller", () => {
 				resourceFence: 7,
 			}),
 		).rejects.toThrow("BROWSER_PAGE_RECOVERY_URL_MISMATCH");
+	});
+});
+
+describe("Browser action cancellation barrier", () => {
+	it("converges an in-flight action to unknown and blocks completed replay", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability: {
+				...capability,
+				operations: ["navigate", "observe", "interact"],
+			},
+		});
+		const reference = await controller.navigate("https://example.test/app");
+		const observation = await controller.observe(reference);
+		const target = observation.elements[0];
+		if (!target) throw new Error("expected element");
+		let releaseClick!: () => void;
+		page.pageLocator.click = vi.fn(
+			() => new Promise<void>((resolve) => (releaseClick = resolve)),
+		);
+		const request = {
+			actionId: "cancelled-action",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			idempotencyKey: "cancelled-action-key",
+			kind: "click" as const,
+			page: reference,
+			target,
+		};
+		const pending = controller.executeAction(request);
+		await Promise.resolve();
+		expect(controller.cancelAction("cancelled-action")).toBe(true);
+		expect(controller.cancelAction("cancelled-action")).toBe(true);
+		releaseClick();
+		await expect(pending).resolves.toMatchObject({
+			status: "unknown",
+			reasonCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
+		});
+		expect(controller.cancelAction("cancelled-action")).toBe(false);
+		await expect(controller.executeAction(request)).resolves.toMatchObject({
+			status: "unknown",
+			reasonCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
+		});
 	});
 });
