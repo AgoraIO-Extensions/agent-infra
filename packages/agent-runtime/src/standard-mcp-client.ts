@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import Ajv, { type ValidateFunction } from "ajv";
+import Ajv2020 from "ajv/dist/2020.js";
 
 import type { RuntimeOriginalEvidenceBinding } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
@@ -129,15 +130,111 @@ export function standardMcpDigest(value: unknown) {
 	return createHash("sha256").update(boundedJson(value)).digest("hex");
 }
 
+function schemaDialect(declaration: unknown): "2020-12" | "draft-07" {
+	const uri =
+		typeof declaration === "string"
+			? declaration.replace(/#$/, "")
+			: declaration;
+	if (
+		uri === undefined ||
+		uri === "https://json-schema.org/draft/2020-12/schema"
+	)
+		return "2020-12";
+	if (uri === "http://json-schema.org/draft-07/schema") return "draft-07";
+	return unavailable();
+}
+
 function schemaValidator(schema: unknown): ValidateFunction {
 	if (!record(schema) || !Object.keys(schema).length) unavailable();
 	boundedJson(schema, 32_768);
+	const dialect = schemaDialect(schema.$schema);
+	const Validator = dialect === "2020-12" ? Ajv2020 : Ajv;
+	const maps = new Set([
+		"properties",
+		"patternProperties",
+		"$defs",
+		"definitions",
+		"dependencies",
+		...(dialect === "2020-12" ? ["dependentSchemas"] : []),
+	]);
+	const arrays = new Set([
+		"allOf",
+		"anyOf",
+		"oneOf",
+		...(dialect === "2020-12" ? ["prefixItems"] : []),
+	]);
+	const singles = new Set([
+		"additionalProperties",
+		"propertyNames",
+		"contains",
+		"items",
+		"not",
+		"if",
+		"then",
+		"else",
+		...(dialect === "2020-12"
+			? ["unevaluatedProperties", "unevaluatedItems", "contentSchema"]
+			: ["additionalItems"]),
+	]);
 	let nodes = 0;
-	const inspect = (value: unknown, depth: number) => {
+	type Context = "schema" | "map" | "array" | "data";
+	const references: { locations: Set<string>; ref: string }[] = [];
+	const inspect = (
+		value: unknown,
+		depth: number,
+		context: Context,
+		parentPath: string,
+		parentLocations: Set<string>,
+	) => {
+		let path = parentPath;
+		let locations = parentLocations;
 		if (++nodes > 1024 || depth > 24) unavailable();
+		if (context === "schema" && (record(value) || typeof value === "boolean")) {
+			locations.add(path);
+			if (record(value)) {
+				if (typeof value.$id === "string" && !value.$id.startsWith("#")) {
+					locations = new Set<string>();
+					path = "#";
+					locations.add(path);
+				}
+				for (const anchor of [value.$anchor, value.$dynamicAnchor])
+					if (typeof anchor === "string") locations.add(`#${anchor}`);
+				if (typeof value.$id === "string" && value.$id.startsWith("#"))
+					locations.add(value.$id);
+				if (typeof value.$ref === "string")
+					references.push({ locations, ref: value.$ref });
+			}
+		}
 		if (Array.isArray(value)) {
-			for (const child of value) inspect(child, depth + 1);
+			for (const [index, child] of value.entries())
+				inspect(
+					child,
+					depth + 1,
+					context === "array" ? "schema" : "data",
+					`${path}/${index}`,
+					locations,
+				);
 		} else if (record(value)) {
+			if (context === "data" || context === "map") {
+				for (const [key, child] of Object.entries(value))
+					inspect(
+						child,
+						depth + 1,
+						context === "map" ? "schema" : "data",
+						`${path}/${key.replace(/~/g, "~0").replace(/\//g, "~1")}`,
+						locations,
+					);
+				return;
+			}
+			// One compiler cannot silently reinterpret another resource's dialect.
+			// Literal const/default/enum/examples data is budgeted but not a schema.
+			if (
+				context === "schema" &&
+				((value.$schema !== undefined &&
+					schemaDialect(value.$schema) !== dialect) ||
+					value.$async !== undefined)
+			)
+				unavailable();
 			for (const [key, child] of Object.entries(value)) {
 				if (
 					(key === "$ref" &&
@@ -146,13 +243,30 @@ function schemaValidator(schema: unknown): ValidateFunction {
 					key === "$recursiveRef"
 				)
 					unavailable();
-				inspect(child, depth + 1);
+				let next: Context = "data";
+				if (context === "schema") {
+					if (maps.has(key)) next = "map";
+					else if (arrays.has(key)) next = "array";
+					else if (singles.has(key))
+						next = Array.isArray(child) ? "array" : "schema";
+				}
+				inspect(
+					child,
+					depth + 1,
+					next,
+					`${path}/${key.replace(/~/g, "~0").replace(/\//g, "~1")}`,
+					locations,
+				);
 			}
 		}
 	};
-	inspect(schema, 0);
+	inspect(schema, 0, "schema", "#", new Set());
 	try {
-		return new Ajv({
+		// References into annotations/unknown keywords have undefined semantics.
+		// Keep the same resource's recognized schema locations, including booleans.
+		for (const { locations, ref } of references)
+			if (!locations.has(decodeURIComponent(ref))) unavailable();
+		return new Validator({
 			strict: false,
 			logger: false,
 			validateFormats: false,
