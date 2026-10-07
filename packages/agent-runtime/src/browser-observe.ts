@@ -347,6 +347,7 @@ export function createBrowserObserveControllerV1(input: {
 	let policyInstalled = false;
 	let inFlightActions = 0;
 	const actions = new Map<string, BrowserActionRecordV1>();
+	const actionsById = new Map<string, BrowserActionRecordV1>();
 	const actionDigests = new Map<string, string>();
 	const activeActionIds = new Set<string>();
 	const cancelledActionIds = new Set<string>();
@@ -605,6 +606,27 @@ export function createBrowserObserveControllerV1(input: {
 		return true;
 	}
 
+	function readAction(input_: {
+		readonly actionId?: string;
+		readonly idempotencyKey?: string;
+	}): BrowserActionRecordV1 | null {
+		const byActionId = input_.actionId
+			? actionsById.get(input_.actionId)
+			: undefined;
+		const byIdempotencyKey = input_.idempotencyKey
+			? actions.get(input_.idempotencyKey)
+			: undefined;
+		if (
+			input_.actionId &&
+			input_.idempotencyKey &&
+			((byActionId === undefined) !== (byIdempotencyKey === undefined) ||
+				(byActionId !== undefined &&
+					byActionId.actionId !== byIdempotencyKey?.actionId))
+		)
+			throw new Error("BROWSER_ACTION_READBACK_CONFLICT");
+		return byActionId ?? byIdempotencyKey ?? null;
+	}
+
 	async function executeAction(
 		request: BrowserActionRequestV1,
 	): Promise<BrowserActionRecordV1> {
@@ -812,6 +834,7 @@ export function createBrowserObserveControllerV1(input: {
 				);
 				if (request.idempotencyKey) {
 					actions.set(request.idempotencyKey, record);
+					actionsById.set(record.actionId, record);
 					actionDigests.set(request.idempotencyKey, requestDigest);
 				}
 				return record;
@@ -911,6 +934,7 @@ export function createBrowserObserveControllerV1(input: {
 				);
 				if (request.idempotencyKey) {
 					actions.set(request.idempotencyKey, record);
+					actionsById.set(record.actionId, record);
 					actionDigests.set(request.idempotencyKey, requestDigest);
 				}
 				return record;
@@ -1015,6 +1039,7 @@ export function createBrowserObserveControllerV1(input: {
 			);
 			if (request.idempotencyKey) {
 				actions.set(request.idempotencyKey, record);
+				actionsById.set(record.actionId, record);
 				actionDigests.set(request.idempotencyKey, requestDigest);
 			}
 			return record;
@@ -1047,6 +1072,7 @@ export function createBrowserObserveControllerV1(input: {
 			);
 			if (request.idempotencyKey) {
 				actions.set(request.idempotencyKey, record);
+				actionsById.set(record.actionId, record);
 				actionDigests.set(request.idempotencyKey, requestDigest);
 			}
 			return record;
@@ -1221,6 +1247,7 @@ export function createBrowserObserveControllerV1(input: {
 		act: executeAction,
 		executeAction,
 		cancelAction,
+		readAction,
 		screenshot,
 		download,
 		upload,
