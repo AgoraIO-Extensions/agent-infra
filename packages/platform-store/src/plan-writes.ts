@@ -175,7 +175,9 @@ export async function insertAgentManagementEffects(
 		traceId: plan.auditEvent.traceId,
 		requestId: plan.auditEvent.requestId,
 		agentId: plan.state.agentId,
-		actorType: plan.operation.startsWith("observe_") ? "system" : "user",
+		actorType: plan.operation.startsWith("observe_")
+			? "system"
+			: (plan.auditEvent.actorType ?? "user"),
 		actorId: plan.auditEvent.actorId,
 		action: plan.auditEvent.action,
 		targetType: plan.auditEvent.subjectType,

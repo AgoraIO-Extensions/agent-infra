@@ -254,9 +254,9 @@ export function registerSessionAuditRoutes(
 					schemaVersion: 2,
 					...publicAuditFields(item),
 					actor:
-						item.actor.kind === "system"
-							? { kind: "system", actorId: item.actor.actorId }
-							: actorById.get(item.actor.actorId),
+						item.actor.kind === "user"
+							? actorById.get(item.actor.actorId)
+							: { kind: item.actor.kind, actorId: item.actor.actorId },
 				}),
 			);
 			return context.json({ items, nextCursor: auditPage.nextCursor });

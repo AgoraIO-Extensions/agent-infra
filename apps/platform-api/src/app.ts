@@ -1,6 +1,14 @@
 import type { startObservability } from "@agent-infra/observability";
 import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
+import {
+	type AgentApiLifecycleRouteDependencies,
+	registerAgentApiLifecycleRoutes,
+} from "./http/agent-api-lifecycle-routes.js";
+import {
+	type AgentApplicationGrantRouteDependencies,
+	registerAgentApplicationGrantRoutes,
+} from "./http/agent-application-grant-routes.js";
 import { registerApplicationApiCredentialRoutes } from "./http/application-api-credential-routes.js";
 import {
 	type ApplicationMaterialGrantRouteDependencies,
@@ -70,6 +78,8 @@ type ApiObservability = Pick<
 >;
 
 export interface PlatformAppDependencies {
+	readonly agentApiLifecycle?: AgentApiLifecycleRouteDependencies;
+	readonly agentApplicationGrants?: AgentApplicationGrantRouteDependencies;
 	readonly applicationApiCredentials?: Parameters<
 		typeof registerApplicationApiCredentialRoutes
 	>[1];
@@ -151,6 +161,13 @@ export function createPlatformApp(
 	if (dependencies.personalRelayKeys)
 		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);
 	registerV2ManagementRoutes(app, dependencies.management);
+	if (dependencies.agentApplicationGrants)
+		registerAgentApplicationGrantRoutes(
+			app,
+			dependencies.agentApplicationGrants,
+		);
+	if (dependencies.agentApiLifecycle)
+		registerAgentApiLifecycleRoutes(app, dependencies.agentApiLifecycle);
 	if (dependencies.applications)
 		registerApplicationRegistrationRoutes(app, dependencies.applications);
 	if (dependencies.applicationApiCredentials)

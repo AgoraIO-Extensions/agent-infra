@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
 	type AgentConfigurationUseCaseDependenciesV1,
 	type ConversationTaskAdmissionPolicyV1,
+	createAgentApiLifecycleV1,
 	createAgentConfigurationUseCaseV1,
 	createAgentManagementV1,
 	createApplicationApiCredentialIssuerV1,
@@ -197,6 +198,7 @@ export function assemblePlatformApi(
 	});
 	const managementTransaction = new PostgresAgentManagementTransactionV1({
 		databaseUrl: input.databaseUrl,
+		userDirectory,
 	});
 	const managementQuery = new PostgresAgentManagementQueryV1({
 		databaseUrl: input.databaseUrl,
@@ -511,6 +513,20 @@ export function assemblePlatformApi(
 			: {}),
 		requestScope: input.requestScope,
 		...(files ? { files: files.dependencies } : {}),
+		agentApplicationGrants: {
+			identity: input.identity,
+			change: (command, grantType) =>
+				managementTransaction.changeApplicationGrant(command, grantType),
+			recordRefusal: (request) =>
+				managementTransaction.recordApiManagementRefusal(request),
+		},
+		agentApiLifecycle: {
+			lifecycle: createAgentApiLifecycleV1(managementTransaction),
+			readState: (request, material) =>
+				managementTransaction.readApiState(request, material),
+			recordRefusal: (request) =>
+				managementTransaction.recordApiManagementRefusal(request),
+		},
 		management: {
 			identity: input.identity,
 			foundation,
