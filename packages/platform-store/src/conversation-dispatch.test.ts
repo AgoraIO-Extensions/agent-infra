@@ -1426,6 +1426,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					"ServiceAccount",
 					"PersistentVolumeClaim",
 					"NetworkPolicy",
+					"Secret",
 				] as const
 			).map((kind) => ({
 				kind,
