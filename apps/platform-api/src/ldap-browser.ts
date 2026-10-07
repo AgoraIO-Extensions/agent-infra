@@ -186,12 +186,18 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				return null;
 			}
 			const renewalNow = now();
-			const renewed = await input.sessions.renew(
-				tokenDigest,
-				renewalNow,
-				Math.min(renewalNow + SESSION_IDLE_MS, session.absoluteExpiresAt),
+			const renewedExpiresAt = Math.min(
+				renewalNow + SESSION_IDLE_MS,
+				session.absoluteExpiresAt,
 			);
-			if (!renewed) return null;
+			if (renewedExpiresAt > session.expiresAt) {
+				const renewed = await input.sessions.renew(
+					tokenDigest,
+					renewalNow,
+					renewedExpiresAt,
+				);
+				if (!renewed) return null;
+			}
 			return identity;
 		},
 		async hydrateUsers(ids: readonly string[]) {
