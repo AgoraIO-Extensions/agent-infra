@@ -1279,16 +1279,27 @@ describe("credential-backed audit query consumer", () => {
 		expect(JSON.stringify(result)).not.toContain(source.material);
 	});
 
-	it("denies stale or revoked API grants before an explicit Agent query can become empty success", async () => {
+	it("uses independent grant revisions and denies revoked or malformed current API grants", async () => {
 		const f = await fixture();
 		const source = await credentialQueryFixture(f);
-		await queryUseGrant(f, "stale-revision");
+		await queryUseGrant(f, "independent-grant-revision");
 		const input = { limit: 10, filters: { agentId: f.agentId } };
 		await expect(
 			query.listAudit(source, input, request()),
-		).rejects.toMatchObject({ code: "access_denied" });
+		).resolves.toMatchObject({
+			items: expect.arrayContaining([
+				expect.objectContaining({ auditId: f.auditId }),
+			]),
+		});
 		await sql`update platform.agent_principal_grants set authorization_revision = 'current-agent-revision', revoked_at = now()
 			where agent_id = ${f.agentId} and principal_id = ${f.scope.kind === "execution" ? f.scope.principal.id : ""}`;
+		await expect(
+			query.listAudit(source, input, request()),
+		).rejects.toMatchObject({ code: "access_denied" });
+		await expect(sql`update platform.agent_principal_grants set revoked_at = null, authorization_revision = ''
+   where agent_id = ${f.agentId} and principal_id = ${f.scope.kind === "execution" ? f.scope.principal.id : ""}`).rejects.toMatchObject(
+			{ code: "23514" },
+		);
 		await expect(
 			query.listAudit(source, input, request()),
 		).rejects.toMatchObject({ code: "access_denied" });

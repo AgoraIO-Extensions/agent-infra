@@ -26,6 +26,11 @@ import { writeStandardMcpExport } from "./standard-mcp-installation.test-support
 
 const faults = vi.hoisted(() => ({
 	failure: "" as string,
+	lossPhase: "",
+	lost: false,
+	hits: 0,
+	unsafeReads: 0,
+	lockClosed: false,
 	renamed: false,
 	materialOpens: 0,
 	events: [] as string[],
@@ -43,7 +48,50 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 			const file = await fs.open(...args);
 			// Linux opens files relative to a verified directory FD. Classify the
 			// real opened location so /proc/self/fd aliases cannot skip a fault.
-			const path = await fs.realpath(String(args[0]));
+			let path: string;
+			try {
+				path = await fs.realpath(String(args[0]));
+			} catch (error) {
+				await file.close();
+				throw error;
+			}
+			const lose = () => {
+				faults.lost = true;
+				faults.hits++;
+				faults.protection.mockImplementation(() => {
+					throw new Error("private-protection-diagnostic");
+				});
+			};
+			const close = file.close.bind(file);
+			file.close = async () => {
+				await close();
+				if (path.endsWith("/.receive.lock")) faults.lockClosed = true;
+				if (
+					faults.lossPhase === "activation" &&
+					path.endsWith("standard-mcp-input/bindings") &&
+					faults.events.includes("metadata-sync") &&
+					!faults.renamed &&
+					!faults.lost
+				)
+					lose();
+				if (
+					faults.lossPhase === "cleanup" &&
+					path.endsWith("standard-mcp-input") &&
+					faults.lockClosed &&
+					!faults.lost
+				)
+					lose();
+			};
+			const write = file.writeFile.bind(file);
+			file.writeFile = async (...args: Parameters<typeof file.writeFile>) => {
+				await write(...args);
+				if (
+					faults.lossPhase === "write" &&
+					path.includes("standard-mcp-input/materials") &&
+					path.endsWith(".token")
+				)
+					lose();
+			};
 			if (path.includes("standard-mcp-export") && path.endsWith(".token")) {
 				faults.materialOpens++;
 				await faults.mutate?.();
@@ -69,7 +117,22 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 					throw new Error("synthetic-private-diagnostic");
 				return sync();
 			};
-			return file;
+			return new Proxy(file, {
+				get(target, property) {
+					if (property === "read" && path.endsWith(".token"))
+						return async (
+							buffer: Buffer,
+							offset: number,
+							length: number,
+							position: number,
+						) => {
+							if (faults.lost) faults.unsafeReads++;
+							return target.read(buffer, offset, length, position);
+						};
+					const value = Reflect.get(target, property, target);
+					return typeof value === "function" ? value.bind(target) : value;
+				},
+			});
 		},
 		rename: async (...args: Parameters<typeof fs.rename>) => {
 			faults.events.push("metadata-rename");
@@ -77,6 +140,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 				throw new Error("synthetic-private-diagnostic");
 			await fs.rename(...args);
 			faults.renamed = true;
+			if (faults.lossPhase === "switched") {
+				faults.lost = true;
+				faults.hits++;
+				faults.protection.mockImplementation(() => {
+					throw new Error("private-protection-diagnostic");
+				});
+			}
 		},
 	};
 });
@@ -85,6 +155,11 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 	faults.protection.mockReset();
 	faults.failure = "";
+	faults.lossPhase = "";
+	faults.lost = false;
+	faults.hits = 0;
+	faults.unsafeReads = 0;
+	faults.lockClosed = false;
 	faults.renamed = false;
 	faults.materialOpens = 0;
 	faults.events.length = 0;
@@ -413,3 +488,35 @@ it("keeps an unknown reception lock unavailable without deleting another writer'
 	expect(await readFile(lock, "utf8")).toBe("");
 	expect(faults.materialOpens).toBe(0);
 });
+
+it.each(["write", "activation", "switched", "cleanup"] as const)(
+	"keeps protection loss during %s unavailable without unsafe reads or false publication",
+	async (phase) => {
+		const env = await setup();
+		faults.lossPhase = phase;
+		const receipt = await receiveProtectedStandardMcpInstallation(env.options);
+		expect(faults.hits).toBe(1);
+		expect(faults.unsafeReads).toBe(0);
+		expect(receipt).toEqual({ status: "unavailable" });
+		expect(faults.renamed).toBe(phase === "switched" || phase === "cleanup");
+		expect(faults.lockClosed).toBe(true);
+		await expect(
+			readFile(join(env.source.inputDirectory, ".receive.lock")),
+		).rejects.toMatchObject({ code: "ENOENT" });
+		// Post-switch failure preserves the actual published file; unavailable is
+		// not a rollback claim and must not erase an original operation's facts.
+		if (faults.renamed)
+			expect(
+				JSON.parse(
+					await readFile(
+						join(
+							env.source.inputDirectory,
+							"bindings",
+							`${env.source.record.key}.json`,
+						),
+						"utf8",
+					),
+				),
+			).toEqual(env.source.record.metadata);
+	},
+);

@@ -7,6 +7,13 @@ import {
 } from "@agent-infra/platform-core";
 
 export type BrowserActionOperationControllerRequestV1 = Readonly<{
+	agentId: string;
+	conversationId: string;
+	executionId: string;
+	capabilityVersion: number;
+	pageRevision: number;
+	sessionGeneration: number;
+	resourceFence: number;
 	actionId?: string;
 	operationRef?: string;
 	attemptRef?: string;
@@ -46,9 +53,15 @@ export type BrowserActionOperationInputV1 = Readonly<{
 	sessionGeneration: number;
 	deliveryFence: number;
 	controllerBinding: Readonly<{
+		agentId: string;
+		conversationId: string;
+		executionId: string;
+		capabilityVersion: number;
+		pageRevision: number;
 		sessionGeneration: number;
 		resourceFence: number;
 	}>;
+	agentId: string;
 	capabilityVersion: number;
 	page: Readonly<{ pageId: string; pageRevision: number }>;
 	actionId: string;
@@ -56,7 +69,16 @@ export type BrowserActionOperationInputV1 = Readonly<{
 	toolId: string;
 	action: Omit<
 		BrowserActionOperationControllerRequestV1,
-		"actionId" | "operationRef" | "attemptRef"
+		| "agentId"
+		| "conversationId"
+		| "executionId"
+		| "capabilityVersion"
+		| "pageRevision"
+		| "sessionGeneration"
+		| "resourceFence"
+		| "actionId"
+		| "operationRef"
+		| "attemptRef"
 	>;
 	occurredAt: string;
 	adapterEventKeyPrefix: string;
@@ -71,9 +93,19 @@ export type BrowserActionOperationResultV1 = Readonly<{
 }>;
 
 function assertBinding(input: {
+	readonly agentId: string;
+	readonly conversationId: string;
+	readonly executionId: string;
 	readonly sessionGeneration: number;
 	readonly deliveryFence: number;
+	readonly capabilityVersion: number;
+	readonly page: Readonly<{ pageRevision: number }>;
 	readonly controllerBinding: Readonly<{
+		agentId: string;
+		conversationId: string;
+		executionId: string;
+		capabilityVersion: number;
+		pageRevision: number;
 		sessionGeneration: number;
 		resourceFence: number;
 	}>;
@@ -83,6 +115,11 @@ function assertBinding(input: {
 		input.sessionGeneration < 1 ||
 		!Number.isSafeInteger(input.deliveryFence) ||
 		input.deliveryFence < 1 ||
+		input.controllerBinding.agentId !== input.agentId ||
+		input.controllerBinding.conversationId !== input.conversationId ||
+		input.controllerBinding.executionId !== input.executionId ||
+		input.controllerBinding.capabilityVersion !== input.capabilityVersion ||
+		input.controllerBinding.pageRevision !== input.page.pageRevision ||
 		input.controllerBinding.sessionGeneration !== input.sessionGeneration ||
 		input.controllerBinding.resourceFence !== input.deliveryFence
 	) {
@@ -143,10 +180,18 @@ export function createBrowserActionOperationAdapterV1(input: {
 							"interrupted",
 						);
 					actionRecord = await input.controller.executeAction({
+						agentId: request.agentId,
+						conversationId: request.conversationId,
+						executionId: request.executionId,
+						capabilityVersion: request.capabilityVersion,
+						pageRevision: request.page.pageRevision,
+						sessionGeneration: request.sessionGeneration,
+						resourceFence: request.deliveryFence,
 						...request.action,
 						actionId: request.actionId,
 						operationRef: request.attempt.operationRef,
 						attemptRef: request.attempt.attemptRef,
+						sideEffect: request.action.sideEffect === true,
 					} as BrowserActionOperationControllerRequestV1);
 					if (actionRecord.actionId !== request.actionId)
 						throw new ConversationBrowserActionExecutionError(

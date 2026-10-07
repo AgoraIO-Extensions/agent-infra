@@ -99,7 +99,9 @@ async function publishMaterial(path: string, name: string, token: string) {
 				unavailable();
 			assertStandardMcpProcessProtection();
 			if (created) await file.writeFile(token, "utf8");
+			assertStandardMcpProcessProtection();
 			await file.sync();
+			assertStandardMcpProcessProtection();
 		} finally {
 			await file.close();
 		}
@@ -117,6 +119,7 @@ async function publishMetadata(
 	name: string,
 	metadata: Record<string, unknown>,
 ) {
+	assertStandardMcpProcessProtection();
 	const directory = await openProtectedStandardMcpDirectory(path);
 	const temporary = `.stage-${randomUUID()}.json`;
 	const temporaryPath = protectedStandardMcpPath(directory, path, temporary);
@@ -148,13 +151,17 @@ async function publishMetadata(
 			0o600,
 		);
 		try {
+			assertStandardMcpProcessProtection();
 			await file.writeFile(JSON.stringify(metadata), "utf8");
+			assertStandardMcpProcessProtection();
 			await file.sync();
+			assertStandardMcpProcessProtection();
 		} finally {
 			await file.close();
 		}
 		assertStandardMcpProcessProtection();
 		await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+		assertStandardMcpProcessProtection();
 		await rename(
 			temporaryPath,
 			protectedStandardMcpPath(directory, path, name),
@@ -357,6 +364,7 @@ export async function receiveProtectedStandardMcpInstallation(options: {
 		} finally {
 			await directory.close();
 		}
+		assertStandardMcpProcessProtection();
 		return { status: "available", installationKeys: keys };
 	} catch {
 		return { status: "unavailable" };

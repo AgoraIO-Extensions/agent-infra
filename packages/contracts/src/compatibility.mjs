@@ -1739,10 +1739,158 @@ function isConnectionCapabilityOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #481 use authority is an exact additive path and four bounded audit actions.
+function isAgentApplicationUseGrantOpenApiAddition(previous, current) {
+	const actions = [
+		"api.agent.use.granted",
+		"api.agent.use.revoked",
+		"api.agent.use.replayed",
+		"api.agent.use.refused",
+	];
+	const path =
+		"/api/v2/agents/{agentId}/application-use-grants/{applicationId}";
+	const normalized = structuredClone(current);
+	const oldActions =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const newActions =
+		normalized.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	let changed = false;
+	if (
+		Array.isArray(oldActions) &&
+		Array.isArray(newActions) &&
+		actions.every(
+			(action) => !oldActions.includes(action) && newActions.includes(action),
+		)
+	) {
+		normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+			newActions.filter((action) => !actions.includes(action));
+		changed = true;
+	}
+	if (
+		previous.paths?.[path] === undefined &&
+		current.paths?.[path] !== undefined
+	) {
+		if (
+			createHash("sha256")
+				.update(JSON.stringify(current.paths[path]))
+				.digest("hex") !==
+			"db2b2515a54f13a66a7fb6b615a7f653f08b5cb2c632a2e3e0cfdeb377f178da"
+		)
+			return false;
+		delete normalized.paths[path];
+		changed = true;
+	}
+	return changed && findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #481 admits only this exact machine/personal lifecycle contract and its audit variants.
+function isAgentApiManagementOpenApiAddition(previous, current) {
+	const actions = [
+		"api.agent.state.read",
+		"api.agent.manager.granted",
+		"api.agent.manager.revoked",
+		"api.agent.manager.replayed",
+		"api.agent.lifecycle.refused",
+		"api.agent.manager.refused",
+		"api.agent.state.refused",
+	];
+	const paths = [
+		"/api/v2/agents/{agentId}/state",
+		"/api/v2/agents/{agentId}/commands",
+		"/api/v2/agents/{agentId}/application-managers/{applicationId}",
+	];
+	const names = [
+		"AgentApiLifecycleRequestV1",
+		"AgentApiLifecycleResponseV1",
+		"AgentApiStateResponseV1",
+		"AgentApplicationManagerRequestV1",
+		"AgentApplicationManagerResponseV1",
+		"PlatformAuditProjectionV2",
+	];
+	const normalized = structuredClone(current);
+	const oldActions =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const newActions =
+		normalized.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	let changed = false;
+	if (
+		Array.isArray(oldActions) &&
+		Array.isArray(newActions) &&
+		actions.every(
+			(action) => !oldActions.includes(action) && newActions.includes(action),
+		)
+	) {
+		normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+			newActions.filter((action) => !actions.includes(action));
+		changed = true;
+	}
+	if (
+		paths.every(
+			(path) =>
+				previous.paths?.[path] === undefined &&
+				current.paths?.[path] !== undefined,
+		)
+	) {
+		const addition = {
+			paths: Object.fromEntries(
+				paths.map((path) => [path, current.paths[path]]),
+			),
+			schemas: Object.fromEntries(
+				names.map((name) => [name, current.components?.schemas?.[name]]),
+			),
+		};
+		if (
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+			"80e3f923b7ae47b750d14dd895c2be132d76c2dcc65ed8f9bb9e586698b0beb8"
+		)
+			return false;
+		for (const path of paths) delete normalized.paths[path];
+		for (const name of names.slice(0, -1)) {
+			if (previous.components?.schemas?.[name] !== undefined) return false;
+			delete normalized.components.schemas[name];
+		}
+		const audit = normalized.components.schemas.PlatformAuditProjectionV2;
+		audit.properties.actor.anyOf = audit.properties.actor.anyOf.filter(
+			(actor) =>
+				!["application", "unknown"].includes(actor.properties?.kind?.const),
+		);
+		audit.properties.subjectType.enum =
+			audit.properties.subjectType.enum.filter((kind) => kind !== "unknown");
+		changed = true;
+	}
+	return changed && sameValue(previous, normalized);
+}
+
 // #1494 adds optional verified Skill metadata to Runtime capabilities.
 function isRuntimeSkillCapabilityOpenApiAddition(previous, current) {
 	const previousSchemas = previous.components?.schemas;
 	if (previousSchemas?.RuntimeSkillCapabilityV1 !== undefined) return false;
+	const currentSchemas = current.components?.schemas;
+	const isHost = currentSchemas?.RuntimeCapabilitiesV1 !== undefined;
+	const oldCapabilities = isHost
+		? previousSchemas?.RuntimeCapabilitiesV1
+		: previousSchemas?.WorkloadReadinessResponseV1?.properties?.capabilities;
+	const newCapabilities = isHost
+		? currentSchemas.RuntimeCapabilitiesV1
+		: currentSchemas?.WorkloadReadinessResponseV1?.properties?.capabilities;
+	if (
+		oldCapabilities === undefined ||
+		oldCapabilities.properties?.skills !== undefined ||
+		newCapabilities?.properties?.skills === undefined
+	)
+		return false;
+	const addition = {
+		skills: newCapabilities.properties.skills,
+		...(isHost ? { definition: currentSchemas.RuntimeSkillCapabilityV1 } : {}),
+	};
+	const expectedDigest = isHost
+		? "3e354b1142891161f39da6b1668873acd62f36b6f56a81f2c1ba440734976ee0"
+		: "f677042fd2ebf9e3969365c59461a698e76ce511e764a6ffff743edfa1fb76ff";
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		expectedDigest
+	)
+		return false;
 	const normalized = structuredClone(current);
 	const capabilities = normalized.components.schemas.RuntimeCapabilitiesV1;
 	const readiness = normalized.components.schemas.WorkloadReadinessResponseV1;
@@ -1759,6 +1907,8 @@ function findBreakingChanges(previous, current) {
 	if (previous.openapi !== undefined) {
 		if (
 			!sameValue(previous, current) &&
+			!isAgentApplicationUseGrantOpenApiAddition(previous, current) &&
+			!isAgentApiManagementOpenApiAddition(previous, current) &&
 			!isConnectionCapabilityOpenApiAddition(previous, current) &&
 			!isKnownCredentialAuditSubjectAddition(previous, current) &&
 			!isPersonalCredentialNarrowOpenApiAddition(previous, current) &&
