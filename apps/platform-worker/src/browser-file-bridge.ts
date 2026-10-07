@@ -2,6 +2,7 @@ import type {
 	FileAccessGrantV1,
 	FileDescriptorV1,
 } from "@agent-infra/contracts/files";
+import type { ExecutionGrantClaimsV1 } from "@agent-infra/contracts/pilot";
 import type { createWorkerFileClientV1 } from "./file-client.js";
 
 export type BrowserFileExecutionBindingV1 = Readonly<{
@@ -15,6 +16,11 @@ type BrowserFileBindingInputV1 = Readonly<{
 	binding: BrowserFileExecutionBindingV1;
 	executionGrant: FileAccessGrantV1;
 }>;
+
+type BrowserFileExecutionClaimsV1 = Pick<
+	ExecutionGrantClaimsV1,
+	"agentId" | "conversationId" | "executionId" | "sessionGeneration"
+>;
 
 type WorkerFileClientV1 = ReturnType<typeof createWorkerFileClientV1>;
 type BrowserFileResultV1 = Awaited<
@@ -66,12 +72,25 @@ function assertSameBinding(
 export function createBrowserFileGrantBridgeV1(input: {
 	readonly client: Pick<WorkerFileClientV1, "readInput" | "writeResult">;
 	readonly binding: BrowserFileExecutionBindingV1;
+	readonly verifyExecutionGrant: (
+		grant: FileAccessGrantV1,
+	) => Promise<BrowserFileExecutionClaimsV1>;
 }) {
 	assertBinding(input.binding);
+	if (typeof input.verifyExecutionGrant !== "function")
+		throw new Error("BROWSER_FILE_GRANT_VERIFIER_REQUIRED");
 	const binding = Object.freeze({ ...input.binding });
 
-	function verify(input_: BrowserFileBindingInputV1): void {
+	async function verify(input_: BrowserFileBindingInputV1): Promise<void> {
 		assertSameBinding(binding, input_.binding);
+		const claims = await input.verifyExecutionGrant(input_.executionGrant);
+		if (
+			claims.agentId !== binding.agentId ||
+			claims.conversationId !== binding.conversationId ||
+			claims.executionId !== binding.executionId ||
+			claims.sessionGeneration !== binding.sessionGeneration
+		)
+			throw new Error("BROWSER_FILE_GRANT_BINDING_CONFLICT");
 	}
 
 	return {
@@ -82,7 +101,7 @@ export function createBrowserFileGrantBridgeV1(input: {
 				readonly idempotencyKey: string;
 			},
 		) {
-			verify(input_);
+			await verify(input_);
 			return await input.client.readInput(
 				input_.executionGrant,
 				input_.fileId,
@@ -97,7 +116,7 @@ export function createBrowserFileGrantBridgeV1(input: {
 				readonly accessIdempotencyKey?: string;
 			},
 		): Promise<BrowserFileResultV1> {
-			verify(input_);
+			await verify(input_);
 			return await input.client.writeResult(
 				input_.executionGrant,
 				input_.descriptor,
