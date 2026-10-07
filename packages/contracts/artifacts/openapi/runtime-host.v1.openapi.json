@@ -312,6 +312,13 @@
           "resultFiles": {
             "type": "boolean"
           },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeSkillCapabilityV1"
+            },
+            "maxItems": 150,
+            "type": "array"
+          },
           "supplementaryInstruction": {
             "type": "boolean"
           }
@@ -1048,6 +1055,46 @@
         "required": [
           "schemaVersion",
           "events"
+        ],
+        "type": "object"
+      },
+      "RuntimeSkillCapabilityV1": {
+        "additionalProperties": false,
+        "properties": {
+          "manifestSha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "packageDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "readOnly": {
+            "const": true,
+            "type": "boolean"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "name",
+          "version",
+          "manifestSha256",
+          "packageDigest",
+          "readOnly"
         ],
         "type": "object"
       },
