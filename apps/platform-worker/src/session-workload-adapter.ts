@@ -14,7 +14,6 @@ import type {
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
-	V1Secret,
 	V1Service,
 	V1ServiceAccount,
 } from "@kubernetes/client-node";
@@ -27,7 +26,6 @@ import {
 } from "./connection-consumer-projection.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
-import { validateRuntimeTlsSecretV1 } from "./kubernetes-runtime-tls.js";
 import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
@@ -48,7 +46,6 @@ export interface SessionSandboxAllocationV1 {
 	readonly namespace: string;
 	readonly podName: string;
 	readonly serviceName: string;
-	readonly runtimeTlsSecretName: string;
 	readonly serviceAccountName: string;
 	readonly pvcName: string;
 	readonly networkPolicyName: string;
@@ -120,10 +117,6 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(value.namespace) ||
 		!value.podName ||
 		!value.serviceName ||
-		!value.runtimeTlsSecretName ||
-		!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(
-			value.runtimeTlsSecretName,
-		) ||
 		!value.serviceAccountName ||
 		!value.pvcName ||
 		!value.networkPolicyName ||
@@ -247,15 +240,11 @@ export function sessionSandboxResourcesV1(
 					volumeMounts: [
 						...connection.volumeMounts,
 						{ name: "workspace", mountPath: allocation.workspaceMountPath },
-						{
-							name: "runtime-tls",
-							mountPath: "/var/run/agent-infra/runtime-tls",
-							readOnly: true,
-						},
 					],
+					// In-cluster plaintext (ADR-0020); NetworkPolicy admits only the Worker.
 					readinessProbe: {
 						httpGet: {
-							scheme: "HTTPS",
+							scheme: "HTTP",
 							path: "/healthz",
 							port: allocation.containerPort,
 						},
@@ -273,17 +262,6 @@ export function sessionSandboxResourcesV1(
 				{
 					name: "workspace",
 					persistentVolumeClaim: { claimName: allocation.pvcName },
-				},
-				{
-					name: "runtime-tls",
-					secret: {
-						secretName: allocation.runtimeTlsSecretName,
-						items: [
-							{ key: "tls.crt", path: "tls.crt" },
-							{ key: "tls.key", path: "tls.key" },
-						],
-						optional: false,
-					},
 				},
 			],
 		},
@@ -716,20 +694,6 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			if (options.client.namespace !== allocation.namespace)
 				throw new WorkloadKubernetesError("policy");
 			validateAllocation(allocation);
-			if (allocation.desiredState === "running") {
-				const tls = await options.client.read(
-					"Secret",
-					allocation.runtimeTlsSecretName,
-				);
-				if (
-					!validateRuntimeTlsSecretV1(
-						tls as V1Secret | null,
-						allocation.runtimeTlsSecretName,
-						[`${allocation.serviceName}.${allocation.namespace}.svc`],
-					)
-				)
-					return { status: "unknown", resources: [] };
-			}
 			const resources: SessionSandboxResourceIdentityV1[] = [];
 			let status: SessionSandboxObservationV1["status"] =
 				allocation.desiredState === "stopped" ? "stopped" : "ready";

@@ -55,8 +55,6 @@ import { createRuntimeConnectionConsumerSnapshotV1 } from "./connection-consumer
 import { createProductionConversationRuntimeResolverV2 } from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
-	runtimeTlsBindingFixture,
-	runtimeTlsSecretFixture,
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
@@ -299,27 +297,6 @@ function fixture(
 	> = {},
 ) {
 	const api = fakeKubernetesApi();
-	const tlsAgents = [
-		"agent-a",
-		"agent-codex",
-		"agent-claude",
-		"agent-acp",
-		"agent-pi",
-	];
-	const runtimeTlsSecrets = new Map(
-		tlsAgents.map((agentId) => {
-			const name = `runtime-tls-${workloadResourceNameV1(agentId)}`;
-			return [name, runtimeTlsSecretFixture(name, agentId)] as const;
-		}),
-	);
-	const readResource = api.client.read.bind(api.client);
-	api.client.read = (async (
-		kind: Parameters<typeof api.client.read>[0],
-		name: string,
-	) => {
-		const secret = kind === "Secret" ? runtimeTlsSecrets.get(name) : undefined;
-		return secret ? structuredClone(secret) : readResource(kind, name);
-	}) as typeof api.client.read;
 	let configuration = inputOverrides.configuration ?? configurationFixture();
 	let state: WorkloadReconciliationStateV1 | null = null;
 	let management: WorkloadReconciliationInputV1["management"] = {
@@ -353,7 +330,6 @@ function fixture(
 		client: api.client,
 		policy: {
 			...workloadTestPolicy,
-			runtimeTls: tlsAgents.map(runtimeTlsBindingFixture),
 		},
 		registry: workloadRegistryFixture({
 			schemaVersion: 1,
@@ -376,18 +352,9 @@ function fixture(
 			}),
 		},
 		fetch: runtimeFetch,
-		runtimeTlsFetch: () => runtimeFetch,
 		probeRuntime: async () => ({ core: "passed", capabilities: {} }),
 		...overrides,
 	};
-	if (overrides.policy && overrides.policy.runtimeTls === undefined)
-		(options as { policy: WorkloadRuntimeOptionsV1["policy"] }).policy = {
-			...overrides.policy,
-			runtimeTls: tlsAgents.map(runtimeTlsBindingFixture),
-		};
-	if (overrides.fetch && !overrides.runtimeTlsFetch)
-		(options as { runtimeTlsFetch?: () => typeof fetch }).runtimeTlsFetch =
-			() => options.fetch ?? runtimeFetch;
 	return {
 		...api,
 		options,
@@ -2973,7 +2940,7 @@ describe("assembled Workload Runtime contracts", () => {
 		await f.tick(5);
 		expect(fetcher).toHaveBeenCalledWith(
 			expect.stringMatching(
-				/^https:\/\/agent-[a-f0-9]+-probe\.workload-test\.svc:8080\/healthz$/,
+				/^http:\/\/agent-[a-f0-9]+-probe\.workload-test\.svc:8080\/healthz$/,
 			),
 			expect.objectContaining({
 				redirect: "error",
@@ -3016,7 +2983,6 @@ it.each(["unavailable", "changed-source"] as const)(
 		const policy = {
 			...workloadTestPolicy,
 			connectionConsumerSnapshot: snapshot,
-			runtimeTls: [runtimeTlsBindingFixture("agent-a")],
 			runtimeAuth: {
 				workerId: signing.workerId,
 				grantIssuer: signing.issuer,
@@ -3096,7 +3062,6 @@ it("persists exact capacity and binds readiness to fence/image while preserving 
 	};
 	const policy = {
 		...workloadTestPolicy,
-		runtimeTls: [runtimeTlsBindingFixture("agent-a")],
 		runtimeAuth: {
 			workerId: signing.workerId,
 			grantIssuer: signing.issuer,
@@ -3485,7 +3450,7 @@ it.each(["unchanged", "uid", "selector", "port", "fence"] as const)(
 			return;
 		}
 		await expect(resolution).resolves.toMatchObject({
-			baseUrl: `https://${sandbox.resourceName}.${sourcePolicy.namespace}.svc:${verifiedDeployment.service.port}`,
+			baseUrl: `http://${sandbox.resourceName}.${sourcePolicy.namespace}.svc:${verifiedDeployment.service.port}`,
 		});
 	},
 );

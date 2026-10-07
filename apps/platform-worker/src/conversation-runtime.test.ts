@@ -227,7 +227,7 @@ function harness(
 		throw new Error(`Unexpected runtime request: ${path}`);
 	});
 	const resolver = vi.fn(async () => ({
-		baseUrl: "https://runtime.test",
+		baseUrl: "http://runtime.test",
 		serviceToken: "synthetic-transport-proof",
 		workerId: "transport",
 	}));
@@ -318,7 +318,7 @@ describe("Trusted conversation Runtime adapter", () => {
 	it("rechecks the trusted Worker identity when resolver outputs share a mutable object", async () => {
 		const h = harness();
 		const target = {
-			baseUrl: "https://runtime.test",
+			baseUrl: "http://runtime.test",
 			serviceToken: "synthetic-transport-proof",
 			workerId: "transport",
 		};
@@ -366,7 +366,7 @@ describe("Trusted conversation Runtime adapter", () => {
 		});
 		if (!first || !changed) throw new Error("Expected approved snapshots");
 		const stableTarget = {
-			baseUrl: "https://runtime.test",
+			baseUrl: "http://runtime.test",
 			serviceToken: "synthetic-transport-proof",
 			workerId: "transport",
 			connectionConsumer: first,
@@ -668,7 +668,7 @@ describe("Trusted conversation Runtime adapter", () => {
 			if (!record) throw new Error("missing fixture");
 			h.setRecord({ ...record, configurationRevision: 2 });
 			return {
-				baseUrl: "https://runtime.test",
+				baseUrl: "http://runtime.test",
 				serviceToken: "synthetic",
 				workerId: "transport",
 			};
@@ -832,7 +832,7 @@ describe("Trusted conversation Runtime adapter", () => {
 			}),
 		).rejects.toMatchObject({ code: "RUNTIME_ACCEPTANCE_UNKNOWN" });
 		expect(h.sent().url).toBe(
-			"https://runtime.test/internal/runtime/v3/original-binding",
+			"http://runtime.test/internal/runtime/v3/original-binding",
 		);
 		expect(h.sent().claims).toMatchObject({
 			purpose: "control",
@@ -892,7 +892,7 @@ describe("Trusted conversation Runtime adapter", () => {
 			}),
 		).resolves.toMatchObject({ outcome: "found", status: "running" });
 		expect(String(h.fetcher.mock.calls[1]?.[0])).toBe(
-			"https://runtime.test/internal/runtime/v3/status",
+			"http://runtime.test/internal/runtime/v3/status",
 		);
 		h.runtime.close();
 	});
@@ -1672,7 +1672,7 @@ describe("Trusted conversation Runtime adapter", () => {
 		h.resolver.mockImplementation(async () => {
 			h.store.readRuntimeState.mockResolvedValue(null);
 			return {
-				baseUrl: "https://runtime.test",
+				baseUrl: "http://runtime.test",
 				serviceToken: "synthetic",
 				workerId: "transport",
 			};
@@ -1734,7 +1734,7 @@ describe("durable generation isolation Worker wiring", () => {
 					result: { outcome: "accepted", status: "cancelled" },
 				});
 				expect(h.sent()).toMatchObject({
-					url: "https://runtime.test/internal/runtime/v3/generations/cancel",
+					url: "http://runtime.test/internal/runtime/v3/generations/cancel",
 					claims: {
 						principal: { kind: "user", id: "user" },
 						purpose: "control",

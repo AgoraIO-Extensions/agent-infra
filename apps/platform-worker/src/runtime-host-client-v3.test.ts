@@ -28,7 +28,7 @@ const base = {
 };
 function client(fetcher: typeof fetch) {
 	return createWorkerRuntimeHostClientV3({
-		baseUrl: "https://runtime.local",
+		baseUrl: "http://runtime.local",
 		serviceToken: "synthetic-service-proof",
 		fetch: fetcher,
 	});
@@ -56,7 +56,7 @@ describe("Worker V3 Runtime Client", () => {
 		).resolves.toEqual(response);
 		const [url, init] = fetcher.mock.calls[0] ?? [];
 		expect(String(url)).toBe(
-			"https://runtime.local/internal/runtime/v3/original-binding",
+			"http://runtime.local/internal/runtime/v3/original-binding",
 		);
 		expect(init?.signal).toBe(signal);
 		expect(init?.headers).toMatchObject({
@@ -276,9 +276,7 @@ describe("Worker V3 Runtime Client", () => {
 		const call = fetcher.mock.calls[0];
 		if (!call) throw new Error("missing request");
 		const [url, options] = call;
-		expect(String(url)).toBe(
-			"https://runtime.local/internal/runtime/v3/status",
-		);
+		expect(String(url)).toBe("http://runtime.local/internal/runtime/v3/status");
 		const payload = JSON.parse(options?.body as string);
 		expect(payload).not.toHaveProperty("input");
 		expect(payload).not.toHaveProperty("recovery");

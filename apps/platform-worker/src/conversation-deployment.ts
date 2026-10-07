@@ -176,7 +176,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				)
 					throw new Error();
 				return {
-					baseUrl: `https://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
+					baseUrl: `http://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
 					connectionConsumer,
@@ -197,12 +197,6 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			if (
 				deployment.agentId !== input.agentId ||
 				deployment.runtimeManifest.interactionMode !== "platform-adapter"
-			)
-				throw new Error();
-			if (
-				!workload.policy.runtimeTls?.some(
-					(binding) => binding.agentId === input.agentId,
-				)
 			)
 				throw new Error();
 			// observe checks actual ownership, UID/generation, Pod/spec/Secret/network
@@ -289,8 +283,8 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					throw new Error();
 				return {
 					// Session sandboxes use their own Service contract; the bound Service
-					// must still be consumed through the internal HTTPS contract.
-					baseUrl: `https://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
+					// is consumed in-cluster over plaintext HTTP (ADR-0020).
+					baseUrl: `http://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
 					connectionConsumer,
@@ -299,7 +293,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			input.signal.throwIfAborted();
 			const service = `${workloadResourceNameV1(input.agentId)}${input.purpose === "control" ? "-probe" : ""}`;
 			return {
-				baseUrl: `https://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
+				baseUrl: `http://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
 				serviceToken,
 				workerId: signing.workerId,
 				connectionConsumer,
@@ -348,49 +342,6 @@ export function createProductionSessionSandboxReceiverV1(
 		namespace: policy.namespace,
 		podName: binding.resourceName,
 		serviceName: binding.resourceName,
-		runtimeTlsSecretName: (() => {
-			const bindings = (
-				policy as typeof policy & {
-					readonly sessionRuntimeTlsBindings?: readonly {
-						readonly sessionId: string;
-						readonly sandboxId: string;
-						readonly generation: number;
-						readonly resourceFence: number;
-						readonly serviceName: string;
-						readonly secretName: string;
-					}[];
-				}
-			).sessionRuntimeTlsBindings;
-			if (!bindings)
-				throw new Error("Session Runtime TLS input is unavailable");
-			const secretNames = new Set(bindings.map((item) => item.secretName));
-			if (secretNames.size !== bindings.length)
-				throw new Error("Session Runtime TLS Secret is reused");
-			const allocationKeys = new Set(
-				bindings.map((item) =>
-					[
-						item.sessionId,
-						item.sandboxId,
-						item.generation,
-						item.resourceFence,
-						item.serviceName,
-					].join("\u0000"),
-				),
-			);
-			if (allocationKeys.size !== bindings.length)
-				throw new Error("Session Runtime TLS binding is ambiguous");
-			const match = bindings.find(
-				(item) =>
-					item.sessionId === binding.sessionId &&
-					item.sandboxId === binding.sandboxId &&
-					item.generation === generation &&
-					item.resourceFence === resourceFence &&
-					item.serviceName === binding.resourceName,
-			);
-			if (!match?.secretName)
-				throw new Error("Session Runtime TLS Secret input is unavailable");
-			return match.secretName;
-		})(),
 		serviceAccountName: binding.resourceName,
 		pvcName: binding.resourceName,
 		networkPolicyName: binding.resourceName,

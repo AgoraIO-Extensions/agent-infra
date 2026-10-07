@@ -7,7 +7,6 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { get as httpsGet } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -23,9 +22,7 @@ import {
 	signV3Fixture,
 	submitV3Fixture,
 } from "../../../packages/agent-runtime/src/grant-v2-fixture.test-support.js";
-import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.js";
-import { createRuntimeTlsTransport } from "../../platform-worker/src/runtime-tls-transport.js";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
@@ -527,11 +524,9 @@ describe("RuntimeHost environment assembly", () => {
 	);
 	it("reports the consumed configuration revision in readiness metadata", async () => {
 		const runtime = await assembleRuntimeHost(await environment());
-		const material = await runtimeTlsFixture();
 		const ready = Promise.withResolvers<string>();
 		const server = startRuntimeHost({
 			...runtime,
-			tls: { ...material, serviceDnsNames: ["localhost"] },
 			port: 0,
 			configVersion: "active-revision-17",
 			log: ready.resolve,
@@ -544,25 +539,13 @@ describe("RuntimeHost environment assembly", () => {
 			const address = server.address();
 			if (!address || typeof address === "string")
 				throw new Error("Missing test port");
-			const status = await new Promise<number | undefined>(
-				(resolve, reject) => {
-					httpsGet(
-						`https://localhost:${address.port}/healthz`,
-						{ ca: material.ca },
-						(response) => {
-							response.resume();
-							response.once("end", () => resolve(response.statusCode));
-						},
-					).once("error", reject);
-				},
-			);
-			expect(status).toBe(200);
+			const response = await fetch(`http://127.0.0.1:${address.port}/healthz`);
+			expect(response.status).toBe(200);
 		} finally {
 			await new Promise<void>((resolve, reject) =>
 				server.close((error) => (error ? reject(error) : resolve())),
 			);
 			await runtime.close();
-			await material.cleanup();
 		}
 	});
 
@@ -573,7 +556,7 @@ describe("RuntimeHost environment assembly", () => {
 		await runtime.close();
 	});
 
-	it("keeps service token and signed Worker authorization independent over verified TLS", async () => {
+	it("keeps service token and signed Worker authorization independent over in-cluster HTTP", async () => {
 		const runtime = await assembleRuntimeHost({
 			...(await environment()),
 			AGENT_INFRA_RUNTIME_WORKER_ID: "worker-fixture",
@@ -583,12 +566,9 @@ describe("RuntimeHost environment assembly", () => {
 				.export({ type: "spki", format: "pem" })
 				.toString(),
 		});
-		const material = await runtimeTlsFixture();
-		const transport = createRuntimeTlsTransport(material.ca);
 		const ready = Promise.withResolvers<string>();
 		const server = startRuntimeHost({
 			...runtime,
-			tls: { ...material, serviceDnsNames: ["localhost"] },
 			port: 0,
 			log: ready.resolve,
 		});
@@ -601,22 +581,19 @@ describe("RuntimeHost environment assembly", () => {
 			now = Date.now(),
 			token = "synthetic-token",
 		) =>
-			transport.fetch(
-				`https://localhost:${address.port}/internal/runtime/v3/turns`,
-				{
-					method: "POST",
-					headers: {
-						authorization: `Bearer ${token}`,
-						"content-type": "application/json",
-					},
-					body: JSON.stringify(
-						signV3Fixture(submitV3Fixture(), "turn.submit", {
-							now,
-							claims: { workerId },
-						}),
-					),
+			fetch(`http://127.0.0.1:${address.port}/internal/runtime/v3/turns`, {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
 				},
-			);
+				body: JSON.stringify(
+					signV3Fixture(submitV3Fixture(), "turn.submit", {
+						now,
+						claims: { workerId },
+					}),
+				),
+			});
 		try {
 			try {
 				expect(
@@ -633,8 +610,6 @@ describe("RuntimeHost environment assembly", () => {
 			expect((await post("worker-fixture")).status).toBe(403);
 		} finally {
 			await closeRuntimeHost(server, async () => {});
-			await transport.close();
-			await material.cleanup();
 		}
 	});
 

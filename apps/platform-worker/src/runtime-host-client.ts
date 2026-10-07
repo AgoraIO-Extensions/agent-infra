@@ -67,7 +67,7 @@ import {
 	type ConversationRuntimeStatusRequestV2,
 } from "@agent-infra/platform-core";
 import type { RelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
-import { runtimeTlsFetch } from "./runtime-tls-transport.js";
+import { runtimeFetch } from "./runtime-transport.js";
 
 export interface WorkerRuntimeHostClientOptionsV1 {
 	readonly baseUrl: string;
@@ -144,8 +144,9 @@ function endpoint(baseUrl: string, path: string) {
 	} catch {
 		throw new TypeError("RuntimeHost base URL is invalid");
 	}
+	// In-cluster plaintext only (ADR-0020); the resolver binds the exact Service.
 	if (
-		base.protocol !== "https:" ||
+		base.protocol !== "http:" ||
 		base.username ||
 		base.password ||
 		base.search ||
@@ -461,7 +462,7 @@ export function createWorkerRuntimeHostClientV1(
 		throw new TypeError("RuntimeHost client options are invalid");
 	}
 	const dispatchBase = endpoint(options.baseUrl, "/");
-	const fetcher = options.fetch ?? runtimeTlsFetch();
+	const fetcher = options.fetch ?? runtimeFetch;
 	return {
 		async dispatch(request, signal) {
 			let selected: ReturnType<typeof dispatchBody>;
@@ -633,7 +634,7 @@ export function createWorkerRuntimeHostClientV3(
 		? structuredClone(options.connectionConsumer)
 		: undefined;
 	const fetcher = bindConnectionConsumer(
-		options.fetch ?? runtimeTlsFetch(),
+		options.fetch ?? runtimeFetch,
 		connectionConsumer,
 	);
 	async function request<T extends { traceId: string }, R>(
@@ -809,16 +810,11 @@ export function createWorkerRuntimeHostClientV4(
 	)
 		throw new TypeError("RuntimeHost V4 client options are invalid");
 	const base = endpoint(options.baseUrl, "/");
-	if (
-		process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0" ||
-		base.protocol !== "https:"
-	)
-		throw new TypeError("RuntimeHost V4 transport must be confidential");
 	const connectionConsumer = options.connectionConsumer
 		? structuredClone(options.connectionConsumer)
 		: undefined;
 	const fetcher = bindConnectionConsumer(
-		options.fetch ?? runtimeTlsFetch(),
+		options.fetch ?? runtimeFetch,
 		connectionConsumer,
 	);
 	async function send(value: RuntimeBusinessRequestV4, signal?: AbortSignal) {

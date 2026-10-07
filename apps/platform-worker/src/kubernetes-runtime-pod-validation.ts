@@ -21,10 +21,6 @@ import {
 	revisionLabel,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
-import {
-	runtimeTlsBindingV1,
-	runtimeTlsEnvironmentV1,
-} from "./kubernetes-runtime-tls.js";
 export function createKubernetesPodValidationV1(dependencies: {
 	readonly connectionConsumerControl?: boolean;
 	readonly policy: KubernetesWorkloadPolicyV1;
@@ -413,7 +409,6 @@ export function createKubernetesPodValidationV1(dependencies: {
 			? runtimeConnectionConsumerControlPodV1({ spec: specInput }).spec
 			: specInput;
 		if (hasUnsafePodSpec(pod, expectedIdentity)) return true;
-		const tls = runtimeTlsBindingV1(policy, value);
 		const container = pod?.containers.find((entry) => entry.name === "agent");
 		const probe = container?.readinessProbe;
 		const ports = container?.ports?.map((port) => ({
@@ -425,7 +420,7 @@ export function createKubernetesPodValidationV1(dependencies: {
 			httpGet: {
 				path: value.health.path,
 				port: value.service.port,
-				scheme: tls ? "HTTPS" : "HTTP",
+				scheme: "HTTP",
 			},
 			timeoutSeconds: value.health.timeoutSeconds,
 			failureThreshold: value.health.failureThreshold,
@@ -456,12 +451,10 @@ export function createKubernetesPodValidationV1(dependencies: {
 					...entry,
 					value: entry.value ?? "",
 				})),
-				[...workloadEnvironment(value), ...runtimeTlsEnvironmentV1(tls)].map(
-					(entry) => ({
-						...entry,
-						value: "value" in entry ? entry.value : "",
-					}),
-				),
+				workloadEnvironment(value).map((entry) => ({
+					...entry,
+					value: "value" in entry ? entry.value : "",
+				})),
 			) ||
 			!hasSameStructure(
 				(container?.envFrom ?? []).map((entry) => ({
@@ -508,18 +501,6 @@ export function createKubernetesPodValidationV1(dependencies: {
 						subPathExpr: "",
 						mountPropagation: "None",
 					},
-					...(tls
-						? [
-								{
-									name: "runtime-tls",
-									mountPath: "/var/run/agent-infra/runtime-tls",
-									readOnly: true,
-									subPath: "",
-									subPathExpr: "",
-									mountPropagation: "None",
-								},
-							]
-						: []),
 				],
 			) ||
 			pod?.serviceAccountName !== workloadResourceNameV1(value.agentId) ||
@@ -567,22 +548,6 @@ export function createKubernetesPodValidationV1(dependencies: {
 						name: "runtime-tmp",
 						emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
 					},
-					...(tls
-						? [
-								{
-									name: "runtime-tls",
-									secret: {
-										secretName: tls.serverSecretRef.name,
-										optional: false,
-										defaultMode: 0o440,
-										items: [
-											{ key: "tls.crt", path: "tls.crt" },
-											{ key: "tls.key", path: "tls.key" },
-										],
-									},
-								},
-							]
-						: []),
 				],
 			)
 		);
