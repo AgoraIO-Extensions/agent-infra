@@ -13,6 +13,11 @@ export interface SessionSandboxPolicyV1 {
 
 export interface SessionSandboxVerifiedPolicyV1 extends SessionSandboxPolicyV1 {
 	readonly configurationRevision: number;
+	/**
+	 * Workload reconciliation revision of the verified deployment the Sandbox
+	 * was prepared from (`deployment.workloadRevision`, equal to
+	 * `verifiedRevision`). Not the management lifecycle revision (#1480).
+	 */
 	readonly workloadRevision: number;
 	readonly managementFence: number;
 	readonly imageDigest: string;

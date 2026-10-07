@@ -156,9 +156,12 @@ export async function readSessionSandboxRuntimeState(
 	if (
 		policy.configurationRevision !== Number(row.configuration_revision) ||
 		policy.managementFence !== Number(row.management_fence) ||
-		policy.workloadRevision !== Number(row.workload_revision) ||
+		// The policy binds the verified Workload revision; the management
+		// lifecycle revision is checked against its own source (#1480).
+		decoded.state.sourceLifecycleRevision !== Number(row.workload_revision) ||
 		decoded.state.phase !== "ready" ||
 		decoded.state.verifiedRevision === null ||
+		policy.workloadRevision !== decoded.state.verifiedRevision ||
 		decoded.state.sourceConfigurationRevision !==
 			policy.configurationRevision ||
 		verified.configuration.revision !== policy.configurationRevision ||

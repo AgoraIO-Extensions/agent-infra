@@ -242,8 +242,9 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					sandboxResource.policy.imageDigest !== deployment.imageDigest ||
 					sandboxResource.policy.configurationRevision !==
 						state.sourceConfigurationRevision ||
+					// The verified Workload revision, not the lifecycle revision (#1480).
 					sandboxResource.policy.workloadRevision !==
-						state.sourceLifecycleRevision ||
+						deployment.workloadRevision ||
 					sandboxResource.policy.resourceConfigurationHash !==
 						workloadResourceConfigurationHashV1(workload.policy)
 				)
