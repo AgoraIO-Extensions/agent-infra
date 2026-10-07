@@ -38,7 +38,8 @@ ARG SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"}}'
 RUN apk add --no-cache --upgrade 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0' 'setpriv=2.42.3-r1' \
-	&& npm install --global npm@11.19.1
+	&& npm install --global npm@11.19.1 --logs-max=0 \
+	&& rm -rf /root/.npm /tmp/node-compile-cache /var/log/apk.log
 ENV NODE_ENV=production
 ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime
 ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin

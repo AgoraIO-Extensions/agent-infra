@@ -55,6 +55,25 @@ Web、Platform API、Worker、目录同步镜像只在 `v*` Tag 或显式手动�
 等预发布 Tag 不更新 `latest`。实际部署选择版本并固定其 Digest。
 发布镜像不登记模板、不提升 readiness，也不代替各模板的真实模型或部署验收。
 
+## 镜像安装层重复构建验证
+
+发布入口仍执行两次无缓存构建并比较 OCI Digest。生产安装层在同一 `RUN` 中清理 npm
+日志/缓存、Node 编译缓存和 apk 日志，避免时间与进程相关内容进入镜像层。
+
+已有明确归属且支持 OCI exporter 的 Docker context 和 Buildx builder 时，可独立验证实际
+Dockerfile 的生产安装命令；该检查不构建业务部署、不推送 Registry，也不替代完整发布验收：
+
+```bash
+IMAGE_RELEASE_TEST_DOCKER_CONTEXT=your-owned-context \
+BUILDX_BUILDER=your-owned-builder PLATFORM=linux/amd64 \
+  node --test --test-concurrency=1 tests/image-installation-reproducibility.test.mjs
+```
+
+`PLATFORM=linux/arm64` 验证另一架构。需要构建代理时显式设置
+`IMAGE_RELEASE_TEST_BUILD_PROXY`；需要缩小反馈范围时用 `IMAGE_RELEASE_TEST_IMAGES` 选择
+`agent-runtime-host,platform-api,platform-worker,enterprise-directory-sync,web,custom-agent-base`
+中的镜像。未声明 context 时普通测试跳过该集成检查，实际发布的双构建门禁继续保留。
+
 ## 部署输入
 
 以下 `AGENT_INFRA_*` 输入只能由受信部署装配。Owner 与 HTTP 请求不能选择 Driver、原生路径、
