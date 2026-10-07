@@ -1,11 +1,13 @@
 import { Buffer } from "node:buffer";
 
-import type {
-	AgentConfigurationActionV1,
-	AgentConfigurationChangedFieldV1,
-	AgentConfigurationRecordV2,
-	AgentConfigurationResultV1,
-	AgentConfigurationSourceV1,
+import {
+	type AgentConfigurationActionV1,
+	type AgentConfigurationChangedFieldV1,
+	type AgentConfigurationRecord,
+	type AgentConfigurationRecordV2,
+	type AgentConfigurationResultV1,
+	type AgentConfigurationSourceV1,
+	decodeAgentConfigurationRecordV3,
 } from "@agent-infra/platform-core";
 
 const idMaxBytes = 1024;
@@ -416,4 +418,15 @@ export function decodeAgentConfigurationResult(
 		revision: positiveInteger(value.revision),
 		changedFields: fields,
 	};
+}
+
+/** Explicit current-store reception; the legacy decoder still refuses V3. */
+export function decodeVersionedAgentConfigurationRecord(
+	input: unknown,
+): AgentConfigurationRecord {
+	return input !== null &&
+		typeof input === "object" &&
+		Object.getOwnPropertyDescriptor(input, "schemaVersion")?.value === 3
+		? decodeAgentConfigurationRecordV3(input)
+		: decodeAgentConfigurationRecord(input);
 }
