@@ -10,14 +10,24 @@ import {
 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
+	V1Container,
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
+	V1Secret,
 	V1Service,
 	V1ServiceAccount,
 } from "@kubernetes/client-node";
+import {
+	runtimeConnectionConsumerAnnotation,
+	runtimeConnectionConsumerControlPodV1,
+	runtimeConnectionConsumerFileEnvironment,
+	runtimeConnectionConsumerProjectionV1,
+	runtimeConnectionConsumerRevisionEnvironment,
+} from "./connection-consumer-projection.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
+import { validateRuntimeTlsSecretV1 } from "./kubernetes-runtime-tls.js";
 
 /** Typed handoff for the #1250 Store allocation authority. */
 export interface SessionSandboxAllocationV1 {
@@ -34,6 +44,7 @@ export interface SessionSandboxAllocationV1 {
 	readonly namespace: string;
 	readonly podName: string;
 	readonly serviceName: string;
+	readonly runtimeTlsSecretName: string;
 	readonly serviceAccountName: string;
 	readonly pvcName: string;
 	readonly networkPolicyName: string;
@@ -42,6 +53,7 @@ export interface SessionSandboxAllocationV1 {
 	readonly containerPort: number;
 	readonly workspaceMountPath: string;
 	readonly env?: Readonly<Record<string, string>>;
+	readonly connectionConsumerSnapshot?: string | null;
 	readonly resources: {
 		readonly requests: { readonly cpu: string; readonly memory: string };
 		readonly limits: { readonly cpu: string; readonly memory: string };
@@ -99,6 +111,10 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(value.namespace) ||
 		!value.podName ||
 		!value.serviceName ||
+		!value.runtimeTlsSecretName ||
+		!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(
+			value.runtimeTlsSecretName,
+		) ||
 		!value.serviceAccountName ||
 		!value.pvcName ||
 		!value.networkPolicyName ||
@@ -124,6 +140,24 @@ export function sessionSandboxResourcesV1(
 	allocation: SessionSandboxAllocationV1,
 ): SessionSandboxResourceSetV1 {
 	validateAllocation(allocation);
+	if (
+		allocation.desiredState === "running" &&
+		(allocation.connectionConsumerSnapshot === null ||
+			Object.hasOwn(
+				allocation.env ?? {},
+				runtimeConnectionConsumerFileEnvironment,
+			) ||
+			Object.hasOwn(
+				allocation.env ?? {},
+				runtimeConnectionConsumerRevisionEnvironment,
+			))
+	)
+		throw new WorkloadKubernetesError("policy");
+	const connection = runtimeConnectionConsumerProjectionV1(
+		allocation.desiredState === "running"
+			? allocation.connectionConsumerSnapshot
+			: undefined,
+	);
 	const resourceLabels = labels(allocation);
 	const account: V1ServiceAccount = {
 		apiVersion: "v1",
@@ -166,7 +200,13 @@ export function sessionSandboxResourcesV1(
 	const pod: V1Pod = {
 		apiVersion: "v1",
 		kind: "Pod",
-		metadata: metadata(allocation, allocation.podName),
+		metadata: {
+			...metadata(allocation, allocation.podName),
+			annotations: {
+				...metadata(allocation, allocation.podName).annotations,
+				...connection.annotations,
+			},
+		},
 		spec: {
 			serviceAccountName: allocation.serviceAccountName,
 			automountServiceAccountToken: false,
@@ -178,16 +218,29 @@ export function sessionSandboxResourcesV1(
 					imagePullPolicy: "IfNotPresent",
 					resources: structuredClone(allocation.resources),
 					ports: [{ containerPort: allocation.containerPort }],
-					env: Object.entries(allocation.env ?? {}).map(([name, value]) => ({
-						name,
-						value,
-					})),
+					env: [
+						...Object.entries(allocation.env ?? {}).map(([name, value]) => ({
+							name,
+							value,
+						})),
+						...connection.env,
+					],
 					workingDir: allocation.workspaceMountPath,
 					volumeMounts: [
+						...connection.volumeMounts,
 						{ name: "workspace", mountPath: allocation.workspaceMountPath },
+						{
+							name: "runtime-tls",
+							mountPath: "/var/run/agent-infra/runtime-tls",
+							readOnly: true,
+						},
 					],
 					readinessProbe: {
-						httpGet: { path: "/healthz", port: allocation.containerPort },
+						httpGet: {
+							scheme: "HTTPS",
+							path: "/healthz",
+							port: allocation.containerPort,
+						},
 						periodSeconds: 5,
 					},
 					securityContext: {
@@ -198,9 +251,21 @@ export function sessionSandboxResourcesV1(
 				},
 			],
 			volumes: [
+				...connection.volumes,
 				{
 					name: "workspace",
 					persistentVolumeClaim: { claimName: allocation.pvcName },
+				},
+				{
+					name: "runtime-tls",
+					secret: {
+						secretName: allocation.runtimeTlsSecretName,
+						items: [
+							{ key: "tls.crt", path: "tls.crt" },
+							{ key: "tls.key", path: "tls.key" },
+						],
+						optional: false,
+					},
 				},
 			],
 		},
@@ -253,6 +318,11 @@ function stableJson(value: unknown): string {
 }
 
 function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
+	if (
+		current.metadata?.annotations?.[runtimeConnectionConsumerAnnotation] !==
+		expected.metadata?.annotations?.[runtimeConnectionConsumerAnnotation]
+	)
+		return false;
 	const currentSpec = (current as V1Pod).spec;
 	const expectedSpec = expected.spec;
 	const currentContainer = currentSpec?.containers?.[0];
@@ -285,19 +355,48 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 		stableJson(currentContainer.resources) ===
 			stableJson(expectedContainer.resources) &&
 		currentContainer.workingDir === expectedContainer.workingDir &&
-		stableJson(currentContainer.ports ?? []) ===
-			stableJson(expectedContainer.ports ?? []) &&
+		stableJson(
+			(currentContainer.ports ?? []).map((port) => ({
+				...port,
+				protocol: port.protocol ?? "TCP",
+			})),
+		) ===
+			stableJson(
+				(expectedContainer.ports ?? []).map((port) => ({
+					...port,
+					protocol: port.protocol ?? "TCP",
+				})),
+			) &&
 		stableJson(normalizeEnv(currentContainer.env)) ===
 			stableJson(normalizeEnv(expectedContainer.env)) &&
 		stableJson(currentContainer.volumeMounts ?? []) ===
 			stableJson(expectedContainer.volumeMounts ?? []) &&
 		stableJson(currentContainer.securityContext ?? {}) ===
 			stableJson(expectedContainer.securityContext ?? {}) &&
-		stableJson(currentContainer.readinessProbe ?? {}) ===
-			stableJson(expectedContainer.readinessProbe ?? {}) &&
+		stableJson(readinessProbeShape(currentContainer.readinessProbe)) ===
+			stableJson(readinessProbeShape(expectedContainer.readinessProbe)) &&
 		stableJson(currentSpec.volumes ?? []) ===
 			stableJson(expectedSpec.volumes ?? [])
 	);
+}
+
+function readinessProbeShape(probe: V1Container["readinessProbe"]) {
+	return probe
+		? {
+				...probe,
+				httpGet: probe.httpGet
+					? {
+							...probe.httpGet,
+							scheme: probe.httpGet.scheme ?? "HTTP",
+						}
+					: undefined,
+				initialDelaySeconds: probe.initialDelaySeconds ?? 0,
+				timeoutSeconds: probe.timeoutSeconds ?? 1,
+				periodSeconds: probe.periodSeconds ?? 10,
+				successThreshold: probe.successThreshold ?? 1,
+				failureThreshold: probe.failureThreshold ?? 3,
+			}
+		: undefined;
 }
 
 function resourceSpecMatches(
@@ -315,8 +414,12 @@ function resourceSpecMatches(
 			);
 		case "NetworkPolicy":
 			return (
-				stableJson((current as V1NetworkPolicy).spec) ===
-				stableJson((expected as V1NetworkPolicy).spec)
+				stableJson(
+					normalizeNetworkPolicySpec((current as V1NetworkPolicy).spec),
+				) ===
+				stableJson(
+					normalizeNetworkPolicySpec((expected as V1NetworkPolicy).spec),
+				)
 			);
 		case "Service": {
 			const actual = (current as V1Service).spec;
@@ -339,6 +442,19 @@ function resourceSpecMatches(
 		default:
 			return false;
 	}
+}
+
+function normalizeNetworkPolicySpec(spec: V1NetworkPolicy["spec"]) {
+	return {
+		...spec,
+		egress: spec?.egress ?? [],
+		ingress: spec?.ingress?.map((rule) => ({
+			...rule,
+			_from:
+				rule._from ?? (rule as typeof rule & { from?: typeof rule._from }).from,
+			from: undefined,
+		})),
+	};
 }
 
 function owned(
@@ -541,6 +657,20 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 				} else if (expected.kind === "Pod") {
 					if (!podSpecMatches(current, expected as V1Pod))
 						throw new WorkloadKubernetesError("conflict");
+				} else if (expected.kind === "Service") {
+					// Keep the API-assigned address and version on lawful retries.
+					// An owned Service with a different route is drift, not an update.
+					if (!resourceSpecMatches(current, expected))
+						throw new WorkloadKubernetesError("conflict");
+				} else if (
+					expected.kind === "ServiceAccount" ||
+					expected.kind === "NetworkPolicy"
+				) {
+					// Kube may add defaulted fields to these owned resources. A
+					// matching object is already converged; replacing it can turn a
+					// harmless retry into a 409 on immutable/defaulted fields.
+					if (!resourceSpecMatches(current, expected))
+						throw new WorkloadKubernetesError("conflict");
 				} else
 					await options.client.replace({
 						...expected,
@@ -560,13 +690,34 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 		async observe(
 			allocation: SessionSandboxAllocationV1,
 			previous: readonly SessionSandboxResourceIdentityV1[] = [],
+			purpose: "business" | "control" = "business",
 		): Promise<SessionSandboxObservationV1> {
 			if (options.client.namespace !== allocation.namespace)
 				throw new WorkloadKubernetesError("policy");
+			validateAllocation(allocation);
+			if (allocation.desiredState === "running") {
+				const tls = await options.client.read(
+					"Secret",
+					allocation.runtimeTlsSecretName,
+				);
+				if (
+					!validateRuntimeTlsSecretV1(
+						tls as V1Secret | null,
+						allocation.runtimeTlsSecretName,
+						[`${allocation.serviceName}.${allocation.namespace}.svc`],
+					)
+				)
+					return { status: "unknown", resources: [] };
+			}
 			const resources: SessionSandboxResourceIdentityV1[] = [];
 			let status: SessionSandboxObservationV1["status"] =
 				allocation.desiredState === "stopped" ? "stopped" : "ready";
-			for (const expected of sessionSandboxResourcesV1(allocation)) {
+			const expectedResources = sessionSandboxResourcesV1(
+				purpose === "control"
+					? { ...allocation, desiredState: "stopped" }
+					: allocation,
+			);
+			for (const expected of expectedResources) {
 				const kind = expected.kind as SessionSandboxResourceIdentityV1["kind"];
 				const name = expected.metadata?.name ?? "";
 				const current = await options.client.read(kind, name);
@@ -606,7 +757,14 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						prior.uid !== identity.uid)
 				)
 					status = "unknown";
-				if (!resourceSpecMatches(current, expected)) status = "unknown";
+				const matches =
+					purpose === "control" && kind === "Pod"
+						? podSpecMatches(
+								runtimeConnectionConsumerControlPodV1(current as V1Pod),
+								runtimeConnectionConsumerControlPodV1(expected as V1Pod),
+							)
+						: resourceSpecMatches(current, expected);
+				if (!matches) status = "unknown";
 				if (kind === "Pod") {
 					const pod = current as V1Pod;
 					if (
@@ -620,7 +778,11 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 						status = "observed";
 				}
 			}
-			return { status, resources };
+			return {
+				status:
+					purpose === "control" && status === "ready" ? "observed" : status,
+				resources,
+			};
 		},
 		async cleanup(
 			allocation: SessionSandboxAllocationV1,
@@ -642,7 +804,10 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 			const recordDeletionProgress = context.recordDeletionProgress;
 			if (!recordDeletionProgress)
 				throw new WorkloadKubernetesError("unavailable");
-			const expectedResources = sessionSandboxResourcesV1(allocation);
+			const expectedResources = sessionSandboxResourcesV1({
+				...allocation,
+				desiredState: "stopped",
+			});
 			const previousByKind = new Map(
 				previous.map((resource) => [resource.kind, resource]),
 			);

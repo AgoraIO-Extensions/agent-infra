@@ -59,6 +59,8 @@ platformWorker:
     privateKeyKey: runtime-grant.pem
     serviceTokenKey: service-token
   deploymentModule: file:///app/dist/deployment.mjs
+  runtimeImageRepository: ghcr.io/agoraio-extensions/agent-infra/agent-runtime-host
+  runtimeImageDigest: sha256:1111111111111111111111111111111111111111111111111111111111111111
   replicas: 1
 enterpriseDirectorySync:
   enabled: false

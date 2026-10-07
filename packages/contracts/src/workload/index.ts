@@ -1,3 +1,4 @@
+import { BrowserCapabilityDeclarationV1Schema } from "../runtime/browser-capability.ts";
 import {
 	WorkloadBoundaryErrorV1Schema,
 	WorkloadFenceV1Schema,
@@ -29,6 +30,7 @@ import {
 import {
 	RuntimeCapabilitySetV1Schema,
 	RuntimeHealthV1Schema,
+	RuntimeManifestCapabilitySetV1Schema,
 	RuntimeManifestV1Schema,
 	RuntimeServiceV1Schema,
 } from "./runtime-manifest.ts";
@@ -59,6 +61,8 @@ export {
 	type RuntimeCapabilitySetV1,
 	RuntimeCapabilitySetV1Schema,
 	RuntimeHealthV1Schema,
+	type RuntimeManifestCapabilitySetV1,
+	RuntimeManifestCapabilitySetV1Schema,
 	type RuntimeManifestV1,
 	RuntimeManifestV1Schema,
 	RuntimeServiceV1Schema,
@@ -78,6 +82,7 @@ export const kubernetesWorkloadSchemasV1 = {
 } as const;
 
 export const registryManifestSchemasV1 = {
+	BrowserCapabilityDeclarationV1: BrowserCapabilityDeclarationV1Schema,
 	ImageAdmissionPolicyEvidenceV1: ImageAdmissionPolicyEvidenceV1Schema,
 	ImageRegistryAdmissionErrorV1: ImageRegistryAdmissionErrorV1Schema,
 	ImageRegistryAdmissionRequestV1: ImageRegistryAdmissionRequestV1Schema,
@@ -88,6 +93,7 @@ export const registryManifestSchemasV1 = {
 	OciImageReferenceV1: OciImageReferenceV1Schema,
 	RuntimeCapabilitySetV1: RuntimeCapabilitySetV1Schema,
 	RuntimeHealthV1: RuntimeHealthV1Schema,
+	RuntimeManifestCapabilitySetV1: RuntimeManifestCapabilitySetV1Schema,
 	RuntimeManifestParsingEvidenceV1: RuntimeManifestParsingEvidenceV1Schema,
 	RuntimeManifestV1: RuntimeManifestV1Schema,
 	RuntimeServiceV1: RuntimeServiceV1Schema,

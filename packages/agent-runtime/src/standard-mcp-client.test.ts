@@ -1,0 +1,355 @@
+import { afterEach, expect, it } from "vitest";
+import {
+	closeStandardMcpFixtures,
+	reference,
+	standardMcpFixture,
+	token,
+} from "./standard-mcp.fixture.js";
+import {
+	StandardMcpClient,
+	validateStandardMcpInput,
+} from "./standard-mcp-client.js";
+
+const closes: (() => Promise<void>)[] = [];
+afterEach(async () => {
+	for (const close of closes.splice(0)) await close();
+	await closeStandardMcpFixtures();
+});
+
+it("uses actual standard initialize/discovery/call once without exporting credentials", async () => {
+	const fixture = await standardMcpFixture();
+	const client = await StandardMcpClient.open(
+		{
+			target: fixture.target,
+			resolveInput: async () => fixture.input,
+			fetch: fixture.fetch,
+		},
+		reference,
+		new AbortController().signal,
+	);
+	closes.push(() => client.close());
+	const alias = client.toolDefinitions[0]?.tools[0]?.name;
+	if (!alias) throw new Error("No fixture tool");
+	const ordering: string[] = [];
+	const result = await client.call(
+		alias,
+		{ text: "bounded fixture text" },
+		{
+			block: () => {},
+			confirm: async () => {},
+			assertCurrent: async () => {
+				ordering.push("authorize");
+				return () => {};
+			},
+			prepare: async () => {},
+			started: async (actual) => {
+				ordering.push("started");
+				expect(actual.requestDigest).toMatch(/^[a-f0-9]{64}$/);
+			},
+		},
+		new AbortController().signal,
+	);
+	expect(result).toMatchObject({ phase: "completed", success: true });
+	expect(fixture.trace.map((item) => item.method)).toContain("initialize");
+	expect(
+		fixture.trace.filter((item) => item.method === "tools/call"),
+	).toHaveLength(1);
+	expect(ordering.indexOf("authorize")).toBeLessThan(
+		ordering.indexOf("started"),
+	);
+	expect(JSON.stringify([client.toolDefinitions, result])).not.toContain(token);
+});
+
+it.each(["persisted", "failed", "revoked"] as const)(
+	"waits for RPC identity persistence and rechecks authority when it is %s",
+	async (outcome) => {
+		const fixture = await standardMcpFixture();
+		let persisted = false;
+		let authorized = true;
+		let starts = 0;
+		const sends: boolean[] = [];
+		const client = await StandardMcpClient.open(
+			{
+				target: fixture.target,
+				resolveInput: async () => fixture.input,
+				fetch: (url, init) => {
+					if (
+						typeof init?.body === "string" &&
+						JSON.parse(init.body).method === "tools/call"
+					)
+						sends.push(persisted);
+					return fixture.fetch(url, init);
+				},
+			},
+			reference,
+			new AbortController().signal,
+		);
+		closes.push(() => client.close());
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const pending = client.call(
+			client.toolDefinitions[0]?.tools[0]?.name ?? "",
+			{ text: "fixture" },
+			{
+				block: () => {},
+				confirm: async () => {},
+				assertCurrent: async () => () => {
+					if (!authorized) throw new Error("Controlled revocation");
+				},
+				prepare: async () => {
+					entered.resolve();
+					await release.promise;
+					if (outcome === "failed")
+						throw new Error("Controlled journal failure");
+					persisted = true;
+				},
+				started: async () => {
+					starts++;
+					expect(sends).toEqual([true]);
+				},
+			},
+			new AbortController().signal,
+		);
+		await entered.promise;
+		const sendsBeforePersistence = sends.length;
+		if (outcome === "revoked") authorized = false;
+		release.resolve();
+		const result = await pending;
+		expect(sendsBeforePersistence).toBe(0);
+		expect(sends).toEqual(outcome === "persisted" ? [true] : []);
+		expect(starts).toBe(outcome === "persisted" ? 1 : 0);
+		expect(result.phase).toBe(
+			outcome === "persisted" ? "completed" : "unknown",
+		);
+	},
+);
+
+it.each(["unknown", "lost", "leak", "key-leak"] as const)(
+	"keeps %s results unknown and does not resend",
+	async (behavior) => {
+		const fixture = await standardMcpFixture();
+		const client = await StandardMcpClient.open(
+			{
+				target: fixture.target,
+				resolveInput: async () => fixture.input,
+				fetch: fixture.fetch,
+			},
+			reference,
+			new AbortController().signal,
+		);
+		closes.push(() => client.close());
+		fixture.setBehavior(behavior);
+		const result = await client.call(
+			client.toolDefinitions[0]?.tools[0]?.name ?? "",
+			{ text: "fixture" },
+			{
+				block: () => {},
+				confirm: async () => {},
+				assertCurrent: async () => () => {},
+				prepare: async () => {},
+				started: async () => {},
+			},
+			new AbortController().signal,
+		);
+		expect(result).toEqual({
+			phase: "unknown",
+			contentItems: [],
+			success: false,
+		});
+		expect(
+			fixture.trace.filter((item) => item.method === "tools/call"),
+		).toHaveLength(1);
+	},
+);
+
+it("rejects discovery with credential-bearing JSON keys", async () => {
+	const fixture = await standardMcpFixture();
+	fixture.setBehavior("tool-key");
+	await expect(
+		StandardMcpClient.open(
+			{
+				target: fixture.target,
+				resolveInput: async () => fixture.input,
+				fetch: fixture.fetch,
+			},
+			reference,
+			new AbortController().signal,
+		),
+	).rejects.toMatchObject({ code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE" });
+});
+
+it("rechecks original authorization after the final awaited installation read", async () => {
+	const fixture = await standardMcpFixture();
+	let checks = 0;
+	let revoked = false;
+	const client = await StandardMcpClient.open(
+		{
+			target: fixture.target,
+			resolveInput: async () => {
+				if (checks >= 2) revoked = true;
+				return fixture.input;
+			},
+			fetch: fixture.fetch,
+		},
+		reference,
+		new AbortController().signal,
+	);
+	closes.push(() => client.close());
+	const result = await client.call(
+		client.toolDefinitions[0]?.tools[0]?.name ?? "",
+		{ text: "fixture" },
+		{
+			block: () => {},
+			confirm: async () => {},
+			prepare: async () => {},
+			started: async () => {},
+			assertCurrent: async () => {
+				checks++;
+				return () => {
+					if (revoked) throw new Error("Revoked fixture");
+				};
+			},
+		},
+		new AbortController().signal,
+	);
+	expect(result.phase).toBe("failed");
+	expect(
+		fixture.trace.filter((entry) => entry.method === "tools/call"),
+	).toHaveLength(0);
+});
+
+it.each(["completed", "unknown"] as const)(
+	"holds queued tools through %s persistence/ACK",
+	async (outcome) => {
+		const fixture = await standardMcpFixture();
+		const client = await StandardMcpClient.open(
+			{
+				target: fixture.target,
+				resolveInput: async () => fixture.input,
+				fetch: fixture.fetch,
+			},
+			reference,
+			new AbortController().signal,
+		);
+		closes.push(() => client.close());
+		fixture.setBehavior(outcome);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let blocked = false;
+		const alias = client.toolDefinitions[0]?.tools[0]?.name ?? "";
+		const first = client.call(
+			alias,
+			{ text: "first" },
+			{
+				assertCurrent: async () => () => {},
+				prepare: async () => {},
+				started: async () => {},
+				block: () => {
+					blocked = true;
+				},
+				confirm: async () => {
+					entered.resolve();
+					await release.promise;
+				},
+			},
+			new AbortController().signal,
+		);
+		await entered.promise;
+		expect(blocked).toBe(outcome === "unknown");
+		const second = client.call(
+			alias,
+			{ text: "second" },
+			{
+				assertCurrent: async () => () => {},
+				prepare: async () => {},
+				started: async () => {},
+				block: () => {},
+				confirm: async () => {},
+			},
+			new AbortController().signal,
+		);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(
+			fixture.trace.filter((entry) => entry.method === "tools/call"),
+		).toHaveLength(1);
+		release.resolve();
+		await first;
+		await second;
+		expect(
+			fixture.trace.filter((entry) => entry.method === "tools/call"),
+		).toHaveLength(outcome === "unknown" ? 1 : 2);
+	},
+);
+
+it("denies installation drift and native argument overrides before sending tools", async () => {
+	const fixture = await standardMcpFixture();
+	let current = fixture.input;
+	const client = await StandardMcpClient.open(
+		{
+			target: fixture.target,
+			resolveInput: async () => current,
+			fetch: fixture.fetch,
+		},
+		reference,
+		new AbortController().signal,
+	);
+	closes.push(() => client.close());
+	const alias = client.toolDefinitions[0]?.tools[0]?.name ?? "";
+	expect(
+		client.validateArguments(alias, { text: "fixture", principal: "user-b" }),
+	).toBe(false);
+	current = { ...current, credentialRevision: "r2" };
+	const result = await client.call(
+		alias,
+		{ text: "fixture" },
+		{
+			block: () => {},
+			confirm: async () => {},
+			assertCurrent: async () => () => {},
+			prepare: async () => {},
+			started: async () => {},
+		},
+		new AbortController().signal,
+	);
+	expect(result.phase).toBe("failed");
+	expect(
+		fixture.trace.filter((item) => item.method === "tools/call"),
+	).toHaveLength(0);
+});
+
+it("rejects redirects without copying the token to another target", async () => {
+	const fixture = await standardMcpFixture();
+	fixture.setBehavior("redirect");
+	await expect(
+		StandardMcpClient.open(
+			{
+				target: fixture.target,
+				resolveInput: async () => fixture.input,
+				fetch: fixture.fetch,
+			},
+			reference,
+			new AbortController().signal,
+		),
+	).rejects.toMatchObject({ code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE" });
+});
+
+it.each([
+	"agentId",
+	"conversationId",
+	"executionId",
+	"sessionGeneration",
+] as const)("rejects mismatched original %s", async (field) => {
+	const fixture = await standardMcpFixture();
+	const scope = {
+		...fixture.input.scope,
+		[field]: field === "sessionGeneration" ? 2 : "different",
+	};
+	expect(() =>
+		validateStandardMcpInput(
+			{ ...fixture.input, scope },
+			reference,
+			fixture.target,
+		),
+	).toThrow("unavailable");
+	expect(fixture.trace).toHaveLength(0);
+});

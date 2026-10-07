@@ -8,6 +8,7 @@ import {
 	FileRuntimeStore,
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { RuntimeCapabilitiesResponseV1Schema } from "@agent-infra/contracts/runtime";
 import {
 	type PlatformSecretRecordV1,
@@ -50,6 +51,7 @@ import {
 	readCodexPilotConfiguration,
 	readRuntimeModelConfigurationV3,
 } from "../../agent-runtime-host/src/configuration.js";
+import { createRuntimeConnectionConsumerSnapshotV1 } from "./connection-consumer-projection.js";
 import { createProductionConversationRuntimeResolverV2 } from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
@@ -2982,6 +2984,107 @@ describe("assembled Workload Runtime contracts", () => {
 		expect(f.state?.phase).toBe("cleaning");
 	});
 });
+
+it.each(["unavailable", "changed-source"] as const)(
+	"preserves the real original control resolver after Connection %s",
+	async (change) => {
+		const keys = generateKeyPairSync("ed25519");
+		const signing = {
+			workerId: "worker-a",
+			issuer: "platform",
+			keyId: "key",
+			privateKey: keys.privateKey,
+		};
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "consumer-a",
+			audience: "resource-a",
+			egressProfile: { ref: "egress-a", revision: "r1" },
+		};
+		const approval = {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			egressEnforced: true,
+			source: { ref: "deployment-a", revision: "r1" },
+		};
+		const snapshot = createRuntimeConnectionConsumerSnapshotV1(
+			profile,
+			approval,
+		);
+		const policy = {
+			...workloadTestPolicy,
+			connectionConsumerSnapshot: snapshot,
+			runtimeTls: [runtimeTlsBindingFixture("agent-a")],
+			runtimeAuth: {
+				workerId: signing.workerId,
+				grantIssuer: signing.issuer,
+				grantKeyId: signing.keyId,
+				grantPublicKey: keys.publicKey
+					.export({ type: "spki", format: "pem" })
+					.toString(),
+				serviceTokenSecret: { name: "transport", key: "token" },
+			},
+		};
+		const f = fixture({ policy });
+		await f.tick(8);
+		const ready = f.state;
+		if (!ready?.identity || !ready.verified)
+			throw Error("Expected ready fixture");
+		const nextApproval = {
+			...approval,
+			source: { ...approval.source, revision: "r2" },
+		};
+		const updated = {
+			...f.options,
+			policy: {
+				...policy,
+				connectionConsumerSnapshot:
+					change === "unavailable"
+						? null
+						: createRuntimeConnectionConsumerSnapshotV1(profile, nextApproval),
+			},
+		};
+		const runtime = createWorkloadRuntimeV1(updated);
+		await expect(runtime.observeVerifiedControl(ready)).resolves.toBe(
+			"healthy",
+		);
+		const resolver = createProductionConversationRuntimeResolverV2({
+			workload: updated,
+			signing,
+			serviceToken: "synthetic-transport",
+			...(change === "changed-source"
+				? {
+						connectionConsumerProfile: profile,
+						connectionConsumerApproval: nextApproval,
+					}
+				: {}),
+		});
+		const writes = f.writes.length;
+		await expect(
+			resolver({
+				agentId: ready.agentId,
+				workload: ready,
+				signal: new AbortController().signal,
+				purpose: "control",
+				command: "turn.stop",
+			}),
+		).resolves.toMatchObject({ baseUrl: expect.stringContaining("-probe") });
+		await expect(
+			resolver({
+				agentId: ready.agentId,
+				workload: { ...ready, identity: { uid: "other", generation: 1 } },
+				signal: new AbortController().signal,
+				purpose: "control",
+				command: "turn.stop",
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		expect(f.writes.length).toBe(writes);
+		await expect(runtime.observe(ready)).resolves.not.toBe("healthy");
+		await expect(runtime.promote(ready)).rejects.toThrow();
+	},
+);
 
 it("persists exact capacity and binds readiness to fence/image while preserving original controls after capacity withdrawal", async () => {
 	const keys = generateKeyPairSync("ed25519");

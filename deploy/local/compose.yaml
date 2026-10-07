@@ -24,13 +24,75 @@ services:
       PLATFORM_API_DEPLOYMENT_MODULE: file:///app/dist/deployment.mjs
       PLATFORM_API_CONFIGURATION_MODULE: file:///app/deployment/configuration.mjs
       PLATFORM_API_PROXY_TOKEN_FILE: /run/secrets/platform_proxy_token
+      PLATFORM_PUBLIC_ORIGIN: ${PLATFORM_PUBLIC_ORIGIN:-https://localhost:3001}
+      NODE_EXTRA_CA_CERTS: /run/secrets/directory_ca
+    extra_hosts:
+      - "${PLATFORM_LOCAL_LDAP_HOST:?Set the private LDAP host name}:${PLATFORM_LOCAL_LDAP_HOST_IP:?Set the private LDAP host IP}"
     volumes:
       - ${PLATFORM_LOCAL_API_DIRECTORY:?Set the API-only deployment directory}:/app/deployment:ro
+      - ${PLATFORM_LOCAL_DIRECTORY_SOURCE_DIR:?Set the private directory source directory}/tls.crt:/run/secrets/directory_ca:ro
     secrets:
       - platform_proxy_token
     depends_on:
       postgres:
         condition: service_healthy
+      enterprise-directory-sync:
+        condition: service_healthy
+
+  enterprise-directory-migration:
+    image: ${PLATFORM_LOCAL_DIRECTORY_IMAGE:?Set the local directory sync image}
+    build: !reset null
+    environment:
+      DIRECTORY_MIGRATION_DATABASE_URL: ${PLATFORM_LOCAL_DIRECTORY_MIGRATION_DATABASE_URL:?Set the private directory migration URL}
+      DIRECTORY_RUNTIME_DATABASE_ROLE: ${PLATFORM_LOCAL_DIRECTORY_RUNTIME_DATABASE_ROLE:?Set the private directory runtime role}
+    profiles: ["enterprise-directory"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  enterprise-directory-sync:
+    image: ${PLATFORM_LOCAL_DIRECTORY_IMAGE:?Set the local directory sync image}
+    build: !reset null
+    environment:
+      DIRECTORY_ROOT_DEPARTMENT_ID: ${PLATFORM_LOCAL_DIRECTORY_ROOT_DEPARTMENT_ID:-1}
+      WECOM_CORP_ID: ${PLATFORM_LOCAL_DIRECTORY_CORP_ID:?Set the private directory Corp ID}
+      DIRECTORY_DATABASE_URL: ${PLATFORM_LOCAL_DIRECTORY_DATABASE_URL:?Set the private directory runtime URL}
+      DIRECTORY_SOURCE_MODULE: file:///app/directory-source/source.ts
+      DIRECTORY_READ_TOKEN_FILE: /run/secrets/directory_read_token
+      DIRECTORY_TLS_CERT_FILE: /run/secrets/directory_tls_cert
+      DIRECTORY_TLS_KEY_FILE: /run/secrets/directory_tls_key
+    volumes:
+      - ${PLATFORM_LOCAL_DIRECTORY_SOURCE_DIR:?Set the private directory source directory}/source.ts:/app/directory-source/source.ts:ro
+      - ${PLATFORM_LOCAL_DIRECTORY_SOURCE_DIR:?Set the private directory source directory}/adapter.ts:/app/directory-source/adapter.ts:ro
+      - ${PLATFORM_LOCAL_DIRECTORY_SOURCE_DIR:?Set the private directory source directory}/package.json:/app/directory-source/package.json:ro
+      - ${PLATFORM_LOCAL_DIRECTORY_SOURCE_DIR:?Set the private directory source directory}/read-token:/run/secrets/directory_read_token:ro
+      - ${PLATFORM_LOCAL_DIRECTORY_SOURCE_DIR:?Set the private directory source directory}/tls.crt:/run/secrets/directory_tls_cert:ro
+      - ${PLATFORM_LOCAL_DIRECTORY_SOURCE_DIR:?Set the private directory source directory}/tls.key:/run/secrets/directory_tls_key:ro
+      - ${PLATFORM_LOCAL_DIRECTORY_SOURCE_DIR:?Set the private directory source directory}/agora-service-key:/run/secrets/agora_service_key:ro
+    extra_hosts:
+      - "${PLATFORM_LOCAL_DIRECTORY_SOURCE_HOST:?Set the private enterprise source host name}:${PLATFORM_LOCAL_DIRECTORY_SOURCE_HOST_IP:?Set the private enterprise source host IP}"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('https').get('https://enterprise-directory-sync:3004/readyz',{ca:require('fs').readFileSync('/run/secrets/directory_tls_cert')},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    profiles: ["enterprise-directory"]
+    depends_on:
+      enterprise-directory-migration:
+        condition: service_completed_successfully
+
+  connection-api:
+    image: agent-infra-e2e-connection-api
+    build: !reset null
+    ports: !override
+      - "127.0.0.1:${PLATFORM_LOCAL_CONNECTION_API_PORT:-34432}:3002"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
 
   object-storage:
     image: cgr.dev/chainguard/minio@sha256:4d397a26fe49d7f9ed39b8b566534848936f7efa50ab6328ac97b2a44eeabf4c

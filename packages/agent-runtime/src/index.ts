@@ -1,4 +1,7 @@
 export * from "./acp-runtime-driver.js";
+export * from "./browser-context.js";
+export * from "./browser-handoff.js";
+export * from "./browser-observe.js";
 export {
 	CLAUDE_NATIVE_PROVENANCE,
 	verifyClaudeInstallation,
@@ -20,4 +23,6 @@ export * from "./opencode-installation.js";
 export * from "./pi-bootstrap.js";
 export * from "./pi-installation.js";
 export * from "./readiness.js";
+export type { RuntimeOriginalExecutionRef } from "./runtime-authorization.js";
 export * from "./runtime-host.js";
+export * from "./standard-mcp-client.js";
