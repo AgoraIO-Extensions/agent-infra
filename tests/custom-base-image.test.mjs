@@ -37,7 +37,7 @@ const configDigest = ${JSON.stringify(configDigest)};
 const manifestDigest = ${JSON.stringify(manifestDigest)};
 const mode = ${JSON.stringify(mode)};
 if (args[0] === "buildx" && args[1] === "imagetools") process.stdout.write(${JSON.stringify(rawManifest)});
-else if (args[0] === "buildx" && args[1] === "build") {
+else if (args[0] === "build" || (args[0] === "buildx" && args[1] === "build")) {
   writeFileSync(args[args.indexOf("--metadata-file") + 1], JSON.stringify({
     "containerimage.digest": mode === "classic" ? configDigest : manifestDigest,
     "containerimage.config.digest": mode === "bad-config" ? "sha256:" + "b".repeat(64) : configDigest,
