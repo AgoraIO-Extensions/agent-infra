@@ -3,10 +3,12 @@ import type { V1Pod, V1StatefulSet } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
+	createRuntimeConnectionInstallationRevisionV1,
 	runtimeConnectionConsumerAnnotation,
 	runtimeConnectionConsumerFileEnvironment,
 	runtimeConnectionConsumerProjectionV1,
 	runtimeConnectionConsumerRevisionEnvironment,
+	runtimeConnectionInstallationRevisionEnvironment,
 } from "./connection-consumer-projection.js";
 import {
 	fakeKubernetesApi,
@@ -278,3 +280,155 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readRuntimeConnectionConsumerProfile } from "../../agent-runtime-host/src/connection-consumer-profile.js";
+
+describe("protected installation supply projection", () => {
+	const selected = JSON.stringify(["private-runtime-supply", "delivery-r7"]);
+	it("captures a separate immutable nonsecret source with the Host tuple format", () => {
+		const input = { ref: "private-runtime-supply", revision: "delivery-r7" };
+		const revision = createRuntimeConnectionInstallationRevisionV1(
+			input,
+			snapshot(),
+		);
+		input.ref = "mutated";
+		expect(revision).toBe(selected);
+		expect(
+			runtimeConnectionConsumerProjectionV1(snapshot(), revision).env,
+		).toContainEqual({
+			name: runtimeConnectionInstallationRevisionEnvironment,
+			value: selected,
+		});
+		expect(
+			createRuntimeConnectionInstallationRevisionV1(undefined, snapshot()),
+		).toBeUndefined();
+	});
+	it.each([
+		null,
+		{},
+		{ ref: "supply" },
+		{ ref: "supply", revision: "" },
+		{ ref: "/outside", revision: "r1" },
+		{ ref: "supply", revision: "a".repeat(129) },
+		{ ref: "supply", revision: "r1", token: "input-sentinel" },
+		{ ref: "supply", revision: "r1", path: "/caller" },
+		{ ref: "supply", revision: 1 },
+	])("keeps invalid supply selected but unavailable (%#)", (input) => {
+		expect(
+			createRuntimeConnectionInstallationRevisionV1(input, snapshot()),
+		).toBeNull();
+	});
+	it.each([undefined, null])(
+		"requires an approved Consumer (%#)",
+		(consumer) => {
+			expect(
+				createRuntimeConnectionInstallationRevisionV1(
+					{ ref: "supply", revision: "r1" },
+					consumer,
+				),
+			).toBeNull();
+			expect(() =>
+				runtimeConnectionConsumerProjectionV1(consumer, selected),
+			).toThrow();
+		},
+	);
+	it.each([
+		'["supply","r1","extra"]',
+		'["supply", "r1"]',
+		"[]",
+		'"r1"',
+		"x".repeat(513),
+	])("rejects malformed captured tuples before rendering (%#)", (revision) => {
+		expect(() =>
+			runtimeConnectionConsumerProjectionV1(snapshot(), revision),
+		).toThrow();
+	});
+	it.each(["ref", "revision", "missing"] as const)(
+		"rejects observed Pod supply %s drift before probing",
+		async (field) => {
+			const api = fakeKubernetesApi();
+			const desired = workloadDesiredFixture();
+			const probe = vi.fn(async () => true);
+			const policy = {
+				...workloadTestPolicy,
+				connectionConsumerSnapshot: snapshot(),
+				connectionInstallationRevision: selected,
+			};
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client: api.client,
+				policy,
+				probe,
+			});
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending")
+				throw new Error("Missing fixture workload");
+			const workload = await api.client.read<V1StatefulSet>(
+				"StatefulSet",
+				desired.service.name,
+			);
+			expect(workload?.spec?.template.spec?.containers[0]?.env).toContainEqual({
+				name: runtimeConnectionInstallationRevisionEnvironment,
+				value: selected,
+			});
+			expect(await adapter.observe(desired, identity)).toBe("healthy");
+			const pod = await api.client.read<V1Pod>(
+				"Pod",
+				`${desired.service.name}-0`,
+			);
+			const container = pod?.spec?.containers[0];
+			const variable = container?.env?.find(
+				(entry) =>
+					entry.name === runtimeConnectionInstallationRevisionEnvironment,
+			);
+			if (!pod || !container || !variable)
+				throw new Error("Missing fixture selector");
+			if (field === "missing")
+				container.env = container.env?.filter((entry) => entry !== variable);
+			else
+				variable.value = JSON.stringify(
+					field === "ref"
+						? ["other-supply", "delivery-r7"]
+						: ["private-runtime-supply", "delivery-r8"],
+				);
+			await api.client.replace(pod);
+			probe.mockClear();
+			expect(await adapter.observe(desired, identity)).not.toBe("healthy");
+			expect(probe).not.toHaveBeenCalled();
+			// Original control still checks identity and the retained non-delivery spec.
+			const control = createKubernetesRuntimeAdapterV1({
+				client: api.client,
+				policy: { ...policy, connectionInstallationRevision: null },
+				connectionConsumerControl: true,
+				probe,
+			});
+			expect(await control.observe(desired, identity)).toBe("healthy");
+		},
+	);
+	it("rejects caller installation env and unavailable supply before any create", async () => {
+		for (const unavailable of [false, true]) {
+			const api = fakeKubernetesApi();
+			const create = vi.spyOn(api.client, "create");
+			const adapter = createKubernetesRuntimeAdapterV1({
+				client: api.client,
+				policy: {
+					...workloadTestPolicy,
+					connectionConsumerSnapshot: snapshot(),
+					connectionInstallationRevision: unavailable ? null : selected,
+				},
+				probe: async () => true,
+			});
+			const desired = workloadDesiredFixture();
+			await expect(
+				adapter.apply(
+					unavailable
+						? desired
+						: {
+								...desired,
+								env: {
+									[runtimeConnectionInstallationRevisionEnvironment]: selected,
+								},
+							},
+				),
+			).rejects.toThrow();
+			expect(create).not.toHaveBeenCalled();
+		}
+	});
+});

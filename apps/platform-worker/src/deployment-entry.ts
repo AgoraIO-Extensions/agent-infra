@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { createRuntimeConnectionConsumerSnapshotV1 } from "./connection-consumer-projection.js";
+import {
+	createRuntimeConnectionConsumerSnapshotV1,
+	createRuntimeConnectionInstallationRevisionV1,
+} from "./connection-consumer-projection.js";
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { createWecomDeploymentCoordinatorV1 } from "./wecom-deployment.js";
@@ -24,6 +27,7 @@ type DeploymentConfiguration = {
 	readonly wecom: unknown;
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
+	readonly connectionInstallationSupply?: unknown;
 };
 
 // Deployment-owned code supplies current IdentityAdapter facts and Worker-only material.
@@ -37,6 +41,7 @@ const {
 	wecom,
 	connectionConsumerProfile,
 	connectionConsumerApproval,
+	connectionInstallationSupply,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
@@ -48,6 +53,13 @@ const connectionConsumerSnapshot = createRuntimeConnectionConsumerSnapshotV1(
 );
 if (Object.hasOwn(workloadInput.policy, "connectionConsumerSnapshot"))
 	throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+if (Object.hasOwn(workloadInput.policy, "connectionInstallationRevision"))
+	throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
+const connectionInstallationRevision =
+	createRuntimeConnectionInstallationRevisionV1(
+		connectionInstallationSupply,
+		connectionConsumerSnapshot,
+	);
 const connectionConsumer = connectionConsumerSnapshot
 	? JSON.parse(connectionConsumerSnapshot)
 	: undefined;
@@ -85,7 +97,11 @@ async function createPrepared(signal: AbortSignal) {
 	const workload = await createProductionWorkloadWorkerOptionsV1(
 		{
 			...workloadInput,
-			policy: { ...workloadInput.policy, connectionConsumerSnapshot },
+			policy: {
+				...workloadInput.policy,
+				connectionConsumerSnapshot,
+				connectionInstallationRevision,
+			},
 			databaseUrl,
 			workerId: signing.workerId,
 			runtimeProbe: createWorkloadReadinessAuthorizationV1({
@@ -151,6 +167,11 @@ async function createPrepared(signal: AbortSignal) {
 					request.purpose !== "control"
 				)
 					throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+				if (
+					connectionInstallationRevision === null &&
+					request.purpose !== "control"
+				)
+					throw new Error("CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE");
 				return resolveRuntimeHost(request);
 			},
 			fetch: workload.fetch,

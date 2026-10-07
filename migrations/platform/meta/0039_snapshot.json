@@ -1,6 +1,6 @@
 {
-  "id": "2ddbc3fa-49eb-4a4b-911b-fe28ff98005c",
-  "prevId": "980ab031-417e-4501-abaa-92e3d477c8f3",
+  "id": "60de0086-a8d8-4c0b-bf92-cb6725943e1c",
+  "prevId": "2ddbc3fa-49eb-4a4b-911b-fe28ff98005c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1134,17 +1134,17 @@
           "primaryKey": false,
           "notNull": true
         },
-        "absolute_expires_at": {
-          "name": "absolute_expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
         "principal": {
           "name": "principal",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
+        },
+        "absolute_expires_at": {
+          "name": "absolute_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {
@@ -4517,6 +4517,638 @@
         "session_sandbox_desired_state_valid": {
           "name": "session_sandbox_desired_state_valid",
           "value": "\"platform\".\"session_sandbox_allocations\".\"desired_state\" in ('running', 'stopped')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.skill_hub_agent_bindings": {
+      "name": "skill_hub_agent_bindings",
+      "schema": "platform",
+      "columns": {
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agent_version": {
+          "name": "agent_version",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "skill_version_id": {
+          "name": "skill_version_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "grant": {
+          "name": "grant",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sync_revision": {
+          "name": "sync_revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "state": {
+          "name": "state",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "failure_reason": {
+          "name": "failure_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "skill_hub_agent_binding_agent_idx": {
+          "name": "skill_hub_agent_binding_agent_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "agent_version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "skill_hub_agent_bindings_agent_id_agents_id_fk": {
+          "name": "skill_hub_agent_bindings_agent_id_agents_id_fk",
+          "tableFrom": "skill_hub_agent_bindings",
+          "tableTo": "agents",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "skill_hub_agent_bindings_skill_version_id_skill_hub_versions_id_fk": {
+          "name": "skill_hub_agent_bindings_skill_version_id_skill_hub_versions_id_fk",
+          "tableFrom": "skill_hub_agent_bindings",
+          "tableTo": "skill_hub_versions",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "skill_version_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "skill_hub_agent_binding_pk": {
+          "name": "skill_hub_agent_binding_pk",
+          "columns": [
+            "agent_id",
+            "agent_version",
+            "skill_version_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "skill_hub_agent_binding_version_non_empty": {
+          "name": "skill_hub_agent_binding_version_non_empty",
+          "value": "char_length(\"platform\".\"skill_hub_agent_bindings\".\"agent_version\") > 0"
+        },
+        "skill_hub_agent_binding_sync_revision_safe": {
+          "name": "skill_hub_agent_binding_sync_revision_safe",
+          "value": "\"platform\".\"skill_hub_agent_bindings\".\"sync_revision\" between 1 and 9007199254740991"
+        },
+        "skill_hub_agent_binding_state_valid": {
+          "name": "skill_hub_agent_binding_state_valid",
+          "value": "\"platform\".\"skill_hub_agent_bindings\".\"state\" in ('pending_sync', 'synced', 'failed', 'revoked')"
+        },
+        "skill_hub_agent_binding_failure_binding": {
+          "name": "skill_hub_agent_binding_failure_binding",
+          "value": "(\"platform\".\"skill_hub_agent_bindings\".\"state\" = 'failed') = (\"platform\".\"skill_hub_agent_bindings\".\"failure_reason\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.skill_hub_installations": {
+      "name": "skill_hub_installations",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "principal_type": {
+          "name": "principal_type",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "principal_id": {
+          "name": "principal_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "skill_version_id": {
+          "name": "skill_version_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "need_upgrade": {
+          "name": "need_upgrade",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "installed_at": {
+          "name": "installed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "skill_hub_installation_principal_version_unique": {
+          "name": "skill_hub_installation_principal_version_unique",
+          "columns": [
+            {
+              "expression": "principal_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "principal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "skill_version_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "skill_hub_installation_principal_idx": {
+          "name": "skill_hub_installation_principal_idx",
+          "columns": [
+            {
+              "expression": "principal_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "principal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "skill_hub_installations_skill_version_id_skill_hub_versions_id_fk": {
+          "name": "skill_hub_installations_skill_version_id_skill_hub_versions_id_fk",
+          "tableFrom": "skill_hub_installations",
+          "tableTo": "skill_hub_versions",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "skill_version_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "skill_hub_installation_id_non_empty": {
+          "name": "skill_hub_installation_id_non_empty",
+          "value": "char_length(\"platform\".\"skill_hub_installations\".\"id\") > 0"
+        },
+        "skill_hub_installation_principal_non_empty": {
+          "name": "skill_hub_installation_principal_non_empty",
+          "value": "char_length(\"platform\".\"skill_hub_installations\".\"principal_id\") > 0"
+        },
+        "skill_hub_installation_principal_type_valid": {
+          "name": "skill_hub_installation_principal_type_valid",
+          "value": "\"platform\".\"skill_hub_installations\".\"principal_type\" in ('user', 'organization')"
+        },
+        "skill_hub_installation_state_valid": {
+          "name": "skill_hub_installation_state_valid",
+          "value": "\"platform\".\"skill_hub_installations\".\"state\" in ('installed', 'uninstalled', 'failed')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.skill_hub_skills": {
+      "name": "skill_hub_skills",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(63)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "skill_hub_skill_owner_name_unique": {
+          "name": "skill_hub_skill_owner_name_unique",
+          "columns": [
+            {
+              "expression": "owner_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "skill_hub_skill_id_owner_unique": {
+          "name": "skill_hub_skill_id_owner_unique",
+          "columns": [
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "owner_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "skill_hub_skill_owner_idx": {
+          "name": "skill_hub_skill_owner_idx",
+          "columns": [
+            {
+              "expression": "owner_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "skill_hub_skill_id_non_empty": {
+          "name": "skill_hub_skill_id_non_empty",
+          "value": "char_length(\"platform\".\"skill_hub_skills\".\"id\") > 0"
+        },
+        "skill_hub_skill_name_non_empty": {
+          "name": "skill_hub_skill_name_non_empty",
+          "value": "char_length(\"platform\".\"skill_hub_skills\".\"name\") > 0"
+        },
+        "skill_hub_skill_owner_non_empty": {
+          "name": "skill_hub_skill_owner_non_empty",
+          "value": "char_length(\"platform\".\"skill_hub_skills\".\"owner_id\") > 0"
+        },
+        "skill_hub_skill_status_valid": {
+          "name": "skill_hub_skill_status_valid",
+          "value": "\"platform\".\"skill_hub_skills\".\"status\" in ('active', 'disabled')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "platform.skill_hub_versions": {
+      "name": "skill_hub_versions",
+      "schema": "platform",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "skill_id": {
+          "name": "skill_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "visibility": {
+          "name": "visibility",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "package_object_version": {
+          "name": "package_object_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "package_digest": {
+          "name": "package_digest",
+          "type": "char(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "manifest_digest": {
+          "name": "manifest_digest",
+          "type": "char(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "signature_digest": {
+          "name": "signature_digest",
+          "type": "char(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "need_upgrade": {
+          "name": "need_upgrade",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "reviewed_by": {
+          "name": "reviewed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "review_reason": {
+          "name": "review_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "skill_hub_version_skill_version_unique": {
+          "name": "skill_hub_version_skill_version_unique",
+          "columns": [
+            {
+              "expression": "skill_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "skill_hub_version_state_idx": {
+          "name": "skill_hub_version_state_idx",
+          "columns": [
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "skill_hub_versions_skill_id_skill_hub_skills_id_fk": {
+          "name": "skill_hub_versions_skill_id_skill_hub_skills_id_fk",
+          "tableFrom": "skill_hub_versions",
+          "tableTo": "skill_hub_skills",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "skill_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "skill_hub_version_skill_owner_fk": {
+          "name": "skill_hub_version_skill_owner_fk",
+          "tableFrom": "skill_hub_versions",
+          "tableTo": "skill_hub_skills",
+          "schemaTo": "platform",
+          "columnsFrom": [
+            "skill_id",
+            "owner_id"
+          ],
+          "columnsTo": [
+            "id",
+            "owner_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "skill_hub_version_id_non_empty": {
+          "name": "skill_hub_version_id_non_empty",
+          "value": "char_length(\"platform\".\"skill_hub_versions\".\"id\") > 0"
+        },
+        "skill_hub_version_owner_non_empty": {
+          "name": "skill_hub_version_owner_non_empty",
+          "value": "char_length(\"platform\".\"skill_hub_versions\".\"owner_id\") > 0"
+        },
+        "skill_hub_version_object_version_non_empty": {
+          "name": "skill_hub_version_object_version_non_empty",
+          "value": "char_length(\"platform\".\"skill_hub_versions\".\"package_object_version\") > 0"
+        },
+        "skill_hub_version_provider_valid": {
+          "name": "skill_hub_version_provider_valid",
+          "value": "\"platform\".\"skill_hub_versions\".\"provider\" in ('system', 'my_library', 'market', 'clawhub', 'skillhub', 'npx', 'github')"
+        },
+        "skill_hub_version_visibility_valid": {
+          "name": "skill_hub_version_visibility_valid",
+          "value": "\"platform\".\"skill_hub_versions\".\"visibility\" in ('PRIVATE', 'MEMBER', 'ORGANIZATION', 'MARKET')"
+        },
+        "skill_hub_version_state_valid": {
+          "name": "skill_hub_version_state_valid",
+          "value": "\"platform\".\"skill_hub_versions\".\"state\" in ('published', 'pending_review', 'rejected', 'revoked')"
+        },
+        "skill_hub_version_package_digest_hex": {
+          "name": "skill_hub_version_package_digest_hex",
+          "value": "\"platform\".\"skill_hub_versions\".\"package_digest\" ~ '^[0-9a-f]{64}$'"
+        },
+        "skill_hub_version_manifest_digest_hex": {
+          "name": "skill_hub_version_manifest_digest_hex",
+          "value": "\"platform\".\"skill_hub_versions\".\"manifest_digest\" ~ '^[0-9a-f]{64}$'"
+        },
+        "skill_hub_version_signature_digest_hex": {
+          "name": "skill_hub_version_signature_digest_hex",
+          "value": "\"platform\".\"skill_hub_versions\".\"signature_digest\" ~ '^[0-9a-f]{64}$'"
+        },
+        "skill_hub_version_review_binding": {
+          "name": "skill_hub_version_review_binding",
+          "value": "\"platform\".\"skill_hub_versions\".\"state\" = 'pending_review' or (\"platform\".\"skill_hub_versions\".\"state\" in ('published', 'rejected') and (\"platform\".\"skill_hub_versions\".\"visibility\" = 'PRIVATE' or \"platform\".\"skill_hub_versions\".\"reviewed_by\" is not null)) or (\"platform\".\"skill_hub_versions\".\"state\" = 'revoked' and \"platform\".\"skill_hub_versions\".\"revoked_at\" is not null)"
         }
       },
       "isRLSEnabled": false

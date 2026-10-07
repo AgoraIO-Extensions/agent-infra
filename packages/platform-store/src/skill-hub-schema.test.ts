@@ -22,7 +22,7 @@ describe("Skill Hub persistence schema", () => {
 		expect(reviewCheck).toBeDefined();
 		expect(
 			readFileSync(
-				new URL("../../../migrations/platform/0038_skill_hub.sql", import.meta.url),
+				new URL("../../../migrations/platform/0039_skill_hub.sql", import.meta.url),
 				"utf8",
 			),
 		).toContain(`"state" = 'pending_review' or`);

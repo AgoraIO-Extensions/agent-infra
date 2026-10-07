@@ -62,11 +62,16 @@ beforeAll(async () => {
 			find: async (digest) => {
 				for (const user of ["admin", "manager"]) {
 					if (createHash("sha256").update(token(user)).digest("hex") === digest)
-						return { uid: `ldap-${user}` };
+						return {
+							uid: `ldap-${user}`,
+							expiresAt: Number.MAX_SAFE_INTEGER,
+							absoluteExpiresAt: Number.MAX_SAFE_INTEGER,
+						};
 				}
 				return null;
 			},
 			create: async () => {},
+			renew: async () => true,
 			revoke: async () => {},
 			revokeUid: async () => {},
 		},

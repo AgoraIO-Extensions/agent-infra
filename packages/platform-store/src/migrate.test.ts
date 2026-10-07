@@ -1952,10 +1952,11 @@ describe("published Relay authority migration", () => {
 			36,
 			37,
 			38,
+			39,
 		]);
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 38,
-			tag: "0038_skill_hub",
+			idx: 39,
+			tag: "0039_skill_hub",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),

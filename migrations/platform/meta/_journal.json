@@ -243,8 +243,15 @@
     {
       "idx": 38,
       "version": "7",
-      "when": 1791345979552,
-      "tag": "0038_skill_hub",
+      "when": 1791338390453,
+      "tag": "0038_browser_session_absolute_expiry",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1791346626235,
+      "tag": "0039_skill_hub",
       "breakpoints": true
     }
   ]
