@@ -2,6 +2,7 @@ import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/c
 import type { SessionSandboxDeletionProgressV1 } from "@agent-infra/platform-core";
 import type {
 	KubernetesObject,
+	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
 } from "@kubernetes/client-node";
@@ -20,6 +21,7 @@ import {
 	type SessionSandboxAllocationV1,
 	sessionSandboxResourcesV1,
 } from "./session-workload-adapter.js";
+import { workloadEgressRulesV1 } from "./workload-network.js";
 
 const api = () => {
 	const resources = new Map<string, KubernetesObject>();
@@ -94,6 +96,7 @@ const allocation: SessionSandboxAllocationV1 = {
 	serviceAccountName: "sandbox-sandbox-a",
 	pvcName: "sandbox-sandbox-a",
 	networkPolicyName: "sandbox-sandbox-a",
+	egress: {},
 	imageDigest: `registry.example.test/runtime@sha256:${"a".repeat(64)}`,
 	authorizedIngressSelector: { component: "dispatcher" },
 	containerPort: 8080,
@@ -232,6 +235,142 @@ describe("session sandbox workload adapter", () => {
 		]);
 		expect(resources[2].spec?.egress).toEqual([]);
 	});
+
+	it("applies the same deployment-approved egress as the Agent Workload (#1445)", async () => {
+		const egress = {
+			dnsEgress: [
+				{ namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
+			],
+			modelEgress: [{ destination: { ip: "203.0.113.10" }, port: 443 }],
+			connectionEgress: [
+				{
+					destination: {
+						namespace: "connection",
+						podLabels: { "app.kubernetes.io/name": "connection-api" },
+					},
+					port: 3002,
+				},
+			],
+		};
+		const approved = { ...allocation, egress };
+		const [, , policy] = sessionSandboxResourcesV1(approved);
+		expect(policy.spec?.policyTypes).toEqual(["Ingress", "Egress"]);
+		expect(policy.spec?.egress).toEqual(workloadEgressRulesV1(egress));
+		expect(policy.spec?.ingress).toEqual([
+			{
+				_from: [{ podSelector: { matchLabels: { component: "dispatcher" } } }],
+				ports: [{ protocol: "TCP", port: 8080 }],
+			},
+		]);
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(approved);
+		const live = await client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			approved.networkPolicyName,
+		);
+		expect(live?.spec?.egress).toEqual(workloadEgressRulesV1(egress));
+		// The same live object no longer matches an allocation without approval.
+		await expect(adapter.apply(allocation)).rejects.toMatchObject({
+			code: "conflict",
+		});
+	});
+
+	it.each([
+		["unknown policy field", { ...allocation, egress: { anyEgress: [] } }],
+		[
+			"arbitrary CIDR destination",
+			{
+				...allocation,
+				egress: {
+					modelEgress: [{ destination: { ip: "0.0.0.0/0" }, port: 443 }],
+				},
+			},
+		],
+		[
+			"missing port",
+			{
+				...allocation,
+				egress: { modelEgress: [{ destination: { ip: "203.0.113.10" } }] },
+			},
+		],
+		["missing egress", { ...allocation, egress: undefined }],
+	])("rejects %s before any resource write", async (_name, invalid) => {
+		const client = api();
+		let writes = 0;
+		const adapter = createSessionSandboxWorkloadAdapterV1({
+			client: {
+				...client,
+				async create(object) {
+					writes++;
+					return client.create(object);
+				},
+			},
+		});
+		await expect(
+			adapter.apply(invalid as unknown as SessionSandboxAllocationV1),
+		).rejects.toMatchObject({ code: "policy" });
+		expect(writes).toBe(0);
+	});
+
+	it.each(["added", "removed", "changed"] as const)(
+		"fails closed when live Session egress is %s",
+		async (mutation) => {
+			const egress = {
+				modelEgress: [{ destination: { ip: "203.0.113.10" }, port: 443 }],
+			};
+			const approved = { ...allocation, egress };
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+			await adapter.apply(approved);
+			const pod = await client.read<V1Pod>("Pod", approved.podName);
+			if (!pod) throw new Error("Missing Pod");
+			pod.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			const before = await adapter.observe(approved);
+			expect(before.status).toBe("ready");
+			const live = await client.read<V1NetworkPolicy>(
+				"NetworkPolicy",
+				approved.networkPolicyName,
+			);
+			if (!live?.spec) throw new Error("Missing NetworkPolicy");
+			const rules = live.spec.egress ?? [];
+			live.spec.egress =
+				mutation === "added"
+					? [...rules, { to: [{ ipBlock: { cidr: "198.51.100.7/32" } }] }]
+					: mutation === "removed"
+						? []
+						: [
+								{
+									to: [{ ipBlock: { cidr: "198.51.100.7/32" } }],
+									ports: [{ protocol: "TCP", port: 443 }],
+								},
+							];
+			let writes = 0;
+			const guarded = createSessionSandboxWorkloadAdapterV1({
+				client: {
+					...client,
+					async replace(object) {
+						writes++;
+						return client.replace(object);
+					},
+					async create(object) {
+						writes++;
+						return client.create(object);
+					},
+				},
+			});
+			expect((await guarded.observe(approved, before.resources)).status).toBe(
+				"unknown",
+			);
+			await expect(
+				guarded.apply(approved, before.resources),
+			).rejects.toMatchObject({ code: "conflict" });
+			expect(writes).toBe(0);
+		},
+	);
 
 	it("keeps two Session allocations fully disjoint under one Agent", () => {
 		const second: SessionSandboxAllocationV1 = {

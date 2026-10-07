@@ -18,6 +18,13 @@ const grant = {
 	token: "opaque-file-grant",
 } as FileAccessGrantV1;
 
+const claims = {
+	agentId: binding.agentId,
+	conversationId: binding.conversationId,
+	executionId: binding.executionId,
+	sessionGeneration: binding.sessionGeneration,
+} as const;
+
 const descriptor: FileDescriptorV1 = {
 	name: "screenshot.png",
 	mediaType: "image/png",
@@ -42,6 +49,7 @@ describe("Browser File Grant bridge", () => {
 		const bridge = createBrowserFileGrantBridgeV1({
 			binding,
 			client: { readInput, writeResult },
+			verifyExecutionGrant: async () => claims,
 		});
 
 		await bridge.readInput({
@@ -76,6 +84,7 @@ describe("Browser File Grant bridge", () => {
 		const bridge = createBrowserFileGrantBridgeV1({
 			binding,
 			client: { readInput, writeResult },
+			verifyExecutionGrant: async () => claims,
 		});
 
 		await expect(
@@ -96,6 +105,73 @@ describe("Browser File Grant bridge", () => {
 			}),
 		).rejects.toThrow("BROWSER_FILE_BINDING_CONFLICT");
 		expect(readInput).not.toHaveBeenCalled();
+		expect(writeResult).not.toHaveBeenCalled();
+	});
+
+	it("rejects a valid grant whose verified claims belong to another execution", async () => {
+		const readInput = vi.fn(async () => new ReadableStream<Uint8Array>());
+		const writeResult = vi.fn(async () => projection);
+		const bridge = createBrowserFileGrantBridgeV1({
+			binding,
+			client: { readInput, writeResult },
+			verifyExecutionGrant: async () => ({
+				...claims,
+				executionId: "other-execution",
+			}),
+		});
+		await expect(
+			bridge.readInput({
+				binding,
+				executionGrant: grant,
+				fileId: "input-1",
+				idempotencyKey: "read-cross-execution",
+			}),
+		).rejects.toThrow("BROWSER_FILE_GRANT_BINDING_CONFLICT");
+		expect(readInput).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["agentId", { agentId: "other-agent" }],
+		["conversationId", { conversationId: "other-conversation" }],
+		["sessionGeneration", { sessionGeneration: 4 }],
+	])("rejects verified claims with a different %s", async (_field, change) => {
+		const readInput = vi.fn(async () => new ReadableStream<Uint8Array>());
+		const writeResult = vi.fn(async () => projection);
+		const bridge = createBrowserFileGrantBridgeV1({
+			binding,
+			client: { readInput, writeResult },
+			verifyExecutionGrant: async () => ({ ...claims, ...change }),
+		});
+		await expect(
+			bridge.readInput({
+				binding,
+				executionGrant: grant,
+				fileId: "input-1",
+				idempotencyKey: `read-${String(_field)}`,
+			}),
+		).rejects.toThrow("BROWSER_FILE_GRANT_BINDING_CONFLICT");
+		expect(readInput).not.toHaveBeenCalled();
+	});
+
+	it("fails closed when grant verification fails", async () => {
+		const readInput = vi.fn(async () => new ReadableStream<Uint8Array>());
+		const writeResult = vi.fn(async () => projection);
+		const bridge = createBrowserFileGrantBridgeV1({
+			binding,
+			client: { readInput, writeResult },
+			verifyExecutionGrant: async () => {
+				throw new Error("grant invalid");
+			},
+		});
+		await expect(
+			bridge.writeResult({
+				binding,
+				executionGrant: grant,
+				descriptor,
+				body: new ReadableStream<Uint8Array>(),
+				idempotencyKey: "result-invalid-grant",
+			}),
+		).rejects.toThrow("grant invalid");
 		expect(writeResult).not.toHaveBeenCalled();
 	});
 });
