@@ -77,6 +77,16 @@ export type BrowserSideEffectConfirmationV1 = Readonly<{
 	preview: Readonly<{ kind: BrowserActionKindV1; name: string }>;
 }>;
 
+export type BrowserActionExecutionBindingV1 = Readonly<{
+	agentId: string;
+	conversationId: string;
+	executionId: string;
+	capabilityVersion: number;
+	pageRevision: number;
+	sessionGeneration: number;
+	resourceFence: number;
+}>;
+
 export type BrowserActionRequestV1 = Readonly<{
 	actionId?: string;
 	/** Allocated by the Platform operation boundary; never generated per retry. */
@@ -93,6 +103,7 @@ export type BrowserActionRequestV1 = Readonly<{
 	durationMs?: number;
 	file?: Readonly<{ descriptor: FileDescriptorV1; bytes: Uint8Array }>;
 	sideEffect?: boolean;
+	executionBinding?: BrowserActionExecutionBindingV1;
 	authorization?: BrowserActionAuthorizationV1;
 	confirmation?: BrowserSideEffectConfirmationV1;
 }>;
@@ -111,6 +122,7 @@ export type BrowserActionRecordV1 = Readonly<{
 		| "unknown";
 	page: BrowserPageReferenceV1;
 	sideEffect: boolean;
+	executionBinding?: BrowserActionExecutionBindingV1;
 	createdAt: string;
 	completedAt?: string;
 	reasonCode?: string;
@@ -163,6 +175,21 @@ class BrowserActionRejectedError extends Error {
 		super(code);
 		this.code = code;
 	}
+}
+
+function sameExecutionBinding(
+	left: BrowserActionExecutionBindingV1,
+	right: BrowserActionExecutionBindingV1,
+): boolean {
+	return (
+		left.agentId === right.agentId &&
+		left.conversationId === right.conversationId &&
+		left.executionId === right.executionId &&
+		left.capabilityVersion === right.capabilityVersion &&
+		left.pageRevision === right.pageRevision &&
+		left.sessionGeneration === right.sessionGeneration &&
+		left.resourceFence === right.resourceFence
+	);
 }
 
 function nonEmpty(value: unknown): value is string {
@@ -595,6 +622,9 @@ export function createBrowserObserveControllerV1(input: {
 			status,
 			page,
 			sideEffect: request.sideEffect === true,
+			...(request.executionBinding
+				? { executionBinding: request.executionBinding }
+				: {}),
 			createdAt,
 			...fields,
 		};
@@ -611,6 +641,7 @@ export function createBrowserObserveControllerV1(input: {
 	function readAction(input_: {
 		readonly actionId?: string;
 		readonly idempotencyKey?: string;
+		readonly executionBinding?: BrowserActionExecutionBindingV1;
 	}): BrowserActionRecordV1 | null {
 		const byActionId = input_.actionId
 			? actionsById.get(input_.actionId)
@@ -626,7 +657,15 @@ export function createBrowserObserveControllerV1(input: {
 					byActionId.actionId !== byIdempotencyKey?.actionId))
 		)
 			throw new Error("BROWSER_ACTION_READBACK_CONFLICT");
-		return byActionId ?? byIdempotencyKey ?? null;
+		const record = byActionId ?? byIdempotencyKey;
+		if (record && input_.executionBinding) {
+			if (
+				!record.executionBinding ||
+				!sameExecutionBinding(record.executionBinding, input_.executionBinding)
+			)
+				throw new Error("BROWSER_ACTION_READBACK_BINDING_CONFLICT");
+		}
+		return record ?? null;
 	}
 
 	async function executeAction(
