@@ -376,16 +376,38 @@ describe("Browser action outcome readback", () => {
 				binding: { ...binding, executionId: "other-execution" },
 			}),
 		).toThrow("BROWSER_ACTION_READBACK_BINDING_MISMATCH");
+		expect(() => controller.readAction({ actionId: "bound-action" })).toThrow(
+			"BROWSER_ACTION_READBACK_BINDING_MISMATCH",
+		);
+		await expect(
+			controller.executeAction({
+				actionId: "bound-action",
+				operationRef: "operation-2",
+				attemptRef: "attempt-2",
+				kind: "click",
+				page: reference,
+				target,
+				...binding,
+				pageRevision: reference.pageRevision + 1,
+			}),
+		).rejects.toThrow("BROWSER_ACTION_BINDING_INVALID");
+		expect(
+			controller.readAction({ actionId: "bound-action", binding }),
+		).toMatchObject({ status: "completed", ...binding });
 
+		const rejectedBinding = executionBinding(1);
 		const rejected = await controller.executeAction({
 			actionId: "bound-rejected",
 			kind: "click",
 			page: { pageId: "missing", pageRevision: 1 },
-			...binding,
+			...rejectedBinding,
 		});
-		expect(rejected).toMatchObject({ status: "rejected", ...binding });
+		expect(rejected).toMatchObject({ status: "rejected", ...rejectedBinding });
 		expect(
-			controller.readAction({ actionId: "bound-rejected", binding }),
-		).toMatchObject({ status: "rejected", ...binding });
+			controller.readAction({
+				actionId: "bound-rejected",
+				binding: rejectedBinding,
+			}),
+		).toMatchObject({ status: "rejected", ...rejectedBinding });
 	});
 });

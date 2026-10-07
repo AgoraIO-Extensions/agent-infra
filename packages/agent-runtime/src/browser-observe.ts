@@ -698,9 +698,9 @@ export function createBrowserObserveControllerV1(input: {
 			throw new Error("BROWSER_ACTION_READBACK_BINDING_INVALID");
 		const recordBinding = record ? actionBinding(record) : undefined;
 		if (
-			input_.binding &&
-			(!record ||
-				!recordBinding ||
+			(recordBinding || input_.binding) &&
+			(!recordBinding ||
+				!input_.binding ||
 				!sameActionBinding(recordBinding, input_.binding))
 		)
 			throw new Error("BROWSER_ACTION_READBACK_BINDING_MISMATCH");
@@ -717,10 +717,7 @@ export function createBrowserObserveControllerV1(input: {
 			hasActionBinding(request) &&
 			(!binding || binding.pageRevision !== request.page.pageRevision)
 		)
-			return actionRecord(request, "rejected", request.page, createdAt, {
-				actionId,
-				reasonCode: "BROWSER_ACTION_BINDING_INVALID",
-			});
+			throw new Error("BROWSER_ACTION_BINDING_INVALID");
 		if (!request.operationRef || !request.attemptRef)
 			return actionRecord(request, "rejected", request.page, createdAt, {
 				actionId,
