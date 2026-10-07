@@ -141,7 +141,12 @@ export interface WorkloadReconciliationInputV1 {
 	};
 }
 
-/** The Store serializes each step with lifecycle/configuration writers. */
+/**
+ * The Store runs at most one step per Agent, without an open transaction or
+ * Agent row lock while the step performs external I/O, and persists the result
+ * only when the management, configuration and Workload inputs it read are
+ * still current. A discarded step is retried from the stored state.
+ */
 export interface WorkloadReconciliationStorePortV1 {
 	runNext(
 		workerId: string,

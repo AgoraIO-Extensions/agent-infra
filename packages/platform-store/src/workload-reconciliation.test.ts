@@ -13,6 +13,7 @@ import {
 	createAgentManagementV1,
 	createWorkloadReconciliationV1,
 	immutableSecretNameV1,
+	type WorkloadReconciliationInputV1,
 	type WorkloadReconciliationStateV1,
 	type WorkloadRuntimePortV1,
 } from "@agent-infra/platform-core";
@@ -128,6 +129,43 @@ async function rejectRegistryAdmission(request: {
 			message: "The image is not admitted by deployment policy",
 			retryable: false,
 			traceId: request.traceId,
+		},
+	};
+}
+
+function preflightState(
+	input: WorkloadReconciliationInputV1,
+	attempts = 0,
+): WorkloadReconciliationStateV1 {
+	return {
+		schemaVersion: 1,
+		agentId: input.management.agentId,
+		sourceConfigurationRevision: input.configuration.revision,
+		sourceLifecycleRevision: input.management.workloadRevision,
+		revision: 1,
+		fence: input.management.fence,
+		phase: "preflight",
+		candidate: { configuration: input.configuration, deployment: null },
+		verified: null,
+		verifiedRevision: null,
+		identity: null,
+		rollback: false,
+		failureCode: null,
+		attempts,
+	};
+}
+
+/** Hold one step open so tests can observe locks and concurrent writers. */
+function heldStep(attempts = 0) {
+	const started = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	return {
+		started: started.promise,
+		release: () => release.resolve(),
+		step: async (input: WorkloadReconciliationInputV1) => {
+			started.resolve();
+			await release.promise;
+			return preflightState(input, attempts);
 		},
 	};
 }
@@ -496,14 +534,32 @@ describe("PostgreSQL Workload steps", () => {
 					throw new Error("synthetic takeover failure");
 				}),
 			).rejects.toThrow("Workload reconciliation persistence failed");
-			const [rolledBackApplication] = await sql<
-				{ fence: string }[]
-			>`select fence::text from platform.agent_applications where agent_id = 'agent-a'`;
-			const [rolledBackState] = await sql<
-				{ has_fence: boolean }[]
-			>`select state ? 'fence' as has_fence from platform.workload_reconciliations where agent_id = 'agent-a'`;
-			expect(rolledBackApplication?.fence).toBe(String(managementFence));
-			expect(rolledBackState?.has_fence).toBe(false);
+			// The takeover commits both fences together before the step runs, so a
+			// failed step neither splits them nor repeats the epoch on retry.
+			const takenOver = async () => {
+				const [application] = await sql<
+					{ fence: string }[]
+				>`select fence::text from platform.agent_applications where agent_id = 'agent-a'`;
+				const [state] = await sql<
+					{ fence: number | null }[]
+				>`select (state->>'fence')::int as fence from platform.workload_reconciliations where agent_id = 'agent-a'`;
+				return { application: application?.fence, state: state?.fence };
+			};
+			expect(await takenOver()).toEqual({
+				application: String(expectedFence),
+				state: expectedFence,
+			});
+			await sql`update platform.workload_reconciliations set next_attempt_at = clock_timestamp() where agent_id = 'agent-a'`;
+			await expect(
+				first.runNext("worker-a", async (input) => {
+					expect(input.management.fence).toBe(expectedFence);
+					throw new Error("synthetic retry failure");
+				}),
+			).rejects.toThrow("Workload reconciliation persistence failed");
+			expect(await takenOver()).toEqual({
+				application: String(expectedFence),
+				state: expectedFence,
+			});
 		},
 	);
 
@@ -1935,7 +1991,7 @@ describe("PostgreSQL Workload steps", () => {
 			)[0]?.status,
 		).toBe("pending");
 	});
-	it("commits a claimed task after its lease expires inside the Agent transaction", async () => {
+	it("commits a claimed task after its lease expires while the step lock is held", async () => {
 		const shortLeaseStore = openPostgresWorkloadReconciliationStoreV1({
 			...database,
 			retryDelayMs: 0,
@@ -1977,47 +2033,134 @@ describe("PostgreSQL Workload steps", () => {
 			await shortLeaseStore.close();
 		}
 	});
-	it("serializes two Workers and prevents configuration writers from passing an in-flight step", async () => {
-		const started = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		const tick = first.runNext("worker-a", async (input) => {
-			started.resolve();
-			await release.promise;
-			return {
-				schemaVersion: 1,
-				agentId: input.management.agentId,
-				sourceConfigurationRevision: 1,
-				sourceLifecycleRevision: 1,
-				revision: 1,
-				fence: input.management.fence,
-				phase: "preflight",
-				candidate: { configuration: input.configuration, deployment: null },
-				verified: null,
-				verifiedRevision: null,
-				identity: null,
-				rollback: false,
-				failureCode: null,
-				attempts: 0,
-			};
-		});
-		await started.promise;
-		let updated = false;
-		const writer =
-			sql`update platform.agents set authorization_revision = 'authorization-b' where id = 'agent-a'`.then(
-				() => {
-					updated = true;
-				},
-			);
+	it("runs a step without an open transaction or Agent row lock", async () => {
+		const held = heldStep();
+		const tick = first.runNext("worker-a", held.step);
+		await held.started;
+		try {
+			expect(
+				await sql`select count(*)::int as count from pg_stat_activity where datname = current_database() and state like 'idle in transaction%'`,
+			).toEqual([{ count: 0 }]);
+			// Session Sandbox and Turn claims lock this row with a bounded wait.
+			for (const mode of ["share", "update"] as const)
+				await sql.begin(async (transaction) => {
+					await transaction`select set_config('lock_timeout', '1s', true)`;
+					await transaction.unsafe(
+						`select id from platform.agents where id = 'agent-a' for ${mode}`,
+					);
+				});
+		} finally {
+			held.release();
+		}
+		expect(await tick).toBe("advanced");
+	});
+	it("admits one step per Agent across Workers while Agent writers commit", async () => {
+		const held = heldStep();
+		const tick = first.runNext("worker-a", held.step);
+		await held.started;
+		try {
+			await sql`update platform.agents set authorization_revision = 'authorization-b' where id = 'agent-a'`;
+			expect(
+				await second.runNext("worker-b", async () => {
+					throw new Error("Concurrent Worker entered");
+				}),
+			).toBe("idle");
+		} finally {
+			held.release();
+		}
+		expect(await tick).toBe("advanced");
 		expect(
-			await second.runNext("worker-b", async () => {
-				throw new Error("Concurrent Worker entered");
-			}),
-		).toBe("idle");
-		expect(updated).toBe(false);
-		release.resolve();
-		await tick;
-		await writer;
-		expect(updated).toBe(true);
+			(
+				await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`
+			)[0]?.state,
+		).toMatchObject({ phase: "preflight", sourceConfigurationRevision: 1 });
+		expect(
+			(
+				await sql`select status from platform.outbox_items where id = 'task-a'`
+			)[0]?.status,
+		).toBe("succeeded");
+	});
+	it.each(["configuration", "fence"] as const)(
+		"discards a step whose %s changed meanwhile and converges on the new intent",
+		async (change) => {
+			const held = heldStep();
+			const tick = first.runNext("worker-a", held.step);
+			await held.started;
+			try {
+				if (change === "configuration") {
+					const [row] = await sql<
+						{ configuration: Record<string, unknown> }[]
+					>`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
+					await sql`insert into platform.agent_configuration_revisions(agent_id, revision, source_reference, configuration, created_at) select 'agent-a', 2, source_reference, ${sql.json({ ...row?.configuration, revision: 2 } as unknown as postgres.JSONValue)}, now() from platform.agent_configuration_revisions where agent_id = 'agent-a' and revision = 1`;
+					await sql`update platform.agents set current_configuration_revision = 2 where id = 'agent-a'`;
+				} else
+					await sql`update platform.agent_applications set fence = 2 where agent_id = 'agent-a'`;
+			} finally {
+				held.release();
+			}
+			expect(await tick).toBe("advanced");
+			expect(
+				await sql`select * from platform.workload_reconciliations where agent_id = 'agent-a'`,
+			).toHaveLength(0);
+			expect(
+				(
+					await sql`select status, lease_owner, attempt_count from platform.outbox_items where id = 'task-a'`
+				)[0],
+			).toMatchObject({
+				status: "retry_scheduled",
+				lease_owner: null,
+				attempt_count: 1,
+			});
+			await createWorkloadReconciliationV1({
+				store: second,
+				runtime: runtime(),
+			}).tick("worker-b");
+			expect(
+				(
+					await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`
+				)[0]?.state,
+			).toMatchObject(
+				change === "configuration"
+					? { sourceConfigurationRevision: 2, fence: 1 }
+					: { sourceConfigurationRevision: 1, fence: 2 },
+			);
+			expect(
+				(
+					await sql`select status from platform.outbox_items where id = 'task-a'`
+				)[0]?.status,
+			).toBe("succeeded");
+		},
+	);
+	it("lets another Worker take over after the step owner's session ends", async () => {
+		const held = heldStep(7);
+		const tick = first.runNext("worker-a", held.step);
+		await held.started;
+		try {
+			const holders = await sql<
+				{ pid: number }[]
+			>`select pid from pg_locks where locktype = 'advisory' and granted`;
+			expect(holders).toHaveLength(1);
+			await sql`select pg_terminate_backend(${holders[0]?.pid ?? 0})`;
+			expect(
+				await second.runNext("worker-b", async (input) =>
+					preflightState(input, 3),
+				),
+			).toBe("advanced");
+		} finally {
+			held.release();
+		}
+		// The earlier owner's write-back sees the newer state and is discarded.
+		expect(await tick).toBe("advanced");
+		expect(
+			(
+				await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`
+			)[0]?.state.attempts,
+		).toBe(3);
+		expect(
+			(
+				await sql`select status, lease_owner from platform.outbox_items where id = 'task-a'`
+			)[0],
+		).toMatchObject({ status: "retry_scheduled", lease_owner: null });
 	});
 	it("rotates past a malformed Agent after rollback and revisits it after repair", async () => {
 		const [source] =
@@ -2086,11 +2229,16 @@ describe("PostgreSQL Workload steps", () => {
 		expect(
 			await sql`select * from platform.workload_reconciliations`,
 		).toHaveLength(0);
+		// The claim committed before the step; a failed step returns it at once.
 		expect(
 			(
-				await sql`select status from platform.outbox_items where id = 'task-a'`
-			)[0]?.status,
-		).toBe("pending");
+				await sql`select status, lease_owner, available_at <= clock_timestamp() as due from platform.outbox_items where id = 'task-a'`
+			)[0],
+		).toMatchObject({
+			status: "retry_scheduled",
+			lease_owner: null,
+			due: true,
+		});
 		const worker = createWorkloadReconciliationV1({
 			store: second,
 			runtime: runtime(),
@@ -2099,5 +2247,10 @@ describe("PostgreSQL Workload steps", () => {
 		expect(
 			await sql`select * from platform.workload_reconciliations`,
 		).toHaveLength(1);
+		expect(
+			(
+				await sql`select status from platform.outbox_items where id = 'task-a'`
+			)[0]?.status,
+		).toBe("succeeded");
 	});
 });

@@ -661,6 +661,8 @@ Platform DB 的 outbox 保证状态变更和投递可恢复；API 任务在同�
 
 - 多个 `platform-worker` 实例可以同时运行。
 - Agent 管理变更在原 Agent 锁内串行化；Sandbox 调谐按其分配与修订串行化，复核 Agent 当前资格，不以 Agent 全局运行实例代替会话隔离。
+- Agent Workload 调谐每个 Agent 同时只执行一个步骤：Worker 以会话级 advisory lock 取得该 Agent 的调谐权，连接断开即释放，其他 Worker 可接管。Agent 行锁只用于短事务：选择到期 Agent、读取管理状态、配置修订、Workload 状态与 Secret 绑定并认领 outbox 后立即提交。Kubernetes、Registry 与健康探针 I/O 在该事务之外执行，期间不持有 Agent 行锁或打开事务；Secret 激活与解密审计使用各自的短条件事务。
+- Workload 调谐写回在新的短事务中重新锁定 Agent，确认管理状态、配置修订和读取时的 Workload 状态均未变化后，才保存新状态、生命周期观测并完成 outbox。任一值变化即丢弃本步结果、交还 outbox 认领，并从已保存状态按新意图重新调谐；步骤内的 Kubernetes 操作因此必须幂等并携带所绑定的 fence。
 - 每次 apply 携带配置修订号，旧任务不能覆盖新状态。
 - 平台会话的 Kubernetes 资源使用稳定 label 和 annotation 关联 Agent、Session、Sandbox、代次与修订/fence。
 - M1 不创建 CRD；Platform DB 是产品期望状态的唯一来源。

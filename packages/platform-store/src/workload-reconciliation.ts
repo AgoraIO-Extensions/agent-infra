@@ -5,6 +5,7 @@ import {
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";
 import {
+	type AgentManagementStateV1,
 	parseWorkloadExecutionCapacityV1,
 	parseWorkloadSecretRecoveriesV1,
 	type WorkloadReconciliationInputV1,
@@ -346,6 +347,50 @@ function resolveSecretBindings(
 	});
 }
 
+interface ClaimedWorkloadTaskV1 {
+	readonly id: string;
+	readonly trace_id: string;
+	readonly request_id: string | null;
+	readonly delivery_fence: string;
+}
+
+interface PersistedWorkloadRowV1 {
+	readonly revision: string;
+	readonly state: unknown;
+}
+
+interface PreparedWorkloadStepV1 {
+	readonly agentId: string;
+	readonly management: AgentManagementStateV1;
+	readonly configuration: ReturnType<typeof decodeAgentConfigurationRecord>;
+	readonly persisted: PersistedWorkloadRowV1 | null;
+	readonly state: WorkloadReconciliationStateV1 | null;
+	readonly task: ClaimedWorkloadTaskV1 | undefined;
+	readonly bindings: readonly WorkloadSecretBindingV1[];
+}
+
+/** Session advisory lock namespace that admits one Workload step per Agent. */
+const workloadStepLockNamespace = "agent-infra:workload-reconciliation:";
+/** Agent writers hold the row briefly; a slower write-back retries later. */
+const workloadWriteBackLockTimeout = "5s";
+/** Bound how many in-flight Agents one poll skips before reporting idle. */
+const maximumBusyWorkloadSelections = 8;
+
+function transactionDatabase(sql: postgres.TransactionSql) {
+	const dialect = new PgDialect();
+	// Drizzle's session uses the transaction's query API; its public
+	// generic incorrectly requires pool-only methods as well.
+	return new PostgresJsTransaction(
+		dialect,
+		new PostgresJsSession(
+			sql as postgres.Sql & postgres.TransactionSql,
+			dialect,
+			undefined,
+		),
+		undefined,
+	);
+}
+
 export function openPostgresWorkloadReconciliationStoreV1(options: {
 	readonly databaseUrl: string;
 	readonly runtimeModelVersion?: 4;
@@ -358,12 +403,16 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 		options.runtimeModelVersion !== 4
 	)
 		throw new TypeError("Invalid Workload runtime model version");
-	const client = postgres(
-		platformDatabaseUrlFromEnvironment({
-			PLATFORM_DATABASE_URL: options.databaseUrl,
-		}),
-		{ max: 2 },
-	);
+	const databaseUrl = platformDatabaseUrlFromEnvironment({
+		PLATFORM_DATABASE_URL: options.databaseUrl,
+	});
+	// Short read, Secret activation, audit and write-back transactions.
+	const client = postgres(databaseUrl, { max: 2 });
+	// A dedicated, non-recycled session holds the per-Agent step locks. If it
+	// ends, PostgreSQL releases the locks and another Worker may take over.
+	const lockClient = postgres(databaseUrl, { max: 1, max_lifetime: null });
+	// Session advisory locks are re-entrant, so this poller also tracks its own.
+	const inFlight = new Set<string>();
 	const retryDelayMs = options.retryDelayMs ?? 1000;
 	const monitorDelayMs = options.monitorDelayMs ?? 30_000;
 	const workloadLeaseMs = options.workloadLeaseMs ?? defaultWorkloadLeaseMs;
@@ -378,272 +427,356 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 		throw new TypeError("Invalid Workload poll interval");
 	// Fairness is local to this live poller; restart begins a new rotation.
 	let lastSelectedAgentId: string | null = null;
+
+	/**
+	 * Short Agent-locked read: select a due Agent, take its step lock, read the
+	 * authoritative inputs and claim the wake-up task. Nothing here waits on
+	 * Kubernetes, so the Agent row lock is held only for these statements.
+	 */
+	async function prepare(
+		workerId: string,
+		excluded: readonly string[],
+		onLocked: (key: string, agentId: string) => void,
+	): Promise<
+		| null
+		| { readonly busy: string }
+		| { readonly prepared: PreparedWorkloadStepV1 }
+	> {
+		return client.begin(async (sql) => {
+			// The same Agent row is locked by management, configuration and
+			// Secret activation. SKIP LOCKED lets other Workers progress.
+			const [agent] = await sql<
+				{ id: string; current_configuration_revision: string }[]
+			>`
+				select a.id, a.current_configuration_revision from platform.agents a
+				join platform.agent_applications ap on ap.agent_id = a.id
+				left join platform.workload_reconciliations w on w.agent_id = a.id
+				where ap.approval_revision is not null
+				and a.id <> all(${sql.array(excluded as string[])}::text[])
+				and (
+					(w.agent_id is null and ap.status <> 'creation_failed')
+					or w.next_attempt_at <= clock_timestamp()
+					or exists (select 1 from platform.outbox_items o where o.scope_type = 'agent'
+						and o.scope_id = a.id
+						and o.operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
+						and ((o.status in ('pending', 'retry_scheduled') and o.available_at <= clock_timestamp())
+							or (o.status = 'processing' and o.lease_expires_at <= clock_timestamp())))
+				) order by
+					case when ${lastSelectedAgentId}::text is null or a.id > ${lastSelectedAgentId} then 0 else 1 end,
+					a.id
+				limit 1 for update of a skip locked
+			`;
+			if (!agent) return null;
+			// Selection advances even when decoding or persistence rolls back,
+			// so a malformed Agent cannot starve the rest of this poller.
+			lastSelectedAgentId = agent.id;
+			if (inFlight.has(agent.id)) return { busy: agent.id };
+			const key = `${workloadStepLockNamespace}${agent.id}`;
+			const [lock] = await lockClient<
+				{ acquired: boolean }[]
+			>`select pg_try_advisory_lock(hashtextextended(${key}, 0)) as acquired`;
+			// Another Worker is running this Agent's step outside any transaction.
+			if (!lock?.acquired) return { busy: agent.id };
+			inFlight.add(agent.id);
+			onLocked(key, agent.id);
+			const database = transactionDatabase(sql);
+			let management = await readAgentManagementState(database, agent.id);
+			if (!management) throw new Error();
+			const [configurationRow] = await sql<
+				{ configuration: unknown }[]
+			>`select configuration from platform.agent_configuration_revisions where agent_id = ${agent.id} and revision = ${agent.current_configuration_revision}`;
+			const configuration = decodeAgentConfigurationRecord(
+				configurationRow?.configuration,
+			);
+			const [persistedRow] = await sql<
+				PersistedWorkloadRowV1[]
+			>`select revision::text, state from platform.workload_reconciliations where agent_id = ${agent.id}`;
+			let persisted = persistedRow ?? null;
+			const decodedState = decodePersistedWorkloadStateV1(
+				persisted?.state,
+				agent.id,
+			);
+			if (decodedState) {
+				const versions = [
+					decodedState.state.candidate,
+					...(decodedState.state.verified ? [decodedState.state.verified] : []),
+				];
+				const revisions = [
+					...new Set(versions.map((version) => version.configuration.revision)),
+				];
+				const rows = await sql<
+					{ configuration: unknown }[]
+				>`select configuration from platform.agent_configuration_revisions where agent_id = ${agent.id} and revision = any(${sql.array(revisions)}::bigint[])`;
+				const historical = rows.map((row) =>
+					decodeAgentConfigurationRecord(row.configuration),
+				);
+				if (
+					versions.some(
+						(version) =>
+							!historical.some(
+								(record) =>
+									record.agentId === agent.id &&
+									record.revision === version.configuration.revision &&
+									isDeepStrictEqual(record, version.configuration),
+							),
+					)
+				)
+					throw new Error();
+			}
+			let state: WorkloadReconciliationStateV1 | null = null;
+			if (decodedState?.legacy) {
+				// Legacy rows used the local Workload revision as the Kubernetes
+				// fence. Advance management authority under the same Agent lock
+				// before exposing a normalized state to the reconciler.
+				const fence = legacyTakeoverFence(
+					management.fence,
+					decodedState.state.revision,
+				);
+				const [updated] = await sql<{ id: string }[]>`
+					update platform.agent_applications set fence = ${fence}
+					where id = ${management.applicationId}
+						and agent_id = ${agent.id}
+						and management_revision = ${management.revision}
+						and workload_revision = ${management.workloadRevision}
+						and fence = ${management.fence}
+					returning id
+				`;
+				if (!updated) throw new Error();
+				state = { ...decodedState.state, fence };
+				// Commit both fences together before any Kubernetes operation uses
+				// the new epoch, independent of the step that follows.
+				const [normalized] = await sql<PersistedWorkloadRowV1[]>`
+					update platform.workload_reconciliations
+					set state = ${sql.json(state as unknown as postgres.JSONValue)}, updated_at = clock_timestamp()
+					where agent_id = ${agent.id} and revision = ${persisted?.revision ?? null}
+						and state = ${sql.json(persisted?.state as postgres.JSONValue)}
+					returning revision::text, state
+				`;
+				if (!normalized) throw new Error();
+				persisted = normalized;
+				// Re-read so the write-back compares the exact committed snapshot.
+				management = await readAgentManagementState(database, agent.id);
+				if (management?.fence !== fence) throw new Error();
+			} else if (decodedState) {
+				state = decodedState.state;
+				if (state.fence > management.fence) throw new Error();
+			}
+			const [candidate] = await sql<{ id: string; delivery_fence: string }[]>`
+				select id, delivery_fence::text from platform.outbox_items where scope_type = 'agent'
+				and scope_id = ${agent.id}
+				and operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
+				and ((status in ('pending', 'retry_scheduled') and available_at <= clock_timestamp())
+					or (status = 'processing' and lease_expires_at <= clock_timestamp()))
+				order by created_at, id limit 1 for update
+			`;
+			let task: ClaimedWorkloadTaskV1 | undefined;
+			if (candidate) {
+				const [claimed] = await sql<ClaimedWorkloadTaskV1[]>`
+					with decision_time as materialized (
+						select clock_timestamp() as decision_at
+					)
+					update platform.outbox_items
+					set status = 'processing', attempt_count = attempt_count + 1,
+						lease_owner = ${workerId}, lease_expires_at = decision_time.decision_at +
+							${workloadLeaseMs} * interval '1 millisecond',
+						delivery_fence = delivery_fence + 1, updated_at = decision_time.decision_at
+					from decision_time
+					where id = ${candidate.id} and delivery_fence = ${candidate.delivery_fence}
+						and ((status in ('pending', 'retry_scheduled') and available_at <= decision_time.decision_at)
+							or (status = 'processing' and lease_expires_at <= decision_time.decision_at))
+					returning id, trace_id, request_id, delivery_fence::text
+				`;
+				if (!claimed) throw new Error();
+				task = claimed;
+			}
+			let secretConfiguration = configuration;
+			if (state?.rollback || (state?.phase === "cleaning" && !state.rollback)) {
+				if (
+					state.rollback &&
+					(!state.verified ||
+						state.candidate.configuration.revision !==
+							state.verified.configuration.revision)
+				)
+					throw new Error();
+				const [candidateConfigurationRow] = await sql<
+					{ configuration: unknown }[]
+				>`select configuration from platform.agent_configuration_revisions where agent_id = ${agent.id} and revision = ${state.candidate.configuration.revision}`;
+				const candidateConfiguration = decodeAgentConfigurationRecord(
+					candidateConfigurationRow?.configuration,
+				);
+				if (
+					!isDeepStrictEqual(
+						candidateConfiguration,
+						state.candidate.configuration,
+					)
+				)
+					throw new Error();
+				secretConfiguration = candidateConfiguration;
+			}
+			const rows = await sql<
+				{ record: unknown }[]
+			>`select record from platform.secret_records where agent_id = ${agent.id}`;
+			const records = rows.map((row) =>
+				validatePlatformSecretRecordV1(row.record),
+			);
+			const wrappingKeyVersions = [
+				...new Set(records.map((record) => record.crypto.wrappingKeyVersion)),
+			];
+			const retired = wrappingKeyVersions.length
+				? await sql<{ key_version: string }[]>`
+						select key_version from platform.retired_secret_wrapping_keys
+						where key_version = any(${sql.array(wrappingKeyVersions)})
+					`
+				: [];
+			// Cleanup follows the original candidate, including its V1 model
+			// bindings. New V4 standard Workloads never consume model Keys;
+			// their pending records therefore need no Kubernetes activation.
+			const historical = state?.rollback || state?.phase === "cleaning";
+			const projection = state?.candidate.modelProjection;
+			const persistedKeyless =
+				projection !== null &&
+				typeof projection === "object" &&
+				"schemaVersion" in projection
+					? projection.schemaVersion === 4
+					: options.runtimeModelVersion === 4;
+			const keyless =
+				secretConfiguration.source.kind === "standard" &&
+				(historical
+					? persistedKeyless
+					: options.runtimeModelVersion === 4 ||
+						(state?.candidate.configuration.revision ===
+							configuration.revision &&
+							persistedKeyless));
+			const bindings = resolveSecretBindings(
+				records,
+				secretConfiguration,
+				management.ownerIds,
+				new Set(retired.map(({ key_version }) => key_version)),
+				!keyless,
+			);
+			return {
+				prepared: {
+					agentId: agent.id,
+					management,
+					configuration,
+					persisted,
+					state,
+					task,
+					bindings,
+				},
+			};
+		}) as Promise<
+			| null
+			| { readonly busy: string }
+			| { readonly prepared: PreparedWorkloadStepV1 }
+		>;
+	}
+
+	/** Return an unfinished wake-up task so any Worker can claim it at once. */
+	async function releaseTask(workerId: string, task: ClaimedWorkloadTaskV1) {
+		await client`
+			update platform.outbox_items
+			set status = 'retry_scheduled', available_at = clock_timestamp(),
+				lease_owner = null, lease_expires_at = null, updated_at = clock_timestamp()
+			where id = ${task.id} and status = 'processing'
+				and lease_owner = ${workerId} and delivery_fence = ${task.delivery_fence}
+		`;
+	}
+
 	return {
 		async close() {
-			await client.end();
+			await Promise.all([client.end(), lockClient.end()]);
 		},
 		async runNext(workerId, step) {
+			let lockedKey = null as string | null;
+			let lockedAgentId = null as string | null;
+			let pendingTask: ClaimedWorkloadTaskV1 | undefined;
 			try {
-				return await client.begin(async (sql) => {
-					// The same Agent row is locked by management, configuration and
-					// Secret activation. SKIP LOCKED lets other Workers progress.
-					const [agent] = await sql<
-						{ id: string; current_configuration_revision: string }[]
-					>`
-						select a.id, a.current_configuration_revision from platform.agents a
-						join platform.agent_applications ap on ap.agent_id = a.id
-						left join platform.workload_reconciliations w on w.agent_id = a.id
-						where ap.approval_revision is not null and (
-							(w.agent_id is null and ap.status <> 'creation_failed')
-							or w.next_attempt_at <= clock_timestamp()
-							or exists (select 1 from platform.outbox_items o where o.scope_type = 'agent'
-								and o.scope_id = a.id
-								and o.operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
-								and ((o.status in ('pending', 'retry_scheduled') and o.available_at <= clock_timestamp())
-									or (o.status = 'processing' and o.lease_expires_at <= clock_timestamp())))
-						) order by
-							case when ${lastSelectedAgentId}::text is null or a.id > ${lastSelectedAgentId} then 0 else 1 end,
-							a.id
-						limit 1 for update of a skip locked
-					`;
-					if (!agent) return "idle" as const;
-					// Selection advances even when decoding or persistence rolls back,
-					// so a malformed Agent cannot starve the rest of this poller.
-					lastSelectedAgentId = agent.id;
-					const dialect = new PgDialect();
-					// Drizzle's session uses the transaction's query API; its public
-					// generic incorrectly requires pool-only methods as well.
-					const database = new PostgresJsTransaction(
-						dialect,
-						new PostgresJsSession(
-							sql as postgres.Sql & postgres.TransactionSql,
-							dialect,
-							undefined,
-						),
-						undefined,
-					);
-					let management = await readAgentManagementState(database, agent.id);
-					if (!management) throw new Error();
-					const [configurationRow] = await sql<
-						{ configuration: unknown }[]
-					>`select configuration from platform.agent_configuration_revisions where agent_id = ${agent.id} and revision = ${agent.current_configuration_revision}`;
-					const configuration = decodeAgentConfigurationRecord(
-						configurationRow?.configuration,
-					);
-					const [persisted] = await sql<
-						{ state: unknown }[]
-					>`select state from platform.workload_reconciliations where agent_id = ${agent.id}`;
-					const decodedState = decodePersistedWorkloadStateV1(
-						persisted?.state,
-						agent.id,
-					);
-					if (decodedState) {
-						const versions = [
-							decodedState.state.candidate,
-							...(decodedState.state.verified
-								? [decodedState.state.verified]
-								: []),
-						];
-						const revisions = [
-							...new Set(
-								versions.map((version) => version.configuration.revision),
-							),
-						];
-						const rows = await sql<
-							{ configuration: unknown }[]
-						>`select configuration from platform.agent_configuration_revisions where agent_id = ${agent.id} and revision = any(${sql.array(revisions)}::bigint[])`;
-						const historical = rows.map((row) =>
-							decodeAgentConfigurationRecord(row.configuration),
-						);
-						if (
-							versions.some(
-								(version) =>
-									!historical.some(
-										(record) =>
-											record.agentId === agent.id &&
-											record.revision === version.configuration.revision &&
-											isDeepStrictEqual(record, version.configuration),
-									),
+				const excluded: string[] = [];
+				let prepared: PreparedWorkloadStepV1 | undefined;
+				while (!prepared) {
+					const selection = await prepare(workerId, excluded, (key, id) => {
+						lockedKey = key;
+						lockedAgentId = id;
+					});
+					if (!selection) return "idle" as const;
+					if ("busy" in selection) {
+						excluded.push(selection.busy);
+						if (excluded.length >= maximumBusyWorkloadSelections)
+							return "idle" as const;
+						continue;
+					}
+					prepared = selection.prepared;
+				}
+				const { agentId, management, configuration, persisted, state, task } =
+					prepared;
+				pendingTask = task;
+				const bindings = prepared.bindings;
+				const requestId = task?.request_id ?? `workload-${agentId}`;
+				const traceId = task?.trace_id ?? requestId;
+				const input: WorkloadReconciliationInputV1 = {
+					management,
+					configuration,
+					state,
+					requestId,
+					traceId,
+					secrets: {
+						bindings,
+						// Activation keeps its own lease and conditional transitions.
+						store: new PostgresSecretActivationStoreV1({ client }),
+						async auditDecryption(secretId, wrappingKeyVersion, outcome) {
+							if (
+								!bindings.some(({ record }) => {
+									const binding = validatePlatformSecretRecordV1(record);
+									return (
+										binding.agentId === agentId &&
+										binding.secretId === secretId &&
+										binding.crypto.wrappingKeyVersion === wrappingKeyVersion
+									);
+								})
 							)
-						)
-							throw new Error();
-					}
-					let state: WorkloadReconciliationStateV1 | null = null;
-					if (decodedState?.legacy) {
-						// Legacy rows used the local Workload revision as the Kubernetes
-						// fence. Advance management authority under the same Agent lock
-						// before exposing a normalized state to the reconciler.
-						const fence = legacyTakeoverFence(
-							management.fence,
-							decodedState.state.revision,
-						);
-						const [updated] = await sql<{ id: string }[]>`
-								update platform.agent_applications set fence = ${fence}
-								where id = ${management.applicationId}
-									and agent_id = ${agent.id}
-									and management_revision = ${management.revision}
-									and workload_revision = ${management.workloadRevision}
-									and fence = ${management.fence}
-								returning id
-							`;
-						if (!updated) throw new Error();
-						management = { ...management, fence };
-						state = { ...decodedState.state, fence };
-					} else if (decodedState) {
-						state = decodedState.state;
-						if (state.fence > management.fence) throw new Error();
-					}
-					const [candidate] = await sql<
-						{ id: string; delivery_fence: string }[]
-					>`
-							select id, delivery_fence::text from platform.outbox_items where scope_type = 'agent'
-							and scope_id = ${agent.id}
-							and operation in ('agent.workload.reconcile.v1', 'agent.configuration.revised.v1')
-							and ((status in ('pending', 'retry_scheduled') and available_at <= clock_timestamp())
-								or (status = 'processing' and lease_expires_at <= clock_timestamp()))
-							order by created_at, id limit 1 for update
-						`;
-					let task:
-						| {
-								id: string;
-								trace_id: string;
-								request_id: string | null;
-								delivery_fence: string;
-						  }
-						| undefined;
-					if (candidate) {
-						const [claimed] = await sql<
-							{
-								id: string;
-								trace_id: string;
-								request_id: string | null;
-								delivery_fence: string;
-							}[]
-						>`
-								with decision_time as materialized (
-									select clock_timestamp() as decision_at
-								)
-								update platform.outbox_items
-								set status = 'processing', attempt_count = attempt_count + 1,
-									lease_owner = ${workerId}, lease_expires_at = decision_time.decision_at +
-										${workloadLeaseMs} * interval '1 millisecond',
-									delivery_fence = delivery_fence + 1, updated_at = decision_time.decision_at
-								from decision_time
-								where id = ${candidate.id} and delivery_fence = ${candidate.delivery_fence}
-									and ((status in ('pending', 'retry_scheduled') and available_at <= decision_time.decision_at)
-										or (status = 'processing' and lease_expires_at <= decision_time.decision_at))
-								returning id, trace_id, request_id, delivery_fence::text
-							`;
-						if (!claimed) throw new Error();
-						task = claimed;
-					}
-					const requestId = task?.request_id ?? `workload-${agent.id}`;
-					const traceId = task?.trace_id ?? requestId;
-					let secretConfiguration = configuration;
-					if (
-						state?.rollback ||
-						(state?.phase === "cleaning" && !state.rollback)
-					) {
-						if (
-							state.rollback &&
-							(!state.verified ||
-								state.candidate.configuration.revision !==
-									state.verified.configuration.revision)
-						)
-							throw new Error();
-						const [candidateConfigurationRow] = await sql<
-							{ configuration: unknown }[]
-						>`select configuration from platform.agent_configuration_revisions where agent_id = ${agent.id} and revision = ${state.candidate.configuration.revision}`;
-						const candidateConfiguration = decodeAgentConfigurationRecord(
-							candidateConfigurationRow?.configuration,
-						);
-						if (
-							!isDeepStrictEqual(
-								candidateConfiguration,
-								state.candidate.configuration,
-							)
-						)
-							throw new Error();
-						secretConfiguration = candidateConfiguration;
-					}
-					const rows = await sql<
-						{ record: unknown }[]
-					>`select record from platform.secret_records where agent_id = ${agent.id}`;
-					const records = rows.map((row) =>
-						validatePlatformSecretRecordV1(row.record),
-					);
-					const wrappingKeyVersions = [
-						...new Set(
-							records.map((record) => record.crypto.wrappingKeyVersion),
-						),
-					];
-					const retired = wrappingKeyVersions.length
-						? await sql<{ key_version: string }[]>`
-								select key_version from platform.retired_secret_wrapping_keys
-								where key_version = any(${sql.array(wrappingKeyVersions)})
-							`
-						: [];
-					// Cleanup follows the original candidate, including its V1 model
-					// bindings. New V4 standard Workloads never consume model Keys;
-					// their pending records therefore need no Kubernetes activation.
-					const historical = state?.rollback || state?.phase === "cleaning";
-					const projection = state?.candidate.modelProjection;
-					const persistedKeyless =
-						projection !== null &&
-						typeof projection === "object" &&
-						"schemaVersion" in projection
-							? projection.schemaVersion === 4
-							: options.runtimeModelVersion === 4;
-					const keyless =
-						secretConfiguration.source.kind === "standard" &&
-						(historical
-							? persistedKeyless
-							: options.runtimeModelVersion === 4 ||
-								(state?.candidate.configuration.revision ===
-									configuration.revision &&
-									persistedKeyless));
-					const bindings = resolveSecretBindings(
-						records,
-						secretConfiguration,
-						management.ownerIds,
-						new Set(retired.map(({ key_version }) => key_version)),
-						!keyless,
-					);
-					const input: WorkloadReconciliationInputV1 = {
-						management,
-						configuration,
-						state,
-						requestId,
-						traceId,
-						secrets: {
-							bindings,
-							store: new PostgresSecretActivationStoreV1({ transaction: sql }),
-							async auditDecryption(secretId, wrappingKeyVersion, outcome) {
-								if (
-									!bindings.some(({ record }) => {
-										const binding = validatePlatformSecretRecordV1(record);
-										return (
-											binding.agentId === agent.id &&
-											binding.secretId === secretId &&
-											binding.crypto.wrappingKeyVersion === wrappingKeyVersion
-										);
-									})
-								)
-									throw new Error();
-								await sql`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details) values (${randomUUID()}, ${traceId}, 'system', ${workerId}, 'secret.decrypt', 'secret', ${secretId}, ${outcome}, ${requestId}, ${agent.id}, ${sql.json({ wrappingKeyVersion, operation: "decrypt", result: outcome })})`;
-							},
+								throw new Error();
+							await client`insert into platform.audit_events (id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details) values (${randomUUID()}, ${traceId}, 'system', ${workerId}, 'secret.decrypt', 'secret', ${secretId}, ${outcome}, ${requestId}, ${agentId}, ${client.json({ wrappingKeyVersion, operation: "decrypt", result: outcome })})`;
 						},
-					};
-					const next = await step(input);
+					},
+				};
+				// Kubernetes, Registry and probe I/O run here without an open
+				// transaction or Agent row lock; only the step lock is held.
+				const next = await step(input);
+				if (
+					next.agentId !== agentId ||
+					next.sourceConfigurationRevision !== configuration.revision ||
+					next.sourceLifecycleRevision !== management.workloadRevision ||
+					next.revision < (state?.revision ?? 1) ||
+					next.fence !== management.fence ||
+					(next.cleanupInterrupted === true && next.phase !== "cleaning")
+				)
+					throw new Error();
+				const outcome = await client.begin(async (sql) => {
+					await sql`select set_config('lock_timeout', ${workloadWriteBackLockTimeout}, true)`;
+					const [locked] = await sql<
+						{ current_configuration_revision: string }[]
+					>`select current_configuration_revision::text from platform.agents where id = ${agentId} for update`;
+					const database = transactionDatabase(sql);
+					const current = await readAgentManagementState(database, agentId);
+					const [row] = await sql<
+						PersistedWorkloadRowV1[]
+					>`select revision::text, state from platform.workload_reconciliations where agent_id = ${agentId} for update`;
+					// Writers may commit while the step runs. Persist only a result
+					// derived from inputs that are still current; otherwise the next
+					// step converges on the newer intent from the stored state.
 					if (
-						next.agentId !== agent.id ||
-						next.sourceConfigurationRevision !== configuration.revision ||
-						next.sourceLifecycleRevision !== management.workloadRevision ||
-						next.revision < (state?.revision ?? 1) ||
-						next.fence !== management.fence ||
-						(next.cleanupInterrupted === true && next.phase !== "cleaning")
+						!locked ||
+						Number(locked.current_configuration_revision) !==
+							configuration.revision ||
+						!isDeepStrictEqual(current, management) ||
+						(persisted === null
+							? row !== undefined
+							: !row ||
+								row.revision !== persisted.revision ||
+								!isDeepStrictEqual(row.state, persisted.state))
 					)
-						throw new Error();
+						return "stale" as const;
 					const observation = await workloadManagementObservationV1(
 						input,
 						next,
@@ -662,7 +795,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					)
 						? monitorDelayMs
 						: retryDelayMs;
-					await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${agent.id}, ${next.revision}, ${sql.json(next as unknown as postgres.JSONValue)}, clock_timestamp() + ${delay} * interval '1 millisecond') on conflict (agent_id) do update set revision = excluded.revision, state = excluded.state, next_attempt_at = excluded.next_attempt_at, updated_at = clock_timestamp()`;
+					await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${agentId}, ${next.revision}, ${sql.json(next as unknown as postgres.JSONValue)}, clock_timestamp() + ${delay} * interval '1 millisecond') on conflict (agent_id) do update set revision = excluded.revision, state = excluded.state, next_attempt_at = excluded.next_attempt_at, updated_at = clock_timestamp()`;
 					// Outbox deliveries only wake reconciliation. The durable Workload
 					// row owns subsequent recovery steps and periodic observations.
 					if (task) {
@@ -674,20 +807,37 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 								delivery_fence: string;
 							}[]
 						>`
-								update platform.outbox_items
-								set status = 'succeeded', lease_owner = null, lease_expires_at = null,
-									updated_at = clock_timestamp()
-								where id = ${task.id} and status = 'processing'
-									and lease_owner = ${workerId} and delivery_fence = ${task.delivery_fence}
-								returning id, trace_id, attempt_count, delivery_fence::text
-							`;
+							update platform.outbox_items
+							set status = 'succeeded', lease_owner = null, lease_expires_at = null,
+								updated_at = clock_timestamp()
+							where id = ${task.id} and status = 'processing'
+								and lease_owner = ${workerId} and delivery_fence = ${task.delivery_fence}
+							returning id, trace_id, attempt_count, delivery_fence::text
+						`;
 						if (!completed) throw new Error();
 						await sql`insert into platform.persisted_events (event_id, stream_id, sequence, stream_cursor, event_type, payload, trace_id) values (${`outbox:${completed.id}:${completed.delivery_fence}`}, ${`outbox:${completed.id}`}, ${completed.delivery_fence}, ${completed.delivery_fence}, 'outbox.succeeded', ${sql.json({ attemptCount: completed.attempt_count, deliveryFence: completed.delivery_fence })}, ${completed.trace_id})`;
 					}
-					return "advanced" as const;
+					return "persisted" as const;
 				});
+				if (outcome === "persisted") {
+					pendingTask = undefined;
+					return "advanced" as const;
+				}
+				// The discarded step leaves the stored state untouched; wake the
+				// next step now instead of waiting for the monitor interval.
+				await client`update platform.workload_reconciliations set next_attempt_at = least(next_attempt_at, clock_timestamp()) where agent_id = ${agentId}`;
+				return "advanced" as const;
 			} catch {
 				throw new Error("Workload reconciliation persistence failed");
+			} finally {
+				if (pendingTask)
+					await releaseTask(workerId, pendingTask).catch(() => undefined);
+				const key = lockedKey;
+				if (key !== null)
+					await lockClient`select pg_advisory_unlock(hashtextextended(${key}, 0))`.catch(
+						() => undefined,
+					);
+				if (lockedAgentId !== null) inFlight.delete(lockedAgentId);
 			}
 		},
 	};
