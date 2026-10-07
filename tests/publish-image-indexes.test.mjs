@@ -46,12 +46,12 @@ if(args[1] === 'imagetools' && args[2] === 'inspect') console.log(JSON.stringify
 `,
 		);
 		await chmod(docker, 0o755);
-		const run = (extra = {}) =>
+		const run = (extra = {}, tag = "main") =>
 			spawnSync(
 				process.execPath,
 				[
 					join(root, "deploy/release/publish-image-indexes.mjs"),
-					"latest",
+					tag,
 					names.join(","),
 					...paths,
 				],
@@ -83,10 +83,23 @@ if(args[1] === 'imagetools' && args[2] === 'inspect') console.log(JSON.stringify
 				"imagetools",
 				"create",
 				"--tag",
-				`${prefix}/${names[index]}:latest`,
+				`${prefix}/${names[index]}:main`,
 				`${prefix}/${names[index]}@sha256:${"2".repeat(64)}`,
 				`${prefix}/${names[index]}@sha256:${"3".repeat(64)}`,
 			]);
+		const release = run({}, "v1.2.3");
+		assert.equal(release.status, 0, release.stderr);
+		const releaseCalls = (await readFile(log, "utf8"))
+			.trim()
+			.split("\n")
+			.map(JSON.parse);
+		assert.deepEqual(
+			releaseCalls
+				.filter((args) => args[2] === "create")
+				.slice(-5)
+				.map((args) => args[4]),
+			names.map((name) => `${prefix}/${name}:v1.2.3`),
+		);
 		for (const mutate of [
 			(value) => {
 				value.commitSha = "9".repeat(40);

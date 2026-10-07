@@ -585,7 +585,7 @@ test("standard template publication uses stable architecture tags and preserves 
 		const result = build(
 			manifestPath,
 			directory,
-			{ IMAGE_TAG: "latest" },
+			{ IMAGE_TAG: "main" },
 			"registry.example/agent-infra",
 			["--images=codex,claude,opencode,pi"],
 		);
@@ -607,7 +607,7 @@ test("standard template publication uses stable architecture tags and preserves 
 		);
 		assert.equal(builds.length, 8);
 		for (const template of ["codex", "claude", "opencode", "pi"]) {
-			const reference = `registry.example/agent-infra/agent-runtime-${template}:latest-linux-amd64`;
+			const reference = `registry.example/agent-infra/agent-runtime-${template}:main-linux-amd64`;
 			const selected = builds.filter((args) => args.includes(reference));
 			assert.equal(selected.length, 2);
 			for (const args of selected) {

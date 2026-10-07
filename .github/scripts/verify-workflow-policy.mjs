@@ -222,7 +222,7 @@ export function validateWorkflowDocuments(workflows) {
   const templates = publish?.jobs?.infrastructure;
   const templateBuild = templates?.steps?.find((step) => step.run?.includes("--images="));
   const templateMatrix = templates?.strategy?.matrix?.include;
-  if (publish?.env?.IMAGE_TAG !== "${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}" ||
+  if (publish?.env?.IMAGE_TAG !== "${{ github.ref == 'refs/heads/main' && 'main' || github.ref_name }}" ||
       !templateBuild?.run?.includes("--images=codex,claude,opencode,pi") ||
       !templateBuild?.run?.includes("--custom-base-image") ||
       !sameObject(publish?.concurrency, {group: "publish-images-${{ github.ref }}", "cancel-in-progress": false}) ||

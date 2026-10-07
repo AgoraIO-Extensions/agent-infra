@@ -19,7 +19,7 @@ IMAGE_REPOSITORY_PREFIX=registry.example/agent-infra \
 ```
 
 将示例前缀替换为部署批准的仓库；产物名为 `custom-agent-base`。上述手动命令默认用 source commit 和
-目标平台组成 Tag；main 自动发布使用固定 `latest` 和架构 Tag，详见
+目标平台组成 Tag；main 自动发布使用固定 `main` 和架构 Tag，详见
 [Runtime 发布入口](../../runtime/README.md#自动发布)。`PLATFORM` 支持 `linux/amd64`、`linux/arm64`，两个平台分别验收，不把单架构
 证据当作多架构发布。
 

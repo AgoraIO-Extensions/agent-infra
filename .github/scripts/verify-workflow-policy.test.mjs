@@ -246,9 +246,10 @@ test("grants PR write permission before restoring human validation labels", asyn
 });
 
 
-test("main image publication rejects business images, SHA tags and invalid setup-node pins", async () => {
+test("main image publication rejects business images, ambiguous tags and invalid setup-node pins", async () => {
   for (const mutate of [
     (workflow) => { workflow.env.IMAGE_TAG = "sha-${{ github.sha }}"; },
+    (workflow) => { workflow.env.IMAGE_TAG = "${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}"; },
     (workflow) => {
       workflow.jobs.infrastructure.steps.find((step) => step.run?.includes("--images="))
         .run = "node deploy/release/build-images.mjs receipt.json --images=platformWorker,runtimeHost";
