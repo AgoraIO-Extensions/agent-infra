@@ -8,6 +8,7 @@ import {
 } from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationModelOptionV1,
+	AgentConfigurationRecord,
 	AgentConfigurationRecordV2,
 	AgentConfigurationSourceV1,
 } from "@agent-infra/platform-core";
@@ -138,6 +139,12 @@ type ModelProjectionConfiguration = Pick<
 	| "modelConfiguration"
 	| "environment"
 	| "secrets"
+>;
+
+// V4 consumes the credential-free fields of both historical V2 and admitted V3.
+type KeylessModelProjectionConfiguration = Pick<
+	AgentConfigurationRecord,
+	keyof ModelProjectionConfiguration
 >;
 
 /** Immutable image admission and the deployment's fixed Driver binding must agree. */
@@ -421,7 +428,7 @@ export function runtimeModelInjectionV1(value: RuntimeModelProjectionV1) {
 
 /** V4 admission resolves only catalog and Driver facts; no model Key is read. */
 export async function projectRuntimeModelConfigurationV4(input: {
-	readonly configuration: ModelProjectionConfiguration;
+	readonly configuration: KeylessModelProjectionConfiguration;
 	readonly catalog: ModelCatalogAdapterV1;
 	readonly standardTemplateBinding: StandardTemplateModelBindingV1;
 	readonly signal: AbortSignal;
@@ -494,7 +501,7 @@ export async function projectRuntimeModelConfigurationV4(input: {
 
 export function validateRuntimeModelProjectionV4(
 	value: unknown,
-	configuration?: ModelProjectionConfiguration,
+	configuration?: KeylessModelProjectionConfiguration,
 ): RuntimeModelProjectionV4 {
 	try {
 		const projection = keylessProjectionSchema.parse(value);

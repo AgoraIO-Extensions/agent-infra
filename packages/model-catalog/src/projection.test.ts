@@ -1,20 +1,27 @@
 import { createHash } from "node:crypto";
-import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
+import {
+	RuntimeModelConfigurationV3Schema,
+	RuntimeModelConfigurationV4Schema,
+} from "@agent-infra/contracts/runtime";
 import type {
 	AgentConfigurationRecordV1,
 	AgentConfigurationRecordV2,
 } from "@agent-infra/platform-core";
+import { decodeAgentConfigurationRecordV3 } from "@agent-infra/platform-core";
 import { expect, it } from "vitest";
 import { catalogFixture } from "./catalog.fixture.js";
 import {
 	createFakeModelAccessValidatorV1,
 	createFakeModelCatalogAdapterV1,
 	projectRuntimeModelConfigurationV1,
+	projectRuntimeModelConfigurationV4,
 	runtimeModelInjectionV1,
+	runtimeModelInjectionV4,
 	type StandardTemplateModelBindingV1,
 	standardTemplateModelBindingV1,
 	standardTemplateModelProtocolV1,
 	validateRuntimeModelProjectionV1,
+	validateRuntimeModelProjectionV4,
 	validateStandardTemplateModelBindingsV1,
 } from "./index.js";
 
@@ -40,6 +47,58 @@ const configurationV2: AgentConfigurationRecordV2 = {
 	channels: [],
 	channelRevision: "channels-a",
 };
+
+it("projects an admitted credential-free V3 record through V4 without rebinding another Agent", async () => {
+	if (configurationV2.source.kind !== "standard") throw new Error();
+	const configuration = decodeAgentConfigurationRecordV3({
+		...configurationV2,
+		schemaVersion: 3,
+		source: { ...configurationV2.source, templateId: "codex" },
+		modelConfiguration: {
+			catalogRevision: "catalog-a",
+			defaultOptionId: "primary",
+			defaultReasoningLevel: "high",
+			options: [
+				{
+					optionId: "primary",
+					endpointId: "endpoint-a",
+					modelId: "model-a",
+					reasoningLevels: ["high"],
+				},
+			],
+		},
+	});
+	const projected = await projectRuntimeModelConfigurationV4({
+		configuration,
+		catalog: createFakeModelCatalogAdapterV1(catalogFixture()),
+		standardTemplateBinding: {
+			templateId: "codex",
+			imageDigest: configuration.source.imageDigest,
+			driver: "codex",
+			protocol: "openai-responses-v1",
+		},
+		signal: AbortSignal.timeout(1000),
+	});
+	expect(validateRuntimeModelProjectionV4(projected, configuration)).toEqual(
+		projected,
+	);
+	const injected = RuntimeModelConfigurationV4Schema.parse(
+		JSON.parse(runtimeModelInjectionV4(projected).configuration),
+	);
+	expect(injected.schemaVersion).toBe(4);
+	expect(injected.modelOptions[0]).toMatchObject({
+		modelOptionId: "primary",
+		model: "model-a",
+	});
+	expect(JSON.stringify(projected)).not.toContain("credential");
+	expect(JSON.stringify(injected)).not.toContain("credential");
+	expect(() =>
+		validateRuntimeModelProjectionV4(projected, {
+			...configuration,
+			agentId: "other-agent",
+		}),
+	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+});
 const standardBinding = {
 	templateId: "arbitrary-template-a",
 	imageDigest: `sha256:${"a".repeat(64)}`,

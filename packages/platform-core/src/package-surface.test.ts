@@ -110,6 +110,8 @@ describe("platform-core package surface", () => {
 			"decideConversationTaskWaitingV1",
 			"decideSessionSandboxDrainObservationV1",
 			"decideSessionSandboxObservationV1",
+			"decodeAgentConfigurationRecord",
+			"decodeAgentConfigurationRecordV3",
 			"executeConversationBrowserActionV1",
 			"immutableSecretNameV1",
 			"isAdministratorAgentReadAllowedV1",
