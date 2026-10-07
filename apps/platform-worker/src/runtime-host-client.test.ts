@@ -99,17 +99,49 @@ function response(
 }
 
 describe("Worker RuntimeHost HTTP/SSE client", () => {
-	it.each([createWorkerRuntimeHostClientV1, createWorkerRuntimeHostClientV3])(
-		"rejects plaintext before any Runtime credentials can be sent",
-		(createClient) => {
+	it.each(
+		[createWorkerRuntimeHostClientV1, createWorkerRuntimeHostClientV3].flatMap(
+			(createClient) =>
+				[
+					"https://runtime.internal/",
+					"http://user:secret@runtime.internal/",
+					"http://runtime.internal/?override=1",
+					"http://runtime.internal/#fragment",
+				].map((baseUrl) => [createClient, baseUrl] as const),
+		),
+	)(
+		"rejects a non in-cluster plaintext origin before any Runtime credentials can be sent (%#)",
+		(createClient, baseUrl) => {
 			expect(() =>
-				createClient({
-					baseUrl: "http://runtime.internal/",
-					serviceToken: "synthetic-service-token",
-				}),
+				createClient({ baseUrl, serviceToken: "synthetic-service-token" }),
 			).toThrow("RuntimeHost base URL is invalid");
 		},
 	);
+	it("never follows Runtime redirects on the default in-cluster transport", async () => {
+		const { runtimeFetch } = await import("./runtime-transport.js");
+		const original = globalThis.fetch;
+		const seen: RequestInit[] = [];
+		globalThis.fetch = (async (
+			_input: string | URL | Request,
+			init?: RequestInit,
+		) => {
+			seen.push(init ?? {});
+			return new Response("{}");
+		}) as typeof fetch;
+		try {
+			await runtimeFetch("http://runtime.internal/internal/runtime/v3/turns", {
+				method: "POST",
+				redirect: "follow",
+			});
+			expect(seen[0]?.redirect).toBe("error");
+			await expect(
+				runtimeFetch("https://runtime.internal/internal/runtime/v3/turns"),
+			).rejects.toThrow("RUNTIME_ORIGIN_INVALID");
+			expect(seen).toHaveLength(1);
+		} finally {
+			globalThis.fetch = original;
+		}
+	});
 	it.each([
 		["turn.submit", "/internal/runtime/v2/turns"],
 		["turn.supplement", "/internal/runtime/v1/instructions"],
@@ -126,7 +158,7 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 				),
 			);
 			const client = createWorkerRuntimeHostClientV1({
-				baseUrl: "https://runtime.internal/",
+				baseUrl: "http://runtime.internal/",
 				serviceToken: "synthetic-service-token",
 				fetch: fetcher,
 			});
@@ -134,7 +166,7 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 			await client.dispatch(request(operation));
 
 			const [url, init] = fetcher.mock.calls[0] ?? [];
-			expect(String(url)).toBe(`https://runtime.internal${path}`);
+			expect(String(url)).toBe(`http://runtime.internal${path}`);
 			expect(init?.headers).toMatchObject({
 				authorization: "Bearer synthetic-service-token",
 				"x-trace-id": "trace-client",
@@ -185,7 +217,7 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 			),
 		];
 		const client = createWorkerRuntimeHostClientV1({
-			baseUrl: "https://runtime.internal",
+			baseUrl: "http://runtime.internal",
 			serviceToken: "synthetic-service-token",
 			fetch: vi.fn<typeof fetch>(async () => errors.shift() as Response),
 		});
@@ -213,7 +245,7 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 			declaredOversized,
 		]) {
 			const client = createWorkerRuntimeHostClientV1({
-				baseUrl: "https://runtime.internal",
+				baseUrl: "http://runtime.internal",
 				serviceToken: "synthetic-service-token",
 				fetch: vi.fn<typeof fetch>(async () => response),
 			});
@@ -225,7 +257,7 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 
 		const oversizedFrame = "x".repeat(131_073);
 		const client = createWorkerRuntimeHostClientV1({
-			baseUrl: "https://runtime.internal",
+			baseUrl: "http://runtime.internal",
 			serviceToken: "synthetic-service-token",
 			fetch: vi.fn<typeof fetch>(
 				async () =>
@@ -246,7 +278,7 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 	it("uses V1 only for a legacy submit without frozen selection", async () => {
 		const fetcher = vi.fn<typeof fetch>(async () => response());
 		const client = createWorkerRuntimeHostClientV1({
-			baseUrl: "https://runtime.internal",
+			baseUrl: "http://runtime.internal",
 			serviceToken: "synthetic-service-token",
 			fetch: fetcher,
 		});
@@ -256,7 +288,7 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 
 		const [url, init] = fetcher.mock.calls[0] ?? [];
 		expect(String(url)).toBe(
-			"https://runtime.internal/internal/runtime/v1/turns",
+			"http://runtime.internal/internal/runtime/v1/turns",
 		);
 		const body = JSON.parse(String(init?.body));
 		expect(body).not.toHaveProperty("selection");
@@ -276,7 +308,7 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 				),
 		);
 		const client = createWorkerRuntimeHostClientV1({
-			baseUrl: "https://runtime.internal",
+			baseUrl: "http://runtime.internal",
 			serviceToken: "synthetic-service-token",
 			fetch: fetcher,
 		});
@@ -286,7 +318,7 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 		});
 		const [url, init] = fetcher.mock.calls[0] ?? [];
 		expect(String(url)).toBe(
-			"https://runtime.internal/internal/runtime/v2/status",
+			"http://runtime.internal/internal/runtime/v2/status",
 		);
 		expect(JSON.parse(String(init?.body))).toMatchObject({
 			executionId: "execution-client",
@@ -333,7 +365,7 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 				}),
 		);
 		const client = createWorkerRuntimeHostClientV1({
-			baseUrl: "https://runtime.internal",
+			baseUrl: "http://runtime.internal",
 			serviceToken: "synthetic-service-token",
 			fetch: fetcher,
 		});
@@ -362,7 +394,7 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 			nativeSessionId: "must-not-cross",
 		};
 		const client = createWorkerRuntimeHostClientV1({
-			baseUrl: "https://runtime.internal",
+			baseUrl: "http://runtime.internal",
 			serviceToken: "synthetic-service-token",
 			fetch: vi.fn<typeof fetch>(
 				async () =>

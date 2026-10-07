@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,12 +8,8 @@ import { promisify } from "node:util";
 
 import {
 	corefileWithForwardZones,
-	issueCa,
-	issueLeaf,
 	isUsableCa,
-	isUsableLeaf,
 	parseDnsForward,
-	runtimeTlsBinding,
 	selectPlatformManifest,
 } from "../deploy/local/runtime-material.mjs";
 
@@ -29,17 +25,6 @@ test("local E2E Harness exposes the staged lifecycle without environment access"
 		stdout,
 		/sync\|images\|build\|deploy\|runtime\|verify\|all\|reset/,
 	);
-});
-
-test("Runtime TLS binding covers the business and probe Service DNS", () => {
-	const binding = runtimeTlsBinding("agent_example", "agent-infra-e2e");
-	const name = binding.serverSecretRef.name.replace(/-runtime-tls$/, "");
-	assert.match(name, /^agent-[a-f0-9]{32}$/);
-	assert.deepEqual(binding.serviceDnsNames, [
-		`${name}.agent-infra-e2e.svc`,
-		`${name}-probe.agent-infra-e2e.svc`,
-	]);
-	assert.notEqual(binding.serverSecretRef.name, "agent-runtime-tls");
 });
 
 test("cluster DNS forward block is marked, replaceable and removable", () => {
@@ -97,26 +82,50 @@ test("Runtime binding resolves only one current-platform image manifest", () => 
 
 const hasOpenssl = spawnSync("openssl", ["version"]).status === 0;
 
-test("issued Runtime leaf satisfies the Worker TLS Secret contract", {
+test("Worker trusted CA bundle accepts only CA certificates", {
 	skip: !hasOpenssl,
 }, async () => {
-	const directory = await mkdtemp(join(tmpdir(), "runtime-tls-test-"));
+	const directory = await mkdtemp(join(tmpdir(), "worker-trust-test-"));
+	// An explicit config keeps the extensions identical across OpenSSL versions.
+	const issue = async (name, ca) => {
+		await writeFile(
+			join(directory, `${name}.cnf`),
+			`[req]\ndistinguished_name = dn\nprompt = no\nx509_extensions = v3\n[dn]\nCN = fixture-${name}\n[v3]\nbasicConstraints = critical, CA:${ca ? "TRUE" : "FALSE"}\n`,
+		);
+		const result = spawnSync(
+			"openssl",
+			[
+				"req",
+				"-x509",
+				"-newkey",
+				"rsa:2048",
+				"-nodes",
+				"-days",
+				"60",
+				"-config",
+				`${name}.cnf`,
+				"-keyout",
+				`${name}.key`,
+				"-out",
+				`${name}.crt`,
+			],
+			{ cwd: directory, stdio: "ignore" },
+		);
+		assert.equal(result.status, 0);
+		return readFile(join(directory, `${name}.crt`), "utf8");
+	};
 	try {
-		const binding = runtimeTlsBinding("agent_example", "agent-infra-e2e");
-		const ca = await issueCa(directory);
-		assert.equal(isUsableCa(ca.cert), true);
-		const leaf = await issueLeaf(directory, ca, binding.serviceDnsNames);
-		assert.equal(isUsableLeaf(leaf, binding.serviceDnsNames, ca.cert), true);
+		const ca = await issue("ca", true);
+		const leaf = await issue("leaf", false);
+		assert.equal(isUsableCa(ca), true);
+		assert.equal(isUsableCa(`${ca}\n${ca}`), true);
+		assert.equal(isUsableCa(leaf), false);
+		assert.equal(isUsableCa(`${ca}\n${leaf}`), false);
 		assert.equal(
-			isUsableLeaf(leaf, ["other.agent-infra-e2e.svc"], ca.cert),
+			isUsableCa(ca, { minRemainingMs: 365 * 24 * 60 * 60 * 1000 }),
 			false,
 		);
-		const otherCa = await issueCa(directory);
-		assert.equal(
-			isUsableLeaf(leaf, binding.serviceDnsNames, otherCa.cert),
-			false,
-		);
-		assert.equal(isUsableCa(leaf.cert), false);
+		assert.equal(isUsableCa("not a certificate"), false);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

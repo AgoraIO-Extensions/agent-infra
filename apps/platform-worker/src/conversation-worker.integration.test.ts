@@ -33,8 +33,6 @@ import { markSessionSandboxReadyFixture } from "../../../packages/platform-store
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
 import {
 	fakeKubernetesApi,
-	runtimeTlsBindingFixture,
-	runtimeTlsSecretFixture,
 	workloadDesiredFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
@@ -137,7 +135,6 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	};
 	const policy = {
 		...workloadTestPolicy,
-		runtimeTls: [runtimeTlsBindingFixture("agent-cli")],
 		runtimeAuth: {
 			workerId: signing.workerId,
 			grantIssuer: signing.issuer,
@@ -149,12 +146,6 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		},
 	};
 	const fake = fakeKubernetesApi();
-	fake.seed(
-		runtimeTlsSecretFixture(
-			runtimeTlsBindingFixture("agent-cli").serverSecretRef.name,
-			"agent-cli",
-		),
-	);
 	const kinds: Record<string, string> = {
 		pods: "Pod",
 		services: "Service",

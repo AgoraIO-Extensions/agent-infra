@@ -71,27 +71,23 @@ Runtime 镜像绑定必须是当前节点架构的 OCI image manifest Digest：A
 
 ## Runtime 部署材料
 
-`runtime` 阶段（`deploy`/`all` 在 `platform.sh up` 前也会执行）承担
-[工程 Spec「内部 Runtime TLS 身份与传输」](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#内部-runtime-tls-身份与传输)
-中的部署输入，只写固定集群里带 `app.kubernetes.io/managed-by=agent-infra-e2e-harness`
-的对象；同名但无此标记的对象直接失败：
+`runtime` 阶段（`deploy`/`all` 在 `platform.sh up` 前也会执行）交付 Worker 的部署输入。
+Worker 到 Runtime 是集群内明文 HTTP（[ADR-0020](../../docs/adr/0020-use-in-cluster-plaintext-runtime-transport.md)），
+因此 Harness 不签发 Runtime CA 或 server leaf。它只写固定集群里带
+`app.kubernetes.io/managed-by=agent-infra-e2e-harness` 的对象；同名但无此标记的对象直接失败：
 
 - 按 `E2E_CLUSTER_DNS_FORWARD`（`zone=ip,ip;zone=ip`）向 CoreDNS 写入带标记的转发块，
   使 Worker 和 Runtime 能解析外部模型端点；未设置时移除该块。
-- 在 `<state>/runtime-tls/` 生成本地 E2E Runtime CA（私钥 `0600`，不进入 Git）；按 Platform
-  DB 中的持久 Agent 签发 server leaf，写入 `<name>-runtime-tls` TLS Secret，覆盖主 Service
-  和 `-probe` Service DNS。
-- 把 `E2E_WORKER_TRUSTED_CA_FILES` 列出的 CA 与 Runtime CA 合成为 Worker 信任 bundle，写入
-  values 中 `platformWorker.trustedCaSecretRef` 指向的 Secret。该 bundle 也是 Worker 访问
-  Runtime 的完整信任集合。
-- 用 `PLATFORM_LOCAL_WORKER_CONFIGURATION` 发布 Worker 配置模块 Secret，并加入
-  `runtime-tls-bindings.json`；私有 adapter 从 `/var/run/agent-infra/deployment/` 读取它
-  作为 `policy.runtimeTls`，不得自行拼接 Agent。
+- 把 `E2E_WORKER_TRUSTED_CA_FILES` 列出的 CA（例如目录服务和本地 Registry CA）合成为
+  Worker 信任 bundle，写入 values 中 `platformWorker.trustedCaSecretRef` 指向的 Secret。
+- 用 `PLATFORM_LOCAL_WORKER_CONFIGURATION` 发布 Worker 配置模块 Secret；
+  `E2E_WORKER_DEPLOYMENT_FILES` 列出的私有只读输入以文件名为键加入同一 Secret，
+  私有 adapter 从 `/var/run/agent-infra/deployment/` 读取。
 - 从 Worker runtime-auth Secret 发布 Host transport token Secret（默认
   `platform-runtime-transport`，键 `token`，可用 `E2E_RUNTIME_TRANSPORT_SECRET` 覆盖），
   名称须与私有 `policy.runtimeAuth.serviceTokenSecret` 一致。
 
-Worker 只在启动时加载这些材料；配置、bindings 或信任 bundle 变化时 Harness 更新 Pod 模板
+Worker 只在启动时加载这些材料；配置、部署输入或信任 bundle 变化时 Harness 更新 Pod 模板
 注解并等待滚动完成。新 Agent 通过审批后，先执行 `runtime` 再等待或重试创建。
 
 标准 Codex 模板的 Runtime readiness 会用镜像内固定版本 Codex 的 `model/list` 核对每个模型

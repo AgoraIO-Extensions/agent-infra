@@ -166,7 +166,7 @@ it("recovers only the original control ref through production Worker/Core and Po
 						"events.ack",
 					]).toContain(command);
 					return {
-						baseUrl: "https://controlled-host-1070",
+						baseUrl: "http://controlled-host-1070",
 						serviceToken: "synthetic-control-transport",
 						workerId: "transport-1070",
 					};

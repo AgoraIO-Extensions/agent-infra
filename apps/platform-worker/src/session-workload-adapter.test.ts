@@ -11,7 +11,6 @@ import {
 	runtimeConnectionConsumerAnnotation,
 	runtimeConnectionConsumerFileEnvironment,
 } from "./connection-consumer-projection.js";
-import { runtimeTlsSecretFixture } from "./kubernetes.fixture.js";
 import type {
 	WorkerKubernetesClientV1,
 	WorkloadResourceKind,
@@ -25,12 +24,6 @@ import {
 const api = () => {
 	const resources = new Map<string, KubernetesObject>();
 	const key = (kind: string, name: string) => `${kind}/${name}`;
-	resources.set(
-		"Secret/sandbox-sandbox-a-tls",
-		runtimeTlsSecretFixture("sandbox-sandbox-a-tls", "session-a", [
-			"sandbox-sandbox-a.workload-test.svc",
-		]),
-	);
 	const client: WorkerKubernetesClientV1 & {
 		deleteResult: NonNullable<WorkerKubernetesClientV1["deleteResult"]>;
 	} = {
@@ -98,7 +91,6 @@ const allocation: SessionSandboxAllocationV1 = {
 	namespace: "workload-test",
 	podName: "sandbox-sandbox-a",
 	serviceName: "sandbox-sandbox-a",
-	runtimeTlsSecretName: "sandbox-sandbox-a-tls",
 	serviceAccountName: "sandbox-sandbox-a",
 	pvcName: "sandbox-sandbox-a",
 	networkPolicyName: "sandbox-sandbox-a",
@@ -424,31 +416,18 @@ describe("session sandbox workload adapter", () => {
 		).rejects.toMatchObject({ code: "conflict" });
 	});
 
-	it("fails closed when the Session leaf SAN is for another Service", async () => {
+	it("serves the Session Pod over in-cluster HTTP without TLS material (ADR-0020)", async () => {
 		const client = api();
 		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
 		await adapter.apply(allocation);
-		(
-			client as typeof client & { resources: Map<string, KubernetesObject> }
-		).resources.set(
-			"Secret/sandbox-sandbox-a-tls",
-			runtimeTlsSecretFixture("sandbox-sandbox-a-tls", "session-a", [
-				"other-sandbox.workload-test.svc",
-			]),
-		);
-		await expect(adapter.observe(allocation)).resolves.toMatchObject({
-			status: "unknown",
-		});
-	});
-
-	it("fails closed when the Session leaf Secret is absent", async () => {
-		const client = api();
-		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
-		await adapter.apply(allocation);
-		(
-			client as typeof client & { resources: Map<string, KubernetesObject> }
-		).resources.delete("Secret/sandbox-sandbox-a-tls");
-		await expect(adapter.observe(allocation)).resolves.toMatchObject({
+		const pod = await client.read<V1Pod>("Pod", allocation.podName);
+		const container = pod?.spec?.containers[0];
+		expect(container?.readinessProbe?.httpGet?.scheme).toBe("HTTP");
+		expect(
+			container?.volumeMounts?.map(({ mountPath }) => mountPath),
+		).not.toContain("/var/run/agent-infra/runtime-tls");
+		expect(pod?.spec?.volumes?.some((volume) => volume.secret)).toBe(false);
+		await expect(adapter.observe(allocation)).resolves.not.toMatchObject({
 			status: "unknown",
 		});
 	});
@@ -744,7 +723,7 @@ describe("session sandbox workload adapter", () => {
 			(pod: V1Pod) => {
 				const probe = pod.spec?.containers[0]?.readinessProbe;
 				if (!probe?.httpGet) throw new Error("missing readiness probe");
-				probe.httpGet.scheme = "HTTP";
+				probe.httpGet.scheme = "HTTPS";
 			},
 		],
 		[
