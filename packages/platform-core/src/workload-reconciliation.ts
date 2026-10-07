@@ -109,6 +109,10 @@ export interface WorkloadCapabilitiesV1 {
 	readonly connection?: boolean;
 	readonly supplementaryInstruction?: boolean;
 	readonly skills?: readonly WorkloadSkillCapabilityV1[];
+	readonly [key: string]:
+		| boolean
+		| readonly WorkloadSkillCapabilityV1[]
+		| undefined;
 }
 
 export interface WorkloadReconciliationStateV1 {
