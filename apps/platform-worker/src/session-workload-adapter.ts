@@ -26,6 +26,10 @@ import {
 } from "./connection-consumer-projection.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
+import {
+	type WorkloadEgressPolicyV1,
+	workloadEgressRulesV1,
+} from "./workload-network.js";
 
 /** Typed handoff for the #1250 Store allocation authority. */
 export interface SessionSandboxAllocationV1 {
@@ -45,6 +49,11 @@ export interface SessionSandboxAllocationV1 {
 	readonly serviceAccountName: string;
 	readonly pvcName: string;
 	readonly networkPolicyName: string;
+	/**
+	 * Deployment-approved egress (Spec §10.1.1), assembled by the Worker from its
+	 * reviewed policy; never from Store claims, requests or Runtime replies.
+	 */
+	readonly egress: WorkloadEgressPolicyV1;
 	readonly imageDigest: string;
 	readonly authorizedIngressSelector: Readonly<Record<string, string>>;
 	readonly containerPort: number;
@@ -124,9 +133,17 @@ function validateAllocation(value: SessionSandboxAllocationV1) {
 		!Number.isSafeInteger(value.containerPort) ||
 		value.containerPort < 1 ||
 		value.containerPort > 65535 ||
-		!value.workspaceMountPath.startsWith("/")
+		!value.workspaceMountPath.startsWith("/") ||
+		!value.egress ||
+		typeof value.egress !== "object" ||
+		Array.isArray(value.egress) ||
+		Object.keys(value.egress).some(
+			(key) => !["modelEgress", "connectionEgress", "dnsEgress"].includes(key),
+		)
 	)
 		throw new WorkloadKubernetesError("policy");
+	// Rejects any destination the shared Agent-level compiler would reject.
+	workloadEgressRulesV1(value.egress);
 }
 
 export function sessionSandboxResourcesV1(
@@ -187,7 +204,8 @@ export function sessionSandboxResourcesV1(
 					ports: [{ protocol: "TCP", port: allocation.containerPort }],
 				},
 			],
-			egress: [],
+			// Same compiled allowlist as the Agent-level Workload; empty denies all.
+			egress: workloadEgressRulesV1(allocation.egress),
 		},
 	};
 	const pod: V1Pod = {
@@ -425,7 +443,10 @@ function resourceSpecMatches(
 function normalizeNetworkPolicySpec(spec: V1NetworkPolicy["spec"]) {
 	return {
 		...spec,
-		egress: spec?.egress ?? [],
+		egress: (spec?.egress ?? []).map((rule) => ({
+			...rule,
+			ports: rule.ports?.map((port) => ({ protocol: "TCP", ...port })),
+		})),
 		ingress: spec?.ingress?.map((rule) => ({
 			...rule,
 			_from:
