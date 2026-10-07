@@ -737,8 +737,9 @@ it("rejects a different embedded resource dialect instead of reinterpreting its 
 
 it("accepts same-dialect resources and literal directive-shaped data without changing its meaning", async () => {
 	const literal = {
-		$id: "urn:literal-data",
-		$schema: "https://unsupported.example.test/schema",
+		$ref: "#/literal",
+		$dynamicRef: "#literal",
+		$recursiveRef: "#",
 	};
 	const fixture = await standardMcpFixture({
 		type: "object",

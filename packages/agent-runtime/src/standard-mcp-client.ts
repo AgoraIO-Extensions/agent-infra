@@ -215,6 +215,17 @@ function schemaValidator(schema: unknown): ValidateFunction {
 					locations,
 				);
 		} else if (record(value)) {
+			if (context === "data" || context === "map") {
+				for (const [key, child] of Object.entries(value))
+					inspect(
+						child,
+						depth + 1,
+						context === "map" ? "schema" : "data",
+						`${path}/${key.replace(/~/g, "~0").replace(/\//g, "~1")}`,
+						locations,
+					);
+				return;
+			}
 			// One compiler cannot silently reinterpret another resource's dialect.
 			// Literal const/default/enum/examples data is budgeted but not a schema.
 			if (
@@ -233,8 +244,7 @@ function schemaValidator(schema: unknown): ValidateFunction {
 				)
 					unavailable();
 				let next: Context = "data";
-				if (context === "map") next = "schema";
-				else if (context === "schema") {
+				if (context === "schema") {
 					if (maps.has(key)) next = "map";
 					else if (arrays.has(key)) next = "array";
 					else if (singles.has(key))
