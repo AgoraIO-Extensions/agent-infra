@@ -101,6 +101,18 @@ function fakeContext(page: FakePage) {
 	};
 }
 
+function executionBinding(pageRevision: number) {
+	return {
+		agentId: "agent-1",
+		conversationId: "conversation-1",
+		executionId: "execution-1",
+		capabilityVersion: capability.capabilityVersion,
+		pageRevision,
+		sessionGeneration: 2,
+		resourceFence: 7,
+	} as const;
+}
+
 describe("Browser observe controller", () => {
 	it("navigates only to approved origins and expires element references on navigation", async () => {
 		const page = new FakePage();
@@ -233,6 +245,7 @@ describe("Browser action cancellation barrier", () => {
 		const observation = await controller.observe(reference);
 		const target = observation.elements[0];
 		if (!target) throw new Error("expected element");
+		const binding = executionBinding(reference.pageRevision);
 		let releaseClick!: () => void;
 		page.pageLocator.click = vi.fn(
 			() => new Promise<void>((resolve) => (releaseClick = resolve)),
@@ -245,6 +258,7 @@ describe("Browser action cancellation barrier", () => {
 			kind: "click" as const,
 			page: reference,
 			target,
+			...binding,
 		};
 		const pending = controller.executeAction(request);
 		await Promise.resolve();
@@ -255,6 +269,9 @@ describe("Browser action cancellation barrier", () => {
 			status: "unknown",
 			reasonCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
 		});
+		expect(
+			controller.readAction({ actionId: "cancelled-action", binding }),
+		).toMatchObject(binding);
 		expect(controller.cancelAction("cancelled-action")).toBe(false);
 		await expect(controller.executeAction(request)).resolves.toMatchObject({
 			status: "unknown",
@@ -323,5 +340,52 @@ describe("Browser action outcome readback", () => {
 		expect(controller.readAction({ actionId: "rejected-only" })).toEqual(
 			result,
 		);
+	});
+
+	it("retains execution binding and rejects cross-binding readback", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability: {
+				...capability,
+				operations: ["navigate", "observe", "interact"],
+			},
+		});
+		const reference = await controller.navigate("https://example.test/app");
+		const observation = await controller.observe(reference);
+		const target = observation.elements[0];
+		if (!target) throw new Error("expected element");
+		const binding = executionBinding(reference.pageRevision);
+		const result = await controller.executeAction({
+			actionId: "bound-action",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			kind: "click",
+			page: reference,
+			target,
+			...binding,
+		});
+		expect(result).toMatchObject({ status: "completed", ...binding });
+		expect(
+			controller.readAction({ actionId: "bound-action", binding }),
+		).toMatchObject({ status: "completed", ...binding });
+		expect(() =>
+			controller.readAction({
+				actionId: "bound-action",
+				binding: { ...binding, executionId: "other-execution" },
+			}),
+		).toThrow("BROWSER_ACTION_READBACK_BINDING_MISMATCH");
+
+		const rejected = await controller.executeAction({
+			actionId: "bound-rejected",
+			kind: "click",
+			page: { pageId: "missing", pageRevision: 1 },
+			...binding,
+		});
+		expect(rejected).toMatchObject({ status: "rejected", ...binding });
+		expect(
+			controller.readAction({ actionId: "bound-rejected", binding }),
+		).toMatchObject({ status: "rejected", ...binding });
 	});
 });

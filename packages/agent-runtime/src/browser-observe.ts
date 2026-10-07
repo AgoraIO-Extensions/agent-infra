@@ -62,6 +62,16 @@ export type BrowserActionAuthorizationV1 = Readonly<{
 	executionId: string;
 }>;
 
+export type BrowserActionExecutionBindingV1 = Readonly<{
+	agentId: string;
+	conversationId: string;
+	executionId: string;
+	capabilityVersion: number;
+	pageRevision: number;
+	sessionGeneration: number;
+	resourceFence: number;
+}>;
+
 export type BrowserSideEffectConfirmationV1 = Readonly<{
 	confirmationId: string;
 	actionId: string;
@@ -95,7 +105,8 @@ export type BrowserActionRequestV1 = Readonly<{
 	sideEffect?: boolean;
 	authorization?: BrowserActionAuthorizationV1;
 	confirmation?: BrowserSideEffectConfirmationV1;
-}>;
+}> &
+	Partial<BrowserActionExecutionBindingV1>;
 
 export type BrowserActionRecordV1 = Readonly<{
 	actionId: string;
@@ -116,7 +127,8 @@ export type BrowserActionRecordV1 = Readonly<{
 	reasonCode?: string;
 	confirmation?: BrowserSideEffectConfirmationV1;
 	artifact?: BrowserArtifactV1;
-}>;
+}> &
+	Partial<BrowserActionExecutionBindingV1>;
 
 export type BrowserObservationV1 = Readonly<{
 	page: BrowserPageReferenceV1;
@@ -167,6 +179,58 @@ class BrowserActionRejectedError extends Error {
 
 function nonEmpty(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && value.length <= 256;
+}
+
+function positiveInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+const actionBindingKeys = [
+	"agentId",
+	"conversationId",
+	"executionId",
+	"capabilityVersion",
+	"pageRevision",
+	"sessionGeneration",
+	"resourceFence",
+] as const;
+
+type BrowserActionBindingFields = Partial<BrowserActionExecutionBindingV1>;
+
+function hasActionBinding(value: BrowserActionBindingFields): boolean {
+	return actionBindingKeys.some((key) => value[key] !== undefined);
+}
+
+function actionBinding(
+	value: BrowserActionBindingFields,
+): BrowserActionExecutionBindingV1 | undefined {
+	if (!hasActionBinding(value)) return undefined;
+	if (
+		!nonEmpty(value.agentId) ||
+		!nonEmpty(value.conversationId) ||
+		!nonEmpty(value.executionId) ||
+		!positiveInteger(value.capabilityVersion) ||
+		!positiveInteger(value.pageRevision) ||
+		!positiveInteger(value.sessionGeneration) ||
+		!positiveInteger(value.resourceFence)
+	)
+		return undefined;
+	return {
+		agentId: value.agentId,
+		conversationId: value.conversationId,
+		executionId: value.executionId,
+		capabilityVersion: value.capabilityVersion,
+		pageRevision: value.pageRevision,
+		sessionGeneration: value.sessionGeneration,
+		resourceFence: value.resourceFence,
+	};
+}
+
+function sameActionBinding(
+	left: BrowserActionExecutionBindingV1,
+	right: BrowserActionExecutionBindingV1,
+): boolean {
+	return actionBindingKeys.every((key) => left[key] === right[key]);
 }
 
 function canonicalize(value: unknown): unknown {
@@ -559,6 +623,7 @@ export function createBrowserObserveControllerV1(input: {
 				: undefined,
 			sideEffect: request.sideEffect,
 			authorization: request.authorization,
+			binding: actionBinding(request),
 		});
 	}
 
@@ -596,6 +661,7 @@ export function createBrowserObserveControllerV1(input: {
 			page,
 			sideEffect: request.sideEffect === true,
 			createdAt,
+			...actionBinding(request),
 			...fields,
 		};
 		actionsById.set(record.actionId, record);
@@ -611,6 +677,7 @@ export function createBrowserObserveControllerV1(input: {
 	function readAction(input_: {
 		readonly actionId?: string;
 		readonly idempotencyKey?: string;
+		readonly binding?: BrowserActionExecutionBindingV1;
 	}): BrowserActionRecordV1 | null {
 		const byActionId = input_.actionId
 			? actionsById.get(input_.actionId)
@@ -626,7 +693,18 @@ export function createBrowserObserveControllerV1(input: {
 					byActionId.actionId !== byIdempotencyKey?.actionId))
 		)
 			throw new Error("BROWSER_ACTION_READBACK_CONFLICT");
-		return byActionId ?? byIdempotencyKey ?? null;
+		const record = byActionId ?? byIdempotencyKey;
+		if (input_.binding && !actionBinding(input_.binding))
+			throw new Error("BROWSER_ACTION_READBACK_BINDING_INVALID");
+		const recordBinding = record ? actionBinding(record) : undefined;
+		if (
+			input_.binding &&
+			(!record ||
+				!recordBinding ||
+				!sameActionBinding(recordBinding, input_.binding))
+		)
+			throw new Error("BROWSER_ACTION_READBACK_BINDING_MISMATCH");
+		return record ?? null;
 	}
 
 	async function executeAction(
@@ -634,6 +712,15 @@ export function createBrowserObserveControllerV1(input: {
 	): Promise<BrowserActionRecordV1> {
 		const createdAt = new Date().toISOString();
 		const actionId = request.actionId ?? `action-${randomUUID()}`;
+		const binding = actionBinding(request);
+		if (
+			hasActionBinding(request) &&
+			(!binding || binding.pageRevision !== request.page.pageRevision)
+		)
+			return actionRecord(request, "rejected", request.page, createdAt, {
+				actionId,
+				reasonCode: "BROWSER_ACTION_BINDING_INVALID",
+			});
 		if (!request.operationRef || !request.attemptRef)
 			return actionRecord(request, "rejected", request.page, createdAt, {
 				actionId,
