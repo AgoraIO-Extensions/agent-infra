@@ -94,6 +94,22 @@ describe("Skill Hub contracts", () => {
 	});
 
 	it("rejects unsafe grants", () => {
+		const invalidOrigin = SkillAgentVersionBindingV1Schema.safeParse({
+			schemaVersion: 1,
+			agentId: "agent-1",
+			agentVersion: "agent-version-1",
+			skillVersion: ref,
+			grant: {
+				schemaVersion: 1,
+				tools: [],
+				connections: [],
+				fileRoots: [],
+				networkOrigins: ["not-a-url"],
+				scripts: false,
+			},
+			syncRevision: 1,
+		});
+		expect(invalidOrigin.success).toBe(false);
 		expect(() =>
 			SkillAgentVersionBindingV1Schema.parse({
 				schemaVersion: 1,

@@ -37,6 +37,7 @@ describe("Skill Hub package boundary", () => {
 	it.each([
 		"../SKILL.md",
 		"/SKILL.md",
+		"./SKILL.md",
 		"references/../SKILL.md",
 		"references\\guide.md",
 	])("rejects unsafe path %s", (path) => {
@@ -46,6 +47,11 @@ describe("Skill Hub package boundary", () => {
 	});
 
 	it("rejects symlinks, duplicates, missing entry, and limits", () => {
+		expect(() =>
+			validateSkillPackageEntriesV1([
+				{ path: "SKILL.md", kind: "directory", sizeBytes: 0 },
+			]),
+		).toThrowError(SkillPackageValidationErrorV1);
 		expect(() =>
 			validateSkillPackageEntriesV1([
 				{ path: "SKILL.md", kind: "symlink", sizeBytes: 1 },
