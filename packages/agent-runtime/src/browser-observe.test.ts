@@ -262,3 +262,50 @@ describe("Browser action cancellation barrier", () => {
 		});
 	});
 });
+
+describe("Browser action outcome readback", () => {
+	it("reads terminal records without browser I/O and rejects conflicting keys", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability: {
+				...capability,
+				operations: ["navigate", "observe", "interact"],
+			},
+		});
+		const reference = await controller.navigate("https://example.test/app");
+		const observation = await controller.observe(reference);
+		const target = observation.elements[0];
+		if (!target) throw new Error("expected element");
+		const request = {
+			actionId: "readback-action",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			idempotencyKey: "readback-key",
+			kind: "click" as const,
+			page: reference,
+			target,
+		};
+		await expect(controller.executeAction(request)).resolves.toMatchObject({
+			status: "completed",
+		});
+		expect(
+			controller.readAction({ actionId: "readback-action" }),
+		).toMatchObject({
+			status: "completed",
+		});
+		expect(
+			controller.readAction({ idempotencyKey: "readback-key" }),
+		).toMatchObject({
+			status: "completed",
+		});
+		expect(controller.readAction({ actionId: "missing" })).toBeNull();
+		expect(() =>
+			controller.readAction({
+				actionId: "readback-action",
+				idempotencyKey: "missing",
+			}),
+		).toThrow("BROWSER_ACTION_READBACK_CONFLICT");
+	});
+});
