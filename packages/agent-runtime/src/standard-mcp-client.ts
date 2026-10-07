@@ -130,28 +130,69 @@ export function standardMcpDigest(value: unknown) {
 	return createHash("sha256").update(boundedJson(value)).digest("hex");
 }
 
+function schemaDialect(declaration: unknown): "2020-12" | "draft-07" {
+	const uri =
+		typeof declaration === "string"
+			? declaration.replace(/#$/, "")
+			: declaration;
+	if (
+		uri === undefined ||
+		uri === "https://json-schema.org/draft/2020-12/schema"
+	)
+		return "2020-12";
+	if (uri === "http://json-schema.org/draft-07/schema") return "draft-07";
+	return unavailable();
+}
+
 function schemaValidator(schema: unknown): ValidateFunction {
 	if (!record(schema) || !Object.keys(schema).length) unavailable();
 	boundedJson(schema, 32_768);
-	// MCP's default is 2020-12; earlier dialects require an explicit declaration.
-	const dialect = schema.$schema;
-	const Validator =
-		dialect === undefined ||
-		dialect === "https://json-schema.org/draft/2020-12/schema" ||
-		dialect === "https://json-schema.org/draft/2020-12/schema#"
-			? Ajv2020
-			: dialect === "http://json-schema.org/draft-07/schema#" ||
-					dialect === "http://json-schema.org/draft-07/schema"
-				? Ajv
-				: unavailable();
-	// Callers make synchronous argument/terminal decisions; no Promise truthiness.
-	if (schema.$async !== undefined) unavailable();
+	const dialect = schemaDialect(schema.$schema);
+	const Validator = dialect === "2020-12" ? Ajv2020 : Ajv;
+	const maps = new Set([
+		"properties",
+		"patternProperties",
+		"$defs",
+		"definitions",
+		"dependencies",
+		...(dialect === "2020-12" ? ["dependentSchemas"] : []),
+	]);
+	const arrays = new Set([
+		"allOf",
+		"anyOf",
+		"oneOf",
+		...(dialect === "2020-12" ? ["prefixItems"] : []),
+	]);
+	const singles = new Set([
+		"additionalProperties",
+		"propertyNames",
+		"contains",
+		"items",
+		"not",
+		"if",
+		"then",
+		"else",
+		...(dialect === "2020-12"
+			? ["unevaluatedProperties", "unevaluatedItems", "contentSchema"]
+			: ["additionalItems"]),
+	]);
 	let nodes = 0;
-	const inspect = (value: unknown, depth: number) => {
+	type Context = "schema" | "map" | "array" | "data";
+	const inspect = (value: unknown, depth: number, context: Context) => {
 		if (++nodes > 1024 || depth > 24) unavailable();
 		if (Array.isArray(value)) {
-			for (const child of value) inspect(child, depth + 1);
+			for (const child of value)
+				inspect(child, depth + 1, context === "array" ? "schema" : "data");
 		} else if (record(value)) {
+			// One compiler cannot silently reinterpret another resource's dialect.
+			// Literal const/default/enum/examples data is budgeted but not a schema.
+			if (
+				context === "schema" &&
+				((value.$schema !== undefined &&
+					schemaDialect(value.$schema) !== dialect) ||
+					value.$async !== undefined)
+			)
+				unavailable();
 			for (const [key, child] of Object.entries(value)) {
 				if (
 					(key === "$ref" &&
@@ -160,11 +201,19 @@ function schemaValidator(schema: unknown): ValidateFunction {
 					key === "$recursiveRef"
 				)
 					unavailable();
-				inspect(child, depth + 1);
+				let next: Context = "data";
+				if (context === "map") next = "schema";
+				else if (context === "schema") {
+					if (maps.has(key)) next = "map";
+					else if (arrays.has(key)) next = "array";
+					else if (singles.has(key))
+						next = Array.isArray(child) ? "array" : "schema";
+				}
+				inspect(child, depth + 1, next);
 			}
 		}
 	};
-	inspect(schema, 0);
+	inspect(schema, 0, "schema");
 	try {
 		return new Validator({
 			strict: false,

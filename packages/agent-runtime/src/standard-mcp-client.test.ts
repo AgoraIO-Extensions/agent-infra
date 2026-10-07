@@ -638,3 +638,136 @@ it.each([
 		expect(fixture.trace).toHaveLength(0);
 	},
 );
+
+it.each(["input", "result"] as const)(
+	"rejects unsupported embedded dialect in %s schema without tool dispatch",
+	async (where) => {
+		const embedded = {
+			$id: "urn:embedded-resource",
+			$schema: "https://unsupported.example.test/schema",
+			type: "string",
+		};
+		const inputSchema = { type: "object", properties: { payload: embedded } };
+		const fixture = await standardMcpFixture(
+			where === "input" ? inputSchema : undefined,
+		);
+		const input =
+			where === "result"
+				? {
+						...fixture.input,
+						contract: {
+							...fixture.input.contract,
+							tools: [
+								{
+									name: "write_note",
+									succeededResultSchema: {
+										...terminalSchema,
+										properties: {
+											...terminalSchema.properties,
+											unknown: embedded,
+										},
+									},
+								},
+							],
+						},
+					}
+				: fixture.input;
+		const denied = await StandardMcpClient.open(
+			{
+				target: fixture.target,
+				resolveInput: async () => input,
+				fetch: fixture.fetch,
+			},
+			reference,
+			new AbortController().signal,
+		).then(
+			(client) => {
+				closes.push(() => client.close());
+				return false;
+			},
+			(error) => {
+				expect(error).toMatchObject({
+					code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+				});
+				return true;
+			},
+		);
+		expect(denied).toBe(true);
+		expect(
+			fixture.trace.filter((event) => event.method === "tools/call"),
+		).toHaveLength(0);
+	},
+);
+
+it("rejects a different embedded resource dialect instead of reinterpreting its keywords", async () => {
+	const fixture = await standardMcpFixture({
+		type: "object",
+		properties: {
+			payload: {
+				$id: "urn:legacy-resource",
+				$schema: schemaDraft7,
+				type: "object",
+				properties: { text: { type: "string" } },
+				unevaluatedProperties: false,
+			},
+		},
+	});
+	const denied = await StandardMcpClient.open(
+		{
+			target: fixture.target,
+			resolveInput: async () => fixture.input,
+			fetch: fixture.fetch,
+		},
+		reference,
+		new AbortController().signal,
+	).then(
+		(client) => {
+			closes.push(() => client.close());
+			return false;
+		},
+		(error) => {
+			expect(error).toMatchObject({
+				code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+			});
+			return true;
+		},
+	);
+	expect(denied).toBe(true);
+});
+
+it("accepts same-dialect resources and literal directive-shaped data without changing its meaning", async () => {
+	const literal = {
+		$id: "urn:literal-data",
+		$schema: "https://unsupported.example.test/schema",
+	};
+	const fixture = await standardMcpFixture({
+		type: "object",
+		properties: {
+			text: { $id: "urn:text-resource", $schema: schema2020, type: "string" },
+			literal: { const: literal, default: literal, examples: [literal] },
+		},
+		required: ["text", "literal"],
+		additionalProperties: false,
+	});
+	const client = await StandardMcpClient.open(
+		{
+			target: fixture.target,
+			resolveInput: async () => fixture.input,
+			fetch: fixture.fetch,
+		},
+		reference,
+		new AbortController().signal,
+	);
+	closes.push(() => client.close());
+	const alias = client.toolDefinitions[0]?.tools[0]?.name ?? "";
+	expect(client.validateArguments(alias, { text: "fixture", literal })).toBe(
+		true,
+	);
+	const result = await client.call(
+		alias,
+		{ text: "fixture", literal },
+		operation(),
+		new AbortController().signal,
+	);
+	expect(result.phase).toBe("completed");
+});

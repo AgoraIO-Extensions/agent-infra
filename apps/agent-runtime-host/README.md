@@ -36,7 +36,8 @@ Host 启动时可消费部署批准的私有文件 export，随后使用已有�
 工具输入和获准结果 schema 未声明 `$schema` 时，按 JSON Schema 2020-12 校验；显式
 `https://json-schema.org/draft/2020-12/schema`（可带尾部 `#`）使用同一版本。另支持显式
 `http://json-schema.org/draft-07/schema`（可带尾部 `#`）以兼容旧合同；旧 tuple schema
-需要显式声明 draft-07。未知版本或非标准 `$async` validator 拒绝，不静默回退。
+需要显式声明 draft-07。未知版本或非标准 `$async` validator 拒绝，不静默回退。嵌入 schema resource 可声明同一
+版本，未知或不同版本拒绝；const/default/enum/examples 中的 JSON 数据不改作 schema。
 
 仍限制 schema 字节数、节点与深度，只允许本地 `$ref`，拒绝原 profile 未批准的
 `$dynamicRef` / `$recursiveRef`；不会联网加载 schema。此校验不扩大工具或 Grant 权限，
