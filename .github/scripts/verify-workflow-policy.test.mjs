@@ -244,3 +244,23 @@ test("grants PR write permission before restoring human validation labels", asyn
     "write",
   );
 });
+
+
+test("main image publication rejects business images, SHA tags and invalid setup-node pins", async () => {
+  for (const mutate of [
+    (workflow) => { workflow.env.IMAGE_TAG = "sha-${{ github.sha }}"; },
+    (workflow) => {
+      workflow.jobs.infrastructure.steps.find((step) => step.run?.includes("--images="))
+        .run = "node deploy/release/build-images.mjs receipt.json --images=platformWorker,runtimeHost";
+    },
+    (workflow) => {
+      workflow.jobs.infrastructure.steps.find((step) => step.uses?.startsWith("actions/setup-node@"))
+        .uses = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5028";
+    },
+    (workflow) => { workflow.jobs.infrastructure.strategy.matrix.include[1].runner = "ubuntu-24.04"; },
+  ]) {
+    const workflows = await actualWorkflows();
+    mutate(workflows["publish-images.yml"]);
+    assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("standard templates")));
+  }
+});

@@ -121,6 +121,7 @@ function build(
 	directory,
 	environment = {},
 	repositoryPrefix = "registry.example/agent-infra",
+	options = [],
 ) {
 	const childEnvironment = {
 		...process.env,
@@ -136,7 +137,7 @@ function build(
 	if (repositoryPrefix !== null) {
 		childEnvironment.IMAGE_REPOSITORY_PREFIX = repositoryPrefix;
 	}
-	return spawnSync(process.execPath, [builder, manifestPath], {
+	return spawnSync(process.execPath, [builder, manifestPath, ...options], {
 		cwd: repositoryRoot,
 		encoding: "utf8",
 		env: childEnvironment,
@@ -570,5 +571,82 @@ test("native runtime probe rejects a missing inspected image digest", async () =
 		assert.ok(!calls.some((args) => args[0] === "push"));
 	} finally {
 		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("standard template publication uses stable architecture tags and preserves the Codex probe", async () => {
+	const directory = await mkdtemp(
+		join(tmpdir(), "agent-infra-template-images-"),
+	);
+	try {
+		await fakes(directory);
+		await writeFile(join(directory, "docker-state.json"), "{}");
+		const manifestPath = join(directory, "images.json");
+		const result = build(
+			manifestPath,
+			directory,
+			{ IMAGE_TAG: "latest" },
+			"registry.example/agent-infra",
+			["--images=codex,claude,opencode,pi"],
+		);
+		assert.equal(result.status, 0, result.stderr);
+		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+		assert.equal(manifest.commitSha, commitSha);
+		assert.deepEqual(Object.keys(manifest.images), [
+			"codex",
+			"claude",
+			"opencode",
+			"pi",
+		]);
+		const calls = (await readFile(join(directory, "docker.log"), "utf8"))
+			.trim()
+			.split("\n")
+			.map(JSON.parse);
+		const builds = calls.filter(
+			(args) => args[0] === "buildx" && args[1] === "build",
+		);
+		assert.equal(builds.length, 8);
+		for (const template of ["codex", "claude", "opencode", "pi"]) {
+			const reference = `registry.example/agent-infra/agent-runtime-${template}:latest-linux-amd64`;
+			const selected = builds.filter((args) => args.includes(reference));
+			assert.equal(selected.length, 2);
+			for (const args of selected) {
+				assert.equal(args[args.indexOf("--target") + 1], template);
+				assert.ok(args.includes(`SOURCE_COMMIT=${commitSha}`));
+			}
+			assert.ok(
+				calls.some((args) => args[0] === "push" && args[1] === reference),
+			);
+		}
+		assert.ok(
+			calls.some((args) => args.includes("/probe/runtime-image-probe.mjs")),
+		);
+		assert.equal(
+			JSON.parse(await readFile(`${manifestPath}.runtime-probe.json`, "utf8"))
+				.probe.status,
+			"passed",
+		);
+		assert.ok(
+			!calls.some((args) => args[0] === "push" && args[1].includes(commitSha)),
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("image tag rejects invalid values before invoking Docker", async () => {
+	for (const IMAGE_TAG of ["", "main/branch", "tag;command", "a".repeat(129)]) {
+		const directory = await mkdtemp(join(tmpdir(), "agent-infra-invalid-tag-"));
+		try {
+			await fakes(directory);
+			const result = build(join(directory, "images.json"), directory, {
+				IMAGE_TAG,
+			});
+			assert.notEqual(result.status, 0);
+			assert.match(result.stderr, /IMAGE_TAG is invalid/);
+			await assert.rejects(access(join(directory, "docker.log")));
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	}
 });

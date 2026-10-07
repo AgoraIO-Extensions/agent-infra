@@ -91,4 +91,18 @@ COPY --from=runtime /opt/codex/ /opt/codex/
 ENV AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1
 USER node
 
+# Template images share the verified RuntimeHost installation. Registry/Worker
+# supplies the required Driver; these artifact labels do not select a Driver.
+FROM runtime AS codex
+LABEL io.agora.agent.standard-template=codex
+
+FROM runtime AS claude
+LABEL io.agora.agent.standard-template=claude
+
+FROM runtime AS opencode
+LABEL io.agora.agent.standard-template=opencode
+
+FROM runtime AS pi
+LABEL io.agora.agent.standard-template=pi
+
 FROM runtime AS runner
