@@ -102,9 +102,14 @@ export interface WorkloadVersionV1 {
 	readonly executionCapacity?: WorkloadExecutionCapacityV1;
 }
 
-export type WorkloadCapabilitiesV1 = Readonly<Record<string, boolean>> & {
+export interface WorkloadCapabilitiesV1 {
+	readonly modelSelection?: boolean;
+	readonly attachments?: boolean;
+	readonly resultFiles?: boolean;
+	readonly connection?: boolean;
+	readonly supplementaryInstruction?: boolean;
 	readonly skills?: readonly WorkloadSkillCapabilityV1[];
-};
+}
 
 export interface WorkloadReconciliationStateV1 {
 	readonly schemaVersion: 1;

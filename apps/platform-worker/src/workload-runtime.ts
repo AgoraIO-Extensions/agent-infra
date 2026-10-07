@@ -1069,7 +1069,7 @@ export function createWorkloadRuntimeV1(
 			if (!state.identity) return "pending";
 			if (state.phase === "ready" && candidateKeyless(state))
 				await revalidateCandidateCatalog(state, true);
-			let capabilities: Record<string, boolean> | undefined;
+			let capabilities: WorkloadCapabilitiesV1 | undefined;
 			const observation = createAdapter((value) => {
 				capabilities = value;
 			}, state);
