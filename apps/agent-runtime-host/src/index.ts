@@ -52,6 +52,7 @@ import {
 } from "./legacy-migration-journal.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
 import { createProtectedStandardMcpInput } from "./standard-mcp-input.js";
+import { receiveProtectedStandardMcpInstallation } from "./standard-mcp-installation.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
@@ -192,12 +193,23 @@ export async function assembleRuntimeHost(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
 	);
 	if (connectionProfile && binding !== "codex") runtimeConfigurationInvalid();
-	const connectionConsumer = await readRuntimeConnectionConsumerProfile(
+	let connectionConsumer = await readRuntimeConnectionConsumerProfile(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE,
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION,
 	);
 	if (connectionProfile && connectionConsumer !== undefined)
 		runtimeConfigurationInvalid();
+	const installationRevision =
+		environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION;
+	if (
+		installationRevision !== undefined &&
+		(!configuration || connectionConsumer?.status !== "available")
+	)
+		connectionConsumer = {
+			status: "unavailable",
+			schemaVersion: 1,
+			reason: "invalid",
+		};
 	const messagesConfiguration =
 		binding === "claude" || binding === "acp" || binding === "pi"
 			? readRuntimeModelConfigurationV3(environment, binding)
@@ -246,17 +258,25 @@ export async function assembleRuntimeHost(
 		openedStore = store;
 		await legacyMigration?.apply(store);
 		const standardConnectionClient =
-			configuration && connectionConsumer?.status === "available"
+			configuration &&
+			agentId !== undefined &&
+			connectionConsumer?.status === "available"
 				? await createProtectedStandardMcpInput({
 						dataDirectory,
 						target: connectionConsumer,
 						store,
+						delivery: await receiveProtectedStandardMcpInstallation({
+							dataDirectory,
+							agentId,
+							target: connectionConsumer,
+							revision: installationRevision,
+						}),
 					})
 				: undefined;
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
 					...(standardConnectionClient ? { standardConnectionClient } : {}),
-					...(connectionProfile
+					...(connectionProfile && installationRevision === undefined
 						? {
 								connectionClient: createIndependentConnectionClientInput({
 									dataDirectory,

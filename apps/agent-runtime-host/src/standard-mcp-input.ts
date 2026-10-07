@@ -1,28 +1,23 @@
 import { createHash } from "node:crypto";
-import { constants, type Stats } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import {
 	type FileRuntimeStore,
-	RuntimeHostError,
 	type RuntimeOriginalExecutionRef,
 	type StandardMcpClientOptions,
 	validateStandardMcpInput,
 	validateStandardMcpMetadata,
 } from "@agent-infra/agent-runtime";
 import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import {
+	readProtectedStandardMcpBytes,
+	standardMcpInputUnavailable as unavailable,
+} from "./standard-mcp-files.js";
+import type { StandardMcpInstallationDelivery } from "./standard-mcp-installation.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
-
-function unavailable(): never {
-	throw new RuntimeHostError(
-		"CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
-		"Standard Connection installation is unavailable",
-		503,
-		false,
-	);
-}
 
 /** Public lookup key, derived only from authenticated original binding/profile. */
 export function standardMcpInstallationKey(
@@ -54,115 +49,21 @@ export function standardMcpMaterialKey(
 		.digest("hex");
 }
 
-async function protectedBytes(
-	directoryPath: string,
-	name: string,
-	maximum: number,
-) {
-	if (
-		!isAbsolute(directoryPath) ||
-		resolve(directoryPath) !== directoryPath ||
-		directoryPath === "/"
-	)
-		unavailable();
-	const directory = await open(
-		directoryPath,
-		constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-	);
-	try {
-		const uid = process.getuid?.();
-		const beforeDirectory = await directory.stat();
-		if (
-			uid === undefined ||
-			beforeDirectory.uid !== uid ||
-			(beforeDirectory.mode & 0o777) !== 0o700 ||
-			(await realpath(directoryPath)) !== directoryPath
-		)
-			unavailable();
-		// Linux opens relative to the verified directory descriptor. The portable
-		// path exists only for controlled filesystem tests; production protection
-		// rejects non-Linux before either metadata or material can be read.
-		const path =
-			process.platform === "linux"
-				? join(`/proc/self/fd/${directory.fd}`, name)
-				: join(directoryPath, name);
-		const file = await open(
-			path,
-			constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-		);
-		try {
-			const before = await file.stat();
-			if (
-				!before.isFile() ||
-				before.uid !== uid ||
-				before.nlink !== 1 ||
-				![0o400, 0o600].includes(before.mode & 0o777) ||
-				before.size < 1 ||
-				before.size > maximum
-			)
-				unavailable();
-			const bytes = Buffer.alloc(before.size + 1);
-			try {
-				let length = 0;
-				while (length < bytes.length) {
-					const { bytesRead } = await file.read(
-						bytes,
-						length,
-						bytes.length - length,
-						length,
-					);
-					if (!bytesRead) break;
-					length += bytesRead;
-				}
-				const after = await file.stat();
-				const currentDirectory = await open(
-					directoryPath,
-					constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-				);
-				try {
-					const current = await currentDirectory.stat();
-					if (
-						length !== before.size ||
-						before.dev !== after.dev ||
-						before.ino !== after.ino ||
-						before.size !== after.size ||
-						before.mtimeMs !== after.mtimeMs ||
-						before.ctimeMs !== after.ctimeMs ||
-						after.uid !== uid ||
-						after.nlink !== 1 ||
-						after.mode !== before.mode ||
-						current.dev !== beforeDirectory.dev ||
-						current.ino !== beforeDirectory.ino ||
-						current.uid !== uid ||
-						current.mode !== beforeDirectory.mode ||
-						(await realpath(directoryPath)) !== directoryPath
-					)
-						unavailable();
-				} finally {
-					await currentDirectory.close();
-				}
-				return new TextDecoder("utf-8", { fatal: true }).decode(
-					bytes.subarray(0, length),
-				);
-			} finally {
-				bytes.fill(0);
-			}
-		} finally {
-			await file.close();
-		}
-	} finally {
-		await directory.close();
-	}
-}
-
 /** Host-only SecretRef material; neither API/Worker nor native receives this resolver. */
 export async function createProtectedStandardMcpInput(options: {
 	dataDirectory: string;
 	target: ApprovedConnectionConsumerTargetV1;
 	store: Pick<FileRuntimeStore, "resolveOriginalExecutionBinding">;
+	delivery?: StandardMcpInstallationDelivery;
 }): Promise<StandardMcpClientOptions | undefined> {
 	const target = structuredClone(options.target);
 	const { dataDirectory, store } = options;
+	if (options.delivery?.status === "unavailable")
+		return { target, resolveInput: async () => unavailable() };
+	const allowedKeys =
+		options.delivery?.status === "available"
+			? new Set(options.delivery.installationKeys)
+			: undefined;
 	// Place Host material inside the Bridge's existing shared deny tree. Its
 	// Landlock allow() rejects every external PATH/program/system directory that
 	// overlaps this boundary in either direction; only each 64-hex Conversation's
@@ -200,7 +101,9 @@ export async function createProtectedStandardMcpInput(options: {
 					"code" in error &&
 					error.code === "ENOENT"
 				)
-					return undefined;
+					return allowedKeys
+						? { target, resolveInput: async () => unavailable() }
+						: undefined;
 				throw error;
 			}
 			if (!entry.isDirectory()) unavailable();
@@ -235,7 +138,8 @@ export async function createProtectedStandardMcpInput(options: {
 					original.scope.agentId,
 					target,
 				);
-				const metadataText = await protectedBytes(
+				if (allowedKeys && !allowedKeys.has(key)) unavailable();
+				const metadataText = await readProtectedStandardMcpBytes(
 					join(base, "bindings"),
 					`${key}.json`,
 					65_536,
@@ -269,7 +173,7 @@ export async function createProtectedStandardMcpInput(options: {
 					verified.credentialRef,
 					verified.credentialRevision,
 				);
-				const token = await protectedBytes(
+				const token = await readProtectedStandardMcpBytes(
 					join(base, "materials"),
 					`${material}.token`,
 					4096,
@@ -282,7 +186,7 @@ export async function createProtectedStandardMcpInput(options: {
 				);
 				if (
 					!isDeepStrictEqual(current, original) ||
-					(await protectedBytes(
+					(await readProtectedStandardMcpBytes(
 						join(base, "bindings"),
 						`${key}.json`,
 						65_536,
