@@ -393,4 +393,21 @@ describe("Browser action outcome readback", () => {
 			reasonCode: "BROWSER_ACTION_OPERATION_REQUIRED",
 		});
 	});
+
+	it("indexes actionId-only rejected outcomes for readback", async () => {
+		const page = new FakePage();
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability,
+		});
+		const result = await controller.executeAction({
+			actionId: "rejected-only",
+			kind: "click",
+			page: { pageId: "missing", pageRevision: 1 },
+		});
+		expect(result.status).toBe("rejected");
+		expect(controller.readAction({ actionId: "rejected-only" })).toEqual(
+			result,
+		);
+	});
 });
