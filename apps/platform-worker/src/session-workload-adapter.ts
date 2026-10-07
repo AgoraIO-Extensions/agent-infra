@@ -18,11 +18,10 @@ import type {
 	V1ServiceAccount,
 } from "@kubernetes/client-node";
 import {
+	isRuntimeConnectionEnvironmentV1,
 	runtimeConnectionConsumerAnnotation,
 	runtimeConnectionConsumerControlPodV1,
-	runtimeConnectionConsumerFileEnvironment,
 	runtimeConnectionConsumerProjectionV1,
-	runtimeConnectionConsumerRevisionEnvironment,
 } from "./connection-consumer-projection.js";
 import type { WorkerKubernetesClientV1 } from "./kubernetes-client.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
@@ -60,6 +59,7 @@ export interface SessionSandboxAllocationV1 {
 	readonly workspaceMountPath: string;
 	readonly env?: Readonly<Record<string, string>>;
 	readonly connectionConsumerSnapshot?: string | null;
+	readonly connectionInstallationRevision?: string | null;
 	readonly resources: {
 		readonly requests: { readonly cpu: string; readonly memory: string };
 		readonly limits: { readonly cpu: string; readonly memory: string };
@@ -153,19 +153,16 @@ export function sessionSandboxResourcesV1(
 	if (
 		allocation.desiredState === "running" &&
 		(allocation.connectionConsumerSnapshot === null ||
-			Object.hasOwn(
-				allocation.env ?? {},
-				runtimeConnectionConsumerFileEnvironment,
-			) ||
-			Object.hasOwn(
-				allocation.env ?? {},
-				runtimeConnectionConsumerRevisionEnvironment,
-			))
+			allocation.connectionInstallationRevision === null ||
+			Object.keys(allocation.env ?? {}).some(isRuntimeConnectionEnvironmentV1))
 	)
 		throw new WorkloadKubernetesError("policy");
 	const connection = runtimeConnectionConsumerProjectionV1(
 		allocation.desiredState === "running"
 			? allocation.connectionConsumerSnapshot
+			: undefined,
+		allocation.desiredState === "running"
+			? allocation.connectionInstallationRevision
 			: undefined,
 	);
 	const resourceLabels = labels(allocation);

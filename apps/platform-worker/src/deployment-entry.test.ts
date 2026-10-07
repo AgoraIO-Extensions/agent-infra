@@ -62,7 +62,7 @@ export const connectionConsumerApproval = ${JSON.stringify(connectionConsumerApp
 		join(directory, "workload-deployment.js"),
 		`
 export const createWorkloadReadinessAuthorizationV1 = () => { globalThis.calls.push('readiness'); };
-export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); globalThis.snapshot = input.policy.connectionConsumerSnapshot; return input; };
+export const createProductionWorkloadWorkerOptionsV1 = async (input) => { globalThis.calls.push('workload'); globalThis.snapshot = input.policy.connectionConsumerSnapshot; globalThis.installation = input.policy.connectionInstallationRevision; return input; };
 `,
 	);
 	await writeFile(
@@ -88,6 +88,11 @@ export const createWecomDeploymentCoordinatorV1 = (input) => { globalThis.calls.
 globalThis.calls = [];
 try {
  const entry = await import('./deployment.mjs');
+ if (process.env.RUN_MUTATE_SUPPLY === 'true') {
+   const configuration = await import('./configuration.mjs');
+   configuration.connectionInstallationSupply.ref = 'mutated';
+   configuration.connectionInstallationSupply.revision = 'r99';
+ }
  const signal = new AbortController().signal;
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
@@ -95,10 +100,10 @@ try {
 	 const control = await conversation.resolveRuntimeHost({ purpose: 'control' });
 	 let business;
 	 try { await conversation.resolveRuntimeHost({ purpose: 'business' }); } catch (error) { business = error.message; }
-	 console.log(JSON.stringify({ control, business, snapshot: globalThis.snapshot }));
+	 console.log(JSON.stringify({ control, business, snapshot: globalThis.snapshot, installation: globalThis.installation }));
 	 process.exit(0);
 	}
- console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls, connection: globalThis.connection, snapshot: JSON.parse(globalThis.snapshot) }));
+ console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls, connection: globalThis.connection, snapshot: JSON.parse(globalThis.snapshot), installation: globalThis.installation }));
 } catch (error) {
  console.log(JSON.stringify({ error: error.message, calls: globalThis.calls }));
  process.exitCode = 1;
@@ -203,3 +208,88 @@ it.each([
 		});
 	},
 );
+
+it("captures the deployment supply before preparation and ignores later object mutation", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	await writeFile(
+		path,
+		`${original}\nexport const connectionInstallationSupply = { ref: "private-runtime-export", revision: "r7" };\n`,
+	);
+	try {
+		const result = run({ RUN_MUTATE_SUPPLY: "true" });
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout).installation).toBe(
+			'["private-runtime-export","r7"]',
+		);
+	} finally {
+		await writeFile(path, original);
+	}
+});
+it.each([
+	{ ref: "/caller", revision: "r1" },
+	{ ref: "approved-export", revision: "r1", token: "input-sentinel" },
+])(
+	"retains original control but blocks business for invalid supply (%#)",
+	async (supply) => {
+		const path = join(directory, "configuration.mjs");
+		const original = await readFile(path, "utf8");
+		await writeFile(
+			path,
+			`${original}\nexport const connectionInstallationSupply = ${JSON.stringify(supply)};\n`,
+		);
+		try {
+			const result = run({ RUN_INVALID_PROFILE: "true" });
+			expect(result.status, result.stderr).toBe(0);
+			expect(JSON.parse(result.stdout)).toMatchObject({
+				control: "original-control",
+				business: "CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE",
+				installation: null,
+			});
+			expect(result.stdout).not.toContain("input-sentinel");
+		} finally {
+			await writeFile(path, original);
+		}
+	},
+);
+it("rejects a supply without approved Consumer input", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	const withoutProfile = original.replace(
+		/^export const connectionConsumer(?:Profile|Approval) = .*;$/gm,
+		"",
+	);
+	await writeFile(
+		path,
+		`${withoutProfile}\nexport const connectionInstallationSupply = { ref: "private-runtime-export", revision: "r7" };\n`,
+	);
+	try {
+		const result = run({ RUN_INVALID_PROFILE: "true" });
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			control: "original-control",
+			business: "CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE",
+			installation: null,
+		});
+	} finally {
+		await writeFile(path, original);
+	}
+});
+it("rejects the internal policy selector override before constructing dependencies", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	await writeFile(
+		path,
+		`${original}\nworkloadInput.policy.connectionInstallationRevision = '["caller","r1"]';\n`,
+	);
+	try {
+		const result = run();
+		expect(result.status).toBe(1);
+		expect(JSON.parse(result.stdout)).toEqual({
+			error: "CONNECTION_INSTALLATION_SUPPLY_UNAVAILABLE",
+			calls: [],
+		});
+	} finally {
+		await writeFile(path, original);
+	}
+});

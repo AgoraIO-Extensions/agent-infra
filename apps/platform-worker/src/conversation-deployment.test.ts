@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	runtimeConnectionConsumerAnnotation,
+	runtimeConnectionInstallationRevisionEnvironment,
 } from "./connection-consumer-projection.js";
 import {
 	createProductionConversationRuntimeResolverV2,
@@ -119,14 +120,30 @@ describe("production SessionSandbox resource receiver", () => {
 		);
 		const selectedWorkload = {
 			...f.options,
-			policy: { ...f.options.policy, connectionConsumerSnapshot: snapshot },
+			policy: {
+				...f.options.policy,
+				connectionConsumerSnapshot: snapshot,
+				connectionInstallationRevision: JSON.stringify([
+					"approved-session-export",
+					"r7",
+				]),
+			},
 		};
 		const receive = createProductionSessionSandboxReceiverV1(selectedWorkload);
-		const observation = await receive(f.claim, signal);
+		// Later dependency mutation and Store claims cannot replace the captured selector.
+		selectedWorkload.policy.connectionInstallationRevision = '["mutated","r8"]';
+		const observation = await receive(
+			{ ...f.claim, ...{ connectionInstallationRevision: '["caller","r9"]' } },
+			signal,
+		);
 		const pod = await f.client.read<V1Pod>("Pod", "sandbox-allocation-a");
 		expect(
 			pod?.metadata?.annotations?.[runtimeConnectionConsumerAnnotation],
 		).toBe(snapshot);
+		expect(pod?.spec?.containers[0]?.env).toContainEqual({
+			name: runtimeConnectionInstallationRevisionEnvironment,
+			value: '["approved-session-export","r7"]',
+		});
 		const resolver = createProductionConversationRuntimeResolverV2({
 			workload: {
 				...selectedWorkload,

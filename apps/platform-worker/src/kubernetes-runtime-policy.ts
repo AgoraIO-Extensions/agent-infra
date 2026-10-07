@@ -21,9 +21,8 @@ import type {
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import {
-	runtimeConnectionConsumerFileEnvironment,
+	isRuntimeConnectionEnvironmentV1,
 	runtimeConnectionConsumerProjectionV1,
-	runtimeConnectionConsumerRevisionEnvironment,
 } from "./connection-consumer-projection.js";
 import { WorkloadKubernetesError } from "./kubernetes-client.js";
 import type { KubernetesWorkloadPolicyV1 } from "./kubernetes-runtime-adapter.js";
@@ -61,6 +60,9 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		dependencies.connectionConsumerControl
 			? undefined
 			: policy.connectionConsumerSnapshot,
+		dependencies.connectionConsumerControl
+			? undefined
+			: policy.connectionInstallationRevision,
 	);
 	function modelBindings(value: AgentWorkloadDesiredV1) {
 		if (!modelProjection || !modelInjection) return undefined;
@@ -87,8 +89,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		if (
 			!dependencies.connectionConsumerControl &&
 			value.replicas !== 0 &&
-			(Object.hasOwn(value.env, runtimeConnectionConsumerFileEnvironment) ||
-				Object.hasOwn(value.env, runtimeConnectionConsumerRevisionEnvironment))
+			Object.keys(value.env).some(isRuntimeConnectionEnvironmentV1)
 		)
 			throw new WorkloadKubernetesError("policy");
 		const injection = modelBindings(value);
@@ -119,8 +120,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 					([name]) =>
 						!(
 							dependencies.connectionConsumerControl &&
-							(name === runtimeConnectionConsumerFileEnvironment ||
-								name === runtimeConnectionConsumerRevisionEnvironment)
+							isRuntimeConnectionEnvironmentV1(name)
 						),
 				)
 				.map(([name, value]) => ({ name, value })),
@@ -219,8 +219,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		if (
 			!dependencies.connectionConsumerControl &&
 			value.replicas !== 0 &&
-			(Object.hasOwn(value.env, runtimeConnectionConsumerFileEnvironment) ||
-				Object.hasOwn(value.env, runtimeConnectionConsumerRevisionEnvironment))
+			Object.keys(value.env).some(isRuntimeConnectionEnvironmentV1)
 		)
 			throw new WorkloadKubernetesError("policy");
 		const name = workloadResourceNameV1(value.agentId);
