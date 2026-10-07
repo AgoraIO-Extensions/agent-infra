@@ -1506,6 +1506,73 @@ Runtime HLD §11.2 的最终产物、主体/Agent、秘密保护、撤销、确�
 文档合入与 fixture 不签收这些结果。该路径只声明 Driver 所执行 MCP 的覆盖，其他原生
 外部工具继续按 §10.11 准入；不得以本路径批准隐藏原生动作或私有 lane。
 
+#### 13.5.5 受保护安装交付
+
+本节定义 §13.5.4 客户端的安装输入交付，不定义 Connection 签发、身份或 Grant 的第二权威。
+初始文件 profile 复用 Host 现有专用 `standard-mcp-input/bindings` 与 `materials` 布局。
+供应方是部署批准的 SecretRef 供应边界：只有在 Connection 原主体的独立确认、安装/实例及
+当前凭据引用能按实际发布的合同核实时，才提供对应原 principal＋Agent 的安装输入。
+部署或文件声明不能替代服务端身份、当前授权及合法领取。缺少匹配部署的服务合同或供应
+引用时，该安装保持不可用；客户端不猜 binder、identity 或原记录路由。
+
+**供应与接收。** 可信部署配置固定输入供应引用与修订，以及完整 Consumer profile 的
+fingerprint/source；请求、callback、模型、工具、Token 名称和 Owner 不能选择或覆盖它们。
+输入包含非敏感安装 metadata 和分离的 material 引用，不在同一普通 JSON/config 中嵌入
+Token。metadata 使用已有客户端字段：principal、Agent、service/Consumer/instance、
+issuer/resource/audience、profile/source、credentialRef/revision/expiry 与获准服务合同引用。
+Runtime 的当前原执行仍须在使用前独立解析并匹配这些字段，不从安装 descriptor 取得业务
+执行权限。API/Worker/Web 只交付非敏感配置，不读取、解密或代转客户端秘密；不能复用
+Worker-only 密文库、keyring、普通 `envFrom` Secret 或模型 Key 交付来运输 Connection Token。
+
+交付格式固定当前 reader 的版本 `1`：metadata 为
+`Omit<StandardMcpInput, "scope" | "token"> & { agentId: string }`，UTF-8 JSON 上限
+65,536 bytes；拒绝未知字段及内嵌 `scope`/`token`。`expiresAt` 为现有毫秒时间戳，
+`contract` 保留同一版本的服务/工具结果 schema。分离 material 是 1–4,096 bytes 的 UTF-8
+Token，按现有客户端约束验证，不 trim 或改写。供应引用及修订与 Consumer 的 `source`
+分别核对，不能把一个当成另一个。安装时不伪造 Conversation、generation 或 Execution
+来补 `scope`；它只在当前 reader 从原持久执行解析后补入并重验。
+
+初始供应形式限定部署批准的 Runtime 私有文件 SecretRef export，不新增 Kubernetes Secret
+取值、HTTP Token 上传、原生 header helper、MCP 代理或通用秘密服务。供应路径、临时材料
+与目标均位于现有 native/tool 共享拒绝树的固定非 Conversation 子目录，禁止路径别名、
+任意 URL/外部路径和请求选择。输入文件保持 Host 专用 UID、私有目录与有界、非符号/硬链接
+材料；这些文件条件只是准入条件，不签收隔离。供应方须在已批准的秘密边界交付 export，
+不能先在模型、工具或普通 staging 文件暴露秘密再声明安装安全。
+
+Host 内安装接收与装配必须在任何 material 读取前通过 §13.5.4 的真实 Linux/进程保护。
+原生启动与工具文件边界仍按同节在最终产物验证；不更改节点政策、不提升权限、不接受
+环境变量的保护声明。安装过程不向 native/stdin/stdout、普通日志、错误、journal 或平台
+接口输出秘密，不继承秘密 FD；失败与诊断只提供受限非敏感状态。
+
+初始接收调用位于 `assembleRuntimeHost`：打开原 Store 后、调用
+`createProtectedStandardMcpInput` 前，消费固定供应修订并发布到该 reader 的输入布局。
+本次装配不隐式监听其他来源或刷新供应；新供应修订经受控安装重新装配，运行中的客户端
+仍沿原 resolver 在每次使用前核对当前绑定。后续实现 primary 必须列出真实供应路径、
+批准来源及接收函数，缺失时不能把测试 export 或占位接收器当作生产交付。
+
+**发布与修订。** 接收器复用当前 `installationKey`（principal＋Agent＋完整 profile/source）
+和 `materialKey`（installationKey＋credentialRef＋revision），不另建主体或授权索引。
+先以私有权限、独占创建和完整持久确认发布不可变 material，成功后才原子发布 metadata。
+相同 material 引用和修订只有完全相同内容才能视为同次交付；不同内容或绑定必须拒绝，
+不得覆盖旧修订。metadata 发布失败保留旧绑定，未被引用的 material 不能被选择；失败不能
+生成可用声明。重复交付、崩溃及修订冲突的结果沿同一安装引用核实，不重新领取或重发
+Connection 业务操作来补造结果。
+
+已配置供应但不可读取、保护不足或发布失败时，保持选中但不可用，不转为未配置，也不
+关闭整台 Host；原 stop/status、已存事实与只读恢复继续可用。确实未配置的输入不独自
+启用客户端，非敏感路由快照保留。已有 Thread 工具快照及 unknown 占用不随安装变更
+升级、降级或释放；新会话与当次真实发送继续按当前原授权及修订重验。
+
+安装删除、替换或本地关闭不表示 Connection 已远端撤销。刷新、撤销与原记录核实仅消费
+其实际发布且匹配部署的合同；不复制 Grant 状态或建立后台同步/调度循环。旧材料的移除
+不能消除未决原操作事实或触发新的 Token/操作 fallback，秘密可达引用释放亦不作为完整
+内存擦除证明。实现与取舍见 [ADR 0020](../adr/0020-protect-connection-installation-delivery.md)。
+
+源码接收器可先使用受控 export 实现与验证；供应方实际输出、可信 SecretRef 解析、合法
+确认/领取、最终 Linux 文件/内存/FD、真实 Runtime/Connection/Provider 与撤销/unknown
+验证分别回链 #851。来源未知或证据不足不启用真实 Token，不以未来整票验收替代当前
+实施所需的最小合同输入，也不以此方案或 fixture 签收真实保护。
+
 ## 14. 使用渠道
 
 ### 14.1 Web

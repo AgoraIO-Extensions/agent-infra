@@ -636,6 +636,11 @@ Runtime 可按工程 Spec
 原主体/Agent/Session 选择与秘密保护、结果等待和失败关闭完整遵循该节；不能用工具定义
 或 response 可用声明整个原生 barrier 已通过。取舍见
 [ADR 0019](../adr/0019-run-standard-mcp-in-protected-runtime-driver.md)。
+安装来源、分离 material、不可变修订和原子交付仅遵循工程 Spec
+[§13.5.5](SPEC-agent-infra-M1-engineering-architecture.md#1355-受保护安装交付)。
+Runtime 内接收不替代合法领取；配置缺失与已配置但不可用分别处理，原控制和已有工具
+快照保持。供应未知时不选择普通 Secret/env、原生 helper 或 Worker 解密作为替代。
+
 sender constraint 仅在获准 profile 明确要求时按 Connection HLD §3/§5.2 验证，缺少必需证明
 仍 fail closed；普通 token profile 不以 DPoP、私有 callback 或 FD3 为通用接入前置。
 
