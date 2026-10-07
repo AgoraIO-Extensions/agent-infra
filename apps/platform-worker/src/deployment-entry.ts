@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createRuntimeConnectionConsumerSnapshotV1 } from "./connection-consumer-projection.js";
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
 import { createWecomDeploymentCoordinatorV1 } from "./wecom-deployment.js";
@@ -16,18 +17,46 @@ type DeploymentConfiguration = {
 	readonly signing: ConversationRuntimeOptionsV2["signing"];
 	readonly serviceToken: string;
 	readonly directory: ConversationRuntimeOptionsV2["directory"];
+	readonly relayKeyDecryptionKeys?: readonly {
+		readonly keyVersion: string;
+		readonly privateKeyPkcs8DerBase64: string;
+	}[];
 	readonly wecom: unknown;
+	readonly connectionConsumerProfile?: unknown;
+	readonly connectionConsumerApproval?: unknown;
 };
 
 // Deployment-owned code supplies current IdentityAdapter facts and Worker-only material.
 // The adjacent configuration.mjs is mounted by the deployment, never bundled into the image.
-const { workloadInput, signing, serviceToken, directory, wecom } =
-	(await import(
-		new URL("./configuration.mjs", import.meta.url).href
-	)) as DeploymentConfiguration;
+const {
+	workloadInput,
+	signing,
+	serviceToken,
+	directory,
+	relayKeyDecryptionKeys,
+	wecom,
+	connectionConsumerProfile,
+	connectionConsumerApproval,
+} = (await import(
+	new URL("./configuration.mjs", import.meta.url).href
+)) as DeploymentConfiguration;
+
+// Both the Pod file and Runtime HTTP assertion consume this captured source.
+const connectionConsumerSnapshot = createRuntimeConnectionConsumerSnapshotV1(
+	connectionConsumerProfile,
+	connectionConsumerApproval,
+);
+if (Object.hasOwn(workloadInput.policy, "connectionConsumerSnapshot"))
+	throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+const connectionConsumer = connectionConsumerSnapshot
+	? JSON.parse(connectionConsumerSnapshot)
+	: undefined;
 
 const instanceId = randomUUID();
 let prepared: ReturnType<typeof createPrepared> | undefined;
+let conversationPrepared:
+	| ReturnType<typeof createConversationPrepared>
+	| undefined;
 
 async function createPrepared(signal: AbortSignal) {
 	const databaseUrl = process.env.PLATFORM_DATABASE_URL;
@@ -56,6 +85,7 @@ async function createPrepared(signal: AbortSignal) {
 	const workload = await createProductionWorkloadWorkerOptionsV1(
 		{
 			...workloadInput,
+			policy: { ...workloadInput.policy, connectionConsumerSnapshot },
 			databaseUrl,
 			workerId: signing.workerId,
 			runtimeProbe: createWorkloadReadinessAuthorizationV1({
@@ -65,10 +95,33 @@ async function createPrepared(signal: AbortSignal) {
 		},
 		signal,
 	);
+	let relayKeyDecryptor: ConversationRuntimeOptionsV2["relayKeyDecryptor"];
+	if (workloadInput.runtimeModelVersion === 4) {
+		if (!relayKeyDecryptionKeys)
+			throw new Error("WORKER_EXECUTION_KEY_CONFIGURATION_INVALID");
+		try {
+			const { createRelayKeyWorkerDecryptorV1 } = await import(
+				"@agent-infra/secret-store/worker"
+			);
+			relayKeyDecryptor = createRelayKeyWorkerDecryptorV1({
+				keys: relayKeyDecryptionKeys,
+			});
+		} catch {
+			throw new Error("WORKER_EXECUTION_KEY_CONFIGURATION_INVALID");
+		}
+	}
 	const wecomDeployment = createWecomDeploymentCoordinatorV1({
 		databaseUrl: workload.databaseUrl,
 		configuration: wecom,
 	});
+	const resolveRuntimeHost =
+		conversationDeployment.createProductionConversationRuntimeResolverV2({
+			workload: { ...workload, workerId: signing.workerId },
+			signing,
+			serviceToken,
+			connectionConsumerProfile: connectionConsumer?.profile,
+			connectionConsumerApproval: connectionConsumer?.approval,
+		});
 	return {
 		// Database lease ownership is per process; Runtime service identity is deployment-bound.
 		workload: { ...workload, workerId: instanceId },
@@ -77,6 +130,7 @@ async function createPrepared(signal: AbortSignal) {
 			workerId: instanceId,
 			signing,
 			directory,
+			relayKeyDecryptor,
 			channelAuthorizationCurrent: wecomDeployment.channelAuthorizationCurrent,
 			sandboxPolicy: {
 				namespace: workload.policy.namespace,
@@ -89,16 +143,77 @@ async function createPrepared(signal: AbortSignal) {
 					...workload,
 					workerId: signing.workerId,
 				}),
-			resolveRuntimeHost:
-				conversationDeployment.createProductionConversationRuntimeResolverV2({
-					workload: { ...workload, workerId: signing.workerId },
-					signing,
-					serviceToken,
-				}),
+			resolveRuntimeHost: async (
+				request: Parameters<typeof resolveRuntimeHost>[0],
+			) => {
+				if (
+					connectionConsumerSnapshot === null &&
+					request.purpose !== "control"
+				)
+					throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+				return resolveRuntimeHost(request);
+			},
 			fetch: workload.fetch,
 		},
 		wecom: wecomDeployment,
 	};
+}
+
+async function createConversationPrepared(signal: AbortSignal) {
+	const deployment = await prepare(signal);
+	signal.throwIfAborted();
+	if (workloadInput.runtimeModelVersion !== 4) return deployment.conversation;
+	let accepted:
+		| InstanceType<
+				typeof import("@agent-infra/platform-store")["PostgresConversationExecutionTransactionV1"]
+		  >
+		| undefined;
+	let ciphertext:
+		| InstanceType<
+				typeof import("@agent-infra/platform-store")["PostgresRelayKeyVersionStoreV1"]
+		  >
+		| undefined;
+	try {
+		const {
+			PostgresConversationExecutionTransactionV1,
+			PostgresRelayKeyVersionStoreV1,
+		} = await import("@agent-infra/platform-store");
+		accepted = new PostgresConversationExecutionTransactionV1({
+			databaseUrl: deployment.conversation.databaseUrl,
+		});
+		ciphertext = new PostgresRelayKeyVersionStoreV1({
+			databaseUrl: deployment.conversation.databaseUrl,
+		});
+		const acceptedStore = accepted;
+		const ciphertextStore = ciphertext;
+		let closing: Promise<void> | undefined;
+		return {
+			...deployment.conversation,
+			executionKeys: {
+				readAcceptedExecution: (
+					request: Parameters<typeof acceptedStore.readAcceptedExecution>[0],
+				) => acceptedStore.readAcceptedExecution(request),
+				readCiphertext: (binding: Parameters<typeof ciphertextStore.read>[0]) =>
+					ciphertextStore.read(binding),
+			},
+			closeDeployment() {
+				closing ??= Promise.allSettled([
+					Promise.resolve().then(() => acceptedStore.close()),
+					Promise.resolve().then(() => ciphertextStore.close()),
+				]).then((results) => {
+					if (results.some((result) => result.status === "rejected"))
+						throw new Error("WORKER_EXECUTION_KEY_CLEANUP_UNAVAILABLE");
+				});
+				return closing;
+			},
+		};
+	} catch {
+		await Promise.allSettled([
+			Promise.resolve().then(() => accepted?.close()),
+			Promise.resolve().then(() => ciphertext?.close()),
+		]);
+		throw new Error("WORKER_EXECUTION_KEY_CONFIGURATION_INVALID");
+	}
 }
 
 function prepare(signal: AbortSignal) {
@@ -115,7 +230,8 @@ export async function createPlatformWorkloadWorkerOptionsV1(
 export async function createPlatformConversationWorkerOptionsV2(
 	signal: AbortSignal,
 ) {
-	return (await prepare(signal)).conversation;
+	conversationPrepared ??= createConversationPrepared(signal);
+	return conversationPrepared;
 }
 
 export async function createPlatformWecomWorkerInstanceV1(signal: AbortSignal) {

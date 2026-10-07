@@ -21,6 +21,10 @@ describe("contracts package surface", () => {
 			types: "./dist/enterprise-directory.d.mts",
 			import: "./dist/enterprise-directory.mjs",
 		});
+		expect(manifest.exports["./connection-consumer-profile"]).toEqual({
+			types: "./dist/connection-consumer-profile.d.mts",
+			import: "./dist/connection-consumer-profile.mjs",
+		});
 		expect(manifest.exports["./openapi/enterprise-directory.v1"]).toBe(
 			"./artifacts/openapi/enterprise-directory.v1.openapi.json",
 		);
@@ -42,8 +46,14 @@ describe("contracts package surface", () => {
 		expect(manifest.exports["./openapi/common.v1"]).toBe(
 			"./artifacts/openapi/common.v1.openapi.json",
 		);
+		expect(manifest.exports["./openapi/browser-capability.v1"]).toBe(
+			"./artifacts/openapi/browser-capability.v1.openapi.json",
+		);
 		expect(manifest.exports["./json-schema/common.v1"]).toBe(
 			"./artifacts/json-schema/common.v1.schema.json",
+		);
+		expect(manifest.exports["./json-schema/browser-capability.v1"]).toBe(
+			"./artifacts/json-schema/browser-capability.v1.schema.json",
 		);
 		expect(manifest.exports["./json-schema/kubernetes-workload.v1"]).toBe(
 			"./artifacts/json-schema/kubernetes-workload.v1.schema.json",
@@ -90,6 +100,7 @@ describe("contracts package surface", () => {
 		const packedFiles = pack.files.map((file: { path: string }) => file.path);
 		expect(packedFiles).toContain("dist/index.d.mts");
 		expect(packedFiles).toContain("dist/enterprise-directory.d.mts");
+		expect(packedFiles).toContain("dist/connection-consumer-profile.d.mts");
 		expect(packedFiles).toContain(
 			"artifacts/openapi/enterprise-directory.v1.openapi.json",
 		);
@@ -101,6 +112,12 @@ describe("contracts package surface", () => {
 		expect(packedFiles).toContain("dist/workload/index.d.mts");
 		expect(packedFiles).toContain("dist/runtime/index.d.mts");
 		expect(packedFiles).toContain("artifacts/openapi/common.v1.openapi.json");
+		expect(packedFiles).toContain(
+			"artifacts/openapi/browser-capability.v1.openapi.json",
+		);
+		expect(packedFiles).toContain(
+			"artifacts/json-schema/browser-capability.v1.schema.json",
+		);
 		expect(packedFiles).toContain(
 			"artifacts/json-schema/kubernetes-workload.v1.schema.json",
 		);

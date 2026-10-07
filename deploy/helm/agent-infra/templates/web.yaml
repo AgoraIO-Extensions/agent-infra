@@ -36,6 +36,8 @@ spec:
         app.kubernetes.io/name: {{ .Chart.Name }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: web
+      annotations:
+        agent-infra.agora.io/connection-profile-version: {{ include "agent-infra.connectionProfileVersion" . | quote }}
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -56,6 +58,10 @@ spec:
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
+          env:
+            {{- include "agent-infra.connectionEnv" . | nindent 12 }}
+          envFrom:
+            {{- include "agent-infra.connectionEnvFrom" . | nindent 12 }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp

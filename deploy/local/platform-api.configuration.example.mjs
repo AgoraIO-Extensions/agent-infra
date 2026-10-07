@@ -2,6 +2,8 @@
 // placeholder with a reviewed deployment-owned implementation. Do not put
 // passwords, private keys, Kubernetes credentials or model credentials here.
 
+import { requiredEnv } from "./environment.mjs";
+
 const missing = (name) => {
 	throw new Error(`Configure deployment export: ${name}`);
 };
@@ -16,7 +18,7 @@ export const ldap = missing("ldap");
 // on dependency failure rather than returning a permissive default.
 export const isPlatformDisabled = missing("isPlatformDisabled");
 export const organizationIds = missing("organizationIds");
-export const publicOrigin = "https://localhost:3001";
+export const publicOrigin = requiredEnv("PLATFORM_PUBLIC_ORIGIN");
 
 // apiInput is the credential-free Platform admission boundary. Keep Worker
 // private keys and raw model credentials out of this API-only module.

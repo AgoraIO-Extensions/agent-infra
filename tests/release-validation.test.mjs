@@ -24,6 +24,28 @@ const imageKeys = [
 	"runtimeHost",
 ];
 
+test("release values carry a neutral, complete Connection Consumer source", async () => {
+	const values = parse(
+		await readFile(
+			resolve(repositoryRoot, "deploy/helm/agent-infra/values.yaml"),
+			"utf8",
+		),
+	);
+	const profile = values.connectionConsumer?.inline;
+	assert.equal(values.connectionConsumer?.source, "inline");
+	assert.equal(profile?.schemaVersion, 1);
+	for (const field of ["publicOrigin", "mcpPath", "consumerId", "audience"]) {
+		assert.equal(typeof profile?.[field], "string");
+		assert.ok(profile[field].length > 0);
+	}
+	assert.match(profile.publicOrigin, /^https:\/\//);
+	assert.match(profile.mcpPath, /^\//);
+	assert.match(profile.egressProfile?.ref, /.+/);
+	assert.match(profile.egressProfile?.revision, /.+/);
+	assert.equal(profile.approval?.egressEnforced, true);
+	assert.doesNotMatch(JSON.stringify(values), /gz3|la3/i);
+});
+
 function validate(fixture, args, environment = {}) {
 	return spawnSync(process.execPath, [validator, ...args], {
 		cwd: repositoryRoot,

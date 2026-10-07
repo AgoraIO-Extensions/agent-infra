@@ -1,0 +1,161 @@
+name: Publish images
+run-name: >-
+  ${{ github.event_name }} | publish-images | ${{ github.ref_name }}
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish_platform:
+        description: Publish Platform business images as well
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPOSITORY_PREFIX: ghcr.io/agoraio-extensions/agent-infra
+
+jobs:
+  infrastructure:
+    name: Infrastructure images (${{ matrix.platform }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            architecture: amd64
+          - platform: linux/arm64
+            architecture: arm64
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5028 # v7.0.0
+        with:
+          node-version: 24
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
+      - name: Build and publish infrastructure images
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          node deploy/release/build-images.mjs "$RUNNER_TEMP/infrastructure-images.json" \
+            --images=platformWorker,enterpriseDirectorySync,runtimeHost
+          node deploy/release/build-images.mjs "$RUNNER_TEMP/custom-agent-base.json" \
+            --custom-base-image
+      - name: Upload infrastructure receipts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          if-no-files-found: error
+          name: infrastructure-images-${{ matrix.architecture }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/infrastructure-images.json
+            ${{ runner.temp }}/infrastructure-images.json.runtime-probe.json
+            ${{ runner.temp }}/custom-agent-base.json
+
+  infrastructure-index:
+    name: Publish infrastructure indexes
+    needs: infrastructure
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
+      - name: Publish multi-architecture indexes
+        run: |
+          set -euo pipefail
+          for image in platform-worker enterprise-directory-sync agent-runtime-host custom-agent-base; do
+            docker buildx imagetools create \
+              --tag "$IMAGE_REPOSITORY_PREFIX/$image:sha-$GITHUB_SHA" \
+              "$IMAGE_REPOSITORY_PREFIX/$image:$GITHUB_SHA-linux-amd64" \
+              "$IMAGE_REPOSITORY_PREFIX/$image:$GITHUB_SHA-linux-arm64"
+            docker buildx imagetools inspect "$IMAGE_REPOSITORY_PREFIX/$image:sha-$GITHUB_SHA"
+          done
+
+  platform:
+    name: Platform business images (${{ matrix.platform }})
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_platform == true)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            architecture: amd64
+          - platform: linux/arm64
+            architecture: arm64
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5028 # v7.0.0
+        with:
+          node-version: 24
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
+      - name: Build and publish Platform images
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          node deploy/release/build-images.mjs "$RUNNER_TEMP/platform-images.json" \
+            --images=web,platformApi
+      - name: Upload Platform receipts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
+        with:
+          if-no-files-found: error
+          name: platform-images-${{ matrix.architecture }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/platform-images.json
+
+  platform-index:
+    name: Publish Platform indexes
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_platform == true)
+    needs: platform
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username github-actions --password-stdin
+      - name: Publish multi-architecture Platform indexes
+        run: |
+          set -euo pipefail
+          for image in web platform-api; do
+            docker buildx imagetools create \
+              --tag "$IMAGE_REPOSITORY_PREFIX/$image:sha-$GITHUB_SHA" \
+              "$IMAGE_REPOSITORY_PREFIX/$image:$GITHUB_SHA-linux-amd64" \
+              "$IMAGE_REPOSITORY_PREFIX/$image:$GITHUB_SHA-linux-arm64"
+            docker buildx imagetools inspect "$IMAGE_REPOSITORY_PREFIX/$image:sha-$GITHUB_SHA"
+          done

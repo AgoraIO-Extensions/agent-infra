@@ -74,6 +74,37 @@ const verifiedTool = {
 	},
 } as const;
 
+const browserBinding = {
+	actionId: "browser-action-1",
+	capabilityVersion: 1,
+	pageRevision: 3,
+	sessionGeneration: 2,
+	resourceFence: 7,
+	sideEffect: true,
+} as const;
+
+const browserIntent = {
+	kind: "tool",
+	operationRef: "browser-operation-1",
+	attemptRef: "browser-attempt-1",
+	phase: "intent",
+	toolId: "browser.click",
+	browser: browserBinding,
+} as const satisfies ConversationOperationFactV2;
+
+const browserStarted = {
+	...browserIntent,
+	phase: "started",
+	startedAt: "2026-09-14T12:00:00.000Z",
+} as const;
+
+const browserUnknown = {
+	...browserStarted,
+	phase: "unknown",
+	finishedAt: "2026-09-14T12:00:01.000Z",
+	failureCode: "recovery_unconfirmed",
+} as const;
+
 describe("Connection association domain successors", () => {
 	it("cannot advance an unfinished or unknown tool outcome during post-terminal verification", () => {
 		for (const previous of [
@@ -212,6 +243,51 @@ describe("Connection association domain successors", () => {
 });
 
 describe("actual operation facts", () => {
+	it("binds browser actions to the existing operation attempt and fence", () => {
+		expect(parseConversationOperationFactV2(browserIntent)).toEqual(
+			browserIntent,
+		);
+		expect(() =>
+			requireConversationOperationSuccessorV2(
+				[browserIntent, browserStarted],
+				browserUnknown,
+			),
+		).not.toThrow();
+		for (const change of [
+			{ capabilityVersion: 2 },
+			{ pageRevision: 4 },
+			{ sessionGeneration: 3 },
+			{ resourceFence: 8 },
+			{ actionId: "browser-action-2" },
+		]) {
+			expect(() =>
+				requireConversationOperationSuccessorV2(
+					[browserIntent, browserStarted],
+					{
+						...browserUnknown,
+						browser: { ...browserBinding, ...change },
+					} as ConversationOperationFactV2,
+				),
+			).toThrow();
+		}
+	});
+
+	it("rejects malformed browser bindings", () => {
+		for (const change of [
+			{ pageRevision: 0 },
+			{ sessionGeneration: 0 },
+			{ resourceFence: 0 },
+			{ capabilityVersion: 0 },
+			{ sideEffect: "yes" },
+		])
+			expect(() =>
+				parseConversationOperationFactV2({
+					...browserIntent,
+					browser: { ...browserBinding, ...change },
+				}),
+			).toThrow();
+	});
+
 	it("preserves missing measurements and only stores explicitly observed usage", () => {
 		expect(parseConversationOperationFactV2(intent)).toEqual(intent);
 		expect(parseConversationOperationFactV2(intent)).not.toHaveProperty(

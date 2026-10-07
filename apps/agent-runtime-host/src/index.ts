@@ -1,5 +1,4 @@
 import { createPublicKey, type KeyObject } from "node:crypto";
-import { createServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -7,6 +6,7 @@ import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
 	createExecutionGrantVerifier,
+	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
 	FakeRuntimeDriver,
@@ -19,6 +19,7 @@ import {
 } from "@agent-infra/agent-runtime";
 import type {
 	ExecutionGrantV1,
+	RuntimeBusinessRequestV4,
 	RuntimeExecutionGrantV2,
 	VerifiedExecutionGrantV1,
 	VerifiedRuntimeExecutionGrantV2,
@@ -37,7 +38,10 @@ import {
 	createIndependentConnectionClientInput,
 	readConnectionClientProfile,
 } from "./connection-client-input.js";
-
+import {
+	type RuntimeConnectionConsumerProfile,
+	readRuntimeConnectionConsumerProfile,
+} from "./connection-consumer-profile.js";
 import {
 	type RuntimeLegacyMigrationFilesystem,
 	readRuntimeLegacyMigrationV1,
@@ -47,16 +51,13 @@ import {
 	readRuntimeLegacyJournal,
 } from "./legacy-migration-journal.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
-import {
-	type RuntimeHostTls,
-	readRuntimeHostTls,
-	validateRuntimeHostTls,
-} from "./runtime-tls.js";
+import { createProtectedStandardMcpInput } from "./standard-mcp-input.js";
+import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
 
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 
 interface StartOptions {
-	tls: RuntimeHostTls;
+	connectionConsumer?: RuntimeConnectionConsumerProfile;
 	readinessWorkerId?: string;
 	runtimeWorkerId?: string;
 	verifyGrantV2?: (
@@ -64,6 +65,10 @@ interface StartOptions {
 	) =>
 		| VerifiedRuntimeExecutionGrantV2
 		| Promise<VerifiedRuntimeExecutionGrantV2>;
+	verifyGrantV4?: (request: unknown) => Promise<{
+		request: RuntimeBusinessRequestV4;
+		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
+	}>;
 	host: RuntimeHost;
 	serviceToken: string;
 	verifyGrant: (
@@ -88,19 +93,19 @@ function requiredEnvironment(environment: NodeJS.ProcessEnv, name: string) {
 	return value;
 }
 
+/**
+ * In-cluster plaintext HTTP (ADR-0020): the service token and signed Grant
+ * authorize every call; NetworkPolicy admits only the Worker.
+ */
 export function startRuntimeHost(options: StartOptions) {
-	validateRuntimeHostTls(options.tls);
 	const port = options.port ?? runtimePort(process.env.PORT, 3003);
 	const log = options.log ?? console.info;
+	const connectionConsumer = options.connectionConsumer
+		? structuredClone(options.connectionConsumer)
+		: undefined;
 	return serve(
 		{
-			createServer,
-			serverOptions: {
-				cert: options.tls.cert,
-				key: options.tls.key,
-				minVersion: "TLSv1.2",
-			},
-			fetch: createRuntimeHostApp(options).fetch,
+			fetch: createRuntimeHostApp({ ...options, connectionConsumer }).fetch,
 			port,
 		},
 		(info) =>
@@ -110,6 +115,18 @@ export function startRuntimeHost(options: StartOptions) {
 					status: "ready",
 					...(options.configVersion
 						? { configVersion: options.configVersion }
+						: {}),
+					...(connectionConsumer
+						? {
+								connectionConsumerProfile:
+									connectionConsumer.status === "available"
+										? {
+												schemaVersion: connectionConsumer.schemaVersion,
+												configFingerprint: connectionConsumer.configFingerprint,
+												source: connectionConsumer.source,
+											}
+										: connectionConsumer,
+							}
 						: {}),
 					port: info.port,
 				}),
@@ -175,6 +192,12 @@ export async function assembleRuntimeHost(
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_PROFILE,
 	);
 	if (connectionProfile && binding !== "codex") runtimeConfigurationInvalid();
+	const connectionConsumer = await readRuntimeConnectionConsumerProfile(
+		environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE,
+		environment.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION,
+	);
+	if (connectionProfile && connectionConsumer !== undefined)
+		runtimeConfigurationInvalid();
 	const messagesConfiguration =
 		binding === "claude" || binding === "acp" || binding === "pi"
 			? readRuntimeModelConfigurationV3(environment, binding)
@@ -222,8 +245,17 @@ export async function assembleRuntimeHost(
 		const store = await FileRuntimeStore.open(storePath);
 		openedStore = store;
 		await legacyMigration?.apply(store);
+		const standardConnectionClient =
+			configuration && connectionConsumer?.status === "available"
+				? await createProtectedStandardMcpInput({
+						dataDirectory,
+						target: connectionConsumer,
+						store,
+					})
+				: undefined;
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
+					...(standardConnectionClient ? { standardConnectionClient } : {}),
 					...(connectionProfile
 						? {
 								connectionClient: createIndependentConnectionClientInput({
@@ -250,7 +282,20 @@ export async function assembleRuntimeHost(
 								"Runtime authorization is not ready",
 								403,
 							);
-						return assembledHost.authorizeExternalAction(action);
+						const authorized =
+							await assembledHost.authorizeExternalAction(action);
+						if (
+							action.kind !== "tool" ||
+							connectionConsumer?.status !== "available"
+						)
+							return authorized;
+						return {
+							...authorized,
+							revalidate: () => {
+								assertStandardMcpProcessProtection();
+								store.assertExternalActionCurrent(action, Date.now);
+							},
+						};
 					},
 					launchPath: "/opt/codex/bin:/usr/local/bin:/usr/bin:/bin",
 					path: join(dataDirectory, "codex-driver.json"),
@@ -282,6 +327,28 @@ export async function assembleRuntimeHost(
 		closeDriver = async () => {
 			if ("close" in driver) await driver.close();
 		};
+		const rawValidateV4 =
+			runtimeWorkerId && configuration?.schemaVersion === 4
+				? createRuntimeExecutionGrantValidatorV4(
+						new Map([[keyId, publicKey]]),
+						{
+							expectedIssuer,
+							expectedWorkerId: runtimeWorkerId,
+						},
+					)
+				: undefined;
+		const validateV4 = rawValidateV4
+			? async (request: unknown) => {
+					const verified = await rawValidateV4(request);
+					if (agentId && verified.claims.agentId !== agentId)
+						throw new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Runtime authorization does not match this deployment",
+							403,
+						);
+					return verified;
+				}
+			: undefined;
 		const host = await RuntimeHost.open({
 			...(readinessBinding
 				? {
@@ -303,6 +370,7 @@ export async function assembleRuntimeHost(
 						},
 					}
 				: {}),
+			...(validateV4 ? { validateGrantV4: validateV4 } : {}),
 		});
 		assembledHost = host;
 		const verifyV2 = createRuntimeExecutionGrantVerifierV2(
@@ -311,6 +379,7 @@ export async function assembleRuntimeHost(
 		const verify = createExecutionGrantVerifier(new Map([[keyId, publicKey]]));
 		return {
 			host,
+			...(connectionConsumer ? { connectionConsumer } : {}),
 			...(readinessBinding
 				? { readinessWorkerId: readinessBinding.workerId }
 				: {}),
@@ -331,6 +400,9 @@ export async function assembleRuntimeHost(
 							return verified;
 						},
 					}
+				: {}),
+			...(validateV4
+				? { verifyGrantV4: (request: unknown) => validateV4(request) }
 				: {}),
 			...(activeConfiguration
 				? { configVersion: activeConfiguration.configVersion }
@@ -376,11 +448,10 @@ export async function closeRuntimeHost(
 
 async function startFromEnvironment() {
 	assertRuntimeProcessProtection();
-	const tls = await readRuntimeHostTls(process.env);
 	const runtime = await assembleRuntimeHost(process.env);
 	let server: ReturnType<typeof startRuntimeHost>;
 	try {
-		server = startRuntimeHost({ ...runtime, tls });
+		server = startRuntimeHost(runtime);
 	} catch (error) {
 		await runtime.close();
 		throw error;
@@ -418,7 +489,6 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 				: error instanceof Error &&
 						[
 							"RUNTIME_CONFIGURATION_INVALID",
-							"RUNTIME_TLS_CONFIGURATION_INVALID",
 							"RUNTIME_CODEX_PROVENANCE_MISMATCH",
 						].includes(error.message)
 					? error.message

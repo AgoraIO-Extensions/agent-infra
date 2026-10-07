@@ -8,6 +8,7 @@ import {
 	FileRuntimeStore,
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { RuntimeCapabilitiesResponseV1Schema } from "@agent-infra/contracts/runtime";
 import {
 	type PlatformSecretRecordV1,
@@ -50,11 +51,10 @@ import {
 	readCodexPilotConfiguration,
 	readRuntimeModelConfigurationV3,
 } from "../../agent-runtime-host/src/configuration.js";
+import { createRuntimeConnectionConsumerSnapshotV1 } from "./connection-consumer-projection.js";
 import { createProductionConversationRuntimeResolverV2 } from "./conversation-deployment.js";
 import {
 	fakeKubernetesApi,
-	runtimeTlsBindingFixture,
-	runtimeTlsSecretFixture,
 	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
@@ -297,27 +297,6 @@ function fixture(
 	> = {},
 ) {
 	const api = fakeKubernetesApi();
-	const tlsAgents = [
-		"agent-a",
-		"agent-codex",
-		"agent-claude",
-		"agent-acp",
-		"agent-pi",
-	];
-	const runtimeTlsSecrets = new Map(
-		tlsAgents.map((agentId) => {
-			const name = `runtime-tls-${workloadResourceNameV1(agentId)}`;
-			return [name, runtimeTlsSecretFixture(name, agentId)] as const;
-		}),
-	);
-	const readResource = api.client.read.bind(api.client);
-	api.client.read = (async (
-		kind: Parameters<typeof api.client.read>[0],
-		name: string,
-	) => {
-		const secret = kind === "Secret" ? runtimeTlsSecrets.get(name) : undefined;
-		return secret ? structuredClone(secret) : readResource(kind, name);
-	}) as typeof api.client.read;
 	let configuration = inputOverrides.configuration ?? configurationFixture();
 	let state: WorkloadReconciliationStateV1 | null = null;
 	let management: WorkloadReconciliationInputV1["management"] = {
@@ -351,7 +330,6 @@ function fixture(
 		client: api.client,
 		policy: {
 			...workloadTestPolicy,
-			runtimeTls: tlsAgents.map(runtimeTlsBindingFixture),
 		},
 		registry: workloadRegistryFixture({
 			schemaVersion: 1,
@@ -374,18 +352,9 @@ function fixture(
 			}),
 		},
 		fetch: runtimeFetch,
-		runtimeTlsFetch: () => runtimeFetch,
 		probeRuntime: async () => ({ core: "passed", capabilities: {} }),
 		...overrides,
 	};
-	if (overrides.policy && overrides.policy.runtimeTls === undefined)
-		(options as { policy: WorkloadRuntimeOptionsV1["policy"] }).policy = {
-			...overrides.policy,
-			runtimeTls: tlsAgents.map(runtimeTlsBindingFixture),
-		};
-	if (overrides.fetch && !overrides.runtimeTlsFetch)
-		(options as { runtimeTlsFetch?: () => typeof fetch }).runtimeTlsFetch =
-			() => options.fetch ?? runtimeFetch;
 	return {
 		...api,
 		options,
@@ -2971,7 +2940,7 @@ describe("assembled Workload Runtime contracts", () => {
 		await f.tick(5);
 		expect(fetcher).toHaveBeenCalledWith(
 			expect.stringMatching(
-				/^https:\/\/agent-[a-f0-9]+-probe\.workload-test\.svc:8080\/healthz$/,
+				/^http:\/\/agent-[a-f0-9]+-probe\.workload-test\.svc:8080\/healthz$/,
 			),
 			expect.objectContaining({
 				redirect: "error",
@@ -2983,6 +2952,106 @@ describe("assembled Workload Runtime contracts", () => {
 	});
 });
 
+it.each(["unavailable", "changed-source"] as const)(
+	"preserves the real original control resolver after Connection %s",
+	async (change) => {
+		const keys = generateKeyPairSync("ed25519");
+		const signing = {
+			workerId: "worker-a",
+			issuer: "platform",
+			keyId: "key",
+			privateKey: keys.privateKey,
+		};
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "consumer-a",
+			audience: "resource-a",
+			egressProfile: { ref: "egress-a", revision: "r1" },
+		};
+		const approval = {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			egressEnforced: true,
+			source: { ref: "deployment-a", revision: "r1" },
+		};
+		const snapshot = createRuntimeConnectionConsumerSnapshotV1(
+			profile,
+			approval,
+		);
+		const policy = {
+			...workloadTestPolicy,
+			connectionConsumerSnapshot: snapshot,
+			runtimeAuth: {
+				workerId: signing.workerId,
+				grantIssuer: signing.issuer,
+				grantKeyId: signing.keyId,
+				grantPublicKey: keys.publicKey
+					.export({ type: "spki", format: "pem" })
+					.toString(),
+				serviceTokenSecret: { name: "transport", key: "token" },
+			},
+		};
+		const f = fixture({ policy });
+		await f.tick(8);
+		const ready = f.state;
+		if (!ready?.identity || !ready.verified)
+			throw Error("Expected ready fixture");
+		const nextApproval = {
+			...approval,
+			source: { ...approval.source, revision: "r2" },
+		};
+		const updated = {
+			...f.options,
+			policy: {
+				...policy,
+				connectionConsumerSnapshot:
+					change === "unavailable"
+						? null
+						: createRuntimeConnectionConsumerSnapshotV1(profile, nextApproval),
+			},
+		};
+		const runtime = createWorkloadRuntimeV1(updated);
+		await expect(runtime.observeVerifiedControl(ready)).resolves.toBe(
+			"healthy",
+		);
+		const resolver = createProductionConversationRuntimeResolverV2({
+			workload: updated,
+			signing,
+			serviceToken: "synthetic-transport",
+			...(change === "changed-source"
+				? {
+						connectionConsumerProfile: profile,
+						connectionConsumerApproval: nextApproval,
+					}
+				: {}),
+		});
+		const writes = f.writes.length;
+		await expect(
+			resolver({
+				agentId: ready.agentId,
+				workload: ready,
+				signal: new AbortController().signal,
+				purpose: "control",
+				command: "turn.stop",
+			}),
+		).resolves.toMatchObject({ baseUrl: expect.stringContaining("-probe") });
+		await expect(
+			resolver({
+				agentId: ready.agentId,
+				workload: { ...ready, identity: { uid: "other", generation: 1 } },
+				signal: new AbortController().signal,
+				purpose: "control",
+				command: "turn.stop",
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		expect(f.writes.length).toBe(writes);
+		await expect(runtime.observe(ready)).resolves.not.toBe("healthy");
+		await expect(runtime.promote(ready)).rejects.toThrow();
+	},
+);
+
 it("persists exact capacity and binds readiness to fence/image while preserving original controls after capacity withdrawal", async () => {
 	const keys = generateKeyPairSync("ed25519");
 	const signing = {
@@ -2993,7 +3062,6 @@ it("persists exact capacity and binds readiness to fence/image while preserving 
 	};
 	const policy = {
 		...workloadTestPolicy,
-		runtimeTls: [runtimeTlsBindingFixture("agent-a")],
 		runtimeAuth: {
 			workerId: signing.workerId,
 			grantIssuer: signing.issuer,
@@ -3382,7 +3450,7 @@ it.each(["unchanged", "uid", "selector", "port", "fence"] as const)(
 			return;
 		}
 		await expect(resolution).resolves.toMatchObject({
-			baseUrl: `https://${sandbox.resourceName}.${sourcePolicy.namespace}.svc:${verifiedDeployment.service.port}`,
+			baseUrl: `http://${sandbox.resourceName}.${sourcePolicy.namespace}.svc:${verifiedDeployment.service.port}`,
 		});
 	},
 );

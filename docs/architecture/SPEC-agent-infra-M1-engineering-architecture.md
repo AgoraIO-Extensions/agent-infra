@@ -18,7 +18,7 @@
 4. 长任务、流式回复、Pod 生命周期和失败恢复如何落地。
 5. 前后端分别交付什么，以及如何进行测试和上线验收。
 
-本文不改变 PRD 的产品范围。M1 包含用户与应用 API、后台任务调度、运行可观测、模型质量评估与效果分析（Eval）、持久审计和 §10.1.1 的 Session-owned Sandbox 隔离。Skill Hub、平台会话隔离以外的通用 Sandbox 产品能力、多 Agent 协作、知识能力、Agent 删除、Webhook、定时任务和主动通知仍在 Roadmap。
+本文不改变 PRD 的产品范围。M1 包含用户与应用 API、后台任务调度、运行可观测、模型质量评估与效果分析（Eval）、持久审计、§10.1.1 的 Session-owned Sandbox 隔离、Browser Capability 和 §11.6 的 Skill Hub。Skill Hub 与 Browser Capability 的工程边界见 §11.5–§11.6；平台会话隔离以外的通用 Sandbox 产品能力、多 Agent 协作、知识能力、Agent 删除、Webhook、定时任务和主动通知仍在 Roadmap。
 
 ## 2. 架构结论
 
@@ -268,6 +268,7 @@ M1 的 Schema family 由以下主责 artifact 维护；表中 Issue 是既有交
 | 企微目录快照内部 HTTP/OpenAPI | 目录服务，Platform 消费方评审 | [#889](https://github.com/AgoraIO-Extensions/agent-infra/issues/889) |
 | RuntimeHost/Driver wire Schema | Codex Runtime，Worker 消费方评审 | [#181](https://github.com/AgoraIO-Extensions/agent-infra/issues/181) |
 | Registry、Secret、Kubernetes Workload 与 Runtime Manifest Contract | Agent Workload，Core/Delivery 消费方评审 | [#182](https://github.com/AgoraIO-Extensions/agent-infra/issues/182)；OCI admission 由 [#188](https://github.com/AgoraIO-Extensions/agent-infra/issues/188) 实现 |
+| Browser Capability declaration、内部 probe 与 conformance artifact | Runtime/Workload，#1252/#508/#992 消费方评审；Platform/API projection 后续接收 | [#1370](https://github.com/AgoraIO-Extensions/agent-infra/issues/1370) |
 
 生成工具固定版本；产物使用稳定 key/property 顺序、LF 和一个末尾换行，不能包含时间戳、绝对路径或工具版本等易漂移字段。`packages/contracts` 必须在现有 `pnpm test` 路径中执行生成漂移、基于 pull-request merge-base 的 breaking-change 和 consumer contract 检查。test-only Client smoke 只验证 OpenAPI 到浏览器 TypeScript Client 的单向链路，不进入 package exports、`files` 或 `dist`；`packages/test-support` 只提供由正式 Schema 校验的静态 builder/fixture，生产代码不得依赖它。Connection 的 MCP/API、客户端身份、OAuth、Grant、凭证和 Action Schema 由 Connection 自己维护；Platform Schema 不定义 Connection 代调用协议或数据投影。
 
@@ -331,48 +332,35 @@ M1 不使用 WebSocket。用户发送消息、停止回复和补充指令都通�
 
 ### 8.3 内部接口
 
-`platform-worker` 到 Agent Pod 使用遵循 [Contract Schema authority](#64-contract-schema-authority) 的版本化 OpenAPI HTTP 契约；Runtime 增量事件使用由 JSON Schema 校验的内部 SSE。内部接口通过部署提供的服务身份和 mTLS 或等价机制认证，并验证执行授权，不因位于集群内而跳过鉴权。
+`platform-worker` 到 Agent Pod 使用遵循 [Contract Schema authority](#64-contract-schema-authority) 的版本化 OpenAPI HTTP 契约；Runtime 增量事件使用由 JSON Schema 校验的内部 SSE。内部接口通过部署提供的服务身份认证，并验证执行授权，不因位于集群内而跳过鉴权。
 
-#### 内部 Runtime TLS 身份与传输
+#### 内部 Runtime 传输与身份
 
-本契约的机制与部署输入边界已接收，待完成适用评审与合并；TLS 实现和真实部署尚未交付。它只约束 Worker 到 RuntimeHost 的内部传输，不改变 Connection 或 Host/Grant/Driver wire。受控实现须有独立、完整的 primary Issue，绑定已评审契约与精确消费者；真实证书、签发者及生产供应签收缺失只阻塞对应部署和实测，不阻塞不依赖这些材料的受控实现。本文不授予本次文档任务实施或部署权限。
+Worker 到 RuntimeHost 使用集群内明文 HTTP，决策与接受的风险见 [ADR-0020](../adr/0020-use-in-cluster-plaintext-runtime-transport.md)。它只约束 Worker 到 RuntimeHost 的集群内传输，不改变 Connection 或 Host/Grant/Driver wire；跨集群、跨 VPC 或经过公网的 Runtime 访问必须使用 TLS 并另行评审。
 
-**采用等价机制：server TLS + 既有 deployment service token + signed Grant。** 三道校验分别满足本节的传输保护、部署服务身份和执行授权，不能相互替代：
-
-| 要求 | 采用机制及边界 |
+| 要求 | 机制及边界 |
 | --- | --- |
-| Worker 认证 Host 并保护传输 | 只连接部署确定的 HTTPS origin；校验证书链、有效期、serverAuth 用途及与 origin 完全匹配的 DNS SAN。部署把该 DNS、namespace 与可信 Agent 绑定；证书不证明 revision、fence、Digest 或 Session。禁止明文 fallback、redirect、关闭校验和调用方覆盖 origin。 |
-| Host 认证部署调用方 | 继续校验既有 service token；它证明持有部署凭证，不是某个 Worker 进程的私钥持有证明。token 只在已验证 TLS 上传输，部署控制其发布、访问、轮换和撤销；Host 所持 token 也不能取得 Grant 签名私钥。 |
-| Host 核对当前授权与部署 | 保留独立 signed readiness 的 Worker/Agent/revision/fence/Digest 本机绑定；业务及控制 Grant 仍按 [§9.3](#93-服务端授权上下文) 校验签名、issuer、audience、时间、对象、用途和操作范围，继续执行原持久幂等、租约与屏障。不能把 readiness 字段笼统写成每种 Execution Grant 已有的字段。 |
+| Worker 只访问获准 Host | 只连接服务端从持久 Workload 或 Session 分配解析出的精确 origin `http://<Service>.<namespace>.svc:<port>`；拒绝其他 scheme、userinfo、query、hash 与 redirect，调用方不能覆盖 origin。 |
+| 限定访问面 | Agent 级 Workload 与 Session Sandbox 的 NetworkPolicy ingress 只放行 Worker 选择器；healthz 或 Service 存在不证明隔离。 |
+| Host 认证部署调用方 | 继续校验既有 service token；它证明持有部署凭证，不是某个 Worker 进程的私钥持有证明。部署控制其发布、访问、轮换和撤销；Host 所持 token 不能取得 Grant 签名私钥。 |
+| Host 核对当前授权与部署 | 保留独立 signed readiness 的 Worker/Agent/revision/fence/Digest 本机绑定；业务及控制 Grant 仍按 [§9.3](#93-服务端授权上下文) 校验签名、issuer、audience、时间、对象、用途和操作范围，继续执行原持久幂等、租约与屏障。 |
 
-在凭证受控、TLS 严格校验和上述授权屏障全部成立的威胁边界内，本节采用此组合作为等价机制；它不等同于 mTLS 的双向传输层私钥证明。共享 bearer token 泄漏会扩大服务认证风险，捕获仍有效的 Grant 也不能靠 TLS 自动消除重放；必须依赖原用途/对象校验、持久幂等与 fence，并完成对应负向验收。当前 HTTP 实现不满足本契约，挂载 CA 或启用某一 Runtime 版本也不代表满足。
+明文传输意味着能观察集群 Pod 网络的节点、CNI 或特权组件可以看到 token、Grant、会话正文和执行期交付的模型 Key。捕获的 Grant 不能靠传输层消除重放，必须依赖原用途/对象校验、持久幂等与 fence；token 泄露时在两端撤旧并受控重载。
 
-**沿既有 Service 拓扑补齐传输。** [Runtime HLD §4.1](HLD-agent-runtime-M1.md#41-内部-runtime-service-与-tls-映射) 区分 Agent 级 candidate/verified Workload 与业务 Session Sandbox。Agent 级实现已有主 Service 和 `-probe` Service，分别承载 business 与 readiness/verified control；沿这两个实际 DNS 提供同一 Host listener 的 server TLS，不因 TLS 新建或合并 Service、不新增 Manifest 字段。Sandbox 沿其原已批准分配及唯一 Service 身份供证，不复用 Agent 级路由或擅加 `-probe`；本契约不改变 §10.1.1 或 #1322 的资源合同。
+**沿既有 Service 拓扑。** [Runtime HLD §4.1](HLD-agent-runtime-M1.md#41-内部-runtime-service-映射) 区分 Agent 级 candidate/verified Workload 与业务 Session Sandbox。Agent 级主 Service 和 `-probe` Service 分别承载 business 与 readiness/verified control；Sandbox 只使用其原已批准分配的唯一 Service，不复用 Agent 级路由或擅加 `-probe`。本契约不改变 §10.1.1 或 #1322 的资源合同。
 
-**受信部署输入。** 复用[现有 Worker 部署模块](../../deploy/platform-worker/README.md#配置模块形状)，准确入口与最小差额如下；新增项是已接收、待实现的部署输入，不是已存在的 Schema 或产物：
+**受信部署输入。** 复用[现有 Worker 部署模块](../../deploy/platform-worker/README.md#配置模块形状)：
 
-| 输入 | 已有入口 / 所需差额 |
+| 输入 | 入口 |
 | --- | --- |
 | 部署代码与身份 | `platformWorker.configurationModuleSecretRef.{name,key}` 只读挂载 `/app/dist/configuration.mjs`；导出 `workloadInput`、`signing`、`serviceToken`。`workloadInput.policy.namespace` 必须与 `PLATFORM_WORKER_NAMESPACE` 一致，Agent 来自服务端持久 Workload，不能从请求、Owner env、模型或 live annotation 获取。 |
 | token 与 Grant | `platformWorker.runtimeAuthSecretRef.{name,privateKeyKey,serviceTokenKey}` 向 Worker 提供 `/var/run/agent-infra/runtime-auth/{runtime-grant.pem,service-token}`；Host 通过 `policy.runtimeAuth.serviceTokenSecret.{name,key}` 的 `secretKeyRef` 得到同一 transport token。保留 `WorkloadRuntimeAuthV1` 原五字段 `workerId/grantKeyId/grantPublicKey/grantIssuer/serviceTokenSecret`；签名私钥仅在 Worker，Host 只得到公钥和预期身份。 |
-| CA | 既有 `platformWorker.trustedCaSecretRef.{name,key}` 挂载 `/var/run/agent-infra/trusted-ca/ca.crt`，由 `NODE_EXTRA_CA_CERTS` 在 Worker 启动时加载。它是附加信任入口，不是 Host leaf，也不自动把 Runtime 信任限定到某一 CA；TLS 消费者须验证配置存在、可解析且含获准 CA，明确实际信任集合，不能把 Node 对坏文件的警告当作 fail closed。 |
-| server leaf（新增受控输入） | 部署须交付可信 `agentId`、`namespace`、从 HLD 对应拓扑计算的 `serviceDnsNames`（Sandbox 另核原分配/归属），以及该 namespace 内原生 `kubernetes.io/tls` 的受控 `serverSecretRef.name`；键固定 `tls.crt`（leaf 与中间链）、`tls.key`（匹配私钥）。与上述 CA 引用分别管理，不复用 Ingress 的 `policy.tlsSecretName` 或 Grant 私钥。只读挂载到 Host `/var/run/agent-infra/runtime-tls/{tls.crt,tls.key}`；这些字段/文件消费者当前尚未实现。 |
 
-可信部署发布角色负责上述输入及 Secret 写权限、签发来源、发布、到期前续期、撤销、保留和泄露处置；生命周期装配角色消费受审阅输入，沿现有 namespace-scoped Kubernetes Adapter 核引用、归属和材料有效性，Host 启动核对挂载证书/私钥及服务绑定。Kubernetes Secret 类型和键存在不证明证书有效。Worker 不获得 Host 私钥挂载，Host 不获得 Grant 签名私钥或 Kubernetes authority；Owner、镜像及请求不能选择 Secret、CA 或 DNS。具体签发者、写入身份、真实引用和操作责任须在 #1164 具名确认，不能从示例名称或 Issue assignee 推断实际供应已存在。
+`platformWorker.trustedCaSecretRef` 继续作为 Worker 访问目录、Registry 等 HTTPS 依赖的附加信任入口，不用于 Runtime 传输。部署不签发 Runtime CA 或 server leaf，Runtime Pod 不挂载 TLS Secret，kubelet readiness 使用 HTTP。
 
-**生命周期与失效。** 同一受信运行实例及其 namespace/DNS（Sandbox 须保持原分配）的有效 leaf 可跨 Workload revision 使用，不建立逐 revision 证书账本，不新增 PKI 服务、CRD 或 TLS reader 框架。Host 沿原受权持久 Pod 替换加载材料，重新验证 HTTPS、signed readiness 后才 promotion；不增热加载。相同 Secret 引用及受信 CA 下续期 leaf 不要求 Worker 重启；受审阅配置引用改变或 Worker 信任集合改变时，按其一次加载语义重启。CA 轮换先加入新 CA 并重启消费者、替换并验证 Host、最后移除旧 CA 并重启消费者，重叠期间不接受已失效材料。
+**迁移。** 旧 TLS Pod 在新期望 Pod 规格下判定为 drift，由既有 fenced 调谐替换，不保留双栈或 HTTPS 兼容层。替换期间沿原受权持久流程停止新准入、核实原执行；旧控制不可达时保持 pending/unknown，使用原 Kubernetes fenced closeRoute、scale-zero 和 ownership cleanup 权限收敛，不重放副作用。
 
-到期、材料不匹配或身份错误须拒绝握手/启动与新业务；CA/hostname 校验本身不保证已撤销证书被拒绝。没有已交付逐 leaf 撤销校验时，泄露/撤销事件采用既有 Kubernetes authority 隔离受影响 Workload，并从 Worker 信任集合移除受影响 CA、关闭旧连接并受控重启后再恢复；同 CA 的其他服务也可能受影响，供应责任人须承担该范围及恢复成本，不能只删 Secret 或换 leaf 就宣称旧 leaf 已不可用。失效或泄露 token 同样须在两端撤旧并受控重载；Grant 仍按原有效期/授权恢复规则处理。
-
-首次 HTTP→TLS 切换先沿原受权持久流程停止新准入、核实/排空原执行并隔离旧通路，不能向旧 HTTP 发送 token/Grant；旧控制不可达时保持 pending/unknown，使用原 Kubernetes fenced closeRoute、scale-zero 和 ownership cleanup 权限收敛。证书失败不能剥夺这些 Kubernetes 权限，也不能把 Pod 退出当作可信终态。保留原 tuple、PVC、Session、Execution、facts、stop/drain、durable recovery/ACK、容量、重试和回滚；回滚不得重新启用明文或复用失效凭证。
-
-**mTLS 备选成本。** 另需 Worker client leaf/key 的受控供应、clientAuth 用途与身份 SAN、Host 侧 client CA 和身份映射、双向轮换/撤销、两端重启与双向故障验收。它加强客户端私钥持有证明，但不替代 token、业务/控制 Grant、fence 或恢复屏障。本契约不增加这些 client leaf 输入；改用 mTLS 须另行审查和批准。
-
-**验收。** 文档评审与后续真实实施分别给证据，不以 fixture、Helm render、Secret 存在或 healthz 签收：
-
-1. #1164 记录已接收的机制、部署输入及供应协调/装配责任；实际部署前填齐真实 Agent/namespace/DNS、Secret/CA 引用、写权限、签发与生命周期签收。材料缺失保持未交付，不冒充受控实现已完成生产验收。
-2. business、control、readiness 均覆盖明文/redirect、错误 DNS/CA、空或损坏 CA、到期/撤销/泄露 leaf、无效 token 和跨用途/主体/Agent/对象的 Grant；分别验证本机 revision/fence/Digest 与旧请求、重复请求的原屏障。
-3. kubelet readiness probe 的 HTTPS scheme、path/port 及实际 Pod/StatefulSet drift 核验保持一致；HTTP 降级、额外 handler 或覆盖 host/header 必须拒绝。kubelet 成功不替代 Worker 的 CA/hostname 校验和 signed readiness。Agent 级主 Service/`-probe` 分别验证 candidate/verified 与业务关路后的控制，Sandbox 验证其独立 Service/分配归属且拒绝跨 Session 路由；原执行恢复/ACK、CA/leaf/token 轮换、响应丢失、Worker/Host 分别重启及回滚均保持原准入和 unknown 语义。证书不能让错误 revision/Session 的后端通过授权。
+**验收。** business、control、readiness 和 Session 路由均覆盖非精确 origin、redirect、userinfo/query/hash、无效 token 和跨用途/主体/Agent/对象的 Grant；分别验证本机 revision/fence/Digest 与旧请求、重复请求的原屏障。Agent 级主 Service/`-probe` 分别验证 candidate/verified 与业务关路后的控制，Sandbox 验证其独立 Service/分配归属且拒绝跨 Session 路由。kubelet readiness 的 HTTP scheme、path/port 与实际 Pod/StatefulSet drift 核验保持一致。
 
 Agent/客户端到 Connection 的 MCP/API 使用 Connection 的独立身份和契约，不经过 Platform API。平台不读取 Connection Catalog，不持有其目录读取或代调用 workload credential。
 
@@ -984,6 +972,11 @@ M1 的标准 Codex 路径使用固定的官方 upstream release。现有
 发行路径如何，PRD 要求的每次实际外部动作持久 intent、当前授权、结果或 unknown 确认仍是
 准入前置；官方路径无法在该边界可靠控制的操作必须拒绝或标记未支持，不能作为正式 conformance。
 
+Runtime Driver 直接执行的标准 MCP 路径按 [§13.5.4](#1354-runtime-driver-直接消费标准-mcp)
+使用官方工具请求/结果接缝：网络动作与秘密读取留在受保护 Driver 内，在原生工具响应前完成
+持久确认。此覆盖仅适用于该 Driver 执行的 MCP 操作，不授予其他原生工具 native barrier
+conformance，也不改变下述私有 lane 的前置。
+
 需要私有 FD callback、Connection bootstrap/recovery 或等价 native lane 的能力，只有在部署
 provenance 明确声明该 lane、协议/Schema 与工具覆盖，并实际验证不可关闭的 native barrier 后
 才能启用。该 barrier 在每个真实外部动作前等待 Driver 的持久 intent 与 Host 当前授权，在
@@ -1191,6 +1184,31 @@ Session/Turn/Event 映射、并发、幂等、SSE 补发和 Pod 重启恢复的�
 - 能力目录不是授权凭据。新业务调用取当前权限与原受理范围的交集，并保持原模型选择、Key 版本、文件授权和 Connection 独立身份边界；目录读取不获得执行权限。只读命令不创建业务 Turn；产生 Turn 或改变原生状态的操作必须先持久受理，复用原 outbox、串行占用、操作事实和恢复路径。
 - 原生 CLI 支持不等于 SDK/API 支持。公开接口缺少所需绑定、事实或恢复接缝时，按具体能力拒绝并记录差额；不能用普通提示、模型自报、私有协议或修改上游产物补齐。尤其不能以 Skill 作为绕过 §10.8–10.13 或文件、隔离、授权门禁的入口。
 - 新契约采用显式版本协商；旧 Driver/Host 缺少命令或 Skill 语义时返回不支持，不把新输入降级为旧文本 submit。旧消息、控制、任务与恢复语义保持；新增能力不能迫使旧任务重建或重放。
+
+### 11.5 Browser Capability 边界
+
+Browser Capability 复用 Platform Conversation Contract、Session-owned Sandbox、RuntimeHost、Execution 事件和 File Grant，不新增浏览器调度器、共享浏览器服务或第二套 Session 权威。共享契约位于 `packages/contracts/src/runtime/browser-capability.ts`，同时作为 Runtime Manifest declaration、Runtime capability projection 和 Platform/API projection 的唯一来源。
+
+- Manifest declaration 只声明 capability version、操作类别和 policy limits；它不能证明 Chromium/Playwright 已安装或可用。只有当前 Sandbox 内固定 Browser Runtime probe 通过后，Runtime 才能返回 `available`。
+- `available` projection 必须绑定 Chromium/Playwright provenance、不可变镜像 Digest、操作类别、域/资源 policy 和 conformance receipt。`not_configured`、`probe_failed`、`unavailable`、`stale` 和版本不支持必须返回稳定脱敏错误码；调用方不能把缺少投影解释为可用。
+- Browser Runtime 不把 Cookie、Storage、BrowserContext、页面原生标识、凭证或无关页面内容带出 RuntimeHost。浏览器动作继续绑定当前 Agent、Conversation、Execution、Session generation 和 fence。
+- 导航和观察属于普通 Browser operation；提交、发布、删除、购买、权限变更等动作必须进入现有持久确认与审计协议。超时、连接中断、进程退出或 ACK 丢失时沿原 operation 查询，不自动重放副作用。
+- 截图、下载和上传只能经现有 File Grant。Runtime 不能读取任意 Sandbox 路径、枚举对象或取得长期对象存储凭证；File Grant 的对象、主体、Execution、generation 和 operation 绑定保持不变。
+- Web/API 只消费版本化 projection；能力状态读取失败必须明确报错，不能返回空能力或由 prompt、env、Skill、Owner 配置伪造。四个标准模板和 `platform-adapter` 的实际可用能力取 Manifest、probe 和启动 conformance 的交集。
+
+### 11.6 Skill Hub、版本绑定与 Worker 装配
+
+Skill Hub 是 Platform DB、版本化 S3 兼容对象存储、Platform API/Web、Platform Worker 和 Sandbox Runtime 的组合能力，不是第二个调度器、权限主体、Connection Store、MCP Server 或 Agent Pod。跨模块决策记录在 [ADR-0019](ADR-0019-magic-aligned-skill-hub.md)。
+
+- Skill project 的规范目录为 ``.agents/skills/<name>`/SKILL.md`，可选 scripts/、references/ 和 assets/；.magic/skills 不属于本平台兼容路径。发布从项目快照生成不可变 ZIP、manifest、内容 digest/signature 和版本记录，对象存储保存字节，Platform DB 保存关系与状态。
+- Platform DB 保存 Skill 主记录、Skill Version、发布范围（PRIVATE、MEMBER、ORGANIZATION、MARKET）、审核、市场目录、用户/组织安装、Agent Version 绑定、权限 grant、同步修订、need_upgrade、撤销和审计。Skill Version 一经发布不可变；Agent Version 保存具体 skillVersionId，市场更新不得静默替换已绑定版本。
+- Provider Registry 按 system → my_library → market → clawhub → skillhub → npx → github 的固定顺序聚合来源。Provider 适配器由平台部署维护，不能由 Skill、Owner、浏览器或 Runtime 动态注册；外部来源必须固定可验证版本，验证发布者/签名和内容 digest，强制扫描/审核，并拒绝归档路径逃逸、符号链接逃逸、超限包和未授权依赖。
+- 上传/导入、Provider 安装和批量安装统一经过临时目录、大小/文件数/SKILL.md/路径验证、staging、manifest 写入、目标目录原子替换和失败恢复；批量安装最多 10 个、并发最多 3 个。安装状态与绑定状态分离，安装成功不代表 Runtime 已挂载。
+- Agent Version 绑定后由受控异步同步将固定包 materialize 到 Agent project 的 ``.agents/skills/<name>``，并维护 .agents/SKILLS.md；只有同步成功、Worker Applied 与 Runtime 装配摘要一致后，Skill 才进入可发现目录。同步失败、撤权、版本撤销、digest/signature 不一致和 Applied 未确认均 fail closed。
+- Platform Worker 消费带有 Skill Version、对象版本、manifest、digest/signature、目标相对路径和只读策略的不可变投影，写入并回读版本化 Workload Desired/Applied/恢复事实。调用方不能提交路径、URL、身份、Agent、Connection 或权限字段；Worker 不直接解析 Provider，也不执行未经 grant 的脚本。
+- Runtime 的 find_skills、install_skills 和 read_skills 仅作用于当前主体、Agent Version、Sandbox 和已批准 grant 的交集。初始 Prompt 只放有界 metadata（最多 150 项、约 30000 字符），正文和关联资源按需读取；读取结果必须包含实际包版本和加载证据。Runtime 不能自行改变 Hub 权威状态，不能静默跟随同名新版本。
+- Skill 的 Tool、Connection、文件、网络和脚本执行 grant 只能收敛既有授权；脚本默认关闭。当前权限失效、跨组织/Agent/Session、无实际加载证据、包不可用或工具结果无法核实时，调用拒绝或保持 unknown，不降级为普通文本。
+- Skill Hub 的 API、事务、CAS、idempotency、outbox、audit 和 recovery 必须复用现有 Agent Configuration Revision 和 Execution/Worker fence；不建立第二套 Skill 状态机或调度循环。旧 Driver/Host 不支持该契约时显式返回不支持。
 
 ## 12. 对话与长任务
 
@@ -1418,6 +1436,144 @@ Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agen
 配置契约或静态校验通过不代表这些验收完成，也不接管
 [#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907)、
 [#601](https://github.com/AgoraIO-Extensions/agent-infra/issues/601)或 Connection 服务端实现。
+
+#### 13.5.4 Runtime Driver 直接消费标准 MCP
+
+当固定原生客户端不能满足 §13.5.3 的凭据保护与持久确认时，Runtime 可明确选择由其
+Driver 内的 TypeScript 标准 MCP 客户端执行 Connection 操作。客户端只存在于所属 Sandbox
+的 RuntimeHost/Driver 受保护范围，直接连接完整获准 profile 的固定 HTTPS endpoint；
+API/Worker/Web 仍只交付非敏感配置与自身执行授权，不取得 token，不转发 MCP，也不创建
+MCP server、Provider 执行器、Connection 目录或授权/审计投影。产品边界与 token 选择以
+§13.5.3 为准。本路径的取舍见 [ADR 0019](../adr/0019-run-standard-mcp-in-protected-runtime-driver.md)。
+
+固定官方 Codex 通过 `thread/start.dynamicTools` 安装有界工具定义，由 `item/tool/call`
+向 Driver 请求操作并等待工具响应。此字段属于固定版本的 experimental API，须显式 opt-in，
+固定协议/schema，并在最终产物验证；不修改原生 release。定义只来自当前受信 MCP 发现快照，
+每个工具名、输入 schema 和修订绑定原 Conversation/generation；它是会话内的客户端元数据，
+不成为平台工具目录或 Grant 权威。原生只取得工具定义及按业务权限可见的脱敏结果，token、
+SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空，
+同一会话不同时启用另一 native MCP、private bootstrap 或 token helper 路径。
+
+**受保护输入。** Host 从当前经过验证且已持久接受的原执行解析 principal、Agent、
+Conversation、Sandbox、generation 与授权修订，再定位获准安装的 SecretRef。安装的
+Consumer/实例、issuer/resource、凭据修订与期限必须与该原执行及完整 profile 一致。
+callback、请求字段、模型/工具参数和 token 名称不能选择安装；SecretRef 或安装映射缺失
+时不可用，不尝试其他 token。领取、刷新与撤销只消费 Connection 实际发布且匹配部署的
+合同，不发明 identity、binder 或 record-query 路由，不把 metadata 声明当作服务端身份验证。
+
+秘密输入属于 Host 的专用受保护材料，不能写入普通配置、native home/workspace 或原
+journal。原生及其工具的真实文件边界必须排除这些材料、父 Host 状态、路径别名与可重开的
+FD；传给原生的 stdin/stdout 只携带当前协议内容，秘密句柄不继承。客户端在自身内存中
+构造固定目标的认证请求，拒绝重定向、caller header/URL 覆盖和跨安装复用；SDK、错误、
+trace、dump 与诊断不能把秘密输出给模型或持久记录。关闭或撤销时停止客户端并释放引用，
+不把 JavaScript 引用释放或 Buffer 清零宣称为完整内存保护。
+
+初始受保护 Host profile 限 Linux：真实非 root UID、无有效/许可/继承/ambient capabilities、
+`no_new_privs`、原有无 inspector/loader/dump 的进程准入，以及对 native/tool 子进程落实的
+文件边界须同时有效。另须从可信内核读取 Yama `ptrace_scope=2` 或 `3`，以阻止同 UID
+进程的 attach-mode 内存访问及 `pidfd_getfd`；proc FD/link/fdinfo 读取与重开另由真实
+文件边界限制，不能以 Yama 数值代替。最终镜像须分别验证 `ptrace`、`process_vm_readv`、
+`/proc/*/mem`、`pidfd_getfd`、`/proc/*/fd`、`fdinfo` 重开与继承攻击实际被拒绝。缺失、不可核实或
+策略变化时，先封闭该能力且不读取/领取新 token；原控制与只读恢复仍沿原执行可用。
+Runtime 不修改节点 sysctl、不提升权限、不接受 env 的保护声明，不回退另一 OS/profile。
+
+**执行与确认。** 每次工具请求严格复用原 Driver/Host 的 journal、fence、事务/游标和
+取消流程；标准 SDK 及 MCP session 只属于原主体/Agent/Conversation/generation，不能
+跨 Sandbox 共享。当前 token 与 Connection 自身授权仍由服务端逐次验证。安全分类不
+以模型声明或 MCP annotations 为授权；不能确认的副作用按可能有 WRITE 处理。
+
+1. Driver 从受信原生进程的 thread/Turn/callId 映射原 Execution，验证已安装工具及参数
+   schema；重复相同请求复用原 operation/attempt，身份、参数或映射冲突拒绝。
+2. 在原持久层确认 intent，释放持久队列后等待 Host 当前业务授权，再核对原代次、
+   fence、deadline、安装修订、token 期限及保护状态；任一 await 后都重验。
+3. 标准客户端发出一次具名 MCP 工具操作，采集同次请求身份/摘要及实际响应；实际开始与
+   远端已接受分别记录，不以前置 intent 冒充已执行。所有 SDK 内部实际工具发送也经过此
+   边界；无法阻断隐藏重试时不启用该操作。响应丢失或提交不确定的 WRITE 保持 unknown，
+   不重发。初始化/发现只做固定目标下的有界协议读取，不代替业务工具意图或授权。
+4. 实际结果或 unknown、必要事实与审计沿原 journal 和原 ACK 可靠保存。只有可确认终态
+   才回答原生 `item/tool/call`；unknown WRITE 即使已保存，也须封闭原 Turn 的新模型/工具
+   动作，保留 Conversation 占用并停止或隔离原生，不能用普通工具错误让推理继续。不能
+   确认副作用类别的 unknown 同样处理。Connection 引用仅从同次认证响应采集，并按已发布
+   的原记录合同核对；缺失或不能核实保持 unverified，MCP success 不等于外部效果已核实。
+
+结果保存失败时不能发送普通工具错误并任由原生继续推理：官方断连可能产生 fallback 工具
+响应。Driver 必须先封闭该原执行的新模型/工具准入，保留已有 intent/未决事实，并按原停止
+流程终止或隔离原生进程后处理协议连接；未确认退出不释放会话。崩溃、断连、取消与恢复
+均不能新建业务 Session/Turn 或重放未决 MCP；只在当前有效原 token 和两侧独立查询权限下
+核实原记录，缺少查询合同则保持 unknown。此流程不新增调度器、事实来源或恢复真值。
+
+源码实现可先以固定官方协议、真实标准 SDK 与受控安装输入开发；功能启用还须通过
+Runtime HLD §11.2 的最终产物、主体/Agent、秘密保护、撤销、确认/故障与恢复验证。
+文档合入与 fixture 不签收这些结果。该路径只声明 Driver 所执行 MCP 的覆盖，其他原生
+外部工具继续按 §10.11 准入；不得以本路径批准隐藏原生动作或私有 lane。
+
+#### 13.5.5 受保护安装交付
+
+本节定义 §13.5.4 客户端的安装输入交付，不定义 Connection 签发、身份或 Grant 的第二权威。
+初始文件 profile 复用 Host 现有专用 `standard-mcp-input/bindings` 与 `materials` 布局。
+供应方是部署批准的 SecretRef 供应边界：只有在 Connection 原主体的独立确认、安装/实例及
+当前凭据引用能按实际发布的合同核实时，才提供对应原 principal＋Agent 的安装输入。
+部署或文件声明不能替代服务端身份、当前授权及合法领取。缺少匹配部署的服务合同或供应
+引用时，该安装保持不可用；客户端不猜 binder、identity 或原记录路由。
+
+**供应与接收。** 可信部署配置固定输入供应引用与修订，以及完整 Consumer profile 的
+fingerprint/source；请求、callback、模型、工具、Token 名称和 Owner 不能选择或覆盖它们。
+输入包含非敏感安装 metadata 和分离的 material 引用，不在同一普通 JSON/config 中嵌入
+Token。metadata 使用已有客户端字段：principal、Agent、service/Consumer/instance、
+issuer/resource/audience、profile/source、credentialRef/revision/expiry 与获准服务合同引用。
+Runtime 的当前原执行仍须在使用前独立解析并匹配这些字段，不从安装 descriptor 取得业务
+执行权限。API/Worker/Web 只交付非敏感配置，不读取、解密或代转客户端秘密；不能复用
+Worker-only 密文库、keyring、普通 `envFrom` Secret 或模型 Key 交付来运输 Connection Token。
+
+交付格式固定当前 reader 的版本 `1`：metadata 为
+`Omit<StandardMcpInput, "scope" | "token"> & { agentId: string }`，UTF-8 JSON 上限
+65,536 bytes；拒绝未知字段及内嵌 `scope`/`token`。`expiresAt` 为现有毫秒时间戳，
+`contract` 保留同一版本的服务/工具结果 schema。分离 material 是 1–4,096 bytes 的 UTF-8
+Token，按现有客户端约束验证，不 trim 或改写。供应引用及修订与 Consumer 的 `source`
+分别核对，不能把一个当成另一个。安装时不伪造 Conversation、generation 或 Execution
+来补 `scope`；它只在当前 reader 从原持久执行解析后补入并重验。
+
+初始供应形式限定部署批准的 Runtime 私有文件 SecretRef export，不新增 Kubernetes Secret
+取值、HTTP Token 上传、原生 header helper、MCP 代理或通用秘密服务。供应路径、临时材料
+与目标均位于现有 native/tool 共享拒绝树的固定非 Conversation 子目录，禁止路径别名、
+任意 URL/外部路径和请求选择。输入文件保持 Host 专用 UID、私有目录与有界、非符号/硬链接
+材料；这些文件条件只是准入条件，不签收隔离。供应方须在已批准的秘密边界交付 export，
+不能先在模型、工具或普通 staging 文件暴露秘密再声明安装安全。
+
+Host 内安装接收与装配必须在任何 material 读取前通过 §13.5.4 的真实 Linux/进程保护。
+原生启动与工具文件边界仍按同节在最终产物验证；不更改节点政策、不提升权限、不接受
+环境变量的保护声明。安装过程不向 native/stdin/stdout、普通日志、错误、journal 或平台
+接口输出秘密，不继承秘密 FD；失败与诊断只提供受限非敏感状态。
+
+初始接收调用位于 `assembleRuntimeHost`：打开原 Store 后、调用
+`createProtectedStandardMcpInput` 前，消费固定供应修订并发布到该 reader 的输入布局。
+本次装配不隐式监听其他来源或刷新供应；新供应修订经受控安装重新装配，运行中的客户端
+仍沿原 resolver 在每次使用前核对当前绑定。后续实现 primary 必须列出真实供应路径、
+批准来源及接收函数，缺失时不能把测试 export 或占位接收器当作生产交付。
+
+**发布与修订。** 接收器复用当前 `installationKey`（principal＋Agent＋完整 profile/source）
+和 `materialKey`（installationKey＋credentialRef＋revision），不另建主体或授权索引。
+先以私有权限、独占创建和完整持久确认发布不可变 material，成功后才原子发布 metadata。
+相同 material 引用和修订只有完全相同内容才能视为同次交付；不同内容或绑定必须拒绝，
+不得覆盖旧修订。metadata 临时文件先持久确认，再原子切换并确认目录持久性；切换前
+失败保留旧绑定。切换后的持久确认失败或崩溃不承诺旧绑定仍在，须沿同一安装引用核实
+当前发布结果，确认前保持不可用；未被引用的 material 不能被选择，失败不能生成可用
+声明。重复交付、崩溃及修订冲突不重新领取或重发 Connection 业务操作来补造结果。
+
+已配置供应但不可读取、保护不足或发布失败时，保持选中但不可用，不转为未配置，也不
+关闭整台 Host；原 stop/status、已存事实与只读恢复继续可用。确实未配置的输入不独自
+启用客户端，非敏感路由快照保留。已有 Thread 工具快照及 unknown 占用不随安装变更
+升级、降级或释放；新会话与当次真实发送继续按当前原授权及修订重验。
+
+安装删除、替换或本地关闭不表示 Connection 已远端撤销。刷新、撤销与原记录核实仅消费
+其实际发布且匹配部署的合同；不复制 Grant 状态或建立后台同步/调度循环。旧材料的移除
+不能消除未决原操作事实或触发新的 Token/操作 fallback，秘密可达引用释放亦不作为完整
+内存擦除证明。实现与取舍见 [ADR 0020](../adr/0020-protect-connection-installation-delivery.md)。
+
+源码接收器可先使用受控 export 实现与验证；供应方实际输出、可信 SecretRef 解析、合法
+确认/领取、最终 Linux 文件/内存/FD、真实 Runtime/Connection/Provider 与撤销/unknown
+验证分别回链 #851。来源未知或证据不足不启用真实 Token，不以未来整票验收替代当前
+实施所需的最小合同输入，也不以此方案或 fixture 签收真实保护。
 
 ## 14. 使用渠道
 
@@ -1731,50 +1887,10 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 - OpenAPI 生成结果无漂移
 - Drizzle migration 校验
 - Docker image build
-- 依赖漏洞和镜像扫描
 
-PR 和 `main` 的 `CI` 使用固定版本及 SHA-256 校验的 Trivy 0.74.0：
+依赖和镜像漏洞发现使用 GitHub repository security alerts 及其维护的依赖图，不在仓库 CI 中复制一套 Trivy 扫描、漏洞库快照、例外审批或漏洞判定门禁。GitHub 安全告警负责报告已知依赖风险；依赖升级 PR、风险处置和安全设置由仓库维护者管理。
 
-- 对根 `pnpm-lock.yaml` 启用 `--include-dev-deps`，扫描根 workspace、`apps/*` 和
-  `packages/*` 的生产、开发/构建、可选及传递依赖；解析出的包清单必须覆盖 lockfile
-  的全部精确包版本，workspace 清单必须与 lockfile importers 一致。
-- 镜像清单为 `web`、`platform-api`、`platform-worker`、`enterprise-directory-sync`、`connection-api`、
-  `agent-runtime-host`、`custom-agent-base`。复用本次 CI 构建的最终运行镜像，以 Docker image ID（Docker
-  存储后端的不可变 SHA-256）及 rootfs layers 绑定 OS 与应用扫描；此 CI 扫描步骤不发布镜像。
-  镜像发布使用独立的 [release 入口](../../deploy/README.md#不可变镜像与-release-检查)。新增
-  Dockerfile 必须同步覆盖清单。Connection 此项仅提供 HLD §14/§16 的镜像证据，不替代其 Pilot 门禁。
-- 使用 Trivy 输出的 `Severity` 识别所有 High/Critical，包括无修复版本。仅
-  `pull_request` CI 将这些发现作为警告，不因发现本身阻塞 PR；`main` push、默认本地
-  调用和发布入口仍阻断未获有效例外的 High/Critical。中低等级及 Unknown 保留报告。
-  报告保留严格漏洞判定及数量，并单独记录本次 CI 门禁结果；PR 警告不表示漏洞已修复。
-  severity 来源采用 Trivy 的 vendor 优先策略：OS 使用发行版
-  advisory，应用包使用其生态数据源（npm 使用 GitHub Advisory Database）；报告保留
-  `SeveritySource`、`VendorSeverity` 和 `DataSource`，不改用仅新增或仅有补丁策略。
-  Trivy 未输出可选 `SeveritySource` 时，摘要注明 `Trivy auto (source unspecified)`，
-  保留原始 vendor/advisory 数据，不自行重算或降低 severity。
-  选择规则以[固定版本的 Trivy 文档](https://github.com/aquasecurity/trivy/blob/v0.74.0/docs/guide/scanner/vulnerability.md#severity-selection)为依据。
-- 每次从漏洞库获取可用的当前快照，然后在本轮扫描中固定该快照。报告绑定源 commit、
-  lockfile SHA-256、CI run/attempt、workspace/镜像清单、image ID/rootfs layers、Trivy
-  版本、数据库 schema/更新时间/下次更新时间和数据库文件 SHA-256。工具/网络失败、
-  数据库不可用或过期、报告缺失/无效、覆盖不全、来源不一致均失败。
-- 原始 Trivy JSON、构建清单、扫描元数据、逐项可读摘要与最终判定作为同一 CI artifact
-  保存 30 天，失败时也上传；CI 下载同一 run 的 artifact 后重新校验来源和判定。
-  扫描只读取构建产物及外部漏洞数据，不扫描 Secret/用户数据、不使用仓库忽略文件。
-- 必要例外经过现有 CODEOWNERS 人工 review 后，由仓库管理员登记到 Actions repository
-  variable `VULNERABILITY_EXCEPTIONS`（JSON 数组，未配置等于空数组）。记录必须含
-  `scope`（`lockfile` 或精确镜像名）、`vulnerability`、`package`、`version`、镜像
-  `imageId`（lockfile 使用 `null`）、`reason`、UTC `expiresAt`、`approvalUrl`。
-  审批 Review 正文必须单独包含 `vulnerability-exception sha256:<摘要>`；摘要为以上
-  字段（不含 `approvalUrl`）按此顺序 JSON 编码的 SHA-256。CI 只读回查本仓库的
-  未关闭或已合并 PR、当前 head 的最新有效 `APPROVED` Review 及审批人的实时
-  maintain/admin 权限；后续 `CHANGES_REQUESTED` 或 `DISMISSED` 使旧批准失效。
-  仓库配置登记与可回读 Review 缺一不可，不能由 PR 文件自填审批人。
-  无效/到期记录、通配范围、版本/Digest 不匹配、审批撤销或回查失败不能豁免。
-  普通基础设施 waiver 不参与漏洞判定，例外不改变其他人工门禁。
-
-真实扫描命中 High/Critical 时保留完整证据，并跟踪修复 Issue；严格门禁下也可由维护者批准
-精确例外。不得自动升级、修复或降低严重性。PR 仍须通过扫描执行与证据完整性检查；报告性
-发现不阻塞 PR readiness，不代表生产或完整人工安全审计完成。
+CI 仍验证构建出的镜像、不可变 image ID、Runtime probe、Web smoke、Custom Base Image inheritance 及其他产品契约。上述构建和运行验证不等同于漏洞扫描，也不因 GitHub Advisory 数据库更新而失败。依赖和镜像漏洞的修复、风险接受及生产发布审批沿用仓库外部安全流程；不得把普通 CI 通过表述为漏洞已修复。
 
 ### 21.2 发布
 

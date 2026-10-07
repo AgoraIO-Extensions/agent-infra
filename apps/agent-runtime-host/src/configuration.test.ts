@@ -63,6 +63,7 @@ describe("Runtime deployment configuration", () => {
 			{ ...env, ANTHROPIC_API_KEY: "synthetic-personal-credential" },
 			"claude",
 		);
+		expect(resolved.schemaVersion).toBe(3);
 		expect(resolved.modelOptions[0]).toMatchObject({
 			authentication: "api-key",
 			credential: "synthetic-active-credential",
@@ -117,6 +118,7 @@ describe("Runtime deployment configuration", () => {
 				OPENAI_BASE_URL: "https://personal.invalid/v1",
 			}),
 		).toEqual({
+			schemaVersion: 2,
 			configVersion: configuration.configVersion,
 			defaultModelOptionId: configuration.defaultModelOptionId,
 			defaultReasoningLevel: configuration.defaultReasoningLevel,
@@ -224,6 +226,7 @@ describe("Runtime deployment configuration", () => {
 				}),
 			),
 		).toEqual({
+			schemaVersion: 2,
 			configVersion: configuration.configVersion,
 			defaultModelOptionId: "option-default",
 			defaultReasoningLevel: "medium",

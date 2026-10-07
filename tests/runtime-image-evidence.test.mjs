@@ -16,7 +16,7 @@ import test from "node:test";
 import {
 	assertCleanRuntimeProbeSource,
 	probeRuntimeImage,
-	runtimeImageFromScanBuild,
+	runtimeImageFromBuildManifest,
 	validateRuntimeProbe,
 } from "../deploy/release/runtime-probe.mjs";
 
@@ -110,14 +110,14 @@ test("runtime probe refuses evidence from a dirty checkout", () => {
 	);
 });
 
-test("runtime probe selects the scanner's exact current-commit image", () => {
+test("runtime probe selects the build manifest's exact current-commit image", () => {
 	const commit = "1".repeat(40);
 	const image = {
 		name: "agent-runtime-host",
 		imageId: `sha256:${"a".repeat(64)}`,
 	};
 	const build = { schemaVersion: 1, source: { commit }, images: [image] };
-	assert.equal(runtimeImageFromScanBuild(build, commit), image.imageId);
+	assert.equal(runtimeImageFromBuildManifest(build, commit), image.imageId);
 	for (const value of [
 		null,
 		{ ...build, images: {} },
@@ -127,7 +127,7 @@ test("runtime probe selects the scanner's exact current-commit image", () => {
 		{ ...build, images: [{ ...image, imageId: "mutable:tag" }] },
 	])
 		assert.throws(
-			() => runtimeImageFromScanBuild(value, commit),
+			() => runtimeImageFromBuildManifest(value, commit),
 			/reference is invalid/,
 		);
 });

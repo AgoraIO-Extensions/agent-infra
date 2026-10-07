@@ -27,7 +27,7 @@ import {
 	createKubernetesRuntimeAdapterV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
-import { runtimeTlsFetch } from "./runtime-tls-transport.js";
+import { runtimeFetch as inClusterRuntimeFetch } from "./runtime-transport.js";
 import type { PlatformWorkloadWorkerOptionsV1 } from "./workload-worker.js";
 
 type ProbeRequest = Omit<WorkloadReadinessRequestV1, "grant">;
@@ -184,9 +184,6 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			fetch: input.modelFetch,
 		});
 		const runtimeFetch = input.runtimeFetch;
-		const managedRuntimeFetch = runtimeFetch
-			? () => runtimeFetch
-			: runtimeTlsFetch;
 		const probeRuntime = createWorkloadRuntimeProbeV1({
 			namespace: input.policy.namespace,
 			workerId: input.workerId,
@@ -212,7 +209,6 @@ export async function createProductionWorkloadWorkerOptionsV1(
 				input.executionCapacityProfiles,
 			),
 			fetch: runtimeFetch,
-			runtimeTlsFetch: managedRuntimeFetch,
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,
 			log: input.log,
@@ -240,7 +236,7 @@ export function createWorkloadRuntimeProbeV1(options: {
 					signal.addEventListener("abort", abort, { once: true });
 				}),
 				(async () => {
-					const origin = `https://${workloadResourceNameV1(input.agentId)}-probe.${options.namespace}.svc:${input.manifest.service.port}`;
+					const origin = `http://${workloadResourceNameV1(input.agentId)}-probe.${options.namespace}.svc:${input.manifest.service.port}`;
 					if (
 						input.baseUrl !== origin ||
 						!Number.isSafeInteger(input.workloadRevision) ||
@@ -291,7 +287,7 @@ export function createWorkloadRuntimeProbeV1(options: {
 						)
 					)
 						throw new Error();
-					const response = await (options.fetch ?? runtimeTlsFetch())(
+					const response = await (options.fetch ?? inClusterRuntimeFetch)(
 						`${origin}/internal/runtime/v1/readiness`,
 						{
 							method: "POST",

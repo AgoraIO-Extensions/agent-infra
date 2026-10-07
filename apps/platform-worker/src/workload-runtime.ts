@@ -44,7 +44,7 @@ import {
 	type KubernetesWorkloadPolicyV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
-import { runtimeTlsFetch } from "./runtime-tls-transport.js";
+import { runtimeFetch } from "./runtime-transport.js";
 
 export interface WorkloadRuntimeOptionsV1 {
 	readonly workerId: string;
@@ -63,7 +63,6 @@ export interface WorkloadRuntimeOptionsV1 {
 	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
 	readonly executionCapacityProfiles?: readonly WorkloadExecutionCapacityV1[];
 	readonly fetch?: typeof fetch;
-	readonly runtimeTlsFetch?: () => typeof fetch;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
 		readonly workloadRevision: number;
@@ -398,6 +397,7 @@ export function createWorkloadRuntimeV1(
 		recordCapabilities: (value: Record<string, boolean>) => void = () => {},
 		state?: Pick<WorkloadReconciliationStateV1, "candidate">,
 		purpose: "authorize" | "cleanup" = "authorize",
+		connectionConsumerControl = false,
 	) {
 		const modelProjection =
 			state?.candidate.configuration.source.kind === "standard"
@@ -420,6 +420,8 @@ export function createWorkloadRuntimeV1(
 				throw new ModelConfigurationErrorV1();
 		}
 		return createKubernetesRuntimeAdapterV1({
+			connectionConsumerControl:
+				purpose === "cleanup" || connectionConsumerControl,
 			client: options.client,
 			policy: options.policy,
 			modelProjection,
@@ -428,7 +430,7 @@ export function createWorkloadRuntimeV1(
 				const healthFetch =
 					desired.runtimeManifest.interactionMode === "self-managed"
 						? fetcher
-						: (options.runtimeTlsFetch?.() ?? runtimeTlsFetch());
+						: (options.fetch ?? runtimeFetch);
 				const response = await healthFetch(`${baseUrl}${desired.health.path}`, {
 					redirect: "error",
 					signal: AbortSignal.timeout(desired.health.timeoutSeconds * 1000),
@@ -1009,9 +1011,14 @@ export function createWorkloadRuntimeV1(
 					state.verified.configuration.source.imageDigest
 			)
 				return "drifted";
-			const observation = createAdapter(undefined, {
-				candidate: state.verified,
-			});
+			const observation = createAdapter(
+				undefined,
+				{
+					candidate: state.verified,
+				},
+				"authorize",
+				true,
+			);
 			const original = validateAgentWorkloadDesiredV1({
 				...deployment,
 				workloadRevision: state.verifiedRevision,

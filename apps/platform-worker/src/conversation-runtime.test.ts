@@ -11,6 +11,7 @@ import type {
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
 import { createConversationDispatchUseCaseV1 } from "../../../packages/platform-core/src/conversation-dispatch.js";
+import { resolveApprovedConnectionConsumerTargetV1 } from "./conversation-deployment.js";
 import {
 	type ConversationLegacyControlRecoveryV2,
 	type ConversationRuntimeOptionsV2,
@@ -226,7 +227,7 @@ function harness(
 		throw new Error(`Unexpected runtime request: ${path}`);
 	});
 	const resolver = vi.fn(async () => ({
-		baseUrl: "https://runtime.test",
+		baseUrl: "http://runtime.test",
 		serviceToken: "synthetic-transport-proof",
 		workerId: "transport",
 	}));
@@ -314,6 +315,82 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it("rechecks the trusted Worker identity when resolver outputs share a mutable object", async () => {
+		const h = harness();
+		const target = {
+			baseUrl: "http://runtime.test",
+			serviceToken: "synthetic-transport-proof",
+			workerId: "transport",
+		};
+		const grant = await h.authorize();
+		let resolutions = 0;
+		h.resolver.mockClear();
+		h.resolver.mockImplementation(async () => {
+			if (++resolutions === 3) target.workerId = "other-worker";
+			return target;
+		});
+		try {
+			await expect(
+				h.runtime.runtimeHost.dispatch(
+					h.request(grant),
+					new AbortController().signal,
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_ROUTE_STALE" });
+			expect(h.resolver).toHaveBeenCalledTimes(3);
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			h.runtime.close();
+		}
+	});
+	it("rejects a changed Connection snapshot at the final route recheck without dispatch", async () => {
+		const h = harness();
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp/v1",
+			consumerId: "platform-worker",
+			audience: "connection-api",
+			egressProfile: { ref: "egress-platform", revision: "r1" },
+		};
+		const approval = {
+			schemaVersion: 1 as const,
+			configFingerprint:
+				"26062a8f8e5a003ff8047fead83d76c254d9b54834ca5348fb7e4ceee67d205b",
+			egressEnforced: true as const,
+			source: { ref: "platform-deployment", revision: "r1" },
+		};
+		const first = resolveApprovedConnectionConsumerTargetV1(profile, approval);
+		const changed = resolveApprovedConnectionConsumerTargetV1(profile, {
+			...approval,
+			source: { ...approval.source, revision: "r2" },
+		});
+		if (!first || !changed) throw new Error("Expected approved snapshots");
+		const stableTarget = {
+			baseUrl: "http://runtime.test",
+			serviceToken: "synthetic-transport-proof",
+			workerId: "transport",
+			connectionConsumer: first,
+		};
+		const changedTarget = { ...stableTarget, connectionConsumer: changed };
+		const grant = await h.authorize();
+		h.resolver.mockClear();
+		h.resolver
+			.mockResolvedValueOnce(stableTarget)
+			.mockResolvedValueOnce(stableTarget)
+			.mockResolvedValueOnce(changedTarget);
+		try {
+			await expect(
+				h.runtime.runtimeHost.dispatch(
+					h.request(grant),
+					new AbortController().signal,
+				),
+			).rejects.toMatchObject({ code: "RUNTIME_ROUTE_STALE" });
+			expect(h.resolver).toHaveBeenCalledTimes(3);
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			h.runtime.close();
+		}
+	});
 	it.each(["web", "partner:channel", "wecom_bot:bot", "wecom_app:app"])(
 		"does not authorize %s without a current channel authority",
 		async (channelId) => {
@@ -591,7 +668,7 @@ describe("Trusted conversation Runtime adapter", () => {
 			if (!record) throw new Error("missing fixture");
 			h.setRecord({ ...record, configurationRevision: 2 });
 			return {
-				baseUrl: "https://runtime.test",
+				baseUrl: "http://runtime.test",
 				serviceToken: "synthetic",
 				workerId: "transport",
 			};
@@ -755,7 +832,7 @@ describe("Trusted conversation Runtime adapter", () => {
 			}),
 		).rejects.toMatchObject({ code: "RUNTIME_ACCEPTANCE_UNKNOWN" });
 		expect(h.sent().url).toBe(
-			"https://runtime.test/internal/runtime/v3/original-binding",
+			"http://runtime.test/internal/runtime/v3/original-binding",
 		);
 		expect(h.sent().claims).toMatchObject({
 			purpose: "control",
@@ -815,7 +892,7 @@ describe("Trusted conversation Runtime adapter", () => {
 			}),
 		).resolves.toMatchObject({ outcome: "found", status: "running" });
 		expect(String(h.fetcher.mock.calls[1]?.[0])).toBe(
-			"https://runtime.test/internal/runtime/v3/status",
+			"http://runtime.test/internal/runtime/v3/status",
 		);
 		h.runtime.close();
 	});
@@ -1397,24 +1474,15 @@ describe("Trusted conversation Runtime adapter", () => {
 		);
 		h.runtime.close();
 	});
-	it("signs the original principal/input/selection after a fresh directory check", async () => {
+	it("rejects historical standard business after a fresh directory check", async () => {
 		const h = harness();
 		const context = await h.authorize();
 		const before = h.directory.resolveUser.mock.calls.length;
-		await h.runtime.runtimeHost.dispatch(h.request(context));
+		await expect(
+			h.runtime.runtimeHost.dispatch(h.request(context)),
+		).rejects.toMatchObject({ code: "RELAY_KEY_UNAVAILABLE" });
 		expect(h.directory.resolveUser.mock.calls.length).toBeGreaterThan(before);
-		expect(h.sent().url).toContain("/v3/turns");
-		expect(h.sent().body).toMatchObject({
-			principal: { kind: "user", id: "user" },
-			input: { text: "original accepted input" },
-			selection: { modelOptionId: "option", reasoningLevel: "high" },
-		});
-		expect(h.sent().claims).toMatchObject({
-			purpose: "business",
-			authorizationRecordId: "original-authorization",
-			workerId: "transport",
-		});
-		expect(h.sent().body).not.toHaveProperty("actorId");
+		expect(h.fetcher).not.toHaveBeenCalled();
 		h.runtime.close();
 	});
 	it("rechecks authorization immediately before signing the runtime grant", async () => {
@@ -1604,7 +1672,7 @@ describe("Trusted conversation Runtime adapter", () => {
 		h.resolver.mockImplementation(async () => {
 			h.store.readRuntimeState.mockResolvedValue(null);
 			return {
-				baseUrl: "https://runtime.test",
+				baseUrl: "http://runtime.test",
 				serviceToken: "synthetic",
 				workerId: "transport",
 			};
@@ -1666,7 +1734,7 @@ describe("durable generation isolation Worker wiring", () => {
 					result: { outcome: "accepted", status: "cancelled" },
 				});
 				expect(h.sent()).toMatchObject({
-					url: "https://runtime.test/internal/runtime/v3/generations/cancel",
+					url: "http://runtime.test/internal/runtime/v3/generations/cancel",
 					claims: {
 						principal: { kind: "user", id: "user" },
 						purpose: "control",

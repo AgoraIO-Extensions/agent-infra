@@ -18,6 +18,8 @@ export interface WorkloadEgressPolicyV1 {
 		readonly destination: WorkloadEgressDestinationV1;
 		readonly port: number;
 	}[];
+	/** Compiled from the approved Connection Consumer snapshot/profile, never Runtime input. */
+	readonly connectionEgress?: WorkloadEgressPolicyV1["modelEgress"];
 	readonly dnsEgress?: readonly WorkloadEgressDestinationV1[];
 }
 
@@ -71,16 +73,19 @@ export function workloadEgressRulesV1(
 	policy: WorkloadEgressPolicyV1,
 ): V1NetworkPolicyEgressRule[] {
 	const models = policy.modelEgress ?? [];
+	const connections = policy.connectionEgress ?? [];
 	const dns = policy.dnsEgress ?? [];
 	if (
 		!Array.isArray(models) ||
+		!Array.isArray(connections) ||
 		!Array.isArray(dns) ||
 		models.length > 128 ||
+		connections.length > 128 ||
 		dns.length > 16
 	)
 		throw new WorkloadKubernetesError("policy");
 	return [
-		...models.map((entry) => {
+		...[...models, ...connections].map((entry) => {
 			if (
 				!entry ||
 				Object.keys(entry).sort().join(",") !== "destination,port" ||

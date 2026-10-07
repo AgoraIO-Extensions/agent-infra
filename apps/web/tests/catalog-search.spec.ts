@@ -117,6 +117,25 @@ async function fixture(page: Page) {
 					reason: "missing",
 				}),
 			});
+		if (
+			request.method() === "GET" &&
+			url.pathname === "/api/v2/directory/search"
+		) {
+			expect(url.searchParams.get("kind")).toBe("organization");
+			expect(url.searchParams.get("ids")).toBe("org-platform");
+			return route.fulfill({
+				json: {
+					items: [
+						{
+							kind: "organization",
+							canonicalId: "org-platform",
+							displayName: "平台工程",
+							organizationPath: "研发 / 平台工程",
+						},
+					],
+				},
+			});
+		}
 		if (request.method() !== "GET") {
 			commands.push(`${request.method()} ${url.pathname}`);
 			return route.abort();

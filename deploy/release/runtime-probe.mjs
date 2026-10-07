@@ -1,7 +1,5 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -20,91 +18,6 @@ const hasKeys = (value, keys) =>
 	typeof value === "object" &&
 	!Array.isArray(value) &&
 	Object.keys(value).sort().join(",") === keys;
-
-async function createRuntimeHostTlsFixture() {
-	const directory = await mkdtemp(join(tmpdir(), "runtime-host-tls-probe-"));
-	const agentId = "synthetic-agent";
-	const namespace = "default";
-	const serviceName = `agent-${createHash("sha256").update(agentId).digest("hex").slice(0, 32)}`;
-	const serviceDnsNames = [
-		`${serviceName}.${namespace}.svc`,
-		`${serviceName}-probe.${namespace}.svc`,
-	];
-	const run = (...args) =>
-		execFileSync("openssl", args, { cwd: directory, stdio: "ignore" });
-	try {
-		await writeFile(
-			join(directory, "ca.cnf"),
-			"[req]\ndistinguished_name=dn\nx509_extensions=ca_extensions\n[dn]\n[ca_extensions]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n",
-		);
-		run(
-			"req",
-			"-x509",
-			"-config",
-			"ca.cnf",
-			"-newkey",
-			"rsa:2048",
-			"-nodes",
-			"-days",
-			"2",
-			"-subj",
-			"/CN=Runtime probe CA",
-			"-keyout",
-			"ca.key",
-			"-out",
-			"ca.crt",
-		);
-		run(
-			"req",
-			"-new",
-			"-newkey",
-			"rsa:2048",
-			"-nodes",
-			"-subj",
-			`/CN=${serviceDnsNames[0]}`,
-			"-keyout",
-			"tls.key",
-			"-out",
-			"tls.csr",
-		);
-		await writeFile(
-			join(directory, "extensions.cnf"),
-			[
-				"basicConstraints=critical,CA:FALSE",
-				"keyUsage=critical,digitalSignature,keyEncipherment",
-				"extendedKeyUsage=serverAuth",
-				`subjectAltName=${serviceDnsNames.map((name) => `DNS:${name}`).join(",")}`,
-			].join("\n"),
-		);
-		run(
-			"x509",
-			"-req",
-			"-in",
-			"tls.csr",
-			"-CA",
-			"ca.crt",
-			"-CAkey",
-			"ca.key",
-			"-CAcreateserial",
-			"-days",
-			"1",
-			"-extfile",
-			"extensions.cnf",
-			"-out",
-			"tls.crt",
-		);
-		await chmod(directory, 0o755);
-		await chmod(join(directory, "tls.crt"), 0o444);
-		await chmod(join(directory, "tls.key"), 0o444);
-		return {
-			directory,
-			cleanup: () => rm(directory, { recursive: true, force: true }),
-		};
-	} catch (error) {
-		await rm(directory, { recursive: true, force: true });
-		throw error;
-	}
-}
 
 function officialRelease(bytes) {
 	const release = JSON.parse(bytes);
@@ -193,7 +106,7 @@ export function validateRuntimeProbe(result, releaseBytes, architecture) {
 	return result;
 }
 
-export function runtimeImageFromScanBuild(manifest, commitSha) {
+export function runtimeImageFromBuildManifest(manifest, commitSha) {
 	const images = Array.isArray(manifest?.images)
 		? manifest.images.filter((image) => image?.name === "agent-runtime-host")
 		: [];
@@ -204,7 +117,7 @@ export function runtimeImageFromScanBuild(manifest, commitSha) {
 		images.length !== 1 ||
 		!digestPattern.test(images[0].imageId)
 	) {
-		throw new Error("Runtime image scanner build reference is invalid");
+		throw new Error("Runtime image build manifest reference is invalid");
 	}
 	return images[0].imageId;
 }
@@ -300,8 +213,6 @@ export async function probeRuntimeImage({
 	const labels = process.env.AO_SESSION_ID
 		? ["--label", `ao.session=${process.env.AO_SESSION_ID}`]
 		: [];
-	const tlsFixture = await createRuntimeHostTlsFixture();
-	try {
 	const run = (mounts = [], args = []) =>
 		command(
 			[
@@ -317,8 +228,6 @@ export async function probeRuntimeImage({
 				"/tmp:size=128m,mode=1777",
 				"--tmpfs",
 				"/var/lib/agent-runtime:size=128m,uid=1000,gid=1000,mode=0700",
-				"--mount",
-				`type=bind,src=${tlsFixture.directory},dst=/var/run/agent-infra/runtime-tls,readonly`,
 				"--mount",
 				`type=bind,src=${join(contextPath, "tests/runtime-image-probe.mjs")},dst=/probe/runtime-image-probe.mjs,readonly`,
 				"--mount",
@@ -398,9 +307,6 @@ export async function probeRuntimeImage({
 		probe: result,
 		provenanceRejection: "passed",
 	};
-	} finally {
-		await tlsFixture.cleanup();
-	}
 }
 
 if (
@@ -417,8 +323,8 @@ if (
 			name: "Runtime probe source",
 			timeoutMs: 30_000,
 		});
-		if (image === "--scan-build") {
-			image = runtimeImageFromScanBuild(
+		if (image === "--build-manifest") {
+			image = runtimeImageFromBuildManifest(
 				JSON.parse(await readFile(output, "utf8")),
 				commitSha,
 			);

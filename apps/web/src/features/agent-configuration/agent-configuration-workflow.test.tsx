@@ -77,7 +77,9 @@ describe("AgentConfigurationWorkflow", () => {
 		render(<AgentConfigurationWorkflow agent={firstAgent} />);
 
 		expect(screen.getByRole("button", { name: "停用 Agent" })).toBeTruthy();
-		expect(screen.queryByLabelText("Owner 用户 ID")).toBeNull();
+		expect(
+			screen.queryByRole("combobox", { name: "共同 Owner 用户" }),
+		).toBeNull();
 	});
 
 	it("drops an entered Secret when navigation changes the Agent", () => {
@@ -95,8 +97,16 @@ describe("AgentConfigurationWorkflow", () => {
 		rerender(<AgentConfigurationWorkflow agent={secondAgent} />);
 
 		expect(screen.queryByLabelText("新 Secret 值")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "校验并保存" }));
 		expect(
-			(screen.getByLabelText("可用组织 ID") as HTMLTextAreaElement).value,
-		).toBe("organization-2");
+			vi.mocked(useAgentConfigurationSubmission).mock.results.at(-1)?.value
+				.saveConfiguration,
+		).toHaveBeenCalledWith(
+			expect.objectContaining({
+				availability: [
+					{ kind: "organization", organizationId: "organization-2" },
+				],
+			}),
+		);
 	});
 });

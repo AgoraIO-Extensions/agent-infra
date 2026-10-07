@@ -52,14 +52,14 @@ Agent / Client --Connection 独立身份--> Connection MCP/API --> External Prov
 
 ### 3.1 标准 Runtime
 
-M1 Registry 是平台维护的固定配置，不支持运行时插件发现。
+M1 Driver Registry 是平台维护的固定配置，不支持运行时 Driver 插件发现。Skill Provider Registry 是独立的受控来源目录，按工程 Spec §11.6 固定顺序聚合 Provider；Provider 不能由 Skill、Owner、浏览器或 Runtime 动态注册。
 
 | 标准模板 | Platform Adapter | `driver` | 补充指令 | M1 平台能力 |
 | --- | --- | --- | --- | --- |
-| Codex | Codex Native | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
-| Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、真实模型/工具观测与 Eval 复用 |
+| Codex | Codex Native | `codex` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| Claude | Claude Native | `claude` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| OpenCode | Generic ACP | `acp` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
+| Pi | Pi RPC | `pi` | Registry 显式声明并通过 Conformance | Web/API、企微、模型、附件/结果、Connection、Browser Capability、真实模型/工具观测与 Eval 复用 |
 
 Registry 同时保存模板标识、当前镜像 Digest、Adapter 类型、Service/健康检查、capability 和 Owner 可配置的 env/Secret 键。每个模板的 `supplementaryInstruction` 只作为 capability 集合中的一个布尔键维护，不存在独立的第二声明源；缺失时按 `false` 处理，只有对应 Adapter 通过持久幂等 Conformance 后才能设为 `true`，不能按协议名称推断。Owner 不选择或覆盖标准模板的 Adapter，也不能提交 Registry 未声明的 env/Secret。
 
@@ -111,7 +111,7 @@ Native 与 OpenCode 的 Generic ACP 模板消费 Messages；支持某种原生�
 | `protocol` | `platform-adapter` 必填且只能为 `acp`；`self-managed` 必须省略，出现时拒绝 |
 | `service.port` | 必填；整数 `1..65535`，Agent Service 和健康检查使用的容器端口 |
 | `health.path` | 必填；必须是以单个 `/` 开头的 origin-form 本地 HTTP 路径，其余字符只允许 ASCII 字母、数字、`/`、`.`、`_`、`~` 或 `-`；拒绝 `//`、`.` 或 `..` 路径段、反斜杠、`%` 编码、外部 URL、查询参数、片段、控制字符或凭证。平台使用校验后的原始路径和固定 Agent Service origin 构造探针请求，不再解码或规范化，且禁止跟随 HTTP 重定向 |
-| `capabilities` | 可选 Object；只允许布尔值 `modelSelection`、`attachments`、`resultFiles`、`connection` 和 `supplementaryInstruction`，缺失键按 `false`；仅 `platform-adapter` 读取，`self-managed` 的声明忽略，不能据此开放平台任务、Conversation、观测、Eval 或 Connection 能力 |
+| `capabilities` | 可选 Object；允许既有布尔能力 `modelSelection`、`attachments`、`resultFiles`、`connection` 和 `supplementaryInstruction`，以及版本化 `browser` 声明；缺失布尔键按 `false`。Browser 声明只描述候选能力和限制，必须与真实 Browser Runtime probe 取交集；仅 `platform-adapter` 读取，`self-managed` 的声明忽略 |
 
 Owner 不在产品页面填写协议、端口或探针。创建或升级时，Runtime 按以下顺序验证：
 
@@ -128,25 +128,29 @@ Owner 不在产品页面填写协议、端口或探针。创建或升级时，Ru
 使用独立 Workload Readiness Grant。Host 必须在调用 Driver 的无副作用 capability 读取前
 校验本机 Workload 绑定；此路径不使用业务 Session，也不开放任务提交或事件查询。
 
-### 4.1 内部 Runtime Service 与 TLS 映射
+### 4.1 内部 Runtime Service 映射
 
-本节细化[工程 Spec §8.3](SPEC-agent-infra-M1-engineering-architecture.md#83-内部接口)；机制已接收、待评审合并，尚未部署。受控实现与真实材料的分阶段门禁引用该节。TLS 跟随已有 Workload 拓扑，不增加或合并 Service、监听端口或 Manifest 字段；部署材料不来自镜像 Manifest 或 Owner 配置。
+本节细化[工程 Spec §8.3](SPEC-agent-infra-M1-engineering-architecture.md#83-内部接口)。Worker 到 RuntimeHost 使用集群内明文 HTTP（[ADR-0020](../adr/0020-use-in-cluster-plaintext-runtime-transport.md)），沿已有 Workload 拓扑，不增加或合并 Service、监听端口或 Manifest 字段。执行授权仍由 service token、signed readiness 与业务/控制 Grant 承担，NetworkPolicy ingress 只放行 Worker。
 
 **Agent 级 candidate/verified Workload。** 令 `N = agent-` 加可信 `agentId` 的 SHA-256 十六进制前 32 位（`workloadResourceNameV1`，见[现有命名函数](../../apps/platform-worker/src/kubernetes-runtime-comparison.ts)），`NS = workloadInput.policy.namespace`。`P` 取对应 candidate/verified deployment 的 `service.port`；readiness 取该候选 Manifest 的同一端口。
 
-| 路径 | 已有 origin（HTTP，尚未满足 TLS 契约） | TLS 契约与不变门禁 |
+| 路径 | origin | 不变门禁 |
 | --- | --- | --- |
-| business | `http://N.NS.svc:P` | `https://N.NS.svc:P`；只在 ready 时消费 candidate，仍校验实际 ownership、Workload readiness 和新 Turn 容量 |
-| verified control | `http://N-probe.NS.svc:P` | `https://N-probe.NS.svc:P`；取原 verified deployment，`observeVerifiedControl` 成功后才返回路由，保留独立控制 Grant |
-| candidate health / signed readiness | `http://N-probe.NS.svc:P` | 同名 HTTPS origin；分别验证原 `health.path` 和 `/internal/runtime/v1/readiness`，不授予业务准入 |
+| business | `http://N.NS.svc:P` | 只在 ready 时消费 candidate，仍校验实际 ownership、Workload readiness 和新 Turn 容量 |
+| verified control | `http://N-probe.NS.svc:P` | 取原 verified deployment，`observeVerifiedControl` 成功后才返回路由，保留独立控制 Grant |
+| candidate health / signed readiness | `http://N-probe.NS.svc:P` | 分别验证原 `health.path` 和 `/internal/runtime/v1/readiness`，不授予业务准入 |
 
 准确消费者为 `createProductionConversationRuntimeResolverV2`（[conversation resolver](../../apps/platform-worker/src/conversation-deployment.ts)）、`createWorkloadRuntimeProbeV1`（[readiness 装配](../../apps/platform-worker/src/workload-deployment.ts)）及 `createKubernetesRuntimeAdapterV1`（[Kubernetes Adapter](../../apps/platform-worker/src/kubernetes-runtime-adapter.ts)）。Adapter 已创建 `N` 和 `N-probe` 两个 ClusterIP Service，共用 Workload 的 `service.port`；候选阶段 `N` selector 为 `closed`，`N-probe` 选中候选 Pod。`closeAgentAtFence`（[cleanup](../../apps/platform-worker/src/kubernetes-runtime-cleanup.ts)）关闭主路由时保留合规的内部 probe 路由；probe 漂移可被移除，不能保证任意故障下 control 都可达。verified 观测失败必须继续 unavailable/unknown，不能把候选误当旧执行目标。
 
-**kubelet 探针与 Worker 验证分离。** 当前 Adapter 的 `readinessProbe.httpGet` 未设置 `scheme`，默认 HTTP；`hasDriftedPodSpec`（[Pod drift 校验](../../apps/platform-worker/src/kubernetes-runtime-pod-validation.ts)）也把缺失值归为 `HTTP` 并按 HTTP 比较。启用 Host TLS 时须同时把期望探针设为 `scheme: HTTPS` 并对实际 StatefulSet/Pod 核验 scheme、原 path/port 与禁止覆盖项；只改 Host 或 Worker URL 会让健康检查与 drift 判定不一致。该 kubelet 探针只判断容器可用性，不携带 service token 或 Grant，不增加明文健康端口。[Kubernetes HTTPS probe 不验证证书](https://kubernetes.io/docs/concepts/workloads/pods/probes/)，其成功不能证明 CA/SAN、服务身份或执行授权；promotion 和 Runtime 调用仍须经过 Worker 严格 TLS 及 signed readiness，不给 kubelet 承担这些认证职责。
+**kubelet 探针与 Worker 验证分离。** Adapter 的 `readinessProbe.httpGet` 使用 HTTP；`hasDriftedPodSpec`（[Pod drift 校验](../../apps/platform-worker/src/kubernetes-runtime-pod-validation.ts)）按 HTTP 比较 scheme、原 path/port 与禁止覆盖项。该探针只判断容器可用性，不携带 service token 或 Grant；promotion 和 Runtime 调用仍须经过 Worker 的精确 origin 与 signed readiness。
 
-同一 Agent 级 Host leaf 的 DNS SAN 覆盖 `N.NS.svc` 和 `N-probe.NS.svc`，每次连接仍只核实际 origin 的 hostname；不以 `.svc.cluster.local`、Pod IP、用户 Ingress 域名或 wildcard 替代这两个实际名称。可信部署将两个名称绑定同一 Agent/namespace；leaf 不证明 candidate/verified revision，原本机绑定及路由观测不得省略。这里补齐的是既有 Kubernetes 资源映射，不是新增双 Runtime 或双服务供应系统。
+**业务 Session Sandbox。** Agent 级上述现状不能证明平台会话已按独立 Sandbox 路由。Session 的分配、Service、原 PVC、resourceFence 与真实 UID/version 继续以 [Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定) 为准；五类必需资源及可选 StatefulSet 的澄清归 #1322。Worker 只消费该分配已有 Service 的实际 DNS/端口 `http://<sandbox Service>.NS.svc:P` 与原 Session/Sandbox/代次绑定，不套用 Agent 级 `N`/`N-probe`，不新增 Sandbox probe Service，不让两个 Session 共享后端。缺少有效分配时拒绝该路由，不能回退到 Agent 级 Service。
 
-**业务 Session Sandbox。** Agent 级上述现状不能证明平台会话已按独立 Sandbox 路由。Session 的分配、Service、原 PVC、resourceFence 与真实 UID/version 继续以 [Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定) 为准；五类必需资源及可选 StatefulSet 的澄清归 #1322。TLS 只消费该分配已有 Service 的实际 DNS/端口与原 Session/Sandbox/代次绑定，不套用 Agent 级 `N`/`N-probe`，不新增 Sandbox probe Service，不让两个 Session 共享 leaf 私钥或后端。准确 Sandbox Service 命名与接线由该 owner 的受审阅交付给出；缺少时拒绝该路由，不能回退到 Agent 级 Service，也不能以本票签收 Sandbox 资源或 Host/Grant/Driver wire。
+### 4.2 Browser Capability
+
+Browser Capability 使用 `packages/contracts/src/runtime/browser-capability.ts` 的版本化契约，分为 Manifest declaration、Runtime probe projection 和后续 Platform/API projection。当前交付的 OpenAPI 是内部 Runtime probe；Platform/API consumer 仍须在现有认证上下文中解析 Agent、Conversation、Session generation、fence 和 Grant 后再暴露 projection。可用投影必须同时包含 Chromium/Playwright provenance、操作类别、域和资源 policy，以及不可伪造的 conformance receipt；不可用投影必须返回脱敏状态、稳定错误码和 retryable 属性。
+
+Manifest declaration 不能证明浏览器已装配或可用。Worker/Host 只有在当前 Session-owned Sandbox 内的固定 Browser Runtime 完成 probe 后，才能把声明与实际结果取交集并向 Platform 返回 `available`。该契约不创建 Browser 专用调度器、不改变 Conversation/Execution/Sandbox 权威，也不把 BrowserContext、Cookie、Storage 或原生页面标识暴露给 Platform API。
 
 ## 5. Platform Conversation Contract
 
@@ -157,7 +161,7 @@ Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation
 - 停止当前 Turn，以及在 capability 支持时提交补充指令。
 - 查询 Session 和 Turn 状态。
 - 订阅并归一化文本、状态、文件、完成和错误事件；实际模型/工具事实按 8.5 生产，不把自由文本摘要当作可信操作结果。
-- 探测模型、附件、结果文件、Connection 和补充指令 capability。
+- 探测模型、附件、结果文件、Connection 和补充指令 capability；Browser Capability 的内部 probe 另由 §4.2 的版本化契约定义，尚不等同于 Platform/API Agent projection。
 
 `packages/agent-runtime` 实现 RuntimeHost 深 Module 和四个固定 Runtime Driver；`apps/agent-runtime-host` 只负责 Agent Pod 内的进程入口、依赖装配和 HTTP/SSE 接入。worker 侧 RuntimeHost Client Adapter 只依赖版本化 Host Contract，不依赖该 package 或任何 Native/ACP library。Agent Service 对 `platform-worker` 始终提供同一内部 HTTP/SSE Interface。
 
@@ -195,7 +199,7 @@ Claude 的持久请求、accepted/unknown、状态和恢复继续遵循 §§7–
 
 ### 5.1 命令与 Skill 目录及调用
 
-本节细化 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界)。固定 Driver 的能力目录是受控装配与原生实际发现的交集，不动态发现 Driver。平台控制保持既有入口，命令目录不能注册第二个停止、补充指令或重新生成实现。
+本节细化 [工程 Spec §11.4](SPEC-agent-infra-M1-engineering-architecture.md#114-原生命令与已安装-skill-边界) 与 [工程 Spec §11.6](SPEC-agent-infra-M1-engineering-architecture.md#116-skill-hub-版本绑定与-worker-装配)。Skill Hub 的不可变 Skill Version、Agent Version 绑定和 Worker Applied 是目录与调用的前置事实；#992 的 Web 会话 command/skill 消费这些同一修订，不建立第二套目录或绑定。固定 Driver 的能力目录是受控装配与原生实际发现的交集，不动态发现 Driver。平台控制保持既有入口，命令目录不能注册第二个停止、补充指令或重新生成实现。
 
 | 契约 | 最小语义 |
 | --- | --- |
@@ -271,7 +275,9 @@ thread/read、skills/list 等等待边界同样受当前读取确认约束，不
 
 Codex 的首个只读原生命令定义为“查看原生会话状态”：目录显式绑定 `thread/read`，不假称 CLI `/status`。Driver 只用当前 Conversation 已持久绑定的 threadId，禁用历史正文投影，只返回映射后的状态及读取时间；原生未装载不触发 resume。它证明真实原生查询闭环，不代替产生 Turn 的命令验收。原生 `/compact` 作为独立有状态命令交付，返回空 ACK 后必须跟踪原 `contextCompaction` item 与 Turn 终态；不伪造普通 prompt 代跑，不绕过 §8.5.2 的当前模型和事实约束。
 
-Codex 已安装 Skill 的首条路径：部署提供固定来源/内容摘要的 Skill 包，作为只读资源装配在已获文件准入的固定 Runtime 资源根 `/opt/codex/agent-infra-skills/workspace-summary/SKILL.md` 及配套资源中，不放进可被模型工具改写的 Conversation 工作区或原生 HOME。该名称是实施验收包，不声称官方内置。每个 Conversation 独立 app-server 进程仅把获准的 `/opt/codex/agent-infra-skills` 交给固定版本公开的 `skills/extraRoots/set`；调用前以 `skills/list` 实际返回且 enabled、来源路径及内容摘要匹配作为目录准入，出现额外的个人或项目 Skill 时拒绝该次调用。Host 将能力 ID 解析为本机获准路径，向原 `turn/start` 传递 `skill {name,path}` 与有界任务文本，保持本次模型/reasoning/Key。路径不由 Web 提供；用受控工作区样本验证原生加载该确定内容、只读挂载和跨 Conversation 文件隔离，以及实际工具读取/摘要结果。官方[输入类型](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/protocol/src/user_input.rs)证明结构化入口存在，不能证明既有部署已允许该目录或工具屏障已经通过；缺少这些前置时保持未验证，由原 owner 补齐，禁止以派生二进制或普通提示绕过。
+Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，但不再是 Skill Hub 的权威模型。Skill Hub 的运行时投影遵循工程 Spec §11.6：Platform DB 保存 Skill Version 与 Agent Version 绑定，Platform Worker 消费不可变包对象版本、manifest、digest/signature 和只读策略，异步 materialize 到 Agent project 的 .agents/skills/<name> 并维护 .agents/SKILLS.md，再随受控 workspace 挂载到 Sandbox。.magic/skills 不属于本平台规范路径。
+
+每个 Conversation 独立 Runtime 进程只接收当前 Agent Version 已批准且同步成功的 Skill 根；调用前以 Runtime 实际返回的目录修订、enabled 状态、来源/版本、包摘要和加载证据作为准入。Host 将能力 ID 解析为受控相对路径，向固定 Driver 传递已冻结版本与有界任务文本；路径不由 Web 提供，Runtime 不能静默下载、改写或替换 Skill。初始 Prompt 只包含有界 metadata，read_skills 按需读取正文和配套资源。受控工作区样本、真实包摘要、只读挂载、跨 Conversation 文件隔离、实际 Skill 加载和工具结果必须分别验证；上游接口存在不能证明本仓已完成装配或权限门禁。
 
 本节源码与官方 SDK 声明属于静态证据；上游测试属于上游证据。运行证据须另列原生版本及发行摘要、受控 Skill 摘要、实际发现/调用、加载及工具事实、平台持久结果与浏览器回读。没有这些证据不得写“支持已验收”；本节不授权新增隔离探针或修改上游实现。
 
@@ -285,6 +291,7 @@ Codex 已安装 Skill 的首条路径：部署提供固定来源/内容摘要的
 | 授权与来源 | 两个独立主体、跨 Agent/Conversation/能力 ID 替换、撤权、依赖不可确认、Owner 越权、来源越界均拒绝；个人 HOME 不参与装配，目录/错误/遥测不泄露内容或凭据 |
 | 串行与恢复 | 活跃/等待/unknown 时不发新 Turn；同键重投/异参冲突、受理响应丢失、原生 ACK 后失败、停止竞态、重启和 SSE 重连保持原操作及结果；不重复模型/工具副作用，不提前释放占用 |
 | 其余模板 | Claude/OpenCode/Pi 各按上表真实 SDK/ACP/RPC 路径核对发现、调用、加载/工具及终态；缺口绑定版本、原因、原 owner 与实施 AC，不能以四行 unsupported 结案 |
+| Skill Hub 挂载 | 真实控制面完成发布/审核/安装/Agent Version 绑定后，Worker Applied 与 Runtime 目录修订、按需读取和真实工具结果均绑定同一 Skill Version；同步、撤销、升级、回滚、重启和重复提交均保留可回读状态 |
 
 [#992](https://github.com/AgoraIO-Extensions/agent-infra/issues/992) 以 [#991](https://github.com/AgoraIO-Extensions/agent-infra/issues/991) 契约评审合入为 native blocker；仅文档完成不签收功能或原票 AC。实施前逐 hunk 交接：Web owner 在 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 唯一输入框/时间线消费生成 Client，遵循 [#400](https://github.com/AgoraIO-Extensions/agent-infra/issues/400) 固定 `agent-infra/index.html`、`screens/chat.html` IA，旧 Pilot 及按当前实现生成的变体不作依据；[#482](https://github.com/AgoraIO-Extensions/agent-infra/issues/482) 拥有任务 API/Store；[#508](https://github.com/AgoraIO-Extensions/agent-infra/issues/508) 拥有公共执行/Host/控制恢复；Runtime 原 owner 拥有各 Driver；正式装配归 [#504](https://github.com/AgoraIO-Extensions/agent-infra/issues/504)。本新增能力不反向阻塞这些票，不接管其未完成验收，也不重定义 OpenCode 工具来源或原控制恢复条款。
 
@@ -301,6 +308,9 @@ Codex 已安装 Skill 的首条路径：部署提供固定来源/内容摘要的
 | RuntimeHost Session 引用 | Platform DB 的 Client Adapter 内部存储 | 保存不透明、不可猜测且不能作为授权依据的 Host Session Ref 和单调递增的 `sessionGeneration`，调用方不能解释或覆盖该引用 |
 | Host Session 到原生 Session 的映射 | Sandbox PVC 上的 RuntimeHost 状态 | 保存 Host Session Ref 与 `agentId`、`conversationId`、Sandbox、`sessionGeneration` 及原生 Session ID 的绑定；只有对应 Driver 解释原生 Session ID |
 | Runtime 工作区和原生 Session 数据 | 所属 Sandbox PVC | Runtime 自己解释，平台不读取内容 |
+| Skill、Skill Version、发布/审核/安装/绑定/同步状态 | Platform DB | 版本与关系是唯一业务权威；Agent Version 固定具体 Skill Version，不静默升级 |
+| Skill ZIP、manifest、digest/signature | 版本化 S3 兼容对象存储 | 对象不可变；Worker 只消费不可变对象版本和受控摘要 |
+| Agent project 的 Skill materialization | 所属 Sandbox PVC 的 .agents/skills | 由 Worker/RuntimeHost 受控同步和只读挂载，Runtime 按需读取，平台不以工作区文件反推业务授权 |
 
 Session/Sandbox 的标识、分配、资源和授权权威统一遵循
 [工程 Spec §10.1.1](SPEC-agent-infra-M1-engineering-architecture.md#1011-session-owned-sandbox-权威与资源绑定)。
@@ -444,6 +454,11 @@ Codex 官方 release 的来源、协议/schema、sandbox、能力声明和安装
 通过原生屏障 conformance，也不以日志、普通 approval 或缓存补足隐藏尝试。无论路径如何，
 每次实际外部动作仍须先保存 intent、重验当前授权并可靠保存结果或 unknown；官方路径无法
 可靠控制该边界的操作必须拒绝或标记未支持，不能进入正式 conformance。
+
+Driver 直接执行的标准 MCP 使用工程 Spec
+[§13.5.4](SPEC-agent-infra-M1-engineering-architecture.md#1354-runtime-driver-直接消费标准-mcp)
+的官方工具请求/结果接缝，在原持久意图、当前授权与结果确认后交付原生响应。
+它只覆盖受保护 Driver 内的实际 MCP 操作，不替代其他原生工具或私有 lane 的屏障。
 
 以下屏障契约只适用于明确启用私有 FD callback、Connection bootstrap/recovery 或等价 native
 lane 的发布 target。部署 provenance 必须声明 lane、协议/schema 与工具覆盖，且在任何业务
@@ -617,6 +632,19 @@ Connection 仍在每次请求及 Dispatch 边界独立鉴权。Owner、应用责
 标准客户端需实证 token 只被获准 HTTP/MCP 消费边界读取，工具子进程和其他主体/Agent
 不能读取文件、内存或继承凭据。仅有普通配置 Header、环境变量名或文件权限声明不能证明
 隔离；当前官方版本不具备所需保护时，该能力保持未通过，不通过新增代理或 token 暴露绕过。
+
+Runtime 可按工程 Spec
+[§13.5.4](SPEC-agent-infra-M1-engineering-architecture.md#1354-runtime-driver-直接消费标准-mcp)
+选择 Driver 作为直接标准 MCP 客户端：token 保留在 Host/Driver 受保护边界，原生只通过
+固定官方工具请求/结果接缝交互。此客户端不提供 MCP 转发服务，不取得 Provider 凭据，
+原主体/Agent/Session 选择与秘密保护、结果等待和失败关闭完整遵循该节；不能用工具定义
+或 response 可用声明整个原生 barrier 已通过。取舍见
+[ADR 0019](../adr/0019-run-standard-mcp-in-protected-runtime-driver.md)。
+安装来源、分离 material、不可变修订和原子交付仅遵循工程 Spec
+[§13.5.5](SPEC-agent-infra-M1-engineering-architecture.md#1355-受保护安装交付)。
+Runtime 内接收不替代合法领取；配置缺失与已配置但不可用分别处理，原控制和已有工具
+快照保持。供应未知时不选择普通 Secret/env、原生 helper 或 Worker 解密作为替代。
+
 sender constraint 仅在获准 profile 明确要求时按 Connection HLD §3/§5.2 验证，缺少必需证明
 仍 fail closed；普通 token profile 不以 DPoP、私有 callback 或 FD3 为通用接入前置。
 
@@ -732,6 +760,7 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
 - 官方 Codex release 与启用私有 native lane 的 target 分别记录 provenance、协议/schema、sandbox、能力覆盖和准入结果；官方路径不把不存在的 vendor barrier 当作验收前置，私有 lane 缺少 barrier 或验证不可回读时 fail closed。
 - 标准 MCP/OAuth/PAT 路径按 [§9.1](#91-codex-独立-connection-consumer-profile) 与 [Connection HLD §5.2](HLD-connection-M1.md#52-consumer-与-instance)、[§7](HLD-connection-M1.md#7-mcpapi-调用流程)、[§8](HLD-connection-M1.md#8-幂等与线性化) 和 [§13](HLD-connection-M1.md#13-pilot-验收与成功声明) 验证 token 当前主体/实例、user/application + Agent 选择、工具子进程不可读取、独立撤销、跨实例隔离、幂等和未知不重放；缺 token 不回退 Owner 或共享凭据。profile 明确要求 sender constraint 时另验持有证明，准备层或 token 签发通过不替代真实运行。
 - 可信关联另验同次实际请求/响应、服务端原调用、跨 Execution/attempt 替换、丢响应与只读核实；缺失保持未核实，标准 token 接入不能代签关联。
+- Driver 直接标准 MCP 路径另验固定官方 dynamicTools/server request 的真实等待、受保护 Host 的文件/内存/FD 与诊断拒绝、原安装选择、每次真实发送、结果保存及 ACK；结果保存失败、unknown WRITE 已保存但未核实或 stdio 断连，均不得释放原执行继续推理。覆盖同 UID 工具、旧修订、跨主体/Agent/Sandbox、未知 WRITE、崩溃、撤销与原操作只读恢复，fixture 与真实 Connection/Provider 证据分别记录；通过不外推 native MCP 或其他原生工具。
 - 明确启用的私有 FD callback、bootstrap 或 recovery 在 intent/permit/结果确认失败、断连、过期、跨代次或主体绑定不一致时，不得产生 Provider/工具副作用。该 lane 未通过不按普通 token 绕过；标准 MCP 路径按自己的获准合同验证，不要求具备未启用的私有接缝。
 
 ## 12. RuntimeHost 未来抽取与维护标准
@@ -793,7 +822,7 @@ Claude 的首个复用基线为 Paseo
 以下内容不进入 M1：
 
 - 动态 Adapter 插件、未知协议自动发现和协议版本兼容矩阵。
-- Hermes 或 Magic 的特殊 Runtime/渠道语义。
+- 未经 Browser Capability 契约纳入的其他特殊 Runtime/渠道语义。
 - 将 ACP、Pi RPC 或原生事件直接暴露给 Web 和企微。
 - Redis、Kafka、NATS、Temporal 或其他消息中间件。
 - Kubernetes CRD、Operator 框架和 PVC 自动快照。

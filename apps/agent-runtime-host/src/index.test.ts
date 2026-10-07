@@ -1,20 +1,28 @@
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { get as httpsGet } from "node:https";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	type CodexRuntimeDriverOptions,
 	FakeRuntimeDriver,
 } from "@agent-infra/agent-runtime";
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import { RuntimeSubmitTurnRequestV4Schema } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { requestDigest } from "../../../packages/agent-runtime/src/file-runtime-store.js";
 import {
 	runtimeV2Keys,
 	signV3Fixture,
 	submitV3Fixture,
 } from "../../../packages/agent-runtime/src/grant-v2-fixture.test-support.js";
-import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
-import { createRuntimeTlsTransport } from "../../platform-worker/src/runtime-tls-transport.js";
+import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.js";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
@@ -61,7 +69,7 @@ import {
 } from "./legacy-migration.test-support.js";
 
 const directories: string[] = [];
-const { publicKey } = generateKeyPairSync("ed25519");
+const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 
 async function environment() {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-assembly-"));
@@ -89,6 +97,194 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("retains signed control and original facts after an installation becomes invalid", async () => {
+		const values = await environment();
+		values.AGENT_INFRA_RUNTIME_DATA_DIR = await realpath(
+			values.AGENT_INFRA_RUNTIME_DATA_DIR,
+		);
+		const directory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
+		const profile = {
+			schemaVersion: 1 as const,
+			publicOrigin: "https://connection.example.test",
+			mcpPath: "/mcp",
+			consumerId: "platform",
+			audience: "fixture-resource",
+			egressProfile: { ref: "fixture-egress", revision: "r1" },
+		};
+		const approval = {
+			schemaVersion: 1,
+			configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+			source: { ref: "fixture-deployment", revision: "r1" },
+			egressEnforced: true,
+		};
+		const file = join(directory, "consumer.json");
+		await writeFile(file, JSON.stringify({ profile, approval }));
+		const configured = {
+			...values,
+			AGENT_INFRA_RUNTIME_DRIVER: "codex",
+			AGENT_INFRA_RUNTIME_AGENT_ID: "agent-fixture",
+			AGENT_INFRA_RUNTIME_GRANT_KEY_ID: "fixture",
+			AGENT_INFRA_RUNTIME_GRANT_PUBLIC_KEY: runtimeV2Keys.publicKey
+				.export({ type: "spki", format: "pem" })
+				.toString(),
+			AGENT_INFRA_RUNTIME_GRANT_ISSUER: "platform-fixture",
+			AGENT_INFRA_RUNTIME_WORKER_ID: "worker-fixture",
+			AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE: file,
+			AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION: JSON.stringify([
+				approval.configFingerprint,
+				approval.source.ref,
+				approval.source.revision,
+			]),
+			AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY:
+				"synthetic-model-credential",
+			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+				schemaVersion: 2,
+				configVersion: "fixture-model-config",
+				defaultModelOptionId: "fixture-option",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "fixture-option",
+						model: "fixture-model",
+						reasoningLevels: ["high"],
+						endpoint: "https://models.example.test",
+						credentialEnvironmentVariable:
+							"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+					},
+				],
+			}),
+		};
+		runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({
+			protocolVersion: 2,
+			codexVersion: "synthetic-codex",
+			upstreamTag: "synthetic-tag",
+			upstreamCommit: "synthetic-commit",
+			schemaSha256: "synthetic-schema",
+		});
+		let selected: CodexRuntimeDriverOptions | undefined;
+		runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+			async (options: CodexRuntimeDriverOptions) => {
+				selected = options;
+				return FakeRuntimeDriver.open(join(directory, "control-driver.json"));
+			},
+		);
+		const unsigned = {
+			...submitV3Fixture(),
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "fixture-option",
+				reasoningLevel: "high" as const,
+			},
+		};
+		const submitted = signV3Fixture(unsigned, "turn.submit", {
+			now: Date.now(),
+		});
+		const before = await assembleRuntimeHost(configured);
+		if (!before.verifyGrantV2) throw new Error("Missing fixture verifier");
+		const accepted = await before.host.submitTurnV3(
+			submitted,
+			before.verifyGrantV2(submitted.grant),
+		);
+		const original = JSON.parse(
+			await readFile(join(directory, "host.json"), "utf8"),
+		).sessions[accepted.hostSessionRef];
+		await before.close();
+		await mkdir(
+			join(
+				directory,
+				"codex-driver.json.native",
+				"conversations",
+				"standard-mcp-input",
+			),
+			{ recursive: true, mode: 0o755 },
+		);
+		const restored = await assembleRuntimeHost(configured);
+		try {
+			expect(selected?.standardConnectionClient).toBeDefined();
+			await expect(
+				selected?.standardConnectionClient?.resolveInput(
+					{
+						agentId: unsigned.agentId,
+						conversationId: unsigned.conversationId,
+						executionId: unsigned.executionId,
+						sessionGeneration: unsigned.sessionGeneration,
+					},
+					new AbortController().signal,
+				),
+			).rejects.toMatchObject({
+				code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+			});
+			if (!restored.verifyGrantV2) throw new Error("Missing fixture verifier");
+			const { input: _input, selection: _selection, ...base } = unsigned;
+			const query = signV3Fixture(
+				{
+					...base,
+					hostSessionRef: accepted.hostSessionRef,
+					originalOperationDigest: requestDigest({
+						kind: "submit-turn",
+						agentId: unsigned.agentId,
+						conversationId: unsigned.conversationId,
+						executionId: unsigned.executionId,
+						turnId: unsigned.turnId,
+						sessionGeneration: unsigned.sessionGeneration,
+						input: unsigned.input,
+						selection: unsigned.selection,
+					}),
+				},
+				"session.status",
+				{ now: Date.now(), purpose: "control", reason: "recovery" },
+			);
+			await expect(
+				restored.host.recoverStatusV3(
+					query,
+					restored.verifyGrantV2(query.grant),
+				),
+			).resolves.toMatchObject({ outcome: "found", status: "unknown" });
+			const stop = signV3Fixture(
+				{
+					...base,
+					hostSessionRef: accepted.hostSessionRef,
+					operation: {
+						kind: "stop" as const,
+						id: "control-stop",
+						deliveryFence: 2,
+						executionDeliveryFence: 1,
+					},
+				},
+				"turn.stop",
+				{
+					now: Date.now(),
+					purpose: "control",
+					reason: "stop",
+					claims: { controlRecordId: "control-stop-fixture" },
+				},
+			);
+			await expect(
+				restored.host.stopV3(stop, restored.verifyGrantV2(stop.grant)),
+			).resolves.toMatchObject({
+				result: { outcome: "accepted", status: "idle" },
+			});
+			const saved = JSON.parse(
+				await readFile(join(directory, "host.json"), "utf8"),
+			);
+			expect(saved.sessions[accepted.hostSessionRef].nativeSessionRef).toBe(
+				original.nativeSessionRef,
+			);
+			expect(original.operations[unsigned.executionId].requestDigest).toBe(
+				query.originalOperationDigest,
+			);
+			expect(
+				saved.sessions[accepted.hostSessionRef].operations[
+					unsigned.executionId
+				],
+			).toMatchObject({
+				requestDigest: original.operations[unsigned.executionId].requestDigest,
+				command: original.operations[unsigned.executionId].command,
+			});
+		} finally {
+			await restored.close();
+		}
+	});
 	it.each(["codex", "claude", "acp", "pi", "fake"])(
 		"checks %s process protection before reading private deployment inputs even through programmatic assembly",
 		async (driver) => {
@@ -314,6 +510,7 @@ describe("RuntimeHost environment assembly", () => {
 			});
 			try {
 				expect(runtime.configVersion).toBe("claude-active-17");
+				expect(runtime.verifyGrantV4).toBeUndefined();
 				expect(
 					(await createRuntimeHostApp(runtime).request("/healthz")).status,
 				).toBe(200);
@@ -327,11 +524,9 @@ describe("RuntimeHost environment assembly", () => {
 	);
 	it("reports the consumed configuration revision in readiness metadata", async () => {
 		const runtime = await assembleRuntimeHost(await environment());
-		const material = await runtimeTlsFixture();
 		const ready = Promise.withResolvers<string>();
 		const server = startRuntimeHost({
 			...runtime,
-			tls: { ...material, serviceDnsNames: ["localhost"] },
 			port: 0,
 			configVersion: "active-revision-17",
 			log: ready.resolve,
@@ -344,25 +539,13 @@ describe("RuntimeHost environment assembly", () => {
 			const address = server.address();
 			if (!address || typeof address === "string")
 				throw new Error("Missing test port");
-			const status = await new Promise<number | undefined>(
-				(resolve, reject) => {
-					httpsGet(
-						`https://localhost:${address.port}/healthz`,
-						{ ca: material.ca },
-						(response) => {
-							response.resume();
-							response.once("end", () => resolve(response.statusCode));
-						},
-					).once("error", reject);
-				},
-			);
-			expect(status).toBe(200);
+			const response = await fetch(`http://127.0.0.1:${address.port}/healthz`);
+			expect(response.status).toBe(200);
 		} finally {
 			await new Promise<void>((resolve, reject) =>
 				server.close((error) => (error ? reject(error) : resolve())),
 			);
 			await runtime.close();
-			await material.cleanup();
 		}
 	});
 
@@ -373,7 +556,7 @@ describe("RuntimeHost environment assembly", () => {
 		await runtime.close();
 	});
 
-	it("keeps service token and signed Worker authorization independent over verified TLS", async () => {
+	it("keeps service token and signed Worker authorization independent over in-cluster HTTP", async () => {
 		const runtime = await assembleRuntimeHost({
 			...(await environment()),
 			AGENT_INFRA_RUNTIME_WORKER_ID: "worker-fixture",
@@ -383,12 +566,9 @@ describe("RuntimeHost environment assembly", () => {
 				.export({ type: "spki", format: "pem" })
 				.toString(),
 		});
-		const material = await runtimeTlsFixture();
-		const transport = createRuntimeTlsTransport(material.ca);
 		const ready = Promise.withResolvers<string>();
 		const server = startRuntimeHost({
 			...runtime,
-			tls: { ...material, serviceDnsNames: ["localhost"] },
 			port: 0,
 			log: ready.resolve,
 		});
@@ -401,22 +581,19 @@ describe("RuntimeHost environment assembly", () => {
 			now = Date.now(),
 			token = "synthetic-token",
 		) =>
-			transport.fetch(
-				`https://localhost:${address.port}/internal/runtime/v3/turns`,
-				{
-					method: "POST",
-					headers: {
-						authorization: `Bearer ${token}`,
-						"content-type": "application/json",
-					},
-					body: JSON.stringify(
-						signV3Fixture(submitV3Fixture(), "turn.submit", {
-							now,
-							claims: { workerId },
-						}),
-					),
+			fetch(`http://127.0.0.1:${address.port}/internal/runtime/v3/turns`, {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
 				},
-			);
+				body: JSON.stringify(
+					signV3Fixture(submitV3Fixture(), "turn.submit", {
+						now,
+						claims: { workerId },
+					}),
+				),
+			});
 		try {
 			try {
 				expect(
@@ -433,8 +610,6 @@ describe("RuntimeHost environment assembly", () => {
 			expect((await post("worker-fixture")).status).toBe(403);
 		} finally {
 			await closeRuntimeHost(server, async () => {});
-			await transport.close();
-			await material.cleanup();
 		}
 	});
 
@@ -527,6 +702,213 @@ describe("RuntimeHost environment assembly", () => {
 				} else {
 					process.env.PATH = originalPath;
 				}
+			}
+		},
+	);
+	it.each(["absent", "available", "invalid"] as const)(
+		"assembles V4 with a routing snapshot and installed input=%s",
+		async (installed) => {
+			const values = await environment();
+			values.AGENT_INFRA_RUNTIME_DATA_DIR = await realpath(
+				values.AGENT_INFRA_RUNTIME_DATA_DIR,
+			);
+			if (installed !== "absent")
+				await mkdir(
+					join(
+						values.AGENT_INFRA_RUNTIME_DATA_DIR,
+						"codex-driver.json.native",
+						"conversations",
+						"standard-mcp-input",
+					),
+					{ recursive: true, mode: installed === "invalid" ? 0o755 : 0o700 },
+				);
+			const profile = {
+				schemaVersion: 1 as const,
+				publicOrigin: "https://connection.example.test",
+				mcpPath: "/mcp",
+				consumerId: "platform",
+				audience: "fixture-resource",
+				egressProfile: { ref: "fixture-egress", revision: "r1" },
+			};
+			const approval = {
+				schemaVersion: 1,
+				configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+				source: { ref: "fixture-deployment", revision: "r1" },
+				egressEnforced: true,
+			};
+			const file = join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "consumer.json");
+			await writeFile(file, JSON.stringify({ profile, approval }));
+			let openedWith: CodexRuntimeDriverOptions | undefined;
+			runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({
+				protocolVersion: 2,
+				codexVersion: "synthetic-codex",
+				upstreamTag: "synthetic-tag",
+				upstreamCommit: "synthetic-commit",
+				schemaSha256: "synthetic-schema-sha256",
+			});
+			runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(
+				async (options: CodexRuntimeDriverOptions) => {
+					openedWith = options;
+					return FakeRuntimeDriver.open(
+						join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "v4-driver.json"),
+					);
+				},
+			);
+			const runtime = await assembleRuntimeHost({
+				...values,
+				AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE: file,
+				AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION: JSON.stringify([
+					approval.configFingerprint,
+					approval.source.ref,
+					approval.source.revision,
+				]),
+				AGENT_INFRA_RUNTIME_DRIVER: "codex",
+				AGENT_INFRA_RUNTIME_WORKER_ID: "synthetic-worker",
+				AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+				AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+					schemaVersion: 4,
+					configVersion: "configuration-4-fingerprint",
+					defaultModelOptionId: "model-option-primary",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "model-option-primary",
+							protocol: "openai-responses-v1",
+							authentication: "bearer",
+							endpoint: "https://models.example.test/v1",
+							model: "gpt-5.3-codex",
+							reasoningLevels: ["high"],
+						},
+					],
+				}),
+			});
+			try {
+				expect(runtime.verifyGrantV4).toBeTypeOf("function");
+				expect(runtime.connectionConsumer).toMatchObject({
+					status: "available",
+					configFingerprint: approval.configFingerprint,
+				});
+				if (installed !== "absent") {
+					expect(openedWith?.standardConnectionClient?.target).toMatchObject({
+						status: "available",
+						configFingerprint: approval.configFingerprint,
+						source: approval.source,
+						url: profile.publicOrigin + profile.mcpPath,
+					});
+					expect(openedWith?.standardConnectionClient?.resolveInput).toBeTypeOf(
+						"function",
+					);
+				} else
+					expect(openedWith).not.toHaveProperty("standardConnectionClient");
+				if (installed === "invalid") {
+					await expect(
+						openedWith?.standardConnectionClient?.resolveInput(
+							{
+								agentId: "synthetic-agent",
+								conversationId: "control-conversation",
+								executionId: "control-execution",
+								sessionGeneration: 1,
+							},
+							new AbortController().signal,
+						),
+					).rejects.toMatchObject({
+						code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+					});
+					expect(
+						(await createRuntimeHostApp(runtime).request("/healthz")).status,
+					).toBe(200);
+				}
+				expect(openedWith?.connectionClient).toBeUndefined();
+				const invalidGrantRequest = RuntimeSubmitTurnRequestV4Schema.parse({
+					schemaVersion: 4,
+					requestId: "assembly-request",
+					traceId: "assembly-trace",
+					principal: { kind: "user", id: "alice" },
+					executionSource: "web",
+					channelId: "web",
+					agentId: "synthetic-agent",
+					conversationId: "assembly-conversation",
+					executionId: "assembly-execution",
+					turnId: "assembly-turn",
+					sessionGeneration: 1,
+					hostSessionRef: null,
+					operation: {
+						kind: "execution",
+						id: "assembly-execution",
+						deliveryFence: 1,
+						executionDeliveryFence: 1,
+					},
+					grant: {
+						schemaVersion: 4,
+						format: "runtime-execution-jws",
+						token: "a.b.c",
+					},
+					keyBinding: {
+						purpose: "personal",
+						subjectId: "alice",
+						ciphertextRef: "key-1",
+						version: 1,
+					},
+					input: { text: "assembly-input", attachments: [] },
+					selection: {
+						schemaVersion: 1,
+						modelOptionId: "model-option-primary",
+						reasoningLevel: "high",
+					},
+				});
+				await expect(
+					runtime.verifyGrantV4?.(invalidGrantRequest),
+				).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+				const signer = createWorkerRuntimeGrantSignerV4({
+					issuer: "synthetic-platform",
+					workerId: "synthetic-worker",
+					keyId: "synthetic-key",
+					privateKey,
+				});
+				const signed = (request: typeof invalidGrantRequest) => ({
+					...request,
+					grant: signer.sign(request, "synthetic-authorization"),
+				});
+				await expect(
+					runtime.verifyGrantV4?.(signed(invalidGrantRequest)),
+				).resolves.toMatchObject({ claims: { agentId: "synthetic-agent" } });
+				await expect(
+					runtime.verifyGrantV4?.(
+						signed({ ...invalidGrantRequest, agentId: "another-agent" }),
+					),
+				).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+				expect(openedWith).toMatchObject({
+					configVersion: "configuration-4-fingerprint",
+					modelOptions: [
+						{
+							modelOptionId: "model-option-primary",
+							endpoint: "https://models.example.test/v1",
+							model: "gpt-5.3-codex",
+							reasoningLevels: ["high"],
+						},
+					],
+				});
+				expect(openedWith?.modelOptions[0]).not.toHaveProperty("credential");
+				const action = {
+					nativeSessionRef: "synthetic-native-session",
+					executionId: "synthetic-execution",
+					operationRef: "synthetic-operation",
+					attemptRef: "synthetic-attempt",
+					runtimeOperationId: "synthetic-runtime-operation",
+					kind: "model" as const,
+				};
+				const revalidate = vi.fn();
+				const authorization = vi
+					.spyOn(runtime.host, "authorizeExternalAction")
+					.mockResolvedValue({ relayKey: "synthetic-relay-key", revalidate });
+				const delivered = await openedWith?.authorizeExternalAction?.(action);
+				expect(delivered).toEqual({
+					relayKey: "synthetic-relay-key",
+					revalidate,
+				});
+				expect(authorization).toHaveBeenCalledWith(action);
+			} finally {
+				await runtime.close();
 			}
 		},
 	);
@@ -671,6 +1053,7 @@ describe("RuntimeHost environment assembly", () => {
 			AGENT_INFRA_RUNTIME_CONNECTION_PROFILE: JSON.stringify(profile),
 		});
 		try {
+			expect(runtime.verifyGrantV4).toBeUndefined();
 			expect(openedWith?.connectionClient).toMatchObject({
 				profile,
 				authorizedService: {

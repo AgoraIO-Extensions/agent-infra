@@ -37,6 +37,8 @@ spec:
         app.kubernetes.io/name: {{ .Chart.Name }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: platform-api
+      annotations:
+        agent-infra.agora.io/connection-profile-version: {{ include "agent-infra.connectionProfileVersion" . | quote }}
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -60,6 +62,8 @@ spec:
           env:
             - name: PLATFORM_API_DEPLOYMENT_MODULE
               value: {{ .Values.platformApi.deploymentModule | quote }}
+            - name: PLATFORM_PUBLIC_ORIGIN
+              value: {{ .Values.web.externalBaseUrl | quote }}
             - name: PLATFORM_DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -69,9 +73,11 @@ spec:
               value: /var/run/agent-infra/encryption-public-key/public.pem
             - name: AGENT_INFRA_ENCRYPTION_KEY_VERSION
               value: {{ .Values.keys.encryptionPublicKey.version | quote }}
+            {{- include "agent-infra.connectionEnv" . | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ $bindings }}
+            {{- include "agent-infra.connectionEnvFrom" . | nindent 12 }}
           volumeMounts:
             - name: encryption-public-key
               mountPath: /var/run/agent-infra/encryption-public-key

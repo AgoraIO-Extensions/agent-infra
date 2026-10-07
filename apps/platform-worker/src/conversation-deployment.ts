@@ -1,5 +1,9 @@
 import { createPublicKey } from "node:crypto";
 import {
+	type ApprovedConnectionConsumerTargetV1,
+	resolveApprovedConnectionConsumerProfileV1,
+} from "@agent-infra/contracts/connection-consumer-profile";
+import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
 } from "@agent-infra/contracts/workload";
@@ -23,13 +27,53 @@ import {
 } from "./workload-runtime.js";
 import { validateWorkloadRuntimeAuthV1 } from "./workload-runtime-auth.js";
 
+type ConnectionConsumerTargetV1 = ApprovedConnectionConsumerTargetV1;
+
+function approvedConnectionConsumerTarget(
+	profile: unknown,
+	approval: unknown,
+	required = false,
+): ConnectionConsumerTargetV1 | undefined {
+	const hasProfile = profile !== undefined;
+	const hasApproval = approval !== undefined;
+	if (!hasProfile && !hasApproval) {
+		if (!required) return undefined;
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	}
+	if (!hasProfile || !hasApproval)
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	const result = resolveApprovedConnectionConsumerProfileV1(profile, approval);
+	if (result.status !== "available")
+		throw new Error("CONNECTION_CONSUMER_PROFILE_UNAVAILABLE");
+	return {
+		...result,
+		url: result.profile.publicOrigin + result.profile.mcpPath,
+	};
+}
+
+/** Resolve the immutable target prepared from a deployment-owned profile. */
+export function resolveApprovedConnectionConsumerTargetV1(
+	profile: unknown,
+	approval: unknown,
+): ConnectionConsumerTargetV1 | undefined {
+	return approvedConnectionConsumerTarget(profile, approval);
+}
+
 /** Resolve only a currently observed Workload through the existing deployment adapter. */
 export function createProductionConversationRuntimeResolverV2(options: {
 	readonly workload: WorkloadRuntimeOptionsV1;
 	readonly signing: ConversationRuntimeOptionsV2["signing"];
 	readonly serviceToken: string;
+	readonly connectionConsumerProfile?: unknown;
+	readonly connectionConsumerApproval?: unknown;
+	readonly requireConnectionConsumerProfile?: boolean;
 }): ConversationRuntimeOptionsV2["resolveRuntimeHost"] {
 	const { workload, signing, serviceToken } = options;
+	const connectionConsumer = approvedConnectionConsumerTarget(
+		options.connectionConsumerProfile,
+		options.connectionConsumerApproval,
+		options.requireConnectionConsumerProfile,
+	);
 	const auth = workload.policy.runtimeAuth;
 	try {
 		if (!auth) throw new Error();
@@ -132,9 +176,10 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				)
 					throw new Error();
 				return {
-					baseUrl: `https://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
+					baseUrl: `http://${service.name}.${service.namespace}.svc:${sourceDeployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
+					connectionConsumer,
 				};
 			}
 			if (
@@ -152,12 +197,6 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			if (
 				deployment.agentId !== input.agentId ||
 				deployment.runtimeManifest.interactionMode !== "platform-adapter"
-			)
-				throw new Error();
-			if (
-				!workload.policy.runtimeTls?.some(
-					(binding) => binding.agentId === input.agentId,
-				)
 			)
 				throw new Error();
 			// observe checks actual ownership, UID/generation, Pod/spec/Secret/network
@@ -244,18 +283,20 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					throw new Error();
 				return {
 					// Session sandboxes use their own Service contract; the bound Service
-					// must still be consumed through the internal HTTPS contract.
-					baseUrl: `https://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
+					// is consumed in-cluster over plaintext HTTP (ADR-0020).
+					baseUrl: `http://${service.name}.${service.namespace}.svc:${deployment.service.port}`,
 					serviceToken,
 					workerId: signing.workerId,
+					connectionConsumer,
 				};
 			}
 			input.signal.throwIfAborted();
 			const service = `${workloadResourceNameV1(input.agentId)}${input.purpose === "control" ? "-probe" : ""}`;
 			return {
-				baseUrl: `https://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
+				baseUrl: `http://${service}.${workload.policy.namespace}.svc:${deployment.service.port}`,
 				serviceToken,
 				workerId: signing.workerId,
+				connectionConsumer,
 			};
 		} catch {
 			input.signal.throwIfAborted();
@@ -264,6 +305,19 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				true,
 			);
 		}
+	};
+}
+
+/** Picks the deployment-approved egress fields; other policy fields never widen it. */
+function sessionSandboxEgressPolicyV1(
+	policy: WorkloadRuntimeOptionsV1["policy"],
+): SessionSandboxAllocationV1["egress"] {
+	return {
+		...(policy.modelEgress ? { modelEgress: policy.modelEgress } : {}),
+		...(policy.connectionEgress
+			? { connectionEgress: policy.connectionEgress }
+			: {}),
+		...(policy.dnsEgress ? { dnsEgress: policy.dnsEgress } : {}),
 	};
 }
 
@@ -291,9 +345,12 @@ export function createProductionSessionSandboxReceiverV1(
 		serviceAccountName: binding.resourceName,
 		pvcName: binding.resourceName,
 		networkPolicyName: binding.resourceName,
+		// Only the reviewed deployment egress, identical to the Agent Workload's.
+		egress: sessionSandboxEgressPolicyV1(workload.policy),
 		imageDigest: `${workload.policy.imageRepository}@${deployment.imageDigest}`,
 		containerPort: deployment.service.port,
 		env: deployment.env,
+		connectionConsumerSnapshot: workload.policy.connectionConsumerSnapshot,
 		authorizedIngressSelector: workload.policy.workerSelector,
 		resources: workload.policy.resources,
 		storageSize: workload.policy.storageSize,
@@ -343,6 +400,7 @@ export function createProductionSessionSandboxReceiverV1(
 				const observed = await adapter.observe(
 					sourceAllocation,
 					sourceResources,
+					"control",
 				);
 				signal.throwIfAborted();
 				return {

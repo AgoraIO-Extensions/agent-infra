@@ -34,6 +34,8 @@ async function fixture() {
 	const manifest = join(directory, "database-route.yaml");
 	const networkState = join(directory, "kind-network-connected");
 	const routeState = join(directory, "database-route.json");
+	const directoryNetworkState = join(directory, "directory-network-connected");
+	const directoryRouteState = join(directory, "directory-route.json");
 	const kubeconfig = join(directory, "kubeconfig");
 	const values = join(directory, "worker.values.yaml");
 	const cert = join(directory, "tls.crt");
@@ -104,6 +106,22 @@ elif [[ "$*" == *"network connect --alias "*" kind fixture-postgres"* ]]; then
   printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 elif [[ "$*" == *"network disconnect kind fixture-postgres"* ]]; then
   rm -f "$FAKE_NETWORK_STATE"
+  printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
+elif [[ "$*" == *"compose"*"ps --all -q enterprise-directory-sync"* || "$*" == *"compose"*"ps -q enterprise-directory-sync"* ]]; then
+  printf 'fixture-directory\\n'
+elif [[ "$*" == *"container inspect fixture-directory"*"IPAddress"* ]]; then
+  printf '172.18.0.43\\n'
+elif [[ "$*" == *"container inspect fixture-directory"* ]]; then
+  [[ -f "$FAKE_DIRECTORY_NETWORK_STATE" ]] && cat "$FAKE_DIRECTORY_NETWORK_STATE"
+  true
+elif [[ "$*" == *"network connect --alias "*" kind fixture-directory"* ]]; then
+  command="$*"
+  alias="\${command#*--alias }"
+  alias="\${alias%% kind fixture-directory*}"
+  printf '%s' "$alias" > "$FAKE_DIRECTORY_NETWORK_STATE"
+  printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
+elif [[ "$*" == *"network disconnect kind fixture-directory"* ]]; then
+  rm -f "$FAKE_DIRECTORY_NETWORK_STATE"
   printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
 else
   printf 'docker %s\\n' "$*" >> "$COMMAND_LOG"
@@ -192,6 +210,8 @@ elif [[ "$*" == *"--ignore-not-found -o json" ]]; then
     fi
   elif [[ "$*" == *"get endpointslice/agent-infra-verify-postgres-docker "* && -f "$FAKE_ROUTE_STATE" ]]; then
     cat "$FAKE_ROUTE_STATE"
+  elif [[ "$*" == *"get endpointslice/enterprise-directory-sync-e2e "* && -f "$FAKE_DIRECTORY_ROUTE_STATE" ]]; then
+    cat "$FAKE_DIRECTORY_ROUTE_STATE"
   fi
 elif [[ "$*" == *"get deployment agent-infra-verify-agent-infra-platform-worker"*"-o jsonpath="* ]]; then
   printf '%s' "$FAKE_WORKER_REPLICAS"
@@ -215,13 +235,17 @@ else
     payload=$(cat)
     printf '%s\\n' "$payload" >> "$MANIFEST_LOG"
     alias=$(printf '%s\\n' "$payload" | sed -n 's/^    agent-infra.agora.io\\/local-network-alias: //p')
+    route_state="$FAKE_ROUTE_STATE"
+    [[ "$payload" == *"name: enterprise-directory-sync-e2e"* ]] && route_state="$FAKE_DIRECTORY_ROUTE_STATE"
     if [[ -n "$alias" ]]; then
-      printf '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"},"annotations":{"agent-infra.agora.io/local-network-alias":"%s"}}}' "$alias" > "$FAKE_ROUTE_STATE"
+      printf '{"metadata":{"labels":{"app.kubernetes.io/managed-by":"agent-infra-local","agent-infra.agora.io/local-project":"agent-infra-verify"},"annotations":{"agent-infra.agora.io/local-network-alias":"%s"}}}' "$alias" > "$route_state"
     fi
   elif [[ "$*" == *"apply --server-side"* ]]; then
     cat >> "$MANIFEST_LOG"
   elif [[ "$*" == *"delete endpointslice/agent-infra-verify-postgres-docker"* ]]; then
     rm -f "$FAKE_ROUTE_STATE"
+  elif [[ "$*" == *"delete endpointslice/enterprise-directory-sync-e2e"* ]]; then
+    rm -f "$FAKE_DIRECTORY_ROUTE_STATE"
   fi
   if [[ "$*" == *"scale deployment/agent-infra-verify-agent-infra-platform-worker --replicas=1"* && -n "$FAKE_RESTORE_SCALE_EXIT" ]]; then
     exit "$FAKE_RESTORE_SCALE_EXIT"
@@ -236,6 +260,8 @@ fi`,
 		MANIFEST_LOG: manifest,
 		FAKE_NETWORK_STATE: networkState,
 		FAKE_ROUTE_STATE: routeState,
+		FAKE_DIRECTORY_NETWORK_STATE: directoryNetworkState,
+		FAKE_DIRECTORY_ROUTE_STATE: directoryRouteState,
 		FAKE_KUBE_SERVER: "https://127.0.0.1:6443",
 		FAKE_KIND_LABEL: "isolated",
 		FAKE_KIND_PORT: "127.0.0.1:6443",
@@ -351,29 +377,44 @@ test("local up, status and stop bind one Worker release to the private kind cont
 			"postgresql://fixture:fixture@agent-infra-verify-postgres.agent-infra-verify.svc.cluster.local:5432/fixture",
 		);
 		assert.match(
-			up[9],
+			up[6],
+			/^docker .* compose .* up --detach --wait enterprise-directory-sync$/,
+		);
+		assert.match(
+			up[7],
+			/network connect --alias enterprise-directory-sync-[0-9a-f]{16} kind fixture-directory$/,
+		);
+		assert.match(up[8], /^kubectl .* apply -f -$/);
+		assert.match(manifest, /name: enterprise-directory-sync-e2e/);
+		assert.match(manifest, /addresses: \["172\.18\.0\.43"\]/);
+		assert.match(
+			up[12],
 			/^kubectl .* --context kind-isolated --namespace agent-infra-verify rollout status deployment\/agent-infra-verify-agent-infra-platform-worker/,
 		);
 		assert.match(
-			up[10],
+			up[13],
+			/^docker .* compose .* up --detach --wait connection-api$/,
+		);
+		assert.match(
+			up[14],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps platform-api$/,
 		);
-		assert.match(up[11], /^node deploy\/local\/check-api-auth\.ts /);
+		assert.match(up[15], /^node deploy\/local\/check-api-auth\.ts /);
 		assert.match(
-			up[12],
+			up[16],
 			/^docker .* compose .* up --detach --wait --force-recreate --no-deps web$/,
 		);
 		assert.match(
 			up[5],
 			/apply --server-side --field-manager=agent-infra-local -f -/,
 		);
-		assert.match(up[6], /^helm .* upgrade --install agent-infra-verify /);
+		assert.match(up[9], /^helm .* upgrade --install agent-infra-verify /);
 		assert.match(
-			up[7],
+			up[10],
 			/^helm .* get values agent-infra-verify --all --output json$/,
 		);
-		assert.match(up[8], /kubectl .* scale .* --replicas=1$/);
-		assert.equal(up.length, 13);
+		assert.match(up[11], /kubectl .* scale .* --replicas=1$/);
+		assert.equal(up.length, 17);
 
 		await writeFile(f.log, "");
 		assert.equal(run("up", f.env).status, 0);
@@ -384,7 +425,7 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		const status = await readFile(f.log, "utf8");
 		assert.match(
 			status,
-			/compose .* ps postgres object-storage platform-api web/,
+			/compose .* ps postgres object-storage enterprise-directory-sync connection-api platform-api web/,
 		);
 		assert.match(status, /helm .* status agent-infra-verify/);
 		assert.match(
@@ -422,12 +463,21 @@ test("local up, status and stop bind one Worker release to the private kind cont
 		assert.match(stopSteps[1], /kubectl .* scale .* --replicas=0/);
 		assert.match(stopSteps[2], /kubectl .* rollout status/);
 		assert.match(stopSteps[3], /helm .* uninstall/);
-		assert.match(stopSteps[4], /network disconnect kind fixture-postgres/);
 		assert.match(
-			stopSteps[5],
+			stopSteps[4],
+			/compose .* stop enterprise-directory-sync connection-api$/,
+		);
+		assert.match(stopSteps[5], /network disconnect kind fixture-directory/);
+		assert.match(
+			stopSteps[6],
+			/delete endpointslice\/enterprise-directory-sync-e2e service\/enterprise-directory-sync/,
+		);
+		assert.match(stopSteps[7], /network disconnect kind fixture-postgres/);
+		assert.match(
+			stopSteps[8],
 			/delete endpointslice\/agent-infra-verify-postgres-docker service\/agent-infra-verify-postgres secret\/agent-infra-verify-postgres/,
 		);
-		assert.match(stopSteps[6], /compose .* stop object-storage postgres/);
+		assert.match(stopSteps[9], /compose .* stop object-storage postgres/);
 		assert.doesNotMatch(
 			stop,
 			/--volumes|compose .* down|delete (persistentvolumeclaim|pvc|namespace)/,
@@ -508,8 +558,17 @@ test("local up keeps API and Web closed when Worker upgrade fails", async () => 
 			steps[5],
 			/apply --server-side --field-manager=agent-infra-local -f -/,
 		);
-		assert.match(steps[6], /helm .* upgrade --install/);
-		assert.equal(steps.length, 7);
+		assert.match(
+			steps[6],
+			/compose .* up --detach --wait enterprise-directory-sync$/,
+		);
+		assert.match(
+			steps[7],
+			/network connect --alias enterprise-directory-sync-[0-9a-f]{16} kind fixture-directory/,
+		);
+		assert.match(steps[8], /kubectl .* apply -f -/);
+		assert.match(steps[9], /helm .* upgrade --install/);
+		assert.equal(steps.length, 10);
 	} finally {
 		await f.close();
 	}

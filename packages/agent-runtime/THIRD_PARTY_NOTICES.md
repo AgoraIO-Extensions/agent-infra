@@ -1,5 +1,11 @@
 # 第三方来源
 
+标准 Connection MCP 客户端使用未修改的官方 `@modelcontextprotocol/sdk@1.30.0`，
+来源为 `modelcontextprotocol/typescript-sdk`，MIT 许可证随依赖分发；具体包内容由
+`pnpm-lock.yaml` integrity 固定。使用 `Client` 与 `StreamableHTTPClientTransport` 的标准
+初始化、发现和调用协议，不复制 framing。Runtime 在 SDK fetch 边界限定目标、认证、大小
+及单次发送，并等待原 journal/ACK；不使用 SDK OAuth fallback、重连重放或改写其源码。
+
 Claude Query 启动与退役逻辑采用 Paseo 的叶子实现：
 
 - 仓库与固定版本：`getpaseo/paseo@d1b705a0cd91617a5707fae25d80cb0be3057950`。

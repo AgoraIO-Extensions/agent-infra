@@ -27,6 +27,7 @@ import type {
 	V1ServiceAccount,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
+import { runtimeConnectionConsumerProjectionV1 } from "./connection-consumer-projection.js";
 import {
 	type WorkerKubernetesClientV1,
 	WorkloadKubernetesError,
@@ -60,13 +61,6 @@ import {
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesWorkloadPolicyHelpersV1 } from "./kubernetes-runtime-policy.js";
 import {
-	type AgentRuntimeTlsBindingV1,
-	runtimeTlsBindingV1,
-	runtimeTlsEnvironmentV1,
-	validateRuntimeTlsPolicyV1,
-	validateRuntimeTlsSecretV1,
-} from "./kubernetes-runtime-tls.js";
-import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -78,6 +72,8 @@ import {
 export { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 
 export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
+	/** Validated deployment copy, never an Agent/request environment value. */
+	readonly connectionConsumerSnapshot?: string | null;
 	readonly namespace: string;
 	readonly namespaceRef: string;
 	readonly resourceProfileRef: string;
@@ -99,10 +95,11 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	/** Trusted deployment auth integration; applied only to platform-auth routes. */
 	readonly platformAuthAnnotations: Readonly<Record<string, string>>;
 	readonly runtimeAuth?: WorkloadRuntimeAuthV1;
-	readonly runtimeTls?: readonly AgentRuntimeTlsBindingV1[];
 }
 
 export function createKubernetesRuntimeAdapterV1(options: {
+	/** Original verified control observes identity/spec without current delivery assertions. */
+	readonly connectionConsumerControl?: boolean;
 	readonly client: WorkerKubernetesClientV1;
 	readonly policy: KubernetesWorkloadPolicyV1;
 	/** Supplied from Worker persistent state, never restored from live annotations. */
@@ -115,9 +112,13 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	}) => Promise<boolean>;
 }) {
 	const { client, policy } = options;
+	const connection = runtimeConnectionConsumerProjectionV1(
+		options.connectionConsumerControl
+			? undefined
+			: policy.connectionConsumerSnapshot,
+	);
 	const egress = workloadEgressRulesV1(policy);
 	if (policy.runtimeAuth) validateWorkloadRuntimeAuthV1(policy.runtimeAuth);
-	validateRuntimeTlsPolicyV1(policy);
 	const modelProjection =
 		options.modelProjection === undefined
 			? undefined
@@ -168,6 +169,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		hasDriftedPodSpec,
 		networkPolicy,
 	} = createKubernetesWorkloadPolicyHelpersV1({
+		connectionConsumerControl: options.connectionConsumerControl,
 		policy,
 		modelProjection,
 		modelInjection,
@@ -308,17 +310,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		},
 	): Promise<"pending" | "healthy" | "unhealthy" | "drifted"> {
 		const value = desired(input);
-		const tls =
-			value.replicas === 0 ? undefined : runtimeTlsBindingV1(policy, value);
-		if (
-			tls &&
-			!validateRuntimeTlsSecretV1(
-				await client.read<V1Secret>("Secret", tls.serverSecretRef.name),
-				tls.serverSecretRef.name,
-				tls.serviceDnsNames,
-			)
-		)
-			return "drifted";
 		if (
 			closedRouteFence &&
 			(routeMode !== "closed" ||
@@ -529,7 +520,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		try {
 			return (await options.probe({
 				desired: value,
-				serviceOrigin: `${tls ? "https" : "http"}://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
+				// In-cluster plaintext (ADR-0020); authorization stays token + Grant.
+				serviceOrigin: `http://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
 			}))
 				? "healthy"
 				: "unhealthy";
@@ -1102,19 +1094,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			input: unknown,
 		): Promise<{ uid: string; generation: number } | "pending" | null> {
 			const value = desired(input);
-			// Missing serving material must not prevent an existing workload closing.
-			const tls =
-				value.replicas === 0 ? undefined : runtimeTlsBindingV1(policy, value);
-			if (tls && modelInjection?.secretName === tls.serverSecretRef.name)
+			if (options.connectionConsumerControl && value.replicas !== 0)
 				throw new WorkloadKubernetesError("policy");
-			if (
-				tls &&
-				!validateRuntimeTlsSecretV1(
-					await client.read<V1Secret>("Secret", tls.serverSecretRef.name),
-					tls.serverSecretRef.name,
-					tls.serviceDnsNames,
-				)
-			)
+			if (value.replicas !== 0 && policy.connectionConsumerSnapshot === null)
 				throw new WorkloadKubernetesError("policy");
 			if (value.replicas !== 0) await assertStandardTemplateSelector(value);
 			const name = workloadResourceNameV1(value.agentId);
@@ -1385,7 +1367,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					selector: { matchLabels: { [ownerLabel]: name } },
 					updateStrategy: { type: "RollingUpdate" },
 					template: {
-						metadata: { labels: podLabels },
+						metadata: {
+							labels: podLabels,
+							...(policy.connectionConsumerSnapshot === undefined
+								? {}
+								: { annotations: connection.annotations }),
+						},
 						spec: {
 							serviceAccountName: name,
 							automountServiceAccountToken: false,
@@ -1404,10 +1391,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 									ports: [
 										{ name: "runtime", containerPort: value.service.port },
 									],
-									env: [
-										...workloadEnvironment(value),
-										...runtimeTlsEnvironmentV1(tls),
-									],
+									env: workloadEnvironment(value),
 									envFrom: environmentSecrets(value).map((ref) => ({
 										secretRef: { name: ref.name },
 									})),
@@ -1415,31 +1399,23 @@ export function createKubernetesRuntimeAdapterV1(options: {
 										httpGet: {
 											path: value.health.path,
 											port: value.service.port,
-											...(tls ? { scheme: "HTTPS" } : {}),
 										},
 										timeoutSeconds: value.health.timeoutSeconds,
 										failureThreshold: value.health.failureThreshold,
 									},
 									securityContext: agentContainerSecurityContext(),
 									volumeMounts: [
+										...connection.volumeMounts,
 										{
 											name: "data",
 											mountPath: value.persistentVolume.mountPath,
 										},
 										{ name: "runtime-tmp", mountPath: "/tmp" },
-										...(tls
-											? [
-													{
-														name: "runtime-tls",
-														mountPath: "/var/run/agent-infra/runtime-tls",
-														readOnly: true,
-													},
-												]
-											: []),
 									],
 								},
 							],
 							volumes: [
+								...connection.volumes,
 								{
 									name: "data",
 									persistentVolumeClaim: {
@@ -1450,22 +1426,6 @@ export function createKubernetesRuntimeAdapterV1(options: {
 									name: "runtime-tmp",
 									emptyDir: { medium: "Memory", sizeLimit: "128Mi" },
 								},
-								...(tls
-									? [
-											{
-												name: "runtime-tls",
-												secret: {
-													secretName: tls.serverSecretRef.name,
-													optional: false,
-													defaultMode: 0o440,
-													items: [
-														{ key: "tls.crt", path: "tls.crt" },
-														{ key: "tls.key", path: "tls.key" },
-													],
-												},
-											},
-										]
-									: []),
 							],
 						},
 					},

@@ -25,7 +25,7 @@ import {
 	idMaxBytes,
 	invalidCommand,
 	isText,
-	maxAccessTargets,
+	maxAuthorityUsers,
 	sameValue,
 } from "./agent-configuration-values.js";
 import {
@@ -44,7 +44,7 @@ function parseAuthorityContext(
 		"organizationIds",
 	]);
 	if (authority.schemaVersion !== 1) invalidCommand();
-	const users = denseArray(authority.users, maxAccessTargets).map(
+	const users = denseArray(authority.users, maxAuthorityUsers).map(
 		(userInput) => {
 			const user = exactObject(userInput, ["userId", "accountStatus"]);
 			if (

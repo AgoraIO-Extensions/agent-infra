@@ -1,7 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
 	parseRuntimeManifestLabelV1,
@@ -11,7 +7,6 @@ import type { ImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import type {
 	KubernetesObject,
 	V1Pod,
-	V1Secret,
 	V1StatefulSet,
 } from "@kubernetes/client-node";
 import {
@@ -46,113 +41,6 @@ export const workloadTestPolicy: KubernetesWorkloadPolicyV1 = {
 		"nginx.ingress.kubernetes.io/auth-url": "https://auth.example.test/verify",
 	},
 };
-
-export function runtimeTlsBindingFixture(agentId: string) {
-	const name = workloadResourceNameV1(agentId);
-	return {
-		agentId,
-		namespace: workloadTestPolicy.namespace,
-		serviceDnsNames: [
-			`${name}.${workloadTestPolicy.namespace}.svc`,
-			`${name}-probe.${workloadTestPolicy.namespace}.svc`,
-		],
-		serverSecretRef: { name: `runtime-tls-${name}` },
-	};
-}
-
-// Real ephemeral serving material for adapter tests; fake probes do not prove CA trust.
-const tlsMaterials = new Map<string, { cert: string; key: string }>();
-export function runtimeTlsSecretFixture(
-	name: string,
-	agentId = "agent-a",
-): V1Secret {
-	let material = tlsMaterials.get(agentId);
-	if (!material) {
-		const directory = mkdtempSync(join(tmpdir(), "runtime-tls-fixture-"));
-		try {
-			const dnsNames = runtimeTlsBindingFixture(agentId).serviceDnsNames;
-			writeFileSync(
-				join(directory, "ext.cnf"),
-				`basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=${dnsNames.map((dns) => `DNS:${dns}`).join(",")}\n`,
-			);
-			execFileSync(
-				"openssl",
-				[
-					"req",
-					"-x509",
-					"-newkey",
-					"rsa:2048",
-					"-nodes",
-					"-days",
-					"2",
-					"-subj",
-					"/CN=fixture-ca",
-					"-keyout",
-					"ca.key",
-					"-out",
-					"ca.crt",
-				],
-				{ cwd: directory, stdio: "ignore" },
-			);
-			execFileSync(
-				"openssl",
-				[
-					"req",
-					"-newkey",
-					"rsa:2048",
-					"-nodes",
-					"-subj",
-					"/CN=fixture-leaf",
-					"-keyout",
-					"tls.key",
-					"-out",
-					"tls.csr",
-				],
-				{ cwd: directory, stdio: "ignore" },
-			);
-			execFileSync(
-				"openssl",
-				[
-					"x509",
-					"-req",
-					"-in",
-					"tls.csr",
-					"-CA",
-					"ca.crt",
-					"-CAkey",
-					"ca.key",
-					"-CAcreateserial",
-					"-days",
-					"2",
-					"-extfile",
-					"ext.cnf",
-					"-out",
-					"tls.crt",
-				],
-				{ cwd: directory, stdio: "ignore" },
-			);
-			material = {
-				cert:
-					readFileSync(join(directory, "tls.crt"), "utf8") +
-					readFileSync(join(directory, "ca.crt"), "utf8"),
-				key: readFileSync(join(directory, "tls.key"), "utf8"),
-			};
-		} finally {
-			rmSync(directory, { recursive: true, force: true });
-		}
-		tlsMaterials.set(agentId, material);
-	}
-	return {
-		apiVersion: "v1",
-		kind: "Secret",
-		metadata: { name, namespace: workloadTestPolicy.namespace },
-		type: "kubernetes.io/tls",
-		data: {
-			"tls.crt": Buffer.from(material.cert).toString("base64"),
-			"tls.key": Buffer.from(material.key).toString("base64"),
-		},
-	};
-}
 
 export function workloadRegistryFixture(
 	manifest: unknown = {

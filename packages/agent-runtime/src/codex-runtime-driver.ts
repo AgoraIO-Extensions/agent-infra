@@ -179,8 +179,15 @@ export interface CodexInstalledSkillDescriptorV1 {
 	};
 }
 
+import {
+	StandardMcpClient,
+	type StandardMcpClientOptions,
+	standardMcpDigest,
+} from "./standard-mcp-client.js";
+
 export interface CodexRuntimeDriverOptions {
 	readonly installedSkill?: CodexInstalledSkillDescriptorV1;
+	readonly standardConnectionClient?: StandardMcpClientOptions;
 	/** Deployment-owned. Private execution still requires a verified native barrier. */
 	readonly nativeLane?: "official-model-only" | "private-callback";
 	readonly path: string;
@@ -358,6 +365,26 @@ interface CodexConnectionRecoveryPass {
 	completed: boolean;
 }
 
+interface CodexStandardMcpCall {
+	threadId: string;
+	turnId: string;
+	callId: string;
+	toolAlias: string;
+	fingerprint: string;
+	operationRef: string;
+	attemptRef: string;
+	phase: "intent" | "started" | "completed" | "failed" | "unknown";
+	held?: true;
+	rpcRequestId?: string | number;
+	requestDigest?: string;
+}
+
+function standardCallsHeld(journal: CodexEventJournal | undefined) {
+	return Object.values(journal?.standardMcpCalls ?? {}).some(
+		(call) => call.held || call.phase === "unknown",
+	);
+}
+
 interface CodexEventJournal {
 	nativeTurnId: string;
 	connectionRecovery?: CodexConnectionRecoveryPass;
@@ -366,6 +393,7 @@ interface CodexEventJournal {
 	acknowledgedCursor?: string;
 	externalActionsBlocked?: true;
 	nativeToolAttempts?: Record<string, CodexNativeToolAttempt>;
+	standardMcpCalls?: Record<string, CodexStandardMcpCall>;
 	nativeSources?: Record<string, CodexNativeSourceRecord>;
 	nativeCompletionStatus?: "completed" | "failed" | "cancelled";
 	events: CodexJournalEvent[];
@@ -405,6 +433,11 @@ interface CodexSession {
 	requiredRuntime?: CodexRuntimeRequirements;
 	threadId?: string;
 	historyMode?: "paginated";
+	standardMcp?: {
+		configFingerprint: string;
+		source: { ref: string; revision: string };
+		toolsFingerprint: string;
+	};
 	activeExecutionId?: string;
 	acceptanceUncertainOperationKey?: string;
 	eventSequence?: number;
@@ -764,6 +797,7 @@ function isCodexEventJournal(
 			"acknowledgedCursor",
 			"externalActionsBlocked",
 			"nativeToolAttempts",
+			"standardMcpCalls",
 			"nativeSources",
 			"nativeCompletionStatus",
 			"events",
@@ -820,6 +854,55 @@ function isCodexEventJournal(
 			value.events.some(
 				(event) => event.cursor === value.acknowledgedCursor,
 			)) &&
+		(value.standardMcpCalls === undefined ||
+			(isPlainRecord(value.standardMcpCalls) &&
+				Object.keys(value.standardMcpCalls).length <= 1024 &&
+				Object.entries(value.standardMcpCalls).every(([key, call]) => {
+					if (
+						!isPlainRecord(call) ||
+						!hasOnlyKeys(call, [
+							"threadId",
+							"turnId",
+							"callId",
+							"toolAlias",
+							"fingerprint",
+							"operationRef",
+							"attemptRef",
+							"phase",
+							"held",
+							"rpcRequestId",
+							"requestDigest",
+						]) ||
+						![
+							"threadId",
+							"turnId",
+							"callId",
+							"toolAlias",
+							"operationRef",
+							"attemptRef",
+						].every((field) => nonEmptyString(call[field])) ||
+						call.turnId !== nativeTurnId ||
+						key !==
+							standardMcpDigest([call.threadId, call.turnId, call.callId]) ||
+						typeof call.fingerprint !== "string" ||
+						!/^[a-f0-9]{64}$/.test(call.fingerprint) ||
+						(call.held !== undefined && call.held !== true) ||
+						(call.requestDigest !== undefined &&
+							(typeof call.requestDigest !== "string" ||
+								!/^[a-f0-9]{64}$/.test(call.requestDigest))) ||
+						(call.rpcRequestId !== undefined &&
+							!isJsonRpcRequestId(call.rpcRequestId))
+					)
+						return false;
+					const fact = latestOperationAttemptFacts(
+						value.events as CodexJournalEvent[],
+					).find(
+						(fact) =>
+							fact.operationRef === call.operationRef &&
+							fact.attemptRef === call.attemptRef,
+					);
+					return fact?.kind === "tool" && fact.phase === call.phase;
+				}))) &&
 		consistentOperationFacts(value.events)
 	);
 }
@@ -1370,6 +1453,7 @@ function isCodexSession(
 			"requiredRuntime",
 			"threadId",
 			"historyMode",
+			"standardMcp",
 			"activeExecutionId",
 			"acceptanceUncertainOperationKey",
 			"eventSequence",
@@ -1386,6 +1470,21 @@ function isCodexSession(
 			!isCodexRuntimeRequirements(value.requiredRuntime)) ||
 		(value.threadId !== undefined && !nonEmptyString(value.threadId)) ||
 		(value.historyMode !== undefined && value.historyMode !== "paginated") ||
+		(value.standardMcp !== undefined &&
+			(!isPlainRecord(value.standardMcp) ||
+				!hasOnlyKeys(value.standardMcp, [
+					"configFingerprint",
+					"source",
+					"toolsFingerprint",
+				]) ||
+				typeof value.standardMcp.configFingerprint !== "string" ||
+				!/^[a-f0-9]{64}$/.test(value.standardMcp.configFingerprint) ||
+				typeof value.standardMcp.toolsFingerprint !== "string" ||
+				!/^[a-f0-9]{64}$/.test(value.standardMcp.toolsFingerprint) ||
+				!isPlainRecord(value.standardMcp.source) ||
+				!hasOnlyKeys(value.standardMcp.source, ["ref", "revision"]) ||
+				!nonEmptyString(value.standardMcp.source.ref) ||
+				!nonEmptyString(value.standardMcp.source.revision))) ||
 		(value.activeExecutionId !== undefined &&
 			!nonEmptyString(value.activeExecutionId)) ||
 		(value.acceptanceUncertainOperationKey !== undefined &&
@@ -2484,7 +2583,18 @@ function parseNativeCommandStatus(value: unknown, threadId: string) {
 	protocolInvalid();
 }
 
+type StandardToolReply = {
+	contentItems: { type: "inputText"; text: string }[];
+	success: boolean;
+	beforeDelivery: () => Promise<() => void>;
+};
+
 class CodexRpc {
+	private readonly serverAbort = new AbortController();
+	private readonly standardRequests = new Map<
+		string | number,
+		{ fingerprint: string; promise: Promise<StandardToolReply> }
+	>();
 	private readonly pending = new Map<number, PendingRequest>();
 	private readonly consuming: Promise<void>;
 	private nextRequestId = 1;
@@ -2494,6 +2604,10 @@ class CodexRpc {
 		private readonly bridge: CodexAppServerTransport,
 		private readonly onNotification: CodexNotificationHandler,
 		private readonly onFailure?: () => void,
+		private readonly onStandardTool?: (
+			params: unknown,
+			signal: AbortSignal,
+		) => Promise<StandardToolReply>,
 	) {
 		this.consuming = this.consume();
 	}
@@ -2639,6 +2753,48 @@ class CodexRpc {
 				this.fail(protocolInvalidError());
 				return;
 			}
+			if (frame.method === "item/tool/call" && this.onStandardTool) {
+				if (
+					!hasOnlyKeys(frame, ["id", "jsonrpc", "method", "params"]) ||
+					(frame.jsonrpc !== undefined && frame.jsonrpc !== "2.0")
+				) {
+					this.fail(protocolInvalidError());
+					return;
+				}
+				const fingerprint = standardMcpDigest(frame.params);
+				let request = this.standardRequests.get(frame.id);
+				if (request && request.fingerprint !== fingerprint) {
+					this.fail(protocolInvalidError());
+					return;
+				}
+				if (!request) {
+					if (this.standardRequests.size >= 1024) {
+						this.fail(unavailableError());
+						return;
+					}
+					request = {
+						fingerprint,
+						promise: this.onStandardTool(frame.params, this.serverAbort.signal),
+					};
+					this.standardRequests.set(frame.id, request);
+				}
+				const id = frame.id;
+				void request.promise
+					.then(async (result) => {
+						const guard = await result.beforeDelivery();
+						guard();
+						if (!this.failed)
+							await this.bridge.send({
+								id,
+								result: {
+									contentItems: result.contentItems,
+									success: result.success,
+								},
+							});
+					})
+					.catch(() => this.fail(unavailableError()));
+				return;
+			}
 			this.denyDelegatedToolRequest(frame.id);
 			return;
 		}
@@ -2731,6 +2887,7 @@ class CodexRpc {
 	private fail(error = unavailableError()) {
 		if (this.failed) return;
 		this.failed = true;
+		this.serverAbort.abort();
 		this.onFailure?.();
 		void this.bridge.close?.().catch(() => {});
 		for (const pending of this.pending.values()) pending.reject(error);
@@ -2852,6 +3009,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly recoveryLaunch?: typeof runCodexConnectionRecovery,
 		private readonly recoveryDirectory?: string,
 		private readonly recoveryLaunchPath?: string,
+		private readonly standardConnectionOptions?: StandardMcpClientOptions,
 	) {}
 
 	private readonly connectionRecoveries = new Map<
@@ -3658,12 +3816,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					if (cached === rpc) {
 						this.conversationRpcs.delete(key);
 						this.revokeConnectionClient(key);
+						this.revokeStandardMcpClients(key);
 						this.revokeModelConversation?.(this.modelConversationKey(key));
 					}
 				}
 				const cached = this.rpcsByTransport.get(bridge);
 				if (cached?.rpc === rpc) this.rpcsByTransport.delete(bridge);
 			},
+			this.standardConnectionOptions
+				? (params, signal) =>
+						this.handleStandardMcpTool(conversationKey, params, signal)
+				: undefined,
 		);
 		try {
 			// Every native process is admitted on its own; a contained
@@ -3789,6 +3952,24 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			options.connectionClient
 		)
 			configurationInvalid();
+		if (
+			options.standardConnectionClient &&
+			(privateLane ||
+				!isPlainRecord(options.standardConnectionClient) ||
+				typeof options.standardConnectionClient.resolveInput !== "function" ||
+				!hasOnlyKeys(options.standardConnectionClient, [
+					"target",
+					"resolveInput",
+					"fetch",
+				]))
+		)
+			configurationInvalid();
+		const standardConnection = options.standardConnectionClient
+			? {
+					...options.standardConnectionClient,
+					target: structuredClone(options.standardConnectionClient.target),
+				}
+			: undefined;
 		const requiredRuntime = privateLane
 			? privateRuntimeRequirements
 			: officialRuntimeRequirements;
@@ -3835,7 +4016,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		const configuredCapabilities = {
 			...capabilities,
-			connection: connectionClient !== undefined,
+			connection:
+				connectionClient !== undefined || standardConnection !== undefined,
 		};
 		const {
 			configured: modelOptions,
@@ -4074,6 +4256,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				runCodexConnectionRecovery,
 				`${options.path}.native`,
 				options.launchPath,
+				standardConnection,
 			);
 		} catch (error) {
 			await modelTransport?.close().catch(() => {});
@@ -4081,6 +4264,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		try {
+			await driver.recoverStandardMcpCalls();
 			await driver.recoverUnconfirmedModelOperations();
 			assertInstalledSkillCurrent();
 			return driver;
@@ -4516,7 +4700,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.session(prepared.operation.nativeSessionRef).threadId !== undefined;
 		let session: CodexSession;
 		try {
-			session = await this.ensureThread(prepared.operation.nativeSessionRef);
+			session = await this.ensureThread(
+				prepared.operation.nativeSessionRef,
+				command.executionId,
+			);
 		} catch (error) {
 			if (hasPersistedThread) {
 				await this.discardPreparedResume(
@@ -4760,6 +4947,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private async executeInterruption(command: CodexInterruptionCommand) {
 		const prepared = await this.prepareInterruption(command);
+		const standard = this.standardMcpClients.get(
+			prepared.operation.nativeSessionRef,
+		);
+		if (standard) {
+			this.standardMcpClients.delete(prepared.operation.nativeSessionRef);
+			await standard.client.close();
+		}
 		await this.drainConnectionRecoveries(
 			command.nativeSessionRef,
 			command.kind === "stop" ? command.executionId : undefined,
@@ -4844,6 +5038,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			prepared.operation.nativeSessionRef,
 			command.executionId,
 		);
+		if (status === "unknown")
+			return this.unknown(command, prepared.operation.nativeSessionRef);
 		return this.resolveInterruption(
 			command,
 			prepared.operation.nativeSessionRef,
@@ -5002,7 +5198,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			operation.nativeSessionRef,
 			command.executionId,
 		);
-		if (status === "running") return { state: "unknown" };
+		if (status === "running" || status === "unknown")
+			return { state: "unknown" };
 		await Promise.all(turns.map((turn) => this.cancelModelTurn?.(turn)));
 		return {
 			state: "found",
@@ -5015,6 +5212,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	async getStatus(nativeSessionRef: string, executionId: string) {
+		const original = this.session(nativeSessionRef);
+		const active = ownRecordValue(original.executions, executionId);
+		if (
+			active &&
+			(this.heldStandardExecutions.has(executionId) ||
+				standardCallsHeld(original.journals?.[active.nativeTurnId]))
+		)
+			return "unknown";
 		const status = await this.restoreExecutionStatus(
 			nativeSessionRef,
 			executionId,
@@ -5277,7 +5482,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	async getCapabilities() {
 		return {
 			...capabilities,
-			connection: this.connectionClientOptions !== undefined,
+			connection:
+				this.connectionClientOptions !== undefined ||
+				this.standardConnectionOptions !== undefined,
 		};
 	}
 
@@ -5358,6 +5565,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			// Keep all records in this version. Existing afterCursor replay must
 			// remain exact even for cursors older than the confirmed watermark.
 		});
+		this.notifyEventStream(this.eventStreamKey(nativeSessionRef, executionId));
 	}
 
 	async subscribeEvents(
@@ -5439,6 +5647,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		await this.drainConnectionRecoveries();
 		for (const client of this.connectionClients.values()) client.close();
 		this.connectionClients.clear();
+		await Promise.allSettled(
+			[...this.standardMcpClients.values()].map((entry) =>
+				entry.client.close(),
+			),
+		);
+		this.standardMcpClients.clear();
+		this.standardMcpReplies.clear();
 		await this.drainNativeCallbacks();
 		const opening = [...this.inFlightConversationRpcs.values()];
 		this.inFlightConversationRpcs.clear();
@@ -6957,6 +7172,553 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		);
 	}
 
+	private readonly heldStandardExecutions = new Set<string>();
+
+	private readonly standardMcpClients = new Map<
+		string,
+		{ executionId: string; client: StandardMcpClient }
+	>();
+	private readonly standardMcpReplies = new Map<
+		string,
+		{ fingerprint: string; promise: Promise<StandardToolReply> }
+	>();
+
+	private revokeStandardMcpClients(conversationKey: string) {
+		for (const [ref, entry] of this.standardMcpClients) {
+			const session = this.readState().sessions[ref];
+			if (session && codexConversationKey(session) === conversationKey) {
+				this.standardMcpClients.delete(ref);
+				void entry.client.close();
+			}
+		}
+	}
+
+	private async standardMcpClientFor(
+		nativeSessionRef: string,
+		executionId: string,
+	) {
+		const options = this.standardConnectionOptions;
+		if (!options || this.closed) unavailable();
+		const session = this.session(nativeSessionRef);
+		if (
+			this.heldStandardExecutions.has(executionId) ||
+			Object.values(session.journals ?? {}).some(standardCallsHeld)
+		)
+			unavailable();
+		if (
+			session.threadId &&
+			(!session.standardMcp ||
+				session.standardMcp.configFingerprint !==
+					options.target.configFingerprint ||
+				!isDeepStrictEqual(session.standardMcp.source, options.target.source))
+		)
+			unavailable();
+		const cached = this.standardMcpClients.get(nativeSessionRef);
+		if (cached?.executionId === executionId) return cached.client;
+		if (cached) {
+			this.standardMcpClients.delete(nativeSessionRef);
+			await cached.client.close();
+		}
+		const client = await StandardMcpClient.open(
+			options,
+			{
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				executionId,
+			},
+			new AbortController().signal,
+		);
+		if (
+			this.closed ||
+			(session.threadId &&
+				session.standardMcp?.toolsFingerprint !== client.fingerprint)
+		) {
+			await client.close();
+			unavailable();
+		}
+		this.standardMcpClients.set(nativeSessionRef, { executionId, client });
+		return client;
+	}
+
+	private async awaitStandardMcpAck(
+		nativeSessionRef: string,
+		executionId: string,
+		cursor: string,
+		signal: AbortSignal,
+	) {
+		const key = this.eventStreamKey(nativeSessionRef, executionId);
+		const deadline = Date.now() + rpcRequestTimeoutMs;
+		while (true) {
+			signal.throwIfAborted();
+			if (this.closed || Date.now() >= deadline) unavailable();
+			const waiter = this.waitForEvent(key, signal);
+			try {
+				const session = this.session(nativeSessionRef);
+				const execution = ownRecordValue(session.executions, executionId);
+				const journal = execution && session.journals?.[execution.nativeTurnId];
+				if (!journal) unavailable();
+				const index = journal.events.findIndex(
+					(event) => event.cursor === cursor,
+				);
+				const confirmed = journal.events.findIndex(
+					(event) => event.cursor === journal.acknowledgedCursor,
+				);
+				if (index >= 0 && confirmed >= index) return;
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				try {
+					await Promise.race([
+						waiter.promise,
+						new Promise<never>((_, reject) => {
+							timer = setTimeout(
+								() => reject(unavailableError()),
+								Math.max(1, deadline - Date.now()),
+							);
+						}),
+					]);
+				} finally {
+					if (timer) clearTimeout(timer);
+				}
+			} finally {
+				waiter.cancel();
+			}
+		}
+	}
+
+	private async recoverStandardMcpCalls() {
+		const needsRecovery = Object.values(this.readState().sessions).some(
+			(session) =>
+				Object.values(session.journals ?? {}).some(
+					(journal) =>
+						!journal.events.some((event) => event.type === "completed") &&
+						Object.keys(journal.standardMcpCalls ?? {}).length,
+				),
+		);
+		if (!needsRecovery) return;
+		await this.update((state) => {
+			for (const session of Object.values(state.sessions))
+				for (const journal of Object.values(session.journals ?? {})) {
+					if (journal.events.some((event) => event.type === "completed"))
+						continue;
+					for (const call of Object.values(journal.standardMcpCalls ?? {})) {
+						// A local pipe write is not proof that native consumed a result.
+						// Keep confirmed MCP facts, but do not resume an unsealed business
+						// Turn after losing its protected response cache.
+						call.held = true;
+						journal.externalActionsBlocked = true;
+						if (call.phase === "intent" || call.phase === "started") {
+							const previous = latestOperationAttemptFacts(journal.events).find(
+								(fact) =>
+									fact.operationRef === call.operationRef &&
+									fact.attemptRef === call.attemptRef,
+							);
+							if (!previous) stateInvalid();
+							this.appendOperationFact(session, journal, {
+								...previous,
+								phase: "unknown",
+								failureCode: "recovery_unconfirmed",
+								finishedAt: new Date().toISOString(),
+							});
+							call.phase = "unknown";
+						}
+					}
+				}
+		});
+	}
+
+	private handleStandardMcpTool(
+		conversationKey: string,
+		params: unknown,
+		signal: AbortSignal,
+	): Promise<StandardToolReply> {
+		if (
+			!isPlainRecord(params) ||
+			!hasOnlyKeys(params, [
+				"threadId",
+				"turnId",
+				"callId",
+				"namespace",
+				"tool",
+				"arguments",
+			]) ||
+			!nonEmptyString(params.threadId) ||
+			!nonEmptyString(params.turnId) ||
+			!nonEmptyString(params.callId) ||
+			params.namespace !== "connection" ||
+			!nonEmptyString(params.tool) ||
+			!isPlainRecord(params.arguments)
+		)
+			return Promise.reject(protocolInvalidError());
+		const input = structuredClone(params) as {
+			threadId: string;
+			turnId: string;
+			callId: string;
+			namespace: string;
+			tool: string;
+			arguments: Record<string, unknown>;
+		};
+		const key = standardMcpDigest([
+			conversationKey,
+			input.threadId,
+			input.turnId,
+			input.callId,
+		]);
+		const fingerprint = standardMcpDigest([
+			input.namespace,
+			input.tool,
+			input.arguments,
+		]);
+		const existing = this.standardMcpReplies.get(key);
+		if (existing) {
+			if (existing.fingerprint !== fingerprint)
+				return Promise.reject(protocolInvalidError());
+			return existing.promise;
+		}
+		if (this.standardMcpReplies.size >= 1024)
+			return Promise.reject(unavailableError());
+		const promise = this.performStandardMcpTool(
+			conversationKey,
+			input,
+			fingerprint,
+			signal,
+		);
+		this.standardMcpReplies.set(key, { fingerprint, promise });
+		return promise;
+	}
+
+	private async performStandardMcpTool(
+		conversationKey: string,
+		input: {
+			threadId: string;
+			turnId: string;
+			callId: string;
+			tool: string;
+			arguments: Record<string, unknown>;
+		},
+		fingerprint: string,
+		signal: AbortSignal,
+	): Promise<StandardToolReply> {
+		const ownedConversation = this.sharesOneNativeTransport()
+			? undefined
+			: conversationKey;
+		const callKey = standardMcpDigest([
+			input.threadId,
+			input.turnId,
+			input.callId,
+		]);
+		const locate = (state: CodexDriverState) => {
+			const resolved = this.resolveNativeSourceJournal(
+				state,
+				ownedConversation,
+				input.threadId,
+				input.turnId,
+			);
+			if (!resolved?.execution || resolved.sourceRecord) unavailable();
+			return { ...resolved, execution: resolved.execution };
+		};
+		const initial = locate(this.readState());
+		const cached = this.standardMcpClients.get(initial.nativeSessionRef);
+		if (
+			!cached ||
+			cached.executionId !== initial.execution.executionId ||
+			!cached.client.validateArguments(input.tool, input.arguments)
+		)
+			unavailable();
+		const client = cached.client;
+		const prepared = await this.update((state) => {
+			signal.throwIfAborted();
+			const resolved = locate(state);
+			this.assertExecutionConfiguration(
+				state,
+				resolved.session,
+				resolved.execution,
+			);
+			this.assertJournalOpen(resolved.journal);
+			if (
+				this.closed ||
+				resolved.journal.externalActionsBlocked ||
+				resolved.journal.nativeCompletionStatus ||
+				resolved.session.activeExecutionId !== resolved.execution.executionId ||
+				resolved.execution.status !== "running" ||
+				this.hasInterruption(
+					resolved.nativeSessionRef,
+					resolved.execution.executionId,
+					state,
+				)
+			)
+				unavailable();
+			const old = resolved.journal.standardMcpCalls?.[callKey];
+			if (old) {
+				old.held = true;
+				resolved.journal.externalActionsBlocked = true;
+				return { ...resolved, repeated: true as const, call: old, cursor: "" };
+			}
+			if (Object.keys(resolved.journal.standardMcpCalls ?? {}).length >= 1024)
+				unavailable();
+			const call: CodexStandardMcpCall = {
+				threadId: input.threadId,
+				turnId: input.turnId,
+				callId: input.callId,
+				toolAlias: input.tool,
+				fingerprint,
+				operationRef: randomUUID(),
+				attemptRef: randomUUID(),
+				phase: "intent",
+			};
+			resolved.journal.standardMcpCalls ??= {};
+			resolved.journal.standardMcpCalls[callKey] = call;
+			this.appendOperationFact(resolved.session, resolved.journal, {
+				kind: "tool",
+				operationRef: call.operationRef,
+				attemptRef: call.attemptRef,
+				phase: "intent",
+				toolId: `mcp:${standardMcpDigest(client.toolName(input.tool)).slice(0, 32)}`,
+				connection: {
+					serviceRef: client.serviceRef,
+					verification: "unverified",
+					reason: "record_unavailable",
+				},
+			});
+			return {
+				...resolved,
+				repeated: false as const,
+				call,
+				cursor: resolved.journal.events.at(-1)?.cursor ?? "",
+			};
+		});
+		const streamKey = this.eventStreamKey(
+			prepared.nativeSessionRef,
+			prepared.execution.executionId,
+		);
+		this.notifyEventStream(streamKey);
+		const action: RuntimeExternalActionAuthorization = {
+			nativeSessionRef: prepared.nativeSessionRef,
+			executionId: prepared.execution.executionId,
+			runtimeOperationId: prepared.execution.executionId,
+			operationRef: prepared.call.operationRef,
+			attemptRef: prepared.call.attemptRef,
+			kind: "tool",
+		};
+		let deliveryGuard: (() => void) | undefined;
+		const checkDriverCurrent = () => {
+			signal.throwIfAborted();
+			const state = this.readState();
+			const resolved = locate(state);
+			const operation = this.executionOperation(
+				state,
+				resolved.session,
+				resolved.execution,
+			);
+			if (
+				this.closed ||
+				this.heldStandardExecutions.has(prepared.execution.executionId) ||
+				resolved.nativeSessionRef !== prepared.nativeSessionRef ||
+				resolved.execution.executionId !== prepared.execution.executionId ||
+				resolved.journal.externalActionsBlocked ||
+				resolved.journal.nativeCompletionStatus ||
+				resolved.execution.status !== "running" ||
+				resolved.session.activeExecutionId !== prepared.execution.executionId ||
+				operation.admissionPending ||
+				operation.admissionRecoveryPending ||
+				this.hasInterruption(
+					prepared.nativeSessionRef,
+					prepared.execution.executionId,
+					state,
+				)
+			)
+				unavailable();
+			this.assertExecutionConfiguration(
+				state,
+				resolved.session,
+				resolved.execution,
+			);
+		};
+		const assertCurrent = async () => {
+			checkDriverCurrent();
+			if (!this.authorizeExternalAction) unavailable();
+			const authorized = await this.authorizeExternalAction(action);
+			if (typeof authorized?.revalidate !== "function") unavailable();
+			const revalidate = () => {
+				const guarded: unknown = authorized.revalidate?.();
+				if (guarded !== undefined) {
+					void Promise.resolve(guarded).catch(() => {});
+					unavailable();
+				}
+				checkDriverCurrent();
+			};
+			revalidate();
+			deliveryGuard = revalidate;
+			return revalidate;
+		};
+		const save = async (
+			phase: "started" | "completed" | "failed" | "unknown",
+			details: Partial<RuntimeOperationFactV2> = {},
+			requestId?: string | number,
+			requestDigest?: string,
+		) => {
+			const cursor = await this.update((state) => {
+				const resolved = locate(state);
+				const call = resolved.journal.standardMcpCalls?.[callKey];
+				if (!call || call.fingerprint !== fingerprint) stateInvalid();
+				const previous = latestOperationAttemptFacts(
+					resolved.journal.events,
+				).find(
+					(fact) =>
+						fact.operationRef === call.operationRef &&
+						fact.attemptRef === call.attemptRef,
+				);
+				if (previous?.kind !== "tool") stateInvalid();
+				if (previous.phase !== "intent" && previous.phase !== "started")
+					return resolved.journal.events.at(-1)?.cursor ?? "";
+				this.appendOperationFact(resolved.session, resolved.journal, {
+					...previous,
+					...details,
+					kind: "tool",
+					phase,
+				} as RuntimeOperationFactV2);
+				call.phase = phase;
+				if (requestId !== undefined) call.rpcRequestId = requestId;
+				if (requestDigest !== undefined) call.requestDigest = requestDigest;
+				if (phase === "unknown") {
+					call.held = true;
+					resolved.journal.externalActionsBlocked = true;
+				}
+				return resolved.journal.events.at(-1)?.cursor ?? "";
+			});
+			this.notifyEventStream(streamKey);
+			return cursor;
+		};
+		const block = () => {
+			this.heldStandardExecutions.add(prepared.execution.executionId);
+			this.revokeModelConversation?.(
+				this.modelConversationKey(conversationKey),
+			);
+		};
+
+		try {
+			if (prepared.repeated) unavailable();
+			(await assertCurrent())();
+			await this.awaitStandardMcpAck(
+				prepared.nativeSessionRef,
+				prepared.execution.executionId,
+				prepared.cursor,
+				signal,
+			);
+			(await assertCurrent())();
+			const result = await client.call(
+				input.tool,
+				input.arguments,
+				{
+					assertCurrent,
+					block,
+					confirm: async (result) => {
+						const cursor = await save(result.phase, {
+							finishedAt: new Date().toISOString(),
+							...(result.phase === "unknown"
+								? { failureCode: "response_incomplete" as const }
+								: result.phase === "failed"
+									? { failureCode: "operation_failed" as const }
+									: {}),
+						});
+						await this.awaitStandardMcpAck(
+							prepared.nativeSessionRef,
+							prepared.execution.executionId,
+							cursor,
+							signal,
+						);
+					},
+					prepare: async (request) => {
+						await this.update((state) => {
+							const resolved = locate(state);
+							const call = resolved.journal.standardMcpCalls?.[callKey];
+							if (
+								!call ||
+								call.fingerprint !== fingerprint ||
+								call.phase !== "intent" ||
+								call.rpcRequestId !== undefined ||
+								call.requestDigest !== undefined
+							)
+								stateInvalid();
+							call.rpcRequestId = request.rpcRequestId;
+							call.requestDigest = request.requestDigest;
+						});
+					},
+					started: async (request) => {
+						await save(
+							"started",
+							{ startedAt: request.startedAt },
+							request.rpcRequestId,
+							request.requestDigest,
+						);
+					},
+				},
+				signal,
+			);
+			if (result.phase === "unknown") unavailable();
+			// Final authority check is not a new action permit. The completed tool
+			// fact must remain readable even if result delivery is now denied.
+			await client.assertCurrent(signal);
+			const current = locate(this.readState());
+			if (
+				current.journal.externalActionsBlocked ||
+				this.hasInterruption(
+					prepared.nativeSessionRef,
+					prepared.execution.executionId,
+				) ||
+				current.execution.status !== "running"
+			)
+				unavailable();
+			return {
+				contentItems: result.contentItems,
+				success: result.success,
+				beforeDelivery: async () => {
+					try {
+						await client.assertCurrent(signal);
+						if (!deliveryGuard) unavailable();
+						deliveryGuard();
+						return () => {
+							try {
+								deliveryGuard?.();
+							} catch {
+								block();
+								throw unavailableError();
+							}
+						};
+					} catch {
+						block();
+						await client.close();
+						await this.update((state) => {
+							const resolved = locate(state);
+							resolved.journal.externalActionsBlocked = true;
+							const call = resolved.journal.standardMcpCalls?.[callKey];
+							if (call) call.held = true;
+						}).catch(() => {});
+						throw unavailableError();
+					}
+				},
+			};
+		} catch {
+			block();
+			// Fence before disconnect: native would otherwise turn lost client
+			// responses into ordinary errors and continue inference.
+			this.revokeModelConversation?.(
+				this.modelConversationKey(conversationKey),
+			);
+			await this.update((state) => {
+				const resolved = locate(state);
+				resolved.journal.externalActionsBlocked = true;
+				const call = resolved.journal.standardMcpCalls?.[callKey];
+				if (call) call.held = true;
+			}).catch(() => {});
+			await save("unknown", {
+				failureCode: "recovery_unconfirmed",
+				finishedAt: new Date().toISOString(),
+			}).catch(() => {});
+			await client.close();
+			throw unavailableError();
+		}
+	}
+
 	private async prepareModelRequest(
 		context: CodexModelRequestContext,
 		signal: AbortSignal,
@@ -6996,6 +7758,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.assertJournalOpen(journal);
 			if (
 				journal.externalActionsBlocked ||
+				this.heldStandardExecutions.has(execution.executionId) ||
 				(sourceRecord
 					? sourceRecord.terminal !== undefined
 					: journal.nativeCompletionStatus !== undefined) ||
@@ -7133,6 +7896,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				!execution ||
 				!journal ||
 				journal.externalActionsBlocked ||
+				this.heldStandardExecutions.has(execution.executionId) ||
 				(sourceRecord
 					? sourceRecord.terminal !== undefined
 					: journal.nativeCompletionStatus !== undefined) ||
@@ -7199,6 +7963,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		return {
+			...(this.standardConnectionOptions
+				? {
+						allowsClientTool: (name: string, namespace: string | undefined) => {
+							const client = this.standardMcpClients.get(
+								prepared.nativeSessionRef,
+							);
+							return (
+								namespace === "connection" &&
+								client?.executionId === prepared.executionId &&
+								client.client.toolName(name) !== undefined
+							);
+						},
+					}
+				: {}),
 			...(authorization?.relayKey === undefined
 				? {}
 				: { credential: authorization.relayKey }),
@@ -7693,6 +8471,24 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const existing = journal.events.find((event) => event.type === "completed");
 		if (existing) {
 			if (existing.payload.status !== status) protocolInvalid();
+			return false;
+		}
+		if (
+			Object.values(journal.standardMcpCalls ?? {}).some(
+				(call) =>
+					call.held || ["intent", "started", "unknown"].includes(call.phase),
+			)
+		)
+			return false;
+		// A transient failed hold write must not let a later native terminal
+		// release the original execution. Persist the already active memory fence.
+		const original = Object.values(session.executions).find(
+			(execution) => execution.nativeTurnId === journal.nativeTurnId,
+		);
+		if (original && this.heldStandardExecutions.has(original.executionId)) {
+			journal.externalActionsBlocked = true;
+			for (const call of Object.values(journal.standardMcpCalls ?? {}))
+				call.held = true;
 			return false;
 		}
 		// Native supports background processes across inference Turns. Keep the
@@ -8621,15 +9417,33 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return session;
 	}
 
-	private async ensureThread(nativeSessionRef: string) {
+	private async ensureThread(nativeSessionRef: string, executionId: string) {
 		const session = this.session(nativeSessionRef);
+		if (
+			this.heldStandardExecutions.has(executionId) ||
+			Object.values(session.journals ?? {}).some(standardCallsHeld)
+		)
+			unavailable();
+		// A persisted Thread retains the tool snapshot with which it started.
+		// Deployment of an installation cannot add tools to a model-only Thread.
+		if (session.threadId && !session.standardMcp) {
+			await this.resumeSession(nativeSessionRef);
+			return this.session(nativeSessionRef);
+		}
+		if (session.standardMcp && !this.standardConnectionOptions) unavailable();
+		const standard = this.standardConnectionOptions
+			? await this.standardMcpClientFor(nativeSessionRef, executionId)
+			: undefined;
 		if (session.threadId) {
 			await this.resumeSession(nativeSessionRef);
 			return this.session(nativeSessionRef);
 		}
 		const threadId = await (await this.rpc(nativeSessionRef)).request(
 			"thread/start",
-			{ historyMode: "paginated" },
+			{
+				historyMode: "paginated",
+				...(standard ? { dynamicTools: standard.toolDefinitions } : {}),
+			},
 			(value) => {
 				const thread = isPlainRecord(value) ? value.thread : undefined;
 				if (
@@ -8656,6 +9470,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			stored.threadId = threadId;
 			stored.historyMode = "paginated";
+			if (standard && this.standardConnectionOptions)
+				stored.standardMcp = {
+					configFingerprint:
+						this.standardConnectionOptions.target.configFingerprint,
+					source: structuredClone(this.standardConnectionOptions.target.source),
+					toolsFingerprint: standard.fingerprint,
+				};
 		});
 		this.resumedSessions.add(nativeSessionRef);
 		return this.session(nativeSessionRef);
