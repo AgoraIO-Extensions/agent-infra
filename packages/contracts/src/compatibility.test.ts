@@ -149,8 +149,14 @@ function restorePreAgentApiManagementContract(value: {
 	])
 		delete value.components.schemas[name];
 	for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
-		const capabilities =
-			value.components.schemas[name]?.properties?.capabilities;
+		const schema = value.components.schemas[name] as
+			| {
+					properties?: {
+						capabilities?: { properties?: Record<string, unknown> };
+					};
+			  }
+			| undefined;
+		const capabilities = schema?.properties?.capabilities;
 		if (capabilities?.properties) delete capabilities.properties.skills;
 	}
 	const audit = value.components.schemas.PlatformAuditProjectionV2 as
