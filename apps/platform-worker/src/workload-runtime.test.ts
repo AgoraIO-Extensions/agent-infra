@@ -2852,11 +2852,24 @@ describe("assembled Workload Runtime contracts", () => {
 						},
 					);
 					expect(response.status).toBe(200);
+					const capabilities = RuntimeCapabilitiesResponseV1Schema.parse(
+						await response.json(),
+					).capabilities;
 					return {
 						core: "passed",
-						capabilities: RuntimeCapabilitiesResponseV1Schema.parse(
-							await response.json(),
-						).capabilities,
+						capabilities: {
+							...capabilities,
+							skills: [
+								{
+									schemaVersion: 1 as const,
+									name: "workspace-summary",
+									version: "1.0.0",
+									manifestSha256: "a".repeat(64),
+									packageDigest: "b".repeat(64),
+									readOnly: true as const,
+								},
+							],
+						},
 					};
 				},
 			});
@@ -2867,6 +2880,7 @@ describe("assembled Workload Runtime contracts", () => {
 				attachments: true,
 				connection: false,
 				resultFiles: false,
+				skills: [{ name: "workspace-summary", packageDigest: "b".repeat(64) }],
 			});
 			expect(
 				[...f.resources.values()].filter(
