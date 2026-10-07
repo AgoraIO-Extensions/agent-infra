@@ -123,9 +123,7 @@ export const skillHubInstallations = platformSchema.table(
 		id: text("id").primaryKey(),
 		principalType: varchar("principal_type", { length: 16 }).notNull(),
 		principalId: text("principal_id").notNull(),
-		skillVersionId: text("skill_version_id")
-			.notNull()
-			.references(() => skillHubVersions.id),
+		skillVersionId: text("skill_version_id").notNull(),
 		state: varchar("state", { length: 16 }).notNull(),
 		needUpgrade: boolean("need_upgrade").default(false).notNull(),
 		installedAt: timestamp("installed_at", { withTimezone: true }).notNull(),
@@ -151,6 +149,11 @@ export const skillHubInstallations = platformSchema.table(
 			table.principalType,
 			table.principalId,
 		),
+		foreignKey({
+			columns: [table.skillVersionId],
+			foreignColumns: [skillHubVersions.id],
+			name: "skill_hub_installation_skill_version_fk",
+		}),
 	],
 );
 
@@ -161,9 +164,7 @@ export const skillHubAgentBindings = platformSchema.table(
 			.notNull()
 			.references(() => agents.id),
 		agentVersion: varchar("agent_version", { length: 128 }).notNull(),
-		skillVersionId: text("skill_version_id")
-			.notNull()
-			.references(() => skillHubVersions.id),
+		skillVersionId: text("skill_version_id").notNull(),
 		grant: jsonb("grant").notNull(),
 		syncRevision: bigint("sync_revision", { mode: "number" })
 			.default(1)
@@ -195,5 +196,10 @@ export const skillHubAgentBindings = platformSchema.table(
 			table.agentId,
 			table.agentVersion,
 		),
+		foreignKey({
+			columns: [table.skillVersionId],
+			foreignColumns: [skillHubVersions.id],
+			name: "skill_hub_agent_binding_skill_version_fk",
+		}),
 	],
 );

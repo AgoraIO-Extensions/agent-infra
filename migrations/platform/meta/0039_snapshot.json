@@ -1,5 +1,5 @@
 {
-  "id": "60de0086-a8d8-4c0b-bf92-cb6725943e1c",
+  "id": "89569e0a-95f8-42c8-b383-2696471caf35",
   "prevId": "2ddbc3fa-49eb-4a4b-911b-fe28ff98005c",
   "version": "7",
   "dialect": "postgresql",
@@ -4619,8 +4619,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "skill_hub_agent_bindings_skill_version_id_skill_hub_versions_id_fk": {
-          "name": "skill_hub_agent_bindings_skill_version_id_skill_hub_versions_id_fk",
+        "skill_hub_agent_binding_skill_version_fk": {
+          "name": "skill_hub_agent_binding_skill_version_fk",
           "tableFrom": "skill_hub_agent_bindings",
           "tableTo": "skill_hub_versions",
           "schemaTo": "platform",
@@ -4771,8 +4771,8 @@
         }
       },
       "foreignKeys": {
-        "skill_hub_installations_skill_version_id_skill_hub_versions_id_fk": {
-          "name": "skill_hub_installations_skill_version_id_skill_hub_versions_id_fk",
+        "skill_hub_installation_skill_version_fk": {
+          "name": "skill_hub_installation_skill_version_fk",
           "tableFrom": "skill_hub_installations",
           "tableTo": "skill_hub_versions",
           "schemaTo": "platform",
