@@ -375,6 +375,13 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 }
 
 export {
+	type BrowserActionOperationControllerRecordV1,
+	type BrowserActionOperationControllerRequestV1,
+	type BrowserActionOperationInputV1,
+	type BrowserActionOperationResultV1,
+	createBrowserActionOperationAdapterV1,
+} from "./browser-action-operation.js";
+export {
 	type BrowserFileExecutionBindingV1,
 	type BrowserFileGrantBridgeV1,
 	createBrowserFileGrantBridgeV1,
