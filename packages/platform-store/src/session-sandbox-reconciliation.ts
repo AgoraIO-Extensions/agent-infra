@@ -241,10 +241,9 @@ async function lockedContext(
 			Number(agent.current_configuration_revision) ||
 		deployment.desiredState !== "running" ||
 		deployment.runtimeManifest.interactionMode !== "platform-adapter" ||
-		// Two distinct revisions (#1480): the Workload reconciliation revision
-		// binds the Sandbox to the deployment it is prepared from, while the
-		// management lifecycle revision proves that deployment is still current.
-		deployment.workloadRevision !== state.verifiedRevision ||
+		// Two distinct revisions (#1480): the deployment is read from the verified
+		// state itself (a rollback keeps its original Workload revision), and the
+		// management lifecycle revision proves that state is still current.
 		state.sourceLifecycleRevision !== management.workloadRevision ||
 		verified.executionCapacity?.resourceConfigurationHash !==
 			policy.resourceConfigurationHash

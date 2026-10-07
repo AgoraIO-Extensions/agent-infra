@@ -629,8 +629,6 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				target.sourceLifecycleRevision = 6;
 				target.fence = 6;
 				target.revision = 6;
-				// A re-verified Workload records its own revision as verified (#1480).
-				target.verifiedRevision = 6;
 				target.candidate.deployment.workloadRevision = 6;
 				target.candidate.deployment.fence = 6;
 				target.verified.deployment.workloadRevision = 6;
@@ -1177,8 +1175,6 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				target.sourceLifecycleRevision = 6;
 				target.fence = 6;
 				target.revision = 6;
-				// A re-verified Workload records its own revision as verified (#1480).
-				target.verifiedRevision = 6;
 				target.candidate.deployment.workloadRevision = 6;
 				target.candidate.deployment.fence = 6;
 				target.verified.deployment.workloadRevision = 6;
@@ -1397,9 +1393,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			});
 			const before = await unchanged();
 			for (const stale of [
-				// Deployment is not the verified one.
-				{ verified: 8, deployment: 7, lifecycle: 4, management: 4 },
-				// Lifecycle source is behind the current management lifecycle.
+				// Lifecycle source is behind or ahead of the current management lifecycle.
 				{ verified: 7, deployment: 7, lifecycle: 3, management: 4 },
 				{ verified: 7, deployment: 7, lifecycle: 4, management: 5 },
 			]) {
@@ -1407,8 +1401,10 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				expect(await store.claimSandboxReconciliation(request)).toBeNull();
 				expect(await unchanged()).toEqual(before);
 			}
+			// A rollback re-promotes the earlier deployment (Workload revision 7)
+			// under a later reconciliation counter; it is still the verified one.
 			await setRevisions({
-				verified: 7,
+				verified: 12,
 				deployment: 7,
 				lifecycle: 4,
 				management: 4,
@@ -1449,16 +1445,16 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				policy: { workloadRevision: 7 },
 			});
 			// The persisted binding still fails closed for a different verified
-			// Workload or a stale lifecycle.
+			// deployment or a stale lifecycle.
 			await setRevisions({
-				verified: 9,
+				verified: 13,
 				deployment: 9,
 				lifecycle: 4,
 				management: 4,
 			});
 			await expect(read()).resolves.toBeNull();
 			await setRevisions({
-				verified: 7,
+				verified: 12,
 				deployment: 7,
 				lifecycle: 4,
 				management: 5,

@@ -14,9 +14,10 @@ export interface SessionSandboxPolicyV1 {
 export interface SessionSandboxVerifiedPolicyV1 extends SessionSandboxPolicyV1 {
 	readonly configurationRevision: number;
 	/**
-	 * Workload reconciliation revision of the verified deployment the Sandbox
-	 * was prepared from (`deployment.workloadRevision`, equal to
-	 * `verifiedRevision`). Not the management lifecycle revision (#1480).
+	 * Workload revision of the verified deployment the Sandbox was prepared
+	 * from (`deployment.workloadRevision`). A rollback re-promotes a deployment
+	 * with its original value, so this is neither the reconciliation counter
+	 * (`verifiedRevision`) nor the management lifecycle revision (#1480).
 	 */
 	readonly workloadRevision: number;
 	readonly managementFence: number;

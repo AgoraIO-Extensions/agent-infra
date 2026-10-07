@@ -3296,8 +3296,8 @@ it("routes a ready Session after configuration re-verification advances only the
 	const ready = f.state;
 	if (ready?.phase !== "ready") throw Error("Expected re-verified fixture");
 	const deployment = validateAgentWorkloadDesiredV1(ready.candidate.deployment);
-	// The two counters diverge once a configuration change is re-verified.
-	expect(deployment.workloadRevision).toBe(ready.verifiedRevision);
+	// The Workload revision diverges from the lifecycle revision once a
+	// configuration change is re-verified.
 	expect(deployment.workloadRevision).not.toBe(ready.sourceLifecycleRevision);
 	const sandboxId = "00000000-0000-4000-8000-000000001480";
 	const sandbox = {
