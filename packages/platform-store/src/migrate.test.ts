@@ -2038,7 +2038,11 @@ describe("published Relay authority migration", () => {
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			const after = await history();
 			expect(after.slice(0, before.length)).toEqual(before);
-			expect(after).toHaveLength(before.length + 8);
+			expect(after).toHaveLength(
+				before.length +
+					migrations.filter((migration) => migration.folderMillis >= relayWhen)
+						.length,
+			);
 			expect(after.slice(before.length)).toEqual(
 				migrations
 					.filter((migration) => migration.folderMillis >= relayWhen)
@@ -2180,7 +2184,11 @@ describe("published Relay authority migration", () => {
 		]);
 		const after = await history();
 		expect(after.slice(0, before.length)).toEqual(before);
-		expect(after).toHaveLength(before.length + 8);
+		expect(after).toHaveLength(
+			before.length +
+				migrations.filter((migration) => migration.folderMillis >= relayWhen)
+					.length,
+		);
 		const catalog = await relayCatalog();
 		await builtStore.migratePlatformDatabase({ databaseUrl });
 		expect(await history()).toEqual(after);
