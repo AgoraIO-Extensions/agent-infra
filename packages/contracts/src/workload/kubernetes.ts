@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SkillWorkloadProjectionV1Schema } from "../skill-hub.ts";
+
 import {
 	WorkloadFenceV1Schema,
 	WorkloadOpaqueIdV1Schema,
@@ -185,7 +185,6 @@ const desiredWorkloadBaseV1Schema = z.strictObject({
 	serviceAccount: WorkloadServiceAccountV1Schema,
 	networkPolicy: WorkloadNetworkPolicyV1Schema,
 	secretRefs: z.array(KubernetesSecretReferenceV1Schema),
-	skills: z.array(SkillWorkloadProjectionV1Schema).max(32).optional(),
 });
 
 const platformAdapterWorkloadBaseV1Schema = desiredWorkloadBaseV1Schema.extend({
@@ -337,7 +336,6 @@ const appliedWorkloadBaseV1Schema = z.strictObject({
 	persistentVolumeRef: WorkloadOpaqueIdV1Schema,
 	networkPolicyRef: WorkloadOpaqueIdV1Schema,
 	secretRefs: z.array(KubernetesSecretReferenceV1Schema),
-	skills: z.array(SkillWorkloadProjectionV1Schema).max(32).optional(),
 });
 
 const readyWorkloadAppliedV1Schema = appliedWorkloadBaseV1Schema.extend({
@@ -637,10 +635,7 @@ export function validateAgentWorkloadDesiredV1(
 			(secretRef) =>
 				secretRef.agentId !== desired.agentId ||
 				secretRef.configRevision > desired.configRevision,
-		) ||
-		(desired.skills ?? []).some((skill) => skill.agentId !== desired.agentId) ||
-		new Set((desired.skills ?? []).map((skill) => skill.targetPath)).size !==
-			(desired.skills ?? []).length
+		)
 	) {
 		throw new Error("Desired Workload correlation mismatch");
 	}
@@ -688,9 +683,7 @@ export function validateAgentWorkloadAppliedV1(
 		(applied.route.state === "open" &&
 			(applied.route.workloadUid !== applied.workloadUid ||
 				applied.route.workloadRevision !== applied.workloadRevision)) ||
-		JSON.stringify(appliedSecrets) !== JSON.stringify(desiredSecrets) ||
-		JSON.stringify(applied.skills ?? []) !==
-			JSON.stringify(desired.skills ?? [])
+		JSON.stringify(appliedSecrets) !== JSON.stringify(desiredSecrets)
 	) {
 		throw new Error("Applied Workload correlation mismatch");
 	}
