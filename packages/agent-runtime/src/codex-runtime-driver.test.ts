@@ -413,7 +413,11 @@ function generationCancelRequest(
 	};
 }
 
-function driverOptions(path: string, configVersion = "synthetic-config-1") {
+function driverOptions(
+	path: string,
+	configVersion = "synthetic-config-1",
+	installedSkill?: CodexInstalledSkillDescriptorV1,
+) {
 	return {
 		nativeLane: "private-callback" as const,
 		path,
@@ -432,6 +436,7 @@ function driverOptions(path: string, configVersion = "synthetic-config-1") {
 				reasoningLevels: ["low"],
 			},
 		],
+		...(installedSkill ? { installedSkill } : {}),
 	};
 }
 
@@ -487,9 +492,10 @@ function openDriver(
 	bridge: TestCodexBridge,
 	onOpen?: (options: CodexAppServerBridgeOptions) => void,
 	configVersion?: string,
+	installedSkill?: CodexInstalledSkillDescriptorV1,
 ) {
 	return openCodexRuntimeDriverForTest(
-		driverOptions(path, configVersion),
+		driverOptions(path, configVersion, installedSkill),
 		async (options) => {
 			onOpen?.(options);
 			return bridge;
@@ -1236,6 +1242,28 @@ afterEach(async () => {
 });
 
 describe("Codex installed Skill descriptor receipt", () => {
+	it("publishes verified installed Skill metadata in runtime capabilities", async () => {
+		const descriptor = installedSkillDescriptor();
+		const driver = await openDriver(
+			join(await runtimeDirectory(), "driver.json"),
+			new TestCodexBridge(),
+			undefined,
+			descriptor.deployment.configVersion,
+			descriptor,
+		);
+		drivers.push(driver);
+		expect(await driver.getCapabilities()).toMatchObject({
+			skills: [
+				{
+					name: "workspace-summary",
+					version: "0.1.0-candidate.1",
+					manifestSha256: descriptor.manifestSha256,
+					packageDigest: descriptor.manifest.packageDigest.sha256,
+					readOnly: true,
+				},
+			],
+		});
+	});
 	it.each([false, true])(
 		"preserves original lazy admission and bridge configuration (installed=%s)",
 		async (installed) => {

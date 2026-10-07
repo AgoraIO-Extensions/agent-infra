@@ -25,6 +25,7 @@ import {
 import {
 	RuntimeCapabilitiesV1Schema,
 	RuntimeEventV1Schema,
+	RuntimeSkillCapabilityV1Schema,
 	RuntimeStatusV1Schema,
 } from "./events.ts";
 import {
@@ -75,6 +76,7 @@ export const RuntimeHostV1SchemaDefinitions = {
 
 export const RuntimeEventV1SchemaDefinitions = {
 	RuntimeCapabilitiesV1: RuntimeCapabilitiesV1Schema,
+	RuntimeSkillCapabilityV1: RuntimeSkillCapabilityV1Schema,
 	RuntimeEventV1: RuntimeEventV1Schema,
 	RuntimeStatusV1: RuntimeStatusV1Schema,
 };
