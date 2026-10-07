@@ -77,7 +77,7 @@ export async function verifyCustomBaseImage(image, { published = false, contextP
 	try {
 		const metadataPath = join(temp, "child.json");
 		docker([
-			"buildx", "build", "--load", "--provenance=false", "--sbom=false",
+			"build", "--provenance=false", "--sbom=false",
 			"--platform", platform,
 			"--tag", childReference,
 			"--build-arg", `BASE_IMAGE=${image}`, "--metadata-file", metadataPath,
