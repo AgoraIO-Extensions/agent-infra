@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	decideSessionSandboxDrainObservationV1,
 	type SessionSandboxDeletionProgressV1,
@@ -79,19 +79,77 @@ export type SessionSandboxResourceSetV1 = readonly [
 
 export type SessionSandboxPrincipalV1 = TaskPrincipalV1;
 
-const labels = (allocation: SessionSandboxAllocationV1) => ({
-	"agent-infra.agora.io/agent-id": allocation.agentId,
-	"agent-infra.agora.io/session-id": allocation.sessionId,
-	"agent-infra.agora.io/sandbox-id": allocation.sandboxId,
-	"agent-infra.agora.io/generation": String(allocation.generation),
-});
+interface SessionSandboxLabelIdentityV1 {
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sandboxId: string;
+	readonly generation: number;
+}
+
+const labelValuePattern = /^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
+const boundedRef = (prefix: string, value: string) =>
+	`${prefix}-${createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
+
+/**
+ * Selector labels for one Session Sandbox. Kubernetes label values are at most
+ * 63 characters, so Agent and Session IDs are bounded hashes; the exact IDs live
+ * in {@link sessionSandboxIdentityAnnotationsV1}. The key differs from the
+ * Agent Workload's `agent-infra.agora.io/agent` so Agent selectors never match.
+ */
+export function sessionSandboxLabelsV1(
+	identity: SessionSandboxLabelIdentityV1,
+): Readonly<Record<string, string>> {
+	const labels = {
+		"agent-infra.agora.io/agent-ref": boundedRef("agent", identity.agentId),
+		"agent-infra.agora.io/session-ref": boundedRef(
+			"session",
+			identity.sessionId,
+		),
+		"agent-infra.agora.io/sandbox-id": identity.sandboxId,
+		"agent-infra.agora.io/generation": String(identity.generation),
+	};
+	if (Object.values(labels).some((value) => !labelValuePattern.test(value)))
+		throw new WorkloadKubernetesError("policy");
+	return labels;
+}
+
+/** Exact identity verified alongside the bounded selector labels. */
+export function sessionSandboxIdentityAnnotationsV1(
+	identity: Pick<SessionSandboxLabelIdentityV1, "agentId" | "sessionId">,
+): Readonly<Record<string, string>> {
+	return {
+		"agent-infra.agora.io/agent-id": identity.agentId,
+		"agent-infra.agora.io/session-id": identity.sessionId,
+	};
+}
+
+/** True when an object carries this Sandbox's labels and exact identity. */
+export function hasSessionSandboxIdentityV1(
+	object: KubernetesObject | null | undefined,
+	identity: SessionSandboxLabelIdentityV1,
+): boolean {
+	const labels = object?.metadata?.labels ?? {};
+	const annotations = object?.metadata?.annotations ?? {};
+	return (
+		Object.entries(sessionSandboxLabelsV1(identity)).every(
+			([key, value]) => labels[key] === value,
+		) &&
+		Object.entries(sessionSandboxIdentityAnnotationsV1(identity)).every(
+			([key, value]) => annotations[key] === value,
+		)
+	);
+}
+
+const labels = (allocation: SessionSandboxAllocationV1) =>
+	sessionSandboxLabelsV1(allocation);
 
 function metadata(allocation: SessionSandboxAllocationV1, name: string) {
 	return {
 		namespace: allocation.namespace,
 		name,
-		labels: labels(allocation),
+		labels: { ...labels(allocation) },
 		annotations: {
+			...sessionSandboxIdentityAnnotationsV1(allocation),
 			"agent-infra.agora.io/fence": String(allocation.resourceFence),
 			"agent-infra.agora.io/managed": "session-sandbox-v1",
 		},
@@ -168,7 +226,7 @@ export function sessionSandboxResourcesV1(
 			? allocation.connectionConsumerSnapshot
 			: undefined,
 	);
-	const resourceLabels = labels(allocation);
+	const resourceLabels = { ...labels(allocation) };
 	const account: V1ServiceAccount = {
 		apiVersion: "v1",
 		kind: "ServiceAccount",
@@ -472,6 +530,7 @@ function owned(
 		Object.entries(expectedLabels).every(
 			([key, value]) => currentLabels[key] === value,
 		) &&
+		hasSessionSandboxIdentityV1(current, allocation) &&
 		currentFence === String(allocation.resourceFence)
 	);
 }
@@ -960,8 +1019,9 @@ export function createSessionSandboxWorkloadAdapterV1(options: {
 					metadata: {
 						namespace: prior.namespace,
 						name: prior.name,
-						labels: labels(allocation),
+						labels: { ...labels(allocation) },
 						annotations: {
+							...sessionSandboxIdentityAnnotationsV1(allocation),
 							"agent-infra.agora.io/fence": String(allocation.resourceFence),
 							"agent-infra.agora.io/managed": "session-sandbox-v1",
 						},

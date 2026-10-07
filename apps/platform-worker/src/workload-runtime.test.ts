@@ -64,6 +64,10 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import {
+	sessionSandboxIdentityAnnotationsV1,
+	sessionSandboxLabelsV1,
+} from "./session-workload-adapter.js";
+import {
 	createWorkloadRuntimeV1,
 	isWorkloadExecutionCapacityCurrentV1,
 	resolveWorkloadExecutionCapacityV1,
@@ -3359,12 +3363,7 @@ it.each(["unchanged", "uid", "selector", "port", "fence"] as const)(
 			resourceVersion: "7",
 			...(kind === "Pod" ? { controllerUid: "StatefulSet-source" } : {}),
 		}));
-		const sourceLabels = {
-			"agent-infra.agora.io/agent-id": sandbox.agentId,
-			"agent-infra.agora.io/session-id": sandbox.sessionId,
-			"agent-infra.agora.io/sandbox-id": sandbox.sandboxId,
-			"agent-infra.agora.io/generation": String(sandbox.generation),
-		};
+		const sourceLabels = { ...sessionSandboxLabelsV1(sandbox) };
 		const liveService = await f.client.create<V1Service>({
 			apiVersion: "v1",
 			kind: "Service",
@@ -3373,6 +3372,7 @@ it.each(["unchanged", "uid", "selector", "port", "fence"] as const)(
 				namespace: sourcePolicy.namespace,
 				labels: sourceLabels,
 				annotations: {
+					...sessionSandboxIdentityAnnotationsV1(sandbox),
 					"agent-infra.agora.io/managed": "session-sandbox-v1",
 					"agent-infra.agora.io/fence": "1",
 				},
@@ -3399,7 +3399,7 @@ it.each(["unchanged", "uid", "selector", "port", "fence"] as const)(
 		if (drift === "selector" && liveService.spec)
 			liveService.spec.selector = {
 				...sourceLabels,
-				"agent-infra.agora.io/session-id": "another-session",
+				"agent-infra.agora.io/session-ref": "session-another",
 			};
 		if (drift === "port" && liveService.spec?.ports?.[0])
 			liveService.spec.ports[0].targetPort = 9090;

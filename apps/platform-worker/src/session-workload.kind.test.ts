@@ -20,6 +20,7 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
+import { sessionSandboxLabelsV1 } from "./session-workload-adapter.js";
 import {
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
@@ -273,13 +274,17 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 						identity.kind as Parameters<typeof client.read>[0],
 						identity.name,
 					);
-					expect(resource?.metadata?.labels).toMatchObject({
+					expect(resource?.metadata?.labels).toMatchObject(
+						sessionSandboxLabelsV1({
+							agentId: row.agent_id,
+							sessionId: row.conversation_id,
+							sandboxId: row.sandbox_id,
+							generation: Number(row.session_generation),
+						}),
+					);
+					expect(resource?.metadata?.annotations).toMatchObject({
 						"agent-infra.agora.io/agent-id": row.agent_id,
 						"agent-infra.agora.io/session-id": row.conversation_id,
-						"agent-infra.agora.io/sandbox-id": row.sandbox_id,
-						"agent-infra.agora.io/generation": String(row.session_generation),
-					});
-					expect(resource?.metadata?.annotations).toMatchObject({
 						"agent-infra.agora.io/managed": "session-sandbox-v1",
 						"agent-infra.agora.io/fence": String(row.resource_fence),
 					});

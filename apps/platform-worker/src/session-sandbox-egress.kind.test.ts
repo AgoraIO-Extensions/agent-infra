@@ -13,6 +13,7 @@ import {
 	createSessionSandboxEgressV1,
 	type SessionSandboxEgressBindingV1,
 } from "./session-sandbox-egress.js";
+import { sessionSandboxLabelsV1 } from "./session-workload-adapter.js";
 
 const kubeconfig = process.env.SANDBOX_EGRESS_KIND_KUBECONFIG;
 const image = process.env.SANDBOX_EGRESS_KIND_IMAGE;
@@ -153,12 +154,7 @@ it.skipIf(!kubeconfig || !image || !evidence)(
 				const labels = {
 					endpoint: name,
 					...(allocation
-						? {
-								"agent-infra.agora.io/agent-id": allocation.agentId,
-								"agent-infra.agora.io/session-id": allocation.sessionId,
-								"agent-infra.agora.io/sandbox-id": allocation.sandboxId,
-								"agent-infra.agora.io/generation": "1",
-							}
+						? sessionSandboxLabelsV1({ ...allocation, generation: 1 })
 						: {}),
 				};
 				const pod = create({

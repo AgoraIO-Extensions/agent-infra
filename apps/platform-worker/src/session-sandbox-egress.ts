@@ -6,6 +6,10 @@ import {
 } from "./kubernetes-client.js";
 import { matchesNetworkPolicySpec } from "./kubernetes-runtime-comparison.js";
 import {
+	sessionSandboxIdentityAnnotationsV1,
+	sessionSandboxLabelsV1,
+} from "./session-workload-adapter.js";
+import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
@@ -67,8 +71,11 @@ export function createSessionSandboxEgressV1(options: {
 		if (
 			value.schemaVersion !== 1 ||
 			value.namespace !== client.namespace ||
-			![value.agentId, value.sessionId, value.sandboxId].every(
-				(id) => typeof id === "string" && labelValue.test(id),
+			typeof value.sandboxId !== "string" ||
+			!labelValue.test(value.sandboxId) ||
+			// Exact IDs live in annotations; selector labels are bounded hashes.
+			![value.agentId, value.sessionId].every(
+				(id) => typeof id === "string" && id.length > 0 && id.length <= 256,
 			) ||
 			typeof value.principalId !== "string" ||
 			!value.principalId ||
@@ -87,12 +94,8 @@ export function createSessionSandboxEgressV1(options: {
 	}
 	function expected(value: SessionSandboxEgressBindingV1, revoked = false) {
 		assertValidBinding(value);
-		const labels = {
-			[`${prefix}agent-id`]: value.agentId,
-			[`${prefix}session-id`]: value.sessionId,
-			[`${prefix}sandbox-id`]: value.sandboxId,
-			[`${prefix}generation`]: String(value.generation),
-		};
+		// Must select exactly the Session Pod labels from the workload adapter.
+		const labels = { ...sessionSandboxLabelsV1(value) };
 		return {
 			apiVersion: "networking.k8s.io/v1",
 			kind: "NetworkPolicy",
@@ -101,6 +104,7 @@ export function createSessionSandboxEgressV1(options: {
 				name: `sandbox-egress-${createHash("sha256").update(value.sandboxId).digest("hex").slice(0, 40)}`,
 				labels,
 				annotations: {
+					...sessionSandboxIdentityAnnotationsV1(value),
 					[`${prefix}managed`]: "session-sandbox-egress-v1",
 					[`${prefix}principal-id`]: value.principalId,
 					[`${prefix}fence`]: String(value.fence),

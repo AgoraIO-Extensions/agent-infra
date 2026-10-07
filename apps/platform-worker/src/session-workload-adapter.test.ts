@@ -5,6 +5,7 @@ import type {
 	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
+	V1Service,
 } from "@kubernetes/client-node";
 import { describe, expect, it } from "vitest";
 import {
@@ -16,9 +17,11 @@ import type {
 	WorkerKubernetesClientV1,
 	WorkloadResourceKind,
 } from "./kubernetes-client.js";
+import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	createSessionSandboxWorkloadAdapterV1,
 	type SessionSandboxAllocationV1,
+	sessionSandboxLabelsV1,
 	sessionSandboxResourcesV1,
 } from "./session-workload-adapter.js";
 import { workloadEgressRulesV1 } from "./workload-network.js";
@@ -218,11 +221,12 @@ describe("session sandbox workload adapter", () => {
 			"Pod",
 		]);
 		for (const resource of resources) {
-			expect(resource.metadata?.labels).toMatchObject({
+			expect(resource.metadata?.labels).toEqual(
+				sessionSandboxLabelsV1(allocation),
+			);
+			expect(resource.metadata?.annotations).toMatchObject({
 				"agent-infra.agora.io/agent-id": "agent-a",
 				"agent-infra.agora.io/session-id": "session-a",
-				"agent-infra.agora.io/sandbox-id": "sandbox-a",
-				"agent-infra.agora.io/generation": "3",
 			});
 			expect(
 				resource.metadata?.annotations?.["agent-infra.agora.io/fence"],
@@ -369,6 +373,84 @@ describe("session sandbox workload adapter", () => {
 				guarded.apply(approved, before.resources),
 			).rejects.toMatchObject({ code: "conflict" });
 			expect(writes).toBe(0);
+		},
+	);
+
+	it("bounds selector labels for real platform Agent IDs (#1461)", () => {
+		const agentId = `agent_${"a9".repeat(32)}`;
+		const sandboxId = "d45cdac5-4766-40f7-976b-bac05dd9c1db";
+		const real = {
+			...allocation,
+			agentId,
+			sessionId: "d02d3ce7-0276-4f8b-8e83-64cd53b7533a",
+			sandboxId,
+			resourceName: `sandbox-${sandboxId}`,
+			workspaceScope: sandboxId,
+			podName: `sandbox-${sandboxId}`,
+			serviceName: `sandbox-${sandboxId}`,
+			serviceAccountName: `sandbox-${sandboxId}`,
+			pvcName: `sandbox-${sandboxId}`,
+			networkPolicyName: `sandbox-${sandboxId}`,
+		};
+		expect(agentId).toHaveLength(70);
+		const kubernetesLabelValue =
+			/^(?:[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$/;
+		for (const resource of sessionSandboxResourcesV1(real)) {
+			const selectors = [
+				resource.metadata?.labels ?? {},
+				(resource as V1Service).spec?.selector ?? {},
+				(resource as V1NetworkPolicy).spec?.podSelector?.matchLabels ?? {},
+			];
+			for (const selector of selectors)
+				for (const value of Object.values(selector))
+					expect(value).toMatch(kubernetesLabelValue);
+			expect(resource.metadata?.labels).toEqual({
+				"agent-infra.agora.io/agent-ref": workloadResourceNameV1(agentId),
+				"agent-infra.agora.io/session-ref": expect.stringMatching(
+					/^session-[a-f0-9]{32}$/,
+				),
+				"agent-infra.agora.io/sandbox-id": sandboxId,
+				"agent-infra.agora.io/generation": "3",
+			});
+			expect(resource.metadata?.annotations).toMatchObject({
+				"agent-infra.agora.io/agent-id": agentId,
+				"agent-infra.agora.io/session-id": real.sessionId,
+			});
+		}
+	});
+
+	it("is never selected by the Agent-level Workload selectors", () => {
+		const [, , , , pod] = sessionSandboxResourcesV1(allocation);
+		const podLabels = pod.metadata?.labels ?? {};
+		const agentSelector = {
+			"agent-infra.agora.io/agent": workloadResourceNameV1(allocation.agentId),
+		};
+		expect(
+			Object.entries(agentSelector).every(
+				([key, value]) => podLabels[key] === value,
+			),
+		).toBe(false);
+		expect(Object.hasOwn(podLabels, "agent-infra.agora.io/agent")).toBe(false);
+	});
+
+	it.each(["agent-infra.agora.io/agent-id", "agent-infra.agora.io/session-id"])(
+		"treats a same-label resource with a different exact %s as foreign",
+		async (annotation) => {
+			const client = api();
+			const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+			await adapter.apply(allocation);
+			const service = await client.read<V1Service>(
+				"Service",
+				allocation.serviceName,
+			);
+			if (!service?.metadata?.annotations) throw new Error("Missing Service");
+			service.metadata.annotations[annotation] = "colliding-identity";
+			await expect(adapter.apply(allocation)).rejects.toMatchObject({
+				code: "conflict",
+			});
+			await expect(adapter.observe(allocation)).resolves.toMatchObject({
+				status: "unknown",
+			});
 		},
 	);
 

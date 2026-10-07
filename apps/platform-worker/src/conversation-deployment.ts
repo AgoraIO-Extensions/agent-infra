@@ -18,6 +18,8 @@ import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
 import {
 	createSessionSandboxWorkloadAdapterV1,
 	type SessionSandboxAllocationV1,
+	sessionSandboxIdentityAnnotationsV1,
+	sessionSandboxLabelsV1,
 } from "./session-workload-adapter.js";
 import {
 	createWorkloadRuntimeV1,
@@ -139,14 +141,10 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					service.name,
 				);
 				input.signal.throwIfAborted();
-				const expectedLabels = {
-					"agent-infra.agora.io/agent-id": controlSource.sandbox.agentId,
-					"agent-infra.agora.io/session-id": controlSource.sandbox.sessionId,
-					"agent-infra.agora.io/sandbox-id": controlSource.sandbox.sandboxId,
-					"agent-infra.agora.io/generation": String(
-						controlSource.sandbox.generation,
-					),
-				};
+				const expectedLabels = sessionSandboxLabelsV1(controlSource.sandbox);
+				const expectedIdentity = sessionSandboxIdentityAnnotationsV1(
+					controlSource.sandbox,
+				);
 				const port = liveService?.spec?.ports?.[0];
 				if (
 					workload.client.namespace !== service.namespace ||
@@ -164,6 +162,10 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						([key, value]) =>
 							liveService.metadata?.labels?.[key] !== value ||
 							liveService.spec?.selector?.[key] !== value,
+					) ||
+					Object.entries(expectedIdentity).some(
+						([key, value]) =>
+							liveService.metadata?.annotations?.[key] !== value,
 					) ||
 					Object.keys(liveService.spec?.selector ?? {}).length !==
 						Object.keys(expectedLabels).length ||
@@ -244,14 +246,10 @@ export function createProductionConversationRuntimeResolverV2(options: {
 					service.name,
 				);
 				input.signal.throwIfAborted();
-				const expectedLabels = {
-					"agent-infra.agora.io/agent-id": sandboxResource.sandbox.agentId,
-					"agent-infra.agora.io/session-id": sandboxResource.sandbox.sessionId,
-					"agent-infra.agora.io/sandbox-id": sandboxResource.sandbox.sandboxId,
-					"agent-infra.agora.io/generation": String(
-						sandboxResource.sandbox.generation,
-					),
-				};
+				const expectedLabels = sessionSandboxLabelsV1(sandboxResource.sandbox);
+				const expectedIdentity = sessionSandboxIdentityAnnotationsV1(
+					sandboxResource.sandbox,
+				);
 				const livePort = liveService?.spec?.ports?.[0];
 				if (
 					!service.uid ||
@@ -268,6 +266,10 @@ export function createProductionConversationRuntimeResolverV2(options: {
 						([key, value]) =>
 							liveService.metadata?.labels?.[key] !== value ||
 							liveService.spec?.selector?.[key] !== value,
+					) ||
+					Object.entries(expectedIdentity).some(
+						([key, value]) =>
+							liveService.metadata?.annotations?.[key] !== value,
 					) ||
 					Object.keys(liveService.spec?.selector ?? {}).length !==
 						Object.keys(expectedLabels).length ||
