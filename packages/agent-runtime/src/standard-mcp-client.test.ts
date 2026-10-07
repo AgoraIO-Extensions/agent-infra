@@ -8,12 +8,45 @@ import {
 import {
 	StandardMcpClient,
 	validateStandardMcpInput,
+	validateStandardMcpInstallationMetadata,
 } from "./standard-mcp-client.js";
 
 const closes: (() => Promise<void>)[] = [];
 afterEach(async () => {
 	for (const close of closes.splice(0)) await close();
 	await closeStandardMcpFixtures();
+});
+
+it("validates installation without a scope and freezes the later authenticated scope", async () => {
+	const fixture = await standardMcpFixture();
+	const { token: _token, scope: immutableScope, ...fields } = fixture.input;
+	const scope = { ...immutableScope };
+	const metadata = { ...fields, agentId: reference.agentId };
+	expect(
+		validateStandardMcpInstallationMetadata(metadata, fixture.target),
+	).toEqual(metadata);
+	for (const forbidden of [{ token }, { scope }, { unexpected: true }])
+		expect(() =>
+			validateStandardMcpInstallationMetadata(
+				{ ...metadata, ...forbidden },
+				fixture.target,
+			),
+		).toThrow();
+	const original = validateStandardMcpInput(
+		{ ...fixture.input, scope },
+		reference,
+		fixture.target,
+	);
+	scope.executionId = "mutated-after-validation";
+	expect(original.scope.executionId).toBe(reference.executionId);
+	const opaque = { ...reference, agentId: "agent/原值" };
+	expect(
+		validateStandardMcpInput(
+			{ ...fixture.input, scope: opaque },
+			opaque,
+			fixture.target,
+		).scope.agentId,
+	).toBe(opaque.agentId);
 });
 
 it("uses actual standard initialize/discovery/call once without exporting credentials", async () => {
