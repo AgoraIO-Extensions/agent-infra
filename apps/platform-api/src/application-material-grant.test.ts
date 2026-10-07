@@ -67,8 +67,13 @@ beforeEach(async () => {
 			currentByUserId,
 		} as unknown as ReturnType<typeof createLdapIdentityDirectory>,
 		sessions: {
-			find: async () => ({ uid: admin.uid }),
+			find: async () => ({
+				uid: admin.uid,
+				expiresAt: Number.MAX_SAFE_INTEGER,
+				absoluteExpiresAt: Number.MAX_SAFE_INTEGER,
+			}),
 			create: async () => {},
+			renew: async () => true,
 			revoke: async () => {},
 			revokeUid: async () => {},
 		},

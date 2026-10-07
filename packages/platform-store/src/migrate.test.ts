@@ -1951,10 +1951,11 @@ describe("published Relay authority migration", () => {
 			35,
 			36,
 			37,
+			38,
 		]);
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 37,
-			tag: "0037_browser_session_principal",
+			idx: 38,
+			tag: "0038_browser_session_absolute_expiry",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2036,7 +2037,11 @@ describe("published Relay authority migration", () => {
 			await builtStore.migratePlatformDatabase({ databaseUrl });
 			const after = await history();
 			expect(after.slice(0, before.length)).toEqual(before);
-			expect(after).toHaveLength(before.length + 8);
+			expect(after).toHaveLength(
+				before.length +
+					migrations.filter((migration) => migration.folderMillis >= relayWhen)
+						.length,
+			);
 			expect(after.slice(before.length)).toEqual(
 				migrations
 					.filter((migration) => migration.folderMillis >= relayWhen)
@@ -2052,6 +2057,7 @@ describe("published Relay authority migration", () => {
 				columns:
 					kind === "original27"
 						? [
+								"browser_sessions:absolute_expires_at",
 								"browser_sessions:principal",
 								"conversation_executions:execution_source",
 								"conversation_executions:original_operation_digest",
@@ -2068,6 +2074,7 @@ describe("published Relay authority migration", () => {
 								"conversations:principal_type",
 							]
 						: [
+								"browser_sessions:absolute_expires_at",
 								"browser_sessions:principal",
 								"conversation_executions:principal_type",
 								"conversation_executions:sandbox_id",
@@ -2094,11 +2101,15 @@ describe("published Relay authority migration", () => {
 				indexes:
 					kind === "original27"
 						? [
+								"browser_sessions:browser_sessions_absolute_expires_at",
 								"conversation_executions:conversation_execution_agent_wait_idx",
 								"conversation_executions:conversation_execution_task_wait_order_unique",
 								"conversations:conversation_principal_binding_unique",
 							]
-						: ["conversations:conversation_principal_binding_unique"],
+						: [
+								"browser_sessions:browser_sessions_absolute_expires_at",
+								"conversations:conversation_principal_binding_unique",
+							],
 				enums:
 					kind === "original27"
 						? ["conversation_execution_status:waiting"]
@@ -2178,7 +2189,11 @@ describe("published Relay authority migration", () => {
 		]);
 		const after = await history();
 		expect(after.slice(0, before.length)).toEqual(before);
-		expect(after).toHaveLength(before.length + 8);
+		expect(after).toHaveLength(
+			before.length +
+				migrations.filter((migration) => migration.folderMillis >= relayWhen)
+					.length,
+		);
 		const catalog = await relayCatalog();
 		await builtStore.migratePlatformDatabase({ databaseUrl });
 		expect(await history()).toEqual(after);
