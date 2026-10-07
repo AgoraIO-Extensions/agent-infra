@@ -14,11 +14,28 @@ import {
 	createBrowserActionOperationAdapterV1,
 } from "./browser-action-operation.js";
 
-type ActionRequest = BrowserActionOperationControllerRequestV1;
+type ActionRequest = Omit<
+	BrowserActionOperationControllerRequestV1,
+	| "agentId"
+	| "conversationId"
+	| "executionId"
+	| "capabilityVersion"
+	| "pageRevision"
+	| "sessionGeneration"
+	| "resourceFence"
+	| "actionId"
+	| "operationRef"
+	| "attemptRef"
+>;
 type ActionRecord = BrowserActionOperationControllerRecordV1;
 
 const page = { pageId: "page-1", pageRevision: 2 } as const;
 const binding = {
+	agentId: "agent-1",
+	conversationId: "conversation-1",
+	executionId: "execution-1",
+	capabilityVersion: 5,
+	pageRevision: page.pageRevision,
 	sessionGeneration: 3,
 	resourceFence: 4,
 } as const;
@@ -51,7 +68,9 @@ function acceptedEvent(
 function setup(
 	options: {
 		readonly persist?: ConversationEventUseCaseV1["persist"];
-		readonly executeAction?: (request: ActionRequest) => Promise<ActionRecord>;
+		readonly executeAction?: (
+			request: BrowserActionOperationControllerRequestV1,
+		) => Promise<ActionRecord>;
 	} = {},
 ) {
 	const phases: string[] = [];
@@ -64,7 +83,9 @@ function setup(
 		});
 	const executeAction =
 		options.executeAction ??
-		(async (request: ActionRequest): Promise<ActionRecord> => ({
+		(async (
+			request: BrowserActionOperationControllerRequestV1,
+		): Promise<ActionRecord> => ({
 			actionId: request.actionId ?? "missing-action-id",
 			status: "completed",
 			page: request.page,
@@ -76,12 +97,13 @@ function setup(
 		controller,
 	});
 	const input: BrowserActionOperationInputV1 = {
-		conversationId: "conversation-1",
-		executionId: "execution-1",
+		agentId: binding.agentId,
+		conversationId: binding.conversationId,
+		executionId: binding.executionId,
 		sessionGeneration: binding.sessionGeneration,
 		deliveryFence: binding.resourceFence,
 		controllerBinding: binding,
-		capabilityVersion: 5,
+		capabilityVersion: binding.capabilityVersion,
 		page,
 		actionId: "action-1",
 		attempt,
@@ -107,6 +129,13 @@ describe("Browser action operation adapter", () => {
 		});
 		expect(state.phases).toEqual(["intent", "started", "completed"]);
 		expect(state.controller.executeAction).toHaveBeenCalledWith({
+			agentId: binding.agentId,
+			conversationId: binding.conversationId,
+			executionId: binding.executionId,
+			capabilityVersion: binding.capabilityVersion,
+			pageRevision: binding.pageRevision,
+			sessionGeneration: binding.sessionGeneration,
+			resourceFence: binding.resourceFence,
 			...action,
 			actionId: "action-1",
 			operationRef: attempt.operationRef,
@@ -114,17 +143,28 @@ describe("Browser action operation adapter", () => {
 		});
 	});
 
-	it("fails before browser I/O when the controller binding is stale", async () => {
-		const state = setup();
-		await expect(
-			state.adapter.execute({
-				...state.input,
-				controllerBinding: { sessionGeneration: 4, resourceFence: 4 },
-			}),
-		).rejects.toThrow("BROWSER_ACTION_CONTROLLER_BINDING_MISMATCH");
-		expect(state.controller.executeAction).not.toHaveBeenCalled();
-		expect(state.phases).toEqual([]);
-	});
+	it.each([
+		["agent", { agentId: "other-agent" }],
+		["conversation", { conversationId: "other-conversation" }],
+		["execution", { executionId: "other-execution" }],
+		["capability", { capabilityVersion: 6 }],
+		["page", { pageRevision: 3 }],
+		["generation", { sessionGeneration: 4 }],
+		["fence", { resourceFence: 5 }],
+	] as const)(
+		"fails before browser I/O on a stale %s binding",
+		async (_kind, change) => {
+			const state = setup();
+			await expect(
+				state.adapter.execute({
+					...state.input,
+					controllerBinding: { ...binding, ...change },
+				}),
+			).rejects.toThrow("BROWSER_ACTION_CONTROLLER_BINDING_MISMATCH");
+			expect(state.controller.executeAction).not.toHaveBeenCalled();
+			expect(state.phases).toEqual([]);
+		},
+	);
 
 	it.each([
 		["rejected", "request_rejected"],
