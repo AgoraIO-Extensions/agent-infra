@@ -173,6 +173,16 @@ describe("Browser result file event adapter", () => {
 		expect(persist).not.toHaveBeenCalled();
 	});
 
+	it("rejects an unknown event decision instead of returning a completed file", async () => {
+		const unknown = setup({
+			outcome: "unknown",
+		} as unknown as ConversationEventDecisionV1);
+
+		await expect(unknown.adapter.persist(unknown.input)).rejects.toThrow(
+			"BROWSER_RESULT_EVENT_UNAVAILABLE",
+		);
+	});
+
 	it("keeps stale or unavailable event persistence from becoming a completed result", async () => {
 		const stale = { outcome: "stale" as const };
 		const { adapter, input } = setup(stale);

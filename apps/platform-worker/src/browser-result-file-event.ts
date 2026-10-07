@@ -83,8 +83,11 @@ function confirmedResultFile(value: unknown): FileProjectionV1 {
 function confirmedResultEvent(
 	value: PersistedRuntimeConversationEventV1,
 	file: FileProjectionV1,
+	binding: BrowserResultFileEventBindingV1,
 ): PersistedRuntimeConversationEventV1 {
 	if (
+		value.conversationId !== binding.conversationId ||
+		value.executionId !== binding.executionId ||
 		value.event.type !== "result.file" ||
 		value.event.fileId !== file.fileId ||
 		value.event.name !== file.descriptor.name ||
@@ -153,10 +156,13 @@ export function createBrowserResultFileEventAdapterV1(input: {
 			if (decision.outcome === "stale") {
 				throw new Error("BROWSER_RESULT_EVENT_STALE");
 			}
+			if (decision.outcome !== "accepted" && decision.outcome !== "replayed") {
+				throw new Error("BROWSER_RESULT_EVENT_UNAVAILABLE");
+			}
 			return {
 				outcome: decision.outcome,
 				file,
-				event: confirmedResultEvent(decision.event, file),
+				event: confirmedResultEvent(decision.event, file, request.binding),
 			};
 		},
 	};
