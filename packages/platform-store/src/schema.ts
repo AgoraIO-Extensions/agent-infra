@@ -45,6 +45,12 @@ import {
 } from "./schema-operations";
 import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 import { browserSessions } from "./schema-sessions";
+import {
+	skillHubAgentBindings,
+	skillHubInstallations,
+	skillHubSkills,
+	skillHubVersions,
+} from "./schema-skill-hub";
 
 export {
 	agentApplications,
@@ -112,6 +118,12 @@ export {
 } from "./schema-operations";
 export { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 export { browserSessions } from "./schema-sessions";
+export {
+	skillHubAgentBindings,
+	skillHubInstallations,
+	skillHubSkills,
+	skillHubVersions,
+} from "./schema-skill-hub";
 
 export const platformInfrastructureTables = [
 	platformUserDisables,
@@ -153,6 +165,10 @@ export const platformInfrastructureTables = [
 	platformFiles,
 	platformFileAccesses,
 	fileReconciliation,
+	skillHubSkills,
+	skillHubVersions,
+	skillHubInstallations,
+	skillHubAgentBindings,
 ] as const;
 
 import { sessionSandboxAllocations } from "./schema-session-sandboxes";

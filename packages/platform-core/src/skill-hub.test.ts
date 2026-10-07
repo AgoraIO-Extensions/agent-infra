@@ -88,6 +88,7 @@ describe("Skill Hub lifecycle", () => {
 		packageObjectVersion: "object-1",
 		packageDigest: "a".repeat(64),
 		manifestDigest: "b".repeat(64),
+		signatureDigest: "c".repeat(64),
 	};
 
 	it("requires review for shared visibility and publishes private versions", async () => {

@@ -239,6 +239,13 @@
       "when": 1791160373692,
       "tag": "0037_browser_session_principal",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1791345218609,
+      "tag": "0038_skill_hub",
+      "breakpoints": true
     }
   ]
 }
