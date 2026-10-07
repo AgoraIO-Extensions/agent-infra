@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import Ajv, { type ValidateFunction } from "ajv";
+import Ajv2020 from "ajv/dist/2020.js";
 
 import type { RuntimeOriginalEvidenceBinding } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
@@ -132,6 +133,19 @@ export function standardMcpDigest(value: unknown) {
 function schemaValidator(schema: unknown): ValidateFunction {
 	if (!record(schema) || !Object.keys(schema).length) unavailable();
 	boundedJson(schema, 32_768);
+	// MCP's default is 2020-12; earlier dialects require an explicit declaration.
+	const dialect = schema.$schema;
+	const Validator =
+		dialect === undefined ||
+		dialect === "https://json-schema.org/draft/2020-12/schema" ||
+		dialect === "https://json-schema.org/draft/2020-12/schema#"
+			? Ajv2020
+			: dialect === "http://json-schema.org/draft-07/schema#" ||
+					dialect === "http://json-schema.org/draft-07/schema"
+				? Ajv
+				: unavailable();
+	// Callers make synchronous argument/terminal decisions; no Promise truthiness.
+	if (schema.$async !== undefined) unavailable();
 	let nodes = 0;
 	const inspect = (value: unknown, depth: number) => {
 		if (++nodes > 1024 || depth > 24) unavailable();
@@ -152,7 +166,7 @@ function schemaValidator(schema: unknown): ValidateFunction {
 	};
 	inspect(schema, 0);
 	try {
-		return new Ajv({
+		return new Validator({
 			strict: false,
 			logger: false,
 			validateFormats: false,

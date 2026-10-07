@@ -31,7 +31,9 @@ export const terminalSchema = {
 	required: ["structuredContent"],
 };
 
-export async function standardMcpFixture() {
+export async function standardMcpFixture(
+	inputSchema?: Record<string, unknown>,
+) {
 	const material = await runtimeTlsFixture();
 	closes.push(material.cleanup);
 	const trace: { method: string; id?: unknown; arguments?: unknown }[] = [];
@@ -87,12 +89,14 @@ export async function standardMcpFixture() {
 						{
 							name: "write_note",
 							description: "Write a note",
-							inputSchema: {
-								type: "object",
-								properties: { text: { type: "string" } },
-								required: ["text"],
-								additionalProperties: false,
-							},
+							inputSchema: structuredClone(
+								inputSchema ?? {
+									type: "object",
+									properties: { text: { type: "string" } },
+									required: ["text"],
+									additionalProperties: false,
+								},
+							),
 						},
 					],
 				};
