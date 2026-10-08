@@ -344,11 +344,7 @@ function parseZip(bytes: Uint8Array) {
 			[...seen].some((path) => path.startsWith(`${normalized}/`))
 		)
 			reject("path_conflict");
-		if (
-			directory &&
-			[...filePaths].some((path) => path.startsWith(`${normalized}/`))
-		)
-			reject("path_conflict");
+		if (directory && filePaths.has(normalized)) reject("path_conflict");
 		for (let parent = normalized; parent.includes("/"); ) {
 			parent = parent.slice(0, parent.lastIndexOf("/"));
 			if (filePaths.has(parent)) reject("path_conflict");

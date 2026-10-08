@@ -145,16 +145,18 @@ export class SkillPackageSupplierV1 {
 			...metadata,
 			archiveDigest: sha256(archiveBytes),
 		});
-		const prepared = prepareSkillPackageV1({
-			archiveBytes,
-			name: selection.name,
-			version: selection.version,
-		});
 		if (
 			selection.provider === "my_library" &&
 			selection.sourceDigest !== selection.archiveDigest
 		)
 			fail();
+		let prepared!: ReturnType<typeof prepareSkillPackageV1>;
+		const ensurePrepared = () =>
+			(prepared ??= prepareSkillPackageV1({
+				archiveBytes,
+				name: selection.name,
+				version: selection.version,
+			}));
 		let originalPolicy: SkillPackageAdmissionPolicyV1 | undefined;
 		let source: SkillPackageSourceProofV1 | undefined;
 		let receipt: SkillPackageScanReceiptV1 | undefined;
@@ -187,6 +189,7 @@ export class SkillPackageSupplierV1 {
 			return current;
 		};
 		const validate = async () => {
+			ensurePrepared();
 			await policy();
 			const proof = await this.#options.sourceVerifier.verify({
 				provider: selection.provider,

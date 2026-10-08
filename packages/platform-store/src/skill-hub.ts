@@ -455,7 +455,21 @@ export class PostgresSkillHubLifecycleV1 {
 						row.idempotencyKey === key &&
 						row.commandType === "skill.package.publish.v1",
 				);
-				if (prior.length && !original)
+				const priorOutbox = await tx
+					.select({ id: outboxItems.id, status: outboxItems.status })
+					.from(outboxItems)
+					.where(
+						and(
+							eq(outboxItems.scopeType, "skill_package"),
+							eq(outboxItems.scopeId, selection.skillVersionId),
+						),
+					);
+				if (
+					prior.length &&
+					!original &&
+					(priorOutbox.length !== prior.length ||
+						priorOutbox.some((row) => row.status !== "failed"))
+				)
 					throw new SkillHubOperationErrorV1("version_conflict");
 				if (original && original.requestDigest !== digest)
 					throw new SkillHubOperationErrorV1("idempotency_conflict");
