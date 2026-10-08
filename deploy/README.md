@@ -166,6 +166,12 @@ exact JSON tuple `[ref, revision]`；供应引用与 Consumer 的 `source` 分�
 [受保护安装交付](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1355-受保护安装交付)
 及 [Host 安装说明](../apps/agent-runtime-host/README.md)。
 
+同一受信 `configuration.mjs` 可选导出 `connectionInstallation`，为 Worker 提供非敏感的
+`RuntimeOAuthConfigurationV1` 和 `authorize(input, signal, finalCheck)` 函数。函数必须使用当前
+认证用户与 Agent 的独立确认，调用并等待 `finalCheck`，然后返回与 `input` 完全一致且带有非空
+`revision` 的批准结果。不得从该导出传入 Token、授权码、PKCE verifier、Consumer secret 或
+普通文件路径；配置校验失败时安装保持不可用。
+
 部署包必须显式提供 `templateModelBindings`，将标准模板 ID、实际镜像 Digest、必需 `driver` 与模型协议
 绑定；支持标准 Agent 时还须装配 `modelCatalog` 和 `modelAccess`。升级已有部署包时需一起
 补齐此字段，缺失会在 Worker 打开 Store 前拒绝启动。仅支持自定义 Agent 的部署包传入空

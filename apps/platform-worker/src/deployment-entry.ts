@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { RuntimeOAuthConfigurationV1Schema } from "@agent-infra/contracts/runtime";
 import {
 	createRuntimeConnectionConsumerSnapshotV1,
 	createRuntimeConnectionInstallationRevisionV1,
@@ -28,7 +29,34 @@ type DeploymentConfiguration = {
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
 	readonly connectionInstallationSupply?: unknown;
+	readonly connectionInstallation?: ConversationRuntimeOptionsV2["connectionInstallation"];
 };
+
+function resolveConnectionInstallation(
+	value: unknown,
+): ConversationRuntimeOptionsV2["connectionInstallation"] | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
+	const candidate = value as Record<string, unknown>;
+	if (
+		Object.keys(candidate).sort().join(",") !== "authorize,configuration" ||
+		typeof candidate.authorize !== "function"
+	)
+		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
+	try {
+		return {
+			configuration: RuntimeOAuthConfigurationV1Schema.parse(
+				structuredClone(candidate.configuration),
+			),
+			authorize: candidate.authorize as NonNullable<
+				ConversationRuntimeOptionsV2["connectionInstallation"]
+			>["authorize"],
+		};
+	} catch {
+		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
+	}
+}
 
 // Deployment-owned code supplies current IdentityAdapter facts and Worker-only material.
 // The adjacent configuration.mjs is mounted by the deployment, never bundled into the image.
@@ -42,6 +70,7 @@ const {
 	connectionConsumerProfile,
 	connectionConsumerApproval,
 	connectionInstallationSupply,
+	connectionInstallation: configuredConnectionInstallation,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
@@ -60,6 +89,9 @@ const connectionInstallationRevision =
 		connectionInstallationSupply,
 		connectionConsumerSnapshot,
 	);
+const connectionInstallation = resolveConnectionInstallation(
+	configuredConnectionInstallation,
+);
 const connectionConsumer = connectionConsumerSnapshot
 	? JSON.parse(connectionConsumerSnapshot)
 	: undefined;
@@ -146,6 +178,7 @@ async function createPrepared(signal: AbortSignal) {
 			workerId: instanceId,
 			signing,
 			directory,
+			...(connectionInstallation ? { connectionInstallation } : {}),
 			relayKeyDecryptor,
 			channelAuthorizationCurrent: wecomDeployment.channelAuthorizationCurrent,
 			sandboxPolicy: {
