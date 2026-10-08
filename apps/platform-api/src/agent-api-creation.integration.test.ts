@@ -1,5 +1,9 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { AgentApiCreationResponseV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	AgentApiCreationResponseV1Schema,
+	ScopedPlatformAuditPageV1Schema,
+	ScopedPlatformAuditProjectionV1Schema,
+} from "@agent-infra/contracts/pilot";
 import type { AgentDefaultRelayKeyBindingV1 } from "@agent-infra/platform-core";
 import { createRelayKeyEncryptorV1 } from "@agent-infra/secret-store";
 import { serve } from "@hono/node-server";
@@ -87,7 +91,22 @@ async function start() {
 			waitingTimeoutMs: 30_000,
 		},
 		identity: {
-			resolve: async () => null,
+			resolve: async (request) => {
+				const session = request.headers.get("Cookie");
+				if (session !== "session=admin" && session !== "session=owner")
+					return null;
+				const userId =
+					session === "session=admin" ? "administrator" : "human-owner";
+				return {
+					schemaVersion: 1,
+					userId,
+					displayName: userId,
+					accountStatus: "active",
+					organizationIds: [],
+					roles: session === "session=admin" ? ["system_admin"] : ["employee"],
+					authorizationRevision: "user-1",
+				};
+			},
 			hydrateUsers: async () => [],
 			resolveUser,
 		},
@@ -209,6 +228,104 @@ async function effects() {
 }
 
 describe("Agent creation through formal HTTP/Core/PostgreSQL with controlled admission", () => {
+	it("reads real creation, replay, refusal and default Key facts through existing administrator audit routes", async () => {
+		const first = await request();
+		expect(first.status).toBe(201);
+		const created = AgentApiCreationResponseV1Schema.parse(await first.json());
+		expect((await request()).status).toBe(200);
+		expect(
+			(
+				await request("same-key", material.application, {
+					...body,
+					name: "conflict",
+				})
+			).status,
+		).toBe(409);
+		const pageResponse = await fetch(`${origin}/api/v3/admin/audit?limit=100`, {
+			headers: { Cookie: "session=admin" },
+		});
+		expect(pageResponse.status).toBe(200);
+		const page = ScopedPlatformAuditPageV1Schema.parse(
+			await pageResponse.json(),
+		);
+		for (const action of [
+			"api.agent.create.accepted",
+			"api.agent.create.replayed",
+			"api.agent.create.refused",
+			"relay_key.agent_default.replace",
+		]) {
+			const original = page.items.find((item) => item.action === action);
+			if (!original) throw new Error(`Missing creation audit: ${action}`);
+			expect(original.actor).toEqual({
+				kind: "application",
+				actorId: "same-id",
+			});
+			expect(original.subject).toEqual({
+				kind: "agent",
+				subjectId: created.agentId,
+			});
+			expect(original.result).toBe(
+				action.endsWith("refused") ? "rejected" : "succeeded",
+			);
+			const filtered = await fetch(
+				`${origin}/api/v3/admin/audit?action=${action}`,
+				{ headers: { Cookie: "session=admin" } },
+			);
+			expect(filtered.status).toBe(200);
+			const filteredPage = ScopedPlatformAuditPageV1Schema.parse(
+				await filtered.json(),
+			);
+			expect(filteredPage.items).toHaveLength(1);
+			expect(filteredPage.items[0]?.auditId).toBe(original.auditId);
+			const detail = await fetch(
+				`${origin}/api/v3/admin/audit/${original.auditId}`,
+				{ headers: { Cookie: "session=admin" } },
+			);
+			expect(detail.status).toBe(200);
+			expect(
+				ScopedPlatformAuditProjectionV1Schema.parse(await detail.json()),
+			).toEqual(original);
+		}
+		for (const value of [
+			body.defaultRelayKey,
+			material.application,
+			material.user,
+		])
+			expect(JSON.stringify(page)).not.toContain(value);
+		const refused = page.items.find(
+			(item) => item.action === "api.agent.create.refused",
+		);
+		if (!refused) throw new Error("Missing refusal audit");
+		for (const headers of [
+			{ Cookie: "session=owner" },
+			{ Authorization: `Bearer ${material.application}` },
+			{ Authorization: `Bearer ${material.user}` },
+		]) {
+			const deniedStatus = "Cookie" in headers ? 404 : 401;
+			const list = await fetch(`${origin}/api/v3/admin/audit`, { headers });
+			expect(list.status).toBe(deniedStatus);
+			const detail = await fetch(
+				`${origin}/api/v3/admin/audit/${refused.auditId}`,
+				{ headers },
+			);
+			expect(detail.status).toBe(deniedStatus);
+			expect(await detail.text()).not.toContain(created.agentId);
+		}
+		await sql`update platform.platform_api_credentials set scopes='["agent:create","agent:manage","agent:read","agent:use"]'::jsonb`;
+		for (const token of [material.user, material.application]) {
+			const own = await fetch(`${origin}/api/v1/audit`, {
+				headers: { Authorization: `Bearer ${token}` },
+			});
+			expect(own.status).toBe(200);
+			expect(
+				ScopedPlatformAuditPageV1Schema.parse(await own.json()).items,
+			).toEqual([]);
+			const detail = await fetch(`${origin}/api/v1/audit/${refused.auditId}`, {
+				headers: { Authorization: `Bearer ${token}` },
+			});
+			expect(detail.status).toBe(404);
+		}
+	});
 	it("uses the generated client to persist application creator, human Owner, independent grants and ciphertext", async () => {
 		const client = createClient(
 			createConfig({ baseUrl: origin, auth: material.application }),

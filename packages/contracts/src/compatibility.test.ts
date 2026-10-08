@@ -19,6 +19,12 @@ const pilotBrowserArtifactPath = fileURLToPath(
 const runtimeHostV2ArtifactPath = fileURLToPath(
 	new URL("../artifacts/openapi/runtime-host.v2.openapi.json", import.meta.url),
 );
+const agentCreationAuditActions = [
+	"api.agent.create.accepted",
+	"api.agent.create.replayed",
+	"api.agent.create.refused",
+	"relay_key.agent_default.replace",
+];
 
 function comparePaths(current: string, previous: string) {
 	return spawnSync(
@@ -58,6 +64,18 @@ function restorePreSkillHubAuditContract(value: {
 					"skill.version.read",
 					"skill.version.refused",
 				].includes(action),
+		);
+}
+
+function restorePreAgentCreationAuditContract(value: {
+	components: { schemas: Record<string, unknown> };
+}) {
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1 as
+		| { enum?: string[] }
+		| undefined;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) => !agentCreationAuditActions.includes(action),
 		);
 }
 
@@ -154,6 +172,7 @@ function restorePreAgentApiManagementContract(value: {
 }) {
 	restorePreSkillHubAuditContract(value);
 	restorePreApplicationUseGrantContract(value);
+	restorePreAgentCreationAuditContract(value);
 	for (const path of [
 		"/api/v2/agents/{agentId}/state",
 		"/api/v2/agents/{agentId}/commands",
@@ -209,6 +228,58 @@ function restorePreAgentApiManagementContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it("admits only the four existing Agent creation audit actions", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		restorePreAgentCreationAuditContract(previous);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "creation-audit-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const mutations: ((document: typeof current) => void)[] = [
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+						"api.agent.create.unreviewed",
+					),
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.shift(),
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.pop(),
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+						agentCreationAuditActions[0],
+					),
+				(document) => {
+					document.paths["/api/v3/admin/audit"].get.security = [{}];
+				},
+				(document) => {
+					document.components.schemas.ScopedPlatformAuditProjectionV1.properties.credential =
+						{ type: "string" };
+				},
+				(document) => {
+					document.components.schemas.ScopedPlatformAuditProjectionV1.properties.actor.additionalProperties = true;
+				},
+				(document) => {
+					document.components.schemas.ScopedPlatformAuditProjectionV1.properties.subject.additionalProperties = true;
+				},
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the exact direct Agent creation contract", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -485,6 +556,7 @@ describe("contract compatibility command", () => {
 				delete document.components.schemas.AgentApiCreationRequestV1;
 				delete document.components.schemas.AgentApiCreationResponseV1;
 				restorePreSkillHubAuditContract(document);
+				restorePreAgentCreationAuditContract(document);
 				for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
 					const schema = document.components.schemas[name];
 					if (schema?.properties?.capabilities?.properties)

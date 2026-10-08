@@ -3729,7 +3729,11 @@
           "wecom.failed",
           "wecom.cancelled",
           "wecom.expired",
-          "wecom.abandoned"
+          "wecom.abandoned",
+          "api.agent.create.accepted",
+          "api.agent.create.replayed",
+          "api.agent.create.refused",
+          "relay_key.agent_default.replace"
         ],
         "type": "string"
       },
