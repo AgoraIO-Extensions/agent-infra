@@ -421,9 +421,12 @@ export function createPlatformConversationWorkerV2(
 					(result): result is PromiseRejectedResult =>
 						result.status === "rejected",
 				);
+				if (failure) {
+					log("CONVERSATION_DISPATCH_STOP_FAILED");
+					throw failure.reason;
+				}
 				lifecycleStatus = "stopped";
 				log("CONVERSATION_DISPATCH_STOPPED");
-				if (failure) throw failure.reason;
 			})();
 			return closing;
 		},

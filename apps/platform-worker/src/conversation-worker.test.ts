@@ -118,6 +118,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 		worker.start();
 		worker.start();
 		expect(worker.status()).toBe("running");
+		await vi.waitFor(() => expect(mocks.find).toHaveBeenCalledTimes(1));
 		expect(options.log).toHaveBeenCalledWith(
 			JSON.stringify({
 				service: "platform-worker",
@@ -127,6 +128,13 @@ describe("Conversation Worker discovery and shutdown", () => {
 		);
 		const stopping = worker.stop();
 		expect(worker.status()).toBe("stopping");
+		expect(options.log).toHaveBeenCalledWith(
+			JSON.stringify({
+				service: "platform-worker",
+				component: "conversation",
+				code: "CONVERSATION_DISPATCH_STOPPING",
+			}),
+		);
 		await stopping;
 		expect(worker.status()).toBe("stopped");
 		expect(options.log).toHaveBeenCalledWith(
@@ -391,6 +399,14 @@ describe("Conversation Worker discovery and shutdown", () => {
 		);
 		const worker = createPlatformConversationWorkerV2(options);
 		await expect(worker.stop()).rejects.toThrow("synthetic runtime failure");
+		expect(worker.status()).toBe("stopping");
+		expect(options.log).toHaveBeenCalledWith(
+			JSON.stringify({
+				service: "platform-worker",
+				component: "conversation",
+				code: "CONVERSATION_DISPATCH_STOP_FAILED",
+			}),
+		);
 		expect(mocks.storeClose).toHaveBeenCalledTimes(1);
 		expect(mocks.eventsClose).toHaveBeenCalledTimes(1);
 		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
