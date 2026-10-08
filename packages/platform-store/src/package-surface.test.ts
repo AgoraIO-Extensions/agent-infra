@@ -140,6 +140,8 @@ describe("platform-store package surface", () => {
 				"dist/migrations/meta/0020_snapshot.json",
 				"dist/migrations/meta/0021_snapshot.json",
 				"dist/migrations/meta/_journal.json",
+				"dist/migrations/0041_skill_version_integrity.sql",
+				"dist/migrations/meta/0041_snapshot.json",
 			]),
 		);
 		expect(
