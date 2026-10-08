@@ -40,14 +40,10 @@ export class PostgresCommitWakeupListenerV1 {
 		await this.#listening;
 	}
 
+	/** Ending the dedicated connection drops its subscription, so shutdown
+	 * never waits on a LISTEN that is still connecting or reconnecting. */
 	async close(): Promise<void> {
-		const listening = this.#listening;
 		this.#listening = undefined;
-		try {
-			if (listening) await (await listening).unlisten();
-		} catch {
-			// The connection is closed below either way.
-		}
 		await this.#client.end({ timeout: 5 });
 	}
 }

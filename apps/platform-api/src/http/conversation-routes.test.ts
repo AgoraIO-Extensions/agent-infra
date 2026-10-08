@@ -1310,6 +1310,46 @@ describe("Conversation persisted SSE", () => {
 			}
 		});
 
+		it("does not let a wakeup postpone the next authorization check", async () => {
+			const eventWake = new ConversationEventWakeHubV1();
+			const poll = 400;
+			const input = dependencies({ streamPollIntervalMs: poll, eventWake });
+			let revoked = false;
+			input.authorization.authorize = vi
+				.fn()
+				.mockImplementation(async () =>
+					revoked ? { outcome: "revoked" } : { outcome: "allowed", authority },
+				);
+			input.query.replay = vi.fn().mockResolvedValue({
+				outcome: "events",
+				events: [],
+				resumeCursor: "cursor-0",
+			});
+			const controller = new AbortController();
+			try {
+				const response = await testApp(input).app.request(
+					"/api/v2/conversations/conversation-1/events?cursor=cursor-0",
+					{ signal: controller.signal },
+				);
+				const reader = response.body?.getReader();
+				if (!reader) throw new Error("Missing SSE body");
+				await vi.waitFor(() =>
+					expect(input.query.replay).toHaveBeenCalledTimes(2),
+				);
+				const started = performance.now();
+				revoked = true;
+				// An empty wakeup just before the deadline must not restart the wait.
+				await delay(poll - 80);
+				eventWake.notify("conversation-1");
+				expect(await readUntil(reader, "authorization.revoked")).toContain(
+					": conversation-stream.closed revoked",
+				);
+				expect(performance.now() - started).toBeLessThan(poll + 250);
+			} finally {
+				controller.abort();
+			}
+		});
+
 		it("checks authorization once per batch and writes none of a batch it refuses", async () => {
 			for (const revokedAt of [undefined, 1] as const) {
 				const input = dependencies({

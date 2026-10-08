@@ -1275,9 +1275,14 @@ export function registerConversationRoutes(
 										cursor = persisted.conversationCursor;
 									}
 									// A commit wakeup reads sooner; polling remains the guarantee.
+									// Waits never extend past the next authorization deadline.
+									const waitMs = Math.max(
+										1,
+										Math.ceil(pollIntervalMs - (performance.now() - checkedAt)),
+									);
 									const woken = watcher
-										? await watcher.wait(pollIntervalMs, lifetime.signal)
-										: (await delay(pollIntervalMs, undefined, {
+										? await watcher.wait(waitMs, lifetime.signal)
+										: (await delay(waitMs, undefined, {
 												signal: lifetime.signal,
 											}),
 											"timeout");

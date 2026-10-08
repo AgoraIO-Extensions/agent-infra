@@ -1,3 +1,4 @@
+import { type AddressInfo, createServer, type Socket } from "node:net";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -105,6 +106,34 @@ describe("outbox commit wakeups (#1561)", () => {
 			await expect.poll(() => woken, { timeout: 5_000 }).toEqual(["", "", ""]);
 		} finally {
 			await listener.close();
+		}
+	});
+});
+
+describe("commit wakeup listener shutdown (#1561)", () => {
+	it("closes without waiting for a LISTEN that is still connecting", async () => {
+		// A server that accepts the connection but never answers the startup.
+		const sockets: Socket[] = [];
+		const server = createServer((socket) => sockets.push(socket));
+		await new Promise<void>((resolve) =>
+			server.listen(0, "127.0.0.1", resolve),
+		);
+		const address = server.address() as AddressInfo;
+		const listener = new PostgresCommitWakeupListenerV1({
+			databaseUrl: `postgres://user:pass@127.0.0.1:${address.port}/platform`,
+			channel: outboxWakeChannelV1,
+			onWake: () => {},
+		});
+		const starting = listener.start().catch(() => undefined);
+		try {
+			await vi.waitFor(() => expect(sockets.length).toBeGreaterThan(0));
+			const began = performance.now();
+			await listener.close();
+			expect(performance.now() - began).toBeLessThan(6_000);
+		} finally {
+			for (const socket of sockets) socket.destroy();
+			server.close();
+			await starting;
 		}
 	});
 });
