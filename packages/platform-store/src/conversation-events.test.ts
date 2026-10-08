@@ -1251,7 +1251,7 @@ describe("PostgreSQL Conversation event transaction", () => {
 			source: string,
 			eventType: string,
 			runtimeCursor: string | null,
-			payload: Record<string, string> = { type: eventType },
+			payload: Record<string, string | null> = { type: eventType },
 		) => client`
 			insert into platform.conversation_events
 				(event_id, conversation_id, execution_id, adapter_event_key, sequence,
@@ -1298,6 +1298,20 @@ describe("PostgreSQL Conversation event transaction", () => {
 					null,
 					{ type: "execution.status", status },
 				),
+			).rejects.toMatchObject({
+				constraint_name: "conversation_event_source_binding",
+			});
+		}
+		// A missing or JSON-null status must not slip through as SQL NULL.
+		for (const [eventId, payload] of [
+			["event_platform_status_missing", { type: "execution.status" }],
+			[
+				"event_platform_status_null",
+				{ type: "execution.status", status: null },
+			],
+		] as const) {
+			await expect(
+				insert(eventId, "platform", "execution.status", null, payload),
 			).rejects.toMatchObject({
 				constraint_name: "conversation_event_source_binding",
 			});

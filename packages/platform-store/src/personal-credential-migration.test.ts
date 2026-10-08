@@ -138,6 +138,7 @@ beforeAll(async () => {
 		{ idx: 40, tag: "0040_agent_configuration_v3" },
 		{ idx: 41, tag: "0041_skill_version_integrity" },
 		{ idx: 42, tag: "0042_platform_cancellation_event" },
+		{ idx: 43, tag: "0043_platform_cancellation_status_required" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
