@@ -2,33 +2,62 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 
 import {
+	type AgentApiAuditContextV1,
+	type AgentApiCreationRowsV1,
+	type AgentApiCreationTransactionV1,
+	type AgentConfigurationAuthorityContextV1,
+	AgentConfigurationError,
 	ApplicationFoundationError,
+	type ApplicationFoundationRelayKeyAttachmentV1,
 	type ApplicationFoundationTransactionPortV1,
 	type ApplicationFoundationWritePlanV1,
+	agentApiCreationIdsV1,
 	type CommitApplicationFoundationResultV1,
+	captureAgentApiCreatePrincipalsV1,
 	type PendingSecretRecordAttachmentsV1,
+	PersonalApiCredentialErrorV1,
+	planAgentApiCreationCompletionV1,
+	requireAgentApiCreatePermissionV1,
+	requirePersonalApiUserActiveV1,
+	requirePersonalApiUserEnabledV1,
+	resolveCurrentPersonalApiUserV1,
 	snapshotApplicationFoundationWritePlanV1,
+	type TaskUserDirectoryV1,
+	withAgentApiAuditContextV1,
 } from "@agent-infra/platform-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { resolveAgentApiIdentityV1 } from "./agent-api-identity.js";
+import { decodeVersionedAgentConfigurationRecord as decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { readAgentManagementState } from "./agent-management.js";
 import { isPostgresError } from "./postgres-error.js";
+import { replaceRelayKeyVersionInTransaction } from "./relay-key-versions.js";
 import {
 	agentApplications,
 	agentAvailability,
 	agentConfigurationRevisions,
 	agentOwners,
+	agentPrincipalGrants,
 	agents,
 	auditEvents,
 	idempotencyRecords,
 	outboxItems,
+	platformApiCredentials,
+	platformApplications,
+	platformUserDisables,
 } from "./schema.js";
 import { insertPendingSecretRecordAttachments } from "./secret-records.js";
 
 export interface PostgresApplicationFoundationOptions {
 	readonly databaseUrl: string;
+	readonly userDirectory?: TaskUserDirectoryV1;
+	readonly apiCreation?: {
+		readonly allowedPrincipals: Parameters<
+			typeof captureAgentApiCreatePrincipalsV1
+		>[0];
+		readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
+	};
 }
 
 interface IdempotencyRow {
@@ -283,13 +312,139 @@ async function requirePersistedReplayIntegrity(
 	}
 }
 
+type FoundationTransaction = Parameters<
+	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
+>[0];
+
+/** Both channels persist configuration, Secrets and the default Key on this exact transaction. */
+async function persistApplicationFoundationRowsV1(
+	transaction: FoundationTransaction,
+	plan: ApplicationFoundationWritePlanV1 | AgentApiCreationRowsV1,
+	configuration: ReturnType<typeof decodeAgentConfigurationRecord>,
+	attachments?: PendingSecretRecordAttachmentsV1,
+	defaultRelayKey?: ApplicationFoundationRelayKeyAttachmentV1,
+) {
+	await transaction.insert(agents).values({
+		id: plan.agent.agentId,
+		currentConfigurationRevision: plan.agent.currentConfigurationRevision,
+		authorizationRevision: plan.agent.authorizationRevision,
+		createdAt: plan.agent.createdAt,
+	});
+	await transaction.insert(agentApplications).values({
+		id: plan.application.applicationId,
+		agentId: plan.application.agentId,
+		applicantId: plan.application.applicantId,
+		name: plan.application.name,
+		description: plan.application.description,
+		status: plan.application.status,
+		...("creator" in plan
+			? (({
+					applicationId: _id,
+					agentId: _agent,
+					applicantId: _applicant,
+					name: _name,
+					description: _description,
+					status: _status,
+					traceId: _trace,
+					requestId: _request,
+					submittedAt: _submitted,
+					...lifecycle
+				}) => lifecycle)(plan.application)
+			: {}),
+		traceId: plan.application.traceId,
+		requestId: plan.application.requestId,
+		submittedAt: plan.application.submittedAt,
+	});
+	await transaction.insert(agentConfigurationRevisions).values({
+		agentId: plan.configurationRevision.agentId,
+		revision: plan.configurationRevision.revision,
+		sourceReference: canonicalSourceReference(configuration),
+		configuration,
+		createdAt: plan.configurationRevision.createdAt,
+	});
+	await insertPendingSecretRecordAttachments(
+		transaction,
+		attachments,
+		configuration,
+	);
+	if (defaultRelayKey) {
+		if (configuration.source.kind !== "standard")
+			throw new ApplicationFoundationError("persistence_failed");
+		// Keep the original Drizzle transaction; adapt only tagged SQL values.
+		const keySql = async (
+			parts: TemplateStringsArray,
+			...parameters: (string | number)[]
+		) => transaction.execute(sql(parts, ...parameters));
+		const replacement = await replaceRelayKeyVersionInTransaction(keySql, {
+			purpose: "agent-default",
+			subjectId: plan.agent.agentId,
+			expectedCurrentVersion: null,
+			encrypt: (binding) =>
+				defaultRelayKey.encrypt({
+					...binding,
+					purpose: "agent-default",
+				}),
+		});
+		if (replacement.outcome !== "replaced")
+			throw new ApplicationFoundationError("persistence_failed");
+		const binding = replacement.binding;
+		await transaction.insert(auditEvents).values({
+			id: randomUUID(),
+			traceId: plan.application.traceId,
+			requestId: plan.application.requestId,
+			agentId: plan.agent.agentId,
+			actorType: "creator" in plan ? plan.creator.kind : "user",
+			actorId:
+				"creator" in plan ? plan.creator.id : plan.application.applicantId,
+			action: "relay_key.agent_default.replace",
+			targetType: "agent",
+			targetId: plan.agent.agentId,
+			outcome: "succeeded",
+			occurredAt: plan.application.submittedAt,
+			details: {
+				schemaVersion: 1,
+				previousVersion: null,
+				keyVersion: binding.keyVersion,
+				configurationRevision: 1,
+			},
+		});
+	}
+	await transaction.insert(agentOwners).values(
+		plan.access.ownerIds.map((ownerId) => ({
+			agentId: plan.access.agentId,
+			ownerId,
+			createdAt: plan.access.createdAt,
+		})),
+	);
+	if (plan.access.availability.length > 0) {
+		await transaction.insert(agentAvailability).values(
+			plan.access.availability.map((target) => ({
+				agentId: plan.access.agentId,
+				targetType: target.kind,
+				targetId:
+					target.kind === "user" ? target.userId : target.organizationId,
+			})),
+		);
+	}
+}
+
 export class PostgresApplicationFoundationTransactionV1
-	implements ApplicationFoundationTransactionPortV1
+	implements
+		ApplicationFoundationTransactionPortV1,
+		AgentApiCreationTransactionV1
 {
 	readonly #client;
 	readonly #database;
+	readonly #userDirectory;
+	readonly #apiCreation;
+	readonly #allowedPrincipals;
 
 	constructor(options: PostgresApplicationFoundationOptions) {
+		this.#allowedPrincipals = captureAgentApiCreatePrincipalsV1(
+			options.apiCreation?.allowedPrincipals,
+		);
+		this.#apiCreation = options.apiCreation;
+		this.#userDirectory = options.userDirectory;
 		this.#client = postgres(options.databaseUrl, { max: 10 });
 		this.#database = drizzle(this.#client);
 	}
@@ -337,9 +492,13 @@ export class PostgresApplicationFoundationTransactionV1
 	async commit(
 		input: ApplicationFoundationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
+		defaultRelayKey?: ApplicationFoundationRelayKeyAttachmentV1,
 	): ReturnType<ApplicationFoundationTransactionPortV1["commit"]> {
 		try {
 			const { plan, configuration, result } = validatedPlan(input);
+			if (configuration.schemaVersion === 3 && !defaultRelayKey) {
+				throw new ApplicationFoundationError("persistence_failed");
+			}
 			return await this.#database.transaction(async (transaction) => {
 				const [reservation] = await transaction
 					.insert(idempotencyRecords)
@@ -386,52 +545,13 @@ export class PostgresApplicationFoundationTransactionV1
 					return replay;
 				}
 
-				await transaction.insert(agents).values({
-					id: plan.agent.agentId,
-					currentConfigurationRevision: plan.agent.currentConfigurationRevision,
-					authorizationRevision: plan.agent.authorizationRevision,
-					createdAt: plan.agent.createdAt,
-				});
-				await transaction.insert(agentApplications).values({
-					id: plan.application.applicationId,
-					agentId: plan.application.agentId,
-					applicantId: plan.application.applicantId,
-					name: plan.application.name,
-					description: plan.application.description,
-					status: plan.application.status,
-					traceId: plan.application.traceId,
-					requestId: plan.application.requestId,
-					submittedAt: plan.application.submittedAt,
-				});
-				await transaction.insert(agentConfigurationRevisions).values({
-					agentId: plan.configurationRevision.agentId,
-					revision: plan.configurationRevision.revision,
-					sourceReference: canonicalSourceReference(configuration),
-					configuration,
-					createdAt: plan.configurationRevision.createdAt,
-				});
-				await insertPendingSecretRecordAttachments(
+				await persistApplicationFoundationRowsV1(
 					transaction,
-					attachments,
+					plan,
 					configuration,
+					attachments,
+					defaultRelayKey,
 				);
-				await transaction.insert(agentOwners).values(
-					plan.access.ownerIds.map((ownerId) => ({
-						agentId: plan.access.agentId,
-						ownerId,
-						createdAt: plan.access.createdAt,
-					})),
-				);
-				if (plan.access.availability.length > 0) {
-					await transaction.insert(agentAvailability).values(
-						plan.access.availability.map((target) => ({
-							agentId: plan.access.agentId,
-							targetType: target.kind,
-							targetId:
-								target.kind === "user" ? target.userId : target.organizationId,
-						})),
-					);
-				}
 				await transaction.insert(outboxItems).values({
 					id: randomUUID(),
 					scopeType: plan.outboxIntent.scopeType,
@@ -477,6 +597,312 @@ export class PostgresApplicationFoundationTransactionV1
 				return { outcome: "conflict", reason: "duplicate" };
 			}
 			throw new ApplicationFoundationError("persistence_failed");
+		}
+	}
+
+	async createAgentApiTransaction(
+		input: Parameters<
+			AgentApiCreationTransactionV1["createAgentApiTransaction"]
+		>[0],
+		prepare: Parameters<
+			AgentApiCreationTransactionV1["createAgentApiTransaction"]
+		>[1],
+	): ReturnType<AgentApiCreationTransactionV1["createAgentApiTransaction"]> {
+		let auditContext: AgentApiAuditContextV1 = { command: "create" };
+		try {
+			return await this.#database.transaction(async (transaction) => {
+				await transaction.execute(sql`set local lock_timeout = '5s'`);
+				await transaction.execute(sql`set local statement_timeout = '30s'`);
+				const authenticated = await resolveAgentApiIdentityV1(
+					transaction,
+					input.material,
+					this.#userDirectory,
+					"agent:create",
+				);
+				const { principal } = authenticated.identity;
+				auditContext = { ...auditContext, principal };
+				requireAgentApiCreatePermissionV1(principal, this.#allowedPrincipals);
+				const ids = agentApiCreationIdsV1(
+					principal,
+					input.command.idempotencyKey,
+				);
+				const commandType = `agent.api.create.${principal.kind}.v1`;
+				const scope = and(
+					eq(idempotencyRecords.scopeType, "agent"),
+					eq(idempotencyRecords.scopeId, ids.agentId),
+					eq(idempotencyRecords.actorId, principal.id),
+					eq(idempotencyRecords.commandType, commandType),
+					eq(idempotencyRecords.idempotencyKey, input.command.idempotencyKey),
+				);
+				const [reservation] = await transaction
+					.insert(idempotencyRecords)
+					.values({
+						id: randomUUID(),
+						scopeType: "agent",
+						scopeId: ids.agentId,
+						actorId: principal.id,
+						commandType,
+						idempotencyKey: input.command.idempotencyKey,
+						requestDigest: input.requestDigest,
+					})
+					.onConflictDoNothing()
+					.returning();
+				const replayed = !reservation;
+				let initial: AgentApiCreationRowsV1 | undefined;
+				let revalidateCreationAuthority: (() => Promise<void>) | undefined;
+				if (replayed) {
+					const [existing] = await transaction
+						.select()
+						.from(idempotencyRecords)
+						.where(scope);
+					if (existing?.status !== "completed")
+						throw new PersonalApiCredentialErrorV1("unavailable");
+
+					const saved = existing.result as Record<string, unknown> | null;
+					if (
+						!saved ||
+						Object.keys(saved).length !== 3 ||
+						saved.schemaVersion !== 1 ||
+						saved.agentId !== ids.agentId ||
+						saved.applicationId !== ids.applicationId
+					)
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					await transaction
+						.select()
+						.from(agents)
+						.where(eq(agents.id, ids.agentId))
+						.for("update");
+					const [application] = await transaction
+						.select()
+						.from(agentApplications)
+						.where(eq(agentApplications.agentId, ids.agentId));
+					if (
+						application?.creationChannel !== "api" ||
+						application.creatorPrincipalType !== principal.kind ||
+						application.creatorPrincipalId !== principal.id
+					)
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					auditContext = { ...auditContext, agentId: ids.agentId };
+					const grants = await transaction
+						.select()
+						.from(agentPrincipalGrants)
+						.where(
+							and(
+								eq(agentPrincipalGrants.agentId, ids.agentId),
+								eq(agentPrincipalGrants.principalType, principal.kind),
+								eq(agentPrincipalGrants.principalId, principal.id),
+							),
+						)
+						.for("share");
+					if (
+						!grants.some(
+							(grant) =>
+								grant.revokedAt === null &&
+								(grant.grantType === "manage" || grant.grantType === "use"),
+						)
+					)
+						throw new PersonalApiCredentialErrorV1("not_found");
+					if (existing.requestDigest !== input.requestDigest)
+						throw new PersonalApiCredentialErrorV1("idempotency_conflict");
+				} else {
+					const deployment = this.#apiCreation;
+					if (!deployment) throw new PersonalApiCredentialErrorV1("forbidden");
+					const [application] =
+						principal.kind === "application"
+							? await transaction
+									.select()
+									.from(platformApplications)
+									.where(eq(platformApplications.id, principal.id))
+									.for("share")
+							: [];
+					const ownerId =
+						principal.kind === "user"
+							? principal.id
+							: application?.responsibleUserId;
+					if (!ownerId) throw new PersonalApiCredentialErrorV1("forbidden");
+					// Serialize current Platform disables without deriving application permission from its Owner.
+					await transaction.execute(
+						sql`lock table platform.platform_user_disables in share mode`,
+					);
+					const currentUser = async (id: string) => {
+						const user = await resolveCurrentPersonalApiUserV1(
+							this.#userDirectory,
+							id,
+						);
+						const disabled = await transaction
+							.select()
+							.from(platformUserDisables)
+							.where(eq(platformUserDisables.userId, id));
+						requirePersonalApiUserActiveV1(user);
+						requirePersonalApiUserEnabledV1(disabled.length !== 0);
+						return user;
+					};
+					const owner = await currentUser(ownerId);
+					const revision = randomUUID();
+					const authorityContext = structuredClone(
+						await deployment.loadAuthorityContext(),
+					);
+					const prepared = await prepare({
+						principal,
+						ownerId,
+						...ids,
+						authorizationRevision: revision,
+						authorizationAdmission: {
+							authorize: async (request) => {
+								await authenticated.revalidate();
+								requireAgentApiCreatePermissionV1(
+									principal,
+									this.#allowedPrincipals,
+								);
+								if (
+									request.agentId !== ids.agentId ||
+									request.actorId !== principal.id
+								)
+									return {
+										schemaVersion: 1,
+										status: "rejected",
+										agentId: request.agentId,
+										actorId: request.actorId,
+									};
+								return {
+									schemaVersion: 1,
+									agentId: request.agentId,
+									actorId: request.actorId,
+									status: "admitted",
+									authorizationRevision: revision,
+									authorityContext,
+								};
+							},
+						},
+					});
+					const { rows, attachments, defaultRelayKey, outboxIntent } = prepared;
+					const configuration = decodeAgentConfigurationRecord(
+						rows.configurationRevision.configuration,
+					);
+					if (
+						rows.creator.kind !== principal.kind ||
+						rows.creator.id !== principal.id ||
+						rows.agent.agentId !== ids.agentId ||
+						rows.application.agentId !== ids.agentId ||
+						rows.application.applicationId !== ids.applicationId ||
+						rows.application.applicantId !== ownerId ||
+						!rows.access.ownerIds.includes(ownerId) ||
+						rows.agent.authorizationRevision !== revision ||
+						configuration.agentId !== ids.agentId ||
+						configuration.revision !== 1 ||
+						rows.application.status !== "creating" ||
+						(configuration.schemaVersion === 3 && !defaultRelayKey)
+					)
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					const references = new Set([
+						...rows.access.ownerIds,
+						...rows.access.availability
+							.filter((target) => target.kind === "user")
+							.map((target) => target.userId),
+					]);
+					const observed = await Promise.all(
+						[...references].map(async (id) => ({
+							id,
+							revision: (await currentUser(id)).authorizationRevision,
+						})),
+					);
+					await persistApplicationFoundationRowsV1(
+						transaction,
+						rows,
+						configuration,
+						attachments,
+						defaultRelayKey,
+					);
+					await transaction.insert(agentPrincipalGrants).values(
+						(["manage", "use"] as const).map((grantType) => ({
+							agentId: ids.agentId,
+							principalType: principal.kind,
+							principalId: principal.id,
+							grantType,
+							authorizationRevision: rows.grants[grantType],
+							createdAt: rows.agent.createdAt,
+						})),
+					);
+					await transaction.insert(outboxItems).values({
+						id: randomUUID(),
+						scopeType: "agent",
+						scopeId: ids.agentId,
+						operation: outboxIntent.operation,
+						payload: outboxIntent.payload,
+						traceId: outboxIntent.traceId,
+						requestId: outboxIntent.requestId,
+						availableAt: outboxIntent.occurredAt,
+						createdAt: outboxIntent.occurredAt,
+						updatedAt: outboxIntent.occurredAt,
+					});
+					await transaction
+						.update(idempotencyRecords)
+						.set({
+							status: "completed",
+							result: { schemaVersion: 1, ...ids },
+							updatedAt: sql`clock_timestamp()`,
+						})
+						.where(eq(idempotencyRecords.id, reservation.id));
+					initial = rows;
+					revalidateCreationAuthority = async () => {
+						if (
+							(await currentUser(ownerId)).authorizationRevision !==
+							owner.authorizationRevision
+						)
+							throw new PersonalApiCredentialErrorV1("unavailable");
+						for (const reference of observed)
+							if (
+								(await currentUser(reference.id)).authorizationRevision !==
+								reference.revision
+							)
+								throw new PersonalApiCredentialErrorV1("unavailable");
+						if (
+							JSON.stringify(await deployment.loadAuthorityContext()) !==
+							JSON.stringify(authorityContext)
+						)
+							throw new PersonalApiCredentialErrorV1("unavailable");
+					};
+				}
+				const state = await readAgentManagementState(transaction, ids.agentId);
+				if (!state) throw new PersonalApiCredentialErrorV1("unavailable");
+				const completion = planAgentApiCreationCompletionV1({
+					state,
+					principal,
+					command: input.command,
+					...(initial ? { initial } : {}),
+				});
+				await transaction
+					.insert(auditEvents)
+					.values({ id: randomUUID(), ...completion.auditEvent });
+				await transaction
+					.update(platformApiCredentials)
+					.set({ lastUsedAt: sql`clock_timestamp()` })
+					.where(
+						eq(
+							platformApiCredentials.id,
+							authenticated.identity.credential.credentialId,
+						),
+					);
+				await revalidateCreationAuthority?.();
+				await authenticated.revalidate();
+				requireAgentApiCreatePermissionV1(principal, this.#allowedPrincipals);
+				return completion.result;
+			});
+		} catch (error) {
+			const failure =
+				error instanceof PersonalApiCredentialErrorV1
+					? error
+					: error instanceof AgentConfigurationError
+						? new PersonalApiCredentialErrorV1(
+								error.code === "not_authorized"
+									? "forbidden"
+									: error.code === "invalid_command" ||
+											error.code === "not_admitted"
+										? "invalid_input"
+										: "unavailable",
+							)
+						: new PersonalApiCredentialErrorV1("unavailable");
+			throw withAgentApiAuditContextV1(failure, auditContext);
 		}
 	}
 

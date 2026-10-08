@@ -143,10 +143,12 @@ describe("platform-store package surface", () => {
 				"dist/migrations/meta/_journal.json",
 				"dist/migrations/0041_skill_version_integrity.sql",
 				"dist/migrations/meta/0041_snapshot.json",
-				"dist/migrations/0042_platform_cancellation_event.sql",
+				"dist/migrations/0042_agent_api_creation.sql",
 				"dist/migrations/meta/0042_snapshot.json",
-				"dist/migrations/0043_platform_cancellation_status_required.sql",
 				"dist/migrations/meta/0043_snapshot.json",
+				"dist/migrations/0043_platform_cancellation_event.sql",
+				"dist/migrations/0044_platform_cancellation_status_required.sql",
+				"dist/migrations/meta/0044_snapshot.json",
 			]),
 		);
 		expect(

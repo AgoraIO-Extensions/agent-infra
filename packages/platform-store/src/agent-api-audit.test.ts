@@ -96,6 +96,32 @@ describe("Agent API facts in the existing audit decoder", () => {
 			}),
 		).toThrow();
 	});
+	it("keeps application API creation and default-key actors auditable", () => {
+		const accepted = decodePlatformAuditRowV1({
+			...row,
+			action: "api.agent.create.accepted",
+			details: {
+				schemaVersion: 1,
+				ownerId: "owner",
+				initialManageRevision: "manage-1",
+				initialUseRevision: "use-1",
+			},
+		});
+		expect(accepted.actor).toEqual({ kind: "application", actorId: "robot" });
+		expect(accepted.subject).toEqual({ kind: "agent", subjectId: "agent" });
+		expect(
+			decodePlatformAuditRowV1({
+				...row,
+				action: "relay_key.agent_default.replace",
+				details: {
+					schemaVersion: 1,
+					previousVersion: null,
+					keyVersion: 1,
+					configurationRevision: 1,
+				},
+			}).actor,
+		).toEqual({ kind: "application", actorId: "robot" });
+	});
 	it("decodes existing Task API facts through their original bounded Core contract", () => {
 		const access = {
 			...row,

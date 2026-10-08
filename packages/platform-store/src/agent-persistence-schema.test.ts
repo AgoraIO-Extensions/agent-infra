@@ -85,6 +85,9 @@ describe("Agent persistence schema contract", () => {
 			"workload_revision",
 			"fence",
 			"failure_code",
+			"creation_channel",
+			"creator_principal_type",
+			"creator_principal_id",
 		]);
 		expect(columnNames(agentConfigurationRevisions)).toEqual([
 			"agent_id",

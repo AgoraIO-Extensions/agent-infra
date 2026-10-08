@@ -22,7 +22,7 @@ export async function resolveAgentApiIdentityV1(
 	transaction: Transaction,
 	material: string,
 	directory: TaskUserDirectoryV1 | undefined,
-	requiredScope: "agent:manage" | "agent:read",
+	requiredScope: "agent:manage" | "agent:read" | "agent:create",
 ) {
 	if (
 		typeof material !== "string" ||

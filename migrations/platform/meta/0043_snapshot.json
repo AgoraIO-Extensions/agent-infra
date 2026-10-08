@@ -1,6 +1,6 @@
 {
-  "id": "a8b7f910-2afa-4494-91e3-4696c3ee28a0",
-  "prevId": "06c0a2d4-9a71-44e3-bad3-916b99875323",
+  "id": "06c0a2d4-9a71-44e3-bad3-916b99875323",
+  "prevId": "d50082f0-78eb-44aa-b3f6-c1bf8c1e1fb5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -118,6 +118,25 @@
           "typeSchema": "platform",
           "primaryKey": false,
           "notNull": false
+        },
+        "creation_channel": {
+          "name": "creation_channel",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'web'"
+        },
+        "creator_principal_type": {
+          "name": "creator_principal_type",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "creator_principal_id": {
+          "name": "creator_principal_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -199,6 +218,10 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "agent_application_creation_provenance": {
+          "name": "agent_application_creation_provenance",
+          "value": "(\n \"platform\".\"agent_applications\".\"creation_channel\" = 'web' and \"platform\".\"agent_applications\".\"creator_principal_type\" is null and \"platform\".\"agent_applications\".\"creator_principal_id\" is null\n ) or (\n \"platform\".\"agent_applications\".\"creation_channel\" = 'api' and \"platform\".\"agent_applications\".\"creator_principal_type\" is not null and \"platform\".\"agent_applications\".\"creator_principal_id\" is not null and \"platform\".\"agent_applications\".\"creator_principal_type\" in ('user','application') and char_length(\"platform\".\"agent_applications\".\"creator_principal_id\") > 0\n and \"platform\".\"agent_applications\".\"approval_revision\" is null and \"platform\".\"agent_applications\".\"status\" not in ('pending_approval','rejected','withdrawn')\n )"
+        },
         "agent_application_id_non_empty": {
           "name": "agent_application_id_non_empty",
           "value": "char_length(\"platform\".\"agent_applications\".\"id\") > 0"
@@ -245,7 +268,7 @@
         },
         "agent_application_management_state_valid": {
           "name": "agent_application_management_state_valid",
-          "value": "(\n\t\t\t\t\"platform\".\"agent_applications\".\"status\" in ('pending_approval', 'withdrawn', 'rejected')\n\t\t\t\tand \"platform\".\"agent_applications\".\"approval_revision\" is null\n\t\t\t\tand \"platform\".\"agent_applications\".\"desired_state\" = 'stopped'\n\t\t\t\tand \"platform\".\"agent_applications\".\"service_availability\" is null\n\t\t\t\tand \"platform\".\"agent_applications\".\"workload_revision\" = 0\n\t\t\t\tand \"platform\".\"agent_applications\".\"fence\" = 0\n\t\t\t\tand \"platform\".\"agent_applications\".\"failure_code\" is null\n\t\t\t) or (\n\t\t\t\t\t\"platform\".\"agent_applications\".\"status\" not in ('pending_approval', 'withdrawn', 'rejected')\n\t\t\t\t\tand ((\"platform\".\"agent_applications\".\"status\" = 'creating' and \"platform\".\"agent_applications\".\"approval_revision\" is null) or \"platform\".\"agent_applications\".\"approval_revision\" is not null)\n\t\t\t\tand \"platform\".\"agent_applications\".\"workload_revision\" >= 1\n\t\t\t\tand \"platform\".\"agent_applications\".\"fence\" >= 1\n\t\t\t\tand (\n\t\t\t\t\t(\"platform\".\"agent_applications\".\"status\" in ('creating', 'creation_failed') and \"platform\".\"agent_applications\".\"desired_state\" = 'running' and \"platform\".\"agent_applications\".\"service_availability\" is null)\n\t\t\t\t\tor (\"platform\".\"agent_applications\".\"status\" = 'available' and \"platform\".\"agent_applications\".\"desired_state\" = 'running' and \"platform\".\"agent_applications\".\"service_availability\" is not null)\n\t\t\t\t\tor (\"platform\".\"agent_applications\".\"status\" in ('stopped', 'disabled') and \"platform\".\"agent_applications\".\"desired_state\" = 'stopped' and \"platform\".\"agent_applications\".\"service_availability\" is null)\n\t\t\t\t)\n\t\t\t)"
+          "value": "(\n\t\t\t\t\"platform\".\"agent_applications\".\"status\" in ('pending_approval', 'withdrawn', 'rejected')\n\t\t\t\tand \"platform\".\"agent_applications\".\"approval_revision\" is null\n\t\t\t\tand \"platform\".\"agent_applications\".\"desired_state\" = 'stopped'\n\t\t\t\tand \"platform\".\"agent_applications\".\"service_availability\" is null\n\t\t\t\tand \"platform\".\"agent_applications\".\"workload_revision\" = 0\n\t\t\t\tand \"platform\".\"agent_applications\".\"fence\" = 0\n\t\t\t\tand \"platform\".\"agent_applications\".\"failure_code\" is null\n\t\t\t) or (\n\t\t\t\t\t\"platform\".\"agent_applications\".\"status\" not in ('pending_approval', 'withdrawn', 'rejected')\n\t\t\t\t\tand ((\"platform\".\"agent_applications\".\"status\" = 'creating' and \"platform\".\"agent_applications\".\"approval_revision\" is null) or \"platform\".\"agent_applications\".\"approval_revision\" is not null or \"platform\".\"agent_applications\".\"creation_channel\" = 'api')\n\t\t\t\tand \"platform\".\"agent_applications\".\"workload_revision\" >= 1\n\t\t\t\tand \"platform\".\"agent_applications\".\"fence\" >= 1\n\t\t\t\tand (\n\t\t\t\t\t(\"platform\".\"agent_applications\".\"status\" in ('creating', 'creation_failed') and \"platform\".\"agent_applications\".\"desired_state\" = 'running' and \"platform\".\"agent_applications\".\"service_availability\" is null)\n\t\t\t\t\tor (\"platform\".\"agent_applications\".\"status\" = 'available' and \"platform\".\"agent_applications\".\"desired_state\" = 'running' and \"platform\".\"agent_applications\".\"service_availability\" is not null)\n\t\t\t\t\tor (\"platform\".\"agent_applications\".\"status\" in ('stopped', 'disabled') and \"platform\".\"agent_applications\".\"desired_state\" = 'stopped' and \"platform\".\"agent_applications\".\"service_availability\" is null)\n\t\t\t\t)\n\t\t\t)"
         },
         "agent_application_decision_reason_state": {
           "name": "agent_application_decision_reason_state",
@@ -1601,7 +1624,7 @@
         },
         "conversation_event_source_binding": {
           "name": "conversation_event_source_binding",
-          "value": "(\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'runtime'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NOT NULL\n\t\t\t\t\tAND char_length(\"platform\".\"conversation_events\".\"runtime_cursor\") > 0\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" not in ('model.selection.fell_back', 'task.status')\n\t\t\t\t) OR (\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'platform'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NULL\n\t\t\t\t\tAND (\n\t\t\t\t\t\t\"platform\".\"conversation_events\".\"event_type\" in ('model.selection.fell_back', 'task.status')\n\t\t\t\t\t\tOR (\n\t\t\t\t\t\t\t\"platform\".\"conversation_events\".\"event_type\" = 'execution.status'\n\t\t\t\t\t\t\tAND (\"platform\".\"conversation_events\".\"event_payload\"->>'status' = 'cancelled') IS TRUE\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)"
+          "value": "(\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'runtime'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NOT NULL\n\t\t\t\t\tAND char_length(\"platform\".\"conversation_events\".\"runtime_cursor\") > 0\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" not in ('model.selection.fell_back', 'task.status')\n\t\t\t\t) OR (\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'platform'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NULL\n\t\t\t\t\tAND (\n\t\t\t\t\t\t\"platform\".\"conversation_events\".\"event_type\" in ('model.selection.fell_back', 'task.status')\n\t\t\t\t\t\tOR (\n\t\t\t\t\t\t\t\"platform\".\"conversation_events\".\"event_type\" = 'execution.status'\n\t\t\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_payload\"->>'status' = 'cancelled'\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)"
         }
       },
       "isRLSEnabled": false
