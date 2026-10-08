@@ -1249,7 +1249,7 @@ Skill Hub 是 Platform DB、版本化 S3 兼容对象存储、Platform API/Web�
 - ZIP 只包含 Skill payload：根目录 `SKILL.md` 与获准资源。manifest、来源证明、扫描回执和签名作为独立对象保存，不放入待计算 `packageDigest` 的 ZIP，避免摘要自引用。
 - `packageDigest` 是实际 ZIP 完整字节的 SHA-256；`manifestDigest` 是 canonical manifest 字节的 SHA-256；`signatureDigest` 是原始 detached signature 字节的 SHA-256。ETag、对象名和调用方声明不能替代内容摘要。
 - manifest 沿既有 Skill Package Manifest：`schemaVersion`、`name`、`version`、`entryPath`、`files`、`packageDigest`。每个文件按 `path`、`sizeBytes`、`sha256` 表述，覆盖 payload 的完整普通文件集合；文件大小与摘要由实际展开字节计算，不能只读归档声明值。
-- canonical JSON 使用 UTF-8、无 BOM、无多余空白；对象按合同列出的字段顺序编码，文件数组按合法相对路径的 UTF-8 字节序排序。schema、路径与数值先严格校验，再编码和比较完整字节；重复字段、额外字段或另一种非 canonical 编码均拒绝。
+- canonical JSON 使用 UTF-8、无 BOM、无多余空白。先按严格 schema 校验所有值：数值仅允许安全非负整数，字符串须为有效 Unicode，拒绝孤立 surrogate、额外字段及非普通数据；文件数组按合法相对路径的 UTF-8 字节序排序。再按合同列出的字段顺序构造普通数据对象，使用 ECMAScript `JSON.stringify`（无 replacer/space）序列化并编码为 UTF-8；字符串转义和数值表示均以此算法为准。接收方按同一规则重建并逐字节比较完整输入，拒绝重复字段、另一种转义/数值写法及任何非 canonical 编码；manifest、来源证明、扫描回执和签名记录统一使用此规则。
 - 归档和展开总量各最多 50,000,000 bytes，普通文件最多 2,000 个；部署策略可以降低限额，调用方不能提高。校验同时计量实际输入和实际展开字节，拒绝截断、重复/重叠条目、声明与实际不一致、加密归档及不支持的归档特性。
 - 文件路径使用既有 manifest 的相对路径约束；目录按同一规则校验相对层级，不计入普通文件集合，不能声明权限或执行入口。绝对路径、dot component、反斜杠、NUL、文件/目录冲突、符号链接、特殊文件及缺少 `SKILL.md` 均拒绝。内容只写入本操作 staging，校验与扫描阶段不执行 Skill、安装脚本或嵌套依赖。
 
