@@ -742,3 +742,33 @@ describe("production deployment admissions", () => {
 		expect(f.fetch).not.toHaveBeenCalled();
 	});
 });
+
+it("rejects browser IDs that collide with the API Registry reference namespace", async () => {
+	const f = fixture();
+	const principal = { kind: "application" as const, id: "alice" };
+	const reference = `api-subject-${createHash("sha256").update(JSON.stringify(principal)).digest("hex")}`;
+	const browser = createDeploymentAdmissionsV1({
+		...f.input,
+		currentIdentity: async () => ({ ...actor, userId: reference }),
+	});
+	await expect(
+		browser.imageAdmission.admitImage({
+			...request,
+			requested: { kind: "standard", templateId: "codex" },
+		}),
+	).rejects.toThrow("PLATFORM_DEPLOYMENT_IDENTITY_UNAVAILABLE");
+	expect(f.authorize).not.toHaveBeenCalled();
+	expect(f.fetch).not.toHaveBeenCalled();
+	const api = createDeploymentAdmissionsV1({
+		...f.input,
+		currentIdentity: undefined,
+		currentApiPrincipal: async () => principal,
+	});
+	expect(
+		await api.imageAdmission.admitImage({
+			...request,
+			requested: { kind: "standard", templateId: "codex" },
+		}),
+	).toMatchObject({ status: "admitted" });
+	expect(f.authorize.mock.calls[0]?.[0].subjectRef).toBe(reference);
+});

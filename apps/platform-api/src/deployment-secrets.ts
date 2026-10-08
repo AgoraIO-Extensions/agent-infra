@@ -1,4 +1,7 @@
-import type { PendingSecretRecordAttachmentResolverV1 } from "@agent-infra/platform-core";
+import type {
+	createAgentApiCreationV1,
+	PendingSecretRecordAttachmentResolverV1,
+} from "@agent-infra/platform-core";
 import type { SecretEncryptorV1 } from "@agent-infra/secret-store";
 
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
@@ -55,10 +58,16 @@ function attachment(
 export function createDeploymentSecretPreparation(
 	encryptor: SecretEncryptorV1,
 ): {
+	readonly prepareAgentApiSecrets: NonNullable<
+		Parameters<typeof createAgentApiCreationV1>[0]["prepareSecrets"]
+	>;
 	readonly prepareApplicationSecrets: ManagementRouteDependencies["prepareSecretReplacements"];
 	readonly prepareConfigurationSecrets: ConfigurationRoutesDependencies["prepareSecretReplacements"];
 } {
 	return {
+		async prepareAgentApiSecrets({ agentId, ownerId, secrets }) {
+			return attachment(encryptor, agentId, ownerId, secrets);
+		},
 		async prepareApplicationSecrets(input) {
 			const model = input.modelConfiguration;
 			const values = [...input.secrets];

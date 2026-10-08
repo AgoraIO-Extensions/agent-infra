@@ -84,6 +84,9 @@ export interface PlatformApiAssemblyInput {
 	readonly agentApiCreation?: {
 		readonly allowedPrincipals: readonly ApiPrincipalV1[];
 		readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
+		readonly admissions?: Parameters<
+			typeof createAgentApiCreationV1
+		>[0]["admissions"];
 		readonly defaultRelayKey?: Parameters<
 			typeof createAgentApiCreationV1
 		>[0]["defaultRelayKey"];
@@ -353,7 +356,7 @@ export function assemblePlatformApi(
 	const agentApiCreation = input.agentApiCreation
 		? createAgentApiCreationV1({
 				transaction: foundationTransaction,
-				admissions,
+				admissions: input.agentApiCreation.admissions ?? admissions,
 				...(input.agentApiCreation.defaultRelayKey
 					? { defaultRelayKey: input.agentApiCreation.defaultRelayKey }
 					: {}),

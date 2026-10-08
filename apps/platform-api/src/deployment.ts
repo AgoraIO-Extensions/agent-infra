@@ -2,6 +2,8 @@ import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/p
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
 import {
 	type AgentConfigurationAuthorityContextV1,
+	type AgentConfigurationUseCaseDependenciesV1,
+	captureAgentApiCreatePrincipalsV1,
 	PersonalRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
 import {
@@ -29,7 +31,21 @@ import type { IdentityAdapter } from "./http/identity.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 
 export interface ProductionPlatformApiInputV1
-	extends Omit<DeploymentAdmissionInputV1, "currentIdentity"> {
+	extends Omit<
+		DeploymentAdmissionInputV1,
+		"currentIdentity" | "currentApiPrincipal"
+	> {
+	readonly agentApiCreation?: {
+		readonly allowedPrincipals: NonNullable<
+			PlatformApiAssemblyInput["agentApiCreation"]
+		>["allowedPrincipals"];
+		readonly keylessModelAdmission?: AgentConfigurationUseCaseDependenciesV1["keylessModelAdmission"];
+		readonly candidates?: NonNullable<
+			NonNullable<
+				PlatformApiAssemblyInput["agentApiCreation"]
+			>["defaultRelayKey"]
+		>["candidates"];
+	};
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerProfileApproval?: unknown;
 	readonly wecom?: PlatformApiAssemblyInput["wecom"];
@@ -61,7 +77,21 @@ export function createProductionPlatformApiAssemblyInputV1(
 	input: ProductionPlatformApiInputV1,
 ): PlatformApiAssemblyInput {
 	let resourceProfile: ProductionPlatformApiInputV1["resourceProfile"];
+	let allowedPrincipals: NonNullable<
+		PlatformApiAssemblyInput["agentApiCreation"]
+	>["allowedPrincipals"];
 	try {
+		allowedPrincipals = captureAgentApiCreatePrincipalsV1(
+			input.agentApiCreation?.allowedPrincipals,
+		);
+		if (
+			(input.agentApiCreation?.candidates !== undefined &&
+				typeof input.agentApiCreation.candidates !== "function") ||
+			(input.agentApiCreation?.keylessModelAdmission !== undefined &&
+				typeof input.agentApiCreation.keylessModelAdmission.admitModels !==
+					"function")
+		)
+			throw new Error();
 		OciImageReferenceV1Schema.parse(
 			`${input.imageRepository}@sha256:${"0".repeat(64)}`,
 		);
@@ -90,10 +120,28 @@ export function createProductionPlatformApiAssemblyInputV1(
 		throw new Error("PLATFORM_DEPLOYMENT_CONFIGURATION_INVALID");
 	}
 	const identityScope = createDeploymentIdentityScope(input.identity);
+	const apiCandidates = input.agentApiCreation?.candidates;
+	const apiModelAdmission = input.agentApiCreation?.keylessModelAdmission;
+	const keylessModelAdmission = apiModelAdmission
+		? { admitModels: apiModelAdmission.admitModels.bind(apiModelAdmission) }
+		: undefined;
 	const admissions = createDeploymentAdmissionsV1({
 		...input,
 		currentIdentity: identityScope.currentIdentity,
 	});
+	// Capture the same startup policy as browser admission; only the principal varies per request.
+	const apiAdmissionInput = {
+		imageRepository: input.imageRepository,
+		registry: {
+			...input.registry,
+			policy: {
+				authorize: input.registry.policy.authorize.bind(input.registry.policy),
+			},
+		},
+		templates: structuredClone(input.templates),
+		modelCatalog: { ...input.modelCatalog },
+		channelPolicy: structuredClone(input.channelPolicy),
+	};
 	const deploymentConfiguration =
 		createDeploymentConfigurationProjectionV2(input);
 	const connectionCapability = createConnectionCapability(
@@ -106,9 +154,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 	const validatePersonalRelayKey = input.personalRelayKeyValidation
 		? createPersonalRelayKeyValidatorV1(input.personalRelayKeyValidation)
 		: undefined;
-	const relayKeyEncryptor = validatePersonalRelayKey
-		? createRelayKeyEncryptorV1({ encryptionKeys: input.encryptionKeys })
-		: undefined;
+	const relayKeyEncryptor =
+		validatePersonalRelayKey || apiCandidates
+			? createRelayKeyEncryptorV1({ encryptionKeys: input.encryptionKeys })
+			: undefined;
 	const personalRelayKeys: PlatformApiAssemblyInput["personalRelayKeys"] =
 		validatePersonalRelayKey && relayKeyEncryptor
 			? {
@@ -136,6 +185,28 @@ export function createProductionPlatformApiAssemblyInputV1(
 				}
 			: undefined;
 	return {
+		agentApiCreation: {
+			allowedPrincipals,
+			loadAuthorityContext: input.loadAuthorityContext,
+			admissions: ({ principal, authorizationAdmission }) => ({
+				...createDeploymentAdmissionsV1({
+					...apiAdmissionInput,
+					currentApiPrincipal: async () => principal,
+				}),
+				authorizationAdmission,
+				...(keylessModelAdmission ? { keylessModelAdmission } : {}),
+			}),
+			prepareSecrets: secrets.prepareAgentApiSecrets,
+			...(relayKeyEncryptor && apiCandidates
+				? {
+						defaultRelayKey: {
+							candidates: apiCandidates,
+							encrypt: (binding, plaintext) =>
+								relayKeyEncryptor.encrypt({ ...binding, plaintext }),
+						},
+					}
+				: {}),
+		},
 		...(personalRelayKeys ? { personalRelayKeys } : {}),
 		...(input.wecom ? { wecom: input.wecom } : {}),
 		...(input.wecomIdentity ? { wecomIdentity: input.wecomIdentity } : {}),
@@ -154,7 +225,8 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.directory ? { directory: input.directory } : {}),
 		connectionCapability,
 		allocateApplicationIds: allocateDeploymentApplicationIds,
-		...secrets,
+		prepareApplicationSecrets: secrets.prepareApplicationSecrets,
+		prepareConfigurationSecrets: secrets.prepareConfigurationSecrets,
 		admissions: ({ configurationQuery }) => ({
 			...admissions,
 			authorizationAdmission: createDeploymentAuthorizationAdmission({

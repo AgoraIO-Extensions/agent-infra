@@ -2,6 +2,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import {
+	AgentApiCreationResponseV1Schema,
 	AgentApplicationProjectionV2Schema,
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
@@ -10,12 +11,25 @@ import {
 	migratePlatformDatabase,
 	PostgresAgentConfigurationQueryV1,
 } from "@agent-infra/platform-store";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
 import { setProductionDeploymentInput } from "../../../tests/fixtures/platform-api-production-deployment.js";
+import {
+	createClient,
+	createConfig,
+} from "../../web/src/pilot/generated-v2/client/index.js";
+import { createAgentApiV1 } from "../../web/src/pilot/generated-v2/sdk.gen.js";
 import {
 	createProductionPlatformApiAssemblyInputV1,
 	type ProductionPlatformApiInputV1,
@@ -347,7 +361,7 @@ beforeAll(async () => {
 	await openApi();
 }, 60_000);
 afterAll(async () => {
-	if (running) await createPlatformApiShutdown(running)();
+	if (running?.server.listening) await createPlatformApiShutdown(running)();
 	await reader?.end();
 	await database?.stop();
 });
@@ -1000,4 +1014,282 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			}
 		},
 	);
+});
+
+const apiTokens = {
+	application: `papi_${"A".repeat(43)}`,
+	user: `papi_${"U".repeat(43)}`,
+};
+const apiModel = {
+	options: [
+		{
+			optionId: "option-a",
+			endpointId: "endpoint-a",
+			modelId: "model-a",
+			reasoningLevels: ["medium"],
+		},
+	],
+	defaultOptionId: "option-a",
+	defaultReasoningLevel: "medium",
+};
+const apiBody = {
+	schemaVersion: 3 as const,
+	name: "Production API Agent",
+	description: "Controlled production creation",
+	source: { kind: "standard" as const, templateId: "codex" },
+	coOwnerIds: [],
+	availability: [],
+	environment: [],
+	secrets: [{ name: "BOT_TOKEN", value: "controlled-api-private-secret" }],
+	modelConfiguration: apiModel,
+	defaultRelayKey: "controlled-api-private-default-key",
+};
+
+// These exercise the real production factory, loader, API/Store and Registry adapter.
+// Registry transport and standard model providers are controlled test inputs.
+describe("production API creation with user and application Tokens", () => {
+	const browserResolve = vi.fn<IdentityAdapter["resolve"]>();
+	const candidates =
+		vi.fn<
+			NonNullable<
+				NonNullable<
+					ProductionPlatformApiInputV1["agentApiCreation"]
+				>["candidates"]
+			>
+		>();
+	let currentOwnerStatus: "active" | "disabled";
+	beforeEach(async () => {
+		if (running.server.listening) await createPlatformApiShutdown(running)();
+		await reader.unsafe(
+			"truncate platform.agents,platform.platform_applications,platform.platform_api_credentials,platform.platform_user_disables,platform.relay_key_subjects,platform.relay_key_versions,platform.audit_events,platform.outbox_items,platform.idempotency_records cascade",
+		);
+		fixture = deploymentInput(database.databaseUrl);
+		browserResolve
+			.mockReset()
+			.mockRejectedValue(
+				new Error("Browser identity must not be used by API creation"),
+			);
+		currentOwnerStatus = "active";
+		fixture.input = {
+			...fixture.input,
+			identity: {
+				...identity,
+				resolve: browserResolve,
+				resolveUser: async (userId) => ({
+					schemaVersion: 1,
+					userId,
+					accountStatus: currentOwnerStatus,
+					organizationIds: [],
+					authorizationRevision: "current-api-user",
+				}),
+			},
+		};
+		candidates.mockReset().mockResolvedValue(apiModel.options);
+		fixture.input = {
+			...fixture.input,
+			agentApiCreation: {
+				allowedPrincipals: [
+					{ kind: "application", id: "alice" },
+					{ kind: "user", id: "alice" },
+				],
+				keylessModelAdmission: {
+					admitModels: async ({ requested }) =>
+						requested ? { ...requested, catalogRevision: "catalog-a" } : null,
+				},
+				candidates,
+			},
+		};
+		await reader.unsafe(
+			"insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('alice','Robot application','alice','app-revision')",
+		);
+		for (const [kind, material] of Object.entries(apiTokens))
+			await reader.unsafe(
+				'insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values($1,$2,\'alice\',$3,\'["agent:create","agent:manage","agent:read"]\'::jsonb)',
+				[kind, kind, sha256(material)],
+			);
+		await openApi();
+	});
+	function create(
+		token = apiTokens.application,
+		key = "api-create",
+		body: unknown = apiBody,
+	) {
+		return fetch(`${origin}/api/v2/agents`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${token}`,
+				"Idempotency-Key": key,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(body),
+		});
+	}
+	async function effects() {
+		return reader.unsafe(
+			"select (select count(*)::int from platform.agents) agents,(select count(*)::int from platform.agent_principal_grants) grants,(select count(*)::int from platform.secret_records) secrets,(select count(*)::int from platform.relay_key_versions) keys,(select count(*)::int from platform.outbox_items) outbox",
+		);
+	}
+	it("creates through the generated Client and encrypts the default Key and ordinary Secret without a browser identity", async () => {
+		const client = createClient(
+			createConfig({ baseUrl: origin, auth: apiTokens.application }),
+		);
+		const response = await createAgentApiV1({
+			client,
+			body: apiBody,
+			headers: { "Idempotency-Key": "generated-api" },
+		});
+		expect(response.response?.status).toBe(201);
+		const result = AgentApiCreationResponseV1Schema.parse(response.data);
+		expect(result).toMatchObject({ status: "creating", replayed: false });
+		expect(await effects()).toEqual([
+			{ agents: 1, grants: 2, secrets: 1, keys: 1, outbox: 1 },
+		]);
+		expect(
+			await reader.unsafe(
+				"select creator_principal_type,creator_principal_id,applicant_id,creation_channel,approval_revision from platform.agent_applications",
+			),
+		).toEqual([
+			{
+				creator_principal_type: "application",
+				creator_principal_id: "alice",
+				applicant_id: "alice",
+				creation_channel: "api",
+				approval_revision: null,
+			},
+		]);
+		expect(fixture.authorize.mock.calls[0]?.[0].subjectRef).toBe(
+			`api-subject-${sha256(JSON.stringify({ kind: "application", id: "alice" }))}`,
+		);
+		expect(browserResolve).not.toHaveBeenCalled();
+		const records = await reader.unsafe(
+			"select record from platform.secret_records",
+		);
+		expect(validatePlatformSecretRecordV1(records[0]?.record)).toMatchObject({
+			agentId: result.agentId,
+			ownerId: "alice",
+			name: "BOT_TOKEN",
+			lifecycleState: "pending",
+		});
+		for (const rows of [
+			await reader.unsafe("select * from platform.secret_records"),
+			await reader.unsafe("select * from platform.relay_key_versions"),
+			await reader.unsafe("select * from platform.audit_events"),
+			response.data,
+		]) {
+			expect(JSON.stringify(rows)).not.toContain(apiBody.defaultRelayKey);
+			expect(JSON.stringify(rows)).not.toContain(apiBody.secrets[0]?.value);
+			expect(JSON.stringify(rows)).not.toContain(apiTokens.application);
+		}
+	});
+	it("keeps concurrent user and application Registry subjects separate for the same bare ID", async () => {
+		const responses = await Promise.all([create(), create(apiTokens.user)]);
+		for (const response of responses) expect(response.status).toBe(201);
+		expect(
+			fixture.authorize.mock.calls
+				.map(([request]) => request.subjectRef)
+				.toSorted(),
+		).toEqual(
+			["user", "application"]
+				.map(
+					(kind) =>
+						`api-subject-${sha256(JSON.stringify({ kind, id: "alice" }))}`,
+				)
+				.toSorted(),
+		);
+		expect(browserResolve).not.toHaveBeenCalled();
+		expect(await effects()).toEqual([
+			{ agents: 2, grants: 4, secrets: 2, keys: 2, outbox: 2 },
+		]);
+	});
+	it("retains startup admission policy after caller aliases are modified", async () => {
+		Object.assign(fixture.input, {
+			imageRepository: "registry.example.test/other/repository",
+			templates: [],
+			registry: {
+				...fixture.input.registry,
+				policy: { authorize: async () => ({ status: "rejected" }) },
+			},
+			channelPolicy: { revision: "mutated", bindings: [] },
+		});
+		expect((await create()).status).toBe(201);
+		expect(fixture.authorize).toHaveBeenCalledOnce();
+		expect(await effects()).toEqual([
+			{ agents: 1, grants: 2, secrets: 1, keys: 1, outbox: 1 },
+		]);
+	});
+	it("denies creation when no deployment principal is explicitly allowed", async () => {
+		await createPlatformApiShutdown(running)();
+		fixture.input = { ...fixture.input, agentApiCreation: undefined };
+		await openApi();
+		expect((await create()).status).toBe(403);
+		expect(fixture.authorize).not.toHaveBeenCalled();
+		expect(await effects()).toEqual([
+			{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+		]);
+	});
+	it.each(["missing-model", "missing-key", "rejected-key", "failed-key"])(
+		"fails closed with %s provider",
+		async (failure) => {
+			await createPlatformApiShutdown(running)();
+			const configured = fixture.input.agentApiCreation;
+			if (!configured) throw new Error("Missing controlled configuration");
+			fixture.input = {
+				...fixture.input,
+				agentApiCreation: {
+					...configured,
+					...(failure === "missing-model"
+						? { keylessModelAdmission: undefined }
+						: {}),
+					...(failure === "missing-key" ? { candidates: undefined } : {}),
+				},
+			};
+			if (failure === "rejected-key") candidates.mockResolvedValue([]);
+			if (failure === "failed-key")
+				candidates.mockRejectedValue(new Error(apiBody.defaultRelayKey));
+			await openApi();
+			const response = await create();
+			expect(response.status).toBeGreaterThanOrEqual(400);
+			expect(await response.text()).not.toContain(apiBody.defaultRelayKey);
+			expect(await effects()).toEqual([
+				{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+			]);
+		},
+	);
+	it("rechecks current Owner validity after Registry admission and rolls back", async () => {
+		fixture.authorize.mockImplementationOnce(async () => {
+			currentOwnerStatus = "disabled";
+			return {
+				status: "admitted",
+				decisionRef: "current-api",
+				evaluatedAt: "2026-10-08T00:00:00Z",
+			};
+		});
+		expect((await create()).status).toBe(403);
+		expect(browserResolve).not.toHaveBeenCalled();
+		expect(await effects()).toEqual([
+			{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
+		]);
+	});
+	it("supports custom API creation without model or default-Key providers", async () => {
+		const response = await create(apiTokens.application, "custom-api", {
+			schemaVersion: 2,
+			name: apiBody.name,
+			description: apiBody.description,
+			source: {
+				kind: "custom",
+				imageReference: `registry.example.test/agents/codex@${fixture.imageDigest}`,
+				interactionMode: "platform-adapter",
+			},
+			coOwnerIds: [],
+			availability: [],
+			environment: [],
+			secrets: apiBody.secrets,
+		});
+		expect(response.status).toBe(201);
+		expect(await effects()).toEqual([
+			{ agents: 1, grants: 2, secrets: 1, keys: 0, outbox: 1 },
+		]);
+		expect(candidates).not.toHaveBeenCalled();
+		expect(browserResolve).not.toHaveBeenCalled();
+	});
 });
