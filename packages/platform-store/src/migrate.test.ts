@@ -1958,10 +1958,15 @@ describe("published Relay authority migration", () => {
 			42,
 			43,
 			44,
+			45,
 		]);
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.at(-2)).toMatchObject({
 			idx: 44,
 			tag: "0044_platform_cancellation_status_required",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 45,
+			tag: "0045_skill_hub_organization_scope",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2083,6 +2088,7 @@ describe("published Relay authority migration", () => {
 				"skill_hub_skills:owner_id",
 				"skill_hub_skills:status",
 				"skill_hub_skills:updated_at",
+				"skill_hub_skills:organization_id",
 				"skill_hub_versions:created_at",
 				"skill_hub_versions:id",
 				"skill_hub_versions:manifest_digest",
@@ -2111,6 +2117,7 @@ describe("published Relay authority migration", () => {
 				"skill_hub_installations:skill_hub_installation_state_valid",
 				"skill_hub_skills:skill_hub_skill_id_non_empty",
 				"skill_hub_skills:skill_hub_skill_name_non_empty",
+				"skill_hub_skills:skill_hub_skill_organization_non_empty",
 				"skill_hub_skills:skill_hub_skill_owner_non_empty",
 				"skill_hub_skills:skill_hub_skill_status_valid",
 				"skill_hub_versions:skill_hub_version_id_non_empty",

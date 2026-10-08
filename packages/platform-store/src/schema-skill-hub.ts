@@ -26,11 +26,11 @@ export const skillHubSkills = platformSchema.table(
 		id: text("id").primaryKey(),
 		name: varchar("name", { length: 63 }).notNull(),
 		ownerId: text("owner_id").notNull(),
-		/** Organization selected by the authenticated publisher for ORGANIZATION visibility. */
-		organizationId: text("organization_id"),
 		status: varchar("status", { length: 16 }).default("active").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+		/** Organization selected by the authenticated publisher for ORGANIZATION visibility. */
+		organizationId: text("organization_id"),
 	},
 	(table) => [
 		nonEmpty(table.id, "skill_hub_skill_id_non_empty"),
