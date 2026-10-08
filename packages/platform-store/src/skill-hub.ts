@@ -738,12 +738,39 @@ export class PostgresSkillHubLifecycleV1 {
 					};
 				},
 			);
-			await this.#transaction(context, async (_tx, _request, identity) => {
-				checkIdentity(identity);
-			});
-			await revalidate();
 			return Object.freeze(result);
-		} catch {
+		} catch (error) {
+			const code =
+				typeof error === "object" && error !== null && "code" in error
+					? (error as { code?: unknown }).code
+					: undefined;
+			const permanent =
+				error instanceof SkillHubOperationErrorV1
+					? error.code !== "unavailable"
+					: typeof code === "string" &&
+						[
+							"invalid_archive",
+							"archive_limit",
+							"invalid_path",
+							"duplicate_path",
+							"path_conflict",
+							"symlink",
+							"missing_entry",
+							"digest_mismatch",
+							"source_untrusted",
+							"scan_rejected",
+							"signature_invalid",
+						].includes(code);
+			if (permanent) {
+				if (lease)
+					await this.#outbox
+						.markFailed({
+							...lease,
+							errorCode: "SKILL_PACKAGE_REJECTED",
+						})
+						.catch(() => null);
+				throw error;
+			}
 			if (lease)
 				await this.#outbox
 					.scheduleRetry({

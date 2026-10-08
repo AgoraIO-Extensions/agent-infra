@@ -425,7 +425,6 @@ export class SkillPackageSupplierV1 {
 				},
 				validate,
 			);
-			await validate();
 			return result;
 		} catch (error) {
 			if (
