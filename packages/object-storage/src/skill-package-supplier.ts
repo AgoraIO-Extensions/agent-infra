@@ -138,7 +138,7 @@ export class SkillPackageSupplierV1 {
 			values.archiveBytes.byteLength > 50_000_000
 		)
 			fail();
-		const archiveBytes = values.archiveBytes.slice();
+		const archiveBytes = Uint8Array.from(values.archiveBytes);
 		const { archiveBytes: _bytes, ...metadata } = values;
 		const selection = parseSkillPackagePublicationSelectionV1({
 			schemaVersion: 1,
