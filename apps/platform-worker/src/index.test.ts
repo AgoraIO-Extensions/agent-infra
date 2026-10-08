@@ -589,6 +589,19 @@ describe("Platform Worker production V2 lifecycle", () => {
 		expect(stopOrder).toEqual(["conversation", "workload", "primary"]);
 		expect(worker.observabilityStatus().state).toBe("closed");
 	});
+	it("keeps Conversation status stopping when conversation cleanup fails", async () => {
+		const worker = await startPlatformWorkerFromDeploymentV2({
+			startPrimary: () => ({ stop: async () => {} }),
+			startWorkload: async () => ({ stop: async () => {} }),
+			startConversation: async () => ({
+				stop: async () => {
+					throw new Error("conversation cleanup failed");
+				},
+			}),
+		});
+		await expect(worker.stop()).rejects.toThrow("conversation cleanup failed");
+		expect(worker.conversationStatus()).toBe("stopping");
+	});
 	it("starts WeCom authorization before conversation and drains conversation first", async () => {
 		const startOrder: string[] = [];
 		const stopOrder: string[] = [];
