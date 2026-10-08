@@ -128,6 +128,7 @@ export {
 export * from "./session-sandbox-lifecycle.js";
 export * from "./session-sandbox-reconciliation.js";
 export * from "./skill-hub.js";
+export * from "./skill-hub-installation.js";
 export * from "./skill-hub-management.js";
 export * from "./skill-package-publication.js";
 export * from "./skill-package-ref.js";

@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
+	canInstallSkillHubVersionV1,
+	canViewSkillHubVersionV1,
 	createSkillHubVersionV1,
 	PersonalApiCredentialErrorV1,
 	parseSkillHubIdempotencyKeyV1,
 	parseSkillHubIdentitySnapshotV1,
 	parseSkillHubIdV1,
+	parseSkillHubInstallationCommandV1,
 	parseSkillHubRegistrationV1,
 	parseSkillHubRequestV1,
 	parseSkillHubReviewV1,
@@ -19,6 +22,8 @@ import {
 	requireSkillHubVersionAccessV1,
 	reviewSkillHubVersionV1,
 	revokeSkillHubVersionV1,
+	type SkillHubInstallationCommandV1,
+	type SkillHubInstallationV1,
 	SkillHubLifecycleErrorV1,
 	SkillHubOperationErrorV1,
 	type SkillHubRegistrationV1,
@@ -29,6 +34,7 @@ import {
 	skillHubVersionStatesV1,
 	skillHubVisibilityV1,
 	skillPackagePublicationStagesV1,
+	uninstallSkillHubInstallationV1,
 } from "@agent-infra/platform-core";
 import { and, eq, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -42,7 +48,11 @@ import {
 	persistedEvents,
 	platformUserDisables,
 } from "./schema.js";
-import { skillHubSkills, skillHubVersions } from "./schema-skill-hub.js";
+import {
+	skillHubInstallations,
+	skillHubSkills,
+	skillHubVersions,
+} from "./schema-skill-hub.js";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
@@ -107,6 +117,35 @@ function idempotencyWhere(
 		eq(idempotencyRecords.commandType, `skill.version.${action}.v1`),
 		eq(idempotencyRecords.idempotencyKey, key),
 	);
+}
+
+function installationScope(command: SkillHubInstallationCommandV1) {
+	return `${command.principalType}:${command.principalId}:${command.skillVersionId}`;
+}
+
+function decodeInstallation(
+	row: typeof skillHubInstallations.$inferSelect,
+): SkillHubInstallationV1 {
+	if (
+		!(["user", "organization"] as const).includes(
+			row.principalType as "user" | "organization",
+		) ||
+		!(["installed", "uninstalled", "failed"] as const).includes(
+			row.state as "installed" | "uninstalled" | "failed",
+		)
+	)
+		throw new SkillHubOperationErrorV1("unavailable");
+	return Object.freeze({
+		schemaVersion: 1,
+		installationId: row.id,
+		principalType: row.principalType as "user" | "organization",
+		principalId: row.principalId,
+		skillVersionId: row.skillVersionId,
+		state: row.state as "installed" | "uninstalled" | "failed",
+		needUpgrade: row.needUpgrade,
+		installedAt: row.installedAt.toISOString(),
+		updatedAt: row.updatedAt.toISOString(),
+	});
 }
 
 async function audit(
@@ -348,6 +387,13 @@ export class PostgresSkillHubLifecycleV1 {
 					.for("update");
 				if (parent)
 					requireSkillHubRegistrationParentV1(parent, command, request.userId);
+				if (
+					parent &&
+					command.visibility === "ORGANIZATION" &&
+					(!parent.organizationId ||
+						!identity.actor.organizationIds.includes(parent.organizationId))
+				)
+					throw new SkillHubOperationErrorV1("forbidden");
 				if (replayed) {
 					const version = await this.#version(
 						transaction,
@@ -376,6 +422,10 @@ export class PostgresSkillHubLifecycleV1 {
 						id: command.skillId,
 						name: command.name,
 						ownerId: request.userId,
+						organizationId:
+							command.visibility === "ORGANIZATION"
+								? (identity.actor.organizationIds[0] ?? null)
+								: null,
 						createdAt: new Date(),
 						updatedAt: new Date(),
 					});
@@ -912,6 +962,331 @@ export class PostgresSkillHubLifecycleV1 {
 					{ state: version.state, replayed: false },
 				);
 				return version;
+			},
+		);
+	}
+
+	async listVisibleVersions(context: SkillHubRequestV1) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				const rows = await transaction
+					.select({
+						version: skillHubVersions,
+						name: skillHubSkills.name,
+						organizationId: skillHubSkills.organizationId,
+					})
+					.from(skillHubVersions)
+					.innerJoin(
+						skillHubSkills,
+						eq(skillHubSkills.id, skillHubVersions.skillId),
+					)
+					.where(eq(skillHubVersions.state, "published"));
+				const versions = rows.flatMap(({ version, name, organizationId }) => {
+					const decoded = decode(version, name);
+					return canViewSkillHubVersionV1(
+						decoded,
+						identity.actor,
+						organizationId,
+					)
+						? [{ ...decoded, name }]
+						: [];
+				});
+				const latestBySkill = new Map<string, Date>();
+				for (const { version } of rows) {
+					const current = latestBySkill.get(version.skillId);
+					if (!current || version.createdAt > current)
+						latestBySkill.set(version.skillId, version.createdAt);
+				}
+				const installationRows = await transaction
+					.select({
+						installation: skillHubInstallations,
+						version: skillHubVersions,
+					})
+					.from(skillHubInstallations)
+					.innerJoin(
+						skillHubVersions,
+						eq(skillHubVersions.id, skillHubInstallations.skillVersionId),
+					)
+					.where(eq(skillHubInstallations.state, "installed"));
+				for (const { installation, version } of installationRows) {
+					if (
+						(installation.principalType === "user" &&
+							installation.principalId !== request.userId) ||
+						(installation.principalType === "organization" &&
+							!identity.actor.isAdministrator &&
+							!identity.actor.organizationIds.includes(
+								installation.principalId,
+							))
+					)
+						continue;
+					const latest = latestBySkill.get(version.skillId);
+					const needUpgrade =
+						latest !== undefined && latest > version.createdAt;
+					if (installation.needUpgrade !== needUpgrade)
+						await transaction
+							.update(skillHubInstallations)
+							.set({ needUpgrade, updatedAt: new Date() })
+							.where(eq(skillHubInstallations.id, installation.id));
+				}
+				await audit(
+					transaction,
+					request,
+					"skill.directory.read",
+					"directory",
+					"succeeded",
+					{ count: versions.length },
+				);
+				return Object.freeze(versions);
+			},
+		);
+	}
+
+	async installVersion(
+		context: SkillHubRequestV1,
+		keyInput: string,
+		input: unknown,
+	) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				const command = parseSkillHubInstallationCommandV1(input);
+				const key = parseSkillHubIdempotencyKeyV1(keyInput);
+				const scopeId = installationScope(command);
+				const digest = platformIdempotencyV1.canonicalRequestDigest({
+					...command,
+				});
+				await transaction.execute(
+					sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["skill_install", scopeId, request.userId, key])}, 0))`,
+				);
+				const [prior] = await transaction
+					.select()
+					.from(idempotencyRecords)
+					.where(
+						and(
+							eq(idempotencyRecords.scopeType, "skill_installation"),
+							eq(idempotencyRecords.scopeId, scopeId),
+							eq(idempotencyRecords.actorId, request.userId),
+							eq(idempotencyRecords.commandType, "skill.install.v1"),
+							eq(idempotencyRecords.idempotencyKey, key),
+						),
+					);
+				if (
+					prior?.requestDigest !== undefined &&
+					prior.requestDigest !== digest
+				)
+					throw new SkillHubOperationErrorV1("idempotency_conflict");
+				if (prior?.status === "completed") {
+					const installationId = prior.result?.installationId;
+					if (typeof installationId !== "string")
+						throw new SkillHubOperationErrorV1("unavailable");
+					const [versionRow] = await transaction
+						.select({
+							version: skillHubVersions,
+							name: skillHubSkills.name,
+							organizationId: skillHubSkills.organizationId,
+						})
+						.from(skillHubVersions)
+						.innerJoin(
+							skillHubSkills,
+							eq(skillHubSkills.id, skillHubVersions.skillId),
+						)
+						.where(eq(skillHubVersions.id, command.skillVersionId));
+					if (!versionRow)
+						throw new SkillHubOperationErrorV1("version_unavailable");
+					const replayVersion = decode(versionRow.version, versionRow.name);
+					if (
+						!canInstallSkillHubVersionV1(
+							replayVersion,
+							command,
+							identity.actor,
+							versionRow.organizationId,
+						)
+					)
+						throw new SkillHubOperationErrorV1(
+							replayVersion.state === "published"
+								? "not_found"
+								: "version_unavailable",
+						);
+					const [row] = await transaction
+						.select()
+						.from(skillHubInstallations)
+						.where(eq(skillHubInstallations.id, installationId));
+					if (!row) throw new SkillHubOperationErrorV1("unavailable");
+					return { replayed: true, installation: decodeInstallation(row) };
+				}
+				const [row] = await transaction
+					.select({
+						version: skillHubVersions,
+						name: skillHubSkills.name,
+						organizationId: skillHubSkills.organizationId,
+					})
+					.from(skillHubVersions)
+					.innerJoin(
+						skillHubSkills,
+						eq(skillHubSkills.id, skillHubVersions.skillId),
+					)
+					.where(eq(skillHubVersions.id, command.skillVersionId))
+					.for("update");
+				if (!row) throw new SkillHubOperationErrorV1("not_found");
+				const version = decode(row.version, row.name);
+				if (
+					!canInstallSkillHubVersionV1(
+						version,
+						command,
+						identity.actor,
+						row.organizationId,
+					)
+				)
+					throw new SkillHubOperationErrorV1(
+						version.state === "published" ? "not_found" : "version_unavailable",
+					);
+				const now = new Date();
+				const [existing] = await transaction
+					.select()
+					.from(skillHubInstallations)
+					.where(
+						and(
+							eq(skillHubInstallations.principalType, command.principalType),
+							eq(skillHubInstallations.principalId, command.principalId),
+							eq(skillHubInstallations.skillVersionId, command.skillVersionId),
+						),
+					)
+					.for("update");
+				if (existing?.state === "installed" && !existing.needUpgrade)
+					throw new SkillHubOperationErrorV1("version_conflict");
+				const installationId = existing?.id ?? randomUUID();
+				if (existing) {
+					await transaction
+						.update(skillHubInstallations)
+						.set({ state: "installed", needUpgrade: false, updatedAt: now })
+						.where(eq(skillHubInstallations.id, installationId));
+				} else {
+					await transaction.insert(skillHubInstallations).values({
+						id: installationId,
+						principalType: command.principalType,
+						principalId: command.principalId,
+						skillVersionId: command.skillVersionId,
+						state: "installed",
+						needUpgrade: false,
+						installedAt: now,
+						updatedAt: now,
+					});
+				}
+				await transaction.execute(sql`
+					update platform.skill_hub_installations
+					set need_upgrade = true, updated_at = ${now.toISOString()}
+					where principal_type = ${command.principalType}
+					  and principal_id = ${command.principalId}
+					  and state = 'installed'
+					  and skill_version_id <> ${command.skillVersionId}
+					  and skill_version_id in (
+						select id from platform.skill_hub_versions where skill_id = ${version.skillId}
+					  )
+				`);
+				const [stored] = await transaction
+					.select()
+					.from(skillHubInstallations)
+					.where(eq(skillHubInstallations.id, installationId));
+				if (!stored) throw new SkillHubOperationErrorV1("unavailable");
+				await transaction.insert(idempotencyRecords).values({
+					id: randomUUID(),
+					scopeType: "skill_installation",
+					scopeId: scopeId,
+					actorId: request.userId,
+					commandType: "skill.install.v1",
+					idempotencyKey: key,
+					requestDigest: digest,
+					status: "completed",
+					result: { installationId, skillVersionId: command.skillVersionId },
+				});
+				await audit(
+					transaction,
+					request,
+					"skill.install",
+					installationId,
+					"succeeded",
+					{ skillVersionId: command.skillVersionId, replayed: false },
+				);
+				return { replayed: false, installation: decodeInstallation(stored) };
+			},
+		);
+	}
+
+	async uninstallInstallation(
+		context: SkillHubRequestV1,
+		installationIdInput: string,
+		keyInput: string,
+	) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				const installationId = parseSkillHubIdV1(installationIdInput);
+				const key = parseSkillHubIdempotencyKeyV1(keyInput);
+				await transaction.execute(
+					sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["skill_uninstall", installationId, request.userId, key])}, 0))`,
+				);
+				const [row] = await transaction
+					.select()
+					.from(skillHubInstallations)
+					.where(eq(skillHubInstallations.id, installationId))
+					.for("update");
+				if (!row) throw new SkillHubOperationErrorV1("not_found");
+				if (
+					(row.principalType === "user" &&
+						row.principalId !== request.userId) ||
+					(row.principalType === "organization" &&
+						!identity.actor.isAdministrator &&
+						!identity.actor.organizationIds.includes(row.principalId))
+				)
+					throw new SkillHubOperationErrorV1("not_found");
+				const digest = platformIdempotencyV1.canonicalRequestDigest({
+					installationId,
+				});
+				const [prior] = await transaction
+					.select()
+					.from(idempotencyRecords)
+					.where(
+						and(
+							eq(idempotencyRecords.scopeType, "skill_installation"),
+							eq(idempotencyRecords.scopeId, installationId),
+							eq(idempotencyRecords.actorId, request.userId),
+							eq(idempotencyRecords.commandType, "skill.uninstall.v1"),
+							eq(idempotencyRecords.idempotencyKey, key),
+						),
+					);
+				if (prior && prior.requestDigest !== digest)
+					throw new SkillHubOperationErrorV1("idempotency_conflict");
+				if (prior?.status === "completed")
+					return { replayed: true, installation: decodeInstallation(row) };
+				const next = uninstallSkillHubInstallationV1(
+					decodeInstallation(row),
+					new Date().toISOString(),
+				);
+				await transaction
+					.update(skillHubInstallations)
+					.set({ state: next.state, updatedAt: new Date(next.updatedAt) })
+					.where(eq(skillHubInstallations.id, installationId));
+				await transaction.insert(idempotencyRecords).values({
+					id: randomUUID(),
+					scopeType: "skill_installation",
+					scopeId: installationId,
+					actorId: request.userId,
+					commandType: "skill.uninstall.v1",
+					idempotencyKey: key,
+					requestDigest: digest,
+					status: "completed",
+					result: { installationId },
+				});
+				await audit(
+					transaction,
+					request,
+					"skill.uninstall",
+					installationId,
+					"succeeded",
+					{ replayed: false },
+				);
+				return { replayed: false, installation: next };
 			},
 		);
 	}
