@@ -3,7 +3,7 @@ import { types } from "node:util";
 
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
 import type {
-	AgentConfigurationRecordV2,
+	AgentConfigurationRecord,
 	PendingSecretRecordAttachmentsV1,
 	PendingSecretRecordExpectationV1,
 } from "@agent-infra/platform-core";
@@ -129,7 +129,7 @@ function configurationReferenceKey(input: {
 }
 
 function configurationReferenceKeys(
-	configuration: AgentConfigurationRecordV2,
+	configuration: AgentConfigurationRecord,
 ): ReadonlySet<string> {
 	const references = [
 		...configuration.secrets.map(({ name, secretId, version, isSet }) => ({
@@ -138,14 +138,16 @@ function configurationReferenceKeys(
 			secretVersion: version,
 			isSet,
 		})),
-		...(configuration.modelConfiguration?.options.map(
-			({ optionId, credential }) => ({
-				name: `model:${optionId}`,
-				secretId: credential.secretId,
-				secretVersion: credential.version,
-				isSet: credential.isSet,
-			}),
-		) ?? []),
+		...(configuration.schemaVersion === 3
+			? []
+			: (configuration.modelConfiguration?.options.map(
+					({ optionId, credential }) => ({
+						name: `model:${optionId}`,
+						secretId: credential.secretId,
+						secretVersion: credential.version,
+						isSet: credential.isSet,
+					}),
+				) ?? [])),
 	];
 	if (
 		references.length > 160 ||
@@ -168,8 +170,8 @@ function configurationReferenceKeys(
 export async function insertPendingSecretRecordAttachments(
 	transaction: Transaction,
 	attachments: PendingSecretRecordAttachmentsV1 | undefined,
-	configuration: AgentConfigurationRecordV2,
-	previousConfiguration?: AgentConfigurationRecordV2,
+	configuration: AgentConfigurationRecord,
+	previousConfiguration?: AgentConfigurationRecord,
 ): Promise<void> {
 	try {
 		const configurationReferences = configurationReferenceKeys(configuration);

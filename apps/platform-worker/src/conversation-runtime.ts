@@ -1058,15 +1058,30 @@ export function createConversationRuntimeV2(
 		},
 		async *events(request, signal) {
 			const active = combined(signal);
+			const pause = async () => {
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				try {
+					await bounded(
+						new Promise<void>((resolve) => {
+							timer = setTimeout(resolve, reconnectDelayMs);
+						}),
+						active,
+					);
+				} finally {
+					clearTimeout(timer);
+				}
+			};
 			for (;;) {
 				active.throwIfAborted();
 				const prepared = await prepare(request, "events.persist", active);
 				const { state, authority } = prepared;
 				if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
 				let terminal = false;
+				let delivered = 0;
 				let streamFailure: ConversationRuntimeHostError | undefined;
 				try {
 					for await (const event of readPreparedEvents(prepared, active)) {
+						delivered++;
 						yield event;
 						if (event.type === "completed") terminal = true;
 					}
@@ -1088,26 +1103,22 @@ export function createConversationRuntimeV2(
 						["completed", "failed", "cancelled"].includes(
 							currentState.executionStatus,
 						)
-					)
+					) {
+						if (delivered === 0 && !streamFailure) await pause();
 						continue;
+					}
 				}
 				if (streamFailure) throw streamFailure;
+				if (terminal) return;
+				// The Host replays a bounded page per read. A non-empty page without
+				// the terminal event may hide later events even when the Platform
+				// already recorded a terminal status from a status response (#1524).
+				if (delivered > 0) continue;
 				if (
-					terminal ||
 					["completed", "failed", "cancelled"].includes(state.executionStatus)
 				)
 					return;
-				let timer: ReturnType<typeof setTimeout> | undefined;
-				try {
-					await bounded(
-						new Promise<void>((resolve) => {
-							timer = setTimeout(resolve, reconnectDelayMs);
-						}),
-						active,
-					);
-				} finally {
-					clearTimeout(timer);
-				}
+				await pause();
 			}
 		},
 	};

@@ -1,7 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { z } from "zod";
 import { createDocument } from "zod-openapi";
 import {
@@ -96,6 +95,7 @@ import {
 	WorkloadReadinessResponseV1Schema,
 	WorkloadReadinessV1SchemaDefinitions,
 } from "./runtime/index.ts";
+import { RuntimeOAuthV1SchemaDefinitions } from "./runtime/oauth.ts";
 import {
 	kubernetesWorkloadSchemasV1,
 	registryManifestSchemasV1,
@@ -114,6 +114,14 @@ if (rootOption !== -1 && !process.argv[rootOption + 1]) {
 	throw new Error("--root requires a directory");
 }
 const artifactPaths = {
+	runtimeOAuthJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/runtime-oauth.v1.schema.json",
+	),
+	runtimeOAuthOpenapi: resolve(
+		artifactRoot,
+		"openapi/runtime-oauth.v1.openapi.json",
+	),
 	browserCapabilityJsonSchema: resolve(
 		artifactRoot,
 		"json-schema/browser-capability.v1.schema.json",
@@ -913,6 +921,37 @@ function buildArtifacts() {
 		registryManifestJsonSchema,
 		secretLifecycleJsonSchema,
 		workerResultJsonSchema,
+		runtimeOAuthJsonSchema: jsonSchemaDocument({
+			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-oauth.v1.schema.json",
+			title: "Runtime OAuth installation contracts V1",
+			definitions: RuntimeOAuthV1SchemaDefinitions,
+		}),
+		runtimeOAuthOpenapi: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Runtime protected OAuth receiver", version: "1.0.0" },
+			security: [{ RuntimeServiceBearer: [] }],
+			paths: Object.fromEntries(
+				["begin", "callback", "confirm", "status"].map((command) => [
+					`/internal/runtime/oauth/v1/${command}`,
+					{
+						post: postOperation(
+							`runtimeOAuth${command[0].toUpperCase()}${command.slice(1)}V1`,
+							RuntimeOAuthV1SchemaDefinitions[
+								`RuntimeOAuth${command[0].toUpperCase()}${command.slice(1)}RequestV1`
+							],
+							RuntimeOAuthV1SchemaDefinitions.RuntimeOAuthResponseV1,
+							"application/json",
+						),
+					},
+				]),
+			),
+			components: {
+				securitySchemes: {
+					RuntimeServiceBearer: { type: "http", scheme: "bearer" },
+				},
+				schemas: { ProtocolErrorV1: ProtocolErrorV1Schema },
+			},
+		}),
 		runtimeJsonSchemaV3,
 		runtimeJsonSchemaV4,
 		runtimeOpenapiV3,

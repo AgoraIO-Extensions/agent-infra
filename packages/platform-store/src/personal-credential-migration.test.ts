@@ -137,6 +137,9 @@ beforeAll(async () => {
 		{ idx: 39, tag: "0039_skill_hub" },
 		{ idx: 40, tag: "0040_agent_configuration_v3" },
 		{ idx: 41, tag: "0041_skill_version_integrity" },
+		{ idx: 42, tag: "0042_agent_api_creation" },
+		{ idx: 43, tag: "0043_platform_cancellation_event" },
+		{ idx: 44, tag: "0044_platform_cancellation_status_required" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
@@ -378,13 +381,13 @@ describe("personal credential disable authority append", () => {
 				Object.entries(data).map(([table, rows]) => [
 					table,
 					rows.map((row) => {
-						if (
-							table !== "conversations" &&
-							table !== "conversation_executions"
-						)
-							return row;
 						if (!row || typeof row !== "object") return row;
 						const copy = { ...(row as Record<string, unknown>) };
+						if (table === "agent_applications") {
+							delete copy.creation_channel;
+							delete copy.creator_principal_type;
+							delete copy.creator_principal_id;
+						}
 						delete copy.principal_type;
 						if (table === "conversation_executions") {
 							if ("sandbox_id" in copy) expect(copy.sandbox_id).toBeNull();

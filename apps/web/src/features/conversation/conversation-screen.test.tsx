@@ -450,6 +450,76 @@ describe("functional conversation screen", () => {
 		).toBeNull();
 	});
 
+	it("settles a stop whose reply had already finished (#1524)", async () => {
+		const { requests } = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (request.method === "POST")
+				return Response.json(
+					CommandAcceptedProjectionV1Schema.parse({
+						schemaVersion: 1,
+						executionId: "execution-1",
+						messageId: null,
+						status: "already_finished",
+					}),
+					{ status: 202 },
+				);
+			if (path === "/api/v2/conversations/conversation-1")
+				return Response.json({
+					...history("conversation-1", []),
+					messages: [userMessage()],
+				});
+		});
+		fireEvent.click(await screen.findByRole("button", { name: "停止回复" }));
+		await screen.findByText("原回复已结束。");
+		const post = requests.findIndex((request) => request.method === "POST");
+		expect(post).toBeGreaterThanOrEqual(0);
+		// The receipt re-reads the timeline instead of waiting for a stop event.
+		await waitFor(() =>
+			expect(
+				requests
+					.slice(post + 1)
+					.some(
+						(request) =>
+							new URL(request.url).pathname ===
+							"/api/v2/conversations/conversation-1",
+					),
+			).toBe(true),
+		);
+		expect(screen.queryByRole("button", { name: "正在停止" })).toBeNull();
+	});
+	it("shows a stored terminal answer whose terminal event is missing (#1524)", async () => {
+		const processing = {
+			...event(1),
+			schemaVersion: 1 as const,
+			type: "execution.status" as const,
+			payload: { status: "processing" as const },
+		};
+		setup((request) => {
+			if (
+				new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+			)
+				return Response.json({
+					...history("conversation-1", [processing]),
+					conversation: { ...history().conversation, status: "ready" },
+					messages: [
+						userMessage(),
+						{
+							...userMessage(),
+							role: "assistant",
+							messageId: "answer-1",
+							replyToMessageId: "message-1",
+							text: "Finished answer",
+							answerVersion: 1,
+							isCurrentAnswer: true,
+						},
+					],
+				});
+		});
+		await screen.findByText("Finished answer");
+		expect(screen.getByText("已完成")).toBeTruthy();
+		expect(screen.queryByText("处理中")).toBeNull();
+		expect(screen.queryByRole("button", { name: "停止回复" })).toBeNull();
+	});
 	it("requires saving a changed model before sending and applies the confirmed future selection", async () => {
 		let saved = false;
 		const config = {

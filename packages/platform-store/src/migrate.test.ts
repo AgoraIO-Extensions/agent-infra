@@ -1955,10 +1955,13 @@ describe("published Relay authority migration", () => {
 			39,
 			40,
 			41,
+			42,
+			43,
+			44,
 		]);
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 41,
-			tag: "0041_skill_version_integrity",
+			idx: 44,
+			tag: "0044_platform_cancellation_status_required",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2161,6 +2164,9 @@ describe("published Relay authority migration", () => {
 								"conversations:principal_type",
 							]),
 					"browser_sessions:absolute_expires_at",
+					"agent_applications:creation_channel",
+					"agent_applications:creator_principal_id",
+					"agent_applications:creator_principal_type",
 					...skillHubColumns,
 				],
 				checks: [
@@ -2175,6 +2181,8 @@ describe("published Relay authority migration", () => {
 								"conversations:conversation_principal_type_valid",
 							]
 						: [
+								// 0042 admits the Platform's own cancellation event.
+								"conversation_events:conversation_event_source_binding",
 								"conversation_executions:conversation_execution_original_digest_binding",
 								"conversation_executions:conversation_execution_principal_type_valid",
 								"conversation_executions:conversation_execution_task_wait_binding",
@@ -2202,6 +2210,10 @@ describe("published Relay authority migration", () => {
 
 			expectedDelta.checks.push(
 				"agent_configuration_revisions:agent_configuration_identity_matches",
+			);
+			expectedDelta.checks.push(
+				"agent_applications:agent_application_creation_provenance",
+				"agent_applications:agent_application_management_state_valid",
 			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,

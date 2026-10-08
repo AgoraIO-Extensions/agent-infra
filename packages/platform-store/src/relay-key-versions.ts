@@ -198,7 +198,7 @@ interface CiphertextRow {
 
 type Transaction = postgres.TransactionSql;
 
-function postgresVersion(value: string, minimum: number): number {
+function postgresVersion(value: unknown, minimum: number): number {
 	if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value))
 		throw new RelayKeyVersionStoreError();
 	const parsed = Number(value);
@@ -230,8 +230,14 @@ export async function currentRelayKeyVersionInTransaction(
 	});
 }
 
+/** The shared writer accepts parameterized tags from postgres-js or a Drizzle transaction. */
+type RelayKeyVersionWriteSql = (
+	strings: TemplateStringsArray,
+	...parameters: (string | number)[]
+) => Promise<readonly Record<string, unknown>[]>;
+
 export async function replaceRelayKeyVersionInTransaction(
-	sql: Transaction,
+	sql: RelayKeyVersionWriteSql,
 	input: RelayKeyVersionSubjectV1 & {
 		readonly expectedCurrentVersion: number | null;
 		readonly encrypt: (
@@ -250,7 +256,7 @@ export async function replaceRelayKeyVersionInTransaction(
 		values (${target.purpose}, ${target.subjectId})
 		on conflict (purpose, subject_id) do nothing
 	`;
-	const rows = await sql<SubjectRow[]>`
+	const rows = await sql`
 		select last_version, current_version
 		from platform.relay_key_subjects
 		where purpose = ${target.purpose} and subject_id = ${target.subjectId}
@@ -276,12 +282,13 @@ export async function replaceRelayKeyVersionInTransaction(
 		await input.encrypt(nextBinding),
 		nextBinding,
 	);
+	// Keep the bound parameter text: postgres-js otherwise JSON-encodes an already serialized value.
 	await sql`
 		insert into platform.relay_key_versions
 			(purpose, subject_id, key_version, key_id, ciphertext)
 		values
 			(${target.purpose}, ${target.subjectId}, ${next}, ${nextBinding.keyId},
-			 ${sql.json(encrypted as unknown as postgres.JSONValue)})
+			 ${JSON.stringify(encrypted)}::text::jsonb)
 	`;
 	await sql`
 		update platform.relay_key_subjects

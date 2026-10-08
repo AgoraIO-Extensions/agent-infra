@@ -165,7 +165,12 @@ export function ActiveConversation({
 		if (result.kind === "accepted") {
 			setNotice("");
 			if (action.current === "stop") {
-				setStopping(result.receipt.executionId ?? undefined);
+				// The stop request found the reply already finished; there is no
+				// stop to wait for, only a projection to refresh (#1524).
+				if (result.receipt.status === "already_finished") {
+					setStopping(undefined);
+					setNotice("原回复已结束。");
+				} else setStopping(result.receipt.executionId ?? undefined);
 			} else {
 				if (action.current === "message") setDraft("");
 				setAcceptedExecution(result.receipt.executionId ?? undefined);

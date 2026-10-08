@@ -539,7 +539,13 @@ export const conversationEvents = platformSchema.table(
 				) OR (
 					${table.source} = 'platform'
 					AND ${table.runtimeCursor} IS NULL
-					AND ${table.eventType} in ('model.selection.fell_back', 'task.status')
+					AND (
+						${table.eventType} in ('model.selection.fell_back', 'task.status')
+						OR (
+							${table.eventType} = 'execution.status'
+							AND (${table.eventPayload}->>'status' = 'cancelled') IS TRUE
+						)
+					)
 				)`,
 		),
 		uniqueIndex("conversation_event_execution_adapter_key_unique")

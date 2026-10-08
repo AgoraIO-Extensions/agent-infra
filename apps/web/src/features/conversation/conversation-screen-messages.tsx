@@ -17,6 +17,7 @@ import type {
 } from "../../pilot/generated-v2/types.gen.js";
 import { AssistantMarkdown } from "./assistant-markdown.js";
 import {
+	answerStatus,
 	answerText,
 	commandFailure,
 	executionStatus,
@@ -74,7 +75,7 @@ export function ConversationMessages({
 					candidates.at(-1);
 				const index = selected ? candidates.indexOf(selected) : -1;
 				const selectedStatus = selected
-					? executionStatus(events, selected.executionId, selected.status)
+					? answerStatus(events, selected.executionId, selected.status)
 					: undefined;
 				return (
 					<div className="exchange space-y-6" key={message.messageId}>

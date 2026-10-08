@@ -100,4 +100,114 @@ describe("current conversation execution", () => {
 			status: "submitted",
 		});
 	});
+
+	it("settles on a terminal assistant result whose terminal event is missing (#1524)", () => {
+		const processing = PersistedConversationEventV1Schema.parse({
+			...event(1),
+			executionId: "execution-1",
+			type: "execution.status",
+			payload: { status: "processing" },
+		});
+		const projection = ConversationDetailProjectionV2Schema.parse({
+			...history("conversation-1", [processing]),
+			messages: [
+				{
+					messageId: "message-1",
+					role: "user",
+					text: "Request",
+					status: "submitted",
+					executionId: "execution-1",
+					replyToMessageId: null,
+					answerVersion: null,
+					isCurrentAnswer: null,
+					error: null,
+					createdAt: timestamp,
+				},
+				{
+					messageId: "message-2",
+					role: "assistant",
+					text: "Answer",
+					status: "completed",
+					executionId: "execution-1",
+					replyToMessageId: "message-1",
+					answerVersion: 1,
+					isCurrentAnswer: true,
+					error: null,
+					createdAt: timestamp,
+				},
+			],
+		});
+
+		expect(currentExecution(projection, projection.events)).toEqual({
+			executionId: "execution-1",
+			status: "completed",
+		});
+	});
+
+	it("does not keep a cancelled reply pending when no status event exists (#1524)", () => {
+		const projection = ConversationDetailProjectionV2Schema.parse({
+			...history("conversation-1", []),
+			messages: [
+				{
+					messageId: "message-1",
+					role: "user",
+					text: "Request",
+					status: "submitted",
+					executionId: "execution-1",
+					replyToMessageId: null,
+					answerVersion: null,
+					isCurrentAnswer: null,
+					error: null,
+					createdAt: timestamp,
+				},
+				{
+					messageId: "message-2",
+					role: "assistant",
+					text: "",
+					status: "cancelled",
+					executionId: "execution-1",
+					replyToMessageId: "message-1",
+					answerVersion: 1,
+					isCurrentAnswer: true,
+					error: null,
+					createdAt: timestamp,
+				},
+			],
+		});
+
+		expect(
+			currentExecution(projection, projection.events, "execution-1"),
+		).toEqual({ executionId: "execution-1", status: "cancelled" });
+	});
+
+	it("keeps a later terminal event ahead of an assistant result", () => {
+		const cancelled = PersistedConversationEventV1Schema.parse({
+			...event(1),
+			executionId: "execution-1",
+			type: "execution.status",
+			payload: { status: "cancelled" },
+		});
+		const projection = ConversationDetailProjectionV2Schema.parse({
+			...history("conversation-1", [cancelled]),
+			messages: [
+				{
+					messageId: "message-2",
+					role: "assistant",
+					text: "Partial",
+					status: "completed",
+					executionId: "execution-1",
+					replyToMessageId: null,
+					answerVersion: 1,
+					isCurrentAnswer: true,
+					error: null,
+					createdAt: timestamp,
+				},
+			],
+		});
+
+		expect(currentExecution(projection, projection.events)).toEqual({
+			executionId: "execution-1",
+			status: "cancelled",
+		});
+	});
 });

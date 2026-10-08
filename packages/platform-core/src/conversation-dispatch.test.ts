@@ -671,6 +671,64 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.outboxStatus).toBe("retry_scheduled");
 	});
 
+	it("keeps a recovered Turn open until its terminal event persists (#1524)", async () => {
+		const pages = [
+			[
+				{
+					schemaVersion: 1 as const,
+					adapterEventKey: "event-t1",
+					executionId: "execution-1",
+					cursor: "cursor-t1",
+					occurredAt: "2026-09-06T00:00:01.000Z",
+					type: "text" as const,
+					payload: { delta: "partial" },
+				},
+			],
+			[runtimeEvent(2)],
+		];
+		let reads = 0;
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Recovery must not resubmit");
+			},
+			async recoverStatus() {
+				throw new Error("Unexpected legacy recovery");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					executionId: request.executionId,
+					hostSessionRef: "host-session-conversation-1",
+					outcome: "found",
+					status: "completed",
+				};
+			},
+			async *events() {
+				// The Host replays a bounded page; this stream ends without the
+				// terminal event although the status response says completed.
+				for (const event of pages[reads++] ?? []) yield event;
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "processing",
+				hostSessionRef: "host-session-conversation-1",
+			}),
+		);
+		const h = setup({ store, runtimeHost });
+		expect(await dispatch(h.useCase)).toMatchObject({ outcome: "retry" });
+		expect(store.outboxStatus).toBe("retry_scheduled");
+		expect(store.errorCode).toBe("RUNTIME_STREAM_INCOMPLETE");
+		expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+			"cursor-t1",
+		]);
+		expect(await dispatch(h.useCase)).toMatchObject({ outcome: "accepted" });
+		expect(store.outboxStatus).toBe("succeeded");
+		expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+			"cursor-t1",
+			"cursor-2",
+		]);
+	});
 	it("retains an occupied original execution when recovery finds no accepted Turn without resubmitting", async () => {
 		let dispatches = 0;
 		let recoveries = 0;
@@ -970,6 +1028,8 @@ describe("Conversation Worker dispatch", () => {
 	it("forwards the Execution-frozen selection without resolving defaults", async () => {
 		const inner = new FakeConversationRuntimeHostV1();
 		inner.setResult({ outcome: "accepted", status: "completed" });
+		// A finished Turn still journals its terminal event (HLD §8.2).
+		inner.setEvents([runtimeEvent(1)]);
 		let observedRequest: ConversationRuntimeDispatchRequestV1 | undefined;
 		const runtimeHost: ConversationRuntimeHostPortV1 = {
 			async dispatch(request) {
@@ -1856,6 +1916,7 @@ describe("Conversation Worker dispatch", () => {
 			outcome: "retry",
 		});
 		runtimeHost.setResult({ outcome: "accepted", status: "completed" });
+		runtimeHost.setEvents([{ ...runtimeEvent(1), executionId: "execution-2" }]);
 		await expect(
 			dispatch(second, "conversation:turn:execution-2"),
 		).resolves.toEqual({ schemaVersion: 1, outcome: "accepted" });
