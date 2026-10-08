@@ -1,6 +1,11 @@
 import type { AuditRecord } from "./audit-query.js";
 
 export const auditActionLabels: Record<AuditRecord["action"], string> = {
+	"skill.version.register": "Skill 版本登记",
+	"skill.version.review": "Skill 版本审核",
+	"skill.version.revoke": "Skill 版本撤销",
+	"skill.version.read": "Skill 版本读取",
+	"skill.version.refused": "Skill 操作拒绝",
 	"agent.application.submitted": "提交创建申请",
 	"agent.application.updated": "修改创建申请",
 	"agent.application.resubmitted": "重新提交申请",

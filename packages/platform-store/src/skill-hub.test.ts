@@ -1,3 +1,4 @@
+import { ScopedPlatformAuditProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import type { SkillHubIdentitySnapshotV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import {
@@ -202,6 +203,26 @@ describe("Skill Hub PostgreSQL lifecycle", () => {
 					).subject.subjectId,
 			),
 		).toEqual(["version-a", "version-a"]);
+		for (const row of audits) {
+			const projection = decodePlatformAuditRowV1(
+				row as Parameters<typeof decodePlatformAuditRowV1>[0],
+			);
+			expect(
+				ScopedPlatformAuditProjectionV1Schema.safeParse({
+					...projection,
+					occurredAt: projection.occurredAt.toISOString(),
+					taskApi: null,
+					requestId: "request-a",
+					agentId: null,
+					conversationId: null,
+					executionId: null,
+					authorizationRecordId: null,
+					originalPrincipal: null,
+					executor: null,
+					operation: null,
+				}).success,
+			).toBe(true);
+		}
 		const encoded = JSON.stringify(audits);
 		for (const value of [
 			"private-review-text",

@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import {
 	parseTaskApiAuditInputV1,
 	skillHubOperationCodesV1,
+	skillHubVersionStatesV1,
 } from "@agent-infra/platform-core";
 
 import { desc, eq, sql } from "drizzle-orm";
@@ -481,9 +482,7 @@ function changedFields(
 				throw new PlatformAuditQueryError("unavailable");
 			const value = details as { state: unknown; replayed: unknown };
 			if (
-				!["pending_review", "published", "rejected", "revoked"].some(
-					(state) => state === value.state,
-				) ||
+				!skillHubVersionStatesV1.some((state) => state === value.state) ||
 				typeof value.replayed !== "boolean"
 			)
 				throw new PlatformAuditQueryError("unavailable");

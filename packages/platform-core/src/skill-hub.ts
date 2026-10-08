@@ -104,11 +104,13 @@ export const skillHubVisibilityV1 = [
 ] as const;
 export type SkillHubVisibilityV1 = (typeof skillHubVisibilityV1)[number];
 
-export type SkillHubVersionStateV1 =
-	| "published"
-	| "pending_review"
-	| "rejected"
-	| "revoked";
+export const skillHubVersionStatesV1 = [
+	"published",
+	"pending_review",
+	"rejected",
+	"revoked",
+] as const;
+export type SkillHubVersionStateV1 = (typeof skillHubVersionStatesV1)[number];
 
 export type SkillHubReviewDecisionV1 = "approve" | "reject";
 

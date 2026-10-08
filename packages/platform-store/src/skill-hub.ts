@@ -21,6 +21,7 @@ import {
 	SkillHubOperationErrorV1,
 	type SkillHubRequestV1,
 	type SkillHubVersionV1,
+	skillHubVersionStatesV1,
 	skillHubVisibilityV1,
 } from "@agent-infra/platform-core";
 import { and, eq, sql } from "drizzle-orm";
@@ -38,12 +39,6 @@ type Transaction = Parameters<
 >[0];
 type Action = "register" | "review" | "revoke";
 type VersionRow = typeof skillHubVersions.$inferSelect;
-const stateValues = [
-	"published",
-	"pending_review",
-	"rejected",
-	"revoked",
-] as const;
 
 function decode(row: VersionRow, name: string): SkillHubVersionV1 {
 	try {
@@ -61,7 +56,7 @@ function decode(row: VersionRow, name: string): SkillHubVersionV1 {
 			signatureDigest: row.signatureDigest,
 		});
 		if (
-			!stateValues.some((item) => item === row.state) ||
+			!skillHubVersionStatesV1.some((item) => item === row.state) ||
 			!skillHubVisibilityV1.some((item) => item === row.visibility)
 		)
 			throw new Error();

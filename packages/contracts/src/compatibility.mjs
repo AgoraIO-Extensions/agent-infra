@@ -1374,6 +1374,28 @@ function isWecomApplicationOpenApiAddition(previous, current) {
 }
 
 // #481 publishes the scoped Platform audit surface and its bounded action set.
+function isSkillHubAuditActionOpenApiAddition(previous, current) {
+	const additions = [
+		"skill.version.register",
+		"skill.version.review",
+		"skill.version.revoke",
+		"skill.version.read",
+		"skill.version.refused",
+	];
+	const before = previous.components?.schemas?.ScopedPlatformAuditActionV1;
+	const after = current.components?.schemas?.ScopedPlatformAuditActionV1;
+	if (
+		!Array.isArray(before?.enum) ||
+		!Array.isArray(after?.enum) ||
+		!sameValue(after.enum, [...additions, ...before.enum])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+		structuredClone(before.enum);
+	return isDeepStrictEqual(previous, normalized);
+}
+
 function isScopedAuditOpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v1/audit",
@@ -1954,6 +1976,7 @@ function findBreakingChanges(previous, current) {
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
+			!isSkillHubAuditActionOpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)
 		) {

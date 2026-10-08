@@ -206,6 +206,7 @@ describe("platform-core package surface", () => {
 			"reviewSkillHubVersionV1",
 			"revokeSkillHubVersionV1",
 			"skillHubOperationCodesV1",
+			"skillHubVersionStatesV1",
 			"skillHubVisibilityV1",
 			"snapshotAgentConfigurationWritePlanV1",
 			"snapshotAgentManagementWritePlanV1",
