@@ -576,10 +576,13 @@ describe("Platform Worker production V2 lifecycle", () => {
 			startWorkload: async () => workload,
 			startConversation: async () => conversation,
 		});
+		expect(worker.conversationStatus()).toBe("running");
 		expect(worker.observabilityStatus().state).toBe("active");
 		const stopping = worker.stop();
+		expect(worker.conversationStatus()).toBe("stopping");
 		expect(worker.stop()).toBe(stopping);
 		await stopping;
+		expect(worker.conversationStatus()).toBe("stopped");
 		expect(primary.stop).toHaveBeenCalledOnce();
 		expect(workload.stop).toHaveBeenCalledOnce();
 		expect(conversation.stop).toHaveBeenCalledOnce();

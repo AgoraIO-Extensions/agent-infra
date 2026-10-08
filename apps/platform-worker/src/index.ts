@@ -57,6 +57,12 @@ export {
 
 export const platformWorkerService = "platform-worker";
 
+export type PlatformWorkerConversationLifecycleStatusV1 =
+	| "not_started"
+	| "running"
+	| "stopping"
+	| "stopped";
+
 export function createPlatformConversationDispatchWorkerV1(options: {
 	readonly databaseUrl: string;
 	readonly authorization: ConversationDispatchAuthorizationPortV1;
@@ -251,6 +257,8 @@ export async function startPlatformWorkerFromDeploymentV2(
 	let workload: { stop(): Promise<void> } | undefined;
 	let conversation: { stop(): Promise<void> } | undefined;
 	let wecom: { stop(): Promise<void> } | undefined;
+	let conversationStatus: PlatformWorkerConversationLifecycleStatusV1 =
+		"not_started";
 	try {
 		workload = await (
 			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
@@ -265,11 +273,16 @@ export async function startPlatformWorkerFromDeploymentV2(
 					telemetry,
 				))
 		)(observability);
+		conversationStatus = "running";
 		let stopping: Promise<void> | undefined;
 		return {
 			observabilityStatus: observability.status,
+			conversationStatus() {
+				return conversationStatus;
+			},
 			stop() {
 				stopping ??= (async () => {
+					conversationStatus = "stopping";
 					const results: PromiseSettledResult<void>[] = [];
 					try {
 						for (const stop of [
@@ -290,6 +303,7 @@ export async function startPlatformWorkerFromDeploymentV2(
 							result.status === "rejected",
 					);
 					if (failure) throw failure.reason;
+					conversationStatus = "stopped";
 				})();
 				return stopping;
 			},
