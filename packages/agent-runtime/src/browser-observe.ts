@@ -698,7 +698,19 @@ export function createBrowserObserveControllerV1(input: {
 	async function executeAction(
 		input_: BrowserActionRequestV1,
 	): Promise<BrowserActionRecordV1> {
-		const binding = input_.executionBinding;
+		const supplied = input_.executionBinding;
+		const binding =
+			supplied === undefined
+				? undefined
+				: Object.freeze({
+						agentId: supplied?.agentId,
+						conversationId: supplied?.conversationId,
+						executionId: supplied?.executionId,
+						capabilityVersion: supplied?.capabilityVersion,
+						pageRevision: supplied?.pageRevision,
+						sessionGeneration: supplied?.sessionGeneration,
+						resourceFence: supplied?.resourceFence,
+					});
 		if (
 			binding !== undefined &&
 			(!validExecutionBinding(binding) ||
@@ -706,7 +718,7 @@ export function createBrowserObserveControllerV1(input: {
 		)
 			throw new Error("BROWSER_ACTION_BINDING_INVALID");
 		const request: BrowserActionRequestV1 = binding
-			? { ...input_, executionBinding: Object.freeze({ ...binding }) }
+			? { ...input_, executionBinding: binding }
 			: input_;
 		const createdAt = new Date().toISOString();
 		const actionId = request.actionId ?? `action-${randomUUID()}`;

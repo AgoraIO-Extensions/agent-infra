@@ -505,6 +505,20 @@ describe("Browser action outcome readback", () => {
 		).toMatchObject({ status: "completed", executionBinding: binding });
 
 		const rejectedBinding = executionBinding(1);
+		const inherited = Object.create(rejectedBinding);
+		const inheritedResult = await controller.executeAction({
+			actionId: "inherited-binding",
+			kind: "click",
+			page: { pageId: "missing", pageRevision: 1 },
+			executionBinding: inherited,
+		});
+		expect(inheritedResult.executionBinding).toEqual(rejectedBinding);
+		expect(
+			controller.readAction({
+				actionId: "inherited-binding",
+				executionBinding: rejectedBinding,
+			}),
+		).toEqual(inheritedResult);
 		const rejected = await controller.executeAction({
 			actionId: "bound-rejected",
 			kind: "click",
@@ -521,6 +535,37 @@ describe("Browser action outcome readback", () => {
 				executionBinding: rejectedBinding,
 			}),
 		).toMatchObject({ status: "rejected", executionBinding: rejectedBinding });
+	});
+
+	it("excludes non-binding metadata from the snapshot and idempotency digest", async () => {
+		const page = new FakePage();
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability: {
+				...capability,
+				operations: ["navigate", "observe", "interact"],
+			},
+		});
+		const reference = await controller.navigate("https://example.test/app");
+		const target = (await controller.observe(reference)).elements[0];
+		if (!target) throw new Error("expected element");
+		const binding = executionBinding(reference.pageRevision);
+		const supplied = { ...binding, metadata: { value: "original" } };
+		const request = {
+			actionId: "metadata-action",
+			idempotencyKey: "metadata-key",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			kind: "click" as const,
+			page: reference,
+			target,
+			executionBinding: supplied,
+		};
+		const result = await controller.executeAction(request);
+		expect(result.executionBinding).toEqual(binding);
+		supplied.metadata.value = "changed";
+		expect(await controller.executeAction(request)).toEqual(result);
+		expect(page.pageLocator.click).toHaveBeenCalledTimes(1);
 	});
 
 	it("captures the dispatch binding before awaiting Browser I/O", async () => {
