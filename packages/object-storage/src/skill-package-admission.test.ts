@@ -2,6 +2,7 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
 	admissionSignatureBytesV1,
+	canonicalSkillPackageScanReceiptV1,
 	canonicalSkillPackageSourceProofV1,
 	prepareSkillPackageV1,
 	verifyAdmissionSignatureV1,
@@ -72,7 +73,178 @@ const archive = zip([
 	{ path: "references/readme.txt", text: "reference" },
 ]);
 
+const sourceProof = {
+	schemaVersion: 1 as const,
+	provider: "my_library",
+	publisherId: "publisher-a",
+	sourceVersion: "source-1",
+	sourceDigest: "a".repeat(64),
+	approvalRef: null,
+	trustRevision: "trust-1",
+};
+const scanReceipt = {
+	schemaVersion: 1 as const,
+	scannerId: "scanner-a",
+	engineVersion: "1",
+	rulesetDigest: "a".repeat(64),
+	policyRevision: "policy-1",
+	scannedAt: "2026-01-01T00:00:00.000Z",
+	expiresAt: "2026-01-01T00:01:00.000Z",
+	packageDigest: "a".repeat(64),
+	manifestDigest: "b".repeat(64),
+	scannedFileCount: 1,
+	scannedBytes: 5,
+	verdict: "clean" as const,
+};
+const signingInput = {
+	packageObjectVersion: "opaque/s3+version",
+	skillId: "skill-a",
+	skillVersionId: "version-a",
+	ownerId: "owner-a",
+	provider: "my_library",
+	version: "1.0.0",
+	packageDigest: "a".repeat(64),
+	manifestDigest: "b".repeat(64),
+	sourceProofDigest: "c".repeat(64),
+	scanReceiptDigest: "d".repeat(64),
+	trustRevision: "trust-1",
+	policyRevision: "policy-1",
+	signingKeyId: "key-a",
+};
+
 describe("Skill package admission", () => {
+	it("refuses to sign malformed or extra fields", () => {
+		expect(() =>
+			admissionSignatureBytesV1({ ...signingInput, signingKeyId: "\ud800" }),
+		).toThrow();
+		expect(() =>
+			admissionSignatureBytesV1({
+				...signingInput,
+				unexpected: "metadata",
+			} as never),
+		).toThrow();
+	});
+	it("rejects a signature from a different key algorithm", () => {
+		const payload = admissionSignatureBytesV1(signingInput);
+		const keys = generateKeyPairSync("rsa", { modulusLength: 1024 });
+		expect(() =>
+			verifyAdmissionSignatureV1(
+				payload,
+				sign(null, payload, keys.privateKey),
+				keys.publicKey,
+			),
+		).toThrow();
+	});
+	it("rejects a scan purportedly completed in the future", () => {
+		const prepared = prepareSkillPackageV1({
+			archiveBytes: archive,
+			name: "summary",
+			version: "1.0.0",
+		});
+		expect(() =>
+			verifySkillPackageScanReceiptV1(
+				{
+					...scanReceipt,
+					packageDigest: prepared.packageDigest,
+					manifestDigest: sha(prepared.manifestBytes),
+					scannedFileCount: prepared.fileCount,
+					scannedBytes: prepared.totalBytes,
+					scannedAt: new Date(Date.now() + 60_000).toISOString(),
+					expiresAt: new Date(Date.now() + 120_000).toISOString(),
+				},
+				prepared,
+				"a".repeat(64),
+				"policy-1",
+			),
+		).toThrow();
+	});
+	it("rejects invalid scan evidence instead of serializing it as JSON null", () => {
+		expect(() =>
+			canonicalSkillPackageScanReceiptV1({
+				...scanReceipt,
+				scannedBytes: Number.NaN,
+			}),
+		).toThrow();
+		expect(() =>
+			canonicalSkillPackageScanReceiptV1({
+				...scanReceipt,
+				engineVersion: "\ud800",
+			}),
+		).toThrow();
+	});
+	it("rejects non-data evidence without invoking accessors", () => {
+		let accessed = false;
+		const proof = { ...sourceProof };
+		Object.defineProperty(proof, "publisherId", {
+			enumerable: true,
+			get() {
+				accessed = true;
+				return "publisher-a";
+			},
+		});
+		expect(() => canonicalSkillPackageSourceProofV1(proof)).toThrow();
+		expect(accessed).toBe(false);
+	});
+	it("does not coerce nested evidence values or invoke their code", () => {
+		let coerced = false;
+		const sourceDigest = {
+			toString() {
+				coerced = true;
+				return "a".repeat(64);
+			},
+		};
+		expect(() =>
+			canonicalSkillPackageSourceProofV1({
+				...sourceProof,
+				sourceDigest,
+			} as never),
+		).toThrow();
+		expect(coerced).toBe(false);
+	});
+	it("rejects payload hidden in a directory entry", () => {
+		expect(() =>
+			prepareSkillPackageV1({
+				archiveBytes: zip([
+					{ path: "SKILL.md", text: "# ok" },
+					{ path: "references/", text: "unscanned" },
+				]),
+				name: "summary",
+				version: "1.0.0",
+			}),
+		).toThrow();
+	});
+	it.each([false, true])(
+		"rejects a file ancestor regardless of entry order (%s)",
+		(reverse) => {
+			const conflict = [
+				{ path: "scripts/run.ts", text: "payload" },
+				{ path: "scripts", text: "file" },
+			];
+			if (reverse) conflict.reverse();
+			expect(() =>
+				prepareSkillPackageV1({
+					archiveBytes: zip([{ path: "SKILL.md", text: "# ok" }, ...conflict]),
+					name: "summary",
+					version: "1.0.0",
+				}),
+			).toThrow();
+		},
+	);
+	it("accepts an explicit directory containing payload files", () => {
+		const prepared = prepareSkillPackageV1({
+			archiveBytes: zip([
+				{ path: "SKILL.md", text: "# ok" },
+				{ path: "references/", text: "" },
+				{ path: "references/doc.md", text: "reference" },
+			]),
+			name: "summary",
+			version: "1.0.0",
+		});
+		expect(prepared.manifest.files.map((file) => file.path)).toEqual([
+			"SKILL.md",
+			"references/doc.md",
+		]);
+	});
 	it("opens a real ZIP, hashes actual files and emits a canonical manifest", () => {
 		const prepared = prepareSkillPackageV1({
 			archiveBytes: archive,
@@ -162,6 +334,31 @@ describe("Skill package admission", () => {
 			policyRevision: receipt.policyRevision,
 			signingKeyId: "key-a",
 		});
+		const prefix = Buffer.from(
+			"agent-infra:skill-package-admission:v1\n",
+			"ascii",
+		);
+		expect(Buffer.from(payload).subarray(0, prefix.length)).toEqual(prefix);
+		const record = JSON.parse(
+			Buffer.from(payload).subarray(prefix.length).toString("utf8"),
+		);
+		expect(record.schemaVersion).toBe(1);
+		expect(Object.keys(record)).toEqual([
+			"schemaVersion",
+			"skillId",
+			"skillVersionId",
+			"ownerId",
+			"provider",
+			"version",
+			"packageObjectVersion",
+			"packageDigest",
+			"manifestDigest",
+			"sourceProofDigest",
+			"scanReceiptDigest",
+			"trustRevision",
+			"policyRevision",
+			"signingKeyId",
+		]);
 		const keys = generateKeyPairSync("ed25519");
 		const signature = sign(null, payload, keys.privateKey);
 		verifyAdmissionSignatureV1(payload, signature, keys.publicKey);

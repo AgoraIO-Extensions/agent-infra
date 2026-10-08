@@ -35,6 +35,24 @@ const version = createSkillHubVersionV1({
 });
 
 describe("Skill Hub management boundary", () => {
+	it.each([
+		"https://opaque.example/version",
+		"  opaque/s3+version  ",
+		"é".repeat(512),
+	])("preserves an opaque S3 VersionId exactly", (packageObjectVersion) => {
+		expect(
+			parseSkillHubRegistrationV1({ ...registration, packageObjectVersion })
+				.packageObjectVersion,
+		).toBe(packageObjectVersion);
+	});
+	it.each(["", "null", "é".repeat(513), "\ud800"])(
+		"rejects invalid S3 version bytes",
+		(packageObjectVersion) => {
+			expect(() =>
+				parseSkillHubRegistrationV1({ ...registration, packageObjectVersion }),
+			).toThrow();
+		},
+	);
 	it("accepts opaque object versions but rejects null", () => {
 		const opaque = {
 			...registration,
@@ -73,7 +91,6 @@ describe("Skill Hub management boundary", () => {
 		).toThrowError(expect.objectContaining({ code: "invalid_input" }));
 	});
 	it.each([
-		{ packageObjectVersion: "https://untrusted.example/pkg" },
 		{ signatureDigest: "not-a-digest" },
 		{ name: "../escape" },
 		{ version: "latest/remote" },

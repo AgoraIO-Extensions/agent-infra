@@ -123,13 +123,8 @@ export function parseSkillHubObjectVersionV1(input: unknown): string {
 	if (
 		typeof input !== "string" ||
 		input.length === 0 ||
-		input.length > 1024 ||
 		input === "null" ||
-		input.includes("://") ||
-		[...input].some((character) => {
-			const code = character.codePointAt(0) ?? 0;
-			return code <= 0x1f || code === 0x7f;
-		}) ||
+		!input.isWellFormed() ||
 		new TextEncoder().encode(input).byteLength > 1024
 	)
 		invalid();

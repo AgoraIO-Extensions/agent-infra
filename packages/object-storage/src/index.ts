@@ -6,7 +6,7 @@ import type {
 
 export * from "./types.js";
 
-import { createContentProbe } from "./content.js";
+import { createContentProbe, type ObjectContentPolicyV1 } from "./content.js";
 import {
 	type ObjectDownloadV1,
 	type ObjectStorageDataV1,
@@ -40,6 +40,12 @@ function sameContent(actual: StoredFileObjectV1, expected: FileDescriptorV1) {
 }
 // Fake keeps bytes only for bounded contract tests; production uses streaming S3 I/O.
 export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
+	readonly #contentPolicy: ObjectContentPolicyV1;
+	constructor(
+		options: { readonly contentPolicy?: ObjectContentPolicyV1 } = {},
+	) {
+		this.#contentPolicy = options.contentPolicy ?? "file";
+	}
 	private objects = new Map<
 		string,
 		{ bytes: Uint8Array; metadata: StoredFileObjectV1; createdAt: string }
@@ -89,6 +95,7 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
 		const probe = createContentProbe(
 			request.descriptor.sizeBytes,
 			request.descriptor.mediaType,
+			this.#contentPolicy,
 		);
 		try {
 			for await (const chunk of request.body.pipeThrough(

@@ -1,4 +1,8 @@
 import { generateKeyPairSync } from "node:crypto";
+import {
+	createSkillHubVersionV1,
+	parseSkillHubRegistrationV1,
+} from "@agent-infra/platform-core";
 import { describe, expect, it } from "vitest";
 import { FakeObjectStorageV1 } from "./index.ts";
 import type { SkillPackageScanReceiptV1 } from "./skill-package-admission.js";
@@ -71,7 +75,7 @@ const identity = {
 
 describe("Skill package supplier", () => {
 	it("verifies, stores and registers an immutable package bundle", async () => {
-		const storage = new FakeObjectStorageV1();
+		const storage = new FakeObjectStorageV1({ contentPolicy: "skill-package" });
 		const keys = generateKeyPairSync("ed25519");
 		const prepared = prepareSkillPackageV1({
 			archiveBytes: archive,
@@ -91,10 +95,10 @@ describe("Skill package supplier", () => {
 			async registerVersion(_context: unknown, _key: string, input: unknown) {
 				return {
 					replayed: false,
-					version: {
-						...(input as Record<string, unknown>),
-						state: "published",
-					},
+					version: createSkillHubVersionV1({
+						...parseSkillHubRegistrationV1(input),
+						ownerId: identity.actor.userId,
+					}),
 				};
 			},
 		};
@@ -108,6 +112,11 @@ describe("Skill package supplier", () => {
 			scanner: {
 				async scan(input) {
 					scans += 1;
+					const bytes = new Uint8Array(
+						await new Response(await input.openPackage()).arrayBuffer(),
+					);
+					expect(bytes.byteLength).toBe(input.packageObject.sizeBytes);
+					expect(input.packageObject.sha256).toBeTypeOf("string");
 					const receipt: SkillPackageScanReceiptV1 = {
 						schemaVersion: 1,
 						scannerId: "scanner-a",

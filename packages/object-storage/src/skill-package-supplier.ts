@@ -4,10 +4,6 @@ import {
 	parseSkillHubIdentitySnapshotV1,
 	type SkillHubRequestV1,
 	type SkillHubVersionV1,
-	type SkillPackageAdmissionSignerV1,
-	type SkillPackageScannerV1,
-	type SkillPackageSourceProofV1,
-	type SkillPackageSourceVerifierV1,
 	skillPackageObjectRefV1,
 } from "@agent-infra/platform-core";
 import {
@@ -15,6 +11,10 @@ import {
 	canonicalSkillPackageScanReceiptV1,
 	canonicalSkillPackageSourceProofV1,
 	prepareSkillPackageV1,
+	type SkillPackageAdmissionSignerV1,
+	type SkillPackageScannerV1,
+	type SkillPackageSourceProofV1,
+	type SkillPackageSourceVerifierV1,
 	verifyAdmissionSignatureV1,
 	verifySkillPackageScanReceiptV1,
 } from "./skill-package-admission.js";
@@ -186,6 +186,18 @@ export class SkillPackageSupplierV1 {
 			inspected.etag !== stored.etag
 		)
 			throw new Error("package object version unavailable");
+		const stream = await this.#options.storage.download({
+			objectRef: ref,
+			version: stored.version,
+			etag: stored.etag,
+			expiresAt: expiresAt(),
+		});
+		const roundTrip = new Uint8Array(await new Response(stream).arrayBuffer());
+		if (
+			sha256(roundTrip) !== descriptor.sha256 ||
+			roundTrip.byteLength !== descriptor.sizeBytes
+		)
+			throw new Error("package object bytes changed");
 		return { ref, descriptor, stored };
 	}
 	async #readJson(ref: string) {
@@ -335,6 +347,7 @@ export class SkillPackageSupplierV1 {
 				...registered,
 				artifacts: {
 					...existingBundle,
+					packageObjectVersion: existingBundle.packageObjectVersion,
 					packageObjectRef: skillPackageObjectRefV1(
 						prepared.packageDigest,
 						"zip",
@@ -362,6 +375,12 @@ export class SkillPackageSupplierV1 {
 				},
 			});
 		}
+		const zipObject = await this.#upload(
+			skillPackageObjectRefV1(prepared.packageDigest, "zip"),
+			`${input.name}-${input.version}.zip`,
+			"application/zip",
+			prepared.archiveBytes,
+		);
 		const scan = await this.#options.scanner.scan({
 			packageDigest: prepared.packageDigest,
 			manifestDigest,
@@ -369,6 +388,20 @@ export class SkillPackageSupplierV1 {
 			totalBytes: prepared.totalBytes,
 			sourceProofDigest,
 			policyRevision: input.policyRevision,
+			packageObject: {
+				objectRef: zipObject.ref,
+				version: zipObject.stored.version,
+				etag: zipObject.stored.etag,
+				sizeBytes: zipObject.stored.sizeBytes,
+				sha256: zipObject.stored.sha256,
+			},
+			openPackage: () =>
+				this.#options.storage.download({
+					objectRef: zipObject.ref,
+					version: zipObject.stored.version,
+					etag: zipObject.stored.etag,
+					expiresAt: expiresAt(),
+				}),
 		});
 		verifySkillPackageScanReceiptV1(
 			scan,
@@ -377,12 +410,6 @@ export class SkillPackageSupplierV1 {
 			input.policyRevision,
 		);
 		const scanBytes = canonicalSkillPackageScanReceiptV1(scan);
-		const zipObject = await this.#upload(
-			skillPackageObjectRefV1(prepared.packageDigest, "zip"),
-			`${input.name}-${input.version}.zip`,
-			"application/zip",
-			prepared.archiveBytes,
-		);
 		await this.#upload(
 			skillPackageObjectRefV1(prepared.packageDigest, "manifest"),
 			`${input.name}-${input.version}.manifest.json`,

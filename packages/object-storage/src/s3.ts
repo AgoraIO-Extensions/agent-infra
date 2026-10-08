@@ -10,7 +10,7 @@ import {
 	type S3ClientConfig,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createContentProbe } from "./content.js";
+import { createContentProbe, type ObjectContentPolicyV1 } from "./content.js";
 import {
 	type ObjectDownloadV1,
 	type ObjectStorageDataV1,
@@ -19,6 +19,8 @@ import {
 } from "./types.js";
 
 export interface S3ObjectStorageOptionsV1 {
+	/** Server-only package evidence storage; requires the separate skill-packages/ prefix. */
+	readonly contentPolicy?: ObjectContentPolicyV1;
 	readonly endpoint?: string;
 	readonly region: string;
 	readonly credentials?: S3ClientConfig["credentials"];
@@ -35,6 +37,8 @@ export function createS3ObjectStorageV1(
 	options: S3ObjectStorageOptionsV1,
 ): ObjectStorageDataV1 & { close(): void } {
 	if (
+		(options.contentPolicy === "skill-package" &&
+			options.prefix !== "skill-packages/") ||
 		!options.bucket ||
 		!/^[a-zA-Z0-9_-]+\/$/.test(options.prefix) ||
 		!Number.isSafeInteger(options.maxObjectBytes) ||
@@ -110,6 +114,7 @@ export function createS3ObjectStorageV1(
 			const probe = createContentProbe(
 				options.maxObjectBytes,
 				head.ContentType,
+				options.contentPolicy,
 			);
 			for await (const chunk of object.Body.transformToWebStream().pipeThrough(
 				new TransformStream<Uint8Array, Uint8Array>(),
@@ -253,6 +258,7 @@ export function createS3ObjectStorageV1(
 				const probe = createContentProbe(
 					request.descriptor.sizeBytes,
 					request.descriptor.mediaType,
+					options.contentPolicy,
 				);
 				const body = request.body.pipeThrough(
 					new TransformStream<Uint8Array, Uint8Array>({

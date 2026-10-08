@@ -1,6 +1,16 @@
-import { createHash, type sign, verify } from "node:crypto";
+import {
+	createHash,
+	createPublicKey,
+	KeyObject,
+	type sign,
+	verify,
+} from "node:crypto";
+import { types } from "node:util";
 import { inflateRawSync } from "node:zlib";
 import {
+	MagicSkillProviderOrderV1,
+	parseSkillHubIdV1,
+	parseSkillHubObjectVersionV1,
 	type SkillPackageEntryV1,
 	SkillPackageValidationErrorV1,
 	validateSkillPackageEntriesV1,
@@ -81,6 +91,14 @@ export interface SkillPackageScannerV1 {
 			totalBytes: number;
 			sourceProofDigest: string;
 			policyRevision: string;
+			packageObject: Readonly<{
+				objectRef: string;
+				version: string;
+				etag: string;
+				sizeBytes: number;
+				sha256: string;
+			}>;
+			openPackage: () => Promise<ReadableStream<Uint8Array>>;
 		}>,
 	): Promise<SkillPackageScanReceiptV1>;
 }
@@ -196,6 +214,36 @@ function validText(value: unknown, maximum = 1024): value is string {
 		})
 	);
 }
+
+function evidenceData<T extends object>(
+	input: T,
+	keys: readonly string[],
+	code: SkillPackageAdmissionErrorCodeV1,
+): T {
+	if (typeof input !== "object" || input === null || types.isProxy(input))
+		reject(code);
+	const prototype = Object.getPrototypeOf(input);
+	if (prototype !== Object.prototype && prototype !== null) reject(code);
+	const descriptors = Object.getOwnPropertyDescriptors(input);
+	if (Reflect.ownKeys(descriptors).length !== keys.length) reject(code);
+	const result: Record<string, unknown> = {};
+	for (const key of keys) {
+		const property = descriptors[key];
+		if (!property?.enumerable || !("value" in property)) reject(code);
+		if (
+			property.value !== null &&
+			!(typeof property.value === "string" && property.value.isWellFormed()) &&
+			!(
+				typeof property.value === "number" &&
+				Number.isSafeInteger(property.value) &&
+				property.value >= 0
+			)
+		)
+			reject(code);
+		result[key] = property.value;
+	}
+	return result as T;
+}
 function findEndOfCentralDirectory(bytes: Uint8Array) {
 	const start = Math.max(0, bytes.length - 22 - 65_535);
 	for (let offset = bytes.length - 22; offset >= start; offset--) {
@@ -265,23 +313,22 @@ function parseZip(bytes: Uint8Array) {
 			name.endsWith("/") ||
 			(externalAttributes & 0x10) !== 0 ||
 			((externalAttributes >>> 16) & 0xf000) === 0x4000;
-		const normalized = directory ? name.slice(0, -1) : name;
+		const normalized = name.endsWith("/") ? name.slice(0, -1) : name;
 		if (!normalized || seen.has(normalized)) reject("duplicate_path");
 		const mode = externalAttributes >>> 16;
 		if (hasSymlink(mode)) reject("symlink");
 		const fileType = mode & 0xf000;
 		if (fileType !== 0 && fileType !== 0x4000 && fileType !== 0x8000)
 			reject("invalid_archive");
-		if (directory) {
-			if (filePaths.has(normalized)) reject("path_conflict");
-			directoryPaths.add(normalized);
-			seen.add(normalized);
-			offset += 46 + nameLength + extraLength + commentLength;
-			continue;
-		}
+		if (directory && uncompressedSize !== 0) reject("invalid_archive");
+		if (
+			!directory &&
+			[...seen].some((path) => path.startsWith(`${normalized}/`))
+		)
+			reject("path_conflict");
 		for (let parent = normalized; parent.includes("/"); ) {
 			parent = parent.slice(0, parent.lastIndexOf("/"));
-			if (seen.has(parent)) reject("path_conflict");
+			if (filePaths.has(parent)) reject("path_conflict");
 		}
 		if (
 			localOffset + 30 > bytes.length ||
@@ -324,7 +371,9 @@ function parseZip(bytes: Uint8Array) {
 			content =
 				method === 0
 					? compressed.slice()
-					: inflateRawSync(compressed, { maxOutputLength: uncompressedSize });
+					: inflateRawSync(compressed, {
+							maxOutputLength: Math.max(1, uncompressedSize),
+						});
 		} catch {
 			reject("invalid_archive");
 		}
@@ -333,8 +382,11 @@ function parseZip(bytes: Uint8Array) {
 		totalBytes += content.length;
 		if (totalBytes > MAX_ARCHIVE_BYTES) reject("archive_limit");
 		seen.add(normalized);
-		filePaths.add(normalized);
-		files.push({ path: normalized, bytes: content });
+		if (directory) directoryPaths.add(normalized);
+		else {
+			filePaths.add(normalized);
+			files.push({ path: normalized, bytes: content });
+		}
 		offset += 46 + nameLength + extraLength + commentLength;
 	}
 	if (offset !== centralOffset + centralBytes) reject("invalid_archive");
@@ -411,8 +463,33 @@ export function prepareSkillPackageV1(
 }
 
 export function canonicalSkillPackageSourceProofV1(
-	proof: SkillPackageSourceProofV1,
+	input: SkillPackageSourceProofV1,
 ) {
+	const proof = evidenceData(
+		input,
+		[
+			"schemaVersion",
+			"provider",
+			"publisherId",
+			"sourceVersion",
+			"sourceDigest",
+			"approvalRef",
+			"trustRevision",
+		],
+		"source_untrusted",
+	);
+	if (
+		proof.schemaVersion !== 1 ||
+		!MagicSkillProviderOrderV1.some(
+			(provider) => provider === proof.provider,
+		) ||
+		!validText(proof.publisherId) ||
+		!validText(proof.sourceVersion) ||
+		!/^[a-f0-9]{64}$/.test(proof.sourceDigest) ||
+		!(proof.approvalRef === null || validText(proof.approvalRef, 256)) ||
+		!validText(proof.trustRevision)
+	)
+		reject("source_untrusted");
 	const value = {
 		schemaVersion: proof.schemaVersion,
 		provider: proof.provider,
@@ -429,36 +506,61 @@ export function canonicalSkillPackageSourceProofV1(
 		reject("source_untrusted");
 	return canonical(value);
 }
+function scanReceiptData(input: SkillPackageScanReceiptV1) {
+	const receipt = evidenceData(
+		input,
+		[
+			"schemaVersion",
+			"scannerId",
+			"engineVersion",
+			"rulesetDigest",
+			"policyRevision",
+			"scannedAt",
+			"expiresAt",
+			"packageDigest",
+			"manifestDigest",
+			"scannedFileCount",
+			"scannedBytes",
+			"verdict",
+		],
+		"scan_rejected",
+	);
+	const iso = (value: string) =>
+		Number.isFinite(Date.parse(value)) &&
+		new Date(value).toISOString() === value;
+	if (
+		receipt.schemaVersion !== 1 ||
+		!validText(receipt.scannerId) ||
+		!validText(receipt.engineVersion) ||
+		!validText(receipt.policyRevision) ||
+		!/^[a-f0-9]{64}$/.test(receipt.rulesetDigest) ||
+		!/^[a-f0-9]{64}$/.test(receipt.packageDigest) ||
+		!/^[a-f0-9]{64}$/.test(receipt.manifestDigest) ||
+		!Number.isSafeInteger(receipt.scannedFileCount) ||
+		!Number.isSafeInteger(receipt.scannedBytes) ||
+		receipt.scannedFileCount < 0 ||
+		receipt.scannedBytes < 0 ||
+		receipt.verdict !== "clean" ||
+		!iso(receipt.scannedAt) ||
+		!iso(receipt.expiresAt)
+	)
+		reject("scan_rejected");
+	return receipt;
+}
+
 export function canonicalSkillPackageScanReceiptV1(
 	receipt: SkillPackageScanReceiptV1,
 ) {
-	const value = {
-		schemaVersion: receipt.schemaVersion,
-		scannerId: receipt.scannerId,
-		engineVersion: receipt.engineVersion,
-		rulesetDigest: receipt.rulesetDigest,
-		policyRevision: receipt.policyRevision,
-		scannedAt: receipt.scannedAt,
-		expiresAt: receipt.expiresAt,
-		packageDigest: receipt.packageDigest,
-		manifestDigest: receipt.manifestDigest,
-		scannedFileCount: receipt.scannedFileCount,
-		scannedBytes: receipt.scannedBytes,
-		verdict: receipt.verdict,
-	};
-	if (
-		Object.keys(receipt).toSorted().join(",") !==
-		Object.keys(value).toSorted().join(",")
-	)
-		reject("scan_rejected");
-	return canonical(value);
+	return canonical(scanReceiptData(receipt));
 }
 export function verifySkillPackageScanReceiptV1(
-	receipt: SkillPackageScanReceiptV1,
+	input: SkillPackageScanReceiptV1,
 	prepared: PreparedSkillPackageV1,
 	sourceProofDigest: string,
 	policyRevision: string,
 ) {
+	const receipt = scanReceiptData(input);
+	const now = Date.now();
 	if (
 		receipt.schemaVersion !== 1 ||
 		!validText(receipt.scannerId) ||
@@ -477,14 +579,16 @@ export function verifySkillPackageScanReceiptV1(
 		!Number.isFinite(Date.parse(receipt.expiresAt)) ||
 		Date.parse(receipt.expiresAt) - Date.parse(receipt.scannedAt) >
 			86_400_000 ||
-		Date.parse(receipt.expiresAt) <= Date.now() ||
+		Date.parse(receipt.scannedAt) > now ||
+		Date.parse(receipt.expiresAt) <= Date.parse(receipt.scannedAt) ||
+		Date.parse(receipt.expiresAt) <= now ||
 		!/^[a-f0-9]{64}$/.test(sourceProofDigest)
 	)
 		reject("scan_rejected");
 }
 
 export function admissionSignatureBytesV1(
-	input: Readonly<{
+	request: Readonly<{
 		packageObjectVersion: string;
 		skillId: string;
 		skillVersionId: string;
@@ -500,13 +604,59 @@ export function admissionSignatureBytesV1(
 		signingKeyId: string;
 	}>,
 ): Uint8Array {
+	const input = evidenceData(
+		request,
+		[
+			"packageObjectVersion",
+			"skillId",
+			"skillVersionId",
+			"ownerId",
+			"provider",
+			"version",
+			"packageDigest",
+			"manifestDigest",
+			"sourceProofDigest",
+			"scanReceiptDigest",
+			"trustRevision",
+			"policyRevision",
+			"signingKeyId",
+		],
+		"signature_invalid",
+	);
+	try {
+		parseSkillHubIdV1(input.skillId);
+		parseSkillHubIdV1(input.skillVersionId);
+		parseSkillHubIdV1(input.version);
+		parseSkillHubObjectVersionV1(input.packageObjectVersion);
+	} catch {
+		reject("signature_invalid");
+	}
+	if (
+		!MagicSkillProviderOrderV1.some(
+			(provider) => provider === input.provider,
+		) ||
+		![
+			input.ownerId,
+			input.trustRevision,
+			input.policyRevision,
+			input.signingKeyId,
+		].every((value) => validText(value)) ||
+		![
+			input.packageDigest,
+			input.manifestDigest,
+			input.sourceProofDigest,
+			input.scanReceiptDigest,
+		].every((value) => /^[a-f0-9]{64}$/.test(value))
+	)
+		reject("signature_invalid");
 	const value = {
-		packageObjectVersion: input.packageObjectVersion,
+		schemaVersion: 1,
 		skillId: input.skillId,
 		skillVersionId: input.skillVersionId,
 		ownerId: input.ownerId,
 		provider: input.provider,
 		version: input.version,
+		packageObjectVersion: input.packageObjectVersion,
 		packageDigest: input.packageDigest,
 		manifestDigest: input.manifestDigest,
 		sourceProofDigest: input.sourceProofDigest,
@@ -526,5 +676,19 @@ export function verifyAdmissionSignatureV1(
 	signature: Uint8Array,
 	publicKey: Parameters<typeof verify>[2],
 ) {
-	if (!verify(null, payload, publicKey, signature)) reject("signature_invalid");
+	try {
+		const key =
+			publicKey instanceof KeyObject
+				? publicKey
+				: createPublicKey(publicKey as Parameters<typeof createPublicKey>[0]);
+		if (
+			key.type !== "public" ||
+			key.asymmetricKeyType !== "ed25519" ||
+			signature.byteLength !== 64 ||
+			!verify(null, payload, key, signature)
+		)
+			reject("signature_invalid");
+	} catch {
+		reject("signature_invalid");
+	}
 }

@@ -1,20 +1,32 @@
 import { createHash } from "node:crypto";
 import { fileTypeFromBuffer } from "file-type";
 
+export type ObjectContentPolicyV1 = "file" | "skill-package";
+
 export function createContentProbe(
 	maxBytes: number,
 	expectedMediaType?: string,
+	policy: ObjectContentPolicyV1 = "file",
 ) {
 	const hash = createHash("sha256");
 	const decoder = new TextDecoder("utf-8", { fatal: true });
 	let text = true;
 	let sizeBytes = 0;
 	let prefix = new Uint8Array();
+	const evidenceJson: Uint8Array[] = [];
 	return {
 		write(chunk: Uint8Array) {
 			sizeBytes += chunk.byteLength;
 			if (sizeBytes > maxBytes) throw new Error("File content limit exceeded");
 			hash.update(chunk);
+			if (
+				policy === "skill-package" &&
+				expectedMediaType === "application/json"
+			) {
+				if (sizeBytes > 2_000_000)
+					throw new Error("Package evidence limit exceeded");
+				evidenceJson.push(chunk.slice());
+			}
 			if (prefix.byteLength < 8192)
 				prefix = Buffer.concat([
 					prefix,
@@ -43,11 +55,34 @@ export function createContentProbe(
 					text = false;
 				}
 			}
-			const detected = prefix.length
-				? await fileTypeFromBuffer(prefix)
-				: undefined;
+			let evidenceType: string | undefined;
+			if (
+				policy === "skill-package" &&
+				expectedMediaType === "application/json"
+			) {
+				JSON.parse(
+					new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+						Buffer.concat(evidenceJson),
+					),
+				);
+				evidenceType = "application/json";
+			}
+			// Detached Ed25519 bytes have no file magic. This purpose is selected only
+			// by the server's separate package storage, after the supplier verifies the signature.
+			if (
+				policy === "skill-package" &&
+				expectedMediaType === "application/octet-stream"
+			) {
+				if (sizeBytes !== 64)
+					throw new Error("Invalid detached signature size");
+				evidenceType = "application/octet-stream";
+			}
+			const detected =
+				!evidenceType && prefix.length
+					? await fileTypeFromBuffer(prefix)
+					: undefined;
 			const mediaType =
-				detected?.mime ?? expectedMediaType ?? (text ? "text/plain" : null);
+				evidenceType ?? detected?.mime ?? (text ? "text/plain" : null);
 			if (!mediaType) throw new Error("File format cannot be verified");
 			return { sizeBytes, mediaType, sha256: hash.digest("hex") };
 		},

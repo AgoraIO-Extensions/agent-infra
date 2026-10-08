@@ -2,9 +2,17 @@ import { z } from "zod";
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
-// S3 VersionId is opaque and its exact byte/expiry checks belong to the trusted
-// package-supplier parser, not a narrowed public wire regex.
-const objectVersion = z.string();
+// Preserve the opaque S3 VersionId; the wire character bound accompanies the UTF-8 byte check.
+const objectVersion = z
+	.string()
+	.min(1)
+	.max(1024)
+	.regex(/^(?!null(?![\s\S]))[\s\S]+$/)
+	.refine(
+		(value) =>
+			value.isWellFormed() &&
+			new TextEncoder().encode(value).byteLength <= 1024,
+	);
 const packageName = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/);
 const relativePackagePath = z
 	.string()
