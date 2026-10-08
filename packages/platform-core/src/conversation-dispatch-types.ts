@@ -179,7 +179,18 @@ export interface ConversationDispatchStorePortV1 {
 	prepareRuntimeDispatch(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
-	}): Promise<boolean | "capacity_wait" | "capacity_unavailable">;
+	}): Promise<
+		boolean | "capacity_wait" | "capacity_unavailable" | "sandbox_wait"
+	>;
+	/**
+	 * Return a just-prepared Turn to its pre-claim status when the Runtime
+	 * request was provably never sent, releasing its Agent occupancy.
+	 */
+	releaseUnsentDispatch?(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly retryDelayMs: number;
+		readonly errorCode: string;
+	}): Promise<boolean>;
 	cancelUnaccepted(input: {
 		readonly claim: ConversationDispatchClaimV1;
 	}): Promise<boolean>;
@@ -436,11 +447,18 @@ export class ConversationDispatchError extends Error {
 export class ConversationRuntimeHostError extends Error {
 	readonly code: string;
 	readonly retryable: boolean;
+	/** True only when the failure happened before any Runtime request was sent. */
+	readonly notSent: boolean;
 
-	constructor(code: string, retryable: boolean) {
+	constructor(
+		code: string,
+		retryable: boolean,
+		options: { readonly notSent?: boolean } = {},
+	) {
 		super("RuntimeHost request failed");
 		this.name = "ConversationRuntimeHostError";
 		this.code = code;
 		this.retryable = retryable;
+		this.notSent = options.notSent === true;
 	}
 }

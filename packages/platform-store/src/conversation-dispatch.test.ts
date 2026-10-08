@@ -2024,6 +2024,187 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it.each([
+		"configurationRevision",
+		"workloadRevision",
+		"imageDigest",
+		"resourceConfigurationHash",
+	] as const)(
+		"keeps a Turn waiting without occupancy when its Sandbox %s is stale (#1522)",
+		async (field) => {
+			await seedCapacityAgent("agent-dispatch", 1);
+			const stale = await seed();
+			const current = await seed();
+			const [allocation] = await client<
+				{ resource_policy: Record<string, string | number> }[]
+			>`select resource_policy from platform.session_sandbox_allocations where conversation_id = ${stale.conversationId}`;
+			const policy = allocation?.resource_policy;
+			if (!policy) throw new Error("Expected a prepared Sandbox policy");
+			await client`update platform.session_sandbox_allocations set resource_policy = ${client.json(
+				{
+					...policy,
+					[field]:
+						typeof policy[field] === "number"
+							? Number(policy[field]) - 1
+							: `sha256:${"e".repeat(64)}`,
+				},
+			)} where conversation_id = ${stale.conversationId}`;
+			const staleClaim = await claim(stale.itemId);
+			const currentClaim = await claim(current.itemId, "worker-2");
+			try {
+				if (
+					staleClaim.decision.outcome !== "claimed" ||
+					currentClaim.decision.outcome !== "claimed"
+				)
+					throw new Error("Expected claims");
+				const before = await dispatchState(stale);
+				await expect(
+					staleClaim.store.prepareRuntimeDispatch({
+						claim: staleClaim.decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).resolves.toBe("sandbox_wait");
+				expect(await dispatchState(stale)).toEqual(before);
+				// The stale Session holds no capacity, so the only slot stays free.
+				await expect(
+					currentClaim.store.prepareRuntimeDispatch({
+						claim: currentClaim.decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).resolves.toBe(true);
+				expect(await dispatchState(current)).toMatchObject({
+					execution_status: "unknown",
+				});
+			} finally {
+				await Promise.all([
+					staleClaim.store.close(),
+					currentClaim.store.close(),
+				]);
+			}
+		},
+	);
+
+	it("returns a provably unsent Turn to its waiting position and frees its capacity (#1522)", async () => {
+		await seedCapacityAgent("agent-dispatch", 1);
+		const first = await seed();
+		const second = await seed();
+		const firstClaim = await claim(first.itemId);
+		const secondClaim = await claim(second.itemId, "worker-2");
+		try {
+			if (
+				firstClaim.decision.outcome !== "claimed" ||
+				secondClaim.decision.outcome !== "claimed"
+			)
+				throw new Error("Expected claims");
+			const original = firstClaim.decision.claim;
+			expect(
+				await firstClaim.store.prepareRuntimeDispatch({
+					claim: original,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			const [pinned] = await client<
+				{ runtime_submit_protocol: string; original_operation_digest: string }[]
+			>`select runtime_submit_protocol, original_operation_digest from platform.conversation_executions where execution_id = ${first.executionId}`;
+			await expect(
+				secondClaim.store.prepareRuntimeDispatch({
+					claim: secondClaim.decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe("capacity_wait");
+			await expect(
+				firstClaim.store.releaseUnsentDispatch({
+					claim: original,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_WORKLOAD_UNAVAILABLE",
+				}),
+			).resolves.toBe(true);
+			expect(await dispatchState(first)).toMatchObject({
+				status: "retry_scheduled",
+				execution_status: "submitted",
+			});
+			// The original operation pin stays authoritative for the next attempt.
+			expect(
+				await client`select runtime_submit_protocol, original_operation_digest from platform.conversation_executions where execution_id = ${first.executionId}`,
+			).toEqual([pinned]);
+			await expect(
+				secondClaim.store.prepareRuntimeDispatch({
+					claim: secondClaim.decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe(true);
+			// Once released, the same claim cannot release or reserve again.
+			const after = await dispatchState(first);
+			await expect(
+				firstClaim.store.releaseUnsentDispatch({
+					claim: original,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_WORKLOAD_UNAVAILABLE",
+				}),
+			).resolves.toBe(false);
+			expect(await dispatchState(first)).toEqual(after);
+		} finally {
+			await Promise.all([firstClaim.store.close(), secondClaim.store.close()]);
+		}
+	});
+
+	it.each(["not-prepared", "fence-moved", "foreign-lease"] as const)(
+		"refuses to release an unsent Turn when the claim is no longer current (%s) (#1522)",
+		async (mode) => {
+			const work = await seed();
+			const claimed = await claim(work.itemId);
+			try {
+				if (claimed.decision.outcome !== "claimed")
+					throw new Error("Expected claim");
+				const original = claimed.decision.claim;
+				if (mode !== "not-prepared")
+					expect(
+						await claimed.store.prepareRuntimeDispatch({
+							claim: original,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(true);
+				if (mode === "fence-moved")
+					await client`update platform.conversation_executions set delivery_fence = delivery_fence + 1 where execution_id = ${work.executionId}`;
+				const before = await dispatchState(work);
+				await expect(
+					claimed.store.releaseUnsentDispatch({
+						claim:
+							mode === "foreign-lease"
+								? { ...original, leaseOwner: "worker-other" }
+								: original,
+						retryDelayMs: 0,
+						errorCode: "RUNTIME_WORKLOAD_UNAVAILABLE",
+					}),
+				).resolves.toBe(false);
+				expect(await dispatchState(work)).toEqual(before);
+			} finally {
+				await claimed.store.close();
+			}
+		},
+	);
+
+	it("rejects releasing a Turn that was claimed for recovery (#1522)", async () => {
+		const work = await seed();
+		const claimed = await claim(work.itemId);
+		try {
+			if (claimed.decision.outcome !== "claimed")
+				throw new Error("Expected claim");
+			const before = await dispatchState(work);
+			for (const executionStatus of ["unknown", "processing"] as const)
+				await expect(
+					claimed.store.releaseUnsentDispatch({
+						claim: { ...claimed.decision.claim, executionStatus },
+						retryDelayMs: 0,
+						errorCode: "RUNTIME_WORKLOAD_UNAVAILABLE",
+					}),
+				).rejects.toThrow("Conversation dispatch release is invalid");
+			expect(await dispatchState(work)).toEqual(before);
+		} finally {
+			await claimed.store.close();
+		}
+	});
+
 	it("rejects a persisted Sandbox swap after claim without releasing either Session", async () => {
 		const first = await seed();
 		const other = await seed();
