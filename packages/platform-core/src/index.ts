@@ -132,6 +132,7 @@ export * from "./skill-hub-installation.js";
 export * from "./skill-hub-management.js";
 export * from "./skill-package-publication.js";
 export * from "./skill-package-ref.js";
+export * from "./skill-provider-registry.js";
 export * from "./task-api-audit.js";
 export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";
