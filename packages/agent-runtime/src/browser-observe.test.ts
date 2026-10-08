@@ -245,11 +245,19 @@ describe("Browser action cancellation barrier", () => {
 		const observation = await controller.observe(reference);
 		const target = observation.elements[0];
 		if (!target) throw new Error("expected element");
-		const binding = executionBinding(reference.pageRevision);
 		let releaseClick!: () => void;
 		page.pageLocator.click = vi.fn(
 			() => new Promise<void>((resolve) => (releaseClick = resolve)),
 		);
+		const executionBinding = {
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			capabilityVersion: 1,
+			pageRevision: reference.pageRevision,
+			sessionGeneration: 2,
+			resourceFence: 3,
+		} as const;
 		const request = {
 			actionId: "cancelled-action",
 			operationRef: "operation-1",
@@ -258,7 +266,7 @@ describe("Browser action cancellation barrier", () => {
 			kind: "click" as const,
 			page: reference,
 			target,
-			...binding,
+			executionBinding,
 		};
 		const pending = controller.executeAction(request);
 		await Promise.resolve();
@@ -269,10 +277,12 @@ describe("Browser action cancellation barrier", () => {
 			status: "unknown",
 			reasonCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
 		});
-		expect(
-			controller.readAction({ actionId: "cancelled-action", binding }),
-		).toMatchObject(binding);
 		expect(controller.cancelAction("cancelled-action")).toBe(false);
+		expect(
+			controller.readAction({ actionId: "cancelled-action", executionBinding }),
+		).toMatchObject({
+			status: "unknown",
+		});
 		await expect(controller.executeAction(request)).resolves.toMatchObject({
 			status: "unknown",
 			reasonCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
@@ -341,7 +351,67 @@ describe("Browser action outcome readback", () => {
 			result,
 		);
 	});
-
+	it("retains and validates execution binding in action readback", async () => {
+		const page = new FakePage();
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability,
+		});
+		const binding = {
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			capabilityVersion: 1,
+			pageRevision: 1,
+			sessionGeneration: 2,
+			resourceFence: 3,
+		} as const;
+		const result = await controller.executeAction({
+			actionId: "bound-action",
+			kind: "click",
+			page: { pageId: "missing", pageRevision: 1 },
+			executionBinding: binding,
+		});
+		expect(
+			controller.readAction({
+				actionId: "bound-action",
+				executionBinding: binding,
+			}),
+		).toEqual(result);
+		expect(() =>
+			controller.readAction({
+				actionId: "bound-action",
+				executionBinding: { ...binding, executionId: "other" },
+			}),
+		).toThrow("BROWSER_ACTION_READBACK_BINDING_CONFLICT");
+		expect(() =>
+			controller.readAction({
+				actionId: "bound-action",
+				executionBinding: { ...binding, sessionGeneration: 9 },
+			}),
+		).toThrow("BROWSER_ACTION_READBACK_BINDING_CONFLICT");
+		expect(() =>
+			controller.readAction({
+				actionId: "bound-action",
+				executionBinding: { ...binding, resourceFence: 9 },
+			}),
+		).toThrow("BROWSER_ACTION_READBACK_BINDING_CONFLICT");
+		const mutableBinding = { ...binding, executionId: "execution-1" as string };
+		const mutableResult = await controller.executeAction({
+			actionId: "immutable-action",
+			kind: "click",
+			page: { pageId: "missing", pageRevision: 1 },
+			executionBinding: mutableBinding,
+		});
+		mutableBinding.executionId = "mutated";
+		expect(mutableResult.executionBinding).toEqual(binding);
+		expect(
+			controller.readAction({
+				actionId: "immutable-action",
+				executionBinding: binding,
+			}),
+		).toEqual(mutableResult);
+	});
 	it("retains execution binding and rejects cross-binding readback", async () => {
 		const page = new FakePage();
 		const context = fakeContext(page);
@@ -359,26 +429,60 @@ describe("Browser action outcome readback", () => {
 		const binding = executionBinding(reference.pageRevision);
 		const result = await controller.executeAction({
 			actionId: "bound-action",
+			idempotencyKey: "bound-key",
 			operationRef: "operation-1",
 			attemptRef: "attempt-1",
 			kind: "click",
 			page: reference,
 			target,
-			...binding,
+			executionBinding: binding,
 		});
-		expect(result).toMatchObject({ status: "completed", ...binding });
+		expect(result).toMatchObject({
+			status: "completed",
+			executionBinding: binding,
+		});
 		expect(
-			controller.readAction({ actionId: "bound-action", binding }),
-		).toMatchObject({ status: "completed", ...binding });
+			controller.readAction({
+				actionId: "bound-action",
+				executionBinding: binding,
+			}),
+		).toMatchObject({ status: "completed", executionBinding: binding });
 		expect(() =>
 			controller.readAction({
 				actionId: "bound-action",
-				binding: { ...binding, executionId: "other-execution" },
+				executionBinding: { ...binding, executionId: "other-execution" },
 			}),
-		).toThrow("BROWSER_ACTION_READBACK_BINDING_MISMATCH");
+		).toThrow("BROWSER_ACTION_READBACK_BINDING_CONFLICT");
 		expect(() => controller.readAction({ actionId: "bound-action" })).toThrow(
-			"BROWSER_ACTION_READBACK_BINDING_MISMATCH",
+			"BROWSER_ACTION_READBACK_BINDING_CONFLICT",
 		);
+		expect(() =>
+			controller.readAction({ idempotencyKey: "bound-key" }),
+		).toThrow("BROWSER_ACTION_READBACK_BINDING_CONFLICT");
+		expect(
+			Reflect.set(result, "executionBinding", {
+				...binding,
+				executionId: "altered",
+			}),
+		).toBe(false);
+		if (!result.executionBinding) throw new Error("expected execution binding");
+		expect(Reflect.set(result.executionBinding, "executionId", "altered")).toBe(
+			false,
+		);
+		const conflict = await controller.executeAction({
+			actionId: "different-binding",
+			idempotencyKey: "bound-key",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			kind: "click",
+			page: reference,
+			target,
+			executionBinding: { ...binding, executionId: "other-execution" },
+		});
+		expect(conflict).toMatchObject({
+			status: "rejected",
+			reasonCode: "BROWSER_ACTION_IDEMPOTENCY_CONFLICT",
+		});
 		await expect(
 			controller.executeAction({
 				actionId: "bound-action",
@@ -387,27 +491,106 @@ describe("Browser action outcome readback", () => {
 				kind: "click",
 				page: reference,
 				target,
-				...binding,
-				pageRevision: reference.pageRevision + 1,
+				executionBinding: {
+					...binding,
+					pageRevision: reference.pageRevision + 1,
+				},
 			}),
 		).rejects.toThrow("BROWSER_ACTION_BINDING_INVALID");
 		expect(
-			controller.readAction({ actionId: "bound-action", binding }),
-		).toMatchObject({ status: "completed", ...binding });
+			controller.readAction({
+				actionId: "bound-action",
+				executionBinding: binding,
+			}),
+		).toMatchObject({ status: "completed", executionBinding: binding });
 
 		const rejectedBinding = executionBinding(1);
 		const rejected = await controller.executeAction({
 			actionId: "bound-rejected",
 			kind: "click",
 			page: { pageId: "missing", pageRevision: 1 },
-			...rejectedBinding,
+			executionBinding: rejectedBinding,
 		});
-		expect(rejected).toMatchObject({ status: "rejected", ...rejectedBinding });
+		expect(rejected).toMatchObject({
+			status: "rejected",
+			executionBinding: rejectedBinding,
+		});
 		expect(
 			controller.readAction({
 				actionId: "bound-rejected",
-				binding: rejectedBinding,
+				executionBinding: rejectedBinding,
 			}),
-		).toMatchObject({ status: "rejected", ...rejectedBinding });
+		).toMatchObject({ status: "rejected", executionBinding: rejectedBinding });
+	});
+
+	it("captures the dispatch binding before awaiting Browser I/O", async () => {
+		const page = new FakePage();
+		const controller = createBrowserObserveControllerV1({
+			context: fakeContext(page) as never,
+			capability: {
+				...capability,
+				operations: ["navigate", "observe", "interact"],
+			},
+		});
+		const reference = await controller.navigate("https://example.test/app");
+		const target = (await controller.observe(reference)).elements[0];
+		if (!target) throw new Error("expected element");
+		const original = executionBinding(reference.pageRevision);
+		const mutable = { ...original, executionId: "execution-1" as string };
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		page.pageLocator.click = vi.fn(async () => {
+			entered.resolve();
+			await release.promise;
+		});
+		const request = {
+			actionId: "captured-action",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			kind: "click" as const,
+			page: reference,
+			target,
+			executionBinding: mutable,
+		};
+		const pending = controller.executeAction(request);
+		await entered.promise;
+		mutable.executionId = "changed-during-dispatch";
+		release.resolve();
+		expect(await pending).toMatchObject({
+			status: "completed",
+			executionBinding: original,
+		});
+		const calls = page.pageLocator.click.mock.calls.length;
+		expect(
+			controller.readAction({
+				actionId: "captured-action",
+				executionBinding: original,
+			}),
+		).toMatchObject({ executionBinding: original });
+		expect(() =>
+			controller.readAction({
+				actionId: "captured-action",
+				executionBinding: mutable,
+			}),
+		).toThrow("BROWSER_ACTION_READBACK_BINDING_CONFLICT");
+		expect(page.pageLocator.click).toHaveBeenCalledTimes(calls);
+		page.pageLocator.click = vi.fn(async () => {
+			throw new Error("fixture failure");
+		});
+		const failed = await controller.executeAction({
+			...request,
+			actionId: "failed-action",
+			executionBinding: original,
+		});
+		expect(failed).toMatchObject({
+			status: "failed",
+			executionBinding: original,
+		});
+		expect(
+			controller.readAction({
+				actionId: "failed-action",
+				executionBinding: original,
+			}),
+		).toEqual(failed);
 	});
 });
