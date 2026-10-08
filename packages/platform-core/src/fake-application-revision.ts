@@ -208,6 +208,8 @@ export class FakeApplicationRevisionTransactionV1
 
 			this.#failBefore("configuration");
 			if (plan.configuration) {
+				if (plan.configuration.configuration.schemaVersion !== 2)
+					throw new ApplicationRevisionError("persistence_failed");
 				draftState = {
 					...draftState,
 					configuration: structuredClone(plan.configuration.configuration),

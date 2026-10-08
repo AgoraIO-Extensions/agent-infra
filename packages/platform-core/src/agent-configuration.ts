@@ -16,6 +16,7 @@ import {
 	accessTargetKey,
 	parseActorContext,
 	parseCommand,
+	parseKeylessUpdateCommand,
 	parseLegacyUpdateCommand,
 	parseReleaseStandardTemplateCommand,
 	parseUpgradeCustomImageCommand,
@@ -28,7 +29,11 @@ import {
 	requestDigest,
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration-plan.js";
-import { requireAdmittedConfigurationPolicy } from "./agent-configuration-record.js";
+import {
+	decodeAgentConfigurationRecord,
+	parseStoredKeylessModel,
+	requireAdmittedConfigurationPolicy,
+} from "./agent-configuration-record.js";
 import {
 	type AgentConfigurationAccessPlanV1,
 	type AgentConfigurationActorContextV1,
@@ -37,7 +42,9 @@ import {
 	AgentConfigurationError,
 	type AgentConfigurationImageAdmissionPortV1,
 	type AgentConfigurationModelAdmissionPortV1,
+	type AgentConfigurationRecord,
 	type AgentConfigurationRecordV2,
+	type AgentConfigurationRelayKeyAttachmentV1,
 	type AgentConfigurationResultV1,
 	type AgentConfigurationSecretAdmissionPortV1,
 	type AgentConfigurationTransactionPortV1,
@@ -47,6 +54,7 @@ import {
 	type AgentConfigurationWritePlanV1,
 	type StandardTemplateReleaseTargetV1,
 	type UpdateAgentConfigurationCommandV2,
+	type UpdateAgentConfigurationCommandV3,
 } from "./agent-configuration-types.js";
 import {
 	compareText,
@@ -56,6 +64,7 @@ import {
 	maxSecretReplacements,
 	sameValue,
 } from "./agent-configuration-values.js";
+import { AgentDefaultRelayKeyErrorV1 } from "./agent-default-relay-key.js";
 import { decideAgentAccessUpdatePolicy } from "./agent-management-access-policy.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
 import {
@@ -94,7 +103,9 @@ export {
 	type AgentConfigurationErrorCode,
 	type AgentConfigurationImageAdmissionPortV1,
 	type AgentConfigurationModelAdmissionPortV1,
+	type AgentConfigurationModelAdmissionPortV2,
 	type AgentConfigurationModelInputV1,
+	type AgentConfigurationModelInputV2,
 	type AgentConfigurationModelOptionInputV1,
 	type AgentConfigurationModelOptionV1,
 	type AgentConfigurationModelOptionV2,
@@ -104,6 +115,7 @@ export {
 	type AgentConfigurationRecordV1,
 	type AgentConfigurationRecordV2,
 	type AgentConfigurationRecordV3,
+	type AgentConfigurationRelayKeyAttachmentV1,
 	type AgentConfigurationResultV1,
 	type AgentConfigurationSecretAdmissionPortV1,
 	type AgentConfigurationSecretMetadataV1,
@@ -123,6 +135,7 @@ export {
 	type StandardTemplateReleaseAuthorizationV1,
 	type StandardTemplateReleaseTargetV1,
 	type UpdateAgentConfigurationCommandV2,
+	type UpdateAgentConfigurationCommandV3,
 	type UpgradeCustomAgentImageCommandV1,
 } from "./agent-configuration-types.js";
 
@@ -141,11 +154,12 @@ function createAgentConfigurationUseCaseV1Internal(
 		actorContext: AgentConfigurationActorContextV1,
 		digest: string,
 		changesFromCurrent: (
-			current: AgentConfigurationRecordV2,
+			current: AgentConfigurationRecord,
 		) => UpdateAgentConfigurationCommandV2["changes"],
 		preserveConnectionEnabled = false,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
 		release?: StandardTemplateReleaseTargetV1,
+		keyless?: UpdateAgentConfigurationCommandV3,
 	): Promise<AgentConfigurationResultV1> => {
 		const firstReleaseAuthority = release
 			? await admitStandardTemplateRelease(
@@ -193,6 +207,12 @@ function createAgentConfigurationUseCaseV1Internal(
 			throw new AgentConfigurationError("not_authorized");
 		}
 		const current = readDecision.record.configuration;
+		if (!keyless && current.schemaVersion === 3)
+			throw new AgentConfigurationError("not_admitted");
+		if (keyless && current.revision !== keyless.expectedConfigurationRevision)
+			throw new AgentConfigurationError("stale_revision");
+		if (keyless && current.source.kind !== "standard")
+			throw new AgentConfigurationError("not_admitted");
 		const authorization = firstReleaseAuthority
 			? {
 					authorizationRevision: firstReleaseAuthority.authorizationRevision,
@@ -333,7 +353,8 @@ function createAgentConfigurationUseCaseV1Internal(
 				current.source.kind === admittedSource.kind &&
 				(current.source.kind === "standard"
 					? admittedSource.kind === "standard" &&
-						current.source.templateId === admittedSource.templateId
+						(keyless !== undefined ||
+							current.source.templateId === admittedSource.templateId)
 					: admittedSource.kind === "custom" &&
 						current.source.interactionMode === admittedSource.interactionMode);
 			if (
@@ -376,7 +397,34 @@ function createAgentConfigurationUseCaseV1Internal(
 		}
 
 		let modelConfiguration = current.modelConfiguration;
-		if (changes.modelConfiguration) {
+		if (keyless) {
+			if (source.kind !== "standard" || !dependencies.keylessModelAdmission)
+				throw new AgentConfigurationError("dependency_unavailable");
+			let admitted: ReturnType<typeof parseStoredKeylessModel> | null;
+			try {
+				const decision = await dependencies.keylessModelAdmission.admitModels({
+					agentId: command.agentId,
+					requestId: command.requestId,
+					traceId: command.traceId,
+					requested: structuredClone(keyless.changes.modelConfiguration),
+				});
+				admitted = decision === null ? null : parseStoredKeylessModel(decision);
+			} catch {
+				throw new AgentConfigurationError("dependency_unavailable");
+			}
+			if (!admitted) throw new AgentConfigurationError("not_admitted");
+			const { catalogRevision: _revision, ...selection } = admitted;
+			if (!sameValue(selection, keyless.changes.modelConfiguration))
+				throw new AgentConfigurationError("not_admitted");
+			modelConfiguration = admitted;
+			if (
+				current.schemaVersion !== 3 ||
+				!sameValue(modelConfiguration, current.modelConfiguration)
+			)
+				changedFields.push("modelConfiguration");
+		} else if (changes.modelConfiguration) {
+			if (current.schemaVersion !== 2)
+				throw new AgentConfigurationError("not_admitted");
 			if (source.kind !== "standard") {
 				throw new AgentConfigurationError("not_admitted");
 			}
@@ -586,6 +634,7 @@ function createAgentConfigurationUseCaseV1Internal(
 			channels,
 		});
 
+		if (keyless) changedFields.push("defaultRelayKey");
 		changedFields.sort();
 		if (changedFields.length === 0) {
 			throw new AgentConfigurationError("no_change");
@@ -609,8 +658,9 @@ function createAgentConfigurationUseCaseV1Internal(
 		if (!Number.isSafeInteger(nextRevision)) {
 			throw new AgentConfigurationError("persistence_failed");
 		}
-		const configuration: AgentConfigurationRecordV2 = {
+		const configuration = decodeAgentConfigurationRecord({
 			...current,
+			schemaVersion: keyless ? 3 : 2,
 			revision: nextRevision,
 			source,
 			modelConfiguration,
@@ -618,7 +668,7 @@ function createAgentConfigurationUseCaseV1Internal(
 			secrets,
 			channels,
 			channelRevision,
-		};
+		});
 		const result: AgentConfigurationResultV1 = {
 			schemaVersion: 1,
 			agentId: command.agentId,
@@ -702,13 +752,66 @@ function createAgentConfigurationUseCaseV1Internal(
 			)
 				throw new AgentConfigurationError("stale_revision");
 		}
+		let defaultRelayKey: AgentConfigurationRelayKeyAttachmentV1 | undefined;
+		if (keyless) {
+			const ports = dependencies.defaultRelayKey;
+			if (!ports) throw new AgentConfigurationError("dependency_unavailable");
+			try {
+				const visible = await ports.candidates(
+					keyless.defaultRelayKey,
+					structuredClone(configuration),
+				);
+				if (
+					!configuration.modelConfiguration ||
+					configuration.modelConfiguration.options.some(
+						(option) =>
+							!visible.some(
+								(candidate) =>
+									candidate.endpointId === option.endpointId &&
+									candidate.modelId === option.modelId &&
+									option.reasoningLevels.every((level) =>
+										candidate.reasoningLevels.includes(level),
+									),
+							),
+					)
+				)
+					throw new AgentConfigurationError("not_admitted");
+				const identity = await ports.currentIdentity(command.traceId);
+				if (
+					!identity ||
+					identity.userId !== actorContext.actorId ||
+					identity.accountStatus !== "active"
+				)
+					throw new AgentConfigurationError("not_authorized");
+				if (
+					identity.authorizationRevision !== authorization.authorizationRevision
+				)
+					throw new AgentConfigurationError("stale_revision");
+				defaultRelayKey = {
+					expectedVersion: keyless.expectedKeyVersion,
+					encrypt: (binding) => ports.encrypt(binding, keyless.defaultRelayKey),
+				};
+			} catch (error) {
+				if (error instanceof AgentConfigurationError) throw error;
+				if (
+					error instanceof AgentDefaultRelayKeyErrorV1 &&
+					error.code === "invalid_input"
+				)
+					throw new AgentConfigurationError("not_admitted");
+				throw new AgentConfigurationError("dependency_unavailable");
+			}
+		}
 		let decision: Awaited<
 			ReturnType<AgentConfigurationTransactionPortV1["commit"]>
 		>;
 		try {
 			const capturedPlan = snapshotAgentConfigurationWritePlanV1(plan);
 			decision = parseTransactionCommitDecision(
-				await dependencies.transaction.commit(capturedPlan, attachments),
+				await dependencies.transaction.commit(
+					capturedPlan,
+					attachments,
+					defaultRelayKey,
+				),
 				command.agentId,
 			);
 		} catch {
@@ -762,6 +865,37 @@ function createAgentConfigurationUseCaseV1Internal(
 			);
 		},
 		async update(commandInput, actorContextInput, attachment) {
+			if (
+				commandInput &&
+				typeof commandInput === "object" &&
+				Object.getOwnPropertyDescriptor(commandInput, "schemaVersion")
+					?.value === 3
+			) {
+				const command = parseKeylessUpdateCommand(commandInput);
+				const actor = parseActorContext(actorContextInput);
+				const { modelConfiguration: _model, ...commonChanges } =
+					command.changes;
+				const digest = platformIdempotencyV1.canonicalRequestDigest({
+					schemaVersion: 1,
+					operation: "agent.configuration.update.v3",
+					agentId: command.agentId,
+					actorId: actor.actorId,
+					rawRequestDigest: actor.rawRequestDigest,
+					expectedConfigurationRevision: command.expectedConfigurationRevision,
+					expectedKeyVersion: command.expectedKeyVersion,
+					changes: command.changes as never,
+				});
+				return execute(
+					command,
+					actor,
+					digest,
+					() => commonChanges,
+					false,
+					attachment,
+					undefined,
+					command,
+				);
+			}
 			const command = parseCommand(commandInput);
 			const actorContext = parseActorContext(actorContextInput);
 			return await execute(
@@ -832,17 +966,23 @@ export function createAgentConfigurationUseCaseV1(
 }
 
 export async function captureAgentConfigurationWritePlanV1(input: {
-	readonly command: UpdateAgentConfigurationCommandV2;
+	readonly command:
+		| UpdateAgentConfigurationCommandV2
+		| UpdateAgentConfigurationCommandV3;
 	readonly actorContext: AgentConfigurationActorContextV1;
-	readonly current: AgentConfigurationRecordV2;
+	readonly current: AgentConfigurationRecord;
 	readonly authorizationRevision: string;
 	readonly dependencies: Omit<
 		AgentConfigurationUseCaseDependenciesV1,
 		"transaction"
 	>;
 	readonly now?: () => Date;
-}): Promise<AgentConfigurationWritePlanV1 | null> {
+}): Promise<{
+	plan: AgentConfigurationWritePlanV1 | null;
+	defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1;
+}> {
 	let captured: AgentConfigurationWritePlanV1 | undefined;
+	let defaultRelayKey: AgentConfigurationRelayKeyAttachmentV1 | undefined;
 	const useCase = createAgentConfigurationUseCaseV1Internal(
 		{
 			...input.dependencies,
@@ -857,7 +997,8 @@ export async function captureAgentConfigurationWritePlanV1(input: {
 						},
 					};
 				},
-				async commit(plan) {
+				async commit(plan, _attachments, key) {
+					defaultRelayKey = key;
 					captured = snapshotAgentConfigurationWritePlanV1(plan);
 					return { outcome: "committed" as const, result: plan.result };
 				},
@@ -873,9 +1014,12 @@ export async function captureAgentConfigurationWritePlanV1(input: {
 			error instanceof AgentConfigurationError &&
 			error.code === "no_change"
 		) {
-			return null;
+			return { plan: null };
 		}
 		throw error;
 	}
-	return captured ?? null;
+	return {
+		plan: captured ?? null,
+		...(defaultRelayKey ? { defaultRelayKey } : {}),
+	};
 }

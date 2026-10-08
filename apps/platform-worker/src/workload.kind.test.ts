@@ -387,7 +387,9 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				expect(state.candidate.configuration).toEqual(seed.configuration);
 				const projection = validateRuntimeModelProjectionV1(
 					state.candidate.modelProjection,
-					state.candidate.configuration,
+					state.candidate.configuration.schemaVersion === 2
+						? state.candidate.configuration
+						: undefined,
 				);
 				assert(seed.configuration.source.kind === "standard");
 				expect(projection.standardTemplateBinding).toEqual({

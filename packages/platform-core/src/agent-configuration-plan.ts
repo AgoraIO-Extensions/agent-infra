@@ -4,7 +4,7 @@ import {
 	parseOwnerIds,
 } from "./agent-configuration-input.js";
 import {
-	decodeAgentConfigurationRecordV2,
+	decodeAgentConfigurationRecord,
 	requireAdmittedConfigurationPolicy,
 } from "./agent-configuration-record.js";
 import type {
@@ -87,7 +87,7 @@ export function parseResult(
 			"revision",
 			"changedFields",
 		]);
-		const changedFields = denseArray(result.changedFields, 8);
+		const changedFields = denseArray(result.changedFields, 9);
 		if (
 			result.schemaVersion !== 1 ||
 			result.agentId !== agentId ||
@@ -101,6 +101,7 @@ export function parseResult(
 				(field) =>
 					!(
 						[
+							"defaultRelayKey",
 							"source",
 							"environment",
 							"modelConfiguration",
@@ -213,9 +214,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 		]);
 		if (!isText(values.agentId, idMaxBytes)) throw new Error();
 		const agentId = values.agentId;
-		const configuration = decodeAgentConfigurationRecordV2(
-			values.configuration,
-		);
+		const configuration = decodeAgentConfigurationRecord(values.configuration);
 		requireAdmittedConfigurationPolicy(configuration);
 		const result = parseResult(values.result, agentId);
 		const accessUpdate = snapshotConfigurationAccessPlanV1(
@@ -254,9 +253,13 @@ export function snapshotAgentConfigurationWritePlanV1(
 			: "agent.configuration.revised";
 		if (
 			values.schemaVersion !== 1 ||
-			snapshotAgentManagementDataObject(values.configuration).schemaVersion !==
-				2 ||
+			![2, 3].includes(
+				snapshotAgentManagementDataObject(values.configuration)
+					.schemaVersion as number,
+			) ||
 			result.changedFields.includes("actions") ||
+			(configuration.schemaVersion === 3) !==
+				result.changedFields.includes("defaultRelayKey") ||
 			!Number.isSafeInteger(values.baseRevision) ||
 			(values.baseRevision as number) < 1 ||
 			!Number.isSafeInteger(values.nextRevision) ||
@@ -394,7 +397,7 @@ export function parseTransactionReadDecision(
 				outcome: "ready",
 				record: {
 					schemaVersion: 1,
-					configuration: decodeAgentConfigurationRecordV2(record.configuration),
+					configuration: decodeAgentConfigurationRecord(record.configuration),
 					authorizationRevision: record.authorizationRevision,
 				},
 			};

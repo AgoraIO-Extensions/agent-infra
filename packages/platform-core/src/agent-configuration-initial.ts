@@ -10,7 +10,10 @@ import {
 	parseActorContext,
 	parseInitialCommand,
 } from "./agent-configuration-input.js";
-import { requireAdmittedConfigurationPolicy } from "./agent-configuration-record.js";
+import {
+	parseStoredKeylessModel,
+	requireAdmittedConfigurationPolicy,
+} from "./agent-configuration-record.js";
 import {
 	type AdmittedInitialAgentConfigurationV1,
 	type AgentConfigurationActorContextV1,
@@ -20,16 +23,25 @@ import {
 	type AgentConfigurationImageAdmissionPortV1,
 	type AgentConfigurationModelAdmissionPortV1,
 	type AgentConfigurationModelV1,
-	type AgentConfigurationRecordV2,
+	type AgentConfigurationModelV2,
+	type AgentConfigurationRecord,
 	type AgentConfigurationSecretAdmissionPortV1,
 	type InitialAgentConfigurationAdmissionDependenciesV1,
 	type InitialAgentConfigurationAdmissionHandleV1,
-	type InitialAgentConfigurationCommandV2,
+	type InitialAgentConfigurationCommand,
 } from "./agent-configuration-types.js";
 import { compareText, sameValue } from "./agent-configuration-values.js";
 
+export interface AgentApiInitialCreatorV1 {
+	readonly principal: {
+		readonly kind: "user" | "application";
+		readonly id: string;
+	};
+	readonly ownerId: string;
+}
+
 function admittedInitialAccess(
-	command: InitialAgentConfigurationCommandV2,
+	command: InitialAgentConfigurationCommand,
 	actorContext: AgentConfigurationActorContextV1,
 	authorization: Extract<
 		Awaited<
@@ -37,7 +49,17 @@ function admittedInitialAccess(
 		>,
 		{ readonly status: "admitted" }
 	>,
+	apiCreator?: AgentApiInitialCreatorV1,
 ): Pick<AdmittedInitialAgentConfigurationV1, "ownerIds" | "availability"> {
+	const ownerId = apiCreator?.ownerId ?? actorContext.actorId;
+	if (
+		apiCreator &&
+		(apiCreator.principal.id !== actorContext.actorId ||
+			!["user", "application"].includes(apiCreator.principal.kind) ||
+			(apiCreator.principal.kind === "user" &&
+				ownerId !== actorContext.actorId))
+	)
+		throw new AgentConfigurationError("not_authorized");
 	const authority = authorization.authorityContext;
 	if (!authority) {
 		throw new AgentConfigurationError("dependency_unavailable");
@@ -49,7 +71,7 @@ function admittedInitialAccess(
 	);
 	const organizationIds = new Set(authority.organizationIds);
 	if (
-		!activeUserIds.has(actorContext.actorId) ||
+		!activeUserIds.has(ownerId) ||
 		command.coOwnerIds.some((ownerId) => !activeUserIds.has(ownerId)) ||
 		command.availability.some((target) =>
 			target.kind === "user"
@@ -60,15 +82,15 @@ function admittedInitialAccess(
 		throw new AgentConfigurationError("not_authorized");
 	}
 	return {
-		ownerIds: [
-			...new Set([actorContext.actorId, ...command.coOwnerIds]),
-		].toSorted(compareText),
+		ownerIds: [...new Set([ownerId, ...command.coOwnerIds])].toSorted(
+			compareText,
+		),
 		availability: structuredClone(command.availability),
 	};
 }
 
 async function completeInitialAgentConfigurationAdmissionV1(
-	command: InitialAgentConfigurationCommandV2,
+	command: InitialAgentConfigurationCommand,
 	actorContext: AgentConfigurationActorContextV1,
 	firstAuthorization: Extract<
 		Awaited<
@@ -77,8 +99,9 @@ async function completeInitialAgentConfigurationAdmissionV1(
 		{ readonly status: "admitted" }
 	>,
 	dependencies: InitialAgentConfigurationAdmissionDependenciesV1,
+	apiCreator?: AgentApiInitialCreatorV1,
 ): Promise<AdmittedInitialAgentConfigurationV1> {
-	admittedInitialAccess(command, actorContext, firstAuthorization);
+	admittedInitialAccess(command, actorContext, firstAuthorization, apiCreator);
 
 	let imageAdmission: Awaited<
 		ReturnType<AgentConfigurationImageAdmissionPortV1["admitImage"]>
@@ -141,8 +164,32 @@ async function completeInitialAgentConfigurationAdmissionV1(
 		throw new AgentConfigurationError("not_admitted");
 	}
 
-	let modelConfiguration: AgentConfigurationModelV1 | null = null;
-	if (command.modelConfiguration) {
+	let modelConfiguration:
+		| AgentConfigurationModelV1
+		| AgentConfigurationModelV2
+		| null = null;
+	if (command.schemaVersion === 3) {
+		if (!dependencies.keylessModelAdmission)
+			throw new AgentConfigurationError("dependency_unavailable");
+
+		let decision: AgentConfigurationModelV2 | null;
+		try {
+			const result = await dependencies.keylessModelAdmission.admitModels({
+				agentId: command.agentId,
+				requestId: command.requestId,
+				traceId: command.traceId,
+				requested: structuredClone(command.modelConfiguration),
+			});
+			decision = result === null ? null : parseStoredKeylessModel(result);
+		} catch {
+			throw new AgentConfigurationError("dependency_unavailable");
+		}
+		if (decision === null) throw new AgentConfigurationError("not_admitted");
+		const { catalogRevision: _revision, ...selection } = decision;
+		if (!sameValue(selection, command.modelConfiguration))
+			throw new AgentConfigurationError("not_admitted");
+		modelConfiguration = decision;
+	} else if (command.modelConfiguration) {
 		let admission: Awaited<
 			ReturnType<AgentConfigurationModelAdmissionPortV1["admitModels"]>
 		>;
@@ -239,17 +286,29 @@ async function completeInitialAgentConfigurationAdmissionV1(
 		throw new AgentConfigurationError("not_admitted");
 	}
 
-	const configuration: AgentConfigurationRecordV2 = {
-		schemaVersion: 2,
+	const common = {
 		agentId: command.agentId,
 		revision: 1,
 		source,
-		modelConfiguration,
 		environment: command.environment,
 		secrets: secretAdmission.secrets,
 		channels: channelAdmission.channels,
 		channelRevision: channelAdmission.channelRevision,
 	};
+
+	let configuration: AgentConfigurationRecord;
+	if (command.schemaVersion === 3) {
+		if (source.kind !== "standard" || modelConfiguration === null)
+			throw new AgentConfigurationError("not_admitted");
+		configuration = { ...common, schemaVersion: 3, source, modelConfiguration };
+	} else {
+		configuration = {
+			...common,
+			schemaVersion: 2,
+			modelConfiguration:
+				modelConfiguration as AgentConfigurationModelV1 | null,
+		};
+	}
 	requireAdmittedConfigurationPolicy(configuration);
 
 	const currentAuthorization = await admitCurrentAuthorization(
@@ -261,6 +320,7 @@ async function completeInitialAgentConfigurationAdmissionV1(
 		command,
 		actorContext,
 		currentAuthorization,
+		apiCreator,
 	);
 	return {
 		schemaVersion: 1,
@@ -272,9 +332,10 @@ async function completeInitialAgentConfigurationAdmissionV1(
 }
 
 export async function beginInitialAgentConfigurationAdmissionV1(
-	commandInput: InitialAgentConfigurationCommandV2,
+	commandInput: InitialAgentConfigurationCommand,
 	actorContextInput: AgentConfigurationActorContextV1,
 	dependencies: InitialAgentConfigurationAdmissionDependenciesV1,
+	apiCreator?: AgentApiInitialCreatorV1,
 ): Promise<InitialAgentConfigurationAdmissionHandleV1> {
 	const command = parseInitialCommand(commandInput);
 	const actorContext = parseActorContext(actorContextInput);
@@ -283,6 +344,9 @@ export async function beginInitialAgentConfigurationAdmissionV1(
 			authorizationAdmission: dependencies.authorizationAdmission,
 			imageAdmission: dependencies.imageAdmission,
 			modelAdmission: dependencies.modelAdmission,
+			...(dependencies.keylessModelAdmission
+				? { keylessModelAdmission: dependencies.keylessModelAdmission }
+				: {}),
 			secretAdmission: dependencies.secretAdmission,
 			channelAdmission: dependencies.channelAdmission,
 		};
@@ -302,6 +366,7 @@ export async function beginInitialAgentConfigurationAdmissionV1(
 				actorContext,
 				firstAuthorization,
 				capturedDependencies,
+				apiCreator,
 			);
 			return completion;
 		},

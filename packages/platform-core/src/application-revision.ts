@@ -4,18 +4,22 @@ import {
 	type AgentConfigurationChannelChangeV1,
 	AgentConfigurationError,
 	type AgentConfigurationModelInputV1,
-	type AgentConfigurationRecordV2,
+	type AgentConfigurationModelInputV2,
+	type AgentConfigurationRecord,
+	type AgentConfigurationRelayKeyAttachmentV1,
 	type AgentConfigurationSecretReplacementInputV1,
 	type AgentConfigurationSourceSelectionV1,
 	type AgentConfigurationUseCaseDependenciesV1,
 	type AgentConfigurationWritePlanV1,
 	captureAgentConfigurationWritePlanV1,
-	decodeAgentConfigurationRecordV2,
+	decodeAgentConfigurationRecord,
 	parseAgentConfigurationChangesV1,
 	snapshotAgentConfigurationWritePlanV1,
 	type UpdateAgentConfigurationCommandV2,
+	type UpdateAgentConfigurationCommandV3,
 	validateLegacyInitialActionsV1,
 } from "./agent-configuration.js";
+import { parseKeylessUpdateCommand } from "./agent-configuration-input.js";
 import {
 	type AgentManagementActorContextV1,
 	type AgentManagementStateV1,
@@ -56,6 +60,21 @@ export interface ReviseApplicationCommandV2 {
 	readonly channels?: readonly AgentConfigurationChannelChangeV1[];
 }
 
+export interface ReviseApplicationCommandV3
+	extends Omit<
+		ReviseApplicationCommandV2,
+		"schemaVersion" | "modelConfiguration"
+	> {
+	readonly schemaVersion: 3;
+	readonly modelConfiguration: AgentConfigurationModelInputV2;
+	readonly defaultRelayKey: string;
+	readonly expectedConfigurationRevision: number;
+	readonly expectedKeyVersion: number | null;
+}
+type ReviseApplicationCommand =
+	| ReviseApplicationCommandV2
+	| ReviseApplicationCommandV3;
+
 export interface ApplicationRevisionActorContextV1
 	extends AgentManagementActorContextV1 {
 	readonly applicationId: string;
@@ -81,7 +100,7 @@ export interface ApplicationRevisionReadStateV1 {
 		readonly description: string;
 	};
 	readonly management: AgentManagementStateV1;
-	readonly configuration: AgentConfigurationRecordV2;
+	readonly configuration: AgentConfigurationRecord;
 	readonly authorizationRevision: string;
 }
 
@@ -156,6 +175,7 @@ export interface ApplicationRevisionTransactionPortV1 {
 	commit(
 		plan: ApplicationRevisionWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
+		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
 	): Promise<ApplicationRevisionCommitDecisionV1>;
 }
 
@@ -166,7 +186,7 @@ export interface ApplicationRevisionUseCaseV1 {
 	): Promise<ApplicationRevisionResultV1>;
 
 	revise(
-		command: ReviseApplicationCommandV2,
+		command: ReviseApplicationCommand,
 		actorContext: ApplicationRevisionActorContextV1,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<ApplicationRevisionResultV1>;
@@ -228,7 +248,69 @@ function exactObject(
 function parseCommand(
 	input: unknown,
 	legacy = false,
-): ReviseApplicationCommandV2 {
+): ReviseApplicationCommand {
+	let top: Record<string, unknown>;
+	try {
+		top = snapshotAgentManagementDataObject(input);
+	} catch {
+		invalidCommand();
+	}
+	if (!legacy && top.schemaVersion === 3) {
+		const values = exactObject(
+			top,
+			[
+				"schemaVersion",
+				"idempotencyKey",
+				"requestId",
+				"traceId",
+				"name",
+				"description",
+				"coOwnerIds",
+				"availability",
+				"source",
+				"environment",
+				"modelConfiguration",
+				"defaultRelayKey",
+				"expectedConfigurationRevision",
+				"expectedKeyVersion",
+			],
+			["secrets", "channels"],
+		);
+		const {
+			defaultRelayKey,
+			expectedConfigurationRevision,
+			expectedKeyVersion,
+			modelConfiguration,
+			...commonInput
+		} = values;
+		const common = parseCommand({ ...commonInput, schemaVersion: 2 });
+		let configuration: UpdateAgentConfigurationCommandV3;
+		try {
+			configuration = parseKeylessUpdateCommand({
+				schemaVersion: 3,
+				agentId: "application-revision",
+				idempotencyKey: common.idempotencyKey,
+				requestId: common.requestId,
+				traceId: common.traceId,
+				defaultRelayKey,
+				expectedConfigurationRevision,
+				expectedKeyVersion,
+				changes: { environment: common.environment, modelConfiguration },
+			});
+		} catch {
+			invalidCommand();
+		}
+		if (common.source.kind !== "standard") invalidCommand();
+		return {
+			...common,
+			schemaVersion: 3,
+			modelConfiguration: configuration.changes.modelConfiguration,
+			defaultRelayKey: configuration.defaultRelayKey,
+			expectedConfigurationRevision:
+				configuration.expectedConfigurationRevision,
+			expectedKeyVersion: configuration.expectedKeyVersion,
+		};
+	}
 	const values = exactObject(
 		input,
 		[
@@ -411,7 +493,7 @@ function parseReadState(input: unknown): ApplicationRevisionReadStateV1 {
 		const management = parseAgentManagementPortState(
 			state.management as AgentManagementStateV1,
 		);
-		const configuration = decodeAgentConfigurationRecordV2(state.configuration);
+		const configuration = decodeAgentConfigurationRecord(state.configuration);
 		if (
 			state.schemaVersion !== 1 ||
 			!isAgentManagementText(application.applicationId) ||
@@ -528,7 +610,7 @@ async function requireCurrentAuthorization(
 	dependencies: ApplicationRevisionUseCaseDependenciesV1,
 	agentId: string,
 	actorContext: ApplicationRevisionActorContextV1,
-	command: ReviseApplicationCommandV2,
+	command: ReviseApplicationCommand,
 ): Promise<string> {
 	let decision: unknown;
 	try {
@@ -813,15 +895,18 @@ function configurationError(error: unknown): ApplicationRevisionError {
 
 async function captureConfigurationPlan(
 	state: ApplicationRevisionReadStateV1,
-	command: ReviseApplicationCommandV2,
+	command: ReviseApplicationCommand,
 	actorContext: ApplicationRevisionActorContextV1,
 	dependencies: ApplicationRevisionUseCaseDependenciesV1,
 	now: () => Date,
 ): Promise<{
 	plan: AgentConfigurationWritePlanV1 | null;
+	defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1;
 	nextAuthorizationRevision: string;
 }> {
-	let capturedPlan: AgentConfigurationWritePlanV1 | null = null;
+	let captured: Awaited<
+		ReturnType<typeof captureAgentConfigurationWritePlanV1>
+	>;
 	let nextAuthorizationRevision: string | undefined;
 	const authorizationAdmission = {
 		async authorize(
@@ -840,32 +925,52 @@ async function captureConfigurationPlan(
 			return decision;
 		},
 	};
+	const common = {
+		agentId: state.application.agentId,
+		idempotencyKey: command.idempotencyKey,
+		requestId: command.requestId,
+		traceId: command.traceId,
+	};
+	const changes = {
+		coOwnerIds: [
+			...new Set([state.application.applicantId, ...command.coOwnerIds]),
+		].toSorted(),
+		availability: command.availability,
+		source: command.source,
+		environment: command.environment,
+		...(Object.hasOwn(command, "secrets") ? { secrets: command.secrets } : {}),
+		...(Object.hasOwn(command, "channels")
+			? { channels: command.channels }
+			: {}),
+	};
+	const update:
+		| UpdateAgentConfigurationCommandV2
+		| UpdateAgentConfigurationCommandV3 =
+		command.schemaVersion === 3
+			? {
+					...common,
+					schemaVersion: 3,
+					defaultRelayKey: command.defaultRelayKey,
+					expectedConfigurationRevision: command.expectedConfigurationRevision,
+					expectedKeyVersion: command.expectedKeyVersion,
+					changes: {
+						...changes,
+						modelConfiguration: command.modelConfiguration,
+					},
+				}
+			: {
+					...common,
+					schemaVersion: 2,
+					changes: {
+						...changes,
+						...(command.modelConfiguration === undefined
+							? {}
+							: { modelConfiguration: command.modelConfiguration }),
+					},
+				};
 	try {
-		capturedPlan = await captureAgentConfigurationWritePlanV1({
-			command: {
-				schemaVersion: 2,
-				agentId: state.application.agentId,
-				idempotencyKey: command.idempotencyKey,
-				requestId: command.requestId,
-				traceId: command.traceId,
-				changes: {
-					coOwnerIds: [
-						...new Set([state.application.applicantId, ...command.coOwnerIds]),
-					].toSorted(),
-					availability: command.availability,
-					source: command.source,
-					...(command.modelConfiguration === undefined
-						? {}
-						: { modelConfiguration: command.modelConfiguration }),
-					environment: command.environment,
-					...(Object.hasOwn(command, "secrets")
-						? { secrets: command.secrets }
-						: {}),
-					...(Object.hasOwn(command, "channels")
-						? { channels: command.channels }
-						: {}),
-				},
-			},
+		captured = await captureAgentConfigurationWritePlanV1({
+			command: update,
 			actorContext: {
 				schemaVersion: 1,
 				actorId: actorContext.userId,
@@ -883,12 +988,12 @@ async function captureConfigurationPlan(
 	if (!nextAuthorizationRevision) {
 		throw new ApplicationRevisionError("dependency_unavailable");
 	}
-	return { plan: capturedPlan, nextAuthorizationRevision };
+	return { ...captured, nextAuthorizationRevision };
 }
 
 async function captureManagementPlan(
 	state: ApplicationRevisionReadStateV1,
-	command: ReviseApplicationCommandV2,
+	command: ReviseApplicationCommand,
 	actorContext: ApplicationRevisionActorContextV1,
 	now: () => Date,
 ): Promise<AgentManagementWritePlanV1> {
@@ -1139,7 +1244,11 @@ export function createApplicationRevisionUseCaseV1(
 		try {
 			const capturedPlan = snapshotApplicationRevisionWritePlanV1(plan);
 			commitDecision = parseCommitDecision(
-				await dependencies.transaction.commit(capturedPlan, attachments),
+				await dependencies.transaction.commit(
+					capturedPlan,
+					attachments,
+					configuration.defaultRelayKey,
+				),
 				result,
 			);
 		} catch {
