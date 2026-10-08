@@ -365,6 +365,17 @@ export class PostgresSkillHubLifecycleV1 {
 		input: unknown,
 	) {
 		const command = parseSkillHubRegistrationV1(input);
+		if (
+			(command.visibility === "ORGANIZATION" && !command.organizationId) ||
+			(command.visibility !== "ORGANIZATION" &&
+				command.organizationId !== undefined)
+		)
+			throw new SkillHubOperationErrorV1("invalid_input");
+		if (
+			command.organizationId &&
+			!identity.actor.organizationIds.includes(command.organizationId)
+		)
+			throw new SkillHubOperationErrorV1("forbidden");
 		return this.#mutation(
 			transaction,
 			request,
@@ -422,10 +433,7 @@ export class PostgresSkillHubLifecycleV1 {
 						id: command.skillId,
 						name: command.name,
 						ownerId: request.userId,
-						organizationId:
-							command.visibility === "ORGANIZATION"
-								? (identity.actor.organizationIds[0] ?? null)
-								: null,
+						organizationId: command.organizationId ?? null,
 						createdAt: new Date(),
 						updatedAt: new Date(),
 					});
@@ -975,6 +983,7 @@ export class PostgresSkillHubLifecycleV1 {
 						version: skillHubVersions,
 						name: skillHubSkills.name,
 						organizationId: skillHubSkills.organizationId,
+						status: skillHubSkills.status,
 					})
 					.from(skillHubVersions)
 					.innerJoin(
@@ -982,16 +991,19 @@ export class PostgresSkillHubLifecycleV1 {
 						eq(skillHubSkills.id, skillHubVersions.skillId),
 					)
 					.where(eq(skillHubVersions.state, "published"));
-				const versions = rows.flatMap(({ version, name, organizationId }) => {
-					const decoded = decode(version, name);
-					return canViewSkillHubVersionV1(
-						decoded,
-						identity.actor,
-						organizationId,
-					)
-						? [{ ...decoded, name }]
-						: [];
-				});
+				const versions = rows.flatMap(
+					({ version, name, organizationId, status }) => {
+						const decoded = decode(version, name);
+						return canViewSkillHubVersionV1(
+							decoded,
+							identity.actor,
+							organizationId,
+							status,
+						)
+							? [{ ...decoded, name }]
+							: [];
+					},
+				);
 				const latestBySkill = new Map<string, Date>();
 				for (const { version } of rows) {
 					const current = latestBySkill.get(version.skillId);
@@ -1085,6 +1097,7 @@ export class PostgresSkillHubLifecycleV1 {
 							version: skillHubVersions,
 							name: skillHubSkills.name,
 							organizationId: skillHubSkills.organizationId,
+							status: skillHubSkills.status,
 						})
 						.from(skillHubVersions)
 						.innerJoin(
@@ -1101,6 +1114,7 @@ export class PostgresSkillHubLifecycleV1 {
 							command,
 							identity.actor,
 							versionRow.organizationId,
+							versionRow.status,
 						)
 					)
 						throw new SkillHubOperationErrorV1(
@@ -1108,6 +1122,18 @@ export class PostgresSkillHubLifecycleV1 {
 								? "not_found"
 								: "version_unavailable",
 						);
+					const [admission] = await transaction
+						.select({ id: idempotencyRecords.id })
+						.from(idempotencyRecords)
+						.where(
+							and(
+								eq(idempotencyRecords.scopeType, "skill_package"),
+								eq(idempotencyRecords.scopeId, command.skillVersionId),
+								eq(idempotencyRecords.status, "completed"),
+							),
+						);
+					if (!admission)
+						throw new SkillHubOperationErrorV1("version_unavailable");
 					const [row] = await transaction
 						.select()
 						.from(skillHubInstallations)
@@ -1120,6 +1146,7 @@ export class PostgresSkillHubLifecycleV1 {
 						version: skillHubVersions,
 						name: skillHubSkills.name,
 						organizationId: skillHubSkills.organizationId,
+						status: skillHubSkills.status,
 					})
 					.from(skillHubVersions)
 					.innerJoin(
@@ -1136,11 +1163,24 @@ export class PostgresSkillHubLifecycleV1 {
 						command,
 						identity.actor,
 						row.organizationId,
+						row.status,
 					)
 				)
 					throw new SkillHubOperationErrorV1(
 						version.state === "published" ? "not_found" : "version_unavailable",
 					);
+				const [admission] = await transaction
+					.select({ id: idempotencyRecords.id })
+					.from(idempotencyRecords)
+					.where(
+						and(
+							eq(idempotencyRecords.scopeType, "skill_package"),
+							eq(idempotencyRecords.scopeId, command.skillVersionId),
+							eq(idempotencyRecords.status, "completed"),
+						),
+					);
+				if (!admission)
+					throw new SkillHubOperationErrorV1("version_unavailable");
 				const now = new Date();
 				const [existing] = await transaction
 					.select()

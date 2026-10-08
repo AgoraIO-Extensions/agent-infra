@@ -48,6 +48,7 @@ export type SkillHubRegistrationV1 = Omit<
 > & {
 	readonly schemaVersion: 1;
 	readonly name: string;
+	readonly organizationId?: string | null;
 };
 
 function invalid(): never {
@@ -135,7 +136,7 @@ export function parseSkillHubRegistrationV1(
 	input: unknown,
 ): SkillHubRegistrationV1 {
 	return parsed(() => {
-		const value = object(input, [
+		const keys = [
 			"schemaVersion",
 			"name",
 			"skillId",
@@ -147,7 +148,13 @@ export function parseSkillHubRegistrationV1(
 			"packageDigest",
 			"manifestDigest",
 			"signatureDigest",
-		]);
+		] as const;
+		const value = object(
+			input,
+			Object.hasOwn((input as Record<string, unknown>) ?? {}, "organizationId")
+				? [...keys, "organizationId"]
+				: keys,
+		);
 		if (
 			value.schemaVersion !== 1 ||
 			typeof value.name !== "string" ||
@@ -174,6 +181,14 @@ export function parseSkillHubRegistrationV1(
 			packageDigest: digest(value.packageDigest),
 			manifestDigest: digest(value.manifestDigest),
 			signatureDigest: digest(value.signatureDigest),
+			...(Object.hasOwn(value, "organizationId")
+				? {
+						organizationId:
+							value.organizationId === null
+								? null
+								: parseSkillHubIdV1(value.organizationId),
+					}
+				: {}),
 		});
 	});
 }
