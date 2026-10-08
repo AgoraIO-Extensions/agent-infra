@@ -92,7 +92,9 @@ function fixture() {
 				_id: string,
 				_input: unknown,
 				_metadata: unknown,
-			) => item,
+			): Promise<
+				Awaited<ReturnType<PostgresScopedPlatformAuditQueryV1["getAudit"]>>
+			> => item,
 		),
 	};
 	const app = new Hono();
@@ -106,6 +108,61 @@ function fixture() {
 }
 
 describe("scoped audit HTTP adapter", () => {
+	it.each([
+		"skill.version.register",
+		"skill.version.review",
+		"skill.version.revoke",
+		"skill.version.read",
+		"skill.version.refused",
+	] as const)(
+		"returns Skill metadata audit %s from the existing admin list and detail routes",
+		async (action) => {
+			const { app, identity, audit } = fixture();
+			identity.resolve.mockResolvedValue({
+				...browser,
+				roles: ["system_admin"],
+			});
+			const record = {
+				...item,
+				action,
+				actor: { kind: "user" as const, actorId: "owner-a" },
+				subject: {
+					kind: "unknown" as const,
+					subjectId:
+						action === "skill.version.refused" ? "unknown" : "version-a",
+				},
+				result:
+					action === "skill.version.refused"
+						? ("rejected" as const)
+						: ("succeeded" as const),
+				summary: action,
+				agentId: null,
+				conversationId: null,
+				executionId: null,
+				authorizationRecordId: null,
+				originalPrincipal: null,
+				executor: null,
+				operation: null,
+			};
+			audit.listAudit.mockResolvedValueOnce({
+				items: [record],
+				nextCursor: null,
+			});
+			audit.getAudit.mockResolvedValueOnce(record);
+			const listed = await app.request(`/api/v3/admin/audit?action=${action}`);
+			expect(listed.status).toBe(200);
+			expect(await listed.json()).toMatchObject({
+				items: [{ action, subject: record.subject, result: record.result }],
+			});
+			const detail = await app.request("/api/v3/admin/audit/audit-a");
+			expect(detail.status).toBe(200);
+			expect(await detail.json()).toMatchObject({
+				action,
+				subject: record.subject,
+				result: record.result,
+			});
+		},
+	);
 	it("passes one own-audit Bearer to the Store without resolving a browser or trusting filters", async () => {
 		const { app, identity, audit } = fixture();
 		const material = `papi_${"a".repeat(43)}`;

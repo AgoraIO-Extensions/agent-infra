@@ -30,6 +30,11 @@ export const ScopedPlatformAuditResultV1Schema = z.enum([
 ]);
 
 export const ScopedPlatformAuditActionV1Schema = z.enum([
+	"skill.version.register",
+	"skill.version.review",
+	"skill.version.revoke",
+	"skill.version.read",
+	"skill.version.refused",
 	"agent.application.submitted",
 	"agent.application.updated",
 	"agent.application.resubmitted",

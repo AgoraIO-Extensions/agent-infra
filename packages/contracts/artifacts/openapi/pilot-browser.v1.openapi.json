@@ -3640,6 +3640,11 @@
       },
       "ScopedPlatformAuditActionV1": {
         "enum": [
+          "skill.version.register",
+          "skill.version.review",
+          "skill.version.revoke",
+          "skill.version.read",
+          "skill.version.refused",
           "agent.application.submitted",
           "agent.application.updated",
           "agent.application.resubmitted",
