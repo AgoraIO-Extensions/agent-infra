@@ -99,6 +99,8 @@ export function installSkillHubVersionV1(
 	installationId: string,
 	now: string,
 ): SkillHubInstallationV1 {
+	if (command.skillVersionId !== version.skillVersionId)
+		throw new SkillHubOperationErrorV1("invalid_input");
 	if (version.state !== "published")
 		throw new SkillHubOperationErrorV1("version_unavailable");
 	return Object.freeze({
@@ -128,7 +130,13 @@ export function uninstallSkillHubInstallationV1(
 export function markSkillHubInstallationUpgradeV1(
 	installation: SkillHubInstallationV1,
 	latest: SkillHubVersionV1,
+	installedVersion: SkillHubVersionV1,
 ): SkillHubInstallationV1 {
+	if (
+		installedVersion.skillVersionId !== installation.skillVersionId ||
+		latest.skillId !== installedVersion.skillId
+	)
+		throw new SkillHubOperationErrorV1("invalid_input");
 	if (installation.state !== "installed" || latest.state !== "published")
 		throw new SkillHubOperationErrorV1("version_unavailable");
 	if (latest.skillVersionId === installation.skillVersionId)
