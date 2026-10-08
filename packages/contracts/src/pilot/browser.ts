@@ -338,6 +338,48 @@ export const AgentApplicationCreateRequestV2Schema =
 	AgentApplicationCreateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
 	});
+
+const [standardSource, selfManagedSource, platformAdapterSource] =
+	AgentSourceInputV1Schema.options;
+const AgentApiCreationCustomRequestV1Schema =
+	AgentApplicationCreateRequestV2Schema.omit({
+		modelConfiguration: true,
+	}).extend({
+		source: z.union([selfManagedSource, platformAdapterSource]),
+	});
+const AgentApiCreationStandardRequestV1Schema =
+	AgentApplicationCreateRequestV2Schema.extend({
+		schemaVersion: z.literal(3),
+		source: standardSource,
+		modelConfiguration: ModelConfigurationInputV1Schema.extend({
+			options: z
+				.array(ModelOptionInputV1Schema.omit({ credentialValue: true }))
+				.min(1),
+		}),
+		defaultRelayKey: z
+			.string()
+			.min(16)
+			.max(8192)
+			.regex(/^[\x21-\x7e]+$/)
+			.meta({ writeOnly: true }),
+	});
+export const AgentApiCreationRequestV1Schema = z.union([
+	AgentApiCreationCustomRequestV1Schema,
+	AgentApiCreationStandardRequestV1Schema,
+]);
+export const AgentApiCreationResponseV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	agentId: OpaqueIdV1Schema,
+	status: z.enum([
+		"creating",
+		"available",
+		"stopped",
+		"creation_failed",
+		"disabled",
+	]),
+	revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+	replayed: z.boolean(),
+});
 export const AgentApplicationUpdateRequestV2Schema =
 	AgentApplicationUpdateRequestV1Schema.omit({ actions: true }).extend({
 		schemaVersion: z.literal(2),
@@ -1697,6 +1739,23 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 				...errorResponses,
 			},
 		},
+		post: {
+			operationId: "createAgentApiV1",
+			security: agentApiCredentialSecurity,
+			requestParams: { header: idempotencyHeader },
+			requestBody: requiredJsonRequestBody(AgentApiCreationRequestV1Schema),
+			responses: {
+				"201": jsonResponse(
+					"Agent API creation accepted",
+					AgentApiCreationResponseV1Schema,
+				),
+				"200": jsonResponse(
+					"Original Agent API creation replayed",
+					AgentApiCreationResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 	},
 	"/api/v2/agents/{agentId}": {
 		get: {
@@ -1788,6 +1847,8 @@ export const pilotBrowserSchemasV2 = {
 	AgentApplicationManagerResponseV1: AgentApplicationManagerResponseV1Schema,
 	AgentApiLifecycleRequestV1: AgentApiLifecycleRequestV1Schema,
 	AgentApiLifecycleResponseV1: AgentApiLifecycleResponseV1Schema,
+	AgentApiCreationRequestV1: AgentApiCreationRequestV1Schema,
+	AgentApiCreationResponseV1: AgentApiCreationResponseV1Schema,
 	ApplicationMetadataV1: ApplicationMetadataV1Schema,
 	ApplicationDisableRequestV1: ApplicationDisableRequestV1Schema,
 	ApplicationRegistrationRequestV1: ApplicationRegistrationRequestV1Schema,

@@ -160,12 +160,16 @@ function restorePreAgentApiManagementContract(value: {
 		"/api/v2/agents/{agentId}/application-managers/{applicationId}",
 	])
 		delete value.paths[path];
+	if (value.paths["/api/v2/agents"])
+		delete (value.paths["/api/v2/agents"] as { post?: unknown }).post;
 	for (const name of [
 		"AgentApiLifecycleRequestV1",
 		"AgentApiLifecycleResponseV1",
 		"AgentApiStateResponseV1",
 		"AgentApplicationManagerRequestV1",
 		"AgentApplicationManagerResponseV1",
+		"AgentApiCreationRequestV1",
+		"AgentApiCreationResponseV1",
 	])
 		delete value.components.schemas[name];
 	const audit = value.components.schemas.PlatformAuditProjectionV2 as
@@ -205,6 +209,55 @@ function restorePreAgentApiManagementContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it("admits only the exact direct Agent creation contract", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		delete previous.paths["/api/v2/agents"].post;
+		delete previous.components.schemas.AgentApiCreationRequestV1;
+		delete previous.components.schemas.AgentApiCreationResponseV1;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-api-create-compat-"),
+		);
+		try {
+			const before = resolve(directory, "before.json");
+			const after = resolve(directory, "after.json");
+			await writeFile(before, JSON.stringify(previous));
+			await writeFile(after, JSON.stringify(current));
+			expect(comparePaths(after, before).status).toBe(0);
+			for (const mutate of [
+				(value: typeof current) => {
+					delete value.paths["/api/v2/agents"].post.security;
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentApiCreationResponseV1.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/agents"].get.operationId = "unreviewed";
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentApiCreationRequestV1.anyOf[1].properties.defaultRelayKey.writeOnly = false;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/unreviewed"] = {};
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(after, JSON.stringify(changed));
+				expect(comparePaths(after, before).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits exactly the Skill lifecycle audit actions without authority or privacy drift", async () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),
@@ -427,6 +480,10 @@ describe("contract compatibility command", () => {
 			const previous = structuredClone(current);
 			restorePreAgentApiManagementContract(previous);
 			for (const document of [current, previous]) {
+				if (document.paths["/api/v2/agents"])
+					delete document.paths["/api/v2/agents"].post;
+				delete document.components.schemas.AgentApiCreationRequestV1;
+				delete document.components.schemas.AgentApiCreationResponseV1;
 				restorePreSkillHubAuditContract(document);
 				for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
 					const schema = document.components.schemas[name];

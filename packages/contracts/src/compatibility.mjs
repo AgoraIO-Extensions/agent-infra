@@ -1917,6 +1917,38 @@ function isAgentApiManagementOpenApiAddition(previous, current) {
 	return changed && sameValue(previous, normalized);
 }
 
+// #481 adds the credential-authenticated direct Agent creation contract beside
+// the existing browser Agent list path.
+function isAgentApiCreationOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents";
+	const names = ["AgentApiCreationRequestV1", "AgentApiCreationResponseV1"];
+	if (
+		previous.paths?.[path]?.post !== undefined ||
+		current.paths?.[path]?.post === undefined ||
+		names.some(
+			(name) =>
+				previous.components?.schemas?.[name] !== undefined ||
+				current.components?.schemas?.[name] === undefined,
+		)
+	)
+		return false;
+	const addition = {
+		path: { post: current.paths[path].post },
+		schemas: Object.fromEntries(
+			names.map((name) => [name, current.components.schemas[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"5605586625e0634b7344bbceb4bae9b41b48e56bb5a38457dc2d5b003e136a86"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].post;
+	for (const name of names) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #1494 adds optional verified Skill metadata to Runtime capabilities.
 function isRuntimeSkillCapabilityOpenApiAddition(previous, current) {
 	const previousSchemas = previous.components?.schemas;
@@ -1980,6 +2012,7 @@ function findBreakingChanges(previous, current) {
 			!sameValue(previous, current) &&
 			!isAgentApplicationUseGrantOpenApiAddition(previous, current) &&
 			!isAgentApiManagementOpenApiAddition(previous, current) &&
+			!isAgentApiCreationOpenApiAddition(previous, current) &&
 			!isConnectionCapabilityOpenApiAddition(previous, current) &&
 			!isKnownCredentialAuditSubjectAddition(previous, current) &&
 			!isPersonalCredentialNarrowOpenApiAddition(previous, current) &&

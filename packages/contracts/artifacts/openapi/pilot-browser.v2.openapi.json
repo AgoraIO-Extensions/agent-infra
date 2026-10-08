@@ -1,6 +1,431 @@
 {
   "components": {
     "schemas": {
+      "AgentApiCreationRequestV1": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "availability": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "user",
+                          "type": "string"
+                        },
+                        "userId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "userId"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "organization",
+                          "type": "string"
+                        },
+                        "organizationId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "organizationId"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "coOwnerIds": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "description": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "environment": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "name": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 2,
+                "type": "number"
+              },
+              "secrets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "minLength": 1,
+                      "type": "string",
+                      "writeOnly": true
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "identityResponsibility": {
+                        "enum": [
+                          "self-managed",
+                          "platform-managed"
+                        ],
+                        "type": "string"
+                      },
+                      "imageReference": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "interactionMode": {
+                        "const": "self-managed",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "custom",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "imageReference",
+                      "interactionMode",
+                      "identityResponsibility"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "imageReference": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "interactionMode": {
+                        "const": "platform-adapter",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "custom",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "imageReference",
+                      "interactionMode"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "name",
+              "description",
+              "source",
+              "coOwnerIds",
+              "availability",
+              "environment",
+              "secrets"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "availability": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "user",
+                          "type": "string"
+                        },
+                        "userId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "userId"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "organization",
+                          "type": "string"
+                        },
+                        "organizationId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "organizationId"
+                      ],
+                      "type": "object"
+                    }
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "coOwnerIds": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "defaultRelayKey": {
+                "maxLength": 8192,
+                "minLength": 16,
+                "pattern": "^[\\x21-\\x7e]+$",
+                "type": "string",
+                "writeOnly": true
+              },
+              "description": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "environment": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "modelConfiguration": {
+                "additionalProperties": false,
+                "properties": {
+                  "defaultOptionId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "defaultReasoningLevel": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "options": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "endpointId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "modelId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "optionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "reasoningLevels": {
+                          "items": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "optionId",
+                        "endpointId",
+                        "modelId",
+                        "reasoningLevels"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "options",
+                  "defaultOptionId",
+                  "defaultReasoningLevel"
+                ],
+                "type": "object"
+              },
+              "name": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "schemaVersion": {
+                "const": 3,
+                "type": "number"
+              },
+              "secrets": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "minLength": 1,
+                      "type": "string",
+                      "writeOnly": true
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "source": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "standard",
+                    "type": "string"
+                  },
+                  "templateId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "templateId"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "name",
+              "description",
+              "source",
+              "coOwnerIds",
+              "availability",
+              "modelConfiguration",
+              "environment",
+              "secrets",
+              "defaultRelayKey"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AgentApiCreationResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "creating",
+              "available",
+              "stopped",
+              "creation_failed",
+              "disabled"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "agentId",
+          "status",
+          "revision",
+          "replayed"
+        ],
+        "type": "object"
+      },
       "AgentApiLifecycleRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -5562,6 +5987,129 @@
           {
             "PlatformSession": []
           },
+          {
+            "platformApiCredential": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createAgentApiV1",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentApiCreationRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentApiCreationResponseV1"
+                }
+              }
+            },
+            "description": "Original Agent API creation replayed"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentApiCreationResponseV1"
+                }
+              }
+            },
+            "description": "Agent API creation accepted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
           {
             "platformApiCredential": []
           }
