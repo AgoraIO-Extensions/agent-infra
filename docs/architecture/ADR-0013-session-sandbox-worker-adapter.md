@@ -14,6 +14,6 @@ Worker adapter 为一个 Sandbox 管理一个 Pod、ClusterIP Service、ServiceA
 
 ## #1250 合并后的集成手册
 
-1250 合并后，将 Store 返回的 allocation 映射为 `SessionSandboxAllocationV1` 并在同一 `runNext` transaction snapshot 中调用 adapter。映射必须保留 Store 的 generation/fence；调用方提交的 sandbox ID、资源名或身份字段不得覆盖 Store 值。若 #1250 字段名或状态枚举不同，只在该映射处调整，不在 Worker adapter 中复制查询或授权逻辑。
+1250 合并后，将 Store 返回的 allocation 映射为 `SessionSandboxAllocationV1`，按该 claim 的同一快照调用 adapter；Kubernetes I/O 不在持有 Agent 行锁的数据库事务内执行，结果按[工程 Spec §10.3](SPEC-agent-infra-M1-engineering-architecture.md#103-并发与-leader) 条件写回。映射必须保留 Store 的 generation/fence；调用方提交的 sandbox ID、资源名或身份字段不得覆盖 Store 值。若 #1250 字段名或状态枚举不同，只在该映射处调整，不在 Worker adapter 中复制查询或授权逻辑。
 
 此 ADR 不把本地 fake、资源清单或单元测试当作 kind 隔离验收；两个 Session 的真实资源和负向访问证据由后续集成验收补齐。#1248/#1250 集成还必须把 Store 的资源 UID、配置/Workload revision、approved DNS/model/Connection egress、runtime readiness/route-close 结果映射到此 seam；本文件不复制这些事实或增加 poller。
