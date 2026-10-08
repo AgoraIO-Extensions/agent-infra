@@ -230,6 +230,7 @@ export class SkillPackageSupplierV1 {
 					sha256(canonicalSkillPackageSourceProofV1(source)),
 					selection.policyRevision,
 					finalPolicy.maximumReceiptAgeMs,
+					publication?.replayed === true,
 				);
 				if (
 					receipt.scannerId !== finalPolicy.scannerId ||
@@ -247,7 +248,10 @@ export class SkillPackageSupplierV1 {
 		try {
 			const result = await this.#options.lifecycle.publishPackage(
 				request,
-				key ?? `supply-${selection.skillVersionId}`,
+				key ??
+					`supply-${sha256(
+						new TextEncoder().encode(selection.skillVersionId),
+					).slice(0, 32)}`,
 				selection,
 				async (operation) => {
 					publication = operation;

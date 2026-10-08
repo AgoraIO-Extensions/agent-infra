@@ -22,7 +22,7 @@ const ZIP_EOCD = 0x06054b50;
 const ZIP_CENTRAL = 0x02014b50;
 const ZIP_LOCAL = 0x04034b50;
 const encoder = new TextEncoder();
-const decoder = new TextDecoder("utf-8", { fatal: true });
+const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export type SkillPackageAdmissionErrorCodeV1 =
 	| "invalid_archive"
@@ -591,6 +591,7 @@ export function verifySkillPackageScanReceiptV1(
 	sourceProofDigest: string,
 	policyRevision: string,
 	maximumReceiptAgeMs = 86_400_000,
+	allowExpired = false,
 ) {
 	const receipt = scanReceiptData(input);
 	const now = Date.now();
@@ -610,11 +611,12 @@ export function verifySkillPackageScanReceiptV1(
 		!Number.isSafeInteger(receipt.scannedBytes) ||
 		!Number.isFinite(Date.parse(receipt.scannedAt)) ||
 		!Number.isFinite(Date.parse(receipt.expiresAt)) ||
-		Date.parse(receipt.expiresAt) - Date.parse(receipt.scannedAt) >
-			maximumReceiptAgeMs ||
+		(!allowExpired &&
+			Date.parse(receipt.expiresAt) - Date.parse(receipt.scannedAt) >
+				maximumReceiptAgeMs) ||
 		Date.parse(receipt.scannedAt) > now ||
 		Date.parse(receipt.expiresAt) <= Date.parse(receipt.scannedAt) ||
-		Date.parse(receipt.expiresAt) <= now ||
+		(!allowExpired && Date.parse(receipt.expiresAt) <= now) ||
 		!/^[a-f0-9]{64}$/.test(sourceProofDigest)
 	)
 		reject("scan_rejected");

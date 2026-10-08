@@ -80,6 +80,7 @@ export type SkillPackagePublicationStateV1 = Readonly<{
 }>;
 export type SkillPackagePublicationContextV1 = Readonly<{
 	state: SkillPackagePublicationStateV1;
+	replayed: boolean;
 	guard: () => Promise<void>;
 	intend: (
 		stage: SkillPackagePublicationStageV1,

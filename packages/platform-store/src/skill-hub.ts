@@ -614,6 +614,7 @@ export class PostgresSkillHubLifecycleV1 {
 		};
 		try {
 			const publication: SkillPackagePublicationContextV1 = {
+				replayed: reserved.completed,
 				get state() {
 					return state;
 				},

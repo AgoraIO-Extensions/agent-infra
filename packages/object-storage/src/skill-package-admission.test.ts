@@ -401,3 +401,13 @@ it("rejects trailing bytes, unsupported flags and truncated EOCD comments", () =
 		}),
 	).toThrow();
 });
+
+it("rejects a UTF-8 BOM in an archive filename instead of normalizing it", () => {
+	expect(() =>
+		prepareSkillPackageV1({
+			archiveBytes: zip([{ path: "\uFEFFSKILL.md", text: "# Summary" }]),
+			name: "summary",
+			version: "1",
+		}),
+	).toThrow();
+});
