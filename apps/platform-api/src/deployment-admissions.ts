@@ -17,6 +17,8 @@ import {
 	type AgentConfigurationSecretMetadataV1,
 	type AgentConfigurationSourceV1,
 	type AgentConfigurationUseCaseDependenciesV1,
+	type ApiPrincipalV1,
+	captureAgentApiCreatePrincipalsV1,
 	parseAgentConfigurationChangesV1,
 } from "@agent-infra/platform-core";
 import type { IdentityContext } from "./http/identity.js";
@@ -31,7 +33,9 @@ export interface DeploymentAdmissionInputV1 {
 	/** The fixed repository used by this deployment's Workload policy, when applicable. */
 	readonly imageRepository?: string;
 	/** Re-resolves the current request's authenticated identity; never a browser identity field. */
-	readonly currentIdentity: (traceId: string) => Promise<IdentityContext>;
+	readonly currentIdentity?: (traceId: string) => Promise<IdentityContext>;
+	/** Bound inside the authenticated creation transaction, never supplied by the request. */
+	readonly currentApiPrincipal?: () => Promise<ApiPrincipalV1>;
 	readonly registry: Parameters<typeof createOciImageRegistryAdapterV1>[0] & {
 		readonly admissionPolicyRef: string;
 	};
@@ -172,7 +176,10 @@ export function createDeploymentAdmissionsV1(
 			!input.registry.admissionPolicyRef ||
 			!modelIdentifier.safeParse(input.modelCatalog.revision).success ||
 			!input.channelPolicy.revision ||
-			typeof input.currentIdentity !== "function" ||
+			(typeof input.currentIdentity !== "function" &&
+				typeof input.currentApiPrincipal !== "function") ||
+			(input.currentIdentity !== undefined &&
+				input.currentApiPrincipal !== undefined) ||
 			typeof input.modelCatalog.load !== "function"
 		)
 			throw new Error();
@@ -238,18 +245,29 @@ export function createDeploymentAdmissionsV1(
 	const loadModelCatalog = input.modelCatalog.load;
 	const admissionPolicyRef = input.registry.admissionPolicyRef;
 	const currentIdentity = input.currentIdentity;
+	const currentApiPrincipal = input.currentApiPrincipal;
 	const imageRepository = input.imageRepository;
-	async function identity(traceId: string) {
+	async function resolveSubjectRef(traceId: string) {
 		try {
-			const actor = await currentIdentity(traceId);
+			if (currentApiPrincipal) {
+				const principal = captureAgentApiCreatePrincipalsV1([
+					await currentApiPrincipal(),
+				])[0];
+				if (!principal) throw new Error();
+				return revision("api-subject", {
+					kind: principal.kind,
+					id: principal.id,
+				});
+			}
+			const actor = await currentIdentity?.(traceId);
 			if (
-				actor.schemaVersion !== 1 ||
+				actor?.schemaVersion !== 1 ||
 				actor.accountStatus !== "active" ||
 				!actor.userId ||
 				!actor.authorizationRevision
 			)
 				throw new Error();
-			return actor;
+			return actor.userId;
 		} catch {
 			throw new Error("PLATFORM_DEPLOYMENT_IDENTITY_UNAVAILABLE");
 		}
@@ -257,7 +275,7 @@ export function createDeploymentAdmissionsV1(
 	return {
 		imageAdmission: {
 			async admitImage(request) {
-				const actor = await identity(request.traceId);
+				const subjectRef = await resolveSubjectRef(request.traceId);
 				const denied = { ...correlation(request), status: "rejected" as const };
 				const selection = parseAgentConfigurationChangesV1({
 					source: request.requested,
@@ -282,7 +300,7 @@ export function createDeploymentAdmissionsV1(
 					{
 						...correlation(request),
 						traceId: request.traceId,
-						subjectRef: actor.userId,
+						subjectRef,
 						imageReference,
 						usage:
 							selection.kind === "standard"
@@ -343,7 +361,7 @@ export function createDeploymentAdmissionsV1(
 		},
 		modelAdmission: {
 			async admitModels(request) {
-				await identity(request.traceId);
+				await resolveSubjectRef(request.traceId);
 				const denied = { ...correlation(request), status: "rejected" as const };
 				const requested = parseAgentConfigurationChangesV1({
 					modelConfiguration: request.requested,
@@ -410,7 +428,7 @@ export function createDeploymentAdmissionsV1(
 		},
 		secretAdmission: {
 			async admitSecrets(request) {
-				await identity(request.traceId);
+				await resolveSubjectRef(request.traceId);
 				const requested =
 					parseAgentConfigurationChangesV1({ secrets: request.requested })
 						.secrets ?? [];
@@ -426,7 +444,7 @@ export function createDeploymentAdmissionsV1(
 		},
 		channelAdmission: {
 			async admitChannels(request) {
-				const actor = await identity(request.traceId);
+				const subjectRef = await resolveSubjectRef(request.traceId);
 				const requested =
 					parseAgentConfigurationChangesV1({ channels: request.requested })
 						.channels ?? [];
@@ -452,7 +470,7 @@ export function createDeploymentAdmissionsV1(
 									registered.kind === binding.kind &&
 									registered.bindingReference === binding.bindingReference &&
 									registered.agentId === request.agentId &&
-									registered.actorIds.includes(actor.userId),
+									registered.actorIds.includes(subjectRef),
 							),
 					)
 				)

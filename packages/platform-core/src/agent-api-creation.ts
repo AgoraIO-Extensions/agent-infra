@@ -251,8 +251,15 @@ function parseCommand(input: unknown): {
 
 export function createAgentApiCreationV1(dependencies: {
 	readonly transaction: AgentApiCreationTransactionV1;
-	readonly admissions: InitialAgentConfigurationAdmissionDependenciesV1;
-	readonly defaultRelayKey?: ApplicationFoundationUseCaseDependenciesV1["defaultRelayKey"];
+	readonly admissions:
+		| InitialAgentConfigurationAdmissionDependenciesV1
+		| ((
+				authority: AgentApiCreationAuthorityV1,
+		  ) => InitialAgentConfigurationAdmissionDependenciesV1);
+	readonly defaultRelayKey?: Pick<
+		NonNullable<ApplicationFoundationUseCaseDependenciesV1["defaultRelayKey"]>,
+		"candidates" | "encrypt"
+	>;
 	readonly prepareSecrets?: (input: {
 		readonly agentId: string;
 		readonly ownerId: string;
@@ -268,6 +275,10 @@ export function createAgentApiCreationV1(dependencies: {
 			return dependencies.transaction.createAgentApiTransaction(
 				{ command, material, requestDigest: digest },
 				async (authority) => {
+					const admissions =
+						typeof dependencies.admissions === "function"
+							? dependencies.admissions(authority)
+							: dependencies.admissions;
 					const {
 						idempotencyKey: _key,
 						name: _name,
@@ -293,7 +304,7 @@ export function createAgentApiCreationV1(dependencies: {
 							rawRequestDigest: digest,
 						},
 						{
-							...dependencies.admissions,
+							...admissions,
 							authorizationAdmission: authority.authorizationAdmission,
 						},
 						{ principal: authority.principal, ownerId: authority.ownerId },

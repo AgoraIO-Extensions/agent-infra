@@ -104,7 +104,7 @@ async function start() {
 				],
 				organizationIds: [],
 			}),
-			defaultRelayKey: { candidates, encrypt, currentIdentity: unused },
+			defaultRelayKey: { candidates, encrypt },
 		},
 		admissions: {
 			...admissions,
