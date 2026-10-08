@@ -2233,6 +2233,16 @@ describe("contract compatibility command", () => {
 				(document: typeof current) => {
 					document.paths["/api/v2/conversations/unreviewed"] = {};
 				},
+				// Only the exact #1534 Session availability may bypass the pinned digest.
+				(document: typeof current) => {
+					document.components.schemas.ConversationDetailProjectionV2.properties.sessionAvailability =
+						{ type: "string" };
+				},
+				(document: typeof current) => {
+					document.components.schemas.ConversationDetailProjectionV2.properties.sessionAvailability.enum.push(
+						"starting",
+					);
+				},
 			]) {
 				const changed = structuredClone(current);
 				mutate(changed);

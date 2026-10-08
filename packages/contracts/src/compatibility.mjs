@@ -1267,7 +1267,10 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	// covers the original publication.
 	const detail = addition.schemas.ConversationDetailProjectionV2;
 	if (
-		detail?.properties?.sessionAvailability !== undefined &&
+		sameValue(detail?.properties?.sessionAvailability, {
+			enum: ["preparing", "ready", "unavailable"],
+			type: "string",
+		}) &&
 		!detail.required?.includes("sessionAvailability")
 	) {
 		const properties = { ...detail.properties };
