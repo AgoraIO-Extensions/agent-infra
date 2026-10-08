@@ -159,7 +159,7 @@ it("collects API and durable event telemetry, queries alerts and preserves resul
 			// No Runtime dispatch is exercised. Consume the production transaction below.
 			startConversation: async (value) => {
 				telemetry = value;
-				return { stop: async () => {} };
+				return { status: () => "running", stop: async () => {} };
 			},
 		});
 		if (!telemetry) throw new Error("Worker telemetry missing");
