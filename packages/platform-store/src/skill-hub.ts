@@ -401,6 +401,12 @@ export class PostgresSkillHubLifecycleV1 {
 				if (
 					parent &&
 					command.visibility === "ORGANIZATION" &&
+					parent.organizationId !== command.organizationId
+				)
+					throw new SkillHubOperationErrorV1("invalid_input");
+				if (
+					parent &&
+					command.visibility === "ORGANIZATION" &&
 					(!parent.organizationId ||
 						!identity.actor.organizationIds.includes(parent.organizationId))
 				)
@@ -1005,7 +1011,16 @@ export class PostgresSkillHubLifecycleV1 {
 					},
 				);
 				const latestBySkill = new Map<string, Date>();
-				for (const { version } of rows) {
+				for (const { version, name, organizationId, status } of rows) {
+					if (
+						!canViewSkillHubVersionV1(
+							decode(version, name),
+							identity.actor,
+							organizationId,
+							status,
+						)
+					)
+						continue;
 					const current = latestBySkill.get(version.skillId);
 					if (!current || version.createdAt > current)
 						latestBySkill.set(version.skillId, version.createdAt);

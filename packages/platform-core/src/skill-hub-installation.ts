@@ -95,6 +95,11 @@ export function canInstallSkillHubVersionV1(
 		return false;
 	if (command.principalType === "user")
 		return command.principalId === actor.userId;
+	if (
+		version.visibility === "ORGANIZATION" &&
+		command.principalId !== organizationId
+	)
+		return false;
 	return (
 		actor.isAdministrator || actor.organizationIds.includes(command.principalId)
 	);
