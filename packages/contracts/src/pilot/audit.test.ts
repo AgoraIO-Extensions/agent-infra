@@ -37,6 +37,58 @@ const record = {
 
 describe("scoped public audit contract", () => {
 	it.each([
+		"api.agent.create.accepted",
+		"api.agent.create.replayed",
+		"api.agent.create.refused",
+		"relay_key.agent_default.replace",
+	])(
+		"preserves the existing creation producer action %s without exposing private fields",
+		(action) => {
+			const creation = {
+				...record,
+				action,
+				actor: { kind: "application", actorId: "robot" },
+				subject: { kind: "agent", subjectId: "agent-a" },
+				result: action.endsWith("refused") ? "rejected" : "succeeded",
+				summary: action,
+				conversationId: null,
+				executionId: null,
+				authorizationRecordId: null,
+				originalPrincipal: null,
+				executor: null,
+				operation: null,
+			};
+			expect(ScopedPlatformAuditProjectionV1Schema.parse(creation)).toEqual(
+				creation,
+			);
+			expect(ScopedPlatformAuditQueryV1Schema.parse({ action })).toEqual({
+				action,
+			});
+			for (const field of [
+				"credential",
+				"defaultRelayKey",
+				"details",
+				"configuration",
+			])
+				expect(
+					ScopedPlatformAuditProjectionV1Schema.safeParse({
+						...creation,
+						[field]: "private-sentinel",
+					}).success,
+				).toBe(false);
+		},
+	);
+	it("continues to reject unregistered creation or Relay Key actions", () => {
+		for (const action of [
+			"api.agent.create.guessed",
+			"relay_key.agent_default.read",
+		])
+			expect(
+				ScopedPlatformAuditProjectionV1Schema.safeParse({ ...record, action })
+					.success,
+			).toBe(false);
+	});
+	it.each([
 		"api.credential.issued",
 		"api.credential.revoked",
 		"api.credential.narrowed",
