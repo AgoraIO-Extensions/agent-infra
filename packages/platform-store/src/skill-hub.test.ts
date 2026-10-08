@@ -55,6 +55,7 @@ const registration = (
 	packageDigest: "a".repeat(64),
 	manifestDigest: "b".repeat(64),
 	signatureDigest: "c".repeat(64),
+	...(visibility === "ORGANIZATION" ? { organizationId: "org-a" } : {}),
 });
 function store(
 	resolveIdentity: (userId: string) => Promise<unknown> = async (userId) =>

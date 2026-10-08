@@ -1,0 +1,2 @@
+ALTER TABLE "platform"."skill_hub_skills" ADD COLUMN "organization_id" text;--> statement-breakpoint
+ALTER TABLE "platform"."skill_hub_skills" ADD CONSTRAINT "skill_hub_skill_organization_non_empty" CHECK ("platform"."skill_hub_skills"."organization_id" is null or char_length("platform"."skill_hub_skills"."organization_id") > 0);

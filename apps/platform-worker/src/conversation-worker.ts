@@ -121,6 +121,12 @@ function record(
 	}
 }
 
+export type PlatformConversationWorkerLifecycleStatusV1 =
+	| "not_started"
+	| "running"
+	| "stopping"
+	| "stopped";
+
 export function createPlatformConversationWorkerV2(
 	options: PlatformConversationWorkerOptionsV2,
 ) {
@@ -229,6 +235,8 @@ export function createPlatformConversationWorkerV2(
 	let closing: Promise<void> | undefined;
 	let started = false;
 	let stopped = false;
+	let lifecycleStatus: PlatformConversationWorkerLifecycleStatusV1 =
+		"not_started";
 	let afterItemId: string | undefined;
 	let rescan = false;
 	const wakeups =
@@ -473,6 +481,8 @@ export function createPlatformConversationWorkerV2(
 		start() {
 			if (started || stopped) return;
 			started = true;
+			lifecycleStatus = "running";
+			log("CONVERSATION_DISPATCH_STARTED");
 			void poll();
 			sampleResources();
 			void wakeups?.start().catch(() => {
@@ -480,9 +490,14 @@ export function createPlatformConversationWorkerV2(
 					log("CONVERSATION_COMMIT_WAKEUP_UNAVAILABLE");
 			});
 		},
+		status() {
+			return lifecycleStatus;
+		},
 		stop() {
 			if (closing) return closing;
 			stopped = true;
+			lifecycleStatus = "stopping";
+			log("CONVERSATION_DISPATCH_STOPPING");
 			clearTimeout(timer);
 			clearTimeout(resourceTimer);
 			controller.abort();
@@ -506,7 +521,12 @@ export function createPlatformConversationWorkerV2(
 					(result): result is PromiseRejectedResult =>
 						result.status === "rejected",
 				);
-				if (failure) throw failure.reason;
+				if (failure) {
+					log("CONVERSATION_DISPATCH_STOP_FAILED");
+					throw failure.reason;
+				}
+				lifecycleStatus = "stopped";
+				log("CONVERSATION_DISPATCH_STOPPED");
 			})();
 			return closing;
 		},

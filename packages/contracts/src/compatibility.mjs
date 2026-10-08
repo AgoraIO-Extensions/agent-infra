@@ -1407,7 +1407,30 @@ function isWecomApplicationOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
-// #481 publishes the scoped Platform audit surface and its bounded action set.
+// The #481 creation producer already persists these actions. #1572 admits only
+// the missing public enum entries; all scope, fields and paths stay identical.
+function isAgentCreationAuditActionOpenApiAddition(previous, current) {
+	const additions = [
+		"api.agent.create.accepted",
+		"api.agent.create.replayed",
+		"api.agent.create.refused",
+		"relay_key.agent_default.replace",
+	];
+	const before = previous.components?.schemas?.ScopedPlatformAuditActionV1;
+	const after = current.components?.schemas?.ScopedPlatformAuditActionV1;
+	if (
+		!Array.isArray(before?.enum) ||
+		!Array.isArray(after?.enum) ||
+		additions.some((action) => before.enum.includes(action)) ||
+		!sameValue(after.enum, [...before.enum, ...additions])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+		structuredClone(before.enum);
+	return isDeepStrictEqual(previous, normalized);
+}
+
 function isSkillHubAuditActionOpenApiAddition(previous, current) {
 	const additions = [
 		"skill.version.register",
@@ -2105,6 +2128,7 @@ function findBreakingChanges(previous, current) {
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&
+			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)
 		) {

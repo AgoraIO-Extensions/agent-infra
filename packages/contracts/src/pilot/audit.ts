@@ -121,6 +121,10 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"wecom.cancelled",
 	"wecom.expired",
 	"wecom.abandoned",
+	"api.agent.create.accepted",
+	"api.agent.create.replayed",
+	"api.agent.create.refused",
+	"relay_key.agent_default.replace",
 ]);
 
 export const ScopedPlatformAuditProjectionV1Schema = z.strictObject({
