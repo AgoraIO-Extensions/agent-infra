@@ -1,18 +1,24 @@
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
-import { ApplicationApiCredentialResponseV1Schema } from "@agent-infra/contracts/pilot";
+import {
+	AgentApiCreationResponseV1Schema,
+	ApplicationApiCredentialResponseV1Schema,
+} from "@agent-infra/contracts/pilot";
 import type {
 	createLdapIdentityDirectory,
 	LdapAccount,
 } from "@agent-infra/identity";
+import type { AgentDefaultRelayKeyBindingV1 } from "@agent-infra/platform-core";
 import { migratePlatformDatabase } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
 import postgres from "postgres";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { applicationFoundationAdmissionDependenciesV1 } from "../../../packages/platform-core/src/application-foundation.conformance.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.ts";
+import { createRelayKeyEncryptorV1 } from "../../../packages/secret-store/src/relay-key.ts";
 import { createPlatformApp } from "./app.js";
 import {
 	assemblePlatformApi,
@@ -30,6 +36,30 @@ let assemblyInput: PlatformApiAssemblyInput;
 let server: ReturnType<typeof serve>;
 let baseUrl: string;
 const materials: string[] = [];
+const agentModelConfiguration = {
+	options: [
+		{
+			optionId: "model",
+			endpointId: "relay",
+			modelId: "model-a",
+			reasoningLevels: ["low"],
+		},
+	],
+	defaultOptionId: "model",
+	defaultReasoningLevel: "low",
+};
+const agentBody = {
+	schemaVersion: 3 as const,
+	name: "Issued Token Agent",
+	description: "Application process management journey",
+	source: { kind: "standard" as const, templateId: "template_01" },
+	coOwnerIds: [],
+	availability: [],
+	environment: [],
+	secrets: [],
+	defaultRelayKey: "issued-token-default-key",
+	modelConfiguration: agentModelConfiguration,
+};
 const accounts: LdapAccount[] = ["manager", "admin", "recipient"].map(
 	(userId) => ({
 		uid: `ldap-${userId}`,
@@ -81,6 +111,25 @@ beforeAll(async () => {
 	const unused = async (): Promise<never> => {
 		throw new Error("Unrelated adapter called");
 	};
+	const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 3072 });
+	const der = publicKey.export({ format: "der", type: "spki" });
+	const encryptor = createRelayKeyEncryptorV1({
+		encryptionKeys: {
+			schemaVersion: 1,
+			activeWrappingKeyVersion: "test-key",
+			keys: [
+				{
+					schemaVersion: 1,
+					keyVersion: "test-key",
+					wrappingAlgorithmVersion: "rsa-oaep-sha256:v1",
+					publicKeySpkiDerBase64: der.toString("base64"),
+					publicKeyFingerprint: createHash("sha256").update(der).digest("hex"),
+					rsaModulusBits: 3072,
+					status: "active",
+				},
+			],
+		},
+	});
 	assemblyInput = {
 		taskAdmissionPolicy: {
 			maximumWaitingTasksPerAgent: 2,
@@ -88,6 +137,32 @@ beforeAll(async () => {
 		},
 		databaseUrl: database.databaseUrl,
 		identity: adapter,
+		agentApiCreation: {
+			allowedPrincipals: [{ kind: "application", id: "app-1" }],
+			loadAuthorityContext: async () => ({
+				schemaVersion: 1,
+				users: [
+					{ userId: "manager", accountStatus: "active" },
+					{ userId: "recipient", accountStatus: "active" },
+				],
+				organizationIds: [],
+			}),
+			admissions: {
+				...applicationFoundationAdmissionDependenciesV1(),
+				keylessModelAdmission: {
+					admitModels: async ({ requested }) =>
+						requested ? { ...requested, catalogRevision: "catalog-1" } : null,
+				},
+			},
+			defaultRelayKey: {
+				candidates: async () => agentModelConfiguration.options,
+				encrypt: (binding: AgentDefaultRelayKeyBindingV1) =>
+					encryptor.encrypt({
+						...binding,
+						plaintext: agentBody.defaultRelayKey,
+					}),
+			},
+		},
 		admissions: {
 			authorizationAdmission: { authorize: unused },
 			imageAdmission: { admitImage: unused },
@@ -100,8 +175,8 @@ beforeAll(async () => {
 		prepareConfigurationSecrets: unused,
 		presentAgent: unused,
 		applicationCredentialDelivery: {
-			principalType: "user",
-			principalId: "recipient",
+			principalType: "application",
+			principalId: "app-1",
 			accept: (_attempt, material) => {
 				materials.push(material);
 				return true;
@@ -149,8 +224,8 @@ function post(
 it("uses formal grant and issuer HTTP, delivers to the bound process only once, and never returns material to manager", async () => {
 	const command = {
 		operation: "issue",
-		recipient: { principalType: "user", principalId: "recipient" },
-		scopes: ["agent:use"],
+		recipient: { principalType: "application", principalId: "app-1" },
+		scopes: ["agent:create", "agent:manage", "agent:use", "agent:read"],
 		expiresAt: null,
 	};
 	const path = "/api/v2/applications/app-1/credentials";
@@ -211,6 +286,74 @@ it("uses formal grant and issuer HTTP, delivers to the bound process only once, 
 		await sql`select details from platform.audit_events`,
 	);
 	expect(audits.includes(materials[0] ?? "missing")).toBe(false);
+});
+
+it("uses the actually delivered application Token to create two Agents and read their state", async () => {
+	const issued = materials[0];
+	if (!issued) throw new Error("Issuer did not deliver an application Token");
+	const create = async (key: string, name: string) => {
+		const response = await fetch(`${baseUrl}/api/v2/agents`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${issued}`,
+				"Idempotency-Key": key,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ ...agentBody, name }),
+		});
+		expect(response.status).toBe(201);
+		return AgentApiCreationResponseV1Schema.parse(await response.json());
+	};
+	const first = await create("issued-agent-one", "Issued Agent One");
+	const second = await create("issued-agent-two", "Issued Agent Two");
+	expect(first.agentId).not.toBe(second.agentId);
+	expect(materials).toHaveLength(1);
+	expect(
+		await sql`select creator_principal_type,creator_principal_id,creation_channel,applicant_id from platform.agent_applications order by agent_id`,
+	).toEqual([
+		{
+			creator_principal_type: "application",
+			creator_principal_id: "app-1",
+			creation_channel: "api",
+			applicant_id: "manager",
+		},
+		{
+			creator_principal_type: "application",
+			creator_principal_id: "app-1",
+			creation_channel: "api",
+			applicant_id: "manager",
+		},
+	]);
+	expect(
+		await sql`select principal_type,principal_id,count(*)::int as count from platform.agent_principal_grants group by principal_type,principal_id`,
+	).toEqual([
+		{ principal_type: "application", principal_id: "app-1", count: 4 },
+	]);
+	for (const agentId of [first.agentId, second.agentId]) {
+		const state = await fetch(`${baseUrl}/api/v2/agents/${agentId}/state`, {
+			headers: { Authorization: `Bearer ${issued}` },
+		});
+		expect(state.status).toBe(200);
+		expect(await state.json()).toMatchObject({
+			agentId,
+			status: "creating",
+			revision: 1,
+		});
+	}
+	const replay = await fetch(`${baseUrl}/api/v2/agents`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${issued}`,
+			"Idempotency-Key": "issued-agent-one",
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({ ...agentBody, name: "Issued Agent One" }),
+	});
+	expect(replay.status).toBe(200);
+	expect(await replay.json()).toMatchObject({
+		agentId: first.agentId,
+		replayed: true,
+	});
 });
 
 it("assembly without a trusted delivery consumer fails closed without issuing", async () => {
