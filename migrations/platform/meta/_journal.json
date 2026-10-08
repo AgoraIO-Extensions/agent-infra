@@ -274,6 +274,20 @@
       "when": 1791428651109,
       "tag": "0042_agent_api_creation",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1791428651110,
+      "tag": "0043_platform_cancellation_event",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1791431461976,
+      "tag": "0044_platform_cancellation_status_required",
+      "breakpoints": true
     }
   ]
 }

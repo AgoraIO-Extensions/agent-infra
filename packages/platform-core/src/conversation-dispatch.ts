@@ -288,6 +288,19 @@ export function createConversationDispatchUseCaseV1(
 				"retry",
 			);
 		}
+		// A status response proves the Runtime finished, not that its journal was
+		// drained. Close the item only after the terminal event itself persisted;
+		// otherwise resume from the committed cursor (#1524).
+		if (!terminalEventSeen) {
+			return retry(
+				dependencies.store,
+				claim,
+				retryDelayMs,
+				"RUNTIME_STREAM_INCOMPLETE",
+				"retry",
+				{},
+			);
+		}
 		const finished = await dependencies.store.finish({
 			claim,
 			status: "succeeded",

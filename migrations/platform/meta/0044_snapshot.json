@@ -1,6 +1,6 @@
 {
-  "id": "d50082f0-78eb-44aa-b3f6-c1bf8c1e1fb5",
-  "prevId": "0003776d-bb1a-4dc1-a416-9abad0a550de",
+  "id": "a8b7f910-2afa-4494-91e3-4696c3ee28a0",
+  "prevId": "06c0a2d4-9a71-44e3-bad3-916b99875323",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1624,7 +1624,7 @@
         },
         "conversation_event_source_binding": {
           "name": "conversation_event_source_binding",
-          "value": "(\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'runtime'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NOT NULL\n\t\t\t\t\tAND char_length(\"platform\".\"conversation_events\".\"runtime_cursor\") > 0\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" not in ('model.selection.fell_back', 'task.status')\n\t\t\t\t) OR (\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'platform'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NULL\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" in ('model.selection.fell_back', 'task.status')\n\t\t\t\t)"
+          "value": "(\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'runtime'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NOT NULL\n\t\t\t\t\tAND char_length(\"platform\".\"conversation_events\".\"runtime_cursor\") > 0\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"event_type\" not in ('model.selection.fell_back', 'task.status')\n\t\t\t\t) OR (\n\t\t\t\t\t\"platform\".\"conversation_events\".\"source\" = 'platform'\n\t\t\t\t\tAND \"platform\".\"conversation_events\".\"runtime_cursor\" IS NULL\n\t\t\t\t\tAND (\n\t\t\t\t\t\t\"platform\".\"conversation_events\".\"event_type\" in ('model.selection.fell_back', 'task.status')\n\t\t\t\t\t\tOR (\n\t\t\t\t\t\t\t\"platform\".\"conversation_events\".\"event_type\" = 'execution.status'\n\t\t\t\t\t\t\tAND (\"platform\".\"conversation_events\".\"event_payload\"->>'status' = 'cancelled') IS TRUE\n\t\t\t\t\t\t)\n\t\t\t\t\t)\n\t\t\t\t)"
         }
       },
       "isRLSEnabled": false
