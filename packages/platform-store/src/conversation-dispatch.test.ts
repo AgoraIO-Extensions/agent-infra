@@ -3155,7 +3155,9 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				retryScheduled: true,
 			});
 			expect(eventRequests).toHaveLength(1);
-			expect(acknowledgements).toEqual(["cursor-1", "cursor-2"]);
+			// Model facts share the next cumulative ACK, which the stopped business
+			// stream never reached (#1525).
+			expect(acknowledgements).toEqual([]);
 			expect(await dispatchState(work)).toMatchObject({
 				status: "retry_scheduled",
 				execution_status: "cancelled",
@@ -3173,13 +3175,9 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				{ afterCursor: undefined, runtimeGrant: "business" },
 				{ afterCursor: "cursor-2", runtimeGrant: "control" },
 			]);
-			expect(acknowledgements).toEqual([
-				"cursor-1",
-				"cursor-2",
-				"cursor-2",
-				"cursor-3",
-				"cursor-4",
-			]);
+			// The control drain first confirms the committed cursor, then the
+			// terminal event.
+			expect(acknowledgements).toEqual(["cursor-2", "cursor-4"]);
 			expect(claims[1]).toMatchObject({
 				executionId: work.executionId,
 				turnId: work.turnId,
