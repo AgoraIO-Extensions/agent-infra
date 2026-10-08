@@ -60,9 +60,6 @@ export {
 
 export const platformWorkerService = "platform-worker";
 
-export type PlatformWorkerConversationLifecycleStatusV1 =
-	PlatformConversationWorkerLifecycleStatusV1;
-
 export function createPlatformConversationDispatchWorkerV1(options: {
 	readonly databaseUrl: string;
 	readonly authorization: ConversationDispatchAuthorizationPortV1;
@@ -233,7 +230,10 @@ export async function startPlatformWorkerFromDeploymentV2(
 		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
 		readonly startConversation?: (
 			observability: ReturnType<typeof startObservability>,
-		) => Promise<{ stop(): Promise<void> }>;
+		) => Promise<{
+			status(): PlatformConversationWorkerLifecycleStatusV1;
+			stop(): Promise<void>;
+		}>;
 		readonly startWecom?: () => Promise<{ stop(): Promise<void> }>;
 		readonly observabilityOptions?: Omit<ObservabilityOptions, "service">;
 	} = {},
@@ -255,10 +255,13 @@ export async function startPlatformWorkerFromDeploymentV2(
 		throw error;
 	}
 	let workload: { stop(): Promise<void> } | undefined;
-	let conversation: { stop(): Promise<void> } | undefined;
+	let conversation:
+		| {
+				status(): PlatformConversationWorkerLifecycleStatusV1;
+				stop(): Promise<void>;
+		  }
+		| undefined;
 	let wecom: { stop(): Promise<void> } | undefined;
-	let conversationStatus: PlatformWorkerConversationLifecycleStatusV1 =
-		"not_started";
 	try {
 		workload = await (
 			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
@@ -273,16 +276,14 @@ export async function startPlatformWorkerFromDeploymentV2(
 					telemetry,
 				))
 		)(observability);
-		conversationStatus = "running";
 		let stopping: Promise<void> | undefined;
 		return {
 			observabilityStatus: observability.status,
 			conversationStatus() {
-				return conversationStatus;
+				return conversation?.status() ?? "not_started";
 			},
 			stop() {
 				stopping ??= (async () => {
-					conversationStatus = "stopping";
 					const results: PromiseSettledResult<void>[] = [];
 					try {
 						for (const stop of [
@@ -291,9 +292,13 @@ export async function startPlatformWorkerFromDeploymentV2(
 							() => workload?.stop(),
 							() => primary.stop(),
 						]) {
-							results.push(
-								...(await Promise.allSettled([Promise.resolve().then(stop)])),
-							);
+							let result: Promise<void>;
+							try {
+								result = Promise.resolve(stop());
+							} catch (error) {
+								result = Promise.reject(error);
+							}
+							results.push(...(await Promise.allSettled([result])));
 						}
 					} finally {
 						await observability.close();
@@ -303,7 +308,6 @@ export async function startPlatformWorkerFromDeploymentV2(
 							result.status === "rejected",
 					);
 					if (failure) throw failure.reason;
-					conversationStatus = "stopped";
 				})();
 				return stopping;
 			},

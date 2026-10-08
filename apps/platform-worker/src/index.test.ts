@@ -53,6 +53,7 @@ vi.mock("@agent-infra/platform-store", () => ({
 	PostgresConversationEventTransactionV1: storeMocks.openEvents,
 }));
 
+import type { PlatformConversationWorkerLifecycleStatusV1 } from "./conversation-worker";
 import {
 	createPlatformConversationDispatchWorkerV1,
 	createPlatformSecretActivationWorkerV1,
@@ -556,6 +557,8 @@ describe("platform worker lifecycle", () => {
 describe("Platform Worker production V2 lifecycle", () => {
 	it("starts and stops workload and trusted conversation workers with the primary process", async () => {
 		const stopOrder: string[] = [];
+		let conversationStatus: PlatformConversationWorkerLifecycleStatusV1 =
+			"not_started";
 		const primary = {
 			stop: vi.fn(async () => {
 				stopOrder.push("primary");
@@ -567,10 +570,16 @@ describe("Platform Worker production V2 lifecycle", () => {
 			}),
 		};
 		const conversation = {
-			stop: vi.fn(async () => {
+			status: () => conversationStatus,
+			stop: vi.fn(() => {
+				conversationStatus = "stopping";
 				stopOrder.push("conversation");
+				return Promise.resolve().then(() => {
+					conversationStatus = "stopped";
+				});
 			}),
 		};
+		conversationStatus = "running";
 		const worker = await startPlatformWorkerFromDeploymentV2({
 			startPrimary: () => primary,
 			startWorkload: async () => workload,
@@ -590,11 +599,15 @@ describe("Platform Worker production V2 lifecycle", () => {
 		expect(worker.observabilityStatus().state).toBe("closed");
 	});
 	it("keeps Conversation status stopping when conversation cleanup fails", async () => {
+		let conversationStatus: PlatformConversationWorkerLifecycleStatusV1 =
+			"running";
 		const worker = await startPlatformWorkerFromDeploymentV2({
 			startPrimary: () => ({ stop: async () => {} }),
 			startWorkload: async () => ({ stop: async () => {} }),
 			startConversation: async () => ({
-				stop: async () => {
+				status: () => conversationStatus,
+				stop: () => {
+					conversationStatus = "stopping";
 					throw new Error("conversation cleanup failed");
 				},
 			}),
@@ -622,6 +635,7 @@ describe("Platform Worker production V2 lifecycle", () => {
 			startConversation: async () => {
 				startOrder.push("conversation");
 				return {
+					status: () => "running",
 					stop: async () => {
 						stopOrder.push("conversation");
 					},
@@ -641,9 +655,15 @@ describe("Platform Worker production V2 lifecycle", () => {
 		expect(stopOrder).toEqual(["conversation", "wecom", "workload", "primary"]);
 	});
 	it("holds conversation polling while WeCom authorization is assembling", async () => {
-		const ready = Promise.withResolvers<{ stop(): Promise<void> }>();
+		const ready = Promise.withResolvers<{
+			status(): PlatformConversationWorkerLifecycleStatusV1;
+			stop(): Promise<void>;
+		}>();
 		const startWecom = vi.fn(() => ready.promise);
-		const startConversation = vi.fn(async () => ({ stop: async () => {} }));
+		const startConversation = vi.fn(async () => ({
+			status: () => "running" as const,
+			stop: async () => {},
+		}));
 		const starting = startPlatformWorkerFromDeploymentV2({
 			startPrimary: () => ({ stop: () => {} }),
 			startWorkload: async () => ({ stop: async () => {} }),
@@ -652,7 +672,7 @@ describe("Platform Worker production V2 lifecycle", () => {
 		});
 		await vi.waitFor(() => expect(startWecom).toHaveBeenCalledOnce());
 		expect(startConversation).not.toHaveBeenCalled();
-		ready.resolve({ stop: async () => {} });
+		ready.resolve({ status: () => "running", stop: async () => {} });
 		const worker = await starting;
 		expect(startConversation).toHaveBeenCalledOnce();
 		await worker.stop();
@@ -663,7 +683,10 @@ describe("Platform Worker production V2 lifecycle", () => {
 			workload: vi.fn(async () => {}),
 			conversation: vi.fn(async () => {}),
 		};
-		const startConversation = vi.fn(async () => ({ stop: stops.conversation }));
+		const startConversation = vi.fn(async () => ({
+			status: () => "running" as const,
+			stop: stops.conversation,
+		}));
 		await expect(
 			startPlatformWorkerFromDeploymentV2({
 				startPrimary: () => ({ stop: stops.primary }),
