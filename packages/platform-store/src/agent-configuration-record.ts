@@ -15,6 +15,7 @@ const valueMaxBytes = 65_536;
 const environmentNamePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const imageDigestPattern = /^sha256:[a-f0-9]{64}$/;
 const changedFields = new Set<AgentConfigurationChangedFieldV1>([
+	"defaultRelayKey",
 	"source",
 	"environment",
 	"modelConfiguration",
