@@ -29,7 +29,6 @@ type BrowserContextManagerOptionsV1 = Readonly<{
 }>;
 
 type ActiveContext = Readonly<{
-	binding: BrowserContextBindingV1;
 	context: BrowserContext;
 	capabilityVersion: number;
 }>;
@@ -47,6 +46,19 @@ function assertBinding(binding: BrowserContextBindingV1): void {
 		binding.resourceFence < 1
 	)
 		throw new Error("BROWSER_CONTEXT_BINDING_INVALID");
+}
+
+function captureBinding(
+	binding: BrowserContextBindingV1,
+): BrowserContextBindingV1 {
+	const captured = Object.freeze({
+		agentId: binding?.agentId,
+		conversationId: binding?.conversationId,
+		sessionGeneration: binding?.sessionGeneration,
+		resourceFence: binding?.resourceFence,
+	});
+	assertBinding(captured);
+	return captured;
 }
 
 function sameBinding(
@@ -72,7 +84,7 @@ export function createBrowserContextManagerV1(
 	const profileRoot = join(resolve(options.sandboxRoot), "browser-profile");
 	let active: ActiveContext | undefined;
 	let pending: Promise<BrowserContext> | undefined;
-	let pendingBinding: BrowserContextBindingV1 | undefined;
+	let profileBinding: BrowserContextBindingV1 | undefined;
 	let snapshot: BrowserContextManagerSnapshotV1 = { status: "not_started" };
 	let closedByManager = false;
 
@@ -84,29 +96,23 @@ export function createBrowserContextManagerV1(
 		binding: BrowserContextBindingV1,
 		capability: BrowserCapabilityProjectionV1,
 	): Promise<BrowserContext> {
-		assertBinding(binding);
+		const acceptedBinding = captureBinding(binding);
 		if (capability.status !== "available")
 			throw new Error(capability.errorCode);
-		if (active) {
-			if (!sameBinding(active.binding, binding))
-				throw new Error("BROWSER_CONTEXT_BINDING_CONFLICT");
-			return active.context;
-		}
-		if (pending) {
-			if (!pendingBinding || !sameBinding(pendingBinding, binding))
-				throw new Error("BROWSER_CONTEXT_BINDING_CONFLICT");
-			return pending;
-		}
+		if (profileBinding && !sameBinding(profileBinding, acceptedBinding))
+			throw new Error("BROWSER_CONTEXT_BINDING_CONFLICT");
+		profileBinding ??= acceptedBinding;
+		if (active) return active.context;
+		if (pending) return pending;
 		snapshot = {
 			status: "starting",
-			agentId: binding.agentId,
-			conversationId: binding.conversationId,
-			sessionGeneration: binding.sessionGeneration,
-			resourceFence: binding.resourceFence,
+			agentId: acceptedBinding.agentId,
+			conversationId: acceptedBinding.conversationId,
+			sessionGeneration: acceptedBinding.sessionGeneration,
+			resourceFence: acceptedBinding.resourceFence,
 			capabilityVersion: capability.capabilityVersion,
 		};
 		closedByManager = false;
-		pendingBinding = binding;
 		pending = options.browserType
 			.launchPersistentContext(profileRoot, {
 				headless: true,
@@ -121,16 +127,15 @@ export function createBrowserContextManagerV1(
 			})
 			.then((context) => {
 				active = {
-					binding,
 					context,
 					capabilityVersion: capability.capabilityVersion,
 				};
 				snapshot = {
 					status: "ready",
-					agentId: binding.agentId,
-					conversationId: binding.conversationId,
-					sessionGeneration: binding.sessionGeneration,
-					resourceFence: binding.resourceFence,
+					agentId: acceptedBinding.agentId,
+					conversationId: acceptedBinding.conversationId,
+					sessionGeneration: acceptedBinding.sessionGeneration,
+					resourceFence: acceptedBinding.resourceFence,
 					capabilityVersion: capability.capabilityVersion,
 				};
 				context.on("close", () => {
@@ -149,20 +154,19 @@ export function createBrowserContextManagerV1(
 			})
 			.finally(() => {
 				pending = undefined;
-				pendingBinding = undefined;
 			});
 		return pending;
 	}
 
 	async function close(binding: BrowserContextBindingV1): Promise<void> {
-		assertBinding(binding);
+		const requestedBinding = captureBinding(binding);
+		if (profileBinding && !sameBinding(profileBinding, requestedBinding))
+			throw new Error("BROWSER_CONTEXT_BINDING_CONFLICT");
 		if (pending) await pending;
 		if (!active) {
 			snapshot = { ...snapshot, status: "closed" };
 			return;
 		}
-		if (!sameBinding(active.binding, binding))
-			throw new Error("BROWSER_CONTEXT_BINDING_CONFLICT");
 		closedByManager = true;
 		const context = active.context;
 		active = undefined;
