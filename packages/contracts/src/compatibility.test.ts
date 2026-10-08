@@ -42,6 +42,25 @@ function restoreOldApiReadActions(input: unknown) {
 	for (const child of Object.values(value)) restoreOldApiReadActions(child);
 }
 
+function restorePreSkillHubAuditContract(value: {
+	components: { schemas: Record<string, unknown> };
+}) {
+	const actions = value.components.schemas.ScopedPlatformAuditActionV1 as
+		| { enum?: string[] }
+		| undefined;
+	if (actions?.enum)
+		actions.enum = actions.enum.filter(
+			(action) =>
+				![
+					"skill.version.register",
+					"skill.version.review",
+					"skill.version.revoke",
+					"skill.version.read",
+					"skill.version.refused",
+				].includes(action),
+		);
+}
+
 function restorePreCredentialNarrowContract(value: {
 	paths: Record<string, Record<string, unknown>>;
 	components: { schemas: Record<string, { enum?: unknown[] }> };
@@ -133,6 +152,7 @@ function restorePreAgentApiManagementContract(value: {
 	paths: Record<string, unknown>;
 	components: { schemas: Record<string, unknown> };
 }) {
+	restorePreSkillHubAuditContract(value);
 	restorePreApplicationUseGrantContract(value);
 	for (const path of [
 		"/api/v2/agents/{agentId}/state",
@@ -185,6 +205,49 @@ function restorePreAgentApiManagementContract(value: {
 }
 
 describe("contract compatibility command", () => {
+	it("admits exactly the Skill lifecycle audit actions without authority or privacy drift", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const previous = structuredClone(current);
+		restorePreSkillHubAuditContract(previous);
+		const directory = await mkdtemp(resolve(tmpdir(), "skill-audit-compat-"));
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const mutations: ((document: typeof current) => void)[] = [
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.push(
+						"unreviewed.action",
+					),
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.shift(),
+				(document) =>
+					document.components.schemas.ScopedPlatformAuditActionV1.enum.pop(),
+				(document) => {
+					document.paths["/api/v3/admin/audit"].get.security = [{}];
+				},
+				(document) => {
+					document.components.schemas.ScopedPlatformAuditProjectionV1.properties.credential =
+						{ type: "string" };
+				},
+				(document) => {
+					document.components.schemas.ScopedPlatformAuditProjectionV1.properties.subject.additionalProperties = true;
+				},
+			];
+			for (const mutate of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it.each([
 		"runtime-host.v1",
 		"runtime-readiness.v1",
@@ -364,6 +427,7 @@ describe("contract compatibility command", () => {
 			const previous = structuredClone(current);
 			restorePreAgentApiManagementContract(previous);
 			for (const document of [current, previous]) {
+				restorePreSkillHubAuditContract(document);
 				for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
 					const schema = document.components.schemas[name];
 					if (schema?.properties?.capabilities?.properties)

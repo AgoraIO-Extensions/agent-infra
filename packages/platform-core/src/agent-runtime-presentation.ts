@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 
-import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
+import type { AgentConfigurationRecord } from "./agent-configuration.js";
 import {
 	type AgentManagementActorContextV1,
 	type AgentManagementStateV1,
@@ -12,10 +12,7 @@ import {
 	requireAgentManagementExactKeys,
 	snapshotAgentManagementDataObject,
 } from "./agent-management-input.js";
-import type {
-	WorkloadCapabilitiesV1,
-	WorkloadReconciliationStateV1,
-} from "./workload-reconciliation.js";
+import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
 
 export interface AgentRuntimePresentationExpectationV1 {
 	readonly configurationRevision: number;
@@ -26,7 +23,7 @@ export type AgentRuntimePresentationDecisionV1 =
 	| {
 			readonly outcome: "found";
 			readonly sourceReference: string;
-			readonly capabilities: WorkloadCapabilitiesV1 | null;
+			readonly capabilities: Readonly<Record<string, boolean>> | null;
 			readonly interactionUrl: null;
 	  }
 	| { readonly outcome: "unavailable" | "stale" };
@@ -49,12 +46,12 @@ export interface AgentRuntimePresentationDeploymentV1 {
 
 export interface AgentRuntimePresentationFactsV1 {
 	readonly management: AgentManagementStateV1;
-	readonly configuration: AgentConfigurationRecordV2;
+	readonly configuration: AgentConfigurationRecord;
 	readonly sourceReference: string;
 	readonly runtime: null | {
 		readonly revision: number;
 		readonly state: WorkloadReconciliationStateV1;
-		readonly verifiedConfiguration: AgentConfigurationRecordV2;
+		readonly verifiedConfiguration: AgentConfigurationRecord;
 		readonly verifiedSourceReference: string;
 		readonly deployment: AgentRuntimePresentationDeploymentV1;
 	};
@@ -172,7 +169,13 @@ export function decideAgentRuntimePresentationV1(input: {
 	return {
 		outcome: "found",
 		sourceReference: facts.sourceReference,
-		capabilities: { ...state.capabilities },
+		capabilities: state.capabilities
+			? (Object.fromEntries(
+					Object.entries(state.capabilities).filter(
+						([, value]) => typeof value === "boolean",
+					),
+				) as Readonly<Record<string, boolean>>)
+			: null,
 		interactionUrl: null,
 	};
 }

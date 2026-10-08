@@ -645,6 +645,10 @@ Runtime 可按工程 Spec
 [§13.5.5](SPEC-agent-infra-M1-engineering-architecture.md#1355-受保护安装交付)。
 Runtime 内接收不替代合法领取；配置缺失与已配置但不可用分别处理，原控制和已有工具
 快照保持。供应未知时不选择普通 Secret/env、原生 helper 或 Worker 解密作为替代。
+标准 OAuth 的合法领取、回跳转交、原主体确认、发布与不确定性只遵循工程 Spec
+[§13.5.6](SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)。
+API/Worker/Web 不取得 Token；OAuth 事务来源不代替原主体/实例映射与 Connection 当前授权，
+供应合同不足时不启用，PAT 路线不被 OAuth 回跳或兑换要求覆盖。
 
 sender constraint 仅在获准 profile 明确要求时按 Connection HLD §3/§5.2 验证，缺少必需证明
 仍 fail closed；普通 token profile 不以 DPoP、私有 callback 或 FD3 为通用接入前置。

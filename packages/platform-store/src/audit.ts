@@ -1,5 +1,9 @@
 import { Buffer } from "node:buffer";
-import { parseTaskApiAuditInputV1 } from "@agent-infra/platform-core";
+import {
+	parseTaskApiAuditInputV1,
+	skillHubOperationCodesV1,
+	skillHubVersionStatesV1,
+} from "@agent-infra/platform-core";
 
 import { desc, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -14,6 +18,31 @@ const wecomDeliveryAuditMetadata = {
 } as const;
 
 const platformAuditActionMetadata = {
+	"skill.version.register": {
+		actorKind: "user",
+		subjectKind: "unknown",
+		details: "skill_hub",
+	},
+	"skill.version.review": {
+		actorKind: "user",
+		subjectKind: "unknown",
+		details: "skill_hub",
+	},
+	"skill.version.revoke": {
+		actorKind: "user",
+		subjectKind: "unknown",
+		details: "skill_hub",
+	},
+	"skill.version.read": {
+		actorKind: "user",
+		subjectKind: "unknown",
+		details: "skill_hub",
+	},
+	"skill.version.refused": {
+		actorKind: "user",
+		subjectKind: "unknown",
+		details: "skill_hub",
+	},
 	"task.api.access": {
 		actorKind: "user",
 		subjectKind: "unknown",
@@ -439,6 +468,27 @@ function changedFields(
 		return [];
 	}
 	const detailKind = platformAuditActionMetadata[action].details;
+	if (detailKind === "skill_hub") {
+		if (action === "skill.version.refused") {
+			if (
+				!exactObject(details, ["reason"]) ||
+				!skillHubOperationCodesV1.some(
+					(code) => code === (details as { reason?: unknown }).reason,
+				)
+			)
+				throw new PlatformAuditQueryError("unavailable");
+		} else {
+			if (!exactObject(details, ["state", "replayed"]))
+				throw new PlatformAuditQueryError("unavailable");
+			const value = details as { state: unknown; replayed: unknown };
+			if (
+				!skillHubVersionStatesV1.some((state) => state === value.state) ||
+				typeof value.replayed !== "boolean"
+			)
+				throw new PlatformAuditQueryError("unavailable");
+		}
+		return [];
+	}
 	if (detailKind === "api_management") {
 		if (action === "api.agent.state.read") {
 			if (details !== null) throw new PlatformAuditQueryError("unavailable");

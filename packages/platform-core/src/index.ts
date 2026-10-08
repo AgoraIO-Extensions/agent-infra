@@ -1,4 +1,5 @@
 export * from "./agent-api-audit-context.js";
+export * from "./agent-api-creation.js";
 export * from "./agent-api-lifecycle.js";
 export * from "./agent-application-grants.js";
 export type {
@@ -17,15 +18,15 @@ export type {
 	AgentConfigurationImageAdmissionPortV1,
 	AgentConfigurationModelAdmissionPortV1,
 	AgentConfigurationModelInputV1,
+	AgentConfigurationModelInputV2,
 	AgentConfigurationModelOptionInputV1,
 	AgentConfigurationModelOptionV1,
-	AgentConfigurationModelOptionV2,
 	AgentConfigurationModelV1,
-	AgentConfigurationModelV2,
 	AgentConfigurationRecord,
 	AgentConfigurationRecordV1,
 	AgentConfigurationRecordV2,
 	AgentConfigurationRecordV3,
+	AgentConfigurationRelayKeyAttachmentV1,
 	AgentConfigurationResultV1,
 	AgentConfigurationSecretAdmissionPortV1,
 	AgentConfigurationSecretMetadataV1,
@@ -42,17 +43,18 @@ export type {
 	StandardTemplateReleaseAuthorizationV1,
 	StandardTemplateReleaseTargetV1,
 	UpdateAgentConfigurationCommandV2,
+	UpdateAgentConfigurationCommandV3,
 	UpgradeCustomAgentImageCommandV1,
 } from "./agent-configuration.js";
 export {
 	AgentConfigurationError,
 	createAgentConfigurationUseCaseV1,
-	decodeAgentConfigurationRecord,
 	decodeAgentConfigurationRecordV3,
 	parseAgentConfigurationChangesV1,
 	parseStandardTemplateReleaseTargetV1,
 	snapshotAgentConfigurationWritePlanV1,
 } from "./agent-configuration.js";
+export * from "./agent-default-relay-key.js";
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
 export * from "./api-audit-identity.js";
@@ -126,6 +128,7 @@ export {
 export * from "./session-sandbox-lifecycle.js";
 export * from "./session-sandbox-reconciliation.js";
 export * from "./skill-hub.js";
+export * from "./skill-hub-management.js";
 export * from "./task-api-audit.js";
 export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";

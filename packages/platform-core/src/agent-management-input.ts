@@ -217,6 +217,7 @@ export function parseAgentManagementPortState(
 	try {
 		const values = snapshotAgentManagementDataObject(input);
 		requireAgentManagementExactKeys(values, [
+			...(Object.hasOwn(values, "creationChannel") ? ["creationChannel"] : []),
 			"schemaVersion",
 			"applicationId",
 			"agentId",
@@ -251,6 +252,8 @@ export function parseAgentManagementPortState(
 		];
 		if (
 			values.schemaVersion !== 1 ||
+			(Object.hasOwn(values, "creationChannel") &&
+				values.creationChannel !== "api") ||
 			!isAgentManagementText(values.applicationId) ||
 			!isAgentManagementText(values.agentId) ||
 			!isAgentManagementText(values.applicantId) ||
@@ -277,11 +280,13 @@ export function parseAgentManagementPortState(
 		const status = values.status as AgentManagementStatusV1;
 		const serviceAvailability =
 			values.serviceAvailability as AgentServiceAvailabilityV1 | null;
+		const apiCreated = values.creationChannel === "api";
 		const preApproval =
 			status === "pending_approval" ||
 			status === "rejected" ||
 			status === "withdrawn";
 		if (
+			(apiCreated && (preApproval || values.approvalRevision !== null)) ||
 			(preApproval &&
 				(values.desiredState !== "stopped" ||
 					serviceAvailability !== null ||
@@ -290,7 +295,7 @@ export function parseAgentManagementPortState(
 					values.fence !== 0 ||
 					values.failureCode !== null)) ||
 			(!preApproval &&
-				(values.approvalRevision === null ||
+				((values.approvalRevision === null && !apiCreated) ||
 					(values.approvalRevision as number) > (values.revision as number) ||
 					(values.workloadRevision as number) < 1 ||
 					(values.fence as number) < 1)) ||
@@ -323,6 +328,7 @@ export function parseAgentManagementPortState(
 		}
 		return {
 			schemaVersion: 1,
+			...(apiCreated ? { creationChannel: "api" as const } : {}),
 			applicationId: values.applicationId,
 			agentId: values.agentId,
 			applicantId: values.applicantId,

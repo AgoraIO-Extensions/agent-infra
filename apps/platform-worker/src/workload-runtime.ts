@@ -246,13 +246,15 @@ function expectedSecrets(
 			})),
 		...(keylessModel
 			? []
-			: (configuration.modelConfiguration?.options
-					.filter((option) => option.credential.isSet)
-					.map((option) => ({
-						secretId: option.credential.secretId,
-						version: option.credential.version,
-						name: `model:${option.optionId}`,
-					})) ?? [])),
+			: configuration.schemaVersion === 2
+				? (configuration.modelConfiguration?.options
+						.filter((option) => option.credential.isSet)
+						.map((option) => ({
+							secretId: option.credential.secretId,
+							version: option.credential.version,
+							name: `model:${option.optionId}`,
+						})) ?? [])
+				: []),
 	];
 }
 
@@ -410,7 +412,9 @@ export function createWorkloadRuntimeV1(
 						)
 					: validateRuntimeModelProjectionV1(
 							state.candidate.modelProjection,
-							state.candidate.configuration,
+							state.candidate.configuration.schemaVersion === 2
+								? state.candidate.configuration
+								: undefined,
 						)
 				: undefined;
 		if (modelProjection && state && purpose === "authorize") {
@@ -581,7 +585,9 @@ export function createWorkloadRuntimeV1(
 		} else {
 			const projection = validateRuntimeModelProjectionV1(
 				state.candidate.modelProjection,
-				state.candidate.configuration,
+				state.candidate.configuration.schemaVersion === 2
+					? state.candidate.configuration
+					: undefined,
 			);
 			await revalidateRuntimeModelCatalogV1(
 				projection,
@@ -762,7 +768,12 @@ export function createWorkloadRuntimeV1(
 						if (!options.modelAccess)
 							throw new WorkloadPreflightRejectedErrorV1();
 						modelProjection = await projectRuntimeModelConfigurationV1({
-							configuration,
+							configuration:
+								configuration.schemaVersion === 2
+									? configuration
+									: (() => {
+											throw new WorkloadPreflightRejectedErrorV1();
+										})(),
 							standardTemplateBinding: standardTemplateModelBindingV1(
 								configuration.source,
 								templateModelBindings,

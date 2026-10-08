@@ -500,6 +500,7 @@ export class PostgresApplicationRevisionTransactionV1
 				);
 
 				if (configuration && plan.configuration) {
+					if (configuration.schemaVersion !== 2) unavailable();
 					if (
 						!(await advanceAgentConfigurationRevision(
 							transaction,
@@ -539,6 +540,7 @@ export class PostgresApplicationRevisionTransactionV1
 					throw new ApplicationRevisionStoreError();
 				}
 				if (configuration !== null) {
+					if (configuration.schemaVersion !== 2) unavailable();
 					await insertPendingSecretRecordAttachments(
 						transaction,
 						attachments,

@@ -115,6 +115,8 @@ export interface AgentAccessQueryV1 {
 }
 
 export interface AgentManagementStateV1 {
+	/** Absent on historical Web-created Agents; API has no approval revision. */
+	readonly creationChannel?: "api";
 	readonly schemaVersion: 1;
 	readonly applicationId: string;
 	readonly agentId: string;

@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 
-import type { AgentConfigurationRecordV2 } from "./agent-configuration.js";
+import type { AgentConfigurationRecord } from "./agent-configuration.js";
 
 const maximumAttachments = 160;
 
@@ -58,7 +58,7 @@ function referenceKey(reference: SecretReference): string {
 }
 
 function referencesForConfiguration(
-	configuration: AgentConfigurationRecordV2,
+	configuration: AgentConfigurationRecord,
 ): SecretReference[] {
 	const references: SecretReference[] = [
 		...configuration.secrets.map(({ name, secretId, version, isSet }) => ({
@@ -67,14 +67,16 @@ function referencesForConfiguration(
 			secretVersion: version,
 			isSet,
 		})),
-		...(configuration.modelConfiguration?.options.map(
-			({ optionId, credential }) => ({
-				name: `model:${optionId}`,
-				secretId: credential.secretId,
-				secretVersion: credential.version,
-				isSet: credential.isSet,
-			}),
-		) ?? []),
+		...(configuration.schemaVersion === 3
+			? []
+			: (configuration.modelConfiguration?.options.map(
+					({ optionId, credential }) => ({
+						name: `model:${optionId}`,
+						secretId: credential.secretId,
+						secretVersion: credential.version,
+						isSet: credential.isSet,
+					}),
+				) ?? [])),
 	];
 	if (
 		references.length > maximumAttachments ||
@@ -114,8 +116,8 @@ function timestamp(value: Date): string {
 
 export async function resolvePendingSecretRecordAttachmentsV1(input: {
 	readonly attachment?: PendingSecretRecordAttachmentResolverV1;
-	readonly previousConfiguration?: AgentConfigurationRecordV2;
-	readonly configuration: AgentConfigurationRecordV2;
+	readonly previousConfiguration?: AgentConfigurationRecord;
+	readonly configuration: AgentConfigurationRecord;
 	readonly ownerId: string;
 	readonly occurredAt: Date;
 }): Promise<PendingSecretRecordAttachmentsV1 | undefined> {

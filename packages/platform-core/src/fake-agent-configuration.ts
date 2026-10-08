@@ -94,6 +94,8 @@ export class FakeAgentConfigurationTransactionV1
 			throw new Error("Injected Agent configuration commit failure");
 		}
 		const plan = snapshotAgentConfigurationWritePlanV1(input);
+		if (plan.configuration.schemaVersion !== 2)
+			throw new Error("Fake transaction has no Relay Key writer");
 		const scope = this.#idempotencyScope(
 			plan.agentId,
 			plan.auditEvent.actorId,
