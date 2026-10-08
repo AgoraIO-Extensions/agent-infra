@@ -3,6 +3,7 @@ import {
 	MagicSkillProviderOrderV1,
 	SkillAgentVersionBindingV1Schema,
 	SkillPackageManifestV1Schema,
+	SkillVersionRefV1Schema,
 	SkillWorkloadProjectionV1Schema,
 } from "./skill-hub.ts";
 
@@ -30,6 +31,26 @@ const ref = {
 };
 
 describe("Skill Hub contracts", () => {
+	it.each([
+		"https://opaque.example/version",
+		"  opaque/s3+version  ",
+		"null\n",
+		"é".repeat(512),
+	])("keeps opaque S3 versions byte-for-byte", (packageObjectVersion) => {
+		expect(
+			SkillVersionRefV1Schema.parse({ ...ref, packageObjectVersion })
+				.packageObjectVersion,
+		).toBe(packageObjectVersion);
+	});
+	it.each(["", "null", "é".repeat(513), "\ud800"])(
+		"refuses invalid S3 versions",
+		(packageObjectVersion) => {
+			expect(
+				SkillVersionRefV1Schema.safeParse({ ...ref, packageObjectVersion })
+					.success,
+			).toBe(false);
+		},
+	);
 	it("pins Magic provider order", () => {
 		expect(MagicSkillProviderOrderV1).toEqual([
 			"system",

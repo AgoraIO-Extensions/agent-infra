@@ -119,6 +119,18 @@ export function parseSkillHubIdempotencyKeyV1(input: unknown): string {
 	return input;
 }
 
+export function parseSkillHubObjectVersionV1(input: unknown): string {
+	if (
+		typeof input !== "string" ||
+		input.length === 0 ||
+		input === "null" ||
+		!input.isWellFormed() ||
+		new TextEncoder().encode(input).byteLength > 1024
+	)
+		invalid();
+	return input;
+}
+
 export function parseSkillHubRegistrationV1(
 	input: unknown,
 ): SkillHubRegistrationV1 {
@@ -156,7 +168,9 @@ export function parseSkillHubRegistrationV1(
 			visibility: value.visibility as SkillHubRegistrationV1["visibility"],
 			provider: value.provider as SkillHubRegistrationV1["provider"],
 			version: parseSkillHubIdV1(value.version),
-			packageObjectVersion: parseSkillHubIdV1(value.packageObjectVersion),
+			packageObjectVersion: parseSkillHubObjectVersionV1(
+				value.packageObjectVersion,
+			),
 			packageDigest: digest(value.packageDigest),
 			manifestDigest: digest(value.manifestDigest),
 			signatureDigest: digest(value.signatureDigest),

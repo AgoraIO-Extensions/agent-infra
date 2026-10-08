@@ -2005,6 +2005,66 @@ function isRuntimeSkillCapabilityOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1541 corrects only the approved opaque S3 VersionId inside fixed Skill package references.
+// Normalize this exact difference before the ordinary comparison; no other field is exempt.
+function normalizeSkillPackageObjectVersions(previous, current, changes) {
+	const oldVersion = {
+		pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+		type: "string",
+	};
+	const newVersion = {
+		maxLength: 1024,
+		minLength: 1,
+		pattern: "^(?!null(?![\\s\\S]))[\\s\\S]+$",
+		type: "string",
+	};
+	const normalized = structuredClone(current);
+	const visit = (oldValue, newValue) => {
+		if (
+			!oldValue ||
+			!newValue ||
+			typeof oldValue !== "object" ||
+			typeof newValue !== "object"
+		)
+			return;
+		const oldProperties = oldValue.properties;
+		const newProperties = newValue.properties;
+		if (
+			[
+				"skillId",
+				"skillVersionId",
+				"packageDigest",
+				"manifestDigest",
+				"signatureDigest",
+			].every((field) => oldProperties?.[field] && newProperties?.[field]) &&
+			sameValue(oldProperties.packageObjectVersion, oldVersion) &&
+			!sameValue(
+				oldProperties.packageObjectVersion,
+				newProperties.packageObjectVersion,
+			)
+		) {
+			if (sameValue(newProperties.packageObjectVersion, newVersion))
+				newProperties.packageObjectVersion = structuredClone(
+					oldProperties.packageObjectVersion,
+				);
+			else
+				changes.push(
+					"changed fixed Skill packageObjectVersion outside approved correction",
+				);
+		}
+		for (const [key, value] of Object.entries(oldValue))
+			if (newValue[key] !== undefined) visit(value, newValue[key]);
+	};
+	for (const name of [
+		"AgentWorkloadDesiredV1",
+		"KubernetesReconcileResultV1",
+		"WorkerWorkloadExpectedRevisionV1",
+		"WorkerWorkloadResultV1",
+	])
+		visit(previous.$defs?.[name], normalized.$defs?.[name]);
+	return normalized;
+}
+
 function findBreakingChanges(previous, current) {
 	const changes = [];
 	if (previous.openapi !== undefined) {
@@ -2053,7 +2113,13 @@ function findBreakingChanges(previous, current) {
 		return changes.sort();
 	}
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
-	const currentSchemas = current.$defs ?? current.components?.schemas ?? {};
+	const normalized = normalizeSkillPackageObjectVersions(
+		previous,
+		current,
+		changes,
+	);
+	const currentSchemas =
+		normalized.$defs ?? normalized.components?.schemas ?? {};
 	for (const [name, schema] of Object.entries(previousSchemas)) {
 		const currentSchema = currentSchemas[name];
 		if (currentSchema === undefined) {

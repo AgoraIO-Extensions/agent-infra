@@ -10,7 +10,9 @@ import {
 import { createS3ObjectStorageV1 } from "./s3.ts";
 
 const execFile = promisify(callback);
-export async function startMinioFileFixtureV1() {
+export async function startMinioFileFixtureV1(
+	contentPolicy: "file" | "skill-package" = "file",
+) {
 	const name = `agent-infra-442-s3-${randomUUID()}`;
 	const credentials = {
 		accessKeyId: "file_contract",
@@ -66,12 +68,16 @@ export async function startMinioFileFixtureV1() {
 			region: "us-east-1",
 			credentials,
 			bucket: "file-contract",
-			prefix: "files/",
+			prefix: contentPolicy === "skill-package" ? "skill-packages/" : "files/",
+			contentPolicy,
 			maxObjectBytes: 1024 * 1024,
 			timeoutMs: 10000,
 		});
 		return {
 			storage,
+			client,
+			bucket: "file-contract",
+			prefix: contentPolicy === "skill-package" ? "skill-packages/" : "files/",
 			async close() {
 				storage.close();
 				client?.destroy();

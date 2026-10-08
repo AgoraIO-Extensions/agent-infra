@@ -6,7 +6,7 @@ import type {
 
 export * from "./types.js";
 
-import { createContentProbe } from "./content.js";
+import { createContentProbe, type ObjectContentPolicyV1 } from "./content.js";
 import {
 	type ObjectDownloadV1,
 	type ObjectStorageDataV1,
@@ -40,6 +40,12 @@ function sameContent(actual: StoredFileObjectV1, expected: FileDescriptorV1) {
 }
 // Fake keeps bytes only for bounded contract tests; production uses streaming S3 I/O.
 export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
+	readonly #contentPolicy: ObjectContentPolicyV1;
+	constructor(
+		options: { readonly contentPolicy?: ObjectContentPolicyV1 } = {},
+	) {
+		this.#contentPolicy = options.contentPolicy ?? "file";
+	}
 	private objects = new Map<
 		string,
 		{ bytes: Uint8Array; metadata: StoredFileObjectV1; createdAt: string }
@@ -86,7 +92,11 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
 		if (request.descriptor.sizeBytes > 1024 * 1024)
 			throw new ObjectStorageError("invalid");
 		const chunks: Uint8Array[] = [];
-		const probe = createContentProbe(request.descriptor.sizeBytes);
+		const probe = createContentProbe(
+			request.descriptor.sizeBytes,
+			request.descriptor.mediaType,
+			this.#contentPolicy,
+		);
 		try {
 			for await (const chunk of request.body.pipeThrough(
 				new TransformStream<Uint8Array, Uint8Array>(),
@@ -158,3 +168,11 @@ export {
 	createS3ObjectStorageV1,
 	type S3ObjectStorageOptionsV1,
 } from "./s3.js";
+export * from "./skill-package-admission.js";
+export { createClamAvSkillPackageScannerV1 } from "./skill-package-clamav.js";
+export {
+	type SkillPackageAdmissionPolicyV1,
+	type SkillPackageSupplierOptionsV1,
+	SkillPackageSupplierV1,
+	type SkillPackageSupplyInputV1,
+} from "./skill-package-supplier.js";

@@ -1,9 +1,74 @@
+import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import {
 	objectCleanupConformanceV1,
 	objectStorageConformanceV1,
 } from "./conformance.ts";
 import { FakeObjectStorageV1 } from "./index.ts";
+
+it("rejects unknown file bytes despite a caller-declared binary media type", async () => {
+	const storage = new FakeObjectStorageV1();
+	const content = new Uint8Array(64);
+	await expect(
+		storage.upload({
+			objectRef: "00000000-0000-4000-8000-000000000001",
+			expiresAt: new Date(Date.now() + 60_000).toISOString(),
+			descriptor: {
+				name: "unknown.bin",
+				mediaType: "application/octet-stream",
+				sizeBytes: content.length,
+				sha256: createHash("sha256").update(content).digest("hex"),
+			},
+			body: new ReadableStream({
+				start(controller) {
+					controller.enqueue(content);
+					controller.close();
+				},
+			}),
+		}),
+	).rejects.toMatchObject({ code: "conflict" });
+	expect(
+		await storage.inspect("00000000-0000-4000-8000-000000000001"),
+	).toBeNull();
+});
+
+it("keeps package evidence storage separate and rejects malformed evidence", async () => {
+	const { createS3ObjectStorageV1 } = await import("./s3.ts");
+	expect(() =>
+		createS3ObjectStorageV1({
+			region: "test",
+			bucket: "test",
+			prefix: "files/",
+			maxObjectBytes: 1024,
+			timeoutMs: 1000,
+			contentPolicy: "skill-package",
+		}),
+	).toThrowError(expect.objectContaining({ code: "invalid" }));
+	const storage = new FakeObjectStorageV1({ contentPolicy: "skill-package" });
+	for (const [content, mediaType] of [
+		[Buffer.from("not JSON"), "application/json"],
+		[new Uint8Array(63), "application/octet-stream"],
+	] as const) {
+		await expect(
+			storage.upload({
+				objectRef: "00000000-0000-4000-8000-000000000001",
+				expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				descriptor: {
+					name: "evidence",
+					mediaType,
+					sizeBytes: content.length,
+					sha256: createHash("sha256").update(content).digest("hex"),
+				},
+				body: new ReadableStream({
+					start(controller) {
+						controller.enqueue(content);
+						controller.close();
+					},
+				}),
+			}),
+		).rejects.toMatchObject({ code: "conflict" });
+	}
+});
 
 it("writes a verified immutable object and refuses content changes under its reference", async () => {
 	const storage = new FakeObjectStorageV1();

@@ -65,6 +65,8 @@ export function validateSkillPackageEntriesV1(
 	let fileCount = 0;
 	let totalBytes = 0;
 	for (const entry of entries) {
+		if (entry.path.length > 512)
+			throw new SkillPackageValidationErrorV1("invalid_path");
 		if (!safePath(entry.path)) {
 			throw new SkillPackageValidationErrorV1("invalid_path");
 		}
