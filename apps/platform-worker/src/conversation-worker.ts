@@ -58,6 +58,69 @@ export interface PlatformConversationWorkerOptionsV2
 		>;
 }
 
+type Telemetry = Pick<ReturnType<typeof startObservability>, "record">;
+type ConversationRuntime = ReturnType<typeof createConversationRuntimeV2>;
+
+/** Bounded stage timings between a claim and the Runtime submit (#1561);
+ * only identifiers and durations are recorded. */
+function timedAuthorization(
+	authorization: ConversationRuntime["authorization"],
+	telemetry: Telemetry,
+): ConversationRuntime["authorization"] {
+	return {
+		...authorization,
+		async authorize(input) {
+			const began = performance.now();
+			const decision = await authorization.authorize(input);
+			record(telemetry, {
+				stage: "authorization",
+				outcome: decision.outcome === "allowed" ? "completed" : "rejected",
+				durationMs: performance.now() - began,
+				conversationId: input.conversationId,
+				executionId: input.executionId,
+			});
+			return decision;
+		},
+	};
+}
+
+function timedRuntimeSubmit(
+	runtimeHost: ConversationRuntime["runtimeHost"],
+	telemetry: Telemetry,
+): ConversationRuntime["runtimeHost"] {
+	return {
+		...runtimeHost,
+		async dispatch(request, signal) {
+			const began = performance.now();
+			let outcome: "completed" | "failed" = "failed";
+			try {
+				const response = await runtimeHost.dispatch(request, signal);
+				outcome = "completed";
+				return response;
+			} finally {
+				record(telemetry, {
+					stage: "runtime",
+					outcome,
+					durationMs: performance.now() - began,
+					conversationId: request.conversationId,
+					executionId: request.executionId,
+				});
+			}
+		},
+	};
+}
+
+function record(
+	telemetry: Telemetry,
+	event: Parameters<Telemetry["record"]>[0],
+) {
+	try {
+		telemetry.record(event);
+	} catch {
+		// Timing is observational; it never changes dispatch.
+	}
+}
+
 export function createPlatformConversationWorkerV2(
 	options: PlatformConversationWorkerOptionsV2,
 ) {
@@ -118,11 +181,16 @@ export function createPlatformConversationWorkerV2(
 				return current;
 			},
 		});
+		const telemetry = options.observability;
 		dispatch = createConversationDispatchUseCaseV1(
 			{
 				store,
-				authorization: runtime.authorization,
-				runtimeHost: runtime.runtimeHost,
+				authorization: telemetry
+					? timedAuthorization(runtime.authorization, telemetry)
+					: runtime.authorization,
+				runtimeHost: telemetry
+					? timedRuntimeSubmit(runtime.runtimeHost, telemetry)
+					: runtime.runtimeHost,
 				events: options.observability
 					? createObservedConversationEvents({
 							transaction,
