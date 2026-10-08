@@ -1434,9 +1434,11 @@ Platform Session 仍按所属 Sandbox 隔离客户端状态，不能由 token �
 同一获准 Consumer 可管理多个独立 token/ConsumerInstance，不默认为每个 Agent 新建 Consumer；
 只有所需外部账号或 Action 权限不同，才消费能表达差异的 Consumer/Actor/Grant 配置。
 
-客户端复用 Connection 的用户确认、固定 callback、不透明 binding 与单次 claim；只保存
-消费方需要的非秘密主体/Agent/binding/实例引用。服务端先从当前身份与持久关系固定主体及
-Agent，再由获准的受保护客户端领取、保存、选择和撤销 token。callback/query/body、token 名称、
+客户端按所选路线复用 Connection 的独立用户确认：标准 OAuth 使用授权码＋PKCE 和
+受控 callback；Agent PAT binding 使用固定 callback、不透明 binding 与受保护 claim。
+两条路线不互相强加未选用的私有领取接口。只保存消费方需要的非秘密主体/Agent/安装引用。
+服务端先从当前身份与持久关系固定主体及 Agent，再由获准的受保护客户端领取、保存、
+选择和撤销 token。callback/query/body、token 名称、
 Owner 或 Runtime 自报字段不能改绑；binding 服务凭据与 MCP token 不互换，API/Worker
 不领取 token 来代调用。原主体与 Agent、Consumer/实例、issuer/resource、凭据修订/期限
 或当前授权无法确认时拒绝，不回退到另一 token、Owner、责任人或共享部署凭据。
@@ -1474,8 +1476,10 @@ Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agen
 当固定原生客户端不能满足 §13.5.3 的凭据保护与持久确认时，Runtime 可明确选择由其
 Driver 内的 TypeScript 标准 MCP 客户端执行 Connection 操作。客户端只存在于所属 Sandbox
 的 RuntimeHost/Driver 受保护范围，直接连接完整获准 profile 的固定 HTTPS endpoint；
-API/Worker/Web 仍只交付非敏感配置与自身执行授权，不取得 token，不转发 MCP，也不创建
-MCP server、Provider 执行器、Connection 目录或授权/审计投影。产品边界与 token 选择以
+API/Worker/Web 交付非敏感配置与自身执行授权，不取得 token，不转发 MCP，也不创建
+MCP server、Provider 执行器、Connection 目录或授权/审计投影。敏感临时授权码仅允许按
+[§13.5.6](#1356-标准-oauth-安装供应)的固定 callback 窄通道瞬时转交；该例外不允许
+access/refresh Token、PKCE verifier 或 Consumer secret 进入控制面。产品边界与 token 选择以
 §13.5.3 为准。本路径的取舍见 [ADR 0019](../adr/0019-run-standard-mcp-in-protected-runtime-driver.md)。
 
 固定官方 Codex 通过 `thread/start.dynamicTools` 安装有界工具定义，由 `item/tool/call`
@@ -1554,8 +1558,10 @@ fingerprint/source；请求、callback、模型、工具、Token 名称和 Owner
 Token。metadata 使用已有客户端字段：principal、Agent、service/Consumer/instance、
 issuer/resource/audience、profile/source、credentialRef/revision/expiry 与获准服务合同引用。
 Runtime 的当前原执行仍须在使用前独立解析并匹配这些字段，不从安装 descriptor 取得业务
-执行权限。API/Worker/Web 只交付非敏感配置，不读取、解密或代转客户端秘密；不能复用
-Worker-only 密文库、keyring、普通 `envFrom` Secret 或模型 Key 交付来运输 Connection Token。
+执行权限。API/Worker/Web 交付非敏感配置，不读取、解密或代转客户端秘密；一次性
+授权码的固定 callback 窄例外仅见 [§13.5.6](#1356-标准-oauth-安装供应)，不适用于
+access/refresh Token、PKCE verifier 或 Consumer secret。不能复用 Worker-only 密文库、
+keyring、普通 `envFrom` Secret 或模型 Key 交付来运输 Connection Token。
 
 交付格式固定当前 reader 的版本 `1`：metadata 为
 `Omit<StandardMcpInput, "scope" | "token"> & { agentId: string }`，UTF-8 JSON 上限
@@ -1606,6 +1612,75 @@ Host 内安装接收与装配必须在任何 material 读取前通过 §13.5.4 �
 确认/领取、最终 Linux 文件/内存/FD、真实 Runtime/Connection/Provider 与撤销/unknown
 验证分别回链 #851。来源未知或证据不足不启用真实 Token，不以未来整票验收替代当前
 实施所需的最小合同输入，也不以此方案或 fixture 签收真实保护。
+
+#### 13.5.6 标准 OAuth 安装供应
+
+新增生产供应优先采用受保护 Runtime 客户端直接执行标准 OAuth Authorization Code +
+PKCE（S256）；既有获准 PAT/export 路线继续遵循 §13.5.3/§13.5.5，不自动迁移或共享 Token。
+本节只定义平台使用方，不注册 Consumer、不修改 Connection 服务、Provider 或 Grant。
+取舍见 [ADR 0022](../adr/0022-acquire-oauth-tokens-in-protected-runtime.md)。
+
+**批准与入口。** 部署固定同一获准 Consumer 的 OAuth client ID、精确 HTTPS callback、
+issuer、authorization/token/revocation endpoint、resource、scope 和合同修订；这些输入与
+完整 profile/source 一起校验，不能由请求或 OAuth discovery 动态扩大目标。DCR 成功、
+Consumer 可见或本机登录不构成平台部署批准；不得使用其他产品 Consumer 或 Portable PAT
+作为自动 fallback。API/Worker/Web 不持有 Consumer secret、PKCE verifier、access/refresh
+Token，也不兑换授权码、刷新或代调用 MCP。
+
+Platform 从当前认证身份与 Agent 使用权限固定原 principal＋Agent，并将安装授权发给
+其所属受保护 Runtime。此授权只允许原客户端发起或确认登录，不签发 Connection 权限；
+不能由 Owner、应用责任人、工作负载身份或模型代替原主体确认。命令合同和接收符号须在
+实现 primary 中具名，经现有 Host Contract 的共同 owner 评审；不复用业务 Turn 来隐藏登录。
+应用凭据不得通过员工浏览器确认取得，未获准的应用登录路线保持不可用。
+
+**原安装事务。** Runtime 在读取任何秘密或访问 token endpoint 前，验证当前平台授权、
+完整 profile/source 及 §13.5.4 的真实进程保护。它生成高熵、短期、单次 state 和 PKCE verifier，
+在现有私有拒绝树中持久绑定原 principal＋Agent、Sandbox/generation、Consumer/client、
+精确 callback、issuer/resource/scope、安装与配置修订以及期限；并发同一安装串行化。
+state 不含主体或凭据，verifier 不离开该秘密边界。每个用户/应用＋Agent 独立创建安装，
+不能把另一安装的授权事务、Token 或 Session 客户端状态拿来复用。
+
+**浏览器与回跳。** 用户在 Connection 的独立页面确认授权；Platform 只呈现该次登录
+入口与受限状态。固定 callback 可以由 Platform HTTP 入口接收并立即转交一次性授权码、
+state、issuer 或协议错误，精确目标只从原受信安装事务定位。授权码按敏感临时材料处理：
+不得进入 DB、队列、journal、URL 访问日志、Trace、错误正文、模型或工具；不得缓存响应、
+跟随任意回跳或作为 bearer Token 使用。回跳不能选择 principal、Agent、Host URL、Consumer
+或安装。回跳转交通道必须具传输保密和内部服务认证，有界且不隐式重试；缺少此接线即拒绝。
+该窄通道不传 access/refresh Token、verifier 或 Consumer secret，不成为 MCP/Token 代理。
+
+Runtime 对回跳校验单次 state、期限、原代次、精确 callback、响应 issuer 和未变配置；
+成功回跳不独自启用安装。原平台主体须经当前登录态、Agent 权限及正常 CSRF/Origin 门禁
+明确确认原安装，Runtime 消费对应具名确认并再次验证当前授权；其他主体确认拒绝。
+随后只向固定 token endpoint 兑换一次原授权码与 verifier，拒绝重定向、调用方 header/URL
+覆盖、跨 issuer/resource 响应和 SDK 隐藏重试。认证与 Token 响应仅在受保护客户端内处理。
+
+**来源与发布。** PKCE/state 证明原 OAuth 事务的领取来源，不能证明两系统 Principal 相同、
+当前 Grant、ConsumerInstance 或外部效果。Connection 仍按自身合同独立解析并逐次校验
+Token 主体、Consumer/实例、generation、期限和授权。供应方仅消费部署匹配的已发布合同
+核对 §13.5.3 要求的原主体/安装映射；标准 OAuth response 未提供的 identity/instance 字段
+不能从邮箱、显示名、Token 名称、local state、JWT 猜测或 metadata 声明补造。缺少可信映射
+时，即使领取成功也不发布可用安装，不调用业务工具；不得为了补证查询猜测的私有接口。
+
+有效凭据通过 §13.5.5 的同一私有 export/接收器交付，access Token 与 metadata 分离；
+refresh Token/verifier 只保留在同一受保护客户端的专用材料中，不进入 reader 的普通 metadata。
+安装/凭据引用区分本地事务引用与 Connection 已确认引用，不以本地随机 ID 冒充服务端实例。
+发布复用现有 material 先持久确认、metadata 后原子切换及修订冲突规则。初版仍采用受控
+重新装配和固定安装快照：新安装修订须经批准配置、原接收器与 resolver 重新核对；不得
+热改已有 Thread 工具快照，或因登录成功释放 unknown、强停未确认执行及借新 Pod 重放。
+
+**失败、刷新与撤销。** 兑换或轮换响应丢失、崩溃及持久确认失败均保留该安装的不确定状态，
+不自动重发授权码、refresh 或业务调用；只按实际已发布的恢复合同核实，否则由原主体重新
+确认新的安装，旧事务不变为已成功。过期/撤销/保护失效时封闭新 MCP 发送，原控制、持久
+事实及只读恢复保留。刷新只消费实际发布的 token 合同与 rotation/replay 语义，先持久确认
+新修订再选择；远端撤销只消费固定 revoke 合同。停止 Session、本地关闭、删文件或请求
+revoke 超时都不宣称已远端撤销，不替代 Connection 的逐次授权检查，也不启动同步循环。
+
+首次实施必须具名列出 Consumer/client/callback 的批准来源、受保护回跳通道的接收函数、
+原平台安装授权与确认合同、Connection 原主体/实例映射来源，以及同版本 MCP 服务/结果
+合同。公开 OAuth/resource metadata 只足以固定协议端点，Browser Token CRUD 不成为领取
+或安装映射合同；上述最小输入缺失时仅推进有明确接收者的受控源码实现，不启用真实 Token。
+两主体/两 Agent、跨 Session/代次、错 state/issuer/resource、重放/撤权、丢响应与最终 Linux
+秘密保护分别沿 #851 验证；登录、文档、export fixture 不代签这些结果。
 
 ## 14. 使用渠道
 
