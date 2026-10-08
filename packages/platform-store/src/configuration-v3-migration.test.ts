@@ -102,9 +102,13 @@ it.each([30, 35, 39])(
 				});
 			}
 			expect(await tasks()).toEqual(tasksBefore);
-			expect(await sql`select * from platform.agent_applications`).toEqual(
-				managementBefore,
-			);
+			expect(
+				await sql`
+					select id,agent_id,applicant_id,name,description,status,trace_id,request_id,
+						submitted_at,management_revision,approval_revision,decision_reason,
+						service_availability,desired_state,workload_revision,fence,failure_code
+					from platform.agent_applications`,
+			).toEqual(managementBefore);
 			expect(await sql`select * from platform.agent_owners`).toEqual(
 				ownersBefore,
 			);

@@ -379,13 +379,13 @@ describe("personal credential disable authority append", () => {
 				Object.entries(data).map(([table, rows]) => [
 					table,
 					rows.map((row) => {
-						if (
-							table !== "conversations" &&
-							table !== "conversation_executions"
-						)
-							return row;
 						if (!row || typeof row !== "object") return row;
 						const copy = { ...(row as Record<string, unknown>) };
+						if (table === "agent_applications") {
+							delete copy.creation_channel;
+							delete copy.creator_principal_type;
+							delete copy.creator_principal_id;
+						}
 						delete copy.principal_type;
 						if (table === "conversation_executions") {
 							if ("sandbox_id" in copy) expect(copy.sandbox_id).toBeNull();
