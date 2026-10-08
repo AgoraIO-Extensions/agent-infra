@@ -16,6 +16,8 @@ export type BrowserRecoveryEventInputV1 = Readonly<{
 	binding: BrowserRecoveryBindingV1;
 	attempt: ConversationBrowserActionAttemptV1;
 	toolId: string;
+	sideEffect: boolean;
+	startedAt?: string;
 	occurredAt: string;
 	adapterEventKeyPrefix: string;
 	runtimeCursorPrefix: string;
@@ -90,8 +92,9 @@ export function createBrowserRecoveryEventAdapterV1(input: {
 						pageRevision: request.binding.pageRevision,
 						sessionGeneration: request.binding.sessionGeneration,
 						resourceFence: request.binding.resourceFence,
-						sideEffect: record?.sideEffect === true,
+						sideEffect: record?.sideEffect ?? request.sideEffect,
 					},
+					...(request.startedAt ? { startedAt: request.startedAt } : {}),
 					...(failureForRecovery(result)
 						? {
 								finishedAt: request.now(),
