@@ -119,6 +119,24 @@ catalog。恢复应发布修复后的正式版本，不能通过重启或重写 
 
 ## 验收边界
 
+### DataLego Hive 表发现与结构查询
+
+v6 提供 `datalego.list_tables` 和 `datalego.describe_table`，复用个人 OAuth 的 SQL HTTP API。
+两项 Action 创建查询任务，因此为 WRITE；使用前需要目标能力档案批准与 Consumer 明确确认。
+旧批准只继承原四项能力，新动作不会自动进入旧 Grant。
+
+发现表时传入数据库及精确表名或以 `*` 结尾的前缀，例如
+`{"database":"analytics","pattern":"event*"}`。查看结构时传入
+`{"database":"analytics","table":"events"}`。
+每次有意创建新任务使用新的 `idempotencyKey`；仅重试同一次请求时复用原 key 和相同参数。
+动作返回 DataLego 任务 `id`，将它作为 `jobId` 调用现有 `datalego.get_query_status`，直到外部
+任务成功或失败；不要把 Connection Call 的 SUCCEEDED 当成外部查询已经完成。
+
+表发现结果包含 namespace、tableName、isTemporary；结构结果包含字段名、类型、引擎注释
+及分区标记。注释可能为空，不提供目录全文搜索、属主、治理标签或其他引擎支持。
+数据库/表名只支持至多 128 个 ASCII 标识符字符；拒绝任意 SQL、URL、Header、下载参数及
+纯 `*` 模式。服务端固定构造 Hive SHOW TABLES/DESCRIBE，Adapter 不轮询、不重放提交。
+
 本机 type check、unit test、临时 PostgreSQL 集成测试和 Docker build 只能证明源码接线。HCI pilot 验收
 仍需要真实公司 LDAP、已登记的 Codex client、真实 Bitbucket/Jira/Confluence credential 在至少两个客户端的
 Bearer 调用、真实 GitHub OAuth App、两个独立 ConsumerInstance、PostgreSQL 备份/恢复、受控 egress，
