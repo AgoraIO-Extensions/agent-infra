@@ -185,7 +185,12 @@ function restorePreAgentApiManagementContract(value: {
 }
 
 describe("contract compatibility command", () => {
-	it.each(["runtime-host.v1", "runtime-readiness.v1"])(
+	it.each([
+		"runtime-host.v1",
+		"runtime-readiness.v1",
+		"pilot-browser.v1",
+		"pilot-browser.v2",
+	])(
 		"admits only the exact optional Skill metadata addition in %s",
 		async (artifact) => {
 			const current = JSON.parse(
@@ -200,8 +205,14 @@ describe("contract compatibility command", () => {
 			const capability = (document: typeof current) =>
 				artifact === "runtime-host.v1"
 					? document.components.schemas.RuntimeCapabilitiesV1
-					: document.components.schemas.WorkloadReadinessResponseV1.properties
-							.capabilities;
+					: artifact === "runtime-readiness.v1"
+						? document.components.schemas.WorkloadReadinessResponseV1.properties
+								.capabilities
+						: document.components.schemas[
+								artifact === "pilot-browser.v1"
+									? "AgentProjectionV1"
+									: "AgentProjectionV2"
+							].properties.capabilities;
 			const item = (document: typeof current) =>
 				artifact === "runtime-host.v1"
 					? document.components.schemas.RuntimeSkillCapabilityV1
@@ -352,6 +363,13 @@ describe("contract compatibility command", () => {
 			);
 			const previous = structuredClone(current);
 			restorePreAgentApiManagementContract(previous);
+			for (const document of [current, previous]) {
+				for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
+					const schema = document.components.schemas[name];
+					if (schema?.properties?.capabilities?.properties)
+						delete schema.properties.capabilities.properties.skills;
+				}
+			}
 			const directory = await mkdtemp(
 				resolve(tmpdir(), "agent-infra-agent-management-compat-"),
 			);
@@ -1964,6 +1982,11 @@ describe("contract compatibility command", () => {
 			delete current.components.schemas[name];
 		delete current.paths["/api/v2/agents"].get.security;
 		delete current.paths["/api/v2/agents"].get.description;
+		for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
+			const schema = current.components.schemas[name];
+			if (schema?.properties?.capabilities?.properties)
+				delete schema.properties.capabilities.properties.skills;
+		}
 		const previous = structuredClone(current);
 		for (const path of Object.keys(previous.paths)) {
 			if (

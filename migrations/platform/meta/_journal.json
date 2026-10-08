@@ -253,6 +253,20 @@
       "when": 1791350154981,
       "tag": "0039_skill_hub",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1791381436995,
+      "tag": "0040_agent_configuration_v3",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1791417500683,
+      "tag": "0041_skill_version_integrity",
+      "breakpoints": true
     }
   ]
 }

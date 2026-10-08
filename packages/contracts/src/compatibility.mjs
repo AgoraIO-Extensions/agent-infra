@@ -1867,12 +1867,21 @@ function isRuntimeSkillCapabilityOpenApiAddition(previous, current) {
 	if (previousSchemas?.RuntimeSkillCapabilityV1 !== undefined) return false;
 	const currentSchemas = current.components?.schemas;
 	const isHost = currentSchemas?.RuntimeCapabilitiesV1 !== undefined;
+	const projectionName = currentSchemas?.AgentProjectionV1
+		? "AgentProjectionV1"
+		: currentSchemas?.AgentProjectionV2
+			? "AgentProjectionV2"
+			: undefined;
 	const oldCapabilities = isHost
 		? previousSchemas?.RuntimeCapabilitiesV1
-		: previousSchemas?.WorkloadReadinessResponseV1?.properties?.capabilities;
+		: projectionName !== undefined
+			? previousSchemas?.[projectionName]?.properties?.capabilities
+			: previousSchemas?.WorkloadReadinessResponseV1?.properties?.capabilities;
 	const newCapabilities = isHost
 		? currentSchemas.RuntimeCapabilitiesV1
-		: currentSchemas?.WorkloadReadinessResponseV1?.properties?.capabilities;
+		: projectionName !== undefined
+			? currentSchemas[projectionName]?.properties?.capabilities
+			: currentSchemas?.WorkloadReadinessResponseV1?.properties?.capabilities;
 	if (
 		oldCapabilities === undefined ||
 		oldCapabilities.properties?.skills !== undefined ||
@@ -1892,9 +1901,15 @@ function isRuntimeSkillCapabilityOpenApiAddition(previous, current) {
 	)
 		return false;
 	const normalized = structuredClone(current);
-	const capabilities = normalized.components.schemas.RuntimeCapabilitiesV1;
-	const readiness = normalized.components.schemas.WorkloadReadinessResponseV1;
-	const capabilitySchema = capabilities ?? readiness?.properties?.capabilities;
+	const normalizedSchemas = normalized.components.schemas;
+	const capabilities = normalizedSchemas.RuntimeCapabilitiesV1;
+	const readiness = normalizedSchemas.WorkloadReadinessResponseV1;
+	const projection =
+		normalizedSchemas.AgentProjectionV1 ?? normalizedSchemas.AgentProjectionV2;
+	const capabilitySchema =
+		capabilities ??
+		readiness?.properties?.capabilities ??
+		projection?.properties?.capabilities;
 	const skillContainer = capabilitySchema?.properties;
 	if (skillContainer?.skills === undefined) return false;
 	delete skillContainer.skills;

@@ -135,6 +135,8 @@ beforeAll(async () => {
 		{ idx: 37, tag: "0037_browser_session_principal" },
 		{ idx: 38, tag: "0038_browser_session_absolute_expiry" },
 		{ idx: 39, tag: "0039_skill_hub" },
+		{ idx: 40, tag: "0040_agent_configuration_v3" },
+		{ idx: 41, tag: "0041_skill_version_integrity" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({

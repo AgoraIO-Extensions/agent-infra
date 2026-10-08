@@ -12,7 +12,10 @@ import {
 	requireAgentManagementExactKeys,
 	snapshotAgentManagementDataObject,
 } from "./agent-management-input.js";
-import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
+import type {
+	WorkloadCapabilitiesV1,
+	WorkloadReconciliationStateV1,
+} from "./workload-reconciliation.js";
 
 export interface AgentRuntimePresentationExpectationV1 {
 	readonly configurationRevision: number;
@@ -23,7 +26,7 @@ export type AgentRuntimePresentationDecisionV1 =
 	| {
 			readonly outcome: "found";
 			readonly sourceReference: string;
-			readonly capabilities: Readonly<Record<string, boolean>> | null;
+			readonly capabilities: WorkloadCapabilitiesV1 | null;
 			readonly interactionUrl: null;
 	  }
 	| { readonly outcome: "unavailable" | "stale" };

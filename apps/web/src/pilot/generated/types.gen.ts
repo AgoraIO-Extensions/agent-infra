@@ -210,6 +210,14 @@ export type AgentProjectionV1 = {
         connection: boolean;
         modelSelection: boolean;
         resultFiles: boolean;
+        skills?: Array<{
+            manifestSha256: string;
+            name: string;
+            packageDigest: string;
+            readOnly: true;
+            schemaVersion: 1;
+            version: string;
+        }>;
         supplementaryInstruction: boolean;
     };
     configuration: AgentConfigurationProjectionV1;

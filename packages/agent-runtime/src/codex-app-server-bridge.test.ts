@@ -29,6 +29,7 @@ vi.mock("node:process", async (importOriginal) => ({
 vi.mock("node:crypto", async (importOriginal) => {
 	const original = await importOriginal<typeof import("node:crypto")>();
 	return {
+		randomUUID: original.randomUUID,
 		createHash: () => {
 			let value = "";
 			return {
@@ -59,6 +60,7 @@ import type {
 	CodexConnectionRecoveryResponse,
 } from "./codex-connection-client.js";
 import type { CodexNativeCallbackHandler } from "./codex-native-callback.js";
+import { codexSkillLaunch } from "./codex-skill-launch.internal.js";
 
 const directories: string[] = [];
 const originalPath = process.env.PATH;
@@ -312,9 +314,18 @@ function createStalledBridge(isolatedDirectory: string) {
 		child: never,
 		shutdownTimeoutMs: number,
 		directory: string,
+		launch: {
+			cwd: string;
+			conversationKey: string;
+			bundledSkillsDisabled: boolean;
+		},
 	) => CodexAppServerBridge;
 	return {
-		bridge: new Bridge(process as never, 25, isolatedDirectory),
+		bridge: new Bridge(process as never, 25, isolatedDirectory, {
+			cwd: "/controlled-workspace",
+			conversationKey: "a".repeat(64),
+			bundledSkillsDisabled: false,
+		}),
 		process,
 	};
 }
@@ -1869,3 +1880,59 @@ it("allows identical recovery evidence retries after ACK without advancing the i
 	);
 	expect(configuration.recovery).toHaveBeenCalledTimes(2);
 });
+
+it.each([false, true])(
+	"binds installed-Skill launch=%s to actual spawn cwd and preserves cleanup ownership",
+	async (installed) => {
+		const { capturePath } = await installFakeCodex("barrier-missing");
+		const bridge = await CodexAppServerBridge.open(
+			options({
+				modelOnly: true,
+				nativeBarrierRequired: false,
+				model: "synthetic/gpt-5.6-sol",
+				modelAccess: {
+					endpoint: "http://127.0.0.1:8080",
+					credential: "synthetic-loopback-token",
+				},
+				...(installed ? { disableBundledSkills: true } : {}),
+			}),
+		);
+		try {
+			const captures = await readCaptures(capturePath, 3);
+			const server = captures[2];
+			const probe = captures[0];
+			if (!server || !probe) throw new Error("Missing launch captures");
+			const launch = bridge[codexSkillLaunch];
+			expect(launch).toBe(bridge[codexSkillLaunch]);
+			expect(Object.isFrozen(launch)).toBe(true);
+			expect(launch.transport).toBe(bridge);
+			expect(launch.cwd).toBe(server.cwd);
+			expect(launch.cwd).not.toBe(probe.cwd);
+			expect(launch.conversationKey).toBe(testConversationKey);
+			expect(launch.bundledSkillsDisabled).toBe(installed);
+			expect(server.args.includes("skills.bundled.enabled=false")).toBe(
+				installed,
+			);
+			expect(probe.args).not.toContain("skills.bundled.enabled=false");
+			expect(server.args).toContain("features.plugins=false");
+			await bridge.close();
+			await expectPathRemoved(probe.cwd);
+			expect(() => bridge[codexSkillLaunch]).toThrow();
+		} finally {
+			await bridge.close();
+		}
+	},
+);
+
+it.each([false, "false", true])(
+	"rejects installed-Skill launch control %s outside the official model-only lane",
+	async (value) => {
+		const { capturePath } = await installFakeCodex("echo");
+		await expect(
+			CodexAppServerBridge.open(options({ disableBundledSkills: value })),
+		).rejects.toMatchObject({ code: "CODEX_APP_SERVER_CONFIGURATION_INVALID" });
+		await expect(readFile(capturePath, "utf8")).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+	},
+);

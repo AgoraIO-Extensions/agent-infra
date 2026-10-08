@@ -30,6 +30,16 @@ export interface WorkloadIdentityV1 {
 	readonly generation: number;
 }
 
+/** Credential-free Runtime Skill metadata carried with the verified Workload. */
+export interface WorkloadSkillCapabilityV1 {
+	readonly schemaVersion: 1;
+	readonly name: string;
+	readonly version: string;
+	readonly manifestSha256: string;
+	readonly packageDigest: string;
+	readonly readOnly: true;
+}
+
 /** Deployment-owned load evidence, private to reconciliation and Dispatch. */
 export interface WorkloadExecutionCapacityV1 {
 	readonly schemaVersion: 1;
@@ -92,6 +102,19 @@ export interface WorkloadVersionV1 {
 	readonly executionCapacity?: WorkloadExecutionCapacityV1;
 }
 
+export interface WorkloadCapabilitiesV1 {
+	readonly modelSelection?: boolean;
+	readonly attachments?: boolean;
+	readonly resultFiles?: boolean;
+	readonly connection?: boolean;
+	readonly supplementaryInstruction?: boolean;
+	readonly skills?: readonly WorkloadSkillCapabilityV1[];
+	readonly [key: string]:
+		| boolean
+		| readonly WorkloadSkillCapabilityV1[]
+		| undefined;
+}
+
 export interface WorkloadReconciliationStateV1 {
 	readonly schemaVersion: 1;
 	readonly agentId: string;
@@ -110,7 +133,7 @@ export interface WorkloadReconciliationStateV1 {
 	readonly cleanupInterrupted?: true;
 	readonly failureCode: "reconciliation_failed" | "health_check_failed" | null;
 	readonly attempts: number;
-	readonly capabilities?: Readonly<Record<string, boolean>>;
+	readonly capabilities?: WorkloadCapabilitiesV1;
 }
 
 /**
@@ -165,7 +188,7 @@ export class WorkloadPreflightRejectedErrorV1 extends Error {
 export interface WorkloadRuntimePortV1 {
 	capabilities(
 		state: WorkloadReconciliationStateV1,
-	): Promise<Readonly<Record<string, boolean>>>;
+	): Promise<WorkloadCapabilitiesV1>;
 	preflight(
 		input: WorkloadReconciliationInputV1,
 		state: WorkloadReconciliationStateV1,

@@ -1953,10 +1953,12 @@ describe("published Relay authority migration", () => {
 			37,
 			38,
 			39,
+			40,
+			41,
 		]);
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 39,
-			tag: "0039_skill_hub",
+			idx: 41,
+			tag: "0041_skill_version_integrity",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2198,6 +2200,9 @@ describe("published Relay authority migration", () => {
 						: [],
 			};
 
+			expectedDelta.checks.push(
+				"agent_configuration_revisions:agent_configuration_identity_matches",
+			);
 			expect(schemaDelta(catalog, afterCatalog)).toEqual({
 				...expectedDelta,
 				columns: [
