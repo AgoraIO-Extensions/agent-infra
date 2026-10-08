@@ -1263,6 +1263,17 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 			schemas.map((name) => [name, current.components?.schemas?.[name]]),
 		),
 	};
+	// #1534 later added the optional Session availability; the pinned digest
+	// covers the original publication.
+	const detail = addition.schemas.ConversationDetailProjectionV2;
+	if (
+		detail?.properties?.sessionAvailability !== undefined &&
+		!detail.required?.includes("sessionAvailability")
+	) {
+		const properties = { ...detail.properties };
+		delete properties.sessionAvailability;
+		addition.schemas.ConversationDetailProjectionV2 = { ...detail, properties };
+	}
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		"097d6b3631a284fd8faf916f2c35a70d7c721c8bc832f3b97a96389fecfc541f"
