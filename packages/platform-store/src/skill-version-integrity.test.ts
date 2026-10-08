@@ -69,11 +69,28 @@ async function history() {
 	return client<{ hash: string; created_at: string }[]>`
 		select hash, created_at::text from platform_migrations.history order by id`;
 }
-async function rejects(operation: PromiseLike<unknown>, constraint: string) {
-	await expect(operation).rejects.toMatchObject({
-		code: "23514",
-		constraint_name: constraint,
-	});
+const rejectionMessages = {
+	skill_hub_version_immutable: "Skill Version content is immutable",
+	skill_hub_version_transition: "Skill Version transition rejected",
+	skill_hub_version_review_immutable: "Skill Version review is immutable",
+	skill_hub_version_revocation_immutable:
+		"Skill Version revocation is immutable",
+} as const;
+async function rejects(
+	operation: PromiseLike<unknown>,
+	constraint: keyof typeof rejectionMessages,
+) {
+	try {
+		await operation;
+		expect.fail("Skill Version write must be rejected");
+	} catch (error) {
+		expect(error).toMatchObject({
+			code: "23514",
+			constraint_name: constraint,
+			message: rejectionMessages[constraint],
+		});
+		expect((error as { detail?: unknown }).detail).toBeUndefined();
+	}
 }
 
 beforeAll(async () => {
