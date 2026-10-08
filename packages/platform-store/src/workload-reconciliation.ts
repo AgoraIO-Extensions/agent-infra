@@ -753,6 +753,20 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 				)
 					throw new Error();
 				const outcome = await client.begin(async (sql) => {
+					const key = lockedKey;
+					if (key === null) return "stale" as const;
+					try {
+						const [released] = await lockClient<
+							{ released: boolean }[]
+						>`select pg_advisory_unlock(hashtextextended(${key}, 0)) as released`;
+						if (!released?.released) return "stale" as const;
+					} catch {
+						return "stale" as const;
+					}
+					const [writeBackLock] = await sql<
+						{ acquired: boolean }[]
+					>`select pg_try_advisory_xact_lock(hashtextextended(${key}, 0)) as acquired`;
+					if (!writeBackLock?.acquired) return "stale" as const;
 					await sql`select set_config('lock_timeout', ${workloadWriteBackLockTimeout}, true)`;
 					const [locked] = await sql<
 						{ current_configuration_revision: string }[]

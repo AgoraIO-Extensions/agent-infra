@@ -2162,6 +2162,43 @@ describe("PostgreSQL Workload steps", () => {
 			)[0],
 		).toMatchObject({ status: "retry_scheduled", lease_owner: null });
 	});
+	it("discards the old step before a successor writes after its session ends", async () => {
+		const held = heldStep(7);
+		const tick = first.runNext("worker-a", held.step);
+		await held.started;
+		const holders = await sql<
+			{ pid: number }[]
+		>`select pid from pg_locks where locktype = 'advisory' and granted`;
+		expect(holders).toHaveLength(1);
+		await sql`select pg_terminate_backend(${holders[0]?.pid ?? 0})`;
+		held.release();
+
+		expect(await tick).toBe("advanced");
+		expect(
+			await sql`select * from platform.workload_reconciliations where agent_id = 'agent-a'`,
+		).toHaveLength(0);
+		expect(
+			(
+				await sql`select status, lease_owner from platform.outbox_items where id = 'task-a'`
+			)[0],
+		).toMatchObject({ status: "retry_scheduled", lease_owner: null });
+
+		expect(
+			await second.runNext("worker-b", async (input) =>
+				preflightState(input, 3),
+			),
+		).toBe("advanced");
+		expect(
+			(
+				await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`
+			)[0]?.state,
+		).toMatchObject({ attempts: 3 });
+		expect(
+			(
+				await sql`select status from platform.outbox_items where id = 'task-a'`
+			)[0]?.status,
+		).toBe("succeeded");
+	});
 	it("rotates past a malformed Agent after rollback and revisits it after repair", async () => {
 		const [source] =
 			await sql`select configuration from platform.agent_configuration_revisions where agent_id = 'agent-a'`;
