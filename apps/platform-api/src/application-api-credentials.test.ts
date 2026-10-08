@@ -342,24 +342,61 @@ it("uses the actually delivered application Token to create two Agents and read 
 		},
 	]);
 	expect(
-		await sql`select principal_type,principal_id,count(*)::int as count from platform.agent_principal_grants group by principal_type,principal_id`,
+		await sql`select agent_id,grant_type,principal_type,principal_id,authorization_revision from platform.agent_principal_grants order by agent_id,grant_type`,
+	).toHaveLength(4);
+	const grants = await sql`
+		select agent_id,grant_type,principal_type,principal_id,authorization_revision
+		from platform.agent_principal_grants order by agent_id,grant_type`;
+	expect(
+		grants.map((grant) => `${grant.agent_id}:${grant.grant_type}`),
 	).toEqual([
-		{ principal_type: "application", principal_id: "app-1", count: 4 },
+		`${first.agentId}:manage`,
+		`${first.agentId}:use`,
+		`${second.agentId}:manage`,
+		`${second.agentId}:use`,
 	]);
+	expect(
+		grants.every(
+			(grant) =>
+				grant.principal_type === "application" &&
+				grant.principal_id === "app-1",
+		),
+	).toBe(true);
+	expect(
+		new Set(grants.map((grant) => grant.authorization_revision)).size,
+	).toBe(4);
 	expect(
 		await sql`select owner_id from platform.agent_owners order by agent_id`,
 	).toEqual([{ owner_id: "manager" }, { owner_id: "manager" }]);
+	const relayRows = await sql`
+		select subject_id,key_version,key_id,ciphertext
+		from platform.relay_key_versions where purpose='agent-default' order by subject_id`;
+	expect(relayRows).toHaveLength(2);
+	for (const row of relayRows) {
+		expect([first.agentId, second.agentId]).toContain(row.subject_id);
+		expect(row.ciphertext).toMatchObject({
+			purpose: "agent-default",
+			subjectId: row.subject_id,
+			keyVersion: Number(row.key_version),
+			keyId: row.key_id,
+		});
+		expect(JSON.stringify(row.ciphertext)).not.toContain(
+			agentBody.defaultRelayKey,
+		);
+	}
+	const creationAudits = await sql`
+		select action,actor_type,actor_id,target_id
+		from platform.audit_events
+		where action in ('api.agent.create.accepted','relay_key.agent_default.replace')`;
+	expect(creationAudits).toHaveLength(4);
 	expect(
-		await sql`select purpose,count(*)::int as count from platform.relay_key_versions where purpose='agent-default' group by purpose`,
-	).toEqual([{ purpose: "agent-default", count: 2 }]);
-	expect(
-		JSON.stringify(
-			await sql`select ciphertext from platform.relay_key_versions`,
+		creationAudits.every(
+			(audit) =>
+				audit.actor_type === "application" &&
+				audit.actor_id === "app-1" &&
+				[first.agentId, second.agentId].includes(audit.target_id),
 		),
-	).not.toContain(agentBody.defaultRelayKey);
-	expect(
-		await sql`select action,actor_type,actor_id from platform.audit_events where action in ('api.agent.create.accepted','relay_key.agent_default.replace')`,
-	).toHaveLength(4);
+	).toBe(true);
 	for (const agentId of [first.agentId, second.agentId]) {
 		const state = await fetch(`${baseUrl}/api/v2/agents/${agentId}/state`, {
 			headers: { Authorization: `Bearer ${issued}` },
