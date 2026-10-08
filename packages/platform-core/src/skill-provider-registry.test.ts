@@ -81,4 +81,23 @@ describe("controlled Skill Provider registry", () => {
 			{ status: "failed", errorCode: "scan_rejected" },
 		]);
 	});
+
+	it("turns malformed runner evidence into an isolated failure", async () => {
+		const results = await runSkillProviderBatchV1(
+			[candidate("my_library", 1)],
+			async (item, index) =>
+				({
+					index,
+					provider: item.provider,
+					status: "succeeded",
+					archiveDigest: "not-a-digest",
+					errorCode: "unexpected",
+				}) as never,
+		);
+		expect(results[0]).toMatchObject({
+			status: "failed",
+			archiveDigest: null,
+			errorCode: "unavailable",
+		});
+	});
 });

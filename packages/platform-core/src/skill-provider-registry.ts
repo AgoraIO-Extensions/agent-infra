@@ -123,8 +123,18 @@ export async function runSkillProviderBatchV1(
 			if (!item) return;
 			try {
 				const result = await run(item, index);
-				if (result.index !== index || result.provider !== item.provider)
-					throw new SkillHubOperationErrorV1("unavailable");
+				const valid =
+					result.index === index &&
+					result.provider === item.provider &&
+					((result.status === "succeeded" &&
+						typeof result.archiveDigest === "string" &&
+						/^[a-f0-9]{64}$/.test(result.archiveDigest) &&
+						result.errorCode === null) ||
+						(result.status === "failed" &&
+							result.archiveDigest === null &&
+							typeof result.errorCode === "string" &&
+							result.errorCode.length > 0));
+				if (!valid) throw new SkillHubOperationErrorV1("unavailable");
 				results[index] = Object.freeze({ ...result });
 			} catch (error) {
 				const code =
