@@ -111,10 +111,19 @@ test("injection, unbounded discovery and unsupported parameters fail before any 
 			{ ...valid, database: "analytics`; DROP TABLE events; --" },
 			{ ...valid, database: "a".repeat(129) },
 			{ ...valid, database: "analytics.other" },
+			{ ...valid, database: "analytics\n" },
+			{ ...valid, database: "analytics\r\n" },
+			{ ...valid, database: "analytics\u2028" },
 			{ ...valid, sql: "SELECT 1" },
 			{ ...valid, engine: "doris" },
 			{ ...valid, download: true },
 			{ ...valid, url: "https://example.invalid" },
+			{
+				...valid,
+				...(action.endsWith("list_tables")
+					? { pattern: "event*\n" }
+					: { table: "events\n" }),
+			},
 			{
 				...valid,
 				...(action.endsWith("list_tables")
