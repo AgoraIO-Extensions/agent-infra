@@ -32,6 +32,23 @@ export async function markSessionSandboxReadyFixture(
 					'name', a.resource_name, 'uid', a.sandbox_id || '-' || kind, 'resourceVersion', '1'))
 				from unnest(array['Pod','Service','ServiceAccount','PersistentVolumeClaim','NetworkPolicy','Secret']) as kind))
 		where a.conversation_id = ${conversationId}`;
+	// A ready Sandbox carries the policy it was prepared with. Bind it to the
+	// Agent's current verified deployment unless the test already chose one.
+	await client`update platform.session_sandbox_allocations a
+		set resource_policy = jsonb_build_object(
+			'namespace', 'fixture-sandboxes',
+			'resourceConfigurationHash', w.state->'verified'->'executionCapacity'->>'resourceConfigurationHash',
+			'configurationRevision', ag.current_configuration_revision,
+			'workloadRevision', (w.state->'verified'->'deployment'->>'workloadRevision')::bigint,
+			'managementFence', m.fence,
+			'imageDigest', w.state->'verified'->'deployment'->>'imageDigest')
+		from platform.agents ag
+		join platform.agent_applications m on m.agent_id = ag.id
+		join platform.workload_reconciliations w on w.agent_id = ag.id
+		where a.conversation_id = ${conversationId} and a.resource_policy is null
+			and ag.id = a.agent_id
+			and jsonb_typeof(w.state->'verified'->'executionCapacity') = 'object'
+			and jsonb_typeof(w.state->'verified'->'deployment') = 'object'`;
 	await client`update platform.outbox_items set status = 'succeeded', lease_owner = null, lease_expires_at = null
 		where scope_type = 'conversation' and scope_id = ${conversationId} and operation = 'conversation.sandbox.reconcile.v1'`;
 }

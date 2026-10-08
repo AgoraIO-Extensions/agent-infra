@@ -203,7 +203,9 @@ export class ConversationDispatchStoreError extends Error {
 export class StaleDispatchLease extends Error {}
 
 export class DispatchCapacityUnavailable extends Error {
-	constructor(readonly outcome: "capacity_wait" | "capacity_unavailable") {
+	constructor(
+		readonly outcome: "capacity_wait" | "capacity_unavailable" | "sandbox_wait",
+	) {
 		super(outcome);
 	}
 }

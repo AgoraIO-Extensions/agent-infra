@@ -152,6 +152,15 @@ function denied(code = "AUTHORIZATION_REVOKED"): never {
 	throw new ConversationRuntimeHostError(code, true);
 }
 
+/** A failure before any Runtime request leaves the original operation unsent. */
+function unsentFailure(error: unknown): unknown {
+	return error instanceof ConversationRuntimeHostError &&
+		error.retryable &&
+		!error.notSent
+		? new ConversationRuntimeHostError(error.code, true, { notSent: true })
+		: error;
+}
+
 async function bounded<T>(
 	promise: Promise<T>,
 	signal: AbortSignal,
@@ -847,7 +856,13 @@ export function createConversationRuntimeV2(
 					context.claim.executionDeliveryFence
 			)
 				denied("RUNTIME_FENCE_STALE");
-			const prepared = await prepare(request, expectedOperation, active);
+			// prepare() only reads authority, routes and Kubernetes state; nothing
+			// reaches the Runtime Host until the request below is sent.
+			const prepared = await prepare(request, expectedOperation, active).catch(
+				(error: unknown) => {
+					throw unsentFailure(error);
+				},
+			);
 			const { state, authority, client, base } = prepared;
 			if (
 				authority.purpose === "control" &&

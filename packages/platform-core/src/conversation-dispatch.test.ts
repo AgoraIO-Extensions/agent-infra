@@ -134,8 +134,12 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 	errorCode: string | undefined;
 	renewable = true;
 	recordable = true;
-	capacity: "available" | "capacity_wait" | "capacity_unavailable" =
-		"available";
+	capacity:
+		| "available"
+		| "capacity_wait"
+		| "capacity_unavailable"
+		| "sandbox_wait" = "available";
+	released = 0;
 
 	constructor(seed = claim()) {
 		this.current = structuredClone(seed);
@@ -281,6 +285,28 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 			...this.current,
 			executionStatus:
 				input.transition.executionStatus ?? this.current.executionStatus,
+		};
+		return true;
+	}
+
+	async releaseUnsentDispatch(input: {
+		claim: ConversationDispatchClaimV1;
+		retryDelayMs: number;
+		errorCode: string;
+	}) {
+		if (
+			!this.#owned(input.claim) ||
+			this.current.executionStatus !== "unknown" ||
+			(input.claim.executionStatus !== "submitted" &&
+				input.claim.executionStatus !== "waiting")
+		)
+			return false;
+		this.released++;
+		this.outboxStatus = "retry_scheduled";
+		this.errorCode = input.errorCode;
+		this.current = {
+			...this.current,
+			executionStatus: input.claim.executionStatus,
 		};
 		return true;
 	}
@@ -756,7 +782,7 @@ describe("Conversation Worker dispatch", () => {
 		expect(store.errorCode).toBe("RUNTIME_STATUS_CONFLICT");
 	});
 
-	it.each(["capacity_wait", "capacity_unavailable"] as const)(
+	it.each(["capacity_wait", "capacity_unavailable", "sandbox_wait"] as const)(
 		"preserves unreserved submitted work when preparation reports %s",
 		async (capacity) => {
 			const runtimeHost = new FakeConversationRuntimeHostV1();
@@ -772,7 +798,9 @@ describe("Conversation Worker dispatch", () => {
 			expect(f.store.errorCode).toBe(
 				capacity === "capacity_wait"
 					? "AGENT_CAPACITY_FULL"
-					: "AGENT_CAPACITY_UNVERIFIED",
+					: capacity === "sandbox_wait"
+						? "SESSION_SANDBOX_UPDATING"
+						: "AGENT_CAPACITY_UNVERIFIED",
 			);
 			f.store.capacity = "available";
 			expect(runtimeHost.sideEffectCount()).toBe(0);
@@ -780,6 +808,41 @@ describe("Conversation Worker dispatch", () => {
 			expect(runtimeHost.sideEffectCount()).toBe(1);
 		},
 	);
+	it.each([
+		["not sent", true, "submitted", 1],
+		["possibly sent", false, "unknown", 0],
+	] as const)(
+		"returns a %s Turn to its waiting position only with proof (#1522)",
+		async (_label, notSent, expectedStatus, released) => {
+			const runtimeHost = new FakeConversationRuntimeHostV1();
+			runtimeHost.setEvents([runtimeEvent(1)]);
+			runtimeHost.failNext("RUNTIME_WORKLOAD_UNAVAILABLE", true, notSent);
+			const f = setup({ runtimeHost });
+			expect(await dispatch(f.useCase)).toMatchObject({
+				outcome: "retry",
+				retryScheduled: true,
+			});
+			expect(f.store.current.executionStatus).toBe(expectedStatus);
+			expect(f.store.released).toBe(released);
+			expect(f.store.outboxStatus).toBe("retry_scheduled");
+			expect(f.store.errorCode).toBe("RUNTIME_WORKLOAD_UNAVAILABLE");
+			expect(runtimeHost.sideEffectCount()).toBe(0);
+			if (!notSent) return;
+			expect(await dispatch(f.useCase)).toMatchObject({ outcome: "accepted" });
+			expect(runtimeHost.sideEffectCount()).toBe(1);
+		},
+	);
+	it("keeps a recovering unknown Turn unknown even when the retry was not sent (#1522)", async () => {
+		const runtimeHost = new FakeConversationRuntimeHostV1();
+		runtimeHost.failNext("RUNTIME_WORKLOAD_UNAVAILABLE", true, true);
+		const f = setup({
+			store: new MemoryDispatchStore(claim({ executionStatus: "unknown" })),
+			runtimeHost,
+		});
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "retry" });
+		expect(f.store.released).toBe(0);
+		expect(f.store.current.executionStatus).toBe("unknown");
+	});
 	it.each(["found", "not_found"] as const)(
 		"recovers a historical control-only task with %s evidence without business dispatch or renewal",
 		async (outcome) => {

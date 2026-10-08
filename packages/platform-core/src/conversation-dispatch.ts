@@ -739,7 +739,8 @@ export function createConversationDispatchUseCaseV1(
 				});
 				if (
 					preparation === "capacity_wait" ||
-					preparation === "capacity_unavailable"
+					preparation === "capacity_unavailable" ||
+					preparation === "sandbox_wait"
 				) {
 					return retry(
 						dependencies.store,
@@ -747,7 +748,9 @@ export function createConversationDispatchUseCaseV1(
 						retryDelayMs,
 						preparation === "capacity_wait"
 							? "AGENT_CAPACITY_FULL"
-							: "AGENT_CAPACITY_UNVERIFIED",
+							: preparation === "sandbox_wait"
+								? "SESSION_SANDBOX_UPDATING"
+								: "AGENT_CAPACITY_UNVERIFIED",
 						"retry",
 						{},
 					);
@@ -965,6 +968,35 @@ export function createConversationDispatchUseCaseV1(
 					}
 				}
 				const failure = runtimeFailure(error);
+				// The Store wrote unknown before the request as a write-ahead of
+				// possible delivery. When the Worker proves nothing was sent, return
+				// the Turn to its original waiting position instead (HLD §8.4).
+				if (
+					failure.retryable &&
+					failure.notSent &&
+					!recoveringOriginalTurn &&
+					(claim.operation === "conversation.turn.submit.v1" ||
+						claim.operation === "conversation.turn.regenerate.v1") &&
+					(claim.executionStatus === "submitted" ||
+						claim.executionStatus === "waiting") &&
+					dependencies.store.releaseUnsentDispatch
+				) {
+					try {
+						return (await dependencies.store.releaseUnsentDispatch({
+							claim,
+							retryDelayMs,
+							errorCode: failure.code,
+						}))
+							? { schemaVersion: 1, outcome: "retry", retryScheduled: true }
+							: { schemaVersion: 1, outcome: "stale" };
+					} catch {
+						return {
+							schemaVersion: 1,
+							outcome: "retry",
+							retryScheduled: false,
+						};
+					}
+				}
 				return failure.retryable
 					? retry(
 							dependencies.store,
