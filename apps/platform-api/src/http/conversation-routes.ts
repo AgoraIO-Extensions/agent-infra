@@ -846,19 +846,26 @@ export function registerConversationRoutes(
 				const v2 = version === 2;
 				if (v2) {
 					return context.json(
-						project(
-							() =>
-								ConversationDetailProjectionV2Schema.parse({
-									schemaVersion: 2,
-									conversation: conversationProjection(
-										detail.conversation,
-										effective,
-									),
-									messages: messageProjections(detail),
-									events: detail.events.map(eventProjection),
-								}),
-							metadata.traceId,
-						),
+						project(() => {
+							const conversation = conversationProjection(
+								detail.conversation,
+								effective,
+							);
+							return ConversationDetailProjectionV2Schema.parse({
+								schemaVersion: 2,
+								conversation,
+								messages: messageProjections(detail),
+								events: detail.events.map(eventProjection),
+								// Same readiness fact as the Web message gate (#1534).
+								sessionAvailability:
+									conversation.status === "unavailable"
+										? "unavailable"
+										: detail.conversation.sandbox !== undefined &&
+												detail.conversation.sandboxReady !== true
+											? "preparing"
+											: "ready",
+							});
+						}, metadata.traceId),
 					);
 				}
 				return context.json(
@@ -961,6 +968,8 @@ export function registerConversationRoutes(
 				traceId: metadata.traceId,
 			});
 			if (decision.outcome === "busy") return fail("BUSY", metadata.traceId);
+			if (decision.outcome === "starting")
+				return fail("AGENT_STARTING", metadata.traceId);
 			if (decision.outcome === "denied") {
 				return deniedCommand(
 					dependencies,
@@ -1001,6 +1010,8 @@ export function registerConversationRoutes(
 				traceId: metadata.traceId,
 			});
 			if (decision.outcome === "busy") return fail("BUSY", metadata.traceId);
+			if (decision.outcome === "starting")
+				return fail("AGENT_STARTING", metadata.traceId);
 			if (decision.outcome === "denied") {
 				return deniedCommand(
 					dependencies,

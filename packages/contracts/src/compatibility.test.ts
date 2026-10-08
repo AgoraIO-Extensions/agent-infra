@@ -2233,6 +2233,16 @@ describe("contract compatibility command", () => {
 				(document: typeof current) => {
 					document.paths["/api/v2/conversations/unreviewed"] = {};
 				},
+				// Only the exact #1534 Session availability may bypass the pinned digest.
+				(document: typeof current) => {
+					document.components.schemas.ConversationDetailProjectionV2.properties.sessionAvailability =
+						{ type: "string" };
+				},
+				(document: typeof current) => {
+					document.components.schemas.ConversationDetailProjectionV2.properties.sessionAvailability.enum.push(
+						"starting",
+					);
+				},
 			]) {
 				const changed = structuredClone(current);
 				mutate(changed);
@@ -2252,6 +2262,54 @@ describe("contract compatibility command", () => {
 		const result = compare(fixture);
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain(reason);
+	});
+
+	it("admits only the optional Session availability on the V2 Conversation detail (#1534)", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		delete previous.components.schemas.ConversationDetailProjectionV2.properties
+			.sessionAvailability;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-session-availability-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutate of [
+				(document: typeof current) => {
+					document.components.schemas.ConversationDetailProjectionV2.required.push(
+						"sessionAvailability",
+					);
+				},
+				(document: typeof current) => {
+					document.components.schemas.ConversationDetailProjectionV2.properties.sessionAvailability.enum.push(
+						"starting",
+					);
+				},
+				(document: typeof current) => {
+					document.components.schemas.ConversationDetailProjectionV2.properties.schemaVersion =
+						{ const: 3, type: "number" };
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it("accepts only the exact file addition and rejects altered authorization, limits and old operations", async () => {

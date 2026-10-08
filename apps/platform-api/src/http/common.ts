@@ -25,6 +25,12 @@ const protocolErrors = {
 		false,
 	],
 	BUSY: [409, "AGENT_BUSY", "The conversation is busy.", true],
+	AGENT_STARTING: [
+		409,
+		"AGENT_STARTING",
+		"The conversation is still preparing.",
+		true,
+	],
 	CONVERSATION_UNAVAILABLE: [
 		409,
 		"CONVERSATION_UNAVAILABLE",

@@ -391,6 +391,65 @@ describe("functional conversation screen", () => {
 				.disabled,
 		).toBe(true);
 	});
+	it("keeps a preparing Session read-only with its draft and enables sending once ready (#1534)", async () => {
+		let ready = false;
+		const { requests } = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path === "/api/v2/conversations/conversation-1")
+				return Response.json({
+					...history("conversation-1", []),
+					conversation: { ...history().conversation, status: "ready" },
+					sessionAvailability: ready ? "ready" : "preparing",
+				});
+			if (request.method === "POST") return receipt();
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "First question" } });
+		await screen.findByText("会话准备中，完成后即可发送。草稿会保留。");
+		const send = screen.getByRole("button", {
+			name: "发送",
+		}) as HTMLButtonElement;
+		expect(send.disabled).toBe(true);
+		expect(input.disabled).toBe(false);
+		ready = true;
+		// No event announces readiness; the screen re-reads the projection.
+		await waitFor(() => expect(send.disabled).toBe(false), { timeout: 4_000 });
+		expect(
+			screen.queryByText("会话准备中，完成后即可发送。草稿会保留。"),
+		).toBeNull();
+		expect(input.value).toBe("First question");
+		expect(requests.some((request) => request.method === "POST")).toBe(false);
+	});
+
+	it("keeps the draft and explains a preparing Session rejection instead of lost access (#1534)", async () => {
+		setup((request) => {
+			if (request.method === "POST")
+				return Response.json(
+					PilotProtocolErrorV1Schema.parse({
+						schemaVersion: 1,
+						code: "AGENT_STARTING",
+						message: "The conversation is still preparing.",
+						retryable: true,
+						traceId: "trace-starting",
+					}),
+					{ status: 409 },
+				);
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Early question" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await screen.findByText(
+			"会话尚未准备完成，消息未发送，草稿已保留。准备完成后请重新发送。",
+		);
+		expect(input.value).toBe("Early question");
+		expect(screen.queryByText("访问权限已失效。")).toBeNull();
+		expect(
+			screen.queryByText(
+				"当前登录或访问权限已失效，请重新登录或返回 Agent 列表。",
+			),
+		).toBeNull();
+	});
+
 	it("settles a stop whose reply had already finished (#1524)", async () => {
 		const { requests } = setup((request) => {
 			const path = new URL(request.url).pathname;
