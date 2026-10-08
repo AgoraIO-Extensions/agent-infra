@@ -994,14 +994,160 @@ describe("Conversation Worker dispatch", () => {
 		await expect(dispatch(harness.useCase)).resolves.toMatchObject({
 			outcome: "retry",
 		});
+		// The cumulative ACK waits for the terminal event, so both events are
+		// committed when that single ACK is lost (#1525).
 		expect(acknowledged).toEqual([]);
-		expect(harness.events.persisted).toHaveLength(1);
+		expect(harness.events.persisted).toHaveLength(2);
 		await expect(dispatch(harness.useCase)).resolves.toMatchObject({
 			outcome: "accepted",
 		});
-		expect(acknowledged).toEqual(["cursor-1", "cursor-2"]);
+		expect(acknowledged).toEqual(["cursor-2"]);
 		expect(harness.events.persisted).toHaveLength(2);
 		expect(inner.sideEffectCount()).toBe(1);
+	});
+
+	describe("cumulative event acknowledgement (#1525)", () => {
+		const text = (sequence: number): ConversationRuntimeEventV1 => ({
+			schemaVersion: 1,
+			adapterEventKey: `event-${sequence}`,
+			executionId: "execution-1",
+			cursor: `cursor-${sequence}`,
+			occurredAt: "2026-09-06T00:00:01.000Z",
+			type: "text",
+			payload: { delta: `part ${sequence}` },
+		});
+		const tool = (
+			sequence: number,
+			phase: "intent" | "started",
+		): ConversationRuntimeOperationEventV2 => ({
+			...runtimeEvent(sequence),
+			schemaVersion: 2,
+			type: "operation",
+			payload: {
+				kind: "tool",
+				toolId: "connection.create_pr",
+				operationRef: "tool-1",
+				attemptRef: "attempt-1",
+				phase,
+				...(phase === "started"
+					? { startedAt: "2026-09-06T00:00:02.000Z" }
+					: {}),
+			} as ConversationRuntimeOperationEventV2["payload"],
+		});
+		function host(
+			stream: (request: { afterCursor?: string }) => AsyncIterable<unknown>,
+		) {
+			const inner = new FakeConversationRuntimeHostV1();
+			const acknowledged: string[] = [];
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				dispatch: (request) => inner.dispatch(request),
+				recoverStatus: (request) => inner.recoverStatus(request),
+				events: (request) => stream(request) as never,
+				async acknowledge(request) {
+					acknowledged.push(request.confirmedCursor);
+				},
+			};
+			return { inner, runtimeHost, acknowledged };
+		}
+
+		it("confirms a reply with one ACK of its terminal cursor", async () => {
+			const { runtimeHost, acknowledged } = host(async function* () {
+				yield runtimeEvent(1, "running");
+				for (let sequence = 2; sequence <= 9; sequence++) yield text(sequence);
+				yield runtimeEvent(10);
+			});
+			const h = setup({ runtimeHost });
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual(
+				Array.from({ length: 10 }, (_, index) => `cursor-${index + 1}`),
+			);
+			expect(acknowledged).toEqual(["cursor-10"]);
+		});
+
+		it("acknowledges a tool fact before the Runtime is asked for more events", async () => {
+			const seen: number[] = [];
+			const { runtimeHost, acknowledged } = host(async function* () {
+				yield tool(1, "intent");
+				// The Runtime does not call the tool until this fact is confirmed.
+				seen.push(acknowledged.length);
+				yield tool(2, "started");
+				seen.push(acknowledged.length);
+				yield text(3);
+				seen.push(acknowledged.length);
+				yield runtimeEvent(4);
+			});
+			const h = setup({ runtimeHost });
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			expect(seen).toEqual([1, 2, 2]);
+			expect(acknowledged).toEqual(["cursor-1", "cursor-2", "cursor-4"]);
+		});
+
+		it("bounds unacknowledged events and confirms the last committed cursor when the stream ends", async () => {
+			const { runtimeHost, acknowledged } = host(async function* () {
+				for (let sequence = 1; sequence <= 70; sequence++) yield text(sequence);
+			});
+			const h = setup({ runtimeHost });
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(h.events.persisted).toHaveLength(70);
+			expect(acknowledged).toEqual(["cursor-32", "cursor-64", "cursor-70"]);
+		});
+
+		it("never acknowledges past a failed commit and resumes from the committed cursor", async () => {
+			const stream = [
+				runtimeEvent(1, "running"),
+				text(2),
+				text(3),
+				text(4),
+				runtimeEvent(5),
+			];
+			const requests: (string | undefined)[] = [];
+			const { inner, runtimeHost, acknowledged } = host(
+				async function* (request) {
+					requests.push(request.afterCursor);
+					const index = request.afterCursor
+						? stream.findIndex(
+								(event) => event.cursor === request.afterCursor,
+							) + 1
+						: 0;
+					yield* stream.slice(index);
+				},
+			);
+			const h = setup({ runtimeHost });
+			const persist = h.events.persist.bind(h.events);
+			let failed = false;
+			h.events.persist = async (command) => {
+				if (command.runtimeCursor === "cursor-4" && !failed) {
+					failed = true;
+					throw new Error("injected persistence failure");
+				}
+				return persist(command);
+			};
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(acknowledged).toEqual([]);
+			expect(h.store.current.runtimeCursor).toBe("cursor-3");
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			// The resumed claim first confirms what the failed attempt committed.
+			expect(acknowledged).toEqual(["cursor-3", "cursor-5"]);
+			expect(requests).toEqual([undefined, "cursor-3"]);
+			expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+				"cursor-1",
+				"cursor-2",
+				"cursor-3",
+				"cursor-4",
+				"cursor-5",
+			]);
+			expect(inner.sideEffectCount()).toBe(1);
+		});
 	});
 
 	it("does not release an active execution when current authority is denied", async () => {
@@ -1865,7 +2011,11 @@ describe("Conversation Worker dispatch", () => {
 						expect(
 							h.events.persisted.map((event) => event.runtimeCursor),
 						).toEqual(recoveringOriginal ? [] : ["cursor-1"]);
-						expect(acknowledged).toEqual(Array(deliveries).fill("cursor-1"));
+						// Only the resumed claim re-acknowledges its committed cursor; a
+						// batched ACK is never sent for an attempt that hit the forgery.
+						expect(acknowledged).toEqual(
+							recoveringOriginal ? Array(deliveries).fill("cursor-1") : [],
+						);
 						expect(eventCursors).toEqual(
 							Array(deliveries).fill(
 								recoveringOriginal ? "cursor-1" : undefined,

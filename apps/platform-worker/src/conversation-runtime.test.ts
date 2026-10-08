@@ -1220,11 +1220,19 @@ describe("Trusted conversation Runtime adapter", () => {
 					},
 				},
 			};
-			const interrupted = {
+			// A tool fact is acknowledged as soon as it commits, because the Runtime
+			// waits for that ACK; other facts share the terminal ACK (#1525).
+			const tool = {
 				...started,
-				adapterEventKey: "model-interrupted",
-				cursor: "interrupted",
-				payload: { ...started.payload, phase: "unknown" },
+				adapterEventKey: "tool-intent",
+				cursor: "tool",
+				payload: {
+					kind: "tool",
+					toolId: "connection.create_pr",
+					operationRef: "original-tool",
+					attemptRef: "original-tool-attempt",
+					phase: "intent",
+				},
 			};
 			const terminal = {
 				schemaVersion: 1,
@@ -1235,7 +1243,10 @@ describe("Trusted conversation Runtime adapter", () => {
 				type: "completed",
 				payload: { status: "cancelled" },
 			};
-			const frame = (event: typeof started | typeof terminal) =>
+			const frame = (event: {
+				readonly cursor: string;
+				readonly type: string;
+			}) =>
 				`id: ${event.cursor}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 			h.fetcher.mockImplementation(async (url, init) => {
 				const body = JSON.parse(init?.body as string);
@@ -1253,7 +1264,7 @@ describe("Trusted conversation Runtime adapter", () => {
 					if (
 						pause === "ack" &&
 						attempts === 1 &&
-						body.confirmedCursor === "interrupted"
+						body.confirmedCursor === "tool"
 					) {
 						reachedControl.resolve();
 						await new Promise<never>((_resolve, reject) =>
@@ -1307,8 +1318,7 @@ describe("Trusted conversation Runtime adapter", () => {
 					);
 				}
 				return new Response(
-					(body.afterCursor === "started" ? frame(interrupted) : "") +
-						frame(terminal),
+					(body.afterCursor === "started" ? frame(tool) : "") + frame(terminal),
 					{ headers: { "content-type": "text/event-stream" } },
 				);
 			});
@@ -1376,7 +1386,7 @@ describe("Trusted conversation Runtime adapter", () => {
 				expect(status).toBe("retry_scheduled");
 				expect(leaseExpiresAt).toBeNull();
 				expect(h.state.runtimeCursor).toBe(
-					pause === "ack" ? "interrupted" : "started",
+					pause === "ack" ? "tool" : "started",
 				);
 				Object.assign(h.state, {
 					executionStatus: "cancelled",
@@ -1385,11 +1395,12 @@ describe("Trusted conversation Runtime adapter", () => {
 				expect(await useCase.dispatch(command)).toMatchObject({
 					outcome: "accepted",
 				});
-				expect(persisted).toEqual(["started", "interrupted", "cancelled"]);
+				expect(persisted).toEqual(["started", "tool", "cancelled"]);
+				// The resumed claim re-acknowledges its committed cursor first.
 				expect(acknowledged).toEqual(
 					pause === "ack"
-						? ["started", "interrupted", "cancelled"]
-						: ["started", "started", "interrupted", "cancelled"],
+						? ["tool", "cancelled"]
+						: ["started", "tool", "cancelled"],
 				);
 				expect(status).toBe("succeeded");
 				const calls = h.fetcher.mock.calls.map((call) => ({
