@@ -116,4 +116,21 @@ describe("Skill Hub installation authorization", () => {
 			canInstallSkillHubVersionV1(version("MARKET"), command, disabled),
 		).toBe(false);
 	});
+
+	it("does not cross-install an organization version into another member organization", () => {
+		const command = {
+			principalType: "organization" as const,
+			principalId: "org-b",
+			skillVersionId: "version-a",
+		};
+		const memberOfBoth = actor("member", ["org-a", "org-b"]);
+		expect(
+			canInstallSkillHubVersionV1(
+				version("ORGANIZATION"),
+				command,
+				memberOfBoth,
+				"org-a",
+			),
+		).toBe(false);
+	});
 });

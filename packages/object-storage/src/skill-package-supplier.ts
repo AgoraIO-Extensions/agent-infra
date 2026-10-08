@@ -428,6 +428,9 @@ export class SkillPackageSupplierV1 {
 						packageDigest: prepared.packageDigest,
 						manifestDigest: manifest.sha256,
 						signatureDigest: detached.sha256,
+						...(Object.hasOwn(selection, "organizationId")
+							? { organizationId: selection.organizationId }
+							: {}),
 					});
 				},
 				validate,

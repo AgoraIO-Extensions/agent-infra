@@ -51,6 +51,7 @@ const registration = (
 	packageDigest: "a".repeat(64),
 	manifestDigest: "b".repeat(64),
 	signatureDigest: "c".repeat(64),
+	...(visibility === "ORGANIZATION" ? { organizationId: "org-a" } : {}),
 });
 
 let database: PostgresTestDatabase | undefined;
@@ -65,6 +66,15 @@ function store() {
 	});
 	stores.push(value);
 	return value;
+}
+async function admit(skillVersionId: string) {
+	const now = new Date();
+	await client`insert into platform.idempotency_records
+		(id, scope_type, scope_id, actor_id, command_type, idempotency_key,
+		 request_digest, status, result, created_at, updated_at)
+		values (${`admission-${skillVersionId}`}, 'skill_package', ${skillVersionId},
+		 'owner-a', 'skill.package.publish.v1', ${`admission-${skillVersionId}`},
+		 ${"d".repeat(64)}, 'completed', ${client.json({ operationId: `admission-${skillVersionId}`, skillVersionId })}, ${now}, ${now})`;
 }
 
 beforeAll(async () => {
@@ -109,6 +119,7 @@ describe("Skill Hub scoped directory and installations", () => {
 				decision: "approve",
 			},
 		);
+		await admit("member-v1");
 		const visible = await adapter.listVisibleVersions(request("member"));
 		expect(visible.map((item) => item.skillVersionId)).toEqual(["member-v1"]);
 		const first = await adapter.installVersion(
@@ -181,6 +192,17 @@ describe("Skill Hub scoped directory and installations", () => {
 		await adapter.reviewVersion(request("admin"), "org-v1", "org-review", {
 			decision: "approve",
 		});
+		await admit("org-v1");
+		await client`update platform.skill_hub_skills set status = 'disabled' where id = 'org-skill'`;
+		expect(await adapter.listVisibleVersions(request("owner-a"))).toEqual([]);
+		await expect(
+			adapter.installVersion(request("owner-a"), "disabled-install", {
+				principalType: "organization",
+				principalId: "org-a",
+				skillVersionId: "org-v1",
+			}),
+		).rejects.toMatchObject({ code: "not_found" });
+		await client`update platform.skill_hub_skills set status = 'active' where id = 'org-skill'`;
 		expect(
 			(await adapter.listVisibleVersions(request("owner-b"))).map(
 				(item) => item.skillVersionId,
@@ -227,6 +249,7 @@ describe("Skill Hub scoped directory and installations", () => {
 			await adapter.reviewVersion(request("admin"), id, `review-${id}`, {
 				decision: "approve",
 			});
+			await admit(id);
 		}
 		const visibleBeforeInstall = await adapter.listVisibleVersions(
 			request("owner-a"),

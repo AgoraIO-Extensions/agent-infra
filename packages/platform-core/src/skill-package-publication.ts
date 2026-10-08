@@ -34,6 +34,8 @@ export type SkillPackagePublicationSelectionV1 = Readonly<{
 	trustRevision: string;
 	policyRevision: string;
 	archiveDigest: string;
+	/** Explicit organization target for ORGANIZATION publications. */
+	organizationId?: string | null;
 }>;
 export const skillPackagePublicationStagesV1 = [
 	"zip",
@@ -132,7 +134,7 @@ export function parseSkillPackagePublicationSelectionV1(
 	input: unknown,
 ): SkillPackagePublicationSelectionV1 {
 	const value = record(input);
-	requireAgentManagementExactKeys(value, [
+	const keys = [
 		"schemaVersion",
 		"name",
 		"skillId",
@@ -146,7 +148,11 @@ export function parseSkillPackagePublicationSelectionV1(
 		"trustRevision",
 		"policyRevision",
 		"archiveDigest",
-	]);
+	] as const;
+	requireAgentManagementExactKeys(
+		value,
+		Object.hasOwn(value, "organizationId") ? [...keys, "organizationId"] : keys,
+	);
 	if (
 		value.schemaVersion !== 1 ||
 		typeof value.name !== "string" ||
@@ -170,6 +176,14 @@ export function parseSkillPackagePublicationSelectionV1(
 		trustRevision: text(value.trustRevision),
 		policyRevision: text(value.policyRevision),
 		archiveDigest: sha(value.archiveDigest),
+		...(Object.hasOwn(value, "organizationId")
+			? {
+					organizationId:
+						value.organizationId === null
+							? null
+							: parseSkillHubIdV1(value.organizationId),
+				}
+			: {}),
 	});
 }
 function descriptor(value: Record<string, unknown>) {
