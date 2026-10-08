@@ -11,10 +11,17 @@ BEGIN
 	RETURN NULL;
 END
 $$;--> statement-breakpoint
+-- Writers stamp available_at from their own clock after the transaction
+-- starts, so compare with the trigger-time clock. The small allowance absorbs
+-- clock skew between writers and the database; delayed retries (seconds) and
+-- waiting tasks (infinity) do not wake anyone.
 CREATE TRIGGER "outbox_item_available"
 AFTER INSERT OR UPDATE OF "status", "available_at" ON "platform"."outbox_items"
 FOR EACH ROW
-WHEN (NEW."status" IN ('pending', 'retry_scheduled') AND NEW."available_at" <= now())
+WHEN (
+	NEW."status" IN ('pending', 'retry_scheduled')
+	AND NEW."available_at" <= clock_timestamp() + interval '250 milliseconds'
+)
 EXECUTE FUNCTION "platform"."notify_outbox_available"();--> statement-breakpoint
 CREATE FUNCTION "platform"."notify_conversation_event"()
 RETURNS trigger

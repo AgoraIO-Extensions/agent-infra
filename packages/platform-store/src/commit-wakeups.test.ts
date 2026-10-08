@@ -90,6 +90,19 @@ describe("outbox commit wakeups (#1561)", () => {
 			await expect.poll(() => woken, { timeout: 5_000 }).toEqual([""]);
 			await insert("now");
 			await expect.poll(() => woken, { timeout: 5_000 }).toEqual(["", ""]);
+			// Writers stamp available_at after their transaction started.
+			await client.begin(async (transaction) => {
+				await transaction`select pg_sleep(0.2)`;
+				await transaction`
+					insert into platform.outbox_items
+						(id, scope_type, scope_id, operation, payload, trace_id,
+						 request_id, available_at, created_at, updated_at)
+					values ('conversation:turn:wake-late-stamp', 'conversation',
+						'conversation-wake', 'conversation.turn.submit.v1',
+						${transaction.json({ schemaVersion: 1 })}, 'trace', 'request',
+						clock_timestamp(), now(), now())`;
+			});
+			await expect.poll(() => woken, { timeout: 5_000 }).toEqual(["", "", ""]);
 		} finally {
 			await listener.close();
 		}
