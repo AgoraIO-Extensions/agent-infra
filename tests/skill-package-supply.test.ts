@@ -407,6 +407,9 @@ describe("Skill supplier with real PG, versioned S3 and native ClamAV", () => {
 			completed: 0,
 			idempotency: 0,
 		});
+		const [failed] =
+			await sql`select status from platform.outbox_items where scope_type = 'skill_package'`;
+		expect(failed?.status).toBe("failed");
 	});
 	it("ignores a changed latest object and rejects corrupted fixed signature bytes", async () => {
 		const first = await supplier().value.admitVersion(request(), input());

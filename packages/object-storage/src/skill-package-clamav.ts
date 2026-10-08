@@ -158,19 +158,31 @@ export function createClamAvSkillPackageScannerV1(
 					paths.push(path);
 					await writeFile(path, file.bytes, { flag: "wx", mode: 0o600 });
 				}
-				const report = await run([
-					`--database=${databaseDirectory}`,
-					"--stdout",
-					"--no-summary",
-					"--disable-cache=yes",
-					"--alert-exceeds-max=yes",
-					"--alert-encrypted=yes",
-					"--max-filesize=50000000",
-					"--max-scansize=50000000",
-					"--max-files=2000",
-					"--max-recursion=16",
-					payloadDirectory,
-				]);
+				let report!: { stdout: string; stderr: string };
+				try {
+					report = await run([
+						`--database=${databaseDirectory}`,
+						"--stdout",
+						"--no-summary",
+						"--disable-cache=yes",
+						"--alert-exceeds-max=yes",
+						"--alert-encrypted=yes",
+						"--max-filesize=50000000",
+						"--max-scansize=50000000",
+						"--max-files=2000",
+						"--max-recursion=16",
+						payloadDirectory,
+					]);
+				} catch (error) {
+					if (
+						typeof error === "object" &&
+						error !== null &&
+						"code" in error &&
+						(error as { code?: unknown }).code === 1
+					)
+						throw new SkillPackageAdmissionErrorV1("scan_rejected");
+					failure();
+				}
 				if (report.stderr.length) failure();
 				const responses = report.stdout.trim().split(/\r?\n/);
 				if (
@@ -201,7 +213,8 @@ export function createClamAvSkillPackageScannerV1(
 					scannedBytes: prepared.totalBytes,
 					verdict: "clean",
 				});
-			} catch {
+			} catch (error) {
+				if (error instanceof SkillPackageAdmissionErrorV1) throw error;
 				return failure();
 			} finally {
 				if (staging)
