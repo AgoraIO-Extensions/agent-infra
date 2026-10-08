@@ -95,7 +95,7 @@ const options = {
 	receiveSandbox: async () => ({ status: "unknown" as const, resources: [] }),
 	maximumConcurrentDispatches: 1,
 	closeDeployment: mocks.deploymentClose,
-	log: () => {},
+	log: vi.fn(),
 };
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -107,9 +107,54 @@ beforeEach(() => {
 	mocks.prepareSandbox.mockResolvedValue(true);
 	mocks.transaction = undefined;
 	mocks.dispatchEvents = undefined;
+	vi.mocked(options.log).mockReset();
 });
 
 describe("Conversation Worker discovery and shutdown", () => {
+	it("exposes one poller lifecycle and logs each transition once", async () => {
+		mocks.find.mockResolvedValue([]);
+		const worker = createPlatformConversationWorkerV2(options);
+		expect(worker.status()).toBe("not_started");
+		worker.start();
+		worker.start();
+		expect(worker.status()).toBe("running");
+		await vi.waitFor(() => expect(mocks.find).toHaveBeenCalledTimes(1));
+		expect(options.log).toHaveBeenCalledWith(
+			JSON.stringify({
+				service: "platform-worker",
+				component: "conversation",
+				code: "CONVERSATION_DISPATCH_STARTED",
+			}),
+		);
+		const stopping = worker.stop();
+		expect(worker.status()).toBe("stopping");
+		expect(options.log).toHaveBeenCalledWith(
+			JSON.stringify({
+				service: "platform-worker",
+				component: "conversation",
+				code: "CONVERSATION_DISPATCH_STOPPING",
+			}),
+		);
+		await stopping;
+		expect(worker.status()).toBe("stopped");
+		expect(options.log).toHaveBeenCalledWith(
+			JSON.stringify({
+				service: "platform-worker",
+				component: "conversation",
+				code: "CONVERSATION_DISPATCH_STOPPED",
+			}),
+		);
+		expect(
+			options.log.mock.calls.filter(([message]) =>
+				String(message).includes("CONVERSATION_DISPATCH_STARTED"),
+			),
+		).toHaveLength(1);
+		expect(
+			options.log.mock.calls.filter(([message]) =>
+				String(message).includes("CONVERSATION_DISPATCH_STOPPED"),
+			),
+		).toHaveLength(1);
+	});
 	it("receives a sandbox reconciliation through the existing discovery lease", async () => {
 		const claim = { schemaVersion: 1, execution: null } as never;
 		mocks.find.mockResolvedValue([
@@ -354,6 +399,14 @@ describe("Conversation Worker discovery and shutdown", () => {
 		);
 		const worker = createPlatformConversationWorkerV2(options);
 		await expect(worker.stop()).rejects.toThrow("synthetic runtime failure");
+		expect(worker.status()).toBe("stopping");
+		expect(options.log).toHaveBeenCalledWith(
+			JSON.stringify({
+				service: "platform-worker",
+				component: "conversation",
+				code: "CONVERSATION_DISPATCH_STOP_FAILED",
+			}),
+		);
 		expect(mocks.storeClose).toHaveBeenCalledTimes(1);
 		expect(mocks.eventsClose).toHaveBeenCalledTimes(1);
 		expect(mocks.authorizationClose).toHaveBeenCalledTimes(1);
