@@ -103,7 +103,7 @@ try {
 	 console.log(JSON.stringify({ control, business, snapshot: globalThis.snapshot, installation: globalThis.installation }));
 	 process.exit(0);
 	}
- console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls, connection: globalThis.connection, snapshot: JSON.parse(globalThis.snapshot), installation: globalThis.installation }));
+ console.log(JSON.stringify({ databases: [workload.databaseUrl, conversation.databaseUrl, globalThis.wecomDatabase], calls: globalThis.calls, connection: globalThis.connection, snapshot: JSON.parse(globalThis.snapshot), installation: globalThis.installation, installationConfigured: typeof conversation.connectionInstallation?.authorize === 'function' }));
 } catch (error) {
  console.log(JSON.stringify({ error: error.message, calls: globalThis.calls }));
  process.exitCode = 1;
@@ -143,7 +143,63 @@ it("uses the selected deployment database for all Worker consumers and prepares 
 			profile: connectionConsumerProfile,
 			approval: connectionConsumerApproval,
 		},
+		installationConfigured: false,
 	});
+});
+
+it("passes the deployment-owned nonsecret installation producer to the Conversation Worker", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	await writeFile(
+		path,
+		`${original}
+export const connectionInstallation = {
+  configuration: {
+    schemaVersion: 1,
+    ref: "oauth-config",
+    revision: "r1",
+    clientId: "platform-client",
+    callbackUrl: "https://platform.example.test/connection/callback",
+    issuer: "https://connection.example.test/",
+    authorizationEndpoint: "https://connection.example.test/oauth/authorize",
+    tokenEndpoint: "https://connection.example.test/oauth/token",
+    revocationEndpoint: "https://connection.example.test/oauth/revoke",
+    resource: "https://connection.example.test/mcp",
+    scope: "mcp",
+    configFingerprint: "26062a8f8e5a003ff8047fead83d76c254d9b54834ca5348fb7e4ceee67d205b",
+    source: { ref: "platform-deployment", revision: "r1" },
+    runtimeOrigin: "https://runtime.example.test:3443/"
+  },
+  authorize: async (input, signal, finalCheck) => ({ ...input, revision: "confirmation-r1" })
+};
+`,
+	);
+	try {
+		const result = run();
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout).installationConfigured).toBe(true);
+	} finally {
+		await writeFile(path, original);
+	}
+});
+
+it.each([
+	"export const connectionInstallation = { configuration: {}, authorize: true };",
+	"export const connectionInstallation = { configuration: {}, authorize: () => {}, extra: true };",
+])("rejects malformed installation producer configuration", async (entry) => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	await writeFile(path, `${original}\n${entry}\n`);
+	try {
+		const result = run();
+		expect(result.status).toBe(1);
+		expect(JSON.parse(result.stdout)).toEqual({
+			error: "CONNECTION_INSTALLATION_UNAVAILABLE",
+			calls: [],
+		});
+	} finally {
+		await writeFile(path, original);
+	}
 });
 
 it("keeps the original control resolver when configured approval is unavailable", async () => {
