@@ -30,6 +30,17 @@ export function executionStatus(
 	return last?.type === "execution.status" ? last.payload.status : fallback;
 }
 
+/** A stored terminal answer result is final even when the timeline lacks its
+ * terminal event; a later terminal event still wins (#1524). */
+export function answerStatus(
+	events: readonly PersistedConversationEventV2[],
+	executionId: string | null,
+	stored: ExecutionStatus,
+): ExecutionStatus | undefined {
+	const status = executionStatus(events, executionId, stored);
+	return isTerminal(stored) && !isTerminal(status) ? stored : status;
+}
+
 /** Answer projections can omit an execution until its first text delta. The
  * persisted status stream is authoritative even when an older answer is last. */
 export function currentExecution(
