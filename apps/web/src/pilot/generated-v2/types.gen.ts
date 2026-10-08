@@ -4,6 +4,78 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
+export type AgentApiCreationRequestV1 = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    name: string;
+    schemaVersion: 2;
+    secrets: Array<{
+        name: string;
+    }>;
+    source: {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+} | {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    name: string;
+    schemaVersion: 3;
+    secrets: Array<{
+        name: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    };
+};
+
+export type AgentApiCreationResponseV1 = {
+    agentId: string;
+    replayed: boolean;
+    revision: number;
+    schemaVersion: 1;
+    status: 'creating' | 'available' | 'stopped' | 'creation_failed' | 'disabled';
+};
+
 export type AgentApiLifecycleRequestV1 = {
     command: 'start' | 'stop' | 'restart';
     schemaVersion: 1;
@@ -777,6 +849,73 @@ export type TimelineReloadSignalV1 = {
     type: 'timeline.reload';
 };
 
+export type AgentApiCreationRequestV1Writable = {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    coOwnerIds: Array<string>;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    name: string;
+    schemaVersion: 2;
+    secrets: Array<{
+        name: string;
+        value: string;
+    }>;
+    source: {
+        identityResponsibility: 'self-managed' | 'platform-managed';
+        imageReference: string;
+        interactionMode: 'self-managed';
+        kind: 'custom';
+    } | {
+        imageReference: string;
+        interactionMode: 'platform-adapter';
+        kind: 'custom';
+    };
+} | {
+    availability: Array<{
+        kind: 'user';
+        userId: string;
+    } | {
+        kind: 'organization';
+        organizationId: string;
+    }>;
+    coOwnerIds: Array<string>;
+    defaultRelayKey: string;
+    description: string;
+    environment: Array<{
+        name: string;
+        value: string;
+    }>;
+    modelConfiguration: {
+        defaultOptionId: string;
+        defaultReasoningLevel: string;
+        options: Array<{
+            endpointId: string;
+            modelId: string;
+            optionId: string;
+            reasoningLevels: Array<string>;
+        }>;
+    };
+    name: string;
+    schemaVersion: 3;
+    secrets: Array<{
+        name: string;
+        value: string;
+    }>;
+    source: {
+        kind: 'standard';
+        templateId: string;
+    };
+};
+
 export type AgentApplicationCreateRequestV2Writable = {
     availability: Array<{
         kind: 'user';
@@ -1448,6 +1587,62 @@ export type ListAgentsV2Responses = {
 };
 
 export type ListAgentsV2Response = ListAgentsV2Responses[keyof ListAgentsV2Responses];
+
+export type CreateAgentApiV1Data = {
+    body: AgentApiCreationRequestV1Writable;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/agents';
+};
+
+export type CreateAgentApiV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CreateAgentApiV1Error = CreateAgentApiV1Errors[keyof CreateAgentApiV1Errors];
+
+export type CreateAgentApiV1Responses = {
+    /**
+     * Original Agent API creation replayed
+     */
+    200: AgentApiCreationResponseV1;
+    /**
+     * Agent API creation accepted
+     */
+    201: AgentApiCreationResponseV1;
+};
+
+export type CreateAgentApiV1Response = CreateAgentApiV1Responses[keyof CreateAgentApiV1Responses];
 
 export type GetAgentV2Data = {
     body?: never;

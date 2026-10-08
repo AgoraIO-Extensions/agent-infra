@@ -698,7 +698,7 @@ export class PostgresApplicationFoundationTransactionV1
 						!grants.some(
 							(grant) =>
 								grant.revokedAt === null &&
-								(grant.grantType === "manage" || grant.grantType === "use"),
+								grant.grantType === "manage",
 						)
 					)
 						throw new PersonalApiCredentialErrorV1("not_found");

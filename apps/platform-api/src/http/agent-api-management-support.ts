@@ -8,7 +8,7 @@ import { mapCoreError } from "./core-errors.js";
 
 export type ApiManagementRefusalRecorderV1 = (
 	input: RequestMetadata & {
-		readonly operation: "lifecycle" | "manager" | "use" | "state";
+		readonly operation: "create" | "lifecycle" | "manager" | "use" | "state";
 		readonly reason: string;
 		readonly failed: boolean;
 		readonly context?: AgentApiAuditContextV1;
@@ -19,7 +19,7 @@ export async function apiManagementFailure(
 	context: Context,
 	error: unknown,
 	metadata: RequestMetadata,
-	operation: "lifecycle" | "manager" | "use" | "state",
+	operation: "create" | "lifecycle" | "manager" | "use" | "state",
 	record: ApiManagementRefusalRecorderV1,
 ) {
 	const protocol = mapCoreError(error, metadata.traceId);

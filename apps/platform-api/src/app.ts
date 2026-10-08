@@ -2,6 +2,10 @@ import type { startObservability } from "@agent-infra/observability";
 import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
 import {
+	type AgentApiCreationRouteDependencies,
+	registerAgentApiCreationRoutes,
+} from "./http/agent-api-creation-routes.js";
+import {
 	type AgentApiLifecycleRouteDependencies,
 	registerAgentApiLifecycleRoutes,
 } from "./http/agent-api-lifecycle-routes.js";
@@ -78,6 +82,7 @@ type ApiObservability = Pick<
 >;
 
 export interface PlatformAppDependencies {
+	readonly agentApiCreation?: AgentApiCreationRouteDependencies;
 	readonly agentApiLifecycle?: AgentApiLifecycleRouteDependencies;
 	readonly agentApplicationGrants?: AgentApplicationGrantRouteDependencies;
 	readonly applicationApiCredentials?: Parameters<
@@ -161,6 +166,8 @@ export function createPlatformApp(
 	if (dependencies.personalRelayKeys)
 		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);
 	registerV2ManagementRoutes(app, dependencies.management);
+	if (dependencies.agentApiCreation)
+		registerAgentApiCreationRoutes(app, dependencies.agentApiCreation);
 	if (dependencies.agentApplicationGrants)
 		registerAgentApplicationGrantRoutes(
 			app,

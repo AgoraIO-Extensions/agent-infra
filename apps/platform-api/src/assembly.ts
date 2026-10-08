@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
+	type AgentConfigurationAuthorityContextV1,
 	type AgentConfigurationUseCaseDependenciesV1,
+	type ApiPrincipalV1,
 	type ConversationTaskAdmissionPolicyV1,
+	createAgentApiCreationV1,
 	createAgentApiLifecycleV1,
 	createAgentConfigurationUseCaseV1,
 	createAgentManagementV1,
@@ -78,6 +81,16 @@ export interface PlatformApiAssemblyInput {
 	readonly applicationCredentialDelivery?: Parameters<
 		typeof createApplicationCredentialProcessDeliveryV1
 	>[0];
+	readonly agentApiCreation?: {
+		readonly allowedPrincipals: readonly ApiPrincipalV1[];
+		readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
+		readonly defaultRelayKey?: Parameters<
+			typeof createAgentApiCreationV1
+		>[0]["defaultRelayKey"];
+		readonly prepareSecrets?: Parameters<
+			typeof createAgentApiCreationV1
+		>[0]["prepareSecrets"];
+	};
 	readonly requestScope?: PlatformAppDependencies["requestScope"];
 	readonly files?: PlatformFileDeploymentV1;
 	readonly databaseUrl: string;
@@ -134,6 +147,11 @@ export function assemblePlatformApi(
 		throw new Error(
 			"WeCom message admission requires a trusted user directory",
 		);
+	if (
+		input.agentApiCreation &&
+		typeof input.agentApiCreation.loadAuthorityContext !== "function"
+	)
+		throw new Error("Agent API creation requires authority context");
 	const userDirectory = {
 		resolveUser: (userId: string) =>
 			resolveCurrentTaskUser(input.identity, userId, randomUUID()),
@@ -192,6 +210,15 @@ export function assemblePlatformApi(
 			: undefined;
 	const foundationTransaction = new PostgresApplicationFoundationTransactionV1({
 		databaseUrl: input.databaseUrl,
+		userDirectory,
+		...(input.agentApiCreation
+			? {
+					apiCreation: {
+						allowedPrincipals: input.agentApiCreation.allowedPrincipals,
+						loadAuthorityContext: input.agentApiCreation.loadAuthorityContext,
+					},
+				}
+			: {}),
 	});
 	const revisionTransaction = new PostgresApplicationRevisionTransactionV1({
 		databaseUrl: input.databaseUrl,
@@ -323,6 +350,18 @@ export function assemblePlatformApi(
 		...admissions,
 		...channelAdmission,
 	});
+	const agentApiCreation = input.agentApiCreation
+		? createAgentApiCreationV1({
+				transaction: foundationTransaction,
+				admissions,
+				...(input.agentApiCreation.defaultRelayKey
+					? { defaultRelayKey: input.agentApiCreation.defaultRelayKey }
+					: {}),
+				...(input.agentApiCreation.prepareSecrets
+					? { prepareSecrets: input.agentApiCreation.prepareSecrets }
+					: {}),
+			})
+		: undefined;
 	const revision = createApplicationRevisionUseCaseV1({
 		transaction: revisionTransaction,
 		...admissions,
@@ -478,6 +517,15 @@ export function assemblePlatformApi(
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
 		tasks,
+		...(agentApiCreation
+			? {
+					agentApiCreation: {
+						create: agentApiCreation.create,
+						recordRefusal: (request) =>
+							managementTransaction.recordApiManagementRefusal(request),
+					},
+				}
+			: {}),
 		...(personalRelayKeys
 			? {
 					personalRelayKeys: {
