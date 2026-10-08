@@ -91,6 +91,31 @@ it("emits only bounded metadata and drops logs under backpressure", () => {
 	});
 });
 
+it("logs a bounded stage duration for latency comparison (#1525)", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({
+		stage: "result_persist",
+		outcome: "completed",
+		durationMs: 12.6,
+	});
+	telemetry.record({ stage: "result_persist", outcome: "completed" });
+	expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+		stage: "result_persist",
+		durationMs: 13,
+	});
+	expect(JSON.parse(lines[1] ?? "{}")).not.toHaveProperty("durationMs");
+});
+
 it("keeps the validated service label after caller options change", () => {
 	const lines: string[] = [];
 	const options = {
