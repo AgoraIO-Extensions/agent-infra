@@ -3,7 +3,10 @@ import {
 	type ObservabilityOptions,
 	startObservability,
 } from "@agent-infra/observability";
-import { startPlatformConversationWorkerFromDeploymentV2 } from "./conversation-worker.js";
+import {
+	type PlatformConversationWorkerLifecycleStatusV1,
+	startPlatformConversationWorkerFromDeploymentV2,
+} from "./conversation-worker.js";
 import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
@@ -58,10 +61,7 @@ export {
 export const platformWorkerService = "platform-worker";
 
 export type PlatformWorkerConversationLifecycleStatusV1 =
-	| "not_started"
-	| "running"
-	| "stopping"
-	| "stopped";
+	PlatformConversationWorkerLifecycleStatusV1;
 
 export function createPlatformConversationDispatchWorkerV1(options: {
 	readonly databaseUrl: string;
