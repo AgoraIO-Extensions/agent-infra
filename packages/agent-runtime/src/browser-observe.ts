@@ -196,6 +196,26 @@ function nonEmpty(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && value.length <= 256;
 }
 
+function positiveInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+function validExecutionBinding(
+	value: BrowserActionExecutionBindingV1 | undefined,
+): value is BrowserActionExecutionBindingV1 {
+	return (
+		value !== undefined &&
+		value !== null &&
+		nonEmpty(value.agentId) &&
+		nonEmpty(value.conversationId) &&
+		nonEmpty(value.executionId) &&
+		positiveInteger(value.capabilityVersion) &&
+		positiveInteger(value.pageRevision) &&
+		positiveInteger(value.sessionGeneration) &&
+		positiveInteger(value.resourceFence)
+	);
+}
+
 function canonicalize(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(canonicalize);
 	if (!value || typeof value !== "object") return value;
@@ -586,6 +606,7 @@ export function createBrowserObserveControllerV1(input: {
 				: undefined,
 			sideEffect: request.sideEffect,
 			authorization: request.authorization,
+			executionBinding: request.executionBinding,
 		});
 	}
 
@@ -614,7 +635,7 @@ export function createBrowserObserveControllerV1(input: {
 		fields: Partial<BrowserActionRecordV1> = {},
 	): BrowserActionRecordV1 {
 		const actionId = request.actionId ?? `action-${randomUUID()}`;
-		const record = {
+		const record = Object.freeze({
 			actionId,
 			...(request.operationRef ? { operationRef: request.operationRef } : {}),
 			...(request.attemptRef ? { attemptRef: request.attemptRef } : {}),
@@ -627,7 +648,7 @@ export function createBrowserObserveControllerV1(input: {
 				: {}),
 			createdAt,
 			...fields,
-		};
+		});
 		actionsById.set(record.actionId, record);
 		return record;
 	}
@@ -658,19 +679,48 @@ export function createBrowserObserveControllerV1(input: {
 		)
 			throw new Error("BROWSER_ACTION_READBACK_CONFLICT");
 		const record = byActionId ?? byIdempotencyKey;
-		if (record && input_.executionBinding) {
-			if (
-				!record.executionBinding ||
-				!sameExecutionBinding(record.executionBinding, input_.executionBinding)
-			)
-				throw new Error("BROWSER_ACTION_READBACK_BINDING_CONFLICT");
-		}
+		if (
+			input_.executionBinding !== undefined &&
+			!validExecutionBinding(input_.executionBinding)
+		)
+			throw new Error("BROWSER_ACTION_READBACK_BINDING_INVALID");
+		const recordBinding = record?.executionBinding;
+		if (
+			record &&
+			(recordBinding || input_.executionBinding) &&
+			(!recordBinding ||
+				!input_.executionBinding ||
+				!sameExecutionBinding(recordBinding, input_.executionBinding))
+		)
+			throw new Error("BROWSER_ACTION_READBACK_BINDING_CONFLICT");
 		return record ?? null;
 	}
 
 	async function executeAction(
-		request: BrowserActionRequestV1,
+		input_: BrowserActionRequestV1,
 	): Promise<BrowserActionRecordV1> {
+		const supplied = input_.executionBinding;
+		const binding =
+			supplied === undefined
+				? undefined
+				: Object.freeze({
+						agentId: supplied?.agentId,
+						conversationId: supplied?.conversationId,
+						executionId: supplied?.executionId,
+						capabilityVersion: supplied?.capabilityVersion,
+						pageRevision: supplied?.pageRevision,
+						sessionGeneration: supplied?.sessionGeneration,
+						resourceFence: supplied?.resourceFence,
+					});
+		if (
+			binding !== undefined &&
+			(!validExecutionBinding(binding) ||
+				binding.pageRevision !== input_.page.pageRevision)
+		)
+			throw new Error("BROWSER_ACTION_BINDING_INVALID");
+		const request: BrowserActionRequestV1 = binding
+			? { ...input_, executionBinding: binding }
+			: input_;
 		const createdAt = new Date().toISOString();
 		const actionId = request.actionId ?? `action-${randomUUID()}`;
 		if (!request.operationRef || !request.attemptRef)
