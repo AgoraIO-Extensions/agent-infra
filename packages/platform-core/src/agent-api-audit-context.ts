@@ -5,6 +5,7 @@ export interface AgentApiAuditContextV1 {
 	readonly principal?: ApiPrincipalV1;
 	readonly agentId?: string;
 	readonly command?:
+		| "create"
 		| "start"
 		| "stop"
 		| "restart"

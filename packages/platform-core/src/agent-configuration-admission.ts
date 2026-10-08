@@ -15,6 +15,7 @@ import type {
 	AgentConfigurationModelAdmissionPortV1,
 	AgentConfigurationModelInputV1,
 	AgentConfigurationModelV1,
+	AgentConfigurationModelV2,
 	AgentConfigurationSecretAdmissionPortV1,
 	AgentConfigurationSourceV1,
 } from "./agent-configuration-types.js";
@@ -300,8 +301,8 @@ export function sameSourceConfiguration(
 }
 
 export function sameModelConfiguration(
-	left: AgentConfigurationModelV1 | null,
-	right: AgentConfigurationModelV1 | null,
+	left: AgentConfigurationModelV2 | null,
+	right: AgentConfigurationModelV2 | null,
 ): boolean {
 	return sameValue(
 		left && { ...left, catalogRevision: undefined },

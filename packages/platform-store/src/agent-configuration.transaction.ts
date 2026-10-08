@@ -390,6 +390,11 @@ export class PostgresAgentConfigurationTransactionV1
 				) {
 					throw new AgentConfigurationStoreError();
 				}
+				if (
+					configuration.schemaVersion !== 2 ||
+					previousConfiguration.schemaVersion !== 2
+				)
+					throw new AgentConfigurationStoreError();
 
 				if (
 					!(await advanceAgentConfigurationRevision(

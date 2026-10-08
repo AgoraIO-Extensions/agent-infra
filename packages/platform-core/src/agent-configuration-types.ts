@@ -1,4 +1,8 @@
 import type {
+	AgentDefaultRelayKeyBindingV1,
+	AgentDefaultRelayKeyDependenciesV1,
+} from "./agent-default-relay-key.js";
+import type {
 	AgentManagementActorContextV1,
 	AgentManagementStateV1,
 } from "./agent-management.js";
@@ -148,6 +152,11 @@ export interface AgentConfigurationModelInputV1 {
 	readonly defaultReasoningLevel: string;
 }
 
+export interface AgentConfigurationModelInputV2
+	extends Omit<AgentConfigurationModelInputV1, "options"> {
+	readonly options: readonly AgentConfigurationModelOptionV2[];
+}
+
 export interface AgentConfigurationSecretReplacementInputV1 {
 	readonly name: string;
 	readonly replace: true;
@@ -189,10 +198,26 @@ export interface InitialAgentConfigurationCommandV2 {
 	readonly channels: readonly AgentConfigurationChannelChangeV1[];
 }
 
+export interface InitialAgentConfigurationCommandV3
+	extends Omit<
+		InitialAgentConfigurationCommandV2,
+		"schemaVersion" | "source" | "modelConfiguration"
+	> {
+	readonly schemaVersion: 3;
+	readonly source: Extract<
+		AgentConfigurationSourceSelectionV1,
+		{ kind: "standard" }
+	>;
+	readonly modelConfiguration: AgentConfigurationModelInputV2;
+}
+export type InitialAgentConfigurationCommand =
+	| InitialAgentConfigurationCommandV2
+	| InitialAgentConfigurationCommandV3;
+
 export interface AdmittedInitialAgentConfigurationV1 {
 	readonly schemaVersion: 1;
 	readonly authorizationRevision: string;
-	readonly configuration: AgentConfigurationRecordV2;
+	readonly configuration: AgentConfigurationRecord;
 	readonly ownerIds: readonly string[];
 	readonly availability: readonly AgentConfigurationAccessTargetV1[];
 }
@@ -222,6 +247,27 @@ export interface UpdateAgentConfigurationCommandV2 {
 		readonly secrets?: readonly AgentConfigurationSecretReplacementInputV1[];
 		readonly channels?: readonly AgentConfigurationChannelChangeV1[];
 	};
+}
+
+export interface UpdateAgentConfigurationCommandV3
+	extends Omit<UpdateAgentConfigurationCommandV2, "schemaVersion" | "changes"> {
+	readonly schemaVersion: 3;
+	readonly expectedConfigurationRevision: number;
+	readonly expectedKeyVersion: number | null;
+	readonly defaultRelayKey: string;
+	readonly changes: Omit<
+		UpdateAgentConfigurationCommandV2["changes"],
+		"modelConfiguration"
+	> & {
+		readonly modelConfiguration: AgentConfigurationModelInputV2;
+	};
+}
+
+export interface AgentConfigurationRelayKeyAttachmentV1 {
+	readonly expectedVersion: number | null;
+	readonly encrypt: (
+		binding: AgentDefaultRelayKeyBindingV1,
+	) => unknown | Promise<unknown>;
 }
 
 export interface LegacyUpdateAgentConfigurationCommandV1
@@ -294,6 +340,7 @@ export interface AgentConfigurationActorContextV1 {
 }
 
 export type AgentConfigurationChangedFieldV1 =
+	| "defaultRelayKey"
 	| "source"
 	| "environment"
 	| "modelConfiguration"
@@ -327,7 +374,7 @@ export interface AgentConfigurationWritePlanV1 {
 	readonly expectedManagementRevision: number | null;
 	readonly expectedAuthorizationRevision: string;
 	readonly nextAuthorizationRevision: string;
-	readonly configuration: AgentConfigurationRecordV2;
+	readonly configuration: AgentConfigurationRecord;
 	readonly accessUpdate: AgentConfigurationAccessPlanV1 | null;
 	readonly result: AgentConfigurationResultV1;
 	readonly idempotency: {
@@ -372,7 +419,7 @@ export interface AgentConfigurationTransactionPortV1 {
 				readonly outcome: "ready";
 				readonly record: {
 					readonly schemaVersion: 1;
-					readonly configuration: AgentConfigurationRecordV2;
+					readonly configuration: AgentConfigurationRecord;
 					readonly authorizationRevision: string;
 				};
 		  }
@@ -386,6 +433,7 @@ export interface AgentConfigurationTransactionPortV1 {
 	commit(
 		plan: AgentConfigurationWritePlanV1,
 		attachments?: PendingSecretRecordAttachmentsV1,
+		defaultRelayKey?: AgentConfigurationRelayKeyAttachmentV1,
 	): Promise<
 		| {
 				readonly outcome: "committed";
@@ -475,6 +523,15 @@ export interface AgentConfigurationModelAdmissionPortV1 {
 	>;
 }
 
+export interface AgentConfigurationModelAdmissionPortV2 {
+	admitModels(input: {
+		readonly agentId: string;
+		readonly requestId: string;
+		readonly traceId: string;
+		readonly requested: AgentConfigurationModelInputV2;
+	}): Promise<AgentConfigurationModelV2 | null>;
+}
+
 export interface AgentConfigurationSecretAdmissionPortV1 {
 	admitSecrets(input: {
 		readonly schemaVersion: 1;
@@ -532,7 +589,9 @@ export interface AgentConfigurationUseCaseV1 {
 		actorContext: AgentConfigurationActorContextV1,
 	): Promise<AgentConfigurationResultV1>;
 	update(
-		command: UpdateAgentConfigurationCommandV2,
+		command:
+			| UpdateAgentConfigurationCommandV2
+			| UpdateAgentConfigurationCommandV3,
 		actorContext: AgentConfigurationActorContextV1,
 		attachment?: PendingSecretRecordAttachmentResolverV1,
 	): Promise<AgentConfigurationResultV1>;
@@ -568,11 +627,16 @@ export class AgentConfigurationError extends Error {
 }
 
 export interface AgentConfigurationUseCaseDependenciesV1 {
+	readonly defaultRelayKey?: Pick<
+		AgentDefaultRelayKeyDependenciesV1,
+		"candidates" | "encrypt" | "currentIdentity"
+	>;
 	readonly standardTemplateReleaseAuthorization?: StandardTemplateReleaseAuthorizationPortV1;
 	readonly transaction: AgentConfigurationTransactionPortV1;
 	readonly authorizationAdmission: AgentConfigurationAuthorizationAdmissionPortV1;
 	readonly imageAdmission: AgentConfigurationImageAdmissionPortV1;
 	readonly modelAdmission: AgentConfigurationModelAdmissionPortV1;
+	readonly keylessModelAdmission?: AgentConfigurationModelAdmissionPortV2;
 	readonly secretAdmission: AgentConfigurationSecretAdmissionPortV1;
 	readonly channelAdmission: AgentConfigurationChannelAdmissionPortV1;
 }
