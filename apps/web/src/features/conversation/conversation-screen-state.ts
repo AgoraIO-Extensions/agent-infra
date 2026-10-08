@@ -40,6 +40,7 @@ export function currentExecution(
 	const messages = history?.messages ?? [];
 	const statuses = new Map<string, ExecutionStatus>();
 	const persistedStatuses = new Set<string>();
+	const eventStatuses = new Map<string, ExecutionStatus>();
 	for (const message of messages) {
 		// A terminal user-message status describes delivery of that message, not
 		// the execution it started. Keep only its non-terminal state as a
@@ -53,8 +54,24 @@ export function currentExecution(
 	for (const event of events) {
 		if (event.type !== "execution.status") continue;
 		persistedStatuses.add(event.executionId);
+		eventStatuses.set(event.executionId, event.payload.status);
 		statuses.delete(event.executionId);
 		statuses.set(event.executionId, event.payload.status);
+	}
+	// The projection reads each assistant result from the stored execution. A
+	// terminal result is final even when its terminal event is missing, such as
+	// a Turn cancelled before the Runtime accepted it (#1524).
+	for (const message of messages) {
+		if (
+			message.role === "assistant" &&
+			message.executionId &&
+			isTerminal(message.status) &&
+			!isTerminal(eventStatuses.get(message.executionId))
+		) {
+			persistedStatuses.add(message.executionId);
+			statuses.delete(message.executionId);
+			statuses.set(message.executionId, message.status);
+		}
 	}
 	// A new receipt remains authoritative until its persisted execution status is
 	// observed. After a reload, reconstruct that pending state from the latest

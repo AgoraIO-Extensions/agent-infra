@@ -493,6 +493,109 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			h.runtime.close();
 		}
 	});
+	it("keeps reading Host pages past a terminal Platform status until the terminal event (#1524)", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			Object.assign(h.state, { executionStatus: "completed" });
+			h.fetcher.mockImplementation(async (_url, init) => {
+				const body = JSON.parse(init?.body as string);
+				return Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					executionId: "execution",
+					events:
+						body.afterCursor === "model-cursor" ? [terminal] : [modelFact],
+				});
+			});
+			const stream = h.runtime.runtimeHost
+				.events(h.events(reference))
+				[Symbol.asyncIterator]();
+			expect((await stream.next()).value).toEqual(modelFact);
+			Object.assign(h.state, { runtimeCursor: "model-cursor" });
+			expect((await stream.next()).value).toEqual(terminal);
+			expect((await stream.next()).done).toBe(true);
+		} finally {
+			h.runtime.close();
+		}
+	});
+
+	it("ends a drained stream for a terminal Platform status without spinning (#1524)", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			Object.assign(h.state, { executionStatus: "completed" });
+			h.fetcher.mockImplementation(async (_url, init) => {
+				const body = JSON.parse(init?.body as string);
+				return Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					executionId: "execution",
+					events: body.afterCursor === "model-cursor" ? [] : [modelFact],
+				});
+			});
+			const stream = h.runtime.runtimeHost
+				.events(h.events(reference))
+				[Symbol.asyncIterator]();
+			expect((await stream.next()).value).toEqual(modelFact);
+			Object.assign(h.state, { runtimeCursor: "model-cursor" });
+			// The Host has nothing more; Core decides whether the stream completed.
+			expect((await stream.next()).done).toBe(true);
+			expect(h.fetcher).toHaveBeenCalledTimes(2);
+		} finally {
+			h.runtime.close();
+		}
+	});
+
+	it.each([
+		["completed", true],
+		["running", false],
+	] as const)(
+		"treats a renewal refused for a %s Host execution accordingly (#1524)",
+		async (status, finished) => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				h.fetcher.mockImplementation(async (url) => {
+					const path = String(url);
+					if (path.endsWith("/authorizations/renew"))
+						return Response.json(
+							{
+								schemaVersion: 1,
+								code: "RUNTIME_GRANT_INVALID",
+								message: "Runtime authorization is unavailable",
+								retryable: false,
+								traceId: "trace",
+							},
+							{ status: 403 },
+						);
+					if (path.endsWith("/status"))
+						return Response.json({
+							schemaVersion: 3,
+							executionId: "execution",
+							hostSessionRef: "host",
+							outcome: "found",
+							status,
+						});
+					throw new Error(`Unexpected runtime request: ${path}`);
+				});
+				const renewal = h.runtime.runtimeHost.renewAuthorization?.(
+					h.events(reference),
+				);
+				if (finished) await expect(renewal).resolves.toBeUndefined();
+				else
+					await expect(renewal).rejects.toMatchObject({
+						code: "RUNTIME_GRANT_INVALID",
+					});
+				expect(
+					h.fetcher.mock.calls.map(([url]) => String(url).split("/v3/")[1]),
+				).toEqual(["authorizations/renew", "status"]);
+			} finally {
+				h.runtime.close();
+			}
+		},
+	);
+
 	it("renews only the original V4 Execution lease through the existing Key-free V3 control envelope", async () => {
 		const h = runtimeV4Harness();
 		try {
