@@ -42,6 +42,7 @@ const protection = vi.hoisted(() => ({
 	afterSecretStat: undefined as ((path: string) => void) | undefined,
 	secretReads: 0,
 	secretWrites: 0,
+	failRecordWrite: false,
 }));
 vi.mock("./standard-mcp-protection.js", () => ({
 	assertStandardMcpProcessProtection: protection.check,
@@ -74,6 +75,19 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 					return write(...args);
 				};
 			}
+			if (
+				path.includes("standard-mcp-oauth/records/") &&
+				path.endsWith(".json")
+			) {
+				const write = file.writeFile.bind(file);
+				file.writeFile = (...args: Parameters<typeof file.writeFile>) => {
+					if (protection.failRecordWrite) {
+						protection.failRecordWrite = false;
+						throw new Error("injected record write failure");
+					}
+					return write(...args);
+				};
+			}
 			return file;
 		},
 	};
@@ -85,6 +99,7 @@ afterEach(async () => {
 	protection.afterSecretStat = undefined;
 	protection.secretReads = 0;
 	protection.secretWrites = 0;
+	protection.failRecordWrite = false;
 });
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const access = "synthetic-oauth-access-material";
@@ -287,11 +302,12 @@ async function fixture() {
 	function signed(
 		command: "begin" | "confirm" | "status",
 		patch: Partial<RuntimeOAuthGrantClaimsV1> = {},
+		authorizationId = "authorization-a",
 	): RuntimeOAuthAuthorizedRequestV1 {
 		const request = {
 			schemaVersion: 1 as const,
 			...scope,
-			authorizationId: "authorization-a",
+			authorizationId,
 			reference,
 			command,
 			grant: {
@@ -429,6 +445,64 @@ it("uses real HTTPS/SDK/files for one exchange and keeps received credentials un
 			),
 		),
 	).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("recovers begin after the verifier was published before the transaction record", async () => {
+	const f = await fixture();
+	protection.failRecordWrite = true;
+	expect((await f.post("begin", f.signed("begin"))).status).toBe(503);
+	const recovered = await f.post("begin", f.signed("begin"));
+	expect(recovered.status).toBe(200);
+	expect(recovered.body.phase).toBe("awaiting_callback");
+	expect(recovered.body.authorizationUrl).toContain("state=");
+});
+
+it("preserves unknown after its transaction expiry", async () => {
+	const f = await fixture();
+	await f.callback();
+	f.setBehavior("lost");
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"unknown",
+	);
+	const recordName = (await readdir(join(f.root, "records"))).find(
+		(name) => name.endsWith(".json") && !name.startsWith("current-"),
+	);
+	expect(recordName).toBeDefined();
+	const recordPath = join(f.root, "records", recordName as string);
+	const record = JSON.parse(await readFile(recordPath, "utf8")) as {
+		expiresAt: number;
+	};
+	record.expiresAt = 1;
+	await writeFile(recordPath, JSON.stringify(record));
+	const status = await f.post("status", f.signed("status"));
+	expect(status.status).toBe(200);
+	expect(status.body.phase).toBe("unknown");
+});
+
+it("round-trips a contract-valid opaque authorization id", async () => {
+	const f = await fixture();
+	const authorizationId = "authorization/含义/01";
+	const begun = await f.post("begin", f.signed("begin", {}, authorizationId));
+	expect(begun.status).toBe(200);
+	const state = new URL(String(begun.body.authorizationUrl)).searchParams.get(
+		"state",
+	);
+	expect(
+		(
+			await f.post("callback", {
+				schemaVersion: 1,
+				state,
+				issuer: f.configuration.issuer,
+				code: "synthetic-authorization-code",
+			})
+		).status,
+	).toBe(200);
+	const status = await f.post(
+		"status",
+		f.signed("status", {}, authorizationId),
+	);
+	expect(status.status).toBe(200);
+	expect(status.body.authorizationId).toBe(authorizationId);
 });
 
 it.each([

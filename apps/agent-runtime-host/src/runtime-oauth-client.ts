@@ -77,7 +77,9 @@ function parseTransaction(text: string): Transaction {
 		!/^[a-f0-9]{64}$/.test(value.configurationFingerprint) ||
 		!RuntimeOAuthOriginalExecutionRefV1Schema.safeParse(value.reference)
 			.success ||
-		!/^[A-Za-z0-9._:-]{1,128}$/.test(value.authorizationId) ||
+		!RuntimeOAuthGrantClaimsV1Schema.shape.authorizationId.safeParse(
+			value.authorizationId,
+		).success ||
 		!RuntimePrincipalV1Schema.safeParse(value.principal).success ||
 		value.principal.kind !== "user" ||
 		!RuntimeOAuthScopeV1Schema.safeParse(value.scope).success ||
@@ -215,6 +217,23 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	async function read(name: string) {
 		return readProtectedStandardMcpBytes(records, name, 16_384);
 	}
+	async function readOptionalMaterial(
+		name: string,
+		maximum: number,
+		guard: () => void,
+	) {
+		try {
+			return await readProtectedStandardMcpBytes(
+				materials,
+				name,
+				maximum,
+				guard,
+			);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+			throw error;
+		}
+	}
 	async function load(key: string) {
 		const record = parseTransaction(await read(`${key}.json`));
 		current();
@@ -237,10 +256,10 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			schemaVersion: 1,
 			authorizationId: record.authorizationId,
 			phase:
-				record.expiresAt <= Date.now()
-					? "expired"
-					: record.phase === "exchange_started"
-						? "unknown"
+				record.phase === "exchange_started" || record.phase === "unknown"
+					? "unknown"
+					: record.expiresAt <= Date.now()
+						? "expired"
 						: record.phase,
 			expiresAt: record.expiresAt,
 		};
@@ -344,7 +363,24 @@ export async function createProtectedRuntimeOAuthClient(options: {
 						)
 							unavailable();
 						const state = randomBytes(32).toString("hex");
-						const verifier = randomBytes(32).toString("base64url");
+						let verifier = await readOptionalMaterial(
+							`${key}.verifier`,
+							256,
+							() => check(snapshot),
+						);
+						if (verifier !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(verifier))
+							unavailable();
+						if (verifier === undefined) {
+							verifier = randomBytes(32).toString("base64url");
+							await publishMaterial(
+								materials,
+								`${key}.verifier`,
+								verifier,
+								() => {
+									check(snapshot);
+								},
+							);
+						}
 						record = {
 							schemaVersion: 1,
 							authorizationId: claims.authorizationId,
@@ -361,14 +397,6 @@ export async function createProtectedRuntimeOAuthClient(options: {
 							expiresAt: Date.now() + 600_000,
 							requestDigest: claims.requestDigest,
 						};
-						await publishMaterial(
-							materials,
-							`${key}.verifier`,
-							verifier,
-							() => {
-								check(snapshot, record);
-							},
-						);
 						check(snapshot);
 						await writeRecord(records, `${key}.json`, record);
 						check(snapshot);
