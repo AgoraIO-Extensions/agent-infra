@@ -669,7 +669,9 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		expect(await driver.sideEffectCount()).toBe(1);
 		// Kill both process owners, expire only this test's owned lease, and recover
 		// through automatic discovery. The Execution and Host session remain the same while the lease fence advances.
-		await waitUntil(async () => ackCount > 0, "committed event acknowledged");
+		// The lone running event waits for the next cumulative ACK (#1525); the
+		// takeover below must confirm it before reading on.
+		expect(ackCount).toBe(0);
 		const [before] =
 			await sql`select delivery_fence::int as fence, host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
 		const priorRequests = requests.length;
