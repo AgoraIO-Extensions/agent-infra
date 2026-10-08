@@ -70,7 +70,7 @@ test("runtime publication, consumer grants and approval management share every P
 		"bitbucketServerConnectionCatalog",
 		"jiraServerConnectionCatalog",
 		"confluenceServerConnectionCatalog",
-		"datalegoV5ConnectionCatalog",
+		"datalegoV6ConnectionCatalog",
 		"jenkinsCiConnectionCatalog",
 		"jenkinsReleaseConnectionCatalog",
 		"manhattanConnectionCatalog",
@@ -87,7 +87,7 @@ test("runtime publication, consumer grants and approval management share every P
 	assert.ok(compatibilityImport);
 	assert.ok(
 		compatibilityImport.importClause.namedBindings.elements.some(
-			(binding) => binding.name.text === "datalegoV5ConnectionCatalog",
+			(binding) => binding.name.text === "datalegoV6ConnectionCatalog",
 		),
 		"DataLego publication and approval must receive the exact reviewed repair evidence",
 	);
@@ -257,6 +257,7 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 		"./datalego-oauth": "./src/datalego-oauth.ts",
 		"./datalego-v4": "./src/datalego-v4.ts",
 		"./datalego-v5": "./src/datalego-v5.ts",
+		"./datalego-v6": "./src/datalego-v6.ts",
 		"./jira-server": "./src/jira-server.ts",
 		"./manhattan": "./src/manhattan.ts",
 		"./rehoboam": "./src/rehoboam.ts",

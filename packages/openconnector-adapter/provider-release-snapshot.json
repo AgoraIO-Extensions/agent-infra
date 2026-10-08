@@ -257,30 +257,40 @@
 		},
 		{
 			"provider": "datalego",
-			"providerReleaseId": "datalego-connection-v5",
-			"executorDigest": "sha256:f8489f6315d4133969d20c080d8c455e8ae549d12ea9fe4f95123ba4cfe0c9f2",
+			"providerReleaseId": "datalego-connection-v6",
+			"executorDigest": "sha256:46bef6190afb945322091a3599764d3ffb63781bfda87dd54b3d2882d67cb857",
 			"sourceCommit": "connection-native",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:f3ee553551169ec0635c452418dc9d42f654802db9afe823e5d5984d50aa087e",
 			"deploymentDigest": "sha256:385e41bc2fb312e23bee5c94cd4a1b36d7f43fb0340d9fcc64c3befc02b9373f",
 			"actions": [
 				{
-					"id": "datalego.cancel_query@v5",
+					"id": "datalego.cancel_query@v6",
 					"name": "datalego.cancel_query",
 					"authorizationDigest": "sha256:839ca6a20567a9e960d33df1b0f9b9f3590cda1de394c914b339406d34ece68f"
 				},
 				{
-					"id": "datalego.get_current_user@v5",
+					"id": "datalego.describe_table@v6",
+					"name": "datalego.describe_table",
+					"authorizationDigest": "sha256:3a047e6d99e1961f3eaddc1789390b5feccc3c7e7aab397189410acff5f0ef2b"
+				},
+				{
+					"id": "datalego.get_current_user@v6",
 					"name": "datalego.get_current_user",
 					"authorizationDigest": "sha256:8ac9b9dbb27d2cc2e3627f0786ccd493a1acc73b96b5179fab2f9eed3f8353b7"
 				},
 				{
-					"id": "datalego.get_query_status@v5",
+					"id": "datalego.get_query_status@v6",
 					"name": "datalego.get_query_status",
 					"authorizationDigest": "sha256:efe9b920719862a92fe603906425f7993b205e3e5a9977488ecbe97a296fe3d0"
 				},
 				{
-					"id": "datalego.submit_query@v5",
+					"id": "datalego.list_tables@v6",
+					"name": "datalego.list_tables",
+					"authorizationDigest": "sha256:5c4d80386fa46065625e0cec771196b7dca233a33c7c3e0d6b18054a11700eaf"
+				},
+				{
+					"id": "datalego.submit_query@v6",
 					"name": "datalego.submit_query",
 					"authorizationDigest": "sha256:36fb9668fd9b0e1eb3aa66663257d773c209ea4ad0f776ac244889527f1b71e9"
 				}
@@ -288,12 +298,12 @@
 			"compatibility": [
 				{
 					"provider": "datalego",
-					"fromReleaseId": "datalego-connection-v4",
-					"toReleaseId": "datalego-connection-v5",
-					"fromExecutorDigest": "sha256:1586729da6ad1b0f26cc8a45d7d3fae4320ab50dd64fdf28df95219fbc0f1c3b",
-					"toExecutorDigest": "sha256:f8489f6315d4133969d20c080d8c455e8ae549d12ea9fe4f95123ba4cfe0c9f2",
-					"rationale": "v5 guards cancellation and preserves uncertain responses; the four action names, input schemas, effects, scopes, personal OAuth identity and fixed origins are unchanged.",
-					"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/pull/1228"
+					"fromReleaseId": "datalego-connection-v5",
+					"toReleaseId": "datalego-connection-v6",
+					"fromExecutorDigest": "sha256:f8489f6315d4133969d20c080d8c455e8ae549d12ea9fe4f95123ba4cfe0c9f2",
+					"toExecutorDigest": "sha256:46bef6190afb945322091a3599764d3ffb63781bfda87dd54b3d2882d67cb857",
+					"rationale": "v6 delegates the original four Actions and OAuth lifecycle to immutable v5 with unchanged scopes, identity and endpoints. The two new fixed Hive metadata job Actions are excluded from inherited approval and require explicit authorization.",
+					"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/1557"
 				}
 			]
 		},

@@ -12,12 +12,14 @@ import {
 	bitbucketAuthorizationCompatibility,
 	datalegoAuthorizationCompatibility,
 	datalegoV5ConnectionCatalog,
+	datalegoV6ConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/authorization-compatibility";
 import { datalegoV4ConnectionCatalog } from "@agent-infra/openconnector-adapter/datalego-v4";
 import {
 	DataLegoV5Adapter,
 	datalegoV5ConnectionCatalog as immutableDatalegoV5,
 } from "@agent-infra/openconnector-adapter/datalego-v5";
+import { DataLegoV6Adapter } from "@agent-infra/openconnector-adapter/datalego-v6";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
 import { PostgresConnectionAccessRequestRepository } from "./access-request-repository";
@@ -36,6 +38,245 @@ if (process.env.CI && !databaseUrl)
 	throw new Error("Upgrade test database required");
 
 describe("compatible approval upgrade", () => {
+	(databaseUrl ? it : it.skip)(
+		"v5 to v6 preserves approved and selected Actions without granting metadata jobs",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const sql = postgres(databaseUrl);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 23),
+			);
+			const suffix = randomUUID();
+			const principalId = `metadata-owner-${suffix}`;
+			const consumerId = `metadata-consumer-${suffix}`;
+			const instanceId = `metadata-instance-${suffix}`;
+			let connectionId: string | undefined;
+			let metadataConnectionId: string | undefined;
+			const metadataPrincipalId = `metadata-approved-${suffix}`;
+			let submissions = 0;
+			try {
+				await repository.publishProviderCatalog(immutableDatalegoV5);
+				await sql`INSERT INTO connection_principals (id,display_name) VALUES (${principalId},'Metadata owner')`;
+				connectionId = (
+					await repository.storeProviderCredential({
+						principalId,
+						providerId: "datalego",
+						providerReleaseId: immutableDatalegoV5.providerReleaseId,
+						externalAccount: "alice@example.invalid",
+						displayName: "Alice",
+						accessToken: "metadata-fixture",
+						grantedScopes: ["datalego.query"],
+						accessRequestId: await seedApprovedConnectPermit(sql, {
+							principalId,
+							providerReleaseId: immutableDatalegoV5.providerReleaseId,
+							scopes: ["datalego.query"],
+						}),
+					})
+				).connectionId;
+				await repository.publishConsumerDeclaration({
+					consumer: { id: consumerId, name: "Metadata consumer" },
+					providerReleaseId: immutableDatalegoV5.providerReleaseId,
+					actionVersionIds: immutableDatalegoV5.actions.map(
+						(action) => action.id,
+					),
+				});
+				await sql`INSERT INTO connection_consumer_instances (id,consumer_id,kind,auth_subject,status,principal_id)
+					VALUES (${instanceId},${consumerId},'DEVICE',${suffix},'ACTIVE',${principalId})`;
+				const originalPreview =
+					await repository.createCurrentConsumerAuthorizationPreview({
+						principalId,
+						consumerId,
+						connectionId,
+						actionVersionIds: ["datalego.get_current_user@v5"],
+					});
+				await repository.confirmCurrentConsumerAuthorization({
+					principalId,
+					previewId: originalPreview.previewId,
+					confirmationToken: originalPreview.confirmationToken,
+					idempotencyKey: randomUUID(),
+				});
+				const adapter = new DataLegoV6Adapter(
+					async (url, init) => {
+						if (init?.method === "POST") {
+							submissions++;
+							return Response.json({ id: "metadata-job", status: "waiting" });
+						}
+						if (String(url).endsWith("/api/v2/userInfo"))
+							return Response.json({ email: "alice@example.invalid" });
+						return Response.json(
+							{ message: "record not found" },
+							{ status: 400 },
+						);
+					},
+					{
+						clientId: "fixture",
+						clientSecret: "fixture",
+						redirectUri:
+							"https://connection.example/oauth/callback?provider=datalego",
+					},
+				);
+				const service = new ConnectionApplicationService(
+					repository,
+					{ execute: (input) => adapter.execute(input) },
+					undefined,
+					{ datalego: adapter },
+					{ datalego: adapter },
+				);
+				await repository.publishProviderCatalog(datalegoV6ConnectionCatalog);
+				await repository.publishConsumerDeclaration({
+					consumer: { id: consumerId, name: "Metadata consumer" },
+					providerReleaseId: datalegoV6ConnectionCatalog.providerReleaseId,
+					actionVersionIds: datalegoV6ConnectionCatalog.actions.map(
+						(action) => action.id,
+					),
+				});
+				await expect(
+					service.upgradeProviderConnection("foreign-principal", connectionId),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await expect(
+					service.upgradeProviderConnection(principalId, connectionId),
+				).resolves.toEqual({ connectionId });
+				const [access] =
+					await sql`SELECT capability_profile_id FROM connection_effective_access_authorizations WHERE connection_id=${connectionId}`;
+				const members = await sql<
+					{ action_version_id: string }[]
+				>`SELECT action_version_id FROM connection_capability_profile_actions WHERE capability_profile_id=${access?.capability_profile_id} ORDER BY action_version_id`;
+				expect(members.map((row) => row.action_version_id)).toEqual(
+					immutableDatalegoV5.actions
+						.map((action) => action.id.replace("@v5", "@v6"))
+						.sort(),
+				);
+				await expect(
+					repository.createCurrentConsumerAuthorizationPreview({
+						principalId,
+						consumerId,
+						connectionId,
+						actionVersionIds: ["datalego.list_tables@v6"],
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				const preview =
+					await repository.createCurrentConsumerAuthorizationPreview({
+						principalId,
+						consumerId,
+						connectionId,
+						actionVersionIds: ["datalego.get_current_user@v6"],
+					});
+				await repository.confirmCurrentConsumerAuthorization({
+					principalId,
+					previewId: preview.previewId,
+					confirmationToken: preview.confirmationToken,
+					idempotencyKey: randomUUID(),
+				});
+				const identity = { principalId, consumerId, instanceId };
+				await expect(
+					service.invokeDirectForIdentity(
+						identity,
+						"datalego.get_current_user",
+						{},
+					),
+				).resolves.toMatchObject({
+					status: "SUCCEEDED",
+					result: { email: "alice@example.invalid" },
+				});
+				await expect(
+					service.invokeDirectForIdentity(identity, "datalego.list_tables", {
+						database: "analytics",
+						pattern: "event*",
+					}),
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				const granted = await sql<
+					{ action_version_id: string }[]
+				>`SELECT member.action_version_id FROM connection_authorization_roots root JOIN connection_grant_actions member ON member.grant_id=root.current_grant_id WHERE root.consumer_id=${consumerId} AND root.principal_id=${principalId}`;
+				expect(granted.map((row) => row.action_version_id)).toEqual([
+					"datalego.get_current_user@v6",
+				]);
+				expect(submissions).toBe(0);
+
+				// New metadata jobs require their own approved profile and explicit consent.
+				await sql`INSERT INTO connection_principals (id,display_name) VALUES (${metadataPrincipalId},'Explicit metadata owner')`;
+				metadataConnectionId = (
+					await repository.storeProviderCredential({
+						principalId: metadataPrincipalId,
+						providerId: "datalego",
+						providerReleaseId: datalegoV6ConnectionCatalog.providerReleaseId,
+						externalAccount: "alice@example.invalid",
+						displayName: "Explicit metadata account",
+						accessToken: "explicit-metadata-fixture",
+						grantedScopes: ["datalego.query"],
+						accessRequestId: await seedApprovedConnectPermit(sql, {
+							principalId: metadataPrincipalId,
+							providerReleaseId: datalegoV6ConnectionCatalog.providerReleaseId,
+							scopes: ["datalego.query"],
+							actionVersionIds: ["datalego.list_tables@v6"],
+						}),
+					})
+				).connectionId;
+				const metadataInstanceId = `explicit-metadata-${suffix}`;
+				await sql`INSERT INTO connection_consumer_instances (id,consumer_id,kind,auth_subject,status,principal_id)
+					VALUES (${metadataInstanceId},${consumerId},'DEVICE',${metadataInstanceId},'ACTIVE',${metadataPrincipalId})`;
+				const metadataPreview =
+					await repository.createCurrentConsumerAuthorizationPreview({
+						principalId: metadataPrincipalId,
+						consumerId,
+						connectionId: metadataConnectionId,
+						actionVersionIds: ["datalego.list_tables@v6"],
+					});
+				await repository.confirmCurrentConsumerAuthorization({
+					principalId: metadataPrincipalId,
+					previewId: metadataPreview.previewId,
+					confirmationToken: metadataPreview.confirmationToken,
+					idempotencyKey: randomUUID(),
+				});
+				const input = {
+					database: "analytics",
+					pattern: "event*",
+					idempotencyKey: randomUUID(),
+				};
+				const metadataIdentity = {
+					principalId: metadataPrincipalId,
+					consumerId,
+					instanceId: metadataInstanceId,
+				};
+				await expect(
+					service.executeDirectActionForIdentity(
+						metadataIdentity,
+						"datalego.list_tables",
+						input,
+					),
+				).resolves.toMatchObject({
+					status: "SUCCEEDED",
+					result: { id: "metadata-job" },
+				});
+				await expect(
+					service.executeDirectActionForIdentity(
+						metadataIdentity,
+						"datalego.list_tables",
+						input,
+					),
+				).resolves.toMatchObject({
+					status: "SUCCEEDED",
+					result: { id: "metadata-job" },
+				});
+				expect(submissions).toBe(1);
+			} finally {
+				if (metadataConnectionId)
+					await repository.disconnectConnection({
+						principalId: metadataPrincipalId,
+						connectionId: metadataConnectionId,
+					});
+				if (connectionId)
+					await repository.disconnectConnection({ principalId, connectionId });
+				await repository.close();
+				await sql.end();
+			}
+		},
+		30_000,
+	);
 	for (const recovery of ["renewal", "reconnect"] as const) {
 		(databaseUrl ? it : it.skip)(
 			`${recovery} recovers obsolete selections but propagates invalid authorization lookups`,

@@ -34,6 +34,7 @@ import {
 import {
 	bitbucketServerConnectionCatalog,
 	datalegoV5ConnectionCatalog,
+	datalegoV6ConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/authorization-compatibility";
 import {
 	ConfluenceServerAdapter,
@@ -48,6 +49,7 @@ import {
 	datalegoV4ConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/datalego-v4";
 import { DataLegoV5Adapter } from "@agent-infra/openconnector-adapter/datalego-v5";
+import { DataLegoV6Adapter } from "@agent-infra/openconnector-adapter/datalego-v6";
 import {
 	JiraServerAdapter,
 	JiraServerOAuthTokenProvider,
@@ -340,7 +342,15 @@ export async function createConnectionRuntime(
 		}),
 		config.datalegoOAuth,
 	);
-	const datalegoOAuth = new DataLegoV5Adapter(
+	const datalegoOAuthV5 = new DataLegoV5Adapter(
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("datalego", fetch),
+		}),
+		config.datalegoOAuth,
+	);
+	const datalegoOAuth = new DataLegoV6Adapter(
 		createGuardedFetch({
 			allowPrivateNetwork: false,
 			maxRedirects: 0,
@@ -358,7 +368,8 @@ export async function createConnectionRuntime(
 		[confluenceServerConnectionCatalog.providerReleaseId]: confluence,
 		[datalegoConnectionCatalog.providerReleaseId]: datalego,
 		[datalegoV4ConnectionCatalog.providerReleaseId]: datalegoOAuthV4,
-		[datalegoV5ConnectionCatalog.providerReleaseId]: datalegoOAuth,
+		[datalegoV5ConnectionCatalog.providerReleaseId]: datalegoOAuthV5,
+		[datalegoV6ConnectionCatalog.providerReleaseId]: datalegoOAuth,
 		[jenkinsCiConnectionCatalog.providerReleaseId]: jenkinsCi,
 		[jenkinsReleaseConnectionCatalog.providerReleaseId]: jenkins,
 		[manhattanConnectionCatalog.providerReleaseId]: manhattan,

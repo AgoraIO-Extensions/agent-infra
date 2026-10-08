@@ -2,6 +2,15 @@
 	"version": 1,
 	"transitions": [
 		{
+			"provider": "datalego",
+			"fromReleaseId": "datalego-connection-v5",
+			"toReleaseId": "datalego-connection-v6",
+			"fromExecutorDigest": "sha256:f8489f6315d4133969d20c080d8c455e8ae549d12ea9fe4f95123ba4cfe0c9f2",
+			"toExecutorDigest": "sha256:46bef6190afb945322091a3599764d3ffb63781bfda87dd54b3d2882d67cb857",
+			"strategy": "COMPATIBLE_REPAIR",
+			"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/1557"
+		},
+		{
 			"provider": "rehoboam",
 			"fromReleaseId": "rehoboam-connection-v8",
 			"toReleaseId": "rehoboam-connection-v9",

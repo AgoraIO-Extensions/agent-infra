@@ -254,6 +254,16 @@ CAS 和失效处理，不回退 Grafana、机器人身份或密码；业务 WRIT
 机器 client secret 仅从部署 Secret 注入。正式上线验收仍须完成真实授权码、个人身份与有界 READ，
 代码测试不替代真实 Provider 验收。
 
+DataLego v6 在现有个人 OAuth SQL HTTP 链路上新增 Hive `list_tables`、`describe_table`。
+两项能力只构造受控 `SHOW TABLES IN` 和 `DESCRIBE`，数据库/表名限制为至多 128 个 ASCII
+标识符字符，列表示例模式只允许精确表名或末尾一个 `*` 的前缀，禁止任意 SQL、引擎、URL、
+Header、下载和额外参数。由于会创建外部异步任务，两项 Action 的 effect 均为 WRITE，必须
+通过现有审批、Consumer 明确确认及幂等/Attempt 门禁；返回任务 ID，结果通过已有
+`get_query_status` READ 获取，不在 Adapter 内轮询或重放提交。
+旧四个动作和 OAuth 生命周期直接委托不可变 v5 实现；v5→v6 的兼容证据只映射原已批准
+Action 子集，不批准或自动授予新增动作。此能力提供引擎表名、字段类型和分区信息，不能
+宣称覆盖目录全文搜索、中文治理说明、属主标签、ClickHouse 或结果下载。
+
 DataLego 取消防护以不可变 `datalego-connection-v5` 和 `@v5` 发布，保留个人 OAuth、
 四个 Action 的名称、effect、scope 与固定 origins；历史 v4 executor 保持不变。
 取消前先读取原任务状态，已终结的 `success/error/cancel/forbid` 返回

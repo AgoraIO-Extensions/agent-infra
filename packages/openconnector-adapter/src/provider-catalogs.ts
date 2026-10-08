@@ -1,7 +1,7 @@
 import upgradePlans from "../provider-upgrade-plans.json" with { type: "json" };
 import {
 	bitbucketServerConnectionCatalog,
-	datalegoV5ConnectionCatalog,
+	datalegoV6ConnectionCatalog,
 } from "./authorization-compatibility.ts";
 import { confluenceServerConnectionCatalog } from "./confluence-server.ts";
 import {
@@ -18,7 +18,7 @@ const catalogs = [
 	bitbucketServerConnectionCatalog,
 	jiraServerConnectionCatalog,
 	confluenceServerConnectionCatalog,
-	datalegoV5ConnectionCatalog,
+	datalegoV6ConnectionCatalog,
 	jenkinsCiConnectionCatalog,
 	jenkinsReleaseConnectionCatalog,
 	manhattanConnectionCatalog,
