@@ -131,8 +131,8 @@ afterAll(async () => {
 describe("Skill Version PostgreSQL integrity", () => {
 	it("upgrades the populated 0040 checkpoint without rewriting versions or migration history", async () => {
 		expect(upgradeRowsAfter).toEqual(upgradeRowsBefore);
-		expect(historyAfter.slice(0, -1)).toEqual(historyBefore);
-		expect(historyAfter).toHaveLength(historyBefore.length + 1);
+		expect(historyAfter.slice(0, -2)).toEqual(historyBefore);
+		expect(historyAfter).toHaveLength(historyBefore.length + 2);
 		await seed();
 		await rejects(
 			client`update platform.skill_hub_versions set package_object_version = 'replacement-object'`,

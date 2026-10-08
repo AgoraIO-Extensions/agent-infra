@@ -82,8 +82,11 @@ it.each([30, 35, 39])(
 			await sql`insert into platform.agent_applications(id,agent_id,applicant_id,name,description,status,management_revision,approval_revision,desired_state,workload_revision,fence,trace_id,request_id,submitted_at) values('legacy-application','agent_01','legacy-owner','Legacy Agent','Preserved approved Web Agent','stopped',2,1,'stopped',1,1,'legacy-trace','legacy-request','2026-01-01T00:00:00Z')`;
 			await sql`insert into platform.agent_owners(agent_id,owner_id,created_at) values('agent_01','legacy-owner','2026-01-01T00:00:00Z')`;
 			await sql`insert into platform.audit_events(id,agent_id,actor_type,actor_id,action,target_type,target_id,outcome,trace_id,request_id) values('legacy-audit','agent_01','user','legacy-owner','agent.application.approved','agent_application','legacy-application','succeeded','legacy-trace','legacy-request')`;
-			const managementBefore =
-				await sql`select * from platform.agent_applications`;
+			const managementBefore = await sql`
+				select id,agent_id,applicant_id,name,description,status,trace_id,request_id,
+					submitted_at,management_revision,approval_revision,decision_reason,
+					service_availability,desired_state,workload_revision,fence,failure_code
+				from platform.agent_applications`;
 			const ownersBefore = await sql`select * from platform.agent_owners`;
 			const auditBefore = await sql`select * from platform.audit_events`;
 			const historyBefore =
