@@ -25,6 +25,7 @@ import {
 	skillHubVisibilityV1,
 } from "@agent-infra/platform-core";
 import { and, eq, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -39,6 +40,7 @@ type Transaction = Parameters<
 >[0];
 type Action = "register" | "review" | "revoke";
 type VersionRow = typeof skillHubVersions.$inferSelect;
+const skillParent = alias(skillHubSkills, "skill_parent");
 
 function decode(row: VersionRow, name: string): SkillHubVersionV1 {
 	try {
@@ -199,14 +201,11 @@ export class PostgresSkillHubLifecycleV1 {
 	async #version(transaction: Transaction, id: string) {
 		// Keep parent -> version lock order identical to registration, including replay.
 		const [parent] = await transaction
-			.select({ id: skillHubSkills.id, name: skillHubSkills.name })
+			.select({ id: skillParent.id, name: skillParent.name })
 			.from(skillHubVersions)
-			.innerJoin(
-				skillHubSkills,
-				eq(skillHubSkills.id, skillHubVersions.skillId),
-			)
+			.innerJoin(skillParent, eq(skillParent.id, skillHubVersions.skillId))
 			.where(eq(skillHubVersions.id, id))
-			.for("update", { of: skillHubSkills });
+			.for("update", { of: skillParent });
 		if (!parent) throw new SkillHubOperationErrorV1("not_found");
 		const [row] = await transaction
 			.select()

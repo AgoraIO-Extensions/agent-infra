@@ -499,6 +499,7 @@ describe("Skill Hub PostgreSQL lifecycle", () => {
 			).rejects.toMatchObject({
 				code: mode === "disabled" ? "forbidden" : "unavailable",
 			});
+			expect(calls).toBe(2);
 			expect(await counts()).toEqual({
 				skills: 0,
 				versions: 0,
