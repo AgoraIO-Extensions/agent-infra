@@ -60,6 +60,12 @@ const agentBody = {
 	defaultRelayKey: "issued-token-default-key",
 	modelConfiguration: agentModelConfiguration,
 };
+const applicationCredentialCommand = {
+	operation: "issue" as const,
+	recipient: { principalType: "application" as const, principalId: "app-1" },
+	scopes: ["agent:create", "agent:manage", "agent:use", "agent:read"],
+	expiresAt: null,
+};
 const accounts: LdapAccount[] = ["manager", "admin", "recipient"].map(
 	(userId) => ({
 		uid: `ldap-${userId}`,
@@ -222,12 +228,7 @@ function post(
 	});
 }
 it("uses formal grant and issuer HTTP, delivers to the bound process only once, and never returns material to manager", async () => {
-	const command = {
-		operation: "issue",
-		recipient: { principalType: "application", principalId: "app-1" },
-		scopes: ["agent:create", "agent:manage", "agent:use", "agent:read"],
-		expiresAt: null,
-	};
+	const command = applicationCredentialCommand;
 	const path = "/api/v2/applications/app-1/credentials";
 	expect((await post(path, command)).status).toBe(403);
 	expect(
@@ -289,6 +290,22 @@ it("uses formal grant and issuer HTTP, delivers to the bound process only once, 
 });
 
 it("uses the actually delivered application Token to create two Agents and read their state", async () => {
+	if (!materials[0]) {
+		const grant = await post(
+			"/api/v2/applications/app-1/material-grant",
+			applicationCredentialCommand.recipient,
+			"admin",
+		);
+		expect([200, 201]).toContain(grant.status);
+		expect(
+			(
+				await post(
+					"/api/v2/applications/app-1/credentials",
+					applicationCredentialCommand,
+				)
+			).status,
+		).toBe(201);
+	}
 	const issued = materials[0];
 	if (!issued) throw new Error("Issuer did not deliver an application Token");
 	const create = async (key: string, name: string) => {
@@ -329,6 +346,20 @@ it("uses the actually delivered application Token to create two Agents and read 
 	).toEqual([
 		{ principal_type: "application", principal_id: "app-1", count: 4 },
 	]);
+	expect(
+		await sql`select owner_id from platform.agent_owners order by agent_id`,
+	).toEqual([{ owner_id: "manager" }, { owner_id: "manager" }]);
+	expect(
+		await sql`select purpose,count(*)::int as count from platform.relay_key_versions where purpose='agent-default' group by purpose`,
+	).toEqual([{ purpose: "agent-default", count: 2 }]);
+	expect(
+		JSON.stringify(
+			await sql`select ciphertext from platform.relay_key_versions`,
+		),
+	).not.toContain(agentBody.defaultRelayKey);
+	expect(
+		await sql`select action,actor_type,actor_id from platform.audit_events where action in ('api.agent.create.accepted','relay_key.agent_default.replace')`,
+	).toHaveLength(4);
 	for (const agentId of [first.agentId, second.agentId]) {
 		const state = await fetch(`${baseUrl}/api/v2/agents/${agentId}/state`, {
 			headers: { Authorization: `Bearer ${issued}` },
@@ -339,11 +370,57 @@ it("uses the actually delivered application Token to create two Agents and read 
 			status: "creating",
 			revision: 1,
 		});
+		const lifecycle = await fetch(
+			`${baseUrl}/api/v2/agents/${agentId}/commands`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${issued}`,
+					"Idempotency-Key": `creating-start-${agentId}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1, command: "start" }),
+			},
+		);
+		expect(lifecycle.status).toBe(409);
 	}
+	expect(
+		await sql`select count(*)::int as count from platform.outbox_items`,
+	).toEqual([{ count: 2 }]);
+	const [oldCredential] =
+		await sql`select id from platform.platform_api_credentials where revoked_at is null`;
+	const rotated = await post(
+		"/api/v2/applications/app-1/credentials",
+		{
+			...applicationCredentialCommand,
+			operation: "rotate",
+			credentialId: oldCredential?.id,
+		},
+		"manager",
+		"rotate-issued-token",
+	);
+	expect(rotated.status).toBe(201);
+	const replacement = materials[1];
+	if (!replacement)
+		throw new Error("Rotation did not deliver replacement Token");
+	expect(
+		(
+			await fetch(`${baseUrl}/api/v2/agents/${first.agentId}/state`, {
+				headers: { Authorization: `Bearer ${issued}` },
+			})
+		).status,
+	).toBe(401);
+	expect(
+		(
+			await fetch(`${baseUrl}/api/v2/agents/${first.agentId}/state`, {
+				headers: { Authorization: `Bearer ${replacement}` },
+			})
+		).status,
+	).toBe(200);
 	const replay = await fetch(`${baseUrl}/api/v2/agents`, {
 		method: "POST",
 		headers: {
-			Authorization: `Bearer ${issued}`,
+			Authorization: `Bearer ${replacement}`,
 			"Idempotency-Key": "issued-agent-one",
 			"Content-Type": "application/json",
 		},
