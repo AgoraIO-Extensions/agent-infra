@@ -129,6 +129,19 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...input,
 		currentIdentity: identityScope.currentIdentity,
 	});
+	// Capture the same startup policy as browser admission; only the principal varies per request.
+	const apiAdmissionInput = {
+		imageRepository: input.imageRepository,
+		registry: {
+			...input.registry,
+			policy: {
+				authorize: input.registry.policy.authorize.bind(input.registry.policy),
+			},
+		},
+		templates: structuredClone(input.templates),
+		modelCatalog: { ...input.modelCatalog },
+		channelPolicy: structuredClone(input.channelPolicy),
+	};
 	const deploymentConfiguration =
 		createDeploymentConfigurationProjectionV2(input);
 	const connectionCapability = createConnectionCapability(
@@ -141,12 +154,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 	const validatePersonalRelayKey = input.personalRelayKeyValidation
 		? createPersonalRelayKeyValidatorV1(input.personalRelayKeyValidation)
 		: undefined;
-	const relayKeyEncryptor = validatePersonalRelayKey
-		? createRelayKeyEncryptorV1({ encryptionKeys: input.encryptionKeys })
-		: undefined;
-	const apiRelayKeyEncryptor = apiCandidates
-		? createRelayKeyEncryptorV1({ encryptionKeys: input.encryptionKeys })
-		: undefined;
+	const relayKeyEncryptor =
+		validatePersonalRelayKey || apiCandidates
+			? createRelayKeyEncryptorV1({ encryptionKeys: input.encryptionKeys })
+			: undefined;
 	const personalRelayKeys: PlatformApiAssemblyInput["personalRelayKeys"] =
 		validatePersonalRelayKey && relayKeyEncryptor
 			? {
@@ -179,19 +190,19 @@ export function createProductionPlatformApiAssemblyInputV1(
 			loadAuthorityContext: input.loadAuthorityContext,
 			admissions: ({ principal, authorizationAdmission }) => ({
 				...createDeploymentAdmissionsV1({
-					...input,
+					...apiAdmissionInput,
 					currentApiPrincipal: async () => principal,
 				}),
 				authorizationAdmission,
 				...(keylessModelAdmission ? { keylessModelAdmission } : {}),
 			}),
 			prepareSecrets: secrets.prepareAgentApiSecrets,
-			...(apiRelayKeyEncryptor && apiCandidates
+			...(relayKeyEncryptor && apiCandidates
 				? {
 						defaultRelayKey: {
 							candidates: apiCandidates,
 							encrypt: (binding, plaintext) =>
-								apiRelayKeyEncryptor.encrypt({ ...binding, plaintext }),
+								relayKeyEncryptor.encrypt({ ...binding, plaintext }),
 						},
 					}
 				: {}),

@@ -264,6 +264,7 @@ export function createDeploymentAdmissionsV1(
 				actor?.schemaVersion !== 1 ||
 				actor.accountStatus !== "active" ||
 				!actor.userId ||
+				/^api-subject-[a-f0-9]{64}$/.test(actor.userId) ||
 				!actor.authorizationRevision
 			)
 				throw new Error();

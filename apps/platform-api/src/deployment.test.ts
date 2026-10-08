@@ -1201,6 +1201,22 @@ describe("production API creation with user and application Tokens", () => {
 			{ agents: 2, grants: 4, secrets: 2, keys: 2, outbox: 2 },
 		]);
 	});
+	it("retains startup admission policy after caller aliases are modified", async () => {
+		Object.assign(fixture.input, {
+			imageRepository: "registry.example.test/other/repository",
+			templates: [],
+			registry: {
+				...fixture.input.registry,
+				policy: { authorize: async () => ({ status: "rejected" }) },
+			},
+			channelPolicy: { revision: "mutated", bindings: [] },
+		});
+		expect((await create()).status).toBe(201);
+		expect(fixture.authorize).toHaveBeenCalledOnce();
+		expect(await effects()).toEqual([
+			{ agents: 1, grants: 2, secrets: 1, keys: 1, outbox: 1 },
+		]);
+	});
 	it("denies creation when no deployment principal is explicitly allowed", async () => {
 		await createPlatformApiShutdown(running)();
 		fixture.input = { ...fixture.input, agentApiCreation: undefined };
