@@ -19,6 +19,10 @@
           "pattern": "^[a-f0-9]{64}$",
           "type": "string"
         },
+        "confirmationRevision": {
+          "minLength": 1,
+          "type": "string"
+        },
         "grant": {
           "additionalProperties": false,
           "properties": {
@@ -136,6 +140,7 @@
         "oauthConfiguration",
         "schemaVersion",
         "authorizationId",
+        "confirmationRevision",
         "reference",
         "grant",
         "command"
@@ -337,6 +342,10 @@
           "pattern": "^[a-f0-9]{64}$",
           "type": "string"
         },
+        "confirmationRevision": {
+          "minLength": 1,
+          "type": "string"
+        },
         "grant": {
           "additionalProperties": false,
           "properties": {
@@ -454,6 +463,7 @@
         "oauthConfiguration",
         "schemaVersion",
         "authorizationId",
+        "confirmationRevision",
         "reference",
         "grant",
         "command"
@@ -485,6 +495,10 @@
         },
         "configFingerprint": {
           "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "confirmationRevision": {
+          "minLength": 1,
           "type": "string"
         },
         "expiresAt": {
@@ -638,6 +652,7 @@
         "principal",
         "command",
         "authorizationId",
+        "confirmationRevision",
         "grantId",
         "issuedAt",
         "expiresAt",
@@ -801,6 +816,10 @@
           "pattern": "^[a-f0-9]{64}$",
           "type": "string"
         },
+        "confirmationRevision": {
+          "minLength": 1,
+          "type": "string"
+        },
         "grant": {
           "additionalProperties": false,
           "properties": {
@@ -918,6 +937,7 @@
         "oauthConfiguration",
         "schemaVersion",
         "authorizationId",
+        "confirmationRevision",
         "reference",
         "grant",
         "command"

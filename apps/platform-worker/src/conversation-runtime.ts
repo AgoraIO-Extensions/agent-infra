@@ -1,7 +1,6 @@
 import type { KeyObject } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
-
 import type {
 	RuntimeBusinessCommandV2,
 	RuntimeBusinessRequestV4,
@@ -13,6 +12,9 @@ import type {
 import {
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventReadRequestV4Schema,
+	type RuntimeOAuthAuthorizedRequestV1,
+	RuntimeOAuthAuthorizedRequestV1Schema,
+	RuntimeOAuthConfigurationV1Schema,
 } from "@agent-infra/contracts/runtime";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import {
@@ -36,7 +38,6 @@ import {
 	type WorkloadReconciliationStateV1,
 } from "@agent-infra/platform-core";
 import type { RelayKeyWorkerDecryptorV1 } from "@agent-infra/secret-store/worker";
-
 import { createWorkerRuntimeGrantSignerV2 } from "./runtime-grant-signer.js";
 import { createWorkerRuntimeGrantSignerV4 } from "./runtime-grant-signer-v4.js";
 import {
@@ -44,6 +45,11 @@ import {
 	createWorkerRuntimeHostClientV4,
 	type WorkerExecutionKeyReaderV4,
 } from "./runtime-host-client.js";
+import {
+	installationUnavailable,
+	sendRuntimeOAuthRequest,
+	type WorkerConnectionInstallationOptions,
+} from "./runtime-oauth-request.js";
 
 export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1 & {
 	/** Immutable Store pin; absent on historical, Key-free control recovery. */
@@ -75,6 +81,7 @@ export interface ConversationLegacyControlStoreV2 {
 }
 
 export interface ConversationRuntimeOptionsV2 {
+	readonly connectionInstallation?: WorkerConnectionInstallationOptions;
 	readonly channelAuthorizationCurrent?: (
 		record: TaskRuntimeAuthorizationRecordV1,
 		signal: AbortSignal,
@@ -201,6 +208,12 @@ export function createConversationRuntimeV2(
 		: controller.signal;
 	const signRequest = createWorkerRuntimeGrantSignerV2(options.signing);
 	const signV4 = createWorkerRuntimeGrantSignerV4(options.signing);
+	const installation = options.connectionInstallation;
+	const installationAuthorize = installation?.authorize;
+	const installationSigning = { ...options.signing };
+	const installationConfiguration = installation
+		? RuntimeOAuthConfigurationV1Schema.safeParse(installation.configuration)
+		: undefined;
 	const combined = (signal?: AbortSignal) =>
 		signal ? AbortSignal.any([lifetime, signal]) : lifetime;
 
@@ -1122,7 +1135,240 @@ export function createConversationRuntimeV2(
 			}
 		},
 	};
+	const connectionInstallation = {
+		async request(
+			input: {
+				execution: ConversationRuntimeEventRequestV1;
+				authorizationId: string;
+				command: "begin" | "confirm" | "status";
+			},
+			signal?: AbortSignal,
+		) {
+			try {
+				if (
+					!installation ||
+					typeof installationAuthorize !== "function" ||
+					!installationConfiguration?.success
+				)
+					installationUnavailable();
+				const configuration = installationConfiguration.data;
+				if (
+					typeof input.authorizationId !== "string" ||
+					!input.authorizationId ||
+					!(["begin", "confirm", "status"] as const).includes(input.command)
+				)
+					installationUnavailable();
+				const { runtimeGrant, ...execution } = input.execution;
+				const snapshot = {
+					...structuredClone(input),
+					execution: { ...structuredClone(execution), runtimeGrant },
+				};
+				const active = AbortSignal.any([
+					combined(signal),
+					AbortSignal.timeout(10_000),
+				]);
+				if (
+					Object.keys(input).sort().join(",") !==
+					"authorizationId,command,execution"
+				)
+					installationUnavailable();
+				const prepared = await prepare(
+					snapshot.execution,
+					"session.status",
+					active,
+				);
+				prepared.target = structuredClone(prepared.target);
+				const context = prepared.context;
+				const sandbox = prepared.state.sandboxResource;
+				const pods = sandbox?.observation?.resources.filter(
+					(resource) => resource.kind === "Pod",
+				);
+				const pod = pods?.[0];
+				const target = prepared.target.connectionConsumer;
+				if (
+					context.kind !== "business" ||
+					context.principal.kind !== "user" ||
+					context.claim.metadataRecovery ||
+					prepared.authority.purpose !== "business" ||
+					prepared.state.executionStatus !== "processing" ||
+					prepared.state.stopPending ||
+					prepared.state.generationIsolation ||
+					prepared.state.runtimeSubmitProtocol !== "v4" ||
+					!prepared.state.hostSessionRef ||
+					sandbox?.status !== "ready" ||
+					sandbox.desiredState !== "running" ||
+					sandbox.observation?.status !== "ready" ||
+					pods?.length !== 1 ||
+					!pod?.uid ||
+					pod.name !== sandbox.sandbox.resourceName ||
+					sandbox.sandbox.agentId !== context.claim.agentId ||
+					sandbox.sandbox.sessionId !== context.claim.conversationId ||
+					sandbox.sandbox.generation !== context.claim.sessionGeneration ||
+					sandbox.sandbox.workspaceScope !== sandbox.sandbox.sandboxId ||
+					!isDeepStrictEqual(sandbox.sandbox.principal, context.principal) ||
+					!target ||
+					target.configFingerprint !== configuration.configFingerprint ||
+					!isDeepStrictEqual(target.source, configuration.source) ||
+					target.url !== configuration.resource ||
+					new URL(configuration.issuer).origin !== target.profile.publicOrigin
+				)
+					installationUnavailable();
+				const base = new URL(prepared.target.baseUrl);
+				const origin = new URL(configuration.runtimeOrigin);
+				if (
+					origin.hostname !== base.hostname ||
+					!origin.port ||
+					Number(origin.port) < 1024 ||
+					origin.port ===
+						(base.port || (base.protocol === "https:" ? "443" : "80")) ||
+					origin.pathname !== "/"
+				)
+					installationUnavailable();
+				const issuer = new URL(configuration.issuer);
+				const endpoints = [
+					configuration.authorizationEndpoint,
+					configuration.tokenEndpoint,
+					configuration.revocationEndpoint,
+				].map((value) => new URL(value));
+				if (
+					issuer.pathname !== "/" ||
+					issuer.search ||
+					issuer.hash ||
+					endpoints.some((endpoint) => endpoint.origin !== issuer.origin)
+				)
+					installationUnavailable();
+				const reference = {
+					agentId: context.claim.agentId,
+					conversationId: context.claim.conversationId,
+					executionId: context.claim.executionId,
+					sessionGeneration: context.claim.sessionGeneration,
+				};
+				const scope = {
+					agentId: context.claim.agentId,
+					sandboxId: sandbox.sandbox.sandboxId,
+					podUid: pod.uid,
+					sessionGeneration: context.claim.sessionGeneration,
+					configFingerprint: target.configFingerprint,
+					source: target.source,
+					oauthConfiguration: {
+						ref: configuration.ref,
+						revision: configuration.revision,
+					},
+				};
+				const approvalInput = {
+					scope,
+					principal: context.principal,
+					reference,
+					authorizationId: snapshot.authorizationId,
+					command: snapshot.command,
+				};
+				let initialCheckCalled = false;
+				let initialCheckPromise: Promise<void> | undefined;
+				const approval = await bounded(
+					installationAuthorize(
+						structuredClone(approvalInput),
+						active,
+						async () => {
+							initialCheckCalled = true;
+							initialCheckPromise = assertCurrentPrepared(
+								prepared,
+								"session.status",
+								active,
+							);
+							await initialCheckPromise;
+						},
+					),
+					active,
+				);
+				if (!initialCheckCalled) installationUnavailable();
+				if (initialCheckPromise) await bounded(initialCheckPromise, active);
+				if (
+					!approval ||
+					Object.keys(approval).sort().join(",") !==
+						"authorizationId,command,principal,reference,revision,scope" ||
+					typeof approval.revision !== "string" ||
+					!approval.revision ||
+					!isDeepStrictEqual(
+						{
+							scope: approval.scope,
+							principal: approval.principal,
+							reference: approval.reference,
+							authorizationId: approval.authorizationId,
+							command: approval.command,
+						},
+						approvalInput,
+					)
+				)
+					installationUnavailable();
+				const approved = structuredClone(approval);
+				const request: RuntimeOAuthAuthorizedRequestV1 =
+					RuntimeOAuthAuthorizedRequestV1Schema.parse({
+						schemaVersion: 1,
+						agentId: context.claim.agentId,
+						sandboxId: sandbox.sandbox.sandboxId,
+						podUid: pod.uid,
+						sessionGeneration: context.claim.sessionGeneration,
+						configFingerprint: target.configFingerprint,
+						source: target.source,
+						oauthConfiguration: {
+							ref: configuration.ref,
+							revision: configuration.revision,
+						},
+						reference,
+						authorizationId: snapshot.authorizationId,
+						confirmationRevision: approval.revision,
+						command: snapshot.command,
+						grant: {
+							schemaVersion: 1,
+							format: "runtime-connection-installation-jws",
+							token: "unsigned.unsigned.unsigned",
+						},
+					});
+				return await sendRuntimeOAuthRequest({
+					request,
+					principal: context.principal,
+					configuration,
+					serviceToken: prepared.target.serviceToken,
+					signing: installationSigning,
+					signal: active,
+					fetch: options.fetch,
+					assertCurrent: async () => {
+						let finalCheckCalled = false;
+						let finalCheckPromise: Promise<void> | undefined;
+						const currentApproval = await bounded(
+							installationAuthorize(
+								structuredClone(approvalInput),
+								active,
+								async () => {
+									finalCheckCalled = true;
+									finalCheckPromise = assertCurrentPrepared(
+										prepared,
+										"session.status",
+										active,
+									);
+									await finalCheckPromise;
+								},
+							),
+							active,
+						);
+						if (!isDeepStrictEqual(currentApproval, approved))
+							installationUnavailable();
+						if (!finalCheckCalled) installationUnavailable();
+						if (finalCheckPromise) await bounded(finalCheckPromise, active);
+					},
+				});
+			} catch (error) {
+				if (
+					error instanceof ConversationRuntimeHostError &&
+					error.code !== "CONNECTION_INSTALLATION_UNAVAILABLE"
+				)
+					throw error;
+				installationUnavailable();
+			}
+		},
+	};
 	return {
+		connectionInstallation,
 		authorization,
 		runtimeHost,
 		async close() {

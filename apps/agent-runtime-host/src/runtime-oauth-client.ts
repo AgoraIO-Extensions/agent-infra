@@ -38,6 +38,7 @@ import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js
 interface Transaction {
 	schemaVersion: 1;
 	authorizationId: string;
+	confirmationRevision: string;
 	principal: { kind: "user"; id: string };
 	scope: import("@agent-infra/contracts/runtime").RuntimeOAuthScopeV1;
 	configuration: { ref: string; revision: string };
@@ -62,6 +63,7 @@ function parseTransaction(text: string): Transaction {
 		"configuration",
 		"configurationFingerprint",
 		"reference",
+		"confirmationRevision",
 		"state",
 		"phase",
 		"expiresAt",
@@ -79,6 +81,9 @@ function parseTransaction(text: string): Transaction {
 			.success ||
 		!RuntimeOAuthGrantClaimsV1Schema.shape.authorizationId.safeParse(
 			value.authorizationId,
+		).success ||
+		!RuntimeOAuthGrantClaimsV1Schema.shape.confirmationRevision.safeParse(
+			value.confirmationRevision,
 		).success ||
 		!RuntimePrincipalV1Schema.safeParse(value.principal).success ||
 		value.principal.kind !== "user" ||
@@ -287,6 +292,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 				!isDeepStrictEqual(runtimeOAuthScopeV1(claims), record.scope) ||
 				!isDeepStrictEqual(request.reference, record.reference) ||
 				claims.authorizationId !== record.authorizationId ||
+				claims.confirmationRevision !== record.confirmationRevision ||
 				(request.command !== "status" && record.expiresAt <= Date.now()))
 		)
 			unavailable();
@@ -384,6 +390,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 						record = {
 							schemaVersion: 1,
 							authorizationId: claims.authorizationId,
+							confirmationRevision: claims.confirmationRevision,
 							principal: { kind: "user", id: claims.principal.id },
 							scope: runtimeOAuthScopeV1(claims),
 							configurationFingerprint,

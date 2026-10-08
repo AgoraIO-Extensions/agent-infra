@@ -1,5 +1,11 @@
 import { generateKeyPairSync } from "node:crypto";
+import {
+	createServer as createHttpsServer,
+	request as httpsRequest,
+} from "node:https";
+import type { AddressInfo } from "node:net";
 import { createRuntimeExecutionGrantVerifierV2 } from "@agent-infra/agent-runtime";
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type {
 	AgentConfigurationRecordV2,
 	AgentManagementStateV1,
@@ -11,6 +17,8 @@ import type {
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
 import { createConversationDispatchUseCaseV1 } from "../../../packages/platform-core/src/conversation-dispatch.js";
+import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
+import { createRuntimeOAuthGrantVerifier } from "../../agent-runtime-host/src/runtime-oauth-grant.js";
 import { resolveApprovedConnectionConsumerTargetV1 } from "./conversation-deployment.js";
 import {
 	type ConversationLegacyControlRecoveryV2,
@@ -29,6 +37,7 @@ function harness(
 	channelAuthorizationCurrent:
 		| ConversationRuntimeOptionsV2["channelAuthorizationCurrent"]
 		| null = async (record) => record.boundary.channelId === "web",
+	overrides: Partial<ConversationRuntimeOptionsV2> = {},
 ) {
 	const claim: ConversationDispatchClaimV1 = {
 		schemaVersion: 1,
@@ -226,12 +235,15 @@ function harness(
 			});
 		throw new Error(`Unexpected runtime request: ${path}`);
 	});
-	const resolver = vi.fn(async () => ({
-		baseUrl: "http://runtime.test",
-		serviceToken: "synthetic-transport-proof",
-		workerId: "transport",
-	}));
+	const resolver = vi.fn<ConversationRuntimeOptionsV2["resolveRuntimeHost"]>(
+		async () => ({
+			baseUrl: "http://runtime.test",
+			serviceToken: "synthetic-transport-proof",
+			workerId: "transport",
+		}),
+	);
 	const runtime = createConversationRuntimeV2({
+		...overrides,
 		...(channelAuthorizationCurrent ? { channelAuthorizationCurrent } : {}),
 		workerId: "instance",
 		signing: {
@@ -1922,4 +1934,491 @@ describe("explicit historical metadata delivery", () => {
 			h.runtime.close();
 		},
 	);
+});
+
+function installationHarness(runtimeOrigin = "https://runtime.test:3443/") {
+	const profile = {
+		schemaVersion: 1 as const,
+		publicOrigin: "https://connection.test",
+		mcpPath: "/mcp",
+		consumerId: "platform",
+		audience: "mcp",
+		egressProfile: { ref: "egress", revision: "r1" },
+	};
+	const approved = resolveApprovedConnectionConsumerTargetV1(profile, {
+		schemaVersion: 1,
+		configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+		source: { ref: "deployment", revision: "r1" },
+		egressEnforced: true,
+	});
+	if (!approved) throw Error("Missing approved test profile");
+	const configuration = {
+		schemaVersion: 1 as const,
+		ref: "oauth",
+		revision: "r1",
+		clientId: "client",
+		issuer: "https://connection.test/",
+		authorizationEndpoint: "https://connection.test/oauth/authorize",
+		tokenEndpoint: "https://connection.test/oauth/token",
+		revocationEndpoint: "https://connection.test/oauth/revoke",
+		callbackUrl: "https://platform.test/callback",
+		runtimeOrigin,
+		resource: approved.url,
+		scope: "mcp" as const,
+		configFingerprint: approved.configFingerprint,
+		source: approved.source,
+	};
+	const installationAuthorize = vi.fn<
+		NonNullable<
+			ConversationRuntimeOptionsV2["connectionInstallation"]
+		>["authorize"]
+	>(async (input, _signal, finalCheck) => {
+		await finalCheck();
+		return { ...input, revision: "confirmation-r1", scope: input.scope };
+	});
+	const h = harness(1, undefined, {
+		connectionInstallation: {
+			configuration,
+			authorize: installationAuthorize,
+		},
+	});
+	Object.assign(h.state, { runtimeSubmitProtocol: "v4" });
+	Object.assign(h.state, {
+		sandboxResource: {
+			sandbox: {
+				schemaVersion: 1,
+				sandboxId: "sandbox",
+				agentId: "agent",
+				sessionId: "conversation",
+				principal: { kind: "user", id: "user" },
+				channelId: "web",
+				generation: 1,
+				resourceName: "runtime",
+				workspaceScope: "sandbox",
+			},
+			resourceFence: 1,
+			desiredState: "running",
+			status: "ready",
+			policy: null,
+			observation: {
+				status: "ready",
+				resources: [
+					{
+						kind: "Pod",
+						namespace: "test",
+						name: "runtime",
+						uid: "pod-current",
+						resourceVersion: "1",
+					},
+				],
+			},
+		},
+	});
+	h.resolver.mockResolvedValue({
+		baseUrl: `http://${new URL(runtimeOrigin).hostname}:3003`,
+		serviceToken: "synthetic-transport-proof",
+		workerId: "transport",
+		connectionConsumer: approved,
+	});
+	h.fetcher.mockResolvedValue(
+		Response.json({
+			schemaVersion: 1,
+			authorizationId: "authorization-a",
+			phase: "awaiting_callback",
+			expiresAt: now + 600_000,
+			authorizationUrl:
+				"https://connection.test/oauth/authorize?response_type=code&client_id=client&redirect_uri=https%3A%2F%2Fplatform.test%2Fcallback&scope=mcp&resource=https%3A%2F%2Fconnection.test%2Fmcp&code_challenge_method=S256&state=" +
+				"a".repeat(64) +
+				"&code_challenge=" +
+				"a".repeat(43),
+		}),
+	);
+	return { ...h, approved, configuration, installationAuthorize };
+}
+
+it("sends a separately authorized installation request from the original Worker execution", async () => {
+	const h = installationHarness();
+	const { approved } = h;
+	try {
+		const runtimeGrant = await h.authorize();
+		const result = await h.runtime.connectionInstallation.request({
+			execution: h.events(runtimeGrant),
+			authorizationId: "authorization-a",
+			command: "begin",
+		});
+		expect(result.phase).toBe("awaiting_callback");
+		const call = h.fetcher.mock.calls[0];
+		expect(String(call?.[0])).toBe(
+			"https://runtime.test:3443/internal/runtime/oauth/v1/begin",
+		);
+		const body = JSON.parse(String(call?.[1]?.body));
+		const verifyOAuth = createRuntimeOAuthGrantVerifier({
+			key: keys.publicKey,
+			keyId: "signing",
+			issuer: "platform",
+			workerId: "transport",
+			scope: {
+				agentId: "agent",
+				sandboxId: "sandbox",
+				podUid: "pod-current",
+				sessionGeneration: 1,
+				configFingerprint: approved.configFingerprint,
+				source: approved.source,
+				oauthConfiguration: { ref: "oauth", revision: "r1" },
+			},
+			principal: { kind: "user", id: "user" },
+			now: () => now,
+		});
+		expect(verifyOAuth(body)).toMatchObject({
+			purpose: "connection_installation",
+			command: "begin",
+			principal: { kind: "user", id: "user" },
+			reference: {
+				agentId: "agent",
+				conversationId: "conversation",
+				executionId: "execution",
+				sessionGeneration: 1,
+			},
+		});
+		expect(body).not.toHaveProperty("input");
+		expect(body).not.toHaveProperty("token");
+	} finally {
+		await h.runtime.close();
+	}
+});
+
+it("rejects installation without an independent platform confirmation or deployment config", async () => {
+	const h = installationHarness();
+	const grant = await h.authorize();
+	h.installationAuthorize.mockResolvedValue(null);
+	try {
+		await expect(
+			h.runtime.connectionInstallation.request({
+				execution: h.events(grant),
+				authorizationId: "authorization-a",
+				command: "confirm",
+			}),
+		).rejects.toThrow();
+		expect(h.fetcher).not.toHaveBeenCalled();
+	} finally {
+		await h.runtime.close();
+	}
+	const unconfigured = harness();
+	const context = await unconfigured.authorize();
+	try {
+		await expect(
+			unconfigured.runtime.connectionInstallation.request({
+				execution: unconfigured.events(context),
+				authorizationId: "authorization-a",
+				command: "begin",
+			}),
+		).rejects.toThrow();
+		expect(unconfigured.fetcher).not.toHaveBeenCalled();
+	} finally {
+		await unconfigured.runtime.close();
+	}
+});
+
+it("rejects revocation while independent installation confirmation is being resolved", async () => {
+	const h = installationHarness();
+	const grant = await h.authorize();
+	h.installationAuthorize.mockImplementation(async (input) => {
+		h.setUser(null);
+		return { ...input, revision: "r1" };
+	});
+	try {
+		await expect(
+			h.runtime.connectionInstallation.request({
+				execution: h.events(grant),
+				authorizationId: "authorization-a",
+				command: "confirm",
+			}),
+		).rejects.toThrow();
+		expect(h.fetcher).not.toHaveBeenCalled();
+	} finally {
+		await h.runtime.close();
+	}
+});
+
+it("rejects an independent confirmation for another user or installation scope", async () => {
+	const h = installationHarness();
+	const grant = await h.authorize();
+	h.installationAuthorize.mockImplementation(async (input) => ({
+		...input,
+		principal: { kind: "user", id: "foreign" },
+		revision: "r1",
+	}));
+	try {
+		await expect(
+			h.runtime.connectionInstallation.request({
+				execution: h.events(grant),
+				authorizationId: "authorization-a",
+				command: "confirm",
+			}),
+		).rejects.toThrow();
+		expect(h.fetcher).not.toHaveBeenCalled();
+	} finally {
+		await h.runtime.close();
+	}
+});
+
+it("rejects approval revision drift before issuing an installation wire grant", async () => {
+	const h = installationHarness();
+	const grant = await h.authorize();
+	let checks = 0;
+	h.installationAuthorize.mockImplementation(async (input) => ({
+		...input,
+		revision: ++checks === 1 ? "r1" : "r2",
+	}));
+	try {
+		await expect(
+			h.runtime.connectionInstallation.request({
+				execution: h.events(grant),
+				authorizationId: "authorization-a",
+				command: "begin",
+			}),
+		).rejects.toThrow();
+		expect(h.fetcher).not.toHaveBeenCalled();
+	} finally {
+		await h.runtime.close();
+	}
+});
+
+it("rejects a changed Pod receipt during independent confirmation", async () => {
+	const h = installationHarness();
+	const grant = await h.authorize();
+	h.installationAuthorize.mockImplementation(async (input) => {
+		const resource = h.state.sandboxResource?.observation?.resources[0];
+		if (resource) Object.assign(resource, { uid: "pod-replacement" });
+		return { ...input, revision: "r1" };
+	});
+	try {
+		await expect(
+			h.runtime.connectionInstallation.request({
+				execution: h.events(grant),
+				authorizationId: "authorization-a",
+				command: "begin",
+			}),
+		).rejects.toThrow();
+		expect(h.fetcher).not.toHaveBeenCalled();
+	} finally {
+		await h.runtime.close();
+	}
+});
+
+it.each(["unknown", "completed", "failed", "cancelled"] as const)(
+	"does not start installation in a %s execution",
+	async (executionStatus) => {
+		const h = installationHarness();
+		const grant = await h.authorize();
+		Object.assign(h.state, { executionStatus });
+		try {
+			await expect(
+				h.runtime.connectionInstallation.request({
+					execution: h.events(grant),
+					authorizationId: "authorization-a",
+					command: "begin",
+				}),
+			).rejects.toThrow();
+			expect(h.fetcher).not.toHaveBeenCalled();
+		} finally {
+			await h.runtime.close();
+		}
+	},
+);
+
+it.each(["redirect", "lost", "foreign", "oversize", "url", "secret"])(
+	"rejects %s responses and never retries the install request",
+	async (behavior) => {
+		const h = installationHarness();
+		const grant = await h.authorize();
+		h.fetcher.mockImplementation(async () => {
+			if (behavior === "lost") throw Error("synthetic private transport data");
+			if (behavior === "redirect")
+				return new Response(null, {
+					status: 302,
+					headers: { location: "https://foreign.test" },
+				});
+			if (behavior === "oversize") return new Response("x".repeat(16_385));
+			return Response.json({
+				schemaVersion: 1,
+				authorizationId:
+					behavior === "foreign" ? "another-transaction" : "authorization-a",
+				phase: "awaiting_callback",
+				expiresAt: now + 600_000,
+				...(behavior === "secret"
+					? { token: "synthetic-token" }
+					: { authorizationUrl: "https://foreign.test/authorize" }),
+			});
+		});
+		try {
+			await expect(
+				h.runtime.connectionInstallation.request({
+					execution: h.events(grant),
+					authorizationId: "authorization-a",
+					command: "begin",
+				}),
+			).rejects.toMatchObject({
+				code: "CONNECTION_INSTALLATION_UNAVAILABLE",
+				retryable: false,
+			});
+			expect(h.fetcher).toHaveBeenCalledTimes(1);
+		} finally {
+			await h.runtime.close();
+		}
+	},
+);
+
+it("sends the actual dedicated JWS over verified HTTPS to the Host verifier", async () => {
+	const tls = await runtimeTlsFixture();
+	let server: ReturnType<typeof createHttpsServer> | undefined;
+	let h: ReturnType<typeof installationHarness> | undefined;
+	let received = 0;
+	try {
+		server = createHttpsServer(
+			{ cert: tls.cert, key: tls.key },
+			async (req, res) => {
+				const chunks: Buffer[] = [];
+				for await (const chunk of req) chunks.push(Buffer.from(chunk));
+				const request = JSON.parse(Buffer.concat(chunks).toString());
+				if (!h) throw Error("Missing controlled Worker");
+				const verify = createRuntimeOAuthGrantVerifier({
+					key: keys.publicKey,
+					keyId: "signing",
+					issuer: "platform",
+					workerId: "transport",
+					principal: { kind: "user", id: "user" },
+					now: () => now,
+					scope: {
+						agentId: "agent",
+						sandboxId: "sandbox",
+						podUid: "pod-current",
+						sessionGeneration: 1,
+						configFingerprint: h.approved.configFingerprint,
+						source: h.approved.source,
+						oauthConfiguration: { ref: "oauth", revision: "r1" },
+					},
+				});
+				const claims = verify(request);
+				received++;
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(
+					JSON.stringify({
+						schemaVersion: 1,
+						authorizationId: claims.authorizationId,
+						phase: "awaiting_confirmation",
+						expiresAt: now + 600_000,
+					}),
+				);
+			},
+		);
+		await new Promise<void>((resolve) =>
+			server?.listen(0, "127.0.0.1", resolve),
+		);
+		h = installationHarness(
+			`https://localhost:${(server.address() as AddressInfo).port}/`,
+		);
+		h.fetcher.mockImplementation(
+			async (url, init) =>
+				new Promise<Response>((resolve, reject) => {
+					const req = httpsRequest(
+						new URL(String(url)),
+						{
+							ca: tls.ca,
+							family: 4,
+							method: init?.method,
+							headers: Object.fromEntries(new Headers(init?.headers)),
+							signal: init?.signal ?? undefined,
+						},
+						(res) => {
+							const parts: Buffer[] = [];
+							res.on("data", (part) => parts.push(Buffer.from(part)));
+							res.on("end", () =>
+								resolve(
+									new Response(Buffer.concat(parts).toString(), {
+										status: res.statusCode,
+									}),
+								),
+							);
+						},
+					);
+					req.on("error", reject);
+					req.end(String(init?.body));
+				}),
+		);
+		const grant = await h.authorize();
+		const result = await h.runtime.connectionInstallation.request({
+			execution: h.events(grant),
+			authorizationId: "authorization-a",
+			command: "confirm",
+		});
+		expect(result.phase).toBe("awaiting_confirmation");
+		expect(received).toBe(1);
+	} finally {
+		await h?.runtime.close();
+		if (server) {
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server?.close(() => resolve()));
+		}
+		await tls.cleanup();
+	}
+});
+
+it("cancels a pending independent confirmation without sending or keeping the Worker open", async () => {
+	const h = installationHarness();
+	const grant = await h.authorize();
+	let started!: () => void;
+	const reached = new Promise<void>((resolve) => {
+		started = resolve;
+	});
+	let finish!: (value: null) => void;
+	h.installationAuthorize.mockImplementation(async () => {
+		started();
+		return new Promise((resolve) => {
+			finish = resolve;
+		});
+	});
+	const request = h.runtime.connectionInstallation.request({
+		execution: h.events(grant),
+		authorizationId: "authorization-a",
+		command: "begin",
+	});
+	const rejected = expect(request).rejects.toMatchObject({
+		code: "RUNTIME_INTERRUPTED",
+		retryable: true,
+	});
+	await reached;
+	await h.runtime.close();
+	await rejected;
+	finish(null);
+	expect(h.fetcher).not.toHaveBeenCalled();
+});
+
+it("rejects unapproved URL parameters in an otherwise approved authorization redirect", async () => {
+	const h = installationHarness();
+	const grant = await h.authorize();
+	h.fetcher.mockResolvedValue(
+		Response.json({
+			schemaVersion: 1,
+			authorizationId: "authorization-a",
+			phase: "awaiting_callback",
+			expiresAt: now + 600_000,
+			authorizationUrl:
+				"https://connection.test/oauth/authorize?access_token=synthetic-private-value",
+		}),
+	);
+	try {
+		await expect(
+			h.runtime.connectionInstallation.request({
+				execution: h.events(grant),
+				authorizationId: "authorization-a",
+				command: "begin",
+			}),
+		).rejects.toMatchObject({
+			code: "CONNECTION_INSTALLATION_UNAVAILABLE",
+			retryable: false,
+		});
+	} finally {
+		await h.runtime.close();
+	}
 });

@@ -98,6 +98,7 @@ export const RuntimeOAuthGrantClaimsV1Schema = RuntimeOAuthScopeV1Schema.extend(
 		principal: RuntimePrincipalV1Schema,
 		command: z.enum(["begin", "confirm", "status"]),
 		authorizationId: OpaqueIdV1Schema,
+		confirmationRevision: OpaqueIdV1Schema,
 		grantId: OpaqueIdV1Schema,
 		issuedAt: z.number().int().nonnegative().safe(),
 		expiresAt: z.number().int().positive().safe(),
@@ -110,6 +111,7 @@ export type RuntimeOAuthGrantClaimsV1 = z.infer<
 const request = RuntimeOAuthScopeV1Schema.extend({
 	schemaVersion: z.literal(1),
 	authorizationId: OpaqueIdV1Schema,
+	confirmationRevision: OpaqueIdV1Schema,
 	reference: RuntimeOAuthOriginalExecutionRefV1Schema,
 	grant: RuntimeOAuthGrantV1Schema,
 });
