@@ -26,6 +26,8 @@ export const skillHubSkills = platformSchema.table(
 		id: text("id").primaryKey(),
 		name: varchar("name", { length: 63 }).notNull(),
 		ownerId: text("owner_id").notNull(),
+		/** Organization selected by the authenticated publisher for ORGANIZATION visibility. */
+		organizationId: text("organization_id"),
 		status: varchar("status", { length: 16 }).default("active").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
@@ -34,6 +36,10 @@ export const skillHubSkills = platformSchema.table(
 		nonEmpty(table.id, "skill_hub_skill_id_non_empty"),
 		nonEmpty(table.name, "skill_hub_skill_name_non_empty"),
 		nonEmpty(table.ownerId, "skill_hub_skill_owner_non_empty"),
+		check(
+			"skill_hub_skill_organization_non_empty",
+			sql`${table.organizationId} is null or char_length(${table.organizationId}) > 0`,
+		),
 		check(
 			"skill_hub_skill_status_valid",
 			sql`${table.status} in ('active', 'disabled')`,

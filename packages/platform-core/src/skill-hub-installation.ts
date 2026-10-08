@@ -65,6 +65,7 @@ export function parseSkillHubInstallationCommandV1(
 export function canViewSkillHubVersionV1(
 	version: SkillHubVersionV1,
 	actor: AgentManagementActorContextV1,
+	organizationId: string | null = null,
 ): boolean {
 	if (actor.accountStatus !== "active" || version.state !== "published")
 		return false;
@@ -72,7 +73,9 @@ export function canViewSkillHubVersionV1(
 	if (version.visibility === "PRIVATE") return version.ownerId === actor.userId;
 	return (
 		version.visibility === "MEMBER" ||
-		(version.visibility === "ORGANIZATION" && actor.organizationIds.length > 0)
+		(version.visibility === "ORGANIZATION" &&
+			organizationId !== null &&
+			actor.organizationIds.includes(organizationId))
 	);
 }
 
@@ -80,8 +83,9 @@ export function canInstallSkillHubVersionV1(
 	version: SkillHubVersionV1,
 	command: SkillHubInstallationCommandV1,
 	actor: AgentManagementActorContextV1,
+	organizationId: string | null = null,
 ): boolean {
-	if (!canViewSkillHubVersionV1(version, actor)) return false;
+	if (!canViewSkillHubVersionV1(version, actor, organizationId)) return false;
 	if (command.principalType === "user")
 		return command.principalId === actor.userId;
 	return (

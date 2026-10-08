@@ -83,11 +83,20 @@ describe("Skill Hub installation authorization", () => {
 							principalId: userId,
 							skillVersionId: "version-a",
 						};
-			expect(canViewSkillHubVersionV1(version(visibility), current)).toBe(
-				expected,
-			);
 			expect(
-				canInstallSkillHubVersionV1(version(visibility), target, current),
+				canViewSkillHubVersionV1(
+					version(visibility),
+					current,
+					visibility === "ORGANIZATION" ? "org-a" : null,
+				),
+			).toBe(expected);
+			expect(
+				canInstallSkillHubVersionV1(
+					version(visibility),
+					target,
+					current,
+					visibility === "ORGANIZATION" ? "org-a" : null,
+				),
 			).toBe(expected);
 		},
 	);
@@ -100,7 +109,9 @@ describe("Skill Hub installation authorization", () => {
 			principalId: "member",
 			skillVersionId: "version-a",
 		};
-		expect(canViewSkillHubVersionV1(revoked, actor("member"))).toBe(false);
+		expect(canViewSkillHubVersionV1(revoked, actor("member"), null)).toBe(
+			false,
+		);
 		expect(
 			canInstallSkillHubVersionV1(version("MARKET"), command, disabled),
 		).toBe(false);

@@ -387,6 +387,13 @@ export class PostgresSkillHubLifecycleV1 {
 					.for("update");
 				if (parent)
 					requireSkillHubRegistrationParentV1(parent, command, request.userId);
+				if (
+					parent &&
+					command.visibility === "ORGANIZATION" &&
+					(!parent.organizationId ||
+						!identity.actor.organizationIds.includes(parent.organizationId))
+				)
+					throw new SkillHubOperationErrorV1("forbidden");
 				if (replayed) {
 					const version = await this.#version(
 						transaction,
@@ -415,6 +422,10 @@ export class PostgresSkillHubLifecycleV1 {
 						id: command.skillId,
 						name: command.name,
 						ownerId: request.userId,
+						organizationId:
+							command.visibility === "ORGANIZATION"
+								? (identity.actor.organizationIds[0] ?? null)
+								: null,
 						createdAt: new Date(),
 						updatedAt: new Date(),
 					});
@@ -960,19 +971,64 @@ export class PostgresSkillHubLifecycleV1 {
 			context,
 			async (transaction, request, identity) => {
 				const rows = await transaction
-					.select({ version: skillHubVersions, name: skillHubSkills.name })
+					.select({
+						version: skillHubVersions,
+						name: skillHubSkills.name,
+						organizationId: skillHubSkills.organizationId,
+					})
 					.from(skillHubVersions)
 					.innerJoin(
 						skillHubSkills,
 						eq(skillHubSkills.id, skillHubVersions.skillId),
 					)
 					.where(eq(skillHubVersions.state, "published"));
-				const versions = rows.flatMap(({ version, name }) => {
+				const versions = rows.flatMap(({ version, name, organizationId }) => {
 					const decoded = decode(version, name);
-					return canViewSkillHubVersionV1(decoded, identity.actor)
+					return canViewSkillHubVersionV1(
+						decoded,
+						identity.actor,
+						organizationId,
+					)
 						? [{ ...decoded, name }]
 						: [];
 				});
+				const latestBySkill = new Map<string, Date>();
+				for (const { version } of rows) {
+					const current = latestBySkill.get(version.skillId);
+					if (!current || version.createdAt > current)
+						latestBySkill.set(version.skillId, version.createdAt);
+				}
+				const installationRows = await transaction
+					.select({
+						installation: skillHubInstallations,
+						version: skillHubVersions,
+					})
+					.from(skillHubInstallations)
+					.innerJoin(
+						skillHubVersions,
+						eq(skillHubVersions.id, skillHubInstallations.skillVersionId),
+					)
+					.where(eq(skillHubInstallations.state, "installed"));
+				for (const { installation, version } of installationRows) {
+					if (
+						(installation.principalType === "user" &&
+							installation.principalId !== request.userId) ||
+						(installation.principalType === "organization" &&
+							!identity.actor.isAdministrator &&
+							!identity.actor.organizationIds.includes(
+								installation.principalId,
+							))
+					)
+						continue;
+					const latest = latestBySkill.get(version.skillId);
+					const needUpgrade =
+						latest !== undefined && latest > version.createdAt;
+					if (installation.needUpgrade !== needUpgrade)
+						await transaction
+							.update(skillHubInstallations)
+							.set({ needUpgrade, updatedAt: new Date() })
+							.where(eq(skillHubInstallations.id, installation.id));
+				}
 				await audit(
 					transaction,
 					request,
@@ -1024,6 +1080,34 @@ export class PostgresSkillHubLifecycleV1 {
 					const installationId = prior.result?.installationId;
 					if (typeof installationId !== "string")
 						throw new SkillHubOperationErrorV1("unavailable");
+					const [versionRow] = await transaction
+						.select({
+							version: skillHubVersions,
+							name: skillHubSkills.name,
+							organizationId: skillHubSkills.organizationId,
+						})
+						.from(skillHubVersions)
+						.innerJoin(
+							skillHubSkills,
+							eq(skillHubSkills.id, skillHubVersions.skillId),
+						)
+						.where(eq(skillHubVersions.id, command.skillVersionId));
+					if (!versionRow)
+						throw new SkillHubOperationErrorV1("version_unavailable");
+					const replayVersion = decode(versionRow.version, versionRow.name);
+					if (
+						!canInstallSkillHubVersionV1(
+							replayVersion,
+							command,
+							identity.actor,
+							versionRow.organizationId,
+						)
+					)
+						throw new SkillHubOperationErrorV1(
+							replayVersion.state === "published"
+								? "not_found"
+								: "version_unavailable",
+						);
 					const [row] = await transaction
 						.select()
 						.from(skillHubInstallations)
@@ -1032,7 +1116,11 @@ export class PostgresSkillHubLifecycleV1 {
 					return { replayed: true, installation: decodeInstallation(row) };
 				}
 				const [row] = await transaction
-					.select({ version: skillHubVersions, name: skillHubSkills.name })
+					.select({
+						version: skillHubVersions,
+						name: skillHubSkills.name,
+						organizationId: skillHubSkills.organizationId,
+					})
 					.from(skillHubVersions)
 					.innerJoin(
 						skillHubSkills,
@@ -1042,7 +1130,14 @@ export class PostgresSkillHubLifecycleV1 {
 					.for("update");
 				if (!row) throw new SkillHubOperationErrorV1("not_found");
 				const version = decode(row.version, row.name);
-				if (!canInstallSkillHubVersionV1(version, command, identity.actor))
+				if (
+					!canInstallSkillHubVersionV1(
+						version,
+						command,
+						identity.actor,
+						row.organizationId,
+					)
+				)
 					throw new SkillHubOperationErrorV1(
 						version.state === "published" ? "not_found" : "version_unavailable",
 					);

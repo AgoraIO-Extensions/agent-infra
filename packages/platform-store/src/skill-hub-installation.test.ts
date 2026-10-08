@@ -171,6 +171,48 @@ describe("Skill Hub scoped directory and installations", () => {
 		).rejects.toMatchObject({ code: "version_unavailable" });
 	});
 
+	it("keeps organization visibility isolated and revalidates replay authorization", async () => {
+		const adapter = store();
+		await adapter.registerVersion(
+			request(),
+			"org-register",
+			registration("org-skill", "org-v1", "ORGANIZATION", "1.0.0"),
+		);
+		await adapter.reviewVersion(request("admin"), "org-v1", "org-review", {
+			decision: "approve",
+		});
+		expect(
+			(await adapter.listVisibleVersions(request("owner-b"))).map(
+				(item) => item.skillVersionId,
+			),
+		).toEqual([]);
+		await expect(
+			adapter.installVersion(request("owner-b"), "org-cross-install", {
+				principalType: "organization",
+				principalId: "org-b",
+				skillVersionId: "org-v1",
+			}),
+		).rejects.toMatchObject({ code: "not_found" });
+		const first = await adapter.installVersion(
+			request("owner-a"),
+			"org-replay",
+			{
+				principalType: "organization",
+				principalId: "org-a",
+				skillVersionId: "org-v1",
+			},
+		);
+		identities.set("owner-a", actor("owner-a", []));
+		await expect(
+			adapter.installVersion(request("owner-a"), "org-replay", {
+				principalType: "organization",
+				principalId: "org-a",
+				skillVersionId: "org-v1",
+			}),
+		).rejects.toMatchObject({ code: "not_found" });
+		expect(first.installation.state).toBe("installed");
+	});
+
 	it("supports organization install, explicit uninstall, and a new version upgrade hint", async () => {
 		const adapter = store();
 		for (const [id, version] of [
@@ -186,6 +228,13 @@ describe("Skill Hub scoped directory and installations", () => {
 				decision: "approve",
 			});
 		}
+		const visibleBeforeInstall = await adapter.listVisibleVersions(
+			request("owner-a"),
+		);
+		expect(visibleBeforeInstall.map((item) => item.skillVersionId)).toEqual([
+			"org-v1",
+			"org-v2",
+		]);
 		const first = await adapter.installVersion(
 			request("owner-a"),
 			"install-org-v1",
@@ -195,6 +244,11 @@ describe("Skill Hub scoped directory and installations", () => {
 				skillVersionId: "org-v1",
 			},
 		);
+		await adapter.listVisibleVersions(request("owner-a"));
+		const hintAfterPublication = await client`
+			select need_upgrade from platform.skill_hub_installations
+			where id=${first.installation.installationId}`;
+		expect(hintAfterPublication[0]?.need_upgrade).toBe(true);
 		const second = await adapter.installVersion(
 			request("owner-a"),
 			"install-org-v2",
