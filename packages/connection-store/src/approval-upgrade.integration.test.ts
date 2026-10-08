@@ -188,7 +188,7 @@ describe("compatible approval upgrade", () => {
 						database: "analytics",
 						pattern: "event*",
 					}),
-				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				).rejects.toMatchObject({ code: "INVALID_REQUEST" });
 				const granted = await sql<
 					{ action_version_id: string }[]
 				>`SELECT member.action_version_id FROM connection_authorization_roots root JOIN connection_grant_actions member ON member.grant_id=root.current_grant_id WHERE root.consumer_id=${consumerId} AND root.principal_id=${principalId}`;
