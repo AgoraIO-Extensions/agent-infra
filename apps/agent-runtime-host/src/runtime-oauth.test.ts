@@ -308,6 +308,7 @@ async function fixture() {
 			schemaVersion: 1 as const,
 			...scope,
 			authorizationId,
+			confirmationRevision: "confirmation-r1",
 			reference,
 			command,
 			grant: {
@@ -327,6 +328,7 @@ async function fixture() {
 			workerId: "worker-a",
 			command,
 			authorizationId: request.authorizationId,
+			confirmationRevision: request.confirmationRevision,
 			grantId: "grant-a",
 			issuedAt: Date.now(),
 			expiresAt: Date.now() + 30_000,

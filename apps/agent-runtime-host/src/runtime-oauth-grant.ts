@@ -76,6 +76,7 @@ export function createRuntimeOAuthGrantVerifier(options: {
 				claims.expiresAt - claims.issuedAt > 30_000 ||
 				claims.command !== request.command ||
 				claims.authorizationId !== request.authorizationId ||
+				claims.confirmationRevision !== request.confirmationRevision ||
 				!isDeepStrictEqual(claims.reference, request.reference) ||
 				claims.reference.agentId !== scope.agentId ||
 				claims.reference.sessionGeneration !== scope.sessionGeneration ||
