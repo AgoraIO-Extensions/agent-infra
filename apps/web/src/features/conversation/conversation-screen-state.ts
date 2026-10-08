@@ -118,7 +118,7 @@ export function commandFailure(code: PilotProtocolErrorV1["code"]): string {
 		case "AGENT_BUSY":
 			return "当前回复仍在处理，暂不支持补充指令。草稿已保留。";
 		case "AGENT_STARTING":
-			return "Agent 正在启动，历史只读。请稍后刷新。";
+			return "会话尚未准备完成，消息未发送，草稿已保留。准备完成后请重新发送。";
 		case "AGENT_UPDATING":
 			return "Agent 正在更新，历史只读。请稍后刷新。";
 		case "CONVERSATION_UNAVAILABLE":

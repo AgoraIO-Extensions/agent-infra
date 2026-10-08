@@ -61,6 +61,11 @@ export const ConversationDetailProjectionV2Schema =
 	ConversationDetailProjectionV1Schema.extend({
 		schemaVersion: z.literal(2),
 		events: z.array(PersistedConversationEventV2Schema),
+		/** Whether the Conversation's own Session Sandbox can take messages yet.
+		 * Absent from older servers, which the Web treats as "ready" (#1534). */
+		sessionAvailability: z
+			.enum(["preparing", "ready", "unavailable"])
+			.optional(),
 	});
 
 const executionAdditions = {

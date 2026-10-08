@@ -1297,6 +1297,26 @@ function isConversationSseV2NotFoundAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1534 adds the optional Session availability to the Web Conversation detail.
+function isConversationSessionAvailabilityOpenApiAddition(previous, current) {
+	const name = "ConversationDetailProjectionV2";
+	const previousDetail = previous.components?.schemas?.[name];
+	const currentDetail = current.components?.schemas?.[name];
+	if (
+		!previousDetail?.properties ||
+		Object.hasOwn(previousDetail.properties, "sessionAvailability") ||
+		!sameValue(currentDetail?.properties?.sessionAvailability, {
+			enum: ["preparing", "ready", "unavailable"],
+			type: "string",
+		}) ||
+		currentDetail.required?.includes("sessionAvailability")
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[name].properties.sessionAvailability;
+	return sameValue(previous, normalized);
+}
+
 // #1052 publishes the exact #1027 recent read; every prior document field stays exact.
 function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/me/conversations/recent";
@@ -1972,6 +1992,7 @@ function findBreakingChanges(previous, current) {
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
+			!isConversationSessionAvailabilityOpenApiAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&

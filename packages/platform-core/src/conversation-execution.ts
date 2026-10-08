@@ -281,12 +281,17 @@ export function createConversationExecutionUseCaseV1(
 							}
 							if (
 								conversation.status === "unavailable" ||
-								conversation.isolationPending ||
-								(authority.channelId === "web" &&
-									conversation.sandbox !== undefined &&
-									conversation.sandboxReady !== true)
+								conversation.isolationPending
 							)
 								return { outcome: "denied" };
+							// A Web Conversation stays read-only until its own Sandbox is
+							// ready (Spec §10.1.1); report that as starting, not as a denial.
+							if (
+								authority.channelId === "web" &&
+								conversation.sandbox !== undefined &&
+								conversation.sandboxReady !== true
+							)
+								return { outcome: "starting" };
 							const modelSelection = effectiveModelSelection(
 								conversation,
 								state.modelConfiguration,
@@ -610,12 +615,17 @@ export function createConversationExecutionUseCaseV1(
 							}
 							if (
 								conversation.status === "unavailable" ||
-								conversation.isolationPending ||
-								(authority.channelId === "web" &&
-									conversation.sandbox !== undefined &&
-									conversation.sandboxReady !== true)
+								conversation.isolationPending
 							)
 								return { outcome: "denied" };
+							// A Web Conversation stays read-only until its own Sandbox is
+							// ready (Spec §10.1.1); report that as starting, not as a denial.
+							if (
+								authority.channelId === "web" &&
+								conversation.sandbox !== undefined &&
+								conversation.sandboxReady !== true
+							)
+								return { outcome: "starting" };
 							if (state.activeExecution) return { outcome: "busy" };
 							const modelSelection = effectiveModelSelection(
 								conversation,

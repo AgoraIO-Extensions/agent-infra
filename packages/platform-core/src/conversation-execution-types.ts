@@ -394,6 +394,8 @@ export type ConversationCommandDecisionV1 =
 			readonly result: ConversationCommandResultV1;
 	  }
 	| { readonly outcome: "busy" }
+	/** The Web Conversation's own Session Sandbox is still preparing (#1534). */
+	| { readonly outcome: "starting" }
 	| { readonly outcome: "denied" }
 	| { readonly outcome: "conflict"; readonly reason: "idempotency_conflict" };
 
@@ -686,7 +688,10 @@ export interface ConversationExecutionTransactionPortV1 {
 			state: ConversationExecutionStateV1,
 		) =>
 			| ConversationMessageWritePlanV1
-			| Extract<ConversationCommandDecisionV1, { outcome: "busy" | "denied" }>,
+			| Extract<
+					ConversationCommandDecisionV1,
+					{ outcome: "busy" | "starting" | "denied" }
+			  >,
 	): Promise<ConversationCommandDecisionV1>;
 	executeModelSelection(
 		request: {
@@ -708,7 +713,10 @@ export interface ConversationExecutionTransactionPortV1 {
 			state: ConversationExecutionStateV1,
 		) =>
 			| ConversationRegenerationWritePlanV1
-			| Extract<ConversationCommandDecisionV1, { outcome: "busy" | "denied" }>,
+			| Extract<
+					ConversationCommandDecisionV1,
+					{ outcome: "busy" | "starting" | "denied" }
+			  >,
 	): Promise<ConversationCommandDecisionV1>;
 	executeStop(
 		request: {

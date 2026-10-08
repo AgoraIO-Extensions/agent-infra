@@ -21,6 +21,8 @@ import { currentExecution, isTerminal } from "./conversation-screen-state.js";
 import { useConversationCommands } from "./use-conversation-commands.js";
 import { useConversationTimeline } from "./use-conversation-timeline.js";
 
+const preparingRefreshMs = 2_000;
+
 export function ActiveConversation({
 	agentId,
 	identityKey,
@@ -78,6 +80,9 @@ export function ActiveConversation({
 	);
 	const handled = useRef<ConversationCommandResult | undefined>(undefined);
 	const conversation = timeline.history?.conversation;
+	// The Conversation stays read-only until its own Session Sandbox is ready
+	// (PRD §6.4, Spec §10.1.1); the draft remains editable meanwhile (#1534).
+	const preparing = timeline.history?.sessionAvailability === "preparing";
 	const { executionId: latestExecution, status } = currentExecution(
 		timeline.history,
 		timeline.events,
@@ -144,9 +149,19 @@ export function ActiveConversation({
 		queryClient,
 	]);
 	useEffect(() => {
+		if (!preparing) return;
+		// No timeline event announces readiness; re-read the projection instead.
+		const timer = setInterval(() => void reader.refresh(), preparingRefreshMs);
+		return () => clearInterval(timer);
+	}, [preparing, reader.refresh]);
+	useEffect(() => {
 		const result = command.result;
 		if (!result || result === handled.current) return;
 		handled.current = result;
+		if (result.kind === "rejected" && result.code === "AGENT_STARTING") {
+			void reader.refresh();
+			return;
+		}
 		if (result.kind === "accepted") {
 			setNotice("");
 			if (action.current === "stop") {
@@ -189,6 +204,7 @@ export function ActiveConversation({
 	const commandLocked = command.isPending || command.result?.kind === "unknown";
 	const canSend =
 		!blocked &&
+		!preparing &&
 		!commandLocked &&
 		!selectionDirty &&
 		!uncertainExecution &&
@@ -203,7 +219,7 @@ export function ActiveConversation({
 		}
 	}
 	function regenerate(messageId: string) {
-		if (blocked || commandLocked || active) return;
+		if (blocked || preparing || commandLocked || active) return;
 		if (command.regenerate(messageId)) {
 			action.current = "regenerate";
 			setNotice("");
@@ -354,7 +370,7 @@ export function ActiveConversation({
 						events={timeline.events}
 						onExecution={openExecution}
 						onRegenerate={regenerate}
-						canRegenerate={!blocked && !commandLocked && !active}
+						canRegenerate={!blocked && !preparing && !commandLocked && !active}
 						onResend={(text) => {
 							setDraft(text);
 							setNotice("请确认草稿后手动发送；不会自动提交。");
@@ -376,6 +392,9 @@ export function ActiveConversation({
 							核实原执行状态
 						</Button>
 					</p>
+				)}
+				{preparing && (
+					<p role="status">会话准备中，完成后即可发送。草稿会保留。</p>
 				)}
 				{active && !agent.capabilities.supplementaryInstruction && (
 					<p role="status">当前回复仍在处理，不支持补充指令。草稿会保留。</p>
