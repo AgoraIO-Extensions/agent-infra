@@ -37,7 +37,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-async function ensurePrivateDirectory(path: string) {
+export async function ensurePrivateDirectory(path: string) {
 	const parentPath = dirname(path);
 	const parent = await openProtectedStandardMcpDirectory(parentPath);
 	try {
@@ -60,9 +60,18 @@ async function ensurePrivateDirectory(path: string) {
 	}
 }
 
-async function publishMaterial(path: string, name: string, token: string) {
-	assertStandardMcpProcessProtection();
-	const directory = await openProtectedStandardMcpDirectory(path);
+export async function publishMaterial(
+	path: string,
+	name: string,
+	token: string,
+	guard?: () => void,
+) {
+	const assertCurrent = () => {
+		assertStandardMcpProcessProtection();
+		guard?.();
+	};
+	assertCurrent();
+	const directory = await openProtectedStandardMcpDirectory(path, guard);
 	try {
 		const filePath = protectedStandardMcpPath(directory, path, name);
 		let created = false;
@@ -80,7 +89,10 @@ async function publishMaterial(path: string, name: string, token: string) {
 			},
 			async (error: NodeJS.ErrnoException) => {
 				if (error.code !== "EEXIST") throw error;
-				if ((await readProtectedStandardMcpBytes(path, name, 4096)) !== token)
+				if (
+					(await readProtectedStandardMcpBytes(path, name, 4096, guard)) !==
+					token
+				)
 					unavailable();
 				return open(
 					filePath,
@@ -89,7 +101,9 @@ async function publishMaterial(path: string, name: string, token: string) {
 			},
 		);
 		try {
+			assertCurrent();
 			const stat = await file.stat();
+			assertCurrent();
 			if (
 				!stat.isFile() ||
 				stat.uid !== process.getuid?.() ||
@@ -97,17 +111,21 @@ async function publishMaterial(path: string, name: string, token: string) {
 				![0o400, 0o600].includes(stat.mode & 0o777)
 			)
 				unavailable();
-			assertStandardMcpProcessProtection();
+			assertCurrent();
 			if (created) await file.writeFile(token, "utf8");
-			assertStandardMcpProcessProtection();
+			assertCurrent();
 			await file.sync();
-			assertStandardMcpProcessProtection();
+			assertCurrent();
 		} finally {
 			await file.close();
 		}
+		assertCurrent();
 		await directory.sync();
-		await assertProtectedStandardMcpDirectoryCurrent(path, directory);
-		if ((await readProtectedStandardMcpBytes(path, name, 4096)) !== token)
+		assertCurrent();
+		await assertProtectedStandardMcpDirectoryCurrent(path, directory, guard);
+		if (
+			(await readProtectedStandardMcpBytes(path, name, 4096, guard)) !== token
+		)
 			unavailable();
 	} finally {
 		await directory.close();

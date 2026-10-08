@@ -1,4 +1,5 @@
 import { createPublicKey, type KeyObject } from "node:crypto";
+import { createServer as createHttpsServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -24,8 +25,7 @@ import type {
 	VerifiedExecutionGrantV1,
 	VerifiedRuntimeExecutionGrantV2,
 } from "@agent-infra/contracts/runtime";
-import { serve } from "@hono/node-server";
-
+import { getRequestListener, serve } from "@hono/node-server";
 import { createRuntimeHostApp, runtimeHostService } from "./app.js";
 import {
 	readCodexInstalledSkillDeployment,
@@ -51,6 +51,11 @@ import {
 	readRuntimeLegacyJournal,
 } from "./legacy-migration-journal.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
+import {
+	createRuntimeOAuthApp,
+	prepareRuntimeOAuth,
+	type RuntimeOAuthAssembly,
+} from "./runtime-oauth.js";
 import { createProtectedStandardMcpInput } from "./standard-mcp-input.js";
 import { receiveProtectedStandardMcpInstallation } from "./standard-mcp-installation.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
@@ -58,6 +63,7 @@ import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 
 interface StartOptions {
+	oauth?: RuntimeOAuthAssembly;
 	connectionConsumer?: RuntimeConnectionConsumerProfile;
 	readinessWorkerId?: string;
 	runtimeWorkerId?: string;
@@ -98,13 +104,43 @@ function requiredEnvironment(environment: NodeJS.ProcessEnv, name: string) {
  * In-cluster plaintext HTTP (ADR-0020): the service token and signed Grant
  * authorize every call; NetworkPolicy admits only the Worker.
  */
+const oauthServers = new WeakMap<
+	ReturnType<typeof serve>,
+	ReturnType<typeof createHttpsServer>
+>();
+
+export function startRuntimeOAuthServer(
+	assembly: Extract<RuntimeOAuthAssembly, { status: "available" }>,
+	serviceToken: string,
+) {
+	assertStandardMcpProcessProtection();
+	const server = createHttpsServer(
+		{ key: assembly.key, cert: assembly.cert, minVersion: "TLSv1.2" },
+		getRequestListener(createRuntimeOAuthApp(assembly, serviceToken).fetch),
+	);
+	server.headersTimeout = 15_000;
+	server.requestTimeout = 15_000;
+	server.on("error", () => {
+		void assembly.client.close();
+		server.close();
+	});
+	server.listen(assembly.port);
+	return server;
+}
+
 export function startRuntimeHost(options: StartOptions) {
 	const port = options.port ?? runtimePort(process.env.PORT, 3003);
 	const log = options.log ?? console.info;
 	const connectionConsumer = options.connectionConsumer
 		? structuredClone(options.connectionConsumer)
 		: undefined;
-	return serve(
+	const oauthServer =
+		options.oauth?.status === "available" && options.oauth.port !== port
+			? startRuntimeOAuthServer(options.oauth, options.serviceToken)
+			: undefined;
+	if (options.oauth?.status === "available" && options.oauth.port === port)
+		void options.oauth.client.close().catch(() => undefined);
+	const server = serve(
 		{
 			fetch: createRuntimeHostApp({ ...options, connectionConsumer }).fetch,
 			port,
@@ -133,6 +169,13 @@ export function startRuntimeHost(options: StartOptions) {
 				}),
 			),
 	);
+	if (oauthServer) {
+		oauthServers.set(server, oauthServer);
+		server.once("close", () => {
+			oauthServer.close();
+		});
+	}
+	return server;
 }
 
 export async function assembleRuntimeHost(
@@ -237,7 +280,9 @@ export async function assembleRuntimeHost(
 	let assembledHost: RuntimeHost | undefined;
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
+	let oauth: RuntimeOAuthAssembly | undefined;
 	const close = async () => {
+		if (oauth?.status === "available") await oauth.client.close();
 		try {
 			await assembledHost?.close();
 		} finally {
@@ -257,6 +302,17 @@ export async function assembleRuntimeHost(
 		const store = await FileRuntimeStore.open(storePath);
 		openedStore = store;
 		await legacyMigration?.apply(store);
+		oauth = await prepareRuntimeOAuth({
+			environment,
+			dataDirectory,
+			target: connectionConsumer,
+			store,
+			agentId,
+			workerId: runtimeWorkerId,
+			key: publicKey,
+			keyId,
+			issuer: expectedIssuer,
+		});
 		const standardConnectionClient =
 			configuration &&
 			agentId !== undefined &&
@@ -427,6 +483,7 @@ export async function assembleRuntimeHost(
 			...(activeConfiguration
 				? { configVersion: activeConfiguration.configVersion }
 				: {}),
+			...(oauth ? { oauth } : {}),
 			serviceToken,
 			port,
 			close,
@@ -457,6 +514,14 @@ export async function closeRuntimeHost(
 		if ("closeAllConnections" in server) server.closeAllConnections();
 	}, timeoutMs);
 	try {
+		const oauthServer = oauthServers.get(server);
+		if (oauthServer) {
+			await new Promise<void>((resolve) => {
+				oauthServer.close(() => resolve());
+				oauthServer.closeAllConnections();
+			});
+			oauthServers.delete(server);
+		}
 		await new Promise<void>((resolve, reject) => {
 			server.close((error) => (error ? reject(error) : resolve()));
 		});
