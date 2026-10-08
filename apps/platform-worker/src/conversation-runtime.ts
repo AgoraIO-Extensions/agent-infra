@@ -1011,40 +1011,13 @@ export function createConversationRuntimeV2(
 				...prepared.base,
 				hostSessionRef: prepared.state.hostSessionRef,
 			};
-			try {
-				await prepared.client.renewAuthorization(
-					{
-						...body,
-						grant: signRequest(body, prepared.authority, "execution.renew"),
-					},
-					active,
-				);
-			} catch (error) {
-				// The Host renews only a running execution. Once the Runtime finished,
-				// that refusal is expected while the Worker still drains its journal;
-				// only the Host's durable status may prove it (#1524).
-				if (
-					!(error instanceof ConversationRuntimeHostError) ||
-					error.code !== "RUNTIME_GRANT_INVALID"
-				)
-					throw error;
-				const {
-					afterCursor: _cursor,
-					schemaVersion: _version,
-					...rest
-				} = request;
-				const status = (await recover(
-					{ ...rest, schemaVersion: 2 },
-					active,
-				).catch(() => undefined)) as
-					| { readonly outcome?: unknown; readonly status?: unknown }
-					| undefined;
-				if (
-					status?.outcome !== "found" ||
-					!["completed", "failed", "cancelled"].includes(String(status.status))
-				)
-					throw error;
-			}
+			await prepared.client.renewAuthorization(
+				{
+					...body,
+					grant: signRequest(body, prepared.authority, "execution.renew"),
+				},
+				active,
+			);
 		},
 		async acknowledge(request, signal) {
 			const active = combined(signal);
