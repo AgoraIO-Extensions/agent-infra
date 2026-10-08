@@ -1,0 +1,1088 @@
+{
+  "components": {
+    "schemas": {
+      "ProtocolErrorV1": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "message": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "traceId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "code",
+          "message",
+          "retryable",
+          "traceId"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "RuntimeServiceBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "Runtime protected OAuth receiver",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/internal/runtime/oauth/v1/begin": {
+      "post": {
+        "operationId": "runtimeOAuthBeginV1",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "agentId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "authorizationId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "command": {
+                    "const": "begin",
+                    "type": "string"
+                  },
+                  "configFingerprint": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "grant": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "format": {
+                        "const": "runtime-connection-installation-jws",
+                        "type": "string"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "token": {
+                        "maxLength": 16384,
+                        "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "format",
+                      "token"
+                    ],
+                    "type": "object"
+                  },
+                  "oauthConfiguration": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref",
+                      "revision"
+                    ],
+                    "type": "object"
+                  },
+                  "podUid": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "reference": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "agentId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "conversationId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "executionId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "sessionGeneration": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "agentId",
+                      "conversationId",
+                      "executionId",
+                      "sessionGeneration"
+                    ],
+                    "type": "object"
+                  },
+                  "sandboxId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "sessionGeneration": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "source": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref",
+                      "revision"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "agentId",
+                  "sandboxId",
+                  "podUid",
+                  "sessionGeneration",
+                  "configFingerprint",
+                  "source",
+                  "oauthConfiguration",
+                  "schemaVersion",
+                  "authorizationId",
+                  "reference",
+                  "grant",
+                  "command"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "authorizationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorizationUrl": {
+                      "format": "uri",
+                      "maxLength": 8192,
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "phase": {
+                      "enum": [
+                        "awaiting_callback",
+                        "awaiting_confirmation",
+                        "awaiting_verification",
+                        "denied",
+                        "unknown",
+                        "expired"
+                      ],
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "authorizationId",
+                    "phase",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "RuntimeHost response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid RuntimeHost request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Execution Grant is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime session or operation is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Generation, fence, or operation conflict"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost operation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime or Driver is unavailable"
+          }
+        }
+      }
+    },
+    "/internal/runtime/oauth/v1/callback": {
+      "post": {
+        "operationId": "runtimeOAuthCallbackV1",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "code": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "pattern": "^[\\x21-\\x7e]+$",
+                        "type": "string"
+                      },
+                      "error": {
+                        "not": {}
+                      },
+                      "issuer": {
+                        "format": "uri",
+                        "maxLength": 2048,
+                        "type": "string"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "state": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "state",
+                      "issuer",
+                      "code"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "code": {
+                        "not": {}
+                      },
+                      "error": {
+                        "enum": [
+                          "access_denied",
+                          "invalid_request",
+                          "unauthorized_client",
+                          "unsupported_response_type",
+                          "invalid_scope",
+                          "server_error",
+                          "temporarily_unavailable"
+                        ],
+                        "type": "string"
+                      },
+                      "issuer": {
+                        "format": "uri",
+                        "maxLength": 2048,
+                        "type": "string"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "state": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "state",
+                      "issuer",
+                      "error"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "authorizationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorizationUrl": {
+                      "format": "uri",
+                      "maxLength": 8192,
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "phase": {
+                      "enum": [
+                        "awaiting_callback",
+                        "awaiting_confirmation",
+                        "awaiting_verification",
+                        "denied",
+                        "unknown",
+                        "expired"
+                      ],
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "authorizationId",
+                    "phase",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "RuntimeHost response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid RuntimeHost request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Execution Grant is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime session or operation is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Generation, fence, or operation conflict"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost operation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime or Driver is unavailable"
+          }
+        }
+      }
+    },
+    "/internal/runtime/oauth/v1/confirm": {
+      "post": {
+        "operationId": "runtimeOAuthConfirmV1",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "agentId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "authorizationId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "command": {
+                    "const": "confirm",
+                    "type": "string"
+                  },
+                  "configFingerprint": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "grant": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "format": {
+                        "const": "runtime-connection-installation-jws",
+                        "type": "string"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "token": {
+                        "maxLength": 16384,
+                        "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "format",
+                      "token"
+                    ],
+                    "type": "object"
+                  },
+                  "oauthConfiguration": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref",
+                      "revision"
+                    ],
+                    "type": "object"
+                  },
+                  "podUid": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "reference": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "agentId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "conversationId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "executionId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "sessionGeneration": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "agentId",
+                      "conversationId",
+                      "executionId",
+                      "sessionGeneration"
+                    ],
+                    "type": "object"
+                  },
+                  "sandboxId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "sessionGeneration": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "source": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref",
+                      "revision"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "agentId",
+                  "sandboxId",
+                  "podUid",
+                  "sessionGeneration",
+                  "configFingerprint",
+                  "source",
+                  "oauthConfiguration",
+                  "schemaVersion",
+                  "authorizationId",
+                  "reference",
+                  "grant",
+                  "command"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "authorizationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorizationUrl": {
+                      "format": "uri",
+                      "maxLength": 8192,
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "phase": {
+                      "enum": [
+                        "awaiting_callback",
+                        "awaiting_confirmation",
+                        "awaiting_verification",
+                        "denied",
+                        "unknown",
+                        "expired"
+                      ],
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "authorizationId",
+                    "phase",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "RuntimeHost response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid RuntimeHost request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Execution Grant is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime session or operation is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Generation, fence, or operation conflict"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost operation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime or Driver is unavailable"
+          }
+        }
+      }
+    },
+    "/internal/runtime/oauth/v1/status": {
+      "post": {
+        "operationId": "runtimeOAuthStatusV1",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "agentId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "authorizationId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "command": {
+                    "const": "status",
+                    "type": "string"
+                  },
+                  "configFingerprint": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "grant": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "format": {
+                        "const": "runtime-connection-installation-jws",
+                        "type": "string"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "token": {
+                        "maxLength": 16384,
+                        "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "format",
+                      "token"
+                    ],
+                    "type": "object"
+                  },
+                  "oauthConfiguration": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref",
+                      "revision"
+                    ],
+                    "type": "object"
+                  },
+                  "podUid": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "reference": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "agentId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "conversationId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "executionId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "sessionGeneration": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "agentId",
+                      "conversationId",
+                      "executionId",
+                      "sessionGeneration"
+                    ],
+                    "type": "object"
+                  },
+                  "sandboxId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "sessionGeneration": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "source": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref",
+                      "revision"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "agentId",
+                  "sandboxId",
+                  "podUid",
+                  "sessionGeneration",
+                  "configFingerprint",
+                  "source",
+                  "oauthConfiguration",
+                  "schemaVersion",
+                  "authorizationId",
+                  "reference",
+                  "grant",
+                  "command"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "authorizationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorizationUrl": {
+                      "format": "uri",
+                      "maxLength": 8192,
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "phase": {
+                      "enum": [
+                        "awaiting_callback",
+                        "awaiting_confirmation",
+                        "awaiting_verification",
+                        "denied",
+                        "unknown",
+                        "expired"
+                      ],
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "authorizationId",
+                    "phase",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "RuntimeHost response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid RuntimeHost request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Execution Grant is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime session or operation is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Generation, fence, or operation conflict"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost operation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime or Driver is unavailable"
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "RuntimeServiceBearer": []
+    }
+  ]
+}

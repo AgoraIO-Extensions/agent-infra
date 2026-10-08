@@ -2576,3 +2576,47 @@ describe("Runtime V3 original evidence read contexts", () => {
 		).toBe(false);
 	});
 });
+
+it("checks a separately authorized installation against current original facts without a native/tool action", async () => {
+	const request = signV3Fixture(submitV3Fixture(), "turn.submit");
+	const reference = {
+		agentId: request.agentId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		sessionGeneration: request.sessionGeneration,
+	};
+	const env = await setup({
+		afterOperationPrepared: () => {
+			env.store.assertOriginalExecutionBindingCurrent(
+				reference,
+				request.principal,
+				() => env.clock.now,
+			);
+			expect(() =>
+				env.store.assertOriginalExecutionBindingCurrent(
+					reference,
+					{ kind: "user", id: "foreign-user" },
+					() => env.clock.now,
+				),
+			).toThrow();
+			expect(() =>
+				env.store.assertOriginalExecutionBindingCurrent(
+					{ ...reference, conversationId: "foreign-conversation" },
+					request.principal,
+					() => env.clock.now,
+				),
+			).toThrow();
+		},
+	});
+	await env.host.submitTurnV3(request, verifyRuntimeV2Fixture(request.grant));
+	env.clock.now += 60_000;
+	expect(() =>
+		env.store.assertOriginalExecutionBindingCurrent(
+			reference,
+			request.principal,
+			() => env.clock.now,
+		),
+	).toThrow();
+	await env.host.close();
+	await env.store.close();
+});

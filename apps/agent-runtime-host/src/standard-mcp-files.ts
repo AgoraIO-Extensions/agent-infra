@@ -13,8 +13,15 @@ export function standardMcpInputUnavailable(): never {
 	);
 }
 
-export async function openProtectedStandardMcpDirectory(path: string) {
-	assertStandardMcpProcessProtection();
+export async function openProtectedStandardMcpDirectory(
+	path: string,
+	guard?: () => void,
+) {
+	const assertCurrent = () => {
+		assertStandardMcpProcessProtection();
+		guard?.();
+	};
+	assertCurrent();
 	if (!isAbsolute(path) || resolve(path) !== path || path === "/")
 		standardMcpInputUnavailable();
 	const directory = await open(
@@ -22,11 +29,11 @@ export async function openProtectedStandardMcpDirectory(path: string) {
 		constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
 	);
 	try {
-		assertStandardMcpProcessProtection();
+		assertCurrent();
 		const stat = await directory.stat();
-		assertStandardMcpProcessProtection();
+		assertCurrent();
 		const canonical = await realpath(path);
-		assertStandardMcpProcessProtection();
+		assertCurrent();
 		if (
 			process.getuid?.() === undefined ||
 			stat.uid !== process.getuid?.() ||
@@ -59,11 +66,19 @@ export function protectedStandardMcpPath(
 export async function assertProtectedStandardMcpDirectoryCurrent(
 	path: string,
 	directory: FileHandle,
+	guard?: () => void,
 ) {
-	const current = await openProtectedStandardMcpDirectory(path);
+	const assertCurrent = () => {
+		assertStandardMcpProcessProtection();
+		guard?.();
+	};
+	assertCurrent();
+	const current = await openProtectedStandardMcpDirectory(path, guard);
 	try {
 		const before = await directory.stat();
+		assertCurrent();
 		const after = await current.stat();
+		assertCurrent();
 		if (
 			before.dev !== after.dev ||
 			before.ino !== after.ino ||
@@ -74,27 +89,35 @@ export async function assertProtectedStandardMcpDirectoryCurrent(
 	} finally {
 		await current.close();
 	}
-	assertStandardMcpProcessProtection();
+	assertCurrent();
 }
 
 export async function readProtectedStandardMcpBytes(
 	directoryPath: string,
 	name: string,
 	maximum: number,
+	guard?: () => void,
 ) {
-	assertStandardMcpProcessProtection();
-	let text: string;
-	const directory = await openProtectedStandardMcpDirectory(directoryPath);
-	try {
+	const assertCurrent = () => {
 		assertStandardMcpProcessProtection();
+		guard?.();
+	};
+	assertCurrent();
+	let text: string;
+	const directory = await openProtectedStandardMcpDirectory(
+		directoryPath,
+		guard,
+	);
+	try {
+		assertCurrent();
 		const file = await open(
 			protectedStandardMcpPath(directory, directoryPath, name),
 			constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
 		);
 		try {
-			assertStandardMcpProcessProtection();
+			assertCurrent();
 			const before = await file.stat();
-			assertStandardMcpProcessProtection();
+			assertCurrent();
 			if (
 				!before.isFile() ||
 				before.uid !== process.getuid?.() ||
@@ -108,19 +131,19 @@ export async function readProtectedStandardMcpBytes(
 			try {
 				let length = 0;
 				while (length < bytes.length) {
-					assertStandardMcpProcessProtection();
+					assertCurrent();
 					const { bytesRead } = await file.read(
 						bytes,
 						length,
 						bytes.length - length,
 						length,
 					);
-					assertStandardMcpProcessProtection();
+					assertCurrent();
 					if (!bytesRead) break;
 					length += bytesRead;
 				}
 				const after = await file.stat();
-				assertStandardMcpProcessProtection();
+				assertCurrent();
 				if (
 					length !== before.size ||
 					before.dev !== after.dev ||
@@ -136,6 +159,7 @@ export async function readProtectedStandardMcpBytes(
 				await assertProtectedStandardMcpDirectoryCurrent(
 					directoryPath,
 					directory,
+					guard,
 				);
 				text = new TextDecoder("utf-8", { fatal: true }).decode(
 					bytes.subarray(0, length),
@@ -149,6 +173,6 @@ export async function readProtectedStandardMcpBytes(
 	} finally {
 		await directory.close();
 	}
-	assertStandardMcpProcessProtection();
+	assertCurrent();
 	return text;
 }

@@ -1,0 +1,931 @@
+{
+  "$defs": {
+    "RuntimeOAuthBeginRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "authorizationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "command": {
+          "const": "begin",
+          "type": "string"
+        },
+        "configFingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "runtime-connection-installation-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "maxLength": 16384,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "oauthConfiguration": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "revision"
+          ],
+          "type": "object"
+        },
+        "podUid": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "reference": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "agentId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration"
+          ],
+          "type": "object"
+        },
+        "sandboxId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "source": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "revision"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "agentId",
+        "sandboxId",
+        "podUid",
+        "sessionGeneration",
+        "configFingerprint",
+        "source",
+        "oauthConfiguration",
+        "schemaVersion",
+        "authorizationId",
+        "reference",
+        "grant",
+        "command"
+      ],
+      "type": "object"
+    },
+    "RuntimeOAuthCallbackRequestV1": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7e]+$",
+              "type": "string"
+            },
+            "error": {
+              "not": {}
+            },
+            "issuer": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "state": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "state",
+            "issuer",
+            "code"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "not": {}
+            },
+            "error": {
+              "enum": [
+                "access_denied",
+                "invalid_request",
+                "unauthorized_client",
+                "unsupported_response_type",
+                "invalid_scope",
+                "server_error",
+                "temporarily_unavailable"
+              ],
+              "type": "string"
+            },
+            "issuer": {
+              "format": "uri",
+              "maxLength": 2048,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "state": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "state",
+            "issuer",
+            "error"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RuntimeOAuthConfigurationV1": {
+      "additionalProperties": false,
+      "properties": {
+        "authorizationEndpoint": {
+          "format": "uri",
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "callbackUrl": {
+          "format": "uri",
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "clientId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "configFingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "issuer": {
+          "format": "uri",
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "ref": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "resource": {
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "revision": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "revocationEndpoint": {
+          "format": "uri",
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "runtimeOrigin": {
+          "format": "uri",
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "const": "mcp",
+          "type": "string"
+        },
+        "source": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "revision"
+          ],
+          "type": "object"
+        },
+        "tokenEndpoint": {
+          "format": "uri",
+          "maxLength": 2048,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "ref",
+        "revision",
+        "clientId",
+        "issuer",
+        "authorizationEndpoint",
+        "tokenEndpoint",
+        "revocationEndpoint",
+        "callbackUrl",
+        "runtimeOrigin",
+        "resource",
+        "scope",
+        "configFingerprint",
+        "source"
+      ],
+      "type": "object"
+    },
+    "RuntimeOAuthConfirmRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "authorizationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "command": {
+          "const": "confirm",
+          "type": "string"
+        },
+        "configFingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "runtime-connection-installation-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "maxLength": 16384,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "oauthConfiguration": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "revision"
+          ],
+          "type": "object"
+        },
+        "podUid": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "reference": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "agentId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration"
+          ],
+          "type": "object"
+        },
+        "sandboxId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "source": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "revision"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "agentId",
+        "sandboxId",
+        "podUid",
+        "sessionGeneration",
+        "configFingerprint",
+        "source",
+        "oauthConfiguration",
+        "schemaVersion",
+        "authorizationId",
+        "reference",
+        "grant",
+        "command"
+      ],
+      "type": "object"
+    },
+    "RuntimeOAuthGrantClaimsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "audience": {
+          "const": "runtime_connection_client",
+          "type": "string"
+        },
+        "authorizationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "command": {
+          "enum": [
+            "begin",
+            "confirm",
+            "status"
+          ],
+          "type": "string"
+        },
+        "configFingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "grantId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "issuedAt": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "issuer": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "oauthConfiguration": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "revision"
+          ],
+          "type": "object"
+        },
+        "podUid": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        "purpose": {
+          "const": "connection_installation",
+          "type": "string"
+        },
+        "reference": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "agentId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration"
+          ],
+          "type": "object"
+        },
+        "requestDigest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "sandboxId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "source": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "revision"
+          ],
+          "type": "object"
+        },
+        "workerId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentId",
+        "sandboxId",
+        "podUid",
+        "sessionGeneration",
+        "configFingerprint",
+        "source",
+        "oauthConfiguration",
+        "schemaVersion",
+        "reference",
+        "purpose",
+        "audience",
+        "issuer",
+        "workerId",
+        "principal",
+        "command",
+        "authorizationId",
+        "grantId",
+        "issuedAt",
+        "expiresAt",
+        "requestDigest"
+      ],
+      "type": "object"
+    },
+    "RuntimeOAuthGrantV1": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "runtime-connection-installation-jws",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "token": {
+          "maxLength": 16384,
+          "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "format",
+        "token"
+      ],
+      "type": "object"
+    },
+    "RuntimeOAuthResponseV1": {
+      "additionalProperties": false,
+      "properties": {
+        "authorizationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "authorizationUrl": {
+          "format": "uri",
+          "maxLength": 8192,
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "phase": {
+          "enum": [
+            "awaiting_callback",
+            "awaiting_confirmation",
+            "awaiting_verification",
+            "denied",
+            "unknown",
+            "expired"
+          ],
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "authorizationId",
+        "phase",
+        "expiresAt"
+      ],
+      "type": "object"
+    },
+    "RuntimeOAuthScopeV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "configFingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "oauthConfiguration": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "revision"
+          ],
+          "type": "object"
+        },
+        "podUid": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sandboxId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "source": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "revision"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "agentId",
+        "sandboxId",
+        "podUid",
+        "sessionGeneration",
+        "configFingerprint",
+        "source",
+        "oauthConfiguration"
+      ],
+      "type": "object"
+    },
+    "RuntimeOAuthStatusRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "authorizationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "command": {
+          "const": "status",
+          "type": "string"
+        },
+        "configFingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "grant": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "runtime-connection-installation-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "maxLength": 16384,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "oauthConfiguration": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "revision"
+          ],
+          "type": "object"
+        },
+        "podUid": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "reference": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "agentId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration"
+          ],
+          "type": "object"
+        },
+        "sandboxId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "source": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "revision": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ref",
+            "revision"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "agentId",
+        "sandboxId",
+        "podUid",
+        "sessionGeneration",
+        "configFingerprint",
+        "source",
+        "oauthConfiguration",
+        "schemaVersion",
+        "authorizationId",
+        "reference",
+        "grant",
+        "command"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-oauth.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Runtime OAuth installation contracts V1"
+}

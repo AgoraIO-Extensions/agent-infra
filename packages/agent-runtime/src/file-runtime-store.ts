@@ -1544,6 +1544,27 @@ export class FileRuntimeStore {
 		this.checkAuthorizedOriginalExecution(this.file.read(), action, readNow);
 	}
 
+	/** Read-only admission check for a separately authorized installation command. */
+	assertOriginalExecutionBindingCurrent(
+		reference: RuntimeOriginalExecutionRef,
+		principal: RuntimePrincipalV1,
+		readNow: () => number,
+	) {
+		const session = this.checkAuthorizedOriginalExecution(
+			this.file.read(),
+			{ ...reference, runtimeOperationId: reference.executionId },
+			readNow,
+		);
+		if (
+			session.agentId !== reference.agentId ||
+			session.conversationId !== reference.conversationId ||
+			session.sessionGeneration !== reference.sessionGeneration ||
+			session.authority?.principal.kind !== principal.kind ||
+			session.authority.principal.id !== principal.id
+		)
+			runtimeAuthorizationDenied();
+	}
+
 	async resolveOriginalExecutionBinding(
 		reference: RuntimeOriginalExecutionRef,
 		readNow: () => number,
