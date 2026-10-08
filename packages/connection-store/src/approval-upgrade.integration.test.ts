@@ -142,7 +142,7 @@ describe("compatible approval upgrade", () => {
 					service.upgradeProviderConnection(principalId, connectionId),
 				).resolves.toEqual({ connectionId });
 				const [access] =
-					await sql`SELECT capability_profile_id FROM connection_access_authorizations WHERE connection_id=${connectionId}`;
+					await sql`SELECT capability_profile_id FROM connection_effective_access_authorizations WHERE connection_id=${connectionId}`;
 				const members = await sql<
 					{ action_version_id: string }[]
 				>`SELECT action_version_id FROM connection_capability_profile_actions WHERE capability_profile_id=${access?.capability_profile_id} ORDER BY action_version_id`;
