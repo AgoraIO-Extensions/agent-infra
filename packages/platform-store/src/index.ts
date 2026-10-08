@@ -144,6 +144,7 @@ export {
 	PostgresSecretKeyRotationStoreV1,
 	SecretKeyRotationStoreError,
 } from "./secret-key-rotation.ts";
+export { PostgresSkillHubLifecycleV1 } from "./skill-hub.js";
 export {
 	PostgresTaskAuthorizationStoreV1,
 	TaskAuthorizationStoreError,

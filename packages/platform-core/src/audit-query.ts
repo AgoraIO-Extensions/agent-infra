@@ -91,6 +91,11 @@ export const platformAuditQueryResultsV1 = [
 ] as const;
 
 export const platformAuditQueryActionsV1 = [
+	"skill.version.register",
+	"skill.version.review",
+	"skill.version.revoke",
+	"skill.version.read",
+	"skill.version.refused",
 	"agent.application.submitted",
 	"agent.application.updated",
 	"agent.application.resubmitted",

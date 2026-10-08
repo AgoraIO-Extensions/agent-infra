@@ -71,6 +71,7 @@ describe("platform-store package surface", () => {
 			"PostgresScopedPlatformAuditQueryV1",
 			"PostgresSecretActivationStoreV1",
 			"PostgresSecretKeyRotationStoreV1",
+			"PostgresSkillHubLifecycleV1",
 			"PostgresTaskAuthorizationStoreV1",
 			"PostgresWecomChannelV1",
 			"PostgresWecomConnectionsV1",

@@ -126,6 +126,7 @@ export {
 export * from "./session-sandbox-lifecycle.js";
 export * from "./session-sandbox-reconciliation.js";
 export * from "./skill-hub.js";
+export * from "./skill-hub-management.js";
 export * from "./task-api-audit.js";
 export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";
