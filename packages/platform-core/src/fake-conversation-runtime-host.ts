@@ -78,8 +78,10 @@ export class FakeConversationRuntimeHostV1
 		this.#events = structuredClone(events);
 	}
 
-	failNext(code = "RUNTIME_UNAVAILABLE", retryable = true) {
-		this.#failNext = new ConversationRuntimeHostError(code, retryable);
+	failNext(code = "RUNTIME_UNAVAILABLE", retryable = true, notSent = false) {
+		this.#failNext = new ConversationRuntimeHostError(code, retryable, {
+			notSent,
+		});
 	}
 
 	async dispatch(request: ConversationRuntimeDispatchRequestV1) {

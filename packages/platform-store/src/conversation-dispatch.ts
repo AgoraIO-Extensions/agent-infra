@@ -65,7 +65,10 @@ import {
 	type PlatformQueueResourceSnapshot,
 	readPlatformQueueResourceSnapshot,
 } from "./observability-snapshot.js";
-import { readSessionSandboxRuntimeState } from "./session-sandbox.js";
+import {
+	isSessionSandboxPolicyCurrentV1,
+	readSessionSandboxRuntimeState,
+} from "./session-sandbox.js";
 import {
 	claimSandboxReconciliation,
 	prepareSandboxReconciliation,
@@ -613,7 +616,9 @@ export class PostgresConversationDispatchStoreV1
 	async prepareRuntimeDispatch(input: {
 		readonly claim: ConversationDispatchClaimV1;
 		readonly leaseDurationMs: number;
-	}): Promise<boolean | "capacity_wait" | "capacity_unavailable"> {
+	}): Promise<
+		boolean | "capacity_wait" | "capacity_unavailable" | "sandbox_wait"
+	> {
 		requireClaim(input.claim);
 		if (input.claim.metadataRecovery)
 			throw new TypeError("Metadata recovery cannot dispatch business work");
@@ -770,6 +775,44 @@ export class PostgresConversationDispatchStoreV1
 						}
 						if (capacityDecision !== "admit")
 							throw new DispatchCapacityUnavailable(capacityDecision);
+						// A Sandbox prepared for an earlier configuration or Workload
+						// revision cannot serve this Turn. Keep it waiting without
+						// reserving capacity; never write unknown for work that is
+						// not going to be sent (HLD §8.4).
+						const binding = state.conversation.sandbox;
+						const [allocation] = binding
+							? await transaction<{ resource_policy: unknown }[]>`
+								select resource_policy from platform.session_sandbox_allocations
+								where sandbox_id = ${binding.sandboxId}
+									and conversation_id = ${binding.sessionId}
+									and session_generation = ${binding.generation}
+							`
+							: [];
+						let sandboxCurrent: boolean;
+						try {
+							sandboxCurrent =
+								!!binding &&
+								isSessionSandboxPolicyCurrentV1({
+									agentId: input.claim.agentId,
+									policy: (allocation?.resource_policy ?? null) as Parameters<
+										typeof isSessionSandboxPolicyCurrentV1
+									>[0]["policy"],
+									configurationRevision: requireSafeCounter(
+										agent.current_configuration_revision,
+										1,
+									),
+									managementFence: requireSafeCounter(agent.fence, 1),
+									lifecycleRevision: requireSafeCounter(
+										agent.workload_revision,
+										1,
+									),
+									workloadState: agent.state,
+								});
+						} catch {
+							throw new DispatchCapacityUnavailable("capacity_unavailable");
+						}
+						if (!sandboxCurrent)
+							throw new DispatchCapacityUnavailable("sandbox_wait");
 						const original = await originalOperationBinding(
 							transaction,
 							state,
@@ -818,6 +861,64 @@ export class PostgresConversationDispatchStoreV1
 			if (error instanceof DispatchCapacityUnavailable) return error.outcome;
 			throw error;
 		}
+	}
+
+	/**
+	 * Undo prepareRuntimeDispatch's unknown write-ahead for a Turn whose Runtime
+	 * request was provably never sent. Only the same lease and delivery fence may
+	 * do this; the pinned original operation stays authoritative for the retry.
+	 */
+	async releaseUnsentDispatch(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly retryDelayMs: number;
+		readonly errorCode: string;
+	}): Promise<boolean> {
+		requireClaim(input.claim);
+		const original = input.claim.executionStatus;
+		if (
+			input.claim.metadataRecovery ||
+			!isTurn(input.claim.operation) ||
+			(original !== "submitted" && original !== "waiting") ||
+			!Number.isSafeInteger(input.retryDelayMs) ||
+			input.retryDelayMs < 0 ||
+			input.retryDelayMs > 86_400_000 ||
+			!symbolicCode.test(input.errorCode)
+		)
+			throw new TypeError("Conversation dispatch release is invalid");
+		return transactionResult(this.#client, async (transaction) => {
+			const state = await ownedState(transaction, input.claim);
+			if (
+				state?.execution.status !== "unknown" ||
+				state.execution.last_runtime_cursor !== null ||
+				state.conversation.host_session_ref !== input.claim.hostSessionRef
+			)
+				throw new StaleDispatchLease();
+			const rows = await transaction<{ execution_id: string }[]>`
+				update platform.conversation_executions
+				set status = ${original}, updated_at = clock_timestamp()
+				where execution_id = ${input.claim.executionId}
+					and conversation_id = ${input.claim.conversationId}
+					and session_generation = ${input.claim.sessionGeneration}
+					and delivery_fence = ${input.claim.executionDeliveryFence}
+					and status = 'unknown'
+				returning execution_id
+			`;
+			if (rows.length !== 1) throw new StaleDispatchLease();
+			state.execution.status = original;
+			await recordTaskStatus(
+				transaction,
+				state,
+				original,
+				input.claim.leaseOwner,
+			);
+			await retryOutbox(
+				transaction,
+				state,
+				input.claim,
+				input.retryDelayMs,
+				input.errorCode,
+			);
+		});
 	}
 
 	async cancelUnaccepted(input: {

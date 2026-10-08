@@ -34,6 +34,50 @@ export const conversationSandboxReadBindingSql = `
  )
 `;
 
+/**
+ * Whether a prepared Sandbox policy still matches the Agent's current
+ * configuration, management fence and verified ready deployment. A Sandbox
+ * prepared before a configuration or Workload change is stale until upgraded.
+ */
+export function isSessionSandboxPolicyCurrentV1(input: {
+	readonly agentId: string;
+	readonly policy: SessionSandboxRuntimeStateV1["policy"] | null;
+	readonly configurationRevision: number;
+	readonly managementFence: number;
+	readonly lifecycleRevision: number;
+	readonly workloadState: unknown;
+}): boolean {
+	const { policy } = input;
+	if (!policy) return false;
+	const decoded = decodePersistedWorkloadStateV1(
+		input.workloadState,
+		input.agentId,
+	);
+	if (!decoded || decoded.legacy || !decoded.state.verified) return false;
+	const verified = decoded.state.verified;
+	const parsed = AgentWorkloadDesiredV1Schema.safeParse(verified.deployment);
+	if (!parsed.success) return false;
+	const deployment = parsed.data;
+	return !(
+		policy.configurationRevision !== input.configurationRevision ||
+		policy.managementFence !== input.managementFence ||
+		// The policy binds the verified deployment's Workload revision (checked
+		// below); the management lifecycle has its own source (#1480).
+		decoded.state.sourceLifecycleRevision !== input.lifecycleRevision ||
+		decoded.state.phase !== "ready" ||
+		decoded.state.verifiedRevision === null ||
+		decoded.state.sourceConfigurationRevision !==
+			policy.configurationRevision ||
+		verified.configuration.revision !== policy.configurationRevision ||
+		deployment.agentId !== input.agentId ||
+		deployment.configRevision !== policy.configurationRevision ||
+		deployment.workloadRevision !== policy.workloadRevision ||
+		deployment.imageDigest !== policy.imageDigest ||
+		verified.executionCapacity?.resourceConfigurationHash !==
+			policy.resourceConfigurationHash
+	);
+}
+
 /** Caller owns the original outbox lease and Conversation lock; this is not an independent reader. */
 export async function readSessionSandboxRuntimeState(
 	transaction: Transaction,
@@ -144,32 +188,15 @@ export async function readSessionSandboxRuntimeState(
 		return null;
 	// Read current facts without acquiring Agent locks after the Conversation mutex.
 	// This receipt never replaces the original prepareRuntimeDispatch authority recheck.
-	const decoded = decodePersistedWorkloadStateV1(
-		row.workload_state,
-		sandbox.agentId,
-	);
-	if (!decoded || decoded.legacy || !decoded.state.verified) return null;
-	const verified = decoded.state.verified;
-	const parsed = AgentWorkloadDesiredV1Schema.safeParse(verified.deployment);
-	if (!parsed.success) return null;
-	const deployment = parsed.data;
 	if (
-		policy.configurationRevision !== Number(row.configuration_revision) ||
-		policy.managementFence !== Number(row.management_fence) ||
-		// The policy binds the verified deployment's Workload revision (checked
-		// below); the management lifecycle has its own source (#1480).
-		decoded.state.sourceLifecycleRevision !== Number(row.workload_revision) ||
-		decoded.state.phase !== "ready" ||
-		decoded.state.verifiedRevision === null ||
-		decoded.state.sourceConfigurationRevision !==
-			policy.configurationRevision ||
-		verified.configuration.revision !== policy.configurationRevision ||
-		deployment.agentId !== sandbox.agentId ||
-		deployment.configRevision !== policy.configurationRevision ||
-		deployment.workloadRevision !== policy.workloadRevision ||
-		deployment.imageDigest !== policy.imageDigest ||
-		verified.executionCapacity?.resourceConfigurationHash !==
-			policy.resourceConfigurationHash
+		!isSessionSandboxPolicyCurrentV1({
+			agentId: sandbox.agentId,
+			policy,
+			configurationRevision: Number(row.configuration_revision),
+			managementFence: Number(row.management_fence),
+			lifecycleRevision: Number(row.workload_revision),
+			workloadState: row.workload_state,
+		})
 	)
 		return null;
 	const observation = row.resource_observation;

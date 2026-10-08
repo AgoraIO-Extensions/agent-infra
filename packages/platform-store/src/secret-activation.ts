@@ -442,26 +442,34 @@ export interface PostgresSecretActivationStoreOptionsV1 {
 export class PostgresSecretActivationStoreV1
 	implements SecretActivationStorePortV1
 {
-	readonly #client: ReturnType<typeof postgres> | undefined;
+	readonly #client: postgres.Sql | undefined;
+	readonly #ownsClient: boolean = false;
 	readonly #transaction: postgres.TransactionSql | undefined;
 
 	constructor(
 		options:
 			| PostgresSecretActivationStoreOptionsV1
-			| { readonly transaction: postgres.TransactionSql },
+			| { readonly transaction: postgres.TransactionSql }
+			/** Shared pool; every operation runs in its own short transaction. */
+			| { readonly client: postgres.Sql },
 	) {
 		if ("transaction" in options) {
 			this.#transaction = options.transaction;
+			return;
+		}
+		if ("client" in options) {
+			this.#client = options.client;
 			return;
 		}
 		const databaseUrl = platformDatabaseUrlFromEnvironment({
 			PLATFORM_DATABASE_URL: text(options.databaseUrl),
 		});
 		this.#client = postgres(databaseUrl, { max: 4 });
+		this.#ownsClient = true;
 	}
 
 	async close(): Promise<void> {
-		await this.#client?.end();
+		if (this.#ownsClient) await this.#client?.end();
 	}
 
 	async #run<T>(

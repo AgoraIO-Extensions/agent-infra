@@ -650,12 +650,19 @@ describe("Trusted conversation Runtime adapter", () => {
 							...(change === "fence" ? { fence: 2 } : {}),
 						},
 		});
+		// Nothing reached the Runtime, so dispatch proves the Turn unsent (#1522).
 		await expect(
 			h.runtime.runtimeHost.dispatch(h.request(context)),
-		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+			notSent: true,
+		});
 		await expect(
 			h.runtime.runtimeHost.renewAuthorization?.(h.events(context)),
-		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+			notSent: false,
+		});
 		expect(h.fetcher).not.toHaveBeenCalled();
 		expect(h.authorizationStore.recordControl).not.toHaveBeenCalled();
 		h.runtime.close();
@@ -675,8 +682,41 @@ describe("Trusted conversation Runtime adapter", () => {
 		});
 		await expect(
 			h.runtime.runtimeHost.dispatch(h.request(context)),
-		).rejects.toMatchObject({ code: "RUNTIME_WORKLOAD_UNAVAILABLE" });
+		).rejects.toMatchObject({
+			code: "RUNTIME_WORKLOAD_UNAVAILABLE",
+			notSent: true,
+		});
 		expect(h.fetcher).not.toHaveBeenCalled();
+		h.runtime.close();
+	});
+	it("does not claim an operation unsent once the Runtime request was attempted (#1522)", async () => {
+		const h = harness();
+		Object.assign(h.claim, {
+			operation: "conversation.turn.stop.v1",
+			stopRequestId: "original-stop",
+			deliveryFence: 3,
+		});
+		Object.assign(h.state, { stopPending: true });
+		h.useLegacy();
+		const reference = await h.authorize();
+		h.fetcher.mockImplementationOnce(async () => {
+			throw new TypeError("connection reset after request write");
+		});
+		const failure = await h.runtime.runtimeHost
+			.dispatch({
+				...h.events(reference),
+				operation: "turn.stop",
+				stopRequestId: "original-stop",
+				deliveryFence: 3,
+				executionDeliveryFence: 2,
+			})
+			.then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+		expect(h.fetcher).toHaveBeenCalled();
+		expect(failure).toBeDefined();
+		expect(failure).not.toMatchObject({ notSent: true });
 		h.runtime.close();
 	});
 	it("uses recovery control to confirm committed events across configuration drift", async () => {
