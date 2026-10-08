@@ -393,6 +393,10 @@ export {
 	createBrowserRecoveryConsumerV1,
 } from "./browser-recovery-consumer.js";
 export {
+	type BrowserRecoveryEventInputV1,
+	createBrowserRecoveryEventAdapterV1,
+} from "./browser-recovery-events.js";
+export {
 	type BrowserResultFileEventBindingV1,
 	type BrowserResultFileEventInputV1,
 	type BrowserResultFileEventResultV1,
