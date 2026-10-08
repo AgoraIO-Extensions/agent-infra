@@ -1242,6 +1242,57 @@ Skill Hub 是 Platform DB、版本化 S3 兼容对象存储、Platform API/Web�
 - Skill 的 Tool、Connection、文件、网络和脚本执行 grant 只能收敛既有授权；脚本默认关闭。当前权限失效、跨组织/Agent/Session、无实际加载证据、包不可用或工具结果无法核实时，调用拒绝或保持 unknown，不降级为普通文本。
 - Skill Hub 的 API、事务、CAS、idempotency、outbox、audit 和 recovery 必须复用现有 Agent Configuration Revision 和 Execution/Worker fence；不建立第二套 Skill 状态机或调度循环。旧 Driver/Host 不支持该契约时显式返回不支持。
 
+#### 11.6.1 包字节与摘要
+
+包供应在受控临时目录处理项目快照或批准 Provider 的固定来源；它只接收受权选择与字节流，不接收调用方文件系统路径、任意 URL、执行命令或准入标记。对象存储负责包字节，Platform DB 负责版本、关系与原操作事实，Runtime 工作区文件不能反推业务授权。
+
+- ZIP 只包含 Skill payload：根目录 `SKILL.md` 与获准资源。manifest、来源证明、扫描回执和签名作为独立对象保存，不放入待计算 `packageDigest` 的 ZIP，避免摘要自引用。
+- `packageDigest` 是实际 ZIP 完整字节的 SHA-256；`manifestDigest` 是 canonical manifest 字节的 SHA-256；`signatureDigest` 是原始 detached signature 字节的 SHA-256。ETag、对象名和调用方声明不能替代内容摘要。
+- manifest 沿既有 Skill Package Manifest：`schemaVersion`、`name`、`version`、`entryPath`、`files`、`packageDigest`。每个文件按 `path`、`sizeBytes`、`sha256` 表述，覆盖 payload 的完整普通文件集合；文件大小与摘要由实际展开字节计算，不能只读归档声明值。
+- canonical JSON 使用 UTF-8、无 BOM、无多余空白。先按严格 schema 校验所有值：数值仅允许安全非负整数，字符串须为有效 Unicode，拒绝孤立 surrogate、额外字段及非普通数据；文件数组按合法相对路径的 UTF-8 字节序排序。再按合同列出的字段顺序构造普通数据对象，使用 ECMAScript `JSON.stringify`（无 replacer/space）序列化并编码为 UTF-8；字符串转义和数值表示均以此算法为准。接收方按同一规则重建并逐字节比较完整输入，拒绝重复字段、另一种转义/数值写法及任何非 canonical 编码；manifest、来源证明、扫描回执和签名记录统一使用此规则。
+- 归档和展开总量各最多 50,000,000 bytes，普通文件最多 2,000 个；部署策略可以降低限额，调用方不能提高。校验同时计量实际输入和实际展开字节，拒绝截断、重复/重叠条目、声明与实际不一致、加密归档及不支持的归档特性。
+- 文件路径使用既有 manifest 的相对路径约束；目录按同一规则校验相对层级，不计入普通文件集合，不能声明权限或执行入口。绝对路径、dot component、反斜杠、NUL、文件/目录冲突、符号链接、特殊文件及缺少 `SKILL.md` 均拒绝。内容只写入本操作 staging，校验与扫描阶段不执行 Skill、安装脚本或嵌套依赖。
+
+#### 11.6.2 来源、签名与扫描准入
+
+信任配置、签名 key、Provider 发布者及扫描服务由平台部署维护，具有可核对的 `trustRevision` 和 `policyRevision`。key ID 只索引受控信任配置，包内公钥、frontmatter、Owner env、模型输出和浏览器字段不能建立信任。
+
+| 证据 | 受控内容与检查 |
+| --- | --- |
+| 来源证明 | `schemaVersion`、`provider`、`publisherId`、`sourceVersion`、`sourceDigest`、`approvalRef`、`trustRevision`；由受信 Provider Adapter/平台项目供应产生并复核，固定实际源版本和内容摘要。仅策略未要求审批的内部来源允许 `approvalRef: null`；外部来源必须有当前有效审批，PRIVATE 初始状态不能替代 |
+| 扫描回执 | `schemaVersion`、`scannerId`、`engineVersion`、`rulesetDigest`、`policyRevision`、`scannedAt`、`expiresAt`、`packageDigest`、`manifestDigest`、`scannedFileCount`、`scannedBytes`、`verdict`；实际扫描覆盖已校验的完整 payload，摘要及覆盖文件数/字节数均与实际 manifest 一致 |
+| 签名记录 | `schemaVersion`、`skillId`、`skillVersionId`、`ownerId`、`provider`、`version`、`packageObjectVersion`、`packageDigest`、`manifestDigest`、`sourceProofDigest`、`scanReceiptDigest`、`trustRevision`、`policyRevision`、`signingKeyId`；身份与版本事实由当前受权服务端原操作派生 |
+
+来源证明和扫描回执按上表字段顺序进行 canonical 编码并计算 SHA-256，不能签名任意字典。摘要均为小写 SHA-256 hex，版本/身份引用与政策修订为有界受控字段；时间使用 UTC ISO 8601。扫描有效期限由服务端策略限制，回读时再次核对当前期限、策略与来源审批，调用方不能延长期限。平台只接纳真实受信扫描器的 `clean` 结果；未知、感染、超限、不支持、依赖失败或无法确认完整扫描均拒绝。外部发布者/签名验证、内容校验和审批分别执行，平台签名不能补造缺失的外部证据。
+
+平台 admission 签名使用 Ed25519，签名输入为 ASCII `agent-infra:skill-package-admission:v1\n` 前缀字节与上述 canonical 签名记录字节的连接；前缀末尾为一个 LF，不包含两个字面字符 `\`、`n`。使用 Node.js 原生 `crypto.sign(null, ...)` / `crypto.verify(null, ...)`，具体 API 见 [Node.js Crypto](https://nodejs.org/docs/latest-v24.x/api/crypto.html)。签名私钥只由平台受控供应服务持有，不交给 Agent、模型、Worker、Runtime 或浏览器；验证者只消费当前受信公钥。
+
+签名记录的对象版本来自实际版本化上传回读。签名不包含自己的摘要或自己的存储版本；`signatureDigest` 由已生成签名计算，再与完整包描述一起保存到原供应操作结果。包描述逐项绑定 ZIP、manifest、来源证明、扫描回执、签名记录和 signature 的固定对象版本、ETag、字节长度及摘要，读取任何对象都核对这些字段。扫描及签名完成不代替共享发布的独立管理员审核，也不产生安装、sync 或 Runtime available 状态。
+
+供应开始、相关外部等待之后及登记/返回之前，重新核对当前身份、包来源授权和同一信任/扫描政策修订。修订变化、key 撤销、结果来源不明、证据缺失或摘要不一致时 fail closed。Worker materialization 与 Runtime 的实际加载沿同一受权包引用复核当前准入条件；旧签名的历史存在不表示当前仍可使用，已受理 Execution 保留原版本关联并遵循原调用的当前权限/恢复边界。
+
+#### 11.6.3 对象版本与发布顺序
+
+平台派生受控包对象键与 staging 标识，复用既有版本化 S3 存储能力，不通过虚构 Agent、Conversation 或附件归属复用存储。包对象、manifest 与各证据不可覆盖已确认引用；发布后所有读取固定对象版本，并重新验证实际字节，禁止把 latest 或重新下载的同名包当作原版本。
+
+S3 VersionId 使用原始、不透明的 UTF-8 值，非空且不能是未启用版本化的 `null`，最多 1,024 bytes；不 trim、解码或规范化，不按业务 identifier、路径或 URL 解释。真实格式依据见 [S3 Versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/versioning-workflows.html)。业务 `skillId`、`skillVersionId`、逻辑版本与受控相对路径继续沿各自既有约束。将 S3 版本作为业务 identifier 的旧合同/解析差额须在包供应实现同步修正，不能用伪造短版本 ID 适配真实存储。
+
+1. 认证及当前授权通过后，持久受理原供应操作，冻结项目快照或批准来源的固定版本及输入摘要；原始字节进入受控隔离存储，DB 原操作只保存固定输入对象引用、摘要及有界控制 metadata，普通正文不进入配置、目录或审计。
+2. 对同一输入验证真实 ZIP/payload、生成 canonical manifest，复核发布者/源签名与审批，并扫描完整 payload；保留实际来源和扫描证据。
+3. 上传并回读固定 ZIP、manifest 和证据对象，核真实版本及内容；生成一次 admission 签名，保存签名记录、signature 和完整固定包描述。
+4. 最终当前权限/政策复核通过后，以该原操作的包描述调用 Skill 生命周期登记，并完成同一业务提交中的成功审计、幂等结果和必要 outbox。登记、PRIVATE/共享初始状态及独立审核沿既有 Core/Store，不增加第二套 Skill 状态机。
+5. 后续安装、Agent Version 配置、同步和加载只使用同一已准入包描述与现有配置/Worker fence；可用性仍要求实际 sync、Worker Applied 和 Runtime 装配一致。
+
+对象存储写入与 PostgreSQL 不假装为分布式原子事务。隔离对象上传、验证、签名/包描述保存及最终登记之间的提交边界必须显式记录，由原操作的幂等、outbox 和既有恢复机制接续；只有已提交的版本与当前准入证据共同满足条件时才可供后续操作消费。
+
+#### 11.6.4 重放、故障与证据边界
+
+- 同一主体/资源/命令/key 的重试核对原输入摘要，重放原操作及固定包描述；异输入冲突。扫描时间、签名及对象版本一经保存就属于原结果，不能重签、重新扫描或换包后冒充同一已完成发布。
+- 未完成操作从已持久化阶段恢复，无法确认某次外部步骤结果时先核原固定输入/对象，不把 unknown 伪装为成功。完成前的缺失步骤可以沿原输入执行；当前授权或政策修订失效则拒绝或明确失败，需要新的合法操作，不重写已完成结果。已完成版本的准入失效后，重新准入须生成新的固定 Skill Version；原版本和签名保留，既有绑定不会静默换用新版本。
+- metadata、成功审计、幂等结果或提交失败时，不暴露为可安装版本；上传对象保留隔离/未引用状态供原恢复机制处理。清理只处理可证明未被版本、配置或历史 Execution 引用的本操作对象版本，不能清除发布历史或借清理推进业务状态。
+- 业务 API、Runtime 与 Worker 不能接收 `verified`、`clean`、任意 source URL、调用方路径或权限声明来绕过该供应入口。目录与操作审计只含获准有界 metadata、受控引用、状态与原因码，不含 Skill 全文、普通 reason、对象地址、原始凭证或签名私钥。
+- 源代码测试、受控真实 PG/S3/扫描器与部署验收分别记录。包准入正向必须有实际归档、固定对象版本、manifest、真实签名及扫描证据；安装/挂载/加载/工具结果须再取得各自回执。合同、metadata 登记或固定安装包发现不代签完整 Skill Hub 与会话验收。
+
 ## 12. 对话与长任务
 
 ### 12.1 数据流
