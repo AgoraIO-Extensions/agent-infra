@@ -686,6 +686,7 @@ export function createBrowserObserveControllerV1(input: {
 			throw new Error("BROWSER_ACTION_READBACK_BINDING_INVALID");
 		const recordBinding = record?.executionBinding;
 		if (
+			record &&
 			(recordBinding || input_.executionBinding) &&
 			(!recordBinding ||
 				!input_.executionBinding ||

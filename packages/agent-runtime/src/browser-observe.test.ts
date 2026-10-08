@@ -427,6 +427,18 @@ describe("Browser action outcome readback", () => {
 		const target = observation.elements[0];
 		if (!target) throw new Error("expected element");
 		const binding = executionBinding(reference.pageRevision);
+		expect(
+			controller.readAction({
+				actionId: "missing-record",
+				executionBinding: binding,
+			}),
+		).toBeNull();
+		expect(
+			controller.readAction({
+				idempotencyKey: "missing-key",
+				executionBinding: binding,
+			}),
+		).toBeNull();
 		const result = await controller.executeAction({
 			actionId: "bound-action",
 			idempotencyKey: "bound-key",
