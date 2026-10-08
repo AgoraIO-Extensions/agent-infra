@@ -18,6 +18,26 @@ const wecomDeliveryAuditMetadata = {
 } as const;
 
 const platformAuditActionMetadata = {
+	"relay_key.agent_default.replace": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "agent_relay_key",
+	},
+	"api.agent.create.accepted": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_creation",
+	},
+	"api.agent.create.replayed": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_creation",
+	},
+	"api.agent.create.refused": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "api_management",
+	},
 	"skill.version.register": {
 		actorKind: "user",
 		subjectKind: "unknown",
@@ -489,6 +509,54 @@ function changedFields(
 		}
 		return [];
 	}
+	if (detailKind === "agent_relay_key") {
+		if (
+			!exactObject(details, [
+				"schemaVersion",
+				"previousVersion",
+				"keyVersion",
+				"configurationRevision",
+			])
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		const value = details as Record<string, unknown>;
+		if (
+			value.schemaVersion !== 1 ||
+			!Number.isSafeInteger(value.keyVersion) ||
+			(value.keyVersion as number) < 1 ||
+			!Number.isSafeInteger(value.configurationRevision) ||
+			(value.configurationRevision as number) < 1 ||
+			(value.previousVersion !== null &&
+				(!Number.isSafeInteger(value.previousVersion) ||
+					(value.previousVersion as number) < 1))
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		return [];
+	}
+	if (detailKind === "api_creation") {
+		const keys =
+			action === "api.agent.create.accepted"
+				? [
+						"schemaVersion",
+						"ownerId",
+						"initialManageRevision",
+						"initialUseRevision",
+					]
+				: ["schemaVersion"];
+		if (!exactObject(details, keys))
+			throw new PlatformAuditQueryError("unavailable");
+		const value = details as Record<string, unknown>;
+		if (
+			value.schemaVersion !== 1 ||
+			(action === "api.agent.create.accepted" &&
+				(!validText(value.ownerId) ||
+					!validText(value.initialManageRevision) ||
+					!validText(value.initialUseRevision) ||
+					value.initialManageRevision === value.initialUseRevision))
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		return [];
+	}
 	if (detailKind === "api_management") {
 		if (action === "api.agent.state.read") {
 			if (details !== null) throw new PlatformAuditQueryError("unavailable");
@@ -507,7 +575,9 @@ function changedFields(
 						? ["grant_manager", "revoke_manager"]
 						: action === "api.agent.use.refused"
 							? ["grant_use", "revoke_use"]
-							: ["read_state"];
+							: action === "api.agent.create.refused"
+								? ["create"]
+								: ["read_state"];
 			if (
 				!exactObject(details, keys) ||
 				!value ||
@@ -754,7 +824,13 @@ export function decodePlatformAuditRowV1(
 	}
 	const action = row.action as PlatformAuditActionV1;
 	const metadata = platformAuditActionMetadata[action];
-	const api = metadata.details === "api_management";
+	const api =
+		metadata.details === "api_management" ||
+		metadata.details === "api_creation" ||
+		metadata.details === "agent_relay_key";
+	const apiPrincipalAction =
+		metadata.details === "api_creation" ||
+		metadata.details === "agent_relay_key";
 	const refusal = api && action.endsWith(".refused");
 	const applicationLifecycle =
 		row.actorType === "application" &&
@@ -776,7 +852,7 @@ export function decodePlatformAuditRowV1(
 				(row.targetType === "unknown" && row.targetId !== "unknown") ||
 				!["rejected", "failed"].includes(row.outcome)
 			: row.outcome !== "succeeded" ||
-				!(action === "api.agent.state.read"
+				!(action === "api.agent.state.read" || apiPrincipalAction
 					? ["user", "application"].includes(row.actorType)
 					: row.actorType === "user"))
 	)

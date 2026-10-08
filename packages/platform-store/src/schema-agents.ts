@@ -109,8 +109,22 @@ export const agentApplications = platformSchema.table(
 			.notNull(),
 		fence: bigint("fence", { mode: "number" }).default(0).notNull(),
 		failureCode: agentFailureCode("failure_code"),
+		creationChannel: varchar("creation_channel", { length: 32 })
+			.default("web")
+			.notNull(),
+		creatorPrincipalType: varchar("creator_principal_type", { length: 32 }),
+		creatorPrincipalId: text("creator_principal_id"),
 	},
 	(table) => [
+		check(
+			"agent_application_creation_provenance",
+			sql`(
+ ${table.creationChannel} = 'web' and ${table.creatorPrincipalType} is null and ${table.creatorPrincipalId} is null
+ ) or (
+ ${table.creationChannel} = 'api' and ${table.creatorPrincipalType} is not null and ${table.creatorPrincipalId} is not null and ${table.creatorPrincipalType} in ('user','application') and char_length(${table.creatorPrincipalId}) > 0
+ and ${table.approvalRevision} is null and ${table.status} not in ('pending_approval','rejected','withdrawn')
+ )`,
+		),
 		check("agent_application_id_non_empty", sql`char_length(${table.id}) > 0`),
 		check(
 			"agent_application_applicant_non_empty",
@@ -164,7 +178,7 @@ export const agentApplications = platformSchema.table(
 				and ${table.failureCode} is null
 			) or (
 					${table.status} not in ('pending_approval', 'withdrawn', 'rejected')
-					and ((${table.status} = 'creating' and ${table.approvalRevision} is null) or ${table.approvalRevision} is not null)
+					and ((${table.status} = 'creating' and ${table.approvalRevision} is null) or ${table.approvalRevision} is not null or ${table.creationChannel} = 'api')
 				and ${table.workloadRevision} >= 1
 				and ${table.fence} >= 1
 				and (

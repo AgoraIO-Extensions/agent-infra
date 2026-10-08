@@ -1,6 +1,7 @@
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import {
 	type AgentConfigurationAccessTargetV1,
+	type AgentConfigurationRecord,
 	type AgentConfigurationRecordV2,
 	type AgentManagementStateV1,
 	type AgentRuntimePresentationDecisionV1,
@@ -22,7 +23,7 @@ import {
 	type PostgresAgentConfigurationOptionsV1,
 	validateText,
 } from "./agent-configuration.shared.js";
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+import { decodeVersionedAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { readAgentManagementState } from "./agent-management.js";
 import {
 	agentAvailability,
@@ -71,7 +72,7 @@ export interface AgentConfigurationProjectionV1 {
 	}[];
 	readonly defaultModelOptionId: string | null;
 	readonly defaultReasoningLevel: string | null;
-	readonly environment: AgentConfigurationRecordV2["environment"];
+	readonly environment: AgentConfigurationRecord["environment"];
 	readonly channelKinds: readonly ("wecom_bot" | "wecom_app")[];
 	readonly secrets: readonly {
 		readonly name: string;
@@ -92,10 +93,12 @@ export type AgentConfigurationAuthorityQueryInputV1 = Omit<
 	"intent"
 >;
 
-export type AgentConfigurationAuthorityQueryResultV1 =
+export type AgentConfigurationAuthorityQueryResultV1<
+	Configuration extends AgentConfigurationRecord = AgentConfigurationRecordV2,
+> =
 	| {
 			readonly outcome: "found";
-			readonly configuration: AgentConfigurationRecordV2;
+			readonly configuration: Configuration;
 			readonly management: AgentManagementStateV1;
 			readonly authorizationRevision: string;
 	  }
@@ -133,7 +136,7 @@ export class PostgresAgentConfigurationQueryV1 {
 				readonly authorizationRevision: string;
 				readonly configurationRevision: number;
 				readonly source: Extract<
-					AgentConfigurationRecordV2["source"],
+					AgentConfigurationRecord["source"],
 					{ kind: "standard" }
 				>;
 		  }
@@ -163,7 +166,7 @@ export class PostgresAgentConfigurationQueryV1 {
 				.where(eq(agents.id, input.agentId))
 				.limit(1);
 			if (!current?.configuration) return { outcome: "unavailable" };
-			const configuration = decodeAgentConfigurationRecord(
+			const configuration = decodeVersionedAgentConfigurationRecord(
 				current.configuration,
 			);
 			if (
@@ -189,10 +192,21 @@ export class PostgresAgentConfigurationQueryV1 {
 		}
 	}
 
-	/** Internal admission material; an administrator role never grants Owner authority. */
+	/** Legacy consumers remain V2-only until their own lifecycle accepts keyless records. */
 	async readAuthority(
 		input: AgentConfigurationAuthorityQueryInputV1,
 	): Promise<AgentConfigurationAuthorityQueryResultV1> {
+		const result = await this.readVersionedAuthority(input);
+		if (result.outcome !== "found" || result.configuration.schemaVersion !== 2)
+			return { outcome: "unavailable" };
+		return { ...result, configuration: result.configuration };
+	}
+	/** Internal admission material; an administrator role never grants Owner authority. */
+	async readVersionedAuthority(
+		input: AgentConfigurationAuthorityQueryInputV1,
+	): Promise<
+		AgentConfigurationAuthorityQueryResultV1<AgentConfigurationRecord>
+	> {
 		try {
 			if (
 				!validateText(input.agentId) ||
@@ -239,7 +253,7 @@ export class PostgresAgentConfigurationQueryV1 {
 						.where(eq(agents.id, input.agentId))
 						.limit(1);
 					if (!current?.configuration) return { outcome: "unavailable" };
-					const configuration = decodeAgentConfigurationRecord(
+					const configuration = decodeVersionedAgentConfigurationRecord(
 						current.configuration,
 					);
 					if (
@@ -326,7 +340,7 @@ export class PostgresAgentConfigurationQueryV1 {
 						.where(eq(agents.id, input.agentId))
 						.limit(1);
 					if (!current?.configuration) return { outcome: "unavailable" };
-					const configuration = decodeAgentConfigurationRecord(
+					const configuration = decodeVersionedAgentConfigurationRecord(
 						current.configuration,
 					);
 					if (
@@ -376,9 +390,10 @@ export class PostgresAgentConfigurationQueryV1 {
 								.limit(1);
 							if (active?.configuration) {
 								try {
-									const verifiedConfiguration = decodeAgentConfigurationRecord(
-										active.configuration,
-									);
+									const verifiedConfiguration =
+										decodeVersionedAgentConfigurationRecord(
+											active.configuration,
+										);
 									if (
 										verifiedConfiguration.agentId !== input.agentId ||
 										verifiedConfiguration.revision !==
@@ -543,7 +558,7 @@ export class PostgresAgentConfigurationQueryV1 {
 						return { outcome: "unavailable" };
 					}
 
-					const configuration = decodeAgentConfigurationRecord(
+					const configuration = decodeVersionedAgentConfigurationRecord(
 						current.configuration,
 					);
 					if (

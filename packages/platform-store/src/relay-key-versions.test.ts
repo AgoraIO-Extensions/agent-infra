@@ -84,7 +84,10 @@ function transaction() {
 			if (statement.startsWith("insert into platform.relay_key_versions")) {
 				versions.set(`${key}:${args[2]}`, {
 					key_id: args[3] as string,
-					ciphertext: args[4],
+					// The production writer binds serialized JSON as text and casts it
+					// to jsonb; PostgreSQL returns the decoded object on read.
+					ciphertext:
+						typeof args[4] === "string" ? JSON.parse(args[4]) : args[4],
 				});
 				return [];
 			}

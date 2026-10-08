@@ -186,6 +186,10 @@ export async function readAgentManagementState(
 ): Promise<AgentManagementStateV1 | undefined> {
 	const [application] = await database
 		.select({
+			// Whole-row extraction preserves the supported pre-0039 Web read during upgrade.
+			creationChannel: sql<
+				string | null
+			>`to_jsonb(agent_applications)->>'creation_channel'`,
 			applicationId: agentApplications.id,
 			agentId: agentApplications.agentId,
 			applicantId: agentApplications.applicantId,
@@ -223,7 +227,10 @@ export async function readAgentManagementState(
 	]);
 	return {
 		schemaVersion: 1,
-		...application,
+		...(({ creationChannel: _channel, ...state }) => state)(application),
+		...(application.creationChannel === "api"
+			? { creationChannel: "api" as const }
+			: {}),
 		ownerIds: owners.map(({ ownerId }) => ownerId),
 		availability: availability.map(({ targetType, targetId }) =>
 			targetType === "user"
@@ -871,7 +878,7 @@ export class PostgresAgentManagementTransactionV1
 		readonly traceId: string;
 		readonly reason: string;
 		readonly failed: boolean;
-		readonly operation: "lifecycle" | "manager" | "use" | "state";
+		readonly operation: "lifecycle" | "manager" | "use" | "state" | "create";
 		readonly context?: AgentApiAuditContextV1;
 	}) {
 		try {
@@ -879,7 +886,9 @@ export class PostgresAgentManagementTransactionV1
 				!validText(input.requestId) ||
 				!validText(input.traceId) ||
 				typeof input.failed !== "boolean" ||
-				!["lifecycle", "manager", "use", "state"].includes(input.operation) ||
+				!["lifecycle", "manager", "use", "state", "create"].includes(
+					input.operation,
+				) ||
 				![
 					"invalid_input",
 					"authentication_required",
