@@ -149,6 +149,8 @@ describe("platform-store package surface", () => {
 				"dist/migrations/0043_platform_cancellation_event.sql",
 				"dist/migrations/0044_platform_cancellation_status_required.sql",
 				"dist/migrations/meta/0044_snapshot.json",
+				"dist/migrations/0045_commit_wakeups.sql",
+				"dist/migrations/meta/0045_snapshot.json",
 			]),
 		);
 		expect(

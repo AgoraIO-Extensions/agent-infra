@@ -10,6 +10,8 @@ import {
 } from "@agent-infra/platform-core";
 import {
 	openPostgresConversationDispatchStoreV1,
+	outboxWakeChannelV1,
+	PostgresCommitWakeupListenerV1,
 	PostgresConversationEventTransactionV1,
 	PostgresLegacyTaskRecoveryReaderV1,
 	PostgresTaskAuthorizationStoreV1,
@@ -40,6 +42,9 @@ export interface PlatformConversationWorkerOptionsV2
 		) => Promise<"committed" | "stale" | "unknown">,
 	) => Promise<SessionSandboxObservationV1>;
 	readonly pollIntervalMs?: number;
+	/** Discover work as soon as an outbox commit wakes the Worker (#1561);
+	 * polling stays the delivery guarantee. Defaults to enabled. */
+	readonly commitWakeups?: boolean;
 	readonly maximumConcurrentDispatches?: number;
 	readonly leaseDurationMs?: number;
 	readonly retryDelayMs?: number;
@@ -157,6 +162,15 @@ export function createPlatformConversationWorkerV2(
 	let started = false;
 	let stopped = false;
 	let afterItemId: string | undefined;
+	let rescan = false;
+	const wakeups =
+		options.commitWakeups === false
+			? undefined
+			: new PostgresCommitWakeupListenerV1({
+					databaseUrl: options.databaseUrl,
+					channel: outboxWakeChannelV1,
+					onWake: () => wake(),
+				});
 	function log(code: string) {
 		try {
 			(options.log ?? console.info)(
@@ -361,8 +375,21 @@ export function createPlatformConversationWorkerV2(
 		if (polling) return polling;
 		polling = discover().finally(() => {
 			polling = undefined;
+			// Work committed during a scan may sort before the scan cursor.
+			if (rescan) {
+				rescan = false;
+				wake();
+			}
 		});
 		return polling;
+	}
+	function wake() {
+		if (stopped || signal.aborted || !started) return;
+		if (polling) {
+			rescan = true;
+			return;
+		}
+		void tick().catch(() => log("CONVERSATION_DISCOVERY_UNAVAILABLE"));
 	}
 	function poll() {
 		if (stopped || signal.aborted) return;
@@ -380,6 +407,10 @@ export function createPlatformConversationWorkerV2(
 			started = true;
 			void poll();
 			sampleResources();
+			void wakeups?.start().catch(() => {
+				if (!stopped && !signal.aborted)
+					log("CONVERSATION_COMMIT_WAKEUP_UNAVAILABLE");
+			});
 		},
 		stop() {
 			if (closing) return closing;
@@ -396,6 +427,7 @@ export function createPlatformConversationWorkerV2(
 					...[...running.values()].map((entry) => entry.promise),
 				]);
 				const closeResults = await Promise.allSettled([
+					Promise.resolve().then(() => wakeups?.close()),
 					Promise.resolve().then(() => transaction.close()),
 					Promise.resolve().then(() => store.close()),
 					Promise.resolve().then(() => taskAuthorizationStore.close()),

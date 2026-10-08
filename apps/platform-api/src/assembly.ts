@@ -21,6 +21,8 @@ import {
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
 import {
+	ConversationEventWakeHubV1,
+	conversationEventWakeChannelV1,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
 	PostgresAgentManagementQueryV1,
@@ -30,6 +32,7 @@ import {
 	PostgresApplicationMaterialGrantStoreV1,
 	PostgresApplicationRegistrationStoreV1,
 	PostgresApplicationRevisionTransactionV1,
+	PostgresCommitWakeupListenerV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
 	PostgresPersonalApiCredentialStoreV1,
@@ -325,6 +328,22 @@ export function assemblePlatformApi(
 		...(input.conversationReplayWindowMs === undefined
 			? {}
 			: { replayWindowMs: input.conversationReplayWindowMs }),
+	});
+	// Commit wakeups shorten SSE waits; streams keep polling without them (#1561).
+	const conversationEventWake = new ConversationEventWakeHubV1();
+	const conversationWakeups = new PostgresCommitWakeupListenerV1({
+		databaseUrl: input.databaseUrl,
+		channel: conversationEventWakeChannelV1,
+		onWake: (conversationId) => conversationEventWake.notify(conversationId),
+	});
+	void conversationWakeups.start().catch(() => {
+		console.info(
+			JSON.stringify({
+				service: "platform-api",
+				component: "conversation",
+				code: "CONVERSATION_COMMIT_WAKEUP_UNAVAILABLE",
+			}),
+		);
 	});
 	const tasks = createTaskRoutesDependenciesV1({
 		transaction: conversationTransaction,
@@ -635,6 +654,7 @@ export function assemblePlatformApi(
 					},
 				}),
 			query: conversationQuery,
+			eventWake: conversationEventWake,
 			recent: createRecentPersonalConversationsUseCaseV1({
 				query: conversationQuery,
 				resolveCurrentUser: (actorId) =>
@@ -664,6 +684,7 @@ export function assemblePlatformApi(
 		configurationQuery,
 		conversationTransaction,
 		conversationQuery,
+		conversationWakeups,
 		auditQuery,
 		scopedAuditQuery,
 		taskAuthorization,

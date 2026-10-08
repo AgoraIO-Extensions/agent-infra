@@ -1958,10 +1958,11 @@ describe("published Relay authority migration", () => {
 			42,
 			43,
 			44,
+			45,
 		]);
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 44,
-			tag: "0044_platform_cancellation_status_required",
+			idx: 45,
+			tag: "0045_commit_wakeups",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),

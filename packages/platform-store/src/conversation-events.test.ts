@@ -9,6 +9,10 @@ import { conversationEventConformanceV1 } from "@agent-infra/platform-core/testi
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import {
+	conversationEventWakeChannelV1,
+	PostgresCommitWakeupListenerV1,
+} from "./commit-wakeups.ts";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
 import { PostgresConversationQueryV1 } from "./conversation-query.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
@@ -1242,6 +1246,54 @@ describe("PostgreSQL Conversation event transaction", () => {
 		).rejects.toMatchObject({
 			constraint_name: "conversation_event_execution_conversation_fk",
 		});
+	});
+
+	it("wakes listeners with only the Conversation id after an event commits (#1561)", async () => {
+		const { conversationId, executionId } = await seedConversation();
+		const woken: string[] = [];
+		const listener = new PostgresCommitWakeupListenerV1({
+			databaseUrl,
+			channel: conversationEventWakeChannelV1,
+			onWake: (payload) => woken.push(payload),
+		});
+		await listener.start();
+		try {
+			const insert = (eventId: string, sequence: number) => client`
+				insert into platform.conversation_events
+					(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+					 conversation_cursor, event_type, event_payload, event_digest,
+					 runtime_cursor, occurred_at, source)
+				values
+					(${eventId}, ${conversationId}, ${executionId}, ${`adapter_${eventId}`},
+					 ${sequence}, ${sequence}, 'text.delta',
+					 ${client.json({ type: "text.delta", text: "private text" })},
+					 ${"0".repeat(64)}, ${`cursor_${eventId}`}, now(), 'runtime')
+			`;
+			// A rolled back event never wakes anyone.
+			await expect(
+				client.begin(async (transaction) => {
+					await transaction`
+						insert into platform.conversation_events
+							(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+							 conversation_cursor, event_type, event_payload, event_digest,
+							 runtime_cursor, occurred_at, source)
+						values
+							('event_wake_rollback', ${conversationId}, ${executionId},
+							 'adapter_event_wake_rollback', 1, 1, 'text.delta',
+							 ${transaction.json({ type: "text.delta", text: "x" })},
+							 ${"0".repeat(64)}, 'cursor_rollback', now(), 'runtime')`;
+					throw new Error("rollback");
+				}),
+			).rejects.toThrow("rollback");
+			await client`select pg_sleep(0.3)`;
+			expect(woken).toEqual([]);
+			await insert("event_wake_committed", 1);
+			await expect
+				.poll(() => woken, { timeout: 5_000 })
+				.toEqual([conversationId]);
+		} finally {
+			await listener.close();
+		}
 	});
 
 	it("enforces the persisted source, event type, and Runtime cursor binding", async () => {

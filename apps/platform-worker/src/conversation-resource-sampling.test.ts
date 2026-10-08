@@ -25,6 +25,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@agent-infra/platform-store", () => ({
+	outboxWakeChannelV1: "agent_infra_outbox_available",
+	PostgresCommitWakeupListenerV1: class {
+		start = async () => {};
+		close = async () => {};
+	},
 	openPostgresConversationDispatchStoreV1: () => {
 		const store = {
 			findDispatchable: mocks.find,

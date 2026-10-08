@@ -288,6 +288,13 @@
       "when": 1791431461976,
       "tag": "0044_platform_cancellation_status_required",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1791453527554,
+      "tag": "0045_commit_wakeups",
+      "breakpoints": true
     }
   ]
 }

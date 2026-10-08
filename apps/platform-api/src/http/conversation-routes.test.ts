@@ -8,6 +8,7 @@ import {
 	ExecutionDetailProjectionV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
+import { ConversationEventWakeHubV1 } from "@agent-infra/platform-store";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
@@ -1221,6 +1222,144 @@ describe("Conversation persisted SSE", () => {
 			}
 		},
 	);
+
+	describe("commit wakeups and batch authorization (#1561)", () => {
+		async function readUntil(
+			reader: ReadableStreamDefaultReader<Uint8Array>,
+			text: string,
+		) {
+			let body = "";
+			while (!body.includes(text)) {
+				const chunk = await reader.read();
+				if (chunk.done) break;
+				body += new TextDecoder().decode(chunk.value);
+			}
+			return body;
+		}
+		const second = {
+			...persistedEvent,
+			eventId: "event-2",
+			sequence: 2,
+			conversationCursor: "cursor-2",
+		};
+
+		it("delivers a committed event on its wakeup instead of the next poll", async () => {
+			const eventWake = new ConversationEventWakeHubV1();
+			const input = dependencies({ streamPollIntervalMs: 30_000, eventWake });
+			let committed = false;
+			input.query.replay = vi.fn().mockImplementation(async () => ({
+				outcome: "events",
+				events: committed ? [persistedEvent] : [],
+				resumeCursor: committed ? "cursor-1" : "cursor-0",
+			}));
+			const controller = new AbortController();
+			try {
+				const response = await testApp(input).app.request(
+					"/api/v2/conversations/conversation-1/events?cursor=cursor-0",
+					{ signal: controller.signal },
+				);
+				const reader = response.body?.getReader();
+				if (!reader) throw new Error("Missing SSE body");
+				// The first wait returns at once to cover commits before the watch.
+				await vi.waitFor(() =>
+					expect(input.query.replay).toHaveBeenCalledTimes(2),
+				);
+				const started = performance.now();
+				committed = true;
+				eventWake.notify("other-conversation");
+				eventWake.notify("conversation-1");
+				expect(await readUntil(reader, "id: event-1")).toContain("id: event-1");
+				expect(performance.now() - started).toBeLessThan(2_000);
+			} finally {
+				controller.abort();
+			}
+			await vi.waitFor(() => expect(eventWake.watchedConversations).toBe(0));
+		});
+
+		it("still delivers by polling when no wakeup arrives", async () => {
+			const eventWake = new ConversationEventWakeHubV1();
+			const input = dependencies({ streamPollIntervalMs: 20, eventWake });
+			input.query.replay = vi
+				.fn()
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [],
+					resumeCursor: "cursor-0",
+				})
+				.mockResolvedValueOnce({
+					outcome: "events",
+					events: [],
+					resumeCursor: "cursor-0",
+				})
+				.mockResolvedValue({
+					outcome: "events",
+					events: [persistedEvent],
+					resumeCursor: "cursor-1",
+				});
+			const controller = new AbortController();
+			try {
+				const response = await testApp(input).app.request(
+					"/api/v2/conversations/conversation-1/events?cursor=cursor-0",
+					{ signal: controller.signal },
+				);
+				const reader = response.body?.getReader();
+				if (!reader) throw new Error("Missing SSE body");
+				expect(await readUntil(reader, "id: event-1")).toContain("id: event-1");
+			} finally {
+				controller.abort();
+			}
+		});
+
+		it("checks authorization once per batch and writes none of a batch it refuses", async () => {
+			for (const revokedAt of [undefined, 1] as const) {
+				const input = dependencies({
+					streamPollIntervalMs: 30_000,
+					eventWake: new ConversationEventWakeHubV1(),
+				});
+				let checks = 0;
+				input.authorization.authorize = vi.fn().mockImplementation(async () => {
+					checks++;
+					// Call 0 opens the stream; call 1 is the first batch check.
+					return revokedAt !== undefined && checks > revokedAt
+						? { outcome: "revoked" }
+						: { outcome: "allowed", authority };
+				});
+				input.query.replay = vi
+					.fn()
+					.mockResolvedValueOnce({
+						outcome: "events",
+						events: [persistedEvent, second],
+						resumeCursor: "cursor-2",
+					})
+					.mockResolvedValue({
+						outcome: "events",
+						events: [],
+						resumeCursor: "cursor-2",
+					});
+				const controller = new AbortController();
+				try {
+					const response = await testApp(input).app.request(
+						"/api/v2/conversations/conversation-1/events",
+						{ signal: controller.signal },
+					);
+					const reader = response.body?.getReader();
+					if (!reader) throw new Error("Missing SSE body");
+					if (revokedAt === undefined) {
+						const body = await readUntil(reader, "id: event-2");
+						expect(body).toContain("id: event-1");
+						// One check for the stream and one for the two-event batch.
+						expect(checks).toBe(2);
+					} else {
+						const body = await readUntil(reader, "authorization.revoked");
+						expect(body).toContain(": conversation-stream.closed revoked");
+						expect(body).not.toMatch(/event-1|event-2|Hello/);
+					}
+				} finally {
+					controller.abort();
+				}
+			}
+		});
+	});
 
 	it("closes a real HTTP idle SSE connection within the configured detection budget", async () => {
 		const poll = 30;
