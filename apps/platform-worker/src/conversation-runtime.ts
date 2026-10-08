@@ -194,7 +194,9 @@ export function createConversationRuntimeV2(
 ) {
 	if (!options.workerId || !options.signing.workerId)
 		throw new TypeError("Conversation Worker identity is invalid");
-	const reconnectDelayMs = options.reconnectDelayMs ?? 1000;
+	// An empty V4 page costs one authorization and route check, not a full
+	// preparation, so a short pause keeps the drain close to the Runtime.
+	const reconnectDelayMs = options.reconnectDelayMs ?? 250;
 	if (
 		!Number.isSafeInteger(reconnectDelayMs) ||
 		reconnectDelayMs < 1 ||
@@ -608,6 +610,30 @@ export function createConversationRuntimeV2(
 		if (!isDeepStrictEqual(fenced, prepared.state))
 			unavailable("RUNTIME_FENCE_STALE");
 		signal.throwIfAborted();
+	}
+	/** Continue an event drain with the route it already proved (#1525). Each
+	 * V4 read re-checks the current authorization, route and fenced state in
+	 * `assertCurrentPrepared` before it leaves the Worker; only the committed
+	 * cursor may advance between reads. Anything else takes the full path. */
+	async function continuePrepared(
+		previous: Awaited<ReturnType<typeof prepare>>,
+		request: Request,
+		signal: AbortSignal,
+	) {
+		if (previous.state.runtimeSubmitProtocol !== "v4")
+			return prepare(request, "events.persist", signal);
+		const state = await stateFor(previous.context, signal);
+		if (
+			!isDeepStrictEqual(
+				{ ...state, runtimeCursor: null },
+				{ ...previous.state, runtimeCursor: null },
+			)
+		)
+			return prepare(request, "events.persist", signal);
+		return {
+			...previous,
+			state: structuredClone(state) as ConversationRuntimeStateV2,
+		};
 	}
 	function v4Client(
 		prepared: Awaited<ReturnType<typeof prepare>>,
@@ -1084,9 +1110,13 @@ export function createConversationRuntimeV2(
 					clearTimeout(timer);
 				}
 			};
+			let previous: Awaited<ReturnType<typeof prepare>> | undefined;
 			for (;;) {
 				active.throwIfAborted();
-				const prepared = await prepare(request, "events.persist", active);
+				const prepared = previous
+					? await continuePrepared(previous, request, active)
+					: await prepare(request, "events.persist", active);
+				previous = undefined;
 				const { state, authority } = prepared;
 				if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
 				let terminal = false;
@@ -1123,6 +1153,7 @@ export function createConversationRuntimeV2(
 				}
 				if (streamFailure) throw streamFailure;
 				if (terminal) return;
+				previous = prepared;
 				// The Host replays a bounded page per read. A non-empty page without
 				// the terminal event may hide later events even when the Platform
 				// already recorded a terminal status from a status response (#1524).

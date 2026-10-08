@@ -77,6 +77,19 @@ export {
 	type DispatchConversationCommandV1,
 } from "./conversation-dispatch-types.js";
 
+/** Far below the Host bound of 256 delivered but unacknowledged cursors. */
+const acknowledgementBatchSize = 32;
+
+/** A standard tool call waits for its persisted fact to be acknowledged before
+ * the Runtime calls the tool or reports its result. The terminal event closes
+ * the batch, so acknowledging it costs no extra round trip. */
+function acknowledgeNow(event: ReturnType<typeof normalizedEvent>) {
+	return (
+		(event.type === "execution.operation" && event.fact.kind === "tool") ||
+		terminalStatus(event) !== undefined
+	);
+}
+
 export function createConversationDispatchUseCaseV1(
 	dependencies: {
 		readonly store: ConversationDispatchStorePortV1;
@@ -174,6 +187,23 @@ export function createConversationDispatchUseCaseV1(
 				"retry",
 				{},
 			);
+		// Host acknowledgement is cumulative, so one ACK of the last committed
+		// cursor confirms every earlier event (#1525). Batch it, except for facts
+		// the Runtime waits on before continuing, and stay far below the Host's
+		// bound on delivered but unacknowledged cursors.
+		let unacknowledgedCursor: string | undefined;
+		let unacknowledgedEvents = 0;
+		const acknowledgeCommitted = async () => {
+			if (!unacknowledgedCursor || !dependencies.runtimeHost.acknowledge)
+				return;
+			const confirmedCursor = unacknowledgedCursor;
+			unacknowledgedCursor = undefined;
+			unacknowledgedEvents = 0;
+			await dependencies.runtimeHost.acknowledge(
+				{ ...eventRequest, confirmedCursor },
+				eventHeartbeat.signal,
+			);
+		};
 		try {
 			// Recover a committed event whose acknowledgement was lost, including
 			// the last metadata event when the remaining stream is empty.
@@ -248,12 +278,15 @@ export function createConversationDispatchUseCaseV1(
 					terminalEventSeen = true;
 					finalStatus = eventFinalStatus;
 				}
-				if (dependencies.runtimeHost.acknowledge)
-					await dependencies.runtimeHost.acknowledge(
-						{ ...eventRequest, confirmedCursor: runtimeEvent.cursor },
-						eventHeartbeat.signal,
-					);
+				unacknowledgedCursor = runtimeEvent.cursor;
+				unacknowledgedEvents++;
+				if (
+					acknowledgeNow(event) ||
+					unacknowledgedEvents >= acknowledgementBatchSize
+				)
+					await acknowledgeCommitted();
 			}
+			await acknowledgeCommitted();
 		} catch (error) {
 			const current = await eventHeartbeat.stop();
 			if (!current) return retryInterruptedDrain();

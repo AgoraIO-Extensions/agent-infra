@@ -464,9 +464,15 @@ export function startObservability(options: ObservabilityOptions) {
 				operations?.add(1, labels);
 				if (durationMs !== undefined) duration?.record(durationMs, labels);
 				tracer?.startSpan(`platform.${stage}`, { attributes: details }).end();
+				// Stage duration is bounded metadata; logging it lets latency be
+				// compared across deployments without an exporter (#1525).
+				const logged =
+					durationMs === undefined
+						? details
+						: { ...details, durationMs: Math.round(durationMs) };
 				if (outcome === "failed" || outcome === "unknown")
-					logger.error(details, "operation");
-				else logger.info(details, "operation");
+					logger.error(logged, "operation");
+				else logger.info(logged, "operation");
 			} catch {
 				captureFailures++;
 			}

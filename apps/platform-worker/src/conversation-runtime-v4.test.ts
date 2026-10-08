@@ -520,6 +520,96 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		}
 	});
 
+	describe("continuing a V4 drain on its proven route (#1525)", () => {
+		function pages(h: ReturnType<typeof runtimeV4Harness>) {
+			h.fetcher.mockImplementation(async (_url, init) => {
+				const body = JSON.parse(init?.body as string);
+				return Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					executionId: "execution",
+					events:
+						body.afterCursor === "model-cursor" ? [terminal] : [modelFact],
+				});
+			});
+		}
+
+		it("re-checks authorization and route before each read without a full preparation", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				pages(h);
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				expect((await stream.next()).value).toEqual(modelFact);
+				Object.assign(h.state, { runtimeCursor: "model-cursor" });
+				const resolves = h.resolveRuntimeHost.mock.calls.length;
+				const users = h.directory.resolveUser.mock.calls.length;
+				expect((await stream.next()).value).toEqual(terminal);
+				expect((await stream.next()).done).toBe(true);
+				// One route check and two authorization checks guard the second read;
+				// a full preparation adds three route resolutions and five checks.
+				expect(h.resolveRuntimeHost.mock.calls.length - resolves).toBe(1);
+				expect(h.directory.resolveUser.mock.calls.length - users).toBe(2);
+				expect(
+					h.fetcher.mock.calls.map(
+						([, init]) => JSON.parse(init?.body as string).afterCursor,
+					),
+				).toEqual([null, "model-cursor"]);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("prepares again when the Session state changed beyond the cursor", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				pages(h);
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				expect((await stream.next()).value).toEqual(modelFact);
+				Object.assign(h.state, {
+					runtimeCursor: "model-cursor",
+					originalSubmitHostSessionRef: "host",
+				});
+				const resolves = h.resolveRuntimeHost.mock.calls.length;
+				expect((await stream.next()).value).toEqual(terminal);
+				expect(h.resolveRuntimeHost.mock.calls.length - resolves).toBe(4);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("signs the next read for control once the user is disabled between pages", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				pages(h);
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				expect((await stream.next()).value).toEqual(modelFact);
+				Object.assign(h.state, { runtimeCursor: "model-cursor" });
+				h.setUser(null);
+				expect((await stream.next()).value).toEqual(terminal);
+				const reads = h.fetcher.mock.calls.map(([, init]) =>
+					JSON.parse(init?.body as string),
+				);
+				expect(reads).toHaveLength(2);
+				expect(verifyControl(reads[0].grant).claims.purpose).toBe("business");
+				expect(verifyControl(reads[1].grant).claims).toMatchObject({
+					purpose: "control",
+					reason: "authorization_revoked",
+				});
+			} finally {
+				h.runtime.close();
+			}
+		});
+	});
+
 	it("ends a drained stream for a terminal Platform status without spinning (#1524)", async () => {
 		const h = runtimeV4Harness();
 		try {
