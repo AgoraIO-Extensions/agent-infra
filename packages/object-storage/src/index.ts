@@ -86,7 +86,10 @@ export class FakeObjectStorageV1 implements ObjectStorageDataV1 {
 		if (request.descriptor.sizeBytes > 1024 * 1024)
 			throw new ObjectStorageError("invalid");
 		const chunks: Uint8Array[] = [];
-		const probe = createContentProbe(request.descriptor.sizeBytes);
+		const probe = createContentProbe(
+			request.descriptor.sizeBytes,
+			request.descriptor.mediaType,
+		);
 		try {
 			for await (const chunk of request.body.pipeThrough(
 				new TransformStream<Uint8Array, Uint8Array>(),
@@ -158,3 +161,10 @@ export {
 	createS3ObjectStorageV1,
 	type S3ObjectStorageOptionsV1,
 } from "./s3.js";
+export * from "./skill-package-admission.js";
+export {
+	type SkillHubLifecyclePortV1,
+	type SkillPackageSupplierOptionsV1,
+	SkillPackageSupplierV1,
+	type SkillPackageSupplyInputV1,
+} from "./skill-package-supplier.js";

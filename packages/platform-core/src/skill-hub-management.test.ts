@@ -35,6 +35,21 @@ const version = createSkillHubVersionV1({
 });
 
 describe("Skill Hub management boundary", () => {
+	it("accepts opaque object versions but rejects null", () => {
+		const opaque = {
+			...registration,
+			packageObjectVersion: "opaque/s3+version",
+		};
+		expect(parseSkillHubRegistrationV1(opaque).packageObjectVersion).toBe(
+			"opaque/s3+version",
+		);
+		expect(() =>
+			parseSkillHubRegistrationV1({
+				...registration,
+				packageObjectVersion: "null",
+			}),
+		).toThrowError();
+	});
 	it("receives the same immutable version reference without promoting package admission", () => {
 		expect(parseSkillHubRegistrationV1(registration)).toEqual(registration);
 		expect(Object.isFrozen(parseSkillHubRegistrationV1(registration))).toBe(

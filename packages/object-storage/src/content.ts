@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { fileTypeFromBuffer } from "file-type";
 
-export function createContentProbe(maxBytes: number) {
+export function createContentProbe(
+	maxBytes: number,
+	expectedMediaType?: string,
+) {
 	const hash = createHash("sha256");
 	const decoder = new TextDecoder("utf-8", { fatal: true });
 	let text = true;
@@ -43,7 +46,8 @@ export function createContentProbe(maxBytes: number) {
 			const detected = prefix.length
 				? await fileTypeFromBuffer(prefix)
 				: undefined;
-			const mediaType = detected?.mime ?? (text ? "text/plain" : null);
+			const mediaType =
+				detected?.mime ?? expectedMediaType ?? (text ? "text/plain" : null);
 			if (!mediaType) throw new Error("File format cannot be verified");
 			return { sizeBytes, mediaType, sha256: hash.digest("hex") };
 		},

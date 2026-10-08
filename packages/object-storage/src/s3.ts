@@ -107,7 +107,10 @@ export function createS3ObjectStorageV1(
 					.catch(() => undefined);
 				throw new ObjectStorageError("unavailable");
 			}
-			const probe = createContentProbe(options.maxObjectBytes);
+			const probe = createContentProbe(
+				options.maxObjectBytes,
+				head.ContentType,
+			);
 			for await (const chunk of object.Body.transformToWebStream().pipeThrough(
 				new TransformStream<Uint8Array, Uint8Array>(),
 				{ signal: abortSignal },
@@ -247,7 +250,10 @@ export function createS3ObjectStorageV1(
 						unhoistableHeaders: new Set(["x-amz-checksum-sha256"]),
 					},
 				);
-				const probe = createContentProbe(request.descriptor.sizeBytes);
+				const probe = createContentProbe(
+					request.descriptor.sizeBytes,
+					request.descriptor.mediaType,
+				);
 				const body = request.body.pipeThrough(
 					new TransformStream<Uint8Array, Uint8Array>({
 						transform(chunk, controller) {

@@ -2,6 +2,9 @@ import { z } from "zod";
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+// S3 VersionId is opaque and its exact byte/expiry checks belong to the trusted
+// package-supplier parser, not a narrowed public wire regex.
+const objectVersion = z.string();
 const packageName = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,62}$/);
 const relativePackagePath = z
 	.string()
@@ -90,7 +93,7 @@ export const SkillVersionRefV1Schema = z.strictObject({
 	skillVersionId: identifier,
 	provider: SkillProviderIdV1Schema,
 	version: identifier,
-	packageObjectVersion: identifier,
+	packageObjectVersion: objectVersion,
 	packageDigest: sha256,
 	manifestDigest: sha256,
 	signatureDigest: sha256,
