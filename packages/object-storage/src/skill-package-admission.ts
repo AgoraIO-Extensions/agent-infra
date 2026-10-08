@@ -34,6 +34,7 @@ export type SkillPackageAdmissionErrorCodeV1 =
 	| "missing_entry"
 	| "digest_mismatch"
 	| "source_untrusted"
+	| "dependency_unavailable"
 	| "scan_unavailable"
 	| "scan_rejected"
 	| "signature_invalid";
@@ -76,8 +77,11 @@ export interface SkillPackageSourceVerifierV1 {
 			provider: string;
 			sourceVersion: string;
 			sourceDigest: string;
+			archiveDigest: string;
+			manifestDigest: string;
 			trustRevision: string;
 			approvalRef: string | null;
+			ownerId: string;
 		}>,
 	): Promise<SkillPackageSourceProofV1>;
 }
@@ -85,6 +89,8 @@ export interface SkillPackageSourceVerifierV1 {
 export interface SkillPackageScannerV1 {
 	scan(
 		input: Readonly<{
+			name: string;
+			version: string;
 			packageDigest: string;
 			manifestDigest: string;
 			fileCount: number;
@@ -140,9 +146,11 @@ function reject(code: SkillPackageAdmissionErrorCodeV1): never {
 	throw new SkillPackageAdmissionErrorV1(code);
 }
 function u16(bytes: Uint8Array, offset: number) {
+	slice(bytes, offset, 2);
 	return (bytes[offset] ?? 0) | ((bytes[offset + 1] ?? 0) << 8);
 }
 function u32(bytes: Uint8Array, offset: number) {
+	slice(bytes, offset, 4);
 	return (
 		((bytes[offset] ?? 0) |
 			((bytes[offset + 1] ?? 0) << 8) |
@@ -182,6 +190,7 @@ function pathFromBytes(bytes: Uint8Array, utf8: boolean) {
 		if (
 			logicalPath.length === 0 ||
 			logicalPath.length > 512 ||
+			!/^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/.test(logicalPath) ||
 			path.includes("\\") ||
 			path.includes("\0") ||
 			path.startsWith("/") ||
@@ -247,7 +256,11 @@ function evidenceData<T extends object>(
 function findEndOfCentralDirectory(bytes: Uint8Array) {
 	const start = Math.max(0, bytes.length - 22 - 65_535);
 	for (let offset = bytes.length - 22; offset >= start; offset--) {
-		if (u32(bytes, offset) === ZIP_EOCD) return offset;
+		if (
+			u32(bytes, offset) === ZIP_EOCD &&
+			offset + 22 + u16(bytes, offset + 20) === bytes.length
+		)
+			return offset;
 	}
 	reject("invalid_archive");
 }
@@ -267,10 +280,10 @@ function parseZip(bytes: Uint8Array) {
 	if (
 		disk !== 0 ||
 		centralDisk !== 0 ||
-		entries > MAX_FILES ||
+		entries > MAX_FILES * 2 ||
 		u16(bytes, eocd + 8) !== entries ||
 		centralOffset + centralBytes > bytes.length ||
-		centralOffset + centralBytes > eocd
+		centralOffset + centralBytes !== eocd
 	)
 		reject("invalid_archive");
 	const files: SkillPackageFileV1[] = [];
@@ -281,6 +294,7 @@ function parseZip(bytes: Uint8Array) {
 	let offset = centralOffset;
 	let totalBytes = 0;
 	for (let index = 0; index < entries; index++) {
+		slice(bytes, offset, 46);
 		if (u32(bytes, offset) !== ZIP_CENTRAL) reject("invalid_archive");
 		const flags = u16(bytes, offset + 8);
 		const method = u16(bytes, offset + 10);
@@ -296,7 +310,10 @@ function parseZip(bytes: Uint8Array) {
 			compressedSize === 0xffffffff ||
 			uncompressedSize === 0xffffffff ||
 			localOffset === 0xffffffff ||
-			(flags & 1) !== 0 ||
+			(flags & ~0x800) !== 0 ||
+			extraLength !== 0 ||
+			u16(bytes, offset + 34) !== 0 ||
+			u16(bytes, offset + 6) > 20 ||
 			(method !== 0 && method !== 8)
 		)
 			reject("invalid_archive");
@@ -320,10 +337,16 @@ function parseZip(bytes: Uint8Array) {
 		const fileType = mode & 0xf000;
 		if (fileType !== 0 && fileType !== 0x4000 && fileType !== 0x8000)
 			reject("invalid_archive");
-		if (directory && uncompressedSize !== 0) reject("invalid_archive");
+		if (directory && (uncompressedSize !== 0 || fileType === 0x8000))
+			reject("invalid_archive");
 		if (
 			!directory &&
 			[...seen].some((path) => path.startsWith(`${normalized}/`))
+		)
+			reject("path_conflict");
+		if (
+			directory &&
+			[...filePaths].some((path) => path.startsWith(`${normalized}/`))
 		)
 			reject("path_conflict");
 		for (let parent = normalized; parent.includes("/"); ) {
@@ -352,6 +375,8 @@ function parseZip(bytes: Uint8Array) {
 			) !== 0 ||
 			localFlags !== flags ||
 			localMethod !== method ||
+			localExtraLength !== 0 ||
+			u16(bytes, localOffset + 4) > 20 ||
 			((flags & 8) === 0 &&
 				(localCrc !== crc ||
 					localCompressedSize !== compressedSize ||
@@ -368,12 +393,16 @@ function parseZip(bytes: Uint8Array) {
 		const compressed = slice(bytes, dataStart, compressedSize);
 		let content: Uint8Array;
 		try {
-			content =
-				method === 0
-					? compressed.slice()
-					: inflateRawSync(compressed, {
-							maxOutputLength: Math.max(1, uncompressedSize),
-						});
+			if (method === 0) content = compressed.slice();
+			else {
+				const inflated = inflateRawSync(compressed, {
+					maxOutputLength: Math.max(1, uncompressedSize),
+					info: true,
+				}) as unknown as { buffer: Buffer; engine: { bytesWritten: number } };
+				if (inflated.engine.bytesWritten !== compressed.byteLength)
+					reject("invalid_archive");
+				content = inflated.buffer;
+			}
 		} catch {
 			reject("invalid_archive");
 		}
@@ -389,6 +418,13 @@ function parseZip(bytes: Uint8Array) {
 		}
 		offset += 46 + nameLength + extraLength + commentLength;
 	}
+	const orderedRanges = localRanges.toSorted((a, b) => a.start - b.start);
+	let localEnd = 0;
+	for (const range of orderedRanges) {
+		if (range.start !== localEnd) reject("invalid_archive");
+		localEnd = range.end;
+	}
+	if (localEnd !== centralOffset) reject("invalid_archive");
 	if (offset !== centralOffset + centralBytes) reject("invalid_archive");
 	if (!files.some((file) => file.path === "SKILL.md")) reject("missing_entry");
 	return { files, totalBytes };
@@ -558,6 +594,7 @@ export function verifySkillPackageScanReceiptV1(
 	prepared: PreparedSkillPackageV1,
 	sourceProofDigest: string,
 	policyRevision: string,
+	maximumReceiptAgeMs = 86_400_000,
 ) {
 	const receipt = scanReceiptData(input);
 	const now = Date.now();
@@ -578,7 +615,7 @@ export function verifySkillPackageScanReceiptV1(
 		!Number.isFinite(Date.parse(receipt.scannedAt)) ||
 		!Number.isFinite(Date.parse(receipt.expiresAt)) ||
 		Date.parse(receipt.expiresAt) - Date.parse(receipt.scannedAt) >
-			86_400_000 ||
+			maximumReceiptAgeMs ||
 		Date.parse(receipt.scannedAt) > now ||
 		Date.parse(receipt.expiresAt) <= Date.parse(receipt.scannedAt) ||
 		Date.parse(receipt.expiresAt) <= now ||
@@ -691,4 +728,88 @@ export function verifyAdmissionSignatureV1(
 	} catch {
 		reject("signature_invalid");
 	}
+}
+
+/** Bounded project snapshot payload, already selected by the authorized project adapter. */
+export function packSkillProjectSnapshotV1(
+	files: readonly SkillPackageFileV1[],
+): Uint8Array {
+	if (!Array.isArray(files) || types.isProxy(files) || files.length > MAX_FILES)
+		reject("archive_limit");
+	const local: Buffer[] = [];
+	const central: Buffer[] = [];
+	let offset = 0;
+	let total = 0;
+	for (let index = 0; index < files.length; index++) {
+		const property = Object.getOwnPropertyDescriptor(files, String(index));
+		if (!property?.enumerable || !("value" in property))
+			reject("invalid_archive");
+		const file = property.value;
+		if (!file || typeof file !== "object" || types.isProxy(file))
+			reject("invalid_archive");
+		const properties = Object.getOwnPropertyDescriptors(file);
+		if (
+			Reflect.ownKeys(properties).length !== 2 ||
+			!properties.path?.enumerable ||
+			!("value" in properties.path) ||
+			!properties.bytes?.enumerable ||
+			!("value" in properties.bytes)
+		)
+			reject("invalid_archive");
+		const path = properties.path.value;
+		const content = properties.bytes.value;
+		if (
+			typeof path !== "string" ||
+			path.endsWith("/") ||
+			!(content instanceof Uint8Array) ||
+			types.isProxy(content) ||
+			content.buffer instanceof SharedArrayBuffer
+		)
+			reject("invalid_archive");
+		const name = Buffer.from(path, "utf8");
+		pathFromBytes(name, true);
+		total += content.byteLength;
+		if (
+			total > MAX_ARCHIVE_BYTES ||
+			offset + 76 + name.byteLength * 2 + content.byteLength > MAX_ARCHIVE_BYTES
+		)
+			reject("archive_limit");
+		const header = Buffer.alloc(30 + name.byteLength);
+		header.writeUInt32LE(ZIP_LOCAL);
+		header.writeUInt16LE(20, 4);
+		header.writeUInt16LE(0x800, 6);
+		header.writeUInt32LE(crc32(content), 14);
+		header.writeUInt32LE(content.byteLength, 18);
+		header.writeUInt32LE(content.byteLength, 22);
+		header.writeUInt16LE(name.byteLength, 26);
+		name.copy(header, 30);
+		const record = Buffer.alloc(46 + name.byteLength);
+		record.writeUInt32LE(ZIP_CENTRAL);
+		record.writeUInt16LE(20, 4);
+		record.writeUInt16LE(20, 6);
+		record.writeUInt16LE(0x800, 8);
+		record.writeUInt32LE(crc32(content), 16);
+		record.writeUInt32LE(content.byteLength, 20);
+		record.writeUInt32LE(content.byteLength, 24);
+		record.writeUInt16LE(name.byteLength, 28);
+		record.writeUInt32LE(offset, 42);
+		name.copy(record, 46);
+		local.push(header, Buffer.from(content));
+		central.push(record);
+		offset += header.byteLength + content.byteLength;
+	}
+	const directoryBytes = central.reduce(
+		(sum, item) => sum + item.byteLength,
+		0,
+	);
+	if (offset + directoryBytes + 22 > MAX_ARCHIVE_BYTES) reject("archive_limit");
+	const end = Buffer.alloc(22);
+	end.writeUInt32LE(ZIP_EOCD);
+	end.writeUInt16LE(files.length, 8);
+	end.writeUInt16LE(files.length, 10);
+	end.writeUInt32LE(directoryBytes, 12);
+	end.writeUInt32LE(offset, 16);
+	const archive = Buffer.concat([...local, ...central, end]);
+	parseZip(archive);
+	return archive;
 }

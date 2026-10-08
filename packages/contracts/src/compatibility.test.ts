@@ -2409,3 +2409,75 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toBe("");
 	});
 });
+
+it("admits only the exact approved opaque Skill package VersionId correction", async () => {
+	const directory = await mkdtemp(
+		resolve(tmpdir(), "skill-version-compatibility-"),
+	);
+	try {
+		const document = JSON.parse(
+			await readFile(
+				resolve(
+					repositoryRoot,
+					"packages/contracts/artifacts/json-schema/worker-result.v1.schema.json",
+				),
+				"utf8",
+			),
+		);
+		const baseline = structuredClone(document);
+		const objects: Record<string, unknown>[] = [];
+		const visit = (value: unknown) => {
+			if (!value || typeof value !== "object") return;
+			const object = value as Record<string, unknown>;
+			const properties = object.properties as
+				| Record<string, unknown>
+				| undefined;
+			if (properties?.packageObjectVersion) {
+				objects.push(properties);
+				properties.packageObjectVersion = {
+					pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+					type: "string",
+				};
+			}
+			for (const child of Object.values(object)) visit(child);
+		};
+		visit(baseline);
+		expect(objects.length).toBeGreaterThan(0);
+		const oldPath = resolve(directory, "old.json");
+		const newPath = resolve(directory, "new.json");
+		await writeFile(oldPath, JSON.stringify(baseline));
+		await writeFile(newPath, JSON.stringify(document));
+		expect(comparePaths(newPath, oldPath).status).toBe(0);
+		const mutations = [
+			(properties: Record<string, unknown>) => {
+				properties.packageObjectVersion = { type: "string" };
+			},
+			(properties: Record<string, unknown>) => {
+				properties.signatureDigest = { type: "number" };
+			},
+			(properties: Record<string, unknown>) => {
+				properties.packageObjectVersion = {
+					...(properties.packageObjectVersion as object),
+					maxLength: 4096,
+				};
+			},
+		];
+		for (const mutate of mutations) {
+			const changed = structuredClone(document);
+			const change = (value: unknown) => {
+				if (!value || typeof value !== "object") return;
+				const object = value as Record<string, unknown>;
+				const properties = object.properties as
+					| Record<string, unknown>
+					| undefined;
+				if (properties?.packageObjectVersion) mutate(properties);
+				for (const child of Object.values(object)) change(child);
+			};
+			change(changed);
+			await writeFile(newPath, JSON.stringify(changed));
+			expect(comparePaths(newPath, oldPath).status).toBe(1);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});

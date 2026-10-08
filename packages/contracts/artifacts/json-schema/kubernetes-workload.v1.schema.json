@@ -1253,7 +1253,7 @@
                       "packageObjectVersion": {
                         "maxLength": 1024,
                         "minLength": 1,
-                        "pattern": "^(?!null$)[\\s\\S]+$",
+                        "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                         "type": "string"
                       },
                       "provider": {
@@ -2610,7 +2610,7 @@
                       "packageObjectVersion": {
                         "maxLength": 1024,
                         "minLength": 1,
-                        "pattern": "^(?!null$)[\\s\\S]+$",
+                        "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                         "type": "string"
                       },
                       "provider": {
@@ -3967,7 +3967,7 @@
                       "packageObjectVersion": {
                         "maxLength": 1024,
                         "minLength": 1,
-                        "pattern": "^(?!null$)[\\s\\S]+$",
+                        "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                         "type": "string"
                       },
                       "provider": {
@@ -5319,7 +5319,7 @@
                       "packageObjectVersion": {
                         "maxLength": 1024,
                         "minLength": 1,
-                        "pattern": "^(?!null$)[\\s\\S]+$",
+                        "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                         "type": "string"
                       },
                       "provider": {
@@ -6671,7 +6671,7 @@
                       "packageObjectVersion": {
                         "maxLength": 1024,
                         "minLength": 1,
-                        "pattern": "^(?!null$)[\\s\\S]+$",
+                        "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                         "type": "string"
                       },
                       "provider": {
@@ -8023,7 +8023,7 @@
                       "packageObjectVersion": {
                         "maxLength": 1024,
                         "minLength": 1,
-                        "pattern": "^(?!null$)[\\s\\S]+$",
+                        "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                         "type": "string"
                       },
                       "provider": {
@@ -9375,7 +9375,7 @@
                       "packageObjectVersion": {
                         "maxLength": 1024,
                         "minLength": 1,
-                        "pattern": "^(?!null$)[\\s\\S]+$",
+                        "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                         "type": "string"
                       },
                       "provider": {
@@ -10727,7 +10727,7 @@
                       "packageObjectVersion": {
                         "maxLength": 1024,
                         "minLength": 1,
-                        "pattern": "^(?!null$)[\\s\\S]+$",
+                        "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                         "type": "string"
                       },
                       "provider": {
@@ -12079,7 +12079,7 @@
                       "packageObjectVersion": {
                         "maxLength": 1024,
                         "minLength": 1,
-                        "pattern": "^(?!null$)[\\s\\S]+$",
+                        "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                         "type": "string"
                       },
                       "provider": {
@@ -13082,7 +13082,7 @@
                               "packageObjectVersion": {
                                 "maxLength": 1024,
                                 "minLength": 1,
-                                "pattern": "^(?!null$)[\\s\\S]+$",
+                                "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                                 "type": "string"
                               },
                               "provider": {
@@ -13748,7 +13748,7 @@
                               "packageObjectVersion": {
                                 "maxLength": 1024,
                                 "minLength": 1,
-                                "pattern": "^(?!null$)[\\s\\S]+$",
+                                "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                                 "type": "string"
                               },
                               "provider": {
@@ -14657,7 +14657,7 @@
                               "packageObjectVersion": {
                                 "maxLength": 1024,
                                 "minLength": 1,
-                                "pattern": "^(?!null$)[\\s\\S]+$",
+                                "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                                 "type": "string"
                               },
                               "provider": {
@@ -15301,7 +15301,7 @@
                               "packageObjectVersion": {
                                 "maxLength": 1024,
                                 "minLength": 1,
-                                "pattern": "^(?!null$)[\\s\\S]+$",
+                                "pattern": "^(?!null(?![\\s\\S]))[\\s\\S]+$",
                                 "type": "string"
                               },
                               "provider": {

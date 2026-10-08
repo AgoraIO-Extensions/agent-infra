@@ -4,18 +4,19 @@ export type SkillPackageObjectKindV1 =
 	| "zip"
 	| "manifest"
 	| "source-proof"
-	| "scan-receipt"
+	| "scan"
+	| "signature-record"
 	| "signature"
 	| "bundle";
 
 export function skillPackageObjectRefV1(
-	packageDigest: string,
+	operationId: string,
 	kind: SkillPackageObjectKindV1,
 ) {
-	if (!/^[a-f0-9]{64}$/.test(packageDigest))
-		throw new Error("Invalid package digest");
+	if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(operationId))
+		throw new Error("Invalid package operation");
 	const bytes = createHash("sha256")
-		.update(`agent-infra:skill-package-object:v1:${kind}:${packageDigest}`)
+		.update(`agent-infra:skill-package-object:v1:${kind}:${operationId}`)
 		.digest();
 	const byte6 = bytes.at(6);
 	const byte8 = bytes.at(8);

@@ -48,6 +48,13 @@ export function createContentProbe(
 			}
 		},
 		async finish() {
+			if (
+				policy === "skill-package" &&
+				expectedMediaType !== "application/zip" &&
+				expectedMediaType !== "application/json" &&
+				expectedMediaType !== "application/octet-stream"
+			)
+				throw new Error("Unsupported skill package media type");
 			if (text) {
 				try {
 					decoder.decode();
@@ -83,6 +90,12 @@ export function createContentProbe(
 					: undefined;
 			const mediaType =
 				evidenceType ?? detected?.mime ?? (text ? "text/plain" : null);
+			if (
+				policy === "skill-package" &&
+				expectedMediaType === "application/zip" &&
+				mediaType !== "application/zip"
+			)
+				throw new Error("Invalid skill package archive type");
 			if (!mediaType) throw new Error("File format cannot be verified");
 			return { sizeBytes, mediaType, sha256: hash.digest("hex") };
 		},

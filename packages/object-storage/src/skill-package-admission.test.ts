@@ -371,3 +371,33 @@ describe("Skill package admission", () => {
 		).toThrow();
 	});
 });
+
+it("rejects trailing bytes, unsupported flags and truncated EOCD comments", () => {
+	expect(() =>
+		prepareSkillPackageV1({
+			archiveBytes: Buffer.concat([archive, Buffer.from([0])]),
+			name: "summary",
+			version: "1",
+		}),
+	).toThrow();
+	const flags = Buffer.from(archive);
+	flags.writeUInt16LE(0x808, 6);
+	const central = flags.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+	flags.writeUInt16LE(0x808, central + 8);
+	expect(() =>
+		prepareSkillPackageV1({
+			archiveBytes: flags,
+			name: "summary",
+			version: "1",
+		}),
+	).toThrow();
+	const comment = Buffer.from(archive);
+	comment.writeUInt16LE(1, comment.length - 2);
+	expect(() =>
+		prepareSkillPackageV1({
+			archiveBytes: comment,
+			name: "summary",
+			version: "1",
+		}),
+	).toThrow();
+});

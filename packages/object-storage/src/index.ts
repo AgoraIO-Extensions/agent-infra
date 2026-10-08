@@ -169,8 +169,9 @@ export {
 	type S3ObjectStorageOptionsV1,
 } from "./s3.js";
 export * from "./skill-package-admission.js";
+export { createClamAvSkillPackageScannerV1 } from "./skill-package-clamav.js";
 export {
-	type SkillHubLifecyclePortV1,
+	type SkillPackageAdmissionPolicyV1,
 	type SkillPackageSupplierOptionsV1,
 	SkillPackageSupplierV1,
 	type SkillPackageSupplyInputV1,
