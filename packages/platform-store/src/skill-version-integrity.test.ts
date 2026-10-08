@@ -32,6 +32,7 @@ let upgradeRowsBefore: unknown;
 let upgradeRowsAfter: unknown;
 let historyBefore: { hash: string; created_at: string }[];
 let historyAfter: { hash: string; created_at: string }[];
+let migrationsAfterCheckpoint: number;
 
 async function seed(state: VersionState = "published") {
 	await client`insert into platform.skill_hub_skills
@@ -102,6 +103,9 @@ beforeAll(async () => {
 	const journal = JSON.parse(await readFile(journalPath, "utf8")) as {
 		entries: { idx: number }[];
 	};
+	migrationsAfterCheckpoint = journal.entries.filter(
+		(entry) => entry.idx > 40,
+	).length;
 	journal.entries = journal.entries.filter((entry) => entry.idx <= 40);
 	await writeFile(journalPath, JSON.stringify(journal));
 	await migratePlatformDatabase({
@@ -131,8 +135,10 @@ afterAll(async () => {
 describe("Skill Version PostgreSQL integrity", () => {
 	it("upgrades the populated 0040 checkpoint without rewriting versions or migration history", async () => {
 		expect(upgradeRowsAfter).toEqual(upgradeRowsBefore);
-		expect(historyAfter.slice(0, -2)).toEqual(historyBefore);
-		expect(historyAfter).toHaveLength(historyBefore.length + 2);
+		expect(historyAfter.slice(0, historyBefore.length)).toEqual(historyBefore);
+		expect(historyAfter).toHaveLength(
+			historyBefore.length + migrationsAfterCheckpoint,
+		);
 		await seed();
 		await rejects(
 			client`update platform.skill_hub_versions set package_object_version = 'replacement-object'`,

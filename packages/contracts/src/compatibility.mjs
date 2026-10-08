@@ -1263,6 +1263,20 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 			schemas.map((name) => [name, current.components?.schemas?.[name]]),
 		),
 	};
+	// #1534 later added the optional Session availability; the pinned digest
+	// covers the original publication.
+	const detail = addition.schemas.ConversationDetailProjectionV2;
+	if (
+		sameValue(detail?.properties?.sessionAvailability, {
+			enum: ["preparing", "ready", "unavailable"],
+			type: "string",
+		}) &&
+		!detail.required?.includes("sessionAvailability")
+	) {
+		const properties = { ...detail.properties };
+		delete properties.sessionAvailability;
+		addition.schemas.ConversationDetailProjectionV2 = { ...detail, properties };
+	}
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		"097d6b3631a284fd8faf916f2c35a70d7c721c8bc832f3b97a96389fecfc541f"
@@ -1294,6 +1308,26 @@ function isConversationSseV2NotFoundAddition(previous, current) {
 		return false;
 	const normalized = structuredClone(current);
 	delete normalized.paths[path].get.responses["404"];
+	return sameValue(previous, normalized);
+}
+
+// #1534 adds the optional Session availability to the Web Conversation detail.
+function isConversationSessionAvailabilityOpenApiAddition(previous, current) {
+	const name = "ConversationDetailProjectionV2";
+	const previousDetail = previous.components?.schemas?.[name];
+	const currentDetail = current.components?.schemas?.[name];
+	if (
+		!previousDetail?.properties ||
+		Object.hasOwn(previousDetail.properties, "sessionAvailability") ||
+		!sameValue(currentDetail?.properties?.sessionAvailability, {
+			enum: ["preparing", "ready", "unavailable"],
+			type: "string",
+		}) ||
+		currentDetail.required?.includes("sessionAvailability")
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[name].properties.sessionAvailability;
 	return sameValue(previous, normalized);
 }
 
@@ -2005,6 +2039,7 @@ function findBreakingChanges(previous, current) {
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
+			!isConversationSessionAvailabilityOpenApiAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&

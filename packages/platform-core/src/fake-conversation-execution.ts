@@ -136,7 +136,7 @@ function defaultAuthorization(
 function isMessageWritePlan(
 	decision:
 		| ConversationMessageWritePlanV1
-		| { readonly outcome: "busy" | "denied" },
+		| { readonly outcome: "busy" | "starting" | "denied" },
 ): decision is ConversationMessageWritePlanV1 {
 	return !Object.hasOwn(decision, "outcome");
 }
@@ -150,7 +150,7 @@ function isEventWritePlan(
 function isRegenerationWritePlan(
 	decision:
 		| ConversationRegenerationWritePlanV1
-		| { readonly outcome: "busy" | "denied" },
+		| { readonly outcome: "busy" | "starting" | "denied" },
 ): decision is ConversationRegenerationWritePlanV1 {
 	return !Object.hasOwn(decision, "outcome");
 }
@@ -418,7 +418,11 @@ export class FakeConversationExecutionV1
 				}
 				const decision = decide(this.#state(request.command.conversationId));
 				if (!isMessageWritePlan(decision)) {
-					if (decision.outcome === "denied" || decision.outcome === "busy") {
+					if (
+						decision.outcome === "denied" ||
+						decision.outcome === "busy" ||
+						decision.outcome === "starting"
+					) {
 						return decision;
 					}
 					this.#commandIdempotency.set(idempotencyKey, {
@@ -609,7 +613,11 @@ export class FakeConversationExecutionV1
 					),
 				);
 				if (!isRegenerationWritePlan(decision)) {
-					if (decision.outcome === "denied" || decision.outcome === "busy") {
+					if (
+						decision.outcome === "denied" ||
+						decision.outcome === "busy" ||
+						decision.outcome === "starting"
+					) {
 						return decision;
 					}
 					this.#commandIdempotency.set(idempotencyKey, {

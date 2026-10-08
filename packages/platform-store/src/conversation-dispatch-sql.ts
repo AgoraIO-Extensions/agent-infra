@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type {
 	ConversationDispatchClaimV1,
@@ -288,6 +289,49 @@ export async function cancelStoppedTurn(
 	) {
 		throw new StaleDispatchLease();
 	}
+	// The Runtime never accepted this Turn, so no Runtime terminal event will
+	// arrive. Record the Platform's own cancellation in the timeline (HLD §8.1).
+	await insertPlatformExecutionStatus(
+		transaction,
+		conversation.id,
+		execution.execution_id,
+		"cancelled",
+	);
+}
+
+/** Append a Platform-sourced execution.status event with no Runtime cursor. */
+async function insertPlatformExecutionStatus(
+	transaction: Transaction,
+	conversationId: string,
+	executionId: string,
+	status: "cancelled",
+) {
+	const [sequence] = await transaction<{ value: string }[]>`
+		update platform.conversation_executions
+		set last_event_sequence = last_event_sequence + 1
+		where execution_id = ${executionId} and conversation_id = ${conversationId}
+		returning last_event_sequence::text as value
+	`;
+	const [cursor] = await transaction<{ value: string }[]>`
+		update platform.conversations
+		set last_conversation_cursor = last_conversation_cursor + 1,
+			updated_at = greatest(updated_at, clock_timestamp())
+		where id = ${conversationId}
+		returning last_conversation_cursor::text as value
+	`;
+	if (!sequence || !cursor) throw new StaleDispatchLease();
+	const eventId = randomUUID();
+	const event = { type: "execution.status", status } as const;
+	await transaction`
+		insert into platform.conversation_events
+			(event_id, conversation_id, execution_id, adapter_event_key, sequence,
+			 conversation_cursor, event_type, event_payload, event_digest, source,
+			 runtime_cursor, occurred_at)
+		values (${eventId}, ${conversationId}, ${executionId}, ${`platform:${eventId}`},
+			${sequence.value}, ${cursor.value}, ${event.type}, ${transaction.json(event)},
+			${createHash("sha256").update(JSON.stringify(event)).digest("hex")},
+			'platform', null, clock_timestamp())
+	`;
 }
 
 export function bindingMatches(

@@ -256,6 +256,7 @@ export function normalizeCommandDecision(
 	const bare = trySnapshotObject(input, ["outcome"]);
 	if (bare) {
 		if (bare.outcome === "busy") return { outcome: "busy" };
+		if (bare.outcome === "starting") return { outcome: "starting" };
 		if (bare.outcome === "denied") return { outcome: "denied" };
 		return unavailable();
 	}

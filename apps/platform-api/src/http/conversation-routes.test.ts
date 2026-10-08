@@ -229,7 +229,48 @@ describe("Conversation HTTP routes", () => {
 		);
 		expect(detailBody.events).toHaveLength(1);
 		expect(executionBody.events).toHaveLength(1);
+		expect(detailBody.sessionAvailability).toBe("ready");
 	});
+
+	it.each([
+		[{ sandboxReady: false }, "preparing"],
+		[{ sandboxReady: true }, "ready"],
+	] as const)(
+		"projects the Session readiness %o as %s (#1534)",
+		async (readiness, expected) => {
+			const input = dependencies();
+			const current = await input.query.get(
+				{ actorId: identity.userId, channelId: "web" },
+				"conversation-1",
+			);
+			if (!current) throw new Error("Expected detail");
+			input.query.get = vi.fn().mockResolvedValue({
+				...current,
+				conversation: {
+					...current.conversation,
+					sandbox: {
+						schemaVersion: 1,
+						sandboxId: "sandbox-1",
+						sessionId: conversation.conversationId,
+						agentId: conversation.agentId,
+						principal: { kind: "user", id: identity.userId },
+						channelId: "web",
+						generation: 1,
+						resourceName: "sandbox-1",
+						workspaceScope: "workspace-1",
+					},
+					...readiness,
+				},
+			});
+			const response = await testApp(input).app.request(
+				"/api/v2/conversations/conversation-1",
+			);
+			expect(
+				ConversationDetailProjectionV2Schema.parse(await response.json())
+					.sessionAvailability,
+			).toBe(expected);
+		},
+	);
 
 	it("keeps V2 conversation and execution reads actor-scoped", async () => {
 		const input = dependencies();
@@ -374,6 +415,32 @@ describe("Conversation HTTP routes", () => {
 		const error = PilotProtocolErrorV1Schema.parse(await busyResponse.json());
 		expect(error).toMatchObject({ code: "AGENT_BUSY", retryable: true });
 		expect(JSON.stringify(error)).not.toContain("Run it");
+	});
+
+	it("reports a preparing Session as a retryable start, not as lost access (#1534)", async () => {
+		const input = dependencies();
+		const command = input.commands(identity);
+		command.accept = vi.fn().mockResolvedValue({ outcome: "starting" });
+		command.regenerate = vi.fn().mockResolvedValue({ outcome: "starting" });
+		const { app } = testApp(input);
+		const responses = await Promise.all([
+			app.request("/api/v1/conversations/conversation-1/messages", {
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1, text: "Run it" }),
+			}),
+			app.request("/api/v1/conversations/conversation-1/regenerations", {
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1, messageId: "message-1" }),
+			}),
+		]);
+
+		expect(responses.map(({ status }) => status)).toEqual([409, 409]);
+		for (const response of responses)
+			expect(
+				PilotProtocolErrorV1Schema.parse(await response.json()),
+			).toMatchObject({ code: "AGENT_STARTING", retryable: true });
 	});
 
 	it("maps temporarily unavailable Agent commands to a retryable Runtime error", async () => {

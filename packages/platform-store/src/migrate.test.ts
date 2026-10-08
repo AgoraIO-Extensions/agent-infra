@@ -1956,10 +1956,12 @@ describe("published Relay authority migration", () => {
 			40,
 			41,
 			42,
+			43,
+			44,
 		]);
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 42,
-			tag: "0042_agent_api_creation",
+			idx: 44,
+			tag: "0044_platform_cancellation_status_required",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2179,6 +2181,8 @@ describe("published Relay authority migration", () => {
 								"conversations:conversation_principal_type_valid",
 							]
 						: [
+								// 0042 admits the Platform's own cancellation event.
+								"conversation_events:conversation_event_source_binding",
 								"conversation_executions:conversation_execution_original_digest_binding",
 								"conversation_executions:conversation_execution_principal_type_valid",
 								"conversation_executions:conversation_execution_task_wait_binding",

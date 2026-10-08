@@ -95,6 +95,20 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		? structuredClone(options.connectionConsumer)
 		: undefined;
 
+	app.all("/internal/runtime/oauth/*", (context) =>
+		context.json(
+			{
+				schemaVersion: 1,
+				code: "CONNECTION_OAUTH_UNAVAILABLE",
+				message:
+					"Connection authorization requires its protected HTTPS receiver",
+				retryable: false,
+				traceId: crypto.randomUUID(),
+			},
+			503,
+		),
+	);
+
 	app.get("/healthz", (context) =>
 		context.json({ service: runtimeHostService, status: "ok" }),
 	);

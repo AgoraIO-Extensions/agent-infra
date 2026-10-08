@@ -2549,6 +2549,14 @@
           "schemaVersion": {
             "const": 2,
             "type": "number"
+          },
+          "sessionAvailability": {
+            "enum": [
+              "preparing",
+              "ready",
+              "unavailable"
+            ],
+            "type": "string"
           }
         },
         "required": [

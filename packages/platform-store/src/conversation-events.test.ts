@@ -1251,6 +1251,7 @@ describe("PostgreSQL Conversation event transaction", () => {
 			source: string,
 			eventType: string,
 			runtimeCursor: string | null,
+			payload: Record<string, string | null> = { type: eventType },
 		) => client`
 			insert into platform.conversation_events
 				(event_id, conversation_id, execution_id, adapter_event_key, sequence,
@@ -1258,7 +1259,7 @@ describe("PostgreSQL Conversation event transaction", () => {
 				 runtime_cursor, occurred_at, source)
 			values
 				(${eventId}, ${conversationId}, ${executionId}, ${`adapter_${eventId}`}, 1,
-				 1, ${eventType}, ${client.json({ type: eventType })}, ${"0".repeat(64)},
+				 1, ${eventType}, ${client.json(payload)}, ${"0".repeat(64)},
 				 ${runtimeCursor}, now(), ${source})
 		`;
 		await expect(
@@ -1286,6 +1287,52 @@ describe("PostgreSQL Conversation event transaction", () => {
 		).rejects.toMatchObject({
 			constraint_name: "conversation_event_source_binding",
 		});
+		// The Platform may record only its own cancellation, never a Runtime
+		// terminal such as completion or failure (HLD §8.1).
+		for (const status of ["completed", "failed", "processing"]) {
+			await expect(
+				insert(
+					`event_platform_status_${status}`,
+					"platform",
+					"execution.status",
+					null,
+					{ type: "execution.status", status },
+				),
+			).rejects.toMatchObject({
+				constraint_name: "conversation_event_source_binding",
+			});
+		}
+		// A missing or JSON-null status must not slip through as SQL NULL.
+		for (const [eventId, payload] of [
+			["event_platform_status_missing", { type: "execution.status" }],
+			[
+				"event_platform_status_null",
+				{ type: "execution.status", status: null },
+			],
+		] as const) {
+			await expect(
+				insert(eventId, "platform", "execution.status", null, payload),
+			).rejects.toMatchObject({
+				constraint_name: "conversation_event_source_binding",
+			});
+		}
+		await expect(
+			insert(
+				"event_platform_cancelled_cursor",
+				"platform",
+				"execution.status",
+				"invented_runtime_cursor",
+				{ type: "execution.status", status: "cancelled" },
+			),
+		).rejects.toMatchObject({
+			constraint_name: "conversation_event_source_binding",
+		});
+		await expect(
+			insert("event_platform_cancelled", "platform", "execution.status", null, {
+				type: "execution.status",
+				status: "cancelled",
+			}),
+		).resolves.toBeDefined();
 	});
 
 	it("rolls back a failed new-event write without advancing either cursor", async () => {

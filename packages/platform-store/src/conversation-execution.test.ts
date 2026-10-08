@@ -655,7 +655,8 @@ describe("PostgreSQL Conversation command transaction", () => {
 				traceId: "web-sandbox",
 			};
 			const before = await commandEffectCounts();
-			expect(await useCase.accept(command)).toEqual({ outcome: "denied" });
+			// Preparing is a retryable start, not a denial (#1534).
+			expect(await useCase.accept(command)).toEqual({ outcome: "starting" });
 			expect(await commandEffectCounts()).toEqual(before);
 			expect(
 				await useCase.readConversation({ schemaVersion: 1, conversationId }),
@@ -684,7 +685,7 @@ describe("PostgreSQL Conversation command transaction", () => {
 					...command,
 					idempotencyKey: "web-sandbox-supplement",
 				}),
-			).toEqual({ outcome: "denied" });
+			).toEqual({ outcome: "starting" });
 			expect(
 				await useCase.regenerate({
 					schemaVersion: 1,
@@ -695,7 +696,7 @@ describe("PostgreSQL Conversation command transaction", () => {
 					requestId: "web-sandbox-regenerate",
 					traceId: "web-sandbox",
 				}),
-			).toEqual({ outcome: "denied" });
+			).toEqual({ outcome: "starting" });
 
 			expect(await commandEffectCounts()).toEqual(acceptedCounts);
 			expect(

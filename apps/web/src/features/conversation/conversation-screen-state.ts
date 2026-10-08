@@ -30,6 +30,17 @@ export function executionStatus(
 	return last?.type === "execution.status" ? last.payload.status : fallback;
 }
 
+/** A stored terminal answer result is final even when the timeline lacks its
+ * terminal event; a later terminal event still wins (#1524). */
+export function answerStatus(
+	events: readonly PersistedConversationEventV2[],
+	executionId: string | null,
+	stored: ExecutionStatus,
+): ExecutionStatus | undefined {
+	const status = executionStatus(events, executionId, stored);
+	return isTerminal(stored) && !isTerminal(status) ? stored : status;
+}
+
 /** Answer projections can omit an execution until its first text delta. The
  * persisted status stream is authoritative even when an older answer is last. */
 export function currentExecution(
@@ -40,6 +51,7 @@ export function currentExecution(
 	const messages = history?.messages ?? [];
 	const statuses = new Map<string, ExecutionStatus>();
 	const persistedStatuses = new Set<string>();
+	const eventStatuses = new Map<string, ExecutionStatus>();
 	for (const message of messages) {
 		// A terminal user-message status describes delivery of that message, not
 		// the execution it started. Keep only its non-terminal state as a
@@ -53,8 +65,24 @@ export function currentExecution(
 	for (const event of events) {
 		if (event.type !== "execution.status") continue;
 		persistedStatuses.add(event.executionId);
+		eventStatuses.set(event.executionId, event.payload.status);
 		statuses.delete(event.executionId);
 		statuses.set(event.executionId, event.payload.status);
+	}
+	// The projection reads each assistant result from the stored execution. A
+	// terminal result is final even when its terminal event is missing, such as
+	// a Turn cancelled before the Runtime accepted it (#1524).
+	for (const message of messages) {
+		if (
+			message.role === "assistant" &&
+			message.executionId &&
+			isTerminal(message.status) &&
+			!isTerminal(eventStatuses.get(message.executionId))
+		) {
+			persistedStatuses.add(message.executionId);
+			statuses.delete(message.executionId);
+			statuses.set(message.executionId, message.status);
+		}
 	}
 	// A new receipt remains authoritative until its persisted execution status is
 	// observed. After a reload, reconstruct that pending state from the latest
@@ -118,7 +146,7 @@ export function commandFailure(code: PilotProtocolErrorV1["code"]): string {
 		case "AGENT_BUSY":
 			return "当前回复仍在处理，暂不支持补充指令。草稿已保留。";
 		case "AGENT_STARTING":
-			return "Agent 正在启动，历史只读。请稍后刷新。";
+			return "会话尚未准备完成，消息未发送，草稿已保留。准备完成后请重新发送。";
 		case "AGENT_UPDATING":
 			return "Agent 正在更新，历史只读。请稍后刷新。";
 		case "CONVERSATION_UNAVAILABLE":

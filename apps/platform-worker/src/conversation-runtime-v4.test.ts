@@ -493,6 +493,60 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			h.runtime.close();
 		}
 	});
+	it("keeps reading Host pages past a terminal Platform status until the terminal event (#1524)", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			Object.assign(h.state, { executionStatus: "completed" });
+			h.fetcher.mockImplementation(async (_url, init) => {
+				const body = JSON.parse(init?.body as string);
+				return Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					executionId: "execution",
+					events:
+						body.afterCursor === "model-cursor" ? [terminal] : [modelFact],
+				});
+			});
+			const stream = h.runtime.runtimeHost
+				.events(h.events(reference))
+				[Symbol.asyncIterator]();
+			expect((await stream.next()).value).toEqual(modelFact);
+			Object.assign(h.state, { runtimeCursor: "model-cursor" });
+			expect((await stream.next()).value).toEqual(terminal);
+			expect((await stream.next()).done).toBe(true);
+		} finally {
+			h.runtime.close();
+		}
+	});
+
+	it("ends a drained stream for a terminal Platform status without spinning (#1524)", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			Object.assign(h.state, { executionStatus: "completed" });
+			h.fetcher.mockImplementation(async (_url, init) => {
+				const body = JSON.parse(init?.body as string);
+				return Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					executionId: "execution",
+					events: body.afterCursor === "model-cursor" ? [] : [modelFact],
+				});
+			});
+			const stream = h.runtime.runtimeHost
+				.events(h.events(reference))
+				[Symbol.asyncIterator]();
+			expect((await stream.next()).value).toEqual(modelFact);
+			Object.assign(h.state, { runtimeCursor: "model-cursor" });
+			// The Host has nothing more; Core decides whether the stream completed.
+			expect((await stream.next()).done).toBe(true);
+			expect(h.fetcher).toHaveBeenCalledTimes(2);
+		} finally {
+			h.runtime.close();
+		}
+	});
+
 	it("renews only the original V4 Execution lease through the existing Key-free V3 control envelope", async () => {
 		const h = runtimeV4Harness();
 		try {

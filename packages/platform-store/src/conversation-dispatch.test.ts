@@ -355,6 +355,35 @@ async function seedStop(work: Awaited<ReturnType<typeof seed>>) {
 	`;
 }
 
+async function expectPlatformCancellationEvent(
+	work: Awaited<ReturnType<typeof seed>>,
+) {
+	const events = await client`
+		select event.event_type, event.event_payload, event.source,
+			event.runtime_cursor, event.adapter_event_key,
+			event.sequence = execution.last_event_sequence as last_sequence,
+			event.conversation_cursor = conversation.last_conversation_cursor
+				as last_cursor
+		from platform.conversation_events event
+		join platform.conversation_executions execution
+			on execution.execution_id = event.execution_id
+		join platform.conversations conversation
+			on conversation.id = event.conversation_id
+		where event.execution_id = ${work.executionId}
+	`;
+	expect(events).toEqual([
+		{
+			event_type: "execution.status",
+			event_payload: { type: "execution.status", status: "cancelled" },
+			source: "platform",
+			runtime_cursor: null,
+			adapter_event_key: expect.stringMatching(/^platform:/),
+			last_sequence: true,
+			last_cursor: true,
+		},
+	]);
+}
+
 async function seedSupplement(work: Awaited<ReturnType<typeof seed>>) {
 	const messageId = `supplement-${work.messageId}`;
 	await client`
@@ -2859,6 +2888,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				supplement_failure_code: "ORIGINAL_RESPONSE_NOT_STARTED",
 				supplement_outbox_status: "failed",
 			});
+			await expectPlatformCancellationEvent(work);
 		} finally {
 			await store.close();
 		}
@@ -3284,6 +3314,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 				where request.execution_id = ${work.executionId}
 			`;
 			expect(stop).toEqual({ status: "completed", outbox_status: "succeeded" });
+			await expectPlatformCancellationEvent(work);
 		} finally {
 			await store.close();
 		}

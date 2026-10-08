@@ -69,7 +69,9 @@
 		"./files": {
 			"types": "./dist/files.d.mts",
 			"import": "./dist/files.mjs"
-		}
+		},
+		"./json-schema/runtime-oauth.v1": "./artifacts/json-schema/runtime-oauth.v1.schema.json",
+		"./openapi/runtime-oauth.v1": "./artifacts/openapi/runtime-oauth.v1.openapi.json"
 	},
 	"files": [
 		"dist",
