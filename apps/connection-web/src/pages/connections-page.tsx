@@ -207,6 +207,11 @@ export function ConnectionsPage() {
 		if (!["connect", "reauthorize"].includes(search.get("intent") ?? ""))
 			return;
 		const provider = search.get("provider");
+		const consumeIntent = () => {
+			const url = new URL(window.location.href);
+			url.searchParams.delete("intent");
+			window.history.replaceState(window.history.state, "", url);
+		};
 		if (approvedRequest.data?.connectReadiness?.status === "REAPPLY_REQUIRED")
 			return;
 		if (
@@ -216,8 +221,10 @@ export function ConnectionsPage() {
 		)
 			return;
 		if (!approvedAccessRequestId) {
-			if (provider)
+			if (provider) {
+				consumeIntent();
 				setApprovalRequiredProvider(provider as ConnectorProviderId);
+			}
 			return;
 		}
 		if (
@@ -226,6 +233,7 @@ export function ConnectionsPage() {
 				newCredentialRequestId !== accessRequestId)
 		)
 			return;
+		consumeIntent();
 		if (
 			approvedAccessRequestId &&
 			startedOAuthRequest.current !== approvedAccessRequestId

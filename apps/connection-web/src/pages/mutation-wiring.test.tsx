@@ -333,9 +333,12 @@ function renderPage(page: ReactNode) {
 	const client = new QueryClient({
 		defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
 	});
-	return render(
-		<QueryClientProvider client={client}>{page}</QueryClientProvider>,
-	);
+	return {
+		...render(
+			<QueryClientProvider client={client}>{page}</QueryClientProvider>,
+		),
+		client,
+	};
 }
 
 function calls(mock: unknown) {
@@ -979,6 +982,57 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(screen.getByRole("button", { name: "查看连接申请" })).toBeTruthy();
 		expect(screen.queryByLabelText("Confluence 密码")).toBeNull();
 	});
+
+	it.each(["关闭按钮", "Escape", "遮罩", "查看连接申请"])(
+		"GitHub 恢复提示通过%s关闭后不会被刷新重新打开",
+		async (action) => {
+			window.history.replaceState(
+				{ recovery: "fixture" },
+				"",
+				"/connection/connections?provider=github&intent=reauthorize",
+			);
+			const page = renderPage(<ConnectionsPage />);
+			const dialog = await screen.findByRole("dialog", {
+				name: "申请连接 GitHub",
+			});
+			await act(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			});
+			if (action === "Escape") {
+				fireEvent.keyDown(dialog, { key: "Escape" });
+			} else if (action === "遮罩") {
+				const backdrop = document.querySelector(".dialog-backdrop");
+				if (!backdrop) throw new Error("Dialog backdrop missing");
+				fireEvent.pointerDown(backdrop, { button: 0, pointerType: "mouse" });
+			} else {
+				fireEvent.click(
+					within(dialog).getByRole("button", {
+						name: action === "关闭按钮" ? "关闭" : action,
+					}),
+				);
+			}
+			await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+			if (action === "查看连接申请") {
+				expect(
+					screen.getByRole("region", { name: "审批与连接进度" }),
+				).toBeTruthy();
+			}
+			await act(async () => {
+				await page.client.invalidateQueries({ queryKey: ["connections"] });
+			});
+			expect(screen.queryByRole("dialog")).toBeNull();
+			expect(
+				new URLSearchParams(window.location.search).get("intent"),
+			).toBeNull();
+			expect(new URLSearchParams(window.location.search).get("provider")).toBe(
+				"github",
+			);
+			expect(window.history.state).toEqual({ recovery: "fixture" });
+			expect(api.startGithubOAuth).not.toHaveBeenCalled();
+			expect(api.prepareConnectionAccess).not.toHaveBeenCalled();
+			expect(api.connectProviderCredential).not.toHaveBeenCalled();
+		},
+	);
 
 	it("Provider 详情展示当前审批阶段并允许取消", async () => {
 		window.history.replaceState(

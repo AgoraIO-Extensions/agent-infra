@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
+import { useCallback } from "react";
 
 import { connectionApi } from "./api";
 
@@ -10,14 +11,17 @@ export function useGithubOAuth() {
 				input.accessRequestId,
 			),
 	});
-	const begin = (sharedScopeId?: string, accessRequestId?: string) => {
-		mutation.mutate(
-			{ sharedScopeId, accessRequestId },
-			{
-				onSuccess: ({ authorizationUrl }) =>
-					window.location.assign(authorizationUrl),
-			},
-		);
-	};
+	const begin = useCallback(
+		(sharedScopeId?: string, accessRequestId?: string) => {
+			mutation.mutate(
+				{ sharedScopeId, accessRequestId },
+				{
+					onSuccess: ({ authorizationUrl }) =>
+						window.location.assign(authorizationUrl),
+				},
+			);
+		},
+		[mutation.mutate],
+	);
 	return { ...mutation, begin };
 }
