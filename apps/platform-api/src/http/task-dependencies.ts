@@ -12,11 +12,20 @@ export function createTaskRoutesDependenciesV1(input: {
 	readonly transaction: PostgresConversationExecutionTransactionV1;
 	readonly query: TaskRoutesDependencies["query"];
 	readonly policy: ConversationTaskAdmissionPolicyV1;
+	readonly streamPollIntervalMs?: number;
+	readonly streamReadTimeoutMs?: number;
 }): TaskRoutesDependencies {
 	const transaction = input.transaction;
 	return {
 		authorize: (request) => transaction.authorizeTaskApi(request),
-		query: input.query,
+		query: {
+			getExecution: input.query.getExecution.bind(input.query),
+			...(input.query.replayExecution
+				? { replayExecution: input.query.replayExecution.bind(input.query) }
+				: {}),
+		},
+		streamPollIntervalMs: input.streamPollIntervalMs,
+		streamReadTimeoutMs: input.streamReadTimeoutMs,
 		audit: createTaskApiAuditV1({
 			write: (plan) => transaction.writeTaskApiAudit(plan),
 		}),

@@ -16,6 +16,7 @@ export * from "./conversation-worker.js";
 export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
 export * from "./runtime-grant-signer.js";
+export * from "./skill-materialization.js";
 export * from "./wecom-deployment.js";
 export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 export * from "./workload-deployment.js";

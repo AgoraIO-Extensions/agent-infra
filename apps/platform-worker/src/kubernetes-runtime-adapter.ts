@@ -1670,6 +1670,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					networkPolicyRef: workloadResourceNameV1(value.agentId),
 					secretRefs: value.secretRefs,
 					...(value.skills ? { skills: value.skills } : {}),
+					...(value.skillGenerationId
+						? { skillGenerationId: value.skillGenerationId }
+						: {}),
 					state: value.replicas === 0 ? "scaled-down" : "applying",
 					desiredReplicas: value.replicas,
 					readyReplicas: 0,
