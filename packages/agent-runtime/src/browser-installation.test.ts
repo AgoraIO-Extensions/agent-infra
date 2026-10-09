@@ -11,20 +11,34 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 			if (path !== "/opt" && !path.startsWith("/opt/agent-infra"))
 				return actual.lstat(path);
 			if (filesystem.fault === "missing") throw new Error("ENOENT");
-			const file = path.endsWith("/chrome") || path.endsWith("/release.json");
+			const file =
+				path.endsWith("/chrome") ||
+				path.endsWith("/release.json") ||
+				path.endsWith(".so");
 			return {
 				uid: 0,
 				gid: 0,
 				nlink: 1,
 				mode:
-					filesystem.fault === "writable"
-						? 0o777
-						: filesystem.fault === "root-writable" && file
-							? 0o755
-							: 0o555,
+					filesystem.fault === "library-writable" && path.endsWith(".so")
+						? 0o666
+						: filesystem.fault === "writable"
+							? 0o777
+							: filesystem.fault === "root-writable" && file
+								? 0o755
+								: 0o555,
 				isFile: () => file,
 				isDirectory: () => !file,
 			};
+		},
+		readdir: async (path: string) => {
+			const directory =
+				process.arch === "x64" ? "chrome-linux64" : "chrome-linux-arm64";
+			if (path === "/opt/agent-infra/browser")
+				return ["release.json", directory];
+			if (path === `/opt/agent-infra/browser/${directory}`)
+				return ["chrome", "libEGL.so"];
+			return [];
 		},
 		realpath: async (path: string) =>
 			path.startsWith("/opt")
@@ -107,6 +121,7 @@ describe("Pinned Chromium installation", () => {
 		"symlink",
 		"tampered",
 		"wrong-version",
+		"library-writable",
 	])("rejects %s supply before browser execution", async (fault) => {
 		filesystem.fault = fault;
 		await expect(verifyChromiumInstallationV1()).rejects.toThrow(

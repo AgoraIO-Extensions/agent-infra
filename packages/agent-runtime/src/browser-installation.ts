@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -38,14 +38,7 @@ export async function verifyChromiumInstallationV1() {
 			throw new Error();
 		const root = "/opt/agent-infra/browser";
 		const executable = join(root, artifact.executable);
-		for (const path of [
-			"/opt",
-			"/opt/agent-infra",
-			root,
-			dirname(executable),
-			executable,
-			join(root, "release.json"),
-		]) {
+		for (const path of ["/opt", "/opt/agent-infra"]) {
 			const stat = await lstat(path);
 			if (
 				(await realpath(path)) !== path ||
@@ -55,6 +48,27 @@ export async function verifyChromiumInstallationV1() {
 				!(stat.isFile() || stat.isDirectory())
 			)
 				throw new Error();
+		}
+		// Chromium also executes bundled libraries and reads resources. Validate
+		// the whole approved tree rather than just its main executable.
+		const pending = [root];
+		let visited = 0;
+		while (pending.length) {
+			const path = pending.pop();
+			if (!path || ++visited > 4096) throw new Error();
+			const stat = await lstat(path);
+			if (
+				(await realpath(path)) !== path ||
+				stat.uid !== 0 ||
+				stat.gid !== 0 ||
+				(stat.mode & 0o0222) !== 0
+			)
+				throw new Error();
+			if (stat.isDirectory()) {
+				const entries = await readdir(path);
+				if (entries.length > 4096) throw new Error();
+				for (const entry of entries) pending.push(join(path, entry));
+			} else if (!stat.isFile() || stat.nlink !== 1) throw new Error();
 		}
 		const binary = await lstat(executable);
 		if (
