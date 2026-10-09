@@ -11,6 +11,7 @@ import { TLSSocket } from "node:tls";
 import {
 	RuntimeHostError,
 	standardOAuthUnavailable as unavailable,
+	validateStandardMcpToken,
 } from "@agent-infra/agent-runtime";
 import {
 	RuntimeOAuthAuthorizedRequestV1Schema,
@@ -37,6 +38,7 @@ export type RuntimeOAuthAssembly =
 			client: ProtectedRuntimeOAuthClient;
 			key: string;
 			cert: string;
+			callbackServiceToken: string;
 			port: number;
 			runtimeOrigin: string;
 	  };
@@ -51,12 +53,14 @@ export async function prepareRuntimeOAuth(options: {
 	issuer: string;
 	workerId: string | undefined;
 	agentId: string | undefined;
+	serviceToken: string;
 	store?: Pick<
 		import("@agent-infra/agent-runtime").FileRuntimeStore,
 		"resolveOriginalExecutionBinding" | "assertOriginalExecutionBindingCurrent"
 	>;
 }): Promise<RuntimeOAuthAssembly | undefined> {
 	const environment = { ...options.environment };
+	const serviceToken = options.serviceToken;
 	const targetSnapshot = options.target
 		? structuredClone(options.target)
 		: undefined;
@@ -148,7 +152,11 @@ export async function prepareRuntimeOAuth(options: {
 		);
 		const cert = await readProtectedStandardMcpBytes(tls, "server.crt", 16384);
 		const key = await readProtectedStandardMcpBytes(tls, "server.key", 16384);
+		const callbackServiceToken = validateStandardMcpToken(
+			await readProtectedStandardMcpBytes(tls, "callback.auth", 4096),
+		);
 		assertStandardMcpProcessProtection();
+		if (!serviceToken || callbackServiceToken === serviceToken) unavailable();
 		const certificate = new X509Certificate(cert);
 		const hostname = runtime.hostname.replace(/^\[|\]$/g, "");
 		if (
@@ -183,6 +191,7 @@ export async function prepareRuntimeOAuth(options: {
 			client,
 			key,
 			cert,
+			callbackServiceToken,
 			port: Number(runtime.port),
 			runtimeOrigin: runtime.origin,
 		};
@@ -224,6 +233,10 @@ export function createRuntimeOAuthApp(
 	assembly: Extract<RuntimeOAuthAssembly, { status: "available" }>,
 	serviceToken: string,
 ) {
+	const callbackServiceToken = validateStandardMcpToken(
+		assembly.callbackServiceToken,
+	);
+	if (!serviceToken || callbackServiceToken === serviceToken) unavailable();
 	const app = new Hono<{ Bindings: HttpBindings }>();
 	app.use("*", async (context, next) => {
 		const socket = context.env.incoming?.socket;
@@ -231,7 +244,12 @@ export function createRuntimeOAuthApp(
 			!(socket instanceof TLSSocket) ||
 			!socket.encrypted ||
 			context.req.header("host") !== new URL(assembly.runtimeOrigin).host ||
-			!authorized(context.req.header("authorization"), serviceToken)
+			!authorized(
+				context.req.header("authorization"),
+				context.req.path === "/internal/runtime/oauth/v1/callback"
+					? callbackServiceToken
+					: serviceToken,
+			)
 		)
 			unavailable();
 		assertStandardMcpProcessProtection();

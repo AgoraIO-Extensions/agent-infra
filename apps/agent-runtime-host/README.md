@@ -31,6 +31,22 @@ Host 启动时可消费部署批准的私有文件 export，随后使用已有�
 `0600`，不使用路径别名、符号链接、硬链接或特殊文件。供应修订不可变；相同修订不能换
 成其他内容。metadata 与文件名不构成 Connection 身份、独立确认或当前授权证明。
 
+## OAuth callback 内部认证
+
+选择 `AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE` 的 Host 还须在既有私有 TLS 目录
+`codex-driver.json.native/conversations/standard-mcp-oauth/tls/` 接收 `callback.auth`。
+该文件仅保存部署批准的 callback-only 服务凭据，使用现有 16–4,096 字符、无空白的
+可打印 ASCII 材料格式；不含末尾换行。目录与文件的 UID、权限、链接和真实进程保护
+要求复用上述私有接收边界，配置只在启动时捕获，变更须受控重新装配。
+
+callback 凭据只认证专用 HTTPS `/internal/runtime/oauth/v1/callback`；Worker serviceToken
+与 installation JWS 继续认证 begin/confirm/status。两类凭据不得相同，也不跨路由兼容。
+缺失/非法 callback 材料关闭 OAuth 安装能力，普通业务/控制入口保持；回跳仍须满足
+原 state、主体/执行/代次、配置和秘密保护校验，成功不发布可用 MCP 安装。
+平台固定 callback 与其 SecretRef 装配须按
+[工程 Spec §13.5.6](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
+实施，本说明不提供 Token 上传或 Consumer 登记接口。
+
 ## MCP schema 版本
 
 工具输入和获准结果 schema 未声明 `$schema` 时，按 JSON Schema 2020-12 校验；显式
