@@ -603,6 +603,36 @@ interface PendingRequest {
 
 type CodexNotificationHandler = (frame: CodexAppServerFrame) => Promise<void>;
 
+/**
+ * Agent message deltas a native RPC delivered while an earlier batch was being
+ * persisted (#1637). They are committed together, in arrival order and each as
+ * its own journal event, so the read loop never waits for one fsync per delta.
+ */
+interface CodexTextDeltaBatch {
+	readonly pending: {
+		readonly conversationKey: string | undefined;
+		readonly delta: NonNullable<
+			ReturnType<typeof agentMessageDeltaNotification>
+		>;
+	}[];
+	flushing: Promise<void> | undefined;
+	failure: unknown;
+	readonly fail: (error: unknown) => void;
+}
+
+/** Received deltas held before the read loop waits for their persistence. */
+const maximumPendingTextDeltas = 512;
+
+/** The first delta of a batch that could not be appended, and why. */
+class TextDeltaFailure extends Error {
+	constructor(
+		readonly index: number,
+		override readonly cause: unknown,
+	) {
+		super("Codex text delta batch failed");
+	}
+}
+
 const capabilities: RuntimeCapabilitiesV1 = {
 	modelSelection: true,
 	attachments: false,
@@ -3022,6 +3052,13 @@ class CodexRpc {
 			.catch(() => this.fail(unavailableError()));
 	}
 
+	/** A notification accepted earlier failed while it was being persisted. */
+	failNotification(error: unknown) {
+		this.fail(
+			error instanceof RuntimeHostError ? error : protocolInvalidError(),
+		);
+	}
+
 	private fail(error = unavailableError()) {
 		if (this.failed) return;
 		this.failed = true;
@@ -3048,6 +3085,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private readonly resumedSessions = new Set<string>();
+	/** The last committed state that passed `assertDriverState`. */
+	private validatedState: CodexDriverState | undefined;
+	/** Text deltas received but not yet committed, one batch per native RPC. */
+	private readonly textDeltaBatches = new Set<CodexTextDeltaBatch>();
 	private readonly inFlightSessionResumes = new Map<string, Promise<void>>();
 	private readonly eventWaiters = new Map<string, Set<() => void>>();
 	private readonly recoveredEventExecutions = new Set<string>();
@@ -3969,6 +4010,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				unavailable();
 			}
 		}
+		const textDeltas: CodexTextDeltaBatch = {
+			pending: [],
+			flushing: undefined,
+			failure: undefined,
+			fail: (error) => rpc.failNotification(error),
+		};
+		this.textDeltaBatches.add(textDeltas);
 		const rpc = new CodexRpc(
 			bridge,
 			(frame) =>
@@ -3980,8 +4028,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					// The scripted test double serves every Conversation from one
 					// transport, so only production can bind routing to one key.
 					this.sharesOneNativeTransport() ? undefined : conversationKey,
+					textDeltas,
 				),
 			() => {
+				// Deltas already accepted from this process still commit in order.
+				void (textDeltas.flushing ?? Promise.resolve()).then(() =>
+					this.textDeltaBatches.delete(textDeltas),
+				);
 				if (skillProcess) {
 					skillProcess.active = false;
 					skillProcess.epoch++;
@@ -5812,30 +5865,43 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		afterCursor?: string,
 	): Promise<RuntimeEvent[]> {
-		const existingSession = this.session(nativeSessionRef);
+		// The Host replays once per event page. Look values up in the committed
+		// snapshot rather than copying the whole Driver state for each check.
+		const existingState = this.readSnapshot();
+		const existingSession = ownRecordValue(
+			existingState.sessions,
+			nativeSessionRef,
+		);
+		if (!existingSession) unavailable();
 		const existingExecution = ownRecordValue(
 			existingSession.executions,
 			executionId,
 		);
 		if (!existingExecution) unavailable();
-		this.assertModelAdmissionConfirmed(existingSession, existingExecution);
+		this.assertModelAdmissionConfirmed(
+			existingSession,
+			existingExecution,
+			existingState,
+		);
 		// Committed facts remain readable without reopening the old native route.
 		// Sealed executions replay their journal before independent status recovery.
 		if (
 			!existingSession.journals?.[existingExecution.nativeTurnId]
 				?.externalActionsBlocked &&
-			!this.hasInterruption(nativeSessionRef, executionId) &&
+			!this.hasInterruption(nativeSessionRef, executionId, existingState) &&
 			this.executionConfigurationMatches(
-				this.readState(),
+				existingState,
 				existingSession,
 				existingExecution,
 			)
 		)
 			await this.recoverEventHistory(nativeSessionRef, executionId);
-		const session = this.session(nativeSessionRef);
+		const state = this.readSnapshot();
+		const session = ownRecordValue(state.sessions, nativeSessionRef);
+		if (!session) unavailable();
 		const execution = ownRecordValue(session.executions, executionId);
 		if (!execution) unavailable();
-		this.assertModelAdmissionConfirmed(session, execution);
+		this.assertModelAdmissionConfirmed(session, execution, state);
 		const journal = ownRecordValue(
 			session.journals ?? {},
 			execution.nativeTurnId,
@@ -5847,7 +5913,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (index === -1) unavailable();
 			events = events.slice(index + 1);
 		}
-		return events.map((event) => this.runtimeEvent(executionId, event));
+		// Callers own the returned events; the snapshot stays frozen.
+		return structuredClone(
+			events.map((event) => this.runtimeEvent(executionId, event)),
+		);
 	}
 
 	async acknowledgeEvents(
@@ -5981,6 +6050,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			...[...rpcs].map((rpc) => rpc.close()),
 			...(this.closeModelTransport ? [this.closeModelTransport()] : []),
 		]);
+		// Deltas the closed processes already delivered still commit in order.
+		await Promise.allSettled(
+			[...this.textDeltaBatches].map((batch) => batch.flushing),
+		);
 		try {
 			await this.file.readCommitted();
 		} finally {
@@ -5996,12 +6069,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return state;
 	}
 
+	/**
+	 * The committed state for read-only lookups on the per-page replay path: one
+	 * frozen copy per committed version, validated once, instead of a copy and a
+	 * validation on every read (#1637).
+	 */
+	private readSnapshot() {
+		const state = this.file.snapshot();
+		if (state !== this.validatedState) {
+			assertDriverState(state);
+			this.validatedState = state;
+		}
+		return state;
+	}
+
 	private assertModelAdmissionConfirmed(
 		session: CodexSession,
 		execution: CodexExecution,
+		state: CodexDriverState = this.readState(),
 	) {
 		const operation = ownRecordValue(
-			this.readState().operations,
+			state.operations,
 			operationKey({
 				agentId: session.agentId,
 				conversationId: session.conversationId,
@@ -6085,13 +6173,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			unavailable();
 	}
 
-	private update<R>(change: (state: CodexDriverState) => R) {
+	private update<R>(
+		change: (state: CodexDriverState) => R,
+		options?: { readonly skipUnchanged?: boolean },
+	) {
 		return this.file.update((state) => {
 			assertDriverState(state);
 			const result = change(state);
 			assertDriverState(state);
 			return result;
-		});
+		}, options);
 	}
 
 	private handleNativeCallback(
@@ -8376,7 +8467,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async recordNotification(
 		frame: CodexAppServerFrame,
 		conversationKey: string | undefined,
+		textDeltas: CodexTextDeltaBatch,
 	) {
+		const delta = agentMessageDeltaNotification(frame);
+		if (delta) {
+			if (delta.delta.length > 0)
+				await this.bufferTextDelta(textDeltas, conversationKey, delta);
+			return;
+		}
+		// Every other notification orders after the deltas received before it.
+		await this.drainTextDeltas(textDeltas);
 		if (frame.method === "skills/changed") {
 			if (!isEmptyRecord(frame.params)) protocolInvalid();
 			const process = conversationKey
@@ -8558,32 +8658,101 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (messageStreamKey) this.notifyEventStream(messageStreamKey);
 			return;
 		}
+	}
 
-		const delta = agentMessageDeltaNotification(frame);
-		if (!delta || delta.delta.length === 0) return;
-		const streamKey = await this.update((state) => {
-			const resolved = this.resolveNotificationJournal(
-				state,
-				conversationKey,
-				delta.threadId,
-				delta.nativeTurnId,
-			);
-			if (!resolved) return;
-			this.assertJournalOpen(resolved.journal);
-			this.appendTextEvent(
-				resolved.session,
-				resolved.journal,
-				delta.nativeItemId,
-				delta.delta,
-			);
-			return resolved.execution
-				? this.eventStreamKey(
-						resolved.nativeSessionRef,
-						resolved.execution.executionId,
-					)
-				: undefined;
-		});
-		if (streamKey) this.notifyEventStream(streamKey);
+	/**
+	 * Accepts a delta without waiting for its persistence, so the native read loop
+	 * keeps reading while an earlier batch is committed. The batch keeps arrival
+	 * order and native event boundaries; only its fsync is shared (#1637).
+	 */
+	private async bufferTextDelta(
+		batch: CodexTextDeltaBatch,
+		conversationKey: string | undefined,
+		delta: NonNullable<ReturnType<typeof agentMessageDeltaNotification>>,
+	) {
+		if (batch.failure !== undefined) throw batch.failure;
+		batch.pending.push({ conversationKey, delta });
+		batch.flushing ??= this.flushTextDeltas(batch);
+		// Bound the memory held for deltas that are not yet durable.
+		if (batch.pending.length >= maximumPendingTextDeltas)
+			await this.drainTextDeltas(batch);
+	}
+
+	/** Waits until every delta accepted so far is committed or has failed. */
+	private async drainTextDeltas(batch: CodexTextDeltaBatch) {
+		while (batch.flushing) await batch.flushing;
+		if (batch.failure !== undefined) throw batch.failure;
+	}
+
+	private async flushTextDeltas(batch: CodexTextDeltaBatch) {
+		try {
+			while (batch.pending.length > 0) {
+				let taken: CodexTextDeltaBatch["pending"] = [];
+				let streamKeys: Set<string>;
+				try {
+					streamKeys = await this.update((state) => {
+						// Deltas that arrived while the previous batch was persisting.
+						taken = batch.pending.splice(0);
+						return this.appendTextDeltas(state, taken);
+					});
+				} catch (error) {
+					if (!(error instanceof TextDeltaFailure)) throw error;
+					// The failed batch was discarded whole. Commit the deltas before the
+					// failed one as they would have committed one by one; the rest are
+					// dropped like frames after a failed notification.
+					const prefix = taken.slice(0, error.index);
+					if (prefix.length > 0)
+						for (const key of await this.update((state) =>
+							this.appendTextDeltas(state, prefix),
+						))
+							this.notifyEventStream(key);
+					throw error.cause;
+				}
+				for (const key of streamKeys) this.notifyEventStream(key);
+			}
+		} catch (error) {
+			const cause = error instanceof TextDeltaFailure ? error.cause : error;
+			batch.failure = cause;
+			batch.pending.splice(0);
+			batch.fail(cause);
+		} finally {
+			batch.flushing = undefined;
+		}
+	}
+
+	private appendTextDeltas(
+		state: CodexDriverState,
+		deltas: CodexTextDeltaBatch["pending"],
+	) {
+		const streamKeys = new Set<string>();
+		for (const [index, { conversationKey, delta }] of deltas.entries()) {
+			try {
+				const resolved = this.resolveNotificationJournal(
+					state,
+					conversationKey,
+					delta.threadId,
+					delta.nativeTurnId,
+				);
+				if (!resolved) continue;
+				this.assertJournalOpen(resolved.journal);
+				this.appendTextEvent(
+					resolved.session,
+					resolved.journal,
+					delta.nativeItemId,
+					delta.delta,
+				);
+				if (resolved.execution)
+					streamKeys.add(
+						this.eventStreamKey(
+							resolved.nativeSessionRef,
+							resolved.execution.executionId,
+						),
+					);
+			} catch (error) {
+				throw new TextDeltaFailure(index, error);
+			}
+		}
+		return streamKeys;
 	}
 
 	private resolveNativeSourceJournal(
@@ -9316,25 +9485,30 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					turnId: nativeTurnId,
 				});
 		}
-		const result = await this.update((state) => {
-			const session = ownRecordValue(state.sessions, nativeSessionRef);
-			if (!session) stateInvalid();
-			const before = ownRecordValue(session.journals ?? {}, nativeTurnId)
-				?.events.length;
-			const persistedStatus = this.setExecutionStatus(
-				state,
-				nativeSessionRef,
-				executionId,
-				nativeTurnId,
-				status,
-			);
-			const after = ownRecordValue(session.journals ?? {}, nativeTurnId)?.events
-				.length;
-			return {
-				persistedStatus,
-				appended: after !== undefined && after !== before,
-			};
-		});
+		const result = await this.update(
+			(state) => {
+				const session = ownRecordValue(state.sessions, nativeSessionRef);
+				if (!session) stateInvalid();
+				const before = ownRecordValue(session.journals ?? {}, nativeTurnId)
+					?.events.length;
+				const persistedStatus = this.setExecutionStatus(
+					state,
+					nativeSessionRef,
+					executionId,
+					nativeTurnId,
+					status,
+				);
+				const after = ownRecordValue(session.journals ?? {}, nativeTurnId)
+					?.events.length;
+				return {
+					persistedStatus,
+					appended: after !== undefined && after !== before,
+				};
+			},
+			// A status read during a running Turn usually confirms what is already
+			// durable; it must not rewrite the whole Driver state each time (#1637).
+			{ skipUnchanged: true },
+		);
 		if (result.appended) {
 			this.notifyEventStream(
 				this.eventStreamKey(nativeSessionRef, executionId),

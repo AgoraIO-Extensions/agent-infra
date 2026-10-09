@@ -5650,6 +5650,133 @@ describe("Codex Runtime Driver", () => {
 		);
 	});
 
+	describe("text delta persistence (#1637)", () => {
+		async function runningTurn() {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(path, bridge);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			const file = (driver as unknown as { file: DurableJsonFile<unknown> })
+				.file;
+			// Occupy the durable write queue so later writes wait behind it.
+			const release = Promise.withResolvers<void>();
+			const holding = file.update(() => release.promise);
+			const replay = () =>
+				driver.replayEvents(accepted.nativeSessionRef, command.executionId);
+			const texts = async () =>
+				(await replay()).filter((event) => event.type === "text");
+			return {
+				path,
+				bridge,
+				driver,
+				command,
+				accepted,
+				release,
+				holding,
+				replay,
+				texts,
+			};
+		}
+
+		it("keeps reading native deltas during a write and commits them together, in order", async () => {
+			const f = await runningTurn();
+			const updates = vi.spyOn(DurableJsonFile.prototype, "update");
+			const deltas = ["one ", "two ", "three ", "four ", "five"];
+			// Each frame is read only after the previous one was handled, so the
+			// read loop is not waiting for any delta's persistence.
+			for (const delta of deltas) await f.bridge.emitAgentMessageDelta(delta);
+			expect(await f.texts()).toEqual([]);
+			f.release.resolve();
+			await f.holding;
+			const text = await vi.waitFor(async () => {
+				const events = await f.texts();
+				expect(events).toHaveLength(deltas.length);
+				return events;
+			});
+			expect(text.map((event) => event.payload)).toEqual(
+				deltas.map((delta) => ({ delta })),
+			);
+			expect(new Set(text.map((event) => event.cursor)).size).toBe(
+				deltas.length,
+			);
+			// One durable write committed all five native events.
+			expect(updates).toHaveBeenCalledTimes(1);
+			// The file holds exactly the committed journal for a restart.
+			const stored = JSON.parse(await readFile(f.path, "utf8")) as {
+				sessions: Record<
+					string,
+					{ journals: Record<string, { events: { cursor: string }[] }> }
+				>;
+			};
+			const journal = Object.values(
+				stored.sessions[f.accepted.nativeSessionRef]?.journals ?? {},
+			)[0];
+			expect(journal?.events.map((event) => event.cursor)).toEqual(
+				(await f.replay()).map((event) => event.cursor),
+			);
+		});
+
+		it("orders a completion after the deltas received before it", async () => {
+			const f = await runningTurn();
+			await f.bridge.emitAgentMessageDelta("before ");
+			await f.bridge.emitAgentMessageDelta("completion");
+			const completed = f.bridge.emitTurnCompleted("completed");
+			f.release.resolve();
+			await completed;
+			const events = await vi.waitFor(async () => {
+				const replayed = await f.replay();
+				expect(replayed.at(-1)?.type).toBe("completed");
+				return replayed;
+			});
+			expect(events.map((event) => event.type)).toEqual([
+				"status",
+				"text",
+				"text",
+				"completed",
+			]);
+		});
+
+		it("fails the native process and exposes nothing when a batch cannot be persisted", async () => {
+			const f = await runningTurn();
+			// The batch write fails once the earlier write releases the queue.
+			vi.spyOn(DurableJsonFile.prototype, "update").mockImplementationOnce(() =>
+				f.holding.then(() => {
+					throw new Error("synthetic persistence failure");
+				}),
+			);
+			await f.bridge.emitAgentMessageDelta("lost ");
+			await f.bridge.emitAgentMessageDelta("batch");
+			f.release.resolve();
+			await vi.waitFor(() =>
+				expect(Reflect.get(f.bridge, "closed")).toBe(true),
+			);
+			expect(await f.texts()).toEqual([]);
+		});
+
+		it("replays from the shared committed snapshot instead of a copy per read", async () => {
+			const f = await runningTurn();
+			await f.bridge.emitAgentMessageDelta("snapshot");
+			f.release.resolve();
+			await vi.waitFor(async () => expect(await f.texts()).toHaveLength(1));
+			const read = vi.spyOn(DurableJsonFile.prototype, "read");
+			const snapshot = vi.spyOn(DurableJsonFile.prototype, "snapshot");
+			const events = await f.replay();
+			await f.replay();
+			expect(read).not.toHaveBeenCalled();
+			expect(
+				new Set(snapshot.mock.results.map((result) => result.value)).size,
+			).toBe(1);
+			// Callers own the returned events.
+			const text = events.find((event) => event.type === "text");
+			if (text?.type !== "text") throw new Error("missing text event");
+			text.payload.delta = "changed by caller";
+			expect((await f.texts())[0]?.payload).toEqual({ delta: "snapshot" });
+		});
+	});
+
 	it("streams existing and later persisted journal events once", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();

@@ -538,11 +538,12 @@ export class RuntimeHost {
 					request.executionId,
 				);
 				const events = replay.data.slice(0, 8);
-				for (const event of events) {
+				if (events.length > 0) {
+					// One authority check and one durable write cover the whole page.
 					await this.eventAuthorityV4(request, verification);
-					await this.options.store.recordDeliveredCursor(
+					await this.options.store.recordDeliveredCursors(
 						claims,
-						event.cursor,
+						events.map((event) => event.cursor),
 						this.options.grantValidationV2?.now ?? Date.now,
 					);
 				}

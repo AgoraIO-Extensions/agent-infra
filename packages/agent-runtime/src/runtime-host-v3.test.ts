@@ -2,6 +2,7 @@ import { type FileHandle, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { FakeRuntimeDriver } from "./fake-runtime-driver.js";
 import { FileRuntimeStore, requestDigest } from "./file-runtime-store.js";
@@ -2091,11 +2092,11 @@ describe("Runtime V3 durable authorization", () => {
 					await release.promise;
 					return sync.call(this);
 				});
-			const pendingWrite = env.store.resolveOperation(
-				accepted.hostSessionRef,
-				accepted.operationId,
-				accepted.result,
-			);
+			// Any queued durable write. An unchanged resolve is no longer rewritten
+			// (#1637), so queue a plain rewrite of the store file instead.
+			const pendingWrite = (
+				env.store as unknown as { file: DurableJsonFile<unknown> }
+			).file.update(() => undefined);
 			try {
 				await entered.promise;
 				let settled = false;

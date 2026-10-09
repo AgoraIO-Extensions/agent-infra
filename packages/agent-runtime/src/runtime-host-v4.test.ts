@@ -16,6 +16,7 @@ import {
 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import { DurableJsonFile } from "./durable-json.js";
 import { FakeRuntimeDriver } from "./fake-runtime-driver.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
 import { createRuntimeExecutionGrantVerifierV2 } from "./grant-v2.js";
@@ -540,6 +541,101 @@ it("persists only delivered cursors and keeps ACK retryable after response loss"
 	).resolves.toMatchObject({ confirmedCursor: cursor });
 	expect(await readFile(f.path)).toEqual(persisted);
 	expect(driverAck).toHaveBeenCalledTimes(2);
+});
+
+function pageEvents(first: number, count: number) {
+	return Array.from({ length: count }, (_, index) => ({
+		schemaVersion: 1 as const,
+		adapterEventKey: `page-event-${first + index}`,
+		executionId: "execution-1",
+		cursor: `page-cursor-${first + index}`,
+		occurredAt: new Date(now).toISOString(),
+		type: "text" as const,
+		payload: { delta: `page-delta-${first + index}` },
+	}));
+}
+
+function hostWrites(path: string) {
+	const persist = vi.spyOn(
+		DurableJsonFile.prototype as unknown as {
+			persist(serialized: string): Promise<void>;
+		},
+		"persist",
+	);
+	return () =>
+		persist.mock.contexts.filter(
+			(context) => (context as { path: string }).path === path,
+		).length;
+}
+
+it("records a replay page with one Host write and a re-read with none (#1637)", async () => {
+	const f = await setup();
+	const accepted = await f.host.submitTurnV4(f.transport);
+	vi.spyOn(f.driver, "replayEvents").mockResolvedValue(pageEvents(1, 8));
+	Object.assign(f.driver, { acknowledgeEvents: vi.fn(async () => undefined) });
+	const writes = hostWrites(f.path);
+	for (const expected of [1, 1]) {
+		const read = await event(
+			f.transport.businessRequest,
+			accepted.hostSessionRef,
+		);
+		const replay = await f.host.readEventsV4(
+			RuntimeEventReadRequestV4Schema.parse(read.request),
+			read.verification,
+		);
+		expect(replay.events).toHaveLength(8);
+		expect(writes()).toBe(expected);
+	}
+	// Every cursor of the page was recorded, so its last one is acknowledgeable,
+	// and the ACK itself is one write.
+	const ack = await event(
+		f.transport.businessRequest,
+		accepted.hostSessionRef,
+		"page-cursor-8",
+	);
+	await expect(
+		f.host.acknowledgeEventsV4(
+			RuntimeEventAckRequestV4Schema.parse(ack.request),
+			ack.verification,
+		),
+	).resolves.toMatchObject({ confirmedCursor: "page-cursor-8" });
+	expect(writes()).toBe(2);
+});
+
+it("refuses a whole page past the delivered-cursor bound without recording any of it", async () => {
+	const f = await setup();
+	const accepted = await f.host.submitTurnV4(f.transport);
+	let page = 0;
+	vi.spyOn(f.driver, "replayEvents").mockImplementation(async () =>
+		pageEvents(page++ * 8 + 1, 8),
+	);
+	Object.assign(f.driver, { acknowledgeEvents: vi.fn(async () => undefined) });
+	const read = async () => {
+		const value = await event(
+			f.transport.businessRequest,
+			accepted.hostSessionRef,
+		);
+		return f.host.readEventsV4(
+			RuntimeEventReadRequestV4Schema.parse(value.request),
+			value.verification,
+		);
+	};
+	// 256 delivered but unacknowledged cursors fill the Host bound exactly.
+	for (let index = 0; index < 32; index++) await read();
+	const before = await readFile(f.path);
+	await expect(read()).rejects.toThrow();
+	expect(await readFile(f.path)).toEqual(before);
+	const refused = await event(
+		f.transport.businessRequest,
+		accepted.hostSessionRef,
+		"page-cursor-257",
+	);
+	await expect(
+		f.host.acknowledgeEventsV4(
+			RuntimeEventAckRequestV4Schema.parse(refused.request),
+			refused.verification,
+		),
+	).rejects.toThrow();
 });
 
 it("keeps the pinned Key when stop is accepted but original request drain is still running", async () => {
