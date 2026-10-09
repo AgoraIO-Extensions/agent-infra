@@ -472,9 +472,9 @@ describe("functional conversation screen", () => {
 				});
 		});
 		await screen.findByText(/Agent 更新中/);
-		// The ready Agent commits the Session's Sandbox upgrade with it.
+		// The ready Agent commits the Session's Sandbox upgrade with it; the
+		// page polls the updating Agent and then re-reads the Session.
 		phase = "session-updating";
-		fireEvent.click(screen.getByRole("button", { name: "刷新 Agent 状态" }));
 		await screen.findByText(
 			"会话更新中，完成后即可发送。草稿会保留。",
 			undefined,
