@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:net";
 import { PassThrough } from "node:stream";
@@ -138,6 +139,76 @@ describe("Platform API production assembly", () => {
 			modelSelection,
 		);
 		return assembly.close();
+	});
+
+	it("passes a deployment-owned custom Agent gateway into PlatformAppDependencies", async () => {
+		const identity = {
+			schemaVersion: 1 as const,
+			userId: "user-1",
+			displayName: "Ada",
+			accountStatus: "active" as const,
+			organizationIds: ["org-1"],
+			roles: ["employee" as const],
+			authorizationRevision: "authorization-1",
+		};
+		const unavailable = async () => {
+			throw new Error("unused test adapter");
+		};
+		const gateway = {
+			path: "/api/v1/custom-agent",
+			identity: {
+				resolve: vi.fn().mockResolvedValue(identity),
+				hydrateUsers: vi.fn().mockResolvedValue([]),
+				resolveUser: vi.fn().mockResolvedValue({
+					schemaVersion: 1,
+					userId: identity.userId,
+					accountStatus: "active",
+					organizationIds: identity.organizationIds,
+					authorizationRevision: "directory-1",
+				}),
+			},
+			authorizeAgent: vi.fn().mockResolvedValue(true),
+			resolveDeployment: vi.fn().mockResolvedValue({
+				agentId: "agent-1",
+				serviceOrigin: "https://agent.example/",
+			}),
+			issuer: "platform-api",
+			keyVersion: "test-key-v1",
+			privateKey: generateKeyPairSync("ed25519").privateKey,
+		};
+		const assembly = assemblePlatformApi({
+			taskAdmissionPolicy: {
+				maximumWaitingTasksPerAgent: 2,
+				waitingTimeoutMs: 60_000,
+			},
+			databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
+			identity: {
+				resolve: vi.fn().mockResolvedValue(identity),
+				hydrateUsers: vi.fn().mockResolvedValue([]),
+				resolveUser: vi.fn().mockResolvedValue({
+					schemaVersion: 1,
+					userId: identity.userId,
+					accountStatus: "active",
+					organizationIds: identity.organizationIds,
+					authorizationRevision: "directory-1",
+				}),
+			},
+			admissions: {
+				authorizationAdmission: { authorize: unavailable },
+				imageAdmission: { admitImage: unavailable },
+				modelAdmission: { admitModels: unavailable },
+				secretAdmission: { admitSecrets: unavailable },
+				channelAdmission: { admitChannels: unavailable },
+			},
+			allocateApplicationIds: unavailable,
+			prepareApplicationSecrets: unavailable,
+			prepareConfigurationSecrets: unavailable,
+			presentAgent: unavailable,
+			customAgentGateway: gateway,
+		});
+
+		expect(assembly.dependencies.customAgentGateway).toBe(gateway);
+		await assembly.close();
 	});
 
 	it("registers the complete app before starting the Node server", async () => {
