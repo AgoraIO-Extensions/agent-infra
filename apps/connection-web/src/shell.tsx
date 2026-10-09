@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate } from "@tanstack/react-router";
 import {
 	Bell,
+	BookOpen,
 	Bot,
 	Cable,
 	Check,
@@ -100,6 +101,9 @@ export function ConsoleShell(props: { children: ReactNode }) {
 					</NavLink>
 					<NavLink to="/connection/approvals" icon={<ListChecks size={18} />}>
 						待我审批
+					</NavLink>
+					<NavLink to="/connection/help" icon={<BookOpen size={18} />}>
+						使用指南
 					</NavLink>
 					<NavLink to="/connection/tokens" icon={<KeyRound size={18} />}>
 						访问令牌
@@ -327,6 +331,7 @@ function NavLink(props: {
 		| "/connection/connections"
 		| "/connection/approvals"
 		| "/connection/tokens"
+		| "/connection/help"
 		| "/connection/admin/agents"
 		| "/connection/admin/shared-connections"
 		| "/connection/admin/administrators"

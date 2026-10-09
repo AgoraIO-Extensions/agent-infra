@@ -2,6 +2,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { guideMarkdown } from "./src/features/user-guide/content.ts";
 
 export default defineConfig({
 	server: {
@@ -21,6 +22,25 @@ export default defineConfig({
 		tsconfigPaths: true,
 	},
 	plugins: [
+		{
+			name: "connection-manual",
+			configureServer(server) {
+				server.middlewares.use((req, res, next) => {
+					if (req.url?.split("?")[0] !== "/connection/help/user-manual.md")
+						return next();
+					res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+					res.setHeader("Cache-Control", "no-store");
+					res.end(guideMarkdown());
+				});
+			},
+			generateBundle() {
+				this.emitFile({
+					type: "asset",
+					fileName: "connection/help/user-manual.md",
+					source: guideMarkdown(),
+				});
+			},
+		},
 		tailwindcss(),
 		tanstackRouter({
 			target: "react",

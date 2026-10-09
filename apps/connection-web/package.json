@@ -5,11 +5,12 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build",
+		"build": "node scripts/export-guide.mjs --check && vite build",
 		"serve": "vite preview",
 		"start": "vite",
-		"check-types": "vite build && tsc --noEmit",
-		"test": "vitest run src"
+		"check-types": "node scripts/export-guide.mjs --check && vite build && tsc --noEmit",
+		"test": "node scripts/export-guide.mjs --check && vitest run src",
+		"guide:generate": "node scripts/export-guide.mjs --write"
 	},
 	"dependencies": {
 		"@agent-infra/connection-contracts": "workspace:*",
