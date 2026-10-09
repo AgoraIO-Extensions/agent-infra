@@ -76,15 +76,19 @@ export function createCustomAgentAuthGatewayV1(options: {
 				agentId: input.agentId,
 			}).token,
 		);
-		const method = input.request.method.toUpperCase();
-		const forwarded = new Request(target, {
-			method,
-			headers,
-			body:
-				method === "GET" || method === "HEAD"
-					? undefined
-					: await input.request.arrayBuffer(),
-		});
-		return (options.forward ?? fetch)(forwarded);
+		try {
+			const method = input.request.method.toUpperCase();
+			const forwarded = new Request(target, {
+				method,
+				headers,
+				body:
+					method === "GET" || method === "HEAD"
+						? undefined
+						: await input.request.arrayBuffer(),
+			});
+			return await (options.forward ?? fetch)(forwarded);
+		} catch {
+			return new Response(null, { status: 503 });
+		}
 	};
 }
