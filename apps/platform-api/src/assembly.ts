@@ -26,6 +26,7 @@ import {
 	conversationEventWakeChannelV1,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
+	PostgresAgentDefaultRelayKeyStoreV1,
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
 	PostgresApplicationApiCredentialIssuerStoreV1,
@@ -33,7 +34,6 @@ import {
 	PostgresApplicationMaterialGrantStoreV1,
 	PostgresApplicationRegistrationStoreV1,
 	PostgresApplicationRevisionTransactionV1,
-	PostgresAgentDefaultRelayKeyStoreV1,
 	PostgresCommitWakeupListenerV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
@@ -340,7 +340,9 @@ export function assemblePlatformApi(
 				})
 			: undefined;
 	const agentDefaultRelayKeyStore = input.agentDefaultRelayKeys
-		? new PostgresAgentDefaultRelayKeyStoreV1({ databaseUrl: input.databaseUrl })
+		? new PostgresAgentDefaultRelayKeyStoreV1({
+				databaseUrl: input.databaseUrl,
+			})
 		: undefined;
 	const agentDefaultRelayKeys =
 		agentDefaultRelayKeyStore && input.agentDefaultRelayKeys
