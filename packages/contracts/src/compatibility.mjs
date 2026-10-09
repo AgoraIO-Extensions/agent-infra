@@ -1069,6 +1069,31 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #482 follow-up permits only the execution-scoped Task SSE path/schema.
+function isTaskHttpV1SseOpenApiAddition(previous, current) {
+	const path =
+		"/api/v1/conversations/{conversationId}/tasks/{executionId}/events";
+	const schema = "TaskSseMessageV1";
+	if (
+		previous.paths?.[path] !== undefined ||
+		previous.components?.schemas?.[schema] !== undefined
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: { [schema]: current.components?.schemas?.[schema] },
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"6326d5f83b123da8233ac85fb694a1362d64ee5c4747618b37acba8759721167"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	delete normalized.components.schemas[schema];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 // #1277 permits only the reviewed issuer operation; all previous contracts remain exact.
 function isApplicationCredentialIssuerV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/applications/{applicationId}/credentials";
@@ -2231,6 +2256,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isPersonalRelayKeyAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
+			!isTaskHttpV1SseOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
 			!isConversationSessionAvailabilityOpenApiAddition(previous, current) &&
