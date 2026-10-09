@@ -102,7 +102,6 @@ pnpm check-types
 pnpm test
 pnpm build
 pnpm smoke
-pnpm docker:build
 npx --yes markdownlint-cli2@0.23.2 README.md AGENTS.md ".github/**/*.md" "docs/**/*.md"
 find README.md AGENTS.md .github docs -type f -name '*.md' -print0 | while IFS= read -r -d '' file; do
   npx --yes markdown-link-check@3.15.0 --config .markdown-link-check.json "$file"
@@ -111,6 +110,10 @@ node .github/scripts/verify-workflow-policy.mjs
 .github/scripts/run-actionlint.sh
 git diff --check
 ```
+
+Docker 镜像构建由 CI 必跑，本地不作为必跑检查，也不默认执行。只有用户明确要求容器调试或
+主动选择本地镜像验证时才运行 `pnpm docker:build`；不得为满足本地验证自动清理镜像、缓存或
+volume。本地省略 Docker 不替代当前 PR head 的 CI 镜像构建和正式发布门禁。
 
 ## Security
 
