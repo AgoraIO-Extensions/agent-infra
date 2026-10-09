@@ -199,6 +199,14 @@ Rehoboam 保存 owner、规范化参数、模板签名、确认 token hash 和�
 禁止通过重试、新预览或另一类型通知自动重发；完成回执可幂等释放 reservation。邮件/企微/Jira 不构成原子事务，
 原服务成功仅表示其业务提交成功，不宣称所有渠道送达。回读只返回本人操作及有界业务证据，不返回 credential 或原始错误正文。
 
+Rehoboam 管理能力以 immutable `rehoboam-connection-v11` 增加 28 个 Actions，旧 42 个 Actions 委托原 v10 实现。
+范围包括版本编辑/复制、管理员模板/流水线配置管理、客户/Native 标记发现、执行申请修改及操作/时间线 READ。
+个人 PAT 身份及原业务权限继续由 Rehoboam 校验，Connection 不拥有业务规则。管理预览持久化草案，声明 WRITE；
+确认绑定 owner、token hash、期限与资源/引用快照，使用 CAS、资源 reservation 和原生完成回执。
+未完成效果不盲重发，回查为纯 READ。配置不运行 Job；申请修改的审批通知/调度副作用必须展示。
+v10→v11 要求重新审批及新增 Action 显式授权，发布前仍需 13.4 真实 Provider 验收。
+详情见 [管理指南](../connection/rehoboam-management.md)。
+
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
 `apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；

@@ -13,3 +13,11 @@ Connection 仅封装固定接口、权限和幂等调用，不拥有版本创建
 确认通过 durable CAS 与每版本 reservation 只提交一次。未知或部分结果保留回执与 reservation，禁止盲目重发。
 reservation 仅串行化 Connection 通知，不声称与旧 Web 入口形成跨渠道原子事务；原服务成功不等于所有渠道送达。
 操作顺序见 [独立版本指南](../connection/rehoboam-standalone-release.md)。
+
+用户批准补齐版本与配置管理。v11 新增版本编辑/复制、模板和流水线配置管理、客户及 Native 标记发现、
+执行申请重新提交和操作/时间线回查，继续由 Rehoboam 拥有校验、角色、状态和业务效果。
+Connection 只映射固定接口，v10 实现不变，v10→v11 必须重新审批，不自动继承新增权限。
+所有管理预览为持久化 WRITE；确认绑定 owner/token/期限及资源快照，并通过 CAS 与资源 reservation
+防止重复提交。原生完成回执用于响应丢失后的回查；READ 不做对账写入，未知效果不自动重发。
+配置不运行表达式、不启动 Job；申请修改明确包含原审批通知/调度副作用。实现批准不等于生产部署批准。
+使用说明见 [版本与配置管理](../connection/rehoboam-management.md)。
