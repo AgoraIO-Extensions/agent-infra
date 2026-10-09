@@ -144,6 +144,7 @@ beforeAll(async () => {
 		{ idx: 46, tag: "0046_commit_wakeups" },
 		{ idx: 47, tag: "0047_skill_agent_binding_revision" },
 		{ idx: 48, tag: "0048_skill_agent_binding_history" },
+		{ idx: 49, tag: "0049_connection_installation_authorization" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
