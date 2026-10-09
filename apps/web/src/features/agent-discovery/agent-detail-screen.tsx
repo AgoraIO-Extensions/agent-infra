@@ -1,3 +1,4 @@
+import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
 import { Link } from "@tanstack/react-router";
 import {
 	ArrowLeft,
@@ -23,8 +24,10 @@ import {
 	canStartPlatformConversation,
 } from "./agent-discovery.js";
 import { agentChannelKindLabels } from "./agent-discovery-screen.js";
+import { BrowserCapabilityStatus } from "./browser-capability-status.js";
 
 type AgentDetailScreenProps = {
+	browserCapability?: BrowserCapabilityProjectionV1;
 	onRetry?: () => void;
 	ownerSettings?: { readonly agentId: string };
 	retrying?: boolean;
@@ -58,6 +61,7 @@ function safeInteractionUrl(input: string | null) {
 }
 
 export function AgentDetailScreen({
+	browserCapability,
 	onRetry,
 	ownerSettings,
 	retrying = false,
@@ -315,6 +319,9 @@ export function AgentDetailScreen({
 							</p>
 						)}
 					</section>
+					{browserCapability && (
+						<BrowserCapabilityStatus capability={browserCapability} />
+					)}
 				</div>
 				<aside className="agent-detail-aside" aria-label="Owner 与渠道">
 					<section
