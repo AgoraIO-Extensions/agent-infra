@@ -430,6 +430,44 @@ it("fails the ACP readiness probe closed when loadSession is not advertised", as
 	}
 });
 
+it("does not advertise model selection from a current value without selectable values", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-readiness-current-only-"));
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "current-model-only" },
+		}),
+	});
+	try {
+		await expect(
+			driver.probeReadiness?.(new AbortController().signal),
+		).resolves.toMatchObject({
+			modelSelection: false,
+			attachments: false,
+			resultFiles: false,
+			connection: false,
+			supplementaryInstruction: false,
+		});
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("normalizes a native execution limit to a redacted error and failed terminal event", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-limit-"));
 	const driver = await GenericAcpRuntimeDriver.open({

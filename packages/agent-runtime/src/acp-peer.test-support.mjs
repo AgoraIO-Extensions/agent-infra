@@ -17,7 +17,9 @@ const configOptions = () => [
 		type: "select",
 		currentValue: model,
 		options:
-			process.env.ACP_TEST_MODE === "grouped-models"
+			process.env.ACP_TEST_MODE === "current-model-only"
+				? []
+			: process.env.ACP_TEST_MODE === "grouped-models"
 				? [
 						{
 							group: "models",

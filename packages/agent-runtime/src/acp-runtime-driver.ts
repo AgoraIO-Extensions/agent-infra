@@ -130,7 +130,7 @@ async function probeAcpReadiness(
 			const selectionState = session.modelSelection();
 			return {
 				modelSelection:
-					selectionState.models.length > 0 ||
+					selectionState.models.length > 0 &&
 					selectionState.currentModel !== null,
 				attachments: false,
 				resultFiles: false,

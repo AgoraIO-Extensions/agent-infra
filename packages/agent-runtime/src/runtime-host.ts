@@ -1066,6 +1066,17 @@ export class RuntimeHost {
 					true,
 				);
 			}
+			const parsedCapabilities = RuntimeCapabilitiesV1Schema.safeParse(
+				capabilities,
+			);
+			if (!parsedCapabilities.success)
+				throw new RuntimeHostError(
+					"RUNTIME_READINESS_UNAVAILABLE",
+					"Workload readiness is unavailable",
+					503,
+					true,
+				);
+			capabilities = parsedCapabilities.data;
 			if (bounded.aborted) throw interrupted();
 			if (this.closed)
 				throw new RuntimeHostError(
