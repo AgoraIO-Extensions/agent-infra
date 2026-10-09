@@ -614,6 +614,12 @@ export function assemblePlatformApi(
 			recordRefusal: (request) =>
 				managementTransaction.recordApiManagementRefusal(request),
 		},
+		agentUserUseGrants: {
+			identity: input.identity,
+			revoke: (command) => managementTransaction.revokeUserApiUse(command),
+			recordRefusal: (request) =>
+				managementTransaction.recordApiManagementRefusal(request),
+		},
 		agentApiLifecycle: {
 			lifecycle: createAgentApiLifecycleV1(managementTransaction),
 			readState: (request, material) =>

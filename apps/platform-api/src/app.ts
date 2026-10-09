@@ -13,6 +13,10 @@ import {
 	type AgentApplicationGrantRouteDependencies,
 	registerAgentApplicationGrantRoutes,
 } from "./http/agent-application-grant-routes.js";
+import {
+	type AgentUserUseGrantRouteDependencies,
+	registerAgentUserUseGrantRoutes,
+} from "./http/agent-user-use-grant-routes.js";
 import { registerApplicationApiCredentialRoutes } from "./http/application-api-credential-routes.js";
 import {
 	type ApplicationMaterialGrantRouteDependencies,
@@ -90,6 +94,7 @@ export interface PlatformAppDependencies {
 	readonly agentApiCreation?: AgentApiCreationRouteDependencies;
 	readonly agentApiLifecycle?: AgentApiLifecycleRouteDependencies;
 	readonly agentApplicationGrants?: AgentApplicationGrantRouteDependencies;
+	readonly agentUserUseGrants?: AgentUserUseGrantRouteDependencies;
 	readonly applicationApiCredentials?: Parameters<
 		typeof registerApplicationApiCredentialRoutes
 	>[1];
@@ -183,6 +188,8 @@ export function createPlatformApp(
 			app,
 			dependencies.agentApplicationGrants,
 		);
+	if (dependencies.agentUserUseGrants)
+		registerAgentUserUseGrantRoutes(app, dependencies.agentUserUseGrants);
 	if (dependencies.agentApiLifecycle)
 		registerAgentApiLifecycleRoutes(app, dependencies.agentApiLifecycle);
 	if (dependencies.applications)

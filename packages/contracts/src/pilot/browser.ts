@@ -18,6 +18,10 @@ import {
 	AgentApplicationManagerResponseV1Schema,
 } from "./agent-application-manager.ts";
 import {
+	AgentUserUseRevokeRequestV1Schema,
+	AgentUserUseRevokeResponseV1Schema,
+} from "./agent-user-use-grants.ts";
+import {
 	ApplicationApiCredentialRequestV1Schema,
 	ApplicationApiCredentialResponseV1Schema,
 } from "./application-api-credentials.ts";
@@ -1311,6 +1315,24 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 			},
 		},
 	},
+	"/api/v2/agents/{agentId}/api-use-grants/{userId}": {
+		delete: {
+			operationId: "revokeAgentUserApiUseV1",
+			security: personalCredentialSecurity,
+			requestParams: {
+				path: z.strictObject({ agentId: pathId(), userId: pathId() }),
+				header: idempotencyHeader,
+			},
+			requestBody: requiredJsonRequestBody(AgentUserUseRevokeRequestV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Explicit user API use revocation",
+					AgentUserUseRevokeResponseV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents/{agentId}/commands": {
 		post: {
 			operationId: "commandAgentApiLifecycleV1",
@@ -1845,6 +1867,8 @@ export const pilotBrowserSchemasV2 = {
 	AgentApiStateResponseV1: AgentApiStateResponseV1Schema,
 	AgentApplicationManagerRequestV1: AgentApplicationManagerRequestV1Schema,
 	AgentApplicationManagerResponseV1: AgentApplicationManagerResponseV1Schema,
+	AgentUserUseRevokeRequestV1: AgentUserUseRevokeRequestV1Schema,
+	AgentUserUseRevokeResponseV1: AgentUserUseRevokeResponseV1Schema,
 	AgentApiLifecycleRequestV1: AgentApiLifecycleRequestV1Schema,
 	AgentApiLifecycleResponseV1: AgentApiLifecycleResponseV1Schema,
 	AgentApiCreationRequestV1: AgentApiCreationRequestV1Schema,

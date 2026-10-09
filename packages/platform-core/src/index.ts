@@ -2,6 +2,7 @@ export * from "./agent-api-audit-context.js";
 export * from "./agent-api-creation.js";
 export * from "./agent-api-lifecycle.js";
 export * from "./agent-application-grants.js";
+export * from "./agent-user-use-grants.js";
 export type {
 	AgentConfigurationAccessAuthorityV1,
 	AgentConfigurationAccessPlanV1,
