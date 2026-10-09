@@ -25,14 +25,46 @@ export interface WecomScopeV1 {
 	readonly conversationType: "single" | "group";
 	readonly threadId: string | null;
 }
+/** Provider media metadata carried only across the trusted WeCom ingress seam.
+ *
+ * The media bytes are never exposed to Runtime or persisted in the receipt. A
+ * deployment supplied resolver turns this opaque provider reference into file
+ * authority ids inside the existing conversation admission transaction.
+ */
+export interface WecomMediaReferenceV1 {
+	readonly kind: "image" | "file" | "voice" | "video";
+	readonly mediaId: string;
+	readonly name: string | null;
+	readonly mediaType: string;
+}
 export interface WecomMessageV1 extends WecomScopeV1 {
 	/** Stable provider receiver identity, independent of a replacement binding reference. */
 	readonly providerId: string;
 	readonly eventId: string;
 	readonly text: string;
+	readonly media?: readonly WecomMediaReferenceV1[];
 	/** Opaque encrypted route; never exposed to the Runtime or browser. */
 	readonly replyHandle: string;
 	readonly replyExpiresAt: string;
+}
+export interface WecomMediaResolverV1 {
+	/**
+	 * Resolve provider media through the existing File Authority and return the
+	 * already confirmed attachment ids. Implementations must be idempotent by
+	 * event/media id and must not create an object outside the caller's
+	 * transaction boundary.
+	 */
+	resolve(input: {
+		readonly message: WecomMessageV1;
+		readonly conversationId: string;
+		readonly signal?: AbortSignal;
+	}): Promise<readonly string[]>;
+}
+export interface WecomResultFileReferenceV1 {
+	readonly fileId: string;
+	readonly name: string;
+	readonly mediaType: string;
+	readonly sizeBytes: number;
 }
 export interface WecomAuthorityV1 {
 	readonly actor: ConversationExecutionAuthorityV1 & {
@@ -124,6 +156,7 @@ export function wecomChannelIdV1(
 export function createWecomChannelV1(dependencies: {
 	readonly authorization: WecomAuthorizationPortV1;
 	readonly store: WecomChannelStorePortV1;
+	readonly media?: WecomMediaResolverV1;
 	readonly now?: () => Date;
 }) {
 	const now = dependencies.now ?? (() => new Date());
@@ -135,6 +168,7 @@ export function createWecomChannelV1(dependencies: {
 		): Promise<WecomAcceptanceV1> {
 			if (signal?.aborted) return { outcome: "unavailable" };
 			const value = snapshotAgentManagementDataObject(input);
+			const hasMedia = Object.hasOwn(value, "media");
 			requireAgentManagementExactKeys(value, [
 				"agentId",
 				"bindingReference",
@@ -148,6 +182,7 @@ export function createWecomChannelV1(dependencies: {
 				"text",
 				"replyHandle",
 				"replyExpiresAt",
+				...(hasMedia ? ["media"] : []),
 			]);
 			if (
 				[
@@ -158,11 +193,37 @@ export function createWecomChannelV1(dependencies: {
 					"eventId",
 					"providerId",
 				].some((k) => !isAgentManagementText(value[k])) ||
-				!isAgentManagementText(value.text, 32768) ||
+				(!(hasMedia && value.text === "") &&
+					!isAgentManagementText(value.text, 32768)) ||
 				!isAgentManagementText(value.replyHandle, 12000) ||
 				!isAgentManagementText(value.replyExpiresAt) ||
 				!Number.isFinite(Date.parse(value.replyExpiresAt as string)) ||
 				Date.parse(value.replyExpiresAt as string) <= now().getTime() ||
+				(hasMedia &&
+					(!Array.isArray(value.media) ||
+						value.media.length === 0 ||
+						value.media.length > 32 ||
+						value.media.some((entry) => {
+							if (!entry || typeof entry !== "object" || Array.isArray(entry))
+								return true;
+							const media = entry as Record<string, unknown>;
+							return (
+								Object.keys(media).sort().join(",") !==
+									"kind,mediaId,mediaType,name" ||
+								!isAgentManagementText(media.mediaId, 4096) ||
+								!isAgentManagementText(media.mediaType, 127) ||
+								(media.name !== null &&
+									!isAgentManagementText(media.name, 255)) ||
+								!["image", "file", "voice", "video"].includes(
+									media.kind as string,
+								)
+							);
+						}) ||
+						new Set(
+							(value.media as readonly { mediaId: string }[]).map(
+								(entry) => entry.mediaId,
+							),
+						).size !== (value.media as readonly unknown[]).length)) ||
 				(value.threadId !== null && !isAgentManagementText(value.threadId)) ||
 				!["wecom_bot", "wecom_app"].includes(value.kind as string) ||
 				!["single", "group"].includes(value.conversationType as string)
@@ -226,6 +287,7 @@ export function createWecomChannelV1(dependencies: {
 				message.threadId,
 				message.eventId,
 				message.text,
+				message.media ?? null,
 				authority.actor.actorId,
 			]);
 			return dependencies.store.accept(
@@ -249,6 +311,23 @@ export function createWecomChannelV1(dependencies: {
 					});
 					if (created.outcome !== "accepted" && created.outcome !== "replayed")
 						throw new Error("WeCom acceptance authorization changed");
+					const attachments = message.media?.length
+						? await dependencies.media?.resolve({
+								message,
+								conversationId: created.result.conversationId,
+								signal,
+							})
+						: undefined;
+					if (message.media?.length && !attachments)
+						throw new Error("WeCom media resolver unavailable");
+					if (
+						attachments &&
+						(attachments.length !== (message.media?.length ?? 0) ||
+							attachments.length > 32 ||
+							attachments.some((id) => !isAgentManagementText(id, 1024)) ||
+							new Set(attachments).size !== attachments.length)
+					)
+						throw new Error("Invalid WeCom media resolution");
 					const decision = await conversation.accept({
 						schemaVersion: 1,
 						command: "message",
@@ -257,6 +336,7 @@ export function createWecomChannelV1(dependencies: {
 						idempotencyKey: eventKey,
 						requestId: eventKey,
 						traceId: eventKey,
+						...(attachments ? { attachments } : {}),
 					});
 					if (decision.outcome === "busy")
 						return {
@@ -320,6 +400,8 @@ export interface WecomSendPortV1 {
 		readonly scope: WecomScopeV1;
 		readonly replyHandle: string;
 		readonly text: string;
+		/** Result files already confirmed by File Authority for this execution. */
+		readonly media?: readonly WecomResultFileReferenceV1[];
 		/** Rechecks the original actor, channel revision and task boundary before an external effect. */
 		readonly revalidate?: () => Promise<boolean>;
 	}): Promise<"sent" | "failed" | "unknown">;

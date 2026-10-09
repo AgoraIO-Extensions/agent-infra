@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
+	WecomMediaReferenceV1,
 	WecomMessageV1,
 	WecomScopeV1,
 	WecomSendPortV1,
@@ -209,15 +210,54 @@ export function createWecomWebSocketV1(options: {
 			if (
 				!text(headers.req_id) ||
 				body.aibotid !== config.botId ||
-				body.msgtype !== "text" ||
+				!["text", "image", "file", "voice", "video"].includes(
+					body.msgtype as string,
+				) ||
 				!text(body.msgid) ||
 				(body.chattype !== "single" && body.chattype !== "group")
 			)
 				return observeIngress("invalid");
 			const senderId = object(body.from).userid;
-			const content = object(body.text).content;
+			const kind =
+				body.msgtype === "image" ||
+				body.msgtype === "file" ||
+				body.msgtype === "voice" ||
+				body.msgtype === "video"
+					? body.msgtype
+					: null;
+			const content = kind === null ? object(body.text).content : "";
+			const media: WecomMediaReferenceV1[] | undefined = kind
+				? (() => {
+						const value = object(body[kind]);
+						const mediaId = value.media_id ?? value.mediaid ?? value.url;
+						if (!text(mediaId, 4096)) throw new Error("Invalid WeCom media");
+						const name =
+							kind === "file" ? (value.name ?? value.filename ?? null) : null;
+						if (name !== null && !text(name, 255))
+							throw new Error("Invalid WeCom media");
+						return [
+							{
+								kind,
+								mediaId,
+								name,
+								mediaType:
+									kind === "image"
+										? "image/jpeg"
+										: kind === "file"
+											? "application/octet-stream"
+											: kind === "voice"
+												? "audio/amr"
+												: "video/mp4",
+							},
+						];
+					})()
+				: undefined;
 			const peerId = body.chattype === "single" ? senderId : body.chatid;
-			if (!text(senderId) || !text(peerId) || !text(content, 32768))
+			if (
+				!text(senderId) ||
+				!text(peerId) ||
+				(kind === null && !text(content, 32768))
+			)
 				return observeIngress("invalid");
 			const receivedAt = now().getTime();
 			// create_time is optional in the official protocol. Without it, use the authenticated receipt lifetime.
@@ -262,7 +302,8 @@ export function createWecomWebSocketV1(options: {
 				...scope,
 				providerId: config.botId,
 				eventId: body.msgid,
-				text: content,
+				text: content as string,
+				...(media ? { media } : {}),
 				replyHandle,
 				replyExpiresAt: expiresAt,
 			});
@@ -270,7 +311,7 @@ export function createWecomWebSocketV1(options: {
 			observeIngress("unavailable");
 		}
 	}
-	client.on("message.text", (frame) => {
+	const receiveMessageFrame = (frame: WsFrame) => {
 		if (closed || !authenticated) return;
 		if (pending >= 64) {
 			observeIngress("overloaded");
@@ -280,7 +321,10 @@ export function createWecomWebSocketV1(options: {
 		void receive(frame, connectionId).finally(() => {
 			pending--;
 		});
-	});
+	};
+	client.on("message.text", receiveMessageFrame);
+	for (const kind of ["image", "file", "voice", "video"] as const)
+		client.on(`message.${kind}`, receiveMessageFrame);
 	const sender: WecomSendPortV1 = {
 		async send(input) {
 			let route: WecomReplyRouteV1;

@@ -5,6 +5,7 @@ import {
 	createWecomChannelV1,
 	type WecomAuthorizationPortV1,
 	type WecomChannelStorePortV1,
+	type WecomMediaResolverV1,
 	type WecomMessageV1,
 	type WecomReceiptV1,
 	wecomChannelIdV1,
@@ -24,7 +25,10 @@ const message: WecomMessageV1 = {
 	replyHandle: "encrypted",
 	replyExpiresAt: "2026-09-15T01:00:00Z",
 };
-function fixture(now = () => new Date("2026-09-15T00:00:00Z")) {
+function fixture(
+	now = () => new Date("2026-09-15T00:00:00Z"),
+	media?: WecomMediaResolverV1,
+) {
 	let allowed = true;
 	let nextId = 0;
 	const receipts = new Map<
@@ -63,6 +67,7 @@ function fixture(now = () => new Date("2026-09-15T00:00:00Z")) {
 	const useCase = createWecomChannelV1({
 		now,
 		store,
+		...(media ? { media } : {}),
 		authorization: {
 			async authorize(scope) {
 				return allowed
@@ -284,6 +289,24 @@ describe("managed WeCom channel", () => {
 		expect(f.receipts.size).toBe(0);
 		expect(f.conversations.size).toBe(0);
 	});
+});
+
+it("fails closed when a callback carries media without an authority resolver", async () => {
+	const f = fixture();
+	await expect(
+		f.useCase.receive({
+			...message,
+			media: [
+				{
+					kind: "image",
+					mediaId: "provider-media-1",
+					name: null,
+					mediaType: "image/jpeg",
+				},
+			],
+		}),
+	).rejects.toThrow("WeCom media resolver unavailable");
+	expect(f.receipts.size).toBe(0);
 });
 
 it("requires the current company identity, active Owner, binding and Agent availability", async () => {
