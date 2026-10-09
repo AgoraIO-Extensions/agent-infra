@@ -394,14 +394,7 @@ export class PostgresWecomChannelV1
 							signal,
 						);
 						const finalUser = current ? parseCurrentTaskUserV1(current) : null;
-						if (
-							!finalUser ||
-							finalUser.userId !== plan.authority.actor.actorId ||
-							finalUser.authorizationRevision !==
-								parseTaskAuthorizationBoundaryV1(
-									plan.authority.actor.taskBoundary,
-								).identityRevision
-						)
+						if (!finalUser || finalUser.userId !== plan.authority.actor.actorId)
 							throw new TaskAuthorizationStoreError();
 						if (finalUser.accountStatus === "disabled")
 							throw new WecomAuthorizationRevoked();
@@ -411,6 +404,13 @@ export class PostgresWecomChannelV1
 							>`select user_id from platform.platform_user_disables where user_id=${finalUser.userId}`,
 						);
 						if (finalPlatformDisabled) throw new WecomAuthorizationRevoked();
+						if (
+							finalUser.authorizationRevision !==
+							parseTaskAuthorizationBoundaryV1(
+								plan.authority.actor.taskBoundary,
+							).identityRevision
+						)
+							throw new TaskAuthorizationStoreError();
 					});
 				} catch (error) {
 					if (!(error instanceof WecomAuthorizationRevoked)) throw error;
@@ -513,14 +513,7 @@ export class PostgresWecomChannelV1
 							signal,
 						);
 						const finalUser = current ? parseCurrentTaskUserV1(current) : null;
-						if (
-							!finalUser ||
-							finalUser.userId !== plan.authority.actor.actorId ||
-							finalUser.authorizationRevision !==
-								parseTaskAuthorizationBoundaryV1(
-									plan.authority.actor.taskBoundary,
-								).identityRevision
-						)
+						if (!finalUser || finalUser.userId !== plan.authority.actor.actorId)
 							throw new TaskAuthorizationStoreError();
 						const [finalPlatformDisabled] = await run(
 							business<
@@ -529,6 +522,13 @@ export class PostgresWecomChannelV1
 						);
 						if (finalUser.accountStatus === "disabled" || finalPlatformDisabled)
 							throw new WecomAuthorizationRevoked();
+						if (
+							finalUser.authorizationRevision !==
+							parseTaskAuthorizationBoundaryV1(
+								plan.authority.actor.taskBoundary,
+							).identityRevision
+						)
+							throw new TaskAuthorizationStoreError();
 					}
 				});
 			} catch (error) {

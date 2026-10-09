@@ -228,6 +228,7 @@ it("rolls back replay metadata and commits controls when identity is disabled at
 					: {
 							...(await fixtureUserDirectory.resolveUser(scope.senderId)),
 							accountStatus: "disabled",
+							authorizationRevision: "changed-identity",
 						},
 			activeUsers: async (ids) => ids,
 		},
