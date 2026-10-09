@@ -506,8 +506,8 @@ it("uses the actually delivered application Token to create two Agents and read 
 		await sql`select count(*)::int as count from platform.outbox_items`,
 	).toEqual([{ count: 2 }]);
 	const otherToken = `papi_${"O".repeat(43)}`;
-	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('app-2','Other Robot','manager','app-2')`;
-	await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values('app-2-credential','application','app-2',${createHash("sha256").update(otherToken).digest("hex")},'["agent:read","agent:manage","agent:use"]'::jsonb)`;
+	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('manager','Other Robot','manager','app-2')`;
+	await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values('app-2-credential','application','manager',${createHash("sha256").update(otherToken).digest("hex")},'["agent:read","agent:manage","agent:use"]'::jsonb)`;
 	for (const path of [
 		`${baseUrl}/api/v2/agents/${first.agentId}/state`,
 		`${baseUrl}/api/v2/agents/${first.agentId}/commands`,
