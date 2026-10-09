@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import {
+	chmod,
 	mkdir,
 	mkdtemp,
 	readdir,
@@ -55,8 +56,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 			const file = await fs.open(...args);
 			const path = await fs.realpath(String(args[0]));
 			if (
-				path.includes("standard-mcp-oauth/materials/") &&
-				/\.(code|access)$/.test(path)
+				path.endsWith("standard-mcp-oauth/tls/callback.auth") ||
+				(path.includes("standard-mcp-oauth/materials/") &&
+					/\.(code|access)$/.test(path))
 			) {
 				const stat = file.stat.bind(file);
 				file.stat = (async (...args: Parameters<typeof file.stat>) => {
@@ -104,6 +106,7 @@ afterEach(async () => {
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const access = "synthetic-oauth-access-material";
 const refresh = "synthetic-oauth-refresh-material";
+const callbackServiceToken = "synthetic-callback-material-123";
 
 async function fixture() {
 	const material = await runtimeTlsFixture();
@@ -123,6 +126,9 @@ async function fixture() {
 		mode: 0o600,
 	});
 	await writeFile(join(root, "tls", "server.key"), material.key, {
+		mode: 0o400,
+	});
+	await writeFile(join(root, "tls", "callback.auth"), callbackServiceToken, {
 		mode: 0o400,
 	});
 	const calls: URLSearchParams[] = [];
@@ -195,10 +201,10 @@ async function fixture() {
 		ref: "fixture-oauth",
 		revision: "r1",
 		clientId: "fixture-client",
-		issuer: origin + "/",
-		authorizationEndpoint: origin + "/oauth/authorize",
-		tokenEndpoint: origin + "/oauth/token",
-		revocationEndpoint: origin + "/oauth/revoke",
+		issuer: `${origin}/`,
+		authorizationEndpoint: `${origin}/oauth/authorize`,
+		tokenEndpoint: `${origin}/oauth/token`,
+		revocationEndpoint: `${origin}/oauth/revoke`,
 		callbackUrl: "https://platform.invalid/connection/callback",
 		runtimeOrigin: `https://localhost:${port}/`,
 		resource: target.url,
@@ -285,6 +291,7 @@ async function fixture() {
 	closes.push(client.close);
 	const assembly: Extract<RuntimeOAuthAssembly, { status: "available" }> = {
 		status: "available",
+		...{ callbackServiceToken },
 		client,
 		cert: material.cert,
 		key: material.key,
@@ -358,7 +365,10 @@ async function fixture() {
 			`${assembly.runtimeOrigin}/internal/runtime/oauth/v1/${command}`,
 			{
 				method: "POST",
-				headers: { authorization: "Bearer fixture-service", ...headers },
+				headers: {
+					authorization: `Bearer ${command === "callback" ? callbackServiceToken : "fixture-service"}`,
+					...headers,
+				},
 				body: JSON.stringify(body),
 			},
 		);
@@ -404,6 +414,187 @@ async function fixture() {
 		},
 	};
 }
+
+async function deployment(f: Awaited<ReturnType<typeof fixture>>) {
+	const file = join(f.directory, "oauth.json");
+	await writeFile(file, JSON.stringify(f.configuration));
+	return {
+		environment: {
+			AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE: file,
+			AGENT_INFRA_RUNTIME_SANDBOX_ID: f.scope.sandboxId,
+			AGENT_INFRA_RUNTIME_POD_UID: f.scope.podUid,
+			AGENT_INFRA_RUNTIME_SESSION_GENERATION: "1",
+			AGENT_INFRA_RUNTIME_PRINCIPAL: JSON.stringify({
+				kind: "user",
+				id: "alice",
+			}),
+		},
+		dataDirectory: f.directory,
+		store: f.store,
+		target: f.target,
+		key: publicKey,
+		keyId: "fixture-key",
+		issuer: "platform",
+		workerId: "worker-a",
+		agentId: "agent-a",
+		serviceToken: "fixture-service",
+	};
+}
+
+it("keeps OAuth unavailable when callback authentication material is absent", async () => {
+	const f = await fixture();
+	const options = await deployment(f);
+	await rm(join(f.root, "tls", "callback.auth"));
+	const prepared = await prepareRuntimeOAuth(options);
+	if (prepared?.status === "available") closes.push(prepared.client.close);
+	expect(prepared?.status).toBe("unavailable");
+	expect(f.calls).toHaveLength(0);
+});
+
+it.each(["too-short", `${callbackServiceToken}\n`, "x".repeat(4097)])(
+	"rejects malformed callback material without exposing it (%#)",
+	async (material) => {
+		const f = await fixture();
+		const options = await deployment(f);
+		await rm(join(f.root, "tls", "callback.auth"));
+		await writeFile(join(f.root, "tls", "callback.auth"), material, {
+			mode: 0o400,
+		});
+		const prepared = await prepareRuntimeOAuth(options);
+		if (prepared?.status === "available") closes.push(prepared.client.close);
+		expect(prepared?.status).toBe("unavailable");
+		expect(JSON.stringify(prepared)).not.toContain(material);
+		expect(f.calls).toHaveLength(0);
+	},
+);
+
+it("rejects shared credentials during actual OAuth preparation", async () => {
+	const f = await fixture();
+	const options = await deployment(f);
+	const prepared = await prepareRuntimeOAuth({
+		...options,
+		serviceToken: callbackServiceToken,
+	});
+	if (prepared?.status === "available") closes.push(prepared.client.close);
+	expect(prepared?.status).toBe("unavailable");
+	expect(f.calls).toHaveLength(0);
+});
+
+it("rejects unsafe callback file permissions before reading material", async () => {
+	const f = await fixture();
+	const options = await deployment(f);
+	await chmod(join(f.root, "tls", "callback.auth"), 0o644);
+	const prepared = await prepareRuntimeOAuth(options);
+	if (prepared?.status === "available") closes.push(prepared.client.close);
+	expect(prepared?.status).toBe("unavailable");
+	expect(protection.secretReads).toBe(0);
+});
+
+it("stops callback material reads when protection is lost during its stat await", async () => {
+	const f = await fixture();
+	const options = await deployment(f);
+	protection.afterSecretStat = (path) => {
+		if (path.endsWith("callback.auth"))
+			protection.check.mockImplementation(() => {
+				throw Error("closed");
+			});
+	};
+	const prepared = await prepareRuntimeOAuth(options);
+	if (prepared?.status === "available") closes.push(prepared.client.close);
+	expect(prepared?.status).toBe("unavailable");
+	expect(protection.secretReads).toBe(0);
+	expect(f.calls).toHaveLength(0);
+});
+
+it("requires callback-only authentication before accepting an original OAuth code", async () => {
+	const f = await fixture();
+	const begun = await f.post("begin", f.signed("begin"));
+	expect(begun.status).toBe(200);
+	const url = new URL(String(begun.body.authorizationUrl));
+	const body = {
+		schemaVersion: 1,
+		state: url.searchParams.get("state"),
+		issuer: f.configuration.issuer,
+		code: "synthetic-authorization-code",
+	};
+	expect(
+		(
+			await f.post("callback", body, {
+				authorization: "Bearer fixture-service",
+			})
+		).status,
+	).toBe(503);
+	expect(
+		(
+			await f.post("callback", body, {
+				authorization: `Bearer ${callbackServiceToken}`,
+			})
+		).body.phase,
+	).toBe("awaiting_confirmation");
+	expect(f.calls).toHaveLength(0);
+});
+
+it.each(["begin", "confirm", "status"] as const)(
+	"refuses callback-only authentication on the %s command",
+	async (command) => {
+		const f = await fixture();
+		const denied = await f.post(command, f.signed(command), {
+			authorization: `Bearer ${callbackServiceToken}`,
+		});
+		expect(denied.status).toBe(503);
+		expect(JSON.stringify(denied.body)).not.toContain(callbackServiceToken);
+		expect((await f.post("begin", f.signed("begin"))).status).toBe(200);
+		expect(f.calls).toHaveLength(0);
+	},
+);
+
+it.each(["turns", "stops", "status"])(
+	"refuses callback-only authentication on the ordinary %s route",
+	async (route) => {
+		const app = createRuntimeHostApp({
+			host: {} as never,
+			serviceToken: "fixture-service",
+			verifyGrant: () => {
+				throw Error("Not used");
+			},
+		});
+		const result = await app.request(`/internal/runtime/v1/${route}`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${callbackServiceToken}` },
+			body: "{}",
+		});
+		expect(result.status).toBe(401);
+		expect(await result.json()).toMatchObject({
+			code: "RUNTIME_SERVICE_UNAUTHORIZED",
+		});
+	},
+);
+
+it("keeps the business listener available when callback and Worker credentials are shared", async () => {
+	const f = await fixture();
+	f.receiver.closeAllConnections();
+	await new Promise<void>((resolve) => f.receiver.close(() => resolve()));
+	const server = startRuntimeHost({
+		oauth: f.assembly,
+		port: 0,
+		serviceToken: callbackServiceToken,
+		host: {} as never,
+		verifyGrant: () => {
+			throw Error("Not used");
+		},
+		log: () => undefined,
+	});
+	closes.push(() => closeRuntimeHost(server, async () => undefined));
+	await new Promise<void>((resolve) =>
+		server.listening ? resolve() : server.once("listening", resolve),
+	);
+	const response = await globalThis.fetch(
+		`http://localhost:${(server.address() as AddressInfo).port}/healthz`,
+	);
+	expect(response.status).toBe(200);
+	expect(await response.json()).toMatchObject({ status: "ok" });
+	expect(f.calls).toHaveLength(0);
+});
 
 it("uses real HTTPS/SDK/files for one exchange and keeps received credentials unverified", async () => {
 	const f = await fixture();
@@ -640,32 +831,35 @@ it("closes admission before secret I/O when protection changes", async () => {
 
 it("prepares the actual private TLS/config boundary and rejects foreign or incomplete deployment", async () => {
 	const f = await fixture();
-	const file = join(f.directory, "oauth.json");
-	await writeFile(file, JSON.stringify(f.configuration));
-	const environment = {
-		AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE: file,
-		AGENT_INFRA_RUNTIME_SANDBOX_ID: f.scope.sandboxId,
-		AGENT_INFRA_RUNTIME_POD_UID: f.scope.podUid,
-		AGENT_INFRA_RUNTIME_SESSION_GENERATION: "1",
-		AGENT_INFRA_RUNTIME_PRINCIPAL: JSON.stringify({
-			kind: "user",
-			id: "alice",
-		}),
-	};
-	const options = {
-		environment,
-		dataDirectory: f.directory,
-		store: f.store,
-		target: f.target,
-		key: publicKey,
-		keyId: "fixture-key",
-		issuer: "platform",
-		workerId: "worker-a",
-		agentId: "agent-a",
-	};
+	const options = await deployment(f);
+	const { environment } = options;
+	const file = environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE;
 	const prepared = await prepareRuntimeOAuth(options);
 	expect(prepared?.status).toBe("available");
-	if (prepared?.status === "available") closes.push(prepared.client.close);
+	if (prepared?.status === "available") {
+		closes.push(prepared.client.close);
+		f.receiver.closeAllConnections();
+		await new Promise<void>((resolve) => f.receiver.close(() => resolve()));
+		const server = startRuntimeHost({
+			oauth: prepared,
+			port: 0,
+			serviceToken: "fixture-service",
+			host: {} as never,
+			verifyGrant: () => {
+				throw Error("Not used");
+			},
+			log: () => undefined,
+		});
+		closes.push(() => closeRuntimeHost(server, prepared.client.close));
+		await new Promise<void>((resolve) =>
+			server.listening ? resolve() : server.once("listening", resolve),
+		);
+		await f.callback();
+		expect((await f.post("status", f.signed("status"))).body.phase).toBe(
+			"awaiting_confirmation",
+		);
+		expect(f.calls).toHaveLength(0);
+	}
 	expect(
 		await prepareRuntimeOAuth({ ...options, environment: {} }),
 	).toBeUndefined();

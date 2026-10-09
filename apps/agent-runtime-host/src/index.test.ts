@@ -7,6 +7,8 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
+import { request as httpsRequest } from "node:https";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -28,6 +30,7 @@ import {
 	standardMcpFixture,
 	token,
 } from "../../../packages/agent-runtime/src/standard-mcp.fixture.js";
+import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runtime-grant-signer-v4.js";
 import { writeStandardMcpExport } from "./standard-mcp-installation.test-support.js";
 
@@ -654,6 +657,213 @@ describe("RuntimeHost environment assembly", () => {
 			await runtime.close();
 		}
 	});
+	it.each(["available", "absent", "shared"] as const)(
+		"assembles, starts and closes the callback-only OAuth receiver with material=%s",
+		async (material) => {
+			const values = await environment();
+			values.AGENT_INFRA_RUNTIME_DATA_DIR = await realpath(
+				values.AGENT_INFRA_RUNTIME_DATA_DIR,
+			);
+			runtimeAssemblyMocks.verifyCodexPilotInstallation.mockResolvedValue({});
+			runtimeAssemblyMocks.openCodexRuntimeDriver.mockImplementation(() =>
+				FakeRuntimeDriver.open(
+					join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "oauth-driver.json"),
+				),
+			);
+			const tls = await runtimeTlsFixture();
+			directories.push(tls.directory);
+			const reserve = createNetServer();
+			await new Promise<void>((resolve) =>
+				reserve.listen(0, "127.0.0.1", resolve),
+			);
+			const oauthPort = (reserve.address() as AddressInfo).port;
+			await new Promise<void>((resolve) => reserve.close(() => resolve()));
+			const profile = {
+				schemaVersion: 1 as const,
+				publicOrigin: "https://connection.example.test",
+				mcpPath: "/mcp",
+				consumerId: "platform",
+				audience: "fixture-resource",
+				egressProfile: { ref: "fixture-egress", revision: "r1" },
+			};
+			const approval = {
+				schemaVersion: 1 as const,
+				configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+				source: { ref: "fixture-deployment", revision: "r1" },
+				egressEnforced: true as const,
+			};
+			const consumerFile = join(
+				values.AGENT_INFRA_RUNTIME_DATA_DIR,
+				"consumer.json",
+			);
+			await writeFile(consumerFile, JSON.stringify({ profile, approval }));
+			const oauthFile = join(values.AGENT_INFRA_RUNTIME_DATA_DIR, "oauth.json");
+			await writeFile(
+				oauthFile,
+				JSON.stringify({
+					schemaVersion: 1,
+					ref: "fixture-oauth",
+					revision: "r1",
+					clientId: "fixture-client",
+					issuer: "https://connection.example.test/",
+					authorizationEndpoint:
+						"https://connection.example.test/oauth/authorize",
+					tokenEndpoint: "https://connection.example.test/oauth/token",
+					revocationEndpoint: "https://connection.example.test/oauth/revoke",
+					callbackUrl: "https://platform.example.test/connection/callback",
+					runtimeOrigin: `https://localhost:${oauthPort}/`,
+					resource: "https://connection.example.test/mcp",
+					scope: "mcp",
+					configFingerprint: approval.configFingerprint,
+					source: approval.source,
+				}),
+			);
+			const tlsDirectory = join(
+				values.AGENT_INFRA_RUNTIME_DATA_DIR,
+				"codex-driver.json.native",
+				"conversations",
+				"standard-mcp-oauth",
+				"tls",
+			);
+			await mkdir(tlsDirectory, { recursive: true, mode: 0o700 });
+			await writeFile(join(tlsDirectory, "server.crt"), tls.cert, {
+				mode: 0o400,
+			});
+			await writeFile(join(tlsDirectory, "server.key"), tls.key, {
+				mode: 0o400,
+			});
+			const callbackToken = "synthetic-callback-material-123";
+			if (material !== "absent")
+				await writeFile(
+					join(tlsDirectory, "callback.auth"),
+					material === "shared"
+						? values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN
+						: callbackToken,
+					{ mode: 0o400 },
+				);
+			const runtime = await assembleRuntimeHost({
+				...values,
+				AGENT_INFRA_RUNTIME_DRIVER: "codex",
+				AGENT_INFRA_RUNTIME_AGENT_ID: "synthetic-agent",
+				AGENT_INFRA_RUNTIME_WORKER_ID: "synthetic-worker",
+				AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE: consumerFile,
+				AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION: JSON.stringify([
+					approval.configFingerprint,
+					approval.source.ref,
+					approval.source.revision,
+				]),
+				AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE: oauthFile,
+				AGENT_INFRA_RUNTIME_SANDBOX_ID: "synthetic-sandbox",
+				AGENT_INFRA_RUNTIME_POD_UID: "synthetic-pod",
+				AGENT_INFRA_RUNTIME_SESSION_GENERATION: "1",
+				AGENT_INFRA_RUNTIME_PRINCIPAL: JSON.stringify({
+					kind: "user",
+					id: "alice",
+				}),
+				AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "synthetic-credential",
+				AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+					schemaVersion: 2,
+					configVersion: "fixture-model",
+					defaultModelOptionId: "fixture-option",
+					defaultReasoningLevel: "high",
+					modelOptions: [
+						{
+							modelOptionId: "fixture-option",
+							model: "fixture-model",
+							reasoningLevels: ["high"],
+							endpoint: "https://models.example.test",
+							credentialEnvironmentVariable:
+								"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+						},
+					],
+				}),
+			});
+			const getOAuth = (path: string, token: string) =>
+				new Promise<number>((resolve, reject) => {
+					const request = httpsRequest(
+						`https://localhost:${oauthPort}/internal/runtime/oauth/v1/${path}`,
+						{
+							ca: tls.ca,
+							family: 4,
+							agent: false,
+							headers: { authorization: `Bearer ${token}` },
+						},
+						(response) => {
+							response.resume();
+							response.on("end", () => resolve(response.statusCode ?? 0));
+						},
+					);
+					request.setTimeout(2000, () =>
+						request.destroy(new Error("Test HTTPS timeout")),
+					);
+					request.on("error", reject);
+					request.end();
+				});
+			try {
+				expect(runtime.oauth?.status).toBe(
+					material === "available" ? "available" : "unavailable",
+				);
+				const ready = Promise.withResolvers<string>();
+				const server = startRuntimeHost({
+					...runtime,
+					port: 0,
+					log: ready.resolve,
+				});
+				try {
+					await ready.promise;
+					const address = server.address();
+					if (!address || typeof address === "string")
+						throw new Error("Missing port");
+					expect(
+						(await fetch(`http://127.0.0.1:${address.port}/healthz`)).status,
+					).toBe(200);
+					const refused = await fetch(
+						`http://127.0.0.1:${address.port}/internal/runtime/v1/stops`,
+						{
+							method: "POST",
+							headers: { authorization: `Bearer ${callbackToken}` },
+							body: "{}",
+						},
+					);
+					expect(refused.status).toBe(401);
+					if (material === "available") {
+						// GET checks route authentication without creating an OAuth transaction.
+						expect(await getOAuth("callback", callbackToken)).toBe(404);
+						expect(
+							await getOAuth(
+								"callback",
+								values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN,
+							),
+						).toBe(503);
+						expect(await getOAuth("begin", callbackToken)).toBe(503);
+						expect(
+							await getOAuth("begin", values.AGENT_INFRA_RUNTIME_SERVICE_TOKEN),
+						).toBe(404);
+					} else {
+						await expect(
+							getOAuth("callback", callbackToken),
+						).rejects.toMatchObject({ code: "ECONNREFUSED" });
+					}
+				} finally {
+					await closeRuntimeHost(server, runtime.close);
+				}
+				await expect(getOAuth("callback", callbackToken)).rejects.toMatchObject(
+					{ code: "ECONNREFUSED" },
+				);
+				if (runtime.oauth?.status === "available")
+					await expect(
+						runtime.oauth.client.callback({
+							schemaVersion: 1,
+							state: "a".repeat(64),
+							issuer: "https://connection.example.test/",
+							error: "access_denied",
+						}),
+					).rejects.toMatchObject({ code: "CONNECTION_OAUTH_UNAVAILABLE" });
+			} finally {
+				await tls.cleanup();
+			}
+		},
+	);
 
 	it("keeps Fake independently usable without Codex model configuration", async () => {
 		const runtime = await assembleRuntimeHost(await environment());

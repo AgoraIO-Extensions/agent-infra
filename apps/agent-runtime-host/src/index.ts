@@ -134,10 +134,17 @@ export function startRuntimeHost(options: StartOptions) {
 	const connectionConsumer = options.connectionConsumer
 		? structuredClone(options.connectionConsumer)
 		: undefined;
-	const oauthServer =
-		options.oauth?.status === "available" && options.oauth.port !== port
-			? startRuntimeOAuthServer(options.oauth, options.serviceToken)
-			: undefined;
+	let oauthServer: ReturnType<typeof createHttpsServer> | undefined;
+	if (options.oauth?.status === "available" && options.oauth.port !== port) {
+		try {
+			oauthServer = startRuntimeOAuthServer(
+				options.oauth,
+				options.serviceToken,
+			);
+		} catch {
+			void options.oauth.client.close().catch(() => undefined);
+		}
+	}
 	if (options.oauth?.status === "available" && options.oauth.port === port)
 		void options.oauth.client.close().catch(() => undefined);
 	const server = serve(
@@ -308,6 +315,7 @@ export async function assembleRuntimeHost(
 			target: connectionConsumer,
 			store,
 			agentId,
+			serviceToken,
 			workerId: runtimeWorkerId,
 			key: publicKey,
 			keyId,
