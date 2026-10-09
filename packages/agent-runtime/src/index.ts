@@ -1,4 +1,5 @@
 export * from "./acp-runtime-driver.js";
+export * from "./browser-capability.js";
 export * from "./browser-context.js";
 export * from "./browser-handoff.js";
 export * from "./browser-installation.js";
