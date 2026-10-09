@@ -461,7 +461,20 @@ function applicationCommandFields(
 	prepared: SecretPreparationResult,
 	traceId: string,
 ) {
-	const modelConfiguration = modelInput(prepared, body, traceId);
+	const preparedModelConfiguration = modelInput(prepared, body, traceId);
+	const keyless =
+		body.source.kind === "standard" &&
+		"defaultRelayKey" in body &&
+		body.defaultRelayKey !== undefined;
+	const modelConfiguration =
+		keyless && preparedModelConfiguration
+			? {
+					...preparedModelConfiguration,
+					options: preparedModelConfiguration.options.map(
+						({ replaceCredential: _replaceCredential, ...option }) => option,
+					),
+				}
+			: preparedModelConfiguration;
 	return {
 		name: body.name,
 		description: body.description,
@@ -502,6 +515,10 @@ export function registerV2ManagementRoutes(
 				AgentApplicationCreateRequestV2Schema,
 				metadata.traceId,
 			);
+			const hasDefaultRelayKey =
+				"defaultRelayKey" in body && body.defaultRelayKey !== undefined;
+			if ((body.source.kind === "standard") !== hasDefaultRelayKey)
+				fail("INVALID_REQUEST", metadata.traceId);
 			const idempotencyKey = parseIdempotencyKey(
 				context.req.raw,
 				metadata.traceId,
@@ -536,7 +553,7 @@ export function registerV2ManagementRoutes(
 			);
 			await dependencies.foundation.submit(
 				{
-					schemaVersion: 2,
+					schemaVersion: body.source.kind === "standard" ? 3 : 2,
 					...ids,
 					idempotencyKey,
 					requestId: metadata.requestId,
@@ -544,7 +561,7 @@ export function registerV2ManagementRoutes(
 					...applicationCommandFields(body, prepared, metadata.traceId),
 					secrets: prepared.secrets,
 					channels: [],
-				},
+				} as Parameters<ApplicationFoundationUseCaseV1["submit"]>[0],
 				{ schemaVersion: 1, userId: identity.userId, rawRequestDigest },
 				prepared.attachment,
 			);
@@ -645,7 +662,7 @@ export function registerV2ManagementRoutes(
 					traceId: metadata.traceId,
 					...applicationCommandFields(body, prepared, metadata.traceId),
 					...(body.secrets === undefined ? {} : { secrets: prepared.secrets }),
-				},
+				} as Parameters<ApplicationRevisionUseCaseV1["revise"]>[0],
 				{
 					schemaVersion: 1,
 					applicationId,

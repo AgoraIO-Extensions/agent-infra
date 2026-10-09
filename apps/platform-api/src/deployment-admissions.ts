@@ -13,6 +13,8 @@ import {
 	modelOperationV1,
 } from "@agent-infra/model-catalog";
 import {
+	type AgentConfigurationModelAdmissionPortV2,
+	type AgentConfigurationModelV2,
 	type AgentConfigurationRecordV2,
 	type AgentConfigurationSecretMetadataV1,
 	type AgentConfigurationSourceV1,
@@ -26,7 +28,7 @@ import type { IdentityContext } from "./http/identity.js";
 type Admissions = Pick<
 	AgentConfigurationUseCaseDependenciesV1,
 	"imageAdmission" | "modelAdmission" | "secretAdmission" | "channelAdmission"
->;
+> & { readonly keylessModelAdmission: AgentConfigurationModelAdmissionPortV2 };
 type StandardSource = Extract<AgentConfigurationSourceV1, { kind: "standard" }>;
 
 export interface DeploymentAdmissionInputV1 {
@@ -273,7 +275,52 @@ export function createDeploymentAdmissionsV1(
 			throw new Error("PLATFORM_DEPLOYMENT_IDENTITY_UNAVAILABLE");
 		}
 	}
+	const keylessModelAdmission: AgentConfigurationModelAdmissionPortV2 = {
+		async admitModels(request) {
+			try {
+				const signal = AbortSignal.timeout(10_000);
+				const snapshot = ModelCatalogSnapshotV1Schema.parse(
+					await modelOperationV1(signal, () => loadModelCatalog(signal)),
+				);
+				if (
+					snapshot.revision !== modelCatalogRevision ||
+					snapshot.validUntil <= Date.now()
+				)
+					return null;
+				const options: AgentConfigurationModelV2["options"][number][] = [];
+				for (const option of request.requested.options) {
+					const endpoint = snapshot.endpoints.find(
+						(candidate) => candidate.endpointId === option.endpointId,
+					);
+					if (
+						!endpoint?.available ||
+						(endpoint.allowedModels !== null &&
+							!endpoint.allowedModels.includes(option.modelId)) ||
+						option.reasoningLevels.some(
+							(level) => !endpoint.capabilities.reasoningLevels.includes(level),
+						)
+					)
+						return null;
+					options.push({
+						optionId: option.optionId,
+						endpointId: option.endpointId,
+						modelId: option.modelId,
+						reasoningLevels: [...option.reasoningLevels].toSorted(),
+					});
+				}
+				return {
+					catalogRevision: snapshot.revision,
+					options,
+					defaultOptionId: request.requested.defaultOptionId,
+					defaultReasoningLevel: request.requested.defaultReasoningLevel,
+				};
+			} catch {
+				return null;
+			}
+		},
+	};
 	return {
+		keylessModelAdmission,
 		imageAdmission: {
 			async admitImage(request) {
 				const subjectRef = await resolveSubjectRef(request.traceId);
