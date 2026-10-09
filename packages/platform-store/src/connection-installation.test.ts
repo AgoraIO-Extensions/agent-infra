@@ -333,11 +333,24 @@ it("claims one pending command with an owned attempt and permanently fences unkn
 	const pending = await store.listPending(10, ["execution-a"]);
 	const begin = pending.find((item) => item.command.command === "begin");
 	if (!begin) throw new Error("missing begin command");
-	const beginClaim = await store.claimPending({ commandId: begin.command.commandId, attemptId: "begin-attempt", attemptOwner: "worker-a" });
+	const beginClaim = await store.claimPending({
+		commandId: begin.command.commandId,
+		attemptId: "begin-attempt",
+		attemptOwner: "worker-a",
+	});
 	expect(beginClaim).toBeDefined();
-	expect(await store.settle({ commandId: begin.command.commandId, attemptId: "begin-attempt", attemptOwner: "worker-a", status: "completed" })).toBe(true);
+	expect(
+		await store.settle({
+			commandId: begin.command.commandId,
+			attemptId: "begin-attempt",
+			attemptOwner: "worker-a",
+			status: "completed",
+		}),
+	).toBe(true);
 	const pendingAfterBegin = await store.listPending(10, ["execution-a"]);
-	const confirm = pendingAfterBegin.find((item) => item.command.command === "confirm");
+	const confirm = pendingAfterBegin.find(
+		(item) => item.command.command === "confirm",
+	);
 	expect(confirm).toBeDefined();
 	const commandId = confirm?.command.commandId;
 	if (!commandId) throw new Error("missing pending command");

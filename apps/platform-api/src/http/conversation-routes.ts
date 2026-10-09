@@ -1285,10 +1285,12 @@ export function registerConversationRoutes(
 									);
 									const woken = watcher
 										? await watcher.wait(waitMs, lifetime.signal)
-										: (await delay(waitMs, undefined, {
-												signal: lifetime.signal,
-											}),
-											"timeout");
+										: await (async () => {
+												await delay(waitMs, undefined, {
+													signal: lifetime.signal,
+												});
+												return "timeout" as const;
+											})();
 									if (
 										(woken === "timeout" ||
 											performance.now() - checkedAt >= pollIntervalMs) &&
