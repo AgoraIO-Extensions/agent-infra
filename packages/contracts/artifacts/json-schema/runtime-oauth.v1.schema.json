@@ -1,5 +1,269 @@
 {
   "$defs": {
+    "ConnectionInstallationAuthorizationV1": {
+      "additionalProperties": false,
+      "properties": {
+        "authorizationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "confirmationRevision": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        "reference": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "agentId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration"
+          ],
+          "type": "object"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "configFingerprint": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "oauthConfiguration": {
+              "additionalProperties": false,
+              "properties": {
+                "ref": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "revision": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ref",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "podUid": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "sandboxId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "source": {
+              "additionalProperties": false,
+              "properties": {
+                "ref": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "revision": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ref",
+                "revision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "agentId",
+            "sandboxId",
+            "podUid",
+            "sessionGeneration",
+            "configFingerprint",
+            "source",
+            "oauthConfiguration"
+          ],
+          "type": "object"
+        },
+        "status": {
+          "enum": [
+            "awaiting_confirmation",
+            "confirmed",
+            "revoked",
+            "expired",
+            "unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "authorizationId",
+        "confirmationRevision",
+        "principal",
+        "reference",
+        "scope",
+        "status",
+        "expiresAt"
+      ],
+      "type": "object"
+    },
+    "ConnectionInstallationCommandV1": {
+      "additionalProperties": false,
+      "properties": {
+        "authorizationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "command": {
+          "enum": [
+            "begin",
+            "confirm",
+            "status"
+          ],
+          "type": "string"
+        },
+        "commandId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "createdAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "requestDigest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "sending",
+            "completed",
+            "unknown",
+            "rejected"
+          ],
+          "type": "string"
+        },
+        "updatedAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "commandId",
+        "authorizationId",
+        "command",
+        "requestDigest",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ConnectionInstallationReferenceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "agentId",
+        "conversationId",
+        "executionId",
+        "sessionGeneration"
+      ],
+      "type": "object"
+    },
     "RuntimeOAuthBeginRequestV1": {
       "additionalProperties": false,
       "properties": {

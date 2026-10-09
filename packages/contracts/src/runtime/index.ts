@@ -202,5 +202,6 @@ export const RuntimeHostV3SchemaDefinitions = {
 };
 
 export * from "./oauth.ts";
+export * from "./installation.ts";
 
 export { canonicalRuntimeRequestSigningPayload } from "./request-signing.ts";

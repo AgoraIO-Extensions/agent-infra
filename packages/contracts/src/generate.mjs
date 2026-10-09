@@ -96,6 +96,7 @@ import {
 	WorkloadReadinessV1SchemaDefinitions,
 } from "./runtime/index.ts";
 import { RuntimeOAuthV1SchemaDefinitions } from "./runtime/oauth.ts";
+import { ConnectionInstallationV1SchemaDefinitions } from "./runtime/installation.ts";
 import {
 	kubernetesWorkloadSchemasV1,
 	registryManifestSchemasV1,
@@ -924,7 +925,10 @@ function buildArtifacts() {
 		runtimeOAuthJsonSchema: jsonSchemaDocument({
 			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-oauth.v1.schema.json",
 			title: "Runtime OAuth installation contracts V1",
-			definitions: RuntimeOAuthV1SchemaDefinitions,
+			definitions: {
+				...RuntimeOAuthV1SchemaDefinitions,
+				...ConnectionInstallationV1SchemaDefinitions,
+			},
 		}),
 		runtimeOAuthOpenapi: createDocument({
 			openapi: "3.1.0",
