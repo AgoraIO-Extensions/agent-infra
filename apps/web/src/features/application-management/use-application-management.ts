@@ -20,7 +20,15 @@ export function useOwnApplication({
 }) {
 	const queryClient = useQueryClient();
 	const scope = useMemo(
-		() => ({ queryKey: ["application-management", identityKey, applicationId, crypto.randomUUID()] as const, active: false }),
+		() => ({
+			queryKey: [
+				"application-management",
+				identityKey,
+				applicationId,
+				crypto.randomUUID(),
+			] as const,
+			active: false,
+		}),
 		[identityKey, applicationId],
 	);
 	useLayoutEffect(() => {
@@ -39,9 +47,13 @@ export function useOwnApplication({
 		retry: false,
 		staleTime: 15_000,
 	});
-	const state = !allowed ? { kind: "denied" as const } : (query.data ?? { kind: "loading" as const });
+	const state = !allowed
+		? { kind: "denied" as const }
+		: (query.data ?? { kind: "loading" as const });
 	function refetch() {
-		return scope.active && allowed ? query.refetch({ cancelRefetch: false }) : Promise.resolve(undefined);
+		return scope.active && allowed
+			? query.refetch({ cancelRefetch: false })
+			: Promise.resolve(undefined);
 	}
 	return { state, isFetching: allowed && query.isFetching, refetch };
 }
@@ -51,10 +63,17 @@ export function useRegisterOwnApplication(client?: Client) {
 	return useMutation({
 		mutationKey: ["application-management", "register"],
 		mutationFn: (name: string) => {
-			if (pending.current?.name !== name) pending.current = { name, idempotencyKey: crypto.randomUUID() };
-			return registerOwnApplication(name, pending.current.idempotencyKey, client);
+			if (pending.current?.name !== name)
+				pending.current = { name, idempotencyKey: crypto.randomUUID() };
+			return registerOwnApplication(
+				name,
+				pending.current.idempotencyKey,
+				client,
+			);
 		},
-		onSuccess: () => { pending.current = undefined; },
+		onSuccess: () => {
+			pending.current = undefined;
+		},
 	});
 }
 
@@ -63,23 +82,50 @@ export function useDisableOwnApplication(client?: Client) {
 	return useMutation({
 		mutationKey: ["application-management", "disable"],
 		mutationFn: (applicationId: string) => {
-			if (pending.current?.applicationId !== applicationId) pending.current = { applicationId, idempotencyKey: crypto.randomUUID() };
-			return disableOwnApplication(applicationId, pending.current.idempotencyKey, client);
+			if (pending.current?.applicationId !== applicationId)
+				pending.current = {
+					applicationId,
+					idempotencyKey: crypto.randomUUID(),
+				};
+			return disableOwnApplication(
+				applicationId,
+				pending.current.idempotencyKey,
+				client,
+			);
 		},
-		onSuccess: () => { pending.current = undefined; },
+		onSuccess: () => {
+			pending.current = undefined;
+		},
 	});
 }
 
 export function useIssueOrRotateApplicationCredential(client?: Client) {
-	const pending = useRef<{ applicationId: string; body: ApplicationCredentialRequest; idempotencyKey: string }>();
+	const pending = useRef<{
+		applicationId: string;
+		body: ApplicationCredentialRequest;
+		idempotencyKey: string;
+	}>();
 	return useMutation({
 		mutationKey: ["application-management", "credential"],
-		mutationFn: (input: { applicationId: string; body: ApplicationCredentialRequest }) => {
-			if (pending.current?.applicationId !== input.applicationId || JSON.stringify(pending.current.body) !== JSON.stringify(input.body)) {
+		mutationFn: (input: {
+			applicationId: string;
+			body: ApplicationCredentialRequest;
+		}) => {
+			if (
+				pending.current?.applicationId !== input.applicationId ||
+				JSON.stringify(pending.current.body) !== JSON.stringify(input.body)
+			) {
 				pending.current = { ...input, idempotencyKey: crypto.randomUUID() };
 			}
-			return issueOrRotateApplicationCredential(input.applicationId, input.body, pending.current.idempotencyKey, client);
+			return issueOrRotateApplicationCredential(
+				input.applicationId,
+				input.body,
+				pending.current.idempotencyKey,
+				client,
+			);
 		},
-		onSuccess: () => { pending.current = undefined; },
+		onSuccess: () => {
+			pending.current = undefined;
+		},
 	});
 }
