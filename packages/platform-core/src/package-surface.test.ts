@@ -191,6 +191,7 @@ describe("platform-core package surface", () => {
 			"planConversationGenerationConfirmationV1",
 			"planConversationGenerationIsolationV1",
 			"planSessionSandboxManagementTransitionV1",
+			"planSessionSandboxUpgradeTransitionV1",
 			"planTaskSystemControlV1",
 			"platformAuditQueryActionsV1",
 			"platformAuditQueryDenialReasonsV1",

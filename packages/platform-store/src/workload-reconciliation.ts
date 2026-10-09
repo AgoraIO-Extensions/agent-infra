@@ -27,6 +27,7 @@ import {
 } from "./agent-management.js";
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import { PostgresSecretActivationStoreV1 } from "./secret-activation.js";
+import { persistSessionSandboxUpgradeIntents } from "./session-sandbox-upgrade.js";
 
 const defaultWorkloadLeaseMs = 300_000;
 
@@ -810,6 +811,16 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 						? monitorDelayMs
 						: retryDelayMs;
 					await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${agentId}, ${next.revision}, ${sql.json(next as unknown as postgres.JSONValue)}, clock_timestamp() + ${delay} * interval '1 millisecond') on conflict (agent_id) do update set revision = excluded.revision, state = excluded.state, next_attempt_at = excluded.next_attempt_at, updated_at = clock_timestamp()`;
+					// Idle Session Sandboxes follow a ready verified deployment in
+					// this same transaction; periodic monitor write-backs retry the
+					// ones that were busy (ADR 0023).
+					if (next.phase === "ready")
+						await persistSessionSandboxUpgradeIntents(sql, {
+							agentId,
+							workerId,
+							traceId,
+							requestId,
+						});
 					// Outbox deliveries only wake reconciliation. The durable Workload
 					// row owns subsequent recovery steps and periodic observations.
 					if (task) {

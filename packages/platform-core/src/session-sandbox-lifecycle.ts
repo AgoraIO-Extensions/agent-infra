@@ -1,4 +1,7 @@
-import type { AgentManagementWritePlanV1 } from "./agent-management.js";
+import type {
+	AgentManagementStateV1,
+	AgentManagementWritePlanV1,
+} from "./agent-management.js";
 import type { SessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	isSessionSandboxDeletionProgressValidV1,
@@ -47,6 +50,9 @@ export interface SessionSandboxStopReceiptV1 {
 /** Carried by the original durable resource outbox, never a business grant. */
 export interface SessionSandboxLifecycleV1 {
 	readonly schemaVersion: 1;
+	/** Set only for an upgrade to the Agent's current verified deployment
+	 * (ADR 0023); audit and "updating" display only, never an authorization. */
+	readonly reason?: "upgrade";
 	readonly authority: {
 		readonly kind: "management";
 		readonly applicationId: string;
@@ -305,13 +311,91 @@ export function decideSessionSandboxDrainObservationV1(input: {
 	};
 }
 
-/** Resource absence never decides an original Execution outcome or frees unknown occupancy. */
+/** Work that never reached a Runtime (#1522 writes `unknown` before any send)
+ * holds no Sandbox side effect; `processing`/`unknown` keep their occupancy. */
+function holdsNoSandboxWorkV1(status: string): boolean {
+	return ["completed", "failed", "cancelled", "submitted", "waiting"].includes(
+		status,
+	);
+}
+
+/** Resource absence never decides an original Execution outcome or frees unknown occupancy.
+ * Only execution status decides (ADR 0023): a Turn waiting for this very
+ * drain already carries a delivery fence from its claim. */
 export function canDrainSessionSandboxComputeV1(
 	executionStatuses: readonly string[],
 ): boolean {
-	return executionStatuses.every((status) =>
-		["completed", "failed", "cancelled"].includes(status),
-	);
+	return executionStatuses.every(holdsNoSandboxWorkV1);
+}
+
+/**
+ * Plans the upgrade of one idle Sandbox to the Agent's current verified
+ * deployment (ADR 0023). The intent reuses the management lifecycle: drain
+ * the source, keep its PVC, then re-prepare under the current authority.
+ * Returns null whenever the Sandbox is not idle, not settled or not stale.
+ */
+export function planSessionSandboxUpgradeTransitionV1(input: {
+	readonly management: Pick<
+		AgentManagementStateV1,
+		| "applicationId"
+		| "agentId"
+		| "status"
+		| "revision"
+		| "fence"
+		| "workloadRevision"
+		| "desiredState"
+	>;
+	readonly current: SessionSandboxSourceV1;
+	readonly allocation: {
+		readonly status: string;
+		readonly desiredState: string;
+	};
+	/** The Sandbox's original reconcile intent; only a settled one may restart. */
+	readonly intent: { readonly status: string } | null;
+	readonly policyCurrent: boolean;
+	readonly executionStatuses: readonly string[];
+	readonly generationBarrierPending: boolean;
+}) {
+	const { management, current } = input;
+	const deployment = current.deployment;
+	if (
+		input.policyCurrent ||
+		management.agentId !== current.sandbox.agentId ||
+		management.status !== "available" ||
+		management.desiredState !== "running" ||
+		input.allocation.status !== "ready" ||
+		input.allocation.desiredState !== "running" ||
+		input.intent?.status !== "succeeded" ||
+		!Number.isSafeInteger(current.resourceFence) ||
+		current.resourceFence < 1 ||
+		current.resourceFence >= Number.MAX_SAFE_INTEGER ||
+		!current.policy ||
+		current.observation?.status !== "ready" ||
+		deployment === null ||
+		typeof deployment !== "object" ||
+		input.generationBarrierPending ||
+		!input.executionStatuses.every(holdsNoSandboxWorkV1)
+	)
+		return null;
+	return {
+		resourceFence: current.resourceFence + 1,
+		status: "unavailable" as const,
+		desiredState: "stopped" as const,
+		lifecycle: {
+			schemaVersion: 1,
+			reason: "upgrade",
+			authority: {
+				kind: "management",
+				applicationId: management.applicationId,
+				managementRevision: management.revision,
+				managementFence: management.fence,
+				workloadRevision: management.workloadRevision,
+				targetDesiredState: "running",
+			},
+			source: current,
+			stopReceipt: null,
+		} satisfies SessionSandboxLifecycleV1,
+	};
 }
 
 /** A persisted source-stop proof permits preparation, never business execution. */
@@ -320,10 +404,7 @@ export function canPrepareSessionSandboxReplacementV1(input: {
 	readonly resourceFence: number;
 	readonly lifecycle: SessionSandboxLifecycleV1;
 	readonly observation: SessionSandboxObservationV1 | null;
-	readonly executions: readonly {
-		readonly status: string;
-		readonly deliveryFence: number;
-	}[];
+	readonly executions: readonly { readonly status: string }[];
 	readonly generationBarrierPending: boolean;
 }): boolean {
 	const { sandbox, resourceFence, lifecycle, observation } = input;
@@ -334,11 +415,7 @@ export function canPrepareSessionSandboxReplacementV1(input: {
 				lifecycle.preparation.resourceFence !== resourceFence)) ||
 		lifecycle.authority.targetDesiredState !== "running" ||
 		input.generationBarrierPending ||
-		!input.executions.every(
-			({ status, deliveryFence }) =>
-				["completed", "failed", "cancelled"].includes(status) ||
-				(["submitted", "waiting"].includes(status) && deliveryFence === 0),
-		)
+		!input.executions.every(({ status }) => holdsNoSandboxWorkV1(status))
 	)
 		return false;
 	if (lifecycle.sourceState === "never-prepared") {

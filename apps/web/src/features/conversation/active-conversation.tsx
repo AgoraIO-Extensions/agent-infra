@@ -82,7 +82,10 @@ export function ActiveConversation({
 	const conversation = timeline.history?.conversation;
 	// The Conversation stays read-only until its own Session Sandbox is ready
 	// (PRD §6.4, Spec §10.1.1); the draft remains editable meanwhile (#1534).
-	const preparing = timeline.history?.sessionAvailability === "preparing";
+	// An upgrading Sandbox is shown as "更新中" (PRD, ADR 0023).
+	const updating = timeline.history?.sessionAvailability === "updating";
+	const preparing =
+		updating || timeline.history?.sessionAvailability === "preparing";
 	const { executionId: latestExecution, status } = currentExecution(
 		timeline.history,
 		timeline.events,
@@ -154,6 +157,13 @@ export function ActiveConversation({
 		const timer = setInterval(() => void reader.refresh(), preparingRefreshMs);
 		return () => clearInterval(timer);
 	}, [preparing, reader.refresh]);
+	// The Agent update that becomes ready commits this Session's Sandbox
+	// upgrade with it; re-read so an open page shows "更新中" (ADR 0023).
+	const wasAvailable = useRef(available);
+	useEffect(() => {
+		if (available && !wasAvailable.current) void reader.refresh();
+		wasAvailable.current = available;
+	}, [available, reader.refresh]);
 	useEffect(() => {
 		const result = command.result;
 		if (!result || result === handled.current) return;
@@ -399,7 +409,11 @@ export function ActiveConversation({
 					</p>
 				)}
 				{preparing && (
-					<p role="status">会话准备中，完成后即可发送。草稿会保留。</p>
+					<p role="status">
+						{updating
+							? "会话更新中，完成后即可发送。草稿会保留。"
+							: "会话准备中，完成后即可发送。草稿会保留。"}
+					</p>
 				)}
 				{active && !agent.capabilities.supplementaryInstruction && (
 					<p role="status">当前回复仍在处理，不支持补充指令。草稿会保留。</p>

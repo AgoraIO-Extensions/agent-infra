@@ -578,6 +578,37 @@ export function createProductionSessionSandboxReceiverV1(
 					status: "unknown" as const,
 					resources: sourceResources,
 				};
+			// A Pod's resourceVersion advances with each status update after its
+			// ready observation, and a delete precondition must be an observed
+			// version. Refresh the captured source once before the first delete;
+			// the Store refines it and the next attempt deletes (#1523).
+			if (!lifecycle.deletionProgress?.length) {
+				const observed = await adapter.observe(
+					sourceAllocation,
+					sourceResources,
+					"control",
+				);
+				signal.throwIfAborted();
+				if (
+					observed.status !== "unknown" &&
+					observed.resources.length === sourceResources.length &&
+					observed.resources.every((resource) =>
+						sourceResources.some(
+							(prior) =>
+								prior.kind === resource.kind && prior.uid === resource.uid,
+						),
+					) &&
+					observed.resources.some(
+						(resource) =>
+							!sourceResources.some(
+								(prior) =>
+									prior.kind === resource.kind &&
+									prior.resourceVersion === resource.resourceVersion,
+							),
+					)
+				)
+					return { status: "observed" as const, resources: observed.resources };
+			}
 			const allocation = allocationFor(
 				claim.sandbox,
 				source.policy,

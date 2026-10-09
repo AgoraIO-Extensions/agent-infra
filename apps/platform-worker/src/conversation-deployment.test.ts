@@ -632,6 +632,60 @@ describe("production SessionSandbox resource receiver", () => {
 		},
 	);
 
+	it("refreshes a source whose Pod resourceVersion moved before any delete (#1523)", async () => {
+		const f = fixture();
+		const signal = new AbortController().signal;
+		await f.receive(f.claim, signal);
+		const ready = async () => {
+			const pod = await f.client.read<V1Pod>(
+				"Pod",
+				f.claim.sandbox.resourceName,
+			);
+			if (!pod) throw new Error("Expected prepared Pod");
+			pod.status = {
+				phase: "Running",
+				conditions: [{ type: "Ready", status: "True" }],
+			};
+			await f.client.replace(pod);
+		};
+		await ready();
+		const observation = await f.receive(f.claim, signal);
+		// A later status update moves only the Pod's resourceVersion.
+		await ready();
+		const writes = f.writes.length;
+		const progress: SessionSandboxDeletionProgressV1[] = [];
+		const record = async (entry: SessionSandboxDeletionProgressV1) => {
+			progress.push(entry);
+			return "committed" as const;
+		};
+		const refreshed = await f.receive(
+			drainClaim(f, observation),
+			signal,
+			record,
+		);
+		expect(refreshed.status).toBe("observed");
+		const before = observation.resources.find(
+			(resource) => resource.kind === "Pod",
+		);
+		const after = refreshed.resources.find(
+			(resource) => resource.kind === "Pod",
+		);
+		expect(after?.uid).toBe(before?.uid);
+		expect(after?.resourceVersion).not.toBe(before?.resourceVersion);
+		expect(progress).toHaveLength(0);
+		expect(f.writes).toHaveLength(writes);
+		expect(
+			await f.receive(
+				drainClaim(f, { ...observation, resources: refreshed.resources }),
+				signal,
+				record,
+			),
+		).toMatchObject({ status: "stopped" });
+		expect(progress[0]).toMatchObject({
+			resource: { kind: "Pod", resourceVersion: after?.resourceVersion },
+		});
+	});
+
 	it("rejects a tampered captured projection before drain writes", async () => {
 		const f = fixture();
 		const signal = new AbortController().signal;

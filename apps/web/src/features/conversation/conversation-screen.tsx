@@ -100,6 +100,15 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 				throw new ConversationReadError({ kind: "invalid" });
 			return parsed.data;
 		},
+		// A starting or updating Agent keeps the page read-only; poll so it
+		// resumes on its own once ready (same cadence as the Agent page).
+		refetchInterval: (query) =>
+			query.state.status === "success" &&
+			(query.state.data?.managementStatus === "creating" ||
+				query.state.data?.serviceAvailability === "starting" ||
+				query.state.data?.serviceAvailability === "updating")
+				? 2000
+				: false,
 	});
 	useLayoutEffect(() => {
 		if (agentQuery.data && (showHistory || recentOpen))

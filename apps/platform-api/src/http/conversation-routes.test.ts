@@ -235,9 +235,10 @@ describe("Conversation HTTP routes", () => {
 
 	it.each([
 		[{ sandboxReady: false }, "preparing"],
+		[{ sandboxReady: false, sandboxUpdating: true }, "updating"],
 		[{ sandboxReady: true }, "ready"],
 	] as const)(
-		"projects the Session readiness %o as %s (#1534)",
+		"projects the Session readiness %o as %s (#1534, #1523)",
 		async (readiness, expected) => {
 			const input = dependencies();
 			const current = await input.query.get(

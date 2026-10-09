@@ -166,8 +166,8 @@ async function lockedContext(
 		)
 			return null;
 		const executions = await transaction<
-			{ status: string; delivery_fence: string }[]
-		>`select status, delivery_fence::text from platform.conversation_executions where conversation_id = ${sandbox.sessionId}`;
+			{ status: string }[]
+		>`select status from platform.conversation_executions where conversation_id = ${sandbox.sessionId}`;
 		if (lifecycle.stopReceipt || lifecycle.sourceState === "never-prepared") {
 			const pending =
 				await transaction`select 1 from platform.conversation_generation_tombstones where conversation_id = ${sandbox.sessionId} and status = 'pending' limit 1`;
@@ -181,10 +181,7 @@ async function lockedContext(
 					lifecycle,
 					observation: allocation.resource_observation,
 					generationBarrierPending: pending.length > 0,
-					executions: executions.map((execution) => ({
-						status: execution.status,
-						deliveryFence: Number(execution.delivery_fence),
-					})),
+					executions,
 				})
 			)
 				return null;

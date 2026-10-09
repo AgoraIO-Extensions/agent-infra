@@ -2,7 +2,7 @@
 
 ## 状态
 
-提议中，归属 [#1523](https://github.com/AgoraIO-Extensions/agent-infra/issues/1523)。
+已采纳，设计经 [#1581](https://github.com/AgoraIO-Extensions/agent-infra/pull/1581) 评审合入，实现归属 [#1523](https://github.com/AgoraIO-Extensions/agent-infra/issues/1523)。
 
 ## 背景
 
@@ -18,7 +18,7 @@ Agent 的配置修订或已验证 Workload（镜像 Digest、资源配置）变�
    - 判定只看执行状态，不看投递 fence。认领在检查 policy 之前递增执行的投递 fence，因此每个因 `SESSION_SANDBOX_UPDATING` 等待的 Turn 都已有 `deliveryFence ≥ 1`；沿用现有重新准备判定中的 `deliveryFence = 0` 条件，会让该 Turn 反过来阻止它所等待的升级。排空与重新准备因此使用同一判定，并去掉该条件。
    - 安全性来自写前日志：Runtime 请求发出前，投递准备须在持有 Agent 行锁的事务内复核 Sandbox 就绪与 policy 当前，并写入 `unknown`。升级意图在同一 Agent 行锁下写入并令 Sandbox 不再就绪；先提交意图时投递只能等待，先写 `unknown` 时该 Sandbox 不再空闲，不会被排空。
 4. **触发点。** 在提交新的已验证 Workload 状态（phase `ready`）的同一 Workload 写回事务内，按 Agent 行 → 会话 → Sandbox 分配 → 调谐 outbox 的既有加锁顺序写入升级意图，并写入审计。该事务也在周期性监测时运行，因此写入时忙碌的 Sandbox 会在其空闲后的下一次监测中升级；只选择 policy 已过期的分配。
-5. **升级期间的等待。** 该会话的 Turn 继续等待：不写 `unknown`、不计入 Agent 占用、保留原顺序。Sandbox 未就绪且存在升级生命周期时，投递等待原因报告为 `SESSION_SANDBOX_UPDATING`；Web 会话可用性显示“更新中”。
+5. **升级期间的等待。** 该会话的 Turn 继续等待：不写 `unknown`、不计入 Agent 占用、保留原顺序。Sandbox 未就绪且存在升级生命周期时，投递等待原因报告为 `SESSION_SANDBOX_UPDATING`；Web 会话详情的 `sessionAvailability` 为 `updating`，对话页显示“更新中”，历史只读、草稿保留，与准备中一样不接受新消息。
 6. **恢复失败。** 新 Pod 从原 PVC 恢复 Host-to-native Session；恢复被原生 Runtime 明确拒绝时，沿 [Runtime HLD §7.3](../architecture/HLD-agent-runtime-M1.md#73-重启恢复) 的 `RUNTIME_SESSION_RECOVERY_FAILED` 与代次隔离流程，只使该会话不可用。
 
 ## 风险与边界

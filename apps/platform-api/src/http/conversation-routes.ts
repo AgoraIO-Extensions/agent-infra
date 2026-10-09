@@ -863,13 +863,16 @@ export function registerConversationRoutes(
 								conversation,
 								messages: messageProjections(detail),
 								events: detail.events.map(eventProjection),
-								// Same readiness fact as the Web message gate (#1534).
+								// Same readiness fact as the Web message gate (#1534); an
+								// upgrading Sandbox is shown as updating (ADR 0023).
 								sessionAvailability:
 									conversation.status === "unavailable"
 										? "unavailable"
 										: detail.conversation.sandbox !== undefined &&
 												detail.conversation.sandboxReady !== true
-											? "preparing"
+											? detail.conversation.sandboxUpdating === true
+												? "updating"
+												: "preparing"
 											: "ready",
 							});
 						}, metadata.traceId),

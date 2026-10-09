@@ -1264,13 +1264,10 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		),
 	};
 	// #1534 later added the optional Session availability; the pinned digest
-	// covers the original publication.
+	// covers the original publication. #1523 later added "updating".
 	const detail = addition.schemas.ConversationDetailProjectionV2;
 	if (
-		sameValue(detail?.properties?.sessionAvailability, {
-			enum: ["preparing", "ready", "unavailable"],
-			type: "string",
-		}) &&
+		isSessionAvailabilityProperty(detail?.properties?.sessionAvailability) &&
 		!detail.required?.includes("sessionAvailability")
 	) {
 		const properties = { ...detail.properties };
@@ -1311,6 +1308,23 @@ function isConversationSseV2NotFoundAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+const preparingSessionAvailability = {
+	enum: ["preparing", "ready", "unavailable"],
+	type: "string",
+};
+const updatingSessionAvailability = {
+	enum: ["preparing", "ready", "unavailable", "updating"],
+	type: "string",
+};
+
+/** Exactly the #1534 Session availability or its #1523 "updating" extension. */
+function isSessionAvailabilityProperty(value) {
+	return (
+		sameValue(value, preparingSessionAvailability) ||
+		sameValue(value, updatingSessionAvailability)
+	);
+}
+
 // #1534 adds the optional Session availability to the Web Conversation detail.
 function isConversationSessionAvailabilityOpenApiAddition(previous, current) {
 	const name = "ConversationDetailProjectionV2";
@@ -1319,15 +1333,37 @@ function isConversationSessionAvailabilityOpenApiAddition(previous, current) {
 	if (
 		!previousDetail?.properties ||
 		Object.hasOwn(previousDetail.properties, "sessionAvailability") ||
-		!sameValue(currentDetail?.properties?.sessionAvailability, {
-			enum: ["preparing", "ready", "unavailable"],
-			type: "string",
-		}) ||
+		!isSessionAvailabilityProperty(
+			currentDetail?.properties?.sessionAvailability,
+		) ||
 		currentDetail.required?.includes("sessionAvailability")
 	)
 		return false;
 	const normalized = structuredClone(current);
 	delete normalized.components.schemas[name].properties.sessionAvailability;
+	return sameValue(previous, normalized);
+}
+
+// #1523 adds only the "updating" value while a Session Sandbox upgrades.
+function isConversationSessionUpdatingOpenApiAddition(previous, current) {
+	const name = "ConversationDetailProjectionV2";
+	const previousDetail = previous.components?.schemas?.[name];
+	const currentDetail = current.components?.schemas?.[name];
+	if (
+		!sameValue(
+			previousDetail?.properties?.sessionAvailability,
+			preparingSessionAvailability,
+		) ||
+		!sameValue(
+			currentDetail?.properties?.sessionAvailability,
+			updatingSessionAvailability,
+		) ||
+		currentDetail.required?.includes("sessionAvailability")
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas[name].properties.sessionAvailability =
+		structuredClone(preparingSessionAvailability);
 	return sameValue(previous, normalized);
 }
 
@@ -2123,6 +2159,7 @@ function findBreakingChanges(previous, current) {
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
 			!isConversationSessionAvailabilityOpenApiAddition(previous, current) &&
+			!isConversationSessionUpdatingOpenApiAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
