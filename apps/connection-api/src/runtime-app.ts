@@ -68,9 +68,8 @@ import {
 	rehoboamLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/rehoboam";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
-import { ProxyAgent, fetch as undiciFetch } from "undici";
-
 import { createConnectionApp } from "./app";
+import { createPinnedProviderFetch } from "./provider-fetch";
 import { fullConnectionRuntimeConfig } from "./runtime-config";
 
 export async function createConnectionRuntimeApp(
@@ -143,6 +142,11 @@ export async function createConnectionRuntime(
 	environment: Record<string, string | undefined> = process.env,
 ) {
 	const config = fullConnectionRuntimeConfig(environment);
+	if (config.githubEgressProxyUrl || config.githubReadFallbackProxyUrl) {
+		throw new Error(
+			"Provider forward proxies require a reviewed pinned CONNECT transport",
+		);
+	}
 	const oauthRepository = new PostgresConnectionOAuthRepository(
 		config.databaseUrl,
 	);
@@ -218,58 +222,50 @@ export async function createConnectionRuntime(
 		repository: oauthRepository,
 		resource: config.resourceUrl,
 	});
-	const proxyFetch = (proxyUrl: string) => {
-		const dispatcher = new ProxyAgent(proxyUrl);
-		return ((input: RequestInfo | URL, init?: RequestInit) =>
-			undiciFetch(
-				input as never,
-				{ ...init, dispatcher } as never,
-			)) as unknown as typeof fetch;
+	const transports: ReturnType<typeof createPinnedProviderFetch>[] = [];
+	const providerFetch = (
+		origins: readonly string[],
+		privateOrigins: readonly string[] = [],
+	) => {
+		const transport = createPinnedProviderFetch({ origins, privateOrigins });
+		transports.push(transport);
+		return transport.fetch;
 	};
-	const githubPrimaryFetch = config.githubEgressProxyUrl
-		? observeProviderFetch("github", proxyFetch(config.githubEgressProxyUrl))
-		: observeProviderFetch("github", fetch);
-	const githubFetch =
-		config.githubEgressProxyUrl && config.githubReadFallbackProxyUrl
-			? createReadFallbackFetch(
-					githubPrimaryFetch,
-					observeProviderFetch(
-						"github-fallback",
-						proxyFetch(config.githubReadFallbackProxyUrl),
-					),
-				)
-			: githubPrimaryFetch;
-	const selectGithubOAuthFetcher = config.githubEgressProxyUrl
-		? createGithubOAuthFetcherSelector(
-				githubPrimaryFetch,
-				createGithubOAuthDirectFetch(),
-				() =>
-					console.info(
-						JSON.stringify({
-							event: "github_oauth_egress_selected",
-							reason: "proxy_preflight_transport_failure",
-							route: "direct",
-						}),
-					),
-			)
-		: undefined;
+	const originFor = (provider: string) => {
+		const origin = catalogs.find((catalog) => catalog.provider === provider)
+			?.deploymentProfile.apiOrigin;
+		if (!origin) throw new Error("Published Provider origin is missing");
+		return origin;
+	};
+	const githubFetch = observeProviderFetch(
+		"github",
+		providerFetch([originFor("github"), githubOAuthTokenUrl]),
+	);
 	const github = new OpenConnectorGitHubAdapter(githubFetch);
-	const githubOAuth = selectGithubOAuthFetcher
-		? createPreSubmitGithubOAuthAdapter(config.github, githubFetch, () =>
-				selectGithubOAuthFetcher(config.github.tokenUrl ?? githubOAuthTokenUrl),
-			)
-		: new OpenConnectorGitHubOAuthAdapter({
-				...config.github,
-				fetcher: githubFetch,
-			});
+	const githubOAuth = createPreSubmitGithubOAuthAdapter(
+		config.github,
+		githubFetch,
+		async () => githubFetch,
+	);
 	const bitbucketFetch = createGuardedFetch({
-		fetch: observeProviderFetch("bitbucket", fetch),
+		fetch: observeProviderFetch(
+			"bitbucket",
+			providerFetch([originFor("bitbucket")]),
+		),
 		allowPrivateNetwork: false,
 		maxRedirects: 0,
 	});
 	const bitbucket = new BitbucketServerAdapter(bitbucketFetch);
 	const jiraFetch = createGuardedFetch({
-		fetch: observeProviderFetch("atlassian", fetch),
+		fetch: observeProviderFetch(
+			"atlassian",
+			providerFetch([
+				originFor("jira"),
+				originFor("confluence"),
+				config.jiraToken.tokenUrl,
+				config.jenkinsCiToken.tokenUrl,
+			]),
+		),
 		allowPrivateNetwork: false,
 		maxRedirects: 0,
 	});
@@ -287,12 +283,23 @@ export async function createConnectionRuntime(
 			? createFixedOriginFetch(
 					jenkinsReleaseProfile.apiOrigin,
 					"http://10.80.1.129:8080",
-					observeProviderFetch("jenkins", fetch),
+					observeProviderFetch(
+						"jenkins",
+						providerFetch(
+							["http://10.80.1.129:8080"],
+							["http://10.80.1.129:8080"],
+						),
+					),
 				)
 			: undefined;
 	const jenkinsFetch = createGuardedFetch({
 		allowPrivateNetwork: false,
-		fetch: jenkinsRouteFetch ?? observeProviderFetch("jenkins", fetch),
+		fetch:
+			jenkinsRouteFetch ??
+			observeProviderFetch(
+				"jenkins",
+				providerFetch([jenkinsReleaseProfile.apiOrigin]),
+			),
 		maxRedirects: 0,
 	});
 	const jenkins = new JenkinsAdapter(jenkinsReleaseProfile, jenkinsFetch);
@@ -301,7 +308,10 @@ export async function createConnectionRuntime(
 		createGuardedFetch({
 			allowPrivateNetwork: false,
 			maxRedirects: 0,
-			fetch: observeProviderFetch("jenkins-ci", fetch),
+			fetch: observeProviderFetch(
+				"jenkins-ci",
+				providerFetch([jenkinsCiProfile.apiOrigin]),
+			),
 		}),
 		new JiraServerOAuthTokenProvider(jiraFetch, config.jenkinsCiToken),
 	);
@@ -309,7 +319,10 @@ export async function createConnectionRuntime(
 		createGuardedFetch({
 			allowPrivateNetwork: false,
 			maxRedirects: 0,
-			fetch: observeProviderFetch("rehoboam", fetch),
+			fetch: observeProviderFetch(
+				"rehoboam",
+				providerFetch([originFor("rehoboam")]),
+			),
 		}),
 		config.rehoboamApiKey,
 	);
@@ -317,13 +330,20 @@ export async function createConnectionRuntime(
 		createGuardedFetch({
 			allowPrivateNetwork: false,
 			maxRedirects: 0,
-			fetch: observeProviderFetch("manhattan", fetch),
+			fetch: observeProviderFetch(
+				"manhattan",
+				providerFetch([originFor("manhattan")]),
+			),
 		}),
 		config.manhattanApiKey,
 	);
 	const manhattanOAuth = new ManhattanOAuthAdapter(
 		manhattan,
-		createGuardedFetch({ allowPrivateNetwork: false, maxRedirects: 0 }),
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: providerFetch(["https://oauth.agoralab.co"]),
+		}),
 		config.manhattanOAuth.clientId,
 		config.manhattanOAuth.clientSecret,
 	);
@@ -331,14 +351,20 @@ export async function createConnectionRuntime(
 		createGuardedFetch({
 			allowPrivateNetwork: false,
 			maxRedirects: 0,
-			fetch: observeProviderFetch("datalego", fetch),
+			fetch: observeProviderFetch(
+				"datalego",
+				providerFetch([originFor("datalego"), "https://oauth.agoralab.co"]),
+			),
 		}),
 	);
 	const datalegoOAuthV4 = new DataLegoV4Adapter(
 		createGuardedFetch({
 			allowPrivateNetwork: false,
 			maxRedirects: 0,
-			fetch: observeProviderFetch("datalego", fetch),
+			fetch: observeProviderFetch(
+				"datalego",
+				providerFetch([originFor("datalego"), "https://oauth.agoralab.co"]),
+			),
 		}),
 		config.datalegoOAuth,
 	);
@@ -346,7 +372,10 @@ export async function createConnectionRuntime(
 		createGuardedFetch({
 			allowPrivateNetwork: false,
 			maxRedirects: 0,
-			fetch: observeProviderFetch("datalego", fetch),
+			fetch: observeProviderFetch(
+				"datalego",
+				providerFetch([originFor("datalego"), "https://oauth.agoralab.co"]),
+			),
 		}),
 		config.datalegoOAuth,
 	);
@@ -354,7 +383,10 @@ export async function createConnectionRuntime(
 		createGuardedFetch({
 			allowPrivateNetwork: false,
 			maxRedirects: 0,
-			fetch: observeProviderFetch("datalego", fetch),
+			fetch: observeProviderFetch(
+				"datalego",
+				providerFetch([originFor("datalego"), "https://oauth.agoralab.co"]),
+			),
 		}),
 		config.datalegoOAuth,
 	);
@@ -453,6 +485,9 @@ export async function createConnectionRuntime(
 	});
 	return {
 		app,
+		closeProviderTransports: async () => {
+			await Promise.all(transports.map((transport) => transport.close()));
+		},
 		approvalMaintenance: approvalRepository,
 		notificationDispatcher,
 		recovery: new ConnectionRecoveryService(repository, executors),

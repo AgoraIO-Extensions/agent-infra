@@ -273,3 +273,11 @@ tag 路径，不能阻止手工 Helm、旧镜像或其他部署途径；缺少�
 管理员可对已排查原因的失败事件显式重投递；该动作只重新排队站内 WorkItem/Notification
 投影，不重试 Provider 请求或已提交的外部 WRITE。事件真正送达后运营待办才完成；仅归档失败
 通知不完成待办。恢复前必须先核对缺失的审计/任务事实，不得为了消除告警伪造业务完成状态。
+
+## 出站安全验证
+
+Provider 连接级 IP pinning、精确依赖 NetworkPolicy 和隔离 enforcement 探针按
+[Connection 出站安全验证](connection-egress-security.md) 执行。目标集群未证明策略执行能力时，
+不得把策略 API 接受或源码测试通过当作生产出口隔离。使用 GitHub forward proxy 的环境必须先
+完成 pinned CONNECT transport 评审；新的 pinned runtime 不接受未验证的代理配置，也不自动
+切换网络路径。

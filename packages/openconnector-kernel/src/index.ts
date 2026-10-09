@@ -1,6 +1,7 @@
 export { executeAction } from "./core/execution.ts";
 export {
 	createGuardedFetch,
+	resolveGuardedEgressTarget,
 	setDefaultGuardedFetchDnsLookup,
 } from "./core/guarded-fetch.ts";
 export type { GuardedFetchDnsLookup } from "./core/guarded-fetch.ts";
