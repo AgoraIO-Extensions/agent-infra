@@ -157,6 +157,13 @@ export function ActiveConversation({
 		const timer = setInterval(() => void reader.refresh(), preparingRefreshMs);
 		return () => clearInterval(timer);
 	}, [preparing, reader.refresh]);
+	// The Agent update that becomes ready commits this Session's Sandbox
+	// upgrade with it; re-read so an open page shows "更新中" (ADR 0023).
+	const wasAvailable = useRef(available);
+	useEffect(() => {
+		if (available && !wasAvailable.current) void reader.refresh();
+		wasAvailable.current = available;
+	}, [available, reader.refresh]);
 	useEffect(() => {
 		const result = command.result;
 		if (!result || result === handled.current) return;
