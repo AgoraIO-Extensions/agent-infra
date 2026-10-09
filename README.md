@@ -42,18 +42,14 @@ Connection 与 Platform 位于同一 monorepo。当前骨架已经分离进程�
 
 ## 生产部署
 
-`docker-compose.production.yml` 定义正式 Connection 部署边界。由部署 Secret Manager 向进程环境
-注入 `.env.conformance.example` 列出的必需值并准备 PostgreSQL，然后运行：
+Connection 当前单主部署在上海 `hcicore-acs-sh-prod01` 的 `agent-connector` namespace，权威
+PostgreSQL 也位于上海。公开入口为 `https://agent-connector.agoralab.co`，GZ3 release 已退役。
+常规发布使用 `pnpm connection:release` 和显式上海 kubeconfig，不使用全局 context 猜测目标，
+不重新运行 Compose/bootstrap 或启动旧控制面。完整命令、数据库 Secret/TLS、回退与验收见
+[Connection 生产部署](docs/architecture/connection-production.md#发布步骤)。
 
-```bash
-pnpm connection:production:bootstrap
-pnpm connection:production:up
-```
-
-bootstrap 只执行正式 migration；API 在完整配置、migration 和 catalog 校验通过后启动同一个正式
-Runtime factory。当前公开地址 `https://agent-connector.gz3.agoralab.co` 按 #601 作为 GZ3 control plane
-pilot，不代表其他环境或客户端已经通过生产门禁。详见
-[Connection 生产部署](docs/architecture/connection-production.md)。
+`docker-compose.production.yml` 保留独立进程与镜像边界，用于另行批准的配置环境，不作为上海
+现网升级入口。上海迁移与受监督 pilot 不代表所有 Provider WRITE、客户端或广泛生产门禁通过。
 
 ## 本地验证
 

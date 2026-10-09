@@ -1,19 +1,22 @@
-# ADR: Connection GZ3 控制面与 GitHub 代理出口
+# ADR: Connection 上海单主与 GitHub 出口
 
 ## 状态
 
-已批准直接在隔离的 GZ3 production namespace 实现。LA3 Provider Egress 因当前 HCI 不提供可用的 workload mTLS 入口而延期；接入广泛生产流量前仍受 Issue #601 的国内 PostgreSQL、代理稳定性证据和 Security/SRE 评审约束。
+上海单主迁移已按 #1276 的批准边界完成，常规发布入口由 #1625 迁入上海；下文 GZ3 决策保留为
+历史基线。LA3 Provider Egress 仍因 HCI 不提供可用的 workload mTLS 入口而延期；广泛生产的
+代理稳定性、Security/SRE 与 HA/PITR 门禁仍独立验收。
 
 Issue [#1276](https://github.com/AgoraIO-Extensions/agent-infra/issues/1276) 的上海分阶段迁移方案
-已由迁移 Owner 确认，替代下述 GZ3 目标地域；确认仅授权架构与离线配置准备，不表示已切换、
-已通过 Security/SRE 门禁或已授权生产操作。切换前 GZ3 仍是现网唯一控制面。
+已由迁移 Owner 确认，替代下述 GZ3 目标地域。服务和数据库切换已分别取得执行授权并完成，
+GZ3 release 已退役；这不意味着 Security/SRE 或业务 WRITE 的全部门禁已经通过。
 
 ## 上海分阶段迁移
 
 目标控制面为上海 `hcicore-acs-sh-prod01` 的 `agent-connector` namespace，公开 origin 为
-`https://agent-connector.agoralab.co`。先迁 API/Web，暂用现有美国 PostgreSQL；待上海数据库
-的数据连续性、备份恢复和切换方案通过验收后再迁数据库。过渡期间数据库仍是唯一权威，
-不双写；不得把该过渡安排视为跨境数据或广泛生产合规批准。
+`https://agent-connector.agoralab.co`。已先迁 API/Web，再在停写与最终备份核对后迁入上海
+PostgreSQL 17，权威数据库保持唯一，不双写。旧库保留为备份来源，不能直接恢复为写入主库。
+当前发布、TLS 与回退操作以[生产部署说明](../architecture/connection-production.md)为准，
+不得把迁移验收视为跨境数据或广泛生产合规批准。
 
 切换时先冻结入口并处理在途 Call/Effect，关闭 GZ3 全部 API 和后台写入角色，再启动上海单主。
 回退时先关闭上海写入，再恢复 GZ3；同库阶段不恢复旧备份或覆盖已提交的数据。身份 realm、
@@ -30,10 +33,12 @@ Issue [#1276](https://github.com/AgoraIO-Extensions/agent-infra/issues/1276) 的
 - 无论直连或代理，已提交而响应未知的 WRITE 仍进入 `UNCERTAIN`；消费状态未知的 OAuth
   code 不换路径重放。出口与凭据保护、审计及恢复门禁不变。
 
-生产切换、Secret 传输、正式镜像发布和外部配置修改按独立执行授权办理。GZ3 专用发布脚本
-继续只面向 GZ3，不直接作为上海部署入口；切换前需审查上海资源管理方式和回退路径。
+生产切换、Secret 传输、正式镜像发布和外部配置修改按独立执行授权办理。常规上海发布只修改
+已存在的 Deployment 镜像并保留数据库/CA/身份配置；旧 GZ3 命令拒绝部署，防止无意恢复旧控制面。
 
 ## 决策
+
+以下为已被上海迁移替代的 GZ3 历史基线，不能用作当前部署目标。
 
 Connection 的唯一 control plane、PostgreSQL authority、Identity、Credential、Grant、Call/Effect 和审计部署在 GZ3。国内 Provider 从 GZ3 直连；GitHub 服务端请求默认通过 `103.101.125.158:28062` 代理，GZ3 pilot 的首次 OAuth code exchange 适用下述直连回退，浏览器 authorize 页面仍由用户浏览器直接访问。该代理只用于 GitHub，不用于 GZ3 可直连的 Bitbucket、Jira、Confluence 或 Jenkins。GitHub WRITE 在请求提交后响应未知时仍进入 `UNCERTAIN`，禁止盲重试。拒绝 LA3/GZ3 双活数据库和通用多区域调度平台。
 
