@@ -6,6 +6,7 @@
 
 ## 文档
 
+- [Connection 使用说明书](docs/guides/connection-user-manual.md)
 - [企业级 Agent 平台 M1 产品需求](docs/prd/PRD-agent-platform-M1.md)
 - [Connection M1 产品需求](docs/prd/PRD-connection-M1.md)
 - [M1 工程架构 Spec](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)
@@ -123,3 +124,10 @@ Confluence Server 使用同一套每用户 Basic 凭证和服务端 Token Provid
 [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)。
 
 开始工作前请阅读 [AGENTS.md](AGENTS.md)。
+
+## Connection 使用指南
+
+Connection Web 的 `/connection/help` 提供章节查阅、搜索与完整 Markdown 下载。
+内容源位于 Connection Web 的 `features/user-guide/content.ts`；修改后使用
+`pnpm --filter @agent-infra/connection-web guide:generate` 同步说明书，构建与测试检查同步状态。
+Codex `/connection/` 与通用 Agent `/connection/agent/` 的安装说明及 `llms.txt` 保持独立。
