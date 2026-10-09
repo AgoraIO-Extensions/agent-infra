@@ -650,6 +650,13 @@ Runtime 内接收不替代合法领取；配置缺失与已配置但不可用分
 API/Worker/Web 不取得 Token；OAuth 事务来源不代替原主体/实例映射与 Connection 当前授权，
 供应合同不足时不启用，PAT 路线不被 OAuth 回跳或兑换要求覆盖。
 
+平台自有的安装确认、非敏感命令交付和 callback 定位沿同一 §13.5.6 实施：Worker 使用
+当前原 claim，不为登录创建或延长 Turn；Host 的 `createRuntimeOAuthApp` 为
+`createProtectedRuntimeOAuthClient.callback` 使用独立 callback-only 认证，业务/安装
+凭据不跨路由复用。回跳成功仍须原主体独立确认及来源核实，不开放 MCP 或改变既有
+Thread 快照；转交 unknown 不重发 code。此合同先沿
+[#1589](https://github.com/AgoraIO-Extensions/agent-infra/issues/1589) 评审，未实现时保持不可用。
+
 sender constraint 仅在获准 profile 明确要求时按 Connection HLD §3/§5.2 验证，缺少必需证明
 仍 fail closed；普通 token profile 不以 DPoP、私有 callback 或 FD3 为通用接入前置。
 

@@ -137,6 +137,7 @@ describe("platform-core package surface", () => {
 			"isSessionSandboxDeletionProgressValidV1",
 			"isSessionSandboxObservationValidV1",
 			"isSessionSandboxReadyV1",
+			"isSkillHubGrantWithinBoundaryV1",
 			"isTaskApiChannelV1",
 			"isTaskApplicationAuthorizationCurrentV1",
 			"isTaskAuthorizationCurrentV1",

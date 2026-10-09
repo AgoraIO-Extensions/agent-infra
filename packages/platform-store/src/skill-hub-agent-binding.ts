@@ -1,8 +1,10 @@
 import {
 	canViewSkillHubVersionV1,
+	isSkillHubGrantWithinBoundaryV1,
 	parseSkillHubGrantV1,
 	parseSkillHubRegistrationV1,
 	type SkillHubAgentBindingAdmissionPortV1,
+	type SkillHubAgentBindingRequestV1,
 	type SkillHubGrantV1,
 } from "@agent-infra/platform-core";
 import { and, eq, inArray, or } from "drizzle-orm";
@@ -23,16 +25,40 @@ export class SkillHubAgentBindingAdmissionErrorV1 extends Error {
 	}
 }
 
+const emptyGrant: SkillHubGrantV1 = {
+	schemaVersion: 1,
+	tools: [],
+	connections: [],
+	fileRoots: [],
+	networkOrigins: [],
+	scripts: false,
+};
+
 /** Reads current installation, publication and package-admission facts only. */
 export class PostgresSkillHubAgentBindingAdmissionV1
 	implements SkillHubAgentBindingAdmissionPortV1
 {
 	readonly #client;
 	readonly #database;
+	readonly #resolveGrantBoundary;
 
-	constructor(options: { readonly databaseUrl: string }) {
+	constructor(options: {
+		readonly databaseUrl: string;
+		/** Existing server-side capability facts; absent means deny every requested capability. */
+		readonly resolveGrantBoundary?: (input: {
+			readonly agentId: string;
+			readonly actorId: string;
+			readonly requested: readonly SkillHubAgentBindingRequestV1[];
+		}) => Promise<
+			readonly {
+				readonly skillVersionId: string;
+				readonly grant: SkillHubGrantV1;
+			}[]
+		>;
+	}) {
 		this.#client = postgres(options.databaseUrl, { max: 5 });
 		this.#database = drizzle(this.#client);
+		this.#resolveGrantBoundary = options.resolveGrantBoundary;
 	}
 
 	async close(): Promise<void> {
@@ -43,6 +69,34 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 		input: Parameters<SkillHubAgentBindingAdmissionPortV1["admit"]>[0],
 	) {
 		try {
+			const boundaryRows = this.#resolveGrantBoundary
+				? await this.#resolveGrantBoundary({
+						agentId: input.agentId,
+						actorId: input.actorId,
+						requested: input.requested,
+					})
+				: input.requested.map((requested) => ({
+						skillVersionId: requested.skillVersionId,
+						grant: emptyGrant,
+					}));
+			const boundaryByVersion = new Map(
+				boundaryRows.map((row) => [row.skillVersionId, row.grant]),
+			);
+			if (
+				boundaryRows.length !== input.requested.length ||
+				input.requested.some((requested) => {
+					const allowed = boundaryByVersion.get(requested.skillVersionId);
+					return (
+						allowed === undefined ||
+						!isSkillHubGrantWithinBoundaryV1(requested.grant, allowed)
+					);
+				})
+			)
+				return {
+					schemaVersion: 1 as const,
+					status: "rejected" as const,
+					reason: "forbidden" as const,
+				};
 			return await this.#database.transaction(async (transaction) => {
 				const versions = await transaction
 					.select({

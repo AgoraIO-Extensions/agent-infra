@@ -130,6 +130,17 @@ beforeEach(async () => {
 		values ('skill-version-1', 'skill-1', 'owner-1', '1.0.0', 'my_library',
 		 'PRIVATE', 'published', 'object-1', ${"a".repeat(64)}, ${"b".repeat(64)},
 		 ${"c".repeat(64)}, 'owner-1', ${occurredAt})`;
+	await client`
+		insert into platform.skill_hub_installations
+		(id, principal_type, principal_id, skill_version_id, state, installed_at, updated_at)
+		values ('installation-1', 'user', 'owner-1', 'skill-version-1', 'installed', ${occurredAt}, ${occurredAt})`;
+	await client`
+		insert into platform.idempotency_records
+		(id, scope_type, scope_id, actor_id, command_type, idempotency_key,
+		 request_digest, status, result, created_at, updated_at)
+		values ('admission-1', 'skill_package', 'skill-version-1', 'owner-1',
+		 'skill.package.publish.v1', 'admission-1', ${"d".repeat(64)}, 'completed',
+		 ${client.json({ skillVersionId: "skill-version-1" })}, ${occurredAt}, ${occurredAt})`;
 });
 
 afterAll(async () => {

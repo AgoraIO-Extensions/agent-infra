@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { snapshotAgentConfigurationWritePlanV1 } from "./agent-configuration-plan.ts";
 import {
+	isSkillHubGrantWithinBoundaryV1,
 	parseSkillHubAgentBindingCommandV1,
 	parseSkillHubGrantV1,
 } from "./skill-hub-agent-binding.ts";
@@ -55,6 +56,21 @@ describe("Skill Hub Agent binding contract", () => {
 				networkOrigins: ["http://example.com/"],
 			}),
 		).toThrow();
+	});
+
+	it("only accepts grants inside the existing capability boundary", () => {
+		expect(
+			isSkillHubGrantWithinBoundaryV1(grant, {
+				...grant,
+				tools: ["filesystem.read", "filesystem.write"],
+			}),
+		).toBe(true);
+		expect(
+			isSkillHubGrantWithinBoundaryV1(
+				{ ...grant, tools: ["filesystem.write"] },
+				grant,
+			),
+		).toBe(false);
 	});
 
 	it("keeps Skill bindings inside the configuration revision plan", () => {

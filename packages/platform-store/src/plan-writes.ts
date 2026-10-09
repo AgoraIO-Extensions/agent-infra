@@ -14,8 +14,12 @@ import {
 	agentOwners,
 	agents,
 	auditEvents,
+	idempotencyRecords,
 	outboxItems,
 	skillHubAgentBindings,
+	skillHubInstallations,
+	skillHubSkills,
+	skillHubVersions,
 } from "./schema.js";
 import { persistSessionSandboxManagementIntents } from "./session-sandbox-management.js";
 
@@ -127,15 +131,50 @@ export async function replaceSkillHubAgentBindings(
 ): Promise<void> {
 	const skillBindings = plan.skillBindings;
 	if (!skillBindings) return;
-	await transaction
-		.delete(skillHubAgentBindings)
-		.where(
-			and(
-				eq(skillHubAgentBindings.agentId, plan.agentId),
-				eq(skillHubAgentBindings.agentVersion, skillBindings.agentVersion),
-			),
-		);
 	if (skillBindings.bindings.length === 0) return;
+	for (const binding of skillBindings.bindings) {
+		const [version] = await transaction
+			.select({
+				state: skillHubVersions.state,
+				parentStatus: skillHubSkills.status,
+			})
+			.from(skillHubVersions)
+			.innerJoin(
+				skillHubSkills,
+				eq(skillHubSkills.id, skillHubVersions.skillId),
+			)
+			.where(eq(skillHubVersions.id, binding.skillVersionId))
+			.for("update");
+		if (version?.state !== "published" || version?.parentStatus !== "active")
+			throw new Error("Skill version is no longer available");
+		const [admission] = await transaction
+			.select({ id: idempotencyRecords.id })
+			.from(idempotencyRecords)
+			.where(
+				and(
+					eq(idempotencyRecords.scopeType, "skill_package"),
+					eq(idempotencyRecords.scopeId, binding.skillVersionId),
+					eq(idempotencyRecords.status, "completed"),
+				),
+			)
+			.limit(1);
+		if (!admission) throw new Error("Skill package admission is unavailable");
+		const [installation] = await transaction
+			.select({ id: skillHubInstallations.id })
+			.from(skillHubInstallations)
+			.where(
+				and(
+					eq(skillHubInstallations.skillVersionId, binding.skillVersionId),
+					eq(skillHubInstallations.principalType, binding.principalType),
+					eq(skillHubInstallations.principalId, binding.principalId),
+					eq(skillHubInstallations.state, "installed"),
+				),
+			)
+			.for("share")
+			.limit(1);
+		if (!installation)
+			throw new Error("Skill installation is no longer available");
+	}
 	await transaction.insert(skillHubAgentBindings).values(
 		skillBindings.bindings.map((binding) => ({
 			agentId: plan.agentId,

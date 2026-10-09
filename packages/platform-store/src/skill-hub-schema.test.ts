@@ -38,5 +38,13 @@ describe("Skill Hub persistence schema", () => {
 			"configuration_revision",
 		);
 		expect(binding.foreignKeys).toHaveLength(3);
+		expect(
+			binding.primaryKeys[0]?.columns.map((column) => column.name),
+		).toEqual([
+			"agent_id",
+			"agent_version",
+			"configuration_revision",
+			"skill_version_id",
+		]);
 	});
 });

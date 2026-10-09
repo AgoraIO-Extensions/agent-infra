@@ -1714,6 +1714,81 @@ Runtime 对回跳校验单次 state、期限、原代次、精确 callback、响
 随后只向固定 token endpoint 兑换一次原授权码与 verifier，拒绝重定向、调用方 header/URL
 覆盖、跨 issuer/resource 响应和 SDK 隐藏重试。认证与 Token 响应仅在受保护客户端内处理。
 
+**平台确认生产者与命令交付。** 独立确认由 Platform 实现，不等待 Connection 提供平台
+身份或 Agent 权限接口。`registerConnectionInstallationRoutesV1` 在既有 Platform API 中接收
+员工浏览器的安装发起、确认与受限状态读取；敏感命令复用当前登录态、exact Origin、
+正常 CSRF/Fetch Metadata 门禁，拒绝 API/application 凭据。Core 的
+`createConnectionInstallationAuthorizationV1` 从当前 IdentityAdapter 与 Agent 使用权限解析
+原用户，不能用 Owner、显示名、邮箱或请求中的 principal 代替。管理员也不能代确认其他
+用户的安装。初版只支持原用户已有且仍有效的 processing Execution；无原执行、已停止、
+代次隔离、应用执行或无有效原 claim 时拒绝，不为登录新建、延长或恢复 Turn。
+
+`PostgresConnectionInstallationAuthorizationTransactionV1` 在 Platform DB 原子保存平台
+自己的非敏感安装授权及命令事实：authorizationId、原 user＋Agent、原 Execution/Session、
+Sandbox/generation/Pod、完整 profile/source 与 OAuth 配置引用、当前授权修订、期限、显式
+确认与撤销状态，以及各安装命令的交付状态。所有目标先从原执行和部署的当前受信事实解析，
+请求不能选择 Runtime URL、Pod、scope、配置、凭据或主体。同一授权对象绑定不可变的
+confirmationRevision；确认只推进原事务的状态，绑定/授权修订发生变化即使旧事务失效，
+不得把新修订补进旧 OAuth 事务。发起确认不等于兑换确认；confirm 命令须有原用户对该次
+安装的明确确认，status 不消费确认或推进权限。审计只记录引用、命令和结果状态。
+
+`createPlatformConversationWorkerV2` 在既有运行循环中消费这些独立安装命令，并调用
+`createConversationRuntimeV2.connectionInstallation.request`；不经业务 Turn、模型或工具
+发起登录，也不建立第二个任务调度器。Worker 仅沿本进程当前持有的原 claim 执行，不能从
+安装记录重造 business RuntimeGrant、续期 lease 或占用新的 Agent/Sandbox。部署的
+`connectionInstallation.authorize(input, signal, finalCheck)` 逐次读取相同授权对象、当前员工
+身份与 Agent 使用权限；等待 finalCheck 后再核对授权未撤销、期限、修订和全部绑定，返回
+与 input 完全一致且带原 confirmationRevision 的批准。业务授权只作复核，不产生独立确认。
+
+原 claim 的接缝具名为 `ConversationConnectionInstallationScopeV1.register`：Core 的
+`createConversationDispatchUseCaseV1` 在 `persistRuntimeEvents` 已构造原
+`ConversationRuntimeEventRequestV1` 后、打开事件流前登记；只登记非 control-only、非
+metadata recovery 的原 processing 执行。它把同一个 in-process runtimeGrant 与原 heartbeat
+signal 交给 Worker 的 `createConnectionInstallationCommandDrainV1`，不序列化 Grant 或
+从 DB 重建授权 Context。Worker 在现有 tick/commit wakeup 的有界扫描中处理登记执行的
+安装命令，因此不需要等事件流返回才消费，也不另开轮询器。登记只保存当前调用范围，
+不取得执行/租约权威；原流退出、执行终结、失去 claim 或 signal 取消即关闭登记并排空
+在途消费。尚未进入 sending 的命令在当前事实复核后拒绝或过期，不能挂到其他 claim；
+已经 sending 的命令保留结果或 unknown，不因关闭登记转成可重试。
+
+每个 begin/confirm/status 命令有独立的非敏感命令引用和严格请求摘要。领取命令与发送意图
+通过原事务 CAS 串行化；必须在任何 HTTP send 前持久提交 sending。崩溃、超时、丢响应或
+结果提交失败保留 unknown，不让下一 Worker 自动重发 begin/confirm；必要的 status 是原
+用户另行请求的只读核实，不重放未知命令，也不重新调用业务工具。Platform 保存自身交付
+事实及 Host 的受限状态响应，不把其 phase 当作 Connection token/Grant/实例事实。经原
+目标校验的短期 authorization URL 可作为只向原用户提供的登录入口保存，过期或撤销即不可
+读取；它不进入任务、模型、工具、审计或日志，不包含 Token、verifier、授权码或原主体信息。
+
+**回跳定位与专用认证。** `registerConnectionOAuthCallbackV1` 接收部署固定的精确 HTTPS
+callback。Worker 收到合法 begin 响应后，把 state 的 hash、authorizationId、原 scope、
+当前 Runtime HTTPS 目标及期限关联到同一 Platform 安装事务，再开放登录入口；未保存映射
+时不向浏览器返回 URL。原事务唯一约束与 CAS 保证同一 state 只定位一个当前安装且只消费
+一次。回跳只接受标准 code/state/iss 或协议 error，拒绝额外、重复和矛盾参数；目标、主体、
+Consumer、安装和任意 redirect 参数均不能来自回跳。与 Connection 原流程一致，回跳不
+依赖浏览器 Cookie、CSRF 或 Origin，也不创建用户会话或自动确认；独立用户确认仍走上述
+正常门禁。schema、体积、期限、issuer、配置及当前原执行/Pod 都须在转交前匹配。
+
+API 在有界请求内向原目标的 `/internal/runtime/oauth/v1/callback` 瞬时转交一次；授权码
+只存在于该窄通道和受保护 Runtime，不进入 Platform DB、outbox、journal、Trace、日志或
+错误。state 单次消费须先提交，转交失响应/取消/崩溃保留 delivery unknown；不靠 HTTP
+重试、重定向、队列或重开事务再次提交 code。响应和浏览器跳转仅含原安装非敏感引用与
+受限状态，采用 no-store/no-referrer；部署入口必须排除 callback query 的访问日志与追踪。
+
+回跳使用独立 callback-only 服务认证，其部署 SecretRef 与 Worker business/installation
+凭据分开。它只能进入 callback 路由，不能访问 business、begin/confirm/status 或 MCP；
+Worker 凭据也不成为 callback 的认证替代。`createRuntimeOAuthApp` 验证该专用认证后，
+调用原 `createProtectedRuntimeOAuthClient.callback`，继续校验 state、原执行、配置、
+保护和当前代次。API 不持有 Worker 签名私钥，不生成 installation JWS；缺少受控 TLS、
+callback-only 凭据或唯一原事务定位时不转交、不降级到原 Runtime HTTP listener。
+现有 Host 共用 Worker serviceToken 的 callback 接收须先拆分；缺少专用 callback 配置
+仅关闭该能力，保留原业务/控制入口，不同时接受新旧两类凭据作为兼容路径。
+
+平台确认/命令/callback 的设计与具名接缝沿
+[#1589](https://github.com/AgoraIO-Extensions/agent-infra/issues/1589) 评审后再实施。
+平台可先完成这些受控源码，但获准 Consumer/client/callback、真实部署路由和
+Connection 原主体/实例映射仍是生产启用及凭据发布输入；不以 future 整票验收反向阻断
+平台自有生产者的设计/开发，也不凭平台确认签收 Connection 授权或真实隔离。
+
 **来源与发布。** PKCE/state 证明原 OAuth 事务的领取来源，不能证明两系统 Principal 相同、
 当前 Grant、ConsumerInstance 或外部效果。Connection 仍按自身合同独立解析并逐次校验
 Token 主体、Consumer/实例、generation、期限和授权。供应方仅消费部署匹配的已发布合同

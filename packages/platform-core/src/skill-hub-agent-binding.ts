@@ -274,6 +274,28 @@ export function parseSkillHubGrantV1(input: unknown): SkillHubGrantV1 {
 	return grant(input);
 }
 
+export function isSkillHubGrantWithinBoundaryV1(
+	requestedInput: SkillHubGrantV1,
+	allowedInput: SkillHubGrantV1,
+): boolean {
+	const requested = grant(requestedInput);
+	const allowed = grant(allowedInput);
+	const subset = (values: readonly string[], boundary: readonly string[]) =>
+		values.every((value) => boundary.includes(value));
+	const fileSubset = requested.fileRoots.every((root) =>
+		allowed.fileRoots.some(
+			(boundary) => root === boundary || root.startsWith(`${boundary}/`),
+		),
+	);
+	return (
+		requested.scripts === false &&
+		subset(requested.tools, allowed.tools) &&
+		subset(requested.connections, allowed.connections) &&
+		fileSubset &&
+		subset(requested.networkOrigins, allowed.networkOrigins)
+	);
+}
+
 export function parseSkillHubAgentBindingWriteV1(
 	input: unknown,
 ): SkillHubAgentBindingWriteV1 {
@@ -429,7 +451,7 @@ export function createSkillHubAgentBindingUseCaseV1(dependencies: {
 					return (
 						requested === undefined ||
 						binding.skillVersionId !== requested.skillVersionId ||
-						!sameValue(binding.grant, requested.grant) ||
+						!isSkillHubGrantWithinBoundaryV1(binding.grant, requested.grant) ||
 						(binding.principalType !== "user" &&
 							binding.principalType !== "organization") ||
 						!idPattern.test(binding.principalId)

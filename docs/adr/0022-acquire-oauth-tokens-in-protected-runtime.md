@@ -33,6 +33,13 @@ Runtime 安装供应，也不替代原主体/Agent 映射。直接复制 PAT、�
 自动重试；它让 access/refresh Token 的领取完全留在原 Runtime 秘密边界，避免建立另一个
 Token 服务或将 PKCE verifier 放进控制面。该通道尚未实现，部署回跳地址也须明确批准。
 
+平台侧确认生产者与 callback 接收的具名合同由
+[#1589](https://github.com/AgoraIO-Extensions/agent-infra/issues/1589) 细化，仍以工程 Spec
+§13.5.6 为唯一边界。Platform DB 只保存自身非敏感确认和命令交付事实，Worker 复用原
+claim 与现有循环；不新建 Turn 或第二个任务调度器。固定 callback 瞬时直达原 Runtime，
+使用与 Worker 分离的 callback-only 服务认证，不能凭该认证发起或确认安装。这个认证
+变化须先评审合同再改 Host；丢响应保留 unknown，不重新转交授权码。
+
 PKCE/state 不解决跨系统主体映射；没有部署匹配的原主体/实例来源，即使 OAuth 成功也
 不发布可用安装。客户端不会为补齐 metadata 自造 identity 路由、解析未发布 JWT 或用
 本地 ID 冒充 Connection 实例。最小实际输入是实现接收合同，未来整票验收不是设计前置。

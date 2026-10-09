@@ -185,7 +185,12 @@ export const skillHubAgentBindings = platformSchema.table(
 	},
 	(table) => [
 		primaryKey({
-			columns: [table.agentId, table.agentVersion, table.skillVersionId],
+			columns: [
+				table.agentId,
+				table.agentVersion,
+				table.configurationRevision,
+				table.skillVersionId,
+			],
 			name: "skill_hub_agent_binding_pk",
 		}),
 		nonEmpty(table.agentVersion, "skill_hub_agent_binding_version_non_empty"),

@@ -1,3 +1,8 @@
+import type {
+	BrowserActionExecutionBindingV1,
+	BrowserActionRecordV1,
+	BrowserActionRequestV1,
+} from "@agent-infra/agent-runtime";
 import {
 	type ConversationBrowserActionAttemptV1,
 	ConversationBrowserActionExecutionError,
@@ -6,61 +11,22 @@ import {
 	executeConversationBrowserActionV1,
 } from "@agent-infra/platform-core";
 
-export type BrowserActionOperationControllerRequestV1 = Readonly<{
-	agentId: string;
-	conversationId: string;
-	executionId: string;
-	capabilityVersion: number;
-	pageRevision: number;
-	sessionGeneration: number;
-	resourceFence: number;
-	actionId?: string;
-	operationRef?: string;
-	attemptRef?: string;
-	kind: string;
-	page: Readonly<{ pageId: string; pageRevision: number }>;
-	target?: Readonly<{
-		elementId: string;
-		pageId?: string;
-		pageRevision?: number;
-		role?: string;
-		name?: string;
-	}>;
-	targetPage?: Readonly<{ pageId: string; pageRevision: number }>;
-	value?: string;
-	key?: string;
-	durationMs?: number;
-	sideEffect?: boolean;
-}>;
+export type BrowserActionOperationControllerRequestV1 =
+	BrowserActionRequestV1 & {
+		readonly actionId: string;
+		readonly operationRef: string;
+		readonly attemptRef: string;
+		readonly executionBinding: BrowserActionExecutionBindingV1;
+	};
 
-export type BrowserActionOperationControllerRecordV1 = Readonly<{
-	actionId: string;
-	status:
-		| "accepted"
-		| "processing"
-		| "completed"
-		| "failed"
-		| "rejected"
-		| "unknown";
-	page: Readonly<{ pageId: string; pageRevision: number }>;
-	sideEffect: boolean;
-	reasonCode?: string;
-}>;
+export type BrowserActionOperationControllerRecordV1 = BrowserActionRecordV1;
 
 export type BrowserActionOperationInputV1 = Readonly<{
 	conversationId: string;
 	executionId: string;
 	sessionGeneration: number;
 	deliveryFence: number;
-	controllerBinding: Readonly<{
-		agentId: string;
-		conversationId: string;
-		executionId: string;
-		capabilityVersion: number;
-		pageRevision: number;
-		sessionGeneration: number;
-		resourceFence: number;
-	}>;
+	controllerBinding: BrowserActionExecutionBindingV1;
 	agentId: string;
 	capabilityVersion: number;
 	page: Readonly<{ pageId: string; pageRevision: number }>;
@@ -69,17 +35,13 @@ export type BrowserActionOperationInputV1 = Readonly<{
 	toolId: string;
 	action: Omit<
 		BrowserActionOperationControllerRequestV1,
-		| "agentId"
-		| "conversationId"
-		| "executionId"
-		| "capabilityVersion"
-		| "pageRevision"
-		| "sessionGeneration"
-		| "resourceFence"
 		| "actionId"
 		| "operationRef"
 		| "attemptRef"
+		| "executionBinding"
+		| "idempotencyKey"
 	>;
+	idempotencyKey?: string;
 	occurredAt: string;
 	adapterEventKeyPrefix: string;
 	runtimeCursorPrefix: string;
@@ -92,24 +54,7 @@ export type BrowserActionOperationResultV1 = Readonly<{
 	record?: BrowserActionOperationControllerRecordV1;
 }>;
 
-function assertBinding(input: {
-	readonly agentId: string;
-	readonly conversationId: string;
-	readonly executionId: string;
-	readonly sessionGeneration: number;
-	readonly deliveryFence: number;
-	readonly capabilityVersion: number;
-	readonly page: Readonly<{ pageRevision: number }>;
-	readonly controllerBinding: Readonly<{
-		agentId: string;
-		conversationId: string;
-		executionId: string;
-		capabilityVersion: number;
-		pageRevision: number;
-		sessionGeneration: number;
-		resourceFence: number;
-	}>;
-}): void {
+function assertBinding(input: BrowserActionOperationInputV1): void {
 	if (
 		!Number.isSafeInteger(input.sessionGeneration) ||
 		input.sessionGeneration < 1 ||
@@ -131,6 +76,39 @@ function failureCode(
 	status: BrowserActionOperationControllerRecordV1["status"],
 ): ConversationOperationFailureV2 {
 	return status === "rejected" ? "request_rejected" : "operation_failed";
+}
+
+function sameBinding(
+	left: BrowserActionExecutionBindingV1,
+	right: BrowserActionExecutionBindingV1,
+): boolean {
+	return (
+		left.agentId === right.agentId &&
+		left.conversationId === right.conversationId &&
+		left.executionId === right.executionId &&
+		left.capabilityVersion === right.capabilityVersion &&
+		left.pageRevision === right.pageRevision &&
+		left.sessionGeneration === right.sessionGeneration &&
+		left.resourceFence === right.resourceFence
+	);
+}
+
+function assertReturnedIdentity(
+	record: BrowserActionOperationControllerRecordV1,
+	request: BrowserActionOperationInputV1,
+): void {
+	if (
+		record.actionId !== request.actionId ||
+		record.operationRef !== request.attempt.operationRef ||
+		record.attemptRef !== request.attempt.attemptRef ||
+		record.executionBinding === undefined ||
+		!sameBinding(record.executionBinding, request.controllerBinding)
+	)
+		throw new ConversationBrowserActionExecutionError(
+			"unknown",
+			"Browser controller returned a different action identity",
+			"recovery_unconfirmed",
+		);
 }
 
 /**
@@ -180,25 +158,15 @@ export function createBrowserActionOperationAdapterV1(input: {
 							"interrupted",
 						);
 					actionRecord = await input.controller.executeAction({
-						agentId: request.agentId,
-						conversationId: request.conversationId,
-						executionId: request.executionId,
-						capabilityVersion: request.capabilityVersion,
-						pageRevision: request.page.pageRevision,
-						sessionGeneration: request.sessionGeneration,
-						resourceFence: request.deliveryFence,
 						...request.action,
 						actionId: request.actionId,
 						operationRef: request.attempt.operationRef,
 						attemptRef: request.attempt.attemptRef,
+						idempotencyKey: request.idempotencyKey ?? request.actionId,
+						executionBinding: request.controllerBinding,
 						sideEffect: request.action.sideEffect === true,
-					} as BrowserActionOperationControllerRequestV1);
-					if (actionRecord.actionId !== request.actionId)
-						throw new ConversationBrowserActionExecutionError(
-							"unknown",
-							"Browser controller returned a different action identity",
-							"recovery_unconfirmed",
-						);
+					});
+					assertReturnedIdentity(actionRecord, request);
 					if (actionRecord.status === "completed") return {};
 					if (actionRecord.status === "unknown")
 						throw new ConversationBrowserActionExecutionError(
