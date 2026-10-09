@@ -846,6 +846,26 @@ function validateResult(
 	)
 		throw new Error("StaticSpaces space target does not match");
 	if (name === "publish_space") validatePublication(result, payload, username);
+	if (name === "upload_html") {
+		const bytes = Buffer.from(String(payload.html), "utf8");
+		const kind = String(payload.kind);
+		const slug = String(kind === "user" ? payload.username : payload.slug);
+		const path = `/spaces/${kind === "user" ? "users" : kind}/${slug}/${String(payload.relative_path)}`;
+		if (
+			result.size !== bytes.length ||
+			result.sha256 !== createHash("sha256").update(bytes).digest("hex") ||
+			result.path !== path ||
+			!matchesUrl(result.url, path)
+		)
+			throw new Error("StaticSpaces HTML upload could not be verified");
+	}
+	if (name === "upload_static_package") {
+		const bytes = base64Bytes(payload.archive_base64, maxArchiveBytes);
+		if (
+			result.archive_sha256 !== createHash("sha256").update(bytes).digest("hex")
+		)
+			throw new Error("StaticSpaces archive upload could not be verified");
+	}
 }
 
 function validatePublication(

@@ -302,10 +302,20 @@ test("StaticSpaces routes all six content Actions with fixed origins and raw pay
 							? {
 									...scope,
 									files_written: ["index.html"],
-									archive_sha256: "a".repeat(64),
+									archive_sha256: createHash("sha256")
+										.update(Buffer.from("AAECAw==", "base64"))
+										.digest("hex"),
 									review_urls: {},
 								}
-							: { ...scope, ...file };
+							: {
+									...scope,
+									path: prefix + "index.html",
+									url: scope.url_prefix + "index.html",
+									size: Buffer.byteLength("<!doctype html><p>draft</p>"),
+									sha256: createHash("sha256")
+										.update("<!doctype html><p>draft</p>")
+										.digest("hex"),
+								};
 
 		const adapter = new StaticSpacesAdapter(async (url, init) => {
 			const request = new Request(url, init);
@@ -720,4 +730,73 @@ test("StaticSpaces requires complete publication receipts and preserves legitima
 		await assert.rejects(adapter.execute(invocation("publish_space", input)));
 		assert.equal(writes, 1);
 	}
+});
+
+test("StaticSpaces upload byte receipts reject stale size, hash, target and archive digests without retry", async () => {
+	const html = "<!doctype html><p>中文\r\n</p>";
+	const args = { kind: "user", relative_path: "index.html", html };
+	const path = `/spaces/users/${personal.username}/index.html`;
+	const receipt = {
+		kind: "user",
+		slug: personal.username,
+		path,
+		url: `https://static-spaces.sh3.agoralab.co${path}`,
+		size: Buffer.byteLength(html),
+		sha256: createHash("sha256").update(html).digest("hex"),
+	};
+	const execute = async (
+		name: string,
+		input: Record<string, unknown>,
+		output: Record<string, unknown>,
+	) => {
+		let writes = 0;
+		const adapter = new StaticSpacesAdapter(async (url, init) => {
+			if (String(url).includes("/core/users/me/")) return identity();
+			if (init?.method === "POST") writes++;
+			return Response.json(output);
+		});
+		const result = adapter.execute(invocation(name, input));
+		return { result, writes: () => writes };
+	};
+	const good = await execute("upload_html", args, receipt);
+	assert.deepEqual(await good.result, receipt);
+	for (const change of [
+		{ size: receipt.size + 1 },
+		{ sha256: "0".repeat(64) },
+		{ path: "/spaces/users/other/index.html" },
+		{ url: "https://attacker.example/index.html" },
+	]) {
+		const checked = await execute("upload_html", args, {
+			...receipt,
+			...change,
+		});
+		await assert.rejects(checked.result, /could not be verified/);
+		assert.equal(checked.writes(), 1);
+	}
+	const archive = {
+		kind: "user",
+		archive_format: "zip",
+		archive_base64: "AAECAw==",
+	};
+	const archiveReceipt = {
+		kind: "user",
+		slug: personal.username,
+		files_written: ["index.html"],
+		archive_sha256: createHash("sha256")
+			.update(Buffer.from(archive.archive_base64, "base64"))
+			.digest("hex"),
+		review_urls: {},
+	};
+	const correct = await execute(
+		"upload_static_package",
+		archive,
+		archiveReceipt,
+	);
+	assert.deepEqual(await correct.result, archiveReceipt);
+	const wrong = await execute("upload_static_package", archive, {
+		...archiveReceipt,
+		archive_sha256: "0".repeat(64),
+	});
+	await assert.rejects(wrong.result, /could not be verified/);
+	assert.equal(wrong.writes(), 1);
 });
