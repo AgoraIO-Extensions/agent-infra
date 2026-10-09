@@ -1,0 +1,3 @@
+ALTER TABLE "platform"."connection_installation_commands" ADD COLUMN "attempt_id" text;--> statement-breakpoint
+ALTER TABLE "platform"."connection_installation_commands" ADD COLUMN "attempt_owner" text;--> statement-breakpoint
+ALTER TABLE "platform"."connection_installation_commands" ADD CONSTRAINT "connection_installation_attempt_binding" CHECK (("platform"."connection_installation_commands"."attempt_id" is null and "platform"."connection_installation_commands"."attempt_owner" is null) or ("platform"."connection_installation_commands"."attempt_id" is not null and "platform"."connection_installation_commands"."attempt_owner" is not null));

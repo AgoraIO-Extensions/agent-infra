@@ -186,12 +186,9 @@ async function createPrepared(signal: AbortSignal) {
 	let authorizedInstallation: ConversationRuntimeOptionsV2["connectionInstallation"];
 	if (connectionInstallation) {
 		let authorize = connectionInstallation.authorize;
-		if (!authorize && connectionConsumer) {
+		if (connectionConsumer) {
 			const { PostgresConnectionInstallationAuthorizationTransactionV1 } =
 				await import("@agent-infra/platform-store");
-			const { createConnectionInstallationAuthorizationV1 } = await import(
-				"@agent-infra/platform-core"
-			);
 			installationStore =
 				new PostgresConnectionInstallationAuthorizationTransactionV1({
 					databaseUrl: workload.databaseUrl,
@@ -200,13 +197,19 @@ async function createPrepared(signal: AbortSignal) {
 					profile: connectionConsumer.profile,
 					approval: connectionConsumer.approval,
 				});
-			authorize = createConnectionInstallationAuthorizationV1({
-				store: installationStore,
-			}).authorize;
+			if (!authorize) {
+				const { createConnectionInstallationAuthorizationV1 } = await import(
+					"@agent-infra/platform-core"
+				);
+				authorize = createConnectionInstallationAuthorizationV1({
+					store: installationStore,
+				}).authorize;
+			}
 		}
 		authorizedInstallation = {
 			configuration: connectionInstallation.configuration,
 			authorize: authorize ?? (async () => null),
+			...(installationStore ? { commandStore: installationStore } : {}),
 		};
 	}
 	return {

@@ -204,6 +204,10 @@ export function createConversationRuntimeV2(
 	)
 		throw new TypeError("Conversation reconnect interval is invalid");
 	const contexts = new WeakMap<object, Context>();
+	const activeInstallations = new Map<
+		string,
+		{ readonly execution: ConversationRuntimeEventRequestV1 }
+	>();
 	const controller = new AbortController();
 	const lifetime = options.signal
 		? AbortSignal.any([controller.signal, options.signal])
@@ -1110,68 +1114,116 @@ export function createConversationRuntimeV2(
 					clearTimeout(timer);
 				}
 			};
-			let previous: Awaited<ReturnType<typeof prepare>> | undefined;
-			for (;;) {
-				active.throwIfAborted();
-				const prepared = previous
-					? await continuePrepared(previous, request, active)
-					: await prepare(request, "events.persist", active);
-				previous = undefined;
-				const { state, authority } = prepared;
-				if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
-				let terminal = false;
-				let delivered = 0;
-				let streamFailure: ConversationRuntimeHostError | undefined;
-				try {
-					for await (const event of readPreparedEvents(prepared, active)) {
-						delivered++;
-						yield event;
-						if (event.type === "completed") terminal = true;
-					}
-				} catch (error) {
-					if (
-						!(error instanceof ConversationRuntimeHostError) ||
-						!error.retryable
-					)
-						throw error;
-					streamFailure = error;
-				}
-				if (authority.purpose === "business" && !terminal) {
-					// Stop invalidates the old business stream. Re-enter the existing
-					// preparation boundary using the live lease and committed cursor;
-					// only that boundary may mint the new control grant.
-					const currentState = await stateFor(contextFor(request), active);
-					if (
-						currentState.stopPending ||
-						["completed", "failed", "cancelled"].includes(
-							currentState.executionStatus,
+			activeInstallations.set(request.executionId, {
+				execution: structuredClone(request),
+			});
+			try {
+				let previous: Awaited<ReturnType<typeof prepare>> | undefined;
+				for (;;) {
+					active.throwIfAborted();
+					const prepared = previous
+						? await continuePrepared(previous, request, active)
+						: await prepare(request, "events.persist", active);
+					previous = undefined;
+					const { state, authority } = prepared;
+					if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+					let terminal = false;
+					let delivered = 0;
+					let streamFailure: ConversationRuntimeHostError | undefined;
+					try {
+						for await (const event of readPreparedEvents(prepared, active)) {
+							delivered++;
+							yield event;
+							if (event.type === "completed") terminal = true;
+						}
+					} catch (error) {
+						if (
+							!(error instanceof ConversationRuntimeHostError) ||
+							!error.retryable
 						)
-					) {
-						if (delivered === 0 && !streamFailure) await pause();
-						continue;
+							throw error;
+						streamFailure = error;
 					}
+					if (authority.purpose === "business" && !terminal) {
+						// Stop invalidates the old business stream. Re-enter the existing
+						// preparation boundary using the live lease and committed cursor;
+						// only that boundary may mint the new control grant.
+						const currentState = await stateFor(contextFor(request), active);
+						if (
+							currentState.stopPending ||
+							["completed", "failed", "cancelled"].includes(
+								currentState.executionStatus,
+							)
+						) {
+							if (delivered === 0 && !streamFailure) await pause();
+							continue;
+						}
+					}
+					if (streamFailure) throw streamFailure;
+					if (terminal) return;
+					previous = prepared;
+					// The Host replays a bounded page per read. A non-empty page without
+					// the terminal event may hide later events even when the Platform
+					// already recorded a terminal status from a status response (#1524).
+					if (delivered > 0) continue;
+					if (
+						["completed", "failed", "cancelled"].includes(state.executionStatus)
+					)
+						return;
+					await pause();
 				}
-				if (streamFailure) throw streamFailure;
-				if (terminal) return;
-				previous = prepared;
-				// The Host replays a bounded page per read. A non-empty page without
-				// the terminal event may hide later events even when the Platform
-				// already recorded a terminal status from a status response (#1524).
-				if (delivered > 0) continue;
-				if (
-					["completed", "failed", "cancelled"].includes(state.executionStatus)
-				)
-					return;
-				await pause();
+			} finally {
+				activeInstallations.delete(request.executionId);
 			}
 		},
 	};
 	const connectionInstallation = {
+		activeExecutionIds() {
+			return [...activeInstallations.keys()];
+		},
+		canDrain(executionId: string) {
+			return activeInstallations.has(executionId);
+		},
+		async drain(
+			input: {
+				readonly authorization: {
+					authorizationId: string;
+					reference: { executionId: string };
+				};
+				readonly command: {
+					commandId: string;
+					command: "begin" | "confirm" | "status";
+				};
+				readonly attemptId: string;
+				readonly attemptOwner: string;
+			},
+			signal?: AbortSignal,
+		) {
+			const active = activeInstallations.get(
+				input.authorization.reference.executionId,
+			);
+			if (!active) return false;
+			await connectionInstallation.request(
+				{
+					execution: active.execution,
+					authorizationId: input.authorization.authorizationId,
+					command: input.command.command,
+					commandId: input.command.commandId,
+					attemptId: input.attemptId,
+					attemptOwner: input.attemptOwner,
+				},
+				signal,
+			);
+			return true;
+		},
 		async request(
 			input: {
 				execution: ConversationRuntimeEventRequestV1;
 				authorizationId: string;
 				command: "begin" | "confirm" | "status";
+				commandId?: string;
+				attemptId?: string;
+				attemptOwner?: string;
 			},
 			signal?: AbortSignal,
 		) {
@@ -1180,6 +1232,11 @@ export function createConversationRuntimeV2(
 					!installation ||
 					typeof installationAuthorize !== "function" ||
 					!installationConfiguration?.success
+				)
+					installationUnavailable();
+				if (
+					Boolean(input.commandId) !== Boolean(input.attemptId) ||
+					Boolean(input.attemptId) !== Boolean(input.attemptOwner)
 				)
 					installationUnavailable();
 				const configuration = installationConfiguration.data;
@@ -1198,11 +1255,18 @@ export function createConversationRuntimeV2(
 					combined(signal),
 					AbortSignal.timeout(10_000),
 				]);
-				if (
-					Object.keys(input).sort().join(",") !==
-					"authorizationId,command,execution"
-				)
-					installationUnavailable();
+				const inputKeys = Object.keys(input).sort().join(",");
+				const expectedInputKeys = [
+					"authorizationId",
+					"command",
+					"execution",
+					...(input.commandId ? ["commandId"] : []),
+					...(input.attemptId ? ["attemptId"] : []),
+					...(input.attemptOwner ? ["attemptOwner"] : []),
+				]
+					.sort()
+					.join(",");
+				if (inputKeys !== expectedInputKeys) installationUnavailable();
 				const prepared = await prepare(
 					snapshot.execution,
 					"session.status",
@@ -1292,6 +1356,13 @@ export function createConversationRuntimeV2(
 					reference,
 					authorizationId: snapshot.authorizationId,
 					command: snapshot.command,
+					...(snapshot.commandId && snapshot.attemptId && snapshot.attemptOwner
+						? {
+								commandId: snapshot.commandId,
+								attemptId: snapshot.attemptId,
+								attemptOwner: snapshot.attemptOwner,
+							}
+						: {}),
 				};
 				let initialCheckCalled = false;
 				let initialCheckPromise: Promise<void> | undefined;
@@ -1316,7 +1387,19 @@ export function createConversationRuntimeV2(
 				if (
 					!approval ||
 					Object.keys(approval).sort().join(",") !==
-						"authorizationId,command,principal,reference,revision,scope" ||
+						[
+							"authorizationId",
+							"command",
+							"principal",
+							"reference",
+							"revision",
+							"scope",
+							...(snapshot.commandId ? ["commandId"] : []),
+							...(snapshot.attemptId ? ["attemptId"] : []),
+							...(snapshot.attemptOwner ? ["attemptOwner"] : []),
+						]
+							.sort()
+							.join(",") ||
 					typeof approval.revision !== "string" ||
 					!approval.revision ||
 					!isDeepStrictEqual(
@@ -1326,6 +1409,11 @@ export function createConversationRuntimeV2(
 							reference: approval.reference,
 							authorizationId: approval.authorizationId,
 							command: approval.command,
+							...(approval.commandId ? { commandId: approval.commandId } : {}),
+							...(approval.attemptId ? { attemptId: approval.attemptId } : {}),
+							...(approval.attemptOwner
+								? { attemptOwner: approval.attemptOwner }
+								: {}),
 						},
 						approvalInput,
 					)

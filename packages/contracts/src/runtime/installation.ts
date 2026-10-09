@@ -48,8 +48,15 @@ export const ConnectionInstallationCommandV1Schema = z.strictObject({
 	command: z.enum(["begin", "confirm", "status"]),
 	requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
 	status: z.enum(["pending", "sending", "completed", "unknown", "rejected"]),
+	attemptId: OpaqueIdV1Schema.nullable(),
+	attemptOwner: OpaqueIdV1Schema.nullable(),
 	createdAt: z.number().int().positive().safe(),
 	updatedAt: z.number().int().positive().safe(),
+});
+export const ConnectionInstallationCommandAttemptV1Schema = z.strictObject({
+	commandId: OpaqueIdV1Schema,
+	attemptId: OpaqueIdV1Schema,
+	attemptOwner: OpaqueIdV1Schema,
 });
 export const ConnectionInstallationBeginRequestV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
@@ -68,6 +75,8 @@ export const ConnectionInstallationV1SchemaDefinitions = {
 		ConnectionInstallationAuthorizationV1Schema,
 	ConnectionInstallationProjectionV1: ConnectionInstallationProjectionV1Schema,
 	ConnectionInstallationCommandV1: ConnectionInstallationCommandV1Schema,
+	ConnectionInstallationCommandAttemptV1:
+		ConnectionInstallationCommandAttemptV1Schema,
 	ConnectionInstallationBeginRequestV1:
 		ConnectionInstallationBeginRequestV1Schema,
 	ConnectionInstallationConfirmRequestV1:

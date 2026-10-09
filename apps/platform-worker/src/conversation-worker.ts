@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { startObservability } from "@agent-infra/observability";
 import { createObservedConversationEvents } from "@agent-infra/observability/worker";
 import {
@@ -406,8 +407,70 @@ export function createPlatformConversationWorkerV2(
 			return;
 		await store.recordSandboxObservation({ claim, observation });
 	}
+	async function drainInstallationCommands() {
+		const commandStore = options.connectionInstallation?.commandStore;
+		if (!commandStore || !runtime) return 0;
+		const pending = await commandStore.listPending(
+			32,
+			runtime.connectionInstallation.activeExecutionIds(),
+		);
+		let drained = 0;
+		for (const item of pending) {
+			if (item.command.command !== "confirm") continue;
+			if (
+				!runtime.connectionInstallation.canDrain(
+					item.authorization.reference.executionId,
+				)
+			)
+				continue;
+			const attemptId = randomUUID();
+			const claimed = await commandStore.claimPending({
+				commandId: item.command.commandId,
+				attemptId,
+				attemptOwner: options.workerId,
+			});
+			if (!claimed) continue;
+			try {
+				const delivered = await runtime.connectionInstallation.drain(
+					{
+						authorization: {
+							authorizationId: claimed.authorization.authorizationId,
+							reference: claimed.authorization.reference,
+						},
+						command: {
+							commandId: claimed.command.commandId,
+							command: claimed.command.command as
+								| "begin"
+								| "confirm"
+								| "status",
+						},
+						attemptId,
+						attemptOwner: options.workerId,
+					},
+					signal,
+				);
+				await commandStore.settle({
+					commandId: claimed.command.commandId,
+					attemptId,
+					attemptOwner: options.workerId,
+					status: delivered ? "completed" : "unknown",
+				});
+				drained++;
+			} catch {
+				await commandStore.settle({
+					commandId: claimed.command.commandId,
+					attemptId,
+					attemptOwner: options.workerId,
+					status: "unknown",
+				});
+			}
+		}
+		return drained;
+	}
 	async function discover() {
 		if (stopped || signal.aborted) return 0;
+		if (options.connectionInstallation?.commandStore)
+			await drainInstallationCommands();
 		const limit = 256;
 		const items = await store.findDispatchable({
 			limit,

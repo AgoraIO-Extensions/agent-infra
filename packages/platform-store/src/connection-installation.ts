@@ -5,11 +5,14 @@ import {
 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
 	ConnectionInstallationAuthorizationV1Schema,
+	ConnectionInstallationCommandV1Schema,
 	type RuntimeOAuthConfigurationV1,
 	RuntimeOAuthConfigurationV1Schema,
 } from "@agent-infra/contracts/runtime";
 import {
+	type ConnectionInstallationCommandDrainStoreV1,
 	ConnectionInstallationErrorV1,
+	type ConnectionInstallationPendingCommandV1,
 	type ConnectionInstallationSavedV1,
 	type ConnectionInstallationStoreV1,
 	type ConnectionInstallationTransactionV1,
@@ -48,7 +51,9 @@ function decode(
 
 /** Same Platform database and original Execution facts, with no credentials or parallel identity. */
 export class PostgresConnectionInstallationAuthorizationTransactionV1
-	implements ConnectionInstallationStoreV1
+	implements
+		ConnectionInstallationStoreV1,
+		ConnectionInstallationCommandDrainStoreV1
 {
 	readonly #client: ReturnType<typeof postgres>;
 	readonly #database: ReturnType<typeof drizzle>;
@@ -114,18 +119,33 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 			return row ? decode(row) : null;
 		};
 		return {
-			hasUnresolvedSend: async (id) => {
+			hasUnresolvedSend: async (id, exclude) => {
 				const rows = await tx
-					.select({ status: commands.status })
+					.select({
+						status: commands.status,
+						id: commands.id,
+						attemptId: commands.attemptId,
+						attemptOwner: commands.attemptOwner,
+					})
 					.from(commands)
 					.where(eq(commands.authorizationId, id));
 				return rows.some(
-					(row) => row.status === "sending" || row.status === "unknown",
+					(row) =>
+						(row.status === "sending" || row.status === "unknown") &&
+						(!exclude ||
+							row.id !== exclude.commandId ||
+							row.attemptId !== exclude.attemptId ||
+							row.attemptOwner !== exclude.attemptOwner),
 				);
 			},
-			commandAllowed: async (id, command) => {
+			commandAllowed: async (id, command, attempt) => {
 				const rows = await tx
-					.select({ status: commands.status })
+					.select({
+						status: commands.status,
+						id: commands.id,
+						attemptId: commands.attemptId,
+						attemptOwner: commands.attemptOwner,
+					})
 					.from(commands)
 					.where(
 						and(
@@ -133,6 +153,15 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 							eq(commands.command, command),
 						),
 					);
+				if (attempt) {
+					return (
+						rows.length === 1 &&
+						rows[0]?.id === attempt.commandId &&
+						rows[0]?.status === "sending" &&
+						rows[0]?.attemptId === attempt.attemptId &&
+						rows[0]?.attemptOwner === attempt.attemptOwner
+					);
+				}
 				return rows.length === 1 && rows[0]?.status === "pending";
 			},
 			read,
@@ -279,6 +308,8 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					idempotencyKey: key,
 					requestDigest: command.requestDigest,
 					status: command.status,
+					attemptId: command.attemptId,
+					attemptOwner: command.attemptOwner,
 					createdAt: new Date(command.createdAt),
 					updatedAt: new Date(command.updatedAt),
 				});
@@ -306,5 +337,135 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 	}
 	async close() {
 		await this.#client.end();
+	}
+	async listPending(
+		limit: number,
+		executionIds: readonly string[] = [],
+	): Promise<readonly ConnectionInstallationPendingCommandV1[]> {
+		if (
+			!Number.isSafeInteger(limit) ||
+			limit < 1 ||
+			limit > 256 ||
+			executionIds.length === 0
+		)
+			return [];
+		try {
+			const rows = await this.#database.transaction(async (tx) => {
+				await tx.execute(sql`set local lock_timeout = '5s'`);
+				await tx.execute(sql`set local statement_timeout = '15s'`);
+				await tx.execute(
+					sql`update platform.connection_installation_commands set status='unknown', updated_at=clock_timestamp() where status='sending' and attempt_expires_at is not null and attempt_expires_at <= clock_timestamp()`,
+				);
+				return tx.execute(sql`
+				select c.*, a.binding, a.confirmation_revision, a.status as authorization_status,
+				 a.expires_at, a.identity_revision, a.agent_authorization_revision
+				from platform.connection_installation_commands c
+				join platform.connection_installation_authorizations a on a.id=c.authorization_id
+				where c.status='pending' and c.attempt_id is null and ((c.command='begin' and a.status in ('awaiting_confirmation','confirmed')) or (c.command='confirm' and a.status='confirmed'))
+				 and a.expires_at > clock_timestamp()
+				and (a.binding->'reference'->>'executionId') in (${sql.join(
+					executionIds.map((id) => sql`${id}`),
+					sql`, `,
+				)})
+				 and not exists (select 1 from platform.connection_installation_commands prior where prior.authorization_id=c.authorization_id and prior.created_at < c.created_at and prior.status in ('pending','sending','unknown'))
+				order by c.created_at, c.id limit ${limit}
+				`);
+			});
+			return rows.map((row) => ({
+				authorization: ConnectionInstallationAuthorizationV1Schema.parse({
+					schemaVersion: 1,
+					authorizationId: row.authorization_id,
+					confirmationRevision: row.confirmation_revision,
+					...(row.binding as Record<string, unknown>),
+					status: row.authorization_status,
+					expiresAt: new Date(row.expires_at as string).getTime(),
+				}),
+				command: ConnectionInstallationCommandV1Schema.parse({
+					schemaVersion: 1,
+					commandId: row.id,
+					authorizationId: row.authorization_id,
+					command: row.command,
+					requestDigest: row.request_digest,
+					status: row.status,
+					attemptId: row.attempt_id,
+					attemptOwner: row.attempt_owner,
+					createdAt: new Date(row.created_at as string).getTime(),
+					updatedAt: new Date(row.updated_at as string).getTime(),
+				}),
+			}));
+		} catch {
+			throw new ConnectionInstallationErrorV1("unavailable");
+		}
+	}
+	async claimPending(input: {
+		commandId: string;
+		attemptId: string;
+		attemptOwner: string;
+	}): Promise<ConnectionInstallationPendingCommandV1 | null> {
+		try {
+			return await this.#database.transaction(async (tx) => {
+				await tx.execute(sql`set local lock_timeout = '5s'`);
+				await tx.execute(sql`set local statement_timeout = '15s'`);
+				await tx.execute(
+					sql`select id from platform.connection_installation_authorizations where id=(select authorization_id from platform.connection_installation_commands where id=${input.commandId}) for update`,
+				);
+				const rows = await tx.execute(sql`
+					update platform.connection_installation_commands c
+					set status='sending', attempt_id=${input.attemptId}, attempt_owner=${input.attemptOwner}, attempt_expires_at=clock_timestamp()+interval '15 seconds', updated_at=clock_timestamp()
+					from platform.connection_installation_authorizations a
+					where c.id=${input.commandId} and c.status='pending' and c.attempt_id is null
+					 and a.id=c.authorization_id and ((c.command='begin' and a.status in ('awaiting_confirmation','confirmed')) or (c.command='confirm' and a.status='confirmed')) and a.expires_at > clock_timestamp()
+					 and not exists (select 1 from platform.connection_installation_commands prior where prior.authorization_id=c.authorization_id and prior.created_at < c.created_at and prior.status in ('pending','sending','unknown'))
+					returning c.*, a.binding, a.confirmation_revision, a.status as authorization_status, a.expires_at
+				`);
+				const row = rows[0];
+				if (!row) return null;
+				return {
+					authorization: ConnectionInstallationAuthorizationV1Schema.parse({
+						schemaVersion: 1,
+						authorizationId: row.authorization_id,
+						confirmationRevision: row.confirmation_revision,
+						...(row.binding as Record<string, unknown>),
+						status: row.authorization_status,
+						expiresAt: new Date(row.expires_at as string).getTime(),
+					}),
+					command: ConnectionInstallationCommandV1Schema.parse({
+						schemaVersion: 1,
+						commandId: row.id,
+						authorizationId: row.authorization_id,
+						command: row.command,
+						requestDigest: row.request_digest,
+						status: row.status,
+						attemptId: row.attempt_id,
+						attemptOwner: row.attempt_owner,
+						createdAt: new Date(row.created_at as string).getTime(),
+						updatedAt: new Date(row.updated_at as string).getTime(),
+					}),
+				};
+			});
+		} catch {
+			throw new ConnectionInstallationErrorV1("unavailable");
+		}
+	}
+	async settle(input: {
+		commandId: string;
+		attemptId: string;
+		attemptOwner: string;
+		status: "completed" | "unknown";
+	}): Promise<boolean> {
+		try {
+			const result = await this.#database.transaction(async (tx) => {
+				await tx.execute(sql`set local lock_timeout = '5s'`);
+				await tx.execute(sql`set local statement_timeout = '15s'`);
+				return tx.execute(sql`
+				update platform.connection_installation_commands
+				set status=${input.status}, attempt_expires_at=null, updated_at=clock_timestamp()
+				where id=${input.commandId} and status='sending' and attempt_id=${input.attemptId} and attempt_owner=${input.attemptOwner}
+				`);
+			});
+			return Number(result.count ?? 0) === 1;
+		} catch {
+			throw new ConnectionInstallationErrorV1("unavailable");
+		}
 	}
 }
