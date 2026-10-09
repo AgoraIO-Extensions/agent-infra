@@ -49,7 +49,11 @@ import type {
 import { isConversationGenerationBarrierConfirmedV1 } from "./conversation-generation-isolation.js";
 
 export { parseConversationMetadataRecoveryV1 } from "./conversation-dispatch-input.js";
-export { decideConversationDispatchRetryTransitionV1 } from "./conversation-dispatch-transition.js";
+export {
+	decideConversationDispatchRetryTransitionV1,
+	decideConversationStopConfirmationStatusV1,
+	decideConversationStopConfirmationTimeoutV1,
+} from "./conversation-dispatch-transition.js";
 export {
 	type ConversationDispatchAuthorityV1,
 	type ConversationDispatchAuthorizationPortV1,

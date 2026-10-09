@@ -1,0 +1,2 @@
+ALTER TABLE "platform"."conversation_stops" ADD COLUMN "confirmation_deadline" timestamp with time zone DEFAULT clock_timestamp() + interval '60 seconds' NOT NULL;--> statement-breakpoint
+ALTER TABLE "platform"."conversation_stops" ADD COLUMN "confirmation_timed_out_at" timestamp with time zone;

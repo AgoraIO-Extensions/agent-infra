@@ -26,6 +26,7 @@ import {
 import {
 	finishWaitingTask,
 	lockWaitingTaskAuthority,
+	observeStopConfirmationTimeout,
 	recordTaskStatus,
 	revalidateWaitingTask,
 	waitingDecision,
@@ -92,6 +93,12 @@ export async function claimWork(
 	if (
 		outbox.status !== "processing" &&
 		!outbox.available_now &&
+		!(
+			selectedOperation === "conversation.turn.stop.v1" &&
+			stop &&
+			stop.confirmation_timed_out_at === null &&
+			stop.confirmation_deadline.getTime() <= decisionAt
+		) &&
 		!(
 			execution?.status === "waiting" &&
 			((outbox.status === "pending" && outbox.waiting_available) ||
@@ -224,6 +231,11 @@ export async function claimWork(
 		);
 		return { outcome: "succeeded" };
 	}
+	await observeStopConfirmationTimeout(
+		transaction,
+		{ outbox, conversation, execution },
+		input.workerId,
+	);
 	const previousFence = safeCounter(outbox.delivery_fence);
 	const executionFence = safeCounter(execution.delivery_fence);
 	if (

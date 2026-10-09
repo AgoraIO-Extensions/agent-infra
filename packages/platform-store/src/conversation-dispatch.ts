@@ -312,6 +312,14 @@ export class PostgresConversationDispatchStoreV1
 								and ((outbox_items.status = 'pending' and outbox_items.available_at = 'infinity'::timestamptz)
 									or e.task_wait_deadline <= clock_timestamp())
 						))
+						or (status in ('pending', 'retry_scheduled')
+							and operation = 'conversation.turn.stop.v1'
+							and exists (
+								select 1 from platform.conversation_stops s
+								where s.execution_id = outbox_items.payload->>'executionId'
+									and s.confirmation_deadline <= clock_timestamp()
+									and s.confirmation_timed_out_at is null
+							))
             or (status in ('succeeded', 'failed') and exists (
               select 1 from platform.conversation_generation_tombstones t where t.item_id = outbox_items.id and t.status = 'pending'
             ))
@@ -1029,6 +1037,12 @@ export class PostgresConversationDispatchStoreV1
 			const state = await ownedState(transaction, input.claim, true);
 			if (!state) throw new StaleDispatchLease();
 			await applyTransition(transaction, state, input.claim, input.transition);
+			if (
+				input.claim.operation === "conversation.turn.stop.v1" &&
+				input.status === "succeeded" &&
+				!["completed", "failed", "cancelled"].includes(state.execution.status)
+			)
+				throw new StaleDispatchLease();
 			if (
 				input.claim.operation === "conversation.turn.supplement.v1" &&
 				input.status === "failed"

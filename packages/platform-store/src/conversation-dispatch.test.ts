@@ -455,6 +455,58 @@ async function dispatchState(work: { itemId: string; executionId: string }) {
 }
 
 describe("PostgreSQL Conversation dispatch Store", () => {
+	it("persists an expired stop as unknown and keeps the stop open until a terminal response", async () => {
+		const work = await seed("conversation.turn.stop.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "original-stop-session",
+		});
+		await client`update platform.outbox_items
+			set status = 'retry_scheduled', available_at = clock_timestamp() + interval '1 day'
+			where id = ${work.itemId}`;
+		await client`update platform.conversation_stops
+			set confirmation_deadline = clock_timestamp() - interval '1 second'
+			where execution_id = ${work.executionId}`;
+		const store = open();
+		try {
+			expect(await store.findDispatchable({ limit: 20 })).toContainEqual({
+				itemId: work.itemId,
+				operation: "conversation.turn.stop.v1",
+			});
+			const decision = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "expired-stop-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (decision.outcome !== "claimed")
+				throw new Error(`Expected expired stop claim: ${decision.outcome}`);
+			expect(decision.claim.executionStatus).toBe("unknown");
+			const [stop] = await client`
+				select status, confirmation_timed_out_at
+				from platform.conversation_stops where execution_id = ${work.executionId}`;
+			expect(stop?.status).toBe("submitted");
+			expect(stop?.confirmation_timed_out_at).not.toBeNull();
+			const [event] = await client`
+				select event_payload from platform.conversation_events
+				where execution_id = ${work.executionId}
+					and event_payload->>'reason' = 'STOP_CONFIRMATION_TIMEOUT'`;
+			expect(event?.event_payload).toEqual({
+				type: "task.status",
+				status: "unknown",
+				reason: "STOP_CONFIRMATION_TIMEOUT",
+			});
+			expect(
+				await store.finish({
+					claim: decision.claim,
+					status: "succeeded",
+					transition: { executionStatus: "processing" },
+				}),
+			).toBe(false);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it.each(["stop-first", "claim-first"] as const)(
 		"serializes never-prepared stop with first resource authorization (%s)",
 		async (order) => {
