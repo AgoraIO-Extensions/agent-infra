@@ -3,7 +3,10 @@ import {
 	type ObservabilityOptions,
 	startObservability,
 } from "@agent-infra/observability";
-import { startPlatformConversationWorkerFromDeploymentV2 } from "./conversation-worker.js";
+import {
+	type PlatformConversationWorkerLifecycleStatusV1,
+	startPlatformConversationWorkerFromDeploymentV2,
+} from "./conversation-worker.js";
 import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
@@ -227,7 +230,10 @@ export async function startPlatformWorkerFromDeploymentV2(
 		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
 		readonly startConversation?: (
 			observability: ReturnType<typeof startObservability>,
-		) => Promise<{ stop(): Promise<void> }>;
+		) => Promise<{
+			status(): PlatformConversationWorkerLifecycleStatusV1;
+			stop(): Promise<void>;
+		}>;
 		readonly startWecom?: () => Promise<{ stop(): Promise<void> }>;
 		readonly observabilityOptions?: Omit<ObservabilityOptions, "service">;
 	} = {},
@@ -249,7 +255,12 @@ export async function startPlatformWorkerFromDeploymentV2(
 		throw error;
 	}
 	let workload: { stop(): Promise<void> } | undefined;
-	let conversation: { stop(): Promise<void> } | undefined;
+	let conversation:
+		| {
+				status(): PlatformConversationWorkerLifecycleStatusV1;
+				stop(): Promise<void>;
+		  }
+		| undefined;
 	let wecom: { stop(): Promise<void> } | undefined;
 	try {
 		workload = await (
@@ -268,6 +279,9 @@ export async function startPlatformWorkerFromDeploymentV2(
 		let stopping: Promise<void> | undefined;
 		return {
 			observabilityStatus: observability.status,
+			conversationStatus() {
+				return conversation?.status() ?? "not_started";
+			},
 			stop() {
 				stopping ??= (async () => {
 					const results: PromiseSettledResult<void>[] = [];
@@ -278,9 +292,13 @@ export async function startPlatformWorkerFromDeploymentV2(
 							() => workload?.stop(),
 							() => primary.stop(),
 						]) {
-							results.push(
-								...(await Promise.allSettled([Promise.resolve().then(stop)])),
-							);
+							let result: Promise<void>;
+							try {
+								result = Promise.resolve(stop());
+							} catch (error) {
+								result = Promise.reject(error);
+							}
+							results.push(...(await Promise.allSettled([result])));
 						}
 					} finally {
 						await observability.close();
