@@ -36,6 +36,15 @@ export interface StandardTemplateModelBindingV1 {
 	readonly protocol: RuntimeModelProtocolV1;
 }
 
+const standardTemplateProtocol: Readonly<
+	Record<StandardTemplateModelBindingV1["driver"], RuntimeModelProtocolV1>
+> = {
+	codex: "openai-responses-v1",
+	claude: "anthropic-messages-v1",
+	acp: "anthropic-messages-v1",
+	pi: "anthropic-messages-v1",
+};
+
 const templateBindingSchema = z
 	.strictObject({
 		templateId: z
@@ -53,11 +62,7 @@ const templateBindingSchema = z
 		protocol: RuntimeModelProtocolV1Schema,
 	})
 	.refine(
-		(binding) =>
-			binding.protocol ===
-			(binding.driver === "codex"
-				? "openai-responses-v1"
-				: "anthropic-messages-v1"),
+		(binding) => binding.protocol === standardTemplateProtocol[binding.driver],
 	);
 
 const projectionContentSchema = z.strictObject({
@@ -169,6 +174,20 @@ export function standardTemplateModelProtocolV1(
 	bindings: readonly StandardTemplateModelBindingV1[],
 ) {
 	return standardTemplateModelBindingV1(source, bindings).protocol;
+}
+
+function validV4ModelEndpoint(
+	endpoint: z.infer<typeof ModelEndpointV1Schema>,
+	binding: StandardTemplateModelBindingV1,
+) {
+	return (
+		endpoint.available &&
+		endpoint.protocol === binding.protocol &&
+		(endpoint.protocol === "anthropic-messages-v1"
+			? endpoint.authentication !== undefined
+			: endpoint.authentication === undefined ||
+				endpoint.authentication === "bearer")
+	);
 }
 
 /** A Worker-owned, credential-free snapshot. Never append this to Workload desired annotations. */
@@ -442,8 +461,8 @@ export async function projectRuntimeModelConfigurationV4(input: {
 		const model = configuration.modelConfiguration;
 		if (
 			source.kind !== "standard" ||
-			standardTemplateBinding.driver !== "codex" ||
-			standardTemplateBinding.protocol !== "openai-responses-v1" ||
+			standardTemplateBinding.protocol !==
+				standardTemplateProtocol[standardTemplateBinding.driver] ||
 			!model ||
 			[...configuration.environment, ...configuration.secrets].some(
 				({ name }) =>
@@ -466,10 +485,7 @@ export async function projectRuntimeModelConfigurationV4(input: {
 			);
 			if (
 				endpoint.endpointId !== option.endpointId ||
-				!endpoint.available ||
-				endpoint.protocol !== standardTemplateBinding.protocol ||
-				(endpoint.authentication !== undefined &&
-					endpoint.authentication !== "bearer")
+				!validV4ModelEndpoint(endpoint, standardTemplateBinding)
 			)
 				throw new ModelConfigurationErrorV1();
 			options.push({
@@ -509,8 +525,8 @@ export function validateRuntimeModelProjectionV4(
 		const { fingerprint, ...content } = projection;
 		if (
 			fingerprint !== hash(JSON.stringify(content)) ||
-			content.standardTemplateBinding.driver !== "codex" ||
-			content.standardTemplateBinding.protocol !== "openai-responses-v1" ||
+			content.standardTemplateBinding.protocol !==
+				standardTemplateProtocol[content.standardTemplateBinding.driver] ||
 			new Set(content.options.map(({ optionId }) => optionId)).size !==
 				content.options.length ||
 			!content.options.some(
@@ -520,10 +536,7 @@ export function validateRuntimeModelProjectionV4(
 			) ||
 			content.options.some(
 				({ endpoint, modelId, reasoningLevels }) =>
-					!endpoint.available ||
-					endpoint.protocol !== content.standardTemplateBinding.protocol ||
-					(endpoint.authentication !== undefined &&
-						endpoint.authentication !== "bearer") ||
+					!validV4ModelEndpoint(endpoint, content.standardTemplateBinding) ||
 					new Set(reasoningLevels).size !== reasoningLevels.length ||
 					reasoningLevels.some(
 						(level) => !endpoint.capabilities.reasoningLevels.includes(level),
