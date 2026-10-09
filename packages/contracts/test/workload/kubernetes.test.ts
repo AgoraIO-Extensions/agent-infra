@@ -220,6 +220,92 @@ describe("KubernetesRuntimeAdapter V1 contract", () => {
 		).toBe(false);
 	});
 
+	it("keeps the self-managed origin across A-to-B and rejects cross-mode carryover", () => {
+		// Contract fixture only: live Registry admission and Kubernetes reachability remain separate evidence.
+		const origin = {
+			schemaVersion: 1 as const,
+			origin: "https://agent.example.test",
+		};
+		const selfManagedManifest = {
+			schemaVersion: 1 as const,
+			interactionMode: "self-managed" as const,
+			service: { port: 8080 },
+			health: { path: "/healthz" },
+		};
+		const selfManagedA = {
+			...desired,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+			runtimeManifest: selfManagedManifest,
+			registryAdmission: {
+				...registryAdmission,
+				immutableDigest: `sha256:${"a".repeat(64)}`,
+				policyEvidence: {
+					...registryAdmission.policyEvidence,
+					imageDigest: `sha256:${"a".repeat(64)}`,
+				},
+				runtimeManifest: selfManagedManifest,
+			},
+			route: {
+				name: desired.route.name,
+				exposure: "self-managed" as const,
+				tlsRequired: true as const,
+				interactionOrigin: origin,
+			},
+			networkPolicy: {
+				...desired.networkPolicy,
+				ingressMode: "self-managed-route" as const,
+			},
+		};
+		const selfManagedB = {
+			...selfManagedA,
+			workloadRevision: selfManagedA.workloadRevision + 1,
+			configRevision: selfManagedA.configRevision + 1,
+			imageDigest: `sha256:${"b".repeat(64)}`,
+			registryAdmission: {
+				...selfManagedA.registryAdmission,
+				immutableDigest: `sha256:${"b".repeat(64)}`,
+				policyEvidence: {
+					...selfManagedA.registryAdmission.policyEvidence,
+					imageDigest: `sha256:${"b".repeat(64)}`,
+				},
+			},
+		};
+
+		expect(validateAgentWorkloadDesiredV1(selfManagedA).route).toEqual(
+			selfManagedA.route,
+		);
+		expect(validateAgentWorkloadDesiredV1(selfManagedB).route).toEqual(
+			selfManagedB.route,
+		);
+		expect(
+			AgentWorkloadDesiredV1Schema.safeParse({
+				...selfManagedB,
+				runtimeManifest: {
+					schemaVersion: 1,
+					interactionMode: "platform-adapter",
+					protocol: "acp",
+					service: { port: 8080 },
+					health: { path: "/healthz" },
+				},
+				registryAdmission: {
+					...selfManagedB.registryAdmission,
+					runtimeManifest: {
+						schemaVersion: 1,
+						interactionMode: "platform-adapter",
+						protocol: "acp",
+						service: { port: 8080 },
+						health: { path: "/healthz" },
+					},
+				},
+				route: { ...selfManagedB.route, exposure: "internal-only" },
+				networkPolicy: {
+					...selfManagedB.networkPolicy,
+					ingressMode: "runtime-host-client-only",
+				},
+			}).success,
+		).toBe(false);
+	});
+
 	it("accepts only correlated stopped requests as absent without a fabricated identity", () => {
 		const stopped = { ...desired, desiredState: "stopped", replicas: 0 };
 		const absent = {
