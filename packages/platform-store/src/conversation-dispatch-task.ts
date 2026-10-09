@@ -315,7 +315,7 @@ export async function observeStopConfirmationTimeout(
 	transaction: Transaction,
 	state: DispatchState,
 	workerId: string,
-) {
+): Promise<boolean> {
 	const [stop] = await transaction<
 		{
 			confirmation_deadline: Date;
@@ -327,14 +327,14 @@ export async function observeStopConfirmationTimeout(
 		from platform.conversation_stops
 		where execution_id = ${state.execution.execution_id}
 		for update`;
-	if (!stop) return;
+	if (!stop) return false;
 	const decision = decideConversationStopConfirmationTimeoutV1({
 		executionStatus: state.execution.status,
 		confirmationDeadline: stop.confirmation_deadline.getTime(),
 		observedAt: stop.observed_at.getTime(),
 		alreadyTimedOut: stop.confirmation_timed_out_at !== null,
 	});
-	if (!decision) return;
+	if (!decision) return false;
 	const rows = await transaction<{ execution_id: string }[]>`
 		update platform.conversation_stops
 		set confirmation_timed_out_at = clock_timestamp(), updated_at = clock_timestamp()
@@ -343,7 +343,7 @@ export async function observeStopConfirmationTimeout(
 			and confirmation_deadline <= clock_timestamp()
 		returning execution_id
 	`;
-	if (rows.length === 0) return;
+	if (rows.length === 0) return false;
 	const executions = await transaction<{ execution_id: string }[]>`
 		update platform.conversation_executions
 		set status = 'unknown', updated_at = clock_timestamp()
@@ -360,6 +360,7 @@ export async function observeStopConfirmationTimeout(
 		workerId,
 		decision.reason,
 	);
+	return true;
 }
 
 export async function finishWaitingTask(

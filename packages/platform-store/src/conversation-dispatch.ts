@@ -312,7 +312,7 @@ export class PostgresConversationDispatchStoreV1
 								and ((outbox_items.status = 'pending' and outbox_items.available_at = 'infinity'::timestamptz)
 									or e.task_wait_deadline <= clock_timestamp())
 						))
-						or (status in ('pending', 'retry_scheduled')
+						or (status in ('pending', 'retry_scheduled', 'processing')
 							and operation = 'conversation.turn.stop.v1'
 							and exists (
 								select 1 from platform.conversation_stops s

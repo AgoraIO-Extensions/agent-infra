@@ -71,13 +71,6 @@ export async function claimWork(
 	if (!isolationWork && outbox.status === "failed")
 		return { outcome: "failed" };
 	const decisionAt = outbox.decision_at.getTime();
-	if (
-		outbox.status === "processing" &&
-		(outbox.lease_expires_at?.getTime() ?? Number.POSITIVE_INFINITY) >
-			decisionAt
-	) {
-		return { outcome: "busy" };
-	}
 	const selectedOperation = operation(outbox.operation);
 	if (!selectedOperation) return { outcome: "stale" };
 	const payload = exactPayload(outbox.payload, selectedOperation);
@@ -90,6 +83,18 @@ export async function claimWork(
 	const stop = execution
 		? await readStop(transaction, payload.executionId)
 		: undefined;
+	if (
+		outbox.status === "processing" &&
+		(outbox.lease_expires_at?.getTime() ?? Number.POSITIVE_INFINITY) >
+			decisionAt &&
+		!(
+			selectedOperation === "conversation.turn.stop.v1" &&
+			stop &&
+			stop.confirmation_timed_out_at === null &&
+			stop.confirmation_deadline.getTime() <= decisionAt
+		)
+	)
+		return { outcome: "busy" };
 	if (
 		outbox.status !== "processing" &&
 		!outbox.available_now &&
@@ -231,7 +236,7 @@ export async function claimWork(
 		);
 		return { outcome: "succeeded" };
 	}
-	await observeStopConfirmationTimeout(
+	const stopConfirmationTimedOut = await observeStopConfirmationTimeout(
 		transaction,
 		{ outbox, conversation, execution },
 		input.workerId,
@@ -347,6 +352,9 @@ export async function claimWork(
 			: null,
 		executionStatus: currentExecutionStatus,
 		stopPending: stop?.status === "submitted",
+		...(stopConfirmationTimedOut
+			? { stopConfirmationTimedOut: true as const }
+			: {}),
 		...(isolationWork && isolation
 			? { generationIsolation: isolationProjection(isolation) }
 			: {}),

@@ -864,11 +864,15 @@ export function createConversationDispatchUseCaseV1(
 				(claim.executionStatus === "unknown" ||
 					claim.executionStatus === "processing") &&
 				dependencies.runtimeHost.recoverOriginalStatus !== undefined;
+			const recoveringTimedOutStop =
+				claim.operation === "conversation.turn.stop.v1" &&
+				claim.stopConfirmationTimedOut === true;
 			if (
 				(claim.operation === "conversation.turn.supplement.v1" ||
 					claim.operation === "conversation.turn.stop.v1") &&
 				claim.executionStatus !== "processing" &&
-				!recoveringMissingStop
+				!recoveringMissingStop &&
+				!recoveringTimedOutStop
 			) {
 				return retry(
 					dependencies.store,
@@ -1216,6 +1220,16 @@ export function createConversationDispatchUseCaseV1(
 					return finished
 						? { schemaVersion: 1, outcome: "already_completed" }
 						: { schemaVersion: 1, outcome: "stale" };
+				}
+				if (claim.operation === "conversation.turn.stop.v1") {
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"RUNTIME_STOP_REJECTED",
+						"retry",
+						{},
+					);
 				}
 				return reject(
 					dependencies.store,
