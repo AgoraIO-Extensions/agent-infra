@@ -462,7 +462,20 @@ function applicationCommandFields(
 	prepared: SecretPreparationResult,
 	traceId: string,
 ) {
-	const modelConfiguration = modelInput(prepared, body, traceId);
+	const preparedModelConfiguration = modelInput(prepared, body, traceId);
+	const keyless =
+		body.source.kind === "standard" &&
+		"defaultRelayKey" in body &&
+		body.defaultRelayKey !== undefined;
+	const modelConfiguration =
+		keyless && preparedModelConfiguration
+			? {
+					...preparedModelConfiguration,
+					options: preparedModelConfiguration.options.map(
+						({ replaceCredential: _replaceCredential, ...option }) => option,
+					),
+				}
+			: preparedModelConfiguration;
 	return {
 		name: body.name,
 		description: body.description,
@@ -662,7 +675,7 @@ export function registerV2ManagementRoutes(
 					traceId: metadata.traceId,
 					...applicationCommandFields(body, prepared, metadata.traceId),
 					...(body.secrets === undefined ? {} : { secrets: prepared.secrets }),
-				},
+				} as Parameters<ApplicationRevisionUseCaseV1["revise"]>[0],
 				{
 					schemaVersion: 1,
 					applicationId,
