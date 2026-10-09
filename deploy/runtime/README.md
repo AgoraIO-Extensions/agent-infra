@@ -58,7 +58,9 @@ Web、Platform API、Worker、目录同步镜像只在 `v*` Tag 或显式手动�
 ## 镜像安装层重复构建验证
 
 发布入口仍执行两次无缓存构建并比较 OCI Digest。生产安装层在同一 `RUN` 中清理 npm
-日志/缓存、Node 编译缓存和 apk 日志，避免时间与进程相关内容进入镜像层。
+日志/缓存、Node 编译缓存、apk/apt 日志与索引、ldconfig 辅助缓存和 fontconfig 生成缓存，避免
+inode、时间与进程相关内容进入镜像层。fontconfig 缓存记录构建时目录 mtime，导出时间戳归一后
+运行时本就判定失效；动态链接仍使用 `/etc/ld.so.cache`。
 
 已有明确归属且支持 OCI exporter 的 Docker context 和 Buildx builder 时，可独立验证实际
 Dockerfile 的生产安装命令；该检查不构建业务部署、不推送 Registry，也不替代完整发布验收：
