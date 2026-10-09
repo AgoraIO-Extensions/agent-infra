@@ -45,6 +45,42 @@ it.each([
 			],
 		},
 	],
+	[
+		"relative path",
+		{
+			commands: [
+				{
+					name: "skill",
+					source: "skill",
+					path: "secret/SKILL.md",
+				},
+			],
+		},
+	],
+	[
+		"approved path without a root",
+		{
+			commands: [
+				{
+					name: "skill",
+					source: "skill",
+					path: "/runtime/skills/SKILL.md",
+				},
+			],
+		},
+	],
+	[
+		"oversized UTF-8 description",
+		{
+			commands: [
+				{
+					name: "compact",
+					source: "extension",
+					description: "你".repeat(1024),
+				},
+			],
+		},
+	],
 ])("rejects %s", (_name, value) => {
 	expect(() => parsePiGetCommandsV1(value)).toThrow(
 		"RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE",

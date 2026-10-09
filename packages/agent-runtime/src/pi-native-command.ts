@@ -28,6 +28,7 @@ function text(value: unknown, maximum = maxTextBytes): string | undefined {
 		typeof value !== "string" ||
 		value.length === 0 ||
 		value.length > maximum ||
+		Buffer.byteLength(value, "utf8") > maximum ||
 		!value.isWellFormed() ||
 		[...value].some((character) => {
 			const code = character.charCodeAt(0);
@@ -98,7 +99,7 @@ function parseCommand(value: unknown, roots: readonly string[]) {
 		(path !== undefined &&
 			(path.includes("\0") ||
 				path.split("/").some((part) => part === "..") ||
-				(isAbsolute(path) && !containedPath(path, roots))))
+				!containedPath(path, roots)))
 	)
 		throw unavailable();
 	if (source === "skill" && path === undefined) throw unavailable();
