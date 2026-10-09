@@ -589,6 +589,10 @@ export function createConversationRuntimeV2(
 		// Authorization, the Platform route record and the fenced state are
 		// checked on every request. Only the live Kubernetes route observation
 		// of an event drain is reused, and only within a bounded window (#1611).
+		// The age is taken after the authorization check, so only the fenced
+		// state read below separates it from the send. A fresh observation is
+		// timed from before it starts and is followed by the same checks as
+		// before #1611; expiring during them never aborts the drain.
 		const age = now() - prepared.routeProof.observedAt;
 		const reuseRoute =
 			eventCommands.includes(command) &&
