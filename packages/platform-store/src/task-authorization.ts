@@ -114,6 +114,155 @@ export async function insertTaskAuthorization(
 	);
 }
 
+export async function recordTaskSystemControlInTransactionV1(
+	transaction: postgres.TransactionSql,
+	input: {
+		executionId: string;
+		authorizationRecordId: string;
+		reason:
+			| "stop"
+			| "authorization_revoked"
+			| "recovery"
+			| "generation_isolation";
+		workerId: string;
+		traceId: string;
+		requestId: string;
+	},
+): Promise<{ controlRecordId: string }> {
+	await transaction`set transaction isolation level read committed`;
+	await transaction`select set_config('lock_timeout', '5s', true)`;
+	await transaction`
+					select a.id from platform.agents a join platform.conversation_executions e on e.agent_id = a.id
+					where e.execution_id = ${input.executionId} for share of a
+				`;
+	const [initialExecution] = await transaction<{ status: string }[]>`
+					select status from platform.conversation_executions where execution_id = ${input.executionId}
+				`;
+	const [original] = await transaction<{ id: string }[]>`
+					select id from platform.outbox_items
+					where scope_type = 'conversation' and payload->>'executionId' = ${input.executionId}
+						and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
+				`;
+	// Waiting dispatch and cancellation lock Conversation before the original Outbox.
+	const outbox =
+		initialExecution?.status === "waiting" && original
+			? await lockOutbox(transaction, original.id)
+			: undefined;
+	if (outbox) {
+		// READ COMMITTED: dispatch may finish while this command waits for O.
+		const [waitingExecution] = await transaction<{ status: string }[]>`
+						select status from platform.conversation_executions where execution_id = ${input.executionId}
+					`;
+		if (waitingExecution?.status !== "waiting")
+			throw new TaskAuthorizationStoreError();
+	}
+	const [conversation] = await transaction<
+		{
+			id: string;
+			principal_type: string;
+			actor_id: string;
+			agent_id: string;
+			channel_id: string;
+		}[]
+	>`select conversation.id, conversation.principal_type, conversation.actor_id,
+					conversation.agent_id, conversation.channel_id
+					from platform.conversations conversation
+					join platform.conversation_executions execution on execution.conversation_id = conversation.id
+					where execution.execution_id = ${input.executionId} for update of conversation`;
+	if (!conversation) throw new TaskAuthorizationStoreError();
+	const [execution] = await transaction<
+		{
+			conversation_id: string;
+			session_generation: number | string;
+			status: ConversationDispatchExecutionStatusV1 | "waiting";
+			agent_id: string;
+			actor_id: string;
+			principal_type: string;
+			channel_id: string;
+			authorization_revision: string;
+		}[]
+	>`select conversation_id, session_generation, status, agent_id, actor_id, principal_type, channel_id, authorization_revision from platform.conversation_executions where execution_id = ${input.executionId} for update`;
+	if (
+		!execution ||
+		execution.conversation_id !== conversation.id ||
+		execution.principal_type !== conversation.principal_type ||
+		execution.actor_id !== conversation.actor_id ||
+		execution.agent_id !== conversation.agent_id ||
+		execution.channel_id !== conversation.channel_id
+	)
+		throw new TaskAuthorizationStoreError();
+	const principal = parseTaskPrincipalV1({
+		kind: execution.principal_type,
+		id: execution.actor_id,
+	});
+	const [record] = await transaction<{ id: string; boundary: unknown }[]>`
+					select id, boundary from platform.task_authorization_records
+					where execution_id = ${input.executionId} and id = ${input.authorizationRecordId} for update
+				`;
+	if (!record) throw new TaskAuthorizationStoreError();
+	const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+	const plan = planTaskSystemControlV1({
+		reason: input.reason,
+		workerId: input.workerId,
+		boundary,
+		execution: {
+			executionId: input.executionId,
+			conversationId: execution.conversation_id,
+			sessionGeneration: Number(execution.session_generation),
+			actorId: execution.actor_id,
+			principal,
+			agentId: execution.agent_id,
+			channelId: execution.channel_id,
+			authorizationRevision: execution.authorization_revision,
+			status: execution.status,
+		},
+	});
+	if (plan.workerId !== input.workerId) throw new TaskAuthorizationStoreError();
+	if (
+		execution.status === "waiting" &&
+		["stop", "authorization_revoked"].includes(input.reason)
+	) {
+		const waitingConversation = await lockConversation(
+			transaction,
+			execution.conversation_id,
+		);
+		const waiting = await lockExecution(
+			transaction,
+			execution.conversation_id,
+			input.executionId,
+		);
+		if (!outbox || !waitingConversation || !waiting)
+			throw new TaskAuthorizationStoreError();
+		await finishWaitingTask(
+			transaction,
+			{ outbox, conversation: waitingConversation, execution: waiting },
+			"cancelled",
+			input.reason === "stop" ? "TASK_CANCELLED" : "AUTHORIZATION_REVOKED",
+			input.workerId,
+		);
+	}
+	if (plan.ensureStop) {
+		const [stop] = await transaction<
+			{ stop_request_id: string }[]
+		>`select stop_request_id from platform.conversation_stops where execution_id = ${input.executionId}`;
+		if (!stop) {
+			const stopRequestId = randomUUID();
+			await transaction`insert into platform.conversation_stops (execution_id, stop_request_id, status, created_at, updated_at) values (${input.executionId}, ${stopRequestId}, 'submitted', now(), now())`;
+			await transaction`
+							insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id)
+							values (${`conversation:stop:${stopRequestId}`}, 'conversation', ${execution.conversation_id}, 'conversation.turn.stop.v1', ${transaction.json({ schemaVersion: 1, conversationId: execution.conversation_id, executionId: input.executionId, sessionGeneration: Number(execution.session_generation), stopRequestId })}, ${input.traceId}, ${input.requestId})
+						`;
+		}
+	}
+	return persistTaskControl(transaction, {
+		plan,
+		authorizationRecordId: record.id,
+		agentId: boundary.agentId,
+		traceId: input.traceId,
+		requestId: input.requestId,
+	});
+}
+
 export class PostgresTaskAuthorizationStoreV1 {
 	readonly #client;
 	readonly #queryClient;
@@ -294,139 +443,7 @@ export class PostgresTaskAuthorizationStoreV1 {
 			return await this.#client.begin(async (transaction) => {
 				await transaction`set transaction isolation level read committed`;
 				await transaction`select set_config('lock_timeout', '5s', true)`;
-				await transaction`
-					select a.id from platform.agents a join platform.conversation_executions e on e.agent_id = a.id
-					where e.execution_id = ${input.executionId} for share of a
-				`;
-				const [initialExecution] = await transaction<{ status: string }[]>`
-					select status from platform.conversation_executions where execution_id = ${input.executionId}
-				`;
-				const [original] = await transaction<{ id: string }[]>`
-					select id from platform.outbox_items
-					where scope_type = 'conversation' and payload->>'executionId' = ${input.executionId}
-						and operation in ('conversation.turn.submit.v1', 'conversation.turn.regenerate.v1')
-				`;
-				// Waiting dispatch and cancellation lock Conversation before the original Outbox.
-				const outbox =
-					initialExecution?.status === "waiting" && original
-						? await lockOutbox(transaction, original.id)
-						: undefined;
-				if (outbox) {
-					// READ COMMITTED: dispatch may finish while this command waits for O.
-					const [waitingExecution] = await transaction<{ status: string }[]>`
-						select status from platform.conversation_executions where execution_id = ${input.executionId}
-					`;
-					if (waitingExecution?.status !== "waiting")
-						throw new TaskAuthorizationStoreError();
-				}
-				const [conversation] = await transaction<
-					{
-						id: string;
-						principal_type: string;
-						actor_id: string;
-						agent_id: string;
-						channel_id: string;
-					}[]
-				>`select conversation.id, conversation.principal_type, conversation.actor_id,
-					conversation.agent_id, conversation.channel_id
-					from platform.conversations conversation
-					join platform.conversation_executions execution on execution.conversation_id = conversation.id
-					where execution.execution_id = ${input.executionId} for update of conversation`;
-				if (!conversation) throw new TaskAuthorizationStoreError();
-				const [execution] = await transaction<
-					{
-						conversation_id: string;
-						session_generation: number | string;
-						status: ConversationDispatchExecutionStatusV1 | "waiting";
-						agent_id: string;
-						actor_id: string;
-						principal_type: string;
-						channel_id: string;
-						authorization_revision: string;
-					}[]
-				>`select conversation_id, session_generation, status, agent_id, actor_id, principal_type, channel_id, authorization_revision from platform.conversation_executions where execution_id = ${input.executionId} for update`;
-				if (
-					!execution ||
-					execution.conversation_id !== conversation.id ||
-					execution.principal_type !== conversation.principal_type ||
-					execution.actor_id !== conversation.actor_id ||
-					execution.agent_id !== conversation.agent_id ||
-					execution.channel_id !== conversation.channel_id
-				)
-					throw new TaskAuthorizationStoreError();
-				const principal = parseTaskPrincipalV1({
-					kind: execution.principal_type,
-					id: execution.actor_id,
-				});
-				const [record] = await transaction<{ id: string; boundary: unknown }[]>`
-					select id, boundary from platform.task_authorization_records
-					where execution_id = ${input.executionId} and id = ${input.authorizationRecordId} for update
-				`;
-				if (!record) throw new TaskAuthorizationStoreError();
-				const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
-				const plan = planTaskSystemControlV1({
-					reason: input.reason,
-					workerId: input.workerId,
-					boundary,
-					execution: {
-						executionId: input.executionId,
-						conversationId: execution.conversation_id,
-						sessionGeneration: Number(execution.session_generation),
-						actorId: execution.actor_id,
-						principal,
-						agentId: execution.agent_id,
-						channelId: execution.channel_id,
-						authorizationRevision: execution.authorization_revision,
-						status: execution.status,
-					},
-				});
-				if (plan.workerId !== input.workerId)
-					throw new TaskAuthorizationStoreError();
-				if (
-					execution.status === "waiting" &&
-					["stop", "authorization_revoked"].includes(input.reason)
-				) {
-					const waitingConversation = await lockConversation(
-						transaction,
-						execution.conversation_id,
-					);
-					const waiting = await lockExecution(
-						transaction,
-						execution.conversation_id,
-						input.executionId,
-					);
-					if (!outbox || !waitingConversation || !waiting)
-						throw new TaskAuthorizationStoreError();
-					await finishWaitingTask(
-						transaction,
-						{ outbox, conversation: waitingConversation, execution: waiting },
-						"cancelled",
-						input.reason === "stop"
-							? "TASK_CANCELLED"
-							: "AUTHORIZATION_REVOKED",
-						input.workerId,
-					);
-				}
-				if (plan.ensureStop) {
-					const [stop] = await transaction<
-						{ stop_request_id: string }[]
-					>`select stop_request_id from platform.conversation_stops where execution_id = ${input.executionId}`;
-					if (!stop) {
-						const stopRequestId = randomUUID();
-						await transaction`insert into platform.conversation_stops (execution_id, stop_request_id, status, created_at, updated_at) values (${input.executionId}, ${stopRequestId}, 'submitted', now(), now())`;
-						await transaction`
-							insert into platform.outbox_items (id, scope_type, scope_id, operation, payload, trace_id, request_id)
-							values (${`conversation:stop:${stopRequestId}`}, 'conversation', ${execution.conversation_id}, 'conversation.turn.stop.v1', ${transaction.json({ schemaVersion: 1, conversationId: execution.conversation_id, executionId: input.executionId, sessionGeneration: Number(execution.session_generation), stopRequestId })}, ${input.traceId}, ${input.requestId})
-						`;
-					}
-				}
-				return persistTaskControl(transaction, {
-					plan,
-					authorizationRecordId: record.id,
-					agentId: boundary.agentId,
-					traceId: input.traceId,
-					requestId: input.requestId,
-				});
+				return recordTaskSystemControlInTransactionV1(transaction, input);
 			});
 		} catch {
 			throw new TaskAuthorizationStoreError();

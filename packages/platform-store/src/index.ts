@@ -158,6 +158,7 @@ export {
 } from "./skill-hub-agent-binding.js";
 export {
 	PostgresTaskAuthorizationStoreV1,
+	recordTaskSystemControlInTransactionV1,
 	TaskAuthorizationStoreError,
 } from "./task-authorization.js";
 export {

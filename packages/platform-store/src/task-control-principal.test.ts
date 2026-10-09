@@ -31,6 +31,7 @@ import { seedSessionSandboxFixture } from "./session-sandbox.fixture.ts";
 import {
 	insertTaskAuthorization,
 	PostgresTaskAuthorizationStoreV1,
+	recordTaskSystemControlInTransactionV1,
 	TaskAuthorizationStoreError,
 } from "./task-authorization.js";
 
@@ -114,6 +115,24 @@ async function control(
 	});
 }
 
+async function controlInCallerTransaction(
+	reason: "stop" | "authorization_revoked" | "recovery" = "recovery",
+) {
+	const [record] =
+		await client`select id from platform.task_authorization_records where execution_id = 'execution'`;
+	if (!record) throw new Error("Missing seeded authority");
+	return client.begin((transaction) =>
+		recordTaskSystemControlInTransactionV1(transaction, {
+			executionId: "execution",
+			authorizationRecordId: record.id,
+			reason,
+			workerId: "worker",
+			traceId: "trace",
+			requestId: "request",
+		}),
+	);
+}
+
 async function expectNoControlEffects() {
 	expect(
 		await client`select id from platform.task_control_records`,
@@ -131,6 +150,18 @@ async function expectNoControlEffects() {
 }
 
 describe("System controls use the durable typed Execution principal", () => {
+	it("writes controls through a caller-owned transaction without opening a nested transaction", async () => {
+		await seed("user");
+		const result = await controlInCallerTransaction();
+		expect(result.controlRecordId).toMatch(/^[0-9a-f-]{36}$/);
+		expect(
+			await client`select id from platform.task_control_records`,
+		).toHaveLength(1);
+		expect(
+			await client`select action from platform.audit_events where action='task.control.created'`,
+		).toEqual([{ action: "task.control.created" }]);
+	});
+
 	it.each(["user", "application"] as const)(
 		"persists the original %s namespace even when actor IDs match",
 		async (kind) => {
