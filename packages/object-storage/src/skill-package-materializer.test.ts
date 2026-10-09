@@ -4,6 +4,7 @@ import {
 	chmod,
 	lstat,
 	mkdtemp,
+	mkdir,
 	readdir,
 	readFile,
 	realpath,
@@ -11,6 +12,7 @@ import {
 	rm,
 	stat,
 	symlink,
+	utimes,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -133,6 +135,19 @@ describe("Skill package materializer", () => {
 			}),
 		).rejects.toMatchObject({ code: "conflict" });
 		expect(await adapter.readCurrent()).toEqual(current);
+	});
+
+	it("recovers a lock directory left before its owner record was written", async () => {
+		const assemblyRoot = await root();
+		const adapter = materializer(assemblyRoot);
+		const lock = join(assemblyRoot, ".materialize-lock");
+		await mkdir(lock, { mode: 0o700 });
+		const stale = new Date(Date.now() - 10_000);
+		await utimes(lock, stale, stale);
+		await expect(
+			adapter.materialize({ packages: [selection] }),
+		).resolves.toBeDefined();
+		expect(await adapter.readCurrent()).not.toBeNull();
 	});
 });
 
