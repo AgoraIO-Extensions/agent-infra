@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import {
 	chmod,
 	lstat,
-	mkdtemp,
 	mkdir,
+	mkdtemp,
 	readdir,
 	readFile,
 	realpath,
