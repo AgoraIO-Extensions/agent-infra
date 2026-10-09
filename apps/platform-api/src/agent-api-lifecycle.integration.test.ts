@@ -297,6 +297,50 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 		);
 	}
 
+	function revokeUserUse(
+		agentId = "agent-a",
+		userId = "same-id",
+		key = "user-revoke",
+	) {
+		return fetch(
+			`${origin}/api/v2/agents/${agentId}/api-use-grants/${userId}`,
+			{
+				method: "DELETE",
+				headers: {
+					Cookie: "session=owner",
+					"Idempotency-Key": key,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1, expectedRevision: 2 }),
+			},
+		);
+	}
+
+	it("Owner revokes a typed user API-use grant and replays its original result", async () => {
+		await sql`insert into platform.agent_principal_grants
+			(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent-a', 'user', 'same-id', 'use', 'user-use-1')`;
+		const revoked = await revokeUserUse();
+		expect(revoked.status).toBe(200);
+		expect(await revoked.json()).toMatchObject({
+			agentId: "agent-a",
+			userId: "same-id",
+			granted: false,
+			replayed: false,
+		});
+		const replay = await revokeUserUse("agent-a", "same-id", "user-revoke");
+		expect(replay.status).toBe(200);
+		expect(await replay.json()).toMatchObject({
+			granted: false,
+			replayed: true,
+		});
+		const [grant] = await sql`
+			select revoked_at from platform.agent_principal_grants
+			where agent_id='agent-a' and principal_type='user'
+				and principal_id='same-id' and grant_type='use'`;
+		expect(grant?.revoked_at).not.toBeNull();
+	});
+
 	it("Owner-issued independent use revisions authorize only the application's own existing API audits", async () => {
 		await sql`delete from platform.agent_principal_grants where principal_type='application' and grant_type='use'`;
 		expect(
