@@ -196,4 +196,89 @@ describe("Agent runtime presentation policy", () => {
 			}),
 		).toEqual({ outcome: "stale" });
 	});
+
+	it("projects only the verified self-managed HTTPS origin", () => {
+		const input = fixture();
+		const current = input.facts.runtime;
+		if (!current) throw new Error("Expected verified fixture");
+		const configuration = {
+			...input.facts.configuration,
+			source: {
+				kind: "custom" as const,
+				imageDigest: `sha256:${"b".repeat(64)}`,
+				admissionRevision: "custom-admission",
+				interactionMode: "self-managed" as const,
+				identityResponsibility: "self-managed" as const,
+				connectionEnabled: false,
+			},
+			modelConfiguration: null,
+		};
+		const deployment = {
+			...current.deployment,
+			imageDigest: configuration.source.imageDigest,
+			runtimeManifest: { interactionMode: "self-managed" as const },
+			route: {
+				exposure: "self-managed" as const,
+				interactionOrigin: "https://agent.example.test",
+			},
+		};
+		const version = { configuration, deployment } as unknown as import(
+			"./workload-reconciliation.js"
+		).WorkloadVersionV1;
+		const facts = {
+			...input.facts,
+			configuration,
+			runtime: {
+				...current,
+				verifiedConfiguration: configuration,
+				deployment,
+				state: { ...current.state, candidate: version, verified: version },
+			},
+		};
+		expect(
+			decideAgentRuntimePresentationV1({ ...input, facts }),
+		).toMatchObject({
+			outcome: "found",
+			interactionUrl: "https://agent.example.test",
+		});
+		for (const interactionOrigin of [
+			"http://agent.example.test",
+			"https://agent.example.test/entry",
+			"https://agent.example.test/?token=secret",
+		]) {
+			const unsafeFacts = {
+				...facts,
+				runtime: {
+					...facts.runtime,
+					deployment: {
+						...deployment,
+						route: { exposure: "self-managed" as const, interactionOrigin },
+					},
+				},
+			};
+			expect(
+				decideAgentRuntimePresentationV1({ ...input, facts: unsafeFacts }),
+			).toMatchObject({ outcome: "found", interactionUrl: null });
+		}
+		const adapterFacts = fixture().facts;
+		if (!adapterFacts.runtime) throw new Error("Expected verified fixture");
+		expect(
+			decideAgentRuntimePresentationV1({
+				...input,
+				facts: {
+					...adapterFacts,
+					runtime: {
+						...adapterFacts.runtime,
+						deployment: {
+							...adapterFacts.runtime.deployment,
+							route: {
+								exposure: "internal-only",
+								interactionOrigin: "https://agent.example.test",
+							},
+						},
+					},
+				},
+			}),
+		).toMatchObject({ outcome: "found", interactionUrl: null });
+	});
 });

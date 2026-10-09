@@ -52,6 +52,7 @@ import {
 	type WorkloadSkillMaterializationResultV1,
 	type WorkloadSkillMaterializerV1,
 } from "./skill-materialization.js";
+import { createWorkloadInteractionOriginV1 } from "./kubernetes-runtime-policy.js";
 
 export interface WorkloadRuntimeOptionsV1 {
 	readonly workerId: string;
@@ -919,7 +920,19 @@ export function createWorkloadRuntimeV1(
 						connectionDatabaseAccess: false,
 						decryptionKeyringAccess: false,
 					},
-					route: { name, exposure, tlsRequired: true },
+					route: {
+						name,
+						exposure,
+						tlsRequired: true,
+						...(exposure === "self-managed"
+							? {
+									interactionOrigin: createWorkloadInteractionOriginV1({
+										routeHostSuffix: options.policy.routeHostSuffix,
+										agentId: state.agentId,
+									}),
+								}
+							: {}),
+					},
 					secretRefs: secretBindings.map(({ record }) =>
 						recordReference(record),
 					),
