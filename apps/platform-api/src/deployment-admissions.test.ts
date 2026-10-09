@@ -462,6 +462,60 @@ describe("production deployment admissions", () => {
 		expect(JSON.stringify(result)).not.toContain("https://");
 	});
 
+	it("admits credential-free model selections for the keyless browser path", async () => {
+		const f = fixture();
+		const requested = {
+			...modelInput(),
+			options: modelInput().options.map(
+				({ replaceCredential: _replaceCredential, ...option }) => option,
+			),
+		};
+		const result = await createDeploymentAdmissionsV1(
+			f.input,
+		).keylessModelAdmission.admitModels({
+			agentId: request.agentId,
+			requestId: request.requestId,
+			traceId: request.traceId,
+			requested,
+		});
+		expect(result).toEqual({
+			catalogRevision: "catalog-a",
+			defaultOptionId: "option-a",
+			defaultReasoningLevel: "medium",
+			options: [
+				{
+					optionId: "option-a",
+					endpointId: "endpoint-a",
+					modelId: "model-a",
+					reasoningLevels: ["high", "medium"],
+				},
+			],
+		});
+		const endpoint = f.catalog.endpoints[0];
+		if (!endpoint) throw new Error();
+		const rejected = await createDeploymentAdmissionsV1({
+			...f.input,
+			modelCatalog: {
+				...f.input.modelCatalog,
+				load: async () => ({
+					...f.catalog,
+					endpoints: [
+						{
+							...endpoint,
+							allowedModels: ["other-model"],
+						},
+					],
+				}),
+			},
+		}).keylessModelAdmission.admitModels({
+			agentId: request.agentId,
+			requestId: request.requestId,
+			traceId: request.traceId,
+			requested,
+		});
+		expect(rejected).toBeNull();
+	});
+
 	it.each([
 		"revision",
 		"expired",

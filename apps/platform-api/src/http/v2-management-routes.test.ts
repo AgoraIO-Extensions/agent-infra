@@ -428,6 +428,7 @@ const headers = {
 
 const applicationBody = {
 	schemaVersion: 2,
+	defaultRelayKey: "agent-default-relay-key",
 	name: "Release assistant",
 	description: "Helps the release team",
 	source: { kind: "standard", templateId: "template-1" },
@@ -435,6 +436,18 @@ const applicationBody = {
 	availability: [{ kind: "organization", organizationId: "org-1" }],
 	environment: [],
 	secrets: [],
+	modelConfiguration: {
+		options: [
+			{
+				optionId: "option-a",
+				endpointId: "endpoint-a",
+				modelId: "model-a",
+				reasoningLevels: ["medium"],
+			},
+		],
+		defaultOptionId: "option-a",
+		defaultReasoningLevel: "medium",
+	},
 };
 
 describe("V2 management routes", () => {
@@ -576,8 +589,9 @@ describe("V2 management routes", () => {
 		expect(projection.configuration).not.toHaveProperty("actions");
 		expect(submit).toHaveBeenCalledWith(
 			expect.objectContaining({
-				schemaVersion: 2,
+				schemaVersion: 3,
 				applicationId: "application-1",
+				defaultRelayKey: "agent-default-relay-key",
 			}),
 			expect.objectContaining({ userId: "user-1" }),
 			undefined,
