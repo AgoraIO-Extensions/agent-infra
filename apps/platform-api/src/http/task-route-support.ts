@@ -54,7 +54,21 @@ export interface TaskRoutesDependencies extends TaskAccessDependencies {
 			conversationId: string,
 			executionId: string,
 		): Promise<ConversationExecutionDetailV1 | undefined>;
+		replayExecution?: (
+			scope: ConversationQueryScopeV1,
+			conversationId: string,
+			executionId: string,
+			selector:
+				| { readonly kind: "cursor" | "last-event-id"; readonly value: string }
+				| undefined,
+		) => Promise<
+			| import("@agent-infra/platform-store").ConversationReplayResultV1
+			| undefined
+		>;
 	};
+	/** Bounds task SSE polling and each authorization/replay read. */
+	readonly streamPollIntervalMs?: number;
+	readonly streamReadTimeoutMs?: number;
 }
 
 export type TaskRequestAuthority = ConversationExecutionAuthorityV1 & {

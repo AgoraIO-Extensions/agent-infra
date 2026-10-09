@@ -837,6 +837,62 @@ export type TaskProjectionV1 = {
     status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
 };
 
+export type TaskSseMessageV1 = PersistedConversationEventV1 | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        attemptRef: string;
+        durationMs?: number;
+        failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+        finishedAt?: string;
+        kind: 'model';
+        model: {
+            configVersion: string;
+            modelId: string;
+            modelOptionId: string;
+            reasoningLevel?: string;
+        };
+        operationRef: string;
+        parentOperationRef?: string;
+        phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+        startedAt?: string;
+        usage?: {
+            cachedInputTokens?: number;
+            inputTokens?: number;
+            outputTokens?: number;
+        };
+    } | {
+        attemptRef: string;
+        connection?: {
+            callRef: string;
+            serviceRef: string;
+            verification: 'verified';
+        } | {
+            callRef?: string;
+            reason: 'receipt_missing' | 'record_unavailable' | 'authorization_unavailable' | 'binding_mismatch' | 'response_unconfirmed';
+            serviceRef: string;
+            verification: 'unverified';
+        };
+        durationMs?: number;
+        failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+        finishedAt?: string;
+        kind: 'tool';
+        operationRef: string;
+        parentOperationRef?: string;
+        phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+        resultRef?: string;
+        startedAt?: string;
+        toolId: string;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'execution.operation';
+} | TaskStatusEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
+
 export type TaskStatusEventV1 = {
     conversationCursor: string;
     conversationId: string;
@@ -3151,6 +3207,63 @@ export type CancelAgentTaskResponses = {
 };
 
 export type CancelAgentTaskResponse = CancelAgentTaskResponses[keyof CancelAgentTaskResponses];
+
+export type StreamAgentTaskEventsData = {
+    body?: never;
+    headers?: {
+        'Last-Event-ID'?: SseEventIdV1;
+    };
+    path: {
+        conversationId: string;
+        executionId: string;
+    };
+    query?: {
+        cursor?: string;
+    };
+    url: '/api/v1/conversations/{conversationId}/tasks/{executionId}/events';
+};
+
+export type StreamAgentTaskEventsErrors = {
+    /**
+     * Task request failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    500: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type StreamAgentTaskEventsError = StreamAgentTaskEventsErrors[keyof StreamAgentTaskEventsErrors];
+
+export type StreamAgentTaskEventsResponses = {
+    /**
+     * Persisted events for this Execution
+     */
+    200: TaskSseMessageV1;
+};
+
+export type StreamAgentTaskEventsResponse = StreamAgentTaskEventsResponses[keyof StreamAgentTaskEventsResponses];
 
 export type GetCurrentSessionData = {
     body?: never;
