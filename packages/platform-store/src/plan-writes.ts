@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
-	AgentConfigurationRecordV2,
+	AgentConfigurationRecord,
 	AgentConfigurationWritePlanV1,
 	AgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
@@ -15,6 +15,7 @@ import {
 	agents,
 	auditEvents,
 	outboxItems,
+	skillHubAgentBindings,
 } from "./schema.js";
 import { persistSessionSandboxManagementIntents } from "./session-sandbox-management.js";
 
@@ -25,7 +26,7 @@ type Transaction = Parameters<
 export async function advanceAgentConfigurationRevision(
 	transaction: Transaction,
 	plan: AgentConfigurationWritePlanV1,
-	configuration: AgentConfigurationRecordV2,
+	configuration: AgentConfigurationRecord,
 ): Promise<boolean> {
 	if (plan.nextRevision !== plan.baseRevision) {
 		await transaction.insert(agentConfigurationRevisions).values({
@@ -118,6 +119,37 @@ export async function insertAgentConfigurationEffects(
 		details: { changedFields: plan.auditEvent.changedFields },
 		occurredAt: plan.auditEvent.occurredAt,
 	});
+}
+
+export async function replaceSkillHubAgentBindings(
+	transaction: Transaction,
+	plan: AgentConfigurationWritePlanV1,
+): Promise<void> {
+	const skillBindings = plan.skillBindings;
+	if (!skillBindings) return;
+	await transaction
+		.delete(skillHubAgentBindings)
+		.where(
+			and(
+				eq(skillHubAgentBindings.agentId, plan.agentId),
+				eq(skillHubAgentBindings.agentVersion, skillBindings.agentVersion),
+			),
+		);
+	if (skillBindings.bindings.length === 0) return;
+	await transaction.insert(skillHubAgentBindings).values(
+		skillBindings.bindings.map((binding) => ({
+			agentId: plan.agentId,
+			agentVersion: skillBindings.agentVersion,
+			configurationRevision: plan.nextRevision,
+			skillVersionId: binding.skillVersionId,
+			grant: binding.grant,
+			syncRevision: 1,
+			state: "pending_sync",
+			failureReason: null,
+			createdAt: plan.auditEvent.occurredAt,
+			updatedAt: plan.auditEvent.occurredAt,
+		})),
+	);
 }
 
 export function agentManagementStateUpdate(plan: AgentManagementWritePlanV1) {

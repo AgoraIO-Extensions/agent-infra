@@ -24,6 +24,7 @@ const changedFields = new Set<AgentConfigurationChangedFieldV1>([
 	"channels",
 	"owners",
 	"availability",
+	"skills",
 ]);
 
 function invalid(): never {

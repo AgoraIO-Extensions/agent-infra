@@ -34,6 +34,7 @@ import {
 	snapshotAgentManagementDenseArray,
 } from "./agent-management-input.js";
 import { platformIdempotencyV1 } from "./idempotency.js";
+import { parseSkillHubAgentBindingWriteV1 } from "./skill-hub-agent-binding.js";
 
 export function requestDigest(
 	command:
@@ -87,7 +88,7 @@ export function parseResult(
 			"revision",
 			"changedFields",
 		]);
-		const changedFields = denseArray(result.changedFields, 9);
+		const changedFields = denseArray(result.changedFields, 10);
 		if (
 			result.schemaVersion !== 1 ||
 			result.agentId !== agentId ||
@@ -110,6 +111,7 @@ export function parseResult(
 							"channels",
 							"owners",
 							"availability",
+							"skills",
 						] as readonly unknown[]
 					).includes(field),
 			)
@@ -128,10 +130,16 @@ export function parseResult(
 function configurationPlanObject(
 	input: unknown,
 	keys: readonly string[],
+	optional: readonly string[] = [],
 ): Record<string, unknown> {
 	return persistenceValue(() => {
 		const values = snapshotAgentManagementDataObject(input);
-		requireAgentManagementExactKeys(values, keys);
+		const allowed = new Set([...keys, ...optional]);
+		if (
+			keys.some((key) => !Object.hasOwn(values, key)) ||
+			Object.keys(values).some((key) => !allowed.has(key))
+		)
+			throw new Error();
 		return values;
 	});
 }
@@ -197,21 +205,25 @@ export function snapshotAgentConfigurationWritePlanV1(
 	input: unknown,
 ): AgentConfigurationWritePlanV1 {
 	return persistenceValue(() => {
-		const values = configurationPlanObject(input, [
-			"schemaVersion",
-			"agentId",
-			"baseRevision",
-			"nextRevision",
-			"expectedManagementRevision",
-			"expectedAuthorizationRevision",
-			"nextAuthorizationRevision",
-			"configuration",
-			"accessUpdate",
-			"result",
-			"idempotency",
-			"outboxIntent",
-			"auditEvent",
-		]);
+		const values = configurationPlanObject(
+			input,
+			[
+				"schemaVersion",
+				"agentId",
+				"baseRevision",
+				"nextRevision",
+				"expectedManagementRevision",
+				"expectedAuthorizationRevision",
+				"nextAuthorizationRevision",
+				"configuration",
+				"accessUpdate",
+				"result",
+				"idempotency",
+				"outboxIntent",
+				"auditEvent",
+			],
+			["skillBindings"],
+		);
 		if (!isText(values.agentId, idMaxBytes)) throw new Error();
 		const agentId = values.agentId;
 		const configuration = decodeAgentConfigurationRecord(values.configuration);
@@ -221,10 +233,14 @@ export function snapshotAgentConfigurationWritePlanV1(
 			values.accessUpdate,
 			agentId,
 		);
-		const idempotency = configurationPlanObject(values.idempotency, [
-			"key",
-			"requestDigest",
-		]);
+		const skillBindings = Object.hasOwn(values, "skillBindings")
+			? parseSkillHubAgentBindingWriteV1(values.skillBindings)
+			: undefined;
+		const idempotency = configurationPlanObject(
+			values.idempotency,
+			["key", "requestDigest"],
+			["scopeType", "commandType"],
+		);
 		const audit = configurationPlanObject(values.auditEvent, [
 			"action",
 			"actorId",
@@ -238,7 +254,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 		]);
 		const auditChangedFields = snapshotAgentManagementDenseArray(
 			audit.changedFields,
-			8,
+			10,
 		);
 		const auditOccurredAt = configurationPlanDate(audit.occurredAt);
 		const accessFields = result.changedFields.filter(
@@ -285,6 +301,10 @@ export function snapshotAgentConfigurationWritePlanV1(
 			audit.subjectType !== "agent" ||
 			audit.subjectId !== agentId ||
 			!sameValue(auditChangedFields, result.changedFields) ||
+			(skillBindings !== undefined) !==
+				result.changedFields.includes("skills") ||
+			(skillBindings !== undefined &&
+				skillBindings.agentVersion.length === 0) ||
 			!isText(audit.traceId, idMaxBytes) ||
 			!isText(audit.requestId, idMaxBytes) ||
 			accessFields.length > 0 !== (accessUpdate !== null)
@@ -311,7 +331,7 @@ export function snapshotAgentConfigurationWritePlanV1(
 			]);
 			const payloadChangedFields = snapshotAgentManagementDenseArray(
 				payload.changedFields,
-				8,
+				10,
 			);
 			const occurredAt = configurationPlanDate(outbox.occurredAt);
 			if (
@@ -357,7 +377,14 @@ export function snapshotAgentConfigurationWritePlanV1(
 			idempotency: {
 				key: idempotency.key,
 				requestDigest: idempotency.requestDigest,
+				...(typeof idempotency.scopeType !== "string"
+					? {}
+					: { scopeType: idempotency.scopeType }),
+				...(typeof idempotency.commandType !== "string"
+					? {}
+					: { commandType: idempotency.commandType }),
 			},
+			...(skillBindings === undefined ? {} : { skillBindings }),
 			outboxIntent,
 			auditEvent: {
 				action: expectedAction,

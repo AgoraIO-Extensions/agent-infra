@@ -1960,14 +1960,19 @@ describe("published Relay authority migration", () => {
 			44,
 			45,
 			46,
+			47,
 		]);
-		expect(journal.entries.at(-2)).toMatchObject({
+		expect(journal.entries.at(-3)).toMatchObject({
 			idx: 45,
 			tag: "0045_skill_hub_organization_scope",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.at(-2)).toMatchObject({
 			idx: 46,
 			tag: "0046_commit_wakeups",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 47,
+			tag: "0047_skill_agent_binding_revision",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2075,6 +2080,7 @@ describe("published Relay authority migration", () => {
 				"skill_hub_agent_bindings:state",
 				"skill_hub_agent_bindings:sync_revision",
 				"skill_hub_agent_bindings:updated_at",
+				"skill_hub_agent_bindings:configuration_revision",
 				"skill_hub_installations:id",
 				"skill_hub_installations:installed_at",
 				"skill_hub_installations:need_upgrade",
@@ -2108,6 +2114,7 @@ describe("published Relay authority migration", () => {
 				"skill_hub_versions:visibility",
 			];
 			const skillHubChecks = [
+				"skill_hub_agent_bindings:skill_hub_agent_binding_configuration_revision_safe",
 				"skill_hub_agent_bindings:skill_hub_agent_binding_failure_binding",
 				"skill_hub_agent_bindings:skill_hub_agent_binding_state_valid",
 				"skill_hub_agent_bindings:skill_hub_agent_binding_sync_revision_safe",

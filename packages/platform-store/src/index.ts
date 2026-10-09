@@ -153,6 +153,10 @@ export {
 } from "./secret-key-rotation.ts";
 export { PostgresSkillHubLifecycleV1 } from "./skill-hub.js";
 export {
+	PostgresSkillHubAgentBindingAdmissionV1,
+	SkillHubAgentBindingAdmissionErrorV1,
+} from "./skill-hub-agent-binding.js";
+export {
 	PostgresTaskAuthorizationStoreV1,
 	TaskAuthorizationStoreError,
 } from "./task-authorization.js";
