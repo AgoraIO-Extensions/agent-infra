@@ -4,8 +4,8 @@ import { createServer } from "node:https";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TLSSocket } from "node:tls";
+import { createPinnedProviderFetch } from "@agent-infra/openconnector-adapter/provider-fetch";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createPinnedProviderFetch } from "./provider-fetch";
 
 describe("Provider connect-time IP pinning", () => {
 	const directory = mkdtempSync(join(tmpdir(), "connection-pinning-"));

@@ -260,6 +260,7 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 		"./datalego-v6": "./src/datalego-v6.ts",
 		"./jira-server": "./src/jira-server.ts",
 		"./manhattan": "./src/manhattan.ts",
+		"./provider-fetch": "./src/provider-fetch.ts",
 		"./rehoboam": "./src/rehoboam.ts",
 	});
 	assert.doesNotMatch(buildConfig, /local-runtime/);

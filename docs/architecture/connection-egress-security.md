@@ -7,7 +7,7 @@
 ## 连接级校验
 
 正式 Node runtime 的 Provider API、OAuth token/profile 和机器 Token 服务通过
-`apps/connection-api/src/provider-fetch.ts` 创建受控 Undici Agent。每次新建连接时，Agent 的
+`packages/openconnector-adapter/src/provider-fetch.ts` 创建受控 Undici Agent。每次新建连接时，Agent 的
 `connect.lookup` 解析并校验全部地址，只把通过校验的 IP 返回给真实连接；底层不会再次独立解析。
 复用连接仍连接原已校验地址，不把 DNS 变化当作更换账号或 Credential 的依据。
 

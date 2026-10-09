@@ -62,6 +62,7 @@ import {
 	manhattanLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/manhattan";
 import { connectionProviderCatalogs } from "@agent-infra/openconnector-adapter/provider-catalogs";
+import { createPinnedProviderFetch } from "@agent-infra/openconnector-adapter/provider-fetch";
 import {
 	RehoboamAdapter,
 	rehoboamConnectionCatalog,
@@ -69,7 +70,6 @@ import {
 } from "@agent-infra/openconnector-adapter/rehoboam";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 import { createConnectionApp } from "./app";
-import { createPinnedProviderFetch } from "./provider-fetch";
 import { fullConnectionRuntimeConfig } from "./runtime-config";
 
 export async function createConnectionRuntimeApp(
@@ -347,47 +347,25 @@ export async function createConnectionRuntime(
 		config.manhattanOAuth.clientId,
 		config.manhattanOAuth.clientSecret,
 	);
-	const datalego = new DataLegoAdapter(
-		createGuardedFetch({
-			allowPrivateNetwork: false,
-			maxRedirects: 0,
-			fetch: observeProviderFetch(
-				"datalego",
-				providerFetch([originFor("datalego"), "https://oauth.agoralab.co"]),
-			),
-		}),
-	);
+	const datalegoFetch = createGuardedFetch({
+		allowPrivateNetwork: false,
+		maxRedirects: 0,
+		fetch: observeProviderFetch(
+			"datalego",
+			providerFetch([originFor("datalego"), "https://oauth.agoralab.co"]),
+		),
+	});
+	const datalego = new DataLegoAdapter(datalegoFetch);
 	const datalegoOAuthV4 = new DataLegoV4Adapter(
-		createGuardedFetch({
-			allowPrivateNetwork: false,
-			maxRedirects: 0,
-			fetch: observeProviderFetch(
-				"datalego",
-				providerFetch([originFor("datalego"), "https://oauth.agoralab.co"]),
-			),
-		}),
+		datalegoFetch,
 		config.datalegoOAuth,
 	);
 	const datalegoOAuthV5 = new DataLegoV5Adapter(
-		createGuardedFetch({
-			allowPrivateNetwork: false,
-			maxRedirects: 0,
-			fetch: observeProviderFetch(
-				"datalego",
-				providerFetch([originFor("datalego"), "https://oauth.agoralab.co"]),
-			),
-		}),
+		datalegoFetch,
 		config.datalegoOAuth,
 	);
 	const datalegoOAuth = new DataLegoV6Adapter(
-		createGuardedFetch({
-			allowPrivateNetwork: false,
-			maxRedirects: 0,
-			fetch: observeProviderFetch(
-				"datalego",
-				providerFetch([originFor("datalego"), "https://oauth.agoralab.co"]),
-			),
-		}),
+		datalegoFetch,
 		config.datalegoOAuth,
 	);
 	const executors = new ProviderExecutorRouter({
