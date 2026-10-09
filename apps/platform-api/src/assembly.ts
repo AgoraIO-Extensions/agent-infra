@@ -129,6 +129,9 @@ export interface PlatformApiAssemblyInput {
 		Parameters<typeof createAgentDefaultRelayKeyUseCaseV1>[0],
 		"transaction"
 	>;
+	readonly validateDefaultRelayKey?: (
+		keyValue: string,
+	) => Promise<"valid" | "invalid" | "unavailable">;
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly connectionCapability?: ConnectionCapabilityV1;
@@ -698,6 +701,9 @@ export function assemblePlatformApi(
 			readAgentProjection: projections.readManagementAgentProjection,
 			personalApiAgentRead,
 			readApiAgentProjection: projections.readApiAgentProjection,
+			...(input.validateDefaultRelayKey
+				? { validateDefaultRelayKey: input.validateDefaultRelayKey }
+				: {}),
 		},
 		configuration: {
 			identity: input.identity,

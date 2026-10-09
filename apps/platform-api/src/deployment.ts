@@ -279,6 +279,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 				: {}),
 		},
 		...(personalRelayKeys ? { personalRelayKeys } : {}),
+		...(validatePersonalRelayKey
+			? { validateDefaultRelayKey: validatePersonalRelayKey }
+			: {}),
 		...(personalRelayKeys &&
 		relayKeyEncryptor &&
 		input.personalRelayKeyValidation &&
