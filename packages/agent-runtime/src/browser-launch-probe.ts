@@ -71,11 +71,9 @@ export async function probeChromiumLaunchV1() {
 		capability,
 		controlledFixture: { url, body: html },
 	});
-	let phase = "start";
 	try {
 		const started = await session.start();
 		if (started.status !== "ready") throw new Error();
-		phase = "version";
 		const version = await promisify(execFile)(
 			installation.executable,
 			["--version"],
@@ -85,16 +83,13 @@ export async function probeChromiumLaunchV1() {
 			version.stdout.trim().split(" ").at(-1) !== installation.chromiumVersion
 		)
 			throw new Error();
-		phase = "navigate";
 		const page = await session.navigate(url);
-		phase = "observe";
 		const initial = await session.observe(page);
 		if (initial.title !== "Browser supply probe") throw new Error();
 		const target = initial.elements.find(
 			(element) => element.name === "Continue",
 		);
 		if (!target) throw new Error();
-		phase = "act";
 		const action = await session.act({
 			kind: "click",
 			page,
@@ -106,18 +101,13 @@ export async function probeChromiumLaunchV1() {
 		if (action.status !== "completed") throw new Error();
 		const clicked = await session.observe(page);
 		if (!clicked.text.includes("Clicked")) throw new Error();
-		phase = "close";
 		await session.close();
 		if (session.snapshot().status !== "closed") throw new Error();
-		phase = "resume-start";
 		const resumed = await session.start();
 		if (resumed.status !== "ready") throw new Error();
-		phase = "resume-navigate";
 		const restoredPage = await session.navigate(url);
-		phase = "resume-observe";
 		const restored = await session.observe(restoredPage);
 		if (!restored.text.includes("retained")) throw new Error();
-		phase = "resume-close";
 		await session.close();
 		if (session.snapshot().status !== "closed") throw new Error();
 		return {
@@ -138,7 +128,6 @@ export async function probeChromiumLaunchV1() {
 			],
 		};
 	} catch {
-		console.error(`RUNTIME_BROWSER_LAUNCH_PROBE_PHASE=${phase}`);
 		throw new Error("RUNTIME_BROWSER_LAUNCH_PROBE_FAILED");
 	} finally {
 		try {
