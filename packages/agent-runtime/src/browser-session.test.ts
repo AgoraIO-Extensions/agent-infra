@@ -85,17 +85,32 @@ function fakePage() {
 
 function fakeBrowser() {
 	const page = fakePage();
+	const listeners = new Set<() => void>();
+	let closed = false;
 	const context = {
-		pages: () => [page],
+		pages: () => {
+			if (closed) throw new Error("Context closed");
+			return [page];
+		},
 		newPage: async () => page,
 		route: async () => undefined,
 		close: async () => undefined,
-		on: () => context,
+		on: (_event: string, listener: () => void) => {
+			listeners.add(listener);
+			return context;
+		},
 	} as unknown as BrowserContext;
 	const browserType = {
 		launchPersistentContext: async () => context,
 	} as unknown as BrowserType;
-	return { context, browserType };
+	return {
+		context,
+		browserType,
+		crash: () => {
+			closed = true;
+			for (const listener of listeners) listener();
+		},
+	};
 }
 
 it("composes one Session facade over Context lifecycle and observe controller", async () => {
@@ -110,8 +125,9 @@ it("composes one Session facade over Context lifecycle and observe controller", 
 		capability,
 	});
 	const [first, second] = await Promise.all([session.start(), session.start()]);
-	expect(first).toBe(fake.context);
-	expect(second).toBe(fake.context);
+	expect(first).toEqual({ status: "ready", ...binding, capabilityVersion: 1 });
+	expect(second).toEqual(first);
+	expect(first).not.toHaveProperty("pages");
 	const page = await session.navigate("https://example.test/");
 	const observation = await session.observe(page);
 	expect(observation).toMatchObject({
@@ -123,6 +139,34 @@ it("composes one Session facade over Context lifecycle and observe controller", 
 	await session.close();
 	expect(session.snapshot().status).toBe("closed");
 	const restarted = await session.start();
-	expect(restarted).toBe(fake.context);
+	expect(restarted).toMatchObject({ status: "ready" });
+	await session.close();
+});
+
+it("creates fresh page references after a Context crash rather than using the old controller", async () => {
+	const first = fakeBrowser();
+	const second = fakeBrowser();
+	let launches = 0;
+	const manager = createBrowserContextManagerV1({
+		sandboxRoot: "/tmp/browser-session-crash-test",
+		browserType: {
+			launchPersistentContext: async () =>
+				++launches === 1 ? first.context : second.context,
+		},
+	});
+	const session = createBrowserSessionControllerV1({
+		manager,
+		binding,
+		capability,
+	});
+	const oldPage = await session.navigate("https://example.test/");
+	first.crash();
+	expect(session.snapshot().status).toBe("crashed");
+	const newPage = await session.navigate("https://example.test/restored");
+	expect(newPage.pageId).not.toBe(oldPage.pageId);
+	await expect(session.observe(oldPage)).rejects.toThrow(
+		"BROWSER_PAGE_REFERENCE_STALE",
+	);
+	expect(await session.observe(newPage)).toMatchObject({ title: "Example" });
 	await session.close();
 });

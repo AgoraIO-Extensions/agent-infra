@@ -13,7 +13,7 @@ import type {
 import { createBrowserObserveControllerV1 } from "./browser-observe.js";
 
 export type BrowserSessionControllerV1 = Readonly<{
-	start(): Promise<BrowserContext>;
+	start(): Promise<BrowserContextManagerSnapshotV1>;
 	navigate(url: string): Promise<BrowserPageReferenceV1>;
 	observe(reference: BrowserPageReferenceV1): Promise<BrowserObservationV1>;
 	close(): Promise<void>;
@@ -26,17 +26,21 @@ export function createBrowserSessionControllerV1(input: {
 	readonly capability: BrowserCapabilityAvailableV1;
 }): BrowserSessionControllerV1 {
 	let observe: ReturnType<typeof createBrowserObserveControllerV1> | undefined;
+	let activeContext: BrowserContext | undefined;
 
-	async function start(): Promise<BrowserContext> {
+	async function start(): Promise<BrowserContextManagerSnapshotV1> {
 		const context = await input.manager.acquire(
 			input.binding,
 			input.capability,
 		);
-		observe ??= createBrowserObserveControllerV1({
-			context,
-			capability: input.capability,
-		});
-		return context;
+		if (activeContext !== context) {
+			observe = createBrowserObserveControllerV1({
+				context,
+				capability: input.capability,
+			});
+			activeContext = context;
+		}
+		return input.manager.snapshot();
 	}
 
 	return {
@@ -56,6 +60,7 @@ export function createBrowserSessionControllerV1(input: {
 		async close() {
 			await input.manager.close(input.binding);
 			observe = undefined;
+			activeContext = undefined;
 		},
 		snapshot: input.manager.snapshot,
 	};
