@@ -155,17 +155,26 @@ describe("Browser observe controller", () => {
 		await controller.navigate("https://example.test/fixture");
 		const fulfill = vi.fn(async () => undefined);
 		const continueRoute = vi.fn(async () => undefined);
+		const abort = vi.fn(async () => undefined);
 		const handler = context.routes[0] as (route: unknown) => Promise<void>;
 		await handler({
 			request: () => ({ url: () => "https://example.test/fixture" }),
 			fulfill,
 			continue: continueRoute,
-			abort: vi.fn(async () => undefined),
+			abort,
 		});
 		expect(fulfill).toHaveBeenCalledWith({
 			contentType: "text/html",
 			body: "<title>Fixture</title>",
 		});
+		expect(continueRoute).not.toHaveBeenCalled();
+		await handler({
+			request: () => ({ url: () => "https://example.test/favicon.ico" }),
+			fulfill,
+			continue: continueRoute,
+			abort,
+		});
+		expect(abort).toHaveBeenCalledWith("blockedbyclient");
 		expect(continueRoute).not.toHaveBeenCalled();
 	});
 

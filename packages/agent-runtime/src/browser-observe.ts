@@ -424,11 +424,15 @@ export function createBrowserObserveControllerV1(input: {
 			try {
 				const requestUrl = route.request().url();
 				assertAllowedUrl(requestUrl, allowedOrigins());
-				if (input.controlledFixture?.url === requestUrl) {
-					await route.fulfill({
-						contentType: "text/html",
-						body: input.controlledFixture.body,
-					});
+				if (input.controlledFixture) {
+					if (input.controlledFixture.url === requestUrl) {
+						await route.fulfill({
+							contentType: "text/html",
+							body: input.controlledFixture.body,
+						});
+					} else {
+						await route.abort("blockedbyclient");
+					}
 					return;
 				}
 				await route.continue();
