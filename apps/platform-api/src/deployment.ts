@@ -31,6 +31,16 @@ import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
 
+type CustomAgentGatewayRouteInput = NonNullable<
+	PlatformApiAssemblyInput["customAgentGateway"]
+>;
+
+/** Deployment-owned Gateway inputs; the production IdentityAdapter is bound by this module. */
+export type ProductionCustomAgentGatewayInputV1 = Omit<
+	CustomAgentGatewayRouteInput,
+	"identity"
+>;
+
 export interface ProductionPlatformApiInputV1
 	extends Omit<
 		DeploymentAdmissionInputV1,
@@ -79,7 +89,7 @@ export interface ProductionPlatformApiInputV1
 	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
-	readonly customAgentGateway?: PlatformApiAssemblyInput["customAgentGateway"];
+	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
 }
 
 export function createProductionPlatformApiAssemblyInputV1(
@@ -125,6 +135,17 @@ export function createProductionPlatformApiAssemblyInputV1(
 		resourceProfile = AgentResourceProfileProjectionV1Schema.parse(
 			input.resourceProfile,
 		);
+		if (input.customAgentGateway) {
+			if (
+				typeof input.customAgentGateway.path !== "string" ||
+				!input.customAgentGateway.path.startsWith("/") ||
+				!input.customAgentGateway.path.includes("*") ||
+				/[?#\s]/.test(input.customAgentGateway.path) ||
+				typeof input.customAgentGateway.resolveDeployment !== "function" ||
+				typeof input.customAgentGateway.authorizeAgent !== "function"
+			)
+				throw new Error();
+		}
 	} catch {
 		throw new Error("PLATFORM_DEPLOYMENT_CONFIGURATION_INVALID");
 	}
@@ -243,7 +264,12 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 		...(input.customAgentGateway
-			? { customAgentGateway: input.customAgentGateway }
+			? {
+					customAgentGateway: {
+						...input.customAgentGateway,
+						identity: input.identity,
+					},
+				}
 			: {}),
 		connectionCapability,
 		allocateApplicationIds: allocateDeploymentApplicationIds,
