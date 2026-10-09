@@ -23,6 +23,19 @@ export type BrowserContextManagerSnapshotV1 = Readonly<{
 	capabilityVersion?: number;
 }>;
 
+export type BrowserContextManagerV1 = Readonly<{
+	acquire(
+		binding: BrowserContextBindingV1,
+		capability: BrowserCapabilityProjectionV1,
+	): Promise<BrowserContext>;
+	resume(
+		binding: BrowserContextBindingV1,
+		capability: BrowserCapabilityProjectionV1,
+	): Promise<BrowserContext>;
+	close(binding: BrowserContextBindingV1): Promise<void>;
+	snapshot(): BrowserContextManagerSnapshotV1;
+}>;
+
 type BrowserContextManagerOptionsV1 = Readonly<{
 	sandboxRoot: string;
 	browserType: Pick<BrowserType, "launchPersistentContext">;
