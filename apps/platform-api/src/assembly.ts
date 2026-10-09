@@ -7,6 +7,7 @@ import {
 	createAgentApiCreationV1,
 	createAgentApiLifecycleV1,
 	createAgentConfigurationUseCaseV1,
+	createAgentDefaultRelayKeyUseCaseV1,
 	createAgentManagementV1,
 	createApplicationApiCredentialIssuerV1,
 	createApplicationFoundationUseCaseV1,
@@ -32,6 +33,7 @@ import {
 	PostgresApplicationMaterialGrantStoreV1,
 	PostgresApplicationRegistrationStoreV1,
 	PostgresApplicationRevisionTransactionV1,
+	PostgresAgentDefaultRelayKeyStoreV1,
 	PostgresCommitWakeupListenerV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
@@ -122,6 +124,10 @@ export interface PlatformApiAssemblyInput {
 	readonly personalRelayKeys?: Pick<
 		Parameters<typeof createPersonalRelayKeyUseCaseV1>[0],
 		"currentIdentity" | "validate" | "encrypt"
+	>;
+	readonly agentDefaultRelayKeys?: Omit<
+		Parameters<typeof createAgentDefaultRelayKeyUseCaseV1>[0],
+		"transaction"
 	>;
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
@@ -330,6 +336,16 @@ export function assemblePlatformApi(
 					encrypt: input.personalRelayKeys.encrypt,
 				})
 			: undefined;
+	const agentDefaultRelayKeyStore = input.agentDefaultRelayKeys
+		? new PostgresAgentDefaultRelayKeyStoreV1({ databaseUrl: input.databaseUrl })
+		: undefined;
+	const agentDefaultRelayKeys =
+		agentDefaultRelayKeyStore && input.agentDefaultRelayKeys
+			? createAgentDefaultRelayKeyUseCaseV1({
+					...input.agentDefaultRelayKeys,
+					transaction: agentDefaultRelayKeyStore,
+				})
+			: undefined;
 	const personalApiCredentials = createPersonalApiCredentialUseCaseV1({
 		transaction: personalApiCredentialStore,
 		userDirectory,
@@ -398,6 +414,9 @@ export function assemblePlatformApi(
 		transaction: foundationTransaction,
 		...admissions,
 		...channelAdmission,
+		...(input.agentDefaultRelayKeys
+			? { defaultRelayKey: input.agentDefaultRelayKeys }
+			: {}),
 	});
 	const agentApiCreation = input.agentApiCreation
 		? createAgentApiCreationV1({
@@ -611,6 +630,14 @@ export function assemblePlatformApi(
 					},
 				}
 			: {}),
+		...(agentDefaultRelayKeys
+			? {
+					agentDefaultRelayKeys: {
+						identity: input.identity,
+						keys: agentDefaultRelayKeys,
+					},
+				}
+			: {}),
 		...(wecomReceipts
 			? {
 					wecomReceipts: {
@@ -770,6 +797,7 @@ export function assemblePlatformApi(
 		...(installationStore ? [installationStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
 		...(input.userGovernance ? [input.userGovernance] : []),
+		...(agentDefaultRelayKeyStore ? [agentDefaultRelayKeyStore] : []),
 	];
 	return {
 		dependencies,
