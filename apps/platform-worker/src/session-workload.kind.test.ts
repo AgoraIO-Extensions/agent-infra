@@ -396,7 +396,7 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 			const workloadStore = openPostgresWorkloadReconciliationStoreV1({
 				databaseUrl: database.databaseUrl,
 				retryDelayMs: 0,
-				monitorDelayMs: 3_600_000,
+				monitorDelayMs: 300_000,
 			});
 			try {
 				expect(
