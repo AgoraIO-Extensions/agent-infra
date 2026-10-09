@@ -48,8 +48,16 @@ function ApiCredentialsRoute() {
 			<ApiCredentialsScreen
 				state={credentials.state}
 				onRetry={() => void credentials.refetch()}
-				onIssue={issue.mutateAsync}
-				onRevoke={revoke.mutateAsync}
+				onIssue={async (body) => {
+					const result = await issue.mutateAsync(body);
+					await credentials.refetch();
+					return result;
+				}}
+				onRevoke={async (credentialId) => {
+					const result = await revoke.mutateAsync(credentialId);
+					await credentials.refetch();
+					return result;
+				}}
 				isIssuing={issue.isPending}
 				revokingCredentialId={revoke.variables}
 				issueError={issue.error}
@@ -67,7 +75,11 @@ function ApiCredentialsRoute() {
 					});
 					return metadata;
 				}}
-				onDisable={disable.mutateAsync}
+				onDisable={async (applicationId) => {
+					const result = await disable.mutateAsync(applicationId);
+					await application.refetch();
+					return result;
+				}}
 				onIssueCredential={issueApplicationCredential.mutateAsync}
 				isRegistering={register.isPending}
 				isDisabling={disable.isPending}
