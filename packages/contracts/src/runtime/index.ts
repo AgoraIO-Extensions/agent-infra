@@ -201,7 +201,7 @@ export const RuntimeHostV3SchemaDefinitions = {
 	RuntimeEventAckResponseV3: RuntimeEventAckResponseV3Schema,
 };
 
-export * from "./oauth.ts";
 export * from "./installation.ts";
+export * from "./oauth.ts";
 
 export { canonicalRuntimeRequestSigningPayload } from "./request-signing.ts";

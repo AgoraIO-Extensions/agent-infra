@@ -35,6 +35,8 @@ export const ScopedPlatformAuditActionV1Schema = z.enum([
 	"skill.version.revoke",
 	"skill.version.read",
 	"skill.version.refused",
+	"connection.installation.begin",
+	"connection.installation.confirm",
 	"agent.application.submitted",
 	"agent.application.updated",
 	"agent.application.resubmitted",

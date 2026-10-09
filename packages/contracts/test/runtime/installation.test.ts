@@ -15,6 +15,14 @@ const scope = {
 };
 
 describe("MCP installation contracts", () => {
+	it("refuses application authorization in the employee installation contract", () => {
+		expect(
+			ConnectionInstallationAuthorizationV1Schema.shape.principal.safeParse({
+				kind: "application",
+				id: "alice",
+			}).success,
+		).toBe(false);
+	});
 	it("accepts a non-sensitive authorization snapshot", () => {
 		expect(
 			ConnectionInstallationAuthorizationV1Schema.parse({
@@ -23,7 +31,6 @@ describe("MCP installation contracts", () => {
 				confirmationRevision: "confirmation-a",
 				principal: { kind: "user", id: "alice" },
 				reference: {
-					schemaVersion: 1,
 					agentId: "agent-a",
 					conversationId: "conversation-a",
 					executionId: "execution-a",
@@ -33,7 +40,10 @@ describe("MCP installation contracts", () => {
 				status: "confirmed",
 				expiresAt: Date.now() + 60_000,
 			}),
-		).toMatchObject({ authorizationId: "authorization-a", status: "confirmed" });
+		).toMatchObject({
+			authorizationId: "authorization-a",
+			status: "confirmed",
+		});
 	});
 
 	it("rejects secrets and caller-selected authority fields", () => {
@@ -48,6 +58,8 @@ describe("MCP installation contracts", () => {
 			updatedAt: Date.now(),
 			token: "secret-token",
 		};
-		expect(ConnectionInstallationCommandV1Schema.safeParse(value).success).toBe(false);
+		expect(ConnectionInstallationCommandV1Schema.safeParse(value).success).toBe(
+			false,
+		);
 	});
 });

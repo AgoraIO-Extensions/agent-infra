@@ -34,6 +34,53 @@ function comparePaths(current: string, previous: string) {
 	);
 }
 
+it("admits only the reviewed installation paths, headers and restricted response", async () => {
+	const current = JSON.parse(
+		await readFile(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	);
+	const paths = [
+		"/api/connection-installations",
+		"/api/connection-installations/{authorizationId}",
+		"/api/connection-installations/{authorizationId}/confirm",
+	];
+	const previous = structuredClone(current);
+	for (const path of paths) delete previous.paths[path];
+	const directory = await mkdtemp(resolve(tmpdir(), "installation-compat-"));
+	const before = resolve(directory, "previous.json");
+	const after = resolve(directory, "current.json");
+	try {
+		await writeFile(before, JSON.stringify(previous));
+		await writeFile(after, JSON.stringify(current));
+		expect(comparePaths(after, before).status).toBe(0);
+		for (const mutate of [
+			(document: typeof current) => {
+				document.paths[paths[0]!].post.security = [];
+			},
+			(document: typeof current) => {
+				document.paths[paths[0]!].post.parameters = [];
+			},
+			(document: typeof current) => {
+				document.paths[paths[0]!].post.responses[202].content[
+					"application/json"
+				].schema.properties.token = { type: "string" };
+			},
+		]) {
+			const changed = structuredClone(current);
+			mutate(changed);
+			await writeFile(after, JSON.stringify(changed));
+			expect(comparePaths(after, before).status).toBe(1);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 function compare(current: string, previous = "base") {
 	return comparePaths(fixturePath(current), fixturePath(previous));
 }

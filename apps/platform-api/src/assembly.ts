@@ -81,6 +81,12 @@ interface AssemblyQueries {
 }
 
 export interface PlatformApiAssemblyInput {
+	readonly connectionInstallation?: {
+		readonly publicOrigin: string;
+		readonly configuration: RuntimeOAuthConfigurationV1;
+		readonly profile: unknown;
+		readonly approval: unknown;
+	};
 	readonly applicationCredentialDelivery?: Parameters<
 		typeof createApplicationCredentialProcessDeliveryV1
 	>[0];
@@ -251,6 +257,13 @@ export function assemblePlatformApi(
 	const taskAuthorization = new PostgresTaskAuthorizationStoreV1({
 		databaseUrl: input.databaseUrl,
 	});
+	const installationStore = input.connectionInstallation
+		? new PostgresConnectionInstallationAuthorizationTransactionV1({
+				databaseUrl: input.databaseUrl,
+				directory: userDirectory,
+				...input.connectionInstallation,
+			})
+		: undefined;
 	const personalApiCredentialStore = new PostgresPersonalApiCredentialStoreV1({
 		databaseUrl: input.databaseUrl,
 	});
@@ -538,6 +551,17 @@ export function assemblePlatformApi(
 			})
 		: undefined;
 	const dependencies: PlatformAppDependencies = {
+		...(installationStore && input.connectionInstallation
+			? {
+					connectionInstallations: {
+						identity: input.identity,
+						publicOrigin: input.connectionInstallation.publicOrigin,
+						installation: createConnectionInstallationAuthorizationV1({
+							store: installationStore,
+						}),
+					},
+				}
+			: {}),
 		tasks,
 		...(agentApiCreation
 			? {
@@ -692,6 +716,7 @@ export function assemblePlatformApi(
 		applicationRegistrationStore,
 		applicationMaterialGrantStore,
 		applicationApiCredentialStore,
+		...(installationStore ? [installationStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
 	];
 	return {
@@ -713,3 +738,7 @@ export function assemblePlatformApi(
 		},
 	};
 }
+
+import type { RuntimeOAuthConfigurationV1 } from "@agent-infra/contracts/runtime";
+import { createConnectionInstallationAuthorizationV1 } from "@agent-infra/platform-core";
+import { PostgresConnectionInstallationAuthorizationTransactionV1 } from "@agent-infra/platform-store";

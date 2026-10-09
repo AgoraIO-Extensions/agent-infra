@@ -1,6 +1,8 @@
 import type { AuditRecord } from "./audit-query.js";
 
 export const auditActionLabels: Record<AuditRecord["action"], string> = {
+	"connection.installation.begin": "发起 Connection 安装",
+	"connection.installation.confirm": "确认 Connection 安装",
 	"skill.version.register": "Skill 版本登记",
 	"skill.version.review": "Skill 版本审核",
 	"skill.version.revoke": "Skill 版本撤销",

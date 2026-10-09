@@ -1048,6 +1048,95 @@ export type AgentConfigurationUpdateRequestV2Writable = {
     }>;
 };
 
+export type BeginPlatformConnectionInstallationV1Data = {
+    body: {
+        executionId: string;
+        schemaVersion: 1;
+    };
+    headers: {
+        Origin: string;
+        'X-Platform-CSRF': '1';
+        'Sec-Fetch-Site'?: 'same-origin';
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/connection-installations';
+};
+
+export type BeginPlatformConnectionInstallationV1Responses = {
+    /**
+     * Platform installation confirmation fact; no credential or Connection Grant
+     */
+    202: {
+        authorizationId: string;
+        expiresAt: number;
+        schemaVersion: 1;
+        status: 'awaiting_confirmation' | 'confirmed' | 'revoked' | 'expired' | 'unknown';
+    };
+};
+
+export type BeginPlatformConnectionInstallationV1Response = BeginPlatformConnectionInstallationV1Responses[keyof BeginPlatformConnectionInstallationV1Responses];
+
+export type ReadPlatformConnectionInstallationV1Data = {
+    body?: never;
+    headers: {
+        Origin: string;
+        'X-Platform-CSRF': '1';
+        'Sec-Fetch-Site'?: 'same-origin';
+    };
+    path: {
+        authorizationId: string;
+    };
+    query?: never;
+    url: '/api/connection-installations/{authorizationId}';
+};
+
+export type ReadPlatformConnectionInstallationV1Responses = {
+    /**
+     * Platform installation confirmation fact; no credential or Connection Grant
+     */
+    200: {
+        authorizationId: string;
+        expiresAt: number;
+        schemaVersion: 1;
+        status: 'awaiting_confirmation' | 'confirmed' | 'revoked' | 'expired' | 'unknown';
+    };
+};
+
+export type ReadPlatformConnectionInstallationV1Response = ReadPlatformConnectionInstallationV1Responses[keyof ReadPlatformConnectionInstallationV1Responses];
+
+export type ConfirmPlatformConnectionInstallationV1Data = {
+    body: {
+        schemaVersion: 1;
+    };
+    headers: {
+        Origin: string;
+        'X-Platform-CSRF': '1';
+        'Sec-Fetch-Site'?: 'same-origin';
+        'Idempotency-Key': string;
+    };
+    path: {
+        authorizationId: string;
+    };
+    query?: never;
+    url: '/api/connection-installations/{authorizationId}/confirm';
+};
+
+export type ConfirmPlatformConnectionInstallationV1Responses = {
+    /**
+     * Platform installation confirmation fact; no credential or Connection Grant
+     */
+    202: {
+        authorizationId: string;
+        expiresAt: number;
+        schemaVersion: 1;
+        status: 'awaiting_confirmation' | 'confirmed' | 'revoked' | 'expired' | 'unknown';
+    };
+};
+
+export type ConfirmPlatformConnectionInstallationV1Response = ConfirmPlatformConnectionInstallationV1Responses[keyof ConfirmPlatformConnectionInstallationV1Responses];
+
 export type ListPendingAgentApplicationsV2Data = {
     body?: never;
     path?: never;

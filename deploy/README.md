@@ -138,6 +138,30 @@ HTTP `202` 仅表示新配置修订已提交；同一发布重试沿用原 key�
 真实账号、Registry、Workload 与首通联合验收仍由
 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192) 跟进。
 
+### Platform Connection 安装确认
+
+Platform API 的受信 `configuration.mjs` 可导出非敏感 `connectionInstallationConfiguration`
+（现有 `RuntimeOAuthConfigurationV1`），与相同模块的完整 Consumer profile/approval 和
+`publicOrigin` 一起装配。API 的 POST `/api/connection-installations`、`/{authorizationId}/confirm`
+与 `/{authorizationId}` 均使用 POST 和当前员工浏览器身份；三者均须 exact Origin、
+`X-Platform-CSRF: 1` 和同源 Fetch Metadata，API/application credential 被拒绝。
+
+本接收片仅支持原用户仍有权使用的 processing V4 Web Execution 与 ready Sandbox/Pod。
+Platform DB 保存原执行绑定、短期非敏感确认与命令事实，confirm 保留原 confirmationRevision，
+status 只读这些平台事实；它不表示 Connection 授权、token 可用或 MCP 安装已发布。
+code、verifier、Token、Consumer secret 与 Runtime URL 不能作为浏览器命令字段。
+
+Worker 的同源 `connectionInstallation` 可以只导出 `configuration`；默认确认 producer
+读取 Platform DB 的这份事实，在 `finalCheck` 后再次核对原用户、权限、Execution、Pod、
+代次与 profile/config。已 configured 的外部 `authorize` 接收合同仍可使用；缺失或漂移时
+不发新安装请求。本片只批准尚未 sending 的单一 pending 命令；任何 sending/unknown
+阻断同一安装的后续发送，重复 confirm 不产生新命令。接入 drain 前必须补齐具名 commandId
+与发送 attempt 的所有权校验，使提交 sending 后的原发送可复核，不能放行任意 sending。
+这里只接上确认事实来源，独立命令 drain 与 callback 瞬时转交继续按
+[工程 Spec §13.5.6](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
+实施，生产 Token/ConsumerInstance/真实保护门禁仍沿
+[#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) 保留。
+
 ### Workload 调谐
 
 生产 Worker 必须在 `platformWorker.deploymentModule` 显式配置部署镜像中已打包模块的绝对路径或 `file:///` URL，例如仓库基础镜像中的 `file:///app/dist/deployment.mjs`。生产 Helm 同时要求 `platformWorker.configurationModuleSecretRef` 指向受信任的相邻 `configuration.mjs`，并要求 `platformWorker.runtimeAuthSecretRef` 指向 Worker 独占的签名私钥与服务 token；只读挂载与 Secret 名称不能证明模块已实际导入或业务流程已运行。发布前必须在最终镜像与实际挂载下确认模块可加载并导出下述工厂。缺少任一引用时生产 Helm 渲染失败；Kind 拓扑仅运行占位进程，不代表生产 Worker 可用。Worker 加载部署包导出的

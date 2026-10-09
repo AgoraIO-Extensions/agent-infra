@@ -4776,6 +4776,337 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/connection-installations": {
+      "post": {
+        "operationId": "beginPlatformConnectionInstallationV1",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Platform-CSRF",
+            "required": true,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Sec-Fetch-Site",
+            "schema": {
+              "const": "same-origin",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "executionId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "executionId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "authorizationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "enum": [
+                        "awaiting_confirmation",
+                        "confirmed",
+                        "revoked",
+                        "expired",
+                        "unknown"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "authorizationId",
+                    "status",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Platform installation confirmation fact; no credential or Connection Grant"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
+    "/api/connection-installations/{authorizationId}": {
+      "post": {
+        "operationId": "readPlatformConnectionInstallationV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "authorizationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Platform-CSRF",
+            "required": true,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Sec-Fetch-Site",
+            "schema": {
+              "const": "same-origin",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "authorizationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "enum": [
+                        "awaiting_confirmation",
+                        "confirmed",
+                        "revoked",
+                        "expired",
+                        "unknown"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "authorizationId",
+                    "status",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Platform installation confirmation fact; no credential or Connection Grant"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
+    "/api/connection-installations/{authorizationId}/confirm": {
+      "post": {
+        "operationId": "confirmPlatformConnectionInstallationV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "authorizationId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Platform-CSRF",
+            "required": true,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Sec-Fetch-Site",
+            "schema": {
+              "const": "same-origin",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "schemaVersion"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "authorizationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "status": {
+                      "enum": [
+                        "awaiting_confirmation",
+                        "confirmed",
+                        "revoked",
+                        "expired",
+                        "unknown"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "authorizationId",
+                    "status",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Platform installation confirmation fact; no credential or Connection Grant"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
     "/api/v2/admin/agent-applications": {
       "get": {
         "operationId": "listPendingAgentApplicationsV2",

@@ -2,5 +2,6 @@
 	"extends": "@agent-infra/config/tsconfig.base.json",
 	"compilerOptions": {
 		"allowImportingTsExtensions": true
-	}
+	},
+	"include": ["src"]
 }

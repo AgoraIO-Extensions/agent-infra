@@ -18,6 +18,7 @@ const {
 	publicOrigin,
 	connectionConsumerProfile,
 	connectionConsumerProfileApproval,
+	connectionInstallationConfiguration,
 	apiInput,
 	directorySearch,
 } = await import(configurationModule);
@@ -51,6 +52,14 @@ export function createPlatformApiAssemblyInput() {
 		directory: { identity: browser.identity, search: directorySearch },
 		connectionConsumerProfile,
 		connectionConsumerProfileApproval,
+		...(connectionInstallationConfiguration
+			? {
+					connectionInstallation: {
+						configuration: connectionInstallationConfiguration,
+						publicOrigin,
+					},
+				}
+			: {}),
 		databaseUrl,
 		identity: browser.identity,
 	});

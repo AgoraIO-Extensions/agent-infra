@@ -47,6 +47,10 @@ export interface ProductionPlatformApiInputV1
 		>["candidates"];
 	};
 	readonly connectionConsumerProfile?: unknown;
+	readonly connectionInstallation?: Omit<
+		NonNullable<PlatformApiAssemblyInput["connectionInstallation"]>,
+		"profile" | "approval"
+	>;
 	readonly connectionConsumerProfileApproval?: unknown;
 	readonly wecom?: PlatformApiAssemblyInput["wecom"];
 	readonly wecomIdentity?: PlatformApiAssemblyInput["wecomIdentity"];
@@ -185,6 +189,15 @@ export function createProductionPlatformApiAssemblyInputV1(
 				}
 			: undefined;
 	return {
+		...(input.connectionInstallation
+			? {
+					connectionInstallation: {
+						...input.connectionInstallation,
+						profile: input.connectionConsumerProfile,
+						approval: input.connectionConsumerProfileApproval,
+					},
+				}
+			: {}),
 		agentApiCreation: {
 			allowedPrincipals,
 			loadAuthorityContext: input.loadAuthorityContext,
