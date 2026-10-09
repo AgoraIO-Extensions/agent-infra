@@ -1,6 +1,7 @@
 import { createRuntimeExecutionGrantVerifierV2 } from "@agent-infra/agent-runtime";
 import {
 	type ConversationDispatchStorePortV1,
+	ConversationRuntimeHostError,
 	createConversationDispatchUseCaseV1,
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
@@ -534,7 +535,7 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			});
 		}
 
-		it("re-checks authorization and route before each read without a full preparation", async () => {
+		it("re-checks authorization before each read and reuses the fresh live route (#1611)", async () => {
 			const h = runtimeV4Harness();
 			try {
 				const reference = await h.authorize();
@@ -546,12 +547,17 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 				Object.assign(h.state, { runtimeCursor: "model-cursor" });
 				const resolves = h.resolveRuntimeHost.mock.calls.length;
 				const users = h.directory.resolveUser.mock.calls.length;
+				const records =
+					h.taskAuthorizationStore.readExecution.mock.calls.length;
 				expect((await stream.next()).value).toEqual(terminal);
 				expect((await stream.next()).done).toBe(true);
-				// One route check and two authorization checks guard the second read;
-				// a full preparation adds three route resolutions and five checks.
-				expect(h.resolveRuntimeHost.mock.calls.length - resolves).toBe(1);
-				expect(h.directory.resolveUser.mock.calls.length - users).toBe(2);
+				// One authorization evaluation guards the second read; the live
+				// route proved by the preparation is still inside its window.
+				expect(h.resolveRuntimeHost.mock.calls.length - resolves).toBe(0);
+				expect(h.directory.resolveUser.mock.calls.length - users).toBe(1);
+				expect(
+					h.taskAuthorizationStore.readExecution.mock.calls.length - records,
+				).toBe(2);
 				expect(
 					h.fetcher.mock.calls.map(
 						([, init]) => JSON.parse(init?.body as string).afterCursor,
@@ -577,7 +583,8 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 				});
 				const resolves = h.resolveRuntimeHost.mock.calls.length;
 				expect((await stream.next()).value).toEqual(terminal);
-				expect(h.resolveRuntimeHost.mock.calls.length - resolves).toBe(4);
+				// A full preparation observes the live route three times.
+				expect(h.resolveRuntimeHost.mock.calls.length - resolves).toBe(3);
 			} finally {
 				h.runtime.close();
 			}
@@ -639,6 +646,224 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 					purpose: "control",
 					reason: "authorization_revoked",
 				});
+			} finally {
+				h.runtime.close();
+			}
+		});
+	});
+
+	describe("bounding the live route reuse of a V4 drain (#1611)", () => {
+		const route = "/internal/runtime/v4/events/";
+		function threePages(h: ReturnType<typeof runtimeV4Harness>) {
+			h.fetcher.mockImplementation(async (url, init) => {
+				const body = JSON.parse(init?.body as string);
+				if (String(url).endsWith("/events/ack"))
+					return Response.json({
+						schemaVersion: 4,
+						executionId: "execution",
+						confirmedCursor: body.confirmedCursor,
+					});
+				return Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					executionId: "execution",
+					events:
+						body.afterCursor === null
+							? [modelFact]
+							: body.afterCursor === "model-cursor"
+								? [toolFact]
+								: [terminal],
+				});
+			});
+		}
+		async function firstPage(h: ReturnType<typeof runtimeV4Harness>) {
+			const reference = await h.authorize();
+			threePages(h);
+			const stream = h.runtime.runtimeHost
+				.events(h.events(reference))
+				[Symbol.asyncIterator]();
+			expect((await stream.next()).value).toEqual(modelFact);
+			Object.assign(h.state, { runtimeCursor: "model-cursor" });
+			return { reference, stream };
+		}
+		const calls = (h: ReturnType<typeof runtimeV4Harness>) => ({
+			routes: h.resolveRuntimeHost.mock.calls.length,
+			users: h.directory.resolveUser.mock.calls.length,
+			sent: h.fetcher.mock.calls.length,
+		});
+		const acks = (h: ReturnType<typeof runtimeV4Harness>) =>
+			h.fetcher.mock.calls
+				.filter(([url]) => String(url).endsWith(`${route}ack`))
+				.map(([, init]) => JSON.parse(init?.body as string));
+
+		it("re-observes the live route once its proof leaves the window, then reuses the refreshed proof", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const { stream } = await firstPage(h);
+				h.setNow(time + 2_000);
+				const before = calls(h);
+				expect((await stream.next()).value).toEqual(toolFact);
+				expect(calls(h).routes - before.routes).toBe(1);
+				expect(calls(h).users - before.users).toBe(2);
+				Object.assign(h.state, { runtimeCursor: "tool-cursor" });
+				h.setNow(time + 3_999);
+				const refreshed = calls(h);
+				expect((await stream.next()).value).toEqual(terminal);
+				expect(calls(h).routes - refreshed.routes).toBe(0);
+				expect(calls(h).users - refreshed.users).toBe(1);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it.each(["changed", "unavailable"] as const)(
+			"sends no read when the re-observed live route is %s",
+			async (change) => {
+				const h = runtimeV4Harness();
+				try {
+					const { stream } = await firstPage(h);
+					h.setNow(time + 2_000);
+					if (change === "changed")
+						h.target.serviceToken = "rotated-service-token";
+					else
+						h.resolveRuntimeHost.mockRejectedValue(
+							new ConversationRuntimeHostError(
+								"RUNTIME_WORKLOAD_UNAVAILABLE",
+								true,
+							),
+						);
+					const before = calls(h);
+					await expect(stream.next()).rejects.toMatchObject({
+						code:
+							change === "changed"
+								? "RUNTIME_ROUTE_STALE"
+								: "RUNTIME_WORKLOAD_UNAVAILABLE",
+					});
+					expect(calls(h).sent).toBe(before.sent);
+				} finally {
+					h.runtime.close();
+				}
+			},
+		);
+
+		it("rejects a Platform route record change on the next read inside the window", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const { stream } = await firstPage(h);
+				h.setRecord({
+					...h.record(),
+					workload: { ...h.workload, revision: h.workload.revision + 1 },
+				});
+				const before = calls(h);
+				await expect(stream.next()).rejects.toMatchObject({
+					code: "RUNTIME_ROUTE_STALE",
+				});
+				expect(calls(h).sent).toBe(before.sent);
+				expect(calls(h).routes).toBe(before.routes);
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("ACKs inside the drain on the reads' preparation with one authorization evaluation", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const { reference } = await firstPage(h);
+				const before = calls(h);
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(reference),
+					confirmedCursor: "model-cursor",
+				});
+				// A full preparation would add three route observations and four
+				// authorization evaluations before the ACK.
+				expect(calls(h).routes - before.routes).toBe(0);
+				expect(calls(h).users - before.users).toBe(1);
+				expect(acks(h)).toHaveLength(1);
+				expect(acks(h)[0]?.confirmedCursor).toBe("model-cursor");
+				expect(verifyControl(acks(h)[0]?.grant).claims).toMatchObject({
+					purpose: "business",
+					authorizationRecordId: "authorization",
+					eventAccess: {
+						command: "events.ack",
+						confirmedCursor: "model-cursor",
+					},
+				});
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("prepares an ACK again when its re-observed live route changed", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const { reference } = await firstPage(h);
+				h.setNow(time + 2_000);
+				h.target.serviceToken = "rotated-service-token";
+				const before = calls(h);
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(reference),
+					confirmedCursor: "model-cursor",
+				});
+				// The stale proof is rejected before sending; only the new full
+				// preparation's route carries the ACK.
+				expect(calls(h).routes - before.routes).toBe(4);
+				expect(acks(h)).toHaveLength(1);
+				expect(h.sent().url).toMatch(/\/events\/ack$/);
+				expect(h.sent().init?.headers).toMatchObject({
+					authorization: "Bearer rotated-service-token",
+				});
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("signs the ACK for control when the user is disabled after the last read", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const { reference } = await firstPage(h);
+				h.setUser(null);
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(reference),
+					confirmedCursor: "model-cursor",
+				});
+				expect(acks(h)).toHaveLength(1);
+				expect(verifyControl(acks(h)[0]?.grant).claims).toMatchObject({
+					purpose: "control",
+					reason: "authorization_revoked",
+				});
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("prepares the ACK again after a stop since the last read", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const { reference } = await firstPage(h);
+				Object.assign(h.state, { stopPending: true });
+				const before = calls(h);
+				await h.runtime.runtimeHost.acknowledge?.({
+					...h.events(reference),
+					confirmedCursor: "model-cursor",
+				});
+				expect(calls(h).routes - before.routes).toBe(3);
+				expect(acks(h)).toHaveLength(1);
+				expect(verifyControl(acks(h)[0]?.grant).claims).toMatchObject({
+					purpose: "control",
+					reason: "stop",
+				});
+			} finally {
+				h.runtime.close();
+			}
+		});
+
+		it("keeps the full route check for a business submission", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				await h.runtime.runtimeHost.dispatch(h.request(reference));
+				// Three observations prepare the Turn and one guards its send.
+				expect(h.resolveRuntimeHost).toHaveBeenCalledTimes(4);
 			} finally {
 				h.runtime.close();
 			}

@@ -152,6 +152,10 @@ type Request =
 	| OriginalStatusRequest;
 type Command = RuntimeBusinessCommandV2 | RuntimeControlCommandV2;
 
+/** Bounded reuse of one drain's live Kubernetes route observation (#1611). */
+const eventRouteProofMaxAgeMs = 2_000;
+const eventCommands: readonly Command[] = ["events.persist", "events.ack"];
+
 function unavailable(code = "AUTHORIZATION_UNAVAILABLE"): never {
 	throw new ConversationRuntimeHostError(code, true);
 }
@@ -194,8 +198,9 @@ export function createConversationRuntimeV2(
 ) {
 	if (!options.workerId || !options.signing.workerId)
 		throw new TypeError("Conversation Worker identity is invalid");
-	// An empty V4 page costs one authorization and route check, not a full
-	// preparation, so a short pause keeps the drain close to the Runtime.
+	// An empty V4 page costs one authorization check and, at most once per
+	// route window, one route observation, not a full preparation, so a short
+	// pause keeps the drain close to the Runtime.
 	const reconnectDelayMs = options.reconnectDelayMs ?? 250;
 	if (
 		!Number.isSafeInteger(reconnectDelayMs) ||
@@ -204,6 +209,9 @@ export function createConversationRuntimeV2(
 	)
 		throw new TypeError("Conversation reconnect interval is invalid");
 	const contexts = new WeakMap<object, Context>();
+	// The latest event-drain preparation per claim context, reused by its ACKs.
+	const drains = new WeakMap<Context, Awaited<ReturnType<typeof prepare>>>();
+	const now = options.signing.now ?? Date.now;
 	const controller = new AbortController();
 	const lifetime = options.signal
 		? AbortSignal.any([controller.signal, options.signal])
@@ -439,6 +447,7 @@ export function createConversationRuntimeV2(
 			await control(context, "stop", signal);
 			unavailable("RUNTIME_ROUTE_STALE");
 		}
+		const routeObservedAt = now();
 		const postTarget = await bounded(
 			options.resolveRuntimeHost({
 				agentId: context.claim.agentId,
@@ -515,6 +524,9 @@ export function createConversationRuntimeV2(
 			base,
 			target: postTarget,
 			route: structuredClone(afterTargetRoute.record),
+			// Shared by every continuation of this preparation, so a refreshed
+			// observation also covers the drain's later reads and ACKs.
+			routeProof: { observedAt: routeObservedAt },
 		};
 	}
 	function customBusiness(prepared: Awaited<ReturnType<typeof prepare>>) {
@@ -574,54 +586,71 @@ export function createConversationRuntimeV2(
 			unavailable("RUNTIME_ROUTE_STALE");
 		if (!isDeepStrictEqual(decision.record, prepared.route))
 			unavailable("RUNTIME_ROUTE_STALE");
-		const target = await bounded(
-			options.resolveRuntimeHost({
-				agentId: prepared.context.claim.agentId,
-				conversationId: prepared.context.claim.conversationId,
-				actorId: prepared.context.claim.actorId,
-				channelId: prepared.context.claim.channelId,
-				principal: prepared.context.claim.principal,
-				sessionGeneration: prepared.context.claim.sessionGeneration,
-				deliveryFence: prepared.context.claim.deliveryFence,
+		// Authorization, the Platform route record and the fenced state are
+		// checked on every request. Only the live Kubernetes route observation
+		// of an event drain is reused, and only within a bounded window (#1611).
+		const age = now() - prepared.routeProof.observedAt;
+		const reuseRoute =
+			eventCommands.includes(command) &&
+			age >= 0 &&
+			age < eventRouteProofMaxAgeMs;
+		let routeObservedAt: number | undefined;
+		if (!reuseRoute) {
+			routeObservedAt = now();
+			const target = await bounded(
+				options.resolveRuntimeHost({
+					agentId: prepared.context.claim.agentId,
+					conversationId: prepared.context.claim.conversationId,
+					actorId: prepared.context.claim.actorId,
+					channelId: prepared.context.claim.channelId,
+					principal: prepared.context.claim.principal,
+					sessionGeneration: prepared.context.claim.sessionGeneration,
+					deliveryFence: prepared.context.claim.deliveryFence,
+					signal,
+					workload: decision.record.workload,
+					sandboxResource: state.sandboxResource,
+					purpose: decision.authority.purpose,
+					command,
+				}),
 				signal,
-				workload: decision.record.workload,
-				sandboxResource: state.sandboxResource,
-				purpose: decision.authority.purpose,
+			);
+			if (!isDeepStrictEqual(target, prepared.target))
+				unavailable("RUNTIME_ROUTE_STALE");
+			const latestState = await stateFor(prepared.context, signal);
+			const latest = await current(
+				prepared.context,
+				latestState,
 				command,
-			}),
-			signal,
-		);
-		if (!isDeepStrictEqual(target, prepared.target))
-			unavailable("RUNTIME_ROUTE_STALE");
-		const latestState = await stateFor(prepared.context, signal);
-		const latest = await current(
-			prepared.context,
-			latestState,
-			command,
-			signal,
-		);
-		if (
-			!isDeepStrictEqual(latest.authority, prepared.authority) ||
-			!isDeepStrictEqual(latest.record, prepared.route)
-		)
-			unavailable("RUNTIME_ROUTE_STALE");
+				signal,
+			);
+			if (
+				!isDeepStrictEqual(latest.authority, prepared.authority) ||
+				!isDeepStrictEqual(latest.record, prepared.route)
+			)
+				unavailable("RUNTIME_ROUTE_STALE");
+		}
 		// The last await revalidates the owned lease/fence after directory and route waits.
 		const fenced = await stateFor(prepared.context, signal);
 		if (!isDeepStrictEqual(fenced, prepared.state))
 			unavailable("RUNTIME_FENCE_STALE");
 		signal.throwIfAborted();
+		if (routeObservedAt !== undefined)
+			prepared.routeProof.observedAt = routeObservedAt;
 	}
 	/** Continue an event drain with the route it already proved (#1525). Each
-	 * V4 read re-checks the current authorization, route and fenced state in
-	 * `assertCurrentPrepared` before it leaves the Worker; only the committed
-	 * cursor may advance between reads. Anything else takes the full path. */
+	 * V4 read or ACK re-checks the current authorization, Platform route record
+	 * and fenced state in `assertCurrentPrepared` before it leaves the Worker,
+	 * and re-observes the live route once its proof is older than the bounded
+	 * window (#1611); only the committed cursor may advance between requests.
+	 * Anything else takes the full path. */
 	async function continuePrepared(
 		previous: Awaited<ReturnType<typeof prepare>>,
 		request: Request,
+		command: "events.persist" | "events.ack",
 		signal: AbortSignal,
 	) {
 		if (previous.state.runtimeSubmitProtocol !== "v4")
-			return prepare(request, "events.persist", signal);
+			return prepare(request, command, signal);
 		const state = await stateFor(previous.context, signal);
 		if (
 			!isDeepStrictEqual(
@@ -629,7 +658,7 @@ export function createConversationRuntimeV2(
 				{ ...previous.state, runtimeCursor: null },
 			)
 		)
-			return prepare(request, "events.persist", signal);
+			return prepare(request, command, signal);
 		return {
 			...previous,
 			state: structuredClone(state) as ConversationRuntimeStateV2,
@@ -639,6 +668,7 @@ export function createConversationRuntimeV2(
 		prepared: Awaited<ReturnType<typeof prepare>>,
 		command: Command,
 		signal: AbortSignal,
+		assertCurrent = () => assertCurrentPrepared(prepared, command, signal),
 	) {
 		const claim = prepared.context.claim;
 		return createWorkerRuntimeHostClientV4({
@@ -656,8 +686,7 @@ export function createConversationRuntimeV2(
 						},
 					}
 				: {}),
-			assertCurrentAuthorization: () =>
-				assertCurrentPrepared(prepared, command, signal),
+			assertCurrentAuthorization: assertCurrent,
 		});
 	}
 	async function dispatchBusinessV4(
@@ -760,6 +789,46 @@ export function createConversationRuntimeV2(
 			signal,
 		).readEvents({ ...request, grant }, signal);
 		yield* replay.events;
+	}
+	async function acknowledgePrepared(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		confirmedCursor: string,
+		signal: AbortSignal,
+		assertCurrent?: () => Promise<void>,
+	) {
+		const { state, authority, client, base } = prepared;
+		if (state.runtimeCursor !== confirmedCursor) return;
+		if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
+		const body = {
+			...base,
+			hostSessionRef: state.hostSessionRef,
+			consumer: "platform_worker_persistence" as const,
+			confirmedCursor,
+		};
+		if (state.runtimeSubmitProtocol !== "v4") {
+			await client.acknowledgeEvents(
+				{ ...body, grant: signRequest(body, authority, "events.ack") },
+				signal,
+			);
+			return;
+		}
+		const v4: RuntimeEventAckRequestV4 = RuntimeEventAckRequestV4Schema.parse({
+			...body,
+			schemaVersion: 4,
+			...keyedIdentity(prepared),
+			grant: {
+				schemaVersion: 2,
+				format: "runtime-execution-jws",
+				token: "unsigned.unsigned.unsigned",
+			},
+		});
+		const grant = await signV4.signEvent(v4, authority);
+		await v4Client(
+			prepared,
+			"events.ack",
+			signal,
+			assertCurrent,
+		).acknowledgeEvents({ ...v4, grant }, signal);
 	}
 	async function latch(
 		prepared: Awaited<ReturnType<typeof prepare>>,
@@ -1060,40 +1129,42 @@ export function createConversationRuntimeV2(
 		},
 		async acknowledge(request, signal) {
 			const active = combined(signal);
-			const prepared = await prepare(request, "events.ack", active);
-			const { state, authority, client, base } = prepared;
-			if (state.runtimeCursor !== request.confirmedCursor) return;
-			if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
-			const body = {
-				...base,
-				hostSessionRef: state.hostSessionRef,
-				consumer: "platform_worker_persistence" as const,
-				confirmedCursor: request.confirmedCursor,
-			};
-			if (state.runtimeSubmitProtocol !== "v4") {
-				await client.acknowledgeEvents(
-					{ ...body, grant: signRequest(body, authority, "events.ack") },
+			const proven = drains.get(contextFor(request));
+			if (proven) {
+				// An ACK inside a drain continues the preparation its reads proved;
+				// the V4 client still re-checks it before sending (#1611).
+				const prepared = await continuePrepared(
+					proven,
+					request,
+					"events.ack",
 					active,
 				);
-				return;
+				const reusing = prepared.routeProof === proven.routeProof;
+				let reuseRejected = false;
+				try {
+					await acknowledgePrepared(
+						prepared,
+						request.confirmedCursor,
+						active,
+						() =>
+							assertCurrentPrepared(prepared, "events.ack", active).catch(
+								(error: unknown) => {
+									reuseRejected = reusing;
+									throw error;
+								},
+							),
+					);
+					drains.set(prepared.context, prepared);
+					return;
+				} catch (error) {
+					// Nothing was sent. A changed authority, such as a revocation
+					// since the last read, is signed by a full preparation below.
+					if (!reuseRejected || active.aborted) throw error;
+				}
 			}
-			const v4: RuntimeEventAckRequestV4 = RuntimeEventAckRequestV4Schema.parse(
-				{
-					...body,
-					schemaVersion: 4,
-					...keyedIdentity(prepared),
-					grant: {
-						schemaVersion: 2,
-						format: "runtime-execution-jws",
-						token: "unsigned.unsigned.unsigned",
-					},
-				},
-			);
-			const grant = await signV4.signEvent(v4, authority);
-			await v4Client(prepared, "events.ack", active).acknowledgeEvents(
-				{ ...v4, grant },
-				active,
-			);
+			const prepared = await prepare(request, "events.ack", active);
+			drains.set(prepared.context, prepared);
+			await acknowledgePrepared(prepared, request.confirmedCursor, active);
 		},
 		async *events(request, signal) {
 			const active = combined(signal);
@@ -1114,9 +1185,10 @@ export function createConversationRuntimeV2(
 			for (;;) {
 				active.throwIfAborted();
 				const prepared = previous
-					? await continuePrepared(previous, request, active)
+					? await continuePrepared(previous, request, "events.persist", active)
 					: await prepare(request, "events.persist", active);
 				previous = undefined;
+				drains.set(prepared.context, prepared);
 				const { state, authority } = prepared;
 				if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
 				let terminal = false;
