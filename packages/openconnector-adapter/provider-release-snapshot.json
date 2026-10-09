@@ -1325,7 +1325,7 @@
 		{
 			"provider": "rehoboam",
 			"providerReleaseId": "rehoboam-connection-v10",
-			"executorDigest": "sha256:818160b17622d45eadf4951aaf6e282fa3ec2068295df2f29ea7916aa91c4a96",
+			"executorDigest": "sha256:bbcc3a4812ebe77db72d91d0c26c4b7bb506329848190ee376724c4b5742ea45",
 			"sourceCommit": "connection-native",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:d6e6d6e0f7399fc140d027982bcdd0dcd82bcf4447b01be20f26960ff498d844",
@@ -1390,6 +1390,16 @@
 					"id": "rehoboam.get_release_family_upstream_results@v10",
 					"name": "rehoboam.get_release_family_upstream_results",
 					"authorizationDigest": "sha256:b8e73709a731c5206854c7131f4533f9c1bc4d52d6364403cb37b7745b07155b"
+				},
+				{
+					"id": "rehoboam.get_release_notice_form@v10",
+					"name": "rehoboam.get_release_notice_form",
+					"authorizationDigest": "sha256:604a3ce07a01b6c3e8223a02f4d39a5dc2379a805fcd7613ef4bdf928bdc6ca4"
+				},
+				{
+					"id": "rehoboam.get_release_notice_operation@v10",
+					"name": "rehoboam.get_release_notice_operation",
+					"authorizationDigest": "sha256:591a205ef73c3e6d2336b6dc8ed07ea607599139ca66ffadb81f824cd92fa2df"
 				},
 				{
 					"id": "rehoboam.get_release_pipeline@v10",
@@ -1487,6 +1497,11 @@
 					"authorizationDigest": "sha256:1b5bcc262873933c1b8c82919f2b2afe7da922f0fec2ea055938326da2b9c8f4"
 				},
 				{
+					"id": "rehoboam.preview_release_notice@v10",
+					"name": "rehoboam.preview_release_notice",
+					"authorizationDigest": "sha256:39b7451dd366e3cc78785bb656e32827fdb1db14c25de71a11e187c7b5748d9e"
+				},
+				{
 					"id": "rehoboam.preview_restore_release_family_task@v10",
 					"name": "rehoboam.preview_restore_release_family_task",
 					"authorizationDigest": "sha256:55cbb75883331a2f2bdfc50ef7a888c9149419eacb0951d34f9ac0babada3888"
@@ -1515,6 +1530,11 @@
 					"id": "rehoboam.submit_release_family_notice@v10",
 					"name": "rehoboam.submit_release_family_notice",
 					"authorizationDigest": "sha256:db81d4e618dcf131f7f01d66b88f1ef4ad305d9b67826e09fb40c0892a7b10f7"
+				},
+				{
+					"id": "rehoboam.submit_release_notice@v10",
+					"name": "rehoboam.submit_release_notice",
+					"authorizationDigest": "sha256:64a7c7cee8f91e84f952cd364c6c665cf6b4cfbf111421bee1a6edda402bcf27"
 				},
 				{
 					"id": "rehoboam.withdraw_execution_request@v10",

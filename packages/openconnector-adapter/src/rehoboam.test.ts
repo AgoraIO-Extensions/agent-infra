@@ -624,3 +624,119 @@ test("new standalone actions require explicit consent and stable mutation keys",
 		}
 	}
 });
+
+test("standalone notices map test/release/test_success to fixed version routes without identity fields", async () => {
+	const calls: Array<{ url: string; init?: RequestInit }> = [];
+	const adapter = new RehoboamAdapter(
+		(async (url, init) => {
+			calls.push({ url: String(url), init });
+			return Response.json({ data: {} });
+		}) as typeof fetch,
+		"machine-key",
+	);
+	for (const kind of ["test", "release", "test_success"]) {
+		await adapter.execute({
+			action: "rehoboam.preview_release_notice",
+			credential: { accessToken: "stored-pat" },
+			input: {
+				releaseId: "rn-release",
+				kind,
+				content: "<p>正文</p>",
+				operator: "forged",
+				idempotencyKey: "preview-key",
+			},
+		});
+		assert.deepEqual(JSON.parse(String(calls.at(-1)?.init?.body)), {
+			kind,
+			content: "<p>正文</p>",
+		});
+		assert.match(
+			calls.at(-1)?.url ?? "",
+			/\/mcp\/v1\/releases\/rn-release\/notice-preview$/,
+		);
+	}
+	await adapter.execute({
+		action: "rehoboam.preview_release_notice",
+		credential: { accessToken: "stored-pat" },
+		input: {
+			releaseId: "rn-release",
+			kind: "test",
+			content: "提测",
+			jiraTransitionSubmission: {
+				mode: "transition",
+				transitionId: "11",
+				targetStatus: "Resolve",
+				fields: { test_scope: "监听器" },
+			},
+		},
+	});
+	assert.deepEqual(
+		JSON.parse(String(calls.at(-1)?.init?.body)).jira_transition_submission,
+		{
+			mode: "transition",
+			transition_id: "11",
+			target_status: "Resolve",
+			fields: { test_scope: "监听器" },
+		},
+	);
+	await adapter.execute({
+		action: "rehoboam.submit_release_notice",
+		credential: { accessToken: "stored-pat" },
+		input: {
+			releaseId: "rn-release",
+			previewId: "preview-1",
+			confirmationToken: "frozen-token",
+			content: "changed",
+		},
+	});
+	assert.match(
+		calls.at(-1)?.url ?? "",
+		/\/mcp\/v1\/releases\/rn-release\/notice-confirm$/,
+	);
+	assert.deepEqual(JSON.parse(String(calls.at(-1)?.init?.body)), {
+		preview_id: "preview-1",
+		confirmation_token: "frozen-token",
+	});
+	await adapter.execute({
+		action: "rehoboam.get_release_notice_form",
+		credential: { accessToken: "stored-pat" },
+		input: {
+			releaseId: "rn-release",
+			kind: "test",
+		},
+	});
+	assert.match(calls.at(-1)?.url ?? "", /\/notice-form\?kind=test$/);
+	await adapter.execute({
+		action: "rehoboam.get_release_notice_operation",
+		credential: { accessToken: "stored-pat" },
+		input: {
+			releaseId: "rn-release",
+			previewId: "preview-1",
+		},
+	});
+	assert.match(calls.at(-1)?.url ?? "", /\/notice-operations\/preview-1$/);
+});
+
+test("persisted notice previews are WRITE and notice receipts are READ", () => {
+	for (const [name, effect] of [
+		["get_release_notice_form", "READ"],
+		["preview_release_notice", "WRITE"],
+		["submit_release_notice", "WRITE"],
+		["get_release_notice_operation", "READ"],
+	] as const) {
+		const action = rehoboamConnectionCatalog.actions.find(
+			(a) => a.name === `rehoboam.${name}`,
+		);
+		assert.ok(action);
+		assert.equal(action.effect, effect);
+		assert.deepEqual(action.requiredScopes, [
+			effect === "READ" ? "rehoboam.release.read" : "rehoboam.release.write",
+		]);
+		assert.equal(
+			(action.inputSchema.required as readonly string[]).includes(
+				"idempotencyKey",
+			),
+			effect === "WRITE",
+		);
+	}
+});

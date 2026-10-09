@@ -8,3 +8,8 @@
 确认参数及模板签名由 Rehoboam 持有；客户端不能修改已确认参数或提供操作者。创建不启动构建、发布、通知或 Jira 流转。
 Connection 仅封装固定接口、权限和幂等调用，不拥有版本创建规则。Provider profile 与门禁以
 [Connection HLD](../architecture/HLD-connection-M1.md) 为准。
+
+独立版本提测、交付和测试通过使用原业务服务，预览持久化 owner/正文/收件人/模板/Jira 表单快照，
+确认通过 durable CAS 与每版本 reservation 只提交一次。未知或部分结果保留回执与 reservation，禁止盲目重发。
+reservation 仅串行化 Connection 通知，不声称与旧 Web 入口形成跨渠道原子事务；原服务成功不等于所有渠道送达。
+操作顺序见 [独立版本指南](../connection/rehoboam-standalone-release.md)。

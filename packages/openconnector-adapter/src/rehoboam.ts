@@ -73,6 +73,66 @@ function familyAction(
 		},
 	};
 }
+const noticeKindSchema = {
+	type: "string",
+	enum: ["test", "release", "test_success"],
+} as const;
+const standaloneNoticeActions = [
+	familyAction(
+		"get_release_notice_form",
+		"读取独立版本提测/交付的 Jira 表单；测试通过不修改 Jira。",
+		"READ",
+		{
+			releaseId: familyIdSchema,
+			kind: noticeKindSchema,
+		},
+		["releaseId", "kind"],
+	),
+	familyAction(
+		"preview_release_notice",
+		"保存独立版本提测、交付或测试通过预览，展示正文、收件人及 Jira/状态影响；不发送。",
+		"WRITE",
+		{
+			releaseId: familyIdSchema,
+			kind: noticeKindSchema,
+			content: { type: "string", minLength: 1, maxLength: 20000 },
+			jiraTransitionSubmission: {
+				type: "object",
+				additionalProperties: false,
+				required: ["fields"],
+				properties: {
+					mode: { type: "string", enum: ["transition", "edit_only"] },
+					transitionId: { type: "string", minLength: 1, maxLength: 128 },
+					targetStatus: { type: "string", minLength: 1, maxLength: 128 },
+					fields: objectSchema,
+				},
+			},
+		},
+		["releaseId", "kind", "content"],
+	),
+	familyAction(
+		"submit_release_notice",
+		"确认本人预览后提交独立版本提测、交付或测试通过；会发送通知并执行已确认 Jira/状态变化，未知结果禁止重发。",
+		"WRITE",
+		{
+			releaseId: familyIdSchema,
+			previewId: familyIdSchema,
+			confirmationToken: { type: "string", minLength: 1, maxLength: 128 },
+		},
+		["releaseId", "previewId", "confirmationToken"],
+	),
+	familyAction(
+		"get_release_notice_operation",
+		"只读查询本人独立版本通知操作及回执，不重新发送；服务成功不代表所有渠道送达。",
+		"READ",
+		{
+			releaseId: familyIdSchema,
+			previewId: familyIdSchema,
+		},
+		["releaseId", "previewId"],
+	),
+];
+
 const standaloneReleaseActions = [
 	{
 		...familyAction(
@@ -440,6 +500,7 @@ const releaseFamilyActions = [
 
 export const rehoboamConnectionCatalog = {
 	actions: [
+		...standaloneNoticeActions,
 		...standaloneReleaseActions,
 		...releaseFamilyActions,
 		{
@@ -736,11 +797,63 @@ export class RehoboamAdapter
 		if (!token) throw invalidCredential("Rehoboam token is required");
 		if (input.action === "rehoboam.get_current_user")
 			return this.getCurrentUser(token);
+		if (standaloneNoticeActions.some((action) => action.name === input.action))
+			return this.executeNoticeAction(input.action, input.input, token);
 		if (standaloneReleaseActions.some((action) => action.name === input.action))
 			return this.executeStandaloneAction(input.action, input.input, token);
 		if (releaseFamilyActions.some((action) => action.name === input.action))
 			return this.executeFamilyAction(input.action, input.input, token);
 		return this.executeReleaseAction(input.action, input.input, token);
+	}
+
+	private executeNoticeAction(
+		action: string,
+		input: Record<string, unknown>,
+		token: string,
+	) {
+		const prefix = `/mcp/v1/releases/${encodeURIComponent(requiredString(input, "releaseId"))}`;
+		const headers = { authorization: `Bearer ${token}` };
+		if (action === "rehoboam.get_release_notice_form")
+			return this.requestJson(
+				withQuery(`${prefix}/notice-form`, { kind: input.kind }),
+				{ headers },
+			);
+		if (action === "rehoboam.get_release_notice_operation")
+			return this.requestJson(
+				`${prefix}/notice-operations/${encodeURIComponent(requiredString(input, "previewId"))}`,
+				{ headers },
+			);
+		const jira = input.jiraTransitionSubmission as
+			| Record<string, unknown>
+			| undefined;
+		const body =
+			action === "rehoboam.preview_release_notice"
+				? {
+						kind: input.kind,
+						content: input.content,
+						...(jira
+							? {
+									jira_transition_submission: {
+										mode: jira.mode,
+										transition_id: jira.transitionId,
+										target_status: jira.targetStatus,
+										fields: jira.fields,
+									},
+								}
+							: {}),
+					}
+				: {
+						preview_id: requiredString(input, "previewId"),
+						confirmation_token: requiredString(input, "confirmationToken"),
+					};
+		return this.requestJson(
+			`${prefix}/notice-${action === "rehoboam.preview_release_notice" ? "preview" : "confirm"}`,
+			{
+				method: "POST",
+				headers: { ...headers, "content-type": "application/json" },
+				body: JSON.stringify(body),
+			},
+		);
 	}
 
 	private executeStandaloneAction(

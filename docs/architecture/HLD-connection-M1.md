@@ -192,6 +192,12 @@ Rehoboam 保存 owner、规范化参数、模板签名、确认 token hash 和�
 重载模板并以 CAS 冻结唯一 effect。版本创建复用原生 effect 唯一回执，只生成 `wait_start` 记录，
 不启动 Job、不发送创建通知、不改变 Jira。已开始但未完成的效果只能对账，不能盲目重试；完成的确认重放返回原版本。
 旧 Release 与 Grant 不扩权；v9 到 v10 需显式升级和新增 Action 授权。发布前仍需按 13.4 完成真实 Provider 验收。
+同一待评审 v10 增补独立版本通知生命周期：Jira 表单 READ、持久化通知预览 WRITE、确认提交 WRITE 和本人操作回执 READ。
+通知类型为提测、交付和测试通过；复用 Rehoboam 当前 PAT 角色与原业务服务，不把它们伪装成无副作用的记录更新。
+预览冻结正文、收件人、版本/模板/Jira 表单摘要、owner、确认 token hash 和期限，并明确显示 Jira、邮件、企微和状态影响。
+确认重新验证上述摘要，以 CAS 和每版本通知 reservation 只提交一次。部分成功或未知结果保留 reservation 与 uncertain 回执，
+禁止通过重试、新预览或另一类型通知自动重发；完成回执可幂等释放 reservation。邮件/企微/Jira 不构成原子事务，
+原服务成功仅表示其业务提交成功，不宣称所有渠道送达。回读只返回本人操作及有界业务证据，不返回 credential 或原始错误正文。
 
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
