@@ -34,6 +34,7 @@ import {
 	PostgresApplicationMaterialGrantStoreV1,
 	PostgresApplicationRegistrationStoreV1,
 	PostgresApplicationRevisionTransactionV1,
+	PostgresAgentDefaultRelayKeyStoreV1,
 	PostgresCommitWakeupListenerV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
