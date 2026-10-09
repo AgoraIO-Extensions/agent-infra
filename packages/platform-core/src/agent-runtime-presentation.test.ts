@@ -222,9 +222,10 @@ describe("Agent runtime presentation policy", () => {
 				interactionOrigin: "https://agent.example.test",
 			},
 		};
-		const version = { configuration, deployment } as unknown as import(
-			"./workload-reconciliation.js"
-		).WorkloadVersionV1;
+		const version = {
+			configuration,
+			deployment,
+		} as unknown as import("./workload-reconciliation.js").WorkloadVersionV1;
 		const facts = {
 			...input.facts,
 			configuration,
@@ -235,12 +236,12 @@ describe("Agent runtime presentation policy", () => {
 				state: { ...current.state, candidate: version, verified: version },
 			},
 		};
-		expect(
-			decideAgentRuntimePresentationV1({ ...input, facts }),
-		).toMatchObject({
-			outcome: "found",
-			interactionUrl: "https://agent.example.test",
-		});
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toMatchObject(
+			{
+				outcome: "found",
+				interactionUrl: "https://agent.example.test",
+			},
+		);
 		for (const interactionOrigin of [
 			"http://agent.example.test",
 			"https://agent.example.test/entry",

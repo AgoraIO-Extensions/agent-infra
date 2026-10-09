@@ -156,9 +156,7 @@ describe("HTTP Workload readiness", () => {
 		});
 	});
 	it("fails closed when a probe returns an invalid capability declaration", async () => {
-		const h = await harness(async () =>
-			({ modelSelection: true }) as never,
-		);
+		const h = await harness(async () => ({ modelSelection: true }) as never);
 		const response = await h.app.request(
 			"/internal/runtime/v1/readiness",
 			post(request()),
