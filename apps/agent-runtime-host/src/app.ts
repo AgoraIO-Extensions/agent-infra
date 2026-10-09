@@ -1,6 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 
-import { type RuntimeHost, RuntimeHostError } from "@agent-infra/agent-runtime";
+import {
+	discoverRuntimeBrowserCapabilityV1,
+	type RuntimeHost,
+	RuntimeHostError,
+} from "@agent-infra/agent-runtime";
 import {
 	type ExecutionGrantV1,
 	RuntimeAuthorizationRenewRequestV3Schema,
@@ -145,6 +149,30 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			);
 		}
 		await next();
+	});
+
+	app.get("/internal/runtime/v1/browser-capability", (context) => {
+		const parameters = new URL(context.req.url).searchParams;
+		const query = Object.fromEntries(
+			[...new Set(parameters.keys())].map((key) => {
+				const values = parameters.getAll(key);
+				return [
+					key,
+					values.length === 1
+						? /^\d+$/.test(values[0] ?? "")
+							? Number(values[0])
+							: values[0]
+						: values,
+				];
+			}),
+		);
+		const result = discoverRuntimeBrowserCapabilityV1(query);
+		if ("code" in result)
+			return context.json(
+				result,
+				result.code === "BROWSER_CAPABILITY_VERSION_UNSUPPORTED" ? 409 : 400,
+			);
+		return context.json(result);
 	});
 
 	app.post("/internal/runtime/v1/turns", async (context) => {
