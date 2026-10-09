@@ -101,6 +101,10 @@ describe("Skill package materializer", () => {
 		expect(result).not.toHaveProperty("readOnly");
 		expect(result).not.toHaveProperty("available");
 		expect(await adapter.readCurrent()).toEqual(result);
+		const details = await adapter.readCurrentDetails();
+		expect(details?.result).toEqual(result);
+		expect(details?.packages[0]?.manifest).toEqual(prepared.manifest);
+		expect(details?.packages[0]?.manifestDigest).toBe(selection.manifestDigest);
 		const directory = project(assemblyRoot, result.generationId);
 		expect(
 			await readFile(

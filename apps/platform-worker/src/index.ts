@@ -21,6 +21,7 @@ export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 export * from "./workload-deployment.js";
 export * from "./workload-runtime.js";
 export * from "./workload-worker.js";
+export * from "./skill-materialization.js";
 
 import {
 	type ConversationDispatchAuthorizationPortV1,

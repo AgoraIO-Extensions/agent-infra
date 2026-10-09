@@ -11,6 +11,7 @@ import {
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { RuntimeCapabilitiesResponseV1Schema } from "@agent-infra/contracts/runtime";
 import {
+	SkillWorkloadProjectionV1Schema,
 	type PlatformSecretRecordV1,
 	validateAgentWorkloadDesiredV1,
 	validatePlatformSecretRecordV1,
@@ -428,6 +429,62 @@ function rejectedRegistry(): WorkloadRuntimeOptionsV1["registry"] {
 		},
 	};
 }
+
+it("binds a verified Skill generation into Workload Desired and Applied", async () => {
+	const generationId = "a".repeat(64);
+	const skill = SkillWorkloadProjectionV1Schema.parse({
+		schemaVersion: 1,
+		agentId: "agent-a",
+		agentVersion: "agent-version-1",
+		skillVersion: {
+			schemaVersion: 1,
+			skillId: "skill-a",
+			skillVersionId: "skill-version-a",
+			provider: "system",
+			version: "1.0.0",
+			packageObjectVersion: "object-version-a",
+			packageDigest: "b".repeat(64),
+			manifestDigest: "c".repeat(64),
+			signatureDigest: "d".repeat(64),
+		},
+		manifest: {
+			schemaVersion: 1,
+			name: "workspace-summary",
+			version: "1.0.0",
+			entryPath: "SKILL.md",
+			files: [{ path: "SKILL.md", sizeBytes: 10, sha256: "e".repeat(64) }],
+			packageDigest: "b".repeat(64),
+		},
+		targetPath: ".agents/skills/workspace-summary",
+		readOnly: true,
+		grant: {
+			schemaVersion: 1,
+			tools: [],
+			connections: [],
+			fileRoots: [],
+			networkOrigins: [],
+			scripts: false,
+		},
+	});
+	const materialize = vi.fn(async () => ({
+		generationId,
+		skills: [skill],
+	}));
+	const f = fixture({ skillMaterializer: { materialize } });
+	await f.tick(2);
+	expect(materialize).toHaveBeenCalledWith(
+		expect.objectContaining({
+			agentId: "agent-a",
+			configurationRevision: 1,
+			workloadRevision: 1,
+			fence: 1,
+		}),
+	);
+	expect(f.state?.candidate.deployment).toMatchObject({
+		skillGenerationId: generationId,
+		skills: [skill],
+	});
+});
 
 function secretConfiguration(
 	overrides: Partial<AgentConfigurationRecordV2> = {},

@@ -33,6 +33,14 @@ export type SkillPackageMaterializationResultV1 = Readonly<{
 	generationId: string;
 	packages: readonly SkillPackageMaterializationInputV1[];
 }>;
+export type SkillPackageMaterializationDetailsV1 = Readonly<{
+	result: SkillPackageMaterializationResultV1;
+	packages: readonly {
+		readonly input: SkillPackageMaterializationInputV1;
+		readonly manifest: ReturnType<typeof prepareSkillPackageV1>["manifest"];
+		readonly manifestDigest: string;
+	}[];
+}>;
 export class SkillPackageMaterializerErrorV1 extends Error {
 	constructor(readonly code: "invalid" | "unavailable" | "conflict") {
 		super("Skill package materialization failed");
@@ -307,7 +315,9 @@ export class SkillPackageMaterializerV1 {
 		)
 			fail("conflict");
 	}
-	async #readGeneration(generationId: string) {
+	async #readGenerationDetails(
+		generationId: string,
+	): Promise<SkillPackageMaterializationDetailsV1> {
 		if (!/^[a-f0-9]{64}$/.test(generationId)) fail("conflict");
 		await this.#assertRoot();
 		const root = join(this.#root, "generations", generationId);
@@ -345,6 +355,9 @@ export class SkillPackageMaterializerV1 {
 			fail("conflict");
 		const actualFiles = await files(join(agents, "skills"));
 		const expected: string[] = [];
+		const details: Array<
+			SkillPackageMaterializationDetailsV1["packages"][number]
+		> = [];
 		for (const input of result.packages) {
 			const manifestBytes = await readRegular(
 				join(root, "manifests", `${input.name}.json`),
@@ -383,13 +396,21 @@ export class SkillPackageMaterializerV1 {
 				if (bytes.length !== value.sizeBytes || sha(bytes) !== value.sha256)
 					fail("conflict");
 			}
+			details.push({
+				input,
+				manifest,
+				manifestDigest: input.manifestDigest,
+			});
 		}
 		if (JSON.stringify(actualFiles) !== JSON.stringify(expected.toSorted()))
 			fail("conflict");
 		// A process may have exited after the generation rename, before sealing its root.
 		await chmod(root, 0o555);
 		await syncDirectory(root);
-		return result;
+		return Object.freeze({ result, packages: Object.freeze(details) });
+	}
+	async #readGeneration(generationId: string) {
+		return (await this.#readGenerationDetails(generationId)).result;
 	}
 	async readCurrent(): Promise<SkillPackageMaterializationResultV1 | null> {
 		try {
@@ -412,6 +433,32 @@ export class SkillPackageMaterializerV1 {
 			)
 				fail("conflict");
 			return await this.#readGeneration(value.generationId);
+		} catch (error) {
+			if (error instanceof SkillPackageMaterializerErrorV1) throw error;
+			fail("unavailable");
+		}
+	}
+	async readCurrentDetails(): Promise<SkillPackageMaterializationDetailsV1 | null> {
+		try {
+			await this.#assertRoot();
+			let bytes: Buffer;
+			try {
+				bytes = await readRegular(join(this.#root, "CURRENT.json"), 128, true);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+				throw error;
+			}
+			const value = object(JSON.parse(bytes.toString("utf8")), [
+				"schemaVersion",
+				"generationId",
+			]);
+			if (
+				value.schemaVersion !== 1 ||
+				typeof value.generationId !== "string" ||
+				!bytes.equals(canonical(value))
+			)
+				fail("conflict");
+			return await this.#readGenerationDetails(value.generationId);
 		} catch (error) {
 			if (error instanceof SkillPackageMaterializerErrorV1) throw error;
 			fail("unavailable");

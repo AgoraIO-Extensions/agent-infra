@@ -1102,6 +1102,10 @@
               ],
               "type": "object"
             },
+            "skillGenerationId": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
             "skills": {
               "items": {
                 "additionalProperties": false,
@@ -2459,6 +2463,10 @@
               ],
               "type": "object"
             },
+            "skillGenerationId": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
             "skills": {
               "items": {
                 "additionalProperties": false,
@@ -3816,6 +3824,10 @@
               ],
               "type": "object"
             },
+            "skillGenerationId": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
             "skills": {
               "items": {
                 "additionalProperties": false,
@@ -5167,6 +5179,10 @@
                 "kubernetesApiAccess"
               ],
               "type": "object"
+            },
+            "skillGenerationId": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
             },
             "skills": {
               "items": {
@@ -6520,6 +6536,10 @@
               ],
               "type": "object"
             },
+            "skillGenerationId": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
             "skills": {
               "items": {
                 "additionalProperties": false,
@@ -7871,6 +7891,10 @@
                 "kubernetesApiAccess"
               ],
               "type": "object"
+            },
+            "skillGenerationId": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
             },
             "skills": {
               "items": {
@@ -9224,6 +9248,10 @@
               ],
               "type": "object"
             },
+            "skillGenerationId": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
             "skills": {
               "items": {
                 "additionalProperties": false,
@@ -10576,6 +10604,10 @@
               ],
               "type": "object"
             },
+            "skillGenerationId": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
             "skills": {
               "items": {
                 "additionalProperties": false,
@@ -11927,6 +11959,10 @@
                 "kubernetesApiAccess"
               ],
               "type": "object"
+            },
+            "skillGenerationId": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
             },
             "skills": {
               "items": {
@@ -12931,6 +12967,10 @@
                       "minLength": 1,
                       "type": "string"
                     },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "skills": {
                       "items": {
                         "additionalProperties": false,
@@ -13595,6 +13635,10 @@
                     },
                     "serviceRef": {
                       "minLength": 1,
+                      "type": "string"
+                    },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
                     },
                     "skills": {
@@ -14506,6 +14550,10 @@
                       "minLength": 1,
                       "type": "string"
                     },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "skills": {
                       "items": {
                         "additionalProperties": false,
@@ -15148,6 +15196,10 @@
                     },
                     "serviceRef": {
                       "minLength": 1,
+                      "type": "string"
+                    },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
                     },
                     "skills": {

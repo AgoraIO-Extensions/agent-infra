@@ -70,6 +70,10 @@ export {
 } from "./runtime-manifest.ts";
 export * from "./secret.ts";
 export * from "./worker-result.ts";
+export {
+	SkillWorkloadProjectionV1Schema,
+	type SkillWorkloadProjectionV1,
+} from "../skill-hub.ts";
 
 export const kubernetesWorkloadSchemasV1 = {
 	AgentWorkloadDesiredV1: AgentWorkloadDesiredV1Schema,

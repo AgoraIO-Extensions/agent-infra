@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	MagicSkillProviderOrderV1,
+	createSkillWorkloadProjectionV1,
 	SkillAgentVersionBindingV1Schema,
 	SkillPackageManifestV1Schema,
 	SkillVersionRefV1Schema,
@@ -84,6 +85,35 @@ describe("Skill Hub contracts", () => {
 				},
 			}).targetPath,
 		).toBe(".agents/skills/workspace-summary");
+	});
+
+	it("builds a projection only for the verified manifest digest", () => {
+		const projection = createSkillWorkloadProjectionV1({
+			agentId: "agent-1",
+			agentVersion: "agent-version-1",
+			skillVersion: { ...ref, manifestDigest: digest },
+			manifest,
+			manifestDigest: digest,
+			grant: {
+				schemaVersion: 1,
+				tools: [],
+				connections: [],
+				fileRoots: [],
+				networkOrigins: [],
+				scripts: false,
+			},
+		});
+		expect(projection.targetPath).toBe(".agents/skills/workspace-summary");
+		expect(() =>
+			createSkillWorkloadProjectionV1({
+				agentId: "agent-1",
+				agentVersion: "agent-version-1",
+				skillVersion: { ...ref, manifestDigest: "b".repeat(64) },
+				manifest,
+				manifestDigest: digest,
+				grant: projection.grant,
+			}),
+		).toThrow("manifest digest mismatch");
 	});
 
 	it("rejects path traversal and mismatched materialization", () => {
