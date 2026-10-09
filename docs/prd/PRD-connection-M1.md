@@ -351,6 +351,7 @@ Consumer 可以通过 Connection 返回的 URL 进入连接、授权或重认证
 | 多用户 | Alice 与 Bob 连接各自 GitHub 账号，不能互相发现、选择或调用 |
 | 同用户多账号 | Alice 可同时保存个人和公司 GitHub Connection；每个 Consumer 只使用用户明确选择的当前账号 |
 | 私有 Provider | 员工可用公司 Bitbucket Server PAT、Jira Server 凭证和 Confluence Server 凭证建立个人 Connection；同一 Consumer 的 GitHub、Bitbucket、Jira 与 Confluence 授权可并存，客户端仍只看到 Connection 的通用 MCP tools |
+| 静态内容协作 | 员工可连接个人 StaticSpaces 账号，在显式指定的个人、shared 或登录用户可读空间发布文件、下载内容并读取 Markdown 评审；首次空间发布可能同时初始化访问规则，写入结果未知时不得自动重试；删除和访问成员管理不纳入首期 |
 | 多 Jenkins deployment | 每个公司 Jenkins 实例作为独立 Provider 建立 Connection 和授权，可同时连接；M1 pilot 仅开放 `jenkins-release` 的 Job、Build 和 Queue 状态读取，不触发或停止构建 |
 | 多 Credential | 同一 Connection 可完成 refresh/rotation 并保留版本历史，新调用只使用 current 版本 |
 | 共享账号 | 只有当前指定员工或组织成员可发现；使用者仍需单独授权 Consumer |

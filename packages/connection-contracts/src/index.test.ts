@@ -64,7 +64,7 @@ describe("Connection Browser OpenAPI", () => {
 						accessRequestId: { type: "string" },
 						accessToken: { maxLength: 8192, minLength: 1, type: "string" },
 						providerId: {
-							enum: ["bitbucket", "rehoboam"],
+							enum: ["bitbucket", "rehoboam", "static-spaces"],
 							type: "string",
 						},
 					},

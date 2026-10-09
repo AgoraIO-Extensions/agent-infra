@@ -691,7 +691,7 @@ export type ProviderCredentialRequest = {
     providerId: 'datalego';
 } | {
     accessRequestId?: string;
-    providerId: 'bitbucket' | 'rehoboam';
+    providerId: 'bitbucket' | 'rehoboam' | 'static-spaces';
     accessToken: string;
 } | {
     accessRequestId?: string;

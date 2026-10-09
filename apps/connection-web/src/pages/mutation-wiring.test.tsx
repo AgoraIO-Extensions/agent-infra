@@ -2019,6 +2019,30 @@ describe("Connection 管理 mutation wiring", () => {
 		});
 	});
 
+	it("StaticSpaces 复用已批准个人凭证流程并立即清空 Token 输入", async () => {
+		approvedFor("static-spaces");
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "StaticSpaces 未连接" }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
+		const field = screen.getByLabelText(
+			"个人 Authentik API Token",
+		) as HTMLInputElement;
+		expect(field.type).toBe("password");
+		fireEvent.change(field, { target: { value: "static-spaces-test-token" } });
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		expect(field.value).toBe("");
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledOnce(),
+		);
+		expect(calls(api.connectProviderCredential)[0]?.[0]).toEqual({
+			accessRequestId: "request-approved",
+			accessToken: "static-spaces-test-token",
+			providerId: "static-spaces",
+		});
+	});
+
 	it("DataLego 即时重连显式使用目标账号而不是新建接口", async () => {
 		const overview = await api.getConnections();
 		api.getConnections.mockResolvedValueOnce({

@@ -80,6 +80,7 @@
 | 内部网站 | Jira | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
 | 内部网站 | Bitbucket | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
 | 内部网站 | Jenkins | 纳入（只读） | 每个公司 Jenkins deployment 使用独立 Provider ID 和 ProviderRelease，共享审核过的只读 Adapter；pilot runtime 仅开放 `jenkins-release` |
+| 内部网站 | StaticSpaces | 纳入实现；未获生产发布批准 | 按 3.2.2 的个人 Token、七项 Action 和 onboarding 门禁实现；不自动进入启动发布目录 |
 
 本表属于 **[设计决策]**，不把不同产品或 deployment 合并为共享 Credential、endpoint 或授权范围。每个纳入项仍必须分别通过 13.4 的 Provider Onboarding；Microsoft Outlook 在状态从“待定”变更前不是 M1 交付依赖。
 
@@ -328,6 +329,55 @@ Connection 的用户名匹配；不能使用 Cloud site URL、Cloud API v2 或�
 OpenConnector Confluence 的 5 个 Cloud Action 保留名称与 schema 语义，并补充经审核的 Server
 页面、评论、空间和附件元数据 Action；附件文件上传/下载不进入 JSON MCP 输入契约。
 
+#### 3.2.2 StaticSpaces deployment 与 Action 边界
+
+[设计决策] [#1636](https://github.com/AgoraIO-Extensions/agent-infra/issues/1636) 批准
+StaticSpaces 的受监督实现范围，不授权部署、生产发布或向现有空间写入。
+`providerId=static-spaces` 使用独立、不可变的 ProviderRelease、Credential 和 Grant。
+Publish API 固定为 `https://publish-static-spaces.sh3.agoralab.co`，身份校验固定为
+`https://auth-static-spaces.sh3.agoralab.co/api/v3/core/users/me/`。个人 Authentik API Token
+仅通过 Connection Credential 表单提交；服务端以 Bearer header 注入，使用稳定 `pk` 绑定
+外部账号，以已验证 username 解析个人空间。拒绝非活跃或 superuser 身份，不接受 browser
+identity header、break-glass token、调用方 username、任意 endpoint 或管理员 Credential。
+Token 的 expiry、revoke 与 rotation 由上游管理，不伪造 OAuth refresh。身份 endpoint 的
+401/403 按上游 Publish API 语义视为无效凭证，内容 API 的 403 仍表示空间权限不足。
+
+首期仅包含以下 Action，均使用现有 Consumer 声明、前置连接审批、Consent/Grant、Credential
+fence 与受控 egress：
+
+| Action | Effect | 固定 endpoint |
+| --- | --- | --- |
+| `get_current_user` | READ | identity endpoint |
+| `list_files` | READ | `GET /v1/files` |
+| `download_file` | READ | `GET /v1/download-file` |
+| `get_markdown_review` | READ | `GET /v1/markdown-review` |
+| `publish_space` | WRITE | `POST /v1/publish-space` |
+| `upload_html` | WRITE | `POST /v1/upload-html` |
+| `upload_static_package` | WRITE | `POST /v1/upload-static-package` |
+
+空间 kind 必须显式为 user/shared/public；shared/public 必须明确 slug，个人空间 username
+只能由所选 Credential 身份解析。public 仅表示所有登录用户可读。首次 `publish_space`
+可以同时初始化文件、组、ACL 和 shared 门户 Application；该整体请求定义为一个非原子的
+LogicalEffect，Consent 必须展示这些外部效果，任何部分应用均不是成功终态。后两项上传
+Action 只用于已初始化空间，不能替代首次发布。
+
+输入禁止任意请求头、绝对路径、dot segments、保留 runtime-state 路径和不支持的文件类型。
+完整发布最多 100 个文件，JSON payload 与响应最多 2 MiB；归档仅 zip/tgz/tar.gz，原始归档
+最多 1 MiB，并保留上游路径与文件类型校验。下载返回原始 bytes 的 Base64、size 和 SHA-256，
+超限失败而不截断伪装完整文件。Markdown 不改写源文本，上游 raw_url/review_url 原样返回。
+读取权限仍由 StaticSpaces effective path ACL 判断，owner/manager 不能绕过更窄 read ACL。
+
+WRITE 不支持原生幂等，复用 Connection 入站幂等与 Call/Effect/Dispatch；提交后网络未知、
+响应丢失、过大或不可解析响应及上游错误均保守保留 `UNCERTAIN`，不得自动重试。空间发布
+可能在 4xx 前完成部分修改，不能只依据文件存在判定整体发布成功；没有可靠完整证据时不实现
+自动成功对账。401 与 403 的凭证/权限错误分别保留，不跟随 redirect 或静默换号。
+
+本实现批准不关闭 G-02/G-03。真实 Token acceptance、identity、reauth/revoke、错误、限流、
+隔离 READ/WRITE 与 response-lost、供应链和安全评审均按 13.4 完成后才能发布。
+`staticSpacesVerificationMatrix` 缺少真实证据时，启动目录不包含该 ProviderRelease，
+不得用环境变量、fixture 或兼容开关绕过。删除、成员/组授权、ACL 管理、用户创建、browser
+runtime state 和订阅管理不在首期范围。
+
 ### 3.3 非目标
 
 | 非目标 | 原因 |
@@ -381,7 +431,7 @@ LDAP 或 MCP OAuth 安全参数的部署不得启动业务路由。
 | ID | 待确认项 | 未关闭时行为 | Owner |
 | --- | --- | --- | --- |
 | G-01 | 公司 LDAP 精确契约、Connection OAuth Authorization Server、目标 Direct MCP Client 版本的 MCP/OAuth profile 和 delegated workload identity | 除 4.3 节明确批准的受监督 HCI pilot 外，身份相关业务路由不启动，不声明对应客户端受支持，也不发布 Direct 登录 | Identity/Security |
-| G-02 | Confluence/Jira/Jenkins 的 exact deployment 与认证、GitHub/Bitbucket 的完整 scope 和写操作测试账号、各 Provider 错误/限流/幂等契约，以及 Outlook 是否纳入 | 除 4.3 节 pilot 内的受监督发布外，缺少对应证据的 ProviderRelease 或写 Action 不得进入生产 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
+| G-02 | Confluence/Jira/Jenkins 的 exact deployment 与认证、GitHub/Bitbucket 的完整 scope 和写操作测试账号、StaticSpaces 3.2.2 的个人 Token 与七项 Action onboarding、各 Provider 错误/限流/幂等契约，以及 Outlook 是否纳入 | 除 4.3 节 pilot 内的受监督发布外，缺少对应证据的 ProviderRelease 或写 Action 不得进入生产 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
 | G-03 | `UNCERTAIN` 用户文案、对账责任和支持流程 | 写 Action 只在测试环境开放 | Product/Support |
 | G-04 | 公司 KMS、网络出口、审计保留和对象存储产品 | 除 4.3 节已接受风险的具名 pilot 外，Credential 和 Provider 执行业务路由不启动；缺少正式 Adapter 时始终启动失败 | Security/SRE |
 | G-05 | Shared Connection 永久 disable 或可恢复语义 | 禁止实现不可逆 tombstone | Product |
@@ -2878,7 +2928,7 @@ flowchart LR
 | WP7 Execution 与 Egress | Connection Owner/SRE | Invocation、Call、Effect、Dispatch、proxy、reconcile | 每个 crash window 经过 kill/restart；重复非幂等外部效果为零 |
 | WP8 Audit 与 Recovery | SRE/DBA/Security | outbox、审计、Recovery Control、PITR runbook | restore 演练保持 mutation closed，直到 continuity 或 Provider coverage 证据通过 |
 | WP9 Connection Web | Connection Owner/Product | 独立 `apps/connection-web`、中文账号/授权/调用/Consumer/Catalog/审计页面和生成 Browser Client | 普通用户与管理员可见性符合 26.3；页面不接收或缓存原始 Credential；不依赖 Agora Agent Platform Web |
-| WP10 初期 Provider 验收 | Provider Owner/QA | GitHub read/write E2E；Confluence、Jira、Bitbucket 获批 Action E2E；每个 Jenkins deployment 完成获批只读 Action E2E；Outlook 仅在 G-02 确认后纳入 | 每个纳入 Provider 完成真实账号、reauth、revoke 和错误路径验证；GitHub 额外覆盖多账号、Direct MCP、Delegated、幂等和 response-lost |
+| WP10 初期 Provider 验收 | Provider Owner/QA | GitHub read/write E2E；Confluence、Jira、Bitbucket 获批 Action E2E；每个 Jenkins deployment 完成获批只读 Action E2E；StaticSpaces 完成 3.2.2 七项 Action 的真实 onboarding；Outlook 仅在 G-02 确认后纳入 | 每个纳入 Provider 完成真实账号、reauth、revoke 和错误路径验证；GitHub 额外覆盖多账号、Direct MCP、Delegated、幂等和 response-lost |
 | WP11 生产加固 | SRE/Security | HA、容量、SLO、升级、回滚、DR 和 on-call | load/soak、N/N-1、backup/PITR、Secret 和安全评审通过，无未接受 P0 风险 |
 
 每个 WP 使用自己的 Issue 和验收证据；不能继续复用本 HLD 的 primary Issue 作为实现总包。实现 PR 必须遵循开发工作流 Spec 的 Issue-first 规则。

@@ -76,6 +76,11 @@ export function ConnectionsPage() {
 	const [rehoboamOpen, setRehoboamOpen] = useState(false);
 	const [rehoboamPending, setRehoboamPending] = useState(false);
 	const [rehoboamError, setRehoboamError] = useState<Error | null>(null);
+	const [staticSpacesOpen, setStaticSpacesOpen] = useState(false);
+	const [staticSpacesPending, setStaticSpacesPending] = useState(false);
+	const [staticSpacesError, setStaticSpacesError] = useState<Error | null>(
+		null,
+	);
 	const [jiraOpen, setJiraOpen] = useState(false);
 	const [jiraPending, setJiraPending] = useState(false);
 	const [jiraError, setJiraError] = useState<Error | null>(null);
@@ -253,6 +258,7 @@ export function ConnectionsPage() {
 		}
 		if (provider === "bitbucket") setBitbucketOpen(true);
 		if (provider === "rehoboam") setRehoboamOpen(true);
+		if (provider === "static-spaces") setStaticSpacesOpen(true);
 		if (provider === "confluence") setConfluenceOpen(true);
 		if (provider === "jira") setJiraOpen(true);
 		if (provider === "jenkins-ci" || provider === "jenkins-release") {
@@ -411,6 +417,25 @@ export function ConnectionsPage() {
 			setRehoboamPending(false);
 		}
 	};
+	const connectStaticSpaces = async (accessToken: string) => {
+		setStaticSpacesPending(true);
+		setStaticSpacesError(null);
+		try {
+			await connectCredential({
+				accessToken,
+				providerId: "static-spaces",
+			});
+			setStaticSpacesOpen(false);
+			setReconnectTargetId(null);
+			await queryClient.invalidateQueries({ queryKey: ["connections"] });
+		} catch (error) {
+			setStaticSpacesError(
+				error instanceof Error ? error : new Error("StaticSpaces 连接失败"),
+			);
+		} finally {
+			setStaticSpacesPending(false);
+		}
+	};
 	const connectJira = async (credential: {
 		password: string;
 		username: string;
@@ -523,6 +548,7 @@ export function ConnectionsPage() {
 	) => {
 		if (providerId === "bitbucket") setBitbucketOpen(true);
 		else if (providerId === "rehoboam") setRehoboamOpen(true);
+		else if (providerId === "static-spaces") setStaticSpacesOpen(true);
 		else if (providerId === "manhattan")
 			manhattanOAuth.mutate(
 				targetId
@@ -803,6 +829,7 @@ export function ConnectionsPage() {
 			) : null}
 			{bitbucketError ? <PageError error={bitbucketError} /> : null}
 			{rehoboamError ? <PageError error={rehoboamError} /> : null}
+			{staticSpacesError ? <PageError error={staticSpacesError} /> : null}
 			{manhattanOAuth.isError ? (
 				<PageError error={manhattanOAuth.error} />
 			) : null}
@@ -1312,6 +1339,67 @@ export function ConnectionsPage() {
 							<Button type="submit" disabled={rehoboamPending}>
 								<KeyRound aria-hidden="true" size={17} />
 								{rehoboamPending ? "正在验证" : "连接"}
+							</Button>
+						</div>
+					</form>
+				</DialogContent>
+			</Dialog>
+			<Dialog
+				open={staticSpacesOpen}
+				onOpenChange={(open) => {
+					setStaticSpacesOpen(open);
+					if (!open) {
+						setStaticSpacesError(null);
+						setReconnectTargetId(null);
+					}
+				}}
+			>
+				<DialogContent aria-describedby={undefined}>
+					<DialogHeader>
+						<DialogTitle>连接 StaticSpaces</DialogTitle>
+						<DialogClose asChild>
+							<Button
+								variant="secondary"
+								size="icon"
+								type="button"
+								aria-label="关闭"
+							>
+								<X aria-hidden="true" size={18} />
+							</Button>
+						</DialogClose>
+					</DialogHeader>
+					<form
+						className="form-stack"
+						onSubmit={(event: FormEvent<HTMLFormElement>) => {
+							event.preventDefault();
+							const accessToken = new FormData(event.currentTarget).get(
+								"accessToken",
+							);
+							if (typeof accessToken === "string") {
+								event.currentTarget.reset();
+								void connectStaticSpaces(accessToken);
+							}
+						}}
+					>
+						<label htmlFor="staticSpaces-access-token">
+							个人 Authentik API Token
+						</label>
+						<input
+							autoComplete="off"
+							id="staticSpaces-access-token"
+							maxLength={8192}
+							name="accessToken"
+							required
+							type="password"
+						/>
+						<p className="form-hint">
+							使用自己的 Authentik API Token；连接前置审批通过后才可提交。Token
+							加密保存，不向客户端提供。服务尚未开放时请等待管理员发布。
+						</p>
+						<div className="dialog-actions">
+							<Button type="submit" disabled={staticSpacesPending}>
+								<KeyRound aria-hidden="true" size={17} />
+								{staticSpacesPending ? "正在验证" : "连接"}
 							</Button>
 						</div>
 					</form>

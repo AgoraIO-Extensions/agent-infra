@@ -35,8 +35,9 @@ describe("Connection Web 中文界面", () => {
 		);
 
 		expect(screen.getByText("已连接 1 个账号")).toBeTruthy();
-		fireEvent.click(screen.getByRole("button", { name: "知识库 1" }));
+		fireEvent.click(screen.getByRole("button", { name: "知识库 2" }));
 		expect(screen.getByRole("heading", { name: "Confluence" })).toBeTruthy();
+		expect(screen.getByRole("heading", { name: "StaticSpaces" })).toBeTruthy();
 		expect(screen.queryByRole("heading", { name: "GitHub" })).toBeNull();
 
 		fireEvent.change(screen.getByLabelText("搜索连接器"), {

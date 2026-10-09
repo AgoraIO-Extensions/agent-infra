@@ -68,6 +68,11 @@ import {
 	rehoboamConnectionCatalog,
 	rehoboamLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/rehoboam";
+import {
+	StaticSpacesAdapter,
+	staticSpacesConnectionCatalog,
+	staticSpacesOrigins,
+} from "@agent-infra/openconnector-adapter/static-spaces";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 import { createConnectionApp } from "./app";
 import { fullConnectionRuntimeConfig } from "./runtime-config";
@@ -371,7 +376,20 @@ export async function createConnectionRuntime(
 		datalegoFetch,
 		config.datalegoOAuth,
 	);
+	const staticSpaces = catalogs.some(
+		(catalog) => catalog.provider === staticSpacesConnectionCatalog.provider,
+	)
+		? new StaticSpacesAdapter(
+				observeProviderFetch(
+					"static-spaces",
+					providerFetch(Object.values(staticSpacesOrigins)),
+				),
+			)
+		: undefined;
 	const executors = new ProviderExecutorRouter({
+		...(staticSpaces
+			? { [staticSpacesConnectionCatalog.providerReleaseId]: staticSpaces }
+			: {}),
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 		...Object.fromEntries(
 			bitbucketServerLegacyProviderReleaseIds.map((id) => [id, bitbucket]),
@@ -406,6 +424,7 @@ export async function createConnectionRuntime(
 			[jenkinsCi.providerId]: jenkinsCi,
 			[manhattan.providerId]: manhattan,
 			[rehoboam.providerId]: rehoboam,
+			...(staticSpaces ? { [staticSpaces.providerId]: staticSpaces } : {}),
 			jira,
 		},
 		{
@@ -450,6 +469,9 @@ export async function createConnectionRuntime(
 			"rehoboam.gz3.agoralab.co": rehoboamConnectionCatalog.provider,
 			"justinia.gz3.agoralab.co": rehoboamConnectionCatalog.provider,
 			"manhattan-api.agoralab.co": manhattanConnectionCatalog.provider,
+			"static-spaces.sh3.agoralab.co": staticSpacesConnectionCatalog.provider,
+			"publish-static-spaces.sh3.agoralab.co":
+				staticSpacesConnectionCatalog.provider,
 		},
 		service,
 		supportedProviders: [
@@ -462,6 +484,12 @@ export async function createConnectionRuntime(
 			jenkinsReleaseConnectionCatalog.provider,
 			rehoboamConnectionCatalog.provider,
 			manhattanConnectionCatalog.provider,
+			...catalogs
+				.filter(
+					(catalog) =>
+						catalog.provider === staticSpacesConnectionCatalog.provider,
+				)
+				.map((catalog) => catalog.provider),
 		],
 	});
 	return {
