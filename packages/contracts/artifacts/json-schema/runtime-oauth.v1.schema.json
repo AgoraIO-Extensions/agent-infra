@@ -7,6 +7,11 @@
           "minLength": 1,
           "type": "string"
         },
+        "authorizationUrl": {
+          "format": "uri",
+          "maxLength": 8192,
+          "type": "string"
+        },
         "confirmationRevision": {
           "minLength": 1,
           "type": "string"
@@ -305,6 +310,11 @@
       "properties": {
         "authorizationId": {
           "minLength": 1,
+          "type": "string"
+        },
+        "authorizationUrl": {
+          "format": "uri",
+          "maxLength": 8192,
           "type": "string"
         },
         "expiresAt": {

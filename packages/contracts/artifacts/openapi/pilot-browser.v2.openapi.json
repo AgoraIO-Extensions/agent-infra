@@ -4854,6 +4854,11 @@
                       "minLength": 1,
                       "type": "string"
                     },
+                    "authorizationUrl": {
+                      "format": "uri",
+                      "maxLength": 8192,
+                      "type": "string"
+                    },
                     "expiresAt": {
                       "exclusiveMinimum": 0,
                       "maximum": 9007199254740991,
@@ -4943,6 +4948,11 @@
                   "properties": {
                     "authorizationId": {
                       "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorizationUrl": {
+                      "format": "uri",
+                      "maxLength": 8192,
                       "type": "string"
                     },
                     "expiresAt": {
@@ -5065,6 +5075,11 @@
                   "properties": {
                     "authorizationId": {
                       "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorizationUrl": {
+                      "format": "uri",
+                      "maxLength": 8192,
                       "type": "string"
                     },
                     "expiresAt": {

@@ -15,6 +15,7 @@ import {
 	type RuntimeOAuthAuthorizedRequestV1,
 	RuntimeOAuthAuthorizedRequestV1Schema,
 	RuntimeOAuthConfigurationV1Schema,
+	type RuntimeOAuthResponseV1,
 } from "@agent-infra/contracts/runtime";
 import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import {
@@ -1283,8 +1284,8 @@ export function createConversationRuntimeV2(
 			const active = activeInstallations.get(
 				input.authorization.reference.executionId,
 			);
-			if (!active) return false;
-			await connectionInstallation.request(
+			if (!active) return null;
+			return connectionInstallation.request(
 				{
 					execution: active.execution,
 					authorizationId: input.authorization.authorizationId,
@@ -1294,8 +1295,7 @@ export function createConversationRuntimeV2(
 					attemptOwner: input.attemptOwner,
 				},
 				signal,
-			);
-			return true;
+			) as Promise<RuntimeOAuthResponseV1>;
 		},
 		async request(
 			input: {

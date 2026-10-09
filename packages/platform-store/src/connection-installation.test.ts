@@ -345,8 +345,19 @@ it("claims one pending command with an owned attempt and permanently fences unkn
 			attemptId: "begin-attempt",
 			attemptOwner: "worker-a",
 			status: "completed",
+			authorizationUrl:
+				`https://connection.test/oauth/authorize?state=${"a".repeat(64)}`,
 		}),
 	).toBe(true);
+	expect(
+		await producer.execute({
+			...request,
+			command: "status",
+			authorizationId: authorization.authorizationId,
+		}),
+	).toMatchObject({
+		authorizationUrl: `https://connection.test/oauth/authorize?state=${"a".repeat(64)}`,
+	});
 	const pendingAfterBegin = await store.listPending(10, ["execution-a"]);
 	const confirm = pendingAfterBegin.find(
 		(item) => item.command.command === "confirm",

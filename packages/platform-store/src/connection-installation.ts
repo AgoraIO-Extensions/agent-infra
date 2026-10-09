@@ -452,18 +452,53 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 		attemptId: string;
 		attemptOwner: string;
 		status: "completed" | "unknown";
+		authorizationUrl?: string;
 	}): Promise<boolean> {
 		try {
 			const result = await this.#database.transaction(async (tx) => {
 				await tx.execute(sql`set local lock_timeout = '5s'`);
 				await tx.execute(sql`set local statement_timeout = '15s'`);
-				return tx.execute(sql`
+				const owned = await tx.execute(sql`
+					select c.command, c.authorization_id, a.binding
+					from platform.connection_installation_commands c
+					join platform.connection_installation_authorizations a on a.id=c.authorization_id
+					where c.id=${input.commandId} and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+					for update
+				`);
+				const command = owned[0];
+				if (!command) return 0;
+				const status = await tx.execute(sql`
 				update platform.connection_installation_commands
 				set status=case when attempt_expires_at is null or attempt_expires_at > clock_timestamp() then ${input.status} else 'unknown' end, attempt_expires_at=null, updated_at=clock_timestamp()
 				where id=${input.commandId} and status='sending' and attempt_id=${input.attemptId} and attempt_owner=${input.attemptOwner}
+				returning status
 				`);
+				const effectiveStatus = status[0]?.status;
+				if (
+					input.authorizationUrl !== undefined &&
+					effectiveStatus === "completed" &&
+					command.command === "begin"
+				) {
+					const actual = new URL(input.authorizationUrl);
+					const expected = new URL(this.#configuration.authorizationEndpoint);
+					if (
+						actual.protocol !== "https:" ||
+						actual.origin !== expected.origin ||
+						actual.pathname !== expected.pathname ||
+						actual.username ||
+						actual.password ||
+						actual.hash
+					)
+						throw new ConnectionInstallationErrorV1("invalid_input");
+					await tx.execute(sql`
+						update platform.connection_installation_authorizations
+						set binding=jsonb_set(binding, '{authorizationUrl}', to_jsonb(${input.authorizationUrl}::text), true), revision=revision+1, updated_at=clock_timestamp()
+						where id=${command.authorization_id}
+					`);
+				}
+				return status.length;
 			});
-			return Number(result.count ?? 0) === 1;
+			return result === 1;
 		} catch {
 			throw new ConnectionInstallationErrorV1("unavailable");
 		}
