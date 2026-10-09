@@ -2272,6 +2272,58 @@ describe("PostgreSQL Connection business authority", () => {
 					});
 				}
 
+				// Preview and confirm are different Actions in the same key scope.
+				const conflictingAction = "github.create_issue";
+				expect(
+					await repository.findIdempotentCall({
+						action: conflictingAction,
+						idempotencyKey,
+						invocation,
+					}),
+				).toMatchObject({
+					action: claimInput.action,
+					callId: concurrentClaims[0]?.call.callId,
+				});
+				expect(
+					await repository.createCall({
+						...claimInput,
+						action: conflictingAction,
+					}),
+				).toMatchObject({ created: false });
+				await expect(
+					service.invokeDirectForIdentity(identity, conflictingAction, {
+						owner: "AgoraIO-Extensions",
+						repo: "agent-infra",
+						title: "Conflicting Action",
+						idempotencyKey,
+					}),
+				).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+				const [conflictCounts] = await sql<
+					{ calls: number; effects: number }[]
+				>`
+					SELECT count(*)::integer AS calls,
+						count(effect.id)::integer AS effects
+					FROM connection_calls call
+					LEFT JOIN connection_effects effect ON effect.call_id = call.id
+					WHERE call.principal_id = ${invocation.principalId}
+						AND call.consumer_id = ${invocation.consumerId}
+						AND call.idempotency_key = ${idempotencyKey}
+				`;
+				expect(conflictCounts).toEqual({ calls: 1, effects: 1 });
+				for (const otherScope of [
+					{ ...invocation, principalId: `other-${randomUUID()}` },
+					{ ...invocation, consumerId: `other-${randomUUID()}` },
+					{ ...invocation, actorKey: `other-${randomUUID()}` },
+				]) {
+					expect(
+						await repository.findIdempotentCall({
+							action: conflictingAction,
+							idempotencyKey,
+							invocation: otherScope,
+						}),
+					).toBeUndefined();
+				}
+
 				const reconciliationClaim = await repository.createCall({
 					...claimInput,
 					argsHash: randomUUID(),

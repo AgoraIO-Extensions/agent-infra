@@ -20,6 +20,9 @@
 
 确认凭据 10 分钟内有效；字段或模板变化需要重新预览。确认不得跨用户使用。
 同一次请求的响应丢失、传输重试和用户重试必须保留原 `idempotencyKey`，不能换键重新创建。
+预览和确认是不同的 Action，必须使用不同的幂等键，例如 `release-preview-1` 与 `release-confirm-1`。
+幂等键按用户、Consumer 和 Actor 去重，不按 Action 分隔；跨 Action 复用同一键应返回
+`IDEMPOTENCY_CONFLICT`，同一 Action 的重试仍复用原键。
 结果不确定时以原预览确认查询 Rehoboam 已完成回执或人工对账，禁止重新提交创建。
 Connection 的既有 UNCERTAIN Call 不会因用户重试自动重新 dispatch；回执查询必须作为独立的受监督确认调用，
 仍使用同一预览 ID/token，不生成新预览。
