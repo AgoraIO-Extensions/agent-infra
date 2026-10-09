@@ -5,6 +5,7 @@ import {
 	type BrowserType,
 	chromium,
 } from "playwright-core";
+import { verifyChromiumInstallationV1 } from "./browser-installation.js";
 
 export type BrowserContextBindingV1 = Readonly<{
 	agentId: string;
@@ -24,7 +25,7 @@ export type BrowserContextManagerSnapshotV1 = Readonly<{
 
 type BrowserContextManagerOptionsV1 = Readonly<{
 	sandboxRoot: string;
-	browserType: BrowserType;
+	browserType: Pick<BrowserType, "launchPersistentContext">;
 	executablePath?: string;
 }>;
 
@@ -181,7 +182,22 @@ export function createBrowserContextManagerV1(
 }
 
 export function createChromiumBrowserContextManagerV1(
-	options: Omit<BrowserContextManagerOptionsV1, "browserType">,
+	options: Omit<
+		BrowserContextManagerOptionsV1,
+		"browserType" | "executablePath"
+	>,
 ) {
-	return createBrowserContextManagerV1({ ...options, browserType: chromium });
+	return createBrowserContextManagerV1({
+		sandboxRoot: options.sandboxRoot,
+		browserType: {
+			async launchPersistentContext(profileRoot, launchOptions) {
+				const installation = await verifyChromiumInstallationV1();
+				return chromium.launchPersistentContext(profileRoot, {
+					...launchOptions,
+					executablePath: installation.executable,
+					timeout: 15_000,
+				});
+			},
+		},
+	});
 }

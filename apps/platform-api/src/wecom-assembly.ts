@@ -67,6 +67,7 @@ export function assembleWecomReceiptApiV1(
 	const store = new PostgresWecomChannelV1({
 		databaseUrl,
 		userDirectory,
+		identity,
 	});
 	const authorization = createWecomAuthorizationV1({ identity, state: store });
 	return {
