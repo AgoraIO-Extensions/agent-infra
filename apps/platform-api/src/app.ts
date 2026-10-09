@@ -14,6 +14,10 @@ import {
 	registerAgentApiLifecycleRoutes,
 } from "./http/agent-api-lifecycle-routes.js";
 import {
+	type AgentDefaultRelayKeyRoutesDependencies,
+	registerAgentDefaultRelayKeyRoutes,
+} from "./http/agent-default-relay-key-routes.js";
+import {
 	type AgentApplicationGrantRouteDependencies,
 	registerAgentApplicationGrantRoutes,
 } from "./http/agent-application-grant-routes.js";
@@ -141,6 +145,7 @@ export interface PlatformAppDependencies {
 	readonly unknownStopOperations?: UnknownStopOperationsRouteDependencies;
 	readonly management: ManagementRouteDependencies;
 	readonly personalApiCredentials?: PersonalApiCredentialRouteDependencies;
+	readonly agentDefaultRelayKeys?: AgentDefaultRelayKeyRoutesDependencies;
 	readonly personalRelayKeys?: PersonalRelayKeyRoutesDependencies;
 	readonly sessionAudit: SessionAuditRoutesDependencies;
 	readonly wecom?: WecomRoutesDependenciesV1;
@@ -225,6 +230,8 @@ export function createPlatformApp(
 		);
 	if (dependencies.personalRelayKeys)
 		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);
+	if (dependencies.agentDefaultRelayKeys)
+		registerAgentDefaultRelayKeyRoutes(app, dependencies.agentDefaultRelayKeys);
 	registerV2ManagementRoutes(app, dependencies.management);
 	if (dependencies.agentApiCreation)
 		registerAgentApiCreationRoutes(app, dependencies.agentApiCreation);
