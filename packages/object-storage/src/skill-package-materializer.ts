@@ -5,10 +5,11 @@ import {
 	lstat,
 	mkdir,
 	open,
-	readFile,
 	readdir,
+	readFile,
 	rename,
 	rm,
+	stat,
 	writeFile,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -641,6 +642,13 @@ export class SkillPackageMaterializerV1 {
 	async materialize(
 		input: unknown,
 	): Promise<SkillPackageMaterializationResultV1> {
+		const previous = SkillPackageMaterializerV1.#locks.get(this.#root);
+		let release!: () => void;
+		const current = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		SkillPackageMaterializerV1.#locks.set(this.#root, current);
+		if (previous) await previous;
 		const lock = join(this.#root, ".materialize-lock");
 		let ownsFilesystemLock = false;
 		for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -653,7 +661,12 @@ export class SkillPackageMaterializerV1 {
 				ownsFilesystemLock = true;
 				break;
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+					release();
+					if (SkillPackageMaterializerV1.#locks.get(this.#root) === current)
+						SkillPackageMaterializerV1.#locks.delete(this.#root);
+					throw error;
+				}
 				try {
 					const owner = Number.parseInt(
 						(await readFile(join(lock, "owner"), "utf8")).trim(),
@@ -668,19 +681,23 @@ export class SkillPackageMaterializerV1 {
 						}
 					}
 				} catch {
-					// A lock without a readable owner is treated as active.
+					try {
+						const info = await stat(lock);
+						if (Date.now() - info.mtimeMs > 5_000)
+							await rm(lock, { recursive: true, force: true });
+					} catch {
+						// A lock without a readable owner is otherwise treated as active.
+					}
 				}
 				await new Promise((resolve) => setTimeout(resolve, 25));
 			}
 		}
-		if (!ownsFilesystemLock) fail("unavailable");
-		const previous = SkillPackageMaterializerV1.#locks.get(this.#root);
-		let release!: () => void;
-		const current = new Promise<void>((resolve) => {
-			release = resolve;
-		});
-		SkillPackageMaterializerV1.#locks.set(this.#root, current);
-		if (previous) await previous;
+		if (!ownsFilesystemLock) {
+			release();
+			if (SkillPackageMaterializerV1.#locks.get(this.#root) === current)
+				SkillPackageMaterializerV1.#locks.delete(this.#root);
+			fail("unavailable");
+		}
 		try {
 			return await this.#materializeUnlocked(input);
 		} finally {
