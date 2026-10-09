@@ -68,3 +68,9 @@ Legal 批准。
 
 每项 Connection 实现变更都必须在 Issue 或 review 描述中引用适用的 HLD 章节。实现前必须报告冲突、
 缺失前置条件或 HLD 范围外行为；这类情况需要更新 HLD/ADR 并取得明确评审批准，不能使用兼容开关绕过。
+
+## 连接级 pinning 与网络策略
+
+[出站安全验证](connection-egress-security.md) 定义 Node connect.lookup 校验、精确目的 IP/port
+策略工件和隔离 enforcement 探针。源码与本地 TLS/DNS 测试通过仅证明连接级 transport；目标 CNI
+执行、正式依赖清单、生产网络旁路拒绝、唯一受控出口和 G-04 签收仍须独立提供证据。

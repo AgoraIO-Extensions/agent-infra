@@ -421,6 +421,9 @@ importers:
       '@agent-infra/openconnector-kernel':
         specifier: workspace:*
         version: link:../openconnector-kernel
+      undici:
+        specifier: 7.29.0
+        version: 7.29.0
     devDependencies:
       '@agent-infra/config':
         specifier: workspace:*
