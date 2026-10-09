@@ -15,6 +15,7 @@ export default defineConfig({
 			"@agent-infra/connection-store",
 			"@agent-infra/connection-store/migrations",
 			"@agent-infra/openconnector-adapter",
+			"@agent-infra/openconnector-adapter/provider-fetch",
 			"@agent-infra/openconnector-kernel",
 			"ldapts",
 		],

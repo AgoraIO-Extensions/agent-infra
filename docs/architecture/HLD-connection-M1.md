@@ -2484,6 +2484,10 @@ Audit 使用每 partition hash chain 或外部 append-only sink。保留策略�
 
 ### 27.4 SSRF 与网络出口
 
+既有 Node runtime 的连接级校验与网络策略 enforcement 验证见
+[Connection 出站安全验证](connection-egress-security.md)。源码验证、策略工件和生产生效分别验收；
+未证明 CNI 执行策略时，G-04 与出口隔离门禁保持开放。
+
 - Provider origin/path template来自 Catalog，不来自 args 或 Provider response。
 - Egress Proxy 对每次新连接执行受控 DNS 解析，拒绝 loopback、link-local、private、metadata 和未 allowlist ranges，并把该连接固定到已校验 IP；HTTP client 不得再次独立解析 hostname。
 - TLS SNI、证书 hostname 校验和 HTTP `Host` 继续使用 Catalog 原始 hostname，不能使用或接受调用方提供的替代值。

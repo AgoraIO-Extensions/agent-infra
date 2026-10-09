@@ -11,6 +11,7 @@ interface StartOptions {
 	hostname?: string;
 	log?: (message: string) => void;
 	port?: number;
+	closeProviderTransports?: () => Promise<void>;
 	approvalMaintenance?: {
 		expireDueAuthorizations(limit?: number): Promise<number>;
 		expireDueRequests(limit?: number): Promise<number>;
@@ -48,6 +49,9 @@ export function startConnectionApi(options: StartOptions) {
 				}),
 			),
 	);
+	server.once("close", () => {
+		void options.closeProviderTransports?.();
+	});
 	if (options.recovery) {
 		let recoveryRunning = false;
 		const timer = setInterval(() => {
