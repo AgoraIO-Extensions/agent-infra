@@ -383,6 +383,8 @@ export interface WecomDeliveryClaimV1 {
 	readonly acceptanceStatus: WecomReceiptStatusV1;
 	readonly executionStatus: string | null;
 	readonly textDeltas: readonly string[];
+	/** Result files already confirmed by File Authority for this execution. */
+	readonly media?: readonly WecomResultFileReferenceV1[];
 }
 export interface WecomDeliveryStorePortV1 {
 	claim(): Promise<WecomDeliveryClaimV1 | null>;
@@ -447,7 +449,8 @@ export function createWecomDeliveryV1(dependencies: {
 							: claim.executionStatus === "cancelled"
 								? "本次任务已停止"
 								: "本次任务执行失败，请稍后重试";
-			if (!text || Buffer.byteLength(text) > 20_480) {
+			const media = claim.media ?? [];
+			if ((!text && media.length === 0) || Buffer.byteLength(text) > 20_480) {
 				await dependencies.store.finish(claim, "failed");
 				return true;
 			}
@@ -459,6 +462,7 @@ export function createWecomDeliveryV1(dependencies: {
 					scope: claim.scope,
 					replyHandle: claim.replyHandle,
 					text,
+					...(media.length ? { media } : {}),
 					revalidate: async () => {
 						const latest = await dependencies.authorization.authorize(
 							claim.scope,

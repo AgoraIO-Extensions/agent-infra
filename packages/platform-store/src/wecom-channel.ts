@@ -637,6 +637,40 @@ export class PostgresWecomChannelV1
 							{ event_payload: { text?: string } }[]
 						>`select event_payload from platform.conversation_events where execution_id=${row.execution_id} and event_type='text.delta' order by sequence`
 					: [];
+			const resultFiles =
+				row.execution_id && row.execution_status === "completed"
+					? await sql<
+							{
+								file_id: string;
+								name: string;
+								media_type: string;
+								size_bytes: string;
+								sequence: string;
+							}[]
+						>`select file_id,name,media_type,size_bytes,sequence from (
+							select distinct on (e.event_payload->>'fileId')
+								e.event_payload->>'fileId' as file_id,
+								e.event_payload->>'name' as name,
+								e.event_payload->>'mediaType' as media_type,
+								e.event_payload->>'sizeBytes' as size_bytes,
+								e.sequence::text as sequence
+							from platform.conversation_events e
+							join platform.files f
+								on f.file_id=e.event_payload->>'fileId'
+								and f.conversation_id=e.conversation_id
+								and f.record->>'executionId'=e.execution_id
+								and f.record->>'kind'='result'
+								and f.record->>'status'='available'
+								and coalesce(f.record->>'objectVersion','')<>''
+								and coalesce(f.record->>'etag','')<>''
+								and f.record->'descriptor'->>'name'=e.event_payload->>'name'
+								and f.record->'descriptor'->>'mediaType'=e.event_payload->>'mediaType'
+								and f.record->'descriptor'->>'sizeBytes'=e.event_payload->>'sizeBytes'
+							where e.execution_id=${row.execution_id}
+								and e.event_type='result.file'
+							order by e.event_payload->>'fileId',e.sequence
+						) confirmed order by sequence::bigint`
+					: [];
 			return {
 				receiptId: row.id,
 				fence: row.fence + 1,
@@ -649,6 +683,19 @@ export class PostgresWecomChannelV1
 				acceptanceStatus: row.acceptance_status,
 				executionStatus: row.execution_status,
 				textDeltas: deltas.map((d) => d.event_payload.text ?? ""),
+				media: resultFiles.flatMap((file) => {
+					const sizeBytes = Number(file.size_bytes);
+					return Number.isSafeInteger(sizeBytes) && sizeBytes >= 0
+						? [
+								{
+									fileId: file.file_id,
+									name: file.name,
+									mediaType: file.media_type,
+									sizeBytes,
+								},
+							]
+						: [];
+				}),
 			};
 		});
 		for (let i = 0; i < unknown; i++) this.#observe("unknown");

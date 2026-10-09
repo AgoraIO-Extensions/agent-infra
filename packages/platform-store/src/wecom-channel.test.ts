@@ -346,6 +346,84 @@ it("does not resend a reply after a worker crashes in the external send window",
 		await restarted.close();
 	}
 });
+it("claims confirmed result files once per file and preserves event order", async () => {
+	await sql`update platform.wecom_receipts set delivery_status='abandoned' where delivery_status in ('pending','claimed','sending')`;
+	const accepted = await channel().receive({
+		...message,
+		senderId: "result_media_sender",
+		eventId: "result_media_event",
+	});
+	if (accepted.outcome !== "accepted") throw new Error("Expected receipt");
+	const executionId = accepted.receipt.executionId;
+	const conversationId = accepted.receipt.conversationId;
+	if (!executionId || !conversationId) throw new Error("Expected execution");
+	await sql`update platform.conversation_executions
+		set status='completed',last_event_sequence=2,last_runtime_cursor='runtime-result-2'
+		where execution_id=${executionId}`;
+	await sql`update platform.conversations
+		set last_conversation_cursor=2 where id=${conversationId}`;
+	const file = {
+		fileId: "result-media-file",
+		objectRef: "result-media-object",
+		kind: "result" as const,
+		idempotencyKey: "result-media-idempotency",
+		actorId: "result_media_sender",
+		agentId: message.agentId,
+		channelId: wecomChannelIdV1({
+			kind: message.kind,
+			bindingReference: message.bindingReference,
+		}),
+		conversationId,
+		executionId,
+		messageId: null,
+		sessionGeneration: 1,
+		status: "available" as const,
+		descriptor: {
+			name: "report.pdf",
+			mediaType: "application/pdf",
+			sizeBytes: 42,
+			sha256: "f".repeat(64),
+		},
+		objectVersion: "result-media-version",
+		etag: "result-media-etag",
+		createdAt: "2026-10-10T00:00:00.000Z",
+		updatedAt: "2026-10-10T00:00:00.000Z",
+		expiresAt: "2099-01-01T00:00:00.000Z",
+		revision: 1,
+	};
+	await sql`insert into platform.files
+		(file_id,actor_id,conversation_id,idempotency_key,record,updated_at)
+		values (${file.fileId},${file.actorId},${conversationId},${file.idempotencyKey},${sql.json(file)},now())`;
+	for (const [sequence, adapterEventKey] of [
+		[1, "result-media-1"],
+		[2, "result-media-2"],
+	] as const) {
+		await sql`insert into platform.conversation_events
+			(event_id,conversation_id,execution_id,adapter_event_key,sequence,
+			 conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,
+			 occurred_at,source)
+			values (${`result-media-event-${sequence}`},${conversationId},${executionId},
+			 ${adapterEventKey},${sequence},${sequence},'result.file',
+			 ${sql.json({
+					type: "result.file",
+					fileId: file.fileId,
+					name: file.descriptor.name,
+					mediaType: file.descriptor.mediaType,
+					sizeBytes: file.descriptor.sizeBytes,
+				})},${String(sequence).repeat(64)},${`runtime-result-${sequence}`},now(),'runtime')`;
+	}
+	const claim = await store.claim();
+	expect(claim?.receiptId).toBe(accepted.receipt.receiptId);
+	expect(claim?.textDeltas).toEqual([]);
+	expect(claim?.media).toEqual([
+		{
+			fileId: file.fileId,
+			name: file.descriptor.name,
+			mediaType: file.descriptor.mediaType,
+			sizeBytes: file.descriptor.sizeBytes,
+		},
+	]);
+});
 it("keeps an application reply sending through the bounded multipart window", async () => {
 	await sql`update platform.agent_configuration_revisions set configuration=${sql.json(
 		{
