@@ -1,6 +1,57 @@
 import { Readable } from "node:stream";
+import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
+import { type BrowserContext, chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createChromiumBrowserContextManagerV1 } from "./browser-context.js";
 import { verifyChromiumInstallationV1 } from "./browser-installation.js";
+
+// Controlled input for the manager seam; never a production projection.
+const capability: BrowserCapabilityProjectionV1 = {
+	schemaVersion: 1,
+	capabilityVersion: 1,
+	status: "available",
+	operations: ["observe"],
+	policy: {
+		allowedOrigins: ["https://example.test/"],
+		maxContexts: 1,
+		maxTabs: 1,
+		maxPages: 1,
+		maxViewportWidth: 1280,
+		maxViewportHeight: 720,
+		maxConcurrentActions: 1,
+		maxDownloads: 1,
+		maxDownloadBytes: 1024,
+		maxUploadBytes: 1024,
+		maxScreenshotBytes: 1024,
+		maxBrowserDurationMs: 60_000,
+		maxRetainedProfileBytes: 1_000_000,
+		navigationTimeoutMs: 15_000,
+		actionTimeoutMs: 5_000,
+		requireSideEffectConfirmation: true,
+		allowUserHandoff: false,
+	},
+	provenance: {
+		browser: "chromium",
+		chromiumVersion: "153.0.8010.12",
+		playwrightVersion: "1.63.0",
+		imageDigest: `sha256:${"a".repeat(64)}`,
+	},
+	conformance: {
+		schemaVersion: 1,
+		receiptId: "controlled-manager-fixture",
+		probeVersion: "fixture-1",
+		verifiedAt: "2026-10-09T00:00:00Z",
+		manifestDigest: `sha256:${"b".repeat(64)}`,
+		evidenceHash: "c".repeat(64),
+		operations: ["observe"],
+	},
+};
+const binding = {
+	agentId: "agent-1",
+	conversationId: "conversation-1",
+	sessionGeneration: 1,
+	resourceFence: 3,
+};
 
 const filesystem = vi.hoisted(() => ({ fault: "valid" }));
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -100,6 +151,93 @@ describe("Pinned Chromium installation", () => {
 	afterEach(() => {
 		if (platform) Object.defineProperty(process, "platform", platform);
 		filesystem.fault = "missing";
+		vi.restoreAllMocks();
+	});
+	it("refuses a persistent Context before executing absent Chromium supply", async () => {
+		filesystem.fault = "missing";
+		const launch = vi
+			.spyOn(chromium, "launchPersistentContext")
+			.mockResolvedValue({
+				on: vi.fn(),
+				close: vi.fn(),
+			} as unknown as BrowserContext);
+		const manager = createChromiumBrowserContextManagerV1({
+			sandboxRoot: "/tmp/controlled-browser-session",
+		});
+		await expect(manager.acquire(binding, capability)).rejects.toThrow(
+			"RUNTIME_BROWSER_PROVENANCE_MISMATCH",
+		);
+		expect(launch).not.toHaveBeenCalled();
+	});
+	it("uses the verified image path, reuses one profile and revalidates after close", async () => {
+		const context = {
+			on: vi.fn(),
+			close: vi.fn(async () => undefined),
+		} as unknown as BrowserContext;
+		const launch = vi
+			.spyOn(chromium, "launchPersistentContext")
+			.mockResolvedValue(context);
+		const input = {
+			sandboxRoot: "/tmp/controlled-browser-session",
+			executablePath: "/tmp/foreign-browser",
+		};
+		const manager = createChromiumBrowserContextManagerV1(input);
+		expect(
+			await Promise.all([
+				manager.acquire(binding, capability),
+				manager.resume(binding, capability),
+			]),
+		).toEqual([context, context]);
+		expect(launch).toHaveBeenCalledTimes(1);
+		expect(launch).toHaveBeenCalledWith(
+			"/tmp/controlled-browser-session/browser-profile",
+			expect.objectContaining({
+				executablePath:
+					process.arch === "x64"
+						? "/opt/agent-infra/browser/chrome-linux64/chrome"
+						: "/opt/agent-infra/browser/chrome-linux-arm64/chrome",
+			}),
+		);
+		await expect(
+			manager.acquire({ ...binding, conversationId: "foreign" }, capability),
+		).rejects.toThrow("BROWSER_CONTEXT_BINDING_CONFLICT");
+		await expect(
+			manager.close({ ...binding, conversationId: "foreign" }),
+		).rejects.toThrow("BROWSER_CONTEXT_BINDING_CONFLICT");
+		await manager.close(binding);
+		expect(manager.snapshot().status).toBe("closed");
+		filesystem.fault = "tampered";
+		await expect(manager.resume(binding, capability)).rejects.toThrow(
+			"RUNTIME_BROWSER_PROVENANCE_MISMATCH",
+		);
+		expect(launch).toHaveBeenCalledTimes(1);
+		filesystem.fault = "valid";
+		expect(await manager.resume(binding, capability)).toBe(context);
+		expect(launch).toHaveBeenCalledTimes(2);
+		await manager.close(binding);
+	});
+	it("revalidates the installed libraries before resuming a crashed Context", async () => {
+		let crash = () => {};
+		const context = {
+			on: (_event: string, callback: () => void) => {
+				crash = callback;
+			},
+			close: vi.fn(async () => undefined),
+		} as unknown as BrowserContext;
+		const launch = vi
+			.spyOn(chromium, "launchPersistentContext")
+			.mockResolvedValue(context);
+		const manager = createChromiumBrowserContextManagerV1({
+			sandboxRoot: "/tmp/controlled-browser-session",
+		});
+		await manager.acquire(binding, capability);
+		crash();
+		expect(manager.snapshot().status).toBe("crashed");
+		filesystem.fault = "library-writable";
+		await expect(manager.resume(binding, capability)).rejects.toThrow(
+			"RUNTIME_BROWSER_PROVENANCE_MISMATCH",
+		);
+		expect(launch).toHaveBeenCalledTimes(1);
 	});
 	it("rejects absent or unsupported supply without a host browser fallback", async () => {
 		filesystem.fault = "missing";
