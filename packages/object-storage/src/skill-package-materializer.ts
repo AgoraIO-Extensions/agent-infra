@@ -265,6 +265,15 @@ export class SkillPackageMaterializerV1 {
 	readonly #identity: { dev: number; ino: number };
 	readonly #readPackage;
 	readonly #verifyAdmission;
+	async #quarantineLock(path: string) {
+		const quarantine = `${path}.stale-${randomUUID()}`;
+		try {
+			await rename(path, quarantine);
+			await rm(quarantine, { recursive: true, force: true });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
 	constructor(options: {
 		/** Pre-provisioned 0700 root outside the Runtime-writable project; never request data. */
 		readonly assemblyRoot: string;
@@ -677,14 +686,14 @@ export class SkillPackageMaterializerV1 {
 							process.kill(owner, 0);
 						} catch (probeError) {
 							if ((probeError as NodeJS.ErrnoException).code === "ESRCH")
-								await rm(lock, { recursive: true, force: true });
+								await this.#quarantineLock(lock);
 						}
 					}
 				} catch {
 					try {
 						const info = await stat(lock);
 						if (Date.now() - info.mtimeMs > 5_000)
-							await rm(lock, { recursive: true, force: true });
+							await this.#quarantineLock(lock);
 					} catch {
 						// A lock without a readable owner is otherwise treated as active.
 					}

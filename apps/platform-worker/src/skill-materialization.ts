@@ -55,6 +55,7 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 	return {
 		async materialize(input) {
 			const materializer = options.materializerFor(input);
+			const current = await materializer.readCurrentDetails();
 			const bindings = await options.resolveBindings(input);
 			if (bindings.length > 10) throw new Error("Too many Skills");
 			if (bindings.some((binding) => binding.agentId !== input.agentId))
@@ -83,7 +84,6 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 					manifestDigest: binding.skillVersion.manifestDigest,
 				}),
 			);
-			const current = await materializer.readCurrentDetails();
 			const result = await materializer.materialize({
 				packages: requested,
 				expectedGenerationId: current?.result.generationId ?? null,
