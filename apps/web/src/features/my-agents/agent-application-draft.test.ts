@@ -20,13 +20,13 @@ const standardCreateDraft = {
 	environment: [{ name: "LOG_LEVEL", value: "debug" }],
 	secrets: [{ name: "MODEL_API_KEY", value: "never-echo" }],
 	configureModels: false,
+	defaultRelayKey: "agent-relay-key-value",
 	models: [
 		{
 			optionId: "model-primary",
 			endpointId: "endpoint-primary",
 			modelId: "gpt-5",
 			reasoningLevels: "medium\nhigh",
-			credentialValue: "never-echo-model",
 		},
 	],
 	defaultModelOptionId: "model-primary",
@@ -38,6 +38,7 @@ describe("Agent application draft", () => {
 		expect(buildAgentApplicationRequest("create", standardCreateDraft)).toEqual(
 			{
 				schemaVersion: 2,
+				defaultRelayKey: "agent-relay-key-value",
 				name: "Release assistant",
 				description: "Helps the release team",
 				source: { kind: "standard", templateId: "codex" },
@@ -56,7 +57,6 @@ describe("Agent application draft", () => {
 							endpointId: "endpoint-primary",
 							modelId: "gpt-5",
 							reasoningLevels: ["medium", "high"],
-							credentialValue: "never-echo-model",
 						},
 					],
 					defaultOptionId: "model-primary",
@@ -143,7 +143,6 @@ describe("Agent application draft", () => {
 					{
 						...standardCreateDraft.models[0],
 						optionId: "legacy-model",
-						credentialValue: "",
 					},
 				],
 			},
@@ -172,7 +171,6 @@ describe("Agent application draft", () => {
 						optionId: "",
 						modelId: "",
 						reasoningLevels: "",
-						credentialValue: "",
 					},
 				],
 			},
@@ -189,7 +187,7 @@ describe("Agent application draft", () => {
 		expect(errors["model.0.modelId"]).toBe("请选择模型。");
 	});
 
-	it("requires credentials for model options not persisted on update", () => {
+	it("does not require credentials for model options not persisted on update", () => {
 		const draft = {
 			...standardCreateDraft,
 			models: [{ ...standardCreateDraft.models[0], credentialValue: "" }],
@@ -207,7 +205,7 @@ describe("Agent application draft", () => {
 
 		expect(
 			validateAgentApplicationDraft(draft, context)["model.0.credentialValue"],
-		).toBe("请输入模型凭证。");
+		).toBeUndefined();
 		expect(
 			validateAgentApplicationDraft(
 				{
@@ -216,7 +214,7 @@ describe("Agent application draft", () => {
 				},
 				context,
 			)["model.0.credentialValue"],
-		).toBe("请输入模型凭证。");
+		).toBeUndefined();
 		expect(
 			validateAgentApplicationDraft(
 				{

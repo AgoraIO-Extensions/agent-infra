@@ -66,7 +66,7 @@ describe("Agent configuration draft", () => {
 		expect(JSON.stringify(draft)).not.toContain("MODEL_API_KEY");
 	});
 
-	it("serializes only explicit Secret and credential replacements", () => {
+	it("serializes only explicit Secret and keyless model replacements", () => {
 		const draft = configurationDraftFromAgent(agent);
 		const request = buildAgentConfigurationRequest({
 			...draft,
@@ -77,7 +77,6 @@ describe("Agent configuration draft", () => {
 					endpointId: "endpoint-primary",
 					modelId: "gpt-5.2",
 					reasoningLevels: "medium\nhigh",
-					credentialValue: "new-credential",
 				},
 			],
 			defaultModelOptionId: "model-option-2",
@@ -100,7 +99,6 @@ describe("Agent configuration draft", () => {
 						endpointId: "endpoint-primary",
 						modelId: "gpt-5.2",
 						reasoningLevels: ["medium", "high"],
-						credentialValue: "new-credential",
 					},
 				],
 				defaultOptionId: "model-option-2",
