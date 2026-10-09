@@ -87,9 +87,7 @@ function fieldId(key: string) {
 	if (key === "defaultReasoningLevel")
 		return "application-default-reasoning-level";
 	const modelField =
-		/^model\.(\d+)\.(endpointId|modelId|reasoningLevels|credentialValue)$/.exec(
-			key,
-		);
+		/^model\.(\d+)\.(endpointId|modelId|reasoningLevels)$/.exec(key);
 	if (modelField) {
 		const [, index, field] = modelField;
 		const control =
@@ -236,11 +234,10 @@ function blankEnvironment(): AgentApplicationEnvironmentDraft {
 
 function blankModel(): AgentApplicationModelDraft {
 	return {
-		optionId: "",
 		endpointId: "",
 		modelId: "",
+		optionId: "",
 		reasoningLevels: "",
-		credentialValue: "",
 	};
 }
 
@@ -304,16 +301,12 @@ function templateFor(
 function ModelRows({
 	models,
 	endpoints,
-	requiresReplacementCredential,
-	persistedModelOptionIds,
 	errors,
 	onChange,
 	onRemove,
 }: {
 	models: readonly AgentApplicationModelDraft[];
 	endpoints: readonly DeploymentModelEndpointProjectionV2[];
-	persistedModelOptionIds?: readonly string[];
-	requiresReplacementCredential: boolean;
 	errors: AgentApplicationFieldErrors;
 	onChange: (
 		index: number,
@@ -334,10 +327,6 @@ function ModelRows({
 				const modelOptions = [
 					...new Set(endpoint?.models.map((item) => item.modelId) ?? []),
 				].map((modelId) => ({ value: modelId, label: modelId }));
-				const needsReplacementCredential =
-					requiresReplacementCredential ||
-					(persistedModelOptionIds !== undefined &&
-						!persistedModelOptionIds.includes(model.optionId));
 				return (
 					<fieldset
 						className="model-option-fieldset grid min-w-0 gap-3 sm:grid-cols-2"
@@ -486,34 +475,6 @@ function ModelRows({
 								message={errors[`model.${index}.reasoningLevels`]}
 							/>
 						</div>
-						<div className="model-credential space-y-2">
-							<Label htmlFor={`application-model-option-credential-${index}`}>
-								模型凭证
-							</Label>
-							<Input
-								autoComplete="new-password"
-								disabled={modelOptions.length === 0}
-								aria-describedby={
-									errors[`model.${index}.credentialValue`]
-										? errorId(`model.${index}.credentialValue`)
-										: undefined
-								}
-								aria-invalid={
-									errors[`model.${index}.credentialValue`] ? true : undefined
-								}
-								id={`application-model-option-credential-${index}`}
-								onChange={(event) =>
-									onChange(index, "credentialValue", event.target.value)
-								}
-								required={needsReplacementCredential}
-								type="password"
-								value={model.credentialValue}
-							/>
-							<FieldError
-								id={errorId(`model.${index}.credentialValue`)}
-								message={errors[`model.${index}.credentialValue`]}
-							/>
-						</div>
 						{models.length > 1 ? (
 							<Button
 								variant="outline"
@@ -653,6 +614,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 	const [description, setDescription] = useState(
 		application?.description ?? "",
 	);
+	const [defaultRelayKey, setDefaultRelayKey] = useState("");
 	const [templateId, setTemplateId] = useState(
 		application?.source.kind === "standard"
 			? application.source.templateId
@@ -704,7 +666,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		if (props.mode === "create") return [blankModel()];
 		return (configuration?.modelOptions ?? []).map((option) => {
 			return {
-				credentialValue: "",
 				endpointId: endpointIdForModelOption(option, modelEndpoints),
 				modelId: option.modelId,
 				optionId: canonicalOptionIdForModelOption(option, modelEndpoints),
@@ -792,13 +753,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		sourceKind,
 		configureModels,
 	);
-	const requiresReplacementCredential =
-		props.mode === "create" ||
-		(application?.source.kind !== "standard" && sourceKind === "standard");
-	const persistedModelOptionIds =
-		props.mode === "update"
-			? (configuration?.modelOptions.map((option) => option.optionId) ?? [])
-			: undefined;
 	const selectedTemplate = templateFor(deployment, templateId);
 	const modelCatalogReady = deployment.modelCatalog.status === "populated";
 	const standardChoicesBlocked =
@@ -1169,6 +1123,7 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		const draft = {
 			name,
 			description,
+			defaultRelayKey,
 			sourceKind,
 			templateId,
 			imageReference,
@@ -1192,8 +1147,8 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 				?.split("\n")
 				.filter(Boolean),
 			modelConfigurationVisible,
-			persistedModelOptionIds,
-			requiresReplacementCredential,
+			requiresDefaultRelayKey:
+				props.mode === "create" && sourceKind === "standard",
 			staleModel,
 			staleModelIndexes,
 			staleTemplate,
@@ -1209,9 +1164,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 		)
 			return;
 		setSecrets([]);
-		setModels((current) =>
-			current.map((model) => ({ ...model, credentialValue: "" })),
-		);
 		if (props.mode === "create") {
 			props.onSubmit(buildAgentApplicationRequest("create", draft));
 			return;
@@ -1556,12 +1508,43 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 						) : null}
 						{modelConfigurationVisible ? (
 							<>
+								{props.mode === "create" ? (
+									<div className="space-y-2">
+										<Label htmlFor="application-default-relay-key">
+											Agent 默认 Relay Key
+										</Label>
+										<Input
+											autoComplete="new-password"
+											aria-describedby={
+												fieldErrors.defaultRelayKey
+													? errorId("defaultRelayKey")
+													: undefined
+											}
+											aria-invalid={
+												fieldErrors.defaultRelayKey ? true : undefined
+											}
+											id="application-default-relay-key"
+											onChange={(event) => {
+												setDefaultRelayKey(event.target.value);
+												clearFieldErrors("defaultRelayKey");
+											}}
+											required
+											type="password"
+											value={defaultRelayKey}
+										/>
+										<p className="text-muted-foreground text-sm">
+											只提交一次；保存后仅显示已设置状态，Key 不会回显。
+										</p>
+										<FieldError
+											id={errorId("defaultRelayKey")}
+											message={fieldErrors.defaultRelayKey}
+										/>
+									</div>
+								) : null}
 								<ModelRows
 									endpoints={modelEndpoints}
 									errors={fieldErrors}
 									models={models}
-									persistedModelOptionIds={persistedModelOptionIds}
-									requiresReplacementCredential={requiresReplacementCredential}
 									onChange={(index, key, value) => {
 										const nextModels = models.map((item, itemIndex) =>
 											itemIndex !== index
@@ -1575,7 +1558,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 																		modelId: "",
 																		reasoningLevels: "",
 																		optionId: "",
-																		credentialValue: "",
 																	}
 																: {
 																		optionId:
@@ -1583,7 +1565,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 																				? optionIdFor(item.endpointId, value)
 																				: "",
 																		reasoningLevels: "",
-																		credentialValue: "",
 																	}),
 														}
 													: { ...item, [key]: value },
@@ -1593,7 +1574,6 @@ export function AgentApplicationForm(props: AgentApplicationFormProps) {
 											"endpointId",
 											"modelId",
 											"reasoningLevels",
-											"credentialValue",
 										].map((field) => `model.${index}.${field}`);
 										clearFieldErrors(
 											...(key === "endpointId" || key === "modelId"

@@ -79,9 +79,6 @@ describe("AgentConfigurationScreen", () => {
 		expect(screen.getByLabelText<HTMLInputElement>("默认推理强度").value).toBe(
 			"",
 		);
-		expect(screen.getByLabelText<HTMLInputElement>("新模型凭证").value).toBe(
-			"",
-		);
 	});
 
 	it("lets an Owner submit configuration while clearing entered 新 Secret 值s", () => {
@@ -224,7 +221,7 @@ describe("AgentConfigurationScreen", () => {
 		const status = screen.getByRole("status");
 		await waitFor(() => expect(document.activeElement).toBe(status));
 	});
-	it("allows model credential replacement without reading back the original value", () => {
+	it("allows keyless model replacement without reading back credentials", () => {
 		const onSave = vi.fn();
 		render(
 			<AgentConfigurationScreen
@@ -236,10 +233,6 @@ describe("AgentConfigurationScreen", () => {
 			/>,
 		);
 		fireEvent.click(screen.getByRole("checkbox", { name: "替换模型配置" }));
-		const credential = screen.getByLabelText<HTMLInputElement>("新模型凭证");
-		expect(credential.value).toBe("");
-		expect(credential.type).toBe("password");
-		expect(credential.autocomplete).toBe("new-password");
 		for (const [label, value] of [
 			["选项 ID", "primary"],
 			["端点 ID", "approved-endpoint"],
@@ -247,7 +240,6 @@ describe("AgentConfigurationScreen", () => {
 			["可选推理强度", "high"],
 			["默认模型选项 ID", "primary"],
 			["默认推理强度", "high"],
-			["新模型凭证", "replacement-value"],
 		]) {
 			fireEvent.change(screen.getByLabelText(label), { target: { value } });
 		}
@@ -261,7 +253,6 @@ describe("AgentConfigurationScreen", () => {
 							endpointId: "approved-endpoint",
 							modelId: "release-model",
 							reasoningLevels: ["high"],
-							credentialValue: "replacement-value",
 						},
 					],
 					defaultOptionId: "primary",
@@ -269,11 +260,10 @@ describe("AgentConfigurationScreen", () => {
 				},
 			}),
 		);
-		expect(credential.value).toBe("");
 		expect(screen.queryByDisplayValue("replacement-value")).toBeNull();
 	});
 
-	it("clears model credentials when replacement is disabled", () => {
+	it("does not render per-model credential fields", () => {
 		render(
 			<AgentConfigurationScreen
 				agent={agent}
@@ -288,15 +278,49 @@ describe("AgentConfigurationScreen", () => {
 			name: "替换模型配置",
 		});
 		fireEvent.click(replaceModels);
-		fireEvent.change(screen.getByLabelText("新模型凭证"), {
-			target: { value: "temporary-credential" },
-		});
-		fireEvent.click(replaceModels);
-		fireEvent.click(replaceModels);
+		expect(screen.queryByLabelText("新模型凭证")).toBeNull();
+	});
 
-		expect(screen.getByLabelText<HTMLInputElement>("新模型凭证").value).toBe(
-			"",
+	it("previews and replaces the default Relay Key without echoing it", async () => {
+		const onPreview = vi.fn().mockResolvedValue({
+			schemaVersion: 1,
+			configurationRevision: 3,
+			candidates: [
+				{
+					endpointId: "endpoint-primary",
+					modelId: "gpt-5",
+					reasoningLevels: ["medium"],
+				},
+			],
+		});
+		const onReplace = vi.fn();
+		render(
+			<AgentConfigurationScreen
+				agent={agent}
+				onPreviewDefaultRelayKeyCandidates={onPreview}
+				onReplaceDefaultRelayKey={onReplace}
+				onSave={vi.fn()}
+				onUpgradeImage={vi.fn()}
+				session={{ kind: "ready", session: ownerSession }}
+				submitting={false}
+			/>,
 		);
+
+		const input = screen.getByLabelText<HTMLInputElement>(
+			"替换 Agent 默认 Relay Key",
+		);
+		fireEvent.change(input, { target: { value: "private-relay-key" } });
+		fireEvent.click(screen.getByRole("button", { name: "检查可用模型" }));
+		await waitFor(() =>
+			expect(onPreview).toHaveBeenCalledWith("private-relay-key"),
+		);
+		await waitFor(() =>
+			expect(screen.getByText(/endpoint-primary · gpt-5/)).toBeTruthy(),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "替换默认 Key" }));
+		expect(onReplace).toHaveBeenCalledWith("private-relay-key");
+		expect(input.value).toBe("");
+		expect(screen.queryByText("private-relay-key")).toBeNull();
 	});
 
 	it("places lifecycle controls below the configuration form", () => {

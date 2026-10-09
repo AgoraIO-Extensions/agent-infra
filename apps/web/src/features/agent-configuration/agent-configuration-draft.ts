@@ -4,7 +4,6 @@ import type {
 } from "../../pilot/generated-v2/types.gen.js";
 
 export type AgentConfigurationModelDraft = {
-	credentialValue: string;
 	endpointId: string;
 	modelId: string;
 	optionId: string;
@@ -68,9 +67,6 @@ export function buildAgentConfigurationRequest(
 					endpointId: model.endpointId.trim(),
 					modelId: model.modelId.trim(),
 					reasoningLevels: splitValues(model.reasoningLevels),
-					...(model.credentialValue.length > 0
-						? { credentialValue: model.credentialValue }
-						: {}),
 				})),
 				defaultOptionId: draft.defaultModelOptionId.trim(),
 				defaultReasoningLevel: draft.defaultReasoningLevel.trim(),
