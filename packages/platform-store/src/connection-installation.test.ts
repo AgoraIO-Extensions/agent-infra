@@ -317,6 +317,79 @@ it("rejects a lost claim and an idempotency key with different installation inte
 		}),
 	).rejects.toMatchObject({ code: "denied" });
 });
+
+it("claims one pending command with an owned attempt and permanently fences unknown", async () => {
+	const producer = createConnectionInstallationAuthorizationV1({ store });
+	const authorization = await producer.execute({
+		...request,
+		command: "begin",
+		executionId: "execution-a",
+	});
+	await producer.execute({
+		...request,
+		command: "confirm",
+		authorizationId: authorization.authorizationId,
+	});
+	const pending = await store.listPending(10, ["execution-a"]);
+	const begin = pending.find((item) => item.command.command === "begin");
+	if (!begin) throw new Error("missing begin command");
+	const beginClaim = await store.claimPending({
+		commandId: begin.command.commandId,
+		attemptId: "begin-attempt",
+		attemptOwner: "worker-a",
+	});
+	expect(beginClaim).toBeDefined();
+	expect(
+		await store.settle({
+			commandId: begin.command.commandId,
+			attemptId: "begin-attempt",
+			attemptOwner: "worker-a",
+			status: "completed",
+		}),
+	).toBe(true);
+	const pendingAfterBegin = await store.listPending(10, ["execution-a"]);
+	const confirm = pendingAfterBegin.find(
+		(item) => item.command.command === "confirm",
+	);
+	expect(confirm).toBeDefined();
+	const commandId = confirm?.command.commandId;
+	if (!commandId) throw new Error("missing pending command");
+	const claimed = await store.claimPending({
+		commandId,
+		attemptId: "attempt-a",
+		attemptOwner: "worker-a",
+	});
+	expect(claimed?.command).toMatchObject({
+		commandId,
+		status: "sending",
+		attemptId: "attempt-a",
+		attemptOwner: "worker-a",
+	});
+	expect(
+		await store.claimPending({
+			commandId,
+			attemptId: "attempt-b",
+			attemptOwner: "worker-b",
+		}),
+	).toBeNull();
+	expect(
+		await store.settle({
+			commandId,
+			attemptId: "attempt-a",
+			attemptOwner: "worker-a",
+			status: "unknown",
+		}),
+	).toBe(true);
+	expect(
+		await store.settle({
+			commandId,
+			attemptId: "attempt-b",
+			attemptOwner: "worker-b",
+			status: "completed",
+		}),
+	).toBe(false);
+	expect(await store.listPending(10, ["execution-a"])).toHaveLength(0);
+});
 it("rolls back every fact when audit persistence fails", async () => {
 	await client.unsafe(
 		"create function platform.fail_installation_audit() returns trigger as $$ begin if NEW.action like 'connection.installation.%' then raise exception 'private-sentinel'; end if; return NEW; end; $$ language plpgsql",

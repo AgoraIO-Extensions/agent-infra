@@ -51,6 +51,8 @@ export interface ConnectionInstallationCommandFactV1 {
 	readonly command: "begin" | "confirm" | "status";
 	readonly requestDigest: string;
 	readonly status: "pending" | "sending" | "completed" | "unknown" | "rejected";
+	readonly attemptId: string | null;
+	readonly attemptOwner: string | null;
 	readonly createdAt: number;
 	readonly updatedAt: number;
 }
@@ -81,10 +83,14 @@ export interface ConnectionInstallationSavedV1 {
 	readonly agentAuthorizationRevision: string;
 }
 export interface ConnectionInstallationTransactionV1 {
-	hasUnresolvedSend(authorizationId: string): Promise<boolean>;
+	hasUnresolvedSend(
+		authorizationId: string,
+		exclude?: { commandId: string; attemptId: string; attemptOwner: string },
+	): Promise<boolean>;
 	commandAllowed(
 		authorizationId: string,
 		command: "begin" | "confirm",
+		attempt?: { commandId: string; attemptId: string; attemptOwner: string },
 	): Promise<boolean>;
 	current(
 		userId: string,
@@ -125,6 +131,27 @@ export interface ConnectionInstallationStoreV1 {
 	transaction<T>(
 		work: (transaction: ConnectionInstallationTransactionV1) => Promise<T>,
 	): Promise<T>;
+}
+export interface ConnectionInstallationPendingCommandV1 {
+	readonly authorization: ConnectionInstallationAuthorizationFactV1;
+	readonly command: ConnectionInstallationCommandFactV1;
+}
+export interface ConnectionInstallationCommandDrainStoreV1 {
+	listPending(
+		limit: number,
+		executionIds?: readonly string[],
+	): Promise<readonly ConnectionInstallationPendingCommandV1[]>;
+	claimPending(input: {
+		commandId: string;
+		attemptId: string;
+		attemptOwner: string;
+	}): Promise<ConnectionInstallationPendingCommandV1 | null>;
+	settle(input: {
+		commandId: string;
+		attemptId: string;
+		attemptOwner: string;
+		status: "completed" | "unknown";
+	}): Promise<boolean>;
 }
 
 function denied(): never {
@@ -316,6 +343,8 @@ export function createConnectionInstallationAuthorizationV1(options: {
 						command: request.command,
 						requestDigest: digest,
 						status: "pending",
+						attemptId: null,
+						attemptOwner: null,
 						createdAt: now,
 						updatedAt: now,
 					},
@@ -351,6 +380,9 @@ export function createConnectionInstallationAuthorizationV1(options: {
 				scope: ConnectionInstallationScopeV1;
 				authorizationId: string;
 				command: "begin" | "confirm" | "status";
+				commandId?: string;
+				attemptId?: string;
+				attemptOwner?: string;
 			},
 			signal: AbortSignal,
 			finalCheck: () => Promise<void>,
@@ -385,15 +417,28 @@ export function createConnectionInstallationAuthorizationV1(options: {
 							record.authorization.status !== "confirmed")
 					)
 						denied();
-					if (
-						snapshot.command !== "status" &&
-						((await transaction.hasUnresolvedSend(snapshot.authorizationId)) ||
+					if (snapshot.command !== "status") {
+						const attempt =
+							snapshot.commandId && snapshot.attemptId && snapshot.attemptOwner
+								? {
+										commandId: snapshot.commandId,
+										attemptId: snapshot.attemptId,
+										attemptOwner: snapshot.attemptOwner,
+									}
+								: undefined;
+						if (
+							(await transaction.hasUnresolvedSend(
+								snapshot.authorizationId,
+								attempt,
+							)) ||
 							!(await transaction.commandAllowed(
 								snapshot.authorizationId,
 								snapshot.command,
-							)))
-					)
-						denied();
+								attempt,
+							))
+						)
+							denied();
+					}
 					signal.throwIfAborted();
 					return {
 						...snapshot,

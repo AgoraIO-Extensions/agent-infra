@@ -180,9 +180,54 @@
       ],
       "type": "object"
     },
+    "ConnectionInstallationCommandAttemptV1": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "attemptOwner": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "commandId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "commandId",
+        "attemptId",
+        "attemptOwner"
+      ],
+      "type": "object"
+    },
     "ConnectionInstallationCommandV1": {
       "additionalProperties": false,
       "properties": {
+        "attemptId": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attemptOwner": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "authorizationId": {
           "minLength": 1,
           "type": "string"
@@ -235,6 +280,8 @@
         "command",
         "requestDigest",
         "status",
+        "attemptId",
+        "attemptOwner",
         "createdAt",
         "updatedAt"
       ],

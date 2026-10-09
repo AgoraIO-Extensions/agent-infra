@@ -154,10 +154,11 @@ code、verifier、Token、Consumer secret 与 Runtime URL 不能作为浏览器�
 Worker 的同源 `connectionInstallation` 可以只导出 `configuration`；默认确认 producer
 读取 Platform DB 的这份事实，在 `finalCheck` 后再次核对原用户、权限、Execution、Pod、
 代次与 profile/config。已 configured 的外部 `authorize` 接收合同仍可使用；缺失或漂移时
-不发新安装请求。本片只批准尚未 sending 的单一 pending 命令；任何 sending/unknown
-阻断同一安装的后续发送，重复 confirm 不产生新命令。接入 drain 前必须补齐具名 commandId
-与发送 attempt 的所有权校验，使提交 sending 后的原发送可复核，不能放行任意 sending。
-这里只接上确认事实来源，独立命令 drain 与 callback 瞬时转交继续按
+不发新安装请求。本片的 Worker drain 只领取已确认的单一 confirm 命令，并以 commandId、
+attemptId、attemptOwner 做 CAS；任何 sending/unknown 阻断同一安装的后续发送，进程崩溃或
+超时会把过期 sending 固化为 unknown。begin 命令暂不领取，因为其 authorizationUrl 必须
+沿 callback-only 合同转交给原用户；在该结果接收片合入前保持 pending，不把 begin 标记完成。
+这里只接上确认事实与安全 drain，callback 瞬时转交继续按
 [工程 Spec §13.5.6](../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
 实施，生产 Token/ConsumerInstance/真实保护门禁仍沿
 [#851](https://github.com/AgoraIO-Extensions/agent-infra/issues/851) 保留。

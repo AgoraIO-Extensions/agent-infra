@@ -92,6 +92,9 @@ export const connectionInstallationCommands = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		attemptId: text("attempt_id"),
+		attemptOwner: text("attempt_owner"),
+		attemptExpiresAt: timestamp("attempt_expires_at", { withTimezone: true }),
 	},
 	(table) => [
 		foreignKey({
@@ -110,6 +113,10 @@ export const connectionInstallationCommands = platformSchema.table(
 		check(
 			"connection_installation_digest_valid",
 			sql`${table.requestDigest} ~ '^[a-f0-9]{64}$'`,
+		),
+		check(
+			"connection_installation_attempt_binding",
+			sql`(${table.attemptId} is null and ${table.attemptOwner} is null) or (${table.attemptId} is not null and ${table.attemptOwner} is not null)`,
 		),
 		uniqueIndex("connection_installation_command_key_unique").on(
 			table.authorizationId,

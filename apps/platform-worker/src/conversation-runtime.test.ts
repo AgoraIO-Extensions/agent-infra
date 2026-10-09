@@ -2098,6 +2098,32 @@ it("sends a separately authorized installation request from the original Worker 
 	}
 });
 
+it("preserves command attempt ownership through the installation authorization", async () => {
+	const h = installationHarness();
+	const runtimeGrant = await h.authorize();
+	try {
+		await h.runtime.connectionInstallation.request({
+			execution: h.events(runtimeGrant),
+			authorizationId: "authorization-a",
+			command: "begin",
+			commandId: "command-a",
+			attemptId: "attempt-a",
+			attemptOwner: "worker-a",
+		});
+		expect(h.installationAuthorize).toHaveBeenCalledWith(
+			expect.objectContaining({
+				commandId: "command-a",
+				attemptId: "attempt-a",
+				attemptOwner: "worker-a",
+			}),
+			expect.anything(),
+			expect.any(Function),
+		);
+	} finally {
+		await h.runtime.close();
+	}
+});
+
 it("rejects installation without an independent platform confirmation or deployment config", async () => {
 	const h = installationHarness();
 	const grant = await h.authorize();
