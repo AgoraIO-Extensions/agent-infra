@@ -6,11 +6,13 @@ shift || true
 publish=false
 deploy=false
 kubeconfig=${CONNECTION_KUBECONFIG:-}
+migration_pr=""
 while (( $# )); do
   case "$1" in
     --publish) publish=true; shift ;;
     --deploy) deploy=true; shift ;;
     --kubeconfig) kubeconfig=${2:?--kubeconfig requires a file}; shift 2 ;;
+    --reviewed-migrations-pr) migration_pr=${2:?--reviewed-migrations-pr requires a PR}; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -45,8 +47,11 @@ previous_ref=$(git ls-remote --tags --refs origin 'refs/tags/connection-v*' | aw
 previous_tag=${previous_ref%% *}
 previous_sha=${previous_ref##* }
 if [[ -n "$previous_ref" ]] && ! git diff --quiet "$previous_sha..$connection_sha" -- migrations/connection; then
-  echo "Connection migrations changed since $previous_tag; use the reviewed migration path before deploying." >&2
-  exit 1
+  if [[ -z "$migration_pr" ]]; then
+    echo "Connection migrations changed since $previous_tag; use the reviewed migration path before deploying." >&2
+    exit 1
+  fi
+  node deploy/connection-reviewed-migrations.mjs "$migration_pr" "$previous_sha" "$connection_sha"
 fi
 
 echo "Preflight OK: $version -> $connection_sha (previous: ${previous_tag:-none})"
@@ -58,7 +63,7 @@ if ! catalog_diff=$(node .github/scripts/connection-release-guard.mjs --baseline
 fi
 printf '%s\n' "$catalog_diff"
 if [[ -n "$kubeconfig" ]]; then
-  node deploy/connection-shanghai-release.mjs --preflight "$version" "$kubeconfig"
+  node deploy/connection-shanghai-release.mjs --preflight "$version" "$kubeconfig" "$migration_pr"
 fi
 
 if $publish; then
@@ -85,4 +90,4 @@ if ! $deploy; then
   exit 0
 fi
 
-node deploy/connection-shanghai-release.mjs --deploy "$version" "$kubeconfig"
+node deploy/connection-shanghai-release.mjs --deploy "$version" "$kubeconfig" "$migration_pr"

@@ -2,7 +2,18 @@ import { migrateConnectionDatabase } from "@agent-infra/connection-store/migrati
 
 import { productionMigrationRuntimeConfig } from "./runtime-config";
 
-const config = productionMigrationRuntimeConfig();
-await migrateConnectionDatabase(config.databaseUrl, "migrations/connection");
+try {
+	const config = productionMigrationRuntimeConfig();
+	const receipt = await migrateConnectionDatabase(
+		config.databaseUrl,
+		"migrations/connection",
+	);
+	console.log(JSON.stringify(receipt));
+} catch {
+	console.error(
+		"Schema migration failed; raw errors withheld to protect database configuration",
+	);
+	process.exitCode = 1;
+}
 // HLD G-01, G-02, and OC-01 prohibit publishing Direct MCP or a ProviderRelease
 // before their external conformance evidence is accepted. This role only migrates.

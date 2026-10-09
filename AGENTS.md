@@ -134,6 +134,9 @@ Connection 现网已迁到上海，权威数据库亦在上海；GZ3 release 已
 保留 `connection-database-shanghai`、`connection-config`、RDS CA 挂载及单主策略，常规发布
 只更换镜像。不得恢复旧库或 GZ3、自动扩大 Provider 授权、以 bootstrap 或环境开关绕过迁移门禁。
 
+新增 SQL/journal 的发布使用生产文档中的 `--reviewed-migrations-pr` 显式路径，校验已合并 CI/review
+成功的精确迁移来源。仅允许 schema Job，成功账本回执之前不得更新镜像；失败/未知 Job 不自动重试。
+
 ### 提交与评审
 
 - 所有可能产生 PR 的工作遵循 [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md#2-基本原则) 的 `Issue -> 实现与验证 -> PR` 规则；创建任务分支、修改文件或提交代码前，必须先确认内容完整的 primary Issue。
