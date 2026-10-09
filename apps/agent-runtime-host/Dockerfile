@@ -86,7 +86,7 @@ RUN chown -R 0:0 /opt/codex/agent-infra-skills \
        /opt/codex/agent-infra-skills/workspace-summary.manifest.json /opt/codex/share/workspace-summary-build.json
 ENV AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1
 COPY --from=builder --chown=node:node /prod/agent-runtime-host/ ./
-RUN node node_modules/@agent-infra/agent-runtime/node_modules/playwright-core/cli.js install-deps chromium \
+RUN node --input-type=module -e 'import {createRequire} from "node:module"; import {dirname,join} from "node:path"; import {execFileSync} from "node:child_process"; const runtimeRequire=createRequire(import.meta.resolve("@agent-infra/agent-runtime")); const cli=join(dirname(runtimeRequire.resolve("playwright-core/package.json")),"cli.js"); execFileSync(process.execPath,[cli,"install-deps","chromium"],{stdio:"inherit"});' \
     && rm -rf /var/lib/apt/lists/* /var/log/*
 COPY --from=isolation-tools /bin/setpriv /usr/bin/setpriv
 COPY --from=isolation-tools /lib/ld-musl-*.so.1 /usr/lib/
