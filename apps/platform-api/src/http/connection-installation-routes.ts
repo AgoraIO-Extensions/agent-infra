@@ -110,6 +110,9 @@ export function registerConnectionInstallationRoutesV1(
 					authorizationId: authorization.authorizationId,
 					status: authorization.status,
 					expiresAt: authorization.expiresAt,
+					...(authorization.authorizationUrl
+						? { authorizationUrl: authorization.authorizationUrl }
+						: {}),
 				}),
 				command === "status" ? 200 : 202,
 			);

@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
+import type { ConnectionInstallationCommandDrainStoreV1 } from "@agent-infra/platform-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -24,6 +25,9 @@ const mocks = vi.hoisted(() => ({
 	dispatchRuntimeHost: undefined as unknown,
 	authorize: vi.fn(),
 	runtimeDispatch: vi.fn(),
+	installationActiveExecutionIds: vi.fn(() => ["execution-a"]),
+	installationCanDrain: vi.fn(() => true),
+	installationDrain: vi.fn(),
 	wake: undefined as (() => void) | undefined,
 	wakeStart: vi.fn(async () => {}),
 	wakeClose: vi.fn(async () => {}),
@@ -88,6 +92,11 @@ vi.mock("./conversation-runtime.js", () => ({
 		return {
 			authorization: { authorize: mocks.authorize },
 			runtimeHost: { dispatch: mocks.runtimeDispatch },
+			connectionInstallation: {
+				activeExecutionIds: mocks.installationActiveExecutionIds,
+				canDrain: mocks.installationCanDrain,
+				drain: mocks.installationDrain,
+			},
 			close: mocks.runtimeClose,
 		};
 	},
@@ -199,6 +208,58 @@ describe("Conversation Worker discovery and shutdown", () => {
 			claim,
 			observation: { status: "unknown", resources: [] },
 		});
+	});
+	it("drains begin and persists the returned authorization URL", async () => {
+		mocks.find.mockResolvedValue([]);
+		mocks.installationDrain.mockResolvedValue({
+			schemaVersion: 1,
+			authorizationId: "authorization-a",
+			phase: "awaiting_callback",
+			expiresAt: Date.now() + 600_000,
+			authorizationUrl: `https://connection.test/oauth/authorize?state=${"a".repeat(64)}`,
+		});
+		const settle = vi.fn(async () => true);
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			connectionInstallation: {
+				configuration: {} as never,
+				authorize: async () => null,
+				commandStore: {
+					listPending: async () => [
+						{
+							authorization: {
+								authorizationId: "authorization-a",
+								reference: { executionId: "execution-a" },
+							},
+							command: {
+								commandId: "command-a",
+								command: "begin",
+							},
+						},
+					],
+					claimPending: async () => ({
+						authorization: {
+							authorizationId: "authorization-a",
+							reference: { executionId: "execution-a" },
+						},
+						command: {
+							commandId: "command-a",
+							command: "begin",
+						},
+					}),
+					settle,
+				} as unknown as ConnectionInstallationCommandDrainStoreV1,
+			},
+		});
+		await worker.tick();
+		expect(settle).toHaveBeenCalledWith({
+			commandId: "command-a",
+			attemptId: expect.any(String),
+			attemptOwner: "instance",
+			status: "completed",
+			authorizationUrl: `https://connection.test/oauth/authorize?state=${"a".repeat(64)}`,
+		});
+		await worker.stop();
 	});
 	it("discovers committed work on a wakeup without waiting for the poll (#1561)", async () => {
 		mocks.find.mockResolvedValue([]);

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { expect, it, vi } from "vitest";
 import { registerConnectionInstallationRoutesV1 } from "./connection-installation-routes.js";
 
-function fixture() {
+function fixture(withAuthorizationUrl = false) {
 	const execute = vi.fn(async (input) => ({
 		schemaVersion: 1 as const,
 		authorizationId: "authorization-a",
@@ -25,6 +25,11 @@ function fixture() {
 		},
 		status: "awaiting_confirmation" as const,
 		expiresAt: 123000,
+		...(withAuthorizationUrl
+			? {
+					authorizationUrl: `https://connection.test/oauth/authorize?state=${"a".repeat(64)}`,
+				}
+			: {}),
 	}));
 	const app = new Hono();
 	registerConnectionInstallationRoutesV1(app, {
@@ -81,6 +86,13 @@ it("uses resolved browser identity and only the original Execution selector", as
 		identityRevision: "identity-r1",
 		executionId: "execution-a",
 		command: "begin",
+	});
+});
+it("projects only the stored authorization URL, never a credential", async () => {
+	const f = fixture(true);
+	const response = await f.post();
+	expect(await response.json()).toMatchObject({
+		authorizationUrl: `https://connection.test/oauth/authorize?state=${"a".repeat(64)}`,
 	});
 });
 it.each(["confirm", "status"] as const)(

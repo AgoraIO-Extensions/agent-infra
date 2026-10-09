@@ -416,7 +416,6 @@ export function createPlatformConversationWorkerV2(
 		);
 		let drained = 0;
 		for (const item of pending) {
-			if (item.command.command !== "confirm") continue;
 			if (
 				!runtime.connectionInstallation.canDrain(
 					item.authorization.reference.executionId,
@@ -431,7 +430,7 @@ export function createPlatformConversationWorkerV2(
 			});
 			if (!claimed) continue;
 			try {
-				const delivered = await runtime.connectionInstallation.drain(
+				const result = await runtime.connectionInstallation.drain(
 					{
 						authorization: {
 							authorizationId: claimed.authorization.authorizationId,
@@ -453,7 +452,10 @@ export function createPlatformConversationWorkerV2(
 					commandId: claimed.command.commandId,
 					attemptId,
 					attemptOwner: options.workerId,
-					status: delivered ? "completed" : "unknown",
+					status: result ? "completed" : "unknown",
+					...(result?.authorizationUrl
+						? { authorizationUrl: result.authorizationUrl }
+						: {}),
 				});
 				drained++;
 			} catch {

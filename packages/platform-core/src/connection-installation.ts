@@ -43,6 +43,8 @@ export interface ConnectionInstallationAuthorizationFactV1 {
 		| "expired"
 		| "unknown";
 	readonly expiresAt: number;
+	/** Runtime-generated OAuth entry point; no credential material. */
+	readonly authorizationUrl?: string;
 }
 export interface ConnectionInstallationCommandFactV1 {
 	readonly schemaVersion: 1;
@@ -151,6 +153,7 @@ export interface ConnectionInstallationCommandDrainStoreV1 {
 		attemptId: string;
 		attemptOwner: string;
 		status: "completed" | "unknown";
+		authorizationUrl?: string;
 	}): Promise<boolean>;
 }
 
@@ -272,7 +275,10 @@ export function createConnectionInstallationAuthorizationV1(options: {
 					denied();
 				const now = await transaction.now();
 				if (existing) requireSaved(existing, current, now);
-				if (request.command === "status") return existing!.authorization;
+				if (request.command === "status") {
+					if (!existing) denied();
+					return existing.authorization;
+				}
 				const replay = await transaction.receipt(
 					request.userId,
 					request.idempotencyKey as string,

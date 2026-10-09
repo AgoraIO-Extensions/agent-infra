@@ -18,6 +18,19 @@ export const ConnectionInstallationAuthorizationStatusV1Schema = z.enum([
 	"expired",
 	"unknown",
 ]);
+const ConnectionInstallationAuthorizationUrlV1Schema = z
+	.string()
+	.url()
+	.max(8192)
+	.refine((value) => {
+		const url = new URL(value);
+		return (
+			url.protocol === "https:" &&
+			!url.username &&
+			!url.password &&
+			!url.hash
+		);
+	});
 
 export const ConnectionInstallationAuthorizationV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
@@ -28,6 +41,8 @@ export const ConnectionInstallationAuthorizationV1Schema = z.strictObject({
 	scope: RuntimeOAuthScopeV1Schema,
 	status: ConnectionInstallationAuthorizationStatusV1Schema,
 	expiresAt: z.number().int().positive().safe(),
+	/** Short-lived OAuth entry point only; never a token, code, verifier, or secret. */
+	authorizationUrl: ConnectionInstallationAuthorizationUrlV1Schema.optional(),
 });
 export type ConnectionInstallationAuthorizationV1 = z.infer<
 	typeof ConnectionInstallationAuthorizationV1Schema
@@ -39,6 +54,7 @@ export const ConnectionInstallationProjectionV1Schema =
 		authorizationId: true,
 		status: true,
 		expiresAt: true,
+		authorizationUrl: true,
 	});
 
 export const ConnectionInstallationCommandV1Schema = z.strictObject({
