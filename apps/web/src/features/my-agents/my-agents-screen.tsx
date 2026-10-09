@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { agentChannelKindLabels } from "../agent-discovery/agent-discovery-screen.js";
 import {
+	agentConversationSourceLabel,
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
@@ -121,9 +122,7 @@ export function MyAgentsScreen({
 													variant="outline"
 													className="max-w-full whitespace-normal rounded-[7px] [overflow-wrap:anywhere]"
 												>
-													{application.source.kind === "standard"
-														? application.source.templateId
-														: "自定义 Agent"}
+													{agentConversationSourceLabel(application)}
 												</Badge>
 											</div>
 											<Link

@@ -293,6 +293,7 @@ describe("AgentApplicationForm", () => {
 		expect(
 			(screen.getByLabelText("镜像地址") as HTMLInputElement).disabled,
 		).toBe(true);
+		expect(screen.queryByRole("combobox", { name: "入口身份校验" })).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "修改并重新提交" }));
 		expect(onSubmit).toHaveBeenCalledWith(
 			expect.objectContaining({ source: customApplication.source }),

@@ -14,9 +14,9 @@ import {
 import { cn } from "@/lib/utils";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
+	agentConversationSourceLabel,
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
-	agentSourceLabel,
 } from "../agent-management-status.js";
 
 import {
@@ -107,7 +107,7 @@ export function AgentDiscoveryScreen({
 			[
 				agent.name,
 				agent.description,
-				agentSourceLabel(agent),
+				agentConversationSourceLabel(agent),
 				agentChannelSummary(agent),
 			]
 				.join("\n")
@@ -326,7 +326,9 @@ export function AgentDiscoveryScreen({
 										</p>
 									</div>
 									<div className="directory-tags flex flex-wrap gap-2">
-										<Badge variant="outline">{agentSourceLabel(agent)}</Badge>
+										<Badge variant="outline">
+											{agentConversationSourceLabel(agent)}
+										</Badge>
 										<Badge variant="outline">
 											{agentChannelSummary(agent)}
 										</Badge>

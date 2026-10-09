@@ -260,6 +260,18 @@ describe("Pilot browser contracts", () => {
 				},
 			}).success,
 		).toBe(false);
+		expect(
+			AgentApplicationCreateRequestV1Schema.safeParse({
+				...validApplication,
+				interactionUrl: "https://agent.example.test",
+			}).success,
+		).toBe(false);
+		expect(
+			AgentApplicationUpdateRequestV1Schema.safeParse({
+				...validApplication,
+				interactionUrl: "https://agent.example.test",
+			}).success,
+		).toBe(false);
 	});
 
 	it("keeps trusted identity and secret values out of browser projections", () => {
