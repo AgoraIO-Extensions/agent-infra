@@ -1123,7 +1123,7 @@ export function createConversationRuntimeV2(
 				for (;;) {
 					active.throwIfAborted();
 					const prepared = previous
-							? await continuePrepared(previous, request, active)
+						? await continuePrepared(previous, request, active)
 						: await prepare(request, "events.persist", active);
 					previous = undefined;
 					drains.set(prepared.context, prepared);
