@@ -111,7 +111,9 @@ function channel(target = store) {
 								channelId: wecomChannelIdV1(scope),
 								identityRevision: "identity-1",
 								agentAuthorizationRevision: "authorization_1",
-								accessSources: [{ kind: "user", userId: scope.senderId }],
+								accessSources: [
+									{ kind: "organization", organizationId: "controlled-org" },
+								],
 							},
 						},
 					},
@@ -151,6 +153,8 @@ beforeAll(async () => {
 	});
 	await sql`insert into platform.agents (id,current_configuration_revision,authorization_revision) values (${message.agentId},1,'authorization_1')`;
 	await sql`insert into platform.agent_applications (id,agent_id,applicant_id,name,description,status,trace_id,request_id,submitted_at,management_revision,approval_revision,service_availability,desired_state,workload_revision,fence) values ('app_1',${message.agentId},'owner_1','Fixture','Fixture','available','trace_1','request_1',now(),1,1,'ready','running',1,1)`;
+	await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${message.agentId},'owner_1',now())`;
+	await sql`insert into platform.agent_availability (agent_id,target_type,target_id) values (${message.agentId},'organization','controlled-org')`;
 	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${message.agentId},1,'fixture',${sql.json(configuration)},now())`;
 }, 120_000);
 afterAll(async () => {

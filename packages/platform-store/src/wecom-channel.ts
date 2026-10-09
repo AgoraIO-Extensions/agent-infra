@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
 	createConversationExecutionUseCaseV1,
+	createWecomAuthorizationV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
 	type TaskAuthorizationBoundaryV1,
 	type TaskUserDirectoryV1,
 	type WecomAcceptancePlanV1,
 	type WecomAcceptanceV1,
+	type WecomAuthorityStateV1,
 	type WecomAuthorityV1,
 	type WecomChannelStorePortV1,
 	type WecomDeliveryClaimV1,
@@ -29,6 +31,7 @@ import {
 } from "./task-authorization.js";
 
 class WecomAuthorizationRevoked extends Error {}
+class WecomAuthorizationDenied extends Error {}
 
 async function revokeUserTasksInTransaction(
 	transaction: postgres.TransactionSql,
@@ -199,13 +202,132 @@ export class PostgresWecomChannelV1
 			nextCursor: rows.length === 25 ? (rows.at(-1)?.id ?? null) : null,
 		};
 	}
+	async #readAdmissionAuthorityState(
+		transaction: postgres.TransactionSql,
+		agentId: string,
+		signal: AbortSignal,
+	): Promise<WecomAuthorityStateV1 | null> {
+		const [row] = await awaitTaskAuthorizationQueryV1(
+			transaction<
+				{
+					configuration: unknown;
+					authorization_revision: string;
+					management: WecomAuthorityStateV1["management"];
+				}[]
+			>`
+				select c.configuration, a.authorization_revision,
+					jsonb_build_object(
+						'schemaVersion', 1, 'agentId', a.id, 'applicationId', app.id,
+						'applicantId', app.applicant_id, 'status', app.status,
+						'revision', app.management_revision::double precision,
+						'approvalRevision', app.approval_revision::double precision,
+						'decisionReason', app.decision_reason, 'serviceAvailability', app.service_availability,
+						'desiredState', app.desired_state, 'workloadRevision', app.workload_revision::double precision,
+						'fence', app.fence::double precision, 'failureCode', app.failure_code,
+						'ownerIds', (select coalesce(jsonb_agg(owner_id order by owner_id), '[]'::jsonb)
+							from platform.agent_owners where agent_id = a.id),
+						'availability', (select coalesce(jsonb_agg(jsonb_build_object(
+							'kind', case when target_type = 'user' then 'user' else 'organization' end,
+							case when target_type = 'user' then 'userId' else 'organizationId' end, target_id
+						) order by target_type, target_id), '[]'::jsonb)
+							from platform.agent_availability where agent_id = a.id)
+					) as management
+				from platform.agents a
+				join platform.agent_applications app on app.agent_id = a.id
+				join platform.agent_configuration_revisions c on c.agent_id = a.id and c.revision = a.current_configuration_revision
+				where a.id = ${agentId}
+			`,
+			signal,
+		);
+		return row
+			? {
+					management: row.management,
+					configuration: decodeAgentConfigurationRecord(row.configuration),
+					authorizationRevision: row.authorization_revision,
+				}
+			: null;
+	}
+	async #currentAuthorityInTransaction(
+		transaction: postgres.TransactionSql,
+		plan: WecomAcceptancePlanV1,
+		boundary: TaskAuthorizationBoundaryV1,
+		signal: AbortSignal,
+	): Promise<
+		| { readonly outcome: "allowed"; readonly authority: WecomAuthorityV1 }
+		| { readonly outcome: "revoked"; readonly userId: string }
+		| { readonly outcome: "denied" | "unavailable" }
+	> {
+		const run = <T extends readonly (object | undefined)[]>(
+			query: postgres.PendingQuery<T>,
+		) => awaitTaskAuthorizationQueryV1(query, signal);
+		const resolved = await awaitTaskAuthorizationDependencyV1(
+			() => this.#identity.resolveSender(plan.message),
+			signal,
+		);
+		const user = resolved ? parseCurrentTaskUserV1(resolved) : null;
+		if (!user || user.userId !== boundary.principal.id)
+			return { outcome: "denied" };
+		const [platformDisabled] = await run(
+			transaction<{ user_id: string }[]>`
+				select user_id from platform.platform_user_disables
+				where user_id=${user.userId}
+			`,
+		);
+		if (user.accountStatus === "disabled" || platformDisabled)
+			return { outcome: "revoked", userId: user.userId };
+		if (user.authorizationRevision !== boundary.identityRevision)
+			return { outcome: "denied" };
+		const authorization = createWecomAuthorizationV1({
+			identity: {
+				resolveSender: async () => user,
+				activeUsers: async (ids) => {
+					if (ids.length === 0) return [];
+					const active = await awaitTaskAuthorizationDependencyV1(
+						() => this.#identity.activeUsers(ids),
+						signal,
+					);
+					const disabled = await run(
+						transaction<{ user_id: string }[]>`
+							select user_id from platform.platform_user_disables
+							where user_id in ${transaction(ids)}
+						`,
+					);
+					const disabledIds = new Set(disabled.map((row) => row.user_id));
+					return active.filter((id) => !disabledIds.has(id));
+				},
+			},
+			state: {
+				readAuthorityState: (currentAgentId) =>
+					this.#readAdmissionAuthorityState(
+						transaction,
+						currentAgentId,
+						signal,
+					),
+			},
+		});
+		const current = await awaitTaskAuthorizationDependencyV1(
+			() => authorization.authorize(plan.message, "use", boundary),
+			signal,
+		);
+		if (current.outcome !== "allowed") return current;
+		if (
+			current.authority.actor.actorId !== plan.authority.actor.actorId ||
+			current.authority.actor.agentId !== plan.authority.actor.agentId ||
+			current.authority.actor.channelId !== plan.authority.actor.channelId ||
+			current.authority.actor.authorizationRevision !==
+				plan.authority.actor.authorizationRevision ||
+			current.authority.channelRevision !== plan.authority.channelRevision ||
+			current.authority.managementRevision !== plan.authority.managementRevision
+		)
+			return { outcome: "denied" };
+		return current;
+	}
 	async accept(
 		plan: WecomAcceptancePlanV1,
 		execute: Parameters<WecomChannelStorePortV1["accept"]>[1],
 		callerSignal?: AbortSignal,
 	): Promise<WecomAcceptanceV1> {
 		if (this.#closed) throw new TaskAuthorizationStoreError();
-		const identity = this.#identity;
 		const deadlineAt = Date.now() + 10_000;
 		const deadline = AbortSignal.timeout(10_000);
 		const signal = callerSignal
@@ -335,40 +457,29 @@ export class PostgresWecomChannelV1
 					config.source.interactionMode === "self-managed")
 			)
 				return reject("denied");
-			let currentUser: ReturnType<typeof parseCurrentTaskUserV1> | null = null;
-			if (identity) {
-				const boundary = parseTaskAuthorizationBoundaryV1(
-					plan.authority.actor.taskBoundary,
-				);
-				const current = await awaitTaskAuthorizationDependencyV1(
-					() => identity.resolveSender(plan.message),
+			const boundary = parseTaskAuthorizationBoundaryV1(
+				plan.authority.actor.taskBoundary,
+			);
+			const current = await this.#currentAuthorityInTransaction(
+				sql,
+				plan,
+				boundary,
+				signal,
+			);
+			if (current.outcome === "revoked") {
+				await revokeUserTasksInTransaction(
+					sql,
+					current.userId,
+					{
+						workerId: this.#connectionHolderId ?? "platform-api",
+						traceId: plan.eventKey,
+						requestId: plan.eventKey,
+					},
 					signal,
 				);
-				currentUser = current ? parseCurrentTaskUserV1(current) : null;
-				if (!currentUser || currentUser.userId !== plan.authority.actor.actorId)
-					return reject("denied");
-				if (currentUser.authorizationRevision !== boundary.identityRevision)
-					return reject("denied");
-				const [platformDisabled] = await run(
-					sql<
-						{ user_id: string }[]
-					>`select user_id from platform.platform_user_disables where user_id=${currentUser.userId}`,
-				);
-				if (currentUser.accountStatus === "disabled" || platformDisabled) {
-					await revokeUserTasksInTransaction(
-						sql,
-						currentUser.userId,
-						{
-							workerId: this.#connectionHolderId ?? "platform-api",
-							traceId: plan.eventKey,
-							requestId: plan.eventKey,
-						},
-						signal,
-					);
-					return readyToCommit({ outcome: "denied" as const });
-				}
-				if (currentUser.accountStatus !== "active") return reject("denied");
+				return readyToCommit({ outcome: "denied" as const });
 			}
+			if (current.outcome !== "allowed") return reject(current.outcome);
 			const [old] = await run(
 				sql<
 					Row[]
@@ -389,30 +500,22 @@ export class PostgresWecomChannelV1
 						await run(
 							business`update platform.wecom_receipts set reply_handle=${plan.message.replyHandle},expires_at=${new Date(plan.message.replyExpiresAt)},connection_bot_id=${plan.connectionFence?.botId ?? null},connection_fence=${plan.connectionFence?.fence ?? null},updated_at=now() where id=${plan.eventKey} and delivery_status='pending'`,
 						);
-						const current = await awaitTaskAuthorizationDependencyV1(
-							() => this.#identity.resolveSender(plan.message),
+						const final = await this.#currentAuthorityInTransaction(
+							business,
+							plan,
+							boundary,
 							signal,
 						);
-						const finalUser = current ? parseCurrentTaskUserV1(current) : null;
-						if (!finalUser || finalUser.userId !== plan.authority.actor.actorId)
-							throw new TaskAuthorizationStoreError();
-						if (finalUser.accountStatus === "disabled")
+						if (final.outcome === "revoked")
 							throw new WecomAuthorizationRevoked();
-						const [finalPlatformDisabled] = await run(
-							business<
-								{ user_id: string }[]
-							>`select user_id from platform.platform_user_disables where user_id=${finalUser.userId}`,
-						);
-						if (finalPlatformDisabled) throw new WecomAuthorizationRevoked();
-						if (
-							finalUser.authorizationRevision !==
-							parseTaskAuthorizationBoundaryV1(
-								plan.authority.actor.taskBoundary,
-							).identityRevision
-						)
+						if (final.outcome === "denied")
+							throw new WecomAuthorizationDenied();
+						if (final.outcome !== "allowed")
 							throw new TaskAuthorizationStoreError();
 					});
 				} catch (error) {
+					if (error instanceof WecomAuthorizationDenied)
+						return reject("denied");
 					if (!(error instanceof WecomAuthorizationRevoked)) throw error;
 					await revokeUserTasksInTransaction(
 						sql,
@@ -507,31 +610,20 @@ export class PostgresWecomChannelV1
 						plan.connectionFence ? "platform-worker" : "platform-api",
 						signal,
 					);
-					if (identity) {
-						const current = await awaitTaskAuthorizationDependencyV1(
-							() => identity.resolveSender(plan.message),
-							signal,
-						);
-						const finalUser = current ? parseCurrentTaskUserV1(current) : null;
-						if (!finalUser || finalUser.userId !== plan.authority.actor.actorId)
-							throw new TaskAuthorizationStoreError();
-						const [finalPlatformDisabled] = await run(
-							business<
-								{ user_id: string }[]
-							>`select user_id from platform.platform_user_disables where user_id=${finalUser.userId}`,
-						);
-						if (finalUser.accountStatus === "disabled" || finalPlatformDisabled)
-							throw new WecomAuthorizationRevoked();
-						if (
-							finalUser.authorizationRevision !==
-							parseTaskAuthorizationBoundaryV1(
-								plan.authority.actor.taskBoundary,
-							).identityRevision
-						)
-							throw new TaskAuthorizationStoreError();
-					}
+					const final = await this.#currentAuthorityInTransaction(
+						business,
+						plan,
+						boundary,
+						signal,
+					);
+					if (final.outcome === "revoked")
+						throw new WecomAuthorizationRevoked();
+					if (final.outcome === "denied") throw new WecomAuthorizationDenied();
+					if (final.outcome !== "allowed")
+						throw new TaskAuthorizationStoreError();
 				});
 			} catch (error) {
+				if (error instanceof WecomAuthorizationDenied) return reject("denied");
 				if (!(error instanceof WecomAuthorizationRevoked)) throw error;
 				await revokeUserTasksInTransaction(
 					sql,
