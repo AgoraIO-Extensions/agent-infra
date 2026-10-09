@@ -24,6 +24,7 @@ import {
 	type ProviderCredentialRequest,
 	providerCredentialRequestSchema,
 	providerReconnectRequestSchema,
+	providerReleaseLifecycleSchema,
 	providerUpgradeRequestSchema,
 	reapprovalCampaignDraftSchema,
 	sharedScopeNameSchema,
@@ -39,6 +40,7 @@ import {
 import type {
 	PostgresConnectionApprovalRepository,
 	PostgresConnectionNotificationDispatcher,
+	PostgresConnectionRepository,
 } from "@agent-infra/connection-store";
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -73,6 +75,10 @@ export type ConnectionOAuthServerOptions = {
 	dynamicClientRegistration?: { clientName: string };
 	issuer: string;
 	management?: {
+		providerLifecycle?: Pick<
+			PostgresConnectionRepository,
+			"getProviderReleaseLifecycle" | "changeProviderReleaseLifecycle"
+		>;
 		approvalCatalog?: PostgresConnectionApprovalRepository;
 		approvalDirectoryEnabled?: boolean;
 		catalogs?: readonly {
@@ -1001,6 +1007,75 @@ export function createConnectionOAuthApp(
 				);
 			}
 		};
+
+		app.get(
+			"/api/v1/connection/admin/provider-releases/:releaseId/lifecycle",
+			async (context) => {
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				if (!management.providerLifecycle)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Provider lifecycle unavailable",
+					);
+				context.header("cache-control", "no-store");
+				return context.json(
+					await management.providerLifecycle.getProviderReleaseLifecycle(
+						session.account.principalId,
+						context.req.param("releaseId"),
+					),
+				);
+			},
+		);
+		app.post(
+			"/api/v1/connection/admin/provider-releases/:releaseId/lifecycle",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const lifecycle = management.providerLifecycle;
+				if (!lifecycle)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Provider lifecycle unavailable",
+					);
+				const revision = context.req.header("if-match");
+				if (!revision || !/^"[1-9][0-9]*"$/.test(revision))
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"Current release revision required",
+					);
+				const body = parseJsonBody(
+					providerReleaseLifecycleSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const releaseId = context.req.param("releaseId");
+				return browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.provider-release.lifecycle",
+							subject: session.account.principalId,
+							request: {
+								...body,
+								releaseId,
+								expectedRevision: revision.slice(1, -1),
+							},
+						},
+						() =>
+							lifecycle.changeProviderReleaseLifecycle({
+								...body,
+								releaseId,
+								expectedRevision: revision.slice(1, -1),
+								actorPrincipalId: session.account.principalId,
+							}),
+					),
+				).then((result) =>
+					result instanceof Response ? result : context.json(result),
+				);
+			},
+		);
 
 		app.get("/api/v1/connection/admin/employee-candidates", async (context) => {
 			const session = await currentBrowserApiAdministrator(context);

@@ -13,6 +13,10 @@ vi.mock("@agent-infra/connection-store", async (importOriginal) => {
 		await importOriginal<typeof import("@agent-infra/connection-store")>();
 	class Repository {
 		async publishProviderCatalog() {}
+		async assertProviderRuntimeCoverage(releases: string[]) {
+			expect(releases).toContain("rehoboam-connection-v10");
+			expect(releases).toContain("datalego-connection-v6");
+		}
 		async publishConsumerDeclaration() {
 			return { declarationId: "synthetic" };
 		}

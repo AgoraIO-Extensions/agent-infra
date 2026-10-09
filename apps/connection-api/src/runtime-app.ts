@@ -386,7 +386,7 @@ export async function createConnectionRuntime(
 				),
 			)
 		: undefined;
-	const executors = new ProviderExecutorRouter({
+	const executorRoutes = {
 		...(staticSpaces
 			? { [staticSpacesConnectionCatalog.providerReleaseId]: staticSpaces }
 			: {}),
@@ -411,7 +411,9 @@ export async function createConnectionRuntime(
 		...Object.fromEntries(
 			rehoboamLegacyProviderReleaseIds.map((id) => [id, rehoboam]),
 		),
-	});
+	};
+	await repository.assertProviderRuntimeCoverage(Object.keys(executorRoutes));
+	const executors = new ProviderExecutorRouter(executorRoutes);
 	const service = new ConnectionApplicationService(
 		repository,
 		executors,
@@ -444,6 +446,7 @@ export async function createConnectionRuntime(
 			},
 			issuer: config.publicBaseUrl,
 			management: {
+				providerLifecycle: repository,
 				approvalCatalog,
 				approvalService,
 				notificationDispatcher,

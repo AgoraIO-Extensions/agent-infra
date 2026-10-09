@@ -590,6 +590,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				{
 					auth_profile: unknown;
 					catalog_checksum: string;
+					deprecated_at: Date | null;
 					deployment_profile: unknown;
 					executor_digest: string;
 					provider: string;
@@ -598,7 +599,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				}[]
 			>`
 				SELECT provider, source_commit, deployment_profile, auth_profile,
-					executor_digest, catalog_checksum, status
+					executor_digest, catalog_checksum, status, deprecated_at
 				FROM connection_provider_releases WHERE id = ${catalog.providerReleaseId}
 				FOR SHARE
 			`;
@@ -628,7 +629,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					canonicalHash(catalog.authProfile) ||
 				release.executor_digest !== catalog.executorDigest ||
 				release.catalog_checksum !== catalogChecksum ||
-				release.status !== "PUBLISHED"
+				release.status !== "PUBLISHED" ||
+				release.deprecated_at !== null
 			) {
 				throw new Error("Pinned ProviderRelease does not match the catalog");
 			}
@@ -762,6 +764,153 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					path.toReleaseId === catalog.providerReleaseId,
 			),
 		);
+	}
+
+	async getProviderReleaseLifecycle(principalId: string, releaseId: string) {
+		return this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, principalId);
+			const [release] = await sql`
+				SELECT release.id, release.provider, release.status, release.revision,
+					release.deprecated_at, release.successor_release_id, release.retired_at,
+					dependencies.accounts, dependencies.grants, dependencies.declarations,
+					dependencies.unfinished_calls
+				FROM connection_provider_releases release
+				JOIN connection_provider_release_dependencies dependencies ON dependencies.id = release.id
+				WHERE release.id = ${releaseId}
+			`;
+			if (!release)
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"ProviderRelease not found",
+				);
+			await sql`INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (${principalId}, 'PROVIDER_RELEASE_LIFECYCLE_QUERIED', ${sql.json({ releaseId })})`;
+			return {
+				releaseId: String(release.id),
+				provider: String(release.provider),
+				status: String(release.status),
+				revision: String(release.revision),
+				deprecatedAt: release.deprecated_at?.toISOString() ?? null,
+				successorReleaseId: release.successor_release_id ?? null,
+				retiredAt: release.retired_at?.toISOString() ?? null,
+				dependencies: {
+					accounts: Number(release.accounts),
+					grants: Number(release.grants),
+					declarations: Number(release.declarations),
+					unfinishedCalls: Number(release.unfinished_calls),
+				},
+			};
+		});
+	}
+
+	async changeProviderReleaseLifecycle(input: {
+		actorPrincipalId: string;
+		releaseId: string;
+		successorReleaseId?: string;
+		expectedRevision: string;
+		operation: "deprecate" | "retire";
+		reason: string;
+	}) {
+		if (
+			!input.reason.trim() ||
+			input.reason.length > 1000 ||
+			!/^[1-9][0-9]*$/.test(input.expectedRevision)
+		)
+			throw new ConnectionError(
+				"INVALID_REQUEST",
+				"Reason and current revision are required",
+			);
+		return this.sql.begin(async (sql) => {
+			await this.requireConnectionAdministrator(sql, input.actorPrincipalId);
+			const [release] = await sql`
+				SELECT * FROM connection_provider_releases WHERE id = ${input.releaseId} FOR UPDATE
+			`;
+			if (!release || String(release.revision) !== input.expectedRevision)
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"ProviderRelease revision changed",
+				);
+			if (
+				this.publishedProviderReleaseIds.get(release.provider) ===
+				input.releaseId
+			)
+				throw new ConnectionError(
+					"INVALID_REQUEST",
+					"Current runtime release cannot be deprecated or retired",
+				);
+			if (input.operation === "deprecate") {
+				if (
+					this.publishedProviderReleaseIds.get(release.provider) !==
+					input.successorReleaseId
+				)
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"Successor must be the current runtime release",
+					);
+				const [successor] = await sql`
+					SELECT id FROM connection_provider_releases
+					WHERE id = ${input.successorReleaseId ?? ""} AND provider = ${release.provider}
+						AND status = 'PUBLISHED' AND deprecated_at IS NULL FOR SHARE
+				`;
+				if (
+					!successor ||
+					successor.id === input.releaseId ||
+					release.status !== "PUBLISHED" ||
+					release.deprecated_at
+				)
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"A published successor and non-deprecated source are required",
+					);
+				await sql`UPDATE connection_provider_releases
+					SET deprecated_at = now(), successor_release_id = ${successor.id},
+						retirement_reason = ${input.reason}, revision = revision + 1
+					WHERE id = ${input.releaseId}`;
+			} else {
+				if (!release.deprecated_at || release.status !== "PUBLISHED")
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"Deprecate the release before retiring it",
+					);
+				const [dependencies] = await sql`
+					SELECT accounts, grants, declarations, unfinished_calls
+					FROM connection_provider_release_dependencies WHERE id = ${input.releaseId}
+				`;
+				if (
+					!dependencies ||
+					Object.values(dependencies).some((count) => Number(count) !== 0)
+				)
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"ProviderRelease still has dependencies",
+					);
+				await sql`UPDATE connection_provider_releases
+					SET status = 'DISABLED', retired_at = now(), retirement_reason = ${input.reason},
+						revision = revision + 1 WHERE id = ${input.releaseId}`;
+			}
+			await sql`INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (${input.actorPrincipalId}, ${input.operation === "deprecate" ? "PROVIDER_RELEASE_DEPRECATED" : "PROVIDER_RELEASE_RETIRED"},
+					${sql.json({ releaseId: input.releaseId, successorReleaseId: input.successorReleaseId ?? null, reason: input.reason })})`;
+			return { releaseId: input.releaseId, operation: input.operation };
+		});
+	}
+
+	async assertProviderRuntimeCoverage(executorReleaseIds: readonly string[]) {
+		const missing = await this.sql`
+			SELECT release.id FROM connection_provider_releases release
+			JOIN connection_provider_release_dependencies dependencies ON dependencies.id = release.id
+			WHERE NOT (release.id = ANY(${[...executorReleaseIds]}::text[])) AND
+				((release.status = 'PUBLISHED' AND
+					(release.runtime_registered OR dependencies.accounts > 0 OR dependencies.grants > 0 OR dependencies.declarations > 0))
+					OR dependencies.unfinished_calls > 0)
+		`;
+		if (missing.length)
+			throw new Error(
+				"Provider runtime is missing releases with live dependencies",
+			);
+		await this
+			.sql`UPDATE connection_provider_releases SET runtime_registered = true
+			WHERE id = ANY(${[...executorReleaseIds]}::text[]) AND runtime_registered = false`;
 	}
 
 	/** @deprecated Use publishProviderCatalog. */
@@ -2186,6 +2335,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND account.status = 'ACTIVE'
 				AND release.status = 'PUBLISHED'
 				AND consumer.status = 'ACTIVE'
+				AND release.deprecated_at IS NULL
 				FOR SHARE OF account, release, consumer, declaration, credential
 			`;
 		if (!subject) forbidden();

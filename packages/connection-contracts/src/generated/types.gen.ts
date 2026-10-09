@@ -3200,6 +3200,100 @@ export type ListAdministratorsResponses = {
 
 export type ListAdministratorsResponse = ListAdministratorsResponses[keyof ListAdministratorsResponses];
 
+export type GetProviderReleaseLifecycleData = {
+    body?: never;
+    path: {
+        releaseId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/provider-releases/{releaseId}/lifecycle';
+};
+
+export type GetProviderReleaseLifecycleErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type GetProviderReleaseLifecycleError = GetProviderReleaseLifecycleErrors[keyof GetProviderReleaseLifecycleErrors];
+
+export type GetProviderReleaseLifecycleResponses = {
+    /**
+     * Lifecycle and dependency counts
+     */
+    200: {
+        releaseId: string;
+        provider: string;
+        status: 'PUBLISHED' | 'DISABLED';
+        revision: string;
+        deprecatedAt?: string | null;
+        successorReleaseId?: string | null;
+        retiredAt?: string | null;
+        dependencies: {
+            accounts: number;
+            grants: number;
+            declarations: number;
+            unfinishedCalls: number;
+        };
+    };
+};
+
+export type GetProviderReleaseLifecycleResponse = GetProviderReleaseLifecycleResponses[keyof GetProviderReleaseLifecycleResponses];
+
+export type ChangeProviderReleaseLifecycleData = {
+    body: {
+        operation: 'deprecate';
+        successorReleaseId: string;
+        reason: string;
+    } | {
+        operation: 'retire';
+        reason: string;
+    };
+    headers: {
+        'Idempotency-Key': string;
+        'If-Match': string;
+    };
+    path: {
+        releaseId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/provider-releases/{releaseId}/lifecycle';
+};
+
+export type ChangeProviderReleaseLifecycleErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type ChangeProviderReleaseLifecycleError = ChangeProviderReleaseLifecycleErrors[keyof ChangeProviderReleaseLifecycleErrors];
+
+export type ChangeProviderReleaseLifecycleResponses = {
+    /**
+     * Audited transition
+     */
+    200: {
+        releaseId: string;
+        operation: 'deprecate' | 'retire';
+    };
+};
+
+export type ChangeProviderReleaseLifecycleResponse = ChangeProviderReleaseLifecycleResponses[keyof ChangeProviderReleaseLifecycleResponses];
+
 export type ListProviderUpgradeCampaignsData = {
     body?: never;
     path?: never;

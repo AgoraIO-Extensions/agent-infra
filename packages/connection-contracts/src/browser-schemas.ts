@@ -2,6 +2,21 @@ import { z } from "zod";
 
 const opaqueId = z.string().min(1).max(512);
 
+export const providerReleaseLifecycleSchema = z.discriminatedUnion(
+	"operation",
+	[
+		z.strictObject({
+			operation: z.literal("deprecate"),
+			successorReleaseId: opaqueId,
+			reason: z.string().trim().min(1).max(1000),
+		}),
+		z.strictObject({
+			operation: z.literal("retire"),
+			reason: z.string().trim().min(1).max(1000),
+		}),
+	],
+);
+
 export const auditQuerySchema = z.strictObject({
 	from: z.string().datetime(),
 	to: z.string().datetime(),

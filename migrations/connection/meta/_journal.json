@@ -260,6 +260,13 @@
       "when": 1790812800000,
       "tag": "0036_retire_datalego_oauth_pilot",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791555000000,
+      "tag": "0037_provider_release_lifecycle",
+      "breakpoints": true
     }
   ]
 }
