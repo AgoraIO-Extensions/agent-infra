@@ -493,6 +493,29 @@ jobs:
           node deploy/release/runtime-probe.mjs --build-manifest
           .ci-images/build.json "$RUNNER_TEMP/codex-runtime-probe.json"
 
+      - name: Verify pinned Chromium supply and controlled launch
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          image=$(jq -er --arg head "$SOURCE_COMMIT" '
+            select(.source.commit == $head)
+            | [.images[] | select(.name == "agent-runtime-host")]
+            | select(length == 1) | .[0].imageId
+            | select(test("^sha256:[a-f0-9]{64}$"))
+          ' .ci-images/build.json)
+          docker run --rm --network none --cap-drop ALL \
+            --security-opt no-new-privileges:true --user node --entrypoint node \
+            "$image" /app/browser-launch-probe.mjs \
+            > "$RUNNER_TEMP/browser-launch-probe.json"
+
+      - name: Preserve Chromium launch evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-launch-probe-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/browser-launch-probe.json
+          if-no-files-found: warn
+
       - name: Verify Custom Base Image inheritance
         run: >-
           node deploy/release/custom-base-image.mjs

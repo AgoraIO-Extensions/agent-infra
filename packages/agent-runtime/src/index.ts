@@ -1,6 +1,7 @@
 export * from "./acp-runtime-driver.js";
 export * from "./browser-context.js";
 export * from "./browser-handoff.js";
+export * from "./browser-installation.js";
 export * from "./browser-observe.js";
 export {
 	CLAUDE_NATIVE_PROVENANCE,

@@ -1,0 +1,21 @@
+{
+	"playwrightVersion": "1.63.0",
+	"chromiumVersion": "153.0.8010.12",
+	"chromiumRevision": "1243",
+	"artifacts": {
+		"amd64": {
+			"directory": "chrome-linux64",
+			"executable": "chrome-linux64/chrome",
+			"url": "https://cdn.playwright.dev/builds/cft/153.0.8010.12/linux64/chrome-linux64.zip",
+			"archiveSha256": "8aac35011c18f6e2d10696154af89a5728ac2ddd6dc6fad24ffdf243c3fcfd5a",
+			"executableSha256": "8c599d43aec53f2460a31ae2f4af6bd863f8258b34ff519564bc5d4726bfaa1e"
+		},
+		"arm64": {
+			"directory": "chrome-linux-arm64",
+			"executable": "chrome-linux-arm64/chrome",
+			"url": "https://cdn.playwright.dev/builds/cft/153.0.8010.12/linux-arm64/chrome-linux-arm64.zip",
+			"archiveSha256": "7d8a4b4ff289efe44a06501a519df142c4c18fff7aaf1c1401a3fbb12b3bd069",
+			"executableSha256": "839efe5fd8b6a773dd81b2e10afdc15f3c0a17316fb82b5908c0533306c4ed9e"
+		}
+	}
+}
