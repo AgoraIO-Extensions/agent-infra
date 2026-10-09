@@ -19,6 +19,7 @@ test("Rehoboam executor digest pins its reviewed source", () => {
 
 test("Rehoboam catalog exposes bounded release workflow actions", () => {
 	assert.deepEqual(rehoboamLegacyProviderReleaseIds, [
+		"rehoboam-connection-v9",
 		"rehoboam-connection-v8",
 		"rehoboam-connection-v4",
 		"rehoboam-connection-v5",
@@ -28,21 +29,21 @@ test("Rehoboam catalog exposes bounded release workflow actions", () => {
 	assert.deepEqual(
 		rehoboamConnectionCatalog.actions.slice(-15).map((action) => action.id),
 		[
-			"rehoboam.get_current_user@v9",
-			"rehoboam.list_releases@v9",
-			"rehoboam.get_release@v9",
-			"rehoboam.get_release_result@v9",
-			"rehoboam.list_release_pipelines@v9",
-			"rehoboam.get_release_pipeline@v9",
-			"rehoboam.prepare_release_pipeline_run@v9",
-			"rehoboam.execute_release_pipeline@v9",
-			"rehoboam.list_execution_requests@v9",
-			"rehoboam.get_execution_request@v9",
-			"rehoboam.approve_execution_request@v9",
-			"rehoboam.withdraw_execution_request@v9",
-			"rehoboam.reject_execution_request@v9",
-			"rehoboam.list_release_pipeline_runs@v9",
-			"rehoboam.get_release_pipeline_run@v9",
+			"rehoboam.get_current_user@v10",
+			"rehoboam.list_releases@v10",
+			"rehoboam.get_release@v10",
+			"rehoboam.get_release_result@v10",
+			"rehoboam.list_release_pipelines@v10",
+			"rehoboam.get_release_pipeline@v10",
+			"rehoboam.prepare_release_pipeline_run@v10",
+			"rehoboam.execute_release_pipeline@v10",
+			"rehoboam.list_execution_requests@v10",
+			"rehoboam.get_execution_request@v10",
+			"rehoboam.approve_execution_request@v10",
+			"rehoboam.withdraw_execution_request@v10",
+			"rehoboam.reject_execution_request@v10",
+			"rehoboam.list_release_pipeline_runs@v10",
+			"rehoboam.get_release_pipeline_run@v10",
 		],
 	);
 	assert.equal(
@@ -73,7 +74,7 @@ test("family WRITE actions require explicit grants and never accept identity sel
 	assert.ok(!("credential" in (preview?.inputSchema.properties || {})));
 	assert.equal(
 		rehoboamConnectionCatalog.providerReleaseId,
-		"rehoboam-connection-v9",
+		"rehoboam-connection-v10",
 	);
 });
 
@@ -522,4 +523,104 @@ test("Rehoboam preserves structured permission failures", async () => {
 			error.providerStatus === 403 &&
 			error.submissionUncertain === undefined,
 	);
+});
+
+test("standalone creation maps only declared fields to fixed preview and confirm routes", async () => {
+	const calls: Array<{ url: string; init?: RequestInit }> = [];
+	const adapter = new RehoboamAdapter(
+		(async (url, init) => {
+			calls.push({ url: String(url), init });
+			return Response.json({
+				data: { release_id: "rn-rtm", status: "wait_start" },
+			});
+		}) as typeof fetch,
+		"machine-test-key",
+	);
+	const credential = {
+		accessToken: "personal-test-pat",
+	};
+	await adapter.execute({
+		action: "rehoboam.list_templates",
+		credential,
+		input: { name: "RN RTM" },
+	});
+	await adapter.execute({
+		action: "rehoboam.get_template",
+		credential,
+		input: { templateId: "rn/rtm" },
+	});
+	await adapter.execute({
+		action: "rehoboam.preview_create_release",
+		credential,
+		input: {
+			templateId: "rn-rtm",
+			title: "RN RTM 修复监听器移除异常",
+			version: "2.3.0",
+			jiraId: "CSD-80180",
+			baseBranch: "main",
+			baseVersion: "2.2.6",
+			targetBranch: "dev/2.2.1",
+			operator: "forged",
+			idempotencyKey: "preview-key",
+		},
+	});
+	await adapter.execute({
+		action: "rehoboam.create_release",
+		credential,
+		input: {
+			previewId: "preview-1",
+			confirmationToken: "confirmation-test-token",
+			idempotencyKey: "confirm-key",
+			title: "changed",
+		},
+	});
+	assert.match(
+		calls[0]?.url ?? "",
+		/\/mcp\/v1\/templates\?name=RN\+RTM&page_size=20$/,
+	);
+	assert.match(calls[1]?.url ?? "", /\/mcp\/v1\/templates\/rn%2Frtm$/);
+	assert.match(calls[2]?.url ?? "", /\/mcp\/v1\/releases\/connection-preview$/);
+	assert.deepEqual(JSON.parse(String(calls[2]?.init?.body)), {
+		template_id: "rn-rtm",
+		title: "RN RTM 修复监听器移除异常",
+		version: "2.3.0",
+		jira_id: "CSD-80180",
+		base_branch: "main",
+		base_version: "2.2.6",
+		target_branch: "dev/2.2.1",
+	});
+	assert.match(calls[3]?.url ?? "", /\/mcp\/v1\/releases\/connection-confirm$/);
+	assert.deepEqual(JSON.parse(String(calls[3]?.init?.body)), {
+		preview_id: "preview-1",
+		confirmation_token: "confirmation-test-token",
+	});
+});
+
+test("new standalone actions require explicit consent and stable mutation keys", () => {
+	for (const name of [
+		"list_templates",
+		"get_template",
+		"preview_create_release",
+		"create_release",
+	]) {
+		const action = rehoboamConnectionCatalog.actions.find(
+			(a) => a.name === `rehoboam.${name}`,
+		);
+		assert.ok(action);
+		assert.equal(action.id, `rehoboam.${name}@v10`);
+		assert.equal(action.inputSchema.additionalProperties, false);
+		assert.deepEqual(action.requiredScopes, [
+			name.includes("create")
+				? "rehoboam.release.write"
+				: "rehoboam.metadata.read",
+		]);
+		if (name.includes("create")) {
+			assert.equal(action.effect, "WRITE");
+			assert.ok(
+				(action.inputSchema.required as readonly string[]).includes(
+					"idempotencyKey",
+				),
+			);
+		}
+	}
 });

@@ -186,6 +186,13 @@ Codex 等 Consumer 负责对话、分析与编排；Rehoboam 拥有发布族、�
 确认复用 Rehoboam 的 owner、确认 token、revision、模板签名和 durable operation，不运行下游 Job。
 新增 Actions 不进入旧 Grant，既有 ProviderRelease 与账号继续可路由，用户显式升级和授权后才使用新增能力。
 
+Rehoboam 独立版本创建以新的 immutable `rehoboam-connection-v10` 增补普通模板列表/详情、持久化创建预览和确认创建。
+模板发现要求 metadata READ；预览因保存确认草案声明 WRITE，预览和确认均要求 release WRITE。
+Rehoboam 保存 owner、规范化参数、模板签名、确认 token hash 和到期时间；确认仅接受预览 ID 与 token，
+重载模板并以 CAS 冻结唯一 effect。版本创建复用原生 effect 唯一回执，只生成 `wait_start` 记录，
+不启动 Job、不发送创建通知、不改变 Jira。已开始但未完成的效果只能对账，不能盲目重试；完成的确认重放返回原版本。
+旧 Release 与 Grant 不扩权；v9 到 v10 需显式升级和新增 Action 授权。发布前仍需按 13.4 完成真实 Provider 验收。
+
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
 `apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；

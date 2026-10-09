@@ -11,8 +11,9 @@ const releaseReadScope = "rehoboam.release.read";
 const releaseWriteScope = "rehoboam.release.write";
 const maxResponseBytes = 64 * 1024;
 const providerId = "rehoboam";
-const providerReleaseId = "rehoboam-connection-v9";
+const providerReleaseId = "rehoboam-connection-v10";
 export const rehoboamLegacyProviderReleaseIds = [
+	"rehoboam-connection-v9",
 	"rehoboam-connection-v8",
 	"rehoboam-connection-v4",
 	"rehoboam-connection-v5",
@@ -54,7 +55,7 @@ function familyAction(
 ) {
 	return {
 		name: `rehoboam.${name}`,
-		id: `rehoboam.${name}@v9`,
+		id: `rehoboam.${name}@v10`,
 		description,
 		effect,
 		requiredScopes: [effect === "READ" ? releaseReadScope : releaseWriteScope],
@@ -72,6 +73,82 @@ function familyAction(
 		},
 	};
 }
+const standaloneReleaseActions = [
+	{
+		...familyAction(
+			"list_templates",
+			"分页查询普通版本模板，包含独立模板。",
+			"READ",
+			{
+				name: { type: "string", maxLength: 256 },
+				page: { type: "integer", minimum: 1 },
+				pageSize: { type: "integer", minimum: 1, maximum: 20 },
+			},
+			[],
+		),
+		requiredScopes: [metadataScope],
+	},
+	{
+		...familyAction(
+			"get_template",
+			"读取普通模板的受限详情，不返回内部 Prompt。",
+			"READ",
+			{
+				templateId: familyIdSchema,
+			},
+			["templateId"],
+		),
+		requiredScopes: [metadataScope],
+	},
+	familyAction(
+		"preview_create_release",
+		"保存独立版本创建预览并返回确认凭据；不创建版本、不运行 Job。",
+		"WRITE",
+		{
+			templateId: familyIdSchema,
+			title: { type: "string", minLength: 1, maxLength: 256 },
+			version: { type: "string", minLength: 1, maxLength: 128 },
+			jiraId: { type: "string", maxLength: 128 },
+			description: { type: "string", maxLength: 4000 },
+			baseVersion: { type: "string", maxLength: 128 },
+			baseBranch: { type: "string", minLength: 1, maxLength: 256 },
+			targetBranch: { type: "string", minLength: 1, maxLength: 256 },
+			customerConfigId: familyIdSchema,
+			nativePublishMarkerConfigIds: {
+				type: "array",
+				maxItems: 100,
+				items: familyIdSchema,
+			},
+			ccEmailList: {
+				type: "array",
+				maxItems: 100,
+				items: { type: "string", minLength: 1, maxLength: 256 },
+			},
+			otherEmailList: {
+				type: "array",
+				maxItems: 100,
+				items: { type: "string", minLength: 1, maxLength: 256 },
+			},
+			testerEmailList: {
+				type: "array",
+				maxItems: 100,
+				items: { type: "string", minLength: 1, maxLength: 256 },
+			},
+		},
+		["templateId", "title", "version", "baseBranch", "targetBranch"],
+	),
+	familyAction(
+		"create_release",
+		"确认本人独立版本预览，幂等创建 wait_start 记录；不启动构建、发布或通知。",
+		"WRITE",
+		{
+			previewId: familyIdSchema,
+			confirmationToken: { type: "string", minLength: 1, maxLength: 128 },
+		},
+		["previewId", "confirmationToken"],
+	),
+];
+
 const releaseFamilyActions = [
 	familyAction(
 		"preview_release_family_notice",
@@ -363,11 +440,12 @@ const releaseFamilyActions = [
 
 export const rehoboamConnectionCatalog = {
 	actions: [
+		...standaloneReleaseActions,
 		...releaseFamilyActions,
 		{
 			description: "获取当前通过 Rehoboam 个人 Token 鉴权的用户。",
 			effect: "READ" as const,
-			id: "rehoboam.get_current_user@v9",
+			id: "rehoboam.get_current_user@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {},
@@ -380,7 +458,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "分页查询 Rehoboam 版本列表。",
 			effect: "READ" as const,
-			id: "rehoboam.list_releases@v9",
+			id: "rehoboam.list_releases@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -400,7 +478,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "获取一个 Rehoboam 版本的受限详情。",
 			effect: "READ" as const,
-			id: "rehoboam.get_release@v9",
+			id: "rehoboam.get_release@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { releaseId: releaseIdSchema },
@@ -414,7 +492,7 @@ export const rehoboamConnectionCatalog = {
 			description:
 				"按字符游标读取指定版本最新的发布结果；时间戳必须与版本详情一致。",
 			effect: "READ" as const,
-			id: "rehoboam.get_release_result@v9",
+			id: "rehoboam.get_release_result@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -431,7 +509,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "列出指定版本拥有的流水线。",
 			effect: "READ" as const,
-			id: "rehoboam.list_release_pipelines@v9",
+			id: "rehoboam.list_release_pipelines@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { releaseId: releaseIdSchema },
@@ -444,7 +522,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "获取指定版本中的一条流水线。",
 			effect: "READ" as const,
-			id: "rehoboam.get_release_pipeline@v9",
+			id: "rehoboam.get_release_pipeline@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { releaseId: releaseIdSchema, cardId: cardIdSchema },
@@ -457,7 +535,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "预检版本流水线运行；服务端决定直跑或审批申请。",
 			effect: "READ" as const,
-			id: "rehoboam.prepare_release_pipeline_run@v9",
+			id: "rehoboam.prepare_release_pipeline_run@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -474,7 +552,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "运行版本流水线；管理员直跑，其他用户创建审批申请。",
 			effect: "WRITE" as const,
-			id: "rehoboam.execute_release_pipeline@v9",
+			id: "rehoboam.execute_release_pipeline@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -491,7 +569,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "分页列出指定版本的流水线执行申请。",
 			effect: "READ" as const,
-			id: "rehoboam.list_execution_requests@v9",
+			id: "rehoboam.list_execution_requests@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -509,7 +587,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "获取一个流水线执行申请及当前用户能力。",
 			effect: "READ" as const,
-			id: "rehoboam.get_execution_request@v9",
+			id: "rehoboam.get_execution_request@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { requestId: requestIdSchema },
@@ -522,7 +600,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "批准流水线执行申请。",
 			effect: "WRITE" as const,
-			id: "rehoboam.approve_execution_request@v9",
+			id: "rehoboam.approve_execution_request@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { releaseId: releaseIdSchema, requestId: requestIdSchema },
@@ -535,7 +613,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "撤回自己的流水线执行申请。",
 			effect: "WRITE" as const,
-			id: "rehoboam.withdraw_execution_request@v9",
+			id: "rehoboam.withdraw_execution_request@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: { releaseId: releaseIdSchema, requestId: requestIdSchema },
@@ -548,7 +626,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "拒绝流水线执行申请，必须提供原因。",
 			effect: "WRITE" as const,
-			id: "rehoboam.reject_execution_request@v9",
+			id: "rehoboam.reject_execution_request@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -565,7 +643,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "列出指定版本流水线的运行记录。",
 			effect: "READ" as const,
-			id: "rehoboam.list_release_pipeline_runs@v9",
+			id: "rehoboam.list_release_pipeline_runs@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -583,7 +661,7 @@ export const rehoboamConnectionCatalog = {
 		{
 			description: "获取指定版本中的一次流水线运行结果。",
 			effect: "READ" as const,
-			id: "rehoboam.get_release_pipeline_run@v9",
+			id: "rehoboam.get_release_pipeline_run@v10",
 			inputSchema: {
 				additionalProperties: false,
 				properties: {
@@ -658,9 +736,63 @@ export class RehoboamAdapter
 		if (!token) throw invalidCredential("Rehoboam token is required");
 		if (input.action === "rehoboam.get_current_user")
 			return this.getCurrentUser(token);
+		if (standaloneReleaseActions.some((action) => action.name === input.action))
+			return this.executeStandaloneAction(input.action, input.input, token);
 		if (releaseFamilyActions.some((action) => action.name === input.action))
 			return this.executeFamilyAction(input.action, input.input, token);
 		return this.executeReleaseAction(input.action, input.input, token);
+	}
+
+	private executeStandaloneAction(
+		action: string,
+		input: Record<string, unknown>,
+		token: string,
+	) {
+		const headers = { authorization: `Bearer ${token}` };
+		if (action === "rehoboam.list_templates")
+			return this.requestJson(
+				withQuery("/mcp/v1/templates", {
+					name: input.name,
+					page: input.page,
+					page_size: input.pageSize ?? 20,
+				}),
+				{ headers },
+			);
+		if (action === "rehoboam.get_template")
+			return this.requestJson(
+				`/mcp/v1/templates/${encodeURIComponent(requiredString(input, "templateId"))}`,
+				{ headers },
+			);
+		const body =
+			action === "rehoboam.create_release"
+				? {
+						preview_id: requiredString(input, "previewId"),
+						confirmation_token: requiredString(input, "confirmationToken"),
+					}
+				: {
+						template_id: requiredString(input, "templateId"),
+						title: requiredString(input, "title"),
+						version: requiredString(input, "version"),
+						jira_id: input.jiraId,
+						description: input.description,
+						base_version: input.baseVersion,
+						base_branch: requiredString(input, "baseBranch"),
+						target_branch: requiredString(input, "targetBranch"),
+						customer_config_id: input.customerConfigId,
+						native_publish_marker_config_ids:
+							input.nativePublishMarkerConfigIds,
+						cc_email_list: input.ccEmailList,
+						other_email_list: input.otherEmailList,
+						tester_email_list: input.testerEmailList,
+					};
+		return this.requestJson(
+			`/mcp/v1/releases/connection-${action === "rehoboam.create_release" ? "confirm" : "preview"}`,
+			{
+				method: "POST",
+				headers: { ...headers, "content-type": "application/json" },
+				body: JSON.stringify(body),
+			},
+		);
 	}
 
 	private executeFamilyAction(
