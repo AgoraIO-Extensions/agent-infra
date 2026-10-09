@@ -117,20 +117,25 @@ async function control(
 
 async function controlInCallerTransaction(
 	reason: "stop" | "authorization_revoked" | "recovery" = "recovery",
+	isolation: "read committed" | "repeatable read" = "read committed",
 ) {
 	const [record] =
 		await client`select id from platform.task_authorization_records where execution_id = 'execution'`;
 	if (!record) throw new Error("Missing seeded authority");
-	return client.begin((transaction) =>
-		recordTaskSystemControlInTransactionV1(transaction, {
+	return client.begin(`isolation level ${isolation}`, async (transaction) => {
+		await transaction`insert into platform.agents (id, authorization_revision) values ('caller-before-control', 'caller-1')`;
+		await transaction`select set_config('lock_timeout', '137ms', true)`;
+		const result = await recordTaskSystemControlInTransactionV1(transaction, {
 			executionId: "execution",
 			authorizationRecordId: record.id,
 			reason,
 			workerId: "worker",
 			traceId: "trace",
 			requestId: "request",
-		}),
-	);
+		});
+		const [settings] = await transaction`show lock_timeout`;
+		return { ...result, lockTimeout: settings?.lock_timeout };
+	});
 }
 
 async function expectNoControlEffects() {
@@ -150,17 +155,69 @@ async function expectNoControlEffects() {
 }
 
 describe("System controls use the durable typed Execution principal", () => {
-	it("writes controls through a caller-owned transaction without opening a nested transaction", async () => {
+	it("commits caller business writes, control, stop and audit in the same transaction", async () => {
 		await seed("user");
-		const result = await controlInCallerTransaction();
+		await client`update platform.conversation_executions set status = 'processing' where execution_id = 'execution'`;
+		const result = await controlInCallerTransaction("authorization_revoked");
 		expect(result.controlRecordId).toMatch(/^[0-9a-f-]{36}$/);
+		expect(result.lockTimeout).toBe("137ms");
 		expect(
 			await client`select id from platform.task_control_records`,
 		).toHaveLength(1);
 		expect(
 			await client`select action from platform.audit_events where action='task.control.created'`,
 		).toEqual([{ action: "task.control.created" }]);
+		expect(
+			await client`select execution_id from platform.conversation_stops`,
+		).toEqual([{ execution_id: "execution" }]);
+		expect(await client`select operation from platform.outbox_items`).toEqual([
+			{ operation: "conversation.turn.stop.v1" },
+		]);
+		const facts = await client`
+			select xmin::text as tx from platform.agents where id = 'caller-before-control'
+			union all select xmin::text from platform.task_control_records
+			union all select xmin::text from platform.task_authorization_records where revoked_at is not null
+			union all select xmin::text from platform.conversation_stops
+			union all select xmin::text from platform.outbox_items
+			union all select xmin::text from platform.audit_events where action = 'task.control.created'`;
+		expect(facts).toHaveLength(6);
+		expect(new Set(facts.map((fact) => fact.tx)).size).toBe(1);
 	});
+	it("rejects a caller's incompatible isolation without lowering it", async () => {
+		await seed("user");
+		await expect(
+			controlInCallerTransaction("recovery", "repeatable read"),
+		).rejects.toBeInstanceOf(TaskAuthorizationStoreError);
+		await expectNoControlEffects();
+		expect(
+			await client`select id from platform.agents where id = 'caller-before-control'`,
+		).toEqual([]);
+	});
+	it.each(["immediate", "deferred"])(
+		"rolls back prior caller writes and every control fact after %s audit failure",
+		async (timing) => {
+			await seed("application");
+			await client`update platform.conversation_executions set status = 'processing' where execution_id = 'execution'`;
+			await client`create function platform.fail_caller_control_audit() returns trigger language plpgsql as $$ begin if new.action = 'task.control.created' then raise exception 'controlled caller control audit failure'; end if; return new; end $$`;
+			try {
+				await client.unsafe(
+					timing === "immediate"
+						? "create trigger fail_caller_control_audit before insert on platform.audit_events for each row execute function platform.fail_caller_control_audit()"
+						: "create constraint trigger fail_caller_control_audit after insert on platform.audit_events deferrable initially deferred for each row execute function platform.fail_caller_control_audit()",
+				);
+				await expect(
+					controlInCallerTransaction("authorization_revoked"),
+				).rejects.toThrow("controlled caller control audit failure");
+				await expectNoControlEffects();
+				expect(
+					await client`select id from platform.agents where id = 'caller-before-control'`,
+				).toEqual([]);
+			} finally {
+				await client`drop trigger if exists fail_caller_control_audit on platform.audit_events`;
+				await client`drop function platform.fail_caller_control_audit()`;
+			}
+		},
+	);
 
 	it.each(["user", "application"] as const)(
 		"persists the original %s namespace even when actor IDs match",

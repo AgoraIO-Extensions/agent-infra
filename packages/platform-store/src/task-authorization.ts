@@ -114,23 +114,16 @@ export async function insertTaskAuthorization(
 	);
 }
 
+/** Uses a trusted caller's existing READ COMMITTED transaction and lock budget.
+ * The caller owns authorization, commit and rollback; no transaction is opened here.
+ */
 export async function recordTaskSystemControlInTransactionV1(
 	transaction: postgres.TransactionSql,
-	input: {
-		executionId: string;
-		authorizationRecordId: string;
-		reason:
-			| "stop"
-			| "authorization_revoked"
-			| "recovery"
-			| "generation_isolation";
-		workerId: string;
-		traceId: string;
-		requestId: string;
-	},
+	input: Parameters<PostgresTaskAuthorizationStoreV1["recordControl"]>[0],
 ): Promise<{ controlRecordId: string }> {
-	await transaction`set transaction isolation level read committed`;
-	await transaction`select set_config('lock_timeout', '5s', true)`;
+	const [isolation] = await transaction`show transaction_isolation`;
+	if (isolation?.transaction_isolation !== "read committed")
+		throw new TaskAuthorizationStoreError();
 	await transaction`
 					select a.id from platform.agents a join platform.conversation_executions e on e.agent_id = a.id
 					where e.execution_id = ${input.executionId} for share of a
