@@ -454,6 +454,85 @@ it("uses the actually delivered application Token to create two Agents and read 
 			})
 		).status,
 	).toBe(200);
+	const replayBeforeRevoke = await fetch(`${baseUrl}/api/v2/agents`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${replacement}`,
+			"Idempotency-Key": "issued-agent-one",
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({ ...agentBody, name: "Issued Agent One" }),
+	});
+	expect(replayBeforeRevoke.status).toBe(200);
+	expect(await replayBeforeRevoke.json()).toMatchObject({
+		agentId: first.agentId,
+		replayed: true,
+	});
+	const revokeManage = await fetch(
+		`${baseUrl}/api/v2/agents/${first.agentId}/application-managers/app-1`,
+		{
+			method: "DELETE",
+			headers: {
+				Cookie: `__Host-platform-session=${token("manager")}`,
+				Origin: origin,
+				"Content-Type": "application/json",
+				"Idempotency-Key": "issued-revoke-manage",
+			},
+			body: JSON.stringify({ schemaVersion: 1 }),
+		},
+	);
+	expect(revokeManage.status).toBe(200);
+	expect(
+		(
+			await fetch(`${baseUrl}/api/v2/agents/${first.agentId}/state`, {
+				headers: { Authorization: `Bearer ${replacement}` },
+			})
+		).status,
+	).toBe(200);
+	const deniedLifecycle = await fetch(
+		`${baseUrl}/api/v2/agents/${first.agentId}/commands`,
+		{
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${replacement}`,
+				"Idempotency-Key": "issued-manage-revoked",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ schemaVersion: 1, command: "stop" }),
+		},
+	);
+	expect(deniedLifecycle.status).toBe(404);
+	const revokeUse = await fetch(
+		`${baseUrl}/api/v2/agents/${first.agentId}/application-use-grants/app-1`,
+		{
+			method: "DELETE",
+			headers: {
+				Cookie: `__Host-platform-session=${token("manager")}`,
+				Origin: origin,
+				"Content-Type": "application/json",
+				"Idempotency-Key": "issued-revoke-use",
+			},
+			body: JSON.stringify({ schemaVersion: 1 }),
+		},
+	);
+	expect(revokeUse.status).toBe(200);
+	expect(
+		(
+			await fetch(`${baseUrl}/api/v2/agents/${first.agentId}/state`, {
+				headers: { Authorization: `Bearer ${replacement}` },
+			})
+		).status,
+	).toBe(404);
+	const otherToken = `papi_${"O".repeat(43)}`;
+	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('app-2','Other Robot','manager','app-2')`;
+	await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values('app-2-credential','application','app-2',${createHash("sha256").update(otherToken).digest("hex")},'["agent:read","agent:manage","agent:use"]'::jsonb)`;
+	expect(
+		(
+			await fetch(`${baseUrl}/api/v2/agents/${first.agentId}/state`, {
+				headers: { Authorization: `Bearer ${otherToken}` },
+			})
+		).status,
+	).toBe(404);
 	const replay = await fetch(`${baseUrl}/api/v2/agents`, {
 		method: "POST",
 		headers: {
@@ -463,11 +542,7 @@ it("uses the actually delivered application Token to create two Agents and read 
 		},
 		body: JSON.stringify({ ...agentBody, name: "Issued Agent One" }),
 	});
-	expect(replay.status).toBe(200);
-	expect(await replay.json()).toMatchObject({
-		agentId: first.agentId,
-		replayed: true,
-	});
+	expect(replay.status).toBe(404);
 });
 
 it("assembly without a trusted delivery consumer fails closed without issuing", async () => {
