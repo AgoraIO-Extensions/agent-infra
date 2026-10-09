@@ -3,6 +3,7 @@ import {
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
+	ConversationModelSelectionProjectionV1Schema,
 	ConversationPageV1Schema,
 	ConversationProjectionV1Schema,
 	ConversationSseMessageV1Schema,
@@ -14,6 +15,7 @@ import {
 	framePilotSseMessageV2,
 	MessageCommandRequestV1Schema,
 	MessageProjectionV1Schema,
+	ModelOptionProjectionV1Schema,
 	ModelSelectionUpdateRequestV1Schema,
 	PersistedConversationEventV2Schema,
 	RegenerateCommandRequestV1Schema,
@@ -121,6 +123,8 @@ export interface ConversationRoutesDependencies {
 	readonly files?: FileRoutesDependenciesV1;
 	readonly identity: IdentityAdapter;
 	readonly authorization: ConversationAuthorization;
+	/** Current Runtime directory for model-capable conversations. */
+	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	readonly commands: (
 		identity: IdentityContext,
 	) => Pick<
@@ -150,6 +154,25 @@ type ConversationProjection = ReturnType<
 	typeof ConversationProjectionV1Schema.parse
 >;
 type SseMessage = ReturnType<typeof ConversationSseMessageV1Schema.parse>;
+type ModelOptionProjection = ReturnType<
+	typeof ModelOptionProjectionV1Schema.parse
+>;
+
+/** Runtime-owned model metadata; endpoint, credential and ACP session fields
+ * never cross this API boundary. */
+export interface ConversationModelSelectionReaderV1 {
+	read(
+		identity: IdentityContext,
+		conversationId: string,
+	): Promise<{
+		readonly agentId: string;
+		readonly source: "standard" | "custom-platform-adapter";
+		readonly available: boolean;
+		readonly options: readonly ModelOptionProjection[];
+		readonly currentModelOptionId: string | null;
+		readonly currentReasoningLevel: string | null;
+	} | null>;
+}
 
 function fail(
 	code: ConstructorParameters<typeof HttpProtocolError>[0],
@@ -320,6 +343,91 @@ async function effectiveConversation(
 		return fail("RESOURCE_UNAVAILABLE", traceId);
 	}
 	return decision.result;
+}
+
+async function readRuntimeModelSelection(
+	reader: ConversationModelSelectionReaderV1 | undefined,
+	identity: IdentityContext,
+	conversationId: string,
+	traceId: string,
+) {
+	if (!reader) return fail("DEPENDENCY_UNAVAILABLE", traceId);
+	let value: Awaited<ReturnType<ConversationModelSelectionReaderV1["read"]>>;
+	try {
+		value = await reader.read(identity, conversationId);
+	} catch {
+		return fail("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+	if (!value || value.agentId.length === 0)
+		return fail("RESOURCE_UNAVAILABLE", traceId);
+	try {
+		return {
+			...value,
+			options: value.options.map((option) =>
+				ModelOptionProjectionV1Schema.parse(option),
+			),
+		};
+	} catch {
+		return fail("DEPENDENCY_UNAVAILABLE", traceId);
+	}
+}
+
+async function assertCurrentRuntimeSelection(
+	reader: ConversationModelSelectionReaderV1 | undefined,
+	identity: IdentityContext,
+	conversationId: string,
+	useCase: ReturnType<ConversationRoutesDependencies["commands"]>,
+	traceId: string,
+): Promise<void> {
+	if (!reader) return;
+	const runtime = await readRuntimeModelSelection(
+		reader,
+		identity,
+		conversationId,
+		traceId,
+	);
+	if (runtime.source !== "custom-platform-adapter") return;
+	if (!runtime.available) return fail("RUNTIME_UNAVAILABLE", traceId);
+	const effective = await effectiveConversation(
+		useCase,
+		conversationId,
+		traceId,
+	);
+	const selected = runtime.options.find(
+		(option) =>
+			option.optionId === effective.conversation.selectedModelOptionId,
+	);
+	if (
+		!selected ||
+		!effective.conversation.selectedReasoningLevel ||
+		!selected.reasoningLevels.includes(
+			effective.conversation.selectedReasoningLevel,
+		)
+	)
+		return fail("CONFLICT", traceId);
+}
+
+function projectRuntimeModelSelection(
+	runtime: Awaited<ReturnType<typeof readRuntimeModelSelection>>,
+	effective: ConversationStateResultV1,
+	traceId: string,
+) {
+	return project(
+		() =>
+			ConversationModelSelectionProjectionV1Schema.parse({
+				schemaVersion: 1,
+				conversationId: effective.conversation.conversationId,
+				agentId: effective.conversation.agentId,
+				source: runtime.source,
+				available: runtime.available,
+				options: runtime.options,
+				currentModelOptionId: runtime.currentModelOptionId,
+				currentReasoningLevel: runtime.currentReasoningLevel,
+				selectedModelOptionId: effective.conversation.selectedModelOptionId,
+				selectedReasoningLevel: effective.conversation.selectedReasoningLevel,
+			}),
+		traceId,
+	);
 }
 
 function project<T>(projection: () => T, traceId: string): T {
@@ -894,6 +1002,39 @@ export function registerConversationRoutes(
 			}),
 		);
 
+	app.get("/api/v1/conversations/:conversationId/model-selection", (context) =>
+		boundary(context, async (metadata) => {
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			const conversationId = context.req.param("conversationId");
+			await authorize(
+				dependencies,
+				identity,
+				{ schemaVersion: 1, operation: "conversation.read", conversationId },
+				metadata.traceId,
+			);
+			const runtime = await readRuntimeModelSelection(
+				dependencies.modelSelection,
+				identity,
+				conversationId,
+				metadata.traceId,
+			);
+			const effective = await effectiveConversation(
+				dependencies.commands(identity),
+				conversationId,
+				metadata.traceId,
+			);
+			if (runtime.agentId !== effective.conversation.agentId)
+				return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			return context.json(
+				projectRuntimeModelSelection(runtime, effective, metadata.traceId),
+			);
+		}),
+	);
+
 	app.put("/api/v1/conversations/:conversationId/model-selection", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
@@ -908,6 +1049,23 @@ export function registerConversationRoutes(
 			);
 			const conversationId = context.req.param("conversationId");
 			const useCase = dependencies.commands(identity);
+			if (dependencies.modelSelection) {
+				const runtime = await readRuntimeModelSelection(
+					dependencies.modelSelection,
+					identity,
+					conversationId,
+					metadata.traceId,
+				);
+				if (runtime.source === "custom-platform-adapter") {
+					if (!runtime.available)
+						return fail("RUNTIME_UNAVAILABLE", metadata.traceId);
+					const option = runtime.options.find(
+						(candidate) => candidate.optionId === body.modelOptionId,
+					);
+					if (!option?.reasoningLevels.includes(body.reasoningLevel))
+						return fail("CONFLICT", metadata.traceId);
+				}
+			}
 			const decision = await useCase.selectModel({
 				schemaVersion: 1,
 				command: "model.select",
@@ -965,6 +1123,13 @@ export function registerConversationRoutes(
 					return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
 				}
 			}
+			await assertCurrentRuntimeSelection(
+				dependencies.modelSelection,
+				identity,
+				context.req.param("conversationId"),
+				dependencies.commands(identity),
+				metadata.traceId,
+			);
 			const decision = await dependencies.commands(identity).accept({
 				schemaVersion: 1,
 				command: "message",

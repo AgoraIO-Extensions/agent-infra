@@ -19,6 +19,7 @@ import { ConversationExecutionDetails } from "./conversation-screen-details.js";
 import { ConversationMessages } from "./conversation-screen-messages.js";
 import { currentExecution, isTerminal } from "./conversation-screen-state.js";
 import { useConversationCommands } from "./use-conversation-commands.js";
+import { useConversationModelSelection } from "./use-conversation-model-selection.js";
 import { useConversationTimeline } from "./use-conversation-timeline.js";
 
 const preparingRefreshMs = 2_000;
@@ -108,6 +109,14 @@ export function ActiveConversation({
 		conversationId,
 		executionId: active ? latestExecution : undefined,
 	});
+	const customPlatformAdapter =
+		agent.source.kind === "custom" &&
+		agent.source.interactionMode === "platform-adapter";
+	const runtimeSelection = useConversationModelSelection({
+		conversationId,
+		identityKey,
+		enabled: customPlatformAdapter,
+	});
 	const mismatched = Boolean(conversation && conversation.agentId !== agentId);
 	const denied = timeline.status === "denied" || command.isDenied || mismatched;
 	const denialScope = `${agentId}:${identityKey}:${conversationId}`;
@@ -193,12 +202,18 @@ export function ActiveConversation({
 			void reader.refresh();
 		}
 	}, [command.result, reader.refresh]);
-	const options = agent.configuration.modelOptions;
+	const options = customPlatformAdapter
+		? (runtimeSelection.data?.options ?? [])
+		: agent.configuration.modelOptions;
+	const runtimeSelectionUnavailable =
+		customPlatformAdapter &&
+		(!runtimeSelection.data || !runtimeSelection.data.available);
 	const currentModelId =
 		modelId ??
 		conversation?.selectedModelOptionId ??
-		agent.configuration.defaultModelOptionId ??
-		"";
+		(customPlatformAdapter
+			? (runtimeSelection.data?.currentModelOptionId ?? "")
+			: (agent.configuration.defaultModelOptionId ?? ""));
 	const option = options.find((item) => item.optionId === currentModelId);
 	const currentReasoning =
 		reasoning ??
@@ -209,6 +224,7 @@ export function ActiveConversation({
 		!available ||
 		!timeline.history ||
 		denied ||
+		runtimeSelectionUnavailable ||
 		conversation?.status === "unavailable" ||
 		timeline.status !== "ready";
 	const selectionDirty =
@@ -226,8 +242,28 @@ export function ActiveConversation({
 		!(active && stopping === latestExecution) &&
 		(!active || agent.capabilities.supplementaryInstruction) &&
 		Boolean(draft.trim());
-	function send() {
+	async function send() {
 		if (!canSend) return;
+		if (customPlatformAdapter) {
+			let latest: Awaited<ReturnType<typeof runtimeSelection.refresh>>;
+			try {
+				latest = await runtimeSelection.refresh();
+			} catch {
+				setNotice("Runtime 模型列表暂时不可用，请刷新后重试。");
+				return;
+			}
+			const selected = latest?.options.find(
+				(item) => item.optionId === currentModelId,
+			);
+			if (
+				!latest?.available ||
+				!selected ||
+				!selected.reasoningLevels.includes(currentReasoning)
+			) {
+				setNotice("模型选项已失效，请刷新后重新选择。");
+				return;
+			}
+		}
 		if (command.submitText(draft)) {
 			action.current = "message";
 			setNotice("");
@@ -286,98 +322,99 @@ export function ActiveConversation({
 						</AlertDescription>
 					</Alert>
 				)}
-				{agent.capabilities.modelSelection && (
-					<fieldset
-						className="model-controls"
-						disabled={blocked || commandLocked}
-					>
-						<legend className="sr-only">下一条消息的模型</legend>
-						<div className="min-w-0 space-y-1">
-							<Label className="sr-only" htmlFor={`${composerId}-model`}>
-								模型
-							</Label>
-							<Select
-								disabled={blocked || commandLocked}
-								value={currentModelId || null}
-								itemToStringLabel={(value) =>
-									(!option && value === currentModelId
-										? "当前选项已移除"
-										: options.find((item) => item.optionId === value)
-												?.displayName) ?? String(value)
-								}
-								onValueChange={(value) => {
-									if (!value) return;
-									setModelId(value);
-									setReasoning(
-										options.find((item) => item.optionId === value)
-											?.reasoningLevels[0],
-									);
+				{agent.capabilities.modelSelection &&
+					(!customPlatformAdapter || runtimeSelection.data?.available) && (
+						<fieldset
+							className="model-controls"
+							disabled={blocked || commandLocked}
+						>
+							<legend className="sr-only">下一条消息的模型</legend>
+							<div className="min-w-0 space-y-1">
+								<Label className="sr-only" htmlFor={`${composerId}-model`}>
+									模型
+								</Label>
+								<Select
+									disabled={blocked || commandLocked}
+									value={currentModelId || null}
+									itemToStringLabel={(value) =>
+										(!option && value === currentModelId
+											? "当前选项已移除"
+											: options.find((item) => item.optionId === value)
+													?.displayName) ?? String(value)
+									}
+									onValueChange={(value) => {
+										if (!value) return;
+										setModelId(value);
+										setReasoning(
+											options.find((item) => item.optionId === value)
+												?.reasoningLevels[0],
+										);
+									}}
+								>
+									<SelectTrigger
+										id={`${composerId}-model`}
+										className="min-h-11 w-full text-base md:text-sm"
+									>
+										<SelectValue placeholder="请选择模型" />
+									</SelectTrigger>
+									<SelectContent>
+										{!option && currentModelId && (
+											<SelectItem value={currentModelId} disabled>
+												当前选项已移除
+											</SelectItem>
+										)}
+										{options.map((item) => (
+											<SelectItem key={item.optionId} value={item.optionId}>
+												{item.displayName}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
+							<div className="min-w-0 space-y-1">
+								<Label className="sr-only" htmlFor={`${composerId}-reasoning`}>
+									推理强度
+								</Label>
+								<Select
+									disabled={blocked || commandLocked}
+									value={currentReasoning || null}
+									onValueChange={(value) => setReasoning(value ?? undefined)}
+								>
+									<SelectTrigger
+										id={`${composerId}-reasoning`}
+										className="min-h-11 w-full text-base md:text-sm"
+									>
+										<SelectValue placeholder="请选择推理强度" />
+									</SelectTrigger>
+									<SelectContent>
+										{option?.reasoningLevels.map((value) => (
+											<SelectItem key={value} value={value}>
+												{value}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
+							<Button
+								type="button"
+								variant="default"
+								className="model-save"
+								hidden={!selectionDirty}
+								disabled={!option?.reasoningLevels.includes(currentReasoning)}
+								onClick={() => {
+									if (
+										command.selectModel({
+											modelOptionId: currentModelId,
+											reasoningLevel: currentReasoning,
+										})
+									)
+										action.current = "selection";
 								}}
 							>
-								<SelectTrigger
-									id={`${composerId}-model`}
-									className="min-h-11 w-full text-base md:text-sm"
-								>
-									<SelectValue placeholder="请选择模型" />
-								</SelectTrigger>
-								<SelectContent>
-									{!option && currentModelId && (
-										<SelectItem value={currentModelId} disabled>
-											当前选项已移除
-										</SelectItem>
-									)}
-									{options.map((item) => (
-										<SelectItem key={item.optionId} value={item.optionId}>
-											{item.displayName}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						</div>
-						<div className="min-w-0 space-y-1">
-							<Label className="sr-only" htmlFor={`${composerId}-reasoning`}>
-								推理强度
-							</Label>
-							<Select
-								disabled={blocked || commandLocked}
-								value={currentReasoning || null}
-								onValueChange={(value) => setReasoning(value ?? undefined)}
-							>
-								<SelectTrigger
-									id={`${composerId}-reasoning`}
-									className="min-h-11 w-full text-base md:text-sm"
-								>
-									<SelectValue placeholder="请选择推理强度" />
-								</SelectTrigger>
-								<SelectContent>
-									{option?.reasoningLevels.map((value) => (
-										<SelectItem key={value} value={value}>
-											{value}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						</div>
-						<Button
-							type="button"
-							variant="default"
-							className="model-save"
-							hidden={!selectionDirty}
-							disabled={!option?.reasoningLevels.includes(currentReasoning)}
-							onClick={() => {
-								if (
-									command.selectModel({
-										modelOptionId: currentModelId,
-										reasoningLevel: currentReasoning,
-									})
-								)
-									action.current = "selection";
-							}}
-						>
-							保存模型选择
-						</Button>
-					</fieldset>
-				)}
+								保存模型选择
+							</Button>
+						</fieldset>
+					)}
 				{timeline.history && (
 					<ConversationMessages
 						agentName={agent.name}
