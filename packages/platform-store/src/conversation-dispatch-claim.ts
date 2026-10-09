@@ -352,7 +352,8 @@ export async function claimWork(
 			: null,
 		executionStatus: currentExecutionStatus,
 		stopPending: stop?.status === "submitted",
-		...(stopConfirmationTimedOut
+		...(stopConfirmationTimedOut ||
+		(stop !== undefined && stop.confirmation_timed_out_at !== null)
 			? { stopConfirmationTimedOut: true as const }
 			: {}),
 		...(isolationWork && isolation

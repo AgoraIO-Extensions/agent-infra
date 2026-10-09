@@ -142,10 +142,13 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"executionSource",
 			"relayKeyBinding",
 			"taskWaitOrder",
+			"stopConfirmationTimedOut",
 		],
 	);
 	if (
 		input.schemaVersion !== 1 ||
+		(input.stopConfirmationTimedOut !== undefined &&
+			input.stopConfirmationTimedOut !== true) ||
 		(input.runtimeTerminalEventSeen !== undefined &&
 			(input.runtimeTerminalEventSeen !== true ||
 				!["completed", "failed", "cancelled"].includes(
@@ -340,6 +343,9 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			typeof input.stopPending === "boolean"
 				? input.stopPending
 				: unavailable(),
+		...(input.stopConfirmationTimedOut === true
+			? { stopConfirmationTimedOut: true as const }
+			: {}),
 	};
 }
 
