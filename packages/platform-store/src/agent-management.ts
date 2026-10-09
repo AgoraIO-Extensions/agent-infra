@@ -51,7 +51,6 @@ import {
 	platformApplications,
 	platformUserDisables,
 } from "./schema.js";
-import { recordTaskSystemControlInTransactionV1 } from "./task-authorization.ts";
 
 export interface PostgresAgentManagementOptionsV1 {
 	readonly databaseUrl: string;
@@ -923,7 +922,7 @@ export class PostgresAgentManagementTransactionV1
 					from platform.agent_applications application
 					join platform.agent_owners owner on owner.agent_id = application.agent_id
 					where application.agent_id = ${command.agentId} and owner.owner_id = ${command.actorId}
-					limit 1`;
+					limit 1 for update`;
 				if (
 					!agent ||
 					![
@@ -987,14 +986,16 @@ export class PostgresAgentManagementTransactionV1
 							and actor_id = ${command.userId}
 							and channel_id in ('api', 'api:user')
 							and status in ('waiting', 'submitted', 'processing', 'unknown')
-						for update
 					`;
+					const { recordTaskSystemControlInTransactionV1 } = await import(
+						"./task-authorization.ts"
+					);
 					for (const execution of executions) {
 						const [record] = await transaction<{ id: string }[]>`
 							select id from platform.task_authorization_records
 							where execution_id = ${execution.execution_id} for update
 						`;
-						if (!record) continue;
+						if (!record) throw new Error("Missing task authorization record");
 						await recordTaskSystemControlInTransactionV1(transaction, {
 							executionId: execution.execution_id,
 							authorizationRecordId: record.id,
@@ -1026,6 +1027,7 @@ export class PostgresAgentManagementTransactionV1
 				const [finalOwner] = await transaction<{ owner_id: string }[]>`
 					select owner_id from platform.agent_owners
 					where agent_id = ${command.agentId} and owner_id = ${command.actorId}
+					for update
 				`;
 				const [finalGrant] = await transaction<
 					{ authorization_revision: string; revoked_at: Date | null }[]
