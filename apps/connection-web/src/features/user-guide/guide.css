@@ -422,3 +422,23 @@
 		gap: 14px;
 	}
 }
+
+.connection-guide-result {
+	border-bottom: 1px solid var(--border);
+	padding: 12px 0;
+}
+.connection-guide-result > button {
+	border-bottom: 0;
+	padding: 8px 10px;
+}
+.connection-guide-result > p {
+	margin: 4px 10px 16px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 1.8;
+}
+.connection-guide-results a {
+	color: var(--connection-guide-accent);
+	text-decoration: underline;
+	text-underline-offset: 4px;
+}

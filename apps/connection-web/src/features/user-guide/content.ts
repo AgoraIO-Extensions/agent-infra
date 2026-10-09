@@ -270,7 +270,7 @@ export const guideChapters: GuideChapter[] = [
 			{
 				title: "通用 Agent",
 				paragraphs: [
-					"打开 /connection/agent/ 及其独立 llms.txt。使用支持 Streamable HTTP 的 MCP 客户端连接 /mcp；支持 remote OAuth 时按 PKCE 登录，否则引用用户签发的获准 Connection PAT。",
+					"打开 /connection/agent/ 及 /connection/agent/llms.txt。使用支持 Streamable HTTP 的 MCP 客户端连接 /mcp；支持 remote OAuth 时按 PKCE 登录，否则引用用户签发的获准 Connection PAT。",
 					"MCP 客户端初始化后使用 tools/list 读取实际工具 Schema，不猜 Action ID，不传入 Provider Credential 或 Principal/Consumer/账号选择器。",
 				],
 			},
@@ -389,7 +389,7 @@ export const guideChapters: GuideChapter[] = [
 				title: "反馈问题",
 				paragraphs: [
 					"提供时间、页面、Provider、客户端版本、脱敏错误码及调用或申请 ID。不要发送密码、Cookie、PAT、OAuth token、Provider Credential 或完整私密会话。",
-					"本指南说明 Connection 的产品流程；实际开放能力及客户端兼容性以当前部署目录与验收为准。正式规则见 Connection PRD/HLD，运行与发布见 Connection 生产部署说明。",
+					"本指南说明 Connection 的产品流程；实际开放能力及客户端兼容性以当前部署目录与验收为准。正式规则见 Connection PRD 和 Connection HLD，运行与发布见 Connection 生产部署说明。",
 				],
 			},
 		],

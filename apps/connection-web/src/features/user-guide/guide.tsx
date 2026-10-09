@@ -1,4 +1,3 @@
-import { Link } from "@tanstack/react-router";
 import {
 	ArrowDownToLine,
 	ArrowLeft,
@@ -9,7 +8,29 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button";
 import { guideChapter, guideChapters, guideText } from "./content";
+import { guideLinkParts } from "./links";
 import "./guide.css";
+
+function GuideText({ text }: { text: string }) {
+	return (
+		<>
+			{guideLinkParts(text).map((part, index) =>
+				part.href ? (
+					<a
+						key={`${index}:${part.text}`}
+						href={part.href}
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						{part.text}
+					</a>
+				) : (
+					part.text
+				),
+			)}
+		</>
+	);
+}
 
 export function ConnectionGuide({
 	chapter,
@@ -49,11 +70,19 @@ export function ConnectionGuide({
 					Connection 使用指南<span>THE FIELD GUIDE</span>
 				</div>
 				<nav className="connection-guide-download" aria-label="指南入口">
-					<a href="/connection/">Codex 安装</a>
-					<a href="/connection/agent/">Agent 接入</a>
-					<Link to="/connection/login" search={{ returnTo: undefined }}>
+					<a href="/connection/" target="_blank" rel="noopener noreferrer">
+						Codex 安装
+					</a>
+					<a
+						href="/connection/agent/"
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						Agent 接入
+					</a>
+					<a href="/connection/login" target="_blank" rel="noopener noreferrer">
 						登录控制台
-					</Link>
+					</a>
 				</nav>
 			</header>
 			<section className="connection-guide-intro">
@@ -84,7 +113,8 @@ export function ConnectionGuide({
 					<a
 						className="connection-guide-download"
 						href="/connection/help/user-manual.md"
-						download="Connection-使用说明书.md"
+						target="_blank"
+						rel="noopener noreferrer"
 					>
 						<ArrowDownToLine size={16} aria-hidden="true" />
 						完整说明书
@@ -117,21 +147,18 @@ export function ConnectionGuide({
 							text.toLocaleLowerCase().indexOf(term) - 40,
 						);
 						return (
-							<Button
-								key={item.id}
-								variant="ghost"
-								onClick={() => choose(item.id)}
-							>
-								<span>{item.id}</span>
-								<span className="connection-guide-result-copy">
+							<div key={item.id} className="connection-guide-result">
+								<Button variant="ghost" onClick={() => choose(item.id)}>
+									<span>{item.id}</span>
 									<strong>{item.title}</strong>
-									<span>
-										{start ? "…" : ""}
-										{text.slice(start, start + 160)}…
-									</span>
-								</span>
-								<ArrowRight aria-hidden="true" />
-							</Button>
+									<ArrowRight aria-hidden="true" />
+								</Button>
+								<p>
+									<GuideText
+										text={`${start ? "…" : ""}${text.slice(start, start + 160)}…`}
+									/>
+								</p>
+							</div>
 						);
 					})}
 					{!found.length && <p>换一个关键词，或清空搜索浏览全部章节。</p>}
@@ -176,12 +203,16 @@ export function ConnectionGuide({
 								<section key={section.title}>
 									<h3>{section.title}</h3>
 									{section.paragraphs.map((text) => (
-										<p key={text}>{text}</p>
+										<p key={text}>
+											<GuideText text={text} />
+										</p>
 									))}
 									{section.steps && (
 										<ol>
 											{section.steps.map((text) => (
-												<li key={text}>{text}</li>
+												<li key={text}>
+													<GuideText text={text} />
+												</li>
 											))}
 										</ol>
 									)}
