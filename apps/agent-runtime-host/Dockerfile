@@ -110,6 +110,8 @@ FROM builder AS installed-skill-test
 ARG SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL org.agora.agent-infra.runtime-stage=installed-skill-test
+RUN apt-get update && apt-get install -y --no-install-recommends procps \
+    && rm -rf /var/lib/apt/lists/* /var/log/*
 COPY --from=runtime /opt/codex/ /opt/codex/
 ENV AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1
 USER node
