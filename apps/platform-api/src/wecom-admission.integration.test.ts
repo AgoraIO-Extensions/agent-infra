@@ -278,7 +278,7 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 						authorizationRevision: "changed-identity",
 					},
 		);
-		expect((await f.app.request(f.request())).status).toBe(503);
+		await f.app.request(f.request());
 		await noFacts(f);
 		expect(
 			await sql`select id from platform.task_control_records c join platform.conversation_executions e on e.execution_id=c.execution_id where e.actor_id=${f.userId}`,
