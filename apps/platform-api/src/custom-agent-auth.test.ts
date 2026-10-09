@@ -64,4 +64,37 @@ describe("platform identity context for custom Agents", () => {
 		});
 		expect(() => verify(token)).toThrow("PLATFORM_ENTRY_CONTEXT_INVALID");
 	});
+
+	it("rejects malformed and tampered platform contexts", () => {
+		const keys = generateKeyPairSync("ed25519");
+		const signer = createPlatformEntryContextSignerV1({
+			issuer: "platform_01",
+			keyVersion: "key_01",
+			privateKey: keys.privateKey,
+			now: () => 1_700_000_000_000,
+		});
+		const token = signer({
+			userId: "user_01",
+			organizationIds: [],
+			roles: ["employee"],
+			authorizationRevision: "authrev_01",
+			agentId: "agent_01",
+		});
+		const verify = createPlatformEntryContextVerifierV1({
+			publicKeys: new Map([["key_01", keys.publicKey]]),
+			expectedIssuer: "platform_01",
+			expectedAgentId: "agent_01",
+			now: () => 1_700_000_010_000,
+		});
+		expect(() => verify({ ...token, token: "invalid" })).toThrow(
+			"PLATFORM_ENTRY_CONTEXT_INVALID",
+		);
+		const signature = token.token.slice(-1);
+		expect(() =>
+			verify({
+				...token,
+				token: `${token.token.slice(0, -1)}${signature === "A" ? "B" : "A"}`,
+			}),
+		).toThrow("PLATFORM_ENTRY_CONTEXT_INVALID");
+	});
 });

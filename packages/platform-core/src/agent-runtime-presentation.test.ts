@@ -281,5 +281,46 @@ describe("Agent runtime presentation policy", () => {
 				},
 			}),
 		).toMatchObject({ outcome: "found", interactionUrl: null });
+
+		const platformManagedConfiguration = {
+			...configuration,
+			source: {
+				...configuration.source,
+				identityResponsibility: "platform-managed" as const,
+			},
+		};
+		const platformManagedDeployment = {
+			...deployment,
+			route: {
+				exposure: "platform-auth" as const,
+				interactionOrigin: "https://owner.example.test",
+			},
+		};
+		const platformManagedVersion = {
+			configuration: platformManagedConfiguration,
+			deployment: platformManagedDeployment,
+		} as unknown as import("./workload-reconciliation.js").WorkloadVersionV1;
+		expect(
+			decideAgentRuntimePresentationV1({
+				...input,
+				facts: {
+					...facts,
+					configuration: platformManagedConfiguration,
+					runtime: {
+						...current,
+						verifiedConfiguration: platformManagedConfiguration,
+						deployment: platformManagedDeployment,
+						state: {
+							...current.state,
+							candidate: platformManagedVersion,
+							verified: platformManagedVersion,
+						},
+					},
+				},
+			}),
+		).toMatchObject({
+			outcome: "found",
+			interactionUrl: null,
+		});
 	});
 });
