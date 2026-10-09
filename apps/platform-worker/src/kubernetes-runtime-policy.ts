@@ -11,6 +11,7 @@ import type {
 	RuntimeModelProjectionV4,
 	runtimeModelInjectionV1,
 	runtimeModelInjectionV4,
+	StandardTemplateModelBindingV1,
 } from "@agent-infra/model-catalog";
 import type {
 	KubernetesObject,
@@ -101,13 +102,20 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		| RuntimeModelProjectionV1
 		| RuntimeModelProjectionV4
 		| undefined;
+	readonly standardTemplateBinding: StandardTemplateModelBindingV1 | undefined;
 	readonly modelInjection:
 		| ReturnType<typeof runtimeModelInjectionV1>
 		| ReturnType<typeof runtimeModelInjectionV4>
 		| undefined;
 	readonly egress: ReturnType<typeof workloadEgressRulesV1>;
 }) {
-	const { policy, modelProjection, modelInjection, egress } = dependencies;
+	const {
+		policy,
+		modelProjection,
+		modelInjection,
+		standardTemplateBinding,
+		egress,
+	} = dependencies;
 	const connection = runtimeConnectionConsumerProjectionV1(
 		dependencies.connectionConsumerControl
 			? undefined
@@ -148,7 +156,8 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		const skillHubRuntime = skillHubRuntimeEnvironmentV1(value);
 		if (Object.hasOwn(value.env, runtimeSkillHubBindingEnvironmentNameV1))
 			throw new WorkloadKubernetesError("policy");
-		const binding = modelProjection?.standardTemplateBinding;
+		const binding =
+			standardTemplateBinding ?? modelProjection?.standardTemplateBinding;
 		if (
 			injection &&
 			(!binding ||
