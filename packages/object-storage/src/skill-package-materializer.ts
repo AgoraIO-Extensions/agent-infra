@@ -257,6 +257,7 @@ const indexBytes = (packages: readonly SkillPackageMaterializationInputV1[]) =>
 
 /** Deployment-owned physical adapter. One existing Worker/fence owns this assembly root. */
 export class SkillPackageMaterializerV1 {
+	static readonly #locks = new Map<string, Promise<void>>();
 	readonly #root: string;
 	readonly #identity: { dev: number; ino: number };
 	readonly #readPackage;
@@ -475,7 +476,7 @@ export class SkillPackageMaterializerV1 {
 			fail("unavailable");
 		}
 	}
-	async materialize(
+	async #materializeUnlocked(
 		input: unknown,
 	): Promise<SkillPackageMaterializationResultV1> {
 		let packages: readonly SkillPackageMaterializationInputV1[];
@@ -633,6 +634,24 @@ export class SkillPackageMaterializerV1 {
 				.catch(() => {});
 			if (error instanceof SkillPackageMaterializerErrorV1) throw error;
 			fail("unavailable");
+		}
+	}
+	async materialize(
+		input: unknown,
+	): Promise<SkillPackageMaterializationResultV1> {
+		const previous = SkillPackageMaterializerV1.#locks.get(this.#root);
+		let release!: () => void;
+		const current = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		SkillPackageMaterializerV1.#locks.set(this.#root, current);
+		if (previous) await previous;
+		try {
+			return await this.#materializeUnlocked(input);
+		} finally {
+			release();
+			if (SkillPackageMaterializerV1.#locks.get(this.#root) === current)
+				SkillPackageMaterializerV1.#locks.delete(this.#root);
 		}
 	}
 }

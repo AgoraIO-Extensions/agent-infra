@@ -45,16 +45,16 @@ export type WorkloadSkillMaterializationBindingV1 = Readonly<{
  * The resolver supplies fixed DB/object references; it never receives caller paths.
  */
 export function createObjectStorageWorkloadSkillMaterializerV1(options: {
-	readonly materializer: Pick<
-		SkillPackageMaterializerV1,
-		"materialize" | "readCurrentDetails"
-	>;
+	readonly materializerFor: (
+		input: WorkloadSkillMaterializationInputV1,
+	) => Pick<SkillPackageMaterializerV1, "materialize" | "readCurrentDetails">;
 	readonly resolveBindings: (
 		input: WorkloadSkillMaterializationInputV1,
 	) => Promise<readonly WorkloadSkillMaterializationBindingV1[]>;
 }): WorkloadSkillMaterializerV1 {
 	return {
 		async materialize(input) {
+			const materializer = options.materializerFor(input);
 			const bindings = await options.resolveBindings(input);
 			if (bindings.length > 10) throw new Error("Too many Skills");
 			if (bindings.some((binding) => binding.agentId !== input.agentId))
@@ -83,12 +83,12 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 					manifestDigest: binding.skillVersion.manifestDigest,
 				}),
 			);
-			const current = await options.materializer.readCurrentDetails();
-			const result = await options.materializer.materialize({
+			const current = await materializer.readCurrentDetails();
+			const result = await materializer.materialize({
 				packages: requested,
 				expectedGenerationId: current?.result.generationId ?? null,
 			});
-			const details = await options.materializer.readCurrentDetails();
+			const details = await materializer.readCurrentDetails();
 			if (!details || details.result.generationId !== result.generationId)
 				throw new Error("Skill materialization generation unavailable");
 			const bindingByName = new Map(

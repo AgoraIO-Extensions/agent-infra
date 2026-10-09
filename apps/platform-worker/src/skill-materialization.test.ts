@@ -119,7 +119,7 @@ describe("Workload Skill materialization receipt", () => {
 			},
 		};
 		const worker = createObjectStorageWorkloadSkillMaterializerV1({
-			materializer,
+			materializerFor: () => materializer,
 			resolveBindings: async () => [
 				{
 					agentId: "agent-a",
