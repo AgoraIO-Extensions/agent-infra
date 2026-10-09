@@ -239,7 +239,10 @@ export async function createConnectionRuntime(
 	};
 	const githubFetch = observeProviderFetch(
 		"github",
-		providerFetch([originFor("github"), githubOAuthTokenUrl]),
+		providerFetch([
+			originFor("github"),
+			config.github.tokenUrl ?? githubOAuthTokenUrl,
+		]),
 	);
 	const github = new OpenConnectorGitHubAdapter(githubFetch);
 	const githubOAuth = createPreSubmitGithubOAuthAdapter(
