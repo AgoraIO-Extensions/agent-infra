@@ -171,8 +171,8 @@ export {
 export * from "./skill-package-admission.js";
 export { createClamAvSkillPackageScannerV1 } from "./skill-package-clamav.js";
 export {
-	type SkillPackageMaterializationInputV1,
 	type SkillPackageMaterializationDetailsV1,
+	type SkillPackageMaterializationInputV1,
 	type SkillPackageMaterializationResultV1,
 	SkillPackageMaterializerErrorV1,
 	SkillPackageMaterializerV1,

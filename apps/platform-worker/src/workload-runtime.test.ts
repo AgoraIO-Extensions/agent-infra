@@ -11,8 +11,8 @@ import {
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { RuntimeCapabilitiesResponseV1Schema } from "@agent-infra/contracts/runtime";
 import {
-	SkillWorkloadProjectionV1Schema,
 	type PlatformSecretRecordV1,
+	SkillWorkloadProjectionV1Schema,
 	validateAgentWorkloadDesiredV1,
 	validatePlatformSecretRecordV1,
 } from "@agent-infra/contracts/workload";

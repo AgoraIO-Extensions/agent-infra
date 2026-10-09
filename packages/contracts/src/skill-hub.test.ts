@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-	MagicSkillProviderOrderV1,
 	createSkillWorkloadProjectionV1,
+	MagicSkillProviderOrderV1,
 	SkillAgentVersionBindingV1Schema,
 	SkillPackageManifestV1Schema,
 	SkillVersionRefV1Schema,
