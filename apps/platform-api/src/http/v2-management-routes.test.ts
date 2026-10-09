@@ -597,6 +597,19 @@ describe("V2 management routes", () => {
 		);
 	});
 
+	it("rejects a standard application that omits the Agent default Relay Key", async () => {
+		const { app, submit } = createApp();
+		const { defaultRelayKey: _defaultRelayKey, ...withoutKey } =
+			applicationBody;
+		const response = await app.request("/api/v2/agent-applications", {
+			method: "POST",
+			headers,
+			body: JSON.stringify(withoutKey),
+		});
+		expect(response.status).toBe(400);
+		expect(submit).not.toHaveBeenCalled();
+	});
+
 	it("runs administrator approval through the management command and rejects invalid scope", async () => {
 		const { app, executeManagementCommand, listAgents } = createApp({
 			administrator: true,
