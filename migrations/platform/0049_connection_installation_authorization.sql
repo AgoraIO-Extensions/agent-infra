@@ -32,8 +32,8 @@ CREATE TABLE "platform"."connection_installation_commands" (
 	CONSTRAINT "connection_installation_digest_valid" CHECK ("platform"."connection_installation_commands"."request_digest" ~ '^[a-f0-9]{64}$')
 );
 --> statement-breakpoint
-ALTER TABLE "platform"."connection_installation_authorizations" ADD CONSTRAINT "connection_installation_authorizations_execution_id_conversation_executions_execution_id_fk" FOREIGN KEY ("execution_id") REFERENCES "platform"."conversation_executions"("execution_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "platform"."connection_installation_commands" ADD CONSTRAINT "connection_installation_commands_authorization_id_connection_installation_authorizations_id_fk" FOREIGN KEY ("authorization_id") REFERENCES "platform"."connection_installation_authorizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform"."connection_installation_authorizations" ADD CONSTRAINT "connection_installation_execution_fk" FOREIGN KEY ("execution_id") REFERENCES "platform"."conversation_executions"("execution_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform"."connection_installation_commands" ADD CONSTRAINT "connection_installation_command_authorization_fk" FOREIGN KEY ("authorization_id") REFERENCES "platform"."connection_installation_authorizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "connection_installation_user_execution_idx" ON "platform"."connection_installation_authorizations" USING btree ("user_id","execution_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "connection_installation_command_key_unique" ON "platform"."connection_installation_commands" USING btree ("authorization_id","command","idempotency_key");--> statement-breakpoint
 CREATE INDEX "connection_installation_pending_idx" ON "platform"."connection_installation_commands" USING btree ("status","authorization_id");

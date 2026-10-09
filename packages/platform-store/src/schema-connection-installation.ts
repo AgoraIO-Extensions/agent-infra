@@ -6,6 +6,7 @@ import { sql } from "drizzle-orm";
 import {
 	bigint,
 	check,
+	foreignKey,
 	index,
 	jsonb,
 	text,
@@ -19,9 +20,7 @@ export const connectionInstallationAuthorizations = platformSchema.table(
 	"connection_installation_authorizations",
 	{
 		id: text("id").primaryKey(),
-		executionId: text("execution_id")
-			.notNull()
-			.references(() => conversationExecutions.executionId),
+		executionId: text("execution_id").notNull(),
 		userId: text("user_id").notNull(),
 		confirmationRevision: text("confirmation_revision").notNull(),
 		binding: jsonb("binding")
@@ -45,6 +44,11 @@ export const connectionInstallationAuthorizations = platformSchema.table(
 			.notNull(),
 	},
 	(table) => [
+		foreignKey({
+			columns: [table.executionId],
+			foreignColumns: [conversationExecutions.executionId],
+			name: "connection_installation_execution_fk",
+		}),
 		check(
 			"connection_installation_status_valid",
 			sql`${table.status} in ('awaiting_confirmation','confirmed','revoked','expired','unknown')`,
@@ -75,9 +79,7 @@ export const connectionInstallationCommands = platformSchema.table(
 	"connection_installation_commands",
 	{
 		id: text("id").primaryKey(),
-		authorizationId: text("authorization_id")
-			.notNull()
-			.references(() => connectionInstallationAuthorizations.id),
+		authorizationId: text("authorization_id").notNull(),
 		command: text("command").notNull(),
 		idempotencyKey: text("idempotency_key").notNull(),
 		requestDigest: text("request_digest").notNull(),
@@ -92,6 +94,11 @@ export const connectionInstallationCommands = platformSchema.table(
 			.notNull(),
 	},
 	(table) => [
+		foreignKey({
+			columns: [table.authorizationId],
+			foreignColumns: [connectionInstallationAuthorizations.id],
+			name: "connection_installation_command_authorization_fk",
+		}),
 		check(
 			"connection_installation_command_valid",
 			sql`${table.command} in ('begin','confirm','status')`,

@@ -1337,8 +1337,8 @@
         }
       },
       "foreignKeys": {
-        "connection_installation_authorizations_execution_id_conversation_executions_execution_id_fk": {
-          "name": "connection_installation_authorizations_execution_id_conversation_executions_execution_id_fk",
+        "connection_installation_execution_fk": {
+          "name": "connection_installation_execution_fk",
           "tableFrom": "connection_installation_authorizations",
           "tableTo": "conversation_executions",
           "schemaTo": "platform",
@@ -1485,8 +1485,8 @@
         }
       },
       "foreignKeys": {
-        "connection_installation_commands_authorization_id_connection_installation_authorizations_id_fk": {
-          "name": "connection_installation_commands_authorization_id_connection_installation_authorizations_id_fk",
+        "connection_installation_command_authorization_fk": {
+          "name": "connection_installation_command_authorization_fk",
           "tableFrom": "connection_installation_commands",
           "tableTo": "connection_installation_authorizations",
           "schemaTo": "platform",
