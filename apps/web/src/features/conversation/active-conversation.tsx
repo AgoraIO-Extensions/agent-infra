@@ -15,6 +15,10 @@ import { Textarea } from "../../components/ui/textarea.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { CommandNotice } from "./conversation-command-notice.js";
 import type { ConversationCommandResult } from "./conversation-commands.js";
+import {
+	ConversationFilePicker,
+	useConversationFiles,
+} from "./conversation-files.js";
 import { ConversationExecutionDetails } from "./conversation-screen-details.js";
 import { ConversationMessages } from "./conversation-screen-messages.js";
 import { currentExecution, isTerminal } from "./conversation-screen-state.js";
@@ -107,6 +111,11 @@ export function ActiveConversation({
 		identityKey,
 		conversationId,
 		executionId: active ? latestExecution : undefined,
+	});
+	const files = useConversationFiles({
+		conversationId,
+		attachmentsEnabled: agent.capabilities.attachments,
+		resultFilesEnabled: agent.capabilities.resultFiles,
 	});
 	const mismatched = Boolean(conversation && conversation.agentId !== agentId);
 	const denied = timeline.status === "denied" || command.isDenied || mismatched;
@@ -225,10 +234,11 @@ export function ActiveConversation({
 		!uncertainExecution &&
 		!(active && stopping === latestExecution) &&
 		(!active || agent.capabilities.supplementaryInstruction) &&
+		!files.uploading &&
 		Boolean(draft.trim());
 	function send() {
 		if (!canSend) return;
-		if (command.submitText(draft)) {
+		if (command.submitText(draft, files.attachments)) {
 			action.current = "message";
 			setNotice("");
 		}
@@ -391,6 +401,8 @@ export function ActiveConversation({
 							setNotice("请确认草稿后手动发送；不会自动提交。");
 							composer.current?.focus();
 						}}
+						onDownloadFile={files.download}
+						downloadingFileId={files.downloading}
 					/>
 				)}
 				{uncertainExecution && (
@@ -452,6 +464,15 @@ export function ActiveConversation({
 						send();
 					}}
 				>
+					<ConversationFilePicker
+						attachmentsEnabled={agent.capabilities.attachments}
+						limits={files.limits}
+						limitsError={files.limitsError}
+						uploads={files.uploads}
+						onSelect={(selected) => void files.addFiles(selected)}
+						onRemove={files.remove}
+						onRetry={files.retry}
+					/>
 					<Label className="sr-only" htmlFor={composerId}>
 						消息
 					</Label>

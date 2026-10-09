@@ -16,6 +16,7 @@ import type {
 	PersistedConversationEventV2,
 } from "../../pilot/generated-v2/types.gen.js";
 import { AssistantMarkdown } from "./assistant-markdown.js";
+import type { ResultFile } from "./conversation-files.js";
 import {
 	answerStatus,
 	answerText,
@@ -32,6 +33,8 @@ export function ConversationMessages({
 	onRegenerate,
 	canRegenerate,
 	onResend,
+	onDownloadFile,
+	downloadingFileId,
 }: {
 	agentName: string;
 	history: ConversationDetailProjectionV2;
@@ -40,6 +43,8 @@ export function ConversationMessages({
 	onRegenerate: (messageId: string) => void;
 	canRegenerate: boolean;
 	onResend: (text: string) => void;
+	onDownloadFile?: (file: ResultFile) => Promise<boolean>;
+	downloadingFileId?: string;
 }) {
 	const [versions, setVersions] = useState<Record<string, string>>({});
 	const userMessages = history.messages.filter((item) => item.role === "user");
@@ -174,6 +179,14 @@ export function ConversationMessages({
 										重新生成
 									</Button>
 								</div>
+								{onDownloadFile && selected.executionId && (
+									<ResultFiles
+										events={events}
+										executionId={selected.executionId}
+										onDownloadFile={onDownloadFile}
+										downloadingFileId={downloadingFileId}
+									/>
+								)}
 							</MessageFrame>
 						) : (
 							message.status !== "failed" && (
@@ -214,6 +227,14 @@ export function ConversationMessages({
 								)
 								.join("")}
 						</AssistantMarkdown>
+						{onDownloadFile && (
+							<ResultFiles
+								events={events}
+								executionId={id}
+								onDownloadFile={onDownloadFile}
+								downloadingFileId={downloadingFileId}
+							/>
+						)}
 						<p className="text-muted-foreground text-sm">
 							{
 								executionStatusLabels[
@@ -239,6 +260,57 @@ export function ConversationMessages({
 				))}
 		</section>
 	);
+}
+
+function ResultFiles({
+	events,
+	executionId,
+	onDownloadFile,
+	downloadingFileId,
+}: {
+	events: readonly PersistedConversationEventV2[];
+	executionId: string;
+	onDownloadFile: (file: ResultFile) => Promise<boolean>;
+	downloadingFileId?: string;
+}) {
+	const files = events
+		.filter(
+			(
+				event,
+			): event is Extract<
+				PersistedConversationEventV2,
+				{ type: "result.file" }
+			> => event.type === "result.file" && event.executionId === executionId,
+		)
+		.map((event) => ({ ...event.payload, executionId: event.executionId }));
+	if (!files.length) return null;
+	return (
+		<div className="space-y-2">
+			<p className="font-medium text-sm">结果文件</p>
+			{files.map((file) => (
+				<div key={file.fileId} className="flex items-center gap-2 text-sm">
+					<span className="min-w-0 flex-1 truncate" title={file.name}>
+						{file.name} ({formatResultSize(file.sizeBytes)})
+					</span>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={downloadingFileId === file.fileId}
+						onClick={() => void onDownloadFile(file)}
+					>
+						{downloadingFileId === file.fileId ? "准备下载…" : "下载"}
+					</Button>
+				</div>
+			))}
+		</div>
+	);
+}
+
+function formatResultSize(value: number) {
+	if (value < 1024) return `${value} B`;
+	if (value < 1024 ** 2) return `${Math.round(value / 1024)} KB`;
+	if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+	return `${(value / 1024 ** 3).toFixed(1)} GB`;
 }
 
 function MessageFrame({
