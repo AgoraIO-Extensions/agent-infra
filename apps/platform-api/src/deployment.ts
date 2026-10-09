@@ -90,6 +90,9 @@ export interface ProductionPlatformApiInputV1
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
+	readonly resolveCustomAgentInteractionUrl?: Parameters<
+		typeof createDeploymentPresentation
+	>[0]["resolveCustomAgentInteractionUrl"];
 }
 
 export function createProductionPlatformApiAssemblyInputV1(
@@ -294,6 +297,12 @@ export function createProductionPlatformApiAssemblyInputV1(
 					configurationQuery,
 					resourceProfile,
 					imageRepository: input.imageRepository,
+					...(input.resolveCustomAgentInteractionUrl
+						? {
+								resolveCustomAgentInteractionUrl:
+									input.resolveCustomAgentInteractionUrl,
+							}
+						: {}),
 				}),
 		},
 	};
