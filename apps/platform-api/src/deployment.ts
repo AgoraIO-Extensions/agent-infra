@@ -78,6 +78,8 @@ export interface ProductionPlatformApiInputV1
 	readonly directory?: DirectoryRouteDependencies;
 	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
+	/** Optional deployment-owned platform identity route for custom Agents. */
+	readonly customAgentGateway?: PlatformApiAssemblyInput["customAgentGateway"];
 }
 
 export function createProductionPlatformApiAssemblyInputV1(
@@ -240,6 +242,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 		conversationReplayWindowMs: input.conversationReplayWindowMs,
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+		...(input.customAgentGateway
+			? { customAgentGateway: input.customAgentGateway }
+			: {}),
 		connectionCapability,
 		allocateApplicationIds: allocateDeploymentApplicationIds,
 		prepareApplicationSecrets: secrets.prepareApplicationSecrets,

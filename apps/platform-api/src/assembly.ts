@@ -137,6 +137,8 @@ export interface PlatformApiAssemblyInput {
 	readonly directory?: DirectoryRouteDependencies;
 	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
+	/** Optional deployment-owned platform identity route for custom Agents. */
+	readonly customAgentGateway?: PlatformAppDependencies["customAgentGateway"];
 }
 
 export interface PlatformApiAssembly {
@@ -698,6 +700,9 @@ export function assemblePlatformApi(
 				? { connectionCapability: input.connectionCapability }
 				: {}),
 		},
+		...(input.customAgentGateway
+			? { customAgentGateway: input.customAgentGateway }
+			: {}),
 		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },
 		...(input.directory ? { directory: input.directory } : {}),
 	};
