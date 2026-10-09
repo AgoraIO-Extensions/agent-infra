@@ -213,6 +213,20 @@ describe("Agent application draft", () => {
 		).toBeUndefined();
 	});
 
+	it("requires a current template readiness revision when the gate is enabled", () => {
+		const errors = validateAgentApplicationDraft(
+			{ ...standardCreateDraft, templateRevision: "" },
+			{
+				modelConfigurationVisible: false,
+				requiresTemplateReadiness: true,
+				staleModel: false,
+				staleTemplate: false,
+				standardChoicesBlocked: false,
+			},
+		);
+		expect(errors.templateId).toBe("模板验证状态已过期，请刷新后重试。");
+	});
+
 	it("marks only repeated environment and Secret names", () => {
 		const errors = validateAgentApplicationDraft(
 			{
