@@ -26,6 +26,7 @@ import {
 import { createDeploymentPresentation } from "./deployment-presentation.js";
 import { createDeploymentSecretPreparation } from "./deployment-secrets.js";
 import { HttpProtocolError } from "./http/common.js";
+import type { ConversationModelSelectionReaderV1 } from "./http/conversation-routes.js";
 import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
@@ -75,6 +76,8 @@ export interface ProductionPlatformApiInputV1
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly directory?: DirectoryRouteDependencies;
+	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
+	readonly modelSelection?: ConversationModelSelectionReaderV1;
 }
 
 export function createProductionPlatformApiAssemblyInputV1(
@@ -236,6 +239,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		conversationReplayWindow: input.conversationReplayWindow,
 		conversationReplayWindowMs: input.conversationReplayWindowMs,
 		...(input.directory ? { directory: input.directory } : {}),
+		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 		connectionCapability,
 		allocateApplicationIds: allocateDeploymentApplicationIds,
 		prepareApplicationSecrets: secrets.prepareApplicationSecrets,

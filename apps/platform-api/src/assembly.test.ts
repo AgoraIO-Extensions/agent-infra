@@ -90,6 +90,56 @@ describe("Platform API production assembly", () => {
 		},
 	);
 
+	it("wires a deployment-owned Runtime model directory without deriving it from ModelCatalog", () => {
+		const modelSelection = { read: vi.fn() };
+		const identity = {
+			schemaVersion: 1 as const,
+			userId: "user-1",
+			displayName: "Ada",
+			accountStatus: "active" as const,
+			organizationIds: ["org-1"],
+			roles: ["employee" as const],
+			authorizationRevision: "authorization-1",
+		};
+		const unavailable = async () => {
+			throw new Error("unused test adapter");
+		};
+		const assembly = assemblePlatformApi({
+			taskAdmissionPolicy: {
+				maximumWaitingTasksPerAgent: 2,
+				waitingTimeoutMs: 60_000,
+			},
+			databaseUrl: "postgres://invalid:invalid@127.0.0.1:1/invalid",
+			identity: {
+				resolve: vi.fn().mockResolvedValue(identity),
+				hydrateUsers: vi.fn().mockResolvedValue([]),
+				resolveUser: vi.fn().mockResolvedValue({
+					schemaVersion: 1,
+					userId: identity.userId,
+					accountStatus: "active",
+					organizationIds: identity.organizationIds,
+					authorizationRevision: "directory-1",
+				}),
+			},
+			admissions: {
+				authorizationAdmission: { authorize: unavailable },
+				imageAdmission: { admitImage: unavailable },
+				modelAdmission: { admitModels: unavailable },
+				secretAdmission: { admitSecrets: unavailable },
+				channelAdmission: { admitChannels: unavailable },
+			},
+			allocateApplicationIds: unavailable,
+			prepareApplicationSecrets: unavailable,
+			prepareConfigurationSecrets: unavailable,
+			presentAgent: unavailable,
+			modelSelection,
+		});
+		expect(assembly.dependencies.conversation.modelSelection).toBe(
+			modelSelection,
+		);
+		return assembly.close();
+	});
+
 	it("registers the complete app before starting the Node server", async () => {
 		const identity = {
 			schemaVersion: 1 as const,
