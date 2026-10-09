@@ -82,7 +82,11 @@ function object(
 		)
 	)
 		fail("invalid");
-	return Object.fromEntries(keys.map((key) => [key, descriptors[key]?.value]));
+	return Object.fromEntries(
+		[...keys, ...optional]
+			.filter((key) => Object.hasOwn(descriptors, key))
+			.map((key) => [key, descriptors[key]?.value]),
+	);
 }
 function array(input: unknown, maximum: number): unknown[] {
 	if (
