@@ -59,7 +59,9 @@ export function useOwnApplication({
 }
 
 export function useRegisterOwnApplication(client?: Client) {
-	const pending = useRef<{ name: string; idempotencyKey: string }>();
+	const pending = useRef<{ name: string; idempotencyKey: string } | undefined>(
+		undefined,
+	);
 	return useMutation({
 		mutationKey: ["application-management", "register"],
 		mutationFn: (name: string) => {
@@ -78,7 +80,9 @@ export function useRegisterOwnApplication(client?: Client) {
 }
 
 export function useDisableOwnApplication(client?: Client) {
-	const pending = useRef<{ applicationId: string; idempotencyKey: string }>();
+	const pending = useRef<
+		{ applicationId: string; idempotencyKey: string } | undefined
+	>(undefined);
 	return useMutation({
 		mutationKey: ["application-management", "disable"],
 		mutationFn: (applicationId: string) => {
@@ -100,11 +104,14 @@ export function useDisableOwnApplication(client?: Client) {
 }
 
 export function useIssueOrRotateApplicationCredential(client?: Client) {
-	const pending = useRef<{
-		applicationId: string;
-		body: ApplicationCredentialRequest;
-		idempotencyKey: string;
-	}>();
+	const pending = useRef<
+		| {
+				applicationId: string;
+				body: ApplicationCredentialRequest;
+				idempotencyKey: string;
+		  }
+		| undefined
+	>(undefined);
 	return useMutation({
 		mutationKey: ["application-management", "credential"],
 		mutationFn: (input: {

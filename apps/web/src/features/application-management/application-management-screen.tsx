@@ -456,9 +456,9 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 							})}
 						</div>
 						{props.scopes.length === 0 ? (
-							<p className="text-destructive text-sm" role="alert">
+							<Alert variant="destructive" className="p-2 text-sm">
 								至少选择一项权限范围。
-							</p>
+							</Alert>
 						) : null}
 					</fieldset>
 					<div className="space-y-2">

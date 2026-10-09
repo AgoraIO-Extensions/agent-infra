@@ -79,7 +79,7 @@ function sameIssueBody(
 }
 
 export function useIssuePersonalApiCredential(client?: Client) {
-	const pending = useRef<IssueAttempt>();
+	const pending = useRef<IssueAttempt | undefined>(undefined);
 	const mutation = useMutation({
 		mutationKey: ["api-credentials", "issue"],
 		mutationFn: (body: PersonalApiCredentialIssueRequestV1) => {
@@ -100,7 +100,9 @@ export function useIssuePersonalApiCredential(client?: Client) {
 }
 
 export function useRevokePersonalApiCredential(client?: Client) {
-	const pending = useRef<{ credentialId: string; idempotencyKey: string }>();
+	const pending = useRef<
+		{ credentialId: string; idempotencyKey: string } | undefined
+	>(undefined);
 	const mutation = useMutation({
 		mutationKey: ["api-credentials", "revoke"],
 		mutationFn: (credentialId: string) => {
@@ -121,7 +123,9 @@ export function useRevokePersonalApiCredential(client?: Client) {
 }
 
 export function useNarrowPersonalApiCredential(client?: Client) {
-	const pending = useRef<{ credentialId: string; idempotencyKey: string }>();
+	const pending = useRef<
+		{ credentialId: string; idempotencyKey: string } | undefined
+	>(undefined);
 	const mutation = useMutation({
 		mutationKey: ["api-credentials", "narrow"],
 		mutationFn: (input: {

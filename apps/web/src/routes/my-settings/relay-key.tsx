@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PersonalRelayKeyScreen } from "../../features/personal-relay-key/personal-relay-key-screen.js";
 import { useApplicationSession } from "../../features/application-shell.js";
+import { PersonalRelayKeyScreen } from "../../features/personal-relay-key/personal-relay-key-screen.js";
 
 export const Route = createFileRoute("/my-settings/relay-key")({
 	component: RelayKeyRoute,

@@ -1,4 +1,8 @@
-import { createFileRoute, useLocation } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	useLocation,
+	useNavigate,
+} from "@tanstack/react-router";
 import { useState } from "react";
 import { ApiCredentialsScreen } from "../../features/api-credentials/api-credentials-screen.js";
 import {
@@ -21,13 +25,17 @@ export const Route = createFileRoute("/my-settings/api-credentials")({
 
 function ApiCredentialsRoute() {
 	const { identityKey } = useApplicationSession();
+	const navigate = useNavigate({ from: "/my-settings/api-credentials" });
 	const credentials = useApiCredentials({ identityKey });
 	const issue = useIssuePersonalApiCredential();
 	const revoke = useRevokePersonalApiCredential();
-	const search = useLocation({ select: (location) => location.search });
+	const search = useLocation({
+		select: (location) => location.search as Record<string, unknown>,
+	});
+	const candidateApplicationId = search.applicationId;
 	const requestedApplicationId =
-		typeof (search as Record<string, unknown>).applicationId === "string"
-			? (search as Record<string, unknown>).applicationId
+		typeof candidateApplicationId === "string"
+			? candidateApplicationId
 			: undefined;
 	const [applicationId, setApplicationId] = useState(requestedApplicationId);
 	const application = useOwnApplication({ applicationId, identityKey });
@@ -53,6 +61,10 @@ function ApiCredentialsRoute() {
 				onRegister={async (name) => {
 					const metadata = await register.mutateAsync(name);
 					setApplicationId(metadata.applicationId);
+					await navigate({
+						replace: true,
+						search: { applicationId: metadata.applicationId },
+					});
 					return metadata;
 				}}
 				onDisable={disable.mutateAsync}
@@ -60,7 +72,9 @@ function ApiCredentialsRoute() {
 				isRegistering={register.isPending}
 				isDisabling={disable.isPending}
 				isIssuingCredential={issueApplicationCredential.isPending}
-				actionError={register.error ?? disable.error ?? issueApplicationCredential.error}
+				actionError={
+					register.error ?? disable.error ?? issueApplicationCredential.error
+				}
 			/>
 		</main>
 	);
