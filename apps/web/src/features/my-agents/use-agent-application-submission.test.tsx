@@ -52,7 +52,6 @@ const sensitiveCreateBody = {
 		options: [
 			{
 				...createBody.modelConfiguration.options[0],
-				credentialValue: "test-credential-value",
 			},
 		],
 	},

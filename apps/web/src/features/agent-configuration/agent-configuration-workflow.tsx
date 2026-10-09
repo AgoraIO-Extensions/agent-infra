@@ -37,6 +37,12 @@ export function AgentConfigurationWorkflow({
 				commandResult={submission.data}
 				key={agent.agentId}
 				onSave={submission.saveConfiguration}
+				onPreviewDefaultRelayKeyCandidates={
+					submission.previewDefaultRelayKeyCandidates
+				}
+				onReplaceDefaultRelayKey={submission.replaceDefaultRelayKey}
+				relayKeyError={submission.relayKeyError}
+				relayKeySubmitting={submission.relayKeySubmitting}
 				onUpgradeImage={submission.upgradeImage}
 				session={session.state}
 				submitting={submission.isPending}

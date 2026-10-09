@@ -18,6 +18,7 @@ import {
 } from "../agent-management-status.js";
 import type { BrowserSessionState } from "../browser-session.js";
 import { DirectoryPicker } from "../directory-fields.js";
+import type { AgentDefaultRelayKeyCandidates } from "./agent-configuration.js";
 import { isAgentConfigurationOwner } from "./agent-configuration.js";
 import {
 	type AgentConfigurationModelDraft,
@@ -36,7 +37,13 @@ type AgentConfigurationScreenProps = {
 	commandResult?: AgentProjectionV2;
 	lifecycle?: ReactNode;
 	onSave: (body: AgentConfigurationUpdateRequestV2Writable) => void;
+	onPreviewDefaultRelayKeyCandidates?: (
+		keyValue: string,
+	) => Promise<AgentDefaultRelayKeyCandidates>;
+	onReplaceDefaultRelayKey?: (keyValue: string) => void;
 	onUpgradeImage: (imageReference: string) => void;
+	relayKeyError?: Error | null;
+	relayKeySubmitting?: boolean;
 	session: ConfigurationSessionState;
 	submitting: boolean;
 };
@@ -63,7 +70,6 @@ function blankModel(): AgentConfigurationModelDraft {
 		endpointId: "",
 		modelId: "",
 		reasoningLevels: "",
-		credentialValue: "",
 	};
 }
 
@@ -144,13 +150,23 @@ export function AgentConfigurationScreen({
 	commandResult,
 	lifecycle,
 	onSave,
+	onPreviewDefaultRelayKeyCandidates,
+	onReplaceDefaultRelayKey,
 	onUpgradeImage,
+	relayKeyError = null,
+	relayKeySubmitting = false,
 	session,
 	submitting,
 }: AgentConfigurationScreenProps) {
 	const [draft, setDraft] = useState(() => configurationDraftFromAgent(agent));
 	const [ownerError, setOwnerError] = useState<string>();
 	const [imageReference, setImageReference] = useState("");
+	const [defaultRelayKey, setDefaultRelayKey] = useState("");
+	const [keyCandidates, setKeyCandidates] = useState<
+		AgentDefaultRelayKeyCandidates["candidates"]
+	>([]);
+	const [keyChecking, setKeyChecking] = useState(false);
+	const [keyCheckError, setKeyCheckError] = useState(false);
 	const submittedResult =
 		commandResult?.agentId === agent.agentId ? commandResult : undefined;
 	const resultRef = useResultFocus(submittedResult);
@@ -174,6 +190,28 @@ export function AgentConfigurationScreen({
 		)
 		.join("、");
 	const isDisabled = submitting || agent.managementStatus === "disabled";
+	const checkDefaultRelayKey = async () => {
+		if (!onPreviewDefaultRelayKeyCandidates || !defaultRelayKey.trim()) return;
+		setKeyChecking(true);
+		setKeyCheckError(false);
+		try {
+			const result = await onPreviewDefaultRelayKeyCandidates(
+				defaultRelayKey.trim(),
+			);
+			setKeyCandidates(result.candidates);
+		} catch {
+			setKeyCandidates([]);
+			setKeyCheckError(true);
+		} finally {
+			setKeyChecking(false);
+		}
+	};
+	const replaceDefaultRelayKey = () => {
+		if (!onReplaceDefaultRelayKey || !defaultRelayKey.trim()) return;
+		onReplaceDefaultRelayKey(defaultRelayKey.trim());
+		setDefaultRelayKey("");
+		setKeyCandidates([]);
+	};
 	const updateModel = (
 		index: number,
 		key: keyof AgentConfigurationModelDraft,
@@ -207,10 +245,6 @@ export function AgentConfigurationScreen({
 		setDraft((current) => ({
 			...current,
 			secrets: [],
-			models: current.models.map((model) => ({
-				...model,
-				credentialValue: "",
-			})),
 		}));
 		onSave(request);
 	};
@@ -393,8 +427,75 @@ export function AgentConfigurationScreen({
 												: "未提供"}
 										</p>
 										<p className="text-muted-foreground text-sm">
-											已有模型凭证不回显；需要替换时填写新凭证。
+											已有 Agent 默认 Relay Key 不回显；需要替换时填写新 Key。
 										</p>
+										{onReplaceDefaultRelayKey ? (
+											<div className="space-y-3">
+												<Label htmlFor="configuration-default-relay-key">
+													替换 Agent 默认 Relay Key
+												</Label>
+												<div className="flex flex-wrap gap-3">
+													<Input
+														autoComplete="new-password"
+														disabled={isDisabled || relayKeySubmitting}
+														id="configuration-default-relay-key"
+														onChange={(event) => {
+															setDefaultRelayKey(event.target.value);
+															setKeyCandidates([]);
+															setKeyCheckError(false);
+														}}
+														placeholder="输入新 Key"
+														type="password"
+														value={defaultRelayKey}
+													/>
+													<Button
+														disabled={
+															isDisabled ||
+															keyChecking ||
+															!defaultRelayKey.trim()
+														}
+														onClick={() => void checkDefaultRelayKey()}
+														type="button"
+														variant="outline"
+													>
+														{keyChecking ? "正在检查…" : "检查可用模型"}
+													</Button>
+													<Button
+														disabled={
+															isDisabled ||
+															relayKeySubmitting ||
+															!defaultRelayKey.trim()
+														}
+														onClick={replaceDefaultRelayKey}
+														type="button"
+													>
+														{relayKeySubmitting ? "正在替换…" : "替换默认 Key"}
+													</Button>
+												</div>
+												<p className="text-muted-foreground text-sm">
+													当前 Key
+													只显示已设置状态；输入值不会回显或写入普通业务投影。
+												</p>
+												{keyCheckError || relayKeyError ? (
+													<Alert variant="destructive">
+														<AlertDescription>
+															Key 校验或替换失败，请刷新后重试。
+														</AlertDescription>
+													</Alert>
+												) : null}
+												{keyCandidates.length > 0 ? (
+													<p className="text-muted-foreground text-sm">
+														Key 可用模型：
+														{keyCandidates
+															.map(
+																(candidate) =>
+																	`${candidate.endpointId} · ${candidate.modelId}`,
+															)
+															.join("、")}
+													</p>
+												) : null}
+											</div>
+										) : null}
 										<Label className="min-h-11 gap-3">
 											<Checkbox
 												disabled={isDisabled}
@@ -407,10 +508,7 @@ export function AgentConfigurationScreen({
 															? current.models.length === 0
 																? [blankModel()]
 																: current.models
-															: current.models.map((model) => ({
-																	...model,
-																	credentialValue: "",
-																})),
+															: current.models,
 													}))
 												}
 											/>
@@ -440,11 +538,6 @@ export function AgentConfigurationScreen({
 																key: "reasoningLevels",
 																label: "可选推理强度",
 																required: true,
-															},
-															{
-																key: "credentialValue",
-																label: "新模型凭证",
-																type: "password",
 															},
 														] as const
 													}
