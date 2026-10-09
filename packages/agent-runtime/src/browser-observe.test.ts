@@ -141,6 +141,23 @@ describe("Browser observe controller", () => {
 		).rejects.toThrow("BROWSER_NAVIGATION_ORIGIN_DENIED");
 	});
 
+	it("reuses the persistent context's initial page at the one-page limit", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const onePageCapability = {
+			...capability,
+			policy: { ...capability.policy, maxPages: 1 },
+		};
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability: onePageCapability,
+		});
+
+		await expect(
+			controller.navigate("https://example.test/app"),
+		).resolves.toEqual(expect.objectContaining({ pageRevision: 2 }));
+	});
+
 	it("keeps controlled fixture fulfillment inside the policy route", async () => {
 		const page = new FakePage();
 		const context = fakeContext(page);

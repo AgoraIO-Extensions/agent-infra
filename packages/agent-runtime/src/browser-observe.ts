@@ -454,7 +454,7 @@ export function createBrowserObserveControllerV1(input: {
 		await installPolicy();
 		const capability = readCapability();
 		assertAllowedUrl(url, allowedOrigins());
-		if (input.context.pages().length >= capability.policy.maxPages)
+		if (input.context.pages().length > capability.policy.maxPages)
 			throw new Error("BROWSER_PAGE_LIMIT_EXCEEDED");
 		const page = input.context.pages()[0] ?? (await input.context.newPage());
 		applyActionTimeout(page);
