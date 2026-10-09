@@ -11,7 +11,7 @@
 			"apps/**",
 			"packages/**",
 			"tests/**",
-			"deploy/**",
+			"deploy/connection-shanghai-release.mjs",
 			"*.json",
 			"*.jsonc",
 			"!**/dist",
