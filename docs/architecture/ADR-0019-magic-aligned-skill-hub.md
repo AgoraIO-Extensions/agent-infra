@@ -18,6 +18,6 @@ RuntimeHost 为每个 native Runtime 进程构造受控 roots 列表，并按固
 
 两个 root 下出现相同 Skill name 时 fail closed，并记录可回读的冲突原因；不按 root 顺序选择优先级，不复制、symlink、overlay 或原地修改固定 root。这样既保留 Magic 的显式 `extraRoots` 语义，也避免固定包遮蔽 Hub 绑定版本或让 Hub 目录反向取得部署文件。固定包的内部路径和 Hub generation 的物理路径仍只留在 Host/Worker，Web/API 只接收不透明能力 ID 和版本摘要。
 
-迁移固定包必须是一次显式的 Skill Hub 变更：先用实际 ZIP 经过 [工程 Spec §11.6.1–11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1161-包字节与摘要) 的准入生成新的 Skill Version，完成 Agent Version binding、同步和 Worker Applied；这一步只准备 generation，不把同名 Hub root 同时暴露给 Runtime。随后在同一配置修订中移除固定 descriptor 并启用 Hub binding，再确认 Runtime 的实际加载回执。切换期间不得同时启用同名的两个来源；切换前失败保留原固定包，切换后的失败沿既有 configuration revision、Worker fence/CAS、outbox 和 recovery 重试，不通过并行 root 或隐式回退绕过冲突。已运行 Execution 不因迁移或目录刷新改绑版本，也不使用旧 root 重新重放副作用。
+迁移固定包必须是一次显式的 Skill Hub 变更：先用实际 ZIP 经过 [工程 Spec §11.6.1–11.6.4](SPEC-agent-infra-M1-engineering-architecture.md#1161-包字节与摘要) 的准入生成新的 Skill Version，并准备完整 Hub generation，此时不启用同名 Hub 来源。随后在同一新的配置修订中移除固定 descriptor 并启用对应 Agent Version binding；Worker 和 Runtime 必须按该修订装配完整 roots 列表，不暴露同名双来源的中间状态。同步、Worker Applied 和 Runtime 实际加载回执均确认后，迁移才算完成。确认前保留原固定包的不可变字节供恢复使用，但不得将其重新加入已启用同名 Hub 来源的 roots；失败沿既有 configuration revision、Worker fence/CAS、outbox 和 recovery 重试，需回退时通过新的配置修订整体恢复原来源。已运行 Execution 不因迁移或目录刷新改绑版本，也不使用旧 root 重新重放副作用。
 
 物理 generation、只读装配和失败恢复由 #1545 承接；Runtime 目录、按需加载和四个 Driver 的 root 接缝由 #1547 承接，并向 #992 提供同一修订的合法目录/加载事实。三票复用现有 Agent Configuration Revision 和 Execution/Worker fence，不建立第二套 Skill 状态机或调度循环。
