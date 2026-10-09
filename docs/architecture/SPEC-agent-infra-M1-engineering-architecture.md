@@ -133,15 +133,16 @@ Connection Web 的独立部署与同源路由决策见
 数据库和数据库账号；两个数据库可以位于同一 PostgreSQL 集群，但不能跨库直接读写。本机部署也
 连接同一 Connection account authority；可选 local edge 不保存账号、Credential 或授权状态。
 
-Connection control plane 在上海切换前单主部署于 GZ3，切换后单主部署于上海；connection database
-暂留现有美国库，后续独立迁入国内，全程保持唯一权威。分阶段迁移及上海 GitHub 直连/代理的
+Connection control plane 与 connection database 已完成上海单主迁移，全程保持唯一权威；GZ3
+不再承担现网写入。上海发布与数据库/TLS 配置以
+[生产部署说明](connection-production.md) 为操作入口。分阶段迁移及上海 GitHub 直连/代理的
 配置选择、重启生效和验收边界见区域 ADR 的
 [上海迁移决策](../adr/ADR-connection-regional-control-plane-and-github-egress.md#上海分阶段迁移)。
 LA3 当前不部署 Connection 组件。GitHub 服务端流量在 GZ3 默认通过固定代理出口，首次 OAuth
 code exchange 在 GZ3 pilot 可按 ADR 的受控条件直连回退；国内 Provider 从当前单主地域直连。LA3 Provider
 Egress 仅作为满足 workload mTLS 门禁后的未来 TODO。区域职责与 WRITE
 `UNCERTAIN` 边界见
-[Connection GZ3 控制面与 GitHub 代理出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
+[Connection 上海单主与 GitHub 出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
 该 ADR 的[GitHub OAuth 出口回退决策](../adr/ADR-connection-regional-control-plane-and-github-egress.md#gz3-pilotgithub-oauth-出口回退)仅在 GZ3 pilot 生效，不免除广泛生产的 Security/SRE 评审。
 
 ### 4.2 不拆分的部署单元

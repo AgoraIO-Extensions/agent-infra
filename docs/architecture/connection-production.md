@@ -1,9 +1,26 @@
 # Connection 生产部署
 
-Issue [#1276](https://github.com/AgoraIO-Extensions/agent-infra/issues/1276) 已确认上海分阶段迁移的
-架构方案，详见[区域 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md#上海分阶段迁移)。
-该方案尚不表示上海已经部署；本文 GZ3 命令和旧 origin 仍描述现网，不可直接用于上海。
-正式切换须另行验收镜像、Secret、入口、OAuth 回调和单主停写步骤。
+Connection 已按 [#1276](https://github.com/AgoraIO-Extensions/agent-infra/issues/1276) 批准的
+[区域 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md#上海分阶段迁移)
+迁入上海，API/Web 与权威 PostgreSQL 均已切换。GZ3 release 已退役，不再作为发布或回退目标。
+本迁移不代表开放中的广泛生产、Security/SRE、HA/PITR 或 Provider WRITE 门禁已经验收。
+
+| 配置 | 上海契约 |
+| --- | --- |
+| 集群 | `hcicore-acs-sh-prod01`；API server `https://106.14.182.204:6443` |
+| namespace | `agent-connector` |
+| 公开 origin | `https://agent-connector.agoralab.co` |
+| MCP | `https://agent-connector.agoralab.co/mcp` |
+| 控制面 | `connection-api`，1 副本，`Recreate`；Web 为 `connection-web` |
+| 权威库 | 上海 PostgreSQL 17，数据库 `agent_connector`，账号 `agent_infra` |
+| 数据库 Secret | `connection-database-shanghai`，键 `DATABASE_URL`；`sslmode=verify-full` |
+| Runtime Secret | `connection-config`；身份 realm、身份/凭证密钥保持不变 |
+| TLS CA | ConfigMap `connection-rds-ca`，键 `ApsaraDB-CA-Chain.pem` |
+| API CA 挂载 | 只读 `/etc/connection-rds`；`NODE_EXTRA_CA_CERTS=/etc/connection-rds/ApsaraDB-CA-Chain.pem` |
+
+原 `connection-database` 是保留的旧库连接，不能用于新 API 或 bootstrap。namespace 隔离不替代
+访问控制、资源配额和受控出口；本文命令仅更新现有上海 Deployment 镜像，不新建 namespace、
+不复制 Secret、不改变数据库、CA、节点调度、安全上下文或其他服务。
 
 `connection-api` 是唯一 Connection control plane，`connection-web` 是独立的无状态中文 React
 入口。PostgreSQL 是唯一权威存储；OpenConnector
@@ -22,7 +39,10 @@ Runtime、SQLite、global alias 和 Runtime token 不进入部署拓扑。[#301]
 及 `secretKeyRef` 注入值；不把值放进 Helm values 或 release 历史。后续 Secret Manager 治理见
 [#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907)，不作为本次发布前置条件。
 
-## 部署
+## Compose 部署边界
+
+以下 Compose 命令用于另行批准并配置的环境，不是现有上海集群的升级命令；常规发布使用
+下文的[上海发布步骤](#发布步骤)。不要对现网重复运行 bootstrap 或创建第二个写入实例。
 
 ```bash
 pnpm install --frozen-lockfile
@@ -145,7 +165,7 @@ Bearer 调用、真实 GitHub OAuth App、两个独立 ConsumerInstance、Postgr
 Kubernetes Secret 注入。实际值不得进入已跟踪文件、日志或聊天。不能仅凭 test double 或本机 unit
 test 验收。
 
-## GZ3 受监督发布
+## 上海受监督发布
 
 ### 管理员操作记录
 
@@ -207,28 +227,151 @@ URL/query 或任意 Header。用同一 sessionId 和生命周期时间关联轮�
 
 ### 发布步骤
 
-GZ3 pilot 的首次 GitHub OAuth 直连回退依照[区域出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md#gz3-pilotgithub-oauth-出口回退)发布，不再要求单独的 Security/SRE NetworkPolicy 签收。当前网络层出口范围未核实，应用白名单不能证明隔离；部署就绪后仍须由申请人重新发起真实 GitHub OAuth，确认回调和连接状态，未验证时不得宣称该功能已验收。
+上海使用 `connection:release`，GitHub 当前采用区域 ADR 的直连配置。该入口不会启用 GZ3 Helm
+release。历史 GZ3 pilot 的直连回退和风险接受不能自动沿用于上海的广泛生产验收。
 
 创建 PR 前先运行：
 
 ```bash
-pnpm connection:pr:preflight -- --issue <issue-number>
+pnpm connection:pr:preflight --issue <issue-number>
 ```
 
 该命令校验受监督分支没有占用 Worker branch namespace、Issue 契约与 `ready-for-human` 标签完整、
 工作区干净且分支基于当前 `origin/connection`，并报告 base commit 已存在的失败 checks。
 
-PR 合并后切到对应的 `origin/connection` commit，再执行：
+PR 合并后，从干净的 release worktree 发布。不要切换或清理正在开发的脏工作区：
 
 ```bash
-pnpm connection:gz3:release connection-vX.Y.Z --publish --deploy
+git fetch origin connection --prune
+git worktree add --detach ../connection-release origin/connection
+cd ../connection-release
+pnpm install --frozen-lockfile
 ```
 
-命令只允许 tag 指向当前 `origin/connection`，等待 GHCR workflow 完成，然后固定使用 GZ3 context、
-`gz3-agent-connector-prod` namespace 和 `connection-gz3` release。无 migration 的发布从一开始使用
-`--no-hooks`，并通过无 watch 的 Deployment image/readyReplica 轮询验收，避免旧 Kubernetes 的
-`event bookmark expired` 造成伪失败。检测到 `migrations/connection` 变化时命令 fail closed，必须改走
-经过评审的 migration 发布流程。脚本不会读取 Secret、自动合并 PR 或执行 Provider WRITE Action。
+若该 worktree 目录已存在，先确认其中 `git status --short` 为空，再在该目录 fetch 并
+`git switch --detach origin/connection`。有未提交改动时换新的 release 目录，不执行 reset、
+clean 或覆盖开发文件。
+
+使用 Node.js 24、仓库 `packageManager` 指定的 pnpm、GitHub `gh` 登录和上海集群权限。
+kubectl 与 API server 的 minor 版本差不能超过 1；例如 Kubernetes 1.34 使用 kubectl 1.34。
+不要沿用机器上旧的 kubectl 1.27 或仅按全局 context 名称猜测集群。
+
+```bash
+export CONNECTION_KUBECONFIG="/path/to/approved-shanghai-kubeconfig"
+export CONNECTION_KUBECTL="/path/to/compatible-kubectl"
+"$CONNECTION_KUBECTL" --kubeconfig "$CONNECTION_KUBECONFIG" version -o json
+```
+
+上述路径由操作者配置，不存入 Git。脚本总是显式传 `--kubeconfig` 和 `-n agent-connector`，
+检查 API server，不修改全局 Kubernetes context。不能只凭 context 名称包含 Shanghai 推断目标；
+名称相近但 server 不符时拒绝部署。API/Web 和已有 Secret/CA 必须已经存在。
+
+先选择大于最新发布且未占用的 `connection-vX.Y.Z`，将以下占位版本替换成该版本。
+三个阶段可以分开执行：
+
+```bash
+pnpm connection:release connection-vX.Y.Z
+pnpm connection:release connection-vX.Y.Z --publish
+pnpm connection:release connection-vX.Y.Z --deploy
+```
+
+也可以一次完成：
+
+```bash
+pnpm connection:release connection-vX.Y.Z --publish --deploy \
+  --kubeconfig "$CONNECTION_KUBECONFIG"
+```
+
+显式配置 kubeconfig 后，dry-run 也检查上海目标、单主、数据库身份、`verify-full`、CA 挂载及
+image-only patch 的 server dry-run。凭据只在进程内用于校验，不打印 Secret、数据库 URL 或密钥。
+
+发布要求工作区干净、HEAD 和 tag 精确等于当前 `origin/connection`；保留 migration、catalog、
+approval fence 和既有账号升级回归门禁。存在 migration 变化时拒绝普通发布，须先走经评审的
+迁移流程，不能用手工导表或跳过 hook 替代。部署要求该 tag、同一 SHA 的 GHCR workflow 完成且
+成功，随后只执行 API/Web 的 `set image`，等待新镜像的 Pod Ready 和 Deployment generation
+生效。它不触发 bootstrap，不自动创建业务对象、升级用户授权或执行 Provider WRITE。
+
+`connection:gz3:release` 只保留发布/预检兼容别名；包含 `--deploy` 时在外部副作用前立即拒绝。
+不要重新安装 `connection-gz3`、使用旧 Helm chart 的固定副本设置或恢复 GZ3 写入角色。
+
+### 发布后验收
+
+```bash
+"$CONNECTION_KUBECTL" --kubeconfig "$CONNECTION_KUBECONFIG" -n agent-connector \
+  get deployment,pods
+curl --fail --silent --show-error https://agent-connector.agoralab.co/healthz
+curl --fail --silent --show-error \
+  https://agent-connector.agoralab.co/.well-known/oauth-authorization-server
+curl --fail --silent --show-error --output /dev/null \
+  https://agent-connector.agoralab.co/connection/connections
+curl --fail --silent --show-error --output /dev/null \
+  https://agent-connector.agoralab.co/connection/help
+```
+
+检查运行中的 API 实际数据库 host、`agent_infra`、PostgreSQL 17、SSL/TLS，并只输出这些元数据。
+在已授权的只读数据库连接中，以下 SQL 可核对身份和该会话的 TLS；不要把密码或完整连接 URL
+放入命令行、日志、文档或聊天：
+
+```sql
+BEGIN READ ONLY;
+SELECT current_database(), current_user, current_setting('server_version');
+SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid();
+COMMIT;
+```
+
+通过 Connection MCP 做已获授权的有界 READ，如 GitHub 当前账号、指定 Jira Issue、指定 Confluence
+页面或 Rehoboam 版本。目录可发现、Pod Ready、READ 成功和业务 WRITE 验收是不同结论。
+新 ProviderRelease 的 Action 仍须原有审批/兼容升级/Consent，不因部署自动扩大权限。
+
+### 镜像回退与故障定位
+
+发布输出会列出原 API/Web 镜像。先检查失败 Pod 的事件与脱敏错误，确认上一镜像对当前 schema、
+Catalog 和已经产生的新数据兼容后，只把对应容器设回原镜像。保持当前上海数据库和 CA 配置。
+不要直接 `rollout undo` 整个 Pod template，因为旧 revision 可能引用美国库或缺少 CA。
+
+```bash
+"$CONNECTION_KUBECTL" --kubeconfig "$CONNECTION_KUBECONFIG" -n agent-connector \
+  set image deployment/connection-api "api=$PREVIOUS_API_IMAGE"
+"$CONNECTION_KUBECTL" --kubeconfig "$CONNECTION_KUBECONFIG" -n agent-connector \
+  set image deployment/connection-web "web=$PREVIOUS_WEB_IMAGE"
+```
+
+`PREVIOUS_*_IMAGE` 从本次发布记录取值，不硬编码历史版本。镜像回退不恢复数据库备份、不复活
+撤销授权，也不删除 UNCERTAIN。上海库已开放写入后，回迁旧库必须重新停写、同步并证明连续性；
+保留旧 Secret 或备份不等于可直接回切。
+
+Jenkins 等入口需要在其实际 API 网关维护出口白名单。当前出口必须从运行的 API Pod 实测，
+节点地址不证明固定 SNAT；不猜测公网网段。网关 403/IP restriction、个人认证失败、未获 Consumer
+授权和网络 timeout 要分开诊断。MCP 元数据发现/传输错误也不能直接归因于 GitHub 代理。
+
+### 使用指南目录与 Nginx 覆盖
+
+`/connection/help` 是 SPA route，`/connection/help/user-manual.md` 是静态下载；前者必须优先返回
+`index.html`，不能由 `try_files $uri/` 匹配下载目录后产生 403。`/connection/help/` 规范化至不带
+斜杠的地址，并保留 query。不要全局关闭目录处理，以免破坏 Codex/Agent 静态入口。
+
+上海曾为该路由使用临时只读 ConfigMap `connection-web-nginx`，挂载
+`/etc/nginx/conf.d/default.conf`。发布脚本保留现有挂载，不自动删除配置。在正式镜像已包含修复、
+且其内置 Nginx 配置与已验收覆盖一致时，先从 Web Pod template 删除该 volumeMount 和 volume，
+等待 Web Ready 并验证指南与下载，再删除该 ConfigMap。不要先删 ConfigMap，也不要让旧覆盖长期
+遮蔽后续镜像中的代理或路由修改。更新覆盖配置需要重新创建 Web Pod；subPath 不会热更新。
+
+确认正式镜像的 tag/提交已包含上述 Nginx 修复后，按此顺序退出临时覆盖：
+
+```bash
+"$CONNECTION_KUBECTL" --kubeconfig "$CONNECTION_KUBECONFIG" -n agent-connector \
+  patch deployment connection-web --type=strategic \
+  -p '{"spec":{"template":{"spec":{"volumes":[{"name":"connection-web-nginx","$patch":"delete"}],"containers":[{"name":"web","volumeMounts":[{"name":"connection-web-nginx","$patch":"delete"}]}]}}}}'
+"$CONNECTION_KUBECTL" --kubeconfig "$CONNECTION_KUBECONFIG" -n agent-connector \
+  rollout status deployment/connection-web --timeout=300s
+curl --fail --silent --show-error --output /dev/null \
+  https://agent-connector.agoralab.co/connection/help
+curl --fail --silent --show-error --output /dev/null \
+  https://agent-connector.agoralab.co/connection/help/user-manual.md
+```
+
+只有全部通过后才删除 `connection-web-nginx` ConfigMap；失败时保留 ConfigMap，先恢复已验收的
+只读挂载并重建 Web Pod，不调整 API 或数据库。仍运行缺少该修复的旧镜像时不要执行退出步骤。
 
 审批迁移 `0032_connection_access_approval` 属于上述需评审的发布，不得用普通 GZ3 脚本跳过
 migration hook。候选提交必须包含 `packages/connection-contracts/approval-fence.json`；正常 Connection
@@ -236,7 +379,7 @@ tag 的 catalog guard 从已提交的 Git 版本读取 migration journal 和 man
 协议版本下降。工作区未提交文件的单元测试不等于 tag 发布验证。
 
 审计迁移 `0033_audit_query_indexes` 与 `0034_call_diagnostics` 先进入主线，其既有 journal 时间戳保持不变。
-审批迁移尚未发布，journal 将 `0032_connection_access_approval` 排在这些审计迁移之后；
+审批迁移的 journal 将 `0032_connection_access_approval` 排在这些审计迁移之后；
 实际执行顺序以 journal 的 `idx` 和 `when` 为准，不按文件名排序，避免已有审计迁移的数据库跳过审批表。
 升级回归必须覆盖仅含审计索引的基线升级至审批版本，并验证重复迁移幂等。
 

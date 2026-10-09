@@ -551,7 +551,7 @@ callback、后台 lease/outbox/reconciliation 可以在同一镜像中以不同�
 业务 Worker 服务。国内 Provider 从当前单主地域直连；GZ3 GitHub 服务端请求默认使用固定代理，首次 OAuth
 code exchange 在 GZ3 pilot 可按 ADR 的受控条件直连回退。LA3 `connection-provider-egress` 因 HCI 暂无合规 workload mTLS 入口而延期，不属于当前生产
 拓扑。完整区域决策见
-[Connection GZ3 控制面与 GitHub 代理出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
+[Connection 上海单主与 GitHub 出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
 该 ADR 的[GitHub OAuth 出口回退决策](../adr/ADR-connection-regional-control-plane-and-github-egress.md#gz3-pilotgithub-oauth-出口回退)仅适用于 GZ3 pilot；此次发布不以独立 NetworkPolicy 签收为前置，广泛生产门禁保持不变。
 
 上海分阶段迁移的目标 namespace、公开 origin、暂留美国数据库及 GitHub 直连/代理配置切换，

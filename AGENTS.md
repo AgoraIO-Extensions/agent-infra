@@ -121,6 +121,17 @@ git diff --check
 
 ## Git And Review
 
+### Connection 发布入口
+
+Connection 现网已迁到上海，权威数据库亦在上海；GZ3 release 已退役。执行部署前必须阅读
+[Connection 生产部署](docs/architecture/connection-production.md#发布步骤)。使用
+`pnpm connection:release`、干净且等于最新 `origin/connection` 的 release worktree、显式
+上海 kubeconfig 和兼容 kubectl；不能按默认 context 或旧 GZ3 脚本猜测目标。
+保留 `connection-database-shanghai`、`connection-config`、RDS CA 挂载及单主策略，常规发布
+只更换镜像。不得恢复旧库或 GZ3、自动扩大 Provider 授权、以 bootstrap 或环境开关绕过迁移门禁。
+
+### 提交与评审
+
 - 所有可能产生 PR 的工作遵循 [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md#2-基本原则) 的 `Issue -> 实现与验证 -> PR` 规则；创建任务分支、修改文件或提交代码前，必须先确认内容完整的 primary Issue。
 - 保持改动范围与当前任务一致，不顺手恢复本地历史材料或重构无关文档。
 - 提交前检查 `git status`、完整 diff 和上述验证命令。
