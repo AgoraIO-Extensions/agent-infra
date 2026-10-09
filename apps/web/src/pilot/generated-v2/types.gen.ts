@@ -958,6 +958,7 @@ export type AgentApiCreationRequestV1Writable = {
         organizationId: string;
     }>;
     coOwnerIds: Array<string>;
+    defaultRelayKey?: string;
     description: string;
     environment: Array<{
         name: string;
