@@ -11,12 +11,26 @@ const artifact = release.artifacts[architecture];
 if (!artifact || !destination || extra.length) throw new Error("usage: install-chromium.mjs <amd64|arm64> <destination>");
 const staging = await mkdtemp(join(tmpdir(), "chromium-install-"));
 try {
-	const response = await fetch(artifact.url, { signal: AbortSignal.timeout(300_000) });
-	if (!response.ok) throw new Error("Chromium release asset unavailable");
-	const bytes = Buffer.from(await response.arrayBuffer());
-	if (createHash("sha256").update(bytes).digest("hex") !== artifact.archiveSha256) throw new Error("Chromium archive checksum mismatch");
 	const archive = join(staging, "release.zip");
-	await writeFile(archive, bytes);
+	const deadline = Date.now() + 300_000;
+	let downloaded = false;
+	for (let attempt = 0; attempt < 10 && Date.now() < deadline; attempt++) {
+		const remaining = deadline - Date.now();
+		try {
+			execFileSync("/usr/bin/curl", [
+				"--fail", "--location", "--continue-at", "-", "--connect-timeout", "15",
+				"--max-time", String(Math.max(1, Math.min(30, Math.floor(remaining / 1000)))),
+				"--output", archive, artifact.url,
+			], { stdio: "ignore", timeout: remaining });
+			downloaded = true;
+			break;
+		} catch {
+			// Only a read-only build artifact resumes; its checksum still gates use.
+		}
+	}
+	if (!downloaded) throw new Error("Chromium release asset unavailable");
+	const bytes = await readFile(archive);
+	if (createHash("sha256").update(bytes).digest("hex") !== artifact.archiveSha256) throw new Error("Chromium archive checksum mismatch");
 	execFileSync("unzip", ["-q", archive, "-d", staging], { stdio: "ignore" });
 	const executable = join(staging, artifact.executable);
 	if (createHash("sha256").update(await readFile(executable)).digest("hex") !== artifact.executableSha256) throw new Error("Chromium executable checksum mismatch");

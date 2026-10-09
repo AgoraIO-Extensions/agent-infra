@@ -4,7 +4,7 @@ RUN apk add --no-cache 'setpriv=2.42.3-r1'
 
 FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS builder
 ARG TARGETARCH
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates unzip util-linux procps \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip util-linux procps \
 	&& rm -rf /var/lib/apt/lists/* /var/log/* \
 	&& npm install --global npm@11.19.1 \
 	&& npm install --global pnpm@11.20.0
