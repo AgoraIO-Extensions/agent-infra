@@ -25,8 +25,80 @@ const statusDescriptions = {
 } as const;
 
 type BrowserCapabilityStatusProps = {
+	readonly workflow?: BrowserWorkflowState;
 	readonly capability: BrowserCapabilityProjectionV1;
 };
+
+export type BrowserWorkflowState =
+	| { readonly kind: "idle" }
+	| { readonly kind: "intent"; readonly operation: string }
+	| { readonly kind: "observing" }
+	| { readonly kind: "action"; readonly operation: string }
+	| {
+			readonly kind: "approval_pending";
+			readonly operation: string;
+			readonly origin: string;
+	  }
+	| { readonly kind: "handoff_pending"; readonly reason: string }
+	| { readonly kind: "handed_off" }
+	| { readonly kind: "unknown"; readonly operation: string };
+
+const workflowLabels = {
+	intent: "正在受理",
+	observing: "正在观察",
+	action: "正在执行",
+	approval_pending: "等待确认",
+	handoff_pending: "等待接管",
+	handed_off: "用户已接管",
+	unknown: "待核实",
+} as const;
+
+export function BrowserWorkflowStatus({
+	workflow,
+}: {
+	readonly workflow?: BrowserWorkflowState;
+}) {
+	if (!workflow || workflow.kind === "idle") return null;
+	const label = workflowLabels[workflow.kind];
+	const detail =
+		workflow.kind === "intent" || workflow.kind === "action"
+			? `操作：${workflow.operation}`
+			: workflow.kind === "approval_pending"
+				? `操作：${workflow.operation} · 目标 origin：${workflow.origin}`
+				: workflow.kind === "handoff_pending"
+					? workflow.reason
+					: workflow.kind === "unknown"
+						? `操作：${workflow.operation}，已阻断自动重试。`
+						: undefined;
+	const destructive = workflow.kind === "unknown";
+	return (
+		<Alert
+			aria-live="polite"
+			aria-atomic="true"
+			variant={destructive ? "destructive" : "default"}
+			className="mt-3"
+		>
+			{destructive ? (
+				<AlertTriangle aria-hidden="true" />
+			) : (
+				<Clock3 aria-hidden="true" />
+			)}
+			<AlertTitle>Browser 工作流 · {label}</AlertTitle>
+			<AlertDescription>
+				{workflow.kind === "approval_pending"
+					? "外部副作用需要当前主体确认后才能继续。"
+					: workflow.kind === "handoff_pending"
+						? "浏览器将暂停 Agent 操作，等待当前主体接管。"
+						: workflow.kind === "handed_off"
+							? "用户已接管浏览器，Agent 操作保持暂停。"
+							: workflow.kind === "unknown"
+								? "操作结果无法确认，系统不会自动重放。"
+								: "Browser 工作流正在推进。"}
+				{detail ? <span className="mt-1 block">{detail}</span> : null}
+			</AlertDescription>
+		</Alert>
+	);
+}
 
 function BrowserCapabilityUnavailable({
 	capability,
@@ -120,8 +192,16 @@ function BrowserCapabilityAvailable({
 
 export function BrowserCapabilityStatus({
 	capability,
+	workflow,
 }: BrowserCapabilityStatusProps) {
-	if (capability.status === "available")
-		return <BrowserCapabilityAvailable capability={capability} />;
-	return <BrowserCapabilityUnavailable capability={capability} />;
+	return (
+		<>
+			{capability.status === "available" ? (
+				<BrowserCapabilityAvailable capability={capability} />
+			) : (
+				<BrowserCapabilityUnavailable capability={capability} />
+			)}
+			<BrowserWorkflowStatus workflow={workflow} />
+		</>
+	);
 }
