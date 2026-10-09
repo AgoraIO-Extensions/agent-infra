@@ -116,7 +116,7 @@ describe("Agent application draft", () => {
 				...standardCreateDraft,
 				models: [
 					standardCreateDraft.models[0],
-					{ ...standardCreateDraft.models[0], credentialValue: "" },
+					{ ...standardCreateDraft.models[0], optionId: "duplicate-model" },
 				],
 			},
 			{
@@ -187,15 +187,11 @@ describe("Agent application draft", () => {
 		expect(errors["model.0.modelId"]).toBe("请选择模型。");
 	});
 
-	it("does not require credentials for model options not persisted on update", () => {
-		const draft = {
-			...standardCreateDraft,
-			models: [{ ...standardCreateDraft.models[0], credentialValue: "" }],
-		};
+	it("requires one default Relay Key instead of per-model credentials", () => {
+		const draft = { ...standardCreateDraft, defaultRelayKey: "" };
 		const context = {
 			modelConfigurationVisible: true,
-			persistedModelOptionIds: ["persisted-option"],
-			requiresReplacementCredential: false,
+			requiresDefaultRelayKey: true,
 			staleModel: false,
 			staleModelIndexes: [],
 			staleTemplate: false,
@@ -203,26 +199,17 @@ describe("Agent application draft", () => {
 			defaultModelReasoningLevels: ["medium", "high"],
 		};
 
-		expect(
-			validateAgentApplicationDraft(draft, context)["model.0.credentialValue"],
-		).toBeUndefined();
-		expect(
-			validateAgentApplicationDraft(
-				{
-					...draft,
-					models: [{ ...draft.models[0], credentialValue: " \t" }],
-				},
-				context,
-			)["model.0.credentialValue"],
-		).toBeUndefined();
+		expect(validateAgentApplicationDraft(draft, context).defaultRelayKey).toBe(
+			"请输入 Agent 默认 Relay Key。",
+		);
 		expect(
 			validateAgentApplicationDraft(
 				{
 					...draft,
-					models: [{ ...draft.models[0], optionId: "persisted-option" }],
+					defaultRelayKey: "agent-relay-key-value",
 				},
 				context,
-			)["model.0.credentialValue"],
+			).defaultRelayKey,
 		).toBeUndefined();
 	});
 
