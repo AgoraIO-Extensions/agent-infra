@@ -439,7 +439,7 @@ export type ConversationDetailProjectionV2 = {
         text: string;
     }>;
     schemaVersion: 2;
-    sessionAvailability?: 'preparing' | 'ready' | 'unavailable';
+    sessionAvailability?: 'preparing' | 'ready' | 'unavailable' | 'updating';
 };
 
 export type ConversationSseMessageV1 = PersistedConversationEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;

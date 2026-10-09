@@ -248,6 +248,30 @@ export async function readSessionSandboxReadiness(
 	);
 }
 
+/**
+ * The Conversation's own reconcile intent carries an unfinished upgrade
+ * lifecycle (ADR 0023). `c` is the Conversation alias. Display and wait
+ * reason only; readiness and authority are decided elsewhere.
+ */
+export const sessionSandboxUpgradingSql = `exists (
+ select 1 from platform.outbox_items upgrade
+ where upgrade.scope_type = 'conversation' and upgrade.scope_id = c.id
+   and upgrade.operation = 'conversation.sandbox.reconcile.v1'
+   and upgrade.status <> 'succeeded'
+   and upgrade.payload->'lifecycle'->>'reason' = 'upgrade'
+)`;
+
+export async function readSessionSandboxUpgrading(
+	transaction: Transaction,
+	conversationId: string,
+): Promise<boolean> {
+	const [row] = await transaction<{ upgrading: boolean }[]>`
+		select ${transaction.unsafe(sessionSandboxUpgradingSql)} as upgrading
+		from platform.conversations c where c.id = ${conversationId}
+	`;
+	return row?.upgrading === true;
+}
+
 /** Missing/legacy/mismatched bindings are unavailable, never allocated during a read. */
 export async function readSessionSandboxBinding(
 	transaction: Transaction,

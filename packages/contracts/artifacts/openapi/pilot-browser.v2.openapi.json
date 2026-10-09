@@ -2554,7 +2554,8 @@
             "enum": [
               "preparing",
               "ready",
-              "unavailable"
+              "unavailable",
+              "updating"
             ],
             "type": "string"
           }

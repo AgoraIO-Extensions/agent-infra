@@ -421,6 +421,37 @@ describe("functional conversation screen", () => {
 		expect(requests.some((request) => request.method === "POST")).toBe(false);
 	});
 
+	it("shows an upgrading Session as updating with read-only history until it is ready (#1523)", async () => {
+		let ready = false;
+		const { requests } = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path === "/api/v2/conversations/conversation-1")
+				return Response.json({
+					...history("conversation-1", []),
+					conversation: { ...history().conversation, status: "ready" },
+					sessionAvailability: ready ? "ready" : "updating",
+				});
+			if (request.method === "POST") return receipt();
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Follow-up" } });
+		await screen.findByText("会话更新中，完成后即可发送。草稿会保留。");
+		const send = screen.getByRole("button", {
+			name: "发送",
+		}) as HTMLButtonElement;
+		expect(send.disabled).toBe(true);
+		expect(
+			screen.queryByText("会话准备中，完成后即可发送。草稿会保留。"),
+		).toBeNull();
+		ready = true;
+		await waitFor(() => expect(send.disabled).toBe(false), { timeout: 4_000 });
+		expect(
+			screen.queryByText("会话更新中，完成后即可发送。草稿会保留。"),
+		).toBeNull();
+		expect(input.value).toBe("Follow-up");
+		expect(requests.some((request) => request.method === "POST")).toBe(false);
+	});
+
 	it("keeps the draft and explains a preparing Session rejection instead of lost access (#1534)", async () => {
 		setup((request) => {
 			if (request.method === "POST")

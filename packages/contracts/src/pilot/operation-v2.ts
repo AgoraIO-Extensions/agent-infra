@@ -62,9 +62,10 @@ export const ConversationDetailProjectionV2Schema =
 		schemaVersion: z.literal(2),
 		events: z.array(PersistedConversationEventV2Schema),
 		/** Whether the Conversation's own Session Sandbox can take messages yet.
-		 * Absent from older servers, which the Web treats as "ready" (#1534). */
+		 * Absent from older servers, which the Web treats as "ready" (#1534);
+		 * "updating" while the Sandbox upgrades to a new deployment (ADR 0023). */
 		sessionAvailability: z
-			.enum(["preparing", "ready", "unavailable"])
+			.enum(["preparing", "ready", "unavailable", "updating"])
 			.optional(),
 	});
 

@@ -4,6 +4,7 @@ import {
 	canDrainSessionSandboxComputeV1,
 	canPrepareSessionSandboxReplacementV1,
 	decideSessionSandboxDrainObservationV1,
+	planSessionSandboxUpgradeTransitionV1,
 	type SessionSandboxLifecycleV1,
 	type SessionSandboxStopReceiptV1,
 } from "./session-sandbox-lifecycle.js";
@@ -171,7 +172,7 @@ describe("original source stop proof", () => {
 		expect(
 			canPrepareSessionSandboxReplacementV1({
 				...request,
-				executions: [{ status: "unknown", deliveryFence: 0 }],
+				executions: [{ status: "unknown" }],
 			}),
 		).toBe(false);
 		expect(
@@ -514,7 +515,7 @@ describe("original source stop proof", () => {
 });
 
 describe("original Execution drain eligibility", () => {
-	it.each(["submitted", "waiting", "processing", "unknown", "invalid"])(
+	it.each(["processing", "unknown", "invalid"])(
 		"does not release %s occupancy",
 		(status) => {
 			expect(canDrainSessionSandboxComputeV1(["completed", status])).toBe(
@@ -522,10 +523,14 @@ describe("original Execution drain eligibility", () => {
 			);
 		},
 	);
-	it("permits compute cleanup only after all original executions are terminal", () => {
+	it("permits compute cleanup once no execution can have reached the Runtime", () => {
 		expect(canDrainSessionSandboxComputeV1([])).toBe(true);
 		expect(
 			canDrainSessionSandboxComputeV1(["completed", "failed", "cancelled"]),
+		).toBe(true);
+		// A claimed Turn waiting for this drain never wrote `unknown` (ADR 0023).
+		expect(
+			canDrainSessionSandboxComputeV1(["completed", "submitted", "waiting"]),
 		).toBe(true);
 	});
 });
@@ -542,32 +547,31 @@ function replacementFixture() {
 			},
 			stopReceipt: input.observation.sourceStop!,
 		},
-		executions: [] as { status: string; deliveryFence: number }[],
+		executions: [] as { status: string }[],
 		generationBarrierPending: false,
 	};
 }
 
 describe("same Sandbox replacement permission", () => {
-	it("allows only the proved source and retained PVC while preserving new never-dispatched work", () => {
+	it("allows only the proved source and retained PVC while preserving work never sent to the Runtime", () => {
 		const input = replacementFixture();
 		expect(canPrepareSessionSandboxReplacementV1(input)).toBe(true);
+		// Claims advance the delivery fence before the Sandbox check, so a
+		// waiting Turn is not "never dispatched"; only its status matters.
 		expect(
 			canPrepareSessionSandboxReplacementV1({
 				...input,
-				executions: [
-					{ status: "waiting", deliveryFence: 0 },
-					{ status: "submitted", deliveryFence: 0 },
-				],
+				executions: [{ status: "waiting" }, { status: "submitted" }],
 			}),
 		).toBe(true);
 	});
-	it.each(["processing", "unknown", "invalid", "waiting", "submitted"])(
-		"blocks occupied or previously dispatched %s work",
+	it.each(["processing", "unknown", "invalid"])(
+		"blocks occupied %s work",
 		(status) => {
 			expect(
 				canPrepareSessionSandboxReplacementV1({
 					...replacementFixture(),
-					executions: [{ status, deliveryFence: 1 }],
+					executions: [{ status }],
 				}),
 			).toBe(false);
 		},
@@ -637,5 +641,100 @@ describe("same Sandbox replacement permission", () => {
 			finished: false,
 			observation: input.observation,
 		});
+	});
+});
+
+describe("idle Sandbox upgrade plan (ADR 0023)", () => {
+	function upgradeFixture() {
+		const { lifecycle } = fixture();
+		return {
+			management: {
+				applicationId: "application",
+				agentId: "agent",
+				status: "available" as const,
+				revision: 5,
+				fence: 2,
+				workloadRevision: 2,
+				desiredState: "running" as const,
+			},
+			current: {
+				...lifecycle.source,
+				deployment: { agentId: "agent", configRevision: 1 },
+				modelProjection: null,
+			},
+			allocation: { status: "ready", desiredState: "running" },
+			intent: { status: "succeeded" },
+			policyCurrent: false,
+			executionStatuses: ["completed", "submitted"],
+			generationBarrierPending: false,
+		};
+	}
+
+	it("drains a stale idle Sandbox under the current management authority and keeps it running", () => {
+		const input = upgradeFixture();
+		expect(planSessionSandboxUpgradeTransitionV1(input)).toEqual({
+			resourceFence: 4,
+			status: "unavailable",
+			desiredState: "stopped",
+			lifecycle: {
+				schemaVersion: 1,
+				reason: "upgrade",
+				authority: {
+					kind: "management",
+					applicationId: "application",
+					managementRevision: 5,
+					managementFence: 2,
+					workloadRevision: 2,
+					targetDesiredState: "running",
+				},
+				source: input.current,
+				stopReceipt: null,
+			},
+		});
+	});
+
+	it.each([
+		["a current policy", { policyCurrent: true }],
+		["a processing execution", { executionStatuses: ["processing"] }],
+		["an unknown execution", { executionStatuses: ["unknown"] }],
+		["a pending generation barrier", { generationBarrierPending: true }],
+		["an unfinished lifecycle", { intent: { status: "retry_scheduled" } }],
+		["a missing intent", { intent: null }],
+		[
+			"a Sandbox that is not ready",
+			{ allocation: { status: "unknown", desiredState: "running" } },
+		],
+		[
+			"a Sandbox already draining",
+			{ allocation: { status: "ready", desiredState: "stopped" } },
+		],
+	] as const)("leaves the Sandbox alone with %s", (_, override) => {
+		expect(
+			planSessionSandboxUpgradeTransitionV1({
+				...upgradeFixture(),
+				...override,
+			}),
+		).toBeNull();
+	});
+
+	it("never upgrades without complete source evidence or under another management state", () => {
+		const input = upgradeFixture();
+		for (const current of [
+			{ ...input.current, deployment: null },
+			{ ...input.current, policy: null },
+			{ ...input.current, observation: null },
+			{ ...input.current, resourceFence: 0 },
+		])
+			expect(
+				planSessionSandboxUpgradeTransitionV1({ ...input, current }),
+			).toBeNull();
+		for (const management of [
+			{ ...input.management, status: "stopped" as const },
+			{ ...input.management, desiredState: "stopped" as const },
+			{ ...input.management, agentId: "another-agent" },
+		])
+			expect(
+				planSessionSandboxUpgradeTransitionV1({ ...input, management }),
+			).toBeNull();
 	});
 });

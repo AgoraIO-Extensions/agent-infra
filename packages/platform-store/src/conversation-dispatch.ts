@@ -68,6 +68,7 @@ import {
 import {
 	isSessionSandboxPolicyCurrentV1,
 	readSessionSandboxRuntimeState,
+	readSessionSandboxUpgrading,
 } from "./session-sandbox.js";
 import {
 	claimSandboxReconciliation,
@@ -697,7 +698,16 @@ export class PostgresConversationDispatchStoreV1
 						!state.conversation.sandbox_ready &&
 						input.claim.operation !== "conversation.turn.stop.v1"
 					)
-						throw new DispatchCapacityUnavailable("capacity_wait");
+						// An upgrading Sandbox is this Session's own wait, not
+						// Agent capacity (ADR 0023).
+						throw new DispatchCapacityUnavailable(
+							(await readSessionSandboxUpgrading(
+								transaction,
+								input.claim.conversationId,
+							))
+								? "sandbox_wait"
+								: "capacity_wait",
+						);
 					if (
 						pendingIsolation &&
 						input.claim.operation !== "conversation.turn.stop.v1"

@@ -5,7 +5,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
 import { createAgentManagementV1 } from "@agent-infra/platform-core";
-import { PostgresAgentManagementTransactionV1 } from "@agent-infra/platform-store";
+import {
+	openPostgresWorkloadReconciliationStoreV1,
+	PostgresAgentManagementTransactionV1,
+} from "@agent-infra/platform-store";
 import { KubeConfig, type V1Pod } from "@kubernetes/client-node";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
@@ -377,6 +380,88 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 					/^DENIED_(HTTP_403|NETWORK_POLICY)$/,
 				);
 			}
+			// A new verified deployment upgrades each idle Sandbox in place:
+			// same Sandbox and PVC, new compute under the next fence (#1523).
+			const upgradedState = structuredClone(state);
+			upgradedState.revision = 2;
+			upgradedState.verifiedRevision = 2;
+			upgradedState.candidate = {
+				...version,
+				deployment: { ...desired, workloadRevision: 2 },
+			};
+			upgradedState.verified = upgradedState.candidate;
+			await sql`update platform.workload_reconciliations set revision = 2, state = ${sql.json(upgradedState)}, next_attempt_at = now() where agent_id = 'agent-kind'`;
+			// The periodic monitor step keeps the ready state; its write-back
+			// writes the upgrade intents, as in production.
+			const workloadStore = openPostgresWorkloadReconciliationStoreV1({
+				databaseUrl: database.databaseUrl,
+				retryDelayMs: 0,
+				monitorDelayMs: 3_600_000,
+			});
+			try {
+				expect(
+					await workloadStore.runNext("kind-workload-worker", async (input) => {
+						assert(input.state);
+						return input.state;
+					}),
+				).toBe("advanced");
+			} finally {
+				await workloadStore.close();
+			}
+			const upgradedRows = await eventually(
+				async () =>
+					sql`select sandbox_id, resource_name, resource_fence::int as resource_fence, status, resource_policy, resource_observation from platform.session_sandbox_allocations where conversation_id in ('session-kind-a', 'session-kind-b') order by conversation_id`,
+				(rows) =>
+					rows.length === 2 &&
+					rows.every(
+						(row) =>
+							row.status === "ready" &&
+							row.resource_fence === 2 &&
+							row.resource_policy?.workloadRevision === 2,
+					),
+			);
+			const identity = (
+				row: (typeof readyRows)[number] | (typeof upgradedRows)[number],
+				kind: string,
+			) =>
+				(
+					row.resource_observation as {
+						resources: Array<{ kind: string; uid: string }>;
+					}
+				).resources.find((resource) => resource.kind === kind)?.uid;
+			for (const [index, row] of upgradedRows.entries()) {
+				const before = readyRows[index];
+				assert(before);
+				expect(row.sandbox_id).toBe(before.sandbox_id);
+				expect(row.resource_name).toBe(before.resource_name);
+				expect(identity(row, "PersistentVolumeClaim")).toBe(
+					identity(before, "PersistentVolumeClaim"),
+				);
+				expect(identity(row, "Pod")).not.toBe(identity(before, "Pod"));
+				const pod = await client.read<V1Pod>(
+					"Pod",
+					row.resource_name as string,
+				);
+				expect(pod?.metadata?.annotations).toMatchObject({
+					"agent-infra.agora.io/fence": "2",
+				});
+			}
+			await kubectl(
+				"wait",
+				"pods",
+				"--all",
+				"--for=condition=Ready",
+				"--timeout=120s",
+			);
+			for (const target of [a, b])
+				await kubectl(
+					"exec",
+					workerProbe,
+					"--",
+					"node",
+					"-e",
+					`fetch('http://${target}.${namespace}.svc:8080/healthz',{signal:AbortSignal.timeout(2500)}).then(async r=>{const body=await r.json();if(r.status!==200||body.marker!=='retained')process.exit(2)}).catch(()=>process.exit(3))`,
+				);
 			const managementTransaction = new PostgresAgentManagementTransactionV1({
 				databaseUrl: database.databaseUrl,
 			});
@@ -440,7 +525,7 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 			await mkdir(evidenceDirectory, { recursive: true });
 			await writeFile(
 				`${evidenceDirectory}/session-sandbox-isolation.json`,
-				`${JSON.stringify({ schemaVersion: 1, namespace, context: process.env.WORKLOAD_KIND_CONTEXT, databaseRows: readyRows, stoppedRows, crossSessionAccess: "denied", lifecycle: "stopped-with-retained-PVC", evidenceKind: "controlled-runtime" }, null, 2)}\n`,
+				`${JSON.stringify({ schemaVersion: 1, namespace, context: process.env.WORKLOAD_KIND_CONTEXT, databaseRows: readyRows, upgradedRows, stoppedRows, crossSessionAccess: "denied", upgrade: "same-sandbox-and-PVC", lifecycle: "stopped-with-retained-PVC", evidenceKind: "controlled-runtime" }, null, 2)}\n`,
 			);
 			await kubectl(
 				"delete",

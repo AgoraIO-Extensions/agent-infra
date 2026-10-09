@@ -26,6 +26,7 @@ import { PostgresAgentManagementTransactionV1 } from "./agent-management.js";
 import { PostgresConversationDispatchStoreV1 } from "./conversation-dispatch.ts";
 import { PostgresConversationEventTransactionV1 } from "./conversation-events.ts";
 import { PostgresConversationExecutionTransactionV1 } from "./conversation-execution.ts";
+import { PostgresConversationQueryV1 } from "./conversation-query.ts";
 import { migratePlatformDatabase } from "./migrate.ts";
 import {
 	type PostgresTestDatabase,
@@ -35,7 +36,12 @@ import {
 	markSessionSandboxReadyFixture,
 	seedSessionSandboxFixture,
 } from "./session-sandbox.fixture.ts";
-import { readSessionSandboxRuntimeState } from "./session-sandbox.ts";
+import {
+	readSessionSandboxRuntimeState,
+	readSessionSandboxUpgrading,
+} from "./session-sandbox.ts";
+import { persistSessionSandboxUpgradeIntents } from "./session-sandbox-upgrade.ts";
+import { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.ts";
 
 let databaseUrl = "";
 let client: ReturnType<typeof postgres>;
@@ -5510,4 +5516,506 @@ describe("waiting Task original Store promotion", () => {
 			},
 		);
 	}
+});
+
+describe("idle Session Sandbox upgrade (#1523)", () => {
+	const sandboxPolicy = {
+		namespace: workloadTestPolicy.namespace,
+		resourceConfigurationHash:
+			workloadResourceConfigurationHashV1(workloadTestPolicy),
+	};
+	const kinds = [
+		"Pod",
+		"Service",
+		"ServiceAccount",
+		"PersistentVolumeClaim",
+		"NetworkPolicy",
+		"Secret",
+	] as const;
+	const sandboxStore = () =>
+		new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			sandboxPolicy,
+			userDirectory: {
+				async resolveUser(userId) {
+					return {
+						schemaVersion: 1,
+						userId,
+						accountStatus: "active",
+						organizationIds: [],
+						authorizationRevision: "directory-current",
+					};
+				},
+			},
+		});
+
+	/** The state a production prepare leaves: verified policy, six owned
+	 * resources and the settled original intent carrying its deployment. */
+	async function prepared(work: { conversationId: string }) {
+		const [workload] =
+			await client`select state from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+		const [allocation] = await client<
+			{
+				sandbox_id: string;
+				resource_name: string;
+				resource_policy: Record<string, unknown>;
+			}[]
+		>`select sandbox_id, resource_name, resource_policy from platform.session_sandbox_allocations where conversation_id = ${work.conversationId}`;
+		if (!allocation) throw new Error("Expected allocation");
+		const resources = kinds.map((kind) => ({
+			kind,
+			namespace: sandboxPolicy.namespace,
+			name: allocation.resource_name,
+			uid: `${allocation.sandbox_id}-${kind}`,
+			resourceVersion: "1",
+		}));
+		await client`update platform.session_sandbox_allocations set
+			resource_policy = ${client.json({ ...allocation.resource_policy, namespace: sandboxPolicy.namespace } as Parameters<typeof client.json>[0])},
+			resource_observation = ${client.json({ status: "ready", resources })}
+			where conversation_id = ${work.conversationId}`;
+		const itemId = `conversation:sandbox:${work.conversationId}:1`;
+		await client`insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id, status,
+			 available_at, created_at, updated_at)
+			values (${itemId}, 'conversation', ${work.conversationId}, 'conversation.sandbox.reconcile.v1',
+				${client.json({
+					schemaVersion: 1,
+					conversationId: work.conversationId,
+					sessionGeneration: 1,
+					deployment: workload!.state.verified.deployment,
+					modelProjection: null,
+				})}, 'trace-prepared', 'request-prepared', 'succeeded', now(), now(), now())`;
+		return { itemId, resources, sandboxId: allocation.sandbox_id };
+	}
+
+	/** A configuration change re-verifies the Workload at revision 7 while the
+	 * management lifecycle stays at revision 4 (#1480). */
+	async function reverify() {
+		await client`update platform.workload_reconciliations set revision = 7, state = state
+			|| jsonb_build_object('revision', 7, 'verifiedRevision', 7)
+			|| jsonb_build_object(
+				'candidate', jsonb_set(state->'candidate', '{deployment,workloadRevision}', '7'::jsonb),
+				'verified', jsonb_set(state->'verified', '{deployment,workloadRevision}', '7'::jsonb))
+			where agent_id = 'agent-dispatch'`;
+	}
+
+	function upgrade() {
+		return client.begin(async (transaction) => {
+			// The Workload write-back already holds this Agent row lock.
+			await transaction`select id from platform.agents where id = 'agent-dispatch' for update`;
+			return persistSessionSandboxUpgradeIntents(transaction, {
+				agentId: "agent-dispatch",
+				workerId: "workload-worker",
+				traceId: "upgrade-trace",
+				requestId: "upgrade-request",
+			});
+		});
+	}
+
+	async function sandboxState(conversationId: string) {
+		const [row] = await client`
+			select a.desired_state, a.status, a.resource_fence::int as resource_fence,
+				o.status as intent_status, o.payload
+			from platform.session_sandbox_allocations a
+			join platform.outbox_items o on o.scope_id = a.conversation_id
+				and o.operation = 'conversation.sandbox.reconcile.v1'
+			where a.conversation_id = ${conversationId}`;
+		return row;
+	}
+
+	it("writes one upgrade intent per idle stale Sandbox and leaves busy or current ones alone", async () => {
+		// A claimed Turn waiting for the Sandbox already carries a delivery fence.
+		const idle = await seed("conversation.turn.submit.v1", {
+			executionFence: 2,
+		});
+		const processing = await seed("conversation.turn.submit.v1", {
+			executionStatus: "processing",
+		});
+		const unknown = await seed("conversation.turn.submit.v1", {
+			executionStatus: "unknown",
+		});
+		const idleSandbox = await prepared(idle);
+		await prepared(processing);
+		await prepared(unknown);
+		const [before] =
+			await client`select resource_policy from platform.session_sandbox_allocations where conversation_id = ${idle.conversationId}`;
+
+		await expect(upgrade()).resolves.toBe(0);
+		await reverify();
+		await expect(upgrade()).resolves.toBe(1);
+
+		const state = await sandboxState(idle.conversationId);
+		expect(state).toMatchObject({
+			desired_state: "stopped",
+			status: "unavailable",
+			resource_fence: 2,
+			intent_status: "pending",
+			payload: {
+				schemaVersion: 1,
+				conversationId: idle.conversationId,
+				sessionGeneration: 1,
+				lifecycle: {
+					schemaVersion: 1,
+					reason: "upgrade",
+					authority: {
+						kind: "management",
+						applicationId: "application-agent-dispatch",
+						managementRevision: 1,
+						managementFence: 4,
+						workloadRevision: 4,
+						targetDesiredState: "running",
+					},
+					source: {
+						resourceFence: 1,
+						policy: before!.resource_policy,
+						observation: { status: "ready", resources: idleSandbox.resources },
+					},
+					stopReceipt: null,
+				},
+				deployment: expect.objectContaining({ workloadRevision: 4 }),
+			},
+		});
+		for (const busy of [processing, unknown])
+			expect(await sandboxState(busy.conversationId)).toMatchObject({
+				desired_state: "running",
+				status: "ready",
+				resource_fence: 1,
+				intent_status: "succeeded",
+			});
+		expect(
+			await client`select actor_type, actor_id, target_id, details from platform.audit_events where action = 'conversation.sandbox.upgrade_requested'`,
+		).toEqual([
+			{
+				actor_type: "system",
+				actor_id: "workload-worker",
+				target_id: idleSandbox.sandboxId,
+				details: {
+					conversationId: idle.conversationId,
+					reason: "upgrade",
+					sourceResourceFence: 1,
+					resourceFence: 2,
+				},
+			},
+		]);
+		// A periodic write-back never re-plans an unfinished upgrade.
+		await expect(upgrade()).resolves.toBe(0);
+		expect(await sandboxState(idle.conversationId)).toEqual(state);
+		// Once the busy Session settles, the next write-back upgrades it.
+		await client`update platform.conversation_executions set status = 'completed' where execution_id = ${processing.executionId}`;
+		await expect(upgrade()).resolves.toBe(1);
+		expect(await sandboxState(processing.conversationId)).toMatchObject({
+			desired_state: "stopped",
+			intent_status: "pending",
+		});
+		expect(await sandboxState(unknown.conversationId)).toMatchObject({
+			desired_state: "running",
+			intent_status: "succeeded",
+		});
+	});
+
+	it("upgrades from the periodic ready Workload write-back, never from a discarded step", async () => {
+		await seedCapacityAgent("agent-dispatch", 8, "custom");
+		const [seeded] =
+			await client`select state->'verified'->'configuration' as configuration from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+		await client`insert into platform.agent_configuration_revisions
+			(agent_id, revision, source_reference, created_at, configuration)
+			values ('agent-dispatch', 4, 'upgrade-test-source', now(), ${client.json(seeded?.configuration)})`;
+		const idle = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		await prepared(idle);
+		await reverify();
+		const before = await sandboxState(idle.conversationId);
+		const workload = openPostgresWorkloadReconciliationStoreV1({
+			databaseUrl,
+			retryDelayMs: 0,
+			monitorDelayMs: 0,
+		});
+		try {
+			// A writer commits during the step: the result is discarded unwritten.
+			await expect(
+				workload.runNext("workload-worker", async (input) => {
+					await client`update platform.agent_applications set management_revision = 2 where agent_id = 'agent-dispatch'`;
+					return input.state!;
+				}),
+			).resolves.toBe("advanced");
+			expect(await sandboxState(idle.conversationId)).toEqual(before);
+			await client`update platform.workload_reconciliations set next_attempt_at = now() where agent_id = 'agent-dispatch'`;
+			// The monitor step keeps the ready state; its write-back upgrades.
+			await expect(
+				workload.runNext("workload-worker", async (input) => input.state!),
+			).resolves.toBe("advanced");
+			expect(await sandboxState(idle.conversationId)).toMatchObject({
+				desired_state: "stopped",
+				status: "unavailable",
+				intent_status: "pending",
+				payload: {
+					lifecycle: {
+						reason: "upgrade",
+						authority: { managementRevision: 2 },
+					},
+				},
+			});
+		} finally {
+			await workload.close();
+		}
+	});
+
+	it("rolls back every upgrade write with the failed write-back transaction", async () => {
+		const idle = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		await prepared(idle);
+		await reverify();
+		const before = await sandboxState(idle.conversationId);
+		await expect(
+			client.begin(async (transaction) => {
+				await transaction`select id from platform.agents where id = 'agent-dispatch' for update`;
+				await persistSessionSandboxUpgradeIntents(transaction, {
+					agentId: "agent-dispatch",
+					workerId: "workload-worker",
+					traceId: "upgrade-trace",
+					requestId: "upgrade-request",
+				});
+				throw new Error("controlled write-back failure");
+			}),
+		).rejects.toThrow("controlled write-back failure");
+		expect(await sandboxState(idle.conversationId)).toEqual(before);
+		expect(
+			await client`select 1 from platform.audit_events where action = 'conversation.sandbox.upgrade_requested'`,
+		).toHaveLength(0);
+	});
+
+	it("drains and re-prepares the same Sandbox and PVC under the new deployment while the waiting Turn keeps its place", async () => {
+		const work = await seed();
+		await client`insert into platform.agent_owners (agent_id,owner_id,created_at) values ('agent-dispatch','owner-a',now()),('agent-dispatch','actor-dispatch',now())`;
+		const sandbox = await prepared(work);
+		await reverify();
+		const turn = await claim(work.itemId);
+		const query = new PostgresConversationQueryV1({ databaseUrl });
+		let store = sandboxStore();
+		try {
+			if (turn.decision.outcome !== "claimed")
+				throw new Error("Expected claim");
+			await expect(
+				turn.store.prepareRuntimeDispatch({
+					claim: turn.decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe("sandbox_wait");
+			await expect(upgrade()).resolves.toBe(1);
+			// Not ready because of the upgrade: the Session's own wait, no occupancy.
+			const waiting = await dispatchState(work);
+			await expect(
+				turn.store.prepareRuntimeDispatch({
+					claim: turn.decision.claim,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe("sandbox_wait");
+			expect(await dispatchState(work)).toEqual(waiting);
+			expect(waiting).toMatchObject({ execution_status: "submitted" });
+			await expect(
+				client.begin((transaction) =>
+					readSessionSandboxUpgrading(transaction, work.conversationId),
+				),
+			).resolves.toBe(true);
+			await expect(
+				query.get(
+					{ actorId: "actor-dispatch", channelId: "web" },
+					work.conversationId,
+				),
+			).resolves.toMatchObject({
+				conversation: { sandboxReady: false, sandboxUpdating: true },
+			});
+
+			const request = {
+				schemaVersion: 1 as const,
+				itemId: sandbox.itemId,
+				workerId: "sandbox-worker",
+				leaseDurationMs: 30_000,
+			};
+			const claimed = await store.claimSandboxReconciliation(request);
+			if (!claimed?.lifecycle) throw new Error("Expected drain claim");
+			let drain: SessionSandboxReconciliationClaimV1 = claimed;
+			expect(drain).toMatchObject({
+				purpose: "drain",
+				desiredState: "stopped",
+				resourceFence: 2,
+				drainComputeAllowed: true,
+				lifecycle: { reason: "upgrade", stopReceipt: null },
+			});
+			const resources = sandbox.resources;
+			for (const resource of resources.filter(
+				(resource) => resource.kind !== "PersistentVolumeClaim",
+			)) {
+				const intent = {
+					schemaVersion: 1 as const,
+					state: "delete-requested" as const,
+					deleteAttemptId: `upgrade-delete-${resource.kind}`,
+					deleteAttempted: false,
+					deleteCallResult: "not-attempted" as const,
+					sourceGeneration: 1,
+					resourceFence: 1,
+					managementFence: drain.lifecycle!.authority.managementFence,
+					resource,
+					preconditions: {
+						uid: resource.uid,
+						resourceVersion: resource.resourceVersion,
+					},
+				};
+				for (const progress of [
+					intent,
+					{
+						...intent,
+						state: "absent" as const,
+						deleteAttempted: resource.kind !== "NetworkPolicy",
+						deleteCallResult:
+							resource.kind === "NetworkPolicy"
+								? ("not-attempted" as const)
+								: ("acknowledged" as const),
+						absence: {
+							kind: resource.kind,
+							namespace: resource.namespace,
+							name: resource.name,
+						},
+					},
+				]) {
+					const result = await store.recordSandboxDeletionProgress({
+						claim: drain,
+						progress,
+						leaseDurationMs: 30_000,
+					});
+					if (result.status !== "committed")
+						throw new Error(`Expected ${resource.kind} progress`);
+					drain = result.claim;
+				}
+			}
+			const pvc = resources.find(
+				(resource) => resource.kind === "PersistentVolumeClaim",
+			)!;
+			const receipt = {
+				schemaVersion: 1 as const,
+				sandboxId: drain.sandbox.sandboxId,
+				sessionId: drain.sandbox.sessionId,
+				sourceGeneration: 1,
+				sourceResourceFence: 1,
+				targetGeneration: 1,
+				targetResourceFence: 2,
+				removed: resources
+					.filter((resource) => resource.kind !== "PersistentVolumeClaim")
+					.map((resource) => ({
+						resource,
+						preconditions: {
+							uid: resource.uid,
+							resourceVersion: resource.resourceVersion,
+						},
+						absence: {
+							kind: resource.kind,
+							namespace: resource.namespace,
+							name: resource.name,
+						},
+					})),
+				retainedPVC: pvc,
+			};
+			await expect(
+				store.recordSandboxObservation({
+					claim: drain,
+					observation: {
+						status: "stopped",
+						resources: [pvc],
+						sourceStop: receipt,
+					},
+				}),
+			).resolves.toBe("committed");
+			await client`update platform.outbox_items set available_at = now() where id = ${sandbox.itemId}`;
+			await store.close();
+			store = sandboxStore();
+			const replacement = await store.claimSandboxReconciliation(request);
+			if (!replacement) throw new Error("Expected replacement preparation");
+			expect(replacement).toMatchObject({
+				purpose: "prepare",
+				desiredState: "running",
+				sandbox: drain.sandbox,
+				resourceFence: 2,
+				policy: { workloadRevision: 7, namespace: sandboxPolicy.namespace },
+				deployment: { workloadRevision: 7 },
+				lifecycle: { reason: "upgrade", stopReceipt: receipt },
+			});
+			await expect(
+				store.prepareSandboxReconciliation({
+					claim: replacement,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe(true);
+			const rebuilt = resources.map((resource) =>
+				resource.kind === "PersistentVolumeClaim"
+					? resource
+					: {
+							...resource,
+							uid: `upgraded-${resource.uid}`,
+							resourceVersion: "2",
+						},
+			);
+			await expect(
+				store.recordSandboxObservation({
+					claim: replacement,
+					observation: { status: "ready", resources: rebuilt },
+				}),
+			).resolves.toBe("committed");
+			const [allocation] = await client`
+				select sandbox_id, status, desired_state, resource_fence::int as resource_fence,
+					resource_policy->>'workloadRevision' as workload_revision,
+					resource_observation from platform.session_sandbox_allocations
+				where conversation_id = ${work.conversationId}`;
+			expect(allocation).toMatchObject({
+				sandbox_id: sandbox.sandboxId,
+				status: "ready",
+				desired_state: "running",
+				resource_fence: 2,
+				workload_revision: "7",
+			});
+			expect(
+				allocation!.resource_observation.resources.find(
+					(resource: { kind: string }) =>
+						resource.kind === "PersistentVolumeClaim",
+				),
+			).toEqual(pvc);
+			await expect(
+				client.begin((transaction) =>
+					readSessionSandboxUpgrading(transaction, work.conversationId),
+				),
+			).resolves.toBe(false);
+			await expect(
+				query.get(
+					{ actorId: "actor-dispatch", channelId: "web" },
+					work.conversationId,
+				),
+			).resolves.toMatchObject({ conversation: { sandboxReady: true } });
+			// The same queued Turn now dispatches on the upgraded Sandbox.
+			await turn.store.close();
+			await client`update platform.outbox_items set status = 'pending', lease_owner = null, lease_expires_at = null, available_at = now() where id = ${work.itemId}`;
+			const resumed = await claim(work.itemId, "worker-after-upgrade");
+			try {
+				if (resumed.decision.outcome !== "claimed")
+					throw new Error("Expected the waiting Turn to resume");
+				await expect(
+					resumed.store.prepareRuntimeDispatch({
+						claim: resumed.decision.claim,
+						leaseDurationMs: 30_000,
+					}),
+				).resolves.toBe(true);
+				expect(await dispatchState(work)).toMatchObject({
+					execution_status: "unknown",
+				});
+			} finally {
+				await resumed.store.close();
+			}
+		} finally {
+			await Promise.allSettled([
+				turn.store.close(),
+				store.close(),
+				query.close(),
+			]);
+		}
+	});
 });
