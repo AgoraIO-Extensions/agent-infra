@@ -583,6 +583,41 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 			}
 		});
 
+		it("continues with the recovery control Grant once the Platform records a Host-confirmed finish (#1554)", async () => {
+			const h = runtimeV4Harness();
+			try {
+				const reference = await h.authorize();
+				pages(h);
+				const stream = h.runtime.runtimeHost
+					.events(h.events(reference))
+					[Symbol.asyncIterator]();
+				expect((await stream.next()).value).toEqual(modelFact);
+				// Core persisted the confirmed terminal status under its lease.
+				Object.assign(h.state, {
+					runtimeCursor: "model-cursor",
+					executionStatus: "completed",
+				});
+				expect((await stream.next()).value).toEqual(terminal);
+				expect((await stream.next()).done).toBe(true);
+				const reads = h.fetcher.mock.calls.map(([, init]) =>
+					JSON.parse(init?.body as string),
+				);
+				expect(reads).toHaveLength(2);
+				expect(verifyControl(reads[0].grant).claims.purpose).toBe("business");
+				expect(verifyControl(reads[1].grant).claims).toMatchObject({
+					purpose: "control",
+					reason: "recovery",
+					allowedCommands: ["events.persist"],
+				});
+				// No business renewal is possible after the switch.
+				await expect(
+					h.runtime.runtimeHost.renewAuthorization?.(h.events(reference)),
+				).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
+			} finally {
+				h.runtime.close();
+			}
+		});
+
 		it("signs the next read for control once the user is disabled between pages", async () => {
 			const h = runtimeV4Harness();
 			try {

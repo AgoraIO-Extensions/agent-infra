@@ -37,6 +37,7 @@ import {
 	ConversationRuntimeHostError,
 	type ConversationRuntimeHostPortV1,
 	type ConversationRuntimeOperationResponseV1,
+	type ConversationRuntimeStatusResponseV2,
 	type ConversationRuntimeStatusV1,
 } from "./conversation-dispatch-types.js";
 import { exactObject, unavailable } from "./conversation-dispatch-values.js";
@@ -135,6 +136,14 @@ export function createConversationDispatchUseCaseV1(
 				? responseStatus
 				: undefined;
 		let finalStatus = responseFinalStatus;
+		// Host-confirmed terminal status for a Turn that finished while its
+		// events were still being drained (#1554); it guards later transitions
+		// exactly like a terminal status response does.
+		let confirmedFinalStatus: typeof responseFinalStatus;
+		// The Host refused renewing the business authority. That alone is
+		// ambiguous (finished, stopped, revoked or fenced); the drain loop
+		// resolves it before persisting the next event.
+		let renewalRefused = false;
 		let terminalEventSeen =
 			claim.runtimeTerminalEventSeen === true ||
 			claim.metadataRecovery !== undefined;
@@ -166,14 +175,86 @@ export function createConversationDispatchUseCaseV1(
 				!authority.controlOnly &&
 				dependencies.runtimeHost.renewAuthorization
 				? async (signal) => {
-						if (!terminalCommitPossible)
+						if (terminalCommitPossible || renewalRefused) return;
+						try {
 							await dependencies.runtimeHost.renewAuthorization?.(
 								eventRequest,
 								signal,
 							);
+						} catch (error) {
+							// The Host renews only a running Turn. A Turn that finished
+							// before its events were read is drained in this same claim
+							// once the Host confirms the finish (Spec §9.3).
+							if (
+								!isTurnOperation(claim.operation) ||
+								!dependencies.runtimeHost.recoverOriginalStatus ||
+								!(error instanceof ConversationRuntimeHostError) ||
+								error.code !== "RUNTIME_GRANT_INVALID"
+							)
+								throw error;
+							renewalRefused = true;
+						}
 					}
 				: undefined,
 		);
+		// Positive Host proof that the original Turn finished. It is persisted
+		// under the live lease like a terminal status response, so the Worker
+		// continues the drain with the control-purpose recovery Grant.
+		const confirmFinished = async (): Promise<"drain" | "interrupted"> => {
+			const recover = dependencies.runtimeHost.recoverOriginalStatus;
+			if (!recover) return "interrupted";
+			let status: ConversationRuntimeStatusResponseV2;
+			try {
+				status = parseRuntimeStatusResponse(
+					await recover(
+						{
+							schemaVersion: 2,
+							requestId: claim.requestId,
+							traceId: claim.traceId,
+							agentId: claim.agentId,
+							actorId: claim.actorId,
+							channelId: claim.channelId,
+							conversationId: claim.conversationId,
+							executionId: claim.executionId,
+							turnId: claim.turnId,
+							sessionGeneration: claim.sessionGeneration,
+							deliveryFence: claim.executionDeliveryFence,
+							hostSessionRef,
+							runtimeGrant: authority.runtimeGrant,
+						},
+						eventHeartbeat.signal,
+					),
+					{ ...claim, hostSessionRef },
+				);
+			} catch {
+				return "interrupted";
+			}
+			if (
+				status.outcome !== "found" ||
+				(status.status !== "completed" &&
+					status.status !== "failed" &&
+					status.status !== "cancelled")
+			)
+				return "interrupted";
+			const transition = acceptedTransition(status.status);
+			try {
+				if (
+					!transition ||
+					!(await dependencies.store.recordRuntimeResponse({
+						claim,
+						hostSessionRef,
+						transition,
+					}))
+				)
+					return "interrupted";
+			} catch {
+				return "interrupted";
+			}
+			confirmedFinalStatus = status.status;
+			finalStatus = status.status;
+			terminalCommitPossible = true;
+			return "drain";
+		};
 		// An authorization renewal can fail after the lease was renewed, notably
 		// when stop changes the stream to control-only recovery. The Store must
 		// recheck ownership before releasing it; heartbeat failure alone is not
@@ -220,6 +301,13 @@ export function createConversationDispatchUseCaseV1(
 				const event = normalizedEvent(runtimeEvent);
 				const transition = transitionFromEvent(event);
 				const eventFinalStatus = terminalStatus(event);
+				if (
+					renewalRefused &&
+					!terminalCommitPossible &&
+					!eventFinalStatus &&
+					(await confirmFinished()) === "interrupted"
+				)
+					return retryInterruptedDrain();
 				const connectionMetadata =
 					event.type === "execution.operation" &&
 					event.fact.kind === "tool" &&
@@ -255,7 +343,9 @@ export function createConversationDispatchUseCaseV1(
 						// The transaction checks the original persisted attempt and outcome.
 						...(terminalEventSeen ? { operationMetadataOnly: true } : {}),
 						...(transition &&
-						(!responseFinalStatus || terminalEventSeen || eventFinalStatus)
+						(!(responseFinalStatus ?? confirmedFinalStatus) ||
+							terminalEventSeen ||
+							eventFinalStatus)
 							? { transition }
 							: {}),
 						dispatchLease: {
@@ -289,7 +379,10 @@ export function createConversationDispatchUseCaseV1(
 			await acknowledgeCommitted();
 		} catch (error) {
 			const current = await eventHeartbeat.stop();
-			if (!current) return retryInterruptedDrain();
+			// An unresolved refusal keeps today's recovery path; it never turns
+			// an expired business read into a failed Turn.
+			if (!current || (renewalRefused && !terminalCommitPossible))
+				return retryInterruptedDrain();
 			const failure = runtimeFailure(error);
 			return failure.retryable
 				? retry(
@@ -309,7 +402,10 @@ export function createConversationDispatchUseCaseV1(
 		} finally {
 			await eventHeartbeat.stop();
 		}
-		if (eventHeartbeat.signal.aborted) {
+		if (
+			eventHeartbeat.signal.aborted ||
+			(renewalRefused && !terminalCommitPossible)
+		) {
 			return retryInterruptedDrain();
 		}
 		if (!finalStatus) {
