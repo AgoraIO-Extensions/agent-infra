@@ -292,6 +292,27 @@ approval fence 和既有账号升级回归门禁。存在 migration 变化时拒
 生效。它不触发 bootstrap，不自动创建业务对象、升级用户授权或执行 Provider WRITE。
 
 `connection:gz3:release` 只保留发布/预检兼容别名；包含 `--deploy` 时在外部副作用前立即拒绝。
+
+#### 经评审的 schema 迁移发布
+
+存在新迁移时，普通发布继续拒绝。仅当变更是新增版本化 SQL 和追加 journal，且精确字节已包含在
+同仓库已合并、当前 head CI/review 成功的 PR 中，才使用显式模式：
+
+```bash
+pnpm connection:release connection-vX.Y.Z --publish --deploy \
+  --kubeconfig "$CONNECTION_KUBECONFIG" --reviewed-migrations-pr <migration-pr-number>
+```
+
+预检验证来源、旧 journal/SQL 不被重写、上海目标、数据库/TLS 和 Job 的 server dry-run，不执行迁移。
+发布先生成精确 SHA 镜像；部署确认 GHCR 成功后，创建单次 `connection-migrate-<version>` Job。
+它仅运行镜像内的 `bootstrap-production.mjs` schema 角色，只注入既有上海 DATABASE_URL Secret 与
+只读 RDS CA，不注入 Provider/LDAP 密钥，不装载账户/授权服务，不自动重试或删除 Job。
+迁移角色先检查旧 Drizzle 账本是提交历史的完整前缀，再执行正式 migrator，最后核验全部提交 SQL 摘要。
+只有 Job 成功且唯一回执与候选提交全部 migration hash 匹配，才执行 API/Web 的 image-only 更新。
+
+响应丢失时可回读同一 SHA/镜像/配置的成功 Job，不重新执行迁移。失败、未知、配置不符或账本漂移时
+保留现场并阻止镜像更新；不能覆盖历史 migration、手改账本、切换数据库或以业务 bootstrap 绕过。
+上线前评审新 SQL 与旧应用兼容性、锁影响和回滚点，通常保留已追加 schema 并只回滚兼容镜像。
 不要重新安装 `connection-gz3`、使用旧 Helm chart 的固定副本设置或恢复 GZ3 写入角色。
 
 ### 发布后验收

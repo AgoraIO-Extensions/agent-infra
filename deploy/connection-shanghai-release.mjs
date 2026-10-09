@@ -1,6 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import {
+	applyReviewedMigrations,
+	migrationJob,
+	reviewedMigrationPlan,
+} from "./connection-reviewed-migrations.mjs";
 
 class ReleaseError extends Error {}
 
@@ -17,11 +22,12 @@ function requireCondition(condition, message) {
 	if (!condition) throw new ReleaseError(message);
 }
 
-function execute(command, args) {
+function execute(command, args, input) {
 	try {
 		return execFileSync(command, args, {
 			encoding: "utf8",
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: [input ? "pipe" : "ignore", "pipe", "pipe"],
+			input,
 			maxBuffer: 16 * 1024 * 1024,
 		}).trim();
 	} catch {
@@ -159,7 +165,7 @@ export function validatePublishedRun(run, sha) {
 	);
 }
 
-function publishedRelease(version) {
+function publishedRelease(version, migrationPr) {
 	requireCondition(
 		!execute("git", ["status", "--porcelain"]),
 		"Use a clean release worktree",
@@ -202,14 +208,15 @@ function publishedRelease(version) {
 		baselineSha,
 		"A previous canonical Connection release is required",
 	);
-	execute("git", [
+	const migrationChanged = execute("git", [
 		"diff",
-		"--exit-code",
+		"--name-only",
 		baselineSha,
 		sha,
 		"--",
 		"migrations/connection",
 	]);
+	if (migrationChanged) reviewedMigrationPlan(migrationPr, baselineSha, sha);
 	execute("node", [
 		".github/scripts/connection-release-guard.mjs",
 		"--baseline",
@@ -235,9 +242,9 @@ function publishedRelease(version) {
 }
 
 export async function main(args = process.argv.slice(2)) {
-	const [mode, version, kubeconfig] = args;
+	const [mode, version, kubeconfig, migrationPr] = args;
 	requireCondition(
-		args.length === 3 && ["--preflight", "--deploy"].includes(mode),
+		[3, 4].includes(args.length) && ["--preflight", "--deploy"].includes(mode),
 		"Usage: --preflight|--deploy connection-vX.Y.Z KUBECONFIG",
 	);
 	const updates = imageUpdates(version);
@@ -286,8 +293,67 @@ export async function main(args = process.argv.slice(2)) {
 	console.log(
 		"Shanghai target, single writer, database/TLS and image-only patch preflight passed",
 	);
+	let migrationContext;
+	if (migrationPr) {
+		const tags = execute("git", [
+			"ls-remote",
+			"--tags",
+			"--refs",
+			"origin",
+			"refs/tags/connection-v*",
+		])
+			.split("\n")
+			.map((line) => line.split(/\s+/))
+			.filter(
+				([, ref]) =>
+					ref &&
+					ref !== `refs/tags/${version}` &&
+					/^refs\/tags\/connection-v\d+\.\d+\.\d+$/.test(ref),
+			)
+			.sort((a, b) => b[1].localeCompare(a[1], "en", { numeric: true }));
+		const plan = reviewedMigrationPlan(migrationPr, tags[0][0]);
+		const job = migrationJob(version, plan, api, shanghai);
+		const createJob = (manifest) =>
+			execute(
+				binary,
+				[
+					"--kubeconfig",
+					kubeconfig,
+					"--request-timeout=20s",
+					"-n",
+					shanghai.namespace,
+					"create",
+					"-f",
+					"-",
+				],
+				JSON.stringify(manifest),
+			);
+		execute(
+			binary,
+			[
+				"--kubeconfig",
+				kubeconfig,
+				"--request-timeout=20s",
+				"-n",
+				shanghai.namespace,
+				"create",
+				"--dry-run=server",
+				"-f",
+				"-",
+			],
+			JSON.stringify(job),
+		);
+		migrationContext = { plan, job, createJob };
+	}
 	if (mode === "--preflight") return;
-	publishedRelease(version);
+	publishedRelease(version, migrationPr);
+	if (migrationContext) {
+		const { plan, job, createJob } = migrationContext;
+		await applyReviewedMigrations(kube, job, plan, createJob);
+		console.log(
+			"Reviewed schema migration Job and committed ledger hashes verified",
+		);
+	}
 	console.log(
 		JSON.stringify({
 			previousImages: [api, web].map((deployment) => ({
