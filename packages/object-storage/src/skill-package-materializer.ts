@@ -530,6 +530,8 @@ export class SkillPackageMaterializerV1 {
 			}
 			await this.#readGeneration(result.generationId);
 			await syncDirectory(generations);
+			// Persist the generations parent entry before CURRENT can select it.
+			await syncDirectory(this.#root);
 			for (const input of packages) await this.#verifyAdmission(input);
 			await this.#assertRoot();
 			temporary = join(this.#root, `.current-${randomUUID()}`);

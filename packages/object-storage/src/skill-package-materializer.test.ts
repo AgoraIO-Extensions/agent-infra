@@ -494,15 +494,12 @@ it("accepts maximum-size canonical manifests from the governed ZIP file/path lim
 	expect(await adapter.readCurrent()).toEqual(result);
 }, 30000);
 
-it("cleans only its sealed staging tree after a filesystem publication failure", async () => {
+it("keeps the first generation unpublished when its parent directory cannot be persisted", async () => {
 	const assemblyRoot = await root();
-	const adapter = materializer(assemblyRoot);
-	const original = await adapter.materialize({ packages: [selection] });
-	const upgraded = await selectionFor("2.0.0");
 	const script = `
  import fs from 'node:fs/promises';import {syncBuiltinESMExports} from 'node:module';
- const rename=fs.rename;
- fs.rename=async(source,target)=>{if(target.includes('/generations/'))throw Object.assign(new Error('injected filesystem failure'),{code:'EIO'});await rename(source,target);};syncBuiltinESMExports();
+ const open=fs.open;
+ fs.open=async(path,...args)=>{const handle=await open(path,...args);if(path===process.env.ASSEMBLY_ROOT)handle.sync=async()=>{throw Object.assign(new Error('injected root fsync failure'),{code:'EIO'});};return handle;};syncBuiltinESMExports();
  const {SkillPackageMaterializerV1}=await import(process.env.MATERIALIZER_MODULE);
  const adapter=new SkillPackageMaterializerV1({assemblyRoot:process.env.ASSEMBLY_ROOT,runtimeUid:65534,verifyAdmission:async()=>{},readPackage:async object=>({...object,bytes:Buffer.from(process.env.ARCHIVE,'base64')})});
  try{await adapter.materialize({packages:[JSON.parse(process.env.PACKAGE_SELECTION)]});process.exit(1);}catch(error){process.exit(error.code==='unavailable'?0:2);}
@@ -515,7 +512,7 @@ it("cleans only its sealed staging tree after a filesystem publication failure",
 				...process.env,
 				MATERIALIZER_MODULE: new URL("../dist/index.mjs", import.meta.url).href,
 				ASSEMBLY_ROOT: assemblyRoot,
-				PACKAGE_SELECTION: JSON.stringify(upgraded),
+				PACKAGE_SELECTION: JSON.stringify(selection),
 				ARCHIVE: archive.toString("base64"),
 			},
 			timeout: 10000,
@@ -523,19 +520,63 @@ it("cleans only its sealed staging tree after a filesystem publication failure",
 		},
 	);
 	expect(child.status, child.stderr).toBe(0);
-	expect(
-		(await readdir(assemblyRoot)).filter((name) =>
-			name.startsWith(".staging-"),
-		),
-	).toEqual([]);
-	expect(await adapter.readCurrent()).toEqual(original);
-	expect(
-		await readFile(
-			join(
-				project(assemblyRoot, original.generationId),
-				".agents/skills/workspace-summary/SKILL.md",
-			),
-			"utf8",
-		),
-	).toBe("# Summary\n");
+	const restarted = materializer(assemblyRoot);
+	expect(await restarted.readCurrent()).toBeNull();
+	const retried = await restarted.materialize({ packages: [selection] });
+	expect(await restarted.readCurrent()).toEqual(retried);
 }, 15000);
+
+it.each([false, true])(
+	"preserves the selected generation after publication failure (cleanup failure: %s)",
+	async (cleanupFails) => {
+		const assemblyRoot = await root();
+		const adapter = materializer(assemblyRoot);
+		const original = await adapter.materialize({ packages: [selection] });
+		const upgraded = await selectionFor("2.0.0");
+		const script = `
+ import fs from 'node:fs/promises';import {syncBuiltinESMExports} from 'node:module';
+ const rename=fs.rename,chmod=fs.chmod;let cleanupFailed=false;
+ fs.rename=async(source,target)=>{if(target.includes('/generations/'))throw Object.assign(new Error('injected filesystem failure'),{code:'EIO'});await rename(source,target);};
+ fs.chmod=async(path,mode)=>{if(process.env.CLEANUP_FAILS==='true' && path.includes('/.staging-') && mode===0o700){cleanupFailed=true;throw Object.assign(new Error('injected cleanup failure'),{code:'EACCES'});}await chmod(path,mode);};syncBuiltinESMExports();
+ const {SkillPackageMaterializerV1}=await import(process.env.MATERIALIZER_MODULE);
+ const adapter=new SkillPackageMaterializerV1({assemblyRoot:process.env.ASSEMBLY_ROOT,runtimeUid:65534,verifyAdmission:async()=>{},readPackage:async object=>({...object,bytes:Buffer.from(process.env.ARCHIVE,'base64')})});
+ try{await adapter.materialize({packages:[JSON.parse(process.env.PACKAGE_SELECTION)]});process.exit(1);}catch(error){process.exit(error.code==='unavailable' && cleanupFailed===(process.env.CLEANUP_FAILS==='true')?0:2);}
+ `;
+		const child = spawnSync(
+			process.execPath,
+			["--input-type=module", "-e", script],
+			{
+				env: {
+					...process.env,
+					CLEANUP_FAILS: String(cleanupFails),
+					MATERIALIZER_MODULE: new URL("../dist/index.mjs", import.meta.url)
+						.href,
+					ASSEMBLY_ROOT: assemblyRoot,
+					PACKAGE_SELECTION: JSON.stringify(upgraded),
+					ARCHIVE: archive.toString("base64"),
+				},
+				timeout: 10000,
+				encoding: "utf8",
+			},
+		);
+		expect(child.status, child.stderr).toBe(0);
+		expect(
+			(await readdir(assemblyRoot)).filter((name) =>
+				name.startsWith(".staging-"),
+			),
+		).toHaveLength(cleanupFails ? 1 : 0);
+		expect(await adapter.readCurrent()).toEqual(original);
+		expect(
+			await readFile(
+				join(
+					project(assemblyRoot, original.generationId),
+					".agents/skills/workspace-summary/SKILL.md",
+				),
+				"utf8",
+			),
+		).toBe("# Summary\n");
+		const retried = await adapter.materialize({ packages: [upgraded] });
+		expect(await adapter.readCurrent()).toEqual(retried);
+	},
+	15000,
+);
