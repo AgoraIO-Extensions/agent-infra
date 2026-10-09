@@ -62,6 +62,13 @@ export {
 	PostgresLdapSessionStoreV1,
 } from "./browser-session.ts";
 export {
+	ConversationEventWakeHubV1,
+	type ConversationEventWatcherV1,
+	conversationEventWakeChannelV1,
+	outboxWakeChannelV1,
+	PostgresCommitWakeupListenerV1,
+} from "./commit-wakeups.ts";
+export {
 	ConversationDispatchStoreError,
 	openPostgresConversationDispatchStoreV1,
 	type PostgresConversationDispatchOptionsV1,

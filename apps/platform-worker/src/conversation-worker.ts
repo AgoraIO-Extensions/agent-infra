@@ -10,6 +10,8 @@ import {
 } from "@agent-infra/platform-core";
 import {
 	openPostgresConversationDispatchStoreV1,
+	outboxWakeChannelV1,
+	PostgresCommitWakeupListenerV1,
 	PostgresConversationEventTransactionV1,
 	PostgresLegacyTaskRecoveryReaderV1,
 	PostgresTaskAuthorizationStoreV1,
@@ -40,6 +42,9 @@ export interface PlatformConversationWorkerOptionsV2
 		) => Promise<"committed" | "stale" | "unknown">,
 	) => Promise<SessionSandboxObservationV1>;
 	readonly pollIntervalMs?: number;
+	/** Discover work as soon as an outbox commit wakes the Worker (#1561);
+	 * polling stays the delivery guarantee. Defaults to enabled. */
+	readonly commitWakeups?: boolean;
 	readonly maximumConcurrentDispatches?: number;
 	readonly leaseDurationMs?: number;
 	readonly retryDelayMs?: number;
@@ -51,6 +56,69 @@ export interface PlatformConversationWorkerOptionsV2
 		Partial<
 			Pick<ReturnType<typeof startObservability>, "observeResource" | "status">
 		>;
+}
+
+type Telemetry = Pick<ReturnType<typeof startObservability>, "record">;
+type ConversationRuntime = ReturnType<typeof createConversationRuntimeV2>;
+
+/** Bounded stage timings between a claim and the Runtime submit (#1561);
+ * only identifiers and durations are recorded. */
+function timedAuthorization(
+	authorization: ConversationRuntime["authorization"],
+	telemetry: Telemetry,
+): ConversationRuntime["authorization"] {
+	return {
+		...authorization,
+		async authorize(input) {
+			const began = performance.now();
+			const decision = await authorization.authorize(input);
+			record(telemetry, {
+				stage: "authorization",
+				outcome: decision.outcome === "allowed" ? "completed" : "rejected",
+				durationMs: performance.now() - began,
+				conversationId: input.conversationId,
+				executionId: input.executionId,
+			});
+			return decision;
+		},
+	};
+}
+
+function timedRuntimeSubmit(
+	runtimeHost: ConversationRuntime["runtimeHost"],
+	telemetry: Telemetry,
+): ConversationRuntime["runtimeHost"] {
+	return {
+		...runtimeHost,
+		async dispatch(request, signal) {
+			const began = performance.now();
+			let outcome: "completed" | "failed" = "failed";
+			try {
+				const response = await runtimeHost.dispatch(request, signal);
+				outcome = "completed";
+				return response;
+			} finally {
+				record(telemetry, {
+					stage: "runtime",
+					outcome,
+					durationMs: performance.now() - began,
+					conversationId: request.conversationId,
+					executionId: request.executionId,
+				});
+			}
+		},
+	};
+}
+
+function record(
+	telemetry: Telemetry,
+	event: Parameters<Telemetry["record"]>[0],
+) {
+	try {
+		telemetry.record(event);
+	} catch {
+		// Timing is observational; it never changes dispatch.
+	}
 }
 
 export type PlatformConversationWorkerLifecycleStatusV1 =
@@ -119,11 +187,16 @@ export function createPlatformConversationWorkerV2(
 				return current;
 			},
 		});
+		const telemetry = options.observability;
 		dispatch = createConversationDispatchUseCaseV1(
 			{
 				store,
-				authorization: runtime.authorization,
-				runtimeHost: runtime.runtimeHost,
+				authorization: telemetry
+					? timedAuthorization(runtime.authorization, telemetry)
+					: runtime.authorization,
+				runtimeHost: telemetry
+					? timedRuntimeSubmit(runtime.runtimeHost, telemetry)
+					: runtime.runtimeHost,
 				events: options.observability
 					? createObservedConversationEvents({
 							transaction,
@@ -165,6 +238,15 @@ export function createPlatformConversationWorkerV2(
 	let lifecycleStatus: PlatformConversationWorkerLifecycleStatusV1 =
 		"not_started";
 	let afterItemId: string | undefined;
+	let rescan = false;
+	const wakeups =
+		options.commitWakeups === false
+			? undefined
+			: new PostgresCommitWakeupListenerV1({
+					databaseUrl: options.databaseUrl,
+					channel: outboxWakeChannelV1,
+					onWake: () => wake(),
+				});
 	function log(code: string) {
 		try {
 			(options.log ?? console.info)(
@@ -369,8 +451,21 @@ export function createPlatformConversationWorkerV2(
 		if (polling) return polling;
 		polling = discover().finally(() => {
 			polling = undefined;
+			// Work committed during a scan may sort before the scan cursor.
+			if (rescan) {
+				rescan = false;
+				wake();
+			}
 		});
 		return polling;
+	}
+	function wake() {
+		if (stopped || signal.aborted || !started) return;
+		if (polling) {
+			rescan = true;
+			return;
+		}
+		void tick().catch(() => log("CONVERSATION_DISCOVERY_UNAVAILABLE"));
 	}
 	function poll() {
 		if (stopped || signal.aborted) return;
@@ -390,6 +485,10 @@ export function createPlatformConversationWorkerV2(
 			log("CONVERSATION_DISPATCH_STARTED");
 			void poll();
 			sampleResources();
+			void wakeups?.start().catch(() => {
+				if (!stopped && !signal.aborted)
+					log("CONVERSATION_COMMIT_WAKEUP_UNAVAILABLE");
+			});
 		},
 		status() {
 			return lifecycleStatus;
@@ -411,6 +510,7 @@ export function createPlatformConversationWorkerV2(
 					...[...running.values()].map((entry) => entry.promise),
 				]);
 				const closeResults = await Promise.allSettled([
+					Promise.resolve().then(() => wakeups?.close()),
 					Promise.resolve().then(() => transaction.close()),
 					Promise.resolve().then(() => store.close()),
 					Promise.resolve().then(() => taskAuthorizationStore.close()),

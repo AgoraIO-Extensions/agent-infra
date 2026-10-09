@@ -43,7 +43,10 @@ import type {
 	ConversationQueryScopeV1,
 	ConversationReplayResultV1,
 } from "@agent-infra/platform-store";
-import { ConversationQueryError } from "@agent-infra/platform-store";
+import {
+	type ConversationEventWatcherV1,
+	ConversationQueryError,
+} from "@agent-infra/platform-store";
 import type { Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import {
@@ -132,6 +135,10 @@ export interface ConversationRoutesDependencies {
 	readonly query: ConversationQuery;
 	/** Idle reauthorization interval, 1–30,000 ms; default 1,000 ms. */
 	readonly streamPollIntervalMs?: number;
+	/** Commit wakeups for open streams (#1561); without it streams only poll. */
+	readonly eventWake?: {
+		watch(conversationId: string): ConversationEventWatcherV1;
+	};
 	/** Bound each authorization/replay read and SSE write, 1–30,000 ms; default 1,000 ms.
 	 * Idle detection is bounded by poll + two reads (default 3 s).
 	 * Terminal delivery adds at most two writes (default 2 s); stalls exclude event-loop starvation.
@@ -1168,6 +1175,8 @@ export function registerConversationRoutes(
 							stream.onAbort(abort);
 							if (request.signal.aborted || stream.aborted) abort();
 							let currentIdentity = identity;
+							let checkedAt = performance.now();
+							const watcher = dependencies.eventWake?.watch(conversationId);
 							const write = async <T>(task: () => Promise<T>): Promise<T> => {
 								try {
 									return await streamRead(task, readTimeoutMs, lifetime.signal);
@@ -1232,6 +1241,7 @@ export function registerConversationRoutes(
 									return false;
 								}
 								currentIdentity = result.identity;
+								checkedAt = performance.now();
 								return true;
 							};
 							try {
@@ -1253,8 +1263,10 @@ export function registerConversationRoutes(
 										);
 										return;
 									}
+									// One current authorization check covers a batch written
+									// back to back; a failed check writes none of it (#1561).
+									if (batch.events.length > 0 && !(await check())) return;
 									for (const persisted of batch.events) {
-										if (!(await check())) return;
 										const message = eventProjection(persisted);
 										if (v2) await writeSseMessageV2(output, message);
 										// V1 skips V2 facts but advances the durable cursor.
@@ -1262,10 +1274,24 @@ export function registerConversationRoutes(
 											await writeSseMessage(output, message);
 										cursor = persisted.conversationCursor;
 									}
-									await delay(pollIntervalMs, undefined, {
-										signal: lifetime.signal,
-									});
-									if (!(await check())) return;
+									// A commit wakeup reads sooner; polling remains the guarantee.
+									// Waits never extend past the next authorization deadline.
+									const waitMs = Math.max(
+										1,
+										Math.ceil(pollIntervalMs - (performance.now() - checkedAt)),
+									);
+									const woken = watcher
+										? await watcher.wait(waitMs, lifetime.signal)
+										: (await delay(waitMs, undefined, {
+												signal: lifetime.signal,
+											}),
+											"timeout");
+									if (
+										(woken === "timeout" ||
+											performance.now() - checkedAt >= pollIntervalMs) &&
+										!(await check())
+									)
+										return;
 									const next = await streamRead(
 										() =>
 											dependencies.query.replay(
@@ -1285,6 +1311,7 @@ export function registerConversationRoutes(
 							} catch {
 								await terminate("dependency_unavailable");
 							} finally {
+								watcher?.close();
 								request.signal.removeEventListener("abort", abort);
 								abort();
 							}

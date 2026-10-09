@@ -20,6 +20,13 @@ const mocks = vi.hoisted(() => ({
 	observedEvents: { persist: vi.fn() },
 	observedFactory: vi.fn(),
 	dispatchEvents: undefined as unknown,
+	dispatchAuthorization: undefined as unknown,
+	dispatchRuntimeHost: undefined as unknown,
+	authorize: vi.fn(),
+	runtimeDispatch: vi.fn(),
+	wake: undefined as (() => void) | undefined,
+	wakeStart: vi.fn(async () => {}),
+	wakeClose: vi.fn(async () => {}),
 }));
 vi.mock("@agent-infra/platform-store", () => ({
 	openPostgresConversationDispatchStoreV1: () => ({
@@ -41,12 +48,26 @@ vi.mock("@agent-infra/platform-store", () => ({
 	PostgresLegacyTaskRecoveryReaderV1: class {
 		close = mocks.legacyClose;
 	},
+	outboxWakeChannelV1: "agent_infra_outbox_available",
+	PostgresCommitWakeupListenerV1: class {
+		constructor(input: { onWake: () => void }) {
+			mocks.wake = () => input.onWake();
+		}
+		start = mocks.wakeStart;
+		close = mocks.wakeClose;
+	},
 }));
 vi.mock("@agent-infra/platform-core", () => ({
-	createConversationDispatchUseCaseV1: (dependencies: { events: unknown }) => {
+	createConversationDispatchUseCaseV1: (dependencies: {
+		events: unknown;
+		authorization: unknown;
+		runtimeHost: unknown;
+	}) => {
 		if (mocks.dispatchAssemblyThrows)
 			throw new Error("synthetic dispatch assembly failure");
 		mocks.dispatchEvents = dependencies.events;
+		mocks.dispatchAuthorization = dependencies.authorization;
+		mocks.dispatchRuntimeHost = dependencies.runtimeHost;
 		return { dispatch: mocks.dispatch };
 	},
 	createConversationEventUseCaseV1: () => ({}),
@@ -64,7 +85,11 @@ vi.mock("./conversation-runtime.js", () => ({
 	}) => {
 		mocks.channelAuthorizationCurrent = options.channelAuthorizationCurrent;
 		mocks.signal = options.signal;
-		return { authorization: {}, runtimeHost: {}, close: mocks.runtimeClose };
+		return {
+			authorization: { authorize: mocks.authorize },
+			runtimeHost: { dispatch: mocks.runtimeDispatch },
+			close: mocks.runtimeClose,
+		};
 	},
 }));
 
@@ -175,6 +200,65 @@ describe("Conversation Worker discovery and shutdown", () => {
 			observation: { status: "unknown", resources: [] },
 		});
 	});
+	it("discovers committed work on a wakeup without waiting for the poll (#1561)", async () => {
+		mocks.find.mockResolvedValue([]);
+		mocks.dispatch.mockResolvedValue(undefined);
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			pollIntervalMs: 30_000,
+		});
+		worker.start();
+		await vi.waitFor(() => expect(mocks.find).toHaveBeenCalledTimes(1));
+		expect(mocks.wakeStart).toHaveBeenCalledTimes(1);
+		mocks.find.mockResolvedValueOnce([
+			{ itemId: "turn-a", operation: "conversation.turn.submit.v1" },
+		]);
+		mocks.wake?.();
+		await vi.waitFor(() =>
+			expect(mocks.dispatch).toHaveBeenCalledWith(
+				expect.objectContaining({ itemId: "turn-a" }),
+			),
+		);
+		await worker.stop();
+		expect(mocks.wakeClose).toHaveBeenCalledTimes(1);
+	});
+
+	it("rescans once when a wakeup arrives during a scan (#1561)", async () => {
+		const scan = Promise.withResolvers<[]>();
+		mocks.find.mockReturnValueOnce(scan.promise).mockResolvedValue([]);
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			pollIntervalMs: 30_000,
+		});
+		worker.start();
+		await vi.waitFor(() => expect(mocks.find).toHaveBeenCalledTimes(1));
+		mocks.wake?.();
+		mocks.wake?.();
+		expect(mocks.find).toHaveBeenCalledTimes(1);
+		scan.resolve([]);
+		await vi.waitFor(() => expect(mocks.find).toHaveBeenCalledTimes(2));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(mocks.find).toHaveBeenCalledTimes(2);
+		await worker.stop();
+	});
+
+	it("keeps polling when commit wakeups are unavailable (#1561)", async () => {
+		const logs: string[] = [];
+		mocks.wakeStart.mockRejectedValueOnce(new Error("LISTEN unsupported"));
+		mocks.find.mockResolvedValue([]);
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			pollIntervalMs: 5,
+			log: (message) => logs.push(message),
+		});
+		worker.start();
+		await vi.waitFor(() =>
+			expect(mocks.find.mock.calls.length).toBeGreaterThanOrEqual(3),
+		);
+		await worker.stop();
+		expect(logs.join("")).toContain("CONVERSATION_COMMIT_WAKEUP_UNAVAILABLE");
+	});
+
 	it("reserves stop capacity while a business Turn occupies the dispatch slot", async () => {
 		const pending = Promise.withResolvers<void>();
 		let stoppedItem = false;
@@ -440,5 +524,52 @@ it("observes persisted conversation events through the original transaction", as
 		telemetry,
 	});
 	expect(mocks.dispatchEvents).toBe(mocks.observedEvents);
+	await worker.stop();
+});
+
+it("records bounded authorization and Runtime submit timings (#1561)", async () => {
+	const telemetry = { record: vi.fn() };
+	const worker = createPlatformConversationWorkerV2({
+		...options,
+		observability: telemetry,
+	});
+	mocks.authorize.mockResolvedValue({ outcome: "allowed", authority: {} });
+	mocks.runtimeDispatch.mockResolvedValue({ schemaVersion: 2 });
+	const ids = { conversationId: "conversation-1", executionId: "execution-1" };
+	const authorization = mocks.dispatchAuthorization as {
+		authorize(input: unknown): Promise<unknown>;
+	};
+	const runtimeHost = mocks.dispatchRuntimeHost as {
+		dispatch(request: unknown): Promise<unknown>;
+	};
+	await expect(authorization.authorize(ids)).resolves.toEqual({
+		outcome: "allowed",
+		authority: {},
+	});
+	await expect(runtimeHost.dispatch(ids)).resolves.toEqual({
+		schemaVersion: 2,
+	});
+	mocks.runtimeDispatch.mockRejectedValueOnce(new Error("submit lost"));
+	await expect(runtimeHost.dispatch(ids)).rejects.toThrow("submit lost");
+	expect(telemetry.record.mock.calls.map(([event]) => event)).toEqual([
+		{
+			stage: "authorization",
+			outcome: "completed",
+			durationMs: expect.any(Number),
+			...ids,
+		},
+		{
+			stage: "runtime",
+			outcome: "completed",
+			durationMs: expect.any(Number),
+			...ids,
+		},
+		{
+			stage: "runtime",
+			outcome: "failed",
+			durationMs: expect.any(Number),
+			...ids,
+		},
+	]);
 	await worker.stop();
 });
