@@ -6,10 +6,10 @@ import {
 	mkdir,
 	open,
 	readdir,
-	readFile,
 	rename,
 	rm,
 	stat,
+	utimes,
 	writeFile,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -660,7 +660,7 @@ export class SkillPackageMaterializerV1 {
 		if (previous) await previous;
 		const lock = join(this.#root, ".materialize-lock");
 		let ownsFilesystemLock = false;
-		for (let attempt = 0; attempt < 200; attempt += 1) {
+		for (let attempt = 0; attempt < 800; attempt += 1) {
 			try {
 				await mkdir(lock, { mode: 0o700 });
 				await writeFile(join(lock, "owner"), String(process.pid), {
@@ -677,26 +677,11 @@ export class SkillPackageMaterializerV1 {
 					throw error;
 				}
 				try {
-					const owner = Number.parseInt(
-						(await readFile(join(lock, "owner"), "utf8")).trim(),
-						10,
-					);
-					if (Number.isSafeInteger(owner) && owner > 0) {
-						try {
-							process.kill(owner, 0);
-						} catch (probeError) {
-							if ((probeError as NodeJS.ErrnoException).code === "ESRCH")
-								await this.#quarantineLock(lock);
-						}
-					}
+					const info = await stat(lock);
+					if (Date.now() - info.mtimeMs > 10_000)
+						await this.#quarantineLock(lock);
 				} catch {
-					try {
-						const info = await stat(lock);
-						if (Date.now() - info.mtimeMs > 5_000)
-							await this.#quarantineLock(lock);
-					} catch {
-						// A lock without a readable owner is otherwise treated as active.
-					}
+					// A lock that disappears is retried through mkdir.
 				}
 				await new Promise((resolve) => setTimeout(resolve, 25));
 			}
@@ -707,9 +692,13 @@ export class SkillPackageMaterializerV1 {
 				SkillPackageMaterializerV1.#locks.delete(this.#root);
 			fail("unavailable");
 		}
+		const heartbeat = setInterval(() => {
+			void utimes(lock, new Date(), new Date()).catch(() => {});
+		}, 1_000);
 		try {
 			return await this.#materializeUnlocked(input);
 		} finally {
+			clearInterval(heartbeat);
 			release();
 			if (SkillPackageMaterializerV1.#locks.get(this.#root) === current)
 				SkillPackageMaterializerV1.#locks.delete(this.#root);
