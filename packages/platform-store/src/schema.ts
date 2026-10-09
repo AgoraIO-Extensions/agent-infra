@@ -19,6 +19,10 @@ import {
 	wecomSetupSessions,
 } from "./schema-channels-files";
 import {
+	connectionInstallationAuthorizations,
+	connectionInstallationCommands,
+} from "./schema-connection-installation.js";
+import {
 	conversationAuditEvents,
 	conversationEvents,
 	conversationExecutions,
@@ -45,6 +49,12 @@ import {
 } from "./schema-operations";
 import { relayKeySubjects, relayKeyVersions } from "./schema-relay-keys";
 import { browserSessions } from "./schema-sessions";
+
+export {
+	connectionInstallationAuthorizations,
+	connectionInstallationCommands,
+} from "./schema-connection-installation.js";
+
 import {
 	skillHubAgentBindings,
 	skillHubInstallations,
@@ -126,6 +136,8 @@ export {
 } from "./schema-skill-hub";
 
 export const platformInfrastructureTables = [
+	connectionInstallationAuthorizations,
+	connectionInstallationCommands,
 	platformUserDisables,
 	ldapIdentityIds,
 	browserSessions,

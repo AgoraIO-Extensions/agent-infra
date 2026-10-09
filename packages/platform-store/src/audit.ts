@@ -18,6 +18,16 @@ const wecomDeliveryAuditMetadata = {
 } as const;
 
 const platformAuditActionMetadata = {
+	"connection.installation.begin": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "connection_installation",
+	},
+	"connection.installation.confirm": {
+		actorKind: "user",
+		subjectKind: "agent",
+		details: "connection_installation",
+	},
 	"relay_key.agent_default.replace": {
 		actorKind: "user",
 		subjectKind: "agent",
@@ -488,6 +498,14 @@ function changedFields(
 		return [];
 	}
 	const detailKind = platformAuditActionMetadata[action].details;
+	if (detailKind === "connection_installation") {
+		if (
+			!exactObject(details, ["authorizationId"]) ||
+			!validText((details as { authorizationId: unknown }).authorizationId)
+		)
+			throw new PlatformAuditQueryError("unavailable");
+		return [];
+	}
 	if (detailKind === "skill_hub") {
 		if (action === "skill.version.refused") {
 			if (

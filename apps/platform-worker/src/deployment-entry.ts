@@ -29,19 +29,29 @@ type DeploymentConfiguration = {
 	readonly connectionConsumerProfile?: unknown;
 	readonly connectionConsumerApproval?: unknown;
 	readonly connectionInstallationSupply?: unknown;
-	readonly connectionInstallation?: ConversationRuntimeOptionsV2["connectionInstallation"];
+	readonly connectionInstallation?: {
+		readonly configuration: NonNullable<
+			ConversationRuntimeOptionsV2["connectionInstallation"]
+		>["configuration"];
+		readonly authorize?: NonNullable<
+			ConversationRuntimeOptionsV2["connectionInstallation"]
+		>["authorize"];
+	};
 };
 
 function resolveConnectionInstallation(
 	value: unknown,
-): ConversationRuntimeOptionsV2["connectionInstallation"] | undefined {
+): DeploymentConfiguration["connectionInstallation"] | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "object" || value === null || Array.isArray(value))
 		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
 	const candidate = value as Record<string, unknown>;
 	if (
-		Object.keys(candidate).sort().join(",") !== "authorize,configuration" ||
-		typeof candidate.authorize !== "function"
+		!["configuration", "authorize,configuration"].includes(
+			Object.keys(candidate).sort().join(","),
+		) ||
+		(candidate.authorize !== undefined &&
+			typeof candidate.authorize !== "function")
 	)
 		throw new Error("CONNECTION_INSTALLATION_UNAVAILABLE");
 	try {
@@ -170,6 +180,35 @@ async function createPrepared(signal: AbortSignal) {
 			connectionConsumerProfile: connectionConsumer?.profile,
 			connectionConsumerApproval: connectionConsumer?.approval,
 		});
+	let installationStore:
+		| import("@agent-infra/platform-store").PostgresConnectionInstallationAuthorizationTransactionV1
+		| undefined;
+	let authorizedInstallation: ConversationRuntimeOptionsV2["connectionInstallation"];
+	if (connectionInstallation) {
+		let authorize = connectionInstallation.authorize;
+		if (!authorize && connectionConsumer) {
+			const { PostgresConnectionInstallationAuthorizationTransactionV1 } =
+				await import("@agent-infra/platform-store");
+			const { createConnectionInstallationAuthorizationV1 } = await import(
+				"@agent-infra/platform-core"
+			);
+			installationStore =
+				new PostgresConnectionInstallationAuthorizationTransactionV1({
+					databaseUrl: workload.databaseUrl,
+					directory,
+					configuration: connectionInstallation.configuration,
+					profile: connectionConsumer.profile,
+					approval: connectionConsumer.approval,
+				});
+			authorize = createConnectionInstallationAuthorizationV1({
+				store: installationStore,
+			}).authorize;
+		}
+		authorizedInstallation = {
+			configuration: connectionInstallation.configuration,
+			authorize: authorize ?? (async () => null),
+		};
+	}
 	return {
 		// Database lease ownership is per process; Runtime service identity is deployment-bound.
 		workload: { ...workload, workerId: instanceId },
@@ -178,7 +217,12 @@ async function createPrepared(signal: AbortSignal) {
 			workerId: instanceId,
 			signing,
 			directory,
-			...(connectionInstallation ? { connectionInstallation } : {}),
+			...(authorizedInstallation
+				? { connectionInstallation: authorizedInstallation }
+				: {}),
+			closeDeployment: async () => {
+				await installationStore?.close();
+			},
 			relayKeyDecryptor,
 			channelAuthorizationCurrent: wecomDeployment.channelAuthorizationCurrent,
 			sandboxPolicy: {
@@ -255,6 +299,9 @@ async function createConversationPrepared(signal: AbortSignal) {
 			},
 			closeDeployment() {
 				closing ??= Promise.allSettled([
+					Promise.resolve().then(() =>
+						deployment.conversation.closeDeployment(),
+					),
 					Promise.resolve().then(() => acceptedStore.close()),
 					Promise.resolve().then(() => ciphertextStore.close()),
 				]).then((results) => {

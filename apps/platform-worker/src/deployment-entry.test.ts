@@ -96,6 +96,7 @@ try {
  const signal = new AbortController().signal;
  const workload = await entry.createPlatformWorkloadWorkerOptionsV1(signal);
 	const conversation = await entry.createPlatformConversationWorkerOptionsV2(signal);
+ if (process.env.RUN_CLOSE_INSTALLATION === "true") await conversation.closeDeployment?.();
 	if (process.env.RUN_INVALID_PROFILE === 'true') {
 	 const control = await conversation.resolveRuntimeHost({ purpose: 'control' });
 	 let business;
@@ -176,6 +177,41 @@ export const connectionInstallation = {
 	);
 	try {
 		const result = run();
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout).installationConfigured).toBe(true);
+	} finally {
+		await writeFile(path, original);
+	}
+});
+
+it("assembles the Platform database producer when only approved installation configuration is supplied", async () => {
+	const path = join(directory, "configuration.mjs");
+	const original = await readFile(path, "utf8");
+	await writeFile(
+		path,
+		`${original}
+export const connectionInstallation = {
+  configuration: {
+    schemaVersion: 1,
+    ref: "oauth-config",
+    revision: "r1",
+    clientId: "platform-client",
+    callbackUrl: "https://platform.example.test/connection/callback",
+    issuer: "https://connection.example.test/",
+    authorizationEndpoint: "https://connection.example.test/oauth/authorize",
+    tokenEndpoint: "https://connection.example.test/oauth/token",
+    revocationEndpoint: "https://connection.example.test/oauth/revoke",
+    resource: "https://connection.example.test/mcp/v1",
+    scope: "mcp",
+    configFingerprint: "26062a8f8e5a003ff8047fead83d76c254d9b54834ca5348fb7e4ceee67d205b",
+    source: { ref: "platform-deployment", revision: "r1" },
+    runtimeOrigin: "https://runtime.example.test:3443/"
+  },
+};
+`,
+	);
+	try {
+		const result = run({ RUN_CLOSE_INSTALLATION: "true" });
 		expect(result.status, result.stderr).toBe(0);
 		expect(JSON.parse(result.stdout).installationConfigured).toBe(true);
 	} finally {

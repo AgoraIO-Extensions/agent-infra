@@ -2124,7 +2124,82 @@ function normalizeSkillPackageObjectVersions(previous, current, changes) {
 	return normalized;
 }
 
-function findBreakingChanges(previous, current) {
+// #1608 adds only these two audited Platform confirmation actions and the pinned
+// employee installation paths. Unchanged actions may be removed from both sides
+// when comparing historical exceptions whose hashes predate this addition.
+const installationAuditActions = [
+	"connection.installation.begin",
+	"connection.installation.confirm",
+];
+function isConnectionInstallationOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	const before =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const after = current.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	let changed = false;
+	if (
+		Array.isArray(before) &&
+		Array.isArray(after) &&
+		installationAuditActions.every(
+			(action) => !before.includes(action) && after.includes(action),
+		)
+	) {
+		const expected = before.flatMap((action) =>
+			action === "skill.version.refused"
+				? [action, ...installationAuditActions]
+				: [action],
+		);
+		if (!sameValue(after, expected)) return false;
+		normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+			structuredClone(before);
+		changed = true;
+	}
+	const paths = [
+		"/api/connection-installations",
+		"/api/connection-installations/{authorizationId}",
+		"/api/connection-installations/{authorizationId}/confirm",
+	];
+	const added = paths.filter(
+		(path) =>
+			previous.paths?.[path] === undefined &&
+			current.paths?.[path] !== undefined,
+	);
+	if (added.length !== 0 && added.length !== 3) return false;
+	if (added.length === 3) {
+		const value = Object.fromEntries(
+			paths.map((path) => [path, current.paths[path]]),
+		);
+		if (
+			createHash("sha256").update(JSON.stringify(value)).digest("hex") !==
+			"a2072cebeabe24c44b0d062db60f6caa86874f5bd9ef65df382169e41346a75f"
+		)
+			return false;
+		for (const path of paths) delete normalized.paths[path];
+		changed = true;
+	}
+	return changed && findBreakingChanges(previous, normalized).length === 0;
+}
+function findBreakingChanges(previousValue, currentValue) {
+	let previous = previousValue;
+	let current = currentValue;
+	const before =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const after = current.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	if (
+		Array.isArray(before) &&
+		Array.isArray(after) &&
+		installationAuditActions.every(
+			(action) => before.includes(action) && after.includes(action),
+		)
+	) {
+		previous = structuredClone(previous);
+		current = structuredClone(current);
+		previous.components.schemas.ScopedPlatformAuditActionV1.enum =
+			before.filter((action) => !installationAuditActions.includes(action));
+		current.components.schemas.ScopedPlatformAuditActionV1.enum = after.filter(
+			(action) => !installationAuditActions.includes(action),
+		);
+	}
 	const changes = [];
 	if (previous.openapi !== undefined) {
 		if (
@@ -2165,6 +2240,7 @@ function findBreakingChanges(previous, current) {
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&
+			!isConnectionInstallationOpenApiAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current)

@@ -719,6 +719,8 @@ describe("Platform PostgreSQL migration foundation", () => {
 			// Platform-owned WeCom transport leases and channel ciphertext are not Connection Provider credentials.
 			expect(forbiddenObjects.map((row) => row.object_name).sort()).toEqual([
 				"api_credential_delivery_grants",
+				"connection_installation_authorizations",
+				"connection_installation_commands",
 				"platform_api_credentials",
 				"platform_api_credentials.credential_hash",
 				"wecom_connections",
@@ -1962,22 +1964,27 @@ describe("published Relay authority migration", () => {
 			46,
 			47,
 			48,
+			49,
 		]);
-		expect(journal.entries.at(-4)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
 			tag: "0045_skill_hub_organization_scope",
 		});
-		expect(journal.entries.at(-3)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 46)).toMatchObject({
 			idx: 46,
 			tag: "0046_commit_wakeups",
 		});
-		expect(journal.entries.at(-2)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 47)).toMatchObject({
 			idx: 47,
 			tag: "0047_skill_agent_binding_revision",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 48)).toMatchObject({
 			idx: 48,
 			tag: "0048_skill_agent_binding_history",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 49,
+			tag: "0049_connection_installation_authorization",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2240,6 +2247,30 @@ describe("published Relay authority migration", () => {
 				columns: [
 					...expectedDelta.columns,
 					...[
+						"id",
+						"execution_id",
+						"user_id",
+						"confirmation_revision",
+						"binding",
+						"identity_revision",
+						"agent_authorization_revision",
+						"status",
+						"expires_at",
+						"revision",
+						"created_at",
+						"updated_at",
+					].map((name) => `connection_installation_authorizations:${name}`),
+					...[
+						"id",
+						"authorization_id",
+						"command",
+						"idempotency_key",
+						"request_digest",
+						"status",
+						"created_at",
+						"updated_at",
+					].map((name) => `connection_installation_commands:${name}`),
+					...[
 						"actor_id",
 						"agent_id",
 						"channel_id",
@@ -2260,6 +2291,20 @@ describe("published Relay authority migration", () => {
 				].sort(),
 				checks: [
 					...expectedDelta.checks,
+					...[
+						"status_valid",
+						"revision_safe",
+						"binding_user",
+						"binding_execution",
+						"ids_nonempty",
+					].map(
+						(name) =>
+							`connection_installation_authorizations:connection_installation_${name}`,
+					),
+					...["command_valid", "delivery_valid", "digest_valid"].map(
+						(name) =>
+							`connection_installation_commands:connection_installation_${name}`,
+					),
 					"conversation_audit_events:conversation_audit_details_binding",
 					"conversation_audit_events:conversation_audit_execution_binding",
 					...[
@@ -2276,6 +2321,11 @@ describe("published Relay authority migration", () => {
 				].sort(),
 				indexes: [
 					...expectedDelta.indexes,
+					"connection_installation_authorizations:connection_installation_authorizations_pkey",
+					"connection_installation_authorizations:connection_installation_user_execution_idx",
+					"connection_installation_commands:connection_installation_commands_pkey",
+					"connection_installation_commands:connection_installation_command_key_unique",
+					"connection_installation_commands:connection_installation_pending_idx",
 					...[
 						"allocations_pkey",
 						"conversation_unique",

@@ -25,6 +25,10 @@ import {
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import {
+	type ConnectionInstallationRouteDependenciesV1,
+	registerConnectionInstallationRoutesV1,
+} from "./http/connection-installation-routes.js";
+import {
 	type ConversationRoutesDependencies,
 	registerConversationRoutes,
 } from "./http/conversation-routes.js";
@@ -82,6 +86,7 @@ type ApiObservability = Pick<
 >;
 
 export interface PlatformAppDependencies {
+	readonly connectionInstallations?: ConnectionInstallationRouteDependenciesV1;
 	readonly agentApiCreation?: AgentApiCreationRouteDependencies;
 	readonly agentApiLifecycle?: AgentApiLifecycleRouteDependencies;
 	readonly agentApplicationGrants?: AgentApplicationGrantRouteDependencies;
@@ -163,6 +168,11 @@ export function createPlatformApp(
 	else if (dependencies.wecomReceipts)
 		registerWecomReceiptRoutesV1(app, dependencies.wecomReceipts);
 	registerRetiredManagementRoutes(app);
+	if (dependencies.connectionInstallations)
+		registerConnectionInstallationRoutesV1(
+			app,
+			dependencies.connectionInstallations,
+		);
 	if (dependencies.personalRelayKeys)
 		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);
 	registerV2ManagementRoutes(app, dependencies.management);

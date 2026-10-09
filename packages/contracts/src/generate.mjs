@@ -95,6 +95,10 @@ import {
 	WorkloadReadinessResponseV1Schema,
 	WorkloadReadinessV1SchemaDefinitions,
 } from "./runtime/index.ts";
+import {
+	ConnectionInstallationV1SchemaDefinitions,
+	connectionInstallationOpenApiPathsV1,
+} from "./runtime/installation.ts";
 import { RuntimeOAuthV1SchemaDefinitions } from "./runtime/oauth.ts";
 import {
 	kubernetesWorkloadSchemasV1,
@@ -700,7 +704,11 @@ function buildArtifacts() {
 			title: "Agent Infra Pilot Browser Audit API",
 			version: "2.0.0",
 		},
-		paths: { ...pilotBrowserOpenApiPathsV2, ...pilotOperationOpenApiPathsV2 },
+		paths: {
+			...pilotBrowserOpenApiPathsV2,
+			...pilotOperationOpenApiPathsV2,
+			...connectionInstallationOpenApiPathsV1,
+		},
 		components: {
 			securitySchemes: {
 				platformApiCredential: { type: "http", scheme: "bearer" },
@@ -924,7 +932,10 @@ function buildArtifacts() {
 		runtimeOAuthJsonSchema: jsonSchemaDocument({
 			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-oauth.v1.schema.json",
 			title: "Runtime OAuth installation contracts V1",
-			definitions: RuntimeOAuthV1SchemaDefinitions,
+			definitions: {
+				...RuntimeOAuthV1SchemaDefinitions,
+				...ConnectionInstallationV1SchemaDefinitions,
+			},
 		}),
 		runtimeOAuthOpenapi: createDocument({
 			openapi: "3.1.0",
