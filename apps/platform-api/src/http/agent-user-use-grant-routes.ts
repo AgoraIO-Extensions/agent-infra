@@ -57,7 +57,7 @@ export function registerAgentUserUseGrantRoutes(
 				const userId = OpaqueIdV1Schema.safeParse(context.req.param("userId"));
 				if (!agentId.success || !userId.success)
 					throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
-				await parseJson(
+				const { value: body } = await parseJson(
 					request,
 					AgentUserUseRevokeRequestV1Schema,
 					metadata.traceId,
@@ -67,6 +67,7 @@ export function registerAgentUserUseGrantRoutes(
 					...metadata,
 					agentId: agentId.data,
 					userId: userId.data,
+					expectedRevision: body.expectedRevision,
 					actorId: identity.userId,
 					idempotencyKey: parseIdempotencyKey(request, metadata.traceId),
 				});

@@ -357,6 +357,7 @@ export type AgentProjectionV2 = {
 };
 
 export type AgentUserUseRevokeRequestV1 = {
+    expectedRevision: number;
     schemaVersion: 1;
 };
 

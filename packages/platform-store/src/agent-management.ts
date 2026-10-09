@@ -897,7 +897,7 @@ export class PostgresAgentManagementTransactionV1
 			return await this.#client.begin(async (transaction) => {
 				await transaction`set local lock_timeout = '5s'`;
 				await transaction`set local statement_timeout = '30s'`;
-				await transaction`lock table platform.platform_user_disables in share mode`;
+				await transaction`lock table platform.platform_user_disables in share row exclusive mode`;
 				const actor = await resolveCurrentPersonalApiUserV1(
 					this.#userDirectory,
 					command.actorId,
@@ -917,14 +917,20 @@ export class PostgresAgentManagementTransactionV1
 				)
 					throw new PersonalApiCredentialErrorV1("forbidden");
 				const [agent] = await transaction<
-					{ status: string; owner_id: string }[]
+					{
+						status: string;
+						owner_id: string;
+						management_revision: number | string;
+					}[]
 				>`select application.status, owner.owner_id
+					, application.management_revision
 					from platform.agent_applications application
 					join platform.agent_owners owner on owner.agent_id = application.agent_id
 					where application.agent_id = ${command.agentId} and owner.owner_id = ${command.actorId}
 					limit 1 for update`;
 				if (
 					!agent ||
+					Number(agent.management_revision) !== command.expectedRevision ||
 					![
 						"creating",
 						"available",
@@ -934,7 +940,7 @@ export class PostgresAgentManagementTransactionV1
 					].includes(agent.status)
 				)
 					throw new PersonalApiCredentialErrorV1("not_found");
-				await transaction`lock table platform.agent_principal_grants in share mode`;
+				await transaction`lock table platform.agent_principal_grants in share row exclusive mode`;
 				const idempotencyScope = {
 					select: async () =>
 						transaction<
@@ -961,6 +967,51 @@ export class PostgresAgentManagementTransactionV1
 					where agent_id = ${command.agentId} and principal_type = 'user'
 						and principal_id = ${command.userId} and grant_type = 'use'
 					for update`;
+				if (existing) {
+					const saved = existing.result as Record<string, unknown> | null;
+					if (
+						!saved ||
+						typeof saved !== "object" ||
+						Array.isArray(saved) ||
+						Object.keys(saved).length !== 6 ||
+						saved.schemaVersion !== 1 ||
+						saved.agentId !== command.agentId ||
+						saved.userId !== command.userId ||
+						saved.granted !== false ||
+						(saved.authorizationRevision !== null &&
+							!validText(saved.authorizationRevision)) ||
+						saved.replayed !== false
+					)
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					await transaction`
+						insert into platform.audit_events
+							(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, 'api.agent.use.replayed', 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${transaction.json(saved as unknown as JsonValue)})
+					`;
+					const finalActor = await resolveCurrentPersonalApiUserV1(
+						this.#userDirectory,
+						command.actorId,
+					);
+					const [finalOwner] = await transaction<{ owner_id: string }[]>`
+						select owner_id from platform.agent_owners
+						where agent_id = ${command.agentId} and owner_id = ${command.actorId}
+						for update
+					`;
+					const [finalDisabled] = await transaction<{ user_id: string }[]>`
+						select user_id from platform.platform_user_disables where user_id = ${command.actorId}
+					`;
+					if (
+						finalActor.userId !== command.actorId ||
+						finalActor.accountStatus !== "active" ||
+						finalDisabled ||
+						!finalOwner
+					)
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					return {
+						...saved,
+						replayed: true,
+					} as unknown as AgentUserUseRevokeResultV1;
+				}
 				const plan = planAgentUserUseRevokeV1({
 					command,
 					current: grant
@@ -969,7 +1020,7 @@ export class PostgresAgentManagementTransactionV1
 								authorizationRevision: grant.authorization_revision,
 							}
 						: null,
-					replayed: existing !== undefined,
+					replayed: false,
 					nextRevision: randomUUID(),
 					occurredAt: new Date(),
 				});

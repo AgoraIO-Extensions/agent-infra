@@ -9,6 +9,7 @@ const command = {
 	agentId: "agent-1",
 	userId: "user-2",
 	actorId: "owner-1",
+	expectedRevision: 1,
 	idempotencyKey: "revoke-1",
 	requestId: "request-1",
 	traceId: "trace-1",

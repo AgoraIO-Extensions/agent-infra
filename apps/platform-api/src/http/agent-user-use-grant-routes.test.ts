@@ -43,7 +43,7 @@ describe("Agent user API-use revoke HTTP", () => {
 					"Idempotency-Key": "revoke-1",
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ schemaVersion: 1 }),
+				body: JSON.stringify({ schemaVersion: 1, expectedRevision: 1 }),
 			},
 		);
 		expect(response.status).toBe(200);
@@ -68,7 +68,7 @@ describe("Agent user API-use revoke HTTP", () => {
 					"Idempotency-Key": "revoke-1",
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ schemaVersion: 1 }),
+				body: JSON.stringify({ schemaVersion: 1, expectedRevision: 1 }),
 			},
 		);
 		expect(response.status).toBe(401);

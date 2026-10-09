@@ -2064,13 +2064,19 @@
       "AgentUserUseRevokeRequestV1": {
         "additionalProperties": false,
         "properties": {
+          "expectedRevision": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
           "schemaVersion": {
             "const": 1,
             "type": "number"
           }
         },
         "required": [
-          "schemaVersion"
+          "schemaVersion",
+          "expectedRevision"
         ],
         "type": "object"
       },

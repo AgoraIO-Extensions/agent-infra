@@ -13,6 +13,7 @@ export interface AgentUserUseRevokeCommandV1 {
 	readonly agentId: string;
 	readonly userId: string;
 	readonly actorId: string;
+	readonly expectedRevision: number;
 	readonly idempotencyKey: string;
 	readonly requestId: string;
 	readonly traceId: string;
@@ -37,12 +38,15 @@ export function parseAgentUserUseRevokeCommandV1(
 			"agentId",
 			"userId",
 			"actorId",
+			"expectedRevision",
 			"idempotencyKey",
 			"requestId",
 			"traceId",
 		]);
 		if (
 			values.schemaVersion !== 1 ||
+			!Number.isSafeInteger(values.expectedRevision) ||
+			(values.expectedRevision as number) < 0 ||
 			![
 				values.agentId,
 				values.userId,
