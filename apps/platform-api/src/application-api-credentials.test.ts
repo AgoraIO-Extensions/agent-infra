@@ -502,6 +502,33 @@ it("uses the actually delivered application Token to create two Agents and read 
 		},
 	);
 	expect(deniedLifecycle.status).toBe(404);
+	expect(
+		await sql`select count(*)::int as count from platform.outbox_items`,
+	).toEqual([{ count: 2 }]);
+	const otherToken = `papi_${"O".repeat(43)}`;
+	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('app-2','Other Robot','manager','app-2')`;
+	await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values('app-2-credential','application','app-2',${createHash("sha256").update(otherToken).digest("hex")},'["agent:read","agent:manage","agent:use"]'::jsonb)`;
+	for (const path of [
+		`${baseUrl}/api/v2/agents/${first.agentId}/state`,
+		`${baseUrl}/api/v2/agents/${first.agentId}/commands`,
+	]) {
+		const response = await fetch(path, {
+			method: path.endsWith("commands") ? "POST" : "GET",
+			headers: {
+				Authorization: `Bearer ${otherToken}`,
+				...(path.endsWith("commands")
+					? {
+							"Idempotency-Key": "app-2-cross-subject",
+							"Content-Type": "application/json",
+						}
+					: {}),
+			},
+			...(path.endsWith("commands")
+				? { body: JSON.stringify({ schemaVersion: 1, command: "stop" }) }
+				: {}),
+		});
+		expect(response.status).toBe(404);
+	}
 	const revokeUse = await fetch(
 		`${baseUrl}/api/v2/agents/${first.agentId}/application-use-grants/app-1`,
 		{
@@ -523,9 +550,6 @@ it("uses the actually delivered application Token to create two Agents and read 
 			})
 		).status,
 	).toBe(404);
-	const otherToken = `papi_${"O".repeat(43)}`;
-	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('app-2','Other Robot','manager','app-2')`;
-	await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes) values('app-2-credential','application','app-2',${createHash("sha256").update(otherToken).digest("hex")},'["agent:read","agent:manage","agent:use"]'::jsonb)`;
 	expect(
 		(
 			await fetch(`${baseUrl}/api/v2/agents/${first.agentId}/state`, {
