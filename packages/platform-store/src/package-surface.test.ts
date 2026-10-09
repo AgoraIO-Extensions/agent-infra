@@ -99,6 +99,7 @@ describe("platform-store package surface", () => {
 			"readCurrentTaskApiUseGrantV1",
 			"readCurrentTaskApplicationV1",
 			"readPlatformQueueResourceSnapshot",
+			"recordTaskSystemControlInTransactionV1",
 			"requireCurrentPersonalApiTaskAdmissionV1",
 			"resolveApiAuditCredentialIdentityV1",
 			"resolvePersonalApiTaskAdmissionAuthorityV1",
