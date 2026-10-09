@@ -59,6 +59,7 @@ const canonical = (value: unknown) => Buffer.from(JSON.stringify(value));
 function object(
 	input: unknown,
 	keys: readonly string[],
+	optional: readonly string[] = [],
 ): Record<string, unknown> {
 	if (
 		!input ||
@@ -69,9 +70,15 @@ function object(
 		fail("invalid");
 	const descriptors = Object.getOwnPropertyDescriptors(input);
 	if (
-		Reflect.ownKeys(input).length !== keys.length ||
+		Reflect.ownKeys(input).length < keys.length ||
+		Reflect.ownKeys(input).length > keys.length + optional.length ||
 		keys.some(
 			(key) => !descriptors[key]?.enumerable || !("value" in descriptors[key]),
+		) ||
+		Reflect.ownKeys(input).some(
+			(key) =>
+				typeof key !== "string" ||
+				(!keys.includes(key) && !optional.includes(key)),
 		)
 	)
 		fail("invalid");
@@ -468,8 +475,21 @@ export class SkillPackageMaterializerV1 {
 		input: unknown,
 	): Promise<SkillPackageMaterializationResultV1> {
 		let packages: readonly SkillPackageMaterializationInputV1[];
+		let expectedGenerationId: string | null | undefined;
 		try {
-			packages = snapshotPackages(object(input, ["packages"]).packages);
+			const request = object(input, ["packages"], ["expectedGenerationId"]);
+			packages = snapshotPackages(request.packages);
+			expectedGenerationId = request.expectedGenerationId as
+				| string
+				| null
+				| undefined;
+			if (
+				expectedGenerationId !== undefined &&
+				expectedGenerationId !== null &&
+				(typeof expectedGenerationId !== "string" ||
+					!/^[a-f0-9]{64}$/.test(expectedGenerationId))
+			)
+				fail("invalid");
 		} catch (error) {
 			if (error instanceof SkillPackageMaterializerErrorV1) throw error;
 			fail("invalid");
@@ -581,6 +601,11 @@ export class SkillPackageMaterializerV1 {
 			await syncDirectory(this.#root);
 			for (const input of packages) await this.#verifyAdmission(input);
 			await this.#assertRoot();
+			if (expectedGenerationId !== undefined) {
+				const current = await this.readCurrent();
+				if ((current?.generationId ?? null) !== expectedGenerationId)
+					fail("conflict");
+			}
 			temporary = join(this.#root, `.current-${randomUUID()}`);
 			await persistFile(
 				temporary,

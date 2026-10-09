@@ -122,6 +122,7 @@ describe("Workload Skill materialization receipt", () => {
 			materializer,
 			resolveBindings: async () => [
 				{
+					agentId: "agent-a",
 					name: "workspace-summary",
 					agentVersion: "agent-version-1",
 					skillVersion: skill.skillVersion,

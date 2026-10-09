@@ -32,6 +32,7 @@ export interface WorkloadSkillMaterializerV1 {
 }
 
 export type WorkloadSkillMaterializationBindingV1 = Readonly<{
+	readonly agentId: string;
 	readonly name: string;
 	readonly agentVersion: string;
 	readonly skillVersion: SkillVersionRefV1;
@@ -56,8 +57,23 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 		async materialize(input) {
 			const bindings = await options.resolveBindings(input);
 			if (bindings.length > 10) throw new Error("Too many Skills");
+			if (bindings.some((binding) => binding.agentId !== input.agentId))
+				throw new Error("Skill binding Agent mismatch");
 			if (new Set(bindings.map((binding) => binding.agentVersion)).size > 1)
 				throw new Error("Skill bindings span multiple Agent versions");
+			if (
+				new Set(bindings.map((binding) => binding.name)).size !==
+					bindings.length ||
+				bindings.some(
+					(binding) =>
+						binding.packageObject.version !==
+							binding.skillVersion.packageObjectVersion ||
+						binding.packageObject.sha256 !==
+							binding.skillVersion.packageDigest ||
+						binding.packageObject.mediaType !== "application/zip",
+				)
+			)
+				throw new Error("Skill binding object mismatch");
 			const requested: SkillPackageMaterializationInputV1[] = bindings.map(
 				(binding) => ({
 					name: binding.name,
@@ -67,8 +83,10 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 					manifestDigest: binding.skillVersion.manifestDigest,
 				}),
 			);
+			const current = await options.materializer.readCurrentDetails();
 			const result = await options.materializer.materialize({
 				packages: requested,
+				expectedGenerationId: current?.result.generationId ?? null,
 			});
 			const details = await options.materializer.readCurrentDetails();
 			if (!details || details.result.generationId !== result.generationId)

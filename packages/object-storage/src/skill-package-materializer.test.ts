@@ -121,6 +121,19 @@ describe("Skill package materializer", () => {
 		).toBe(0o444);
 		expect((await stat(directory)).mode & 0o777).toBe(0o555);
 	});
+
+	it("rejects a stale generation expectation before replacing CURRENT", async () => {
+		const assemblyRoot = await root();
+		const adapter = materializer(assemblyRoot);
+		const current = await adapter.materialize({ packages: [selection] });
+		await expect(
+			adapter.materialize({
+				packages: [selection],
+				expectedGenerationId: "b".repeat(64),
+			}),
+		).rejects.toMatchObject({ code: "conflict" });
+		expect(await adapter.readCurrent()).toEqual(current);
+	});
 });
 
 async function selectionFor(version: string) {
