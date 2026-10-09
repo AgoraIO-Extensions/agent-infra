@@ -347,6 +347,8 @@ export class PostgresWecomChannelV1
 				currentUser = current ? parseCurrentTaskUserV1(current) : null;
 				if (!currentUser || currentUser.userId !== plan.authority.actor.actorId)
 					return reject("denied");
+				if (currentUser.authorizationRevision !== boundary.identityRevision)
+					return reject("denied");
 				const [platformDisabled] = await run(
 					sql<
 						{ user_id: string }[]
@@ -365,11 +367,7 @@ export class PostgresWecomChannelV1
 					);
 					return readyToCommit({ outcome: "denied" as const });
 				}
-				if (
-					currentUser.accountStatus !== "active" ||
-					currentUser.authorizationRevision !== boundary.identityRevision
-				)
-					return reject("denied");
+				if (currentUser.accountStatus !== "active") return reject("denied");
 			}
 			const [old] = await run(
 				sql<

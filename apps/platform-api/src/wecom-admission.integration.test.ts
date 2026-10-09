@@ -264,6 +264,26 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 			await sql`select revoked_at is not null as revoked from platform.task_authorization_records a join platform.conversation_executions e on e.execution_id=a.execution_id where e.actor_id=${f.userId}`,
 		).toEqual([{ revoked: true }]);
 	});
+	it("does not fan out controls when a disabled identity has a changed revision", async () => {
+		const prior = await fixture();
+		expect((await prior.app.request(prior.request())).status).toBe(200);
+		const f = await fixture(prior.userId);
+		let calls = 0;
+		f.setIdentity(async (scope) =>
+			++calls <= 2
+				? user(scope.senderId)
+				: {
+						...user(scope.senderId),
+						accountStatus: "disabled",
+						authorizationRevision: "changed-identity",
+					},
+		);
+		expect((await f.app.request(f.request())).status).toBe(503);
+		await noFacts(f);
+		expect(
+			await sql`select id from platform.task_control_records c join platform.conversation_executions e on e.execution_id=c.execution_id where e.actor_id=${f.userId}`,
+		).toEqual([]);
+	});
 	it("uses the Platform disable override at admission", async () => {
 		const prior = await fixture();
 		expect((await prior.app.request(prior.request())).status).toBe(200);
