@@ -4,7 +4,7 @@ RUN apk add --no-cache 'setpriv=2.42.3-r1'
 
 FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS builder
 ARG TARGETARCH
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates unzip util-linux \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates unzip util-linux procps \
 	&& rm -rf /var/lib/apt/lists/* /var/log/* \
 	&& npm install --global npm@11.19.1 \
 	&& npm install --global pnpm@11.20.0
@@ -110,8 +110,6 @@ FROM builder AS installed-skill-test
 ARG SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL org.agora.agent-infra.runtime-stage=installed-skill-test
-RUN apt-get update && apt-get install -y --no-install-recommends procps \
-    && rm -rf /var/lib/apt/lists/* /var/log/*
 COPY --from=runtime /opt/codex/ /opt/codex/
 ENV AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1
 USER node
