@@ -7,6 +7,10 @@ import {
 	type ConnectionRepository,
 } from "@agent-infra/connection-core";
 import { githubConnectionCatalog } from "@agent-infra/openconnector-adapter";
+import {
+	StaticSpacesAdapter,
+	staticSpacesConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/static-spaces";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
 import { seedApprovedConnectPermit } from "./approved-connect-fixture";
@@ -2623,5 +2627,216 @@ describe("PostgreSQL Connection business authority", () => {
 			}
 		},
 		30_000,
+	);
+});
+
+describe("StaticSpaces account isolation with PostgreSQL authority", () => {
+	integrationTest(
+		"rejects cross-user, cross-Connection and cross-Provider Credential access and survives revoke",
+		async () => {
+			if (!databaseUrl) return;
+			await migrateConnectionDatabase(
+				databaseUrl,
+				resolve(import.meta.dirname, "../../../migrations/connection"),
+			);
+			const repository = new PostgresConnectionRepository(
+				databaseUrl,
+				Buffer.alloc(32, 29),
+			);
+			const sql = postgres(databaseUrl, { max: 1 });
+			const suffix = randomUUID();
+			const consumerId = `static-spaces-consumer-${suffix}`;
+			const accounts = ["alice", "bob"].map((name, index) => ({
+				name,
+				principalId: `static-spaces-${name}-${suffix}`,
+				instanceId: `static-spaces-instance-${name}-${suffix}`,
+				token: `static-spaces-canary-${name}-${suffix}`,
+				pk: index + 17,
+			}));
+			let providerCalls = 0;
+			let providerWrites = 0;
+			let writeResponse: () => Promise<Response> = async () =>
+				Response.json({});
+			const adapter = new StaticSpacesAdapter(async (_url, init) => {
+				providerCalls += 1;
+				if (init?.method === "POST") {
+					providerWrites += 1;
+					return writeResponse();
+				}
+				const authorization = new Headers(init?.headers).get("authorization");
+				const account = accounts.find(
+					(item) => authorization === `Bearer ${item.token}`,
+				);
+				if (!account) return new Response(null, { status: 401 });
+				return Response.json({
+					user: {
+						pk: account.pk,
+						username: `${account.name}@example.test`,
+						is_superuser: false,
+						is_active: true,
+					},
+				});
+			});
+			const contexts: import("@agent-infra/connection-core").InvocationContext[] =
+				[];
+			try {
+				// Test-only catalog and permit seeding; this does not enter the runtime publication list.
+				await repository.publishProviderCatalog(staticSpacesConnectionCatalog);
+				await repository.publishConsumerDeclaration({
+					actionVersionIds: staticSpacesConnectionCatalog.actions.map(
+						(action) => action.id,
+					),
+					consumer: { id: consumerId, name: "StaticSpaces isolated test" },
+					providerReleaseId: staticSpacesConnectionCatalog.providerReleaseId,
+				});
+				for (const account of accounts) {
+					await sql`INSERT INTO connection_principals (id, display_name, email) VALUES (${account.principalId}, ${account.name}, ${`${account.name}@example.test`})`;
+					await sql`INSERT INTO connection_consumer_instances (id, consumer_id, kind, auth_subject, status, principal_id) VALUES (${account.instanceId}, ${consumerId}, 'DEVICE', ${account.instanceId}, 'ACTIVE', ${account.principalId})`;
+					const connection = await repository.storeProviderCredential({
+						...(await adapter.validateCredential(account.token)),
+						principalId: account.principalId,
+						accessRequestId: await seedApprovedConnectPermit(sql, {
+							principalId: account.principalId,
+							providerReleaseId:
+								staticSpacesConnectionCatalog.providerReleaseId,
+							scopes: ["static-spaces.personal-api-token"],
+						}),
+					});
+					await authorizeCurrentConsumer(repository, {
+						connectionId: connection.connectionId,
+						consumerId,
+						principalId: account.principalId,
+					});
+					const [context] = await repository.resolveDirectIdentities({
+						consumerId,
+						instanceId: account.instanceId,
+						principalId: account.principalId,
+					});
+					if (!context)
+						throw new Error("Missing authorized StaticSpaces context");
+					contexts.push(context);
+				}
+				const [alice, bob] = contexts;
+				if (!alice || !bob) throw new Error("Missing test accounts");
+				expect(await repository.getCredential(alice)).toEqual({
+					accessToken: accounts[0]?.token,
+				});
+				const beforeDenied = providerCalls;
+				for (const changed of [
+					{ principalId: bob.principalId },
+					{ connectionId: bob.connectionId },
+					{ credentialVersionId: bob.credentialVersionId },
+					{ grantId: bob.grantId },
+					{ instanceId: bob.instanceId },
+					{ actorKey: "other-agent" },
+					{ providerId: "github" },
+					{ providerReleaseId: "connection-v9" },
+				])
+					await expect(
+						repository.getCredential({ ...alice, ...changed }),
+					).rejects.toMatchObject({ code: "FORBIDDEN" });
+				expect(providerCalls).toBe(beforeDenied);
+				const service = new ConnectionApplicationService(repository, adapter);
+				expect(
+					await service.executeDirectActionForIdentity(
+						alice,
+						"static-spaces.get_current_user",
+						{},
+					),
+				).toMatchObject({
+					status: "SUCCEEDED",
+					result: { id: "17", username: "alice@example.test" },
+				});
+				for (const extra of [
+					{ username: "bob@example.test" },
+					{ connectionId: bob.connectionId },
+					{ principalId: bob.principalId },
+					{ accessToken: "caller-token" },
+					{ providerId: "github" },
+				]) {
+					await expect(
+						service.executeDirectActionForIdentity(
+							alice,
+							"static-spaces.list_files",
+							{ kind: "user", ...extra },
+						),
+					).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				}
+				for (const input of [
+					{ kind: "shared" },
+					{ kind: "user", slug: "other" },
+					{ kind: "invalid" },
+				]) {
+					await expect(
+						service.executeDirectActionForIdentity(
+							alice,
+							"static-spaces.list_files",
+							input,
+						),
+					).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+				}
+				expect(providerCalls).toBe(beforeDenied + 1);
+				// Verify the real persisted ledger for non-atomic rejection, lost response and malformed success.
+				for (const response of [
+					async () => new Response("partial write", { status: 409 }),
+					async () => {
+						throw new TypeError("response lost");
+					},
+					async () => Response.json({}),
+				]) {
+					writeResponse = response;
+					const input = {
+						kind: "user",
+						files: [{ relative_path: "docs/PRD.md", content: "# 原文\r\n" }],
+						idempotencyKey: `static-spaces-write-${providerWrites}-${suffix}`,
+					};
+					const writesBefore = providerWrites;
+					await expect(
+						service.executeDirectActionForIdentity(
+							alice,
+							"static-spaces.publish_space",
+							input,
+						),
+					).rejects.toMatchObject({ code: "PROVIDER_UNCERTAIN" });
+					const replay = await service.executeDirectActionForIdentity(
+						alice,
+						"static-spaces.publish_space",
+						input,
+					);
+					expect(replay.status).toBe("UNCERTAIN");
+					expect(providerWrites).toBe(writesBefore + 1);
+					const [persisted] =
+						await sql`SELECT call.status AS call_status, effect.status AS effect_status, dispatch.status AS dispatch_status FROM connection_calls call JOIN connection_effects effect ON effect.call_id = call.id JOIN connection_dispatches dispatch ON dispatch.effect_id = effect.id WHERE call.id = ${replay.callId}`;
+					expect(persisted).toEqual({
+						call_status: "UNCERTAIN",
+						effect_status: "UNCERTAIN",
+						dispatch_status: "UNCERTAIN",
+					});
+				}
+
+				await repository.revokeGrant({
+					grantId: alice.grantId,
+					principalId: alice.principalId,
+				});
+				const beforeRevoked = providerCalls;
+				await expect(
+					service.executeDirectActionForIdentity(
+						alice,
+						"static-spaces.get_current_user",
+						{},
+					),
+				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				expect(providerCalls).toBe(beforeRevoked);
+				const audit =
+					await sql`SELECT detail FROM connection_audit_records WHERE principal_id IN (${alice.principalId}, ${bob.principalId})`;
+				for (const account of accounts)
+					expect(JSON.stringify(audit)).not.toContain(account.token);
+			} finally {
+				const ownedPrincipals = accounts.map((account) => account.principalId);
+				await sql`DELETE FROM connection_reconciliation_jobs job USING connection_calls call WHERE job.call_id = call.id AND call.principal_id = ANY(${ownedPrincipals}::text[])`;
+				await repository.close();
+				await sql.end();
+			}
+		},
 	);
 });

@@ -338,7 +338,8 @@ export type ConnectorProviderId =
 	| "jenkins-release"
 	| "jira"
 	| "manhattan"
-	| "rehoboam";
+	| "rehoboam"
+	| "static-spaces";
 
 export const connectorDefinitions: Array<{
 	category: "代码托管" | "研发协作" | "知识库" | "CI/CD" | "数据平台";
@@ -374,6 +375,13 @@ export const connectorDefinitions: Array<{
 		icon: BookOpen,
 		name: "Confluence",
 		providerId: "confluence",
+	},
+	{
+		category: "知识库",
+		description: "静态文件发布、下载与 Markdown 评审读取",
+		icon: BookOpen,
+		name: "StaticSpaces",
+		providerId: "static-spaces",
 	},
 	{
 		category: "数据平台",
@@ -576,6 +584,7 @@ export function providerLabel(value: string) {
 			"jenkins-release": "Jenkins Release",
 			jira: "Jira",
 			rehoboam: "Rehoboam",
+			"static-spaces": "StaticSpaces",
 			manhattan: "Manhattan",
 		}[value] ?? value
 	);

@@ -58,9 +58,16 @@ test("runtime publication, consumer grants and approval management share every P
 				ts.isAsExpression(node.initializer) &&
 					ts.isArrayLiteralExpression(node.initializer.expression),
 			);
-			names = node.initializer.expression.elements.map(
-				(element) => element.text,
-			);
+			names = node.initializer.expression.elements.map((element) => {
+				if (ts.isIdentifier(element)) return element.text;
+				assert.ok(ts.isSpreadElement(element));
+				assert.match(
+					element.getText(registry),
+					/staticSpacesVerificationMatrix/,
+				);
+				assert.match(element.getText(registry), /LIVE_VERIFIED/);
+				return "staticSpacesConnectionCatalog (onboarding gated)";
+			});
 		}
 		ts.forEachChild(node, readRegistry);
 	}
@@ -75,6 +82,7 @@ test("runtime publication, consumer grants and approval management share every P
 		"jenkinsReleaseConnectionCatalog",
 		"manhattanConnectionCatalog",
 		"rehoboamConnectionCatalog",
+		"staticSpacesConnectionCatalog (onboarding gated)",
 	]);
 	assert.equal(loops, 2);
 	assert.equal(managementBindings, 1);
@@ -262,6 +270,7 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 		"./manhattan": "./src/manhattan.ts",
 		"./provider-fetch": "./src/provider-fetch.ts",
 		"./rehoboam": "./src/rehoboam.ts",
+		"./static-spaces": "./src/static-spaces.ts",
 		"./rehoboam-v11": "./src/rehoboam-v11.ts",
 	});
 	assert.doesNotMatch(buildConfig, /local-runtime/);

@@ -5,6 +5,7 @@ import { createConnectionRuntime } from "./runtime-app";
 const captured = vi.hoisted(() => ({
 	oauth: undefined as GitHubOAuthProvider | undefined,
 	requests: [] as string[],
+	origins: [] as string[][],
 }));
 
 vi.mock("@agent-infra/connection-store", async (importOriginal) => {
@@ -48,26 +49,29 @@ vi.mock("@agent-infra/connection-core", async (importOriginal) => {
 
 // Exercise the actual startup composition; no LDAP, database or Provider traffic.
 vi.mock("@agent-infra/openconnector-adapter/provider-fetch", () => ({
-	createPinnedProviderFetch: (options: { origins: string[] }) => ({
-		close: async () => {},
-		fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-			const url = input instanceof Request ? input.url : String(input);
-			if (
-				!options.origins.some(
-					(origin) => new URL(origin).origin === new URL(url).origin,
+	createPinnedProviderFetch: (options: { origins: string[] }) => {
+		captured.origins.push(options.origins);
+		return {
+			close: async () => {},
+			fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = input instanceof Request ? input.url : String(input);
+				if (
+					!options.origins.some(
+						(origin) => new URL(origin).origin === new URL(url).origin,
+					)
 				)
-			)
-				throw new Error("Provider origin is not allowed");
-			captured.requests.push(url);
-			return init?.method === "POST"
-				? Response.json({
-						access_token: "synthetic-token",
-						token_type: "bearer",
-						scope: "read:user",
-					})
-				: Response.json({ id: 42, login: "synthetic-user" });
-		},
-	}),
+					throw new Error("Provider origin is not allowed");
+				captured.requests.push(url);
+				return init?.method === "POST"
+					? Response.json({
+							access_token: "synthetic-token",
+							token_type: "bearer",
+							scope: "read:user",
+						})
+					: Response.json({ id: 42, login: "synthetic-user" });
+			},
+		};
+	},
 }));
 
 const environment = {
@@ -109,6 +113,7 @@ const environment = {
 afterEach(() => {
 	captured.oauth = undefined;
 	captured.requests = [];
+	captured.origins = [];
 	vi.restoreAllMocks();
 });
 
@@ -125,6 +130,12 @@ describe("production GitHub OAuth transport wiring", () => {
 			});
 			try {
 				if (!captured.oauth) throw new Error("OAuth Adapter was not assembled");
+				expect(captured.origins.flat()).not.toContain(
+					"https://publish-static-spaces.sh3.agoralab.co",
+				);
+				expect(captured.origins.flat()).not.toContain(
+					"https://auth-static-spaces.sh3.agoralab.co",
+				);
 				const identity = await captured.oauth.exchangeCode({
 					code: "synthetic-code",
 					codeVerifier: "synthetic-verifier",

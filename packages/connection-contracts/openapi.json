@@ -3903,7 +3903,7 @@
 							"accessRequestId": { "type": "string" },
 							"providerId": {
 								"type": "string",
-								"enum": ["bitbucket", "rehoboam"]
+								"enum": ["bitbucket", "rehoboam", "static-spaces"]
 							},
 							"accessToken": {
 								"type": "string",

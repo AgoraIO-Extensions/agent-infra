@@ -33,6 +33,7 @@ const services = new Set([
 	"rehoboam",
 	"manhattan",
 	"datalego",
+	"static-spaces",
 ]);
 const methods = new Set([
 	"GET",
@@ -112,6 +113,13 @@ const routeSegments = new Set([
 	"login",
 	"profile",
 	"me",
+	"core",
+	"files",
+	"publish-space",
+	"upload-html",
+	"upload-static-package",
+	"download-file",
+	"markdown-review",
 ]);
 const requestIdNames = [
 	"x-request-id",

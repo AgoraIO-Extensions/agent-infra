@@ -76,6 +76,27 @@ describe("call HTTP diagnostics", () => {
 			);
 		}
 	});
+	it("records StaticSpaces endpoints while excluding token, document query and response body", async () => {
+		const diagnostics = newCallDiagnostics("EXECUTE");
+		const observed = observeProviderFetch("static-spaces", async () =>
+			Response.json({ content: "DOCUMENT-CANARY" }),
+		);
+		await withCallDiagnostics(diagnostics, () =>
+			observed(
+				"https://publish-static-spaces.sh3.agoralab.co/v1/markdown-review?kind=shared&slug=SPACE-CANARY&path=DOCUMENT-CANARY.md",
+				{ headers: { authorization: "Bearer TOKEN-CANARY" } },
+			),
+		);
+		expect(diagnostics.requests[0]).toMatchObject({
+			service: "static-spaces",
+			pathTemplate: "/v1/markdown-review",
+			status: 200,
+		});
+		expect(JSON.stringify(projectCallDiagnostics(diagnostics))).not.toContain(
+			"CANARY",
+		);
+	});
+
 	it("does not retry failures or reflect messages, and marks bounded capture", async () => {
 		let calls = 0;
 		const error = new DOMException("SECRET-CANARY", "TimeoutError");

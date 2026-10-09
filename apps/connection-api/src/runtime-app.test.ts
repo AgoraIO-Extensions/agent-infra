@@ -148,6 +148,7 @@ it("production assembly uses registered diagnostic service names", () => {
 	};
 	visit(source);
 	expect(services).toContain("datalego");
+	expect(services).toContain("static-spaces");
 	expect(() => observeProviderFetch("unregistered-service", vi.fn())).toThrow(
 		"Unknown diagnostic service",
 	);

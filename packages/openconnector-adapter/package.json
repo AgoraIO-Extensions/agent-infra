@@ -15,6 +15,7 @@
 		"./datalego-oauth": "./src/datalego-oauth.ts",
 		"./manhattan": "./src/manhattan.ts",
 		"./rehoboam": "./src/rehoboam.ts",
+		"./static-spaces": "./src/static-spaces.ts",
 		"./rehoboam-v11": "./src/rehoboam-v11.ts",
 		"./provider-fetch": "./src/provider-fetch.ts"
 	},
@@ -25,6 +26,7 @@
 		"verify:bitbucket:upstream": "node scripts/verify-bitbucket-upstream.mjs"
 	},
 	"dependencies": {
+		"@cfworker/json-schema": "4.1.1",
 		"@agent-infra/connection-core": "workspace:*",
 		"@agent-infra/openconnector-kernel": "workspace:*",
 		"undici": "7.29.0"
