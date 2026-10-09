@@ -8900,6 +8900,24 @@
                   "const": "self-managed",
                   "type": "string"
                 },
+                "interactionOrigin": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "origin": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "origin"
+                  ],
+                  "type": "object"
+                },
                 "name": {
                   "minLength": 1,
                   "type": "string"
@@ -10255,6 +10273,24 @@
                 "exposure": {
                   "const": "self-managed",
                   "type": "string"
+                },
+                "interactionOrigin": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "origin": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "origin"
+                  ],
+                  "type": "object"
                 },
                 "name": {
                   "minLength": 1,
@@ -11612,6 +11648,24 @@
                   "const": "self-managed",
                   "type": "string"
                 },
+                "interactionOrigin": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "origin": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "origin"
+                  ],
+                  "type": "object"
+                },
                 "name": {
                   "minLength": 1,
                   "type": "string"
@@ -12828,6 +12882,24 @@
                               "const": "self-managed",
                               "type": "string"
                             },
+                            "interactionOrigin": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "schemaVersion": {
+                                  "const": 1,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "schemaVersion",
+                                "origin"
+                              ],
+                              "type": "object"
+                            },
                             "name": {
                               "minLength": 1,
                               "type": "string"
@@ -13497,6 +13569,24 @@
                             "exposure": {
                               "const": "self-managed",
                               "type": "string"
+                            },
+                            "interactionOrigin": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "schemaVersion": {
+                                  "const": 1,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "schemaVersion",
+                                "origin"
+                              ],
+                              "type": "object"
                             },
                             "name": {
                               "minLength": 1,
@@ -14411,6 +14501,24 @@
                               "const": "self-managed",
                               "type": "string"
                             },
+                            "interactionOrigin": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "schemaVersion": {
+                                  "const": 1,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "schemaVersion",
+                                "origin"
+                              ],
+                              "type": "object"
+                            },
                             "name": {
                               "minLength": 1,
                               "type": "string"
@@ -15058,6 +15166,24 @@
                             "exposure": {
                               "const": "self-managed",
                               "type": "string"
+                            },
+                            "interactionOrigin": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "origin": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "schemaVersion": {
+                                  "const": 1,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "schemaVersion",
+                                "origin"
+                              ],
+                              "type": "object"
                             },
                             "name": {
                               "minLength": 1,
@@ -16625,6 +16751,24 @@
           "type": "object"
         }
       ]
+    },
+    "WorkloadRouteOriginV1": {
+      "additionalProperties": false,
+      "properties": {
+        "origin": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "origin"
+      ],
+      "type": "object"
     },
     "WorkloadRouteSwitchRequestV1": {
       "oneOf": [
