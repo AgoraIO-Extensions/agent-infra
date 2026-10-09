@@ -12,6 +12,14 @@ export function implementationUrl(logicalPath) {
 		(file) => file.logicalPath === logicalPath,
 	);
 	if (
+		!entry &&
+		/^src\/[a-z0-9-]+\.ts$/.test(logicalPath) &&
+		sourceLayout.sharedDependencies?.some(
+			(file) => file.logicalPath === logicalPath,
+		)
+	)
+		return new URL("../" + logicalPath, import.meta.url);
+	if (
 		!entry ||
 		!/^src\/providers\/[a-z0-9-]+\/versions\/[a-z0-9-]+\.ts$/.test(
 			entry.implementationPath,

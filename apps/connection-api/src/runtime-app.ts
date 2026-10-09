@@ -72,7 +72,7 @@ import {
 	StaticSpacesAdapter,
 	staticSpacesConnectionCatalog,
 	staticSpacesOrigins,
-} from "@agent-infra/openconnector-adapter/static-spaces";
+} from "@agent-infra/openconnector-adapter/providers/static-spaces";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 import { createConnectionApp } from "./app";
 import { fullConnectionRuntimeConfig } from "./runtime-config";

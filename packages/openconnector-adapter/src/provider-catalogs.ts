@@ -14,7 +14,7 @@ import { rehoboamV11ConnectionCatalog as rehoboamConnectionCatalog } from "./pro
 import {
 	staticSpacesConnectionCatalog,
 	staticSpacesVerificationMatrix,
-} from "./static-spaces.ts";
+} from "./providers/static-spaces/definition.ts";
 
 const catalogs = [
 	githubConnectionCatalog,

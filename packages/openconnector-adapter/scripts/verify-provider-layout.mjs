@@ -4,6 +4,15 @@ import { readFileSync } from "node:fs";
 import { implementationUrl, sourceLayout } from "./source-layout.mjs";
 
 assert.equal(sourceLayout.version, 1);
+for (const file of sourceLayout.sharedDependencies ?? []) {
+	assert.match(file.logicalPath, /^src\/[a-z0-9-]+\.ts$/);
+	assert.equal(
+		createHash("sha256")
+			.update(readFileSync(implementationUrl(file.logicalPath)))
+			.digest("hex"),
+		file.sha256,
+	);
+}
 assert.equal(
 	new Set(sourceLayout.files.map((file) => file.logicalPath)).size,
 	sourceLayout.files.length,

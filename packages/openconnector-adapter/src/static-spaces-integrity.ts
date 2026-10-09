@@ -1,2 +1,2 @@
-export const staticSpacesExecutorDigest =
-	"sha256:8c24ce7b0632d6eeadd64aabf6468669dcf1329d878dc8ed1497e57a1f1dfc1d";
+// Compatibility entry point; provider implementation lives under providers/.
+export * from "./providers/static-spaces/versions/static-spaces-integrity.ts";

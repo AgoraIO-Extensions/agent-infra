@@ -10,6 +10,7 @@ test("provider entry points preserve executor identity and published action arra
 		["datalego", "datalego-v6.ts", "DataLegoV6Adapter"],
 		["manhattan", "manhattan.ts", "ManhattanAdapter"],
 		["rehoboam", "rehoboam-v11.ts", "RehoboamV11Adapter"],
+		["static-spaces", "static-spaces.ts", "StaticSpacesAdapter"],
 	] as const) {
 		const current = await import(`./providers/${provider}/index.ts`);
 		const legacy = await import(`./${file}`);

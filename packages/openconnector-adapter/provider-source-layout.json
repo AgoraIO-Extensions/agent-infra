@@ -1,6 +1,6 @@
 {
 	"version": 1,
-	"baselineCommit": "0fa4d6275300fd9110f1a85a2fd7c94a20fc4b3d",
+	"baselineCommit": "5b84af05dff93e33a33471ad6e65ccd58975dc9b",
 	"files": [
 		{
 			"logicalPath": "src/bitbucket-server-integrity.ts",
@@ -136,6 +136,22 @@
 			"logicalPath": "src/rehoboam.ts",
 			"implementationPath": "src/providers/rehoboam/versions/rehoboam.ts",
 			"sha256": "bbcc3a4812ebe77db72d91d0c26c4b7bb506329848190ee376724c4b5742ea45"
+		},
+		{
+			"logicalPath": "src/static-spaces.ts",
+			"implementationPath": "src/providers/static-spaces/versions/static-spaces.ts",
+			"sha256": "8c24ce7b0632d6eeadd64aabf6468669dcf1329d878dc8ed1497e57a1f1dfc1d"
+		},
+		{
+			"logicalPath": "src/static-spaces-integrity.ts",
+			"implementationPath": "src/providers/static-spaces/versions/static-spaces-integrity.ts",
+			"sha256": "1980f5a4a05e71d129485df6162e5000f76d98e3b49556d94534d551963c7051"
+		}
+	],
+	"sharedDependencies": [
+		{
+			"logicalPath": "src/test-project.ts",
+			"sha256": "2b30389c709cd0c3efb84fa3326ccc71151f87b7c9db454f8d72c0386caadfbb"
 		}
 	]
 }

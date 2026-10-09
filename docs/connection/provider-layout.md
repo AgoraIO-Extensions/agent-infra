@@ -19,6 +19,7 @@ openconnector-adapter/
     │   ├── jenkins/
     │   ├── manhattan/
     │   ├── datalego/
+    │   ├── static-spaces/
     │   └── rehoboam/
     └── *.ts                         # 旧导入路径的兼容出口
 ```
@@ -37,6 +38,7 @@ openconnector-adapter/
 Jenkins CI/Release 是两个独立部署 profile，使用同一 `jenkins/` 实现；DataLego 的历史 PAT、OAuth
 试验和 v4/v5/v6 在同一 Provider 的版本目录内，当前入口选择已发布 v6。Rehoboam 当前入口选择 v11，
 v10 及旧版本路由继续按原契约委托。
+StaticSpaces 的当前入口保留原真实验收门禁及启用条件，不因目录调整自动开放未验证能力。
 
 已发布版本源码是不可变快照，归档内保留原来的模块边界。目录调整不重写它们，也不改变
 ProviderRelease、executor digest、Action schema 或权限，因此不会制造一次没有能力变化的账号升级。
