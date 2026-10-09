@@ -209,7 +209,6 @@ export function createConversationRuntimeV2(
 		{ readonly execution: ConversationRuntimeEventRequestV1 }
 	>();
 	const drains = new WeakMap<Context, Awaited<ReturnType<typeof prepare>>>();
-	const now = options.signing.now ?? Date.now;
 	const controller = new AbortController();
 	const lifetime = options.signal
 		? AbortSignal.any([controller.signal, options.signal])
@@ -1124,7 +1123,7 @@ export function createConversationRuntimeV2(
 				for (;;) {
 					active.throwIfAborted();
 					const prepared = previous
-						? await continuePrepared(previous, request, "events.persist", active)
+							? await continuePrepared(previous, request, active)
 						: await prepare(request, "events.persist", active);
 					previous = undefined;
 					drains.set(prepared.context, prepared);
