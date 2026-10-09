@@ -938,29 +938,34 @@ export class FileRuntimeStore {
 		result: RuntimeOperationResultV1 | RuntimeOperationResultV2,
 		nativeSessionRef?: string,
 	) {
-		return this.file.update((state) => {
-			const session = state.sessions[hostSessionRef] ?? storeCorrupted();
-			const operation = session.operations[operationId] ?? storeCorrupted();
-			if (
-				nativeSessionRef &&
-				session.nativeSessionRef &&
-				nativeSessionRef !== session.nativeSessionRef
-			) {
-				throw new RuntimeHostError(
-					"RUNTIME_DRIVER_INVALID",
-					"Runtime Driver response is invalid",
-					503,
-					true,
-				);
-			}
-			operation.state = "resolved";
-			operation.result = result;
-			if (nativeSessionRef) session.nativeSessionRef = nativeSessionRef;
-			return {
-				session: structuredClone(session),
-				operation: structuredClone(operation),
-			};
-		});
+		// Each event page re-resolves a running Turn; an unchanged result is
+		// already durable and is not rewritten (#1637).
+		return this.file.update(
+			(state) => {
+				const session = state.sessions[hostSessionRef] ?? storeCorrupted();
+				const operation = session.operations[operationId] ?? storeCorrupted();
+				if (
+					nativeSessionRef &&
+					session.nativeSessionRef &&
+					nativeSessionRef !== session.nativeSessionRef
+				) {
+					throw new RuntimeHostError(
+						"RUNTIME_DRIVER_INVALID",
+						"Runtime Driver response is invalid",
+						503,
+						true,
+					);
+				}
+				operation.state = "resolved";
+				operation.result = result;
+				if (nativeSessionRef) session.nativeSessionRef = nativeSessionRef;
+				return {
+					session: structuredClone(session),
+					operation: structuredClone(operation),
+				};
+			},
+			{ skipUnchanged: true },
+		);
 	}
 
 	getSessionForQuery(
@@ -1162,7 +1167,7 @@ export class FileRuntimeStore {
 		mode: "query" | "renew" | "generation-cancel" = "query",
 		now: RuntimeStoreClock = Date.now,
 	) {
-		return this.file.update((state) => {
+		const authorize = (state: RuntimeStoreState) => {
 			const currentNow = typeof now === "function" ? now() : now;
 			assertStoreState(state);
 			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
@@ -1243,7 +1248,11 @@ export class FileRuntimeStore {
 				session: structuredClone(session),
 				authority: structuredClone(authority),
 			};
-		});
+		};
+		// A query that changes nothing, such as each business event read, is
+		// already durable; it keeps its place in the write order but does not
+		// rewrite the file (#1637).
+		return this.file.update(authorize, { skipUnchanged: mode === "query" });
 	}
 
 	checkRequestV3(claims: RuntimeExecutionGrantClaimsV2) {
@@ -1376,50 +1385,69 @@ export class FileRuntimeStore {
 		cursor: string,
 		now: RuntimeStoreClock = Date.now,
 	) {
-		return this.file.update((state) => {
-			const currentNow = typeof now === "function" ? now() : now;
-			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
-			const session = sessionFor(
-				state,
-				claims.hostSessionRef,
-				claims,
-				claims.purpose === "control",
-			);
-			const authority = session.executionAuthorities?.[claims.executionId];
-			if (
-				!authority ||
-				(claims.purpose === "business" && authority.expiresAt <= currentNow) ||
-				claims.expiresAt <= currentNow ||
-				authority.executionDeliveryFence !==
-					claims.operation.executionDeliveryFence ||
-				authority.workerId !== claims.workerId ||
-				session.highestFences[`execution:${claims.executionId}`] !==
-					claims.operation.executionDeliveryFence
-			)
-				runtimeAuthorizationDenied();
-			if (
-				claims.purpose === "business" &&
-				(authority.stopped ||
-					authority.control !== undefined ||
-					authority.authorizationRecordId !== claims.authorizationRecordId)
-			)
-				runtimeAuthorizationDenied();
-			if (
-				claims.purpose === "control" &&
-				(authority.control?.controlRecordId !== claims.controlRecordId ||
-					authority.control.reason !== claims.reason)
-			)
-				runtimeAuthorizationDenied();
-			if (
-				!authority.deliveredCursors.includes(cursor) &&
-				!authority.acknowledgedCursors?.includes(cursor) &&
-				authority.confirmedCursor !== cursor
-			) {
-				if (authority.deliveredCursors.length >= maximumAcknowledgedCursors)
+		return this.recordDeliveredCursors(claims, [cursor], now);
+	}
+
+	/**
+	 * Records one replay page's cursors, in order, with one durable write; a
+	 * re-read page whose cursors are all recorded is not rewritten (#1637).
+	 */
+	recordDeliveredCursors(
+		claims: RuntimeExecutionGrantClaimsV2,
+		cursors: readonly string[],
+		now: RuntimeStoreClock = Date.now,
+	) {
+		return this.file.update(
+			(state) => {
+				const currentNow = typeof now === "function" ? now() : now;
+				if (!claims.hostSessionRef) runtimeAuthorizationDenied();
+				const session = sessionFor(
+					state,
+					claims.hostSessionRef,
+					claims,
+					claims.purpose === "control",
+				);
+				const authority = session.executionAuthorities?.[claims.executionId];
+				if (
+					!authority ||
+					(claims.purpose === "business" &&
+						authority.expiresAt <= currentNow) ||
+					claims.expiresAt <= currentNow ||
+					authority.executionDeliveryFence !==
+						claims.operation.executionDeliveryFence ||
+					authority.workerId !== claims.workerId ||
+					session.highestFences[`execution:${claims.executionId}`] !==
+						claims.operation.executionDeliveryFence
+				)
 					runtimeAuthorizationDenied();
-				authority.deliveredCursors.push(cursor);
-			}
-		});
+				if (
+					claims.purpose === "business" &&
+					(authority.stopped ||
+						authority.control !== undefined ||
+						authority.authorizationRecordId !== claims.authorizationRecordId)
+				)
+					runtimeAuthorizationDenied();
+				if (
+					claims.purpose === "control" &&
+					(authority.control?.controlRecordId !== claims.controlRecordId ||
+						authority.control.reason !== claims.reason)
+				)
+					runtimeAuthorizationDenied();
+				for (const cursor of cursors) {
+					if (
+						!authority.deliveredCursors.includes(cursor) &&
+						!authority.acknowledgedCursors?.includes(cursor) &&
+						authority.confirmedCursor !== cursor
+					) {
+						// Over the bound, the whole page is refused and nothing is recorded.
+						if (authority.deliveredCursors.length >= maximumAcknowledgedCursors)
+							runtimeAuthorizationDenied();
+						authority.deliveredCursors.push(cursor);
+					}
+				}
+			},
+			{ skipUnchanged: true },
+		);
 	}
 
 	checkAcknowledgableCursor(
