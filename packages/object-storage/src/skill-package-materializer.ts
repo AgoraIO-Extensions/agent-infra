@@ -5,9 +5,11 @@ import {
 	lstat,
 	mkdir,
 	open,
+	readFile,
 	readdir,
 	rename,
 	rm,
+	writeFile,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { types } from "node:util";
@@ -639,6 +641,39 @@ export class SkillPackageMaterializerV1 {
 	async materialize(
 		input: unknown,
 	): Promise<SkillPackageMaterializationResultV1> {
+		const lock = join(this.#root, ".materialize-lock");
+		let ownsFilesystemLock = false;
+		for (let attempt = 0; attempt < 200; attempt += 1) {
+			try {
+				await mkdir(lock, { mode: 0o700 });
+				await writeFile(join(lock, "owner"), String(process.pid), {
+					flag: "wx",
+					mode: 0o444,
+				});
+				ownsFilesystemLock = true;
+				break;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+				try {
+					const owner = Number.parseInt(
+						(await readFile(join(lock, "owner"), "utf8")).trim(),
+						10,
+					);
+					if (Number.isSafeInteger(owner) && owner > 0) {
+						try {
+							process.kill(owner, 0);
+						} catch (probeError) {
+							if ((probeError as NodeJS.ErrnoException).code === "ESRCH")
+								await rm(lock, { recursive: true, force: true });
+						}
+					}
+				} catch {
+					// A lock without a readable owner is treated as active.
+				}
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+		}
+		if (!ownsFilesystemLock) fail("unavailable");
 		const previous = SkillPackageMaterializerV1.#locks.get(this.#root);
 		let release!: () => void;
 		const current = new Promise<void>((resolve) => {
@@ -652,6 +687,7 @@ export class SkillPackageMaterializerV1 {
 			release();
 			if (SkillPackageMaterializerV1.#locks.get(this.#root) === current)
 				SkillPackageMaterializerV1.#locks.delete(this.#root);
+			await rm(lock, { recursive: true, force: true });
 		}
 	}
 }
