@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
-import { skillHubSkills, skillHubVersions } from "./schema-skill-hub.ts";
+import {
+	skillHubAgentBindings,
+	skillHubSkills,
+	skillHubVersions,
+} from "./schema-skill-hub.ts";
 
 describe("Skill Hub persistence schema", () => {
 	it("supports the composite version owner foreign key", () => {
@@ -26,5 +30,21 @@ describe("Skill Hub persistence schema", () => {
 				"utf8",
 			),
 		).toContain(`"state" = 'pending_review' or`);
+	});
+
+	it("binds every row to the configuration revision", () => {
+		const binding = getTableConfig(skillHubAgentBindings);
+		expect(binding.columns.map((column) => column.name)).toContain(
+			"configuration_revision",
+		);
+		expect(binding.foreignKeys).toHaveLength(3);
+		expect(
+			binding.primaryKeys[0]?.columns.map((column) => column.name),
+		).toEqual([
+			"agent_id",
+			"agent_version",
+			"configuration_revision",
+			"skill_version_id",
+		]);
 	});
 });

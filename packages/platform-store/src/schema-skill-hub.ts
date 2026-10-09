@@ -14,7 +14,7 @@ import {
 	uniqueIndex,
 	varchar,
 } from "drizzle-orm/pg-core";
-import { agents } from "./schema-agents";
+import { agentConfigurationRevisions, agents } from "./schema-agents";
 import { platformSchema } from "./schema-common";
 
 const nonEmpty = (column: AnyPgColumn, name: string) =>
@@ -179,16 +179,28 @@ export const skillHubAgentBindings = platformSchema.table(
 		failureReason: text("failure_reason"),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+		configurationRevision: bigint("configuration_revision", {
+			mode: "number",
+		}).notNull(),
 	},
 	(table) => [
 		primaryKey({
-			columns: [table.agentId, table.agentVersion, table.skillVersionId],
+			columns: [
+				table.agentId,
+				table.agentVersion,
+				table.configurationRevision,
+				table.skillVersionId,
+			],
 			name: "skill_hub_agent_binding_pk",
 		}),
 		nonEmpty(table.agentVersion, "skill_hub_agent_binding_version_non_empty"),
 		check(
 			"skill_hub_agent_binding_sync_revision_safe",
 			sql`${table.syncRevision} between 1 and 9007199254740991`,
+		),
+		check(
+			"skill_hub_agent_binding_configuration_revision_safe",
+			sql`${table.configurationRevision} between 1 and 9007199254740991`,
 		),
 		check(
 			"skill_hub_agent_binding_state_valid",
@@ -206,6 +218,14 @@ export const skillHubAgentBindings = platformSchema.table(
 			columns: [table.skillVersionId],
 			foreignColumns: [skillHubVersions.id],
 			name: "skill_hub_agent_binding_skill_version_fk",
+		}),
+		foreignKey({
+			columns: [table.agentId, table.configurationRevision],
+			foreignColumns: [
+				agentConfigurationRevisions.agentId,
+				agentConfigurationRevisions.revision,
+			],
+			name: "skill_hub_agent_binding_configuration_revision_fk",
 		}),
 	],
 );

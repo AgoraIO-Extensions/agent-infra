@@ -24,6 +24,7 @@ import {
 	advanceAgentConfigurationRevision,
 	insertAgentConfigurationEffects,
 	replaceAgentAccess,
+	replaceSkillHubAgentBindings,
 } from "./plan-writes.js";
 import {
 	agentApplications,
@@ -72,10 +73,13 @@ export class PostgresAgentConfigurationTransactionV1
 						.from(idempotencyRecords)
 						.where(
 							and(
-								eq(idempotencyRecords.scopeType, scopeType),
+								eq(idempotencyRecords.scopeType, input.scopeType ?? scopeType),
 								eq(idempotencyRecords.scopeId, input.agentId),
 								eq(idempotencyRecords.actorId, input.actorId),
-								eq(idempotencyRecords.commandType, commandType),
+								eq(
+									idempotencyRecords.commandType,
+									input.commandType ?? commandType,
+								),
 								eq(idempotencyRecords.idempotencyKey, input.idempotencyKey),
 							),
 						)
@@ -184,6 +188,9 @@ export class PostgresAgentConfigurationTransactionV1
 			)
 				throw new AgentConfigurationStoreError();
 			const { configuration, result } = plan;
+			const idempotencyScopeType = plan.idempotency.scopeType ?? scopeType;
+			const idempotencyCommandType =
+				plan.idempotency.commandType ?? commandType;
 			return await this.#database.transaction(async (transaction) => {
 				const [agent] = await transaction
 					.select({
@@ -205,10 +212,10 @@ export class PostgresAgentConfigurationTransactionV1
 					.from(idempotencyRecords)
 					.where(
 						and(
-							eq(idempotencyRecords.scopeType, scopeType),
+							eq(idempotencyRecords.scopeType, idempotencyScopeType),
 							eq(idempotencyRecords.scopeId, plan.agentId),
 							eq(idempotencyRecords.actorId, plan.auditEvent.actorId),
-							eq(idempotencyRecords.commandType, commandType),
+							eq(idempotencyRecords.commandType, idempotencyCommandType),
 							eq(idempotencyRecords.idempotencyKey, plan.idempotency.key),
 						),
 					)
@@ -391,8 +398,10 @@ export class PostgresAgentConfigurationTransactionV1
 					throw new AgentConfigurationStoreError();
 				}
 				if (
-					configuration.schemaVersion !== 2 ||
-					previousConfiguration.schemaVersion !== 2
+					(configuration.schemaVersion !== 2 &&
+						configuration.schemaVersion !== 3) ||
+					(previousConfiguration.schemaVersion !== 2 &&
+						previousConfiguration.schemaVersion !== 3)
 				)
 					throw new AgentConfigurationStoreError();
 
@@ -411,6 +420,7 @@ export class PostgresAgentConfigurationTransactionV1
 					configuration,
 					previousConfiguration,
 				);
+				await replaceSkillHubAgentBindings(transaction, plan);
 
 				if (plan.accessUpdate && applicationId) {
 					const accessAdvanced = await transaction
@@ -438,10 +448,10 @@ export class PostgresAgentConfigurationTransactionV1
 
 				await transaction.insert(idempotencyRecords).values({
 					id: randomUUID(),
-					scopeType,
+					scopeType: idempotencyScopeType,
 					scopeId: plan.agentId,
 					actorId: plan.auditEvent.actorId,
-					commandType,
+					commandType: idempotencyCommandType,
 					idempotencyKey: plan.idempotency.key,
 					requestDigest: plan.idempotency.requestDigest,
 					status: "completed",

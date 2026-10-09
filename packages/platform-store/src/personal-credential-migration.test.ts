@@ -142,6 +142,8 @@ beforeAll(async () => {
 		{ idx: 44, tag: "0044_platform_cancellation_status_required" },
 		{ idx: 45, tag: "0045_skill_hub_organization_scope" },
 		{ idx: 46, tag: "0046_commit_wakeups" },
+		{ idx: 47, tag: "0047_skill_agent_binding_revision" },
+		{ idx: 48, tag: "0048_skill_agent_binding_history" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({

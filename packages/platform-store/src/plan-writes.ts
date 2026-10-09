@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
-	AgentConfigurationRecordV2,
+	AgentConfigurationRecord,
 	AgentConfigurationWritePlanV1,
 	AgentManagementWritePlanV1,
 } from "@agent-infra/platform-core";
@@ -14,7 +14,12 @@ import {
 	agentOwners,
 	agents,
 	auditEvents,
+	idempotencyRecords,
 	outboxItems,
+	skillHubAgentBindings,
+	skillHubInstallations,
+	skillHubSkills,
+	skillHubVersions,
 } from "./schema.js";
 import { persistSessionSandboxManagementIntents } from "./session-sandbox-management.js";
 
@@ -25,7 +30,7 @@ type Transaction = Parameters<
 export async function advanceAgentConfigurationRevision(
 	transaction: Transaction,
 	plan: AgentConfigurationWritePlanV1,
-	configuration: AgentConfigurationRecordV2,
+	configuration: AgentConfigurationRecord,
 ): Promise<boolean> {
 	if (plan.nextRevision !== plan.baseRevision) {
 		await transaction.insert(agentConfigurationRevisions).values({
@@ -118,6 +123,72 @@ export async function insertAgentConfigurationEffects(
 		details: { changedFields: plan.auditEvent.changedFields },
 		occurredAt: plan.auditEvent.occurredAt,
 	});
+}
+
+export async function replaceSkillHubAgentBindings(
+	transaction: Transaction,
+	plan: AgentConfigurationWritePlanV1,
+): Promise<void> {
+	const skillBindings = plan.skillBindings;
+	if (!skillBindings) return;
+	if (skillBindings.bindings.length === 0) return;
+	for (const binding of skillBindings.bindings) {
+		const [version] = await transaction
+			.select({
+				state: skillHubVersions.state,
+				parentStatus: skillHubSkills.status,
+			})
+			.from(skillHubVersions)
+			.innerJoin(
+				skillHubSkills,
+				eq(skillHubSkills.id, skillHubVersions.skillId),
+			)
+			.where(eq(skillHubVersions.id, binding.skillVersionId))
+			.for("update");
+		if (version?.state !== "published" || version?.parentStatus !== "active")
+			throw new Error("Skill version is no longer available");
+		const [admission] = await transaction
+			.select({ id: idempotencyRecords.id })
+			.from(idempotencyRecords)
+			.where(
+				and(
+					eq(idempotencyRecords.scopeType, "skill_package"),
+					eq(idempotencyRecords.scopeId, binding.skillVersionId),
+					eq(idempotencyRecords.status, "completed"),
+				),
+			)
+			.limit(1);
+		if (!admission) throw new Error("Skill package admission is unavailable");
+		const [installation] = await transaction
+			.select({ id: skillHubInstallations.id })
+			.from(skillHubInstallations)
+			.where(
+				and(
+					eq(skillHubInstallations.skillVersionId, binding.skillVersionId),
+					eq(skillHubInstallations.principalType, binding.principalType),
+					eq(skillHubInstallations.principalId, binding.principalId),
+					eq(skillHubInstallations.state, "installed"),
+				),
+			)
+			.for("share")
+			.limit(1);
+		if (!installation)
+			throw new Error("Skill installation is no longer available");
+	}
+	await transaction.insert(skillHubAgentBindings).values(
+		skillBindings.bindings.map((binding) => ({
+			agentId: plan.agentId,
+			agentVersion: skillBindings.agentVersion,
+			configurationRevision: plan.nextRevision,
+			skillVersionId: binding.skillVersionId,
+			grant: binding.grant,
+			syncRevision: 1,
+			state: "pending_sync",
+			failureReason: null,
+			createdAt: plan.auditEvent.occurredAt,
+			updatedAt: plan.auditEvent.occurredAt,
+		})),
+	);
 }
 
 export function agentManagementStateUpdate(plan: AgentManagementWritePlanV1) {

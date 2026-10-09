@@ -10,6 +10,7 @@ import type {
 	PendingSecretRecordAttachmentResolverV1,
 	PendingSecretRecordAttachmentsV1,
 } from "./secret-record-attachments.js";
+import type { SkillHubAgentBindingWriteV1 } from "./skill-hub-agent-binding.js";
 
 export type AgentConfigurationSourceV1 =
 	| {
@@ -348,7 +349,8 @@ export type AgentConfigurationChangedFieldV1 =
 	| "actions"
 	| "channels"
 	| "owners"
-	| "availability";
+	| "availability"
+	| "skills";
 
 export interface AgentConfigurationAccessPlanV1 {
 	readonly schemaVersion: 1;
@@ -375,11 +377,15 @@ export interface AgentConfigurationWritePlanV1 {
 	readonly expectedAuthorizationRevision: string;
 	readonly nextAuthorizationRevision: string;
 	readonly configuration: AgentConfigurationRecord;
+	/** Skill bindings are committed in the same configuration CAS transaction. */
+	readonly skillBindings?: SkillHubAgentBindingWriteV1;
 	readonly accessUpdate: AgentConfigurationAccessPlanV1 | null;
 	readonly result: AgentConfigurationResultV1;
 	readonly idempotency: {
 		readonly key: string;
 		readonly requestDigest: string;
+		readonly scopeType?: string;
+		readonly commandType?: string;
 	};
 	readonly outboxIntent: {
 		readonly operation: "agent.configuration.revised.v1";
@@ -414,6 +420,8 @@ export interface AgentConfigurationTransactionPortV1 {
 		readonly actorId: string;
 		readonly idempotencyKey: string;
 		readonly requestDigest: string;
+		readonly scopeType?: string;
+		readonly commandType?: string;
 	}): Promise<
 		| {
 				readonly outcome: "ready";
