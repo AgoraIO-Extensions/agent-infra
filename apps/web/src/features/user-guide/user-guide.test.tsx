@@ -52,6 +52,21 @@ describe("user guide", () => {
 		);
 		expect(screen.queryByRole("region", { name: "搜索结果" })).toBeNull();
 	});
+	it("restores heading focus when a search result is the current chapter", () => {
+		render(<Guide initial="07" />);
+		const input = screen.getByRole("textbox", { name: "搜索使用说明" });
+		input.focus();
+		fireEvent.change(input, { target: { value: "Relay Key" } });
+		const result = within(
+			screen.getByRole("region", { name: "搜索结果" }),
+		).getByRole("button", { name: /模型与 Relay Key/ });
+		result.focus();
+		fireEvent.click(result);
+		expect(screen.getByRole("heading", { name: "模型与 Relay Key" })).toBe(
+			document.activeElement,
+		);
+		expect(screen.queryByRole("region", { name: "搜索结果" })).toBeNull();
+	});
 	it("recovers from no results without changing the selected chapter", () => {
 		render(<Guide initial="07" />);
 		const input = screen.getByRole("textbox", { name: "搜索使用说明" });

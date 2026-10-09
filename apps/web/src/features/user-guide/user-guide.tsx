@@ -77,6 +77,7 @@ export function UserGuide({
 	const [query, setQuery] = useState("");
 	const heading = useRef<HTMLHeadingElement>(null);
 	const previousChapter = useRef("01");
+	const selectedSearchResult = useRef(false);
 	const active = guideChapter(chapter);
 	const index = guideChapters.indexOf(active);
 	const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -84,13 +85,18 @@ export function UserGuide({
 		`${item.title} ${item.body}`.toLocaleLowerCase().includes(normalizedQuery),
 	);
 	useEffect(() => {
-		if (previousChapter.current !== chapter && !query) {
+		if (
+			!query &&
+			(previousChapter.current !== chapter || selectedSearchResult.current)
+		) {
 			heading.current?.focus({ preventScroll: true });
 			heading.current?.scrollIntoView({ block: "start" });
 			previousChapter.current = chapter;
+			selectedSearchResult.current = false;
 		}
 	}, [chapter, query]);
 	const choose = (id: string) => {
+		selectedSearchResult.current = query.length > 0;
 		setQuery("");
 		onChapterChange(id);
 	};
