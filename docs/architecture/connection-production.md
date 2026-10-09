@@ -248,6 +248,10 @@ cd ../connection-release
 pnpm install --frozen-lockfile
 ```
 
+若该 worktree 目录已存在，先确认其中 `git status --short` 为空，再在该目录 fetch 并
+`git switch --detach origin/connection`。有未提交改动时换新的 release 目录，不执行 reset、
+clean 或覆盖开发文件。
+
 使用 Node.js 24、仓库 `packageManager` 指定的 pnpm、GitHub `gh` 登录和上海集群权限。
 kubectl 与 API server 的 minor 版本差不能超过 1；例如 Kubernetes 1.34 使用 kubectl 1.34。
 不要沿用机器上旧的 kubectl 1.27 或仅按全局 context 名称猜测集群。
