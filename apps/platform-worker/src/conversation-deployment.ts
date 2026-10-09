@@ -595,8 +595,7 @@ export function createProductionSessionSandboxReceiverV1(
 					observed.resources.every((resource) =>
 						sourceResources.some(
 							(prior) =>
-								prior.kind === resource.kind &&
-								prior.uid === resource.uid,
+								prior.kind === resource.kind && prior.uid === resource.uid,
 						),
 					) &&
 					observed.resources.some(
