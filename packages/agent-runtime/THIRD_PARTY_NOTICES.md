@@ -68,3 +68,8 @@ Pi 的路径解析、read 文件名 fallback、edit 和 write 队列不在本仓
 `createReadToolDefinition`、`createWriteToolDefinition`、`createEditToolDefinition` 的
 filesystem operations 接口，在 Pi 完成路径解析后校验实际访问目标；恢复时使用官方纯函数
 `buildSessionContext` 核对已持久历史 checkpoint，在启动 CLI 前拒绝截断或替换的上下文。
+
+Browser Runtime 使用未修改的官方 `playwright-core@1.63.0` 和匹配的 Chrome for Testing。
+Playwright 的 Apache-2.0 许可证随依赖分发；浏览器归档保留官方 LICENSE、资源与运行库。
+固定版本、官方归档来源及 SHA-256 见 [browser-release.json](src/browser-release.json)。
+供应校验与受控启动探测不构成四模板或 Session 隔离验收。

@@ -1,9 +1,17 @@
-FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS builder
+# Preserve the proven Landlock helper; Bookworm's setpriv lacks required rights.
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS isolation-tools
+RUN apk add --no-cache 'setpriv=2.42.3-r1'
+
+FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS builder
 ARG TARGETARCH
-RUN apk add --no-cache --upgrade 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0' \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip util-linux procps \
+	&& rm -rf /var/lib/apt/lists/* /var/log/* \
 	&& npm install --global npm@11.19.1 \
 	&& npm install --global pnpm@11.20.0
 WORKDIR /app
+COPY --from=isolation-tools /bin/setpriv /usr/bin/setpriv
+COPY --from=isolation-tools /lib/ld-musl-*.so.1 /usr/lib/
+COPY --from=isolation-tools /usr/lib/libcap-ng.so.0* /usr/lib/libeconf.so.0* /usr/lib/
 
 COPY deploy/runtime/install-codex.mjs ./deploy/runtime/install-codex.mjs
 COPY packages/agent-runtime/src/codex-release.json ./packages/agent-runtime/src/codex-release.json
@@ -11,8 +19,10 @@ RUN node --use-env-proxy deploy/runtime/install-codex.mjs "$TARGETARCH" /opt/cod
 COPY deploy/runtime/install-opencode.mjs ./deploy/runtime/install-opencode.mjs
 COPY packages/agent-runtime/src/opencode-release.json ./packages/agent-runtime/src/opencode-release.json
 COPY packages/agent-runtime/third-party/opencode-LICENSE ./packages/agent-runtime/third-party/opencode-LICENSE
-RUN node --use-env-proxy deploy/runtime/install-opencode.mjs "$TARGETARCH" /opt/opencode
-RUN apk add --no-cache 'setpriv=2.42.3-r1'
+RUN node --use-env-proxy deploy/runtime/install-opencode.mjs "$TARGETARCH" /opt/opencode gnu
+COPY deploy/runtime/install-chromium.mjs ./deploy/runtime/install-chromium.mjs
+COPY packages/agent-runtime/src/browser-release.json ./packages/agent-runtime/src/browser-release.json
+RUN node --use-env-proxy deploy/runtime/install-chromium.mjs "$TARGETARCH" /opt/agent-infra/browser
 COPY . .
 RUN pnpm --fetch-timeout=300000 install --frozen-lockfile --store-dir /pnpm-store
 
@@ -33,19 +43,23 @@ RUN cd /prod/agent-runtime-host && node --input-type=module -e 'import {verifyCl
 
 RUN cd /prod/agent-runtime-host && node --input-type=module -e 'import {verifyPiInstallation} from "@agent-infra/agent-runtime"; import {execFileSync} from "node:child_process"; const p = await verifyPiInstallation(); if (execFileSync(p.executable, [p.cli, "--version"], {encoding:"utf8"}).trim() !== p.nativeVersion) throw new Error("RUNTIME_PI_PROVENANCE_MISMATCH");'
 
-FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS runtime
+RUN cd /prod/agent-runtime-host && node --input-type=module -e 'import {verifyOpenCodeInstallation} from "@agent-infra/agent-runtime"; import {execFileSync} from "node:child_process"; const p = await verifyOpenCodeInstallation("/opt/opencode/bin/opencode"); if (execFileSync(p.executable, ["--version"], {encoding:"utf8"}).trim() !== p.nativeVersion) throw new Error("RUNTIME_OPENCODE_PROVENANCE_MISMATCH");'
+
+FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
 ARG SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"}}'
-RUN apk add --no-cache --upgrade 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0' 'setpriv=2.42.3-r1' \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates util-linux \
+	&& rm -rf /var/lib/apt/lists/* /var/log/* \
 	&& npm install --global npm@11.19.1 --logs-max=0 \
-	&& rm -rf /root/.npm /tmp/node-compile-cache /var/log/apk.log
+	&& rm -rf /root/.npm /tmp/node-compile-cache
 ENV NODE_ENV=production
 ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime
 ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
 COPY --from=builder /opt/codex/ /opt/codex/
 COPY --from=builder /opt/opencode/ /opt/opencode/
+COPY --from=builder /opt/agent-infra/browser/ /opt/agent-infra/browser/
 COPY --from=builder --chown=0:0 /app/deploy/runtime/skills/workspace-summary/ /opt/codex/agent-infra-skills/workspace-summary/
 COPY --from=builder --chown=0:0 /app/deploy/runtime/skills/workspace-summary.manifest.json /opt/codex/agent-infra-skills/workspace-summary.manifest.json
 RUN SOURCE_COMMIT="$SOURCE_COMMIT" node --input-type=module -e '\
@@ -72,8 +86,18 @@ RUN chown -R 0:0 /opt/codex/agent-infra-skills \
        /opt/codex/agent-infra-skills/workspace-summary.manifest.json /opt/codex/share/workspace-summary-build.json
 ENV AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1
 COPY --from=builder --chown=node:node /prod/agent-runtime-host/ ./
+RUN printf 'Acquire::Retries "3";\n' > /tmp/chromium-apt.conf \
+    && APT_CONFIG=/tmp/chromium-apt.conf node --input-type=module -e 'import {createRequire} from "node:module"; import {dirname,join} from "node:path"; import {execFileSync} from "node:child_process"; const runtimeRequire=createRequire(import.meta.resolve("@agent-infra/agent-runtime")); const cli=join(dirname(runtimeRequire.resolve("playwright-core/package.json")),"cli.js"); execFileSync(process.execPath,[cli,"install-deps","chromium"],{stdio:"inherit"});' \
+    && rm -rf /tmp/chromium-apt.conf /var/lib/apt/lists/* /var/log/*
+COPY --from=isolation-tools /bin/setpriv /usr/bin/setpriv
+COPY --from=isolation-tools /lib/ld-musl-*.so.1 /usr/lib/
+COPY --from=isolation-tools /usr/lib/libcap-ng.so.0* /usr/lib/libeconf.so.0* /usr/lib/
+RUN setpriv --version | grep -Fx 'setpriv from util-linux 2.42.3' \
+    && setpriv --help | grep -q -- '--landlock-access'
+COPY --from=builder /app/deploy/runtime/browser-launch-probe.mjs ./browser-launch-probe.mjs
 COPY --from=builder --chown=node:node /app/apps/agent-runtime-host/start-runtime-host.sh ./start-runtime-host.sh
-RUN chmod 0755 ./start-runtime-host.sh
+RUN chmod 0755 ./start-runtime-host.sh \
+    && chmod 0555 /opt/agent-infra/browser
 RUN mkdir -p /var/lib/agent-runtime && chown node:node /var/lib/agent-runtime
 RUN mkdir -p /etc/agent-infra/legacy-migration \
     && chown root:root /etc/agent-infra /etc/agent-infra/legacy-migration \

@@ -6,9 +6,9 @@ import { join, resolve } from "node:path";
 
 const releasePath = new URL("../../packages/agent-runtime/src/opencode-release.json", import.meta.url);
 const release = JSON.parse(await readFile(releasePath, "utf8"));
-const [architecture, destination, ...extra] = process.argv.slice(2);
-const artifact = release.artifacts[`linux-${architecture === "amd64" ? "x64" : architecture}-musl`];
-if (!artifact || !destination || extra.length) throw new Error("usage: install-opencode.mjs <amd64|arm64> <destination>");
+const [architecture, destination, libc = "musl", ...extra] = process.argv.slice(2);
+const artifact = release.artifacts[`linux-${architecture === "amd64" ? "x64" : architecture}${libc === "musl" ? "-musl" : ""}`];
+if (!artifact || !destination || !["musl", "gnu"].includes(libc) || extra.length) throw new Error("usage: install-opencode.mjs <amd64|arm64> <destination> [musl|gnu]");
 const directory = await mkdtemp(join(tmpdir(), "opencode-install-"));
 try {
 	const response = await fetch(artifact.tarball, { signal: AbortSignal.timeout(300_000) });
