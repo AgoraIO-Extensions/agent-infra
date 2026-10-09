@@ -206,8 +206,7 @@ export function ActiveConversation({
 		? (runtimeSelection.data?.options ?? [])
 		: agent.configuration.modelOptions;
 	const runtimeSelectionUnavailable =
-		customPlatformAdapter &&
-		(!runtimeSelection.data || !runtimeSelection.data.available);
+		customPlatformAdapter && !runtimeSelection.data?.available;
 	const currentModelId =
 		modelId ??
 		conversation?.selectedModelOptionId ??
@@ -257,8 +256,7 @@ export function ActiveConversation({
 			);
 			if (
 				!latest?.available ||
-				!selected ||
-				!selected.reasoningLevels.includes(currentReasoning)
+				!selected?.reasoningLevels.includes(currentReasoning)
 			) {
 				setNotice("模型选项已失效，请刷新后重新选择。");
 				return;

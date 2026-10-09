@@ -121,8 +121,8 @@ export function createPlatformEntryContextVerifierV1(options: {
 			)
 				throw new Error("invalid header");
 			const key = publicKeys.get((header as { kid: string }).kid);
+			if (!key) throw new Error("unknown key");
 			if (
-				!key ||
 				key.type !== "public" ||
 				key.asymmetricKeyType !== "ed25519" ||
 				!verify(
