@@ -116,11 +116,23 @@ export function compareCatalogs(baseline, candidate) {
 
 export function readCatalog(ref) {
 	const catalog = {};
+	const layoutPath = "packages/openconnector-adapter/provider-source-layout.json";
+	const layout = gitFileExists(ref, layoutPath) ? JSON.parse(git("show", `${ref}:${layoutPath}`)) : null;
+	const resolveSource = (path) => {
+		const entry = layout?.files?.find((file) => "packages/openconnector-adapter/" + file.logicalPath === path);
+		if (!entry) return path;
+		if (!/^src\/providers\/[a-z0-9-]+\/versions\/[a-z0-9-]+\.ts$/.test(entry.implementationPath))
+			throw new Error("Invalid provider source relocation");
+		const implementationPath = "packages/openconnector-adapter/" + entry.implementationPath;
+		if (!gitFileExists(ref, implementationPath)) throw new Error("Pinned provider implementation is missing");
+		return implementationPath;
+	};
 	for (const [provider, file] of Object.entries(providerSources)) {
-		const sourceFile = provider === "datalego"
+		const logicalSource = provider === "datalego"
 			? [file, "packages/openconnector-adapter/src/datalego-v5.ts", "packages/openconnector-adapter/src/datalego-v4.ts", "packages/openconnector-adapter/src/datalego.ts"]
-				.find((path) => gitFileExists(ref, path)) ?? file
+				.find((path) => gitFileExists(ref, resolveSource(path))) ?? file
 			: file;
+		const sourceFile = resolveSource(logicalSource);
 		if (!git("ls-tree", "--name-only", ref, "--", sourceFile)) continue;
 		catalog[provider] = parseCatalogSource(git("show", `${ref}:${sourceFile}`), provider);
 	}

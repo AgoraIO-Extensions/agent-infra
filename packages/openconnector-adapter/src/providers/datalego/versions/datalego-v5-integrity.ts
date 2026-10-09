@@ -1,0 +1,2 @@
+export const datalegoV5ExecutorDigest =
+	"sha256:f8489f6315d4133969d20c080d8c455e8ae549d12ea9fe4f95123ba4cfe0c9f2";

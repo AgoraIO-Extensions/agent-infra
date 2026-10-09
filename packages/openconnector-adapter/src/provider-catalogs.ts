@@ -1,17 +1,15 @@
 import upgradePlans from "../provider-upgrade-plans.json" with { type: "json" };
+import { bitbucketServerConnectionCatalog } from "./providers/bitbucket/definition.ts";
+import { confluenceServerConnectionCatalog } from "./providers/confluence/definition.ts";
+import { datalegoV6ConnectionCatalog } from "./providers/datalego/definition.ts";
+import { githubConnectionCatalog } from "./providers/github/definition.ts";
 import {
-	bitbucketServerConnectionCatalog,
-	datalegoV6ConnectionCatalog,
-} from "./authorization-compatibility.ts";
-import { confluenceServerConnectionCatalog } from "./confluence-server.ts";
-import {
-	githubConnectionCatalog,
 	jenkinsCiConnectionCatalog,
 	jenkinsReleaseConnectionCatalog,
-} from "./index.ts";
-import { jiraServerConnectionCatalog } from "./jira-server.ts";
-import { manhattanConnectionCatalog } from "./manhattan.ts";
-import { rehoboamV11ConnectionCatalog as rehoboamConnectionCatalog } from "./rehoboam-v11.ts";
+} from "./providers/jenkins/definition.ts";
+import { jiraServerConnectionCatalog } from "./providers/jira/definition.ts";
+import { manhattanConnectionCatalog } from "./providers/manhattan/definition.ts";
+import { rehoboamV11ConnectionCatalog as rehoboamConnectionCatalog } from "./providers/rehoboam/definition.ts";
 
 import {
 	staticSpacesConnectionCatalog,

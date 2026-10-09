@@ -538,6 +538,12 @@ Connection 的所有部署都只暴露 `connection-api` 拥有的契约：
 - 上游 Runtime HTTP/MCP 接口不直接暴露给任何 Consumer、Agent 或浏览器。
 - OpenConnector 只由 Connection Infrastructure Adapter 依赖，不让其存储模型或类型渗透到 Connection Domain。
 
+Connection Adapter 按 `src/providers/<名称>/{actions,definition,executors,index}.ts` 组织开发入口，
+运行装配与目录注册统一使用 Provider 入口。已发布实现和测试归到该 Provider 的 `versions/`，
+保留源码字节、release ID、摘要和授权契约；旧包路径仅作兼容出口。源码定位及跨目录透明导入桥接由
+`provider-source-layout.json` 和校验脚本约束，不引入动态 Loader 或账号升级。
+目录说明见 [连接器布局](../connection/provider-layout.md)。
+
 默认从精确上游 Commit 导出 allowlist 审核后的 Provider execution closure，形成
 `packages/openconnector-kernel` 受控源码 package；该 package 记录来源 Commit、复制文件清单和 digest，
 保留许可证与 notice。`connection-api` 只通过 OpenConnector Adapter 依赖它，把 Provider、OAuth 和

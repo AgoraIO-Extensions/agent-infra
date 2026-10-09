@@ -1,2 +1,2 @@
-export const jiraServerExecutorDigest =
-	"sha256:7e213c41f25056125910e06e52752971c27c7aff622a77c72ea99dbd971e3de3";
+// Compatibility entry point; provider implementation lives under providers/.
+export * from "./providers/jira/versions/jira-server-integrity.ts";

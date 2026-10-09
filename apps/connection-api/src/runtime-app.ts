@@ -19,55 +19,55 @@ import {
 	PostgresConnectionPatBindingRepository,
 	PostgresConnectionRepository,
 } from "@agent-infra/connection-store";
+import { connectionProviderCatalogs } from "@agent-infra/openconnector-adapter/provider-catalogs";
+import { createPinnedProviderFetch } from "@agent-infra/openconnector-adapter/provider-fetch";
 import {
 	BitbucketServerAdapter,
+	bitbucketServerConnectionCatalog,
 	bitbucketServerLegacyProviderReleaseIds,
+} from "@agent-infra/openconnector-adapter/providers/bitbucket";
+import {
+	ConfluenceServerAdapter,
+	confluenceServerConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/providers/confluence";
+import {
+	DataLegoAdapter,
+	DataLegoV4Adapter,
+	DataLegoV5Adapter,
+	DataLegoV6Adapter,
+	datalegoConnectionCatalog,
+	datalegoV4ConnectionCatalog,
+	datalegoV5ConnectionCatalog,
+	datalegoV6ConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/providers/datalego";
+import {
 	githubConnectionCatalog,
+	OpenConnectorGitHubAdapter,
+	OpenConnectorGitHubOAuthAdapter,
+} from "@agent-infra/openconnector-adapter/providers/github";
+import {
 	JenkinsAdapter,
 	jenkinsCiConnectionCatalog,
 	jenkinsCiProfile,
 	jenkinsReleaseConnectionCatalog,
 	jenkinsReleaseProfile,
-	OpenConnectorGitHubAdapter,
-	OpenConnectorGitHubOAuthAdapter,
-} from "@agent-infra/openconnector-adapter";
-import {
-	bitbucketServerConnectionCatalog,
-	datalegoV5ConnectionCatalog,
-	datalegoV6ConnectionCatalog,
-} from "@agent-infra/openconnector-adapter/authorization-compatibility";
-import {
-	ConfluenceServerAdapter,
-	confluenceServerConnectionCatalog,
-} from "@agent-infra/openconnector-adapter/confluence-server";
-import {
-	DataLegoAdapter,
-	datalegoConnectionCatalog,
-} from "@agent-infra/openconnector-adapter/datalego";
-import {
-	DataLegoV4Adapter,
-	datalegoV4ConnectionCatalog,
-} from "@agent-infra/openconnector-adapter/datalego-v4";
-import { DataLegoV5Adapter } from "@agent-infra/openconnector-adapter/datalego-v5";
-import { DataLegoV6Adapter } from "@agent-infra/openconnector-adapter/datalego-v6";
+} from "@agent-infra/openconnector-adapter/providers/jenkins";
 import {
 	JiraServerAdapter,
 	JiraServerOAuthTokenProvider,
 	jiraServerConnectionCatalog,
-} from "@agent-infra/openconnector-adapter/jira-server";
+} from "@agent-infra/openconnector-adapter/providers/jira";
 import {
 	ManhattanAdapter,
 	ManhattanOAuthAdapter,
 	manhattanConnectionCatalog,
 	manhattanLegacyProviderReleaseIds,
-} from "@agent-infra/openconnector-adapter/manhattan";
-import { connectionProviderCatalogs } from "@agent-infra/openconnector-adapter/provider-catalogs";
-import { createPinnedProviderFetch } from "@agent-infra/openconnector-adapter/provider-fetch";
+} from "@agent-infra/openconnector-adapter/providers/manhattan";
 import {
 	RehoboamV11Adapter as RehoboamAdapter,
 	rehoboamV11ConnectionCatalog as rehoboamConnectionCatalog,
 	rehoboamV11LegacyProviderReleaseIds as rehoboamLegacyProviderReleaseIds,
-} from "@agent-infra/openconnector-adapter/rehoboam-v11";
+} from "@agent-infra/openconnector-adapter/providers/rehoboam";
 import {
 	StaticSpacesAdapter,
 	staticSpacesConnectionCatalog,

@@ -1,0 +1,141 @@
+{
+	"version": 1,
+	"baselineCommit": "0fa4d6275300fd9110f1a85a2fd7c94a20fc4b3d",
+	"files": [
+		{
+			"logicalPath": "src/bitbucket-server-integrity.ts",
+			"implementationPath": "src/providers/bitbucket/versions/bitbucket-server-integrity.ts",
+			"sha256": "1af6e9387c0b7b49d8bff652e58482f26409fb476e3e91fd0478dac63043154d"
+		},
+		{
+			"logicalPath": "src/bitbucket-server.ts",
+			"implementationPath": "src/providers/bitbucket/versions/bitbucket-server.ts",
+			"sha256": "36e421531152628f993691b6e61e4966dc84af4ad4fced71ab4b84f44b025b67"
+		},
+		{
+			"logicalPath": "src/confluence-server-integrity.ts",
+			"implementationPath": "src/providers/confluence/versions/confluence-server-integrity.ts",
+			"sha256": "418e35d95a9c41b2bcd0c8c358a91da9e2de61a0cc7f444db4cb7fb7726072d6"
+		},
+		{
+			"logicalPath": "src/confluence-server.ts",
+			"implementationPath": "src/providers/confluence/versions/confluence-server.ts",
+			"sha256": "ed7cb9f7aca45612fa75aef9105c3000be647a5685022c8a789ec43f0ae20ebb"
+		},
+		{
+			"logicalPath": "src/datalego-integrity.ts",
+			"implementationPath": "src/providers/datalego/versions/datalego-integrity.ts",
+			"sha256": "1125fb120b4a99b750db247dfc746e7303a88d49401543bd09b96ec72af6d72b"
+		},
+		{
+			"logicalPath": "src/datalego-oauth-integrity.ts",
+			"implementationPath": "src/providers/datalego/versions/datalego-oauth-integrity.ts",
+			"sha256": "c4045a61acce2f9b3444f512c5fa9bd91a10b9b1408473547408ed74b2f1fc53"
+		},
+		{
+			"logicalPath": "src/datalego-oauth.ts",
+			"implementationPath": "src/providers/datalego/versions/datalego-oauth.ts",
+			"sha256": "2840193a1a90d8db6b29a824e0f43c9b47a40cf6e665c92696dd51c578085e7c"
+		},
+		{
+			"logicalPath": "src/datalego-v4-integrity.ts",
+			"implementationPath": "src/providers/datalego/versions/datalego-v4-integrity.ts",
+			"sha256": "fec10508051827c11998e5def2ede37a8e532f7a72f547d8190455a554e0da58"
+		},
+		{
+			"logicalPath": "src/datalego-v4.ts",
+			"implementationPath": "src/providers/datalego/versions/datalego-v4.ts",
+			"sha256": "1586729da6ad1b0f26cc8a45d7d3fae4320ab50dd64fdf28df95219fbc0f1c3b"
+		},
+		{
+			"logicalPath": "src/datalego-v5-integrity.ts",
+			"implementationPath": "src/providers/datalego/versions/datalego-v5-integrity.ts",
+			"sha256": "afa7df1492fedc2cdd2c9a1441e4659c6e1704a7adec0c003196eb0e44a2aaa7"
+		},
+		{
+			"logicalPath": "src/datalego-v5.ts",
+			"implementationPath": "src/providers/datalego/versions/datalego-v5.ts",
+			"sha256": "f8489f6315d4133969d20c080d8c455e8ae549d12ea9fe4f95123ba4cfe0c9f2"
+		},
+		{
+			"logicalPath": "src/datalego-v6-integrity.ts",
+			"implementationPath": "src/providers/datalego/versions/datalego-v6-integrity.ts",
+			"sha256": "c7ebce0005e588b85c48d55060b5ee2cb86415e806a04fa86e543b4aff413984"
+		},
+		{
+			"logicalPath": "src/datalego-v6.ts",
+			"implementationPath": "src/providers/datalego/versions/datalego-v6.ts",
+			"sha256": "46bef6190afb945322091a3599764d3ffb63781bfda87dd54b3d2882d67cb857"
+		},
+		{
+			"logicalPath": "src/datalego.ts",
+			"implementationPath": "src/providers/datalego/versions/datalego.ts",
+			"sha256": "a4b6ec7cddf139e0fc75e115770e074fed22f7fd2cc1e93c03693b5345aeeeb8"
+		},
+		{
+			"logicalPath": "src/github-integrity.ts",
+			"implementationPath": "src/providers/github/versions/github-integrity.ts",
+			"sha256": "4effd4156ea7c141db47b70a93dbfb26bcfaa0991a2da2f28500a89482e846e6"
+		},
+		{
+			"logicalPath": "src/index.ts",
+			"implementationPath": "src/providers/github/versions/index.ts",
+			"sha256": "9deba65c280ec0328d94698154702401e69ce4bfdf60883403f321d2edee5cfa"
+		},
+		{
+			"logicalPath": "src/jenkins-integrity.ts",
+			"implementationPath": "src/providers/jenkins/versions/jenkins-integrity.ts",
+			"sha256": "9074b31ea8c1f92c129a1d0a145594c156844357ed30e0be88345fc268c285eb"
+		},
+		{
+			"logicalPath": "src/jenkins.ts",
+			"implementationPath": "src/providers/jenkins/versions/jenkins.ts",
+			"sha256": "0038c81afec7a30cf1c17c937306ae2128fce3cce7fc670cd1a874ddb3e15720"
+		},
+		{
+			"logicalPath": "src/jira-server-integrity.ts",
+			"implementationPath": "src/providers/jira/versions/jira-server-integrity.ts",
+			"sha256": "b1421b27de9386922a9df3dc7b9ef99dc33b447d5550be7e508585f3d8cdacac"
+		},
+		{
+			"logicalPath": "src/jira-server.ts",
+			"implementationPath": "src/providers/jira/versions/jira-server.ts",
+			"sha256": "7e213c41f25056125910e06e52752971c27c7aff622a77c72ea99dbd971e3de3"
+		},
+		{
+			"logicalPath": "src/manhattan-integrity.ts",
+			"implementationPath": "src/providers/manhattan/versions/manhattan-integrity.ts",
+			"sha256": "bd50a7b0a9bea1f7a5ed3a5a7b5ee5ffbb7c2885c62eb4f8570434fc141b91d5"
+		},
+		{
+			"logicalPath": "src/manhattan.ts",
+			"implementationPath": "src/providers/manhattan/versions/manhattan.ts",
+			"sha256": "74b704b14095bedd918439c23d43473fd513470aa547c841a76a453dcc8ff2af"
+		},
+		{
+			"logicalPath": "src/rehoboam-integrity.ts",
+			"implementationPath": "src/providers/rehoboam/versions/rehoboam-integrity.ts",
+			"sha256": "624963aade13475f099a8c629e09c8e20928e81a0511922a6ac2ba7282f93cc7"
+		},
+		{
+			"logicalPath": "src/rehoboam-management.ts",
+			"implementationPath": "src/providers/rehoboam/versions/rehoboam-management.ts",
+			"sha256": "9804475790799694b0667745f7bfcc29be2dc5fd0f44bed963d5dcd36f220afd"
+		},
+		{
+			"logicalPath": "src/rehoboam-v11-integrity.ts",
+			"implementationPath": "src/providers/rehoboam/versions/rehoboam-v11-integrity.ts",
+			"sha256": "ed49e423bf4afa68e5b6a46694f94044e14659e03dc706fd17e8711bfd291267"
+		},
+		{
+			"logicalPath": "src/rehoboam-v11.ts",
+			"implementationPath": "src/providers/rehoboam/versions/rehoboam-v11.ts",
+			"sha256": "48d4efa0d6510a74663f6a7234e030bd20f86665df2340a2e6913d314c559998"
+		},
+		{
+			"logicalPath": "src/rehoboam.ts",
+			"implementationPath": "src/providers/rehoboam/versions/rehoboam.ts",
+			"sha256": "bbcc3a4812ebe77db72d91d0c26c4b7bb506329848190ee376724c4b5742ea45"
+		}
+	]
+}

@@ -1,2 +1,2 @@
-export const datalegoV4ExecutorDigest =
-	"sha256:1586729da6ad1b0f26cc8a45d7d3fae4320ab50dd64fdf28df95219fbc0f1c3b";
+// Compatibility entry point; provider implementation lives under providers/.
+export * from "./providers/datalego/versions/datalego-v4-integrity.ts";

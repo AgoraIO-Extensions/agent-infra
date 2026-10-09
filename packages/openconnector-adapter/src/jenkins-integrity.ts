@@ -1,2 +1,2 @@
-export const jenkinsExecutorDigest =
-	"sha256:0038c81afec7a30cf1c17c937306ae2128fce3cce7fc670cd1a874ddb3e15720";
+// Compatibility entry point; provider implementation lives under providers/.
+export * from "./providers/jenkins/versions/jenkins-integrity.ts";

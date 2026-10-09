@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -132,6 +132,20 @@ test("DataLego v5 release guard retains v3/v4 catalogs and rejects rollback", ()
 		assert.equal(current.datalego.providerReleaseVersion, 5);
 		assert.equal(compareCatalogs(after, current).length, 1);
 		assert.throws(() => compareCatalogs(current, after), /downgrade/);
+		const versions = join(source, "providers/datalego/versions");
+		mkdirSync(versions, { recursive: true });
+		renameSync(join(source, "datalego-v5.ts"), join(versions, "datalego-v5.ts"));
+		writeFileSync(join(source, "datalego-v5.ts"), 'export * from "./providers/datalego/versions/datalego-v5.ts";');
+		writeFileSync(join(source, "../provider-source-layout.json"), JSON.stringify({ files: [{
+			logicalPath: "src/datalego-v5.ts", implementationPath: "src/providers/datalego/versions/datalego-v5.ts",
+		}] }));
+		git("add", "-A");
+		git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-m", "provider layout");
+		assert.deepEqual(readCatalog("HEAD"), current);
+		unlinkSync(join(versions, "datalego-v5.ts"));
+		git("add", "-A");
+		git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-m", "missing implementation");
+		assert.throws(() => readCatalog("HEAD"), /Pinned provider implementation is missing/);
 	} finally {
 		process.chdir(cwd);
 		rmSync(temp, { recursive: true, force: true });

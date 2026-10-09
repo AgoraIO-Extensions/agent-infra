@@ -90,7 +90,7 @@ test("runtime publication, consumer grants and approval management share every P
 		(statement) =>
 			ts.isImportDeclaration(statement) &&
 			statement.moduleSpecifier.text ===
-				"@agent-infra/openconnector-adapter/authorization-compatibility",
+				"@agent-infra/openconnector-adapter/providers/datalego",
 	);
 	assert.ok(compatibilityImport);
 	assert.ok(
@@ -98,6 +98,12 @@ test("runtime publication, consumer grants and approval management share every P
 			(binding) => binding.name.text === "datalegoV6ConnectionCatalog",
 		),
 		"DataLego publication and approval must receive the exact reviewed repair evidence",
+	);
+	assert.match(
+		await read(
+			"packages/openconnector-adapter/src/providers/datalego/definition.ts",
+		),
+		/from "\.\/compatibility\.ts"/,
 	);
 });
 
@@ -260,6 +266,7 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 		".": "./src/index.ts",
 		"./authorization-compatibility": "./src/authorization-compatibility.ts",
 		"./provider-catalogs": "./src/provider-catalogs.ts",
+		"./providers/*": "./src/providers/*/index.ts",
 		"./confluence-server": "./src/confluence-server.ts",
 		"./datalego": "./src/datalego.ts",
 		"./datalego-oauth": "./src/datalego-oauth.ts",
