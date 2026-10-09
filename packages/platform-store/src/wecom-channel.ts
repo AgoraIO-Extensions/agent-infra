@@ -476,29 +476,6 @@ export class PostgresWecomChannelV1
 						conversationId: executionResult.conversationId,
 						executionId: executionResult.executionId,
 					};
-					if (identity) {
-						const current = await awaitTaskAuthorizationDependencyV1(
-							() => identity.resolveSender(plan.message),
-							signal,
-						);
-						const finalUser = current ? parseCurrentTaskUserV1(current) : null;
-						if (
-							!finalUser ||
-							finalUser.userId !== plan.authority.actor.actorId ||
-							finalUser.authorizationRevision !==
-								parseTaskAuthorizationBoundaryV1(
-									plan.authority.actor.taskBoundary,
-								).identityRevision
-						)
-							throw new TaskAuthorizationStoreError();
-						const [finalPlatformDisabled] = await run(
-							business<
-								{ user_id: string }[]
-							>`select user_id from platform.platform_user_disables where user_id=${finalUser.userId}`,
-						);
-						if (finalUser.accountStatus === "disabled" || finalPlatformDisabled)
-							throw new WecomAuthorizationRevoked();
-					}
 					const {
 						agentId,
 						bindingReference,
@@ -532,6 +509,29 @@ export class PostgresWecomChannelV1
 						plan.connectionFence ? "platform-worker" : "platform-api",
 						signal,
 					);
+					if (identity) {
+						const current = await awaitTaskAuthorizationDependencyV1(
+							() => identity.resolveSender(plan.message),
+							signal,
+						);
+						const finalUser = current ? parseCurrentTaskUserV1(current) : null;
+						if (
+							!finalUser ||
+							finalUser.userId !== plan.authority.actor.actorId ||
+							finalUser.authorizationRevision !==
+								parseTaskAuthorizationBoundaryV1(
+									plan.authority.actor.taskBoundary,
+								).identityRevision
+						)
+							throw new TaskAuthorizationStoreError();
+						const [finalPlatformDisabled] = await run(
+							business<
+								{ user_id: string }[]
+							>`select user_id from platform.platform_user_disables where user_id=${finalUser.userId}`,
+						);
+						if (finalUser.accountStatus === "disabled" || finalPlatformDisabled)
+							throw new WecomAuthorizationRevoked();
+					}
 				});
 			} catch (error) {
 				if (!(error instanceof WecomAuthorizationRevoked)) throw error;
