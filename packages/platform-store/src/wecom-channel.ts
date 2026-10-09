@@ -128,15 +128,16 @@ export class PostgresWecomChannelV1
 	readonly #management: PostgresAgentManagementTransactionV1;
 	readonly #connectionHolderId: string | null;
 	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
-	readonly #identity: WecomIdentityPortV1 | undefined;
+	readonly #identity: WecomIdentityPortV1;
 	readonly #observe: (status: WecomDeliveryStatusV1) => void;
 	constructor(options: {
 		readonly databaseUrl: string;
 		readonly userDirectory?: TaskUserDirectoryV1;
-		readonly identity?: WecomIdentityPortV1;
+		readonly identity: WecomIdentityPortV1;
 		readonly connectionHolderId?: string;
 		readonly observe?: (status: WecomDeliveryStatusV1) => void;
 	}) {
+		if (!options.identity) throw new Error("WeCom identity is required");
 		this.#connectionHolderId = options.connectionHolderId ?? null;
 		this.#userDirectory = options.userDirectory;
 		this.#identity = options.identity;
@@ -385,9 +386,48 @@ export class PostgresWecomChannelV1
 						old.connection_bot_id !== plan.connectionFence?.botId)
 				)
 					return reject("conflict");
-				await run(
-					sql`update platform.wecom_receipts set reply_handle=${plan.message.replyHandle},expires_at=${new Date(plan.message.replyExpiresAt)},connection_bot_id=${plan.connectionFence?.botId ?? null},connection_fence=${plan.connectionFence?.fence ?? null},updated_at=now() where id=${plan.eventKey} and delivery_status='pending'`,
-				);
+				try {
+					await sql.savepoint(async (business) => {
+						await run(
+							business`update platform.wecom_receipts set reply_handle=${plan.message.replyHandle},expires_at=${new Date(plan.message.replyExpiresAt)},connection_bot_id=${plan.connectionFence?.botId ?? null},connection_fence=${plan.connectionFence?.fence ?? null},updated_at=now() where id=${plan.eventKey} and delivery_status='pending'`,
+						);
+						const current = await awaitTaskAuthorizationDependencyV1(
+							() => this.#identity.resolveSender(plan.message),
+							signal,
+						);
+						const finalUser = current ? parseCurrentTaskUserV1(current) : null;
+						if (
+							!finalUser ||
+							finalUser.userId !== plan.authority.actor.actorId ||
+							finalUser.authorizationRevision !==
+								parseTaskAuthorizationBoundaryV1(
+									plan.authority.actor.taskBoundary,
+								).identityRevision
+						)
+							throw new TaskAuthorizationStoreError();
+						if (finalUser.accountStatus === "disabled")
+							throw new WecomAuthorizationRevoked();
+						const [finalPlatformDisabled] = await run(
+							business<
+								{ user_id: string }[]
+							>`select user_id from platform.platform_user_disables where user_id=${finalUser.userId}`,
+						);
+						if (finalPlatformDisabled) throw new WecomAuthorizationRevoked();
+					});
+				} catch (error) {
+					if (!(error instanceof WecomAuthorizationRevoked)) throw error;
+					await revokeUserTasksInTransaction(
+						sql,
+						plan.authority.actor.actorId,
+						{
+							workerId: this.#connectionHolderId ?? "platform-api",
+							traceId: plan.eventKey,
+							requestId: plan.eventKey,
+						},
+						signal,
+					);
+					return readyToCommit({ outcome: "denied" as const });
+				}
 				return readyToCommit({
 					outcome: "replayed",
 					receipt: receipt(old),
