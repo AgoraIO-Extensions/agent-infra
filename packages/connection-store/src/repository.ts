@@ -4906,7 +4906,6 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND call.consumer_id = ${input.invocation.consumerId}
 				AND COALESCE(call.actor_key, '') = ${input.invocation.actorKey ?? ""}
 				AND call.idempotency_key = ${input.idempotencyKey}
-				AND action.name = ${input.action}
 		`;
 		if (!row) return undefined;
 		await this.verifyInvocation({ ...input.invocation, action: input.action });
