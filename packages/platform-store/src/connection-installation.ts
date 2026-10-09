@@ -459,7 +459,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				await tx.execute(sql`set local statement_timeout = '15s'`);
 				return tx.execute(sql`
 				update platform.connection_installation_commands
-				set status=${input.status}, attempt_expires_at=null, updated_at=clock_timestamp()
+				set status=case when attempt_expires_at is null or attempt_expires_at > clock_timestamp() then ${input.status} else 'unknown' end, attempt_expires_at=null, updated_at=clock_timestamp()
 				where id=${input.commandId} and status='sending' and attempt_id=${input.attemptId} and attempt_owner=${input.attemptOwner}
 				`);
 			});

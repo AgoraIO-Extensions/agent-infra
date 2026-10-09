@@ -469,8 +469,13 @@ export function createPlatformConversationWorkerV2(
 	}
 	async function discover() {
 		if (stopped || signal.aborted) return 0;
-		if (options.connectionInstallation?.commandStore)
-			await drainInstallationCommands();
+		if (options.connectionInstallation?.commandStore) {
+			try {
+				await drainInstallationCommands();
+			} catch {
+				// Installation storage failures never block ordinary conversation dispatch.
+			}
+		}
 		const limit = 256;
 		const items = await store.findDispatchable({
 			limit,
