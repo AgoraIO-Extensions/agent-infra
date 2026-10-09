@@ -21,6 +21,7 @@ describe("custom Agent platform identity gateway", () => {
 		const gateway = createCustomAgentAuthGatewayV1({
 			resolveIdentity: async () => identity,
 			authorizeAgent: async () => true,
+			resolveServiceOrigin: async () => "https://agent.internal.test",
 			issuer: "platform_01",
 			keyVersion: "key_01",
 			privateKey: keys.privateKey,
@@ -44,7 +45,6 @@ describe("custom Agent platform identity gateway", () => {
 				body: "hello",
 			}),
 			agentId: "agent_01",
-			serviceOrigin: "https://agent.internal.test",
 		});
 		expect(response.status).toBe(200);
 		expect(forwarded?.url).toBe("https://agent.internal.test/chat?view=1");
@@ -63,6 +63,7 @@ describe("custom Agent platform identity gateway", () => {
 		const gateway = createCustomAgentAuthGatewayV1({
 			resolveIdentity: async () => identity,
 			authorizeAgent,
+			resolveServiceOrigin: async () => "https://agent.test",
 			issuer: "platform_01",
 			keyVersion: "key_01",
 			privateKey: keys.privateKey,
@@ -71,9 +72,7 @@ describe("custom Agent platform identity gateway", () => {
 			request: new Request("https://platform.test/chat"),
 			agentId: "agent_01",
 		};
-		expect(
-			(await gateway({ ...input, serviceOrigin: "https://agent.test" })).status,
-		).toBe(403);
+		expect((await gateway(input)).status).toBe(403);
 		expect(authorizeAgent).toHaveBeenCalledWith({
 			identity,
 			agentId: "agent_01",
@@ -81,12 +80,11 @@ describe("custom Agent platform identity gateway", () => {
 		const allow = createCustomAgentAuthGatewayV1({
 			resolveIdentity: async () => identity,
 			authorizeAgent: async () => true,
+			resolveServiceOrigin: async () => "http://agent.test",
 			issuer: "platform_01",
 			keyVersion: "key_01",
 			privateKey: keys.privateKey,
 		});
-		expect(
-			(await allow({ ...input, serviceOrigin: "http://agent.test" })).status,
-		).toBe(503);
+		expect((await allow(input)).status).toBe(503);
 	});
 });

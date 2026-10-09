@@ -13,8 +13,8 @@ const untrustedIdentityHeaders = [
 
 /**
  * Forward one request to the selected custom Agent Service after current
- * platform identity and Agent scope checks. The caller supplies the trusted
- * Agent id and internal Service origin from the deployment projection.
+ * platform identity and Agent scope checks. The Service origin is resolved
+ * from trusted deployment state, never supplied by the browser request.
  */
 export function createCustomAgentAuthGatewayV1(options: {
 	readonly resolveIdentity: (request: Request) => Promise<IdentityContext>;
@@ -22,6 +22,7 @@ export function createCustomAgentAuthGatewayV1(options: {
 		readonly identity: IdentityContext;
 		readonly agentId: string;
 	}) => Promise<boolean>;
+	readonly resolveServiceOrigin: (agentId: string) => Promise<string>;
 	readonly issuer: string;
 	readonly keyVersion: string;
 	readonly privateKey: Parameters<
@@ -35,19 +36,20 @@ export function createCustomAgentAuthGatewayV1(options: {
 	return async (input: {
 		readonly request: Request;
 		readonly agentId: string;
-		readonly serviceOrigin: string;
 	}): Promise<Response> => {
 		let identity: IdentityContext;
+		let serviceOrigin: string;
 		try {
 			identity = await options.resolveIdentity(input.request);
 			if (!(await options.authorizeAgent({ identity, agentId: input.agentId })))
 				return new Response(null, { status: 403 });
+			serviceOrigin = await options.resolveServiceOrigin(input.agentId);
 		} catch {
 			return new Response(null, { status: 503 });
 		}
 		let origin: URL;
 		try {
-			origin = new URL(input.serviceOrigin);
+			origin = new URL(serviceOrigin);
 			if (
 				origin.protocol !== "https:" ||
 				origin.username ||
