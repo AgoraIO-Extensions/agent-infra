@@ -186,6 +186,10 @@ const desiredWorkloadBaseV1Schema = z.strictObject({
 	networkPolicy: WorkloadNetworkPolicyV1Schema,
 	secretRefs: z.array(KubernetesSecretReferenceV1Schema),
 	skills: z.array(SkillWorkloadProjectionV1Schema).max(32).optional(),
+	skillGenerationId: z
+		.string()
+		.regex(/^[a-f0-9]{64}$/)
+		.optional(),
 });
 
 const platformAdapterWorkloadBaseV1Schema = desiredWorkloadBaseV1Schema.extend({
@@ -338,6 +342,10 @@ const appliedWorkloadBaseV1Schema = z.strictObject({
 	networkPolicyRef: WorkloadOpaqueIdV1Schema,
 	secretRefs: z.array(KubernetesSecretReferenceV1Schema),
 	skills: z.array(SkillWorkloadProjectionV1Schema).max(32).optional(),
+	skillGenerationId: z
+		.string()
+		.regex(/^[a-f0-9]{64}$/)
+		.optional(),
 });
 
 const readyWorkloadAppliedV1Schema = appliedWorkloadBaseV1Schema.extend({
@@ -640,7 +648,8 @@ export function validateAgentWorkloadDesiredV1(
 		) ||
 		(desired.skills ?? []).some((skill) => skill.agentId !== desired.agentId) ||
 		new Set((desired.skills ?? []).map((skill) => skill.targetPath)).size !==
-			(desired.skills ?? []).length
+			(desired.skills ?? []).length ||
+		(desired.skills !== undefined) !== (desired.skillGenerationId !== undefined)
 	) {
 		throw new Error("Desired Workload correlation mismatch");
 	}
@@ -690,7 +699,8 @@ export function validateAgentWorkloadAppliedV1(
 				applied.route.workloadRevision !== applied.workloadRevision)) ||
 		JSON.stringify(appliedSecrets) !== JSON.stringify(desiredSecrets) ||
 		JSON.stringify(applied.skills ?? []) !==
-			JSON.stringify(desired.skills ?? [])
+			JSON.stringify(desired.skills ?? []) ||
+		applied.skillGenerationId !== desired.skillGenerationId
 	) {
 		throw new Error("Applied Workload correlation mismatch");
 	}

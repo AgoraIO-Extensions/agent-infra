@@ -8,6 +8,9 @@ import {
 	readdir,
 	rename,
 	rm,
+	stat,
+	utimes,
+	writeFile,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { types } from "node:util";
@@ -33,6 +36,14 @@ export type SkillPackageMaterializationResultV1 = Readonly<{
 	generationId: string;
 	packages: readonly SkillPackageMaterializationInputV1[];
 }>;
+export type SkillPackageMaterializationDetailsV1 = Readonly<{
+	result: SkillPackageMaterializationResultV1;
+	packages: readonly {
+		readonly input: SkillPackageMaterializationInputV1;
+		readonly manifest: ReturnType<typeof prepareSkillPackageV1>["manifest"];
+		readonly manifestDigest: string;
+	}[];
+}>;
 export class SkillPackageMaterializerErrorV1 extends Error {
 	constructor(readonly code: "invalid" | "unavailable" | "conflict") {
 		super("Skill package materialization failed");
@@ -51,6 +62,7 @@ const canonical = (value: unknown) => Buffer.from(JSON.stringify(value));
 function object(
 	input: unknown,
 	keys: readonly string[],
+	optional: readonly string[] = [],
 ): Record<string, unknown> {
 	if (
 		!input ||
@@ -61,13 +73,23 @@ function object(
 		fail("invalid");
 	const descriptors = Object.getOwnPropertyDescriptors(input);
 	if (
-		Reflect.ownKeys(input).length !== keys.length ||
+		Reflect.ownKeys(input).length < keys.length ||
+		Reflect.ownKeys(input).length > keys.length + optional.length ||
 		keys.some(
 			(key) => !descriptors[key]?.enumerable || !("value" in descriptors[key]),
+		) ||
+		Reflect.ownKeys(input).some(
+			(key) =>
+				typeof key !== "string" ||
+				(!keys.includes(key) && !optional.includes(key)),
 		)
 	)
 		fail("invalid");
-	return Object.fromEntries(keys.map((key) => [key, descriptors[key]?.value]));
+	return Object.fromEntries(
+		[...keys, ...optional]
+			.filter((key) => Object.hasOwn(descriptors, key))
+			.map((key) => [key, descriptors[key]?.value]),
+	);
 }
 function array(input: unknown, maximum: number): unknown[] {
 	if (
@@ -238,10 +260,20 @@ const indexBytes = (packages: readonly SkillPackageMaterializationInputV1[]) =>
 
 /** Deployment-owned physical adapter. One existing Worker/fence owns this assembly root. */
 export class SkillPackageMaterializerV1 {
+	static readonly #locks = new Map<string, Promise<void>>();
 	readonly #root: string;
 	readonly #identity: { dev: number; ino: number };
 	readonly #readPackage;
 	readonly #verifyAdmission;
+	async #quarantineLock(path: string) {
+		const quarantine = `${path}.stale-${randomUUID()}`;
+		try {
+			await rename(path, quarantine);
+			await rm(quarantine, { recursive: true, force: true });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
 	constructor(options: {
 		/** Pre-provisioned 0700 root outside the Runtime-writable project; never request data. */
 		readonly assemblyRoot: string;
@@ -307,7 +339,9 @@ export class SkillPackageMaterializerV1 {
 		)
 			fail("conflict");
 	}
-	async #readGeneration(generationId: string) {
+	async #readGenerationDetails(
+		generationId: string,
+	): Promise<SkillPackageMaterializationDetailsV1> {
 		if (!/^[a-f0-9]{64}$/.test(generationId)) fail("conflict");
 		await this.#assertRoot();
 		const root = join(this.#root, "generations", generationId);
@@ -345,6 +379,9 @@ export class SkillPackageMaterializerV1 {
 			fail("conflict");
 		const actualFiles = await files(join(agents, "skills"));
 		const expected: string[] = [];
+		const details: Array<
+			SkillPackageMaterializationDetailsV1["packages"][number]
+		> = [];
 		for (const input of result.packages) {
 			const manifestBytes = await readRegular(
 				join(root, "manifests", `${input.name}.json`),
@@ -383,13 +420,21 @@ export class SkillPackageMaterializerV1 {
 				if (bytes.length !== value.sizeBytes || sha(bytes) !== value.sha256)
 					fail("conflict");
 			}
+			details.push({
+				input,
+				manifest,
+				manifestDigest: input.manifestDigest,
+			});
 		}
 		if (JSON.stringify(actualFiles) !== JSON.stringify(expected.toSorted()))
 			fail("conflict");
 		// A process may have exited after the generation rename, before sealing its root.
 		await chmod(root, 0o555);
 		await syncDirectory(root);
-		return result;
+		return Object.freeze({ result, packages: Object.freeze(details) });
+	}
+	async #readGeneration(generationId: string) {
+		return (await this.#readGenerationDetails(generationId)).result;
 	}
 	async readCurrent(): Promise<SkillPackageMaterializationResultV1 | null> {
 		try {
@@ -417,12 +462,51 @@ export class SkillPackageMaterializerV1 {
 			fail("unavailable");
 		}
 	}
-	async materialize(
+	async readCurrentDetails(): Promise<SkillPackageMaterializationDetailsV1 | null> {
+		try {
+			await this.#assertRoot();
+			let bytes: Buffer;
+			try {
+				bytes = await readRegular(join(this.#root, "CURRENT.json"), 128, true);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+				throw error;
+			}
+			const value = object(JSON.parse(bytes.toString("utf8")), [
+				"schemaVersion",
+				"generationId",
+			]);
+			if (
+				value.schemaVersion !== 1 ||
+				typeof value.generationId !== "string" ||
+				!bytes.equals(canonical(value))
+			)
+				fail("conflict");
+			return await this.#readGenerationDetails(value.generationId);
+		} catch (error) {
+			if (error instanceof SkillPackageMaterializerErrorV1) throw error;
+			fail("unavailable");
+		}
+	}
+	async #materializeUnlocked(
 		input: unknown,
 	): Promise<SkillPackageMaterializationResultV1> {
 		let packages: readonly SkillPackageMaterializationInputV1[];
+		let expectedGenerationId: string | null | undefined;
 		try {
-			packages = snapshotPackages(object(input, ["packages"]).packages);
+			const request = object(input, ["packages"], ["expectedGenerationId"]);
+			packages = snapshotPackages(request.packages);
+			expectedGenerationId = request.expectedGenerationId as
+				| string
+				| null
+				| undefined;
+			if (
+				expectedGenerationId !== undefined &&
+				expectedGenerationId !== null &&
+				(typeof expectedGenerationId !== "string" ||
+					!/^[a-f0-9]{64}$/.test(expectedGenerationId))
+			)
+				fail("invalid");
 		} catch (error) {
 			if (error instanceof SkillPackageMaterializerErrorV1) throw error;
 			fail("invalid");
@@ -534,6 +618,11 @@ export class SkillPackageMaterializerV1 {
 			await syncDirectory(this.#root);
 			for (const input of packages) await this.#verifyAdmission(input);
 			await this.#assertRoot();
+			if (expectedGenerationId !== undefined) {
+				const current = await this.readCurrent();
+				if ((current?.generationId ?? null) !== expectedGenerationId)
+					fail("conflict");
+			}
 			temporary = join(this.#root, `.current-${randomUUID()}`);
 			await persistFile(
 				temporary,
@@ -557,6 +646,63 @@ export class SkillPackageMaterializerV1 {
 				.catch(() => {});
 			if (error instanceof SkillPackageMaterializerErrorV1) throw error;
 			fail("unavailable");
+		}
+	}
+	async materialize(
+		input: unknown,
+	): Promise<SkillPackageMaterializationResultV1> {
+		const previous = SkillPackageMaterializerV1.#locks.get(this.#root);
+		let release!: () => void;
+		const current = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		SkillPackageMaterializerV1.#locks.set(this.#root, current);
+		if (previous) await previous;
+		const lock = join(this.#root, ".materialize-lock");
+		let ownsFilesystemLock = false;
+		for (let attempt = 0; attempt < 800; attempt += 1) {
+			try {
+				await mkdir(lock, { mode: 0o700 });
+				await writeFile(join(lock, "owner"), String(process.pid), {
+					flag: "wx",
+					mode: 0o444,
+				});
+				ownsFilesystemLock = true;
+				break;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+					release();
+					if (SkillPackageMaterializerV1.#locks.get(this.#root) === current)
+						SkillPackageMaterializerV1.#locks.delete(this.#root);
+					throw error;
+				}
+				try {
+					const info = await stat(lock);
+					if (Date.now() - info.mtimeMs > 10_000)
+						await this.#quarantineLock(lock);
+				} catch {
+					// A lock that disappears is retried through mkdir.
+				}
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+		}
+		if (!ownsFilesystemLock) {
+			release();
+			if (SkillPackageMaterializerV1.#locks.get(this.#root) === current)
+				SkillPackageMaterializerV1.#locks.delete(this.#root);
+			fail("unavailable");
+		}
+		const heartbeat = setInterval(() => {
+			void utimes(lock, new Date(), new Date()).catch(() => {});
+		}, 1_000);
+		try {
+			return await this.#materializeUnlocked(input);
+		} finally {
+			clearInterval(heartbeat);
+			release();
+			if (SkillPackageMaterializerV1.#locks.get(this.#root) === current)
+				SkillPackageMaterializerV1.#locks.delete(this.#root);
+			await rm(lock, { recursive: true, force: true });
 		}
 	}
 }
