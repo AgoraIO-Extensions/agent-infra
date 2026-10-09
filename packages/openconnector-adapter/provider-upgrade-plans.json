@@ -27,6 +27,15 @@
 			"toExecutorDigest": "sha256:bbcc3a4812ebe77db72d91d0c26c4b7bb506329848190ee376724c4b5742ea45",
 			"strategy": "REAPPROVAL_REQUIRED",
 			"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/1614"
+		},
+		{
+			"provider": "rehoboam",
+			"fromReleaseId": "rehoboam-connection-v10",
+			"toReleaseId": "rehoboam-connection-v11",
+			"fromExecutorDigest": "sha256:bbcc3a4812ebe77db72d91d0c26c4b7bb506329848190ee376724c4b5742ea45",
+			"toExecutorDigest": "sha256:9dc6ea444b7f7eeedd4452735e0afd04d8985ea338486db3ba06dce0ef626505",
+			"strategy": "REAPPROVAL_REQUIRED",
+			"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/1633"
 		}
 	]
 }

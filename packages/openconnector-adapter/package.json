@@ -16,6 +16,7 @@
 		"./manhattan": "./src/manhattan.ts",
 		"./rehoboam": "./src/rehoboam.ts",
 		"./static-spaces": "./src/static-spaces.ts",
+		"./rehoboam-v11": "./src/rehoboam-v11.ts",
 		"./provider-fetch": "./src/provider-fetch.ts"
 	},
 	"scripts": {

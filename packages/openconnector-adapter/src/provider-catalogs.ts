@@ -11,7 +11,7 @@ import {
 } from "./index.ts";
 import { jiraServerConnectionCatalog } from "./jira-server.ts";
 import { manhattanConnectionCatalog } from "./manhattan.ts";
-import { rehoboamConnectionCatalog } from "./rehoboam.ts";
+import { rehoboamV11ConnectionCatalog as rehoboamConnectionCatalog } from "./rehoboam-v11.ts";
 
 import {
 	staticSpacesConnectionCatalog,

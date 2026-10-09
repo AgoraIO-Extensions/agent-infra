@@ -307,6 +307,10 @@ Gate 的唯一事实源。
 PR 首先运行仓库定义的格式、静态检查、测试、构建和 workflow policy。所有结果绑定精确 PR
 head SHA。Runner、Action、网关或第三方服务故障属于基础设施失败，不能触发代码修改。
 
+Docker 镜像构建由 CI 和正式发布 workflow 验证，本地是可选检查，不要求每次实现或文档修改
+都运行。本地 Agent 只有在用户明确要求容器调试或主动选择镜像验证时才执行，不通过自动清理
+用户镜像、缓存或 volume 腾出空间。本地省略不会豁免当前 head 的 CI 镜像构建门禁。
+
 同一 head 的首次 CI failure 只执行一次 no-code retry。只有相同失败在 retry 后仍能确定性复现，
 才可以触发 Codex repair；通过 retry 的 flake 不消费 repair round。
 

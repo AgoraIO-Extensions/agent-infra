@@ -271,6 +271,7 @@ test("all Consumers use the account-backed Connection without a Runtime profile"
 		"./provider-fetch": "./src/provider-fetch.ts",
 		"./rehoboam": "./src/rehoboam.ts",
 		"./static-spaces": "./src/static-spaces.ts",
+		"./rehoboam-v11": "./src/rehoboam-v11.ts",
 	});
 	assert.doesNotMatch(buildConfig, /local-runtime/);
 	assert.doesNotMatch(dockerfile, /local-runtime/);
