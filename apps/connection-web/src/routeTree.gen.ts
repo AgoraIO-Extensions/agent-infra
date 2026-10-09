@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ConnectionApprovalsRouteImport } from './routes/connection.approvals'
 import { Route as ConnectionConnectionsRouteImport } from './routes/connection.connections'
+import { Route as ConnectionHelpRouteImport } from './routes/connection.help'
 import { Route as ConnectionLoginRouteImport } from './routes/connection.login'
 import { Route as ConnectionTokensRouteImport } from './routes/connection.tokens'
 import { Route as ConnectionAdminActionCallsRouteImport } from './routes/connection.admin.action-calls'
@@ -33,6 +34,11 @@ const ConnectionApprovalsRoute = ConnectionApprovalsRouteImport.update({
 const ConnectionConnectionsRoute = ConnectionConnectionsRouteImport.update({
   id: '/connection/connections',
   path: '/connection/connections',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConnectionHelpRoute = ConnectionHelpRouteImport.update({
+  id: '/connection/help',
+  path: '/connection/help',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConnectionLoginRoute = ConnectionLoginRouteImport.update({
@@ -78,6 +84,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/connection/approvals': typeof ConnectionApprovalsRoute
   '/connection/connections': typeof ConnectionConnectionsRoute
+  '/connection/help': typeof ConnectionHelpRoute
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
   '/connection/admin/action-calls': typeof ConnectionAdminActionCallsRoute
@@ -90,6 +97,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/connection/approvals': typeof ConnectionApprovalsRoute
   '/connection/connections': typeof ConnectionConnectionsRoute
+  '/connection/help': typeof ConnectionHelpRoute
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
   '/connection/admin/action-calls': typeof ConnectionAdminActionCallsRoute
@@ -103,6 +111,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/connection/approvals': typeof ConnectionApprovalsRoute
   '/connection/connections': typeof ConnectionConnectionsRoute
+  '/connection/help': typeof ConnectionHelpRoute
   '/connection/login': typeof ConnectionLoginRoute
   '/connection/tokens': typeof ConnectionTokensRoute
   '/connection/admin/action-calls': typeof ConnectionAdminActionCallsRoute
@@ -117,6 +126,7 @@ export interface FileRouteTypes {
     | '/'
     | '/connection/approvals'
     | '/connection/connections'
+    | '/connection/help'
     | '/connection/login'
     | '/connection/tokens'
     | '/connection/admin/action-calls'
@@ -129,6 +139,7 @@ export interface FileRouteTypes {
     | '/'
     | '/connection/approvals'
     | '/connection/connections'
+    | '/connection/help'
     | '/connection/login'
     | '/connection/tokens'
     | '/connection/admin/action-calls'
@@ -141,6 +152,7 @@ export interface FileRouteTypes {
     | '/'
     | '/connection/approvals'
     | '/connection/connections'
+    | '/connection/help'
     | '/connection/login'
     | '/connection/tokens'
     | '/connection/admin/action-calls'
@@ -154,6 +166,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ConnectionApprovalsRoute: typeof ConnectionApprovalsRoute
   ConnectionConnectionsRoute: typeof ConnectionConnectionsRoute
+  ConnectionHelpRoute: typeof ConnectionHelpRoute
   ConnectionLoginRoute: typeof ConnectionLoginRoute
   ConnectionTokensRoute: typeof ConnectionTokensRoute
   ConnectionAdminActionCallsRoute: typeof ConnectionAdminActionCallsRoute
@@ -184,6 +197,13 @@ declare module '@tanstack/react-router' {
       path: '/connection/connections'
       fullPath: '/connection/connections'
       preLoaderRoute: typeof ConnectionConnectionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/connection/help': {
+      id: '/connection/help'
+      path: '/connection/help'
+      fullPath: '/connection/help'
+      preLoaderRoute: typeof ConnectionHelpRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/connection/login': {
@@ -242,6 +262,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ConnectionApprovalsRoute: ConnectionApprovalsRoute,
   ConnectionConnectionsRoute: ConnectionConnectionsRoute,
+  ConnectionHelpRoute: ConnectionHelpRoute,
   ConnectionLoginRoute: ConnectionLoginRoute,
   ConnectionTokensRoute: ConnectionTokensRoute,
   ConnectionAdminActionCallsRoute: ConnectionAdminActionCallsRoute,
