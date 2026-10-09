@@ -57,7 +57,12 @@ export async function verifyChromiumInstallationV1() {
 				throw new Error();
 		}
 		const binary = await lstat(executable);
-		if (!binary.isFile() || (binary.mode & 0o111) === 0 || binary.nlink !== 1)
+		if (
+			!binary.isFile() ||
+			(binary.mode & 0o222) !== 0 ||
+			(binary.mode & 0o111) === 0 ||
+			binary.nlink !== 1
+		)
 			throw new Error();
 		const installedRelease = JSON.parse(
 			await readFile(join(root, "release.json"), "utf8"),

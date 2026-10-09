@@ -1,3 +1,7 @@
+# Preserve the proven Landlock helper; Bookworm's setpriv lacks required rights.
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81 AS isolation-tools
+RUN apk add --no-cache 'setpriv=2.42.3-r1'
+
 FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS builder
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates unzip util-linux \
@@ -5,6 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 	&& npm install --global npm@11.19.1 \
 	&& npm install --global pnpm@11.20.0
 WORKDIR /app
+COPY --from=isolation-tools /bin/setpriv /usr/bin/setpriv
+COPY --from=isolation-tools /lib/ld-musl-*.so.1 /usr/lib/
+COPY --from=isolation-tools /usr/lib/libcap-ng.so.0* /usr/lib/libeconf.so.0* /usr/lib/
 
 COPY deploy/runtime/install-codex.mjs ./deploy/runtime/install-codex.mjs
 COPY packages/agent-runtime/src/codex-release.json ./packages/agent-runtime/src/codex-release.json
@@ -81,6 +88,11 @@ ENV AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1
 COPY --from=builder --chown=node:node /prod/agent-runtime-host/ ./
 RUN node node_modules/@agent-infra/agent-runtime/node_modules/playwright-core/cli.js install-deps chromium \
     && rm -rf /var/lib/apt/lists/* /var/log/*
+COPY --from=isolation-tools /bin/setpriv /usr/bin/setpriv
+COPY --from=isolation-tools /lib/ld-musl-*.so.1 /usr/lib/
+COPY --from=isolation-tools /usr/lib/libcap-ng.so.0* /usr/lib/libeconf.so.0* /usr/lib/
+RUN setpriv --version | grep -Fx 'setpriv from util-linux 2.42.3' \
+    && setpriv --help | grep -q -- '--landlock-access'
 COPY --from=builder /app/deploy/runtime/browser-launch-probe.mjs ./browser-launch-probe.mjs
 COPY --from=builder --chown=node:node /app/apps/agent-runtime-host/start-runtime-host.sh ./start-runtime-host.sh
 RUN chmod 0755 ./start-runtime-host.sh

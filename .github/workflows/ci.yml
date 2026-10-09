@@ -503,9 +503,14 @@ jobs:
             | select(length == 1) | .[0].imageId
             | select(test("^sha256:[a-f0-9]{64}$"))
           ' .ci-images/build.json)
+          test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_COMMIT"
           docker run --rm --network none --cap-drop ALL \
             --security-opt no-new-privileges:true --user node --entrypoint node \
             "$image" /app/browser-launch-probe.mjs \
+            > "$RUNNER_TEMP/browser-launch-probe.raw.json"
+          jq -n --arg commit "$SOURCE_COMMIT" --arg image "$image" \
+            --slurpfile probe "$RUNNER_TEMP/browser-launch-probe.raw.json" \
+            '{schemaVersion:1,source:{commit:$commit,imageId:$image},probe:$probe[0]}' \
             > "$RUNNER_TEMP/browser-launch-probe.json"
 
       - name: Preserve Chromium launch evidence
