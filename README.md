@@ -62,8 +62,10 @@ pnpm check-types
 pnpm test
 pnpm build
 pnpm smoke
-pnpm docker:build
 ```
+
+Docker 镜像验证在 CI 执行，本地清单不默认构建镜像。需要容器调试时可主动运行
+`pnpm docker:build`；本地省略不影响 CI 和发布的镜像构建要求。
 
 真实账号 conformance 使用本机忽略的 `.env.conformance.local`，或由 Secret Manager 注入
 `.env.conformance.example` 中列出的参数后运行 `pnpm connection:conformance`。该命令启动
