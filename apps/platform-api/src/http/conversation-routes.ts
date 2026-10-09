@@ -1123,14 +1123,15 @@ export function registerConversationRoutes(
 					return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
 				}
 			}
+			const useCase = dependencies.commands(identity);
 			await assertCurrentRuntimeSelection(
 				dependencies.modelSelection,
 				identity,
 				context.req.param("conversationId"),
-				dependencies.commands(identity),
+				useCase,
 				metadata.traceId,
 			);
-			const decision = await dependencies.commands(identity).accept({
+			const decision = await useCase.accept({
 				schemaVersion: 1,
 				command: "message",
 				conversationId: context.req.param("conversationId"),
