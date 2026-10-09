@@ -6,6 +6,7 @@
 
 ## 文档
 
+- [项目使用说明书](docs/guides/user-manual.md)
 - [企业级 Agent 平台 M1 产品需求](docs/prd/PRD-agent-platform-M1.md)
 - [Connection M1 产品需求](docs/prd/PRD-connection-M1.md)
 - [M1 工程架构 Spec](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)
@@ -85,3 +86,9 @@ Pod/PVC 调谐、多人运行上下文隔离和真实 Pilot 仍由对应交付�
 [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)。
 
 开始工作前请阅读 [AGENTS.md](AGENTS.md)。
+
+## 使用指南
+
+Web 导航中的“使用指南”（`/help`）提供搜索、目录、章节链接及完整 Markdown 下载。
+页面与[项目使用说明书](docs/guides/user-manual.md)共用一份内容。
+静态使用说明可在登录前阅读，Agent、对话和管理页面仍要求登录及相应权限。

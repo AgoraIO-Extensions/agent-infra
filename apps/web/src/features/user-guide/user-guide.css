@@ -1,0 +1,350 @@
+/* Selected knowledge-guide layout. Shared platform tokens and UI controls. */
+.guide {
+	--guide-accent: #32634d;
+	padding: 30px clamp(20px, 4vw, 64px) 48px;
+	max-width: 1500px;
+	margin: auto;
+	min-width: 0;
+}
+.guide-masthead,
+.guide-wordmark,
+.guide-download,
+.guide-colophon {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.guide-masthead {
+	padding-bottom: 24px;
+	border-bottom: 1px solid var(--border);
+}
+.guide-wordmark {
+	font-weight: 650;
+}
+.guide-wordmark span,
+.guide-eyebrow,
+.guide-colophon,
+.guide-download {
+	font-size: 11px;
+	letter-spacing: 0.12em;
+}
+.guide-wordmark span {
+	color: var(--muted-foreground);
+	margin-left: 8px;
+}
+.guide-download {
+	letter-spacing: 0;
+	font-size: 13px;
+	justify-content: start;
+}
+.guide-download:hover {
+	text-decoration: underline;
+}
+.guide-intro {
+	display: grid;
+	grid-template-columns: 1.5fr 1fr;
+	align-items: end;
+	gap: 30px;
+	padding: 52px 0 35px;
+}
+.guide-eyebrow {
+	color: var(--guide-accent);
+	font-weight: 650;
+}
+.guide h1 {
+	font-family: var(--font-display);
+	font-size: clamp(34px, 4.2vw, 64px);
+	font-weight: 500;
+	line-height: 1.2;
+	letter-spacing: -0.04em;
+	margin: 18px 0 22px;
+}
+.guide-intro p:not(.guide-eyebrow),
+.guide-intro-side {
+	color: var(--muted-foreground);
+	font-size: 14px;
+	line-height: 1.9;
+}
+.guide-intro-side {
+	border-left: 1px solid var(--border);
+	padding-left: 32px;
+}
+.guide-volume {
+	font-family: var(--font-display);
+	font-size: 58px;
+	line-height: 1;
+	color: var(--guide-accent);
+}
+.guide-intro-side p {
+	margin: 18px 0;
+}
+.guide-search {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	padding: 6px 18px;
+	margin-bottom: 35px;
+	border-radius: 12px;
+}
+.guide-search input {
+	border: 0;
+	background: transparent;
+}
+.guide-search > span {
+	font-size: 11px;
+	white-space: nowrap;
+	color: var(--muted-foreground);
+}
+.guide-reading {
+	display: grid;
+	grid-template-columns: 210px minmax(0, 1fr);
+	gap: 42px;
+	align-items: start;
+}
+.guide-reading aside {
+	position: sticky;
+	top: 20px;
+}
+.guide-contents {
+	margin-top: 18px;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.guide-contents button {
+	justify-content: start;
+	gap: 10px;
+	text-align: left;
+	min-height: 44px;
+	padding: 7px 10px;
+	font-weight: 450;
+	font-size: 12px;
+}
+.guide-contents button span {
+	flex-shrink: 0;
+	white-space: nowrap;
+	color: var(--muted-foreground);
+	font:
+		10px ui-monospace,
+		monospace;
+}
+.guide-contents button[aria-current] {
+	color: var(--guide-accent);
+	background: color-mix(in srgb, var(--guide-accent) 9%, transparent);
+	font-weight: 650;
+}
+.guide-article {
+	min-width: 0;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	border-radius: 14px;
+	padding: clamp(20px, 3vw, 42px);
+}
+.guide-article > header {
+	border-bottom: 1px solid var(--border);
+	padding-bottom: 24px;
+	margin-bottom: 24px;
+}
+.guide h2 {
+	font-size: 27px;
+	letter-spacing: -0.025em;
+	font-weight: 650;
+	margin: 12px 0;
+	line-height: 1.4;
+}
+.guide-subtitle {
+	font-size: 13px;
+	color: var(--muted-foreground);
+}
+.guide-prose {
+	font-size: 14px;
+	line-height: 1.95;
+	overflow-wrap: anywhere;
+}
+.guide-prose p,
+.guide-prose ul,
+.guide-prose ol,
+.guide-prose pre,
+.guide-prose blockquote {
+	margin: 20px 0;
+}
+.guide-prose ul {
+	list-style: disc;
+	padding-left: 24px;
+}
+.guide-prose ol {
+	list-style: decimal;
+	padding-left: 24px;
+}
+.guide-prose li {
+	margin: 9px 0;
+	padding-left: 4px;
+}
+.guide-prose li::marker {
+	color: var(--guide-accent);
+	font-weight: 650;
+}
+.guide-prose blockquote {
+	border-left: 3px solid var(--guide-accent);
+	background: color-mix(in srgb, var(--guide-accent) 5%, transparent);
+	padding: 1px 20px;
+}
+.guide-prose code {
+	font-size: 12px;
+	background: var(--muted);
+	border-radius: 4px;
+	padding: 2px 5px;
+}
+.guide-prose pre {
+	white-space: pre-wrap;
+	background: #202e29;
+	color: #edf4ee;
+	border-radius: 10px;
+	padding: 20px;
+}
+.guide-prose pre code {
+	background: none;
+	padding: 0;
+}
+.guide-prose a {
+	color: var(--guide-accent);
+	text-decoration: underline;
+	text-underline-offset: 4px;
+}
+.guide-table {
+	max-width: 100%;
+	overflow: auto;
+	margin: 22px 0;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+}
+.guide-table th,
+.guide-table td {
+	white-space: normal;
+	min-width: 90px;
+	font-size: 12px;
+	line-height: 1.75;
+	padding: 12px;
+}
+.guide-table th {
+	background: var(--muted);
+}
+.guide-article-footer {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-top: 35px;
+	padding-top: 20px;
+	border-top: 1px solid var(--border);
+	font-size: 11px;
+	color: var(--muted-foreground);
+}
+.guide-results {
+	min-height: 400px;
+}
+.guide-results > p {
+	font-size: 13px;
+	color: var(--muted-foreground);
+}
+.guide-results button {
+	width: 100%;
+	padding: 22px 10px;
+	justify-content: space-between;
+	text-align: left;
+	border-bottom: 1px solid var(--border);
+	border-radius: 0;
+	gap: 20px;
+}
+.guide-colophon {
+	margin-top: 45px;
+	border-top: 1px solid var(--border);
+	padding-top: 20px;
+	color: var(--muted-foreground);
+	letter-spacing: 0;
+	flex-wrap: wrap;
+}
+@media (max-width: 1150px) {
+	.guide-reading {
+		gap: 20px;
+		grid-template-columns: 185px minmax(0, 1fr);
+	}
+	.guide-wordmark span {
+		display: none;
+	}
+}
+@media (max-width: 700px) {
+	.guide {
+		padding: 20px 18px 40px;
+	}
+	.guide-intro {
+		grid-template-columns: 1fr;
+		gap: 25px;
+		padding: 30px 0;
+	}
+	.guide-intro-side {
+		border: 0;
+		padding: 0;
+	}
+	.guide-volume {
+		display: none;
+	}
+	.guide-intro-side p {
+		margin: 0 0 12px;
+	}
+	.guide-reading {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 25px;
+	}
+	.guide-reading aside {
+		position: static;
+	}
+	.guide-contents {
+		flex-direction: row;
+		overflow: auto;
+		padding-bottom: 10px;
+	}
+	.guide-contents button {
+		white-space: nowrap;
+		flex-shrink: 0;
+	}
+	.guide-search {
+		padding: 6px 10px;
+		gap: 5px;
+	}
+	.guide-search > span {
+		display: none;
+	}
+	.guide-search button {
+		font-size: 12px;
+		padding: 8px;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.guide * {
+		transition: none;
+	}
+}
+.guide-reading > aside {
+	min-width: 0;
+}
+.guide-article h2 {
+	scroll-margin-top: 24px;
+}
+.guide-result-copy {
+	flex: 1;
+	min-width: 0;
+}
+.guide-result-copy > span {
+	display: block;
+	margin-top: 8px;
+	font-size: 12px;
+	font-weight: 400;
+}
+
+.guide-article h2:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 6px;
+}

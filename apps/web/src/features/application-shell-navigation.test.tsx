@@ -39,7 +39,11 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-async function showShell(administrator: boolean, initialEntry = "/agents") {
+async function showShell(
+	administrator: boolean,
+	initialEntry = "/agents",
+	authenticated = true,
+) {
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(() => {
@@ -52,18 +56,25 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 		},
 	});
 	clients.push(client);
-	client.setQueryData(["browser-session"], {
-		kind: "ready",
-		sessionGeneration: "g".repeat(43),
-		session: {
-			schemaVersion: 1,
-			user: {
-				userId: "controlled-person",
-				displayName: "受控用户",
-				roles: administrator ? ["employee", "system_admin"] : ["employee"],
-			},
-		},
-	});
+	client.setQueryData(
+		["browser-session"],
+		authenticated
+			? {
+					kind: "ready",
+					sessionGeneration: "g".repeat(43),
+					session: {
+						schemaVersion: 1,
+						user: {
+							userId: "controlled-person",
+							displayName: "受控用户",
+							roles: administrator
+								? ["employee", "system_admin"]
+								: ["employee"],
+						},
+					},
+				}
+			: { kind: "unavailable", retryable: false },
+	);
 	const root = createRootRoute({
 		component: () => (
 			<ApplicationShell>
@@ -81,7 +92,13 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 		path: "/agents",
 		component: () => <h1>受控 Agent 目录</h1>,
 	});
+	const help = createRoute({
+		getParentRoute: () => root,
+		path: "/help",
+		component: () => <h1>静态使用指南</h1>,
+	});
 	const targets = [
+		"/help/private",
 		"/my-agents",
 		"/my-agents/new",
 		"/audit",
@@ -95,7 +112,7 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 	const history = createMemoryHistory({ initialEntries: [initialEntry] });
 	const router = createRouter({
 		history,
-		routeTree: root.addChildren([home, agents, ...targets]),
+		routeTree: root.addChildren([home, agents, help, ...targets]),
 	});
 	await router.load();
 	render(
@@ -177,4 +194,32 @@ describe("Original IA workbench navigation", () => {
 			expect(globalThis.fetch).not.toHaveBeenCalled();
 		},
 	);
+});
+
+describe("public help boundary", () => {
+	it("allows the static guide when logged out", async () => {
+		await showShell(false, "/help", false);
+		expect(screen.getByRole("heading", { name: "静态使用指南" })).toBeTruthy();
+		expect(
+			screen
+				.getByRole("link", { name: "使用指南" })
+				.getAttribute("aria-current"),
+		).toBe("page");
+		expect(screen.queryByRole("heading", { name: "登录工作空间" })).toBeNull();
+		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+	it.each([
+		"/agents",
+		"/my-agents",
+		"/admin/agents",
+		"/chat/agent-1/conversation-1",
+		"/help/private",
+	])("still requires login at %s", async (entry) => {
+		await showShell(false, entry, false);
+		expect(screen.getByRole("heading", { name: "登录工作空间" })).toBeTruthy();
+		expect(
+			screen.queryByRole("heading", { name: "受控 Agent 目录" }),
+		).toBeNull();
+		expect(screen.queryByRole("heading", { name: "静态使用指南" })).toBeNull();
+	});
 });

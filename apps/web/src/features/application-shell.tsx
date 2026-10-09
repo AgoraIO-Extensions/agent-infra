@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
+	BookOpen,
 	Bot,
 	Check,
 	ClipboardMinus,
@@ -121,6 +122,8 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		sessionProjection,
 	]);
 	const pathname = useLocation({ select: (location) => location.pathname });
+	// Only this static guide is public. Business routes keep the session boundary.
+	const userGuide = pathname === "/help" || pathname === "/help/";
 	const conversationSelection = useLocation({
 		select: (location) => location.search.mode === "conversation",
 	});
@@ -161,8 +164,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const development =
 		import.meta.env.DEV &&
 		import.meta.env.VITE_PLATFORM_DEVELOPMENT_MODE === "controlled";
-	const title =
-		pathname === "/"
+	const title = userGuide
+		? "使用指南"
+		: pathname === "/"
 			? "工作台"
 			: selectingConversation
 				? "选择 Agent 开始对话"
@@ -326,6 +330,16 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					</nav>
 				)}
 			</nav>
+			<Link
+				className={`platform-nav-item ${userGuide ? "selected" : ""}`}
+				aria-current={userGuide ? "page" : undefined}
+				to="/help"
+				search={{ chapter: "01" }}
+				onClick={() => setSheet(false)}
+			>
+				<BookOpen size={17} aria-hidden="true" />
+				使用指南
+			</Link>
 			<div className="platform-nav-bottom">
 				<div className="platform-identity">
 					<Avatar className="platform-avatar" aria-hidden="true">
@@ -429,7 +443,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					)}
 				</header>
 				<div id="main-content" tabIndex={-1} className="min-w-0 flex-1">
-					{session.state.kind === "ready" ? (
+					{userGuide ? (
+						children
+					) : session.state.kind === "ready" ? (
 						<AuthenticatedContent
 							// A login generation can outlive a role change. Both boundaries
 							// must reset feature caches and drafts, including older deployments.
