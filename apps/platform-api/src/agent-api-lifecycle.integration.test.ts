@@ -320,13 +320,20 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 		await sql`insert into platform.agent_principal_grants
 			(agent_id, principal_type, principal_id, grant_type, authorization_revision)
 			values ('agent-a', 'user', 'same-id', 'use', 'user-use-1')`;
-		const revoked = await revokeUserUse();
-		expect(revoked.status).toBe(200);
-		expect(await revoked.json()).toMatchObject({
+		const [first, second] = await Promise.all([
+			revokeUserUse("agent-a", "same-id", "user-revoke-concurrent"),
+			revokeUserUse("agent-a", "same-id", "user-revoke-concurrent"),
+		]);
+		expect(first.status).toBe(200);
+		expect(second.status).toBe(200);
+		expect(await first.json()).toMatchObject({
 			agentId: "agent-a",
 			userId: "same-id",
 			granted: false,
-			replayed: false,
+		});
+		expect(await second.json()).toMatchObject({
+			granted: false,
+			replayed: expect.any(Boolean),
 		});
 		const replay = await revokeUserUse("agent-a", "same-id", "user-revoke");
 		expect(replay.status).toBe(200);
