@@ -101,16 +101,16 @@ it("projects an admitted credential-free V3 record through V4 without rebinding 
 });
 
 it.each([
-	["claude", "anthropic-messages-v1", "api-key"],
-	["acp", "anthropic-messages-v1", "bearer"],
-	["pi", "anthropic-messages-v1", "api-key"],
+	["claude", "claude", "anthropic-messages-v1", "api-key"],
+	["opencode", "acp", "anthropic-messages-v1", "bearer"],
+	["pi", "pi", "anthropic-messages-v1", "api-key"],
 ] as const)(
-	"projects keyless V4 model configuration for the %s Driver",
-	async (driver, protocol, authentication) => {
+	"projects keyless V4 model configuration for the %s template",
+	async (templateId, driver, protocol, authentication) => {
 		const configuration = decodeAgentConfigurationRecordV3({
 			...configurationV2,
 			schemaVersion: 3,
-			source: { ...configurationV2.source, templateId: driver },
+			source: { ...configurationV2.source, templateId },
 			modelConfiguration: {
 				catalogRevision: "catalog-a",
 				defaultOptionId: "primary",
@@ -131,7 +131,7 @@ it.each([
 			...(protocol === "anthropic-messages-v1" ? { authentication } : {}),
 		};
 		const standardTemplateBinding = {
-			templateId: driver,
+			templateId,
 			imageDigest: configuration.source.imageDigest,
 			driver,
 			protocol,
