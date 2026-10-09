@@ -5,6 +5,7 @@ export * from "./browser-handoff.js";
 export * from "./browser-installation.js";
 export * from "./browser-launch-probe.js";
 export * from "./browser-observe.js";
+export * from "./browser-session.js";
 export {
 	CLAUDE_NATIVE_PROVENANCE,
 	verifyClaudeInstallation,
