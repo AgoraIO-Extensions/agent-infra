@@ -28,7 +28,8 @@
 		"docker:build": "SOURCE_COMMIT=${SOURCE_COMMIT:-$(git rev-parse HEAD)} docker compose --profile runtime build",
 		"docker:up": "docker compose up -d --build",
 		"docker:down": "docker compose down",
-		"docker:logs": "docker compose logs -f"
+		"docker:logs": "docker compose logs -f",
+		"prototype:guide": "pnpm --filter @agent-infra/contracts build && pnpm --filter @agent-infra/web dev --open /prototype/user-guide?variant=A"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.6",

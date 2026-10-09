@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
+	BookOpen,
 	Bot,
 	Check,
 	ClipboardMinus,
@@ -121,6 +122,8 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		sessionProjection,
 	]);
 	const pathname = useLocation({ select: (location) => location.pathname });
+	const guidePrototype =
+		import.meta.env.DEV && pathname === "/prototype/user-guide";
 	const conversationSelection = useLocation({
 		select: (location) => location.search.mode === "conversation",
 	});
@@ -161,8 +164,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const development =
 		import.meta.env.DEV &&
 		import.meta.env.VITE_PLATFORM_DEVELOPMENT_MODE === "controlled";
-	const title =
-		pathname === "/"
+	const title = guidePrototype
+		? "使用指南原型"
+		: pathname === "/"
 			? "工作台"
 			: selectingConversation
 				? "选择 Agent 开始对话"
@@ -326,6 +330,16 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					</nav>
 				)}
 			</nav>
+			{import.meta.env.DEV && (
+				<Link
+					className="platform-nav-item"
+					to="/prototype/user-guide"
+					search={{ variant: "A", chapter: "01" }}
+				>
+					<BookOpen size={17} aria-hidden="true" />
+					使用指南 · 原型
+				</Link>
+			)}
 			<div className="platform-nav-bottom">
 				<div className="platform-identity">
 					<Avatar className="platform-avatar" aria-hidden="true">
@@ -429,7 +443,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					)}
 				</header>
 				<div id="main-content" tabIndex={-1} className="min-w-0 flex-1">
-					{session.state.kind === "ready" ? (
+					{guidePrototype ? (
+						children
+					) : session.state.kind === "ready" ? (
 						<AuthenticatedContent
 							// A login generation can outlive a role change. Both boundaries
 							// must reset feature caches and drafts, including older deployments.

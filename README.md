@@ -6,6 +6,7 @@
 
 ## 文档
 
+- [项目使用说明书](docs/guides/user-manual.md)
 - [企业级 Agent 平台 M1 产品需求](docs/prd/PRD-agent-platform-M1.md)
 - [Connection M1 产品需求](docs/prd/PRD-connection-M1.md)
 - [M1 工程架构 Spec](docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md)
@@ -84,3 +85,13 @@ Pod/PVC 调谐、多人运行上下文隔离和真实 Pilot 仍由对应交付�
 [AI 主导开发工作流 Spec](docs/architecture/SPEC-ai-native-development-workflow.md)。
 
 开始工作前请阅读 [AGENTS.md](AGENTS.md)。
+
+## 使用指南设计原型
+
+```bash
+pnpm prototype:guide
+```
+
+开发态访问 `/prototype/user-guide?variant=A`，通过底部切换器比较知识手册（A）、
+任务导航（B）和阅读长卷（C）。原型只读，内容与使用说明书共用一个 Markdown 源。
+正式构建不开放原型入口；视觉选择与后续提升记录在 Issue #1599。
