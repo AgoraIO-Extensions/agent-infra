@@ -62,7 +62,6 @@ const body = {
 				endpointId: "endpoint-primary",
 				modelId: "gpt-5",
 				reasoningLevels: ["medium"],
-				credentialValue: "test-credential-value",
 			},
 		],
 		defaultOptionId: "model-option-1",

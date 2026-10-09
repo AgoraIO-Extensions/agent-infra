@@ -155,7 +155,8 @@ describe("AgentApplicationForm", () => {
 		});
 		choose("标准模板", "Codex");
 		expect(
-			(screen.getByLabelText("模型凭证") as HTMLInputElement).required,
+			(screen.getByLabelText("Agent 默认 Relay Key") as HTMLInputElement)
+				.required,
 		).toBe(true);
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
@@ -187,7 +188,7 @@ describe("AgentApplicationForm", () => {
 		expect(screen.getAllByRole("option", { name: "gpt-5" })).toHaveLength(1);
 	});
 
-	it("does not submit an initial standard application without a model credential", () => {
+	it("does not submit an initial standard application without a default Relay Key", () => {
 		const onSubmit = vi.fn();
 		render(
 			<AgentApplicationForm
@@ -518,15 +519,12 @@ describe("AgentApplicationForm", () => {
 		chooseAt("模型端点", "Primary endpoint", 0);
 		chooseAt("模型", "gpt-5", 0);
 		checkAt("medium", 0);
-		fireEvent.change(at(screen.getAllByLabelText("模型凭证"), 0), {
-			target: { value: "credential-one" },
-		});
 		fireEvent.click(screen.getByRole("button", { name: "添加模型选项" }));
 		chooseAt("模型端点", "Primary endpoint", 1);
 		chooseAt("模型", "gpt-5", 1);
 		checkAt("medium", 1);
-		fireEvent.change(at(screen.getAllByLabelText("模型凭证"), 1), {
-			target: { value: "credential-two" },
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: "agent-relay-key-value" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 		expect(screen.getAllByText("模型选项不能重复。")).toHaveLength(2);
@@ -557,16 +555,10 @@ describe("AgentApplicationForm", () => {
 		chooseAt("模型端点", "Primary endpoint", 0);
 		chooseAt("模型", "gpt-5", 0);
 		checkAt("medium", 0);
-		fireEvent.change(at(screen.getAllByLabelText("模型凭证"), 0), {
-			target: { value: "credential-one" },
-		});
 		fireEvent.click(screen.getByRole("button", { name: "添加模型选项" }));
 		chooseAt("模型端点", "Primary endpoint", 1);
 		chooseAt("模型", "gpt-5", 1);
 		checkAt("medium", 1);
-		fireEvent.change(at(screen.getAllByLabelText("模型凭证"), 1), {
-			target: { value: "credential-two" },
-		});
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 		expect(screen.getAllByText("模型选项不能重复。")).toHaveLength(2);
 
@@ -621,15 +613,16 @@ describe("AgentApplicationForm", () => {
 		choose("模型", "gpt-5");
 		check("medium");
 		check("high");
-		fireEvent.change(screen.getByLabelText("模型凭证"), {
-			target: { value: "never-echo-model" },
-		});
 		choose("默认模型", "Primary endpoint · gpt-5");
 		choose("默认推理档位", "medium");
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: "agent-relay-key-value" },
+		});
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(onSubmit).toHaveBeenCalledWith({
 			schemaVersion: 2,
+			defaultRelayKey: "agent-relay-key-value",
 			name: "Release assistant",
 			description: "Helps the release team",
 			source: { kind: "standard", templateId: "codex" },
@@ -648,7 +641,6 @@ describe("AgentApplicationForm", () => {
 						endpointId: "endpoint-primary",
 						modelId: "gpt-5",
 						reasoningLevels: ["medium", "high"],
-						credentialValue: "never-echo-model",
 					},
 				],
 				defaultOptionId: "endpoint-primary:gpt-5",
@@ -691,11 +683,11 @@ describe("AgentApplicationForm", () => {
 		choose("模型端点", "Colon endpoint");
 		choose("模型", "model:primary");
 		check("medium");
-		fireEvent.change(screen.getByLabelText("模型凭证"), {
-			target: { value: "never-echo-model" },
-		});
 		choose("默认模型", "Colon endpoint · model:primary");
 		choose("默认推理档位", "medium");
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: "agent-relay-key-value" },
+		});
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(onSubmit).toHaveBeenCalledWith(
@@ -1073,7 +1065,7 @@ describe("AgentApplicationForm", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
-	it("requires a replacement credential after canonicalizing a legacy option", () => {
+	it("does not require a per-model credential after canonicalizing a legacy option", () => {
 		const application = AgentApplicationProjectionV2Schema.parse({
 			...pendingApplication,
 			configuration: {
@@ -1116,11 +1108,9 @@ describe("AgentApplicationForm", () => {
 		);
 
 		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
-		const credential = screen.getByLabelText("模型凭证") as HTMLInputElement;
-		expect(credential.required).toBe(true);
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
-		expect(screen.getByText("请输入模型凭证。")).toBeTruthy();
-		expect(onSubmit).not.toHaveBeenCalled();
+		expect(screen.queryByText("请输入模型凭证。")).toBeNull();
+		expect(onSubmit).toHaveBeenCalled();
 	});
 
 	it("marks a persisted model with an unmapped endpoint as stale", () => {
@@ -1290,9 +1280,6 @@ describe("AgentApplicationForm", () => {
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
 		expect(onSubmit).not.toHaveBeenCalled();
-		fireEvent.change(screen.getByLabelText("模型凭证"), {
-			target: { value: "replacement-secret" },
-		});
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
 		choose("默认推理档位", "high");
 		expect(defaultModel.getAttribute("aria-invalid")).toBe("true");
@@ -1351,6 +1338,9 @@ describe("AgentApplicationForm", () => {
 		choose("标准模板", "Codex");
 		choose("模型端点", "Primary endpoint");
 		choose("模型", "gpt-5");
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: "agent-relay-key-value" },
+		});
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		const group = screen.getByRole("group", { name: "允许的推理档位" });
@@ -1412,9 +1402,6 @@ describe("AgentApplicationForm", () => {
 		);
 
 		fireEvent.click(screen.getByRole("checkbox", { name: "修改模型配置" }));
-		expect(
-			(screen.getByLabelText("模型凭证") as HTMLInputElement).required,
-		).toBe(true);
 		fireEvent.click(screen.getByRole("button", { name: "修改申请" }));
 
 		expect(document.activeElement).toBe(
@@ -1738,11 +1725,11 @@ describe("AgentApplicationForm", () => {
 		choose("模型端点", "Primary endpoint");
 		choose("模型", "gpt-5");
 		check("medium");
-		fireEvent.change(screen.getByLabelText("模型凭证"), {
-			target: { value: "never-echo-model" },
-		});
 		choose("默认模型", "Primary endpoint · gpt-5");
 		choose("默认推理档位", "medium");
+		fireEvent.change(screen.getByLabelText("Agent 默认 Relay Key"), {
+			target: { value: "agent-relay-key-value" },
+		});
 		fireEvent.click(screen.getByRole("button", { name: "提交申请" }));
 
 		expect(screen.getByRole("status").textContent).toBe(
