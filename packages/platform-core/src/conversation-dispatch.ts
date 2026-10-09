@@ -1078,6 +1078,18 @@ export function createConversationDispatchUseCaseV1(
 					if (status.status === "unavailable") {
 						throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
 					}
+					if (recoveringStop && status.status === "unknown") {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"unknown",
+							{},
+						);
+					}
 					if (recoveringStop && status.status === "running") {
 						response = parseRuntimeResponse(
 							await dependencies.runtimeHost.dispatch(
