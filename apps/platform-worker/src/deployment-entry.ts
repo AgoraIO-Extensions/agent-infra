@@ -189,15 +189,19 @@ async function createPrepared(signal: AbortSignal) {
 		if (connectionConsumer) {
 			const { PostgresConnectionInstallationAuthorizationTransactionV1 } =
 				await import("@agent-infra/platform-store");
-			installationStore =
-				new PostgresConnectionInstallationAuthorizationTransactionV1({
-					databaseUrl: workload.databaseUrl,
-					directory,
-					configuration: connectionInstallation.configuration,
-					profile: connectionConsumer.profile,
-					approval: connectionConsumer.approval,
-				});
-			if (!authorize) {
+			try {
+				installationStore =
+					new PostgresConnectionInstallationAuthorizationTransactionV1({
+						databaseUrl: workload.databaseUrl,
+						directory,
+						configuration: connectionInstallation.configuration,
+						profile: connectionConsumer.profile,
+						approval: connectionConsumer.approval,
+					});
+			} catch {
+				installationStore = undefined;
+			}
+			if (!authorize && installationStore) {
 				const { createConnectionInstallationAuthorizationV1 } = await import(
 					"@agent-infra/platform-core"
 				);
