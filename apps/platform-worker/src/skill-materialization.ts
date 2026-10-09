@@ -2,8 +2,8 @@ import {
 	createSkillWorkloadProjectionV1,
 	type SkillGrantV1,
 	type SkillVersionRefV1,
-	SkillWorkloadProjectionV1Schema,
 	type SkillWorkloadProjectionV1,
+	SkillWorkloadProjectionV1Schema,
 } from "@agent-infra/contracts";
 import type {
 	SkillPackageMaterializationInputV1,

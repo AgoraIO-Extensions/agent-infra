@@ -49,8 +49,8 @@ import {
 import { runtimeFetch } from "./runtime-transport.js";
 import {
 	validateWorkloadSkillMaterializationV1,
-	type WorkloadSkillMaterializerV1,
 	type WorkloadSkillMaterializationResultV1,
+	type WorkloadSkillMaterializerV1,
 } from "./skill-materialization.js";
 
 export interface WorkloadRuntimeOptionsV1 {
