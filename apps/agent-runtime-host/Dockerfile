@@ -96,7 +96,8 @@ RUN setpriv --version | grep -Fx 'setpriv from util-linux 2.42.3' \
     && setpriv --help | grep -q -- '--landlock-access'
 COPY --from=builder /app/deploy/runtime/browser-launch-probe.mjs ./browser-launch-probe.mjs
 COPY --from=builder --chown=node:node /app/apps/agent-runtime-host/start-runtime-host.sh ./start-runtime-host.sh
-RUN chmod 0755 ./start-runtime-host.sh
+RUN chmod 0755 ./start-runtime-host.sh \
+    && chmod 0555 /opt/agent-infra/browser
 RUN mkdir -p /var/lib/agent-runtime && chown node:node /var/lib/agent-runtime
 RUN mkdir -p /etc/agent-infra/legacy-migration \
     && chown root:root /etc/agent-infra /etc/agent-infra/legacy-migration \
