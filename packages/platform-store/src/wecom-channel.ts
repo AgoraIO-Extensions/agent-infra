@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
 	createConversationExecutionUseCaseV1,
+	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
 	type TaskAuthorizationBoundaryV1,
 	type TaskUserDirectoryV1,
@@ -11,6 +12,7 @@ import {
 	type WecomDeliveryClaimV1,
 	type WecomDeliveryStatusV1,
 	type WecomDeliveryStorePortV1,
+	type WecomIdentityPortV1,
 	type WecomScopeV1,
 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -80,15 +82,18 @@ export class PostgresWecomChannelV1
 	readonly #management: PostgresAgentManagementTransactionV1;
 	readonly #connectionHolderId: string | null;
 	readonly #userDirectory: TaskUserDirectoryV1 | undefined;
+	readonly #identity: WecomIdentityPortV1 | undefined;
 	readonly #observe: (status: WecomDeliveryStatusV1) => void;
 	constructor(options: {
 		readonly databaseUrl: string;
 		readonly userDirectory?: TaskUserDirectoryV1;
+		readonly identity?: WecomIdentityPortV1;
 		readonly connectionHolderId?: string;
 		readonly observe?: (status: WecomDeliveryStatusV1) => void;
 	}) {
 		this.#connectionHolderId = options.connectionHolderId ?? null;
 		this.#userDirectory = options.userDirectory;
+		this.#identity = options.identity;
 		this.#observe = (status) => {
 			try {
 				options.observe?.(status);
@@ -153,6 +158,7 @@ export class PostgresWecomChannelV1
 		callerSignal?: AbortSignal,
 	): Promise<WecomAcceptanceV1> {
 		if (this.#closed) throw new TaskAuthorizationStoreError();
+		const identity = this.#identity;
 		const deadlineAt = Date.now() + 10_000;
 		const deadline = AbortSignal.timeout(10_000);
 		const signal = callerSignal
@@ -277,6 +283,23 @@ export class PostgresWecomChannelV1
 					config.source.interactionMode === "self-managed")
 			)
 				return reject("denied");
+			if (identity) {
+				const boundary = parseTaskAuthorizationBoundaryV1(
+					plan.authority.actor.taskBoundary,
+				);
+				const current = await awaitTaskAuthorizationDependencyV1(
+					() => identity.resolveSender(plan.message),
+					signal,
+				);
+				const currentUser = current ? parseCurrentTaskUserV1(current) : null;
+				if (
+					!currentUser ||
+					currentUser.userId !== plan.authority.actor.actorId ||
+					currentUser.accountStatus !== "active" ||
+					currentUser.authorizationRevision !== boundary.identityRevision
+				)
+					return reject("denied");
+			}
 			const [old] = await run(
 				sql<
 					Row[]
@@ -322,6 +345,23 @@ export class PostgresWecomChannelV1
 					),
 				signal,
 			);
+			if (identity) {
+				const boundary = parseTaskAuthorizationBoundaryV1(
+					plan.authority.actor.taskBoundary,
+				);
+				const current = await awaitTaskAuthorizationDependencyV1(
+					() => identity.resolveSender(plan.message),
+					signal,
+				);
+				const currentUser = current ? parseCurrentTaskUserV1(current) : null;
+				if (
+					!currentUser ||
+					currentUser.userId !== plan.authority.actor.actorId ||
+					currentUser.accountStatus !== "active" ||
+					currentUser.authorizationRevision !== boundary.identityRevision
+				)
+					throw new TaskAuthorizationStoreError();
+			}
 			const {
 				agentId,
 				bindingReference,

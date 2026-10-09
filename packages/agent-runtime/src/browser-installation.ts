@@ -4,7 +4,6 @@ import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { chromium } from "playwright-core";
 import release from "./browser-release.json" with { type: "json" };
 
 export const BROWSER_NATIVE_PROVENANCE = Object.freeze({
@@ -95,48 +94,5 @@ export async function verifyChromiumInstallationV1() {
 		};
 	} catch {
 		throw new Error("RUNTIME_BROWSER_PROVENANCE_MISMATCH");
-	}
-}
-
-/** Controlled image test, never a Browser Capability conformance projection. */
-export async function probeChromiumLaunchV1() {
-	if (process.getuid?.() === 0)
-		throw new Error("RUNTIME_BROWSER_PROBE_NON_ROOT_REQUIRED");
-	const installation = await verifyChromiumInstallationV1();
-	const browser = await chromium.launch({
-		executablePath: installation.executable,
-		headless: true,
-		timeout: 15_000,
-	});
-	try {
-		if (browser.version() !== installation.chromiumVersion) throw new Error();
-		const context = await browser.newContext();
-		await context.route("**/*", (route) => route.abort());
-		const page = await context.newPage();
-		page.setDefaultTimeout(5_000);
-		await page.setContent(
-			"<title>Browser supply probe</title><button onclick=\"this.textContent='Clicked'\">Continue</button>",
-		);
-		if ((await page.title()) !== "Browser supply probe") throw new Error();
-		await page.getByRole("button", { name: "Continue" }).click();
-		if ((await page.getByRole("button").innerText()) !== "Clicked")
-			throw new Error();
-		return {
-			schemaVersion: 1 as const,
-			status: "passed" as const,
-			scope: "controlled-image-supply-and-launch" as const,
-			installation,
-			checks: [
-				"non-root",
-				"pinned-binary",
-				"browser-version",
-				"page-observation",
-				"page-interaction",
-			],
-		};
-	} catch {
-		throw new Error("RUNTIME_BROWSER_LAUNCH_PROBE_FAILED");
-	} finally {
-		await browser.close();
 	}
 }

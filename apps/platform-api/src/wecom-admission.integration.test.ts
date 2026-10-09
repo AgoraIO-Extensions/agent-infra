@@ -92,6 +92,9 @@ async function fixture(userId = `http-user-${++sequence}`) {
 		resolveSender: async (scope) => user(scope.senderId),
 		activeUsers: async (ids) => ids,
 	};
+	let currentIdentity: WecomIdentityPortV1["resolveSender"] =
+		identity.resolveSender;
+	identity.resolveSender = (scope) => currentIdentity(scope);
 	const outcomes: string[] = [];
 	const assembly = assembleWecomApiV1(db.databaseUrl, {
 		identity,
@@ -143,6 +146,9 @@ async function fixture(userId = `http-user-${++sequence}`) {
 		userId,
 		eventId,
 		outcomes,
+		setIdentity: (resolveSender: WecomIdentityPortV1["resolveSender"]) => {
+			currentIdentity = resolveSender;
+		},
 		app,
 		request,
 		eventKey: createHash("sha256")
@@ -234,6 +240,18 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 	it("rejects a missing personal Key without accepting callback facts", async () => {
 		const f = await fixture();
 		await sql`update platform.relay_key_subjects set current_version=null where purpose='personal' and subject_id=${f.userId}`;
+		expect((await f.app.request(f.request())).status).toBe(503);
+		await noFacts(f);
+	});
+	it("rolls back every acceptance fact when current sender identity changes before commit", async () => {
+		const f = await fixture();
+		let calls = 0;
+		f.setIdentity(async (scope) => {
+			calls += 1;
+			return calls <= 2
+				? user(scope.senderId)
+				: { ...user(scope.senderId), accountStatus: "disabled" };
+		});
 		expect((await f.app.request(f.request())).status).toBe(503);
 		await noFacts(f);
 	});
