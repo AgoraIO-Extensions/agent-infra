@@ -39,6 +39,7 @@ export function createPlatformWecomWorkerV1(
 		connectionHolderId,
 		databaseUrl: options.databaseUrl,
 		userDirectory: options.userDirectory,
+		identity: options.identity,
 		observe: options.observe,
 	});
 	const authorization = createWecomAuthorizationV1({
