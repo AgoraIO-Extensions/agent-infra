@@ -1,6 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, lstatSync, realpathSync } from "node:fs";
-import { chmod, lstat, mkdir, open, readdir, rename } from "node:fs/promises";
+import {
+	chmod,
+	lstat,
+	mkdir,
+	open,
+	readdir,
+	rename,
+	rm,
+} from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { types } from "node:util";
 import {
@@ -34,6 +42,8 @@ export class SkillPackageMaterializerErrorV1 extends Error {
 function fail(code: SkillPackageMaterializerErrorV1["code"]): never {
 	throw new SkillPackageMaterializerErrorV1(code);
 }
+const maximumManifestBytes = 2000 * (512 + 64 + 128) + 1024;
+
 const sha = (bytes: Uint8Array) =>
 	createHash("sha256").update(bytes).digest("hex");
 const canonical = (value: unknown) => Buffer.from(JSON.stringify(value));
@@ -156,6 +166,18 @@ async function persistFile(path: string, bytes: Uint8Array, mode: number) {
 		await handle.close();
 	}
 }
+// Only this invocation's private staging tree; never touch retained generations.
+async function removeStaging(path: string): Promise<void> {
+	const info = await lstat(path);
+	if (!info.isDirectory() || info.isSymbolicLink()) fail("conflict");
+	await chmod(path, 0o700);
+	for (const entry of await readdir(path, { withFileTypes: true })) {
+		if (entry.isDirectory()) await removeStaging(join(path, entry.name));
+		else await rm(join(path, entry.name), { force: true });
+	}
+	await rm(path, { recursive: true });
+}
+
 async function readRegular(path: string, maximum: number, readonly: boolean) {
 	const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 	try {
@@ -237,7 +259,7 @@ export class SkillPackageMaterializerV1 {
 				typeof options.assemblyRoot !== "string" ||
 				!isAbsolute(options.assemblyRoot) ||
 				!Number.isSafeInteger(options.runtimeUid) ||
-				options.runtimeUid < 0 ||
+				options.runtimeUid <= 0 ||
 				options.runtimeUid === process.geteuid?.() ||
 				typeof options.readPackage !== "function" ||
 				typeof options.verifyAdmission !== "function"
@@ -326,7 +348,7 @@ export class SkillPackageMaterializerV1 {
 		for (const input of result.packages) {
 			const manifestBytes = await readRegular(
 				join(root, "manifests", `${input.name}.json`),
-				1000000,
+				maximumManifestBytes,
 				true,
 			);
 			if (sha(manifestBytes) !== input.manifestDigest) fail("conflict");
@@ -405,6 +427,8 @@ export class SkillPackageMaterializerV1 {
 			if (error instanceof SkillPackageMaterializerErrorV1) throw error;
 			fail("invalid");
 		}
+		let staging: string | undefined;
+		let temporary: string | undefined;
 		try {
 			await this.#assertRoot();
 			const prepared: {
@@ -443,6 +467,7 @@ export class SkillPackageMaterializerV1 {
 				prepared.push({ input, value });
 			}
 			const result = receipt(packages);
+			await this.#assertRoot();
 			const generations = join(this.#root, "generations");
 			try {
 				await mkdir(generations, { mode: 0o700 });
@@ -459,7 +484,7 @@ export class SkillPackageMaterializerV1 {
 				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 			}
 			if (!exists) {
-				const staging = join(this.#root, `.staging-${randomUUID()}`);
+				staging = join(this.#root, `.staging-${randomUUID()}`);
 				const agents = join(staging, ".agents");
 				await mkdir(join(agents, "skills"), { recursive: true, mode: 0o700 });
 				await mkdir(join(staging, "manifests"), { mode: 0o700 });
@@ -489,6 +514,7 @@ export class SkillPackageMaterializerV1 {
 				await this.#assertRoot();
 				try {
 					await rename(staging, generation);
+					staging = undefined;
 				} catch (error) {
 					if (
 						!["EEXIST", "ENOTEMPTY"].includes(
@@ -498,22 +524,35 @@ export class SkillPackageMaterializerV1 {
 						throw error;
 				}
 			}
+			if (staging) {
+				await removeStaging(staging);
+				staging = undefined;
+			}
 			await this.#readGeneration(result.generationId);
 			await syncDirectory(generations);
 			for (const input of packages) await this.#verifyAdmission(input);
 			await this.#assertRoot();
-			const temporary = join(this.#root, `.current-${randomUUID()}`);
+			temporary = join(this.#root, `.current-${randomUUID()}`);
 			await persistFile(
 				temporary,
 				canonical({ schemaVersion: 1, generationId: result.generationId }),
 				0o444,
 			);
 			await rename(temporary, join(this.#root, "CURRENT.json"));
+			temporary = undefined;
 			await syncDirectory(this.#root);
 			// Never delete a published generation: old Execution/mount references may still consume it.
 			// Abandoned staging is private and never selected; retries build or validate the fixed generation.
 			return result;
 		} catch (error) {
+			const abandoned = staging;
+			const pendingPointer = temporary;
+			await this.#assertRoot()
+				.then(async () => {
+					if (abandoned) await removeStaging(abandoned);
+					if (pendingPointer) await rm(pendingPointer, { force: true });
+				})
+				.catch(() => {});
 			if (error instanceof SkillPackageMaterializerErrorV1) throw error;
 			fail("unavailable");
 		}
