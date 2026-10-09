@@ -8,6 +8,7 @@ import {
 	WorkloadTimestampV1Schema,
 } from "./common.ts";
 import {
+	RuntimeManifestBrowserAdmissionV1Schema,
 	type RuntimeManifestV1,
 	RuntimeManifestV1Schema,
 	resolveRuntimeManifestCapabilitiesV1,
@@ -328,7 +329,7 @@ export function parseRuntimeManifestLabelV1(label: string): {
 }
 
 function canonicalRuntimeManifest(manifestInput: unknown) {
-	const manifest = RuntimeManifestV1Schema.parse(manifestInput);
+	const manifest = RuntimeManifestBrowserAdmissionV1Schema.parse(manifestInput);
 	const browser =
 		manifest.interactionMode === "platform-adapter"
 			? manifest.capabilities?.browser

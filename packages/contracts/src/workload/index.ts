@@ -65,6 +65,7 @@ export {
 	type RuntimeCapabilitySetV1,
 	RuntimeCapabilitySetV1Schema,
 	RuntimeHealthV1Schema,
+	RuntimeManifestBrowserAdmissionV1Schema,
 	type RuntimeManifestCapabilitySetV1,
 	RuntimeManifestCapabilitySetV1Schema,
 	type RuntimeManifestV1,
