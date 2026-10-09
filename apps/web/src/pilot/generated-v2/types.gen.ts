@@ -129,6 +129,7 @@ export type AgentApplicationCreateRequestV2 = {
     source: {
         kind: 'standard';
         templateId: string;
+        templateRevision?: string;
     } | {
         identityResponsibility: 'self-managed' | 'platform-managed';
         imageReference: string;
@@ -223,6 +224,7 @@ export type AgentApplicationUpdateRequestV2 = {
     source: {
         kind: 'standard';
         templateId: string;
+        templateRevision?: string;
     } | {
         identityResponsibility: 'self-managed' | 'platform-managed';
         imageReference: string;
@@ -538,6 +540,10 @@ export type DeploymentTemplateProjectionV2 = {
     allowedSecretKeys: Array<string>;
     connectionEnabled: boolean;
     displayName: string;
+    readiness?: {
+        revision: string | null;
+        state: 'ready' | 'unregistered' | 'unverified' | 'failed' | 'disabled' | 'stale' | 'unavailable';
+    };
     templateId: string;
 };
 
@@ -1052,6 +1058,7 @@ export type AgentApplicationCreateRequestV2Writable = {
     source: {
         kind: 'standard';
         templateId: string;
+        templateRevision?: string;
     } | {
         identityResponsibility: 'self-managed' | 'platform-managed';
         imageReference: string;
@@ -1098,6 +1105,7 @@ export type AgentApplicationUpdateRequestV2Writable = {
     source: {
         kind: 'standard';
         templateId: string;
+        templateRevision?: string;
     } | {
         identityResponsibility: 'self-managed' | 'platform-managed';
         imageReference: string;

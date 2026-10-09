@@ -134,7 +134,11 @@ export interface AgentConfigurationModelOptionInputV1 {
 }
 
 export type AgentConfigurationSourceSelectionV1 =
-	| { readonly kind: "standard"; readonly templateId: string }
+	| {
+			readonly kind: "standard";
+			readonly templateId: string;
+			readonly templateRevision?: string;
+	  }
 	| {
 			readonly kind: "custom";
 			readonly imageReference: string;

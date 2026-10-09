@@ -38,6 +38,7 @@ export type AgentApplicationFormDraft = {
 	source?: AgentApplicationCreateRequestV2Writable["source"];
 	sourceKind: AgentApplicationSourceKind;
 	templateId: string;
+	templateRevision?: string;
 	userAvailabilityIds: string;
 };
 
@@ -73,6 +74,7 @@ export type AgentApplicationValidationContext = {
 	allowedEnvironmentKeys?: readonly string[];
 	allowedSecretKeys?: readonly string[];
 	modelConfigurationVisible: boolean;
+	requiresTemplateReadiness?: boolean;
 	requiresDefaultRelayKey?: boolean;
 	/** @deprecated Kept for callers compiled against the pre-keyless draft. */
 	requiresReplacementCredential?: boolean;
@@ -91,6 +93,8 @@ export function validateAgentApplicationDraft(
 	if (!draft.description.trim()) errors.description = "请输入用途说明。";
 	if (draft.sourceKind === "standard") {
 		if (!draft.templateId) errors.templateId = "请选择标准模板。";
+		if (context.requiresTemplateReadiness && !draft.templateRevision)
+			errors.templateId = "模板验证状态已过期，请刷新后重试。";
 		if (context.staleTemplate) errors.templateId = "该模板已移除，请重新选择。";
 		if (context.standardChoicesBlocked)
 			errors.templateId = context.configurationMessage ?? "部署选项暂不可用。";
@@ -223,7 +227,13 @@ function requestBody(
 	const source: AgentApplicationCreateRequestV2Writable["source"] =
 		draft.source ??
 		(draft.sourceKind === "standard"
-			? { kind: "standard", templateId: draft.templateId.trim() }
+			? {
+					kind: "standard",
+					templateId: draft.templateId.trim(),
+					...(draft.templateRevision
+						? { templateRevision: draft.templateRevision }
+						: {}),
+				}
 			: draft.sourceKind === "custom-platform-adapter"
 				? {
 						kind: "custom",

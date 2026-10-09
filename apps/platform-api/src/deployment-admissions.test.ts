@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
 import type {
 	AgentConfigurationModelInputV1,
 	AgentConfigurationModelV1,
@@ -68,6 +69,25 @@ function fixture(
 		layers: [],
 	});
 	const imageDigest = digest(manifest);
+	const modelBinding = {
+		templateId: "codex",
+		imageDigest,
+		driver: "codex" as const,
+		protocol: "openai-responses-v1" as const,
+	};
+	const validation = {
+		schemaVersion: 1 as const,
+		templateId: "codex",
+		imageDigest,
+		driver: "codex" as const,
+		configurationRevision: "config-a",
+		status: "passed" as const,
+		evidenceKind: "real-runtime-model" as const,
+		executionId: "execution-a",
+		modelId: "model-a",
+		validatedAt: Date.now() - 1_000,
+		validUntil: Date.now() + 60_000,
+	};
 	const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
 		const url = new URL(
 			input instanceof Request ? input.url : input.toString(),
@@ -134,6 +154,9 @@ function fixture(
 				allowedSecretKeys: ["MODEL_API_KEY"],
 				platformManagedKeys: ["PORT"],
 				connectionEnabled: false,
+				modelBinding,
+				configurationRevision: "config-a",
+				loadValidation: async () => validation,
 			},
 		],
 		modelCatalog: { revision: "catalog-a", load },
@@ -149,7 +172,37 @@ function fixture(
 			],
 		},
 	};
-	return { input, authorize, fetch, imageDigest, catalog, load };
+	const readiness = standardTemplateReadinessV1({
+		templateId: "codex",
+		imageDigest,
+		binding: modelBinding,
+		configurationRevision: "config-a",
+		validation,
+		now: Date.now(),
+	});
+	if (readiness.state !== "ready") throw new Error("fixture readiness failed");
+	const templateRevision = `template-${createHash("sha256")
+		.update(
+			JSON.stringify({
+				registration: {
+					templateId: "codex",
+					imageDigest,
+					modelBinding,
+					configurationRevision: "config-a",
+				},
+				validation: readiness.revision,
+			}),
+		)
+		.digest("hex")}`;
+	return {
+		input,
+		authorize,
+		fetch,
+		imageDigest,
+		catalog,
+		load,
+		templateRevision,
+	};
 }
 
 function modelInput(replaceCredential = true): AgentConfigurationModelInputV1 {
@@ -193,11 +246,16 @@ describe("production deployment admissions", () => {
 		).toThrow("PLATFORM_DEPLOYMENT_ADMISSION_CONFIGURATION_INVALID");
 	});
 	it("binds actual OCI content and policy evidence to the trusted actor and template", async () => {
-		const { input, authorize, imageDigest, fetch } = fixture();
+		const { input, authorize, imageDigest, fetch, templateRevision } =
+			fixture();
 		const admissions = createDeploymentAdmissionsV1(input);
 		const result = await admissions.imageAdmission.admitImage({
 			...request,
-			requested: { kind: "standard", templateId: "codex" },
+			requested: {
+				kind: "standard",
+				templateId: "codex",
+				templateRevision,
+			},
 		});
 		expect(result).toMatchObject({
 			schemaVersion: 1,
@@ -231,7 +289,11 @@ describe("production deployment admissions", () => {
 		});
 		const changed = await admissions.imageAdmission.admitImage({
 			...request,
-			requested: { kind: "standard", templateId: "codex" },
+			requested: {
+				kind: "standard",
+				templateId: "codex",
+				templateRevision,
+			},
 		});
 		if (result.status !== "admitted" || changed.status !== "admitted")
 			throw new Error("Expected actual registry admission");
@@ -348,7 +410,11 @@ describe("production deployment admissions", () => {
 							await admissions.imageAdmission.admitImage({
 								...request,
 								requestId: user,
-								requested: { kind: "standard", templateId: "codex" },
+								requested: {
+									kind: "standard",
+									templateId: "codex",
+									templateRevision: f.templateRevision,
+								},
 							}),
 						).toMatchObject({ status: "admitted" });
 					},
@@ -366,7 +432,11 @@ describe("production deployment admissions", () => {
 		await expect(
 			admissions.imageAdmission.admitImage({
 				...request,
-				requested: { kind: "standard", templateId: "codex" },
+				requested: {
+					kind: "standard",
+					templateId: "codex",
+					templateRevision: f.templateRevision,
+				},
 			}),
 		).rejects.toThrow("PLATFORM_DEPLOYMENT_IDENTITY_UNAVAILABLE");
 	});
@@ -387,7 +457,11 @@ describe("production deployment admissions", () => {
 		const results = await Promise.allSettled([
 			a.imageAdmission.admitImage({
 				...request,
-				requested: { kind: "standard", templateId: "codex" },
+				requested: {
+					kind: "standard",
+					templateId: "codex",
+					templateRevision: f.templateRevision,
+				},
 			}),
 			a.modelAdmission.admitModels({
 				...request,
@@ -745,6 +819,7 @@ describe("production deployment admissions", () => {
 		"policy",
 		"unpinned",
 		"duplicate-template",
+		"driver-binding",
 		"invalid-binding",
 	])("rejects invalid deployment configuration: %s", (kind) => {
 		const f = fixture();
@@ -773,6 +848,21 @@ describe("production deployment admissions", () => {
 				: {}),
 			...(kind === "duplicate-template"
 				? { templates: [template, template] }
+				: {}),
+			...(kind === "driver-binding"
+				? {
+						templates: [
+							{
+								...template,
+								modelBinding: {
+									templateId: "codex",
+									imageDigest: template.imageDigest,
+									driver: "pi",
+									protocol: "anthropic-messages-v1",
+								},
+							},
+						],
+					}
 				: {}),
 			...(kind === "invalid-binding"
 				? {
@@ -808,7 +898,11 @@ it("rejects browser IDs that collide with the API Registry reference namespace",
 	await expect(
 		browser.imageAdmission.admitImage({
 			...request,
-			requested: { kind: "standard", templateId: "codex" },
+			requested: {
+				kind: "standard",
+				templateId: "codex",
+				templateRevision: f.templateRevision,
+			},
 		}),
 	).rejects.toThrow("PLATFORM_DEPLOYMENT_IDENTITY_UNAVAILABLE");
 	expect(f.authorize).not.toHaveBeenCalled();
@@ -821,7 +915,11 @@ it("rejects browser IDs that collide with the API Registry reference namespace",
 	expect(
 		await api.imageAdmission.admitImage({
 			...request,
-			requested: { kind: "standard", templateId: "codex" },
+			requested: {
+				kind: "standard",
+				templateId: "codex",
+				templateRevision: f.templateRevision,
+			},
 		}),
 	).toMatchObject({ status: "admitted" });
 	expect(f.authorize.mock.calls[0]?.[0].subjectRef).toBe(reference);

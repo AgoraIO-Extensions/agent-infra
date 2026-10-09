@@ -71,7 +71,7 @@ function createApp(read: () => Promise<unknown>) {
 describe("deployment configuration projection", () => {
 	it("projects choices without endpoint or image sensitive material", async () => {
 		const read = createDeploymentConfigurationProjectionV2({
-			templates: [template],
+			templates: [{ ...template, templateId: "codex", displayName: "Codex" }],
 			modelCatalog: {
 				revision: "catalog-a",
 				load: async () => snapshot(Date.now() + 60_000),
@@ -88,12 +88,25 @@ describe("deployment configuration projection", () => {
 			status: "populated",
 			templates: [
 				{
-					templateId: "template-standard",
-					displayName: "Standard Agent",
+					templateId: "codex",
+					displayName: "Codex",
 					connectionEnabled: false,
 					allowedEnvironmentKeys: ["LOG_LEVEL"],
 					allowedSecretKeys: ["MODEL_API_KEY"],
+					readiness: { state: "unverified", revision: null },
 				},
+				...[
+					["claude", "Claude Code"],
+					["opencode", "OpenCode"],
+					["pi", "Pi"],
+				].map(([templateId, displayName]) => ({
+					templateId,
+					displayName,
+					connectionEnabled: false,
+					allowedEnvironmentKeys: [],
+					allowedSecretKeys: [],
+					readiness: { state: "unregistered", revision: null },
+				})),
 			],
 			modelCatalog: {
 				status: "populated",
@@ -168,7 +181,12 @@ describe("deployment configuration projection", () => {
 		);
 		expect(body.status).toBe(status);
 		expect(body.modelCatalog.status).toBe(status);
-		expect(body.templates).toEqual([]);
+		expect(body.templates).toHaveLength(4);
+		expect(
+			body.templates.every(
+				(template) => template.readiness?.state === "unregistered",
+			),
+		).toBe(true);
 		expect(body.modelCatalog.endpoints).toEqual([]);
 	});
 
