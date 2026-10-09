@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseRuntimeStatusResponse } from "./conversation-dispatch-runtime.js";
+import { ConversationRuntimeHostError } from "./conversation-dispatch-types.js";
 import { FakeConversationEventsV1 } from "./fake-conversation-events.js";
 import { FakeConversationRuntimeHostV1 } from "./fake-conversation-runtime-host.js";
 import {
@@ -1147,6 +1148,194 @@ describe("Conversation Worker dispatch", () => {
 				"cursor-5",
 			]);
 			expect(inner.sideEffectCount()).toBe(1);
+		});
+	});
+
+	describe("finished Turn drain after a refused renewal (#1554)", () => {
+		const hostSessionRef = "host-session-conversation-1";
+		const text = (sequence: number): ConversationRuntimeEventV1 => ({
+			schemaVersion: 1,
+			adapterEventKey: `event-${sequence}`,
+			executionId: "execution-1",
+			cursor: `cursor-${sequence}`,
+			occurredAt: "2026-09-06T00:00:01.000Z",
+			type: "text",
+			payload: { delta: `part ${sequence}` },
+		});
+		const status = (value: string) => ({
+			schemaVersion: 2 as const,
+			hostSessionRef,
+			executionId: "execution-1",
+			outcome: "found" as const,
+			status: value,
+		});
+		const refused = () =>
+			new ConversationRuntimeHostError("RUNTIME_GRANT_INVALID", false);
+		function harness(options: {
+			readonly renew: (call: number) => void;
+			readonly recover?: () => Promise<unknown>;
+			readonly fail?: (sequence: number) => boolean;
+		}) {
+			const inner = new FakeConversationRuntimeHostV1();
+			const acknowledged: string[] = [];
+			const recovered: unknown[] = [];
+			const tick = () => new Promise((resolve) => setTimeout(resolve, 15));
+			let renewals = 0;
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				dispatch: (request) => inner.dispatch(request),
+				recoverStatus: (request) => inner.recoverStatus(request),
+				async recoverOriginalStatus(request) {
+					recovered.push(request);
+					// Malformed or unexpected shapes are part of what is tested.
+					return (await (
+						options.recover ?? (async () => status("completed"))
+					)()) as never;
+				},
+				async renewAuthorization() {
+					renewals++;
+					options.renew(renewals);
+				},
+				async *events(_, signal) {
+					yield runtimeEvent(1, "running");
+					// The Runtime has finished; its journal drains over several
+					// renewal periods.
+					for (let sequence = 2; sequence <= 9; sequence++) {
+						await tick();
+						signal?.throwIfAborted();
+						if (options.fail?.(sequence)) throw refused();
+						yield text(sequence);
+					}
+					yield runtimeEvent(10);
+				},
+				async acknowledge(request) {
+					acknowledged.push(request.confirmedCursor);
+				},
+			};
+			const store = new MemoryDispatchStore();
+			const events = new MemoryEvents(store);
+			const useCase = createConversationDispatchUseCaseV1(
+				{ store, authorization: authorization(), runtimeHost, events },
+				// One heartbeat every 10 ms.
+				{ leaseDurationMs: 30, retryDelayMs: 0 },
+			);
+			return {
+				store,
+				events,
+				useCase,
+				acknowledged,
+				recovered,
+				renewals: () => renewals,
+			};
+		}
+
+		it("drains every event in the same claim once the Host confirms the finish", async () => {
+			const h = harness({
+				renew(call) {
+					if (call > 1) throw refused();
+				},
+			});
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			expect(h.store.outboxStatus).toBe("succeeded");
+			expect(h.store.errorCode).toBeUndefined();
+			expect(h.store.current.executionStatus).toBe("completed");
+			expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual(
+				Array.from({ length: 10 }, (_, index) => `cursor-${index + 1}`),
+			);
+			expect(h.recovered).toEqual([
+				expect.objectContaining({
+					schemaVersion: 2,
+					executionId: "execution-1",
+					deliveryFence: h.store.current.executionDeliveryFence,
+					hostSessionRef,
+				}),
+			]);
+			// The confirmed status, not later events, owns the terminal state.
+			expect(
+				h.events.persisted
+					.filter((event) => event.transition !== undefined)
+					.map((event) => event.runtimeCursor),
+			).toEqual(["cursor-1", "cursor-10"]);
+			expect(h.acknowledged.at(-1)).toBe("cursor-10");
+			// No business renewal is attempted after the refusal.
+			const renewals = h.renewals();
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			expect(h.renewals()).toBe(renewals);
+		});
+
+		it.each([
+			["a running Turn", async () => status("running")],
+			["an unknown Turn", async () => status("unknown")],
+			[
+				"no accepted Turn",
+				async () => ({
+					schemaVersion: 2,
+					hostSessionRef,
+					executionId: "execution-1",
+					outcome: "not_found",
+				}),
+			],
+			[
+				"an unavailable status",
+				async () => {
+					throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
+				},
+			],
+		])(
+			"keeps the recovery path when the refusal concerns %s",
+			async (_, recover) => {
+				const h = harness({
+					renew(call) {
+						if (call > 1) throw refused();
+					},
+					recover,
+				});
+				await expect(dispatch(h.useCase)).resolves.toMatchObject({
+					outcome: "retry",
+				});
+				expect(h.store.outboxStatus).toBe("retry_scheduled");
+				expect(h.store.errorCode).toBe("RUNTIME_HEARTBEAT_INTERRUPTED");
+				expect(h.store.current.executionStatus).toBe("processing");
+				expect(h.recovered).toHaveLength(1);
+			},
+		);
+
+		it("never resolves a Worker-side revocation or stop through the Host status", async () => {
+			const h = harness({
+				renew(call) {
+					if (call > 1)
+						throw new ConversationRuntimeHostError(
+							"AUTHORIZATION_REVOKED",
+							true,
+						);
+				},
+			});
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(h.store.errorCode).toBe("RUNTIME_HEARTBEAT_INTERRUPTED");
+			expect(h.store.current.executionStatus).toBe("processing");
+			expect(h.recovered).toHaveLength(0);
+		});
+
+		it("does not fail a Turn whose business read is refused before the finish is confirmed", async () => {
+			let refusedRenewal = false;
+			const h = harness({
+				renew(call) {
+					if (call > 1) {
+						refusedRenewal = true;
+						throw refused();
+					}
+				},
+				fail: () => refusedRenewal,
+			});
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(h.store.outboxStatus).toBe("retry_scheduled");
+			expect(h.store.errorCode).toBe("RUNTIME_HEARTBEAT_INTERRUPTED");
+			expect(h.store.current.executionStatus).toBe("processing");
 		});
 	});
 
