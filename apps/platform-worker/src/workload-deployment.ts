@@ -68,6 +68,8 @@ export interface ProductionWorkloadWorkerInputV1 {
 	>[0];
 	readonly templateModelBindings: PlatformWorkloadWorkerOptionsV1["templateModelBindings"];
 	readonly executionCapacityProfiles?: PlatformWorkloadWorkerOptionsV1["executionCapacityProfiles"];
+	/** Deployment-owned ObjectStorage adapter used by the bounded reconciliation worker. */
+	readonly files?: PlatformWorkloadWorkerOptionsV1["files"];
 	readonly runtimeModelVersion?: PlatformWorkloadWorkerOptionsV1["runtimeModelVersion"];
 	readonly runtimeProbe: WorkloadRuntimeProbeAuthorizationV1;
 	/** Separate transports keep registry authentication out of model and Runtime requests. */
@@ -121,7 +123,15 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			typeof input.modelCatalog?.load !== "function" ||
 			typeof input.runtimeProbe?.authorize !== "function" ||
 			!input.policy.runtimeAuth ||
-			input.policy.runtimeAuth.workerId !== input.workerId
+			input.policy.runtimeAuth.workerId !== input.workerId ||
+			(input.files !== undefined &&
+				(!Number.isSafeInteger(input.files.batchSize) ||
+					input.files.batchSize < 1 ||
+					input.files.batchSize > 100 ||
+					!Number.isSafeInteger(input.files.orphanGraceMs) ||
+					input.files.orphanGraceMs < 1 ||
+					typeof input.files.storage?.scan !== "function" ||
+					typeof input.files.storage?.remove !== "function"))
 		)
 			throw new Error();
 		const templateModelBindings = validateStandardTemplateModelBindingsV1(
@@ -208,6 +218,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			executionCapacityProfiles: structuredClone(
 				input.executionCapacityProfiles,
 			),
+			...(input.files ? { files: input.files } : {}),
 			fetch: runtimeFetch,
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,
