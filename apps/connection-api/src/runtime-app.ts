@@ -64,10 +64,10 @@ import {
 import { connectionProviderCatalogs } from "@agent-infra/openconnector-adapter/provider-catalogs";
 import { createPinnedProviderFetch } from "@agent-infra/openconnector-adapter/provider-fetch";
 import {
-	RehoboamAdapter,
-	rehoboamConnectionCatalog,
-	rehoboamLegacyProviderReleaseIds,
-} from "@agent-infra/openconnector-adapter/rehoboam";
+	RehoboamV11Adapter as RehoboamAdapter,
+	rehoboamV11ConnectionCatalog as rehoboamConnectionCatalog,
+	rehoboamV11LegacyProviderReleaseIds as rehoboamLegacyProviderReleaseIds,
+} from "@agent-infra/openconnector-adapter/rehoboam-v11";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 import { createConnectionApp } from "./app";
 import { fullConnectionRuntimeConfig } from "./runtime-config";
