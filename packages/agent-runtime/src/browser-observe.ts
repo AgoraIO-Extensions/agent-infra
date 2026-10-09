@@ -414,6 +414,10 @@ export function createBrowserObserveControllerV1(input: {
 		return new Set(readCapability().policy.allowedOrigins.map(normalizeOrigin));
 	}
 
+	function applyActionTimeout(page: Page) {
+		page.setDefaultTimeout?.(readCapability().policy.actionTimeoutMs);
+	}
+
 	async function installPolicy() {
 		if (policyInstalled) return;
 		await input.context.route("**/*", async (route: Route) => {
@@ -449,6 +453,7 @@ export function createBrowserObserveControllerV1(input: {
 		if (input.context.pages().length >= capability.policy.maxPages)
 			throw new Error("BROWSER_PAGE_LIMIT_EXCEEDED");
 		const page = input.context.pages()[0] ?? (await input.context.newPage());
+		applyActionTimeout(page);
 		const state = pageStateFor(page, pages);
 		await page.goto(url, {
 			waitUntil: "domcontentloaded",
@@ -462,6 +467,7 @@ export function createBrowserObserveControllerV1(input: {
 		reference: BrowserPageReferenceV1,
 	): Promise<BrowserObservationV1> {
 		const state = requirePage(reference);
+		applyActionTimeout(state.page);
 		const root = state.activeFrame ?? state.page;
 		const origin = new URL(state.page.url()).origin;
 		const body = root.locator("body");

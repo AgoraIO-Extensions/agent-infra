@@ -58,6 +58,7 @@ class FakePage {
 		click: vi.fn(async (): Promise<void> => undefined),
 		evaluate: vi.fn(async () => "button"),
 	};
+	setDefaultTimeout = vi.fn();
 
 	on(event: string, handler: (value: unknown) => void) {
 		this.handlers.set(event, handler);
@@ -166,6 +167,20 @@ describe("Browser observe controller", () => {
 			body: "<title>Fixture</title>",
 		});
 		expect(continueRoute).not.toHaveBeenCalled();
+	});
+
+	it("applies the capability action timeout to navigation and observation", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability,
+		});
+		const reference = await controller.navigate("https://example.test/timeout");
+		await controller.observe(reference);
+		expect(page.setDefaultTimeout).toHaveBeenCalledWith(
+			capability.policy.actionTimeoutMs,
+		);
 	});
 
 	it("rebinds persisted page metadata and invalidates old elements", async () => {
