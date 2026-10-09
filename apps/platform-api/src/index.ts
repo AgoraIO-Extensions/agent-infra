@@ -263,6 +263,11 @@ export function createPlatformApiShutdown(
 }
 
 export {
+	createPlatformEntryContextSignerV1,
+	createPlatformEntryContextVerifierV1,
+} from "./custom-agent-auth.js";
+export { createCustomAgentAuthGatewayV1 } from "./custom-agent-auth-gateway.js";
+export {
 	createProductionPlatformApiAssemblyInputV1,
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";

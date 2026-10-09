@@ -12,6 +12,7 @@ export * from "./host-v3.ts";
 export * from "./host-v4.ts";
 export * from "./host-v4-events.ts";
 export * from "./legacy-migration-v1.ts";
+export * from "./platform-entry-auth.ts";
 export * from "./readiness.ts";
 
 import {
