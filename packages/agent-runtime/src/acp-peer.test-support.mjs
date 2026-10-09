@@ -43,7 +43,10 @@ const connection = new AgentSideConnection(
 	() => ({
 		initialize: async () => ({
 			protocolVersion: 1,
-			agentCapabilities: { loadSession: true },
+			agentCapabilities:
+				process.env.ACP_TEST_MODE === "no-load-session"
+					? {}
+					: { loadSession: true },
 		}),
 		newSession: async () => {
 			sessionId = randomUUID();

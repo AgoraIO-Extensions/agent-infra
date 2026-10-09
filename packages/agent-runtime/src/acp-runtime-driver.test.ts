@@ -355,6 +355,81 @@ it.each(["ignore-cancel", "delayed-cancel"])(
 	},
 );
 
+it("probes ACP initialization and Session creation without prompting", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-readiness-"));
+	let launches = 0;
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "grouped-models" },
+			close: async () => {
+				launches++;
+			},
+		}),
+	});
+	try {
+		await expect(
+			driver.probeReadiness?.(new AbortController().signal),
+		).resolves.toMatchObject({
+			modelSelection: true,
+			attachments: false,
+			resultFiles: false,
+			connection: false,
+			supplementaryInstruction: false,
+		});
+		expect(launches).toBe(1);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("fails the ACP readiness probe closed when loadSession is not advertised", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-readiness-fail-"));
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "no-load-session" },
+		}),
+	});
+	try {
+		await expect(
+			driver.probeReadiness?.(new AbortController().signal),
+		).rejects.toThrow("RUNTIME_READINESS_UNAVAILABLE");
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("normalizes a native execution limit to a redacted error and failed terminal event", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-limit-"));
 	const driver = await GenericAcpRuntimeDriver.open({
