@@ -266,7 +266,13 @@ export {
 	createPlatformEntryContextSignerV1,
 	createPlatformEntryContextVerifierV1,
 } from "./custom-agent-auth.js";
-export { createCustomAgentAuthGatewayV1 } from "./custom-agent-auth-gateway.js";
+export {
+	type CustomAgentAuthDeploymentV1,
+	type CustomAgentAuthGatewayRouteOptionsV1,
+	createCustomAgentAuthGatewayRouteAdapterV1,
+	createCustomAgentAuthGatewayV1,
+	registerCustomAgentAuthGatewayRoutesV1,
+} from "./custom-agent-auth-gateway.js";
 export {
 	createProductionPlatformApiAssemblyInputV1,
 	type ProductionPlatformApiInputV1,
