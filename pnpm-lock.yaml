@@ -415,6 +415,9 @@ importers:
 
   packages/openconnector-adapter:
     dependencies:
+      '@cfworker/json-schema':
+        specifier: 4.1.1
+        version: 4.1.1
       '@agent-infra/connection-core':
         specifier: workspace:*
         version: link:../connection-core

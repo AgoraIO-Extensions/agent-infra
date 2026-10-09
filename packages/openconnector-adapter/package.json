@@ -25,6 +25,7 @@
 		"verify:bitbucket:upstream": "node scripts/verify-bitbucket-upstream.mjs"
 	},
 	"dependencies": {
+		"@cfworker/json-schema": "4.1.1",
 		"@agent-infra/connection-core": "workspace:*",
 		"@agent-infra/openconnector-kernel": "workspace:*",
 		"undici": "7.29.0"

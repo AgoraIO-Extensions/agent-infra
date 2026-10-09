@@ -2832,6 +2832,8 @@ describe("StaticSpaces account isolation with PostgreSQL authority", () => {
 				for (const account of accounts)
 					expect(JSON.stringify(audit)).not.toContain(account.token);
 			} finally {
+				const ownedPrincipals = accounts.map((account) => account.principalId);
+				await sql`DELETE FROM connection_reconciliation_jobs job USING connection_calls call WHERE job.call_id = call.id AND call.principal_id = ANY(${ownedPrincipals}::text[])`;
 				await repository.close();
 				await sql.end();
 			}

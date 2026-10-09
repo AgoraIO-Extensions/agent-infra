@@ -366,6 +366,11 @@ Action 只用于已初始化空间，不能替代首次发布。
 最多 1 MiB，并保留上游路径与文件类型校验。下载返回原始 bytes 的 Base64、size 和 SHA-256，
 超限失败而不截断伪装完整文件。Markdown 不改写源文本，上游 raw_url/review_url 原样返回。
 读取权限仍由 StaticSpaces effective path ACL 判断，owner/manager 不能绕过更窄 read ACL。
+响应仅接受符合 Action 的 Content-Type 与 identity encoding；压缩响应拒绝处理。输出按已固定的
+JSON Schema 投影并校验后才能持久化，不返回未声明的内部 metadata。完整发布须核对每个文件的
+path/size/SHA-256、组名称、ACL 及 shared Application/binding 回执；任何失败的 verification
+都不进入成功终态。个人和首次 managed-space 发布还须证明当前账号的 membership 与访问验证；
+既有 shared/public 更新只有在全部组已存在且上述完整回执匹配时，才接受空 verification。
 
 WRITE 不支持原生幂等，复用 Connection 入站幂等与 Call/Effect/Dispatch；提交后网络未知、
 响应丢失、过大或不可解析响应及上游错误均保守保留 `UNCERTAIN`，不得自动重试。空间发布

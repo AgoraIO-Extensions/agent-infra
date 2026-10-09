@@ -28,6 +28,118 @@ const invocation = (name: string, input: Record<string, unknown> = {}) => ({
 	providerReleaseId: catalog.providerReleaseId,
 });
 
+function publicationResponse(input: Record<string, unknown>, created = true) {
+	const kind = String(input.kind);
+	const slug = kind === "user" ? personal.username : String(input.slug);
+	const pathPrefix = `/spaces/${kind === "user" ? "users" : kind}/${slug}/`;
+	const origin = "https://static-spaces.sh3.agoralab.co";
+	const roles =
+		kind === "user"
+			? ["viewers"]
+			: kind === "shared"
+				? ["owners", "managers", "viewers"]
+				: ["owners", "managers"];
+	const groupName = (role: string) =>
+		`static-spaces-${kind === "user" ? "users" : kind}-${slug}-${role}`;
+	const groups = Object.fromEntries(
+		roles.map((role) => [
+			role,
+			{
+				created,
+				group: {
+					pk: `group-${role}`,
+					name: groupName(role),
+					is_superuser: false,
+				},
+			},
+		]),
+	);
+	const files = input.files as Array<{
+		relative_path: string;
+		content?: string;
+		content_base64?: string;
+	}>;
+	const filesWritten = files.map((file) => {
+		const bytes =
+			file.content !== undefined
+				? Buffer.from(file.content)
+				: Buffer.from(file.content_base64 ?? "", "base64");
+		const path = pathPrefix + file.relative_path;
+		const url = origin + path;
+		return {
+			kind,
+			slug,
+			path,
+			url,
+			size: bytes.length,
+			sha256: createHash("sha256").update(bytes).digest("hex"),
+			...(/\.(md|markdown)$/i.test(path)
+				? { raw_url: url, review_url: `${url}?view=review` }
+				: {}),
+		};
+	});
+	let normalized =
+		slug.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "space";
+	if (normalized !== slug)
+		normalized += `-${createHash("sha256").update(slug).digest("hex").slice(0, 8)}`;
+	return {
+		space: slug,
+		kind,
+		slug,
+		path_prefix: pathPrefix,
+		url_prefix: origin + pathPrefix,
+		files_written: filesWritten,
+		acl: {
+			prefix: pathPrefix,
+			groups: kind === "public" ? "" : groupName("viewers"),
+			enabled: true,
+		},
+		...(kind === "user" ? { group: groups.viewers } : { groups }),
+		...(kind === "shared"
+			? {
+					application: {
+						created,
+						application: {
+							pk: "app",
+							slug: `static-spaces-shared-${normalized}`,
+							launch_url: origin + pathPrefix,
+						},
+						binding: {
+							target: "app",
+							group: "group-viewers",
+							enabled: true,
+							negate: false,
+						},
+					},
+				}
+			: {}),
+		memberships:
+			created || kind === "user"
+				? roles.map((role) => ({
+						username: personal.username,
+						group: groupName(role),
+						member: true,
+					}))
+				: [],
+		verification:
+			created || kind === "user"
+				? [
+						{
+							username: personal.username,
+							path: pathPrefix,
+							allowed: true,
+							status: 200,
+						},
+					]
+				: [],
+		review_urls: Object.fromEntries(
+			filesWritten
+				.filter((file) => "review_url" in file)
+				.map((file) => [file.path.slice(pathPrefix.length), file.review_url]),
+		),
+	};
+}
+
 test("StaticSpaces source digest and real-account publication gate", () => {
 	assert.equal(
 		staticSpacesExecutorDigest,
@@ -148,46 +260,44 @@ test("StaticSpaces routes all six content Actions with fixed origins and raw pay
 	for (const [name, args, path, method] of cases) {
 		const requests: Request[] = [];
 		const raw = Buffer.from([0, 255, 128, 10]);
+		const slug = args.kind === "user" ? personal.username : "project-y";
+		const prefix = `/spaces/${args.kind === "user" ? "users" : args.kind}/${slug}/`;
 		const scope = {
+			space: slug,
 			kind: args.kind,
-			slug: args.kind === "user" ? personal.username : "project-y",
+			slug,
+			path_prefix: prefix,
+			url_prefix: `https://static-spaces.sh3.agoralab.co${prefix}`,
 		};
 		const file = {
 			path: "docs/PRD.md",
-			url: "https://static-spaces.sh3.agoralab.co/spaces/shared/project-y/docs/PRD.md",
-			raw_url:
-				"https://static-spaces.sh3.agoralab.co/spaces/shared/project-y/docs/PRD.md",
-			review_url:
-				"https://static-spaces.sh3.agoralab.co/spaces/shared/project-y/docs/PRD.md?view=review",
+			url: `${scope.url_prefix}docs/PRD.md`,
+			raw_url: `${scope.url_prefix}docs/PRD.md`,
+			review_url: `${scope.url_prefix}docs/PRD.md?view=review`,
 			size: 27,
 			sha256: "a".repeat(64),
+			updated_at: "2026-10-09T00:00:00Z",
 		};
 		const response =
 			name === "list_files"
 				? { ...scope, files: [file] }
 				: name === "get_markdown_review"
 					? {
-							document: { ...file, content: "# 原文\r\n" },
-							comments: { etag: "current", threads: [] },
+							document: {
+								kind: args.kind,
+								slug,
+								...file,
+								content: "# 原文\r\n",
+							},
+							comments: {
+								etag: "current",
+								updated_at: null,
+								thread_count: 0,
+								threads: [],
+							},
 						}
 					: name === "publish_space"
-						? {
-								...scope,
-								files_written: [file],
-								acl: {
-									prefix: "/spaces/shared/project-y/",
-									groups: ["viewers"],
-									enabled: true,
-								},
-								groups: {
-									owners: "owners",
-									managers: "managers",
-									viewers: "viewers",
-								},
-								memberships: [],
-								verification: [],
-								review_urls: { "docs/PRD.md": file.review_url },
-							}
+						? publicationResponse(args)
 						: name === "upload_static_package"
 							? {
 									...scope,
@@ -231,6 +341,13 @@ test("StaticSpaces routes all six content Actions with fixed origins and raw pay
 				args.kind === "user" ? personal.username : null,
 			);
 		}
+		const expected = structuredClone(response);
+		if (name === "get_markdown_review") {
+			const document = (expected as { document: Record<string, unknown> })
+				.document;
+			delete document.url;
+			delete document.updated_at;
+		}
 		assert.deepEqual(
 			result,
 			name === "download_file"
@@ -240,7 +357,7 @@ test("StaticSpaces routes all six content Actions with fixed origins and raw pay
 						sha256: createHash("sha256").update(raw).digest("hex"),
 						mimeType: "application/octet-stream",
 					}
-				: response,
+				: expected,
 		);
 	}
 });
@@ -455,4 +572,152 @@ test("StaticSpaces content ACL denial does not invalidate a proven personal toke
 			error.providerCredentialInvalid !== true &&
 			!error.message.includes(token),
 	);
+});
+
+test("StaticSpaces applies Content-Type, no-compression and nested JSON output contracts", async () => {
+	const input = { kind: "public", slug: "project-y", path: "docs/PRD.md" };
+	for (const response of [
+		() =>
+			new Response(
+				JSON.stringify({ kind: "public", slug: "project-y", files: [] }),
+				{ headers: { "content-type": "text/html" } },
+			),
+		() =>
+			Response.json(
+				{ kind: "public", slug: "project-y", files: [] },
+				{ headers: { "content-encoding": "gzip" } },
+			),
+		() =>
+			Response.json({
+				document: {
+					kind: "public",
+					slug: "project-y",
+					path: "docs/PRD.md",
+					content: "text",
+					size: 4,
+					sha256: "a".repeat(64),
+					raw_url: "https://example.test/raw",
+					review_url: "https://example.test/review",
+				},
+				comments: {
+					etag: "x",
+					updated_at: null,
+					thread_count: 1,
+					threads: [
+						{
+							id: "thread",
+							anchor: { type: "document", document_sha256: "a".repeat(64) },
+							comments: [
+								{
+									id: "comment",
+									author_email: "a@example.test",
+									body: { secret: "unexpected" },
+									created_at: "now",
+									edited_at: null,
+									deleted_at: null,
+									can_edit: true,
+									can_delete: true,
+								},
+							],
+						},
+					],
+				},
+			}),
+	]) {
+		const adapter = new StaticSpacesAdapter(async (url) =>
+			String(url).includes("/core/users/me/") ? identity() : response(),
+		);
+		await assert.rejects(
+			adapter.execute(invocation("get_markdown_review", input)),
+		);
+	}
+	const adapter = new StaticSpacesAdapter(async (url) =>
+		String(url).includes("/core/users/me/")
+			? identity()
+			: Response.json({
+					kind: "user",
+					slug: personal.username,
+					files: [],
+					unexpected_private_field: "omit-me",
+				}),
+	);
+	assert.deepEqual(
+		await adapter.execute(invocation("list_files", { kind: "user" })),
+		{ kind: "user", slug: personal.username, files: [] },
+	);
+});
+
+test("StaticSpaces requires complete publication receipts and preserves legitimate managed-space updates", async () => {
+	const input = {
+		kind: "shared",
+		slug: "project.y",
+		files: [{ relative_path: "docs/PRD.md", content: "# 原文\r\n" }],
+	};
+	for (const created of [true, false]) {
+		const expected = publicationResponse(input, created);
+		const adapter = new StaticSpacesAdapter(async (url) =>
+			String(url).includes("/core/users/me/")
+				? identity()
+				: Response.json(expected),
+		);
+		assert.deepEqual(
+			await adapter.execute(invocation("publish_space", input)),
+			expected,
+		);
+	}
+	for (const kind of ["user", "public"]) {
+		const target =
+			kind === "user" ? { kind, files: input.files } : { ...input, kind };
+		const expected = publicationResponse(target);
+		const adapter = new StaticSpacesAdapter(async (url) =>
+			String(url).includes("/core/users/me/")
+				? identity()
+				: Response.json(expected),
+		);
+		assert.deepEqual(
+			await adapter.execute(invocation("publish_space", target)),
+			expected,
+		);
+	}
+
+	for (const edit of [
+		(result: Record<string, unknown>) => {
+			result.verification = [
+				{
+					username: personal.username,
+					path: "/spaces/shared/project.y/",
+					allowed: false,
+					status: 403,
+				},
+			];
+		},
+		(result: Record<string, unknown>) => {
+			result.verification = [];
+		},
+		(result: Record<string, unknown>) => {
+			result.memberships = [];
+		},
+		(result: Record<string, unknown>) => {
+			(result.acl as Record<string, unknown>).enabled = false;
+		},
+		(result: Record<string, unknown>) => {
+			const app = result.application as { binding: Record<string, unknown> };
+			app.binding.negate = true;
+		},
+		(result: Record<string, unknown>) => {
+			const files = result.files_written as Record<string, unknown>[];
+			if (files[0]) files[0].sha256 = "b".repeat(64);
+		},
+	]) {
+		const malformed = publicationResponse(input) as Record<string, unknown>;
+		edit(malformed);
+		let writes = 0;
+		const adapter = new StaticSpacesAdapter(async (url, init) => {
+			if (String(url).includes("/core/users/me/")) return identity();
+			if (init?.method === "POST") writes++;
+			return Response.json(malformed);
+		});
+		await assert.rejects(adapter.execute(invocation("publish_space", input)));
+		assert.equal(writes, 1);
+	}
 });
