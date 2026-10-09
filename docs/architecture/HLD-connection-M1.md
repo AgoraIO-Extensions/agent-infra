@@ -875,6 +875,18 @@ erDiagram
 | Invocation | AuthorizedInvocation + idempotency binding | authorize、claim、expire |
 | Action Call | Call + Attempt + Effect + Dispatch | prepare、submit、finalize、reconcile |
 
+ProviderRelease 弃用保留 PUBLISHED 执行状态，记录 deprecated_at、同 Provider 当前 successor 和审计；
+阻止新账号、Grant 与声明，已有授权仍可执行并经原升级流程迁移。下线要求已弃用且 active 账号/Grant、
+当前声明和未完成 Call/Effect/Dispatch 依赖均为零，事务内锁定版本重验后设为 DISABLED。
+准入共享锁与下线排他锁保证并发新增依赖不可绕过；目录与历史效果不可删除。启动登记运行版本并拒绝移除
+尚未下线或仍有未完成效果的已登记执行器。用户已批准实现此有界机制，不授权自动迁移或生产下线。
+操作说明见 [版本生命周期](../connection/provider-release-lifecycle.md)。
+
+连接器开发入口采用 `openconnector-adapter/src/providers/<名称>/` 的 actions/definition/executors 分工，
+已发布源码按原字节归到 versions；旧导入路径和相对依赖使用透明出口，源码定位校验读取真实归档。
+此纯目录迁移保持已有 ProviderRelease、executor digest、Action schema/scopes 与审批证明，
+不要求因文件位置变化重新授权。布局和新增 Provider 规则见 [连接器目录](../connection/provider-layout.md)。
+
 一个事务只修改一个聚合和同聚合的 outbox/audit。跨聚合使用稳定 ID、短事务重校验和 outbox，不使用进程内事件冒充提交。
 
 ### 12.2 Principal

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { jiraServerConnectionCatalog } from "../src/jira-server.ts";
+import { implementationUrl } from "./source-layout.mjs";
 
 const provenance = JSON.parse(
 	await readFile(
@@ -35,7 +36,7 @@ assert.equal(
 );
 assert.equal(
 	`sha256:${createHash("sha256")
-		.update(await readFile(new URL("../src/jira-server.ts", import.meta.url)))
+		.update(await readFile(implementationUrl("src/jira-server.ts")))
 		.digest("hex")}`,
 	jiraServerConnectionCatalog.executorDigest,
 );

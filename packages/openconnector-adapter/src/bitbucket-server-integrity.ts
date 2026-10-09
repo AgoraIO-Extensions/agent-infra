@@ -1,2 +1,2 @@
-export const bitbucketServerExecutorDigest =
-	"sha256:36e421531152628f993691b6e61e4966dc84af4ad4fced71ab4b84f44b025b67";
+// Compatibility entry point; provider implementation lives under providers/.
+export * from "./providers/bitbucket/versions/bitbucket-server-integrity.ts";

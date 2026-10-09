@@ -1,2 +1,2 @@
-export const datalegoOAuthExecutorDigest =
-	"sha256:2840193a1a90d8db6b29a824e0f43c9b47a40cf6e665c92696dd51c578085e7c";
+// Compatibility entry point; provider implementation lives under providers/.
+export * from "./providers/datalego/versions/datalego-oauth-integrity.ts";

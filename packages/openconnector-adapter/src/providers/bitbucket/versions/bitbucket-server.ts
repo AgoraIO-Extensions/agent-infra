@@ -1,0 +1,1250 @@
+import { createHash } from "node:crypto";
+
+import type {
+	CredentialForExecution,
+	ProviderCredentialConnector,
+	ProviderExecutor,
+} from "@agent-infra/connection-core";
+
+import { bitbucketServerExecutorDigest } from "./bitbucket-server-integrity.ts";
+
+const sourceCommit = "0618e8cdaeaaaa77e2eb23938ac639867d4f03d7";
+const providerId = "bitbucket";
+const apiOrigin = "https://bitbucket-api.agoralab.co";
+const providerReleaseId = `bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v8`;
+const credentialScope = "bitbucket.server.pat";
+const maxResponseBytes = 5 * 1024 * 1024;
+const requestTimeoutMs = 8_000;
+
+export const bitbucketServerLegacyProviderReleaseIds = [
+	`bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v6`,
+	`bitbucket-server-6.7.2-openconnector-${sourceCommit}-connection-v7`,
+] as const;
+
+type JsonObject = Record<string, unknown>;
+type ActionEffect = "READ" | "WRITE";
+
+type ActionSpec = {
+	description: string;
+	effect: ActionEffect;
+	name: string;
+	properties?: JsonObject;
+	required?: readonly string[];
+};
+
+const stringField = { minLength: 1, type: "string" } as const;
+const positiveInteger = { minimum: 1, type: "integer" } as const;
+const paginationProperties = {
+	limit: { maximum: 100, minimum: 1, type: "integer" },
+	start: { minimum: 0, type: "integer" },
+};
+const repositoryProperties = {
+	project: stringField,
+	repository: stringField,
+};
+const pullRequestProperties = {
+	...repositoryProperties,
+	pullRequestId: positiveInteger,
+};
+const commentProperties = {
+	...pullRequestProperties,
+	commentId: positiveInteger,
+};
+
+const actionSpecs: readonly ActionSpec[] = [
+	{
+		description: "获取当前通过 Bitbucket Server PAT 鉴权的用户。",
+		effect: "READ",
+		name: "get_current_user",
+	},
+	{
+		description: "分页列出当前用户可访问的 Bitbucket 项目。",
+		effect: "READ",
+		name: "list_projects",
+		properties: paginationProperties,
+	},
+	{
+		description: "按 project key 获取 Bitbucket 项目。",
+		effect: "READ",
+		name: "get_project",
+		properties: { project: stringField },
+		required: ["project"],
+	},
+	{
+		description: "分页列出 Bitbucket 项目中的仓库。",
+		effect: "READ",
+		name: "list_repositories",
+		properties: { ...paginationProperties, project: stringField },
+		required: ["project"],
+	},
+	{
+		description: "按 project key 和 repository slug 获取仓库。",
+		effect: "READ",
+		name: "get_repository",
+		properties: repositoryProperties,
+		required: ["project", "repository"],
+	},
+	{
+		description: "在指定 Bitbucket 项目中创建仓库。",
+		effect: "WRITE",
+		name: "create_repository",
+		properties: {
+			description: { type: "string" },
+			forkable: { type: "boolean" },
+			name: stringField,
+			project: stringField,
+			public: { type: "boolean" },
+			scmId: { enum: ["git"], type: "string" },
+		},
+		required: ["project", "name"],
+	},
+	{
+		description: "分页列出 Bitbucket 仓库分支。",
+		effect: "READ",
+		name: "list_branches",
+		properties: { ...paginationProperties, ...repositoryProperties },
+		required: ["project", "repository"],
+	},
+	{
+		description: "分页列出 Bitbucket 仓库提交。",
+		effect: "READ",
+		name: "list_commits",
+		properties: {
+			...paginationProperties,
+			...repositoryProperties,
+			path: stringField,
+			since: stringField,
+			until: stringField,
+		},
+		required: ["project", "repository"],
+	},
+	{
+		description: "获取 Bitbucket 仓库中的一个提交。",
+		effect: "READ",
+		name: "get_commit",
+		properties: { ...repositoryProperties, commit: stringField },
+		required: ["project", "repository", "commit"],
+	},
+	{
+		description: "获取一个 Bitbucket commit 的构建状态。",
+		effect: "READ",
+		name: "get_commit_build_status",
+		properties: {
+			...paginationProperties,
+			...repositoryProperties,
+			commit: stringField,
+		},
+		required: ["project", "repository", "commit"],
+	},
+	{
+		description: "比较 Bitbucket 仓库中的两个 ref，并返回匹配路径的文件 diff。",
+		effect: "READ",
+		name: "compare_refs",
+		properties: {
+			...repositoryProperties,
+			baseRef: stringField,
+			contextLines: { maximum: 100, minimum: 0, type: "integer" },
+			maxDiffBytes: {
+				maximum: maxResponseBytes,
+				minimum: 1024,
+				type: "integer",
+			},
+			maxFiles: { maximum: 50, minimum: 1, type: "integer" },
+			pathGlobs: {
+				items: { maxLength: 256, ...stringField },
+				maxItems: 20,
+				minItems: 1,
+				type: "array",
+				uniqueItems: true,
+			},
+			targetRef: stringField,
+		},
+		required: ["project", "repository", "baseRef", "targetRef", "pathGlobs"],
+	},
+	{
+		description: "分页列出 Bitbucket 仓库 Pull Request。",
+		effect: "READ",
+		name: "list_pull_requests",
+		properties: {
+			...paginationProperties,
+			...repositoryProperties,
+			state: {
+				enum: ["ALL", "OPEN", "MERGED", "DECLINED", "SUPERSEDED"],
+				type: "string",
+			},
+		},
+		required: ["project", "repository"],
+	},
+	{
+		description: "获取 Bitbucket Pull Request。",
+		effect: "READ",
+		name: "get_pull_request",
+		properties: pullRequestProperties,
+		required: ["project", "repository", "pullRequestId"],
+	},
+	{
+		description: "获取 Bitbucket Pull Request diff。",
+		effect: "READ",
+		name: "get_pull_request_diff",
+		properties: pullRequestProperties,
+		required: ["project", "repository", "pullRequestId"],
+	},
+	{
+		description: "获取 Bitbucket Pull Request 最新提交的构建状态。",
+		effect: "READ",
+		name: "get_pull_request_build_status",
+		properties: { ...paginationProperties, ...pullRequestProperties },
+		required: ["project", "repository", "pullRequestId"],
+	},
+	{
+		description: "在 Bitbucket 仓库中创建 Pull Request。",
+		effect: "WRITE",
+		name: "create_pull_request",
+		properties: {
+			...repositoryProperties,
+			description: { type: "string" },
+			destinationBranch: stringField,
+			reviewerUsernames: {
+				items: stringField,
+				maxItems: 100,
+				type: "array",
+				uniqueItems: true,
+			},
+			sourceBranch: stringField,
+			title: stringField,
+		},
+		required: [
+			"project",
+			"repository",
+			"title",
+			"sourceBranch",
+			"destinationBranch",
+		],
+	},
+	{
+		description: "合并 Bitbucket Pull Request。",
+		effect: "WRITE",
+		name: "merge_pull_request",
+		properties: {
+			...pullRequestProperties,
+			message: { type: "string" },
+			version: { minimum: 0, type: "integer" },
+		},
+		required: ["project", "repository", "pullRequestId", "version"],
+	},
+	{
+		description: "拒绝 Bitbucket Pull Request。",
+		effect: "WRITE",
+		name: "decline_pull_request",
+		properties: {
+			...pullRequestProperties,
+			version: { minimum: 0, type: "integer" },
+		},
+		required: ["project", "repository", "pullRequestId", "version"],
+	},
+	{
+		description: "批准 Bitbucket Pull Request。",
+		effect: "WRITE",
+		name: "approve_pull_request",
+		properties: pullRequestProperties,
+		required: ["project", "repository", "pullRequestId"],
+	},
+	{
+		description: "取消当前用户对 Bitbucket Pull Request 的批准。",
+		effect: "WRITE",
+		name: "unapprove_pull_request",
+		properties: pullRequestProperties,
+		required: ["project", "repository", "pullRequestId"],
+	},
+	{
+		description: "分页列出 Bitbucket Pull Request 评论。",
+		effect: "READ",
+		name: "list_pull_request_comments",
+		properties: { ...paginationProperties, ...pullRequestProperties },
+		required: ["project", "repository", "pullRequestId"],
+	},
+	{
+		description: "获取一条 Bitbucket Pull Request 评论。",
+		effect: "READ",
+		name: "get_pull_request_comment",
+		properties: commentProperties,
+		required: ["project", "repository", "pullRequestId", "commentId"],
+	},
+	{
+		description: "创建 Bitbucket Pull Request 评论。",
+		effect: "WRITE",
+		name: "create_pull_request_comment",
+		properties: { ...pullRequestProperties, content: stringField },
+		required: ["project", "repository", "pullRequestId", "content"],
+	},
+	{
+		description: "回复 Bitbucket Pull Request 评论。",
+		effect: "WRITE",
+		name: "reply_pull_request_comment",
+		properties: { ...commentProperties, content: stringField },
+		required: [
+			"project",
+			"repository",
+			"pullRequestId",
+			"commentId",
+			"content",
+		],
+	},
+	{
+		description: "更新 Bitbucket Pull Request 评论。",
+		effect: "WRITE",
+		name: "update_pull_request_comment",
+		properties: {
+			...commentProperties,
+			content: stringField,
+			version: { minimum: 0, type: "integer" },
+		},
+		required: [
+			"project",
+			"repository",
+			"pullRequestId",
+			"commentId",
+			"content",
+			"version",
+		],
+	},
+	{
+		description: "删除 Bitbucket Pull Request 评论。",
+		effect: "WRITE",
+		name: "delete_pull_request_comment",
+		properties: {
+			...commentProperties,
+			version: { minimum: 0, type: "integer" },
+		},
+		required: [
+			"project",
+			"repository",
+			"pullRequestId",
+			"commentId",
+			"version",
+		],
+	},
+] as const;
+
+export const bitbucketServerConnectionCatalog = {
+	actions: actionSpecs.map((action) => ({
+		description: action.description,
+		effect: action.effect,
+		id: `${providerId}.${action.name}@v8`,
+		inputSchema: {
+			additionalProperties: false,
+			properties: action.properties ?? {},
+			required: action.required ?? [],
+			type: "object",
+		},
+		name: `${providerId}.${action.name}`,
+		requiredScopes: [credentialScope],
+	})),
+	authProfile: {
+		credential: "personal-access-token",
+		header: "Authorization",
+		scheme: "Bearer",
+	},
+	deploymentProfile: {
+		apiOrigin,
+		build: "6007002",
+		deployment: "server",
+		identity: "whoami + exact active user id",
+		product: "Bitbucket Server",
+		version: "6.7.2",
+	},
+	executorDigest: bitbucketServerExecutorDigest,
+	provider: providerId,
+	providerReleaseId,
+	sourceCommit,
+} as const;
+
+export class BitbucketServerAdapter
+	implements ProviderCredentialConnector, ProviderExecutor
+{
+	readonly providerId = providerId;
+	readonly providerReleaseId = providerReleaseId;
+	private readonly fetcher: typeof fetch;
+
+	constructor(fetcher: typeof fetch) {
+		this.fetcher = fetcher;
+	}
+
+	async validateCredential(accessToken: string) {
+		const username = (
+			await this.requestText(accessToken, "/plugins/servlet/applinks/whoami", {
+				credentialProbe: true,
+			})
+		).trim();
+		if (!username || username.length > 512) {
+			throw invalidCredential("Bitbucket PAT identity lookup failed");
+		}
+		const matches: JsonObject[] = [];
+		let start = 0;
+		let complete = false;
+		for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
+			const users = await this.requestJson(accessToken, "/rest/api/1.0/users", {
+				credentialProbe: true,
+				query: { filter: username, limit: 100, start },
+			});
+			matches.push(
+				...pageValues(users).filter((entry) => {
+					const name = readString(entry, "name");
+					const email = readString(entry, "emailAddress");
+					return (
+						(name === username || email === username) &&
+						entry.active === true &&
+						entry.id !== undefined &&
+						entry.id !== null
+					);
+				}),
+			);
+			if (users.isLastPage === true) {
+				complete = true;
+				break;
+			}
+			const next = users.nextPageStart;
+			if (!Number.isSafeInteger(next) || Number(next) <= start) {
+				throw providerError("Bitbucket user pagination is invalid");
+			}
+			start = Number(next);
+		}
+		if (!complete) {
+			throw providerError("Bitbucket user pagination exceeded the safe limit");
+		}
+		if (matches.length !== 1) {
+			throw invalidCredential(
+				"Bitbucket PAT identity is missing, disabled, or ambiguous",
+			);
+		}
+		const user = matches[0] as JsonObject;
+		return {
+			accessToken,
+			displayName:
+				readString(user, "displayName") ??
+				readString(user, "name") ??
+				String(user.id),
+			externalAccount: String(user.id),
+			grantedScopes: [credentialScope],
+			providerId,
+			providerReleaseId,
+		};
+	}
+
+	async execute(input: {
+		action: string;
+		credential: CredentialForExecution;
+		input: JsonObject;
+	}) {
+		const action = input.action.replace(`${providerId}.`, "");
+		const value = input.input;
+		const token = input.credential.accessToken;
+		const repoPath = () => repositoryPath(value);
+		const pullRequestPath = () =>
+			`${repoPath()}/pull-requests/${integer(value, "pullRequestId")}`;
+		const commentPath = () =>
+			`${pullRequestPath()}/comments/${integer(value, "commentId")}`;
+		switch (action) {
+			case "get_current_user": {
+				const { accessToken: _accessToken, ...identity } =
+					await this.validateCredential(token);
+				return identity;
+			}
+			case "list_projects":
+				return this.requestJson(token, "/rest/api/1.0/projects", {
+					query: pagination(value),
+				});
+			case "get_project":
+				return this.requestJson(
+					token,
+					`/rest/api/1.0/projects/${segment(value, "project")}`,
+				);
+			case "list_repositories":
+				return this.requestJson(token, `${projectPath(value)}/repos`, {
+					query: pagination(value),
+				});
+			case "get_repository":
+				return this.requestJson(token, repoPath());
+			case "create_repository":
+				return this.requestJson(token, `${projectPath(value)}/repos`, {
+					body: compact({
+						description: value.description,
+						forkable: value.forkable,
+						name: value.name,
+						public: value.public,
+						scmId: value.scmId ?? "git",
+					}),
+					method: "POST",
+				});
+			case "list_branches":
+				return this.requestJson(token, `${repoPath()}/branches`, {
+					query: pagination(value),
+				});
+			case "list_commits":
+				return this.requestJson(token, `${repoPath()}/commits`, {
+					query: {
+						...pagination(value),
+						path: value.path,
+						since: value.since,
+						until: value.until,
+					},
+				});
+			case "get_commit":
+				return this.requestJson(
+					token,
+					`${repoPath()}/commits/${segment(value, "commit")}`,
+				);
+			case "get_commit_build_status": {
+				const commit = segment(value, "commit");
+				await this.requestJson(token, `${repoPath()}/commits/${commit}`);
+				return this.requestJson(
+					token,
+					`/rest/build-status/1.0/commits/${commit}`,
+					{
+						query: pagination(value),
+					},
+				);
+			}
+			case "compare_refs":
+				return this.compareRefs(token, value);
+			case "list_pull_requests":
+				return this.requestJson(token, `${repoPath()}/pull-requests`, {
+					query: { ...pagination(value), state: value.state },
+				});
+			case "get_pull_request":
+				return this.requestJson(token, pullRequestPath());
+			case "get_pull_request_diff":
+				return {
+					diff: await this.requestText(token, `${pullRequestPath()}.diff`),
+				};
+			case "get_pull_request_build_status": {
+				const pullRequest = await this.requestJson(token, pullRequestPath());
+				const fromRef = objectValue(pullRequest, "fromRef");
+				const commit = readString(fromRef, "latestCommit");
+				if (!commit) throw providerError("Pull Request has no source commit");
+				return this.requestJson(
+					token,
+					`/rest/build-status/1.0/commits/${encodeURIComponent(commit)}`,
+					{ query: pagination(value) },
+				);
+			}
+			case "create_pull_request":
+				return this.requestJson(token, `${repoPath()}/pull-requests`, {
+					body: {
+						description: value.description ?? "",
+						fromRef: branchReference(value, "sourceBranch"),
+						reviewers: stringArray(value.reviewerUsernames).map((name) => ({
+							user: { name },
+						})),
+						title: value.title,
+						toRef: branchReference(value, "destinationBranch"),
+					},
+					method: "POST",
+				});
+			case "merge_pull_request":
+				return this.requestJson(token, `${pullRequestPath()}/merge`, {
+					body: compact({ message: value.message }),
+					method: "POST",
+					query: { version: value.version },
+				});
+			case "decline_pull_request":
+				return this.requestJson(token, `${pullRequestPath()}/decline`, {
+					allowEmptyResponse: true,
+					method: "POST",
+					query: { version: value.version },
+				});
+			case "approve_pull_request":
+				return this.requestJson(token, `${pullRequestPath()}/approve`, {
+					method: "POST",
+				});
+			case "unapprove_pull_request":
+				return this.requestJson(token, `${pullRequestPath()}/approve`, {
+					method: "DELETE",
+				});
+			case "list_pull_request_comments": {
+				const page = await this.requestJson(
+					token,
+					`${pullRequestPath()}/activities`,
+					{ query: pagination(value) },
+				);
+				return {
+					...page,
+					values: pageValues(page)
+						.map((activity) => activity.comment)
+						.filter(
+							(comment): comment is JsonObject =>
+								typeof comment === "object" &&
+								comment !== null &&
+								!Array.isArray(comment),
+						),
+				};
+			}
+			case "get_pull_request_comment":
+				return this.requestJson(token, commentPath());
+			case "create_pull_request_comment":
+				return this.requestJson(token, `${pullRequestPath()}/comments`, {
+					body: { text: value.content },
+					method: "POST",
+				});
+			case "reply_pull_request_comment":
+				return this.requestJson(token, `${pullRequestPath()}/comments`, {
+					body: {
+						parent: { id: value.commentId },
+						text: value.content,
+					},
+					method: "POST",
+				});
+			case "update_pull_request_comment":
+				return this.requestJson(token, commentPath(), {
+					body: { text: value.content, version: value.version },
+					method: "PUT",
+				});
+			case "delete_pull_request_comment":
+				return this.requestJson(token, commentPath(), {
+					method: "DELETE",
+					query: { version: value.version },
+				});
+			default:
+				throw providerError(`Unsupported Bitbucket Server action: ${action}`);
+		}
+	}
+
+	private requestJson(
+		accessToken: string,
+		path: string,
+		options: RequestOptions = {},
+	) {
+		return requestJson(this.fetcher, accessToken, path, options);
+	}
+
+	private requestText(
+		accessToken: string,
+		path: string,
+		options: RequestOptions = {},
+	) {
+		return requestText(this.fetcher, accessToken, path, options);
+	}
+
+	private async compareRefs(accessToken: string, value: JsonObject) {
+		const deadline = Date.now() + 30_000;
+		const requestWithinDeadline = (
+			path: string,
+			options: RequestOptions = {},
+		) => {
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) {
+				throw providerError("Bitbucket compare deadline exceeded");
+			}
+			return this.requestJson(accessToken, path, {
+				...options,
+				requestTimeoutMs: remaining,
+			});
+		};
+		const pathGlobs = [
+			...requiredStringArray(value.pathGlobs, "pathGlobs", 20),
+		].sort();
+		const repository = repositoryPath(value);
+		const baseRef = stringValue(value, "baseRef");
+		const targetRef = stringValue(value, "targetRef");
+		const maxFiles = boundedInteger(value.maxFiles, "maxFiles", 50, 1, 50);
+		const maxDiffBytes = boundedInteger(
+			value.maxDiffBytes,
+			"maxDiffBytes",
+			1024 * 1024,
+			1024,
+			maxResponseBytes,
+		);
+		const contextLines = boundedInteger(
+			value.contextLines,
+			"contextLines",
+			3,
+			0,
+			100,
+		);
+		const resolveRef = async (ref: string, label: string) => {
+			const page = await requestWithinDeadline(`${repository}/commits`, {
+				query: { limit: 1, until: ref },
+			});
+			const [commit] = pageValues(page);
+			if (!commit) {
+				throw providerError(`Bitbucket ${label} did not resolve to a commit`);
+			}
+			return commit;
+		};
+		const baseCommit = await resolveRef(baseRef, "base ref");
+		const targetCommit = await resolveRef(targetRef, "target ref");
+		const baseId = requiredObjectString(baseCommit, "id", "base ref");
+		const targetId = requiredObjectString(targetCommit, "id", "target ref");
+		const projectedChanges: ReturnType<typeof projectChange>[] = [];
+		let start = 0;
+		let complete = false;
+		for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
+			const page = await requestWithinDeadline(
+				`${repository}/compare/changes`,
+				{ query: { from: baseId, limit: 100, start, to: targetId } },
+			);
+			projectedChanges.push(...pageValues(page).map(projectChange));
+			if (page.isLastPage === true) {
+				complete = true;
+				break;
+			}
+			const next = page.nextPageStart;
+			if (!Number.isSafeInteger(next) || Number(next) <= start) {
+				throw providerError("Bitbucket compare pagination is invalid");
+			}
+			start = Number(next);
+		}
+		const changePagesTruncated = !complete;
+		const candidates: ReturnType<typeof projectChange>[] = [];
+		const matchBudget = { remaining: 1_000_000 };
+		let pathFilteringTruncated = false;
+		projectedChanges.sort((left, right) => {
+			const leftKey = [left.path, left.sourcePath ?? "", left.status].join(
+				"\0",
+			);
+			const rightKey = [right.path, right.sourcePath ?? "", right.status].join(
+				"\0",
+			);
+			return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+		});
+		for (const change of projectedChanges) {
+			const matches = (path: string) =>
+				pathGlobs.some((pattern) => globMatches(pattern, path, matchBudget));
+			const included =
+				matches(change.path) &&
+				(change.sourcePath === undefined || matches(change.sourcePath));
+			if (matchBudget.remaining <= 0) {
+				pathFilteringTruncated = true;
+				break;
+			}
+			if (included) candidates.push(change);
+		}
+		const files: JsonObject[] = [];
+		const omittedFiles: JsonObject[] = candidates
+			.slice(maxFiles)
+			.map((change) => ({ path: change.path, reason: "max_files" }));
+		const selectedCandidates = candidates.slice(0, maxFiles);
+		let diffBytes = 0;
+		for (const [index, change] of selectedCandidates.entries()) {
+			if (diffBytes >= maxDiffBytes) {
+				omittedFiles.push(
+					...selectedCandidates.slice(index).map((candidate) => ({
+						path: candidate.path,
+						reason: "max_diff_bytes",
+					})),
+				);
+				break;
+			}
+			const encodedPath = change.path
+				.split("/")
+				.map((entry) => encodeURIComponent(entry))
+				.join("/");
+			let diff: JsonObject;
+			try {
+				diff = await requestWithinDeadline(
+					`${repository}/diff/${encodedPath}`,
+					{
+						query: {
+							contextLines,
+							since: baseId,
+							...(change.sourcePath === undefined
+								? {}
+								: { srcPath: change.sourcePath }),
+							until: targetId,
+						},
+						responseLimitBytes: maxDiffBytes - diffBytes,
+					},
+				);
+			} catch (error) {
+				if (!isResponseTooLarge(error)) throw error;
+				omittedFiles.push(
+					...selectedCandidates.slice(index).map((candidate) => ({
+						path: candidate.path,
+						reason: "max_diff_bytes",
+					})),
+				);
+				break;
+			}
+			const size = Buffer.byteLength(JSON.stringify(diff));
+			if (diffBytes + size > maxDiffBytes) {
+				omittedFiles.push(
+					...selectedCandidates.slice(index).map((candidate) => ({
+						path: candidate.path,
+						reason: "max_diff_bytes",
+					})),
+				);
+				break;
+			}
+			diffBytes += size;
+			files.push({ ...change, diff });
+		}
+		const fingerprintPayload = {
+			baseCommit: baseId,
+			changePagesTruncated,
+			files,
+			omittedFiles,
+			pathFilteringTruncated,
+			pathGlobs: [...pathGlobs].sort(),
+			targetCommit: targetId,
+		};
+		return {
+			baseCommit: projectCommit(baseCommit),
+			changePagesTruncated,
+			diffBytes,
+			files,
+			fingerprint: `sha256:${createHash("sha256")
+				.update(stableJson(fingerprintPayload))
+				.digest("hex")}`,
+			omittedFileCount: omittedFiles.length,
+			omittedFiles,
+			pathGlobs,
+			pathFilteringTruncated,
+			targetCommit: projectCommit(targetCommit),
+			truncated:
+				changePagesTruncated ||
+				pathFilteringTruncated ||
+				omittedFiles.length > 0 ||
+				files.some((file) => (file.diff as JsonObject).truncated === true),
+		};
+	}
+}
+
+function projectPath(value: JsonObject) {
+	return `/rest/api/1.0/projects/${segment(value, "project")}`;
+}
+
+function repositoryPath(value: JsonObject) {
+	return `${projectPath(value)}/repos/${segment(value, "repository")}`;
+}
+
+function branchReference(value: JsonObject, key: string) {
+	return {
+		id: `refs/heads/${stringValue(value, key)}`,
+		repository: {
+			project: { key: stringValue(value, "project") },
+			slug: stringValue(value, "repository"),
+		},
+	};
+}
+
+function pagination(value: JsonObject) {
+	return compact({ limit: value.limit, start: value.start });
+}
+
+function segment(value: JsonObject, key: string) {
+	return encodeURIComponent(stringValue(value, key));
+}
+
+function stringValue(value: JsonObject, key: string) {
+	const entry = value[key];
+	if (typeof entry !== "string" || !entry) {
+		throw new Error(`${key} is required`);
+	}
+	return entry;
+}
+
+function integer(value: JsonObject, key: string) {
+	const entry = value[key];
+	if (!Number.isSafeInteger(entry) || Number(entry) < 0) {
+		throw new Error(`${key} is invalid`);
+	}
+	return Number(entry);
+}
+
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((entry): entry is string => typeof entry === "string")
+		: [];
+}
+
+function requiredStringArray(value: unknown, key: string, maximum: number) {
+	if (!Array.isArray(value) || value.length === 0) {
+		throw new Error(`${key} must contain at least one pattern`);
+	}
+	if (
+		value.length > maximum ||
+		new Set(value).size !== value.length ||
+		value.some(
+			(entry) =>
+				typeof entry !== "string" || entry.length === 0 || entry.length > 256,
+		)
+	) {
+		throw new Error(`${key} is invalid`);
+	}
+	return value as string[];
+}
+
+function boundedInteger(
+	value: unknown,
+	key: string,
+	fallback: number,
+	minimum: number,
+	maximum: number,
+) {
+	if (value === undefined) return fallback;
+	if (
+		!Number.isSafeInteger(value) ||
+		Number(value) < minimum ||
+		Number(value) > maximum
+	) {
+		throw new Error(`${key} is invalid`);
+	}
+	return Number(value);
+}
+
+function requiredObjectString(value: JsonObject, key: string, label: string) {
+	const result = readString(value, key);
+	if (!result)
+		throw providerError(`Bitbucket ${label} did not resolve to a commit`);
+	return result;
+}
+
+function projectCommit(value: JsonObject) {
+	return compact({
+		displayId: readString(value, "displayId"),
+		id: readString(value, "id"),
+	});
+}
+
+function nestedString(value: JsonObject, key: string, nestedKey: string) {
+	const nested = value[key];
+	return typeof nested === "object" && nested !== null && !Array.isArray(nested)
+		? readString(nested as JsonObject, nestedKey)
+		: undefined;
+}
+
+function projectChange(value: JsonObject) {
+	const path = nestedString(value, "path", "toString");
+	if (!path) throw providerError("Bitbucket compare change has no path");
+	return compact({
+		path,
+		sourcePath: nestedString(value, "srcPath", "toString"),
+		status: readString(value, "type") ?? "UNKNOWN",
+	}) as { path: string; sourcePath?: string; status: string };
+}
+
+function globMatches(
+	pattern: string,
+	path: string,
+	budget: { remaining: number },
+) {
+	type Token = "*" | "**" | "**/" | "?" | { literal: string };
+	const tokens: Token[] = [];
+	for (let index = 0; index < pattern.length; ) {
+		if (pattern.startsWith("**/", index)) {
+			tokens.push("**/");
+			index += 3;
+		} else if (pattern.startsWith("**", index)) {
+			tokens.push("**");
+			index += 2;
+		} else {
+			const character = pattern.charAt(index);
+			tokens.push(
+				character === "*" || character === "?"
+					? character
+					: { literal: character },
+			);
+			index += 1;
+		}
+	}
+	let current = Array<boolean>(path.length + 1).fill(false);
+	current[0] = true;
+	for (const token of tokens) {
+		if (--budget.remaining <= 0) return false;
+		const next = Array<boolean>(path.length + 1).fill(false);
+		if (token === "**") {
+			next[0] = current[0] === true;
+			for (let index = 1; index <= path.length; index += 1) {
+				if (--budget.remaining <= 0) return false;
+				next[index] = current[index] === true || next[index - 1] === true;
+			}
+		} else if (token === "**/") {
+			let reachable = false;
+			for (let index = 0; index <= path.length; index += 1) {
+				if (--budget.remaining <= 0) return false;
+				reachable ||= current[index] === true;
+				next[index] ||= current[index] === true;
+				if (index < path.length && reachable && path.charAt(index) === "/") {
+					next[index + 1] = true;
+				}
+			}
+		} else if (token === "*") {
+			next[0] = current[0] === true;
+			for (let index = 1; index <= path.length; index += 1) {
+				if (--budget.remaining <= 0) return false;
+				next[index] =
+					current[index] === true ||
+					(path.charAt(index - 1) !== "/" && next[index - 1] === true);
+			}
+		} else {
+			for (let index = 0; index < path.length; index += 1) {
+				if (--budget.remaining <= 0) return false;
+				const matches =
+					token === "?"
+						? path.charAt(index) !== "/"
+						: path.charAt(index) === token.literal;
+				if (current[index] && matches) next[index + 1] = true;
+			}
+		}
+		current = next;
+	}
+	return current[path.length];
+}
+
+function stableJson(value: unknown): string {
+	return JSON.stringify(value, (_key, entry) =>
+		typeof entry === "object" && entry !== null && !Array.isArray(entry)
+			? Object.fromEntries(
+					Object.entries(entry).sort(([left], [right]) =>
+						left < right ? -1 : left > right ? 1 : 0,
+					),
+				)
+			: entry,
+	);
+}
+
+function compact(value: JsonObject) {
+	return Object.fromEntries(
+		Object.entries(value).filter(([, entry]) => entry !== undefined),
+	);
+}
+
+function objectValue(value: unknown, key: string): JsonObject {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		return {};
+	const entry = (value as JsonObject)[key];
+	return typeof entry === "object" && entry !== null && !Array.isArray(entry)
+		? (entry as JsonObject)
+		: {};
+}
+
+function readString(value: unknown, key: string) {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		return undefined;
+	const entry = (value as JsonObject)[key];
+	return typeof entry === "string" ? entry : undefined;
+}
+
+function pageValues(value: unknown): JsonObject[] {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		return [];
+	const values = (value as JsonObject).values;
+	return Array.isArray(values)
+		? values.filter(
+				(entry): entry is JsonObject =>
+					typeof entry === "object" && entry !== null && !Array.isArray(entry),
+			)
+		: [];
+}
+
+function providerError(message: string) {
+	return new Error(message);
+}
+
+function invalidCredential(message: string) {
+	return Object.assign(new Error(message), { providerCredentialInvalid: true });
+}
+
+function responseTooLarge() {
+	return Object.assign(
+		providerError("Bitbucket Server response is too large"),
+		{
+			responseTooLarge: true,
+		},
+	);
+}
+
+function isResponseTooLarge(error: unknown) {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { responseTooLarge?: unknown }).responseTooLarge === true
+	);
+}
+
+type RequestOptions = {
+	allowEmptyResponse?: boolean;
+	body?: JsonObject;
+	credentialProbe?: boolean;
+	method?: "DELETE" | "GET" | "POST" | "PUT";
+	query?: JsonObject;
+	requestTimeoutMs?: number;
+	responseLimitBytes?: number;
+};
+
+async function requestJson(
+	fetcher: typeof fetch,
+	accessToken: string,
+	path: string,
+	options: RequestOptions = {},
+): Promise<JsonObject> {
+	const timeoutMs = effectiveRequestTimeout(options);
+	const startedAt = Date.now();
+	const response = await request(fetcher, accessToken, path, options);
+	const remainingTimeoutMs = timeoutMs - (Date.now() - startedAt);
+	if (remainingTimeoutMs <= 0) {
+		await response.body?.cancel();
+		throw providerError("Bitbucket Server response timed out");
+	}
+	if (response.status === 204) return { ok: true };
+	const text = await boundedText(
+		response,
+		options.responseLimitBytes ?? maxResponseBytes,
+		remainingTimeoutMs,
+	);
+	if (text === "" && options.allowEmptyResponse) return { ok: true };
+	try {
+		const value: unknown = JSON.parse(text);
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			throw new Error("not an object");
+		}
+		return value as JsonObject;
+	} catch {
+		throw providerError("Bitbucket Server returned an invalid JSON response");
+	}
+}
+
+async function requestText(
+	fetcher: typeof fetch,
+	accessToken: string,
+	path: string,
+	options: RequestOptions = {},
+) {
+	return boundedText(await request(fetcher, accessToken, path, options));
+}
+
+async function request(
+	fetcher: typeof fetch,
+	accessToken: string,
+	path: string,
+	options: RequestOptions,
+) {
+	if (!path.startsWith("/") || path.startsWith("//")) {
+		throw providerError("Bitbucket Server request path is invalid");
+	}
+	const url = new URL(path, apiOrigin);
+	if (options.query) {
+		for (const [key, value] of Object.entries(options.query)) {
+			if (
+				typeof value === "string" ||
+				typeof value === "number" ||
+				typeof value === "boolean"
+			) {
+				url.searchParams.set(key, String(value));
+			}
+		}
+	}
+	const controller = new AbortController();
+	const timeout = setTimeout(
+		() => controller.abort(),
+		effectiveRequestTimeout(options),
+	);
+	try {
+		const response = await fetcher(url, {
+			body:
+				options.body === undefined ? undefined : JSON.stringify(options.body),
+			headers: {
+				accept: "application/json, text/plain;q=0.9",
+				authorization: `Bearer ${accessToken}`,
+				...(options.method === "POST" && options.body === undefined
+					? {
+							"content-type": "application/json",
+							"x-atlassian-token": "no-check",
+						}
+					: {}),
+				...(options.body === undefined
+					? {}
+					: { "content-type": "application/json" }),
+			},
+			method: options.method ?? "GET",
+			redirect: "error",
+			signal: controller.signal,
+		});
+		if (
+			options.credentialProbe &&
+			(response.status === 401 || response.status === 403)
+		) {
+			throw invalidCredential("Bitbucket PAT was rejected");
+		}
+		if (!response.ok) {
+			throw Object.assign(
+				providerError(`Bitbucket Server request failed (${response.status})`),
+				{ providerStatus: response.status },
+			);
+		}
+		return response;
+	} catch (error) {
+		if (
+			typeof error === "object" &&
+			error !== null &&
+			(error as { providerCredentialInvalid?: unknown })
+				.providerCredentialInvalid === true
+		) {
+			throw error;
+		}
+		if (error instanceof Error && error.message.startsWith("Bitbucket Server"))
+			throw error;
+		throw providerError("Bitbucket Server request failed");
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+function effectiveRequestTimeout(options: RequestOptions) {
+	return Math.min(
+		requestTimeoutMs,
+		Math.max(1, options.requestTimeoutMs ?? requestTimeoutMs),
+	);
+}
+
+async function boundedText(
+	response: Response,
+	limit = maxResponseBytes,
+	timeoutMs = requestTimeoutMs,
+) {
+	const declaredLength = Number(response.headers.get("content-length") ?? 0);
+	if (declaredLength > limit) {
+		await response.body?.cancel();
+		throw responseTooLarge();
+	}
+	if (!response.body) return "";
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	let timedOut = false;
+	const timeout = setTimeout(() => {
+		timedOut = true;
+		void reader.cancel();
+	}, timeoutMs);
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			size += value.byteLength;
+			if (size > limit) {
+				await reader.cancel();
+				throw responseTooLarge();
+			}
+			chunks.push(value);
+		}
+		if (timedOut) {
+			throw providerError("Bitbucket Server response timed out");
+		}
+	} catch (error) {
+		if (timedOut) {
+			throw providerError("Bitbucket Server response timed out");
+		}
+		if (error instanceof Error && error.message.startsWith("Bitbucket Server"))
+			throw error;
+		throw providerError("Bitbucket Server response timed out");
+	} finally {
+		clearTimeout(timeout);
+	}
+	const bytes = new Uint8Array(size);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return new TextDecoder().decode(bytes);
+}

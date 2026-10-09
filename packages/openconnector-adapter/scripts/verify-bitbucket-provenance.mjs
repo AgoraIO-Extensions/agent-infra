@@ -5,6 +5,7 @@ import {
 	bitbucketServerConnectionCatalog,
 	githubConnectionCatalog,
 } from "../src/index.ts";
+import { implementationUrl } from "./source-layout.mjs";
 
 const provenance = JSON.parse(
 	await readFile(
@@ -43,7 +44,7 @@ for (const [sourceFile, expected] of [
 	],
 	["../src/index.ts", githubConnectionCatalog.executorDigest],
 ]) {
-	const source = await readFile(new URL(sourceFile, import.meta.url));
+	const source = await readFile(implementationUrl(sourceFile.slice(3)));
 	assert.equal(
 		`sha256:${createHash("sha256").update(source).digest("hex")}`,
 		expected,

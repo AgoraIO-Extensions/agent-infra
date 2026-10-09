@@ -1796,6 +1796,144 @@
 				}
 			}
 		},
+		"/api/v1/connection/admin/provider-releases/{releaseId}/lifecycle": {
+			"parameters": [
+				{
+					"name": "releaseId",
+					"in": "path",
+					"required": true,
+					"schema": { "type": "string" }
+				}
+			],
+			"get": {
+				"operationId": "getProviderReleaseLifecycle",
+				"responses": {
+					"200": {
+						"description": "Lifecycle and dependency counts",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": [
+										"releaseId",
+										"provider",
+										"status",
+										"revision",
+										"dependencies"
+									],
+									"properties": {
+										"releaseId": { "type": "string" },
+										"provider": { "type": "string" },
+										"status": {
+											"type": "string",
+											"enum": ["PUBLISHED", "DISABLED"]
+										},
+										"revision": { "type": "string" },
+										"deprecatedAt": { "type": ["string", "null"] },
+										"successorReleaseId": { "type": ["string", "null"] },
+										"retiredAt": { "type": ["string", "null"] },
+										"dependencies": {
+											"type": "object",
+											"required": [
+												"accounts",
+												"grants",
+												"declarations",
+												"unfinishedCalls"
+											],
+											"properties": {
+												"accounts": { "type": "integer" },
+												"grants": { "type": "integer" },
+												"declarations": { "type": "integer" },
+												"unfinishedCalls": { "type": "integer" }
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"401": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" }
+				}
+			},
+			"post": {
+				"operationId": "changeProviderReleaseLifecycle",
+				"parameters": [
+					{ "$ref": "#/components/parameters/IdempotencyKey" },
+					{
+						"name": "If-Match",
+						"in": "header",
+						"required": true,
+						"schema": { "type": "string" }
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"oneOf": [
+									{
+										"type": "object",
+										"additionalProperties": false,
+										"required": ["operation", "successorReleaseId", "reason"],
+										"properties": {
+											"operation": { "type": "string", "const": "deprecate" },
+											"successorReleaseId": {
+												"type": "string",
+												"minLength": 1,
+												"maxLength": 512
+											},
+											"reason": {
+												"type": "string",
+												"minLength": 1,
+												"maxLength": 1000
+											}
+										}
+									},
+									{
+										"type": "object",
+										"additionalProperties": false,
+										"required": ["operation", "reason"],
+										"properties": {
+											"operation": { "type": "string", "const": "retire" },
+											"reason": {
+												"type": "string",
+												"minLength": 1,
+												"maxLength": 1000
+											}
+										}
+									}
+								]
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Audited transition",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["releaseId", "operation"],
+									"properties": {
+										"releaseId": { "type": "string" },
+										"operation": {
+											"type": "string",
+											"enum": ["deprecate", "retire"]
+										}
+									}
+								}
+							}
+						}
+					},
+					"400": { "$ref": "#/components/responses/Error" },
+					"404": { "$ref": "#/components/responses/Error" },
+					"409": { "$ref": "#/components/responses/Error" }
+				}
+			}
+		},
 		"/api/v1/connection/admin/provider-upgrades": {
 			"get": {
 				"operationId": "listProviderUpgradeCampaigns",
