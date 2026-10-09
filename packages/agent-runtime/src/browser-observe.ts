@@ -140,6 +140,11 @@ export type BrowserObservationV1 = Readonly<{
 	elements: readonly BrowserElementReferenceV1[];
 }>;
 
+export type BrowserControlledFixtureV1 = Readonly<{
+	url: string;
+	body: string;
+}>;
+
 export type BrowserArtifactV1 = Readonly<{
 	page: BrowserPageReferenceV1;
 	descriptor: FileDescriptorV1;
@@ -382,6 +387,7 @@ export function createBrowserObserveControllerV1(input: {
 	readonly capability:
 		| BrowserCapabilityAvailableV1
 		| (() => BrowserCapabilityAvailableV1);
+	readonly controlledFixture?: BrowserControlledFixtureV1;
 	readonly recoveryBinding?: BrowserContextRecoveryBindingV1;
 	readonly maxTextBytes?: number;
 }) {
@@ -412,7 +418,15 @@ export function createBrowserObserveControllerV1(input: {
 		if (policyInstalled) return;
 		await input.context.route("**/*", async (route: Route) => {
 			try {
-				assertAllowedUrl(route.request().url(), allowedOrigins());
+				const requestUrl = route.request().url();
+				assertAllowedUrl(requestUrl, allowedOrigins());
+				if (input.controlledFixture?.url === requestUrl) {
+					await route.fulfill({
+						contentType: "text/html",
+						body: input.controlledFixture.body,
+					});
+					return;
+				}
 				await route.continue();
 			} catch {
 				await route.abort("blockedbyclient");

@@ -140,6 +140,34 @@ describe("Browser observe controller", () => {
 		).rejects.toThrow("BROWSER_NAVIGATION_ORIGIN_DENIED");
 	});
 
+	it("keeps controlled fixture fulfillment inside the policy route", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability,
+			controlledFixture: {
+				url: "https://example.test/fixture",
+				body: "<title>Fixture</title>",
+			},
+		});
+		await controller.navigate("https://example.test/fixture");
+		const fulfill = vi.fn(async () => undefined);
+		const continueRoute = vi.fn(async () => undefined);
+		const handler = context.routes[0] as (route: unknown) => Promise<void>;
+		await handler({
+			request: () => ({ url: () => "https://example.test/fixture" }),
+			fulfill,
+			continue: continueRoute,
+			abort: vi.fn(async () => undefined),
+		});
+		expect(fulfill).toHaveBeenCalledWith({
+			contentType: "text/html",
+			body: "<title>Fixture</title>",
+		});
+		expect(continueRoute).not.toHaveBeenCalled();
+	});
+
 	it("rebinds persisted page metadata and invalidates old elements", async () => {
 		const page = new FakePage();
 		const context = fakeContext(page);
