@@ -86,15 +86,15 @@ export const connectionInstallationCommands = platformSchema.table(
 		status: text("status")
 			.$type<ConnectionInstallationCommandV1["status"]>()
 			.notNull(),
-		attemptId: text("attempt_id"),
-		attemptOwner: text("attempt_owner"),
-		attemptExpiresAt: timestamp("attempt_expires_at", { withTimezone: true }),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
+		attemptId: text("attempt_id"),
+		attemptOwner: text("attempt_owner"),
+		attemptExpiresAt: timestamp("attempt_expires_at", { withTimezone: true }),
 	},
 	(table) => [
 		foreignKey({

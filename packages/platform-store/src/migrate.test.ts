@@ -1965,6 +1965,8 @@ describe("published Relay authority migration", () => {
 			47,
 			48,
 			49,
+			50,
+			51,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -1982,9 +1984,17 @@ describe("published Relay authority migration", () => {
 			idx: 48,
 			tag: "0048_skill_agent_binding_history",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.find((entry) => entry.idx === 49)).toMatchObject({
 			idx: 49,
 			tag: "0049_connection_installation_authorization",
+		});
+		expect(journal.entries.at(-2)).toMatchObject({
+			idx: 50,
+			tag: "0050_connection_installation_attempts",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 51,
+			tag: "0051_connection_installation_attempt_expiry",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2269,6 +2279,9 @@ describe("published Relay authority migration", () => {
 						"status",
 						"created_at",
 						"updated_at",
+						"attempt_id",
+						"attempt_owner",
+						"attempt_expires_at",
 					].map((name) => `connection_installation_commands:${name}`),
 					...[
 						"actor_id",
@@ -2305,6 +2318,7 @@ describe("published Relay authority migration", () => {
 						(name) =>
 							`connection_installation_commands:connection_installation_${name}`,
 					),
+					"connection_installation_commands:connection_installation_attempt_binding",
 					"conversation_audit_events:conversation_audit_details_binding",
 					"conversation_audit_events:conversation_audit_execution_binding",
 					...[
