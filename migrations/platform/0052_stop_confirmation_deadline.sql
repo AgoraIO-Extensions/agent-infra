@@ -1,5 +1,5 @@
-ALTER TABLE "platform"."conversation_stops" ADD COLUMN "confirmation_deadline" timestamp with time zone;--> statement-breakpoint
-ALTER TABLE "platform"."conversation_stops" ADD COLUMN "confirmation_timed_out_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "platform"."conversation_stops" ADD COLUMN IF NOT EXISTS "confirmation_deadline" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "platform"."conversation_stops" ADD COLUMN IF NOT EXISTS "confirmation_timed_out_at" timestamp with time zone;--> statement-breakpoint
 UPDATE "platform"."conversation_stops"
 SET "confirmation_deadline" = "created_at" + interval '60 seconds'
 WHERE "confirmation_deadline" IS NULL;--> statement-breakpoint

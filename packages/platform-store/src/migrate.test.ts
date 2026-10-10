@@ -1989,13 +1989,17 @@ describe("published Relay authority migration", () => {
 			idx: 49,
 			tag: "0049_connection_installation_authorization",
 		});
-		expect(journal.entries.at(-2)).toMatchObject({
+		expect(journal.entries.at(-3)).toMatchObject({
 			idx: 50,
 			tag: "0050_connection_installation_attempts",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.at(-2)).toMatchObject({
 			idx: 51,
 			tag: "0051_connection_installation_attempt_expiry",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 52,
+			tag: "0052_stop_confirmation_deadline",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
