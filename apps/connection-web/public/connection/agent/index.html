@@ -24,7 +24,7 @@
       <section class="intro" aria-labelledby="page-title">
         <p class="eyebrow">Connection MCP · 开发者接入指南</p>
         <h1 id="page-title">将 Connection 接入自建 Agent</h1>
-        <p class="summary">注册客户端、引导用户确认授权、在服务端取得独立访问令牌，再通过一个 MCP 入口调用外部服务。RehoboamAI 使用的授权确认与回跳流程，就是下面的 Agent PAT Binding。</p>
+        <p class="summary">先由 Connection 管理员注册客户端，再由开发者实现回调、配置服务凭据、引导用户确认授权、在服务端取得独立访问令牌，再通过一个 MCP 入口调用外部服务。RehoboamAI 使用的授权确认与回跳流程，就是下面的 Agent PAT Binding。</p>
       </section>
 
       <section class="install" aria-labelledby="choose-title">
@@ -39,13 +39,14 @@
 
       <section class="install" aria-labelledby="register-title">
         <h2 id="register-title">2. 管理员注册 Agent，开发者取得服务凭据</h2>
-        <p>请 Connection 管理员打开<a href="/connection/admin/agents" target="_blank" rel="noopener noreferrer">管理 → Agent 接入</a>，填写以下信息并点击“注册 Agent”。普通用户没有该管理权限，应联系 Connection 管理员，不要用个人 PAT 代替服务凭据。</p>
+        <p><strong>开发者或普通用户：</strong>请把 Consumer ID、Agent 名称和固定 Callback URL 提交给 Connection 管理员，由管理员添加 Agent。该管理页面仅对管理员开放；普通用户直接访问会返回“我的 Connection”。</p>
+        <p><strong>Connection 管理员：</strong>打开<a href="/connection/admin/agents" target="_blank" rel="noopener noreferrer">Agent 接入管理页（仅管理员）</a>，填写以下信息并点击“注册 Agent”。</p>
         <ul>
           <li><code>Consumer ID</code>：稳定标识，例如 <code>my-agent</code>，3–80 位小写字母、数字或连字符，首位为字母或数字。</li>
           <li><code>Agent 名称</code>：用户授权页展示的名称，1–100 个字符，例如 <code>My Agent</code>。</li>
-          <li><code>Callback URL</code>：你的服务端固定 HTTPS 回调地址，例如 <code>https://agent.example/connection/callback</code>。不能包含用户名、密码或 fragment；绑定请求不能临时替换 callback。</li>
+          <li><code>Callback URL</code>：你的服务端固定 HTTPS 回调地址，例如 <code>https://agent.example/connection/callback</code>。不能包含用户名、密码或 fragment；绑定请求不能临时替换 callback。注册时只校验地址格式，不会访问或检查该接口是否已存在；开始用户绑定前，开发者须实现该回调并确保用户浏览器可访问。</li>
         </ul>
-        <p>注册后页面仅展示一次<strong>服务凭据</strong>，请管理员安全交付给开发者并保存到后端 Secret。它用于创建绑定和领取 PAT，不能用于调用 MCP，也不能交给浏览器或模型。管理员还需在该 Agent 的“配置能力”中选择 Provider 与 Action 并“发布 Declaration”；它是用户可申请的能力上限，不会直接授予账号权限。</p>
+        <p>不要用个人 PAT 代替 Agent 服务凭据。注册后页面仅展示一次<strong>服务凭据</strong>，请管理员安全交付给开发者并保存到后端 Secret。它用于创建绑定和领取 PAT，不能用于调用 MCP，也不能交给浏览器或模型。管理员还需在该 Agent 的“配置能力”中选择 Provider 与 Action 并“发布 Declaration”；它是用户可申请的能力上限，不会直接授予账号权限。</p>
       </section>
 
       <section class="install" aria-labelledby="binding-title">

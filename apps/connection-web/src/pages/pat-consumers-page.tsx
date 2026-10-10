@@ -207,11 +207,13 @@ export function PatConsumersPage() {
 							</tbody>
 						</table>
 					</div>
-				) : (
+				) : consumers.isSuccess ? (
 					<EmptyState title="还没有 Agent">
 						注册后才能发起用户级 PAT 绑定。
 					</EmptyState>
-				)}
+				) : consumers.isPending ? (
+					<p role="status">正在加载 Agent...</p>
+				) : null}
 			</section>
 			{declarationConsumerId && declarationOptions.data ? (
 				<section className="data-section content-stack">
