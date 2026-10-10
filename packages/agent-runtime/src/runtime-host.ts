@@ -85,10 +85,11 @@ import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
+import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
 import { RuntimeHostV3 } from "./runtime-host-v3.js";
 import { RuntimeHostV4 } from "./runtime-host-v4.js";
 
-interface RuntimeHostOptions {
+export interface RuntimeHostOptions {
 	grantValidationV2?: RuntimeGrantValidationOptionsV2;
 	allowLegacyBusiness?: boolean;
 	validateGrantV4?: (request: unknown) => Promise<{
@@ -100,6 +101,8 @@ interface RuntimeHostOptions {
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
 	store: FileRuntimeStore;
 	driver: RuntimeDriver;
+	/** Request-scoped file bridge; absent until a deployment owns the data plane. */
+	fileBridge?: RuntimeFileBridgePortV1;
 	grantValidation: ExecutionGrantValidationOptions;
 	afterOperationPrepared?: (operationId: string) => void | Promise<void>;
 	afterDriverResult?: (operationId: string) => void | Promise<void>;
@@ -440,6 +443,15 @@ export class RuntimeHost {
 		// without changing running/unknown receipts or claiming native drain.
 		// In-flight requests retain their own credential until Driver close drains them.
 		this.executionKeys.clear();
+	}
+	/**
+	 * Return the request-scoped file port only when deployment wiring supplied
+	 * one. A missing bridge stays fail-closed and never enables Driver media.
+	 */
+	getFileBridge(): RuntimeFileBridgePortV1 {
+		this.requireLegacyHost();
+		if (!this.options.fileBridge) runtimeAuthorizationDenied();
+		return this.options.fileBridge;
 	}
 	private requireLegacyHost() {
 		if (this.closed) runtimeAuthorizationDenied();
