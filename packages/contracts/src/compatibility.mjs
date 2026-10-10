@@ -1392,6 +1392,34 @@ function isConversationSessionUpdatingOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1707 adds only the approved session-authenticated Skill metadata reads.
+function isSkillHubReadOpenApiAddition(previous, current) {
+	const paths = ["/api/v2/skills", "/api/v2/skills/versions/{skillVersionId}"];
+	const schemas = ["SkillHubVersionMetadataV1", "SkillHubDirectoryPageV1"];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"055b0d8a2b70e16a0c8aab3dd44218bb7f0115f1712047226fec9f270fffa79f"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #1052 publishes the exact #1027 recent read; every prior document field stays exact.
 function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/me/conversations/recent";
@@ -2317,6 +2345,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isConversationSessionAvailabilityOpenApiAddition(previous, current) &&
 			!isConversationSessionUpdatingOpenApiAddition(previous, current) &&
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
+			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&

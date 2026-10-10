@@ -43,6 +43,8 @@ import {
 	pilotSseSchemasV1,
 	pilotTaskOpenApiPathsV1,
 	pilotTaskSchemasV1,
+	skillHubReadOpenApiPathsV1,
+	skillHubReadSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
 } from "./pilot/index.ts";
 import { platformAuthOpenApiPathsV1 } from "./platform-auth.ts";
@@ -707,6 +709,7 @@ function buildArtifacts() {
 		paths: {
 			...pilotBrowserOpenApiPathsV2,
 			...pilotOperationOpenApiPathsV2,
+			...skillHubReadOpenApiPathsV1,
 			...connectionInstallationOpenApiPathsV1,
 		},
 		components: {
@@ -718,7 +721,11 @@ function buildArtifacts() {
 					name: "__Host-platform-session",
 				},
 			},
-			schemas: { ...pilotBrowserSchemasV2, ...pilotOperationSchemasV2 },
+			schemas: {
+				...pilotBrowserSchemasV2,
+				...pilotOperationSchemasV2,
+				...skillHubReadSchemasV1,
+			},
 		},
 	});
 	const pilotSseJsonSchema = jsonSchemaDocument({

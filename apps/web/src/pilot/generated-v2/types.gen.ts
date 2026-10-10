@@ -854,6 +854,25 @@ export type RuntimeOperationFactV2 = {
 
 export type RuntimeOperationFailureV2 = 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
 
+export type SkillHubDirectoryPageV1 = {
+    items: Array<SkillHubVersionMetadataV1>;
+    nextCursor: string | null;
+};
+
+export type SkillHubVersionMetadataV1 = {
+    manifestDigest: string;
+    name: string;
+    packageDigest: string;
+    provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+    schemaVersion: 1;
+    signatureDigest: string;
+    skillId: string;
+    skillVersionId: string;
+    state: 'published';
+    version: string;
+    visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
+};
+
 export type SseEventIdV1 = string;
 
 export type TimelineReloadSignalV1 = {
@@ -3403,3 +3422,90 @@ export type ReplacePersonalRelayKeyV2Responses = {
 };
 
 export type ReplacePersonalRelayKeyV2Response = ReplacePersonalRelayKeyV2Responses[keyof ReplacePersonalRelayKeyV2Responses];
+
+export type ListSkillHubVersionsV1Data = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string;
+        limit?: number;
+    };
+    url: '/api/v2/skills';
+};
+
+export type ListSkillHubVersionsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListSkillHubVersionsV1Error = ListSkillHubVersionsV1Errors[keyof ListSkillHubVersionsV1Errors];
+
+export type ListSkillHubVersionsV1Responses = {
+    /**
+     * Visible fixed Skill versions
+     */
+    200: SkillHubDirectoryPageV1;
+};
+
+export type ListSkillHubVersionsV1Response = ListSkillHubVersionsV1Responses[keyof ListSkillHubVersionsV1Responses];
+
+export type ReadSkillHubVersionV1Data = {
+    body?: never;
+    path: {
+        skillVersionId: string;
+    };
+    query?: never;
+    url: '/api/v2/skills/versions/{skillVersionId}';
+};
+
+export type ReadSkillHubVersionV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadSkillHubVersionV1Error = ReadSkillHubVersionV1Errors[keyof ReadSkillHubVersionV1Errors];
+
+export type ReadSkillHubVersionV1Responses = {
+    /**
+     * Visible fixed Skill version
+     */
+    200: SkillHubVersionMetadataV1;
+};
+
+export type ReadSkillHubVersionV1Response = ReadSkillHubVersionV1Responses[keyof ReadSkillHubVersionV1Responses];

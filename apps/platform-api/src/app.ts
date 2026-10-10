@@ -70,6 +70,10 @@ import {
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
 import {
+	registerSkillHubReadRoutesV1,
+	type SkillHubReadRoutesDependenciesV1,
+} from "./http/skill-hub-read-routes.js";
+import {
 	registerTaskRoutes,
 	type TaskRoutesDependencies,
 } from "./http/task-routes.js";
@@ -126,6 +130,7 @@ export interface PlatformAppDependencies {
 	>[1];
 	readonly scopedAudit?: ScopedAuditRoutesDependencies;
 	readonly directory?: DirectoryRouteDependencies;
+	readonly skillHubRead?: SkillHubReadRoutesDependenciesV1;
 }
 
 export function createPlatformHealthApp(observability?: ApiObservability) {
@@ -236,5 +241,7 @@ export function createPlatformApp(
 	if (dependencies.directory)
 		registerDirectoryRoutes(app, dependencies.directory);
 	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
+	if (dependencies.skillHubRead)
+		registerSkillHubReadRoutesV1(app, dependencies.skillHubRead);
 	return app;
 }

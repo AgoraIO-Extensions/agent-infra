@@ -67,6 +67,7 @@ import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
 } from "./projection.js";
+import { assembleSkillHubReadApiV1 } from "./skill-hub-read-assembly.js";
 import {
 	assembleWecomApiV1,
 	assembleWecomReceiptApiV1,
@@ -294,6 +295,7 @@ export function assemblePlatformApi(
 		new PostgresApplicationMaterialGrantStoreV1({
 			databaseUrl: input.databaseUrl,
 		});
+	const skillHubRead = assembleSkillHubReadApiV1(input);
 	const applicationMaterialGrants = createApplicationMaterialGrantUseCaseV1({
 		store: applicationMaterialGrantStore,
 		resolveCurrentActor: (userId) =>
@@ -719,6 +721,7 @@ export function assemblePlatformApi(
 				: {}),
 		},
 		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },
+		skillHubRead: skillHubRead.dependencies,
 		...(input.directory ? { directory: input.directory } : {}),
 	};
 	const adapters = [
@@ -741,6 +744,7 @@ export function assemblePlatformApi(
 		personalApiCredentialStore,
 		applicationRegistrationStore,
 		applicationMaterialGrantStore,
+		skillHubRead,
 		applicationApiCredentialStore,
 		...(installationStore ? [installationStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
