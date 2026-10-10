@@ -24,6 +24,7 @@ import {
 	verifyRuntimeV2Fixture,
 } from "./grant-v2-fixture.test-support.js";
 import { createRuntimeExecutionGrantValidatorV4 } from "./grant-v4.js";
+import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
 import { RuntimeHost } from "./runtime-host.js";
 
 // These exercise the real Host/Store and signature validators with a controlled
@@ -150,7 +151,7 @@ function delivery<T extends RuntimeBusinessRequestV4>(request: T) {
 	};
 }
 
-async function setup() {
+async function setup(fileBridge?: RuntimeFileBridgePortV1) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-consumer-"));
 	cleanups.push(() => rm(directory, { recursive: true, force: true }));
 	const path = join(directory, "host.json");
@@ -173,6 +174,7 @@ async function setup() {
 			expectedWorkerId: "worker-fixture",
 			now: () => clock,
 		}),
+		...(fileBridge ? { fileBridge: () => fileBridge } : {}),
 	};
 	let host = await RuntimeHost.open(options);
 	cleanups.push(() => host.close());
@@ -306,6 +308,25 @@ it("binds the first durable native receipt and returns the original Key before s
 	expect(await f.driver.sideEffectCount()).toBe(1);
 	expect(await readFile(f.path, "utf8")).not.toContain(
 		"synthetic-pinned-key-k1",
+	);
+});
+
+it("passes the request-scoped file bridge only through the Driver execution context", async () => {
+	const fileBridge = {
+		readInput: vi.fn(),
+		writeResult: vi.fn(),
+	} as unknown as RuntimeFileBridgePortV1;
+	const f = await setup(fileBridge);
+	const execute = f.driver.execute.bind(f.driver);
+	const contexts: unknown[] = [];
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command, context) => {
+		contexts.push(context);
+		return execute(command, context);
+	});
+	await f.host.submitTurnV4(f.transport);
+	expect(contexts[0]).toEqual({ fileBridge });
+	expect(JSON.stringify(await readFile(f.path, "utf8"))).not.toContain(
+		"fileBridge",
 	);
 });
 

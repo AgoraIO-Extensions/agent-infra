@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { lstat, mkdtemp, readFile, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type {
@@ -91,6 +92,7 @@ import {
 import type {
 	RuntimeDriver,
 	RuntimeDriverCommand,
+	RuntimeDriverExecutionContextV1,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
@@ -107,6 +109,7 @@ import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
+import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
 
 interface CodexAppServerTransport {
 	[codexSkillLaunch]?: CodexSkillLaunchProvenance;
@@ -686,6 +689,15 @@ type CodexSubmitTurnCommand = Extract<
 	RuntimeDriverCommand,
 	{ kind: "submit-turn" }
 >;
+
+type CodexNativeInputItem =
+	| { readonly type: "text"; readonly text: string }
+	| { readonly type: "local_image"; readonly path: string };
+
+interface MaterializedCodexInput {
+	readonly items: readonly CodexNativeInputItem[];
+	readonly cleanup: () => Promise<void>;
+}
 
 function operationKey(
 	command: Pick<
@@ -4509,13 +4521,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 	}
 
-	async execute(command: RuntimeDriverCommand) {
+	async execute(
+		command: RuntimeDriverCommand,
+		context?: RuntimeDriverExecutionContextV1,
+	) {
 		const key = operationKey(command);
 		const inFlight = this.inFlightOperations.get(key);
 		if (inFlight) return inFlight;
 		const execution =
 			command.kind === "submit-turn"
-				? this.executeSubmitTurn(command)
+				? this.executeSubmitTurn(command, context?.fileBridge)
 				: isCodexInterruptionCommand(command)
 					? this.executeInterruption(command)
 					: Promise.reject(unavailableError());
@@ -4983,11 +4998,91 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			runtimeAuthorizationDenied();
 	}
 
-	private async executeSubmitTurn(command: CodexSubmitTurnCommand) {
-		if (command.input.attachments.length > 0) unavailable();
+	private async executeSubmitTurn(
+		command: CodexSubmitTurnCommand,
+		fileBridge?: RuntimeFileBridgePortV1,
+	) {
 		if (command.operationId !== command.executionId) stateInvalid();
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
+		let materialized: MaterializedCodexInput | undefined;
+		const ensureInput = async () => {
+			materialized ??= await this.materializeCodexInput(
+				command,
+				text,
+				fileBridge,
+			);
+			return materialized;
+		};
+		if (command.input.attachments.length > 0 && !this.operationRecord(command))
+			await ensureInput();
+		try {
+			return await this.executePreparedSubmitTurn(command, text, ensureInput);
+		} finally {
+			await materialized?.cleanup();
+		}
+	}
+
+	private async materializeCodexInput(
+		command: CodexSubmitTurnCommand,
+		text: string,
+		fileBridge?: RuntimeFileBridgePortV1,
+	): Promise<MaterializedCodexInput> {
+		if (!fileBridge) unavailable();
+		const directory = await mkdtemp(join(tmpdir(), "agent-infra-codex-input-"));
+		try {
+			const items: CodexNativeInputItem[] = [{ type: "text", text }];
+			for (const [index, fileId] of command.input.attachments.entries()) {
+				const input = await fileBridge.readInput(fileId);
+				if (
+					input.fileId !== fileId ||
+					!input.descriptor.mediaType.startsWith("image/") ||
+					input.descriptor.sizeBytes > 50 * 1024 * 1024
+				)
+					unavailable();
+				const reader = input.body.getReader();
+				const chunks: Uint8Array[] = [];
+				let size = 0;
+				try {
+					while (true) {
+						const next = await reader.read();
+						if (next.done) break;
+						if (!(next.value instanceof Uint8Array)) unavailable();
+						size += next.value.byteLength;
+						if (size > 50 * 1024 * 1024) unavailable();
+						chunks.push(next.value);
+					}
+				} finally {
+					reader.releaseLock();
+				}
+				if (size !== input.descriptor.sizeBytes) unavailable();
+				const path = join(directory, `${String(index).padStart(2, "0")}.image`);
+				await writeFile(path, Buffer.concat(chunks), {
+					flag: "wx",
+					mode: 0o600,
+				});
+				items.push({ type: "local_image", path });
+			}
+			let cleaned = false;
+			return {
+				items,
+				async cleanup() {
+					if (cleaned) return;
+					cleaned = true;
+					await rm(directory, { recursive: true, force: true });
+				},
+			};
+		} catch (error) {
+			await rm(directory, { recursive: true, force: true });
+			throw error;
+		}
+	}
+
+	private async executePreparedSubmitTurn(
+		command: CodexSubmitTurnCommand,
+		text: string,
+		ensureInput: () => Promise<MaterializedCodexInput>,
+	) {
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) {
 			if (
@@ -5001,6 +5096,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
+		const nativeInput =
+			command.input.attachments.length > 0
+				? await ensureInput()
+				: { items: [{ type: "text", text }], cleanup: async () => {} };
 		const nativeSelection = this.operationSelection(prepared.operation);
 		if (!nativeSelection) stateInvalid();
 		const hasPersistedThread =
@@ -5063,7 +5162,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				{
 					threadId: session.threadId,
 					clientUserMessageId: command.operationId,
-					input: [{ type: "text", text }],
+					input: nativeInput.items,
 					...(nativeSelection ?? {}),
 				},
 				(value) => {

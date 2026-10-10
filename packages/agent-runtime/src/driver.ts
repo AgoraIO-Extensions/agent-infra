@@ -8,6 +8,7 @@ import type {
 	RuntimePrincipalV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
+import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
 
 export interface RuntimeModelDirectoryOption {
 	readonly modelOptionId: string;
@@ -27,6 +28,11 @@ export interface RuntimeModelDirectory {
 export type RuntimeDriverCommand =
 	| RuntimeDriverCommandV1
 	| RuntimeDriverSubmitTurnCommandV2;
+
+/** Request-local execution dependencies; never part of a durable command. */
+export interface RuntimeDriverExecutionContextV1 {
+	readonly fileBridge?: RuntimeFileBridgePortV1;
+}
 export type RuntimeDriverOperationRecord =
 	| RuntimeDriverOperationRecordV1
 	| RuntimeDriverSubmitTurnOperationRecordV2;
@@ -95,7 +101,10 @@ export interface RuntimeDriver {
 	): Promise<void>;
 	/** Bounded native protocol handshake only; no business Session/Turn or model call. */
 	probeReadiness?(signal: AbortSignal): Promise<RuntimeCapabilitiesV1>;
-	execute(command: RuntimeDriverCommand): Promise<RuntimeDriverOperationRecord>;
+	execute(
+		command: RuntimeDriverCommand,
+		context?: RuntimeDriverExecutionContextV1,
+	): Promise<RuntimeDriverOperationRecord>;
 	lookupOperation(command: RuntimeDriverCommand): Promise<RuntimeDriverLookup>;
 	getStatus(
 		nativeSessionRef: string,
