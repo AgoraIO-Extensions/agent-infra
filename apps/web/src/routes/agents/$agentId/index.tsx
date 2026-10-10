@@ -35,6 +35,7 @@ function AgentDetailRoute() {
 								? { kind: "unavailable", retryable }
 								: query.data
 					}
+					browserCapability={agent?.capabilities.browser}
 					onRetry={() => void query.refetch()}
 					retrying={query.isFetching}
 					ownerSettings={ownerSettings}

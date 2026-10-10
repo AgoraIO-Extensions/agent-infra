@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
 
 import type { AgentConfigurationRecord } from "./agent-configuration.js";
 import {
@@ -23,7 +24,11 @@ export type AgentRuntimePresentationDecisionV1 =
 	| {
 			readonly outcome: "found";
 			readonly sourceReference: string;
-			readonly capabilities: Readonly<Record<string, boolean>> | null;
+			readonly capabilities:
+				| (Readonly<Record<string, boolean>> & {
+							readonly browser?: BrowserCapabilityProjectionV1;
+				  })
+				| null;
 			readonly interactionUrl: string | null;
 	  }
 	| { readonly outcome: "unavailable" | "stale" };
@@ -198,11 +203,18 @@ export function decideAgentRuntimePresentationV1(input: {
 		outcome: "found",
 		sourceReference: facts.sourceReference,
 		capabilities: state.capabilities
-			? (Object.fromEntries(
+			? ({
+					...Object.fromEntries(
 					Object.entries(state.capabilities).filter(
 						([, value]) => typeof value === "boolean",
 					),
-				) as Readonly<Record<string, boolean>>)
+					),
+					...(state.capabilities.browser
+						? { browser: state.capabilities.browser }
+						: {}),
+				} as Readonly<Record<string, boolean>> & {
+					browser?: BrowserCapabilityProjectionV1;
+				})
 			: null,
 		interactionUrl,
 	};

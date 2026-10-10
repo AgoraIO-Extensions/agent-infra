@@ -1,3 +1,4 @@
+import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
 import { describe, expect, it } from "vitest";
 
 import { agentConfigurationConformanceRecordV1 } from "./agent-configuration.conformance.js";
@@ -93,6 +94,67 @@ function fixture() {
 }
 
 describe("Agent runtime presentation policy", () => {
+	it("projects the verified Browser state without exposing probe internals", () => {
+		const input = fixture();
+		const browser: BrowserCapabilityProjectionV1 = {
+			schemaVersion: 1,
+			capabilityVersion: 1,
+			status: "available",
+			operations: ["navigate", "observe"],
+			policy: {
+				allowedOrigins: ["https://example.test/"],
+				maxContexts: 1,
+				maxTabs: 1,
+				maxPages: 1,
+				maxViewportWidth: 1280,
+				maxViewportHeight: 720,
+				maxConcurrentActions: 1,
+				maxDownloads: 0,
+				maxDownloadBytes: 0,
+				maxUploadBytes: 0,
+				maxScreenshotBytes: 1024,
+				maxBrowserDurationMs: 60_000,
+				maxRetainedProfileBytes: 100_000,
+				navigationTimeoutMs: 15_000,
+				actionTimeoutMs: 5_000,
+				requireSideEffectConfirmation: true,
+				allowUserHandoff: false,
+			},
+			provenance: {
+				browser: "chromium",
+				chromiumVersion: "140.0.7339.0",
+				playwrightVersion: "1.55.0",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			conformance: {
+				schemaVersion: 1,
+				receiptId: "browser-receipt",
+				probeVersion: "browser-probe",
+				verifiedAt: "2026-10-10T00:00:00.000Z",
+				manifestDigest: `sha256:${"a".repeat(64)}`,
+				evidenceHash: "b".repeat(64),
+				operations: ["navigate", "observe"],
+			},
+		};
+		const runtime = input.facts.runtime;
+		if (!runtime || !runtime.state.capabilities) throw new Error();
+		const facts = {
+			...input.facts,
+			runtime: {
+				...runtime,
+				state: {
+					...runtime.state,
+					capabilities: { ...runtime.state.capabilities, browser },
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toMatchObject(
+			{
+				outcome: "found",
+				capabilities: { modelSelection: true, browser },
+			},
+		);
+	});
 	it.each([false, true])(
 		"rejects another Agent's configuration before projecting source or capabilities (runtime present: %s)",
 		(hasRuntime) => {
