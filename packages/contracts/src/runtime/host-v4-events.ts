@@ -57,6 +57,12 @@ export const RuntimeEventReplayResponseV4Schema = z.strictObject({
 	events: z.array(RuntimeEventSchema),
 });
 
+/**
+ * Serialized event bytes one V4 replay page may carry: eight full 128 KiB event
+ * frames. The Worker bounds a replay response by it plus its envelope.
+ */
+export const maximumRuntimeEventReplayPageBytesV4 = 8 * 131_072;
+
 export const RuntimeEventAckResponseV4Schema = z.strictObject({
 	schemaVersion: z.literal(4),
 	executionId: OpaqueIdV1Schema,
