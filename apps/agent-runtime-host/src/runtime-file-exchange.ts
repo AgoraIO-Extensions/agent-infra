@@ -106,7 +106,8 @@ function boundedUpload(
 ) {
 	const reader = body.getReader();
 	let bytes = 0;
-	return new ReadableStream<Uint8Array>({
+	let cancelled = false;
+	const stream = new ReadableStream<Uint8Array>({
 		async pull(controller) {
 			try {
 				const next = await reader.read();
@@ -126,9 +127,18 @@ function boundedUpload(
 			}
 		},
 		async cancel() {
+			cancelled = true;
 			await reader.cancel();
 		},
 	});
+	return {
+		stream,
+		async cancel() {
+			if (cancelled) return;
+			cancelled = true;
+			await reader.cancel().catch(() => undefined);
+		},
+	};
 }
 
 export function createRuntimeFileBridgeFactoryV1(
@@ -266,6 +276,7 @@ export function createRuntimeFileBridgeFactoryV1(
 				body: ReadableStream<Uint8Array>,
 			): Promise<RuntimeFileResultV1> {
 				const key = idempotency(binding, "result", descriptor);
+				let bounded: ReturnType<typeof boundedUpload> | undefined;
 				try {
 					const access = await exchange(
 						{
@@ -295,14 +306,14 @@ export function createRuntimeFileBridgeFactoryV1(
 						"Content-Length": String(descriptor.sizeBytes),
 					};
 					if (access.file.status === "pending") {
-						const boundedBody = boundedUpload(body, descriptor.sizeBytes);
+						bounded = boundedUpload(body, descriptor.sizeBytes);
 						const response = await send(target(access.path), {
 							method: "PUT",
 							duplex: "half",
 							redirect: "error",
 							signal: AbortSignal.timeout(timeoutMs),
 							headers,
-							body: boundedBody,
+							body: bounded.stream,
 						} as RequestInit & { duplex: "half" });
 						await response.body?.cancel();
 						if (!response.ok)
@@ -339,6 +350,7 @@ export function createRuntimeFileBridgeFactoryV1(
 						throw new Error("RUNTIME_FILE_RESULT_INVALID");
 					return file;
 				} catch (error) {
+					await bounded?.cancel().catch(() => undefined);
 					if (!body.locked) await body.cancel().catch(() => undefined);
 					throw error;
 				}

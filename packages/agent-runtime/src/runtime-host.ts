@@ -485,6 +485,7 @@ export class RuntimeHost {
 		const binding = await createRuntimeFileBridgeBindingV1({
 			request,
 			claims,
+			now: this.options.grantValidationV2?.now?.() ?? Date.now(),
 		});
 		return this.options.fileBridge(binding);
 	}
