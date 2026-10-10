@@ -30,6 +30,7 @@ export * from "./pi-native-command.js";
 export * from "./readiness.js";
 export type { RuntimeOriginalExecutionRef } from "./runtime-authorization.js";
 export * from "./runtime-host.js";
+export * from "./skill-hub-directory.js";
 export * from "./standard-mcp-client.js";
 
 export {
