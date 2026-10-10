@@ -27,8 +27,11 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { parseAllDocuments } from "yaml";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
 import { seedStandardWorkloadHostV1 } from "../../../tests/fixtures/standard-workload-host-deployment.js";
+import { createPlatformApp } from "../../platform-api/src/app.js";
+import { assemblePlatformApi } from "../../platform-api/src/assembly.js";
 import {
 	workloadDesiredFixture,
+	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
@@ -37,6 +40,7 @@ import { createPlatformWorkloadWorkerV1 } from "./workload-worker.js";
 
 const execFile = promisify(execFileCallback);
 const namespace = workloadTestPolicy.namespace;
+let workloadPolicy: typeof workloadTestPolicy;
 function kubeArguments() {
 	if (!process.env.KUBECONFIG || !process.env.WORKLOAD_KIND_CONTEXT)
 		throw new Error("Explicit isolated kubeconfig/context are required");
@@ -230,7 +234,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				currentContext: "worker",
 			});
 			client = createWorkerKubernetesClientV1(namespace, config);
-			const policy = {
+			workloadPolicy = {
 				...workloadTestPolicy,
 				imageRepository: process.env.WORKLOAD_KIND_REPOSITORY ?? "",
 				routeNamespace: namespace,
@@ -281,9 +285,9 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						containers: [
 							{
 								name: "probe",
-								image: `${policy.imageRepository}@${imageDigest}`,
+								image: `${workloadPolicy.imageRepository}@${imageDigest}`,
 								command: ["node", "-e", "setInterval(()=>{},60000)"],
-								resources: policy.resources,
+								resources: workloadPolicy.resources,
 							},
 						],
 					},
@@ -292,7 +296,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			await waitForReadyPods();
 			adapter = createKubernetesRuntimeAdapterV1({
 				client,
-				policy,
+				policy: workloadPolicy,
 				probe: async ({ desired, serviceOrigin }) => {
 					try {
 						await request(
@@ -826,6 +830,159 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					`agent-infra.agora.io/agent=${a.service.name}`,
 				),
 			).toHaveLength(1);
+		}, 900_000);
+
+		it("drives the same Workload through the formal API lifecycle and recovers it", async () => {
+			const database = await startPostgresTestDatabase("api-workload-kind");
+			const sql = postgres(database.databaseUrl, { onnotice: () => undefined });
+			const token = `papi_${"K".repeat(43)}`;
+			const appToken = `papi_${"A".repeat(43)}`;
+			let worker: ReturnType<typeof createPlatformWorkloadWorkerV1> | undefined;
+			let assembly: ReturnType<typeof assemblePlatformApi> | undefined;
+			try {
+				await migratePlatformDatabase(database);
+				const seed = await seedStandardWorkloadHostV1(
+					database.databaseUrl,
+					process.env.WORKLOAD_KIND_IMAGE_A ?? "",
+				);
+				const hash = (value: string) =>
+					createHash("sha256").update(value).digest("hex");
+				await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision)
+					values ('api-workload-application','API Workload','selector-host-owner','app-revision')`;
+				await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes)
+					values ('api-workload-user','user','selector-host-owner',${hash(token)}, '["agent:manage","agent:read"]'::jsonb),
+						('api-workload-app','application','api-workload-application',${hash(appToken)}, '["agent:manage","agent:read"]'::jsonb)`;
+				await sql`insert into platform.agent_principal_grants(agent_id,principal_type,principal_id,grant_type,authorization_revision)
+					values (${seed.agentId},'user','selector-host-owner','manage','user-manage'),
+						(${seed.agentId},'application','api-workload-application','manage','app-manage')`;
+				const unused = async (): Promise<never> => {
+					throw new Error("Unused API dependency");
+				};
+				const admissions = {
+					authorizationAdmission: { authorize: unused },
+					imageAdmission: { admitImage: unused },
+					modelAdmission: { admitModels: unused },
+					secretAdmission: { admitSecrets: unused },
+					channelAdmission: { admitChannels: unused },
+				};
+				assembly = assemblePlatformApi({
+					databaseUrl: database.databaseUrl,
+					taskAdmissionPolicy: {
+						maximumWaitingTasksPerAgent: 1,
+						waitingTimeoutMs: 30_000,
+					},
+					identity: {
+						resolve: async () => null,
+						resolveUser: async (userId) => ({
+							schemaVersion: 1,
+							userId,
+							accountStatus: "active",
+							organizationIds: [],
+							authorizationRevision: "directory-revision",
+						}),
+						hydrateUsers: async () => [],
+					},
+					admissions,
+					allocateApplicationIds: unused,
+					prepareApplicationSecrets: unused,
+					prepareConfigurationSecrets: unused,
+					presentAgent: unused,
+				});
+				const api = createPlatformApp(assembly.dependencies);
+				const request = (
+					command: "stop" | "restart",
+					key: string,
+					bearer: string,
+				) =>
+					api.request(`/api/v2/agents/${seed.agentId}/commands`, {
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${bearer}`,
+							"Content-Type": "application/json",
+							"Idempotency-Key": key,
+						},
+						body: JSON.stringify({ schemaVersion: 1, command }),
+					});
+				const probeRuntime = async (input: {
+					baseUrl: string;
+					manifest: { health: { path: string } };
+				}) => {
+					await kubectl(
+						"exec",
+						"worker-probe",
+						"--",
+						"node",
+						"-e",
+						"fetch(process.argv[1],{signal:AbortSignal.timeout(2500)}).then(r=>{if(!r.ok)process.exit(2)}).catch(()=>process.exit(3))",
+						`${input.baseUrl}${input.manifest.health.path}`,
+					);
+					return { core: "passed" as const, capabilities: {} };
+				};
+				worker = createPlatformWorkloadWorkerV1({
+					...seed.workerOptions,
+					client,
+					workerId: "api-workload-worker",
+					pollIntervalMs: 1,
+					policy: workloadPolicy,
+					registry: workloadRegistryFixture({
+						schemaVersion: 1,
+						interactionMode: "platform-adapter",
+						protocol: "acp",
+						service: { port: 3003 },
+						health: { path: "/healthz" },
+						capabilities: {},
+					}),
+					probeRuntime,
+				});
+				async function tickUntil(
+					predicate: (row: {
+						status: string;
+						service_availability: string | null;
+					}) => boolean,
+				) {
+					for (let attempt = 0; attempt < 240; attempt++) {
+						await worker?.tick();
+						const [row] = await sql<
+							{ status: string; service_availability: string | null }[]
+						>`
+							select status, service_availability from platform.agent_applications where agent_id=${seed.agentId}`;
+						if (row && predicate(row)) return row;
+						await setTimeout(500);
+					}
+					throw new Error("API Workload lifecycle did not converge");
+				}
+				await tickUntil(
+					(row) =>
+						row.status === "available" && row.service_availability === "ready",
+				);
+				const stopped = await request("stop", "api-workload-stop", token);
+				expect(stopped.status).toBe(202);
+				await tickUntil(
+					(row) =>
+						row.status === "stopped" && row.service_availability === null,
+				);
+				const restarted = await request(
+					"restart",
+					"api-workload-restart",
+					appToken,
+				);
+				expect(restarted.status).toBe(202);
+				await tickUntil(
+					(row) =>
+						row.status === "available" && row.service_availability === "ready",
+				);
+				const [recovered] = await sql<
+					{ workload_revision: number; fence: number }[]
+				>`
+					select workload_revision, fence from platform.agent_applications where agent_id=${seed.agentId}`;
+				expect(Number(recovered?.workload_revision)).toBeGreaterThan(1);
+				expect(Number(recovered?.fence)).toBeGreaterThan(1);
+			} finally {
+				await worker?.stop();
+				await assembly?.close();
+				await sql.end();
+				await database.stop();
+			}
 		}, 900_000);
 	},
 );
