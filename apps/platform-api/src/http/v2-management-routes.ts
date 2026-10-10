@@ -132,6 +132,7 @@ export interface ManagementRouteDependencies {
 	readonly validateDefaultRelayKey?: (
 		keyValue: string,
 	) => Promise<"valid" | "invalid" | "unavailable">;
+	readonly enforceDefaultRelayKey?: boolean;
 	readonly readApplicationProjection: (
 		input: ProjectionInput<AgentManagementApplicationProjectionV1>,
 	) => Promise<unknown>;
@@ -520,7 +521,7 @@ export function registerV2ManagementRoutes(
 			if (
 				body.source.kind === "standard" &&
 				!hasDefaultRelayKey &&
-				dependencies.validateDefaultRelayKey
+				dependencies.enforceDefaultRelayKey
 			)
 				fail("INVALID_REQUEST", metadata.traceId);
 			const idempotencyKey = parseIdempotencyKey(
