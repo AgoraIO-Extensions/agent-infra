@@ -12,9 +12,98 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { fixture } from "./kubernetes-runtime-adapter.fixture.js";
-import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import {
+	createKubernetesRuntimeAdapterV1,
+	skillHubWorkloadMountRootV1,
+} from "./kubernetes-runtime-adapter.js";
 
 describe("GA Kubernetes Workload adapter", () => {
+	it("mounts the verified Skill generation through a fixed read-only Hub root", async () => {
+		const f = fixture();
+		const desired = {
+			...workloadDesiredFixture(),
+			skills: [],
+			skillGenerationId: "a".repeat(64),
+		};
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const workload = f.resources.get(`StatefulSet/${desired.service.name}`) as
+			| V1StatefulSet
+			| undefined;
+		const mounts = workload?.spec?.template.spec?.containers?.[0]?.volumeMounts;
+		expect(mounts).toContainEqual({
+			name: "data",
+			mountPath: skillHubWorkloadMountRootV1,
+			subPath: `generations/${desired.skillGenerationId}/.agents`,
+			readOnly: true,
+		});
+		expect(mounts).toContainEqual({
+			name: "data",
+			mountPath: desired.persistentVolume.mountPath,
+			subPath: "runtime-data",
+		});
+		expect(
+			mounts?.filter(
+				(mount) => mount.mountPath === skillHubWorkloadMountRootV1,
+			),
+		).toHaveLength(1);
+	});
+
+	it("does not add a Hub mount when Desired has no Skill generation", async () => {
+		const f = fixture();
+		const desired = workloadDesiredFixture();
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const workload = f.resources.get(`StatefulSet/${desired.service.name}`) as
+			| V1StatefulSet
+			| undefined;
+		expect(
+			workload?.spec?.template.spec?.containers?.[0]?.volumeMounts?.some(
+				(mount) => mount.mountPath === skillHubWorkloadMountRootV1,
+			),
+		).toBe(false);
+	});
+
+	it.each([
+		[
+			"read-only",
+			(mount: { readOnly?: boolean; subPath?: string }) => {
+				mount.readOnly = false;
+			},
+		],
+		[
+			"generation binding",
+			(mount: { readOnly?: boolean; subPath?: string }) => {
+				mount.subPath = "generations/foreign/.agents";
+			},
+		],
+	] as const)(
+		"fails closed when the live Skill mount loses %s",
+		async (_name, mutate) => {
+			const f = fixture();
+			const desired = {
+				...workloadDesiredFixture(),
+				skills: [],
+				skillGenerationId: "b".repeat(64),
+			};
+			const adapter = f.adapter();
+			const identity = await adapter.apply(desired);
+			if (!identity || identity === "pending") throw new Error();
+			const key = `StatefulSet/${desired.service.name}`;
+			const workload = structuredClone(f.resources.get(key)) as V1StatefulSet;
+			const mount =
+				workload.spec?.template.spec?.containers?.[0]?.volumeMounts?.find(
+					(entry) => entry.mountPath === skillHubWorkloadMountRootV1,
+				);
+			if (!mount) throw new Error();
+			mutate(mount);
+			f.resources.set(key, workload);
+			expect(await adapter.observe(desired, identity)).toBe("drifted");
+			await expect(adapter.promote(desired, identity)).rejects.toThrow();
+		},
+	);
 	it("starts other route closures while a Service operation is pending and waits for its outcome", async () => {
 		const f = fixture();
 		const adapter = f.adapter();
