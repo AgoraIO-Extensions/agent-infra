@@ -1967,6 +1967,7 @@ describe("published Relay authority migration", () => {
 			49,
 			50,
 			51,
+			52,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -2192,6 +2193,8 @@ describe("published Relay authority migration", () => {
 								"conversation_executions:sandbox_id",
 								"conversation_executions:task_wait_deadline",
 								"conversation_executions:task_wait_order",
+								"conversation_stops:confirmation_deadline",
+								"conversation_stops:confirmation_timed_out_at",
 								"conversations:principal_type",
 							]
 						: [
