@@ -6,6 +6,13 @@ const mocks = vi.hoisted(() => ({
 	dispatch: vi.fn(),
 	storeOpen: vi.fn(),
 	scopeForExecution: vi.fn(),
+	channelOptions: undefined as
+		| {
+				readonly media?: {
+					resolve: (...args: never[]) => Promise<readonly string[]>;
+				};
+		  }
+		| undefined,
 	sender: undefined as WecomSendPortV1 | undefined,
 	close: vi.fn(async () => {}),
 	connectionsTick: vi.fn(async () => {}),
@@ -33,7 +40,10 @@ vi.mock("@agent-infra/platform-store", () => ({
 }));
 vi.mock("@agent-infra/platform-core", () => ({
 	createWecomAuthorizationV1: () => ({}),
-	createWecomChannelV1: () => ({}),
+	createWecomChannelV1: (options: typeof mocks.channelOptions) => {
+		mocks.channelOptions = options;
+		return { receive: vi.fn() };
+	},
 	createWecomDeliveryV1: (options: { sender: WecomSendPortV1 }) => {
 		mocks.sender = options.sender;
 		return { dispatch: mocks.dispatch };
@@ -62,6 +72,37 @@ vi.mock("./wecom-setup.js", () => ({
 import { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
 
 afterEach(() => vi.resetAllMocks());
+
+it("forwards the deployment-owned media resolver without creating a second file authority", async () => {
+	const resolve = vi.fn(async () => ["file-1"] as const);
+	const mediaResolver = { resolve };
+	const worker = createPlatformWecomWorkerV1({
+		databaseUrl: "postgres://fixture",
+		identity: { resolveSender: async () => null, activeUsers: async () => [] },
+		observe: () => {},
+		sender: { send: async () => "failed" },
+		mediaResolver,
+	});
+	try {
+		expect(mocks.channelOptions?.media).toBe(mediaResolver);
+	} finally {
+		await worker.close();
+	}
+});
+
+it("keeps the channel media resolver absent when deployment does not provide one", async () => {
+	const worker = createPlatformWecomWorkerV1({
+		databaseUrl: "postgres://fixture",
+		identity: { resolveSender: async () => null, activeUsers: async () => [] },
+		observe: () => {},
+		sender: { send: async () => "failed" },
+	});
+	try {
+		expect(mocks.channelOptions?.media).toBeUndefined();
+	} finally {
+		await worker.close();
+	}
+});
 
 it("rejects unknown channels before querying WeCom execution state", async () => {
 	const worker = createPlatformWecomWorkerV1({
