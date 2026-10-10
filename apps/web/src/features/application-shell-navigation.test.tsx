@@ -84,6 +84,8 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 	const targets = [
 		"/my-agents",
 		"/my-agents/new",
+		"/my-settings/api-credentials",
+		"/my-settings/relay-key",
 		"/audit",
 		"/admin/approvals",
 		"/admin/agents",
@@ -175,6 +177,34 @@ describe("Original IA workbench navigation", () => {
 				}),
 			).toBeTruthy();
 			expect(globalThis.fetch).not.toHaveBeenCalled();
+		},
+	);
+	it.each([
+		{
+			entry: "/my-settings/api-credentials",
+			label: "API 凭证与应用",
+		},
+		{ entry: "/my-settings/relay-key", label: "个人 Relay Key" },
+	])(
+		"keeps personal settings in the original management IA: %s",
+		async ({ entry, label }) => {
+			await showShell(false, entry);
+			const management = screen.getByRole("navigation", { name: "我的管理" });
+			const link = within(management).getByRole("link", { name: label });
+			expect(link.getAttribute("aria-current")).toBe("page");
+			expect(link.className).toContain("selected");
+			expect(management.querySelectorAll(".selected")).toHaveLength(1);
+			expect(
+				screen.getByText("我的管理", {
+					selector: '[data-slot="breadcrumb-item"]',
+				}),
+			).toBeTruthy();
+			expect(
+				screen.getByText(label, {
+					selector: '[data-slot="breadcrumb-page"]',
+				}),
+			).toBeTruthy();
+			expect(screen.queryByRole("navigation", { name: "系统管理" })).toBeNull();
 		},
 	);
 });
