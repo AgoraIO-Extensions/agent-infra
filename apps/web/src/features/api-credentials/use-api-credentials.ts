@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
 import type {
 	PersonalApiCredentialIssueRequestV1,
@@ -29,8 +29,9 @@ export function useApiCredentials({
 		() => ({
 			queryKey: keyFor("list", `${identityKey}:${crypto.randomUUID()}`),
 			active: false,
+			client,
 		}),
-		[identityKey],
+		[identityKey, client],
 	);
 	useLayoutEffect(() => {
 		scope.active = true;
@@ -41,11 +42,9 @@ export function useApiCredentials({
 		};
 	}, [queryClient, scope]);
 	const allowed = Boolean(identityKey);
-	const [refreshFailure, setRefreshFailure] =
-		useState<ApiCredentialsState | null>(null);
 	const query = useQuery({
 		queryKey: scope.queryKey,
-		queryFn: ({ signal }) => loadPersonalApiCredentials(client, signal),
+		queryFn: ({ signal }) => loadPersonalApiCredentials(scope.client, signal),
 		enabled: (current) =>
 			allowed &&
 			(current.state.data?.kind !== "unavailable" ||
@@ -64,7 +63,7 @@ export function useApiCredentials({
 		: null;
 	const state: ApiCredentialsState | { kind: "denied" | "loading" } = !allowed
 		? { kind: "denied" }
-		: (refreshFailure ?? queryFailure ?? query.data ?? { kind: "loading" });
+		: (queryFailure ?? query.data ?? { kind: "loading" });
 	async function refetch() {
 		const current = queryClient.getQueryData<ApiCredentialsState>(
 			scope.queryKey,
@@ -75,19 +74,7 @@ export function useApiCredentials({
 			(current?.kind === "unavailable" && !current.retryable)
 		)
 			return undefined;
-		const result = await query.refetch({ cancelRefetch: false });
-		if (result.error) {
-			setRefreshFailure({
-				kind: "unavailable",
-				retryable:
-					!(result.error instanceof Error) ||
-					!("retryable" in result.error) ||
-					result.error.retryable !== false,
-			});
-		} else {
-			setRefreshFailure(null);
-		}
-		return result;
+		return query.refetch({ cancelRefetch: false });
 	}
 	return { state, isFetching: allowed && query.isFetching, refetch };
 }
@@ -191,8 +178,9 @@ export function useNarrowPersonalApiCredential(client?: Client) {
 				client,
 			);
 		},
-		// Keep the committed request identity while the caller confirms server
-		// metadata. A retry after a readback failure must replay the same key.
+		onSuccess: () => {
+			pending.current = undefined;
+		},
 	});
 	return mutation;
 }

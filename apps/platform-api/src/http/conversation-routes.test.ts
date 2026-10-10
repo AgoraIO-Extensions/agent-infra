@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
 	ConversationDetailProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
+	ConversationModelSelectionProjectionV1Schema,
 	ConversationSseMessageV1Schema,
 	ConversationSseMessageV2Schema,
 	ExecutionDetailProjectionV1Schema,
@@ -374,6 +375,73 @@ describe("Conversation HTTP routes", () => {
 				reasoningLevel: "medium",
 			}),
 		);
+	});
+
+	it("projects the authorized Runtime directory and rejects stale custom choices before selection or submit", async () => {
+		const reader = {
+			read: vi
+				.fn()
+				.mockResolvedValueOnce({
+					agentId: "agent-1",
+					source: "custom-platform-adapter" as const,
+					available: true,
+					options: [
+						{
+							optionId: "runtime-model",
+							displayName: "Runtime Model",
+							modelId: "runtime-model",
+							reasoningLevels: ["medium"],
+						},
+					],
+					currentModelOptionId: "runtime-model",
+					currentReasoningLevel: "medium",
+				})
+				.mockResolvedValue({
+					agentId: "agent-1",
+					source: "custom-platform-adapter" as const,
+					available: true,
+					options: [],
+					currentModelOptionId: null,
+					currentReasoningLevel: null,
+				}),
+		};
+		const input = dependencies({ modelSelection: reader });
+		const app = testApp(input).app;
+		const listed = await app.request(
+			"/api/v1/conversations/conversation-1/model-selection",
+		);
+		expect(listed.status).toBe(200);
+		expect(
+			ConversationModelSelectionProjectionV1Schema.parse(await listed.json()),
+		).toMatchObject({
+			source: "custom-platform-adapter",
+			options: [{ optionId: "runtime-model" }],
+			currentModelOptionId: "runtime-model",
+		});
+		const stale = await app.request(
+			"/api/v1/conversations/conversation-1/model-selection",
+			{
+				method: "PUT",
+				headers: commandHeaders,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					modelOptionId: "runtime-model",
+					reasoningLevel: "medium",
+				}),
+			},
+		);
+		expect(stale.status).toBe(409);
+		expect(input.commands(identity).selectModel).not.toHaveBeenCalled();
+		const message = await app.request(
+			"/api/v1/conversations/conversation-1/messages",
+			{
+				method: "POST",
+				headers: commandHeaders,
+				body: JSON.stringify({ schemaVersion: 1, text: "Run it" }),
+			},
+		);
+		expect(message.status).toBe(409);
+		expect(input.commands(identity).accept).not.toHaveBeenCalled();
 	});
 
 	it("rejects caller identity, invalid idempotency, and busy commands with redacted errors", async () => {

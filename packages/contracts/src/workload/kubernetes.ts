@@ -141,6 +141,34 @@ export const WorkloadNetworkPolicyV1Schema = z.strictObject({
 	decryptionKeyringAccess: z.literal(false),
 });
 
+/** Deployment-owned public origin; never derived from a Service or Pod. */
+export const WorkloadRouteOriginV1Schema = z.strictObject({
+	schemaVersion: WorkloadSchemaVersionV1Schema,
+	origin: z
+		.string()
+		.min(1)
+		.refine(
+			(value) => {
+				try {
+					const url = new URL(value);
+					return (
+						value === url.origin &&
+						url.protocol === "https:" &&
+						url.username === "" &&
+						url.password === "" &&
+						url.pathname === "/" &&
+						url.search === "" &&
+						url.hash === "" &&
+						url.hostname !== ""
+					);
+				} catch {
+					return false;
+				}
+			},
+			{ message: "Route origin must be a canonical HTTPS origin" },
+		),
+});
+
 const internalWorkloadRouteV1Schema = z.strictObject({
 	name: z.string().min(1),
 	exposure: z.literal("internal-only"),
@@ -157,6 +185,7 @@ const ownerAuthWorkloadRouteV1Schema = z.strictObject({
 	name: z.string().min(1),
 	exposure: z.literal("self-managed"),
 	tlsRequired: z.literal(true),
+	interactionOrigin: WorkloadRouteOriginV1Schema.optional(),
 });
 
 export const WorkloadRouteV1Schema = z.union([
@@ -609,6 +638,7 @@ export const WorkloadCleanupResultV1Schema = z.union([
 export type AgentWorkloadDesiredV1 = z.infer<
 	typeof AgentWorkloadDesiredV1Schema
 >;
+export type WorkloadRouteOriginV1 = z.infer<typeof WorkloadRouteOriginV1Schema>;
 export type AgentWorkloadAppliedV1 = z.infer<
 	typeof AgentWorkloadAppliedV1Schema
 >;

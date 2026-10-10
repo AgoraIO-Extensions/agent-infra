@@ -198,6 +198,9 @@ importers:
       '@agent-infra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@agent-infra/enterprise-directory':
+        specifier: workspace:*
+        version: link:../../packages/enterprise-directory
       '@agent-infra/identity':
         specifier: workspace:*
         version: link:../../packages/identity

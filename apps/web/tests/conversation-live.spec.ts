@@ -4,6 +4,7 @@ import {
 	CommandAcceptedProjectionV1Schema,
 	ConnectionCapabilityProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
+	ConversationModelSelectionProjectionV1Schema,
 	ConversationPageV1Schema,
 	ExecutionDetailProjectionV2Schema,
 	PersistedConversationEventV2Schema,
@@ -1067,6 +1068,25 @@ for (const source of ["standard", "custom"] as const) {
 					path === `/api/v2/agents/${agentId}`
 				)
 					await route.fulfill({ json: agent });
+				else if (
+					source === "custom" &&
+					request.method() === "GET" &&
+					path === `/api/v1/conversations/${conversationId}/model-selection`
+				)
+					await route.fulfill({
+						json: ConversationModelSelectionProjectionV1Schema.parse({
+							schemaVersion: 1,
+							conversationId,
+							agentId,
+							source: "custom-platform-adapter",
+							available: true,
+							options: agent.configuration.modelOptions,
+							currentModelOptionId: "model-secondary",
+							currentReasoningLevel: "high",
+							selectedModelOptionId: "model-secondary",
+							selectedReasoningLevel: "high",
+						}),
+					});
 				else if (
 					request.method() === "POST" &&
 					path === `/api/v1/conversations/${conversationId}/messages`

@@ -93,6 +93,31 @@ export const RuntimeCapabilitiesRequestV1Schema = z.strictObject({
 	hostSessionRef: OpaqueIdV1Schema.optional(),
 });
 
+/** Read-only public model choices for an already-bound Runtime Host Session. */
+export const RuntimeModelDirectoryRequestV1Schema = z.strictObject({
+	...requestContext,
+	hostSessionRef: OpaqueIdV1Schema,
+});
+
+export const RuntimeModelDirectoryOptionV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	modelOptionId: OpaqueIdV1Schema,
+	modelId: z.string().min(1).max(256),
+	displayName: z.string().min(1).max(256),
+	reasoningLevels: z.array(OpaqueIdV1Schema).max(64),
+});
+
+export const RuntimeModelDirectoryResponseV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	hostSessionRef: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	options: z.array(RuntimeModelDirectoryOptionV1Schema).max(64),
+	current: z.strictObject({
+		modelOptionId: OpaqueIdV1Schema,
+		reasoningLevel: OpaqueIdV1Schema,
+	}),
+});
+
 export const RuntimeReplayRequestV1Schema = z.strictObject({
 	...requestContext,
 	hostSessionRef: OpaqueIdV1Schema,
@@ -216,6 +241,15 @@ export type RuntimeStatusRequestV2 = z.infer<
 >;
 export type RuntimeCapabilitiesRequestV1 = z.infer<
 	typeof RuntimeCapabilitiesRequestV1Schema
+>;
+export type RuntimeModelDirectoryRequestV1 = z.infer<
+	typeof RuntimeModelDirectoryRequestV1Schema
+>;
+export type RuntimeModelDirectoryOptionV1 = z.infer<
+	typeof RuntimeModelDirectoryOptionV1Schema
+>;
+export type RuntimeModelDirectoryResponseV1 = z.infer<
+	typeof RuntimeModelDirectoryResponseV1Schema
 >;
 export type RuntimeReplayRequestV1 = z.infer<
 	typeof RuntimeReplayRequestV1Schema

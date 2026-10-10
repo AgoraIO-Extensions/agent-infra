@@ -152,9 +152,13 @@ export async function openAcpSession(options: {
 				);
 				return {
 					models: model ? selectValues(model) : [],
-					currentModel: model?.currentValue ?? null,
+					currentModel:
+						typeof model?.currentValue === "string" ? model.currentValue : null,
 					reasoningLevels: reasoning ? selectValues(reasoning) : [],
-					currentReasoning: reasoning?.currentValue ?? null,
+					currentReasoning:
+						typeof reasoning?.currentValue === "string"
+							? reasoning.currentValue
+							: null,
 				};
 			},
 			close,

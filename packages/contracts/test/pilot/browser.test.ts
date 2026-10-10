@@ -37,6 +37,7 @@ const requiredOperations = [
 	"listConversations",
 	"createConversation",
 	"getConversation",
+	"getConversationModelSelection",
 	"submitMessage",
 	"regenerateAnswer",
 	"stopExecution",
@@ -258,6 +259,18 @@ describe("Pilot browser contracts", () => {
 					interactionMode: "platform-adapter",
 					identityResponsibility: "platform-managed",
 				},
+			}).success,
+		).toBe(false);
+		expect(
+			AgentApplicationCreateRequestV1Schema.safeParse({
+				...validApplication,
+				interactionUrl: "https://agent.example.test",
+			}).success,
+		).toBe(false);
+		expect(
+			AgentApplicationUpdateRequestV1Schema.safeParse({
+				...validApplication,
+				interactionUrl: "https://agent.example.test",
 			}).success,
 		).toBe(false);
 	});

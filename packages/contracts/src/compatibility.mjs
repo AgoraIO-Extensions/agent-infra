@@ -687,6 +687,109 @@ function isModelSelectionFallbackOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1266 admits the Runtime-owned model directory and the Platform model
+// projection. The additions are versioned and must be removable without
+// changing any previously published operation or schema.
+function isCustomAgentModelSelectionOpenApiAddition(previous, current) {
+	const commandSchema = "ExecutionGrantCommandV1";
+	const command = "model-directory.read";
+	const runtimeSchemas = [
+		"RuntimeModelDirectoryRequestV1",
+		"RuntimeModelDirectoryResponseV1",
+	];
+	const runtimeHasSchemas = runtimeSchemas.some(
+		(name) => previous.components?.schemas?.[name] !== undefined,
+	);
+	const currentHasSchemas = runtimeSchemas.every(
+		(name) => current.components?.schemas?.[name] !== undefined,
+	);
+	if (runtimeHasSchemas) return false;
+	const previousCommands = previous.components?.schemas?.[commandSchema]?.enum;
+	const currentCommands = current.components?.schemas?.[commandSchema]?.enum;
+	const addition = {
+		command,
+		schemas: currentHasSchemas
+			? Object.fromEntries(
+					runtimeSchemas.map((name) => [
+						name,
+						current.components.schemas[name],
+					]),
+				)
+			: {},
+	};
+	const fingerprint = createHash("sha256")
+		.update(JSON.stringify(addition))
+		.digest("hex");
+	if (
+		!currentHasSchemas &&
+		fingerprint !==
+			"a4f9bbd58f3540591efb5f55bb5c6a296f1711a03e0c1fcbfb3eee47d11ded89"
+	)
+		return false;
+	if (
+		currentHasSchemas &&
+		fingerprint !==
+			"295257286a4113aa928fd4ccf63949e3518ffe9b90afdabf28d031d485ca75b9"
+	)
+		return false;
+	if (
+		!Array.isArray(previousCommands) ||
+		!Array.isArray(currentCommands) ||
+		previousCommands.includes(command) ||
+		!currentCommands.includes(command) ||
+		currentCommands.length !== previousCommands.length + 1 ||
+		!currentCommands.every(
+			(value) => value === command || previousCommands.includes(value),
+		) ||
+		(runtimeHasSchemas && !currentHasSchemas) ||
+		(!runtimeHasSchemas &&
+			currentHasSchemas &&
+			previous.components?.schemas?.RuntimeModelDirectoryRequestV1 !==
+				undefined)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas[commandSchema].enum = currentCommands.filter(
+		(value) => value !== command,
+	);
+	if (currentHasSchemas) {
+		for (const name of runtimeSchemas)
+			delete normalized.components.schemas[name];
+	}
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1266 admits the GET side of the existing model-selection route and its
+// projection schema. The PUT route and all prior components remain exact.
+function isCustomAgentModelProjectionOpenApiAddition(previous, current) {
+	const path = "/api/v1/conversations/{conversationId}/model-selection";
+	const schema = "ConversationModelSelectionProjectionV1";
+	if (
+		previous.paths?.[path]?.get !== undefined ||
+		previous.components?.schemas?.[schema] !== undefined ||
+		current.paths?.[path]?.get === undefined ||
+		current.components?.schemas?.[schema] === undefined
+	)
+		return false;
+	const fingerprint = createHash("sha256")
+		.update(
+			JSON.stringify({
+				get: current.paths[path].get,
+				schema: current.components.schemas[schema],
+			}),
+		)
+		.digest("hex");
+	if (
+		fingerprint !==
+		"1e2db2356ab7527e287133ff308dfb93ae0560a6cca67ca2ba15e2559926259a"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].get;
+	delete normalized.components.schemas[schema];
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function isAgentSummaryOpenApiAddition(previous, current) {
 	const componentName = "ExecutionProcessSummaryV1";
 	const previousOptions = previous.components?.schemas?.[componentName]?.oneOf;
@@ -2354,7 +2457,9 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isConnectionInstallationAuthorizationUrlAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
-			!isFileAuthorityOpenApiAddition(previous, current)
+			!isFileAuthorityOpenApiAddition(previous, current) &&
+			!isCustomAgentModelSelectionOpenApiAddition(previous, current) &&
+			!isCustomAgentModelProjectionOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

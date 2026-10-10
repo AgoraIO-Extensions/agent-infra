@@ -5,6 +5,7 @@ import type {
 	LdapAccount,
 } from "@agent-infra/identity";
 import { resolveLdapPrincipal } from "@agent-infra/identity";
+import type { DirectorySnapshotBindingV1 } from "@agent-infra/platform-core";
 import type { BrowserSessionPrincipal } from "@agent-infra/platform-store";
 
 type Directory = ReturnType<typeof createLdapIdentityDirectory>;
@@ -97,6 +98,10 @@ export interface LdapBrowserInput {
 	readonly organizationIds: (
 		account: LdapAccount,
 	) => Promise<readonly string[]>;
+	readonly organizationAuthority?: (account: LdapAccount) => Promise<{
+		readonly organizationIds: readonly string[];
+		readonly binding: DirectorySnapshotBindingV1;
+	}>;
 	readonly now?: () => number;
 }
 
@@ -243,6 +248,9 @@ export function createLdapBrowserAdapter(input: LdapBrowserInput) {
 				accountStatus: identity.accountStatus,
 				organizationIds: identity.organizationIds,
 				authorizationRevision: identity.authorizationRevision,
+				...(identity.directorySnapshotBinding
+					? { directorySnapshotBinding: identity.directorySnapshotBinding }
+					: {}),
 			};
 		},
 	};

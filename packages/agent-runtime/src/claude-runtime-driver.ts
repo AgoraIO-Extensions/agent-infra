@@ -29,6 +29,7 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
+	RuntimeModelDirectory,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -1037,6 +1038,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			connection: false,
 			supplementaryInstruction: false,
 		};
+	}
+	async getModelDirectory(
+		_nativeSessionRef: string,
+	): Promise<RuntimeModelDirectory> {
+		return unavailable();
 	}
 
 	/** Return the same bounded Browser descriptor contract used by Codex. */

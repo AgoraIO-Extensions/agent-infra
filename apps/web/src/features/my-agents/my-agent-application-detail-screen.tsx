@@ -15,7 +15,11 @@ import {
 import { useResultFocus } from "@/hooks/use-result-focus";
 
 import type { AgentApplicationProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
-import { agentManagementStatusLabels } from "../agent-management-status.js";
+import {
+	agentConversationSourceLabel,
+	agentIdentityResponsibilityLabel,
+	agentManagementStatusLabels,
+} from "../agent-management-status.js";
 import { PageLoadingState } from "../page-loading-state.js";
 import {
 	agentApplicationEditActionLabels,
@@ -284,6 +288,10 @@ export function MyAgentApplicationDetailScreen({
 									? application.source.templateId
 									: application.source.imageReference}
 							</dd>
+							<dt>入口模式</dt>
+							<dd>{agentConversationSourceLabel(application)}</dd>
+							<dt>入口身份责任</dt>
+							<dd>{agentIdentityResponsibilityLabel(application)}</dd>
 							<dt>Owner</dt>
 							<dd>
 								{configuration.owners

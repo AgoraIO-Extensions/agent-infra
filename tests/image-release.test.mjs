@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
 	access,
 	chmod,
+	mkdir,
 	mkdtemp,
 	readFile,
 	rm,
@@ -12,6 +13,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+
+import { writeOciArchive } from "./support/oci-archive.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const builder = resolve(repositoryRoot, "deploy/release/build-images.mjs");
@@ -53,7 +56,7 @@ else process.exit(1);`,
 	await executable(
 		docker,
 		`import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const args = process.argv.slice(2);
 const log = process.env.FAKE_DOCKER_LOG;
@@ -73,6 +76,10 @@ if (args[0] === "buildx" && args[1] === "build") {
   writeFileSync(statePath, JSON.stringify(state));
   if (process.env.FAKE_GIT_DRIFT && Object.values(state).reduce((sum, count) => sum + count, 0) === 1) writeFileSync(process.env.FAKE_GIT_DRIFT_MARKER, "drift");
   const drift = process.env.FAKE_DOCKER_DRIFT && tag.includes(process.env.FAKE_DOCKER_DRIFT) && state[tag] === 2;
+  if (process.env.FAKE_OCI_ARCHIVE_DIR) {
+    const output = args[args.indexOf("--output") + 1];
+    copyFileSync(join(process.env.FAKE_OCI_ARCHIVE_DIR, (drift ? "2" : "1") + ".tar"), /dest=([^,]+)/.exec(output)[1]);
+  }
   const digest = createHash("sha256").update(tag + (drift ? ":drift" : ":stable")).digest("hex");
   writeFileSync(metadata, JSON.stringify({ "containerimage.digest": "sha256:" + digest }));
   process.exit(0);
@@ -340,11 +347,46 @@ test("image build validates reproducibility and read-only non-root execution", a
 
 		await writeFile(join(directory, "docker-state.json"), "{}");
 		await writeFile(join(directory, "docker.log"), "");
+		const archives = join(directory, "oci-archives");
+		await mkdir(archives);
+		for (const pass of ["1", "2"]) {
+			await writeOciArchive(join(archives, `${pass}.tar`), {
+				layers: [
+					{ entries: [{ path: "etc/os-release", content: "ID=debian\n" }] },
+					{
+						entries: [
+							{
+								path: "var/cache/generated.bin",
+								content: `credential-like-${pass}`,
+							},
+						],
+					},
+				],
+			});
+		}
 		const drifted = build(join(directory, "drifted.json"), directory, {
 			FAKE_DOCKER_DRIFT: "platform-worker",
+			FAKE_OCI_ARCHIVE_DIR: archives,
 		});
 		assert.notEqual(drifted.status, 0);
 		assert.match(drifted.stderr, /platformWorker image is not reproducible/);
+		assert.match(
+			drifted.stderr,
+			/^platformWorker reproducibility: layers 2 vs 2; differing indexes: 1$/m,
+		);
+		assert.match(
+			drifted.stderr,
+			new RegExp(
+				`^platformWorker reproducibility: {3}~ var/cache/generated\\.bin \\(sha256 ${createHash("sha256").update("credential-like-1").digest("hex")} -> ${createHash("sha256").update("credential-like-2").digest("hex")}\\)$`,
+				"m",
+			),
+		);
+		assert.ok(!drifted.stderr.includes("credential-like-"));
+		assert.ok(
+			drifted.stderr
+				.trimEnd()
+				.endsWith("platformWorker image is not reproducible"),
+		);
 		const driftCalls = (await readFile(join(directory, "docker.log"), "utf8"))
 			.trim()
 			.split("\n")

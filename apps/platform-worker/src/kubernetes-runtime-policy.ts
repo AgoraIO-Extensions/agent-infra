@@ -42,6 +42,28 @@ import {
 import { createKubernetesPodValidationV1 } from "./kubernetes-runtime-pod-validation.js";
 import type { workloadEgressRulesV1 } from "./workload-network.js";
 import { workloadRuntimeAuthEnvironmentV1 } from "./workload-runtime-auth.js";
+
+const routeHostSuffixPattern =
+	/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
+
+/** Build the only public route origin accepted by the Workload contract. */
+export function createWorkloadInteractionOriginV1(input: {
+	readonly routeHostSuffix: string;
+	readonly agentId: string;
+}) {
+	if (!routeHostSuffixPattern.test(input.routeHostSuffix))
+		throw new WorkloadKubernetesError("policy");
+	const origin = `https://${workloadResourceNameV1(input.agentId)}.${input.routeHostSuffix}`;
+	try {
+		const url = new URL(origin);
+		if (url.origin !== origin || url.protocol !== "https:")
+			throw new Error("invalid route origin");
+	} catch {
+		throw new WorkloadKubernetesError("policy");
+	}
+	return { schemaVersion: 1 as const, origin };
+}
+
 export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	readonly connectionConsumerControl?: boolean;
 	readonly policy: KubernetesWorkloadPolicyV1;
@@ -223,6 +245,10 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		)
 			throw new WorkloadKubernetesError("policy");
 		const name = workloadResourceNameV1(value.agentId);
+		const interactionOrigin =
+			value.route.exposure === "self-managed"
+				? value.route.interactionOrigin
+				: undefined;
 		if (
 			value.namespaceRef !== policy.namespaceRef ||
 			value.resourceProfileRef !== policy.resourceProfileRef ||
@@ -233,7 +259,14 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			value.persistentVolume.name !== `${name}-data` ||
 			value.route.name !== name ||
 			(value.route.exposure === "platform-auth" &&
-				!Object.keys(policy.platformAuthAnnotations).length)
+				!Object.keys(policy.platformAuthAnnotations).length) ||
+			(value.route.exposure === "self-managed" &&
+				(!interactionOrigin ||
+					interactionOrigin.origin !==
+						createWorkloadInteractionOriginV1({
+							routeHostSuffix: policy.routeHostSuffix,
+							agentId: value.agentId,
+						}).origin))
 		)
 			throw new WorkloadKubernetesError("policy");
 		return value;
