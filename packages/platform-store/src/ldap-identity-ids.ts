@@ -150,6 +150,12 @@ export class PostgresPlatformUserDisablesV1 {
 					!actor.isSystemAdmin
 				)
 					throw new PlatformUserDisableError("not_authorized");
+				const [actorDisable] = await sql`
+					select user_id
+					from platform.platform_user_disables
+					where user_id=${input.actorUserId}
+				`;
+				if (actorDisable) throw new PlatformUserDisableError("not_authorized");
 				const target = await this.currentUser(input.targetUserId);
 				if (!target || target.userId !== input.targetUserId)
 					throw new PlatformUserDisableError("resource_unavailable");

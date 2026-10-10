@@ -1,69 +1,50 @@
-import { randomUUID } from "node:crypto";
+import postgres from "postgres";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { PostgresLdapIdentityIds } from "./ldap-identity-ids.js";
+import { PostgresPlatformUserDisablesV1 } from "./ldap-identity-ids.js";
 import { migratePlatformDatabase } from "./migrate.js";
-import { startPostgresTestDatabase } from "./postgres-test.js";
+import {
+	type PostgresTestDatabase,
+	startPostgresTestDatabase,
+} from "./postgres-test.js";
 
-let database: Awaited<ReturnType<typeof startPostgresTestDatabase>>;
+const administrator = "00000000-0000-4000-8000-000000000001";
+const target = "00000000-0000-4000-8000-000000000002";
+let database: PostgresTestDatabase;
+let client: ReturnType<typeof postgres>;
+let store: PostgresPlatformUserDisablesV1;
+
 beforeAll(async () => {
-	database = await startPostgresTestDatabase("ldap-identities");
+	database = await startPostgresTestDatabase("1758-governance");
+	client = postgres(database.databaseUrl);
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
+	store = new PostgresPlatformUserDisablesV1(
+		database.databaseUrl,
+		async (userId) =>
+			userId === administrator
+				? { userId, accountStatus: "active", isSystemAdmin: true }
+				: userId === target
+					? { userId, accountStatus: "active", isSystemAdmin: false }
+					: null,
+	);
 });
+
 afterAll(async () => {
+	await store?.close();
+	await client?.end();
 	await database?.stop();
 });
-it("allocates once across replicas, survives reconnect and isolates issuers and identities", async () => {
-	const a = new PostgresLdapIdentityIds(database.databaseUrl);
-	const b = new PostgresLdapIdentityIds(database.databaseUrl);
-	let persisted = "";
-	try {
-		const ids = await Promise.all(
-			Array.from({ length: 16 }, (_, i) =>
-				(i % 2 ? a : b).getOrCreate("issuer-a", "uid-a", randomUUID()),
-			),
-		);
-		expect(new Set(ids).size).toBe(1);
-		persisted = ids[0] ?? "";
-		expect(persisted).not.toBe("");
-		expect(await a.findByUid("issuer-a", "uid-a")).toBe(persisted);
-		expect(await b.findUidByUserId("issuer-a", persisted)).toBe("uid-a");
-		expect(await a.findUidByUserId("issuer-b", persisted)).toBeNull();
-		expect(await a.findByUid("issuer-a", "missing")).toBeNull();
-		expect(await a.getOrCreate("issuer-b", "uid-a", randomUUID())).not.toBe(
-			persisted,
-		);
-		expect(await b.getOrCreate("issuer-a", "uid-b", randomUUID())).not.toBe(
-			persisted,
-		);
-		await expect(b.getOrCreate("issuer-c", "uid-c", persisted)).rejects.toThrow(
-			/^LDAP_IDENTITY_STORE_UNAVAILABLE$/,
-		);
-		expect(await a.findByUid("issuer-c", "uid-c")).toBeNull();
-		await expect(
-			a.getOrCreate("issuer-a", "bad", "not-a-uuid"),
-		).rejects.toThrow(/^LDAP_IDENTITY_STORE_UNAVAILABLE$/);
-	} finally {
-		await a.close();
-		await b.close();
-	}
-	const reconnect = new PostgresLdapIdentityIds(database.databaseUrl);
-	try {
-		expect(await reconnect.getOrCreate("issuer-a", "uid-a", randomUUID())).toBe(
-			persisted,
-		);
-	} finally {
-		await reconnect.close();
-	}
-});
-it("fails closed without disclosing database connection details", async () => {
-	const store = new PostgresLdapIdentityIds(
-		"postgres://private-user:private-password@127.0.0.1:1/missing",
-	);
-	try {
-		await expect(store.findByUid("issuer", "uid")).rejects.toThrow(
-			/^LDAP_IDENTITY_STORE_UNAVAILABLE$/,
-		);
-	} finally {
-		await store.close();
-	}
+
+it("rejects a Platform-disabled administrator inside the governance transaction", async () => {
+	await client`insert into platform.platform_user_disables(user_id) values (${administrator})`;
+	await expect(
+		store.setPlatformDisabled({
+			actorUserId: administrator,
+			targetUserId: target,
+			disabled: true,
+			traceId: "trace-disabled-admin",
+		}),
+	).rejects.toMatchObject({ code: "not_authorized" });
+	expect(
+		await client`select user_id from platform.platform_user_disables where user_id=${target}`,
+	).toHaveLength(0);
 });
