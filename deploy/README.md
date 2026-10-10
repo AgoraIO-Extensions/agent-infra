@@ -63,7 +63,11 @@ IMAGE_REPOSITORY_PREFIX=registry.example/agent-infra \
 ```
 
 该入口对每个镜像执行两次无缓存构建并比较 Digest，检查最终镜像的 non-root 用户，并以只读
-根文件系统运行最小 probe。全部镜像通过后，入口使用现有 Docker 登录态发布唯一一份已验证
+根文件系统运行最小 probe。两次 Digest 不一致时，入口先比较两份 OCI archive 并在 stderr
+输出有界诊断：manifest/config 的差异字段、不同 layer 的 Digest 与 diff_id、前 3 个不同 layer
+中最多 50 条路径的类型/大小/sha256/mode/owner/mtime 变化，以及 `/var/lib/dpkg/status` 的
+包版本差异；诊断不输出其他文件内容或 config 值，随后仍以 `<image> image is not reproducible`
+失败，不重试也不追加构建。全部镜像通过后，入口使用现有 Docker 登录态发布唯一一份已验证
 artifact；发布 Tag 由 Commit SHA 与目标 Platform 共同限定，避免不同架构互相覆盖。入口回读
 Registry Digest 作为 image manifest 的权威引用；必须显式提供通用
 `IMAGE_REPOSITORY_PREFIX`，`PLATFORM` 也可设为 `linux/arm64`。仅本机测试 Registry 可设置
