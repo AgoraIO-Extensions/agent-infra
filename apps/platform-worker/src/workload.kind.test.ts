@@ -1086,12 +1086,16 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					"StatefulSet",
 					workloadSelector,
 				);
-				expect(
-					stoppedWorkloads.every((workload) => workload.spec?.replicas === 0),
-				).toBe(true);
-				expect(await client.list<V1Pod>("Pod", workloadSelector)).toHaveLength(
-					0,
-				);
+				const stoppedPods = await client.list<V1Pod>("Pod", workloadSelector);
+				if (
+					!stoppedWorkloads.every(
+						(workload) => workload.spec?.replicas === 0,
+					) ||
+					stoppedPods.length !== 0
+				)
+					throw new Error(
+						`API Workload stop resources did not converge: ${JSON.stringify({ workloads: stoppedWorkloads.map((workload) => ({ name: workload.metadata?.name, replicas: workload.spec?.replicas })), podCount: stoppedPods.length, stoppedBaseline })}`,
+					);
 				const restarted = await request(
 					"restart",
 					"api-workload-restart",
