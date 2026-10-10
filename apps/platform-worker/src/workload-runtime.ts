@@ -46,13 +46,13 @@ import {
 	type KubernetesWorkloadPolicyV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
+import { createWorkloadInteractionOriginV1 } from "./kubernetes-runtime-policy.js";
 import { runtimeFetch } from "./runtime-transport.js";
 import {
 	validateWorkloadSkillMaterializationV1,
 	type WorkloadSkillMaterializationResultV1,
 	type WorkloadSkillMaterializerV1,
 } from "./skill-materialization.js";
-import { createWorkloadInteractionOriginV1 } from "./kubernetes-runtime-policy.js";
 
 export interface WorkloadRuntimeOptionsV1 {
 	readonly workerId: string;

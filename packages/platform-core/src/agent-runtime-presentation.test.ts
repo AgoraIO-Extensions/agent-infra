@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { agentConfigurationConformanceRecordV1 } from "./agent-configuration.conformance.js";
+import type { AgentConfigurationRecordV2 } from "./agent-configuration-types.js";
 import {
 	type AgentManagementStateV1,
 	isAgentAccessAllowedV1,
@@ -10,7 +11,6 @@ import {
 	decideAgentRuntimePresentationV1,
 	snapshotAgentRuntimePresentationExpectationV1,
 } from "./agent-runtime-presentation.js";
-import type { AgentConfigurationRecordV2 } from "./agent-configuration-types.js";
 
 const management: AgentManagementStateV1 = {
 	schemaVersion: 1,

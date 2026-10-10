@@ -2,6 +2,10 @@ import type { startObservability } from "@agent-infra/observability";
 import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
 import {
+	type CustomAgentAuthGatewayRouteOptionsV1,
+	registerCustomAgentAuthGatewayRoutesV1,
+} from "./custom-agent-auth-gateway.js";
+import {
 	type AgentApiCreationRouteDependencies,
 	registerAgentApiCreationRoutes,
 } from "./http/agent-api-creation-routes.js";
@@ -13,10 +17,6 @@ import {
 	type AgentApplicationGrantRouteDependencies,
 	registerAgentApplicationGrantRoutes,
 } from "./http/agent-application-grant-routes.js";
-import {
-	type CustomAgentAuthGatewayRouteOptionsV1,
-	registerCustomAgentAuthGatewayRoutesV1,
-} from "./custom-agent-auth-gateway.js";
 import { registerApplicationApiCredentialRoutes } from "./http/application-api-credential-routes.js";
 import {
 	type ApplicationMaterialGrantRouteDependencies,
