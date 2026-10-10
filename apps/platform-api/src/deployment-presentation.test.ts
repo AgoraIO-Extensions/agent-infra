@@ -1,5 +1,5 @@
 import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createDeploymentPresentation } from "./deployment-presentation.js";
 
 const browser: BrowserCapabilityProjectionV1 = {
