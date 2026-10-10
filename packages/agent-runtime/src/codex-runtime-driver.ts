@@ -5038,11 +5038,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					input.fileId !== fileId ||
 					!input.descriptor.mediaType.startsWith("image/") ||
 					input.descriptor.sizeBytes > 50 * 1024 * 1024
-				)
+				) {
+					await input.body.cancel().catch(() => undefined);
 					unavailable();
+				}
 				const reader = input.body.getReader();
 				const chunks: Uint8Array[] = [];
 				let size = 0;
+				let complete = false;
 				try {
 					while (true) {
 						const next = await reader.read();
@@ -5052,7 +5055,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						if (size > 50 * 1024 * 1024) unavailable();
 						chunks.push(next.value);
 					}
+					complete = true;
 				} finally {
+					if (!complete) await reader.cancel().catch(() => undefined);
 					reader.releaseLock();
 				}
 				if (size !== input.descriptor.sizeBytes) unavailable();

@@ -91,3 +91,55 @@ it("rejects a file outside the execution binding before network access", async (
 	);
 	expect(fetcher).not.toHaveBeenCalled();
 });
+
+it("keeps result idempotency stable when descriptor property order changes", async () => {
+	const descriptor = {
+		name: "result.txt",
+		mediaType: "text/plain",
+		sizeBytes: 3,
+		sha256: "a".repeat(64),
+	};
+	const reordered = {
+		sha256: descriptor.sha256,
+		sizeBytes: descriptor.sizeBytes,
+		mediaType: descriptor.mediaType,
+		name: descriptor.name,
+	};
+	const resultFile = {
+		schemaVersion: 1,
+		fileId: "result-1",
+		kind: "result",
+		descriptor,
+		status: "available",
+		createdAt: "2026-01-01T00:00:00Z",
+		expiresAt: "2099-01-01T00:00:00Z",
+	};
+	const fetcher = vi.fn(
+		async (input: string | URL | Request, _init?: RequestInit) => {
+			const url = String(input);
+			if (url.endsWith("runtime-exchange"))
+				return response(
+					resultFile,
+					"/api/v1/conversations/conversation-1/files/result-1/content",
+				);
+			if (url.endsWith("/complete"))
+				return new Response(JSON.stringify(resultFile), { status: 200 });
+			throw new Error(`unexpected request ${url}`);
+		},
+	);
+	const bridge = createRuntimeFileBridgeFactoryV1({
+		origin: "https://files.example.test",
+		serviceToken: "s".repeat(32),
+		fetch: fetcher,
+	})(binding);
+	await bridge.writeResult(descriptor, new ReadableStream<Uint8Array>());
+	await bridge.writeResult(reordered, new ReadableStream<Uint8Array>());
+	const keys = fetcher.mock.calls
+		.filter(([input]) => String(input).endsWith("runtime-exchange"))
+		.map(([, init]) => {
+			if (!init) throw new Error("missing exchange request init");
+			return (init.headers as Record<string, string>)["Idempotency-Key"];
+		});
+	expect(keys).toHaveLength(2);
+	expect(keys[0]).toBe(keys[1]);
+});

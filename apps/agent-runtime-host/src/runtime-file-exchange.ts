@@ -29,6 +29,10 @@ function idempotency(
 	operation: "read" | "result",
 	value: string | FileDescriptorV1,
 ) {
+	const normalizedValue =
+		typeof value === "string"
+			? value
+			: [value.name, value.mediaType, value.sizeBytes, value.sha256];
 	return createHash("sha256")
 		.update(
 			JSON.stringify([
@@ -40,7 +44,7 @@ function idempotency(
 				binding.sessionGeneration,
 				binding.grantId,
 				operation,
-				value,
+				normalizedValue,
 			]),
 		)
 		.digest("hex");
