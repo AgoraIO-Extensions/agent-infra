@@ -844,8 +844,9 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			const workerLogs: string[] = [];
 			try {
 				await migratePlatformDatabase(database);
-				const imageDigest = process.env.WORKLOAD_KIND_IMAGE_A;
-				if (!imageDigest) throw new Error("WORKLOAD_KIND_IMAGE_A is required");
+				const imageDigest = process.env.WORKLOAD_KIND_HOST_IMAGE;
+				if (!imageDigest)
+					throw new Error("WORKLOAD_KIND_HOST_IMAGE is required");
 				const seed = await seedStandardWorkloadHostV1(
 					database.databaseUrl,
 					imageDigest,
