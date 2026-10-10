@@ -354,6 +354,66 @@ function createTestApp(
 }
 
 describe("Connection API", () => {
+	it("v3 catalog visibility enforces the current Principal and pilot admission", async () => {
+		let principalId = "pilot";
+		let open = true;
+		const isProviderAdmissionOpen = vi.fn(
+			async (input: { principalId?: string }) =>
+				open && input.principalId === "pilot",
+		);
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			resource: "https://connection.example/mcp",
+			service: {
+				getBrowserAccount: async () => ({
+					principalId,
+					displayName: "Test",
+					email: null,
+				}),
+			} as unknown as ConnectionOAuthService,
+			management: {
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: {
+					authorizeConnectionAdministration: async () => true,
+				} as unknown as ConnectionApplicationService,
+				approvalCatalog: {
+					listCatalog: async () => ({
+						policies: [],
+						capabilityProfiles: [],
+						disclaimers: [],
+					}),
+				} as never,
+				providerAdmission: { isProviderAdmissionOpen },
+				catalogs: [
+					{ provider: "github", providerReleaseId: "github", actions: [] },
+					{
+						provider: "static-spaces",
+						providerReleaseId: "static-spaces-connection-v3-supervised",
+						actions: [],
+					},
+				],
+			},
+		});
+		for (const [who, admitted, expected] of [
+			["pilot", true, 2],
+			["other", true, 1],
+			["pilot", false, 1],
+		] as const) {
+			principalId = who;
+			open = admitted;
+			const response = await app.request(
+				"/api/v1/connection/admin/access-policies",
+				{
+					headers: {
+						cookie: `connection_session=conn_session_${"S".repeat(43)}`,
+					},
+				},
+			);
+			expect(response.status).toBe(200);
+			expect((await response.json()).providers).toHaveLength(expected);
+		}
+		expect(isProviderAdmissionOpen).toHaveBeenCalledTimes(3);
+	});
 	it("exposes a Chinese browser-session JSON API for Connection Web", async () => {
 		const sessionToken = `conn_session_${"S".repeat(43)}`;
 		let logoutToken: string | undefined;
