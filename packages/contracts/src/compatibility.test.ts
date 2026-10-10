@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// These tests intentionally spawn the compatibility CLI repeatedly; hosted CI
+// runners need a bounded budget larger than Vitest's 5s unit default.
+vi.setConfig({ testTimeout: 30_000 });
 
 const cliPath = fileURLToPath(new URL("./compatibility.mjs", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -754,7 +758,7 @@ describe("contract compatibility command", () => {
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
-	});
+	}, 120_000);
 
 	it("admits only exact scoped audit cookie/Bearer documentation and rejects authority drift", async () => {
 		const current = JSON.parse(
@@ -1741,7 +1745,7 @@ describe("contract compatibility command", () => {
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
-	}, 30_000);
+	}, 120_000);
 	it("tracks published browser, file, readiness and template-release contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
 		for (const path of [

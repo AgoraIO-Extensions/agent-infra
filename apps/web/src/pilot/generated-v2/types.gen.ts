@@ -1084,6 +1084,7 @@ export type BeginPlatformConnectionInstallationV1Responses = {
      */
     202: {
         authorizationId: string;
+        authorizationUrl?: string;
         expiresAt: number;
         schemaVersion: 1;
         status: 'awaiting_confirmation' | 'confirmed' | 'revoked' | 'expired' | 'unknown';
@@ -1112,6 +1113,7 @@ export type ReadPlatformConnectionInstallationV1Responses = {
      */
     200: {
         authorizationId: string;
+        authorizationUrl?: string;
         expiresAt: number;
         schemaVersion: 1;
         status: 'awaiting_confirmation' | 'confirmed' | 'revoked' | 'expired' | 'unknown';
@@ -1143,6 +1145,7 @@ export type ConfirmPlatformConnectionInstallationV1Responses = {
      */
     202: {
         authorizationId: string;
+        authorizationUrl?: string;
         expiresAt: number;
         schemaVersion: 1;
         status: 'awaiting_confirmation' | 'confirmed' | 'revoked' | 'expired' | 'unknown';

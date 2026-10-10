@@ -87,6 +87,9 @@ export interface PlatformApiAssemblyInput {
 		readonly profile: unknown;
 		readonly approval: unknown;
 	};
+	readonly connectionInstallationCallback?: {
+		readonly forward: import("./http/connection-installation-callback-routes.js").ConnectionInstallationCallbackRouteDependenciesV1["forward"];
+	};
 	readonly applicationCredentialDelivery?: Parameters<
 		typeof createApplicationCredentialProcessDeliveryV1
 	>[0];
@@ -556,9 +559,26 @@ export function assemblePlatformApi(
 					connectionInstallations: {
 						identity: input.identity,
 						publicOrigin: input.connectionInstallation.publicOrigin,
+						callbackEnabled: () =>
+							input.connectionInstallationCallback !== undefined,
 						installation: createConnectionInstallationAuthorizationV1({
 							store: installationStore,
 						}),
+					},
+				}
+			: {}),
+		...(installationStore &&
+		input.connectionInstallation &&
+		input.connectionInstallationCallback
+			? {
+					connectionInstallationCallback: {
+						publicOrigin: input.connectionInstallation.publicOrigin,
+						callbackUrl: input.connectionInstallation.configuration.callbackUrl,
+						issuer: input.connectionInstallation.configuration.issuer,
+						installation: createConnectionInstallationAuthorizationV1({
+							store: installationStore,
+						}),
+						forward: input.connectionInstallationCallback.forward,
 					},
 				}
 			: {}),

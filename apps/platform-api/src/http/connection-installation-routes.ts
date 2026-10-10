@@ -21,9 +21,12 @@ import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 export interface ConnectionInstallationRouteDependenciesV1 {
 	readonly identity: IdentityAdapter;
 	readonly publicOrigin: string;
-	readonly installation: ReturnType<
-		typeof createConnectionInstallationAuthorizationV1
+	readonly installation: Pick<
+		ReturnType<typeof createConnectionInstallationAuthorizationV1>,
+		"execute" | "authorize"
 	>;
+	/** URL is projected only when the callback receiver is actually enabled. */
+	readonly callbackEnabled?: () => boolean;
 }
 export function registerConnectionInstallationRoutesV1(
 	app: Hono,
@@ -110,6 +113,10 @@ export function registerConnectionInstallationRoutesV1(
 					authorizationId: authorization.authorizationId,
 					status: authorization.status,
 					expiresAt: authorization.expiresAt,
+					...(dependencies.callbackEnabled?.() === true &&
+					authorization.authorizationUrl
+						? { authorizationUrl: authorization.authorizationUrl }
+						: {}),
 				}),
 				command === "status" ? 200 : 202,
 			);
