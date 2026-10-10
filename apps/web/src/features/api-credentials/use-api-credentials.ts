@@ -66,7 +66,15 @@ export function useApiCredentials({
 		? { kind: "denied" }
 		: (refreshFailure ?? queryFailure ?? query.data ?? { kind: "loading" });
 	async function refetch() {
-		if (!scope.active || !allowed) return undefined;
+		const current = queryClient.getQueryData<ApiCredentialsState>(
+			scope.queryKey,
+		);
+		if (
+			!scope.active ||
+			!allowed ||
+			(current?.kind === "unavailable" && !current.retryable)
+		)
+			return undefined;
 		const result = await query.refetch({ cancelRefetch: false });
 		if (result.error) {
 			setRefreshFailure({
@@ -183,9 +191,8 @@ export function useNarrowPersonalApiCredential(client?: Client) {
 				client,
 			);
 		},
-		onSuccess: () => {
-			pending.current = undefined;
-		},
+		// Keep the committed request identity while the caller confirms server
+		// metadata. A retry after a readback failure must replay the same key.
 	});
 	return mutation;
 }
