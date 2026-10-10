@@ -284,6 +284,10 @@ export {
 } from "./ldap-browser.js";
 export { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.js";
 export {
+	createRuntimeModelSelectionReaderV1,
+	type RuntimeModelDirectoryTransportV1,
+} from "./runtime-model-selection-reader.js";
+export {
 	createPendingSecretRecordAttachmentResolverV1,
 	type PreparedSecretPlaintextV1,
 } from "./secret-preparation.js";
