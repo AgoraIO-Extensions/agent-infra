@@ -1045,7 +1045,6 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		return unavailable();
 	}
 
-
 	/** Return the same bounded Browser descriptor contract used by Codex. */
 	getBrowserToolDescriptors(): readonly CodexBrowserToolDescriptorV1[] {
 		return createCodexBrowserToolDescriptorsV1(this.options.browserCapability);
