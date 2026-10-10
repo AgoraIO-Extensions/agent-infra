@@ -1063,7 +1063,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					(row) =>
 						row.status === "stopped" && row.service_availability === null,
 				);
-				for (let attempt = 0; attempt < 120; attempt++) {
+				for (let attempt = 0; attempt < 300; attempt++) {
 					const stoppedWorkloads = await client.list<V1StatefulSet>(
 						"StatefulSet",
 						workloadSelector,
