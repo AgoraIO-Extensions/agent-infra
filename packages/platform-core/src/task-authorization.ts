@@ -41,6 +41,18 @@ export interface CurrentTaskApplicationV1 {
 	readonly useGrant: CurrentTaskApiUseGrantV1 | null;
 }
 
+/**
+ * Opaque directory snapshot fact carried by trusted identity adapters.
+ * Consumers must compare it at their own sensitive-operation boundary.
+ */
+export interface DirectorySnapshotBindingV1 {
+	readonly schemaVersion: 1;
+	readonly source: string;
+	readonly revision: string;
+	readonly fetchedAt: number;
+	readonly validUntil: number;
+}
+
 function object(input: unknown): Record<string, unknown> {
 	if (
 		input !== null &&
@@ -64,6 +76,7 @@ export interface CurrentTaskUserV1 {
 	readonly accountStatus: "active" | "disabled";
 	readonly organizationIds: readonly string[];
 	readonly authorizationRevision: string;
+	readonly directorySnapshotBinding?: DirectorySnapshotBindingV1;
 }
 
 /** Deployment-selected IdentityAdapter boundary for task-scoped user facts. */
@@ -89,13 +102,16 @@ export interface TaskAuthorizationBoundaryV1 {
 
 export function parseCurrentTaskUserV1(input: unknown): CurrentTaskUserV1 {
 	const value = object(input);
-	exact(value, [
+	const keys = [
 		"schemaVersion",
 		"userId",
 		"accountStatus",
 		"organizationIds",
 		"authorizationRevision",
-	]);
+	];
+	if (Object.hasOwn(value, "directorySnapshotBinding"))
+		keys.push("directorySnapshotBinding");
+	exact(value, keys);
 	if (
 		value.schemaVersion !== 1 ||
 		!text(value.userId) ||
@@ -103,6 +119,35 @@ export function parseCurrentTaskUserV1(input: unknown): CurrentTaskUserV1 {
 		!text(value.authorizationRevision)
 	) {
 		throw new TypeError("Current task identity is invalid");
+	}
+	const binding = value.directorySnapshotBinding;
+	let directorySnapshotBinding: DirectorySnapshotBindingV1 | undefined;
+	if (binding !== undefined) {
+		const parsed = object(binding);
+		exact(parsed, [
+			"schemaVersion",
+			"source",
+			"revision",
+			"fetchedAt",
+			"validUntil",
+		]);
+		if (
+			parsed.schemaVersion !== 1 ||
+			!text(parsed.source) ||
+			!text(parsed.revision) ||
+			!Number.isSafeInteger(parsed.fetchedAt) ||
+			(parsed.fetchedAt as number) < 0 ||
+			!Number.isSafeInteger(parsed.validUntil) ||
+			(parsed.validUntil as number) <= 0
+		)
+			throw new TypeError("Directory snapshot binding is invalid");
+		directorySnapshotBinding = {
+			schemaVersion: 1,
+			source: parsed.source,
+			revision: parsed.revision,
+		fetchedAt: parsed.fetchedAt as number,
+		validUntil: parsed.validUntil as number,
+		};
 	}
 	return {
 		schemaVersion: 1,
@@ -113,6 +158,7 @@ export function parseCurrentTaskUserV1(input: unknown): CurrentTaskUserV1 {
 			true,
 		),
 		authorizationRevision: value.authorizationRevision,
+		...(directorySnapshotBinding ? { directorySnapshotBinding } : {}),
 	};
 }
 

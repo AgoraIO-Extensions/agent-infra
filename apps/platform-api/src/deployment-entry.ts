@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
-import { createDirectoryOrganizationIdsResolverV1 } from "./directory-authority.js";
+import {
+	createDirectoryOrganizationAuthorityResolverV1,
+	createDirectoryOrganizationIdsResolverV1,
+} from "./directory-authority.js";
 import {
 	createPostgresLdapBrowserDeployment,
 	createProductionPlatformApiAssemblyInputV1,
@@ -34,7 +37,12 @@ if (typeof directorySearch !== "function") {
 	throw new Error("Directory search authority is required");
 }
 let organizationIds = configuredOrganizationIds;
+let organizationAuthority:
+	| ReturnType<typeof createDirectoryOrganizationAuthorityResolverV1>
+	| undefined;
 if (directorySnapshot !== undefined) {
+	organizationAuthority =
+		createDirectoryOrganizationAuthorityResolverV1(directorySnapshot);
 	organizationIds = createDirectoryOrganizationIdsResolverV1(directorySnapshot);
 }
 if (typeof organizationIds !== "function") {
@@ -51,6 +59,7 @@ const browser = createPostgresLdapBrowserDeployment({
 	directory,
 	isPlatformDisabled,
 	organizationIds,
+	...(organizationAuthority ? { organizationAuthority } : {}),
 	publicOrigin,
 	trustedProxyToken,
 });

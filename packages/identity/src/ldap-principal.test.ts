@@ -46,4 +46,24 @@ describe("LDAP principal authority", () => {
 			}),
 		).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 	});
+
+	it("carries an opaque current directory binding beside organization facts", async () => {
+		const binding = {
+			schemaVersion: 1 as const,
+			source: "internal",
+			revision: "00000000-0000-4000-8000-000000000001",
+			fetchedAt: 1_000,
+			validUntil: 2_000,
+		};
+		const identity = await resolveLdapPrincipal(account, {
+			isPlatformDisabled: async () => false,
+			organizationIds: async () => ["legacy-org"],
+			organizationAuthority: async () => ({
+				organizationIds: ["org-a"],
+				binding,
+			}),
+		});
+		expect(identity.organizationIds).toEqual(["org-a"]);
+		expect(identity.directorySnapshotBinding).toEqual(binding);
+	});
 });

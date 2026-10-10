@@ -6,6 +6,7 @@ import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import type {
 	ApplicationMaterialGrantActorV1,
 	CurrentTaskUserV1,
+	DirectorySnapshotBindingV1,
 	TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 
@@ -19,6 +20,7 @@ export interface IdentityContext {
 	readonly organizationIds: readonly string[];
 	readonly roles: readonly ("employee" | "system_admin")[];
 	readonly authorizationRevision: string;
+	readonly directorySnapshotBinding?: DirectorySnapshotBindingV1;
 }
 
 export interface IdentityAdapter {
@@ -175,16 +177,60 @@ function stringArray(value: unknown): readonly string[] {
 	return values;
 }
 
-function parseIdentity(value: unknown): ResolvedIdentity {
-	const identity = record(value, [
+function parseDirectorySnapshotBinding(
+	value: unknown,
+): DirectorySnapshotBindingV1 | undefined {
+	if (value === undefined) return undefined;
+	const binding = record(value, [
 		"schemaVersion",
-		"userId",
-		"displayName",
-		"accountStatus",
-		"organizationIds",
-		"roles",
-		"authorizationRevision",
+		"source",
+		"revision",
+		"fetchedAt",
+		"validUntil",
 	]);
+	if (
+		binding.schemaVersion !== 1 ||
+		!text(binding.source) ||
+		!text(binding.revision) ||
+		!Number.isSafeInteger(binding.fetchedAt) ||
+		(binding.fetchedAt as number) < 0 ||
+		!Number.isSafeInteger(binding.validUntil) ||
+		(binding.validUntil as number) <= 0
+	)
+		throw new Error();
+	return {
+		schemaVersion: 1,
+		source: binding.source,
+		revision: binding.revision,
+		fetchedAt: binding.fetchedAt as number,
+		validUntil: binding.validUntil as number,
+	};
+}
+
+function parseIdentity(value: unknown): ResolvedIdentity {
+	let identity: Record<string, unknown>;
+	try {
+		identity = record(value, [
+			"schemaVersion",
+			"userId",
+			"displayName",
+			"accountStatus",
+			"organizationIds",
+			"roles",
+			"authorizationRevision",
+			"directorySnapshotBinding",
+		]);
+	} catch {
+		identity = record(value, [
+			"schemaVersion",
+			"userId",
+			"displayName",
+			"accountStatus",
+			"organizationIds",
+			"roles",
+			"authorizationRevision",
+		]);
+	}
 	if (
 		identity.schemaVersion !== 1 ||
 		!text(identity.userId) ||
@@ -202,6 +248,9 @@ function parseIdentity(value: unknown): ResolvedIdentity {
 	) {
 		throw new Error();
 	}
+	const binding = parseDirectorySnapshotBinding(
+		identity.directorySnapshotBinding,
+	);
 	return {
 		schemaVersion: 1,
 		userId: identity.userId,
@@ -210,6 +259,7 @@ function parseIdentity(value: unknown): ResolvedIdentity {
 		organizationIds: stringArray(identity.organizationIds),
 		roles: roles as ("employee" | "system_admin")[],
 		authorizationRevision: identity.authorizationRevision,
+		...(binding ? { directorySnapshotBinding: binding } : {}),
 	};
 }
 

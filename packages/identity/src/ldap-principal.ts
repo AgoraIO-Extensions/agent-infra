@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { DirectorySnapshotBindingV1 } from "@agent-infra/platform-core";
 import type { LdapAccount } from "./ldap.js";
 
 export interface LdapPrincipalAuthorities {
@@ -8,6 +9,11 @@ export interface LdapPrincipalAuthorities {
 	readonly organizationIds: (
 		account: LdapAccount,
 	) => Promise<readonly string[]>;
+	/** Optional current directory authority; its binding stays opaque to callers. */
+	readonly organizationAuthority?: (account: LdapAccount) => Promise<{
+		readonly organizationIds: readonly string[];
+		readonly binding: DirectorySnapshotBindingV1;
+	}>;
 }
 
 export async function resolveLdapPrincipal(
@@ -18,9 +24,14 @@ export async function resolveLdapPrincipal(
 	if (typeof disabled !== "boolean")
 		throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 	const isDisabled = account.accountStatus === "disabled" || disabled;
+	const authority =
+		!isDisabled && authorities.organizationAuthority
+			? await authorities.organizationAuthority(account)
+			: null;
 	const organizationIds = isDisabled
 		? []
-		: await authorities.organizationIds(account);
+		: (authority?.organizationIds ??
+			(await authorities.organizationIds(account)));
 	if (
 		!Array.isArray(organizationIds) ||
 		organizationIds.some(
@@ -45,5 +56,6 @@ export async function resolveLdapPrincipal(
 				]),
 			)
 			.digest("hex"),
+		...(authority ? { directorySnapshotBinding: authority.binding } : {}),
 	};
 }
