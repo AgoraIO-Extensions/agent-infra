@@ -2,7 +2,7 @@ import { createPublicKey, type KeyObject } from "node:crypto";
 import { createServer as createHttpsServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { RuntimeBrowserCapabilityAssemblyInputV1 } from "@agent-infra/agent-runtime";
+import type { RuntimeBrowserCapabilityAssemblyV1 } from "@agent-infra/agent-runtime";
 import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
@@ -64,8 +64,8 @@ export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 
 interface StartOptions {
 	browserCapability?:
-		| RuntimeBrowserCapabilityAssemblyInputV1
-		| (() => RuntimeBrowserCapabilityAssemblyInputV1 | undefined);
+		| RuntimeBrowserCapabilityAssemblyV1
+		| (() => RuntimeBrowserCapabilityAssemblyV1 | undefined);
 	oauth?: RuntimeOAuthAssembly;
 	connectionConsumer?: RuntimeConnectionConsumerProfile;
 	readinessWorkerId?: string;
@@ -291,9 +291,7 @@ export async function assembleRuntimeHost(
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
 	let oauth: RuntimeOAuthAssembly | undefined;
-	let browserCapabilityAssembly:
-		| RuntimeBrowserCapabilityAssemblyInputV1
-		| undefined;
+	let browserCapabilityAssembly: RuntimeBrowserCapabilityAssemblyV1 | undefined;
 	const close = async () => {
 		if (oauth?.status === "available") await oauth.client.close();
 		try {

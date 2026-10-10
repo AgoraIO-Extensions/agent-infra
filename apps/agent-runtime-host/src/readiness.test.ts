@@ -2,7 +2,10 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RuntimeDriver } from "@agent-infra/agent-runtime";
+import type {
+	RuntimeBrowserCapabilityAssemblyV1,
+	RuntimeDriver,
+} from "@agent-infra/agent-runtime";
 import {
 	createExecutionGrantVerifier,
 	createWorkloadReadinessVerifierV1,
@@ -89,14 +92,7 @@ async function harness(
 	const execute = vi.spyOn(driver, "execute");
 	const lookup = vi.spyOn(driver, "lookupOperation");
 	const store = await FileRuntimeStore.open(join(dir, "host.json"));
-	let browserCapabilityAssembly:
-		| {
-				readonly declaration: BrowserCapabilityDeclarationV1;
-				readonly binding: BrowserCapabilityBindingV1;
-				readonly manifestDigest: string;
-				readonly probe: RuntimeBrowserCapabilityProbeEvidenceV1;
-		  }
-		| undefined;
+	let browserCapabilityAssembly: RuntimeBrowserCapabilityAssemblyV1 | undefined;
 	const host = await RuntimeHost.open({
 		store,
 		driver: Object.assign(driver, probe ? { probeReadiness: probe } : {}),
@@ -224,10 +220,14 @@ describe("HTTP Workload readiness", () => {
 			"/internal/runtime/v1/browser-capability?schemaVersion=1",
 			{ headers: { authorization: "Bearer transport-a" } },
 		);
+		const afterForeignBody = await afterForeign.json();
 		expect(
-			BrowserCapabilityProjectionV1Schema.parse(await afterForeign.json())
-				.status,
-		).toBe("not_configured");
+			BrowserCapabilityProjectionV1Schema.parse(afterForeignBody).status,
+		).toBe("unavailable");
+		expect(afterForeignBody).toMatchObject({
+			errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+			retryable: true,
+		});
 		const staleGeneration = await h.app.request(
 			"/internal/runtime/v1/readiness",
 			post(
@@ -245,7 +245,7 @@ describe("HTTP Workload readiness", () => {
 		expect(
 			BrowserCapabilityProjectionV1Schema.parse(await afterGeneration.json())
 				.status,
-		).toBe("not_configured");
+		).toBe("unavailable");
 	});
 	it("calls only the dedicated probe and leaves durable business state unchanged", async () => {
 		const probe = vi.fn(async () => caps);

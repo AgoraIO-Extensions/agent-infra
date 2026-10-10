@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 
 import {
 	discoverRuntimeBrowserCapabilityV1,
-	type RuntimeBrowserCapabilityAssemblyInputV1,
+	type RuntimeBrowserCapabilityAssemblyV1,
 	type RuntimeHost,
 	RuntimeHostError,
 } from "@agent-infra/agent-runtime";
@@ -48,8 +48,8 @@ export const runtimeHostService = "agent-runtime-host";
 interface RuntimeHostAppOptions {
 	/** Admitted manifest plus local probe evidence; never selected by a caller. */
 	browserCapability?:
-		| RuntimeBrowserCapabilityAssemblyInputV1
-		| (() => RuntimeBrowserCapabilityAssemblyInputV1 | undefined);
+		| RuntimeBrowserCapabilityAssemblyV1
+		| (() => RuntimeBrowserCapabilityAssemblyV1 | undefined);
 	/** Local approved deployment snapshot; transport headers cannot select it. */
 	connectionConsumer?: RuntimeConnectionConsumerProfile;
 	/** Identity authenticated by this deployment's service token. Never a caller field. */

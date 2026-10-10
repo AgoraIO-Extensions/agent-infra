@@ -25,6 +25,24 @@ export interface RuntimeBrowserCapabilityAssemblyInputV1 {
 	readonly maxReceiptAgeMs?: number;
 }
 
+/**
+ * A configured Browser whose authenticated evidence was rejected. Keep this
+ * distinct from an absent declaration so discovery cannot erase a binding
+ * mismatch as `not_configured`.
+ */
+export interface RuntimeBrowserCapabilityAssemblyFailureV1 {
+	readonly failure: {
+		readonly status: "unavailable";
+		readonly errorCode: "BROWSER_CAPABILITY_UNAVAILABLE";
+		readonly reason: string;
+		readonly retryable: boolean;
+	};
+}
+
+export type RuntimeBrowserCapabilityAssemblyV1 =
+	| RuntimeBrowserCapabilityAssemblyInputV1
+	| RuntimeBrowserCapabilityAssemblyFailureV1;
+
 function unavailable(
 	status: "not_configured" | "probe_failed" | "unavailable" | "stale",
 	errorCode:
@@ -154,7 +172,7 @@ function assembleAvailable(
 /** Current Host has no approved production Browser assembly. */
 export function discoverRuntimeBrowserCapabilityV1(
 	request: unknown,
-	assembly?: RuntimeBrowserCapabilityAssemblyInputV1,
+	assembly?: RuntimeBrowserCapabilityAssemblyV1,
 ) {
 	// Schema libraries may ignore prototype-related keys. Preserve strictness
 	// against the complete decoded query without maintaining a second key list.
@@ -191,6 +209,13 @@ export function discoverRuntimeBrowserCapabilityV1(
 			"BROWSER_CAPABILITY_NOT_CONFIGURED",
 			"Production Browser capability is not configured",
 			false,
+		);
+	if ("failure" in assembly)
+		return unavailable(
+			assembly.failure.status,
+			assembly.failure.errorCode,
+			assembly.failure.reason,
+			assembly.failure.retryable,
 		);
 	return assembleAvailable(assembly);
 }

@@ -63,6 +63,7 @@ import {
 	WorkloadReadinessRequestV1Schema,
 	WorkloadReadinessResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
+import type { RuntimeBrowserCapabilityAssemblyFailureV1 } from "./browser-capability.js";
 import type {
 	RuntimeDriver,
 	RuntimeExternalActionAuthorization,
@@ -105,6 +106,7 @@ interface RuntimeHostOptions {
 					readonly manifestDigest: string;
 					readonly probe: RuntimeBrowserCapabilityProbeEvidenceV1;
 			  }
+			| RuntimeBrowserCapabilityAssemblyFailureV1
 			| undefined,
 	) => void;
 	store: FileRuntimeStore;
@@ -1088,27 +1090,36 @@ export class RuntimeHost {
 					true,
 				);
 			verify(request, authenticatedWorkerId);
-			this.options.onBrowserCapabilityAssembly?.(
-				request.browserDeclaration &&
-					request.browserBinding &&
-					request.browserBinding.agentId === request.agentId &&
-					request.browserBinding.workloadRevision ===
-						request.workloadRevision &&
-					request.browserBinding.resourceFence === request.fence &&
-					request.browserBinding.imageDigest === request.imageDigest &&
-					capabilities.browser?.binding &&
-					isDeepStrictEqual(
-						request.browserBinding,
-						capabilities.browser.binding,
-					)
-					? {
-							declaration: request.browserDeclaration,
-							binding: request.browserBinding,
-							manifestDigest: request.imageDigest,
-							probe: capabilities.browser,
-						}
-					: undefined,
-			);
+			const browserBinding = request.browserBinding;
+			const browserProbe = capabilities.browser;
+			if (!request.browserDeclaration) {
+				this.options.onBrowserCapabilityAssembly?.(undefined);
+			} else if (
+				browserBinding &&
+				browserBinding.agentId === request.agentId &&
+				browserBinding.workloadRevision === request.workloadRevision &&
+				browserBinding.resourceFence === request.fence &&
+				browserBinding.imageDigest === request.imageDigest &&
+				browserProbe?.binding &&
+				isDeepStrictEqual(browserBinding, browserProbe.binding)
+			) {
+				this.options.onBrowserCapabilityAssembly?.({
+					declaration: request.browserDeclaration,
+					binding: browserBinding,
+					manifestDigest: request.imageDigest,
+					probe: browserProbe,
+				});
+			} else {
+				this.options.onBrowserCapabilityAssembly?.({
+					failure: {
+						status: "unavailable",
+						errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+						reason:
+							"Browser capability evidence does not match the admitted Sandbox binding",
+						retryable: true,
+					},
+				});
+			}
 			const { grant: _proof, ...binding } = request;
 			return WorkloadReadinessResponseV1Schema.parse({
 				...binding,
