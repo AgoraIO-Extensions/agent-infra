@@ -4,6 +4,14 @@ export const DirectorySourceIdSchema = z
 	.string()
 	.regex(/^[a-z][a-z0-9-]{0,63}$/u);
 
+export const DirectorySnapshotBindingV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	source: DirectorySourceIdSchema,
+	revision: z.uuid(),
+	fetchedAt: z.number().int().nonnegative(),
+	validUntil: z.number().int().positive(),
+});
+
 export const EnterpriseDirectorySnapshotV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
 	revision: z.uuid(),

@@ -1,3 +1,4 @@
+import { DirectorySnapshotBindingV1Schema } from "@agent-infra/contracts/enterprise-directory";
 import {
 	type DirectoryDepartment,
 	type DirectorySnapshot,
@@ -12,10 +13,13 @@ export interface DirectorySnapshotLoaderV1 {
 
 export interface DirectoryOrganizationAuthorityV1 {
 	readonly schemaVersion: 1;
-	readonly source: string;
-	readonly revision: string;
-	readonly fetchedAt: number;
-	readonly validUntil: number;
+	readonly binding: {
+		readonly schemaVersion: 1;
+		readonly source: string;
+		readonly revision: string;
+		readonly fetchedAt: number;
+		readonly validUntil: number;
+	};
 	readonly organizationIds: readonly string[];
 }
 
@@ -77,12 +81,16 @@ export function createDirectoryOrganizationResolverV1(
 					new Set(organizationIds).size !== organizationIds.length
 				)
 					throw new DirectoryUnavailableError();
-				return {
-					schemaVersion: 1 as const,
+				const binding = DirectorySnapshotBindingV1Schema.parse({
+					schemaVersion: 1,
 					source: snapshot.source,
 					revision: snapshot.revision,
 					fetchedAt: snapshot.fetchedAt,
 					validUntil: snapshot.validUntil,
+				});
+				return {
+					schemaVersion: 1 as const,
+					binding,
 					organizationIds: organizationIds.toSorted(),
 				};
 			} catch {

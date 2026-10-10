@@ -41,10 +41,13 @@ describe("Platform directory organization consumer", () => {
 		});
 		expect(await resolver.resolve({ email: "ALICE@example.test" })).toEqual({
 			schemaVersion: 1,
-			source: "wecom",
-			revision: current.revision,
-			fetchedAt: current.fetchedAt,
-			validUntil: current.validUntil,
+			binding: {
+				schemaVersion: 1,
+				source: "wecom",
+				revision: current.revision,
+				fetchedAt: current.fetchedAt,
+				validUntil: current.validUntil,
+			},
 			organizationIds: ["department:2"],
 		});
 	});
@@ -118,7 +121,7 @@ describe("Platform directory organization consumer", () => {
 		await expect(
 			resolver.resolve({ email: "alice@example.test" }),
 		).resolves.toMatchObject({
-			revision: current.revision,
+			binding: { revision: current.revision },
 		});
 		await expect(
 			resolver.resolve({ email: "alice@example.test" }),
