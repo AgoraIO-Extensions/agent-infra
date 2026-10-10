@@ -266,7 +266,9 @@ export function createRuntimeFileBridgeV1(options: {
 			return options.writeResult(
 				descriptor,
 				body,
-				context(binding, `result:${binding.executionId}`, "write"),
+				// The execution binding carries the unique result owner; no file id exists
+				// until the authority allocates the confirmed result object.
+				context(binding, "result", "write"),
 			);
 		},
 	};

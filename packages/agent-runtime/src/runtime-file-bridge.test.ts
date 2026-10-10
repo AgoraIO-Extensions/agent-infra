@@ -92,10 +92,32 @@ describe("RuntimeHost execution file bridge", () => {
 		)?.[2];
 		expect(writeContext).toMatchObject({
 			...binding,
-			fileId: "result:execution-1",
+			fileId: "result",
 			operation: "write",
 		});
 		expect(Object.isFrozen(writeContext)).toBe(true);
+	});
+
+	it("keeps result writes valid for a maximum-length execution id", async () => {
+		const longBinding = { ...binding, executionId: "e".repeat(255) };
+		const writeResult = vi.fn(
+			async (
+				..._args: [
+					FileDescriptorV1,
+					ReadableStream<Uint8Array>,
+					RuntimeFileBridgeContextV1,
+				]
+			) => projection,
+		);
+		const port = bridge({ binding: longBinding, writeResult });
+		await expect(
+			port.writeResult(descriptor, new ReadableStream<Uint8Array>()),
+		).resolves.toEqual(projection);
+		expect(writeResult.mock.calls[0]?.[2]).toMatchObject({
+			fileId: "result",
+			operation: "write",
+			executionId: longBinding.executionId,
+		});
 	});
 
 	it("rejects a file outside the signed input set before invoking the reader", async () => {
