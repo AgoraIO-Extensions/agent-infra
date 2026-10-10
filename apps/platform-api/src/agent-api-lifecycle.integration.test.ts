@@ -18,6 +18,7 @@ import {
 	startPostgresTestDatabase,
 } from "../../../packages/platform-store/src/postgres-test.js";
 import { writeTaskApiAuditV1 } from "../../../packages/platform-store/src/task-api-audit.js";
+import { insertTaskAuthorization } from "../../../packages/platform-store/src/task-authorization.js";
 import { createPlatformApp } from "./app.js";
 import { assemblePlatformApi, type PlatformApiAssembly } from "./assembly.js";
 
@@ -352,6 +353,59 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 			where agent_id='agent-a' and principal_type='user'
 				and principal_id='same-id' and grant_type='use'`;
 		expect(grant?.revoked_at).not.toBeNull();
+	});
+
+	it("user use revoke persists its running Task control and JSON stop payload atomically", async () => {
+		await sql`insert into platform.agent_principal_grants
+			(agent_id, principal_type, principal_id, grant_type, authorization_revision)
+			values ('agent-a', 'user', 'same-id', 'use', 'user-use-1')`;
+		await sql`insert into platform.conversations
+			(id, agent_id, actor_id, principal_type, channel_id, status, session_generation, authorization_revision)
+			values ('user-revoke-conversation', 'agent-a', 'same-id', 'user', 'api', 'active', 1, 'agent-1')`;
+		await sql`insert into platform.conversation_executions
+			(execution_id, conversation_id, agent_id, actor_id, principal_type, channel_id, turn_id, status, session_generation, authorization_revision, created_at)
+			values ('user-revoke-execution', 'user-revoke-conversation', 'agent-a', 'same-id', 'user', 'api', 'user-revoke-turn', 'processing', 1, 'agent-1', now())`;
+		await sql.begin((transaction) =>
+			insertTaskAuthorization(transaction, {
+				executionId: "user-revoke-execution",
+				traceId: "trace-user-revoke",
+				requestId: "request-user-revoke",
+				boundary: {
+					schemaVersion: 1,
+					principal: { kind: "user", id: "same-id" },
+					agentId: "agent-a",
+					channelId: "api",
+					identityRevision: "user-1",
+					agentAuthorizationRevision: "agent-1",
+					accessSources: [{ kind: "api-use", useGrantRevision: "user-use-1" }],
+				},
+			}),
+		);
+		const response = await revokeUserUse();
+		expect(response.status, await response.clone().text()).toBe(200);
+		const [stop] = await sql`
+			select payload, xmin::text as tx from platform.outbox_items
+			where operation = 'conversation.turn.stop.v1'`;
+		expect(stop?.payload).toMatchObject({
+			executionId: "user-revoke-execution",
+			conversationId: "user-revoke-conversation",
+			sessionGeneration: 1,
+		});
+		const facts = await sql`
+			select xmin::text as tx from platform.agent_principal_grants
+			where agent_id='agent-a' and principal_type='user' and grant_type='use'
+			union all select xmin::text from platform.task_authorization_records where revoked_at is not null
+			union all select xmin::text from platform.task_control_records
+			union all select xmin::text from platform.conversation_stops
+			union all select xmin::text from platform.outbox_items
+			union all select xmin::text from platform.idempotency_records
+			union all select xmin::text from platform.audit_events where action in ('api.agent.use.revoked', 'task.control.created')`;
+		expect(facts).toHaveLength(8);
+		expect(new Set(facts.map((row) => row.tx))).toEqual(new Set([stop?.tx]));
+		const [applicationUse] = await sql`
+			select revoked_at from platform.agent_principal_grants
+			where agent_id='agent-a' and principal_type='application' and grant_type='use'`;
+		expect(applicationUse?.revoked_at).toBeNull();
 	});
 
 	it("Owner-issued independent use revisions authorize only the application's own existing API audits", async () => {

@@ -383,6 +383,7 @@ export class PostgresAgentManagementTransactionV1
 	implements AgentManagementTransactionPortV1, AgentApiLifecycleTransactionV1
 {
 	readonly #client;
+	readonly #revokeClient;
 	readonly #database;
 	readonly #userDirectory;
 
@@ -390,6 +391,8 @@ export class PostgresAgentManagementTransactionV1
 		this.#userDirectory = options.userDirectory;
 		this.#client = postgres(options.databaseUrl, { max: 1 });
 		this.#database = drizzle(this.#client);
+		// Drizzle replaces date/JSON codecs. Task control SQL needs native postgres codecs.
+		this.#revokeClient = postgres(options.databaseUrl, { max: 1 });
 	}
 
 	async executeAgentManagementTransaction(
@@ -892,7 +895,7 @@ export class PostgresAgentManagementTransactionV1
 			command: "revoke_use",
 		};
 		try {
-			return await this.#client.begin(async (transaction) => {
+			return await this.#revokeClient.begin(async (transaction) => {
 				await transaction`set local lock_timeout = '5s'`;
 				await transaction`set local statement_timeout = '30s'`;
 				await transaction`lock table platform.platform_user_disables in share row exclusive mode`;
@@ -984,7 +987,7 @@ export class PostgresAgentManagementTransactionV1
 					await transaction`
 						insert into platform.audit_events
 							(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
-						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, 'api.agent.use.replayed', 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${JSON.stringify(saved)}::jsonb)
+						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, 'api.agent.use.replayed', 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${transaction.json(saved as postgres.JSONValue)})
 					`;
 					const finalActor = await resolveCurrentPersonalApiUserV1(
 						this.#userDirectory,
@@ -1022,11 +1025,10 @@ export class PostgresAgentManagementTransactionV1
 					nextRevision: randomUUID(),
 					occurredAt: new Date(),
 				});
-				const occurredAt = plan.occurredAt.toISOString();
 				if (plan.mutation === "revoke") {
 					await transaction`
 						update platform.agent_principal_grants
-						set revoked_at = ${occurredAt}, authorization_revision = ${plan.result.authorizationRevision}
+						set revoked_at = ${plan.occurredAt}, authorization_revision = ${plan.result.authorizationRevision}
 						where agent_id = ${command.agentId} and principal_type = 'user'
 							and principal_id = ${command.userId} and grant_type = 'use'
 					`;
@@ -1059,13 +1061,13 @@ export class PostgresAgentManagementTransactionV1
 				await transaction`
 					insert into platform.audit_events
 						(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
-						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, ${plan.audit.action}, 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${JSON.stringify(plan.result)}::jsonb)
+						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, ${plan.audit.action}, 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${transaction.json({ ...plan.result })})
 				`;
 				if (!existing)
 					await transaction`
 						insert into platform.idempotency_records
 							(id, scope_type, scope_id, actor_id, command_type, idempotency_key, request_digest, status, result, created_at, updated_at)
-						values (${randomUUID()}, 'agent', ${command.agentId}, ${command.actorId}, ${commandType}, ${command.idempotencyKey}, ${digest}, 'completed', ${JSON.stringify(plan.result)}::jsonb, ${occurredAt}, ${occurredAt})
+						values (${randomUUID()}, 'agent', ${command.agentId}, ${command.actorId}, ${commandType}, ${command.idempotencyKey}, ${digest}, 'completed', ${transaction.json({ ...plan.result })}, ${plan.occurredAt}, ${plan.occurredAt})
 					`;
 				const finalActor = await resolveCurrentPersonalApiUserV1(
 					this.#userDirectory,
@@ -1174,7 +1176,7 @@ export class PostgresAgentManagementTransactionV1
 
 	async close(): Promise<void> {
 		try {
-			await this.#client.end();
+			await Promise.all([this.#client.end(), this.#revokeClient.end()]);
 		} catch {
 			throw new AgentManagementError("unavailable");
 		}
