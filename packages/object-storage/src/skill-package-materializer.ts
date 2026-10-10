@@ -171,6 +171,24 @@ async function syncDirectory(path: string) {
 		await handle.close();
 	}
 }
+
+async function ensureRuntimeData(root: string): Promise<void> {
+	const path = join(root, "runtime-data");
+	try {
+		const info = await lstat(path);
+		if (
+			!info.isDirectory() ||
+			info.isSymbolicLink() ||
+			(info.mode & 0o777) !== 0o770
+		)
+			fail("conflict");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		await mkdir(path, { mode: 0o770 });
+		await chmod(path, 0o770);
+	}
+	await syncDirectory(root);
+}
 async function persistFile(path: string, bytes: Uint8Array, mode: number) {
 	const handle = await open(
 		path,
@@ -552,6 +570,9 @@ export class SkillPackageMaterializerV1 {
 			}
 			const result = receipt(packages);
 			await this.#assertRoot();
+			// The Runtime's writable PVC subPath is deliberately separate from
+			// immutable generations. Mounting code consumes this exact directory.
+			await ensureRuntimeData(this.#root);
 			const generations = join(this.#root, "generations");
 			try {
 				await mkdir(generations, { mode: 0o700 });
