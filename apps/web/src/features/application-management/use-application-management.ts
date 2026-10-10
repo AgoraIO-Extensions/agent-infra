@@ -47,7 +47,7 @@ export function useOwnApplication({
 		useState<ApplicationManagementState | null>(null);
 	const query = useQuery({
 		queryKey: scope.queryKey,
-		queryFn: () => loadOwnApplication(applicationId ?? "", client),
+		queryFn: () => loadOwnApplication(applicationId, client),
 		enabled: allowed,
 		retry: false,
 		staleTime: 15_000,
