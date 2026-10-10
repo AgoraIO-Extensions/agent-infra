@@ -56,6 +56,8 @@ export interface ProductionPlatformApiInputV1
 	readonly wecomIdentity?: PlatformApiAssemblyInput["wecomIdentity"];
 	readonly wecomCredentialEncryptionKeys?: PlatformApiAssemblyInput["wecomCredentialEncryptionKeys"];
 	readonly wecomApplicationSetup?: PlatformApiAssemblyInput["wecomApplicationSetup"];
+	/** Deployment-owned ObjectStorage/file authority adapter for Web and Runtime exchange. */
+	readonly files?: PlatformApiAssemblyInput["files"];
 	readonly databaseUrl: string;
 	readonly taskAdmissionPolicy: PlatformApiAssemblyInput["taskAdmissionPolicy"];
 	/** Same immutable image repository used by the Worker's resource policy. */
@@ -229,6 +231,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.wecomApplicationSetup
 			? { wecomApplicationSetup: input.wecomApplicationSetup }
 			: {}),
+		...(input.files ? { files: input.files } : {}),
 		databaseUrl: input.databaseUrl,
 		taskAdmissionPolicy: input.taskAdmissionPolicy,
 		identity: input.identity,
