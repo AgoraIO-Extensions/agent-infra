@@ -1289,6 +1289,21 @@ export function createConversationDispatchUseCaseV1(
 				);
 			}
 			if (
+				claim.operation === "conversation.turn.stop.v1" &&
+				!["completed", "failed", "cancelled"].includes(response.result.status)
+			) {
+				// Stop acceptance is an ACK; retain its work until the original Turn confirms a terminal result.
+				const scheduled = await dependencies.store.retry({
+					claim,
+					retryDelayMs,
+					errorCode: "STOP_CONFIRMATION_PENDING",
+					transition: {},
+				});
+				return scheduled
+					? { schemaVersion: 1, outcome: "accepted" }
+					: { schemaVersion: 1, outcome: "stale" };
+			}
+			if (
 				claim.operation === "conversation.turn.supplement.v1" ||
 				claim.operation === "conversation.turn.stop.v1"
 			) {
