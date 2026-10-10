@@ -1092,10 +1092,13 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						(workload) => workload.spec?.replicas === 0,
 					) ||
 					stoppedPods.length !== 0
-				)
+				) {
+					const outbox = await sql`
+							select status, operation, payload from platform.outbox_items where scope_id=${seed.agentId} order by created_at`;
 					throw new Error(
-						`API Workload stop resources did not converge: ${JSON.stringify({ workloads: stoppedWorkloads.map((workload) => ({ name: workload.metadata?.name, replicas: workload.spec?.replicas })), podCount: stoppedPods.length, stoppedBaseline })}`,
+						`API Workload stop resources did not converge: ${JSON.stringify({ workloads: stoppedWorkloads.map((workload) => ({ name: workload.metadata?.name, replicas: workload.spec?.replicas })), podCount: stoppedPods.length, stoppedBaseline, outbox })}`,
 					);
+				}
 				const restarted = await request(
 					"restart",
 					"api-workload-restart",
