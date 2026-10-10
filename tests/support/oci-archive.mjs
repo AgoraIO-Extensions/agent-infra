@@ -31,20 +31,29 @@ function header(
 	return block;
 }
 
-function paxPath(path) {
-	const body = ` path=${path}\n`;
+function paxRecord(key, value) {
+	const body = ` ${key}=${value}\n`;
 	let length = Buffer.byteLength(body);
 	length += String(length + String(length).length).length;
-	return Buffer.from(`${length}${body}`);
+	return `${length}${body}`;
 }
 
+// `pax` adds raw PAX records, e.g. a malformed `size` for negative tests.
 export function tarArchive(entries) {
 	const blocks = [];
-	for (const { path, content = "", ...options } of entries) {
+	for (const { path, content = "", pax = {}, ...options } of entries) {
 		const bytes = Buffer.from(content);
-		if (Buffer.byteLength(path) > 100) {
-			const record = paxPath(path);
-			blocks.push(header("PaxHeaders/long", record.length, { type: "x" }));
+		const records = {
+			...(Buffer.byteLength(path) > 100 ? { path } : {}),
+			...pax,
+		};
+		if (Object.keys(records).length > 0) {
+			const record = Buffer.from(
+				Object.entries(records)
+					.map(([key, value]) => paxRecord(key, value))
+					.join(""),
+			);
+			blocks.push(header("PaxHeaders/entry", record.length, { type: "x" }));
 			blocks.push(pad(record));
 		}
 		blocks.push(header(path, bytes.length, options), pad(bytes));

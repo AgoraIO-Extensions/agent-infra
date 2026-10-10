@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { describeOciArchiveDifference } from "../deploy/release/oci-archive-diff.mjs";
-import { writeOciArchive } from "./support/oci-archive.mjs";
+import { tarArchive, writeOciArchive } from "./support/oci-archive.mjs";
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const longPath = `usr/share/${"nested-directory/".repeat(8)}generated.cache`;
@@ -271,6 +271,41 @@ test("diagnostic failures are reported without throwing", async () => {
 				)
 			).at(-1),
 			"diagnostic incomplete: archive JSON member is invalid",
+		);
+	});
+});
+
+test("malformed PAX sizes end the diagnostic instead of looping", {
+	timeout: 10_000,
+}, async () => {
+	await withDirectory(async (directory) => {
+		// Layer stream: a non-numeric size must not stall listTarEntries.
+		const valid = join(directory, "valid.tar");
+		const malformedLayer = join(directory, "malformed-layer.tar");
+		await writeOciArchive(valid, {
+			layers: [{ entries: [{ path: "etc/a", content: "a" }] }],
+		});
+		await writeOciArchive(malformedLayer, {
+			layers: [
+				{ entries: [{ path: "etc/a", content: "a", pax: { size: "NaN" } }] },
+			],
+		});
+		assert.equal(
+			(await describeOciArchiveDifference(valid, malformedLayer)).at(-1),
+			"diagnostic incomplete: tar entry size is invalid",
+		);
+
+		// Outer archive: a negative size must not rewind to the same header.
+		const malformedArchive = join(directory, "malformed-archive.tar");
+		await writeFile(
+			malformedArchive,
+			tarArchive([
+				{ path: "index.json", content: "{}", pax: { size: "-1024" } },
+			]),
+		);
+		assert.equal(
+			(await describeOciArchiveDifference(malformedArchive, valid)).at(-1),
+			"diagnostic incomplete: tar entry size is invalid",
 		);
 	});
 });

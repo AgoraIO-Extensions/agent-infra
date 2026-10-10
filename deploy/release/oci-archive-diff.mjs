@@ -107,13 +107,19 @@ const typeNames = {
 };
 
 function applyOverrides(header, overrides) {
+	// The effective size advances archive offsets and stream reads; a malformed
+	// PAX value must stop the diagnostic instead of looping.
+	const size = Number(overrides.size ?? header.size);
+	if (!Number.isSafeInteger(size) || size < 0) {
+		throw new DiagnosticError("tar entry size is invalid");
+	}
 	return {
 		path: normalizePath(overrides.path ?? header.name),
 		type: typeNames[header.type] ?? `type-${header.type}`,
 		mode: header.mode,
 		uid: Number(overrides.uid ?? header.uid),
 		gid: Number(overrides.gid ?? header.gid),
-		size: Number(overrides.size ?? header.size),
+		size,
 		mtime: String(overrides.mtime ?? header.mtime),
 		link: overrides.linkpath ?? header.linkname,
 		xattrs: Object.keys(overrides)
