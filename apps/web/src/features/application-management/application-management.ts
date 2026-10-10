@@ -52,10 +52,10 @@ function unavailable(status: number | undefined): CollectionReadUnavailable {
 }
 
 export async function loadOwnApplication(
-	applicationId: string,
+	applicationId: string | undefined,
 	client?: Client,
 ): Promise<ApplicationManagementState> {
-	if (!applicationId) return { kind: "empty" };
+	if (applicationId === undefined) return { kind: "empty" };
 	const result: Awaited<
 		RequestResult<
 			GetOwnApplicationV2Responses,
