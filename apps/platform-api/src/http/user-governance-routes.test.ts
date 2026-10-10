@@ -81,6 +81,30 @@ describe("Platform user governance HTTP", () => {
 		expect(isPlatformDisabled).toHaveBeenCalledWith(targetId);
 	});
 
+	it("normalizes an uppercase UUID accepted by the public path contract", async () => {
+		const { app, isPlatformDisabled, setPlatformDisabled } = fixture();
+		const uppercaseTarget = targetId.toUpperCase();
+		isPlatformDisabled.mockResolvedValueOnce(false);
+		const read = await app.request(
+			`/api/v2/admin/users/${uppercaseTarget}/disable`,
+			{ method: "GET" },
+		);
+		expect(read.status).toBe(200);
+		expect(isPlatformDisabled).toHaveBeenCalledWith(targetId);
+		const write = await app.request(
+			`/api/v2/admin/users/${uppercaseTarget}/disable`,
+			{
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body,
+			},
+		);
+		expect(write.status).toBe(200);
+		expect(setPlatformDisabled).toHaveBeenCalledWith(
+			expect.objectContaining({ targetUserId: targetId }),
+		);
+	});
+
 	it("rejects bearer, non-admin and invalid requests before a write", async () => {
 		const { app, setPlatformDisabled } = fixture("employee");
 		const request = (target: string, requestBody = body, bearer = false) =>

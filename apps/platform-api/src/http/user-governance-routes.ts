@@ -15,7 +15,13 @@ export interface UserGovernanceRoutesDependencies {
 }
 
 const userIdPattern =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+	/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+function normalizedUserId(value: string, traceId: string): string {
+	if (!userIdPattern.test(value))
+		throw new HttpProtocolError("INVALID_REQUEST", traceId);
+	return value.toLowerCase();
+}
 
 /** Administrator-only browser route for the durable Platform override. */
 export function registerUserGovernanceRoutes(
@@ -37,9 +43,10 @@ export function registerUserGovernanceRoutes(
 			);
 			if (!identity.roles.includes("system_admin"))
 				throw new HttpProtocolError("FORBIDDEN", metadata.traceId);
-			const targetUserId = context.req.param("userId");
-			if (!userIdPattern.test(targetUserId))
-				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+			const targetUserId = normalizedUserId(
+				context.req.param("userId"),
+				metadata.traceId,
+			);
 			if (!dependencies.users)
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			const disabled =
@@ -66,9 +73,10 @@ export function registerUserGovernanceRoutes(
 			);
 			if (!identity.roles.includes("system_admin"))
 				throw new HttpProtocolError("FORBIDDEN", metadata.traceId);
-			const targetUserId = context.req.param("userId");
-			if (!userIdPattern.test(targetUserId))
-				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+			const targetUserId = normalizedUserId(
+				context.req.param("userId"),
+				metadata.traceId,
+			);
 			const { value } = await parseJson(
 				context.req.raw,
 				PlatformUserDisableCommandV1Schema,
