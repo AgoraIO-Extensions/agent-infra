@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
+import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
 import {
 	createPostgresLdapBrowserDeployment,
 	createProductionPlatformApiAssemblyInputV1,
@@ -45,6 +46,16 @@ const browser = createPostgresLdapBrowserDeployment({
 	publicOrigin,
 	trustedProxyToken,
 });
+const callbackForwarder =
+	connectionInstallationCallback ??
+	(connectionInstallationConfiguration &&
+	process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE
+		? {
+				forward: createProtectedConnectionInstallationForwarder({
+					authFile: process.env.PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE,
+				}),
+			}
+		: undefined);
 
 export const browserAuth = browser.browserAuth;
 export function createPlatformApiAssemblyInput() {
@@ -61,8 +72,8 @@ export function createPlatformApiAssemblyInput() {
 					},
 				}
 			: {}),
-		...(connectionInstallationCallback
-			? { connectionInstallationCallback }
+		...(callbackForwarder
+			? { connectionInstallationCallback: callbackForwarder }
 			: {}),
 		databaseUrl,
 		identity: browser.identity,
