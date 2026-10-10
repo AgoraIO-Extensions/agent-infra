@@ -1,9 +1,89 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
-import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
+import {
+	GenericAcpRuntimeDriver,
+	type GenericAcpRuntimeDriverOptions,
+} from "./acp-runtime-driver.js";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
+
+it.each(["prompt-reject", "prompt-no-model"])(
+	"does not record a model start when ACP %s sends no model request",
+	async (mode) => {
+		const path = await mkdtemp(join(tmpdir(), "acp-no-model-send-"));
+		const driver = await GenericAcpRuntimeDriver.open({
+			path,
+			configVersion: "configuration-a",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					nativeModelId: "provider/model",
+					reasoningLevels: ["high"],
+				},
+			],
+			launch: async () => ({
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: { ACP_TEST_MODE: mode },
+			}),
+		});
+		try {
+			const accepted = await driver.execute({
+				schemaVersion: 2,
+				kind: "submit-turn",
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-a",
+				turnId: "turn-a",
+				operationId: "operation-a",
+				input: { text: "synthetic input", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			});
+			await vi.waitFor(async () => {
+				const events = await driver.replayEvents(
+					accepted.nativeSessionRef,
+					"execution-a",
+				);
+				expect(
+					events
+						.flatMap((event) =>
+							event.type === "operation" && event.payload.kind === "model"
+								? [event.payload.phase]
+								: [],
+						)
+						.at(-1),
+				).toBe("unknown");
+			});
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				"execution-a",
+			);
+			const models = events.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "model"
+					? [event.payload]
+					: [],
+			);
+			expect(models.map((fact) => fact.phase)).toEqual(["intent", "unknown"]);
+			expect(models.every((fact) => fact.startedAt === undefined)).toBe(true);
+		} finally {
+			await driver.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
 
 it("persists a confirmed ACP result and events, then resumes the same session without resubmitting", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-driver-"));
@@ -24,7 +104,7 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 			args: [
 				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
 			],
-			env: {},
+			env: { ACP_TEST_MODE: "tool" },
 		}),
 	};
 	let driver = await GenericAcpRuntimeDriver.open(options);
@@ -57,11 +137,30 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 			command.executionId,
 		);
 		expect(
+			events.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "model"
+					? [event.payload.phase]
+					: [],
+			),
+		).toEqual(["intent", "unknown"]);
+		expect(
 			events
 				.filter((event) => event.type === "text")
 				.map((event) => event.payload.delta)
 				.join(""),
 		).toBe("synthetic result 1");
+		expect(
+			events.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload.phase]
+					: [],
+			),
+		).toEqual([]);
+		expect(
+			events.flatMap((event) =>
+				event.type === "tool" ? [event.payload.phase] : [],
+			),
+		).toEqual(["started", "completed"]);
 		await driver.close();
 		driver = await GenericAcpRuntimeDriver.open(options);
 		expect(await driver.execute(command)).toEqual(result);
@@ -95,9 +194,9 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 	}
 });
 
-it("keeps a lost active turn unknown after restart and blocks another turn without quarantining its session", async () => {
-	const path = await mkdtemp(join(tmpdir(), "acp-unknown-"));
-	const options = {
+it("reuses a tool kind when the terminal ACP update omits it", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-tool-kind-fallback-"));
+	const driver = await GenericAcpRuntimeDriver.open({
 		path,
 		configVersion: "configuration-a",
 		defaultModelOptionId: "primary",
@@ -114,14 +213,13 @@ it("keeps a lost active turn unknown after restart and blocks another turn witho
 			args: [
 				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
 			],
-			env: { ACP_TEST_MODE: "hold" },
+			env: { ACP_TEST_MODE: "tool-kind-omitted" },
 		}),
-	};
-	let driver = await GenericAcpRuntimeDriver.open(options);
+	});
 	try {
-		const command = {
-			schemaVersion: 2 as const,
-			kind: "submit-turn" as const,
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
 			agentId: "agent-a",
 			conversationId: "conversation-a",
 			sessionGeneration: 1,
@@ -130,49 +228,593 @@ it("keeps a lost active turn unknown after restart and blocks another turn witho
 			operationId: "operation-a",
 			input: { text: "synthetic input", attachments: [] },
 			selection: {
-				schemaVersion: 1 as const,
+				schemaVersion: 1,
 				modelOptionId: "primary",
 				reasoningLevel: "high",
 			},
-		};
-		const accepted = await driver.execute(command);
-		expect(accepted.result.outcome).toBe("accepted");
-		expect(
-			await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
-		).toBe("running");
-		await driver.close();
-		driver = await GenericAcpRuntimeDriver.open(options);
-		expect(
-			await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
-		).toBe("unknown");
-		expect(await driver.execute(command)).toEqual(accepted);
-		expect(await driver.lookupOperation(command)).toEqual({
-			state: "found",
-			record: accepted,
 		});
-		const next = {
-			...command,
-			nativeSessionRef: accepted.nativeSessionRef,
-			executionId: "execution-b",
-			turnId: "turn-b",
-			operationId: "operation-b",
-		};
-		expect((await driver.execute(next)).result.outcome).toBe("busy");
-		expect(
-			(
-				await driver.replayEvents(accepted.nativeSessionRef, "execution-a")
-			).filter((e) => e.type === "completed"),
-		).toEqual([]);
-		const other = await driver.execute({
-			...command,
-			conversationId: "conversation-b",
-		});
-		expect(other.result.outcome).toBe("accepted");
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
+			).toBe("completed"),
+		);
+		const tools = (
+			await driver.replayEvents(accepted.nativeSessionRef, "execution-a")
+		).flatMap((event) => (event.type === "tool" ? [event.payload] : []));
+		expect(tools.map(({ name, phase }) => ({ name, phase }))).toEqual([
+			{ name: "read", phase: "started" },
+			{ name: "read", phase: "completed" },
+		]);
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
 	}
 });
+
+it("does not retain a kind after a duplicate terminal update", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-tool-kind-reuse-"));
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "tool-kind-reused" },
+		}),
+	});
+	try {
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-a",
+			turnId: "turn-a",
+			operationId: "operation-a",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
+			).toBe("completed"),
+		);
+		const tools = (
+			await driver.replayEvents(accepted.nativeSessionRef, "execution-a")
+		).flatMap((event) => (event.type === "tool" ? [event.payload] : []));
+		expect(tools.map(({ name, phase }) => ({ name, phase }))).toEqual([
+			{ name: "read", phase: "started" },
+			{ name: "read", phase: "completed" },
+			{ name: "unknown", phase: "started" },
+			{ name: "unknown", phase: "completed" },
+		]);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it.each([
+	{ permitted: true, mode: "tool-permission" },
+	{ permitted: false, mode: "tool-permission" },
+	{ permitted: true, mode: "tool-status-before-permission" },
+])(
+	"records ACP $mode authorization $permitted without inferring tool start",
+	async ({ permitted, mode }) => {
+		const path = await mkdtemp(join(tmpdir(), "acp-permission-facts-"));
+		const driver = await GenericAcpRuntimeDriver.open({
+			path,
+			authorizeExternalAction: (action) =>
+				driver.validateExternalAction(action),
+			configVersion: "configuration-a",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					nativeModelId: "provider/model",
+					reasoningLevels: ["high"],
+				},
+			],
+			launch: async (_directory, _selection, admit) => ({
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: { ACP_TEST_MODE: mode },
+				authorize: async () => {
+					await admit();
+					return permitted;
+				},
+			}),
+		});
+		try {
+			const command = {
+				schemaVersion: 2 as const,
+				kind: "submit-turn" as const,
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-permission",
+				turnId: "turn-permission",
+				operationId: "operation-permission",
+				input: { text: "synthetic input", attachments: [] },
+				selection: {
+					schemaVersion: 1 as const,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			};
+			const accepted = await driver.execute(command);
+			await vi.waitFor(
+				async () =>
+					expect(
+						await driver.getStatus(
+							accepted.nativeSessionRef,
+							command.executionId,
+						),
+					).toBe(permitted ? "unknown" : "completed"),
+				{ timeout: 3_000 },
+			);
+			const tools = (
+				await driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				)
+			).flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload]
+					: [],
+			);
+			expect(tools.map((fact) => fact.phase)).toEqual(
+				!permitted ? ["intent", "failed"] : ["intent", "unknown"],
+			);
+			if (!permitted)
+				expect(tools.at(-1)?.failureCode).toBe("authorization_denied");
+			else expect(tools.at(-1)?.failureCode).toBe("recovery_unconfirmed");
+			expect(tools.at(-1)?.startedAt).toBeUndefined();
+			if (permitted) expect(tools.at(-1)?.finishedAt).toBeUndefined();
+			expect(tools.at(-1)?.durationMs).toBeUndefined();
+		} finally {
+			await driver.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
+
+it("does not turn ACP progress during permission into a tool start", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-permission-progress-"));
+	const marker = join(path, "permission-entered");
+	let releaseAuthorization: () => void = () => {};
+	const authorizationRelease = new Promise<void>((resolve) => {
+		releaseAuthorization = resolve;
+	});
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		authorizeExternalAction: async (action) => {
+			await driver.validateExternalAction(action);
+			if (action.kind === "tool") {
+				await writeFile(marker, "entered");
+				await authorizationRelease;
+			}
+		},
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async (_directory, _selection, admit) => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: {
+				ACP_TEST_MODE: "tool-progress-during-permission",
+				ACP_TEST_PERMISSION_MARKER: marker,
+			},
+			authorize: async () => {
+				await admit();
+				return true;
+			},
+		}),
+	});
+	try {
+		const executionId = "execution-permission-progress";
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId,
+			turnId: "turn-permission-progress",
+			operationId: "operation-permission-progress",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		await vi.waitFor(async () => {
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				executionId,
+			);
+			expect(
+				events.some(
+					(event) =>
+						event.type === "text" &&
+						event.payload.delta === "permission-progress-marker",
+				),
+			).toBe(true);
+		});
+		const phases = (
+			await driver.replayEvents(accepted.nativeSessionRef, executionId)
+		).flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "tool"
+				? [event.payload.phase]
+				: [],
+		);
+		expect(phases).toEqual(["intent"]);
+		releaseAuthorization();
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, executionId),
+			).toBe("unknown"),
+		);
+		expect(
+			(
+				await driver.replayEvents(accepted.nativeSessionRef, executionId)
+			).flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload.phase]
+					: [],
+			),
+		).toEqual(["intent", "unknown"]);
+	} finally {
+		releaseAuthorization();
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("permits a second native tool while the first authorized tool is still in progress", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-concurrent-tools-"));
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		authorizeExternalAction: (action) => driver.validateExternalAction(action),
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async (_directory, _selection, admit) => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "tool-permission-concurrent" },
+			authorize: async () => {
+				await admit();
+				return true;
+			},
+		}),
+	});
+	try {
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-concurrent",
+			turnId: "turn-concurrent",
+			operationId: "operation-concurrent",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		await vi.waitFor(
+			async () =>
+				expect(
+					await driver.getStatus(
+						accepted.nativeSessionRef,
+						"execution-concurrent",
+					),
+				).toBe("unknown"),
+			{ timeout: 10_000 },
+		);
+		const phases = (
+			await driver.replayEvents(
+				accepted.nativeSessionRef,
+				"execution-concurrent",
+			)
+		).flatMap((event) =>
+			event.type === "operation" && event.payload.kind === "tool"
+				? [event.payload.phase]
+				: [],
+		);
+		expect(phases.filter((phase) => phase === "intent")).toHaveLength(2);
+		expect(phases.filter((phase) => phase === "started")).toHaveLength(0);
+		expect(phases.filter((phase) => phase === "completed")).toHaveLength(0);
+		expect(phases.filter((phase) => phase === "unknown")).toHaveLength(2);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+}, 15_000);
+
+it.each(["permitted", "revoked", "missing"] as const)(
+	"ACP checks %s current authority before permitting a file write",
+	async (authority) => {
+		const path = await mkdtemp(join(tmpdir(), "acp-write-authority-"));
+		let effectPath = "";
+		let revoked = false;
+		const authorize = vi.fn(
+			async (action: RuntimeExternalActionAuthorization) => {
+				await driver.validateExternalAction(action);
+				if (revoked) throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+			},
+		);
+		const driver = await GenericAcpRuntimeDriver.open({
+			path,
+			configVersion: "configuration-a",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					nativeModelId: "provider/model",
+					reasoningLevels: ["high"],
+				},
+			],
+			authorizeExternalAction: authority === "missing" ? undefined : authorize,
+			launch: async (directory, _selection, admit) => {
+				effectPath = join(directory, "workspace", "effect.txt");
+				await writeFile(effectPath, "unchanged");
+				return {
+					command: process.execPath,
+					args: [
+						fileURLToPath(
+							new URL("./acp-peer.test-support.mjs", import.meta.url),
+						),
+					],
+					env: {
+						ACP_TEST_MODE: "tool-permission-write",
+						ACP_TEST_EFFECT_PATH: effectPath,
+					},
+					authorize: async () => {
+						await admit();
+						revoked = authority === "revoked";
+						return true;
+					},
+				};
+			},
+		});
+		try {
+			const accepted = await driver.execute({
+				schemaVersion: 2,
+				kind: "submit-turn",
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-write",
+				turnId: "turn-write",
+				operationId: "operation-write",
+				input: { text: "synthetic input", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			});
+			await vi.waitFor(
+				async () =>
+					expect(
+						await driver.getStatus(
+							accepted.nativeSessionRef,
+							"execution-write",
+						),
+					).toBe(authority === "permitted" ? "unknown" : "completed"),
+				{ timeout: 10_000 },
+			);
+			expect(await readFile(effectPath, "utf8")).toBe(
+				authority === "permitted" ? "synthetic effect" : "unchanged",
+			);
+			expect(authorize).toHaveBeenCalledTimes(authority === "missing" ? 0 : 1);
+			const tools = (
+				await driver.replayEvents(accepted.nativeSessionRef, "execution-write")
+			).flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload]
+					: [],
+			);
+			expect(tools.map((fact) => fact.phase)).toEqual(
+				authority === "permitted"
+					? ["intent", "unknown"]
+					: ["intent", "failed"],
+			);
+			if (authority === "permitted")
+				expect(tools.at(-1)?.failureCode).toBe("recovery_unconfirmed");
+			if (authority !== "permitted") {
+				expect(tools.at(-1)?.failureCode).toBe("authorization_denied");
+				expect(tools.at(-1)?.startedAt).toBeUndefined();
+				expect(tools.at(-1)?.durationMs).toBeUndefined();
+			}
+		} finally {
+			await driver.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+	15_000,
+);
+
+it.each([
+	{
+		mode: "tool-permission-hold",
+		phase: "started",
+	},
+	{
+		mode: "tool-permission-completed-hold",
+		phase: "completed",
+	},
+])(
+	"keeps a lost active turn unknown after restart with $mode",
+	async ({ mode, phase }) => {
+		const path = await mkdtemp(join(tmpdir(), "acp-unknown-"));
+		const options: GenericAcpRuntimeDriverOptions = {
+			path,
+			authorizeExternalAction: (action: RuntimeExternalActionAuthorization) =>
+				driver.validateExternalAction(action),
+			configVersion: "configuration-a",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					nativeModelId: "provider/model",
+					reasoningLevels: ["high"],
+				},
+			],
+			launch: async (_directory, _selection, admit) => ({
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: { ACP_TEST_MODE: mode },
+				authorize: async () => {
+					await admit();
+					return true;
+				},
+			}),
+		};
+		let driver = await GenericAcpRuntimeDriver.open(options);
+		try {
+			const command = {
+				schemaVersion: 2 as const,
+				kind: "submit-turn" as const,
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-a",
+				turnId: "turn-a",
+				operationId: "operation-a",
+				input: { text: "synthetic input", attachments: [] },
+				selection: {
+					schemaVersion: 1 as const,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			};
+			const accepted = await driver.execute(command);
+			expect(accepted.result.outcome).toBe("accepted");
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
+			).toBe("running");
+			await vi.waitFor(async () => {
+				const events = await driver.replayEvents(
+					accepted.nativeSessionRef,
+					"execution-a",
+				);
+				expect(
+					events.some(
+						(event) => event.type === "tool" && event.payload.phase === phase,
+					),
+				).toBe(true);
+			});
+			await driver.close();
+			driver = await GenericAcpRuntimeDriver.open(options);
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
+			).toBe("unknown");
+			const recoveredEvents = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				"execution-a",
+			);
+			const modelFacts = recoveredEvents.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "model"
+					? [event.payload]
+					: [],
+			);
+			expect(modelFacts.at(-1)?.phase).toBe("unknown");
+			expect(modelFacts.at(-1)?.finishedAt).toBeUndefined();
+			expect(modelFacts.at(-1)?.durationMs).toBeUndefined();
+			const toolFacts = recoveredEvents.flatMap((event) =>
+				event.type === "operation" && event.payload.kind === "tool"
+					? [event.payload]
+					: [],
+			);
+			expect(toolFacts.map((fact) => fact.phase)).toEqual([
+				"intent",
+				"unknown",
+			]);
+			expect(toolFacts.at(-1)?.failureCode).toBe("recovery_unconfirmed");
+			expect(toolFacts.at(-1)?.startedAt).toBeUndefined();
+			expect(toolFacts.at(-1)?.finishedAt).toBeUndefined();
+			expect(toolFacts.at(-1)?.durationMs).toBeUndefined();
+			expect(await driver.execute(command)).toEqual(accepted);
+			expect(await driver.lookupOperation(command)).toEqual({
+				state: "found",
+				record: accepted,
+			});
+			const next = {
+				...command,
+				nativeSessionRef: accepted.nativeSessionRef,
+				executionId: "execution-b",
+				turnId: "turn-b",
+				operationId: "operation-b",
+			};
+			expect((await driver.execute(next)).result.outcome).toBe("busy");
+			expect(
+				(
+					await driver.replayEvents(accepted.nativeSessionRef, "execution-a")
+				).filter((e) => e.type === "completed"),
+			).toEqual([]);
+			const other = await driver.execute({
+				...command,
+				conversationId: "conversation-b",
+			});
+			expect(other.result.outcome).toBe("accepted");
+		} finally {
+			await driver.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
 
 it("does not log raw malformed frames, notification parameters or unsolicited response IDs", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-redaction-"));
@@ -338,10 +980,12 @@ it.each(["ignore-cancel", "delayed-cancel"])(
 				).some((e) => e.type === "completed"),
 			).toBe(false);
 			if (mode === "delayed-cancel") {
-				await vi.waitFor(async () =>
-					expect(
-						await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
-					).toBe("cancelled"),
+				await vi.waitFor(
+					async () =>
+						expect(
+							await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
+						).toBe("cancelled"),
+					{ timeout: 10000 },
 				);
 				expect(await driver.lookupOperation(stopCommand)).toMatchObject({
 					state: "found",
@@ -353,6 +997,7 @@ it.each(["ignore-cancel", "delayed-cancel"])(
 			await rm(path, { recursive: true, force: true });
 		}
 	},
+	15000,
 );
 
 it("normalizes a native execution limit to a redacted error and failed terminal event", async () => {

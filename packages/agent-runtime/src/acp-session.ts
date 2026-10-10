@@ -2,6 +2,7 @@
 // Copyright (c) 2025-present Mohamed Boudra. Apache-2.0; see THIRD_PARTY_NOTICES.md.
 
 import { Readable, Writable } from "node:stream";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import {
 	client,
 	PROTOCOL_VERSION,
@@ -10,8 +11,8 @@ import {
 	type ToolCall,
 } from "@agentclientprotocol/sdk";
 import { spawnAcpProcess } from "./acp-process.js";
-
 import { acpStream } from "./acp-stream.js";
+import type { NativeSessionOptions } from "./session-runtime-driver.js";
 
 export interface AcpLaunch {
 	command: string;
@@ -21,6 +22,23 @@ export interface AcpLaunch {
 	authorize?: (
 		tool: Pick<ToolCall, "toolCallId" | "kind" | "rawInput">,
 	) => Promise<boolean>;
+	onTurn?: (callbacks: {
+		modelRequestIntent?: () => Promise<void>;
+		modelRequestStarted?: () => Promise<void>;
+		modelRequestFinished?: (
+			state: "completed" | "failed" | "unknown",
+			usage?: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+		) => Promise<void>;
+		modelUsage?: (
+			usage: Extract<RuntimeOperationFactV2, { kind: "model" }>["usage"],
+		) => Promise<void>;
+		toolRequestStarted?: (tool: {
+			readonly toolCallId: string;
+			readonly name: string;
+			readonly permitted?: boolean;
+			readonly executionBoundary?: true;
+		}) => Promise<void>;
+	}) => void;
 }
 
 export async function openAcpSession(options: {
@@ -29,6 +47,13 @@ export async function openAcpSession(options: {
 	cwd: string;
 	nativeId?: string;
 	update: (notification: SessionNotification) => Promise<void>;
+	toolRequestStarted?: (tool: {
+		readonly toolCallId: string;
+		readonly name: string;
+		readonly permitted?: boolean;
+		readonly executionBoundary?: true;
+	}) => Promise<void>;
+	toolReceipt?: NativeSessionOptions["toolReceipt"];
 }) {
 	const native = await spawnAcpProcess(
 		options.directory,
@@ -45,7 +70,10 @@ export async function openAcpSession(options: {
 		string,
 		Pick<ToolCall, "toolCallId" | "kind" | "rawInput">
 	>();
+	const unconfirmedTools = new Map<string, string>();
 	let activeSessionId: string | undefined;
+	let currentToolRequestStarted = options.toolRequestStarted;
+	let currentToolReceipt = options.toolReceipt;
 	const connection = client({ name: "agent-infra" })
 		.onNotification("session/update", async ({ params }) => {
 			if (loading || params.sessionId !== activeSessionId) return;
@@ -74,21 +102,42 @@ export async function openAcpSession(options: {
 			const once = params.options.find(
 				(option) => option.kind === "allow_once",
 			);
-			const allowed =
+			const activeTool = () =>
 				!loading &&
 				params.sessionId === activeSessionId &&
+				tools.has(params.toolCall.toolCallId);
+			const allowed =
+				activeTool() &&
 				tool &&
 				once &&
 				(await options.launch.authorize?.(tool).catch(() => false));
+			const admitted =
+				activeTool() && currentToolRequestStarted
+					? await currentToolRequestStarted({
+							toolCallId: params.toolCall.toolCallId,
+							name: tool?.kind ?? params.toolCall.kind ?? "unknown",
+							permitted: Boolean(allowed),
+							executionBoundary: true,
+						}).then(
+							() => Boolean(allowed),
+							() => false,
+						)
+					: false;
+			if (admitted && once)
+				unconfirmedTools.set(
+					params.toolCall.toolCallId,
+					tool?.kind ?? params.toolCall.kind ?? "unknown",
+				);
 			const rejected = params.options.find(
 				(option) => option.kind === "reject_once",
 			);
 			return {
-				outcome: allowed
-					? { outcome: "selected" as const, optionId: once.optionId }
-					: rejected
-						? { outcome: "selected" as const, optionId: rejected.optionId }
-						: { outcome: "cancelled" as const },
+				outcome:
+					admitted && once
+						? { outcome: "selected" as const, optionId: once.optionId }
+						: rejected
+							? { outcome: "selected" as const, optionId: rejected.optionId }
+							: { outcome: "cancelled" as const },
 			};
 		})
 		.connect(
@@ -142,6 +191,18 @@ export async function openAcpSession(options: {
 		loading = false;
 		return {
 			nativeId,
+			startTurn(next: {
+				toolRequestStarted?: (tool: {
+					readonly toolCallId: string;
+					readonly name: string;
+					readonly permitted?: boolean;
+					readonly executionBoundary?: true;
+				}) => Promise<void>;
+				toolReceipt?: NativeSessionOptions["toolReceipt"];
+			}) {
+				currentToolRequestStarted = next.toolRequestStarted;
+				currentToolReceipt = next.toolReceipt;
+			},
 			modelSelection: () => {
 				const model = configOptions.find(
 					(option) => option.category === "model" || option.id === "model",
@@ -200,11 +261,19 @@ export async function openAcpSession(options: {
 			},
 			async prompt(text: string) {
 				tools.clear();
-				const response = await connection.agent.request("session/prompt", {
+				unconfirmedTools.clear();
+				const responsePromise = connection.agent.request("session/prompt", {
 					sessionId: nativeId,
 					prompt: [{ type: "text", text }],
 				});
+				const response = await responsePromise;
 				await updates;
+				for (const [toolCallId, name] of unconfirmedTools) {
+					if (!currentToolReceipt)
+						throw new Error("RUNTIME_TOOL_RESULT_UNCONFIRMED");
+					await currentToolReceipt({ toolCallId, name, phase: "unknown" });
+				}
+				unconfirmedTools.clear();
 				return response;
 			},
 			cancel: () =>

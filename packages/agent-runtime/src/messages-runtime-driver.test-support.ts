@@ -3,7 +3,10 @@ import { createServer, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { vi } from "vitest";
 import { ClaudeRuntimeDriver } from "./claude-runtime-driver.js";
-import type { RuntimeDriverCommand } from "./driver.js";
+import type {
+	RuntimeDriverCommand,
+	RuntimeExternalActionAuthorization,
+} from "./driver.js";
 import { openOpenCodeRuntime } from "./opencode-bootstrap.js";
 import { openPiRuntime } from "./pi-bootstrap.js";
 
@@ -11,6 +14,7 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 	path: string,
 	loseFirstResult = false,
 	runtime: "claude" | "opencode" | "pi" = "claude",
+	upstreamStatus?: number,
 ) {
 	let loseResult = loseFirstResult;
 	let calls = 0;
@@ -46,6 +50,10 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 							: "model-option-alternate",
 					reasoningLevel: value.output_config.effort,
 				});
+				if (upstreamStatus) {
+					response.writeHead(upstreamStatus).end();
+					return;
+				}
 				response.writeHead(200, { "content-type": "text/event-stream" });
 				response.write(
 					encode({
@@ -80,6 +88,12 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 	});
 	const options = {
 		path,
+		// Source/lifecycle conformance verifies the journal; this is not a Host current-authority fixture.
+		authorizeExternalAction: async (
+			action: RuntimeExternalActionAuthorization,
+		) => {
+			await raw.validateExternalAction(action);
+		},
 		configVersion: "conformance-1",
 		defaultModelOptionId: "model-option-primary",
 		defaultReasoningLevel: "high",
@@ -117,14 +131,16 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 				)
 			) {
 				commands.push({ command, ref: record.nativeSessionRef });
-				await vi.waitFor(
-					() => {
-						if (calls <= previousCalls)
-							throw new Error("Waiting for native model request");
-					},
-					{ timeout: 10_000 },
-				);
 				if (loseResult) {
+					// This explicit source fault loses acceptance after an actual request.
+					// Ordinary receipts return before HTTP, allowing Host to publish its Native binding.
+					await vi.waitFor(
+						() => {
+							if (calls <= previousCalls)
+								throw new Error("Waiting for native model request");
+						},
+						{ timeout: 10_000 },
+					);
 					loseResult = false;
 					await forgetResult(command.operationId);
 					throw new Error("Synthetic lost acceptance response");
@@ -147,16 +163,26 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 		}
 	}
 	decorate();
+	const waitForRequests = async () => {
+		await vi.waitFor(
+			() => {
+				if (calls < commands.length)
+					throw new Error("Waiting for native model requests");
+			},
+			{ timeout: 10_000 },
+		);
+	};
 	let closed = false;
 	const fixture = {
 		get driver() {
 			return raw;
 		},
 		recoveryStatus: "unknown" as const,
-		emitRunningEvent: async () => {},
+		emitRunningEvent: waitForRequests,
 		submitWithPreStartEvent: async <T>(submit: () => Promise<T>) => submit(),
 		completeStopAsCancelled: () => {},
 		async completeStopAsCompleted() {
+			await waitForRequests();
 			for (const response of responses) {
 				for (const event of [
 					{
@@ -189,7 +215,10 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 				{ timeout: 10_000 },
 			);
 		},
-		createdTurnCount: async () => calls,
+		createdTurnCount: async () => {
+			await waitForRequests();
+			return calls;
+		},
 		turnSelections: () => structuredClone(selections),
 		rejectNextSelectedTurn: () => {},
 		async restart() {

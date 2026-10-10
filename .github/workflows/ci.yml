@@ -254,6 +254,76 @@ jobs:
             src/claude-native.test.ts src/claude-runtime-driver.test.ts \
             src/runtime-driver-conformance.test.ts --cache=false
 
+      - name: Verify native Claude count_tokens evidence
+        id: claude_count
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/claude-count-evidence
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          chmod 0777 "$EVIDENCE_DIR"
+          docker run --rm --pull=never --network=none --read-only \
+            --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,exec,size=256m,mode=1777 \
+            --volume "$EVIDENCE_DIR:/evidence:rw" \
+            --env AGENT_INFRA_CLAUDE_COUNT_EVIDENCE_PATH=/evidence/result.json \
+            agent-infra-codex-native-test \
+            pnpm --filter @agent-infra/agent-runtime exec vitest run \
+            src/claude-count-tokens.native.test.ts --cache=false
+          SOURCE_TREE="$(git show -s --format=%T HEAD)"
+          IMAGE_ID="$(docker image inspect agent-infra-codex-native-test | node --input-type=module -e 'let data=""; process.stdin.on("data", (chunk) => (data += chunk)); process.stdin.on("end", () => process.stdout.write(JSON.parse(data)[0].Id));')"
+          CLAUDE_COUNT_RESULT_PATH="$EVIDENCE_DIR/result.json" \
+          CLAUDE_COUNT_OUTPUT_PATH="$EVIDENCE_DIR/claude-count.json" \
+          CLAUDE_COUNT_HEAD="$SCAN_COMMIT" \
+          CLAUDE_COUNT_SOURCE_TREE="$SOURCE_TREE" \
+          CLAUDE_COUNT_IMAGE_ID="$IMAGE_ID" \
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from "node:fs/promises";
+
+          const resultPath = process.env.CLAUDE_COUNT_RESULT_PATH;
+          const outputPath = process.env.CLAUDE_COUNT_OUTPUT_PATH;
+          const head = process.env.CLAUDE_COUNT_HEAD;
+          const sourceTree = process.env.CLAUDE_COUNT_SOURCE_TREE;
+          const imageId = process.env.CLAUDE_COUNT_IMAGE_ID;
+          if (!resultPath || !outputPath || !head || !sourceTree || !imageId)
+            throw new Error("CLAUDE_COUNT_EVIDENCE_METADATA_MISSING");
+          const result = JSON.parse(await readFile(resultPath, "utf8"));
+          if (
+            !result.native ||
+            typeof result.executionId !== "string" ||
+            !Array.isArray(result.upstreamIntents) ||
+            !Array.isArray(result.requests) ||
+            !Array.isArray(result.facts)
+          )
+            throw new Error("CLAUDE_COUNT_EVIDENCE_INCOMPLETE");
+          if (!/^sha256:[0-9a-f]{64}$/.test(imageId))
+            throw new Error("CLAUDE_COUNT_IMAGE_ID_INVALID");
+          await writeFile(
+            outputPath,
+            `${JSON.stringify(
+              {
+                schemaVersion: 1,
+                test: "claude-count-tokens.native",
+                head,
+                sourceTree,
+                imageRef: "agent-infra-codex-native-test",
+                imageId,
+                evidence: result,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          NODE
+
+      - name: Preserve Claude count evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: claude-count-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/claude-count-evidence/claude-count.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Verify Generic ACP, OpenCode and Pi conformance in the pinned Linux image
         run: |
           docker run --init --rm --pull=never --network=none --read-only \

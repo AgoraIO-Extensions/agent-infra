@@ -73,3 +73,34 @@ it("filters foreign-session text and tool notifications before the Driver callba
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
+
+it("rejects a foreign-session permission request without recording a tool intent", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "acp-foreign-permission-"));
+	await mkdir(join(cwd, "workspace"));
+	const authorize = vi.fn().mockResolvedValue(true);
+	const toolRequestStarted = vi.fn().mockResolvedValue(undefined);
+	const session = await openAcpSession({
+		directory: cwd,
+		cwd: join(cwd, "workspace"),
+		launch: {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "foreign-permission" },
+			authorize,
+		},
+		toolRequestStarted,
+		update: async () => {},
+	});
+	try {
+		expect(await session.prompt("synthetic input")).toEqual({
+			stopReason: "end_turn",
+		});
+		expect(authorize).not.toHaveBeenCalled();
+		expect(toolRequestStarted).not.toHaveBeenCalled();
+	} finally {
+		await session.close();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});

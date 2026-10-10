@@ -3,7 +3,9 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RuntimeEvent } from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 import {
 	type OpenCodeRuntimeOptions,
 	openOpenCodeRuntime,
@@ -76,6 +78,11 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 				path,
 				executable: process.env.OPENCODE_EXECUTABLE ?? "",
 				configVersion: "configuration-a",
+				authorizeExternalAction: async (
+					action: RuntimeExternalActionAuthorization,
+				) => {
+					await driver.validateExternalAction(action);
+				},
 				defaultModelOptionId: "primary",
 				defaultReasoningLevel: "high",
 				modelOptions: [
@@ -120,6 +127,22 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 					accepted.nativeSessionRef,
 					"execution-a",
 				);
+				const modelFacts = events.flatMap((event) =>
+					event.type === "operation" && event.payload.kind === "model"
+						? [event.payload]
+						: [],
+				);
+				expect(modelFacts.map((fact) => fact.phase)).toEqual([
+					"intent",
+					"started",
+					"completed",
+				]);
+				expect(modelFacts.at(-1)).toMatchObject({
+					startedAt: expect.any(String),
+					finishedAt: expect.any(String),
+					usage: { inputTokens: 10, outputTokens: 5 },
+				});
+				expect(modelFacts.at(-1)?.durationMs).toBeGreaterThanOrEqual(0);
 				expect(
 					events
 						.filter((e) => e.type === "text")
@@ -162,17 +185,41 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 			}
 		}, 60_000);
 
+		const ownerToolExpectation =
+			runtime === "OpenCode"
+				? "bounds owner %s at unknown when no native receipt and denies foreign paths and symlink escapes through native permission"
+				: "allows owner %s and denies foreign paths and symlink escapes through native permission";
 		it.each(["read", "write", "edit"])(
-			"allows owner %s and denies foreign paths and symlink escapes through native permission",
+			ownerToolExpectation,
 			async (toolName) => {
 				const path = await mkdtemp(join(tmpdir(), "opencode-tools-"));
 				const calls: string[] = [];
+				const persistedIntentsAtSend: number[] = [];
+				let ownerRef: string | undefined;
 				let target = "owner.txt";
 				let sequence = 0;
 				const server = createServer(async (req, res) => {
 					let body = "";
 					for await (const chunk of req) body += chunk;
 					const request = JSON.parse(body);
+					if (ownerRef) {
+						const persisted = JSON.parse(
+							await readFile(
+								join(path, "driver", ownerRef, "state.json"),
+								"utf8",
+							),
+						) as { turns: { events: RuntimeEvent[] }[] };
+						persistedIntentsAtSend.push(
+							persisted.turns
+								.flatMap((turn) => turn.events)
+								.filter(
+									(event) =>
+										event.type === "operation" &&
+										event.payload.kind === "model" &&
+										event.payload.phase === "intent",
+								).length,
+						);
+					}
 					calls.push(body);
 					sequence++;
 					const isToolResult = calls.length > 1;
@@ -256,6 +303,13 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 				if (!address || typeof address === "string") throw new Error();
 				const driver = await openNative({
 					path: join(path, "driver"),
+					// This source/path fixture checks durable attempts for both native Drivers.
+					// Real Host current-authority negatives remain in pi-native.test.ts.
+					authorizeExternalAction: async (
+						action: RuntimeExternalActionAuthorization,
+					) => {
+						await driver.validateExternalAction(action);
+					},
 					executable: process.env.OPENCODE_EXECUTABLE ?? "",
 					configVersion: "configuration-a",
 					defaultModelOptionId: "primary",
@@ -294,6 +348,7 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 						operationId: "prepare",
 						selection: { ...command.selection, modelOptionId: "missing" },
 					});
+					ownerRef = binding.nativeSessionRef;
 					const workspace = join(
 						path,
 						"driver",
@@ -318,11 +373,94 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 									accepted.nativeSessionRef,
 									"execution-a",
 								),
-							).toBe("completed"),
+							).toBe(runtime === "OpenCode" ? "unknown" : "completed"),
 						{ timeout: 20_000 },
 					);
-					if (toolName === "read")
+					if (toolName === "read" && runtime === "Pi")
 						expect(calls.at(-1)).toContain("SYNTHETIC_OWNER_CANARY");
+					const ownerEvents = await driver.replayEvents(
+						accepted.nativeSessionRef,
+						"execution-a",
+					);
+					const firstModelCompleted = ownerEvents.findIndex(
+						(event) =>
+							event.type === "operation" &&
+							event.payload.kind === "model" &&
+							event.payload.phase === "completed",
+					);
+					const firstToolIntent = ownerEvents.findIndex(
+						(event) =>
+							event.type === "operation" &&
+							event.payload.kind === "tool" &&
+							event.payload.phase === "intent",
+					);
+					expect(firstModelCompleted).toBeGreaterThanOrEqual(0);
+					expect(firstModelCompleted).toBeLessThan(firstToolIntent);
+					const modelFacts = ownerEvents.flatMap((event) =>
+						event.type === "operation" && event.payload.kind === "model"
+							? [event.payload]
+							: [],
+					);
+					expect(modelFacts.map((fact) => fact.phase)).toEqual(
+						runtime === "OpenCode"
+							? ["intent", "started", "completed"]
+							: [
+									"intent",
+									"started",
+									"completed",
+									"intent",
+									"started",
+									"completed",
+								],
+					);
+					expect(
+						persistedIntentsAtSend.slice(0, runtime === "OpenCode" ? 1 : 2),
+					).toEqual(runtime === "OpenCode" ? [1] : [1, 2]);
+					expect(
+						new Set(
+							modelFacts
+								.filter((fact) => fact.phase === "intent")
+								.map((fact) => fact.attemptRef),
+						).size,
+					).toBe(runtime === "OpenCode" ? 1 : 2);
+					expect(modelFacts[2]?.usage).toMatchObject({
+						inputTokens: 10,
+						outputTokens: 10,
+					});
+					expect(modelFacts[3]?.usage).toBeUndefined();
+					expect(modelFacts[4]?.usage).toBeUndefined();
+					const ownerToolFacts = ownerEvents.flatMap((event) =>
+						event.type === "operation" && event.payload.kind === "tool"
+							? [event.payload]
+							: [],
+					);
+					expect(ownerToolFacts.map((fact) => fact.phase)).toEqual(
+						runtime === "OpenCode"
+							? ["intent", "unknown"]
+							: runtime === "Pi" || toolName === "edit"
+								? ["intent", "started", "completed"]
+								: ["intent", "completed"],
+					);
+					if (runtime === "OpenCode") {
+						expect(ownerToolFacts[1]).toMatchObject({
+							phase: "unknown",
+							failureCode: "recovery_unconfirmed",
+							operationRef: ownerToolFacts[0]?.operationRef,
+							attemptRef: ownerToolFacts[0]?.attemptRef,
+						});
+						expect(ownerToolFacts[1]?.startedAt).toBeUndefined();
+						expect(ownerToolFacts[1]?.finishedAt).toBeUndefined();
+						expect(ownerToolFacts[1]?.durationMs).toBeUndefined();
+					}
+					if (runtime === "Pi") {
+						expect(ownerToolFacts.at(-1)?.startedAt).toEqual(
+							expect.any(String),
+						);
+						expect(ownerToolFacts.at(-1)?.durationMs).toBeGreaterThanOrEqual(0);
+					} else {
+						expect(ownerToolFacts.at(-1)?.startedAt).toBeUndefined();
+						expect(ownerToolFacts.at(-1)?.durationMs).toBeUndefined();
+					}
 					expect(await readFile(join(workspace, "owner.txt"), "utf8")).toBe(
 						toolName === "write"
 							? "synthetic replacement"
@@ -499,6 +637,18 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 						escaped.nativeSessionRef,
 						"execution-escape",
 					);
+					const escapeToolFacts = escapeEvents.flatMap((event) =>
+						event.type === "operation" && event.payload.kind === "tool"
+							? [event.payload]
+							: [],
+					);
+					expect(escapeToolFacts.at(-1)?.phase).toBe("failed");
+					expect(escapeToolFacts.at(-1)?.failureCode).toBe(
+						runtime === "OpenCode"
+							? "authorization_denied"
+							: "operation_failed",
+					);
+					expect(escapeToolFacts[0]?.phase).toBe("intent");
 					expect(escapeEvents.filter((e) => e.type === "tool")).toContainEqual(
 						expect.objectContaining({
 							payload: expect.objectContaining({ phase: "failed" }),
@@ -531,22 +681,32 @@ describe.each(["Pi", ...(process.env.OPENCODE_EXECUTABLE ? ["OpenCode"] : [])])(
 									afterDenial.nativeSessionRef,
 									"execution-after-denial",
 								),
-							).toBe("completed"),
+							).toBe(runtime === "OpenCode" ? "unknown" : "completed"),
 						{ timeout: 20_000 },
 					);
-					expect(calls).toHaveLength(2);
+					expect(calls).toHaveLength(runtime === "OpenCode" ? 1 : 2);
+					const afterDenialEvents = await driver.replayEvents(
+						afterDenial.nativeSessionRef,
+						"execution-after-denial",
+					);
 					expect(
-						(
-							await driver.replayEvents(
-								afterDenial.nativeSessionRef,
-								"execution-after-denial",
-							)
-						).filter((e) => e.type === "tool"),
+						afterDenialEvents.filter((e) => e.type === "tool"),
 					).toContainEqual(
 						expect.objectContaining({
 							payload: expect.objectContaining({ phase: "completed" }),
 						}),
 					);
+					if (runtime === "OpenCode") {
+						const afterDenialToolFacts = afterDenialEvents.flatMap((event) =>
+							event.type === "operation" && event.payload.kind === "tool"
+								? [event.payload]
+								: [],
+						);
+						expect(afterDenialToolFacts.map((fact) => fact.phase)).toEqual([
+							"intent",
+							"unknown",
+						]);
+					}
 				} finally {
 					await driver.close();
 					server.closeAllConnections();
