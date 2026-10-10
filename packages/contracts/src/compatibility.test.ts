@@ -2467,6 +2467,9 @@ describe("contract compatibility command", () => {
 		delete current.paths[
 			"/api/v2/agents/{agentId}/default-relay-key/candidates"
 		];
+		delete current.paths["/api/v2/agents/{agentId}/api-use-grants/{userId}"];
+		delete current.components.schemas.AgentUserUseRevokeRequestV1;
+		delete current.components.schemas.AgentUserUseRevokeResponseV1;
 		delete current.components.schemas.AgentApplicationCreateRequestV2.properties
 			.defaultRelayKey;
 		delete current.components.schemas.DeploymentTemplateProjectionV2.properties
