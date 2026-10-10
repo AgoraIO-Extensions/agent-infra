@@ -1,4 +1,6 @@
+import { BrowserCapabilityDeclarationV1Schema } from "@agent-infra/contracts/runtime";
 import {
+	RuntimeManifestBrowserAdmissionV1Schema,
 	RuntimeManifestV1Schema,
 	resolveRuntimeManifestCapabilitiesV1,
 } from "@agent-infra/contracts/workload";
@@ -82,6 +84,36 @@ describe("Runtime Manifest V1 contract", () => {
 			RuntimeManifestV1Schema.safeParse({
 				...manifest,
 				capabilities: { providerSpecific: true },
+			}).success,
+		).toBe(false);
+		const browser = BrowserCapabilityDeclarationV1Schema.parse({
+			schemaVersion: 1,
+			capabilityVersion: 1,
+			operations: ["navigate"],
+			policy: {
+				allowedOrigins: ["https://example.test/"],
+				maxContexts: 1,
+				maxTabs: 1,
+				maxPages: 1,
+				maxViewportWidth: 1280,
+				maxViewportHeight: 720,
+				maxConcurrentActions: 1,
+				maxDownloads: 0,
+				maxDownloadBytes: 0,
+				maxUploadBytes: 0,
+				maxScreenshotBytes: 0,
+				maxBrowserDurationMs: 60_000,
+				maxRetainedProfileBytes: 100_000,
+				navigationTimeoutMs: 5_000,
+				actionTimeoutMs: 5_000,
+				requireSideEffectConfirmation: true,
+				allowUserHandoff: false,
+			},
+		});
+		expect(
+			RuntimeManifestBrowserAdmissionV1Schema.safeParse({
+				...manifest,
+				capabilities: { browser },
 			}).success,
 		).toBe(false);
 	});
