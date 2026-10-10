@@ -89,11 +89,13 @@ describe("platform identity context for custom Agents", () => {
 		expect(() => verify({ ...token, token: "invalid" })).toThrow(
 			"PLATFORM_ENTRY_CONTEXT_INVALID",
 		);
-		const signature = token.token.slice(-1);
+		const parts = token.token.split(".");
+		const signature = parts[2];
+		if (!signature) throw new Error("Expected signature");
 		expect(() =>
 			verify({
 				...token,
-				token: `${token.token.slice(0, -1)}${signature === "A" ? "B" : "A"}`,
+				token: `${parts[0]}.${parts[1]}.${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`,
 			}),
 		).toThrow("PLATFORM_ENTRY_CONTEXT_INVALID");
 	});
