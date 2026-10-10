@@ -7,6 +7,7 @@ import {
 	SchemaVersionV1Schema,
 	TraceIdV1Schema,
 } from "../index.ts";
+import { BrowserCapabilityProjectionV1Schema } from "../runtime/browser-capability.ts";
 import { RuntimeSkillCapabilityV1Schema } from "../runtime/events.ts";
 import {
 	AgentApiLifecycleRequestV1Schema,
@@ -313,6 +314,7 @@ export const AgentProjectionV1Schema = z.strictObject({
 		connection: z.boolean(),
 		supplementaryInstruction: z.boolean(),
 		skills: z.array(RuntimeSkillCapabilityV1Schema).max(150).optional(),
+		browser: BrowserCapabilityProjectionV1Schema.optional(),
 	}),
 	interactionUrl: z
 		.string()

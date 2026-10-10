@@ -207,6 +207,53 @@ export type AgentProjectionV1 = {
     agentId: string;
     capabilities: {
         attachments: boolean;
+        browser?: {
+            capabilityVersion: number;
+            conformance: {
+                evidenceHash: string;
+                manifestDigest: string;
+                operations: Array<'navigate' | 'observe' | 'interact' | 'files' | 'handoff' | 'side_effects'>;
+                probeVersion: string;
+                receiptId: string;
+                schemaVersion: 1;
+                verifiedAt: string;
+            };
+            operations: Array<'navigate' | 'observe' | 'interact' | 'files' | 'handoff' | 'side_effects'>;
+            policy: {
+                actionTimeoutMs: number;
+                allowUserHandoff: boolean;
+                allowedOrigins: Array<string>;
+                maxBrowserDurationMs: number;
+                maxConcurrentActions: number;
+                maxContexts: number;
+                maxDownloadBytes: number;
+                maxDownloads: number;
+                maxPages: number;
+                maxRetainedProfileBytes: number;
+                maxScreenshotBytes: number;
+                maxTabs: number;
+                maxUploadBytes: number;
+                maxViewportHeight: number;
+                maxViewportWidth: number;
+                navigationTimeoutMs: number;
+                requireSideEffectConfirmation: boolean;
+            };
+            provenance: {
+                browser: 'chromium';
+                chromiumVersion: string;
+                imageDigest: string;
+                playwrightVersion: string;
+            };
+            schemaVersion: 1;
+            status: 'available';
+        } | {
+            capabilityVersion: number;
+            errorCode: 'BROWSER_CAPABILITY_NOT_CONFIGURED' | 'BROWSER_CAPABILITY_PROBE_FAILED' | 'BROWSER_CAPABILITY_UNAVAILABLE' | 'BROWSER_CAPABILITY_STALE' | 'BROWSER_CAPABILITY_VERSION_UNSUPPORTED' | 'BROWSER_CAPABILITY_POLICY_DENIED';
+            reason: string;
+            retryable: boolean;
+            schemaVersion: 1;
+            status: 'not_configured' | 'probe_failed' | 'unavailable' | 'stale';
+        };
         connection: boolean;
         modelSelection: boolean;
         resultFiles: boolean;

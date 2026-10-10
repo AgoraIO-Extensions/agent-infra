@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { discoverRuntimeBrowserCapabilityV1 } from "@agent-infra/agent-runtime";
 import {
 	type BrowserCapabilityBindingV1,
+	BrowserCapabilityProjectionV1Schema,
 	RuntimeCapabilitiesV1Schema,
 } from "@agent-infra/contracts/runtime";
 import {
@@ -535,6 +537,31 @@ export function createWorkloadRuntimeV1(
 				const declared = RuntimeCapabilitySetV1Schema.parse(
 					desired.runtimeManifest.capabilities ?? {},
 				);
+				const browserResult =
+					desired.runtimeManifest.capabilities?.browser &&
+					runtimeCapabilities.success &&
+					runtimeCapabilities.data.browser
+						? discoverRuntimeBrowserCapabilityV1(
+								{ schemaVersion: 1 },
+								{
+									declaration: desired.runtimeManifest.capabilities.browser,
+									manifestDigest: desired.imageDigest,
+									probe: runtimeCapabilities.data.browser,
+								},
+							)
+						: desired.runtimeManifest.capabilities?.browser
+							? discoverRuntimeBrowserCapabilityV1(
+									{ schemaVersion: 1 },
+									{
+										declaration: desired.runtimeManifest.capabilities.browser,
+										manifestDigest: desired.imageDigest,
+										probe: undefined,
+									},
+								)
+							: undefined;
+				const browser = browserResult
+					? BrowserCapabilityProjectionV1Schema.parse(browserResult)
+					: undefined;
 				recordCapabilities({
 					...Object.fromEntries(
 						Object.entries(declared).map(([name, value]) => [
@@ -545,6 +572,7 @@ export function createWorkloadRuntimeV1(
 					...(runtimeCapabilities.success && runtimeCapabilities.data.skills
 						? { skills: runtimeCapabilities.data.skills }
 						: {}),
+					...(browser ? { browser } : {}),
 				});
 				return probe.core === "passed";
 			},

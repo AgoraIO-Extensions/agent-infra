@@ -1,5 +1,7 @@
-import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/pilot";
-import { RuntimeCapabilitiesV1Schema } from "@agent-infra/contracts/runtime";
+import {
+	AgentProjectionV1Schema,
+	AgentResourceProfileProjectionV1Schema,
+} from "@agent-infra/contracts/pilot";
 import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-store";
 
 import type { createDeploymentIdentityScope } from "./deployment-identity.js";
@@ -60,12 +62,13 @@ export function createDeploymentPresentation(input: {
 			};
 		}
 		const verified = runtime.capabilities;
-		const capabilities = RuntimeCapabilitiesV1Schema.parse({
+		const capabilities = AgentProjectionV1Schema.shape.capabilities.parse({
 			modelSelection: verified?.modelSelection === true,
 			attachments: verified?.attachments === true,
 			resultFiles: verified?.resultFiles === true,
 			connection: verified?.connection === true,
 			supplementaryInstruction: verified?.supplementaryInstruction === true,
+			...(verified?.browser ? { browser: verified.browser } : {}),
 		});
 		return {
 			source: browserSource,

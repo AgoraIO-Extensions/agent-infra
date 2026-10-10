@@ -259,6 +259,9 @@ importers:
 
   apps/platform-worker:
     dependencies:
+      '@agent-infra/agent-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agent-runtime
       '@agent-infra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -296,9 +299,6 @@ importers:
         specifier: 7.29.1
         version: 7.29.1
     devDependencies:
-      '@agent-infra/agent-runtime':
-        specifier: workspace:*
-        version: link:../../packages/agent-runtime
       '@agent-infra/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -716,6 +716,9 @@ importers:
       '@agent-infra/config':
         specifier: workspace:*
         version: link:../config
+      '@agent-infra/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3

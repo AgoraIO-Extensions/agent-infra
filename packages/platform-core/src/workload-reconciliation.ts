@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
 import type { AgentConfigurationRecord } from "./agent-configuration.js";
 import {
 	type AgentManagementDecisionV1,
@@ -109,9 +110,11 @@ export interface WorkloadCapabilitiesV1 {
 	readonly connection?: boolean;
 	readonly supplementaryInstruction?: boolean;
 	readonly skills?: readonly WorkloadSkillCapabilityV1[];
+	readonly browser?: BrowserCapabilityProjectionV1;
 	readonly [key: string]:
 		| boolean
 		| readonly WorkloadSkillCapabilityV1[]
+		| BrowserCapabilityProjectionV1
 		| undefined;
 }
 
