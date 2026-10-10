@@ -322,6 +322,7 @@ export function createWecomSenderV1(options: {
 			let replyExpiresAt: number;
 			let config: WecomConfigurationV1;
 			let route!: WecomReplyRouteV1;
+			const sendMedia = options.sendMedia;
 			try {
 				if (
 					(input.text.length === 0 && !(input.media?.length ?? 0)) ||
@@ -343,6 +344,9 @@ export function createWecomSenderV1(options: {
 					(input.media?.length ?? 0) > 32
 				)
 					return "failed";
+				// Media support is a deterministic deployment capability. Reject before
+				// any text effect so a missing transfer cannot create a partial reply.
+				if (input.media?.length && !sendMedia) return "failed";
 				const resolved = await options.resolveConfiguration(input.scope);
 				route = await options.revealReply(input.replyHandle);
 				if (
@@ -442,14 +446,14 @@ export function createWecomSenderV1(options: {
 					return index > 0 && status === "failed" ? "unknown" : status;
 			}
 			if (input.media?.length) {
-				if (!options.sendMedia) return bodies.length ? "unknown" : "failed";
+				if (!sendMedia) return "failed";
 				if (replyExpiresAt <= (options.now?.() ?? new Date()).getTime())
 					return bodies.length ? "unknown" : "failed";
 				let status: "sent" | "failed" | "unknown";
 				try {
 					if (!input.revalidate || !(await input.revalidate()))
 						return bodies.length ? "unknown" : "failed";
-					status = await options.sendMedia({
+					status = await sendMedia({
 						config,
 						route,
 						scope: input.scope,
