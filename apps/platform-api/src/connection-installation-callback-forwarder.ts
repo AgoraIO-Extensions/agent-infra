@@ -23,6 +23,17 @@ async function readProtectedCallbackToken(path: string) {
 		throw new Error();
 	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 	try {
+		const openedStats = await file.stat();
+		if (
+			openedStats.dev !== stats.dev ||
+			openedStats.ino !== stats.ino ||
+			!openedStats.isFile() ||
+			openedStats.uid !== process.getuid?.() ||
+			(openedStats.mode & 0o777) !== 0o600 ||
+			openedStats.size < 16 ||
+			openedStats.size > 4096
+		)
+			throw new Error();
 		const value = (await file.readFile("utf8")) as string;
 		if (!tokenPattern.test(value)) throw new Error();
 		return value;
@@ -66,7 +77,8 @@ export function createProtectedConnectionInstallationForwarder(options: {
 	fetch?: typeof fetch;
 }): ProtectedConnectionInstallationForwarder {
 	return async ({ target, callbackPath: targetPath, request, signal }) => {
-		if (targetPath !== callbackPath) throw new Error();
+		if (targetPath !== callbackPath || target.callbackPath !== callbackPath)
+			throw new Error();
 		const runtime = new URL(target.runtimeOrigin);
 		if (
 			runtime.protocol !== "https:" ||
