@@ -265,3 +265,19 @@ test("main image publication rejects business images, ambiguous tags and invalid
     assert.ok(validateWorkflowDocuments(workflows).some((error) => error.includes("standard templates")));
   }
 });
+
+test("merged recovery isolates model secrets and Checks authority",async()=>{
+ for(const mutate of [
+  workflows=>{workflows['pr-agent-review.yml'].jobs['recovery-review'].permissions.checks='write';},
+  workflows=>{workflows['pr-agent-review.yml'].jobs['recovery-publish'].steps.push({uses:'docker://pragent/pr-agent@sha256:548b760b81ab4b3f729182428695ccc1194bbf87528c2b1e2b2b07e5223af7b6'});},
+ ]){
+  const workflows=await actualWorkflows();mutate(workflows);
+  assert.ok(validateWorkflowDocuments(workflows).some(error=>error.includes('Recovery')));
+ }
+});
+test("review execution and publisher serialize per PR without cancellation",async()=>{
+ for(const concurrency of [{group:'shared', 'cancel-in-progress':false},{group:'pr-agent-review-${{ github.event.pull_request.number || github.event.issue.number }}','cancel-in-progress':true}]){
+  const workflows=await actualWorkflows();workflows['pr-agent-review.yml'].concurrency=concurrency;
+  assert.ok(validateWorkflowDocuments(workflows).some(error=>error.includes('serialize')));
+ }
+});

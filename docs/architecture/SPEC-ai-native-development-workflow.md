@@ -101,7 +101,8 @@ Human Validation Gate、CODEOWNER approval、conversation resolution 与 PR revi
   评论请求重跑；其他命令、参数和 Bot 评论不触发。连续 push 不自动重跑模型。
 - 官方 Action 通过 API 获取 PR，不 checkout 或执行 PR 代码，不加载 PR 的配置文件或 wiki
   配置。保留既有模型、API Secret、超时与 context 上限，写权限只用于原生评论和 Review。
-- PR-Agent 不维护自定义 Analysis/Publisher、primary Issue 输入、增量 scope、receipt、Coverage、
+- 除 [已合并 Connection PR 的显式复评](#731-已合并-connection-pr-的显式复评) 外，
+  PR-Agent 不维护自定义 Analysis/Publisher、primary Issue 输入、增量 scope、receipt、Coverage、
   recorder/shadow、代理或派生镜像。原生 token 裁剪、文件过滤、分块、空结果与失败提示均由
   上游负责；评论存在不代表完整覆盖，也不保证每种超限情况都能发布“请拆分 PR”。
 - PR-Agent 是辅助评审，不提供 required Coverage Check。移除分支保护中的
@@ -112,6 +113,21 @@ Human Validation Gate、CODEOWNER approval、conversation resolution 与 PR revi
 - 迁移时移除旧 required context 并回读剩余 Check 的 App 绑定。工作流替换合入后，用默认分支
   重新启用 `pr-agent-review.yml`，再使用后续测试 PR 核验自动 Review/Suggestions 和两个评论命令。实现 PR 的静态检查不替代
   hosted 发布证据。
+
+#### 7.3.1 已合并 Connection PR 的显式复评
+
+Connection 的 reviewed migration release 要求原 PR 当前 head 的真实 `review` Check。
+对同仓库、目标 `connection` 的 merged PR，获授权非 Bot OWNER/MEMBER/COLLABORATOR 可用
+准确 `/review` 请求复评；其他 closed PR、fork、其他命令或未经授权 caller 不进入此路径。
+可信默认分支控制代码捕获 PR head，官方 Action 完成分析；只有新发布或更新的可信 Bot 原生
+Review 输出标明该捕获 head、完整执行成功，且发布前 head 再次核对一致，才由无模型
+Publisher 发布该 head 的 `review` Check。失败、跳过、缺少产出、旧 head 或 head 变化均不成功。
+此 Check 只证明该次复评执行与 SHA 绑定，不声明 Coverage，不替代 CODEOWNER 或人工验收。
+
+该路径是 §7.3 无自定义 Publisher 原则的受限例外，仅服务上述显式复评。不维护模型代理、
+上游补丁、派生镜像或增量覆盖系统。分析步骤不取得 Checks 写权限、不 checkout 或执行 PR
+代码；Publisher 无模型，只执行可信默认分支控制代码，保持凭证隔离。不改发布与迁移门禁，
+也不将本地报告或历史结果改写为成功 Check。正式部署仍须通过当前代码 head 的 CI。
 
 ### 7.4 人工验证
 

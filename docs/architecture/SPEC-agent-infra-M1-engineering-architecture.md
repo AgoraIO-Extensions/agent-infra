@@ -25,7 +25,8 @@
 M1 的自有产品与控制代码采用全 TypeScript 单仓库，使用 Better-T-Stack 初始化基础工程。Better-T-Stack 只负责生成工程骨架，不作为运行时依赖，也不决定领域模块的接口。Codex 使用固定官方 release，由 Native Driver/Adapter 消费上游能力；第三方源码、私有接缝与执行屏障的边界见 [10.11](#1011-codex-上游原生补丁与执行屏障)。
 
 CI 的 PR-Agent 直接使用官方 GitHub Action，仅启用 Review 与 Suggestions；不维护自有
-PR-Agent 脚本、上游补丁或派生 runtime。配置与权限边界见
+PR-Agent 上游补丁或派生 runtime；已合并 Connection PR 的复评记录恢复遵循工作流 Spec 的
+受限可信控制例外。配置与权限边界见
 [Workflow Spec §7.3](SPEC-ai-native-development-workflow.md#73-automated-pr-review)。
 
 ### 2.1 技术栈

@@ -82,7 +82,7 @@ function validateStepSecrets(errors, workflowName, jobName, step) {
       }[secret];
       if (
         workflowName !== "pr-agent-review.yml" ||
-        jobName !== "review" ||
+        !["review", "recovery-review"].includes(jobName) ||
         step.uses !== PR_AGENT_ACTION ||
         step.env?.[envName] !== reference ||
         occurrences !== 1
@@ -164,6 +164,22 @@ export function validateWorkflowDocuments(workflows) {
         }
       }
     }
+  }
+  const recovery = workflows["pr-agent-review.yml"];
+  if (!sameObject(recovery?.concurrency, {group:"pr-agent-review-${{ github.event.pull_request.number || github.event.issue.number }}", "cancel-in-progress":false})) {
+    errors.push("Recovery must serialize each PR without cancellation");
+  }
+  const analysis = recovery?.jobs?.["recovery-review"];
+  const publisher = recovery?.jobs?.["recovery-publish"];
+  if (analysis && (!sameObject(analysis.permissions, {contents:"read",issues:"write","pull-requests":"write"}) ||
+      analysis.steps?.some(step=>step.uses?.startsWith("actions/checkout@")) ||
+      !analysis.steps?.some(step=>step.uses===PR_AGENT_ACTION && step.env?.CONFIG__PROPAGATE_TOOL_ERRORS==='true' && step.env?.GITHUB_ACTION_CONFIG__AUTO_IMPROVE==='false'))) {
+    errors.push("Recovery analysis must use the pinned Action without Checks write or PR checkout");
+  }
+  if (publisher && (!sameObject(publisher.permissions, {contents:"read",issues:"read","pull-requests":"read",checks:"write"}) ||
+      referencedSecrets(publisher).length || publisher.steps?.some(step=>step.uses===PR_AGENT_ACTION) ||
+      !publisher.steps?.some(step=>step.run==='node .github/scripts/connection-review-recovery.ts publish'))) {
+    errors.push("Recovery Publisher must be model-free trusted control code with minimal Checks permission");
   }
   const gates = workflows["pr-gates.yml"];
   const issue = gates?.jobs?.issue;

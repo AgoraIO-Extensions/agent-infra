@@ -13,7 +13,7 @@
 		"dev": "turbo run dev",
 		"build": "turbo run build",
 		"check": "biome check . && node tests/support/web-ui-policy.mjs",
-		"check-types": "turbo run check-types && tsc --project deploy/local/authentik/tsconfig.json --noEmit",
+		"check-types": "turbo run check-types && tsc --project deploy/local/authentik/tsconfig.json --noEmit && tsc --project .github/scripts/tsconfig.json --noEmit",
 		"test": "node --test .github/scripts/*.test.mjs tests/*.test.mjs && turbo run test --concurrency=1 && vitest run tests/file-authority.test.ts tests/skill-package-supply.test.ts",
 		"test:file-authority": "vitest run tests/file-authority.test.ts",
 		"test:skill-package": "vitest run tests/skill-package-supply.test.ts",

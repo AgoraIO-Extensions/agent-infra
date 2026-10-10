@@ -10,6 +10,10 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: pr-agent-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   review:
     if: >-
@@ -57,3 +61,100 @@ jobs:
           GITHUB_ACTION_CONFIG__AUTO_DESCRIBE: "false"
           GITHUB_ACTION_CONFIG__AUTO_IMPROVE: "true"
           GITHUB_ACTION_CONFIG__PR_ACTIONS: '["opened", "reopened", "ready_for_review"]'
+
+  recovery-target:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.sender.type != 'Bot' &&
+      github.event.issue.pull_request &&
+      github.event.issue.state == 'closed' &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+      github.event.comment.body == '/review'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      allowed: ${{ steps.target.outputs.allowed }}
+      pr: ${{ steps.target.outputs.pr }}
+      head: ${{ steps.target.outputs.head }}
+      started: ${{ steps.target.outputs.started }}
+      before: ${{ steps.target.outputs.before }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+      - id: target
+        run: node .github/scripts/connection-review-recovery.ts prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  recovery-review:
+    needs: recovery-target
+    if: needs.recovery-target.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Review and suggest with PR-Agent
+        uses: docker://pragent/pr-agent@sha256:548b760b81ab4b3f729182428695ccc1194bbf87528c2b1e2b2b07e5223af7b6
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENAI_KEY: ${{ secrets.PR_AGENT_API_KEY }}
+          OPENAI__API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
+          CONFIG__MODEL: ${{ secrets.PR_AGENT_MODEL }}
+          CONFIG__FALLBACK_MODELS: "[]"
+          CONFIG__PROPAGATE_TOOL_ERRORS: "true"
+          CONFIG__AI_TIMEOUT: ${{ vars.PR_AGENT_AI_TIMEOUT_SECONDS || '120' }}
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
+          CONFIG__MAX_MODEL_TOKENS: ${{ vars.PR_AGENT_MODEL_MAX_TOKENS || '128000' }}
+          CONFIG__RESTRICTED_MODE: "true"
+          CONFIG__USE_REPO_SETTINGS_FILE: "false"
+          CONFIG__USE_WIKI_SETTINGS_FILE: "false"
+          PR_REVIEWER__ENABLE_REVIEW_LABELS_EFFORT: "false"
+          PR_REVIEWER__ENABLE_REVIEW_LABELS_SECURITY: "false"
+          PR_CODE_SUGGESTIONS__COMMITABLE_CODE_SUGGESTIONS: "true"
+          LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES: "true"
+          LITELLM__CUSTOM_LLM_PROVIDER: openai
+          LITELLM__FORCE_STREAMING_CUSTOM_LLM_PROVIDER: openai
+          LITELLM__FORCE_STREAMING_API_BASE_SUBSTRINGS: '["https://"]'
+          GITHUB_ACTION_CONFIG__AUTO_REVIEW: "true"
+          GITHUB_ACTION_CONFIG__AUTO_DESCRIBE: "false"
+          GITHUB_ACTION_CONFIG__AUTO_IMPROVE: "false"
+          GITHUB_ACTION_CONFIG__PR_ACTIONS: '["opened", "reopened", "ready_for_review"]'
+
+  recovery-publish:
+    needs: [recovery-target, recovery-review]
+    if: always() && needs.recovery-target.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+      - run: node .github/scripts/connection-review-recovery.ts publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REVIEW_PR: ${{ needs.recovery-target.outputs.pr }}
+          REVIEW_HEAD: ${{ needs.recovery-target.outputs.head }}
+          REVIEW_STARTED: ${{ needs.recovery-target.outputs.started }}
+          REVIEW_BEFORE: ${{ needs.recovery-target.outputs.before }}
+          REVIEW_RESULT: ${{ needs.recovery-review.result }}
