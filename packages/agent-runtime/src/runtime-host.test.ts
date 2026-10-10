@@ -827,11 +827,15 @@ describe("RuntimeHost durable Session", () => {
 			{
 				schemaVersion: 1,
 				modelOptionId: "model-option-primary",
+				modelId: "model-option-primary",
+				displayName: "model-option-primary",
 				reasoningLevels: ["high"],
 			},
 			{
 				schemaVersion: 1,
 				modelOptionId: "model-option-alternate",
+				modelId: "model-option-alternate",
+				displayName: "model-option-alternate",
 				reasoningLevels: ["low"],
 			},
 		]);
