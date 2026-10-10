@@ -2,7 +2,6 @@ export * from "./agent-api-audit-context.js";
 export * from "./agent-api-creation.js";
 export * from "./agent-api-lifecycle.js";
 export * from "./agent-application-grants.js";
-export * from "./agent-user-use-grants.js";
 export type {
 	AgentConfigurationAccessAuthorityV1,
 	AgentConfigurationAccessPlanV1,
@@ -58,6 +57,7 @@ export {
 export * from "./agent-default-relay-key.js";
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
+export * from "./agent-user-use-grants.js";
 export * from "./api-audit-identity.js";
 export * from "./application-api-credentials.js";
 export * from "./application-foundation.js";
