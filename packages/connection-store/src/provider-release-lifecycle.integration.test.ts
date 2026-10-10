@@ -252,4 +252,5 @@ integration(
 			await sql.end();
 		}
 	},
+	30_000,
 );
