@@ -7,6 +7,7 @@ import {
 	ApplicationRevisionError,
 	PersonalApiCredentialErrorV1,
 	PersonalRelayKeyErrorV1,
+	SkillHubOperationErrorV1,
 } from "@agent-infra/platform-core";
 
 import { HttpProtocolError } from "./common.js";
@@ -16,6 +17,20 @@ export function mapCoreError(
 	traceId: string,
 ): HttpProtocolError {
 	if (error instanceof HttpProtocolError) return error;
+	if (error instanceof SkillHubOperationErrorV1) {
+		const codes = {
+			invalid_input: "INVALID_REQUEST",
+			forbidden: "AUTHORIZATION_REVOKED",
+			not_found: "RESOURCE_UNAVAILABLE",
+			idempotency_conflict: "CONFLICT",
+			version_conflict: "CONFLICT",
+			invalid_transition: "CONFLICT",
+			owner_cannot_review: "AUTHORIZATION_REVOKED",
+			version_unavailable: "RESOURCE_UNAVAILABLE",
+			unavailable: "DEPENDENCY_UNAVAILABLE",
+		} as const;
+		return new HttpProtocolError(codes[error.code], traceId);
+	}
 	if (error instanceof PersonalRelayKeyErrorV1) {
 		const codes = {
 			invalid_input: "INVALID_REQUEST",

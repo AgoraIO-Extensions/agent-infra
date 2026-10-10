@@ -207,7 +207,17 @@ describe("standard contract artifacts", () => {
 			"/api/v2/me/api-credentials/{credentialId}",
 			"/api/v2/me/conversations/recent",
 			"/api/v2/me/relay-key",
+			"/api/v2/skills",
+			"/api/v2/skills/versions/{skillVersionId}",
 		]);
+		for (const path of [
+			"/api/v2/skills",
+			"/api/v2/skills/versions/{skillVersionId}",
+		]) {
+			expect(artifacts.pilotBrowserOpenapiV2.paths[path].get.security).toEqual([
+				{ PlatformSession: [] },
+			]);
+		}
 		const recent =
 			artifacts.pilotBrowserOpenapiV2.paths["/api/v2/me/conversations/recent"]
 				.get;

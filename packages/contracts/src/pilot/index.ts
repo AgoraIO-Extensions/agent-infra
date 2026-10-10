@@ -11,6 +11,7 @@ export * from "./errors.ts";
 export * from "./operation-v2.ts";
 export * from "./personal-api-credentials.ts";
 export * from "./personal-relay-key.ts";
+export * from "./skill-hub-read.ts";
 export * from "./sse.ts";
 export * from "./task.ts";
 export * from "./template-release.ts";

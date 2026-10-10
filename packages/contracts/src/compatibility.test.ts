@@ -1577,6 +1577,16 @@ describe("contract compatibility command", () => {
 			),
 		);
 		const current = JSON.parse(await readFile(artifact, "utf8"));
+		// This test isolates the credential compatibility contract. Skill Hub reads
+		// have their own pinned-addition test below; keeping them out avoids paying
+		// the subprocess cost for an unrelated contract mutation matrix.
+		for (const path of [
+			"/api/v2/skills",
+			"/api/v2/skills/versions/{skillVersionId}",
+		])
+			delete current.paths[path];
+		for (const name of ["SkillHubVersionMetadataV1", "SkillHubDirectoryPageV1"])
+			delete current.components.schemas[name];
 		const latest = structuredClone(current);
 		restorePreRelayKeyContract(current);
 		const previous = structuredClone(current);
@@ -1601,9 +1611,11 @@ describe("contract compatibility command", () => {
 		);
 		const baseline = resolve(directory, "previous.json");
 		const historicalCurrent = resolve(directory, "historical-current.json");
+		const contractArtifact = resolve(directory, "skill-hub-stripped.json");
 		try {
 			await writeFile(baseline, JSON.stringify(previous));
 			await writeFile(historicalCurrent, JSON.stringify(current));
+			await writeFile(contractArtifact, JSON.stringify(current));
 			expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
 			const mutations: Record<string, (value: typeof current) => void> = {
 				anonymous: (value) => {
@@ -1706,7 +1718,9 @@ describe("contract compatibility command", () => {
 				await writeFile(path, JSON.stringify(existing));
 				if (baselineKind === "governance")
 					expect(comparePaths(path, baseline).status).toBe(0);
-				expect(comparePaths(artifact, path).status, baselineKind).toBe(0);
+				expect(comparePaths(contractArtifact, path).status, baselineKind).toBe(
+					0,
+				);
 				expect(
 					comparePaths(historicalCurrent, path).status,
 					`${baselineKind}-historical`,
@@ -2234,6 +2248,8 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/me/conversations/recent" &&
 				path !== "/api/v2/me/api-credentials" &&
 				path !== "/api/v2/me/api-credentials/{credentialId}" &&
+				path !== "/api/v2/skills" &&
+				path !== "/api/v2/skills/versions/{skillVersionId}" &&
 				path !== "/api/v2/applications/{applicationId}/credentials" &&
 				path !== "/api/v2/applications/{applicationId}/material-grant" &&
 				path !==
