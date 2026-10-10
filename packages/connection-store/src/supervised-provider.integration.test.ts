@@ -318,6 +318,8 @@ if (process.env.CI && !url)
 				}),
 			).rejects.toMatchObject({ code: "FORBIDDEN" });
 		} finally {
+			// Leave the shared test reconciliation queue free of this fixture only.
+			await sql`DELETE FROM connection_reconciliation_jobs job USING connection_calls call WHERE job.call_id=call.id AND call.principal_id=${principalId}`;
 			await repo.close();
 			await sql.end();
 		}
