@@ -1,6 +1,9 @@
 import postgres from "postgres";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { PostgresPlatformUserDisablesV1 } from "./ldap-identity-ids.js";
+import {
+	type CurrentPlatformUserV1,
+	PostgresPlatformUserDisablesV1,
+} from "./ldap-identity-ids.js";
 import { migratePlatformDatabase } from "./migrate.js";
 import {
 	type PostgresTestDatabase,
@@ -88,4 +91,60 @@ it("rolls back the disable when its required audit cannot be written", async () 
 	expect(
 		await client`select id from platform.audit_events where trace_id='trace-audit-failure'`,
 	).toHaveLength(0);
+});
+
+it("rechecks external administrator authority before committing", async () => {
+	let actorReads = 0;
+	const raceStore = new PostgresPlatformUserDisablesV1(
+		database.databaseUrl,
+		async (userId): Promise<CurrentPlatformUserV1 | null> => {
+			if (userId === administrator) {
+				actorReads += 1;
+				return actorReads === 1
+					? { userId, accountStatus: "active", isSystemAdmin: true }
+					: null;
+			}
+			return userId === target
+				? { userId, accountStatus: "active", isSystemAdmin: false }
+				: null;
+		},
+	);
+	try {
+		await expect(
+			raceStore.setPlatformDisabled({
+				actorUserId: administrator,
+				targetUserId: target,
+				disabled: true,
+				traceId: "trace-directory-revoked",
+			}),
+		).rejects.toMatchObject({ code: "not_authorized" });
+	} finally {
+		await raceStore.close();
+	}
+	expect(actorReads).toBe(2);
+	expect(
+		await client`select user_id from platform.platform_user_disables where user_id=${target}`,
+	).toHaveLength(0);
+});
+
+it("bounds a hanging directory lookup and releases its transaction", async () => {
+	const stalledStore = new PostgresPlatformUserDisablesV1(
+		database.databaseUrl,
+		async () => new Promise<CurrentPlatformUserV1>(() => {}),
+	);
+	const startedAt = Date.now();
+	try {
+		await expect(
+			stalledStore.setPlatformDisabled({
+				actorUserId: administrator,
+				targetUserId: target,
+				disabled: true,
+				traceId: "trace-directory-timeout",
+			}),
+		).rejects.toMatchObject({ code: "dependency_unavailable" });
+	} finally {
+		await stalledStore.close();
+	}
+	expect(Date.now() - startedAt).toBeLessThan(4_000);
+	expect(await client`select 1 as released`).toEqual([{ released: 1 }]);
 });

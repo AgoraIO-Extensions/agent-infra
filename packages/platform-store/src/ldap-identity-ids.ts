@@ -22,6 +22,23 @@ export class PlatformUserDisableError extends Error {
 }
 
 const unavailable = () => new Error("LDAP_IDENTITY_STORE_UNAVAILABLE");
+const governanceOperationTimeoutMs = 2_000;
+
+async function withGovernanceTimeout<T>(operation: Promise<T>): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			operation,
+			new Promise<T>((_, reject) => {
+				timer = setTimeout(() => {
+					reject(new PlatformUserDisableError("dependency_unavailable"));
+				}, governanceOperationTimeoutMs);
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
 function text(value: string) {
 	if (
 		typeof value !== "string" ||
@@ -140,9 +157,13 @@ export class PostgresPlatformUserDisablesV1 {
 		}
 		try {
 			return await this.sql.begin(async (sql) => {
+				await sql`set local lock_timeout = '2s'`;
+				await sql`set local statement_timeout = '5s'`;
 				// Match all existing current-authority readers before resolving identity.
 				await sql`lock table platform.platform_user_disables in share row exclusive mode`;
-				const actor = await this.currentUser(input.actorUserId);
+				const actor = await withGovernanceTimeout(
+					this.currentUser(input.actorUserId),
+				);
 				if (
 					!actor ||
 					actor.userId !== input.actorUserId ||
@@ -156,11 +177,30 @@ export class PostgresPlatformUserDisablesV1 {
 					where user_id=${input.actorUserId}
 				`;
 				if (actorDisable) throw new PlatformUserDisableError("not_authorized");
-				const target = await this.currentUser(input.targetUserId);
+				const target = await withGovernanceTimeout(
+					this.currentUser(input.targetUserId),
+				);
 				if (!target || target.userId !== input.targetUserId)
 					throw new PlatformUserDisableError("resource_unavailable");
 				if (!input.disabled && target.accountStatus !== "active")
 					throw new PlatformUserDisableError("resource_unavailable");
+				const currentActor = await withGovernanceTimeout(
+					this.currentUser(input.actorUserId),
+				);
+				if (
+					!currentActor ||
+					currentActor.userId !== input.actorUserId ||
+					currentActor.accountStatus !== "active" ||
+					!currentActor.isSystemAdmin
+				)
+					throw new PlatformUserDisableError("not_authorized");
+				const [currentActorDisable] = await sql`
+					select user_id
+					from platform.platform_user_disables
+					where user_id=${input.actorUserId}
+				`;
+				if (currentActorDisable)
+					throw new PlatformUserDisableError("not_authorized");
 				const rows = input.disabled
 					? await sql`
 							insert into platform.platform_user_disables (user_id)
