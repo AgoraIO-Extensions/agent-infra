@@ -1527,7 +1527,8 @@ profile 必须明确配置、两端可互操作且保持自身门禁；不允许
 Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agent-infra/issues/435)
 是已关闭（NOT_PLANNED）的历史联合验收回链，不恢复该入口或已停止探针；当前代表旅程由
 [#192](https://github.com/AgoraIO-Extensions/agent-infra/issues/192)回链
-[#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144)，完整 Pilot 义务仍按原验收要求保留。
+[#144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144)；多日 Pilot 已退出 M1 规划，P0 首发真实环境验收由
+[#171](https://github.com/AgoraIO-Extensions/agent-infra/issues/171)供应资源并回链 #144。
 配置契约或静态校验通过不代表这些验收完成，也不接管
 [#907](https://github.com/AgoraIO-Extensions/agent-infra/issues/907)、
 [#601](https://github.com/AgoraIO-Extensions/agent-infra/issues/601)或 Connection 服务端实现。

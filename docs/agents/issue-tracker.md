@@ -15,7 +15,7 @@
 
 ## Planning priority labels
 
-- `priority:P0`：M1 后端主链路或首个 Pilot 的必要前置。
+- `priority:P0`：M1 后端主链路或 P0 首发真实环境验收的必要前置。
 - `priority:P1`：M1 必须完成，但依赖 P0 或属于后续验收门禁。
 - `priority:P2`：当前较低优先级的消费者、体验补齐或延后工作。
 
