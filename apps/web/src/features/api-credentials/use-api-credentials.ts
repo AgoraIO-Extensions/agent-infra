@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
 import type {
 	PersonalApiCredentialIssueRequestV1,
@@ -41,6 +41,8 @@ export function useApiCredentials({
 		};
 	}, [queryClient, scope]);
 	const allowed = Boolean(identityKey);
+	const [refreshFailure, setRefreshFailure] =
+		useState<ApiCredentialsState | null>(null);
 	const query = useQuery({
 		queryKey: scope.queryKey,
 		queryFn: ({ signal }) => loadPersonalApiCredentials(client, signal),
@@ -51,13 +53,33 @@ export function useApiCredentials({
 		retry: false,
 		staleTime: 15_000,
 	});
+	const queryFailure: ApiCredentialsState | null = query.error
+		? {
+				kind: "unavailable",
+				retryable:
+					!(query.error instanceof Error) ||
+					!("retryable" in query.error) ||
+					query.error.retryable !== false,
+			}
+		: null;
 	const state: ApiCredentialsState | { kind: "denied" | "loading" } = !allowed
 		? { kind: "denied" }
-		: (query.data ?? { kind: "loading" });
-	function refetch() {
-		return scope.active && allowed
-			? query.refetch({ cancelRefetch: false })
-			: Promise.resolve(undefined);
+		: (refreshFailure ?? queryFailure ?? query.data ?? { kind: "loading" });
+	async function refetch() {
+		if (!scope.active || !allowed) return undefined;
+		const result = await query.refetch({ cancelRefetch: false });
+		if (result.error) {
+			setRefreshFailure({
+				kind: "unavailable",
+				retryable:
+					!(result.error instanceof Error) ||
+					!("retryable" in result.error) ||
+					result.error.retryable !== false,
+			});
+		} else {
+			setRefreshFailure(null);
+		}
+		return result;
 	}
 	return { state, isFetching: allowed && query.isFetching, refetch };
 }
@@ -124,7 +146,12 @@ export function useRevokePersonalApiCredential(client?: Client) {
 
 export function useNarrowPersonalApiCredential(client?: Client) {
 	const pending = useRef<
-		{ credentialId: string; idempotencyKey: string } | undefined
+		| {
+				credentialId: string;
+				bodyFingerprint: string;
+				idempotencyKey: string;
+		  }
+		| undefined
 	>(undefined);
 	const mutation = useMutation({
 		mutationKey: ["api-credentials", "narrow"],
@@ -135,9 +162,17 @@ export function useNarrowPersonalApiCredential(client?: Client) {
 				expiresAt?: string;
 			};
 		}) => {
-			if (pending.current?.credentialId !== input.credentialId) {
+			const bodyFingerprint = JSON.stringify({
+				scopes: input.body.scopes ? [...input.body.scopes].sort() : undefined,
+				expiresAt: input.body.expiresAt,
+			});
+			if (
+				pending.current?.credentialId !== input.credentialId ||
+				pending.current.bodyFingerprint !== bodyFingerprint
+			) {
 				pending.current = {
 					credentialId: input.credentialId,
+					bodyFingerprint,
 					idempotencyKey: crypto.randomUUID(),
 				};
 			}

@@ -3,7 +3,6 @@ import {
 	useLocation,
 	useNavigate,
 } from "@tanstack/react-router";
-import { useState } from "react";
 import { ApiCredentialsScreen } from "../../features/api-credentials/api-credentials-screen.js";
 import {
 	useApiCredentials,
@@ -37,8 +36,10 @@ function ApiCredentialsRoute() {
 		typeof candidateApplicationId === "string"
 			? candidateApplicationId
 			: undefined;
-	const [applicationId, setApplicationId] = useState(requestedApplicationId);
-	const application = useOwnApplication({ applicationId, identityKey });
+	const application = useOwnApplication({
+		applicationId: requestedApplicationId,
+		identityKey,
+	});
 	const register = useRegisterOwnApplication();
 	const disable = useDisableOwnApplication();
 	const issueApplicationCredential = useIssueOrRotateApplicationCredential();
@@ -59,7 +60,7 @@ function ApiCredentialsRoute() {
 					return result;
 				}}
 				isIssuing={issue.isPending}
-				revokingCredentialId={revoke.variables}
+				revokingCredentialId={revoke.isPending ? revoke.variables : undefined}
 				issueError={issue.error}
 				revokeError={revoke.error}
 			/>
@@ -68,7 +69,6 @@ function ApiCredentialsRoute() {
 				onRetry={() => void application.refetch()}
 				onRegister={async (name) => {
 					const metadata = await register.mutateAsync(name);
-					setApplicationId(metadata.applicationId);
 					await navigate({
 						replace: true,
 						search: { applicationId: metadata.applicationId },

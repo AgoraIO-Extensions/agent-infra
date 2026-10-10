@@ -1,7 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
-import type { ApplicationCredentialRequest } from "./application-management.js";
+import type {
+	ApplicationCredentialRequest,
+	ApplicationManagementState,
+} from "./application-management.js";
 import {
 	disableOwnApplication,
 	issueOrRotateApplicationCredential,
@@ -40,6 +43,8 @@ export function useOwnApplication({
 		};
 	}, [queryClient, scope]);
 	const allowed = Boolean(identityKey);
+	const [refreshFailure, setRefreshFailure] =
+		useState<ApplicationManagementState | null>(null);
 	const query = useQuery({
 		queryKey: scope.queryKey,
 		queryFn: () => loadOwnApplication(applicationId ?? "", client),
@@ -47,13 +52,35 @@ export function useOwnApplication({
 		retry: false,
 		staleTime: 15_000,
 	});
+	const queryFailure: ApplicationManagementState | null = query.error
+		? {
+				kind: "unavailable",
+				retryable:
+					!(query.error instanceof Error) ||
+					!("retryable" in query.error) ||
+					query.error.retryable !== false,
+			}
+		: null;
 	const state = !allowed
 		? { kind: "denied" as const }
-		: (query.data ?? { kind: "loading" as const });
-	function refetch() {
-		return scope.active && allowed
-			? query.refetch({ cancelRefetch: false })
-			: Promise.resolve(undefined);
+		: (refreshFailure ??
+			queryFailure ??
+			query.data ?? { kind: "loading" as const });
+	async function refetch() {
+		if (!scope.active || !allowed) return undefined;
+		const result = await query.refetch({ cancelRefetch: false });
+		if (result.error) {
+			setRefreshFailure({
+				kind: "unavailable",
+				retryable:
+					!(result.error instanceof Error) ||
+					!("retryable" in result.error) ||
+					result.error.retryable !== false,
+			});
+		} else {
+			setRefreshFailure(null);
+		}
+		return result;
 	}
 	return { state, isFetching: allowed && query.isFetching, refetch };
 }
