@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	readCodexPilotConfiguration,
 	readRuntimeModelConfigurationV3,
+	readRuntimeModelConfigurationV4,
 } from "./configuration.js";
 
 const configuration = {
@@ -74,6 +75,32 @@ describe("Runtime deployment configuration", () => {
 		expect(() =>
 			readRuntimeModelConfigurationV3(environment(), "claude"),
 		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
+	it("accepts credential-free Messages V4 configuration for Claude", () => {
+		const env = {
+			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+				schemaVersion: 4,
+				configVersion: "configuration-1",
+				defaultModelOptionId: "option-default",
+				defaultReasoningLevel: "medium",
+				modelOptions: [
+					{
+						modelOptionId: "option-default",
+						protocol: "anthropic-messages-v1",
+						authentication: "api-key",
+						endpoint: "https://model.invalid/v1",
+						model: "claude-opus-5",
+						reasoningLevels: ["medium"],
+					},
+				],
+			}),
+		};
+		expect(
+			readRuntimeModelConfigurationV4(env, "claude").modelOptions[0],
+		).toMatchObject({
+			model: "claude-opus-5",
+			authentication: "api-key",
+		});
 	});
 	it.each([
 		"http://model.invalid/v1",

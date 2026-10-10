@@ -6,7 +6,9 @@ import { validateModelAccess } from "./codex-app-server-bridge.js";
 export interface RuntimeMessagesTransportOptions {
 	readonly client?: "claude" | "opencode" | "pi";
 	readonly endpoint: string;
-	readonly credential: string;
+	readonly credential?: string;
+	/** V4 execution-key delivery. Resolved immediately before each upstream request. */
+	readonly resolveCredential?: () => Promise<string>;
 	readonly authentication: "api-key" | "bearer";
 	readonly model: string;
 	readonly effort: string;
@@ -42,12 +44,15 @@ function reject(response: ServerResponse, status = 400) {
 export async function openRuntimeMessagesTransport(
 	options: RuntimeMessagesTransportOptions,
 ) {
-	const access = validateModelAccess({
-		endpoint: options.endpoint,
-		credential: options.credential,
-	});
+	const access =
+		options.credential === undefined
+			? undefined
+			: validateModelAccess({
+					endpoint: options.endpoint,
+					credential: options.credential,
+				});
 	if (
-		!access ||
+		(!access && !options.resolveCredential) ||
 		!["api-key", "bearer"].includes(options.authentication) ||
 		!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(options.model) ||
 		!["low", "medium", "high", "xhigh", "max"].includes(options.effort)
@@ -130,6 +135,14 @@ export async function openRuntimeMessagesTransport(
 					admitted = true;
 				}
 				if (closed || controller.signal.aborted) throw new Error();
+				const credential = options.resolveCredential
+					? await options.resolveCredential()
+					: options.credential;
+				const requestAccess = validateModelAccess({
+					endpoint: options.endpoint,
+					credential,
+				});
+				if (!requestAccess) throw new Error();
 				const headers: Record<string, string> = {
 					"content-type": "application/json",
 					"anthropic-version": "2023-06-01",
@@ -143,12 +156,12 @@ export async function openRuntimeMessagesTransport(
 				};
 				if (typeof beta === "string") headers["anthropic-beta"] = beta;
 				if (options.authentication === "api-key")
-					headers["x-api-key"] = access.credential;
-				else headers.authorization = `Bearer ${access.credential}`;
+					headers["x-api-key"] = requestAccess.credential;
+				else headers.authorization = `Bearer ${requestAccess.credential}`;
 				if (!counting) await options.receipt?.("sent");
 				sent = true;
 				const upstream = await (options.fetch ?? fetch)(
-					`${access.endpoint.replace(/\/$/, "")}${request.url}`,
+					`${requestAccess.endpoint.replace(/\/$/, "")}${request.url}`,
 					{
 						method: "POST",
 						headers,
@@ -204,7 +217,7 @@ export async function openRuntimeMessagesTransport(
 					upstream.body,
 					response,
 					options.model,
-					[access.credential, access.endpoint],
+					[requestAccess.credential, requestAccess.endpoint],
 					controller.signal,
 					async (reason) => {
 						await options.receipt?.("completed", reason === "end_turn");
