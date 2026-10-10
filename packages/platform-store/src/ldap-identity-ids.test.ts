@@ -47,4 +47,45 @@ it("rejects a Platform-disabled administrator inside the governance transaction"
 	expect(
 		await client`select user_id from platform.platform_user_disables where user_id=${target}`,
 	).toHaveLength(0);
+	await client`delete from platform.platform_user_disables where user_id=${administrator}`;
+});
+
+it("rolls back the disable when its required audit cannot be written", async () => {
+	await client`
+		create function platform.fail_platform_user_disable_audit()
+		returns trigger as $$
+		begin
+			if NEW.action = 'platform.user.disabled' then
+				raise exception 'governance audit failure sentinel';
+			end if;
+			return NEW;
+		end;
+		$$ language plpgsql
+	`;
+	await client`
+		create trigger fail_platform_user_disable_audit
+		before insert on platform.audit_events
+		for each row execute function platform.fail_platform_user_disable_audit()
+	`;
+	try {
+		await expect(
+			store.setPlatformDisabled({
+				actorUserId: administrator,
+				targetUserId: target,
+				disabled: true,
+				traceId: "trace-audit-failure",
+			}),
+		).rejects.toMatchObject({ code: "dependency_unavailable" });
+	} finally {
+		await client`
+			drop trigger fail_platform_user_disable_audit on platform.audit_events
+		`;
+		await client`drop function platform.fail_platform_user_disable_audit()`;
+	}
+	expect(
+		await client`select user_id from platform.platform_user_disables where user_id=${target}`,
+	).toHaveLength(0);
+	expect(
+		await client`select id from platform.audit_events where trace_id='trace-audit-failure'`,
+	).toHaveLength(0);
 });
