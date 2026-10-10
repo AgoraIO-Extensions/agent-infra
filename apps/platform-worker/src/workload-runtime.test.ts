@@ -9,6 +9,10 @@ import {
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
+import type {
+	BrowserCapabilityDeclarationV1,
+	RuntimeBrowserCapabilityProbeEvidenceV1,
+} from "@agent-infra/contracts/runtime";
 import { RuntimeCapabilitiesResponseV1Schema } from "@agent-infra/contracts/runtime";
 import {
 	type PlatformSecretRecordV1,
@@ -2860,6 +2864,105 @@ describe("assembled Workload Runtime contracts", () => {
 			false,
 			false,
 		]);
+	});
+	it("persists the verified Browser projection with its current Sandbox binding", async () => {
+		const imageDigest = `sha256:${"a".repeat(64)}`;
+		const browserDeclaration: BrowserCapabilityDeclarationV1 = {
+			schemaVersion: 1,
+			capabilityVersion: 1,
+			operations: ["navigate", "observe"],
+			policy: {
+				allowedOrigins: ["https://example.test/"],
+				maxContexts: 1,
+				maxTabs: 1,
+				maxPages: 1,
+				maxViewportWidth: 1280,
+				maxViewportHeight: 720,
+				maxConcurrentActions: 1,
+				maxDownloads: 0,
+				maxDownloadBytes: 0,
+				maxUploadBytes: 0,
+				maxScreenshotBytes: 1024,
+				maxBrowserDurationMs: 60_000,
+				maxRetainedProfileBytes: 100_000,
+				navigationTimeoutMs: 15_000,
+				actionTimeoutMs: 5_000,
+				requireSideEffectConfirmation: true,
+				allowUserHandoff: false,
+			},
+		};
+		const browserProbe: RuntimeBrowserCapabilityProbeEvidenceV1 = {
+			capabilityVersion: 1,
+			operations: ["navigate", "observe"],
+			provenance: {
+				browser: "chromium",
+				chromiumVersion: "140.0.7339.0",
+				playwrightVersion: "1.55.0",
+				imageDigest,
+			},
+			conformance: {
+				schemaVersion: 1,
+				receiptId: "browser-receipt",
+				probeVersion: "browser-probe",
+				verifiedAt: new Date().toISOString(),
+				manifestDigest: imageDigest,
+				evidenceHash: "b".repeat(64),
+				operations: ["navigate", "observe"],
+			},
+			binding: {
+				agentId: "agent-a",
+				sessionId: "session-a",
+				sessionGeneration: 1,
+				resourceFence: 1,
+				workloadRevision: 1,
+				imageDigest,
+			},
+		};
+		const probeRuntime = vi.fn(async () => ({
+			core: "passed" as const,
+			capabilities: {
+				modelSelection: false,
+				attachments: false,
+				resultFiles: false,
+				connection: false,
+				supplementaryInstruction: false,
+				browser: browserProbe,
+			},
+		}));
+		const f = fixture({
+			registry: workloadRegistryFixture({
+				schemaVersion: 1,
+				interactionMode: "platform-adapter",
+				protocol: "acp",
+				service: { port: 8080 },
+				health: { path: "/healthz" },
+				capabilities: {
+					modelSelection: false,
+					attachments: false,
+					resultFiles: false,
+					connection: false,
+					supplementaryInstruction: false,
+					browser: browserDeclaration,
+				},
+			}),
+			browserBinding: ({ agentId, workloadRevision, fence, imageDigest }) => ({
+				agentId,
+				sessionId: "session-a",
+				sessionGeneration: 1,
+				resourceFence: fence,
+				workloadRevision,
+				imageDigest,
+			}),
+			probeRuntime,
+		});
+		await f.tick(8);
+		expect(f.state?.phase).toBe("ready");
+		expect(f.state?.capabilities?.browser).toMatchObject({
+			status: "available",
+			operations: ["navigate", "observe"],
+			provenance: browserProbe.provenance,
+			conformance: browserProbe.conformance,
+		});
 	});
 	it("uses RuntimeHost Fake HTTP capabilities and persists only the declared intersection across Worker restarts", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "workload-runtime-"));
