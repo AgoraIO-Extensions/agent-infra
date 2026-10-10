@@ -847,6 +847,22 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				const imageDigest = process.env.WORKLOAD_KIND_HOST_IMAGE;
 				if (!imageDigest)
 					throw new Error("WORKLOAD_KIND_HOST_IMAGE is required");
+				const { publicKey } = generateKeyPairSync("ed25519");
+				const grantPublicKey = publicKey
+					.export({ type: "spki", format: "pem" })
+					.toString();
+				const tokenName = "api-workload-service-token";
+				apply({
+					apiVersion: "v1",
+					kind: "Secret",
+					metadata: { name: tokenName, namespace },
+					immutable: true,
+					type: "Opaque",
+					stringData: { token: randomBytes(32).toString("base64") },
+				});
+				const tokenSecret = await client.read<V1Secret>("Secret", tokenName);
+				if (!tokenSecret?.data?.token)
+					throw new Error("Runtime token is missing");
 				const seed = await seedStandardWorkloadHostV1(
 					database.databaseUrl,
 					imageDigest,
@@ -998,7 +1014,16 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					client: workerClient,
 					workerId: "api-workload-worker",
 					pollIntervalMs: 1,
-					policy: workloadPolicy,
+					policy: {
+						...workloadPolicy,
+						runtimeAuth: {
+							workerId: "api-workload-worker",
+							grantKeyId: "api-workload-grant",
+							grantIssuer: "api-workload-issuer",
+							grantPublicKey,
+							serviceTokenSecret: { name: tokenName, key: "token" },
+						},
+					},
 					registry: seed.workerOptions.registry,
 					fetch: fetchViaProbe,
 					log: (message) => workerLogs.push(message),
