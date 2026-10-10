@@ -1,10 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	type ApprovedConnectionConsumerTargetV1,
 	resolveApprovedConnectionConsumerProfileV1,
 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
 	ConnectionInstallationAuthorizationV1Schema,
+	ConnectionInstallationCallbackV1Schema,
 	ConnectionInstallationCommandV1Schema,
 	type RuntimeOAuthConfigurationV1,
 	RuntimeOAuthConfigurationV1Schema,
@@ -32,6 +33,37 @@ import {
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
 >[0];
+function parseAuthorizationRedirect(
+	value: string,
+	configuration: RuntimeOAuthConfigurationV1,
+	expiresAt: number,
+) {
+	if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now())
+		throw new ConnectionInstallationErrorV1("invalid_input");
+	const actual = new URL(value);
+	const expected = new URL(configuration.authorizationEndpoint);
+	const keys = [...actual.searchParams.keys()].sort().join(",");
+	if (
+		actual.protocol !== "https:" ||
+		actual.origin !== expected.origin ||
+		actual.pathname !== expected.pathname ||
+		actual.username ||
+		actual.password ||
+		actual.hash ||
+		keys !==
+			"client_id,code_challenge,code_challenge_method,redirect_uri,resource,response_type,scope,state" ||
+		actual.searchParams.get("client_id") !== configuration.clientId ||
+		actual.searchParams.get("redirect_uri") !== configuration.callbackUrl ||
+		actual.searchParams.get("resource") !== configuration.resource ||
+		actual.searchParams.get("response_type") !== "code" ||
+		actual.searchParams.get("scope") !== configuration.scope ||
+		actual.searchParams.get("code_challenge_method") !== "S256" ||
+		!/^[a-f0-9]{64}$/.test(actual.searchParams.get("state") ?? "") ||
+		!/^[A-Za-z0-9_-]{43}$/.test(actual.searchParams.get("code_challenge") ?? "")
+	)
+		throw new ConnectionInstallationErrorV1("invalid_input");
+	return actual.searchParams.get("state") as string;
+}
 function decode(
 	row: typeof authorizations.$inferSelect,
 ): ConnectionInstallationSavedV1 {
@@ -119,6 +151,61 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 			return row ? decode(row) : null;
 		};
 		return {
+			claimCallback: async ({ stateHash, now }) => {
+				await tx.execute(sql`
+					update platform.connection_installation_authorizations
+					set binding=jsonb_set(
+						binding,
+						'{callback,status}',
+						to_jsonb('unknown'::text),
+						true
+					), revision=revision+1, updated_at=clock_timestamp()
+					where binding->'callback'->>'status'='sending'
+					  and (binding->'callback'->>'attemptExpiresAt')::bigint <= ${now}
+				`);
+				const rows = await tx.execute(sql`
+					select id, binding
+					from platform.connection_installation_authorizations
+					where binding->'callback'->>'stateHash'=${stateHash}
+					  and binding->'callback'->>'status'='pending'
+					  and (binding->'callback'->>'expiresAt')::bigint > ${now}
+					  and expires_at > clock_timestamp()
+					  and status in ('awaiting_confirmation','confirmed')
+					for update
+				`);
+				const row = rows[0];
+				if (!row) return null;
+				const binding = row.binding as Record<string, unknown>;
+				const callback = ConnectionInstallationCallbackV1Schema.parse(
+					binding.callback,
+				);
+				await tx.execute(sql`
+					update platform.connection_installation_authorizations
+					set binding=jsonb_set(
+						jsonb_set(binding, '{callback,status}', to_jsonb('sending'::text), true),
+						'{callback,attemptExpiresAt}', to_jsonb(${now + 15_000}::bigint), true
+					), revision=revision+1, updated_at=clock_timestamp()
+					where id=${row.id}
+				`);
+				return {
+					authorizationId: row.id as string,
+					runtimeOrigin: callback.runtimeOrigin,
+					expiresAt: callback.expiresAt,
+					issuer: this.#configuration.issuer,
+				};
+			},
+			settleCallback: async ({ stateHash, status }) => {
+				const result = await tx.execute(sql`
+					update platform.connection_installation_authorizations
+					set binding=(jsonb_set(
+						binding, '{callback,status}', to_jsonb(${status}::text), true
+					) #- '{callback,attemptExpiresAt}'),
+						revision=revision+1, updated_at=clock_timestamp()
+					where binding->'callback'->>'stateHash'=${stateHash}
+					  and binding->'callback'->>'status'='sending'
+				`);
+				return Number(result.count ?? 0) === 1;
+			},
 			hasUnresolvedSend: async (id, exclude) => {
 				const rows = await tx
 					.select({
@@ -453,13 +540,14 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 		attemptOwner: string;
 		status: "completed" | "unknown";
 		authorizationUrl?: string;
+		authorizationExpiresAt?: number;
 	}): Promise<boolean> {
 		try {
 			const result = await this.#database.transaction(async (tx) => {
 				await tx.execute(sql`set local lock_timeout = '5s'`);
 				await tx.execute(sql`set local statement_timeout = '15s'`);
 				const owned = await tx.execute(sql`
-					select c.command, c.authorization_id, a.binding
+					select c.command, c.authorization_id, a.binding, a.expires_at
 					from platform.connection_installation_commands c
 					join platform.connection_installation_authorizations a on a.id=c.authorization_id
 					where c.id=${input.commandId} and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
@@ -476,23 +564,32 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				const effectiveStatus = status[0]?.status;
 				if (
 					input.authorizationUrl !== undefined &&
+					input.authorizationExpiresAt !== undefined &&
 					effectiveStatus === "completed" &&
 					command.command === "begin"
 				) {
-					const actual = new URL(input.authorizationUrl);
-					const expected = new URL(this.#configuration.authorizationEndpoint);
+					const state = parseAuthorizationRedirect(
+						input.authorizationUrl,
+						this.#configuration,
+						input.authorizationExpiresAt,
+					);
 					if (
-						actual.protocol !== "https:" ||
-						actual.origin !== expected.origin ||
-						actual.pathname !== expected.pathname ||
-						actual.username ||
-						actual.password ||
-						actual.hash
+						input.authorizationExpiresAt >
+						new Date(command.expires_at as string).getTime()
 					)
 						throw new ConnectionInstallationErrorV1("invalid_input");
+					const callback = {
+						stateHash: createHash("sha256").update(state).digest("hex"),
+						runtimeOrigin: this.#configuration.runtimeOrigin,
+						expiresAt: input.authorizationExpiresAt,
+						status: "pending" as const,
+					};
 					await tx.execute(sql`
 						update platform.connection_installation_authorizations
-						set binding=jsonb_set(binding, '{authorizationUrl}', to_jsonb(${input.authorizationUrl}::text), true), revision=revision+1, updated_at=clock_timestamp()
+						set binding=jsonb_set(
+							jsonb_set(binding, '{authorizationUrl}', to_jsonb(${input.authorizationUrl}::text), true),
+							'{callback}', ${JSON.stringify(callback)}::jsonb, true
+						), revision=revision+1, updated_at=clock_timestamp()
 						where id=${command.authorization_id}
 					`);
 				}

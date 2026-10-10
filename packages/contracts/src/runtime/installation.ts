@@ -25,12 +25,38 @@ const ConnectionInstallationAuthorizationUrlV1Schema = z
 	.refine((value) => {
 		const url = new URL(value);
 		return (
-			url.protocol === "https:" &&
-			!url.username &&
-			!url.password &&
-			!url.hash
+			url.protocol === "https:" && !url.username && !url.password && !url.hash
 		);
 	});
+export const ConnectionInstallationCallbackStatusV1Schema = z.enum([
+	"pending",
+	"sending",
+	"delivered",
+	"unknown",
+]);
+export const ConnectionInstallationCallbackV1Schema = z.strictObject({
+	stateHash: z.string().regex(/^[a-f0-9]{64}$/),
+	runtimeOrigin: z
+		.string()
+		.url()
+		.refine((value) => {
+			const url = new URL(value);
+			return (
+				url.protocol === "https:" &&
+				url.pathname === "/" &&
+				!url.search &&
+				!url.hash &&
+				!url.username &&
+				!url.password
+			);
+		}),
+	expiresAt: z.number().int().positive().safe(),
+	status: ConnectionInstallationCallbackStatusV1Schema,
+	attemptExpiresAt: z.number().int().positive().safe().optional(),
+});
+export type ConnectionInstallationCallbackV1 = z.infer<
+	typeof ConnectionInstallationCallbackV1Schema
+>;
 
 export const ConnectionInstallationAuthorizationV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
@@ -43,6 +69,7 @@ export const ConnectionInstallationAuthorizationV1Schema = z.strictObject({
 	expiresAt: z.number().int().positive().safe(),
 	/** Short-lived OAuth entry point only; never a token, code, verifier, or secret. */
 	authorizationUrl: ConnectionInstallationAuthorizationUrlV1Schema.optional(),
+	callback: ConnectionInstallationCallbackV1Schema.optional(),
 });
 export type ConnectionInstallationAuthorizationV1 = z.infer<
 	typeof ConnectionInstallationAuthorizationV1Schema
@@ -87,6 +114,7 @@ export type ConnectionInstallationCommandV1 = z.infer<
 
 export const ConnectionInstallationV1SchemaDefinitions = {
 	ConnectionInstallationReferenceV1: ConnectionInstallationReferenceV1Schema,
+	ConnectionInstallationCallbackV1: ConnectionInstallationCallbackV1Schema,
 	ConnectionInstallationAuthorizationV1:
 		ConnectionInstallationAuthorizationV1Schema,
 	ConnectionInstallationProjectionV1: ConnectionInstallationProjectionV1Schema,

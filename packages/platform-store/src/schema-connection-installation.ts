@@ -30,7 +30,10 @@ export const connectionInstallationAuthorizations = platformSchema.table(
 					"principal" | "reference" | "scope"
 				> &
 					Partial<
-						Pick<ConnectionInstallationAuthorizationV1, "authorizationUrl">
+						Pick<
+							ConnectionInstallationAuthorizationV1,
+							"authorizationUrl" | "callback"
+						>
 					>
 			>()
 			.notNull(),

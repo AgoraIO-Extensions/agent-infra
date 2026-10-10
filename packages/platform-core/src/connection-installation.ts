@@ -45,6 +45,14 @@ export interface ConnectionInstallationAuthorizationFactV1 {
 	readonly expiresAt: number;
 	/** Runtime-generated OAuth entry point; no credential material. */
 	readonly authorizationUrl?: string;
+	readonly callback?: ConnectionInstallationCallbackV1;
+}
+export interface ConnectionInstallationCallbackV1 {
+	readonly stateHash: string;
+	readonly runtimeOrigin: string;
+	readonly expiresAt: number;
+	readonly status: "pending" | "sending" | "delivered" | "unknown";
+	readonly attemptExpiresAt?: number;
 }
 export interface ConnectionInstallationCommandFactV1 {
 	readonly schemaVersion: 1;
@@ -85,6 +93,14 @@ export interface ConnectionInstallationSavedV1 {
 	readonly agentAuthorizationRevision: string;
 }
 export interface ConnectionInstallationTransactionV1 {
+	claimCallback?(input: {
+		stateHash: string;
+		now: number;
+	}): Promise<ConnectionInstallationCallbackClaimV1 | null>;
+	settleCallback?(input: {
+		stateHash: string;
+		status: "delivered" | "unknown";
+	}): Promise<boolean>;
 	hasUnresolvedSend(
 		authorizationId: string,
 		exclude?: { commandId: string; attemptId: string; attemptOwner: string },
@@ -129,6 +145,12 @@ export interface ConnectionInstallationTransactionV1 {
 		traceId: string,
 	): Promise<void>;
 }
+export interface ConnectionInstallationCallbackClaimV1 {
+	readonly authorizationId: string;
+	readonly runtimeOrigin: string;
+	readonly expiresAt: number;
+	readonly issuer: string;
+}
 export interface ConnectionInstallationStoreV1 {
 	transaction<T>(
 		work: (transaction: ConnectionInstallationTransactionV1) => Promise<T>,
@@ -154,6 +176,7 @@ export interface ConnectionInstallationCommandDrainStoreV1 {
 		attemptOwner: string;
 		status: "completed" | "unknown";
 		authorizationUrl?: string;
+		authorizationExpiresAt?: number;
 	}): Promise<boolean>;
 }
 
@@ -379,6 +402,27 @@ export function createConnectionInstallationAuthorizationV1(options: {
 	};
 	return {
 		execute,
+		callback: {
+			claim: async (input: { stateHash: string; now: number }) => {
+				if (!/^[a-f0-9]{64}$/.test(input.stateHash)) return null;
+				if (!options.store.transaction) return null;
+				return options.store.transaction(
+					(transaction) =>
+						transaction.claimCallback?.(input) ?? Promise.resolve(null),
+				);
+			},
+			settle: async (input: {
+				stateHash: string;
+				status: "delivered" | "unknown";
+			}) => {
+				if (!/^[a-f0-9]{64}$/.test(input.stateHash)) return false;
+				if (!options.store.transaction) return false;
+				return options.store.transaction(
+					(transaction) =>
+						transaction.settleCallback?.(input) ?? Promise.resolve(false),
+				);
+			},
+		},
 		async authorize(
 			input: {
 				principal: { kind: "user" | "application"; id: string };

@@ -258,6 +258,7 @@ describe("Conversation Worker discovery and shutdown", () => {
 			attemptOwner: "instance",
 			status: "completed",
 			authorizationUrl: `https://connection.test/oauth/authorize?state=${"a".repeat(64)}`,
+			authorizationExpiresAt: expect.any(Number),
 		});
 		await worker.stop();
 	});

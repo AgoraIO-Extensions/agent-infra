@@ -456,6 +456,9 @@ export function createPlatformConversationWorkerV2(
 					...(result?.authorizationUrl
 						? { authorizationUrl: result.authorizationUrl }
 						: {}),
+					...(result?.expiresAt
+						? { authorizationExpiresAt: result.expiresAt }
+						: {}),
 				});
 				drained++;
 			} catch {

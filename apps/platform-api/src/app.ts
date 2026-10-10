@@ -25,6 +25,10 @@ import {
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
 import {
+	type ConnectionInstallationCallbackRouteDependenciesV1,
+	registerConnectionInstallationCallbackRoutesV1,
+} from "./http/connection-installation-callback-routes.js";
+import {
 	type ConnectionInstallationRouteDependenciesV1,
 	registerConnectionInstallationRoutesV1,
 } from "./http/connection-installation-routes.js";
@@ -87,6 +91,7 @@ type ApiObservability = Pick<
 
 export interface PlatformAppDependencies {
 	readonly connectionInstallations?: ConnectionInstallationRouteDependenciesV1;
+	readonly connectionInstallationCallback?: ConnectionInstallationCallbackRouteDependenciesV1;
 	readonly agentApiCreation?: AgentApiCreationRouteDependencies;
 	readonly agentApiLifecycle?: AgentApiLifecycleRouteDependencies;
 	readonly agentApplicationGrants?: AgentApplicationGrantRouteDependencies;
@@ -172,6 +177,11 @@ export function createPlatformApp(
 		registerConnectionInstallationRoutesV1(
 			app,
 			dependencies.connectionInstallations,
+		);
+	if (dependencies.connectionInstallationCallback)
+		registerConnectionInstallationCallbackRoutesV1(
+			app,
+			dependencies.connectionInstallationCallback,
 		);
 	if (dependencies.personalRelayKeys)
 		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);

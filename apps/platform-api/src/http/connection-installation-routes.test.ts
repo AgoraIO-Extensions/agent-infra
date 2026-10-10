@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { expect, it, vi } from "vitest";
 import { registerConnectionInstallationRoutesV1 } from "./connection-installation-routes.js";
 
-function fixture(withAuthorizationUrl = false) {
+function fixture(withAuthorizationUrl = false, callbackEnabled = false) {
 	const execute = vi.fn(async (input) => ({
 		schemaVersion: 1 as const,
 		authorizationId: "authorization-a",
@@ -47,6 +47,7 @@ function fixture(withAuthorizationUrl = false) {
 			hydrateUsers: async () => [],
 		},
 		installation: { execute, authorize: async () => null },
+		callbackEnabled: () => callbackEnabled,
 	});
 	const post = (
 		body: unknown = { schemaVersion: 1, executionId: "execution-a" },
@@ -89,11 +90,16 @@ it("uses resolved browser identity and only the original Execution selector", as
 	});
 });
 it("projects only the stored authorization URL, never a credential", async () => {
-	const f = fixture(true);
+	const f = fixture(true, true);
 	const response = await f.post();
 	expect(await response.json()).toMatchObject({
 		authorizationUrl: `https://connection.test/oauth/authorize?state=${"a".repeat(64)}`,
 	});
+});
+it("hides an authorization URL while the callback receiver is unavailable", async () => {
+	const f = fixture(true, false);
+	const response = await f.post();
+	expect(await response.json()).not.toHaveProperty("authorizationUrl");
 });
 it.each(["confirm", "status"] as const)(
 	"uses the same browser gates for %s",

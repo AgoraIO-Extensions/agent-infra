@@ -12,6 +12,45 @@
           "maxLength": 8192,
           "type": "string"
         },
+        "callback": {
+          "additionalProperties": false,
+          "properties": {
+            "attemptExpiresAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "expiresAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "runtimeOrigin": {
+              "format": "uri",
+              "type": "string"
+            },
+            "stateHash": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "sending",
+                "delivered",
+                "unknown"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "stateHash",
+            "runtimeOrigin",
+            "expiresAt",
+            "status"
+          ],
+          "type": "object"
+        },
         "confirmationRevision": {
           "minLength": 1,
           "type": "string"
@@ -182,6 +221,45 @@
       "required": [
         "schemaVersion",
         "executionId"
+      ],
+      "type": "object"
+    },
+    "ConnectionInstallationCallbackV1": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptExpiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "runtimeOrigin": {
+          "format": "uri",
+          "type": "string"
+        },
+        "stateHash": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "sending",
+            "delivered",
+            "unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "stateHash",
+        "runtimeOrigin",
+        "expiresAt",
+        "status"
       ],
       "type": "object"
     },

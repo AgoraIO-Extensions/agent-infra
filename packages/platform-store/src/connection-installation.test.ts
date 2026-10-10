@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { createConnectionInstallationAuthorizationV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
@@ -52,6 +53,11 @@ const request = {
 	traceId: "trace-a",
 	idempotencyKey: "key-a",
 };
+const authorizationUrl =
+	"https://connection.test/oauth/authorize?response_type=code&client_id=platform-client&redirect_uri=https%3A%2F%2Fplatform.test%2Fconnection%2Fcallback&scope=mcp&resource=https%3A%2F%2Fconnection.test%2Fmcp&code_challenge_method=S256&state=" +
+	"a".repeat(64) +
+	"&code_challenge=" +
+	"a".repeat(43);
 beforeAll(async () => {
 	database = await startPostgresTestDatabase("1608-installation");
 	client = postgres(database.databaseUrl);
@@ -345,8 +351,8 @@ it("claims one pending command with an owned attempt and permanently fences unkn
 			attemptId: "begin-attempt",
 			attemptOwner: "worker-a",
 			status: "completed",
-			authorizationUrl:
-				`https://connection.test/oauth/authorize?state=${"a".repeat(64)}`,
+			authorizationUrl,
+			authorizationExpiresAt: Date.now() + 300_000,
 		}),
 	).toBe(true);
 	expect(
@@ -356,8 +362,27 @@ it("claims one pending command with an owned attempt and permanently fences unkn
 			authorizationId: authorization.authorizationId,
 		}),
 	).toMatchObject({
-		authorizationUrl: `https://connection.test/oauth/authorize?state=${"a".repeat(64)}`,
+		authorizationUrl,
 	});
+	const callbackStateHash = createHash("sha256")
+		.update("a".repeat(64))
+		.digest("hex");
+	expect(
+		await producer.callback.claim({
+			stateHash: callbackStateHash,
+			now: Date.now(),
+		}),
+	).toMatchObject({
+		authorizationId: authorization.authorizationId,
+		runtimeOrigin: configuration.runtimeOrigin,
+		issuer: configuration.issuer,
+	});
+	expect(
+		await producer.callback.settle({
+			stateHash: callbackStateHash,
+			status: "unknown",
+		}),
+	).toBe(true);
 	const pendingAfterBegin = await store.listPending(10, ["execution-a"]);
 	const confirm = pendingAfterBegin.find(
 		(item) => item.command.command === "confirm",
