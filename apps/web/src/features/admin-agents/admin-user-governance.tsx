@@ -1,8 +1,13 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { setPlatformUserDisabledV2 } from "../../pilot/generated-v2/sdk.gen.js";
+import {
+	getPlatformUserDisabledV2,
+	setPlatformUserDisabledV2,
+} from "../../pilot/generated-v2/sdk.gen.js";
 import { DirectoryPicker } from "../directory-fields.js";
+
+type DisableStatus = "loading" | "disabled" | "enabled" | "unavailable";
 
 function oneUser(value: string) {
 	return (
@@ -18,6 +23,34 @@ export function AdminUserGovernance() {
 	const [userId, setUserId] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [message, setMessage] = useState("");
+	const [status, setStatus] = useState<DisableStatus | undefined>();
+	const generation = useRef(0);
+
+	useEffect(() => {
+		const attempt = ++generation.current;
+		setMessage("");
+		if (!userId) {
+			setStatus(undefined);
+			return;
+		}
+		setStatus("loading");
+		void getPlatformUserDisabledV2({
+			path: { userId },
+			responseStyle: "fields",
+			throwOnError: false,
+		})
+			.then((result) => {
+				if (attempt !== generation.current) return;
+				if (result.response?.status !== 200 || !result.data) {
+					setStatus("unavailable");
+					return;
+				}
+				setStatus(result.data.disabled ? "disabled" : "enabled");
+			})
+			.catch(() => {
+				if (attempt === generation.current) setStatus("unavailable");
+			});
+	}, [userId]);
 
 	async function updateDisabled(disabled: boolean) {
 		const targetUserId = userId.trim();
@@ -31,11 +64,17 @@ export function AdminUserGovernance() {
 				responseStyle: "fields",
 				throwOnError: false,
 			});
-			if (result.response?.status !== 204) throw new Error("request failed");
+			if (result.response?.status !== 200 || !result.data)
+				throw new Error("request failed");
+			setStatus(result.data.disabled ? "disabled" : "enabled");
 			setMessage(
-				disabled
-					? "已提交禁用，后续访问会按服务端当前状态重新校验。"
-					: "已提交解除禁用，后续访问会按服务端当前状态重新校验。",
+				`${disabled ? "禁用" : "解除禁用"}已确认；当前状态：${
+					result.data.disabled ? "已禁用" : "未禁用"
+				}；审计结果：${
+					result.data.auditOutcome === "recorded"
+						? "已记录"
+						: "状态未变化，未新增记录"
+				}。`,
 			);
 		} catch {
 			setMessage("操作未确认，请刷新目录记录后重试。未显示上游错误详情。");
@@ -73,7 +112,15 @@ export function AdminUserGovernance() {
 				id="admin-user-governance-help"
 				className="text-muted-foreground text-xs"
 			>
-				禁用与解除禁用是独立的服务端操作；当前按钮不推断员工已有状态。
+				{status === "loading"
+					? "当前状态：读取中…"
+					: status === "disabled"
+						? "当前状态：已禁用"
+						: status === "enabled"
+							? "当前状态：未禁用"
+							: status === "unavailable"
+								? "当前状态暂时无法确认，请刷新后重试。"
+								: "选择员工后读取当前服务端状态。"}
 			</p>
 			<div className="flex flex-wrap gap-3">
 				<Button

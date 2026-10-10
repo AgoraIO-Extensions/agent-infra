@@ -810,6 +810,20 @@ export type PlatformUserDisableCommandV1 = {
     schemaVersion: 1;
 };
 
+export type PlatformUserDisableResultV1 = {
+    auditOutcome: 'recorded' | 'not_required';
+    changed: boolean;
+    disabled: boolean;
+    schemaVersion: 1;
+    userId: string;
+};
+
+export type PlatformUserDisableStatusV1 = {
+    disabled: boolean;
+    schemaVersion: 1;
+    userId: string;
+};
+
 export type RuntimeConnectionAssociationV1 = {
     callRef: string;
     serviceRef: string;
@@ -1397,6 +1411,57 @@ export type ListPlatformAuditV2Responses = {
 
 export type ListPlatformAuditV2Response = ListPlatformAuditV2Responses[keyof ListPlatformAuditV2Responses];
 
+export type GetPlatformUserDisabledV2Data = {
+    body?: never;
+    path: {
+        userId: string;
+    };
+    query?: never;
+    url: '/api/v2/admin/users/{userId}/disable';
+};
+
+export type GetPlatformUserDisabledV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetPlatformUserDisabledV2Error = GetPlatformUserDisabledV2Errors[keyof GetPlatformUserDisabledV2Errors];
+
+export type GetPlatformUserDisabledV2Responses = {
+    /**
+     * Current Platform user disable status
+     */
+    200: PlatformUserDisableStatusV1;
+};
+
+export type GetPlatformUserDisabledV2Response = GetPlatformUserDisabledV2Responses[keyof GetPlatformUserDisabledV2Responses];
+
 export type SetPlatformUserDisabledV2Data = {
     body: PlatformUserDisableCommandV1;
     path: {
@@ -1441,9 +1506,9 @@ export type SetPlatformUserDisabledV2Error = SetPlatformUserDisabledV2Errors[key
 
 export type SetPlatformUserDisabledV2Responses = {
     /**
-     * Platform user status updated
+     * Platform user status and audit result
      */
-    204: void;
+    200: PlatformUserDisableResultV1;
 };
 
 export type SetPlatformUserDisabledV2Response = SetPlatformUserDisabledV2Responses[keyof SetPlatformUserDisabledV2Responses];

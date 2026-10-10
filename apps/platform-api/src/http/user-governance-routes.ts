@@ -8,7 +8,10 @@ import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 
 export interface UserGovernanceRoutesDependencies {
 	readonly identity: IdentityAdapter;
-	readonly users?: Pick<PostgresPlatformUserDisablesV1, "setPlatformDisabled">;
+	readonly users?: Pick<
+		PostgresPlatformUserDisablesV1,
+		"isPlatformDisabled" | "setPlatformDisabled"
+	>;
 }
 
 const userIdPattern =
@@ -19,6 +22,35 @@ export function registerUserGovernanceRoutes(
 	app: Hono,
 	dependencies: UserGovernanceRoutesDependencies,
 ): void {
+	app.get("/api/v2/admin/users/:userId/disable", async (context) => {
+		const metadata = requestMetadata(context.req.raw);
+		try {
+			if (context.req.raw.headers.has("authorization"))
+				throw new HttpProtocolError(
+					"AUTHENTICATION_REQUIRED",
+					metadata.traceId,
+				);
+			const identity = await resolveIdentity(
+				dependencies.identity,
+				context.req.raw,
+				metadata.traceId,
+			);
+			if (!identity.roles.includes("system_admin"))
+				throw new HttpProtocolError("FORBIDDEN", metadata.traceId);
+			const targetUserId = context.req.param("userId");
+			if (!userIdPattern.test(targetUserId))
+				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+			if (!dependencies.users)
+				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			const disabled =
+				await dependencies.users.isPlatformDisabled(targetUserId);
+			return context.json({ schemaVersion: 1, userId: targetUserId, disabled });
+		} catch (error) {
+			const protocol = mapCoreError(error, metadata.traceId);
+			return context.json(protocol.body, protocol.status);
+		}
+	});
+
 	app.put("/api/v2/admin/users/:userId/disable", async (context) => {
 		const metadata = requestMetadata(context.req.raw);
 		try {
@@ -44,8 +76,9 @@ export function registerUserGovernanceRoutes(
 			);
 			if (!dependencies.users)
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			let changed: boolean;
 			try {
-				await dependencies.users.setPlatformDisabled({
+				changed = await dependencies.users.setPlatformDisabled({
 					actorUserId: identity.userId,
 					targetUserId,
 					disabled: value.disabled,
@@ -72,7 +105,13 @@ export function registerUserGovernanceRoutes(
 				}
 				throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
-			return context.body(null, 204);
+			return context.json({
+				schemaVersion: 1,
+				userId: targetUserId,
+				disabled: value.disabled,
+				changed,
+				auditOutcome: changed ? "recorded" : "not_required",
+			});
 		} catch (error) {
 			const protocol = mapCoreError(error, metadata.traceId);
 			return context.json(protocol.body, protocol.status);

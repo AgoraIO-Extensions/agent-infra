@@ -4543,6 +4543,62 @@
         ],
         "type": "object"
       },
+      "PlatformUserDisableResultV1": {
+        "additionalProperties": false,
+        "properties": {
+          "auditOutcome": {
+            "enum": [
+              "recorded",
+              "not_required"
+            ],
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "userId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "userId",
+          "disabled",
+          "changed",
+          "auditOutcome"
+        ],
+        "type": "object"
+      },
+      "PlatformUserDisableStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "disabled": {
+            "type": "boolean"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "userId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "userId",
+          "disabled"
+        ],
+        "type": "object"
+      },
       "RuntimeConnectionAssociationV1": {
         "oneOf": [
           {
@@ -5817,6 +5873,103 @@
       }
     },
     "/api/v2/admin/users/{userId}/disable": {
+      "get": {
+        "operationId": "getPlatformUserDisabledV2",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformUserDisableStatusV1"
+                }
+              }
+            },
+            "description": "Current Platform user disable status"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        }
+      },
       "put": {
         "operationId": "setPlatformUserDisabledV2",
         "parameters": [
@@ -5842,8 +5995,15 @@
           "required": true
         },
         "responses": {
-          "204": {
-            "description": "Platform user status updated"
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformUserDisableResultV1"
+                }
+              }
+            },
+            "description": "Platform user status and audit result"
           },
           "400": {
             "content": {

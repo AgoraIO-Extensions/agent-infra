@@ -660,6 +660,18 @@ export const PlatformUserDisableCommandV1Schema = z.strictObject({
 	disabled: z.boolean(),
 });
 
+export const PlatformUserDisableStatusV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	userId: OpaqueIdV1Schema,
+	disabled: z.boolean(),
+});
+
+export const PlatformUserDisableResultV1Schema =
+	PlatformUserDisableStatusV1Schema.extend({
+		changed: z.boolean(),
+		auditOutcome: z.enum(["recorded", "not_required"]),
+	});
+
 export const DeploymentModelProjectionV2Schema = z.strictObject({
 	modelId: nonEmptyString(),
 	reasoningLevels: z.array(nonEmptyString()),
@@ -1268,12 +1280,26 @@ export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
 	"/api/v2/admin/users/{userId}/disable": {
+		get: {
+			operationId: "getPlatformUserDisabledV2",
+			requestParams: { path: platformUserPath },
+			responses: {
+				"200": jsonResponse(
+					"Current Platform user disable status",
+					PlatformUserDisableStatusV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 		put: {
 			operationId: "setPlatformUserDisabledV2",
 			requestParams: { path: platformUserPath },
 			requestBody: requiredJsonRequestBody(PlatformUserDisableCommandV1Schema),
 			responses: {
-				"204": { description: "Platform user status updated" },
+				"200": jsonResponse(
+					"Platform user status and audit result",
+					PlatformUserDisableResultV1Schema,
+				),
 				...errorResponses,
 			},
 		},
@@ -1920,6 +1946,8 @@ export const pilotBrowserSchemasV1 = {
 
 export const pilotBrowserSchemasV2 = {
 	PlatformUserDisableCommandV1: PlatformUserDisableCommandV1Schema,
+	PlatformUserDisableStatusV1: PlatformUserDisableStatusV1Schema,
+	PlatformUserDisableResultV1: PlatformUserDisableResultV1Schema,
 	AgentApiStateResponseV1: AgentApiStateResponseV1Schema,
 	AgentApplicationManagerRequestV1: AgentApplicationManagerRequestV1Schema,
 	AgentApplicationManagerResponseV1: AgentApplicationManagerResponseV1Schema,

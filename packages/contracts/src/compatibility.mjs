@@ -2366,10 +2366,14 @@ function isConnectionInstallationOpenApiAddition(previous, current) {
 }
 
 // #1756 adds the administrator employee disable/reenable operation, its
-// command schema, and the two bounded user governance audit actions.
+// status/result schemas, and the two bounded user governance audit actions.
 function isPlatformUserDisableOpenApiAddition(previous, current) {
 	const path = "/api/v2/admin/users/{userId}/disable";
-	const schema = "PlatformUserDisableCommandV1";
+	const schemas = [
+		"PlatformUserDisableCommandV1",
+		"PlatformUserDisableStatusV1",
+		"PlatformUserDisableResultV1",
+	];
 	const actions = ["platform.user.disabled", "platform.user.reenabled"];
 	const oldActions =
 		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
@@ -2378,8 +2382,11 @@ function isPlatformUserDisableOpenApiAddition(previous, current) {
 	const hasGovernanceAddition =
 		previous.paths?.[path] !== undefined ||
 		current.paths?.[path] !== undefined ||
-		previous.components?.schemas?.[schema] !== undefined ||
-		current.components?.schemas?.[schema] !== undefined ||
+		schemas.some(
+			(schema) =>
+				previous.components?.schemas?.[schema] !== undefined ||
+				current.components?.schemas?.[schema] !== undefined,
+		) ||
 		oldActions?.some((action) => actions.includes(action)) ||
 		newActions?.some((action) => actions.includes(action)) ||
 		[
@@ -2394,12 +2401,16 @@ function isPlatformUserDisableOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	const normalizedPrevious = structuredClone(previous);
 	if (normalized.paths?.[path] !== undefined) delete normalized.paths[path];
-	if (normalized.components?.schemas?.[schema] !== undefined)
-		delete normalized.components.schemas[schema];
+	for (const schema of schemas) {
+		if (normalized.components?.schemas?.[schema] !== undefined)
+			delete normalized.components.schemas[schema];
+	}
 	if (normalizedPrevious.paths?.[path] !== undefined)
 		delete normalizedPrevious.paths[path];
-	if (normalizedPrevious.components?.schemas?.[schema] !== undefined)
-		delete normalizedPrevious.components.schemas[schema];
+	for (const schema of schemas) {
+		if (normalizedPrevious.components?.schemas?.[schema] !== undefined)
+			delete normalizedPrevious.components.schemas[schema];
+	}
 	if (Array.isArray(newActions))
 		normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
 			newActions.filter((action) => !actions.includes(action));

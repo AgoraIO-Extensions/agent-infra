@@ -17,6 +17,7 @@ function storeError(code: string): Error {
 
 function fixture(role: "system_admin" | "employee" = "system_admin") {
 	const setPlatformDisabled = vi.fn(async () => true);
+	const isPlatformDisabled = vi.fn(async () => false);
 	const app = new Hono();
 	registerUserGovernanceRoutes(app, {
 		identity: {
@@ -36,9 +37,9 @@ function fixture(role: "system_admin" | "employee" = "system_admin") {
 				return [];
 			},
 		},
-		users: { setPlatformDisabled },
+		users: { isPlatformDisabled, setPlatformDisabled },
 	});
-	return { app, setPlatformDisabled };
+	return { app, isPlatformDisabled, setPlatformDisabled };
 }
 
 describe("Platform user governance HTTP", () => {
@@ -49,7 +50,14 @@ describe("Platform user governance HTTP", () => {
 			headers: { "content-type": "application/json" },
 			body,
 		});
-		expect(response.status).toBe(204);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			schemaVersion: 1,
+			userId: targetId,
+			disabled: true,
+			changed: true,
+			auditOutcome: "recorded",
+		});
 		expect(setPlatformDisabled).toHaveBeenCalledWith(
 			expect.objectContaining({
 				actorUserId: administratorId,
@@ -58,6 +66,19 @@ describe("Platform user governance HTTP", () => {
 				traceId: expect.any(String),
 			}),
 		);
+	});
+
+	it("reads the durable status through the same administrator gate", async () => {
+		const { app, isPlatformDisabled } = fixture();
+		isPlatformDisabled.mockResolvedValueOnce(true);
+		const response = await app.request(path, { method: "GET" });
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			schemaVersion: 1,
+			userId: targetId,
+			disabled: true,
+		});
+		expect(isPlatformDisabled).toHaveBeenCalledWith(targetId);
 	});
 
 	it("rejects bearer, non-admin and invalid requests before a write", async () => {
@@ -94,6 +115,7 @@ describe("Platform user governance HTTP", () => {
 			).status,
 		).toBe(400);
 		expect(admin.setPlatformDisabled).not.toHaveBeenCalled();
+		expect((await app.request(path, { method: "GET" })).status).toBe(403);
 	});
 
 	it("maps current-authority and storage failures without leaking details", async () => {
