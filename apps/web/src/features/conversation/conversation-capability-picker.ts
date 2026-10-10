@@ -27,7 +27,10 @@ const maximumQueryBytes = 512;
 const maximumParameterBytes = 4096;
 
 function bounded(value: string, maximum: number) {
-	return value.isWellFormed() && Buffer.byteLength(value, "utf8") <= maximum;
+	return (
+		value.isWellFormed() &&
+		new TextEncoder().encode(value).byteLength <= maximum
+	);
 }
 
 export function filterConversationCapabilities(

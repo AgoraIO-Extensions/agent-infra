@@ -75,4 +75,10 @@ describe("conversation capability picker model", () => {
 		expect(state.parameterText).toBe("");
 		expect(confirmConversationCapability(state)?.parameterText).toBe("");
 	});
+
+	it("uses browser-native UTF-8 measurement for multibyte queries", () => {
+		expect(
+			filterConversationCapabilities(capabilities, "你".repeat(256)),
+		).toEqual([]);
+	});
 });
