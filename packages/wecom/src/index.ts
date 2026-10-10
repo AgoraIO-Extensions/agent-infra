@@ -5,7 +5,11 @@ import {
 	randomBytes,
 	timingSafeEqual,
 } from "node:crypto";
-import type { WecomMessageV1, WecomScopeV1 } from "@agent-infra/platform-core";
+import type {
+	WecomMediaReferenceV1,
+	WecomMessageV1,
+	WecomScopeV1,
+} from "@agent-infra/platform-core";
 import { parseWecomXml } from "./xml.js";
 
 export interface WecomConfigurationV1 {
@@ -47,6 +51,29 @@ function record(value: unknown): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		return invalid();
 	return value as Record<string, unknown>;
+}
+function mediaType(kind: WecomMediaReferenceV1["kind"]): string {
+	return kind === "image"
+		? "image/jpeg"
+		: kind === "file"
+			? "application/octet-stream"
+			: kind === "voice"
+				? "audio/amr"
+				: "video/mp4";
+}
+function mediaReference(
+	kind: WecomMediaReferenceV1["kind"],
+	mediaId: unknown,
+	name: unknown = null,
+): WecomMediaReferenceV1 {
+	const normalizedName =
+		name === undefined || name === null ? null : field(name, 255);
+	return {
+		kind,
+		mediaId: field(mediaId, 4096),
+		name: normalizedName,
+		mediaType: mediaType(kind),
+	};
 }
 function exactRecord(value: unknown, keys: readonly string[]) {
 	const result = record(value);
@@ -248,16 +275,34 @@ export function createWecomAdapterV1(options: {
 				if (config.kind === "wecom_app") {
 					const payload = parseWecomXml(text);
 					if (
-						payload.MsgType !== "text" ||
 						payload.ToUserName !== config.corporationId ||
 						payload.AgentID !== config.applicationId ||
 						!/^\d+$/.test(payload.CreateTime ?? "") ||
 						Math.abs(now().getTime() / 1000 - Number(payload.CreateTime)) > 300
 					)
 						return invalid();
+					const kind =
+						payload.MsgType === "image" ||
+						payload.MsgType === "file" ||
+						payload.MsgType === "voice" ||
+						payload.MsgType === "video"
+							? payload.MsgType
+							: payload.MsgType === "text"
+								? null
+								: invalid();
 					const senderId = field(payload.FromUserName);
-					const content = field(payload.Content, 32 * 1024);
+					const content =
+						kind === null ? field(payload.Content, 32 * 1024) : "";
 					const eventId = field(payload.MsgId);
+					const media = kind
+						? [
+								mediaReference(
+									kind,
+									payload.MediaId,
+									kind === "file" ? payload.FileName : null,
+								),
+							]
+						: undefined;
 					const expiresAt = new Date(
 						Number(timestamp) * 1000 + 3600_000,
 					).toISOString();
@@ -292,6 +337,7 @@ export function createWecomAdapterV1(options: {
 							conversationType: "single",
 							threadId: null,
 							text: content,
+							...(media ? { media } : {}),
 							replyHandle,
 							replyExpiresAt: expiresAt,
 						},
@@ -301,7 +347,9 @@ export function createWecomAdapterV1(options: {
 				if (
 					config.kind !== "wecom_bot" ||
 					payload.aibotid !== config.botId ||
-					payload.msgtype !== "text"
+					!["text", "image", "file", "voice", "video"].includes(
+						payload.msgtype as string,
+					)
 				)
 					return invalid();
 				if (payload.chattype !== "single" && payload.chattype !== "group")
@@ -320,7 +368,27 @@ export function createWecomAdapterV1(options: {
 					return invalid();
 				const peerId =
 					payload.chattype === "group" ? field(payload.chatid) : senderId;
-				const content = field(record(payload.text).content, 32 * 1024);
+				const kind =
+					payload.msgtype === "image" ||
+					payload.msgtype === "file" ||
+					payload.msgtype === "voice" ||
+					payload.msgtype === "video"
+						? payload.msgtype
+						: null;
+				const content =
+					kind === null ? field(record(payload.text).content, 32 * 1024) : "";
+				const media = kind
+					? (() => {
+							const value = record(payload[kind]);
+							return [
+								mediaReference(
+									kind,
+									value.media_id ?? value.mediaid ?? value.url,
+									kind === "file" ? (value.name ?? value.filename) : null,
+								),
+							];
+						})()
+					: undefined;
 				const eventId = field(payload.msgid);
 				const expiresAt = new Date(
 					Number(timestamp) * 1000 + 3600_000,
@@ -353,6 +421,7 @@ export function createWecomAdapterV1(options: {
 						conversationType: payload.chattype,
 						threadId: null,
 						text: content,
+						...(media ? { media } : {}),
 						replyHandle,
 						replyExpiresAt: expiresAt,
 					},
