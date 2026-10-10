@@ -68,7 +68,6 @@ export async function loadOwnApplication(
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (result.response?.status === 404) return { kind: "empty" };
 	if (result.response?.status !== 200)
 		return unavailable(result.response?.status);
 	if (!result.data || !metadataSchema.safeParse(result.data).success) {

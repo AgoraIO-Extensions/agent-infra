@@ -1,7 +1,7 @@
 import {
 	createFileRoute,
 	useLocation,
-	useNavigate,
+	useRouter,
 } from "@tanstack/react-router";
 import { ApiCredentialsScreen } from "../../features/api-credentials/api-credentials-screen.js";
 import {
@@ -24,7 +24,7 @@ export const Route = createFileRoute("/my-settings/api-credentials")({
 
 function ApiCredentialsRoute() {
 	const { identityKey } = useApplicationSession();
-	const navigate = useNavigate({ from: "/my-settings/api-credentials" });
+	const router = useRouter();
 	const credentials = useApiCredentials({ identityKey });
 	const issue = useIssuePersonalApiCredential();
 	const revoke = useRevokePersonalApiCredential();
@@ -65,14 +65,19 @@ function ApiCredentialsRoute() {
 				revokeError={revoke.error}
 			/>
 			<ApplicationManagementScreen
+				key={identityKey}
 				state={application.state}
 				onRetry={() => void application.refetch()}
+				onOpenApplication={(applicationId) =>
+					router.history.push(
+						`/my-settings/api-credentials?applicationId=${encodeURIComponent(applicationId)}`,
+					)
+				}
 				onRegister={async (name) => {
 					const metadata = await register.mutateAsync(name);
-					await navigate({
-						replace: true,
-						search: { applicationId: metadata.applicationId },
-					});
+					router.history.replace(
+						`/my-settings/api-credentials?applicationId=${encodeURIComponent(metadata.applicationId)}`,
+					);
 					return metadata;
 				}}
 				onDisable={async (applicationId) => {
