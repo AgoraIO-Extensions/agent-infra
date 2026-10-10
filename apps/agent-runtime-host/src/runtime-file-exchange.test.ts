@@ -178,3 +178,53 @@ it("rejects an expired access response before content transfer", async () => {
 	);
 	expect(fetcher).toHaveBeenCalledOnce();
 });
+
+it("bounds result upload streams before completing the file", async () => {
+	const descriptor = {
+		name: "result.txt",
+		mediaType: "text/plain",
+		sizeBytes: 2,
+		sha256: "a".repeat(64),
+	};
+	const pending = {
+		schemaVersion: 1,
+		fileId: "result-1",
+		kind: "result",
+		descriptor,
+		status: "pending",
+		createdAt: "2026-01-01T00:00:00Z",
+		expiresAt: "2099-01-01T00:00:00Z",
+	};
+	const fetcher = vi.fn(
+		async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (url.endsWith("runtime-exchange"))
+				return response(
+					pending,
+					"/api/v1/conversations/conversation-1/files/result-1/content",
+				);
+			if (url.endsWith("/content")) {
+				await new Response(init?.body).arrayBuffer();
+				return new Response(null, { status: 204 });
+			}
+			throw new Error("completion must not start");
+		},
+	);
+	const bridge = createRuntimeFileBridgeFactoryV1({
+		origin: "https://files.example.test",
+		serviceToken: "s".repeat(32),
+		fetch: fetcher,
+	})(binding);
+	await expect(
+		bridge.writeResult(
+			descriptor,
+			new ReadableStream({
+				start(controller) {
+					controller.enqueue(new Uint8Array([1, 2, 3]));
+					controller.close();
+				},
+			}),
+		),
+	).rejects.toThrow("RUNTIME_FILE_RESULT_SIZE_MISMATCH");
+	expect(fetcher).toHaveBeenCalledTimes(2);
+});

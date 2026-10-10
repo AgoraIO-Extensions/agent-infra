@@ -100,6 +100,37 @@ function assertFreshAccess(access: {
 		throw new Error("RUNTIME_FILE_EXCHANGE_EXPIRED");
 }
 
+function boundedUpload(
+	body: ReadableStream<Uint8Array>,
+	expectedBytes: number,
+) {
+	const reader = body.getReader();
+	let bytes = 0;
+	return new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			try {
+				const next = await reader.read();
+				if (next.done) {
+					if (bytes !== expectedBytes)
+						throw new Error("RUNTIME_FILE_RESULT_SIZE_MISMATCH");
+					controller.close();
+					return;
+				}
+				bytes += next.value.byteLength;
+				if (bytes > expectedBytes)
+					throw new Error("RUNTIME_FILE_RESULT_SIZE_MISMATCH");
+				controller.enqueue(next.value);
+			} catch (error) {
+				await reader.cancel().catch(() => undefined);
+				controller.error(error);
+			}
+		},
+		async cancel() {
+			await reader.cancel();
+		},
+	});
+}
+
 export function createRuntimeFileBridgeFactoryV1(
 	options: RuntimeFileExchangeOptionsV1,
 ): RuntimeFileBridgeFactoryV1 {
@@ -264,13 +295,14 @@ export function createRuntimeFileBridgeFactoryV1(
 						"Content-Length": String(descriptor.sizeBytes),
 					};
 					if (access.file.status === "pending") {
+						const boundedBody = boundedUpload(body, descriptor.sizeBytes);
 						const response = await send(target(access.path), {
 							method: "PUT",
 							duplex: "half",
 							redirect: "error",
 							signal: AbortSignal.timeout(timeoutMs),
 							headers,
-							body,
+							body: boundedBody,
 						} as RequestInit & { duplex: "half" });
 						await response.body?.cancel();
 						if (!response.ok)
