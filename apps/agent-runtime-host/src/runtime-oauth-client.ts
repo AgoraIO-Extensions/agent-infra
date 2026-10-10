@@ -280,6 +280,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	function check(
 		request: RuntimeOAuthAuthorizedRequestV1,
 		record?: Transaction,
+		inFlight = false,
 	) {
 		current();
 		const claims = RuntimeOAuthGrantClaimsV1Schema.parse(
@@ -296,11 +297,16 @@ export async function createProtectedRuntimeOAuthClient(options: {
 				(request.command !== "status" && record.expiresAt <= Date.now()))
 		)
 			unavailable();
-		options.store.assertOriginalExecutionBindingCurrent(
-			request.reference,
-			claims.principal,
-			Date.now,
-		);
+		try {
+			options.store.assertOriginalExecutionBindingCurrent(
+				request.reference,
+				claims.principal,
+				Date.now,
+			);
+		} catch (error) {
+			if (inFlight) unavailable();
+			throw error;
+		}
 		return claims;
 	}
 	async function original(
@@ -472,7 +478,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					`${key}.code`,
 					4096,
 					() => {
-						check(snapshot, record);
+						check(snapshot, record, true);
 					},
 				);
 				check(snapshot, record);
@@ -481,7 +487,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					`${key}.verifier`,
 					256,
 					() => {
-						check(snapshot, record);
+						check(snapshot, record, true);
 					},
 				);
 				check(snapshot, record);
@@ -496,7 +502,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 						signal: abort.signal,
 						...(options.fetch ? { fetch: options.fetch } : {}),
 						assertCurrent: () => {
-							check(snapshot, record);
+							check(snapshot, record, true);
 						},
 					});
 					check(snapshot, record);
@@ -505,7 +511,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 						`${key}.access`,
 						tokens.accessToken,
 						() => {
-							check(snapshot, record);
+							check(snapshot, record, true);
 						},
 					);
 					check(snapshot, record);

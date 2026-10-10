@@ -163,6 +163,33 @@ export type SkillWorkloadProjectionV1 = z.infer<
 	typeof SkillWorkloadProjectionV1Schema
 >;
 
+/** Build the only Worker projection from a verified materialized manifest. */
+export function createSkillWorkloadProjectionV1(input: {
+	readonly agentId: string;
+	readonly agentVersion: string;
+	readonly skillVersion: SkillVersionRefV1;
+	readonly manifest: unknown;
+	readonly manifestDigest: string;
+	readonly grant: SkillGrantV1;
+}): SkillWorkloadProjectionV1 {
+	const manifest = SkillPackageManifestV1Schema.parse(input.manifest);
+	if (
+		!/^[a-f0-9]{64}$/.test(input.manifestDigest) ||
+		input.manifestDigest !== input.skillVersion.manifestDigest
+	)
+		throw new Error("Materialized Skill manifest digest mismatch");
+	return SkillWorkloadProjectionV1Schema.parse({
+		schemaVersion: 1,
+		agentId: input.agentId,
+		agentVersion: input.agentVersion,
+		skillVersion: input.skillVersion,
+		manifest,
+		targetPath: `.agents/skills/${manifest.name}`,
+		readOnly: true,
+		grant: input.grant,
+	});
+}
+
 export const MagicSkillProviderOrderV1 = [
 	"system",
 	"my_library",

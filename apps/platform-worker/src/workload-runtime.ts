@@ -47,6 +47,11 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { runtimeFetch } from "./runtime-transport.js";
+import {
+	validateWorkloadSkillMaterializationV1,
+	type WorkloadSkillMaterializationResultV1,
+	type WorkloadSkillMaterializerV1,
+} from "./skill-materialization.js";
 
 export interface WorkloadRuntimeOptionsV1 {
 	readonly workerId: string;
@@ -64,6 +69,8 @@ export interface WorkloadRuntimeOptionsV1 {
 	/** Trusted template/digest profiles; an explicit empty list supports custom Agents only. */
 	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
 	readonly executionCapacityProfiles?: readonly WorkloadExecutionCapacityV1[];
+	/** Trusted deployment-owned fixed Skill materialization; failures reject preflight. */
+	readonly skillMaterializer?: WorkloadSkillMaterializerV1;
 	readonly fetch?: typeof fetch;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
@@ -837,6 +844,23 @@ export function createWorkloadRuntimeV1(
 							configuration.source.identityResponsibility === "platform-managed"
 						? "platform-auth"
 						: "self-managed";
+			let materializedSkills: WorkloadSkillMaterializationResultV1 | undefined;
+			if (options.skillMaterializer) {
+				materializedSkills = validateWorkloadSkillMaterializationV1(
+					{
+						agentId: state.agentId,
+						configurationRevision: configuration.revision,
+						workloadRevision: state.revision,
+						fence: state.fence,
+					},
+					await options.skillMaterializer.materialize({
+						agentId: state.agentId,
+						configurationRevision: configuration.revision,
+						workloadRevision: state.revision,
+						fence: state.fence,
+					}),
+				);
+			}
 			try {
 				const deployment = validateAgentWorkloadDesiredV1({
 					schemaVersion: 1,
@@ -899,6 +923,12 @@ export function createWorkloadRuntimeV1(
 					secretRefs: secretBindings.map(({ record }) =>
 						recordReference(record),
 					),
+					...(materializedSkills
+						? {
+								skills: materializedSkills.skills,
+								skillGenerationId: materializedSkills.generationId,
+							}
+						: {}),
 					desiredState: "running",
 					replicas: 1,
 				});

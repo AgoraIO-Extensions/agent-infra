@@ -73,7 +73,12 @@ export async function writeTaskApiAuditV1(
 ): Promise<void> {
 	const { action, ...input } = plan;
 	const parsed = parseTaskApiAuditInputV1(input);
-	if (parsed.phase !== "access" || action !== "task.api.access")
-		throw new TaskApiAuditError("invalid_input");
+	const expectedAction =
+		parsed.phase === "access"
+			? "task.api.access"
+			: parsed.phase === "subscription.started"
+				? "task.api.subscription.started"
+				: "task.api.subscription.ended";
+	if (action !== expectedAction) throw new TaskApiAuditError("invalid_input");
 	await writeAudit(transaction, { ...parsed, action });
 }

@@ -38,6 +38,7 @@ describe("standard contract artifacts", () => {
 			"/api/v1/agents/{agentId}/tasks",
 			"/api/v1/conversations/{conversationId}/tasks/{executionId}",
 			"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/events",
 		]);
 		expect(
 			Object.keys(document.components.schemas).filter((name) =>
@@ -49,6 +50,7 @@ describe("standard contract artifacts", () => {
 			"TaskAcceptedV1",
 			"TaskCancellationV1",
 			"TaskProjectionV1",
+			"TaskSseMessageV1",
 			"TaskStatusEventV1",
 		]);
 		expect(document.components.securitySchemes.platformApiCredential).toEqual({
@@ -59,6 +61,7 @@ describe("standard contract artifacts", () => {
 			"/api/v1/agents/{agentId}/tasks",
 			"/api/v1/conversations/{conversationId}/tasks/{executionId}",
 			"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/events",
 		]) {
 			const operation = document.paths[path].post ?? document.paths[path].get;
 			expect(operation.security).toEqual([{ platformApiCredential: [] }]);

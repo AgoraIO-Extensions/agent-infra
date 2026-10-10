@@ -68,6 +68,8 @@ describe("Browser Capability V1", () => {
 			health: { path: "/healthz" },
 			capabilities: { browser: declaration },
 		});
+		expect(manifest.interactionMode).toBe("platform-adapter");
+		if (manifest.interactionMode !== "platform-adapter") throw new Error();
 		expect(manifest.capabilities?.browser).toEqual(declaration);
 		expect(BrowserCapabilityAvailableV1Schema.parse(available)).toEqual(
 			available,

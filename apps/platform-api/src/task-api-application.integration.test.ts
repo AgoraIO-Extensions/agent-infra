@@ -106,22 +106,45 @@ afterAll(async () => {
 	await database?.stop();
 });
 describe("Task router/factory with actual Bearer and PostgreSQL", () => {
-	it("registers C without any subscription factory or SSE route", async () => {
+	it("streams only the target Execution's persisted events over API SSE", async () => {
 		const router = app(dependencies());
 		expect(
 			(await router.request(path(), { headers: headers("application") }))
 				.status,
 		).toBe(200);
+		const controller = new AbortController();
+		const response = await router.request(`${path()}/events`, {
+			headers: headers("application"),
+			signal: controller.signal,
+		});
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toContain("text/event-stream");
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("Missing task event stream");
+		const decoder = new TextDecoder();
+		let output = "";
+		for (
+			let attempt = 0;
+			attempt < 3 && !output.includes("application output");
+			attempt++
+		) {
+			const chunk = await reader.read();
+			output += decoder.decode(chunk.value);
+		}
+		expect(output).toContain("application output");
+		controller.abort();
+		await reader.cancel();
 		expect(
-			(
-				await router.request(`${path()}/events`, {
-					headers: headers("application"),
-				})
-			).status,
-		).toBe(404);
-		expect(
-			await sql`select id from platform.outbox_items where scope_type='task_api_subscription'`,
-		).toHaveLength(0);
+			await sql`select action from platform.audit_events where action='task.api.subscription.started'`,
+		).toHaveLength(1);
+		await expect
+			.poll(
+				async () =>
+					(
+						await sql`select action from platform.audit_events where action='task.api.subscription.ended'`
+					).length,
+			)
+			.toBe(1);
 	});
 	it("consumes the original deployment loader and production assembly over real HTTP with typed Bearer isolation", async () => {
 		const moduleSpecifier = new URL(

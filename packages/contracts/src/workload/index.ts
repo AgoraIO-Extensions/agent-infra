@@ -54,6 +54,10 @@ import {
 	WorkerWorkloadResultV1Schema,
 } from "./worker-result.ts";
 
+export {
+	type SkillWorkloadProjectionV1,
+	SkillWorkloadProjectionV1Schema,
+} from "../skill-hub.ts";
 export * from "./common.ts";
 export * from "./kubernetes.ts";
 export * from "./registry.ts";
@@ -61,6 +65,7 @@ export {
 	type RuntimeCapabilitySetV1,
 	RuntimeCapabilitySetV1Schema,
 	RuntimeHealthV1Schema,
+	RuntimeManifestBrowserAdmissionV1Schema,
 	type RuntimeManifestCapabilitySetV1,
 	RuntimeManifestCapabilitySetV1Schema,
 	type RuntimeManifestV1,

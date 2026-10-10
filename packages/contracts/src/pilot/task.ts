@@ -8,7 +8,12 @@ import {
 } from "../index.ts";
 import { PilotProtocolErrorV1Schema } from "./errors.ts";
 import { PersistedConversationEventV2Schema } from "./operation-v2.ts";
-import { SseEventIdV1Schema } from "./sse.ts";
+import {
+	AuthorizationRevokedSignalV1Schema,
+	HeartbeatSignalV1Schema,
+	SseEventIdV1Schema,
+	TimelineReloadSignalV1Schema,
+} from "./sse.ts";
 
 export const TaskStatusV1Schema = z.enum([
 	"waiting",
@@ -54,6 +59,17 @@ export const TaskPersistedEventV1Schema = z.union([
 	PersistedConversationEventV2Schema,
 	TaskStatusEventV1Schema,
 ]);
+export const TaskSseMessageV1Schema = z.union([
+	TaskPersistedEventV1Schema,
+	HeartbeatSignalV1Schema,
+	TimelineReloadSignalV1Schema,
+	AuthorizationRevokedSignalV1Schema,
+]);
+
+export function frameTaskSseMessageV1(input: unknown) {
+	const data = TaskSseMessageV1Schema.parse(input);
+	return data.kind === "event" ? { id: data.eventId, data } : { data };
+}
 
 export const SubmitTaskRequestV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
@@ -97,6 +113,16 @@ const errors = Object.fromEntries(
 const taskPath = z.strictObject({
 	conversationId: OpaqueIdV1Schema,
 	executionId: OpaqueIdV1Schema,
+});
+const taskStreamPath = z.strictObject({
+	conversationId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+});
+const taskStreamQuery = z.strictObject({
+	cursor: OpaqueCursorV1Schema.optional(),
+});
+const taskStreamHeader = z.strictObject({
+	"Last-Event-ID": SseEventIdV1Schema.optional(),
 });
 const idempotency = z.strictObject({
 	"Idempotency-Key": IdempotencyKeyV1Schema,
@@ -151,6 +177,33 @@ export const pilotTaskOpenApiPathsV1 = {
 			},
 		},
 	},
+	"/api/v1/conversations/{conversationId}/tasks/{executionId}/events": {
+		get: {
+			operationId: "streamAgentTaskEvents",
+			security: [{ platformApiCredential: [] }],
+			"x-agent-infra-sse-framing": {
+				controlId: null,
+				persistedEventId: "eventId",
+			},
+			"x-agent-infra-replay-selector": {
+				header: "Last-Event-ID",
+				mode: "at-most-one",
+				query: "cursor",
+			},
+			requestParams: {
+				path: taskStreamPath,
+				query: taskStreamQuery,
+				header: taskStreamHeader,
+			},
+			responses: {
+				"200": {
+					description: "Persisted events for this Execution",
+					content: { "text/event-stream": { schema: TaskSseMessageV1Schema } },
+				},
+				...errors,
+			},
+		},
+	},
 } as const;
 
 export const pilotTaskSchemasV1 = {
@@ -160,4 +213,5 @@ export const pilotTaskSchemasV1 = {
 	TaskStatusEventV1: TaskStatusEventV1Schema,
 	CancelTaskRequestV1: CancelTaskRequestV1Schema,
 	TaskCancellationV1: TaskCancellationV1Schema,
+	TaskSseMessageV1: TaskSseMessageV1Schema,
 };
