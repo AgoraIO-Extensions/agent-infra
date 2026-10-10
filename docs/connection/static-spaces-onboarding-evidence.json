@@ -1,0 +1,110 @@
+{
+  "provider": "static-spaces",
+  "providerReleaseId": "static-spaces-connection-v1",
+  "executorDigest": "sha256:8c24ce7b0632d6eeadd64aabf6468669dcf1329d878dc8ed1497e57a1f1dfc1d",
+  "externalAccount": "841",
+  "containerId": "0c1e6e33-6750-4127-9d72-157e8899ddcd",
+  "runId": "static-spaces-eaf16f1c-3c69-4865-b6af-410b87cacb9d",
+  "calls": [
+    {
+      "actionVersionId": "static-spaces.get_current_user@v1",
+      "status": "SUCCEEDED"
+    },
+    {
+      "actionVersionId": "static-spaces.list_files@v1",
+      "status": "SUCCEEDED"
+    },
+    {
+      "actionVersionId": "static-spaces.publish_space@v1",
+      "status": "SUCCEEDED"
+    },
+    {
+      "actionVersionId": "static-spaces.download_file@v1",
+      "status": "SUCCEEDED"
+    },
+    {
+      "actionVersionId": "static-spaces.get_markdown_review@v1",
+      "status": "SUCCEEDED"
+    },
+    {
+      "actionVersionId": "static-spaces.upload_html@v1",
+      "status": "SUCCEEDED"
+    },
+    {
+      "actionVersionId": "static-spaces.upload_static_package@v1",
+      "status": "SUCCEEDED"
+    }
+  ],
+  "status": "SUCCEEDED",
+  "cleanup": "SUCCEEDED",
+  "resources": [
+    {
+      "path": "connection-onboarding/static-spaces-eaf16f1c-3c69-4865-b6af-410b87cacb9d/canary.md",
+      "sha256": "66e69ea63d6d9623a0fa65d8f4c98024e5afd851555c287981faa048997946e9",
+      "cleanup": "DELETED"
+    },
+    {
+      "path": "connection-onboarding/static-spaces-eaf16f1c-3c69-4865-b6af-410b87cacb9d/canary.html",
+      "sha256": "36b4ced589c70f119d4c1c7a18ca2bd810b232022a27f6cceb01328295e91b3f",
+      "cleanup": "DELETED"
+    },
+    {
+      "path": "connection-onboarding/static-spaces-eaf16f1c-3c69-4865-b6af-410b87cacb9d/package.txt",
+      "sha256": "a79718c6413da8d613b9203b9e3dbd16ea53fc11d4918e92878f6e2ce01976b7",
+      "cleanup": "DELETED"
+    },
+    {
+      "path": "connection-onboarding/static-spaces-eaf16f1c-3c69-4865-b6af-410b87cacb9d/response-lost.html",
+      "sha256": "110e01577d325c31c1cdf52cdc1dc8702b940da8ef2d968a4c2ab87dd83eb4e2",
+      "cleanup": "DELETED"
+    }
+  ],
+  "verificationLayer": "DIRECT_ADAPTER_WITH_REAL_PROVIDER",
+  "containerPreflightHttp": 200,
+  "lifecycle": "REVOKED_TOKEN_REJECTED_AND_CURRENT_TOKEN_REAUTHENTICATED",
+  "responseLost": {
+    "submissions": 1,
+    "submissionUncertain": true,
+    "realEffectReadback": true
+  },
+  "publicationStatus": "NOT_PUBLISHED",
+  "connectionE2E": "NOT_RUN",
+  "acceptedForPublication": false,
+  "conformanceStatus": "DIRECT_ADAPTER_PASSED_CONNECTION_E2E_PENDING",
+  "credentialLifecycle": {
+    "disposableTokenCreateHttp": 201,
+    "disposableIdentityBeforeRevocationHttp": 200,
+    "disposableTokenDeleteHttp": 204,
+    "revokedIdentityHttp": 403,
+    "currentIdentityAfterRevocationHttp": 200,
+    "effectiveOrdinaryUserLifetimeDays": 7,
+    "customExpirationAccepted": false,
+    "actualExpirationTest": "NOT_RUN",
+    "currentTokenRotated": false
+  },
+  "pending": [
+    "FORMAL_LEGAL_SECURITY_SIGNOFF",
+    "SIGNED_SUPPLY_CHAIN_PUBLICATION_EVIDENCE",
+    "EDGE_RATE_LIMIT_CONTRACT",
+    "CONNECTION_HTTP_MCP_E2E",
+    "ACTUAL_TOKEN_EXPIRATION_TEST",
+    "CONNECTION_REAUTH_DISCONNECT_REVOKE"
+  ],
+  "rejectedContainerPreflight": {
+    "provider": "static-spaces",
+    "providerReleaseId": "static-spaces-connection-v1",
+    "executorDigest": "sha256:8c24ce7b0632d6eeadd64aabf6468669dcf1329d878dc8ed1497e57a1f1dfc1d",
+    "externalAccount": "841",
+    "containerId": "0c1e6e33-6750-4127-9d72-157e8899ddcd",
+    "runId": "static-spaces-1ccb86bc-29f6-4704-a93f-aa86e006c78b",
+    "calls": [],
+    "status": "FAILED",
+    "cleanup": "SUCCEEDED",
+    "resources": [],
+    "verificationLayer": "DIRECT_ADAPTER_WITH_REAL_PROVIDER",
+    "containerPreflightHttp": 403,
+    "failure": {
+      "code": "CANARY_FAILED"
+    }
+  }
+}
