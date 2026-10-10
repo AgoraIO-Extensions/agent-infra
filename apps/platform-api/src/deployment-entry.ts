@@ -2,6 +2,10 @@ import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
 import {
+	createDirectoryOrganizationAuthorityResolverV1,
+	createDirectoryOrganizationIdsResolverV1,
+} from "./directory-authority.js";
+import {
 	createPostgresLdapBrowserDeployment,
 	createProductionPlatformApiAssemblyInputV1,
 } from "./index.js";
@@ -15,7 +19,8 @@ if (!configurationModule || new URL(configurationModule).protocol !== "file:") {
 const {
 	ldap,
 	isPlatformDisabled,
-	organizationIds,
+	organizationIds: configuredOrganizationIds,
+	directorySnapshot,
 	publicOrigin,
 	connectionConsumerProfile,
 	connectionConsumerProfileApproval,
@@ -32,6 +37,18 @@ if (typeof ldap?.verifyCurrentStatus !== "function") {
 if (typeof directorySearch !== "function") {
 	throw new Error("Directory search authority is required");
 }
+let organizationIds = configuredOrganizationIds;
+let organizationAuthority:
+	| ReturnType<typeof createDirectoryOrganizationAuthorityResolverV1>
+	| undefined;
+if (directorySnapshot !== undefined) {
+	organizationAuthority =
+		createDirectoryOrganizationAuthorityResolverV1(directorySnapshot);
+	organizationIds = createDirectoryOrganizationIdsResolverV1(directorySnapshot);
+}
+if (typeof organizationIds !== "function") {
+	throw new Error("Directory organization authority is required");
+}
 const tokenFile = process.env.PLATFORM_API_PROXY_TOKEN_FILE;
 if (!tokenFile?.startsWith("/")) {
 	throw new Error("PLATFORM_API_PROXY_TOKEN_FILE must be an absolute path");
@@ -43,6 +60,7 @@ const browser = createPostgresLdapBrowserDeployment({
 	directory,
 	isPlatformDisabled,
 	organizationIds,
+	...(organizationAuthority ? { organizationAuthority } : {}),
 	publicOrigin,
 	trustedProxyToken,
 });

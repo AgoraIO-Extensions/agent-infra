@@ -78,6 +78,33 @@ describe("task authorization boundary", () => {
 		expect(boundary?.identityRevision).toBe("directory-7");
 	});
 
+	it("binds the directory snapshot to the task and rejects changed or missing bindings", () => {
+		const binding = {
+			schemaVersion: 1 as const,
+			source: "internal",
+			revision: "00000000-0000-4000-8000-000000000001",
+			fetchedAt: Date.now() - 1_000,
+			validUntil: Date.now() + 60_000,
+		};
+		const boundUser = { ...user, directorySnapshotBinding: binding };
+		const boundary = requiredBoundary({ user: boundUser });
+		expect(boundary.directorySnapshotBinding).toEqual(binding);
+		expect(
+			isTaskAuthorizationCurrentV1({ boundary, user: boundUser, agent }),
+		).toBe(true);
+		expect(
+			isTaskAuthorizationCurrentV1({
+				boundary,
+				user: {
+					...boundUser,
+					directorySnapshotBinding: { ...binding, revision: "changed" },
+				},
+				agent,
+			}),
+		).toBe(false);
+		expect(isTaskAuthorizationCurrentV1({ boundary, user, agent })).toBe(false);
+	});
+
 	it("rejects application principals carrying user access sources", () => {
 		expect(() =>
 			parseTaskAuthorizationBoundaryV1({

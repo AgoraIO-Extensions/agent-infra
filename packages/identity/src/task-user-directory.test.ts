@@ -58,6 +58,55 @@ describe("requestless current task identity boundary", () => {
 		]);
 	});
 
+	it("preserves a validated directory binding without exposing it in projections", async () => {
+		const now = Date.now();
+		const binding = {
+			schemaVersion: 1,
+			source: "internal",
+			revision: "00000000-0000-4000-8000-000000000001",
+			fetchedAt: now - 1_000,
+			validUntil: now + 10_000,
+		};
+		await expect(
+			resolveCurrentTaskUserV1(
+				{
+					resolveUser: async () => ({
+						...active,
+						directorySnapshotBinding: binding,
+					}),
+				},
+				"user-1",
+			),
+		).resolves.toMatchObject({ directorySnapshotBinding: binding });
+		await expect(
+			resolveCurrentTaskUserV1(
+				{
+					resolveUser: async () => ({
+						...active,
+						directorySnapshotBinding: { ...binding, validUntil: 0 },
+					}),
+				},
+				"user-1",
+			),
+		).rejects.toThrow(TaskIdentityUnavailableErrorV1);
+		for (const invalid of [
+			{ ...binding, fetchedAt: now + 60_000 },
+			{ ...binding, validUntil: now - 1 },
+		]) {
+			await expect(
+				resolveCurrentTaskUserV1(
+					{
+						resolveUser: async () => ({
+							...active,
+							directorySnapshotBinding: invalid,
+						}),
+					},
+					"user-1",
+				),
+			).rejects.toThrow(TaskIdentityUnavailableErrorV1);
+		}
+	});
+
 	it("rejects another user, privileged response expansion, malformed arrays and accessor payloads", async () => {
 		const getter = vi.fn(() => "user-1");
 		const accessor = Object.defineProperty({ ...active }, "userId", {

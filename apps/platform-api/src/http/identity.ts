@@ -6,8 +6,10 @@ import { resolveCurrentTaskUserV1 } from "@agent-infra/identity";
 import type {
 	ApplicationMaterialGrantActorV1,
 	CurrentTaskUserV1,
+	DirectorySnapshotBindingV1,
 	TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
+import { parseDirectorySnapshotBindingV1 } from "@agent-infra/platform-core";
 
 import { HttpProtocolError } from "./common";
 
@@ -19,6 +21,7 @@ export interface IdentityContext {
 	readonly organizationIds: readonly string[];
 	readonly roles: readonly ("employee" | "system_admin")[];
 	readonly authorizationRevision: string;
+	readonly directorySnapshotBinding?: DirectorySnapshotBindingV1;
 }
 
 export interface IdentityAdapter {
@@ -176,15 +179,29 @@ function stringArray(value: unknown): readonly string[] {
 }
 
 function parseIdentity(value: unknown): ResolvedIdentity {
-	const identity = record(value, [
-		"schemaVersion",
-		"userId",
-		"displayName",
-		"accountStatus",
-		"organizationIds",
-		"roles",
-		"authorizationRevision",
-	]);
+	let identity: Record<string, unknown>;
+	try {
+		identity = record(value, [
+			"schemaVersion",
+			"userId",
+			"displayName",
+			"accountStatus",
+			"organizationIds",
+			"roles",
+			"authorizationRevision",
+			"directorySnapshotBinding",
+		]);
+	} catch {
+		identity = record(value, [
+			"schemaVersion",
+			"userId",
+			"displayName",
+			"accountStatus",
+			"organizationIds",
+			"roles",
+			"authorizationRevision",
+		]);
+	}
 	if (
 		identity.schemaVersion !== 1 ||
 		!text(identity.userId) ||
@@ -202,6 +219,10 @@ function parseIdentity(value: unknown): ResolvedIdentity {
 	) {
 		throw new Error();
 	}
+	const binding =
+		identity.directorySnapshotBinding === undefined
+			? undefined
+			: parseDirectorySnapshotBindingV1(identity.directorySnapshotBinding);
 	return {
 		schemaVersion: 1,
 		userId: identity.userId,
@@ -210,6 +231,7 @@ function parseIdentity(value: unknown): ResolvedIdentity {
 		organizationIds: stringArray(identity.organizationIds),
 		roles: roles as ("employee" | "system_admin")[],
 		authorizationRevision: identity.authorizationRevision,
+		...(binding ? { directorySnapshotBinding: binding } : {}),
 	};
 }
 

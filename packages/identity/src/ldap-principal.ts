@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import {
+	type DirectorySnapshotBindingV1,
+	parseDirectorySnapshotBindingV1,
+} from "@agent-infra/platform-core";
 import type { LdapAccount } from "./ldap.js";
 
 export interface LdapPrincipalAuthorities {
@@ -8,6 +12,11 @@ export interface LdapPrincipalAuthorities {
 	readonly organizationIds: (
 		account: LdapAccount,
 	) => Promise<readonly string[]>;
+	/** Optional current directory authority; its binding stays opaque to callers. */
+	readonly organizationAuthority?: (account: LdapAccount) => Promise<{
+		readonly organizationIds: readonly string[];
+		readonly binding: DirectorySnapshotBindingV1;
+	}>;
 }
 
 export async function resolveLdapPrincipal(
@@ -18,9 +27,35 @@ export async function resolveLdapPrincipal(
 	if (typeof disabled !== "boolean")
 		throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 	const isDisabled = account.accountStatus === "disabled" || disabled;
+	const organizationAuthority = authorities.organizationAuthority;
+	const hasOrganizationAuthority =
+		!isDisabled && organizationAuthority !== undefined;
+	const authority =
+		hasOrganizationAuthority && typeof organizationAuthority === "function"
+			? await organizationAuthority(account)
+			: null;
+	if (
+		hasOrganizationAuthority &&
+		(!authority ||
+			!Array.isArray(authority.organizationIds) ||
+			!authority.binding)
+	)
+		throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 	const organizationIds = isDisabled
 		? []
-		: await authorities.organizationIds(account);
+		: authority
+			? authority.organizationIds
+			: await authorities.organizationIds(account);
+	let directorySnapshotBinding: DirectorySnapshotBindingV1 | undefined;
+	if (authority) {
+		try {
+			directorySnapshotBinding = parseDirectorySnapshotBindingV1(
+				authority.binding,
+			);
+		} catch {
+			throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+		}
+	}
 	if (
 		!Array.isArray(organizationIds) ||
 		organizationIds.some(
@@ -45,5 +80,6 @@ export async function resolveLdapPrincipal(
 				]),
 			)
 			.digest("hex"),
+		...(directorySnapshotBinding ? { directorySnapshotBinding } : {}),
 	};
 }

@@ -350,6 +350,7 @@ it("requires the current company identity, active Owner, binding and Agent avail
 	let organizations = ["org-1"];
 	let owners = ["owner"];
 	let channelEnabled = true;
+	let directoryRevision = "snapshot-1";
 	const auth = createWecomAuthorizationV1({
 		identity: {
 			async resolveSender() {
@@ -359,6 +360,13 @@ it("requires the current company identity, active Owner, binding and Agent avail
 					accountStatus: active ? "active" : "disabled",
 					organizationIds: organizations,
 					authorizationRevision: "identity-1",
+					directorySnapshotBinding: {
+						schemaVersion: 1,
+						source: "controlled-directory",
+						revision: directoryRevision,
+						fetchedAt: Date.now() - 1_000,
+						validUntil: Date.now() + 60_000,
+					},
 				};
 			},
 			async activeUsers() {
@@ -394,6 +402,11 @@ it("requires the current company identity, active Owner, binding and Agent avail
 		},
 	});
 	if (initial.outcome !== "allowed") throw new Error("Expected authorization");
+	directoryRevision = "snapshot-2";
+	expect(
+		await auth.authorize(message, "use", initial.authority.actor.taskBoundary),
+	).toMatchObject({ outcome: "denied" });
+	directoryRevision = "snapshot-1";
 	channelEnabled = false;
 	expect(await auth.authorize(message)).toMatchObject({ outcome: "denied" });
 	channelEnabled = true;
