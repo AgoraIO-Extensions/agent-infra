@@ -59,12 +59,13 @@ describe("requestless current task identity boundary", () => {
 	});
 
 	it("preserves a validated directory binding without exposing it in projections", async () => {
+		const now = Date.now();
 		const binding = {
 			schemaVersion: 1,
 			source: "internal",
 			revision: "00000000-0000-4000-8000-000000000001",
-			fetchedAt: 1_000,
-			validUntil: 2_000,
+			fetchedAt: now - 1_000,
+			validUntil: now + 10_000,
 		};
 		await expect(
 			resolveCurrentTaskUserV1(
@@ -88,6 +89,22 @@ describe("requestless current task identity boundary", () => {
 				"user-1",
 			),
 		).rejects.toThrow(TaskIdentityUnavailableErrorV1);
+		for (const invalid of [
+			{ ...binding, fetchedAt: now + 1 },
+			{ ...binding, validUntil: now },
+		]) {
+			await expect(
+				resolveCurrentTaskUserV1(
+					{
+						resolveUser: async () => ({
+							...active,
+							directorySnapshotBinding: invalid,
+						}),
+					},
+					"user-1",
+				),
+			).rejects.toThrow(TaskIdentityUnavailableErrorV1);
+		}
 	});
 
 	it("rejects another user, privileged response expansion, malformed arrays and accessor payloads", async () => {

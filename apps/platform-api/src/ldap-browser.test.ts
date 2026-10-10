@@ -205,12 +205,13 @@ describe("LDAP browser adapter", () => {
 	});
 
 	it("carries a snapshot binding into current identity and task resolution", async () => {
+		const now = Date.now();
 		const binding = {
 			schemaVersion: 1 as const,
 			source: "internal",
 			revision: "00000000-0000-4000-8000-000000000001",
-			fetchedAt: 1_000,
-			validUntil: 2_000,
+			fetchedAt: now - 1_000,
+			validUntil: now + 10_000,
 		};
 		const state = fixture(memorySessions(), async () => ({
 			organizationIds: ["org-bound"],

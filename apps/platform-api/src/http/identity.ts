@@ -9,6 +9,7 @@ import type {
 	DirectorySnapshotBindingV1,
 	TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
+import { parseDirectorySnapshotBindingV1 } from "@agent-infra/platform-core";
 
 import { HttpProtocolError } from "./common";
 
@@ -177,36 +178,6 @@ function stringArray(value: unknown): readonly string[] {
 	return values;
 }
 
-function parseDirectorySnapshotBinding(
-	value: unknown,
-): DirectorySnapshotBindingV1 | undefined {
-	if (value === undefined) return undefined;
-	const binding = record(value, [
-		"schemaVersion",
-		"source",
-		"revision",
-		"fetchedAt",
-		"validUntil",
-	]);
-	if (
-		binding.schemaVersion !== 1 ||
-		!text(binding.source) ||
-		!text(binding.revision) ||
-		!Number.isSafeInteger(binding.fetchedAt) ||
-		(binding.fetchedAt as number) < 0 ||
-		!Number.isSafeInteger(binding.validUntil) ||
-		(binding.validUntil as number) <= 0
-	)
-		throw new Error();
-	return {
-		schemaVersion: 1,
-		source: binding.source,
-		revision: binding.revision,
-		fetchedAt: binding.fetchedAt as number,
-		validUntil: binding.validUntil as number,
-	};
-}
-
 function parseIdentity(value: unknown): ResolvedIdentity {
 	let identity: Record<string, unknown>;
 	try {
@@ -248,9 +219,10 @@ function parseIdentity(value: unknown): ResolvedIdentity {
 	) {
 		throw new Error();
 	}
-	const binding = parseDirectorySnapshotBinding(
-		identity.directorySnapshotBinding,
-	);
+	const binding =
+		identity.directorySnapshotBinding === undefined
+			? undefined
+			: parseDirectorySnapshotBindingV1(identity.directorySnapshotBinding);
 	return {
 		schemaVersion: 1,
 		userId: identity.userId,

@@ -65,6 +65,40 @@ function object(input: unknown): Record<string, unknown> {
 	return snapshotAgentManagementDataObject(input);
 }
 
+export function parseDirectorySnapshotBindingV1(
+	input: unknown,
+	now = Date.now(),
+): DirectorySnapshotBindingV1 {
+	const parsed = object(input);
+	exact(parsed, [
+		"schemaVersion",
+		"source",
+		"revision",
+		"fetchedAt",
+		"validUntil",
+	]);
+	if (
+		parsed.schemaVersion !== 1 ||
+		!text(parsed.source) ||
+		!text(parsed.revision) ||
+		!Number.isSafeInteger(parsed.fetchedAt) ||
+		(parsed.fetchedAt as number) < 0 ||
+		!Number.isSafeInteger(parsed.validUntil) ||
+		(parsed.validUntil as number) <= 0 ||
+		(parsed.fetchedAt as number) > now ||
+		(parsed.validUntil as number) <= now ||
+		(parsed.validUntil as number) <= (parsed.fetchedAt as number)
+	)
+		throw new TypeError("Directory snapshot binding is invalid");
+	return {
+		schemaVersion: 1,
+		source: parsed.source,
+		revision: parsed.revision,
+		fetchedAt: parsed.fetchedAt as number,
+		validUntil: parsed.validUntil as number,
+	};
+}
+
 /**
  * Task-scoped directory facts resolved by a deployment IdentityAdapter.
  * This is not the canonical platform IdentityContext; application grants and
@@ -123,31 +157,7 @@ export function parseCurrentTaskUserV1(input: unknown): CurrentTaskUserV1 {
 	const binding = value.directorySnapshotBinding;
 	let directorySnapshotBinding: DirectorySnapshotBindingV1 | undefined;
 	if (binding !== undefined) {
-		const parsed = object(binding);
-		exact(parsed, [
-			"schemaVersion",
-			"source",
-			"revision",
-			"fetchedAt",
-			"validUntil",
-		]);
-		if (
-			parsed.schemaVersion !== 1 ||
-			!text(parsed.source) ||
-			!text(parsed.revision) ||
-			!Number.isSafeInteger(parsed.fetchedAt) ||
-			(parsed.fetchedAt as number) < 0 ||
-			!Number.isSafeInteger(parsed.validUntil) ||
-			(parsed.validUntil as number) <= 0
-		)
-			throw new TypeError("Directory snapshot binding is invalid");
-		directorySnapshotBinding = {
-			schemaVersion: 1,
-			source: parsed.source,
-			revision: parsed.revision,
-		fetchedAt: parsed.fetchedAt as number,
-		validUntil: parsed.validUntil as number,
-		};
+		directorySnapshotBinding = parseDirectorySnapshotBindingV1(binding);
 	}
 	return {
 		schemaVersion: 1,
