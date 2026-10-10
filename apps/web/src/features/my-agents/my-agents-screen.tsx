@@ -122,7 +122,9 @@ export function MyAgentsScreen({
 													variant="outline"
 													className="max-w-full whitespace-normal rounded-[7px] [overflow-wrap:anywhere]"
 												>
-													{agentConversationSourceLabel(application)}
+													{application.source.kind === "standard"
+														? application.source.templateId
+														: agentConversationSourceLabel(application)}
 												</Badge>
 											</div>
 											<Link
