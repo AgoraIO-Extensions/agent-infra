@@ -296,7 +296,8 @@ approval fence 和既有账号升级回归门禁。存在 migration 变化时拒
 #### 经评审的 schema 迁移发布
 
 存在新迁移时，普通发布继续拒绝。仅当变更是新增版本化 SQL 和追加 journal，且精确字节已包含在
-同仓库已合并、当前 head CI/review 成功的 PR 中，才使用显式模式：
+同仓库已合并的 PR 中，才使用显式模式。迁移来源校验不重复要求该 PR 的 CI/review Check
+成功；PR 合并门禁和正式镜像发布的 CI 检查仍按各自流程执行：
 
 ```bash
 pnpm connection:release connection-vX.Y.Z --publish --deploy \
