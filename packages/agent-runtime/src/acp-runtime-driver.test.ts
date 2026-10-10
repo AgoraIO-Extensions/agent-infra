@@ -47,6 +47,12 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 		};
 		const result = await driver.execute(command);
 		expect(result.result.outcome).toBe("accepted");
+		await expect(
+			driver.getModelDirectory(result.nativeSessionRef),
+		).resolves.toEqual({
+			options: [{ modelOptionId: "primary", reasoningLevels: ["high"] }],
+			current: { modelOptionId: "primary", reasoningLevel: "high" },
+		});
 		await vi.waitFor(async () =>
 			expect(
 				await driver.getStatus(result.nativeSessionRef, command.executionId),

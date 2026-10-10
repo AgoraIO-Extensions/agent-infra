@@ -4,6 +4,7 @@ import type {
 	ExecutionGrantV1,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeGenerationCancelRequestV1,
+	RuntimeModelDirectoryRequestV1,
 	RuntimeReplayRequestV1,
 	RuntimeStatusRequestV1,
 	RuntimeStatusRequestV2,
@@ -111,6 +112,12 @@ export function ingressVerifiedRuntimeHost(host: RuntimeHost) {
 		},
 		capabilities(request: RuntimeCapabilitiesRequestV1) {
 			return host.capabilities(
+				request,
+				verificationForRuntimeGrant(request.grant),
+			);
+		},
+		modelDirectory(request: RuntimeModelDirectoryRequestV1) {
+			return host.modelDirectory(
 				request,
 				verificationForRuntimeGrant(request.grant),
 			);

@@ -92,6 +92,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeExternalActionAuthorizer,
+	RuntimeModelDirectory,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 	RuntimeOriginalEvidenceRecoveryRef,
@@ -5799,6 +5800,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					}
 				: {}),
 		};
+	}
+
+	async getModelDirectory(
+		_nativeSessionRef: string,
+	): Promise<RuntimeModelDirectory> {
+		return unavailable();
 	}
 
 	async probeReadiness(signal: AbortSignal) {

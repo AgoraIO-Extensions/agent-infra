@@ -9,6 +9,19 @@ import type {
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
 
+export interface RuntimeModelDirectoryOption {
+	readonly modelOptionId: string;
+	readonly reasoningLevels: readonly string[];
+}
+
+export interface RuntimeModelDirectory {
+	readonly options: readonly RuntimeModelDirectoryOption[];
+	readonly current: {
+		readonly modelOptionId: string;
+		readonly reasoningLevel: string;
+	};
+}
+
 export type RuntimeDriverCommand =
 	| RuntimeDriverCommandV1
 	| RuntimeDriverSubmitTurnCommandV2;
@@ -87,6 +100,8 @@ export interface RuntimeDriver {
 		executionId: string,
 	): Promise<RuntimeStatusV1>;
 	getCapabilities(): Promise<RuntimeCapabilitiesV1>;
+	/** Read-only model choices for an existing native Session; never opens or mutates one. */
+	getModelDirectory(nativeSessionRef: string): Promise<RuntimeModelDirectory>;
 	replayEvents(
 		nativeSessionRef: string,
 		executionId: string,

@@ -25,6 +25,7 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
+	RuntimeModelDirectory,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -1031,6 +1032,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			connection: false,
 			supplementaryInstruction: false,
 		};
+	}
+	async getModelDirectory(
+		_nativeSessionRef: string,
+	): Promise<RuntimeModelDirectory> {
+		return unavailable();
 	}
 	async replayEvents(ref: string, executionId: string, afterCursor?: string) {
 		const turn = (await this.forReference(ref))

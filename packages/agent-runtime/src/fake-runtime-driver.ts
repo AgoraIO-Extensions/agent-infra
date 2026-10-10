@@ -378,6 +378,26 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 		return capabilities;
 	}
 
+	async getModelDirectory(_nativeSessionRef: string) {
+		const current = defaultSelections[0];
+		if (!current)
+			throw new RuntimeHostError(
+				"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+				"Runtime session could not be recovered",
+				503,
+			);
+		return {
+			options: defaultSelections.map((selection) => ({
+				modelOptionId: selection.modelOptionId,
+				reasoningLevels: [selection.reasoningLevel],
+			})),
+			current: {
+				modelOptionId: current.modelOptionId,
+				reasoningLevel: current.reasoningLevel,
+			},
+		};
+	}
+
 	async replayEvents(
 		nativeSessionRef: string,
 		executionId: string,
