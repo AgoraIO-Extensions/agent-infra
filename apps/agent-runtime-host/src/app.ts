@@ -47,7 +47,9 @@ export const runtimeHostService = "agent-runtime-host";
 
 interface RuntimeHostAppOptions {
 	/** Admitted manifest plus local probe evidence; never selected by a caller. */
-	browserCapability?: RuntimeBrowserCapabilityAssemblyInputV1;
+	browserCapability?:
+		| RuntimeBrowserCapabilityAssemblyInputV1
+		| (() => RuntimeBrowserCapabilityAssemblyInputV1 | undefined);
 	/** Local approved deployment snapshot; transport headers cannot select it. */
 	connectionConsumer?: RuntimeConnectionConsumerProfile;
 	/** Identity authenticated by this deployment's service token. Never a caller field. */
@@ -171,7 +173,9 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		);
 		const result = discoverRuntimeBrowserCapabilityV1(
 			query,
-			options.browserCapability,
+			typeof options.browserCapability === "function"
+				? options.browserCapability()
+				: options.browserCapability,
 		);
 		if ("code" in result)
 			return context.json(

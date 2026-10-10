@@ -263,6 +263,9 @@ export function createWorkloadRuntimeProbeV1(options: {
 						workloadRevision: input.workloadRevision,
 						fence: input.fence,
 						imageDigest: input.imageDigest,
+						...(input.manifest.capabilities?.browser
+							? { browserDeclaration: input.manifest.capabilities.browser }
+							: {}),
 					});
 					const authorization = await options.authorization.authorize(
 						{ request },
@@ -294,7 +297,8 @@ export function createWorkloadRuntimeProbeV1(options: {
 					if (
 						Object.entries(request).some(
 							([field, value]) =>
-								claims[field as keyof typeof claims] !== value,
+								JSON.stringify(claims[field as keyof typeof claims]) !==
+								JSON.stringify(value),
 						)
 					)
 						throw new Error();
@@ -347,7 +351,8 @@ export function createWorkloadRuntimeProbeV1(options: {
 						if (
 							Object.entries(request).some(
 								([field, value]) =>
-									result[field as keyof typeof result] !== value,
+									JSON.stringify(result[field as keyof typeof result]) !==
+									JSON.stringify(value),
 							)
 						)
 							throw new Error();

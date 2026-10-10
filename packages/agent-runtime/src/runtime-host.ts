@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 
 import type {
+	BrowserCapabilityDeclarationV1,
 	RuntimeAuthorizationRenewRequestV3,
+	RuntimeBrowserCapabilityProbeEvidenceV1,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeCapabilitiesResponseV1,
 	RuntimeCapabilitiesV1,
@@ -94,6 +96,15 @@ interface RuntimeHostOptions {
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
 	}>;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
+	onBrowserCapabilityAssembly?: (
+		input:
+			| {
+					readonly declaration: BrowserCapabilityDeclarationV1;
+					readonly manifestDigest: string;
+					readonly probe: RuntimeBrowserCapabilityProbeEvidenceV1;
+			  }
+			| undefined,
+	) => void;
 	store: FileRuntimeStore;
 	driver: RuntimeDriver;
 	grantValidation: ExecutionGrantValidationOptions;
@@ -1075,6 +1086,15 @@ export class RuntimeHost {
 					true,
 				);
 			verify(request, authenticatedWorkerId);
+			this.options.onBrowserCapabilityAssembly?.(
+				request.browserDeclaration && capabilities.browser
+					? {
+							declaration: request.browserDeclaration,
+							manifestDigest: request.imageDigest,
+							probe: capabilities.browser,
+						}
+					: undefined,
+			);
 			const { grant: _proof, ...binding } = request;
 			return WorkloadReadinessResponseV1Schema.parse({
 				...binding,

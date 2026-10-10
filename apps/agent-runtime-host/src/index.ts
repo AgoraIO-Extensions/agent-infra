@@ -2,7 +2,7 @@ import { createPublicKey, type KeyObject } from "node:crypto";
 import { createServer as createHttpsServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-
+import type { RuntimeBrowserCapabilityAssemblyInputV1 } from "@agent-infra/agent-runtime";
 import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
@@ -63,6 +63,9 @@ import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js
 export { createRuntimeHostApp, runtimeHostService } from "./app.js";
 
 interface StartOptions {
+	browserCapability?:
+		| RuntimeBrowserCapabilityAssemblyInputV1
+		| (() => RuntimeBrowserCapabilityAssemblyInputV1 | undefined);
 	oauth?: RuntimeOAuthAssembly;
 	connectionConsumer?: RuntimeConnectionConsumerProfile;
 	readinessWorkerId?: string;
@@ -288,6 +291,9 @@ export async function assembleRuntimeHost(
 	let closeDriver: (() => Promise<void>) | undefined;
 	let openedStore: FileRuntimeStore | undefined;
 	let oauth: RuntimeOAuthAssembly | undefined;
+	let browserCapabilityAssembly:
+		| RuntimeBrowserCapabilityAssemblyInputV1
+		| undefined;
 	const close = async () => {
 		if (oauth?.status === "available") await oauth.client.close();
 		try {
@@ -434,6 +440,9 @@ export async function assembleRuntimeHost(
 				}
 			: undefined;
 		const host = await RuntimeHost.open({
+			onBrowserCapabilityAssembly: (input) => {
+				browserCapabilityAssembly = input;
+			},
 			...(readinessBinding
 				? {
 						readinessVerifier: createWorkloadReadinessVerifierV1({
@@ -463,6 +472,7 @@ export async function assembleRuntimeHost(
 		const verify = createExecutionGrantVerifier(new Map([[keyId, publicKey]]));
 		return {
 			host,
+			browserCapability: () => browserCapabilityAssembly,
 			...(connectionConsumer ? { connectionConsumer } : {}),
 			...(readinessBinding
 				? { readinessWorkerId: readinessBinding.workerId }

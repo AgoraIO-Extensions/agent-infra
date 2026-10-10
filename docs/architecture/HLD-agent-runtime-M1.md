@@ -152,6 +152,8 @@ Browser Capability 使用 `packages/contracts/src/runtime/browser-capability.ts`
 
 Manifest declaration 不能证明浏览器已装配或可用。Worker/Host 只有在当前 Session-owned Sandbox 内的固定 Browser Runtime 完成 probe 后，才能把声明与实际结果取交集并向 Platform 返回 `available`。该契约不创建 Browser 专用调度器、不改变 Conversation/Execution/Sandbox 权威，也不把 BrowserContext、Cookie、Storage 或原生页面标识暴露给 Platform API。
 
+生产接收路径沿现有 signed readiness binding 传递准入后的 Manifest Browser declaration；RuntimeHost 返回的本地 probe evidence 只在同一 Agent、workload revision、fence 和 immutable image digest 下与该 declaration 组装。缺少 declaration 或 probe、binding 不匹配、receipt 过期或跨 Sandbox/镜像时，保持不可用状态，不能由查询参数、env 或 Owner 字段选择 `available`。
+
 ## 5. Platform Conversation Contract
 
 Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation Contract；Runtime 不另建身份、任务队列或 Eval 状态权威。Contract 定义以下语义，不暴露具体 Runtime 协议：

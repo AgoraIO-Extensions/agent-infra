@@ -10,6 +10,11 @@ import {
 	FileRuntimeStore,
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
+import type {
+	BrowserCapabilityDeclarationV1,
+	RuntimeBrowserCapabilityProbeEvidenceV1,
+} from "@agent-infra/contracts/runtime";
+import { BrowserCapabilityProjectionV1Schema } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeHostApp } from "./app.js";
 import { readWorkloadReadinessBindingV1 } from "./configuration.js";
@@ -28,12 +33,13 @@ afterEach(async () => {
 		dirs.splice(0).map((path) => rm(path, { recursive: true, force: true })),
 	);
 });
-function request() {
+function request(browserDeclaration?: BrowserCapabilityDeclarationV1) {
 	const fields = {
 		schemaVersion: 1,
 		...binding,
 		requestId: "request-a",
 		traceId: "trace-a",
+		...(browserDeclaration ? { browserDeclaration } : {}),
 	};
 	const now = Date.now();
 	const claims = {
@@ -70,6 +76,13 @@ async function harness(
 	const execute = vi.spyOn(driver, "execute");
 	const lookup = vi.spyOn(driver, "lookupOperation");
 	const store = await FileRuntimeStore.open(join(dir, "host.json"));
+	let browserCapabilityAssembly:
+		| {
+				readonly declaration: BrowserCapabilityDeclarationV1;
+				readonly manifestDigest: string;
+				readonly probe: RuntimeBrowserCapabilityProbeEvidenceV1;
+		  }
+		| undefined;
 	const host = await RuntimeHost.open({
 		store,
 		driver: Object.assign(driver, probe ? { probeReadiness: probe } : {}),
@@ -80,9 +93,13 @@ async function harness(
 			publicKeys: new Map([["key-a", keys.publicKey]]),
 			...(now ? { now } : {}),
 		}),
+		onBrowserCapabilityAssembly: (input) => {
+			browserCapabilityAssembly = input;
+		},
 	});
 	const app = createRuntimeHostApp({
 		host,
+		browserCapability: () => browserCapabilityAssembly,
 		serviceToken: "transport-a",
 		readinessWorkerId: "worker-a",
 		verifyGrant: createExecutionGrantVerifier(
@@ -104,6 +121,49 @@ const caps = {
 	connection: false,
 	supplementaryInstruction: false,
 };
+const browserDeclaration: BrowserCapabilityDeclarationV1 = {
+	schemaVersion: 1,
+	capabilityVersion: 1,
+	operations: ["navigate", "observe"],
+	policy: {
+		allowedOrigins: ["https://example.test/"],
+		maxContexts: 1,
+		maxTabs: 1,
+		maxPages: 1,
+		maxViewportWidth: 1280,
+		maxViewportHeight: 720,
+		maxConcurrentActions: 1,
+		maxDownloads: 1,
+		maxDownloadBytes: 1024,
+		maxUploadBytes: 1024,
+		maxScreenshotBytes: 1024,
+		maxBrowserDurationMs: 60_000,
+		maxRetainedProfileBytes: 100_000,
+		navigationTimeoutMs: 15_000,
+		actionTimeoutMs: 5_000,
+		requireSideEffectConfirmation: true,
+		allowUserHandoff: false,
+	},
+};
+const browserProbe: RuntimeBrowserCapabilityProbeEvidenceV1 = {
+	capabilityVersion: 1,
+	operations: ["navigate", "observe"],
+	provenance: {
+		browser: "chromium",
+		chromiumVersion: "153.0.8010.12",
+		playwrightVersion: "1.63.0",
+		imageDigest: binding.imageDigest,
+	},
+	conformance: {
+		schemaVersion: 1,
+		receiptId: "browser-receipt",
+		probeVersion: "browser-probe",
+		verifiedAt: new Date().toISOString(),
+		manifestDigest: binding.imageDigest,
+		evidenceHash: "b".repeat(64),
+		operations: ["navigate", "observe"],
+	},
+};
 const post = (body: unknown, token = "transport-a") => ({
 	method: "POST",
 	headers: {
@@ -114,6 +174,28 @@ const post = (body: unknown, token = "transport-a") => ({
 });
 
 describe("HTTP Workload readiness", () => {
+	it("assembles Browser availability only from signed declaration and local probe evidence", async () => {
+		const probe = vi.fn(async () => ({ ...caps, browser: browserProbe }));
+		const h = await harness(probe);
+		const body = request(browserDeclaration);
+		const response = await h.app.request(
+			"/internal/runtime/v1/readiness",
+			post(body),
+		);
+		expect(response.status).toBe(200);
+		const readiness = (await response.json()) as {
+			capabilities: { browser?: RuntimeBrowserCapabilityProbeEvidenceV1 };
+		};
+		expect(readiness.capabilities.browser).toEqual(browserProbe);
+		const discovery = await h.app.request(
+			"/internal/runtime/v1/browser-capability?schemaVersion=1",
+			{ headers: { authorization: "Bearer transport-a" } },
+		);
+		expect(discovery.status).toBe(200);
+		expect(
+			BrowserCapabilityProjectionV1Schema.parse(await discovery.json()).status,
+		).toBe("available");
+	});
 	it("calls only the dedicated probe and leaves durable business state unchanged", async () => {
 		const probe = vi.fn(async () => caps);
 		const h = await harness(probe);
