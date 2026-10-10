@@ -697,7 +697,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				unavailable();
 			}
 		}
-		for (const name of ["workspace", "config", "tmp", "memory"]) {
+		for (const name of ["workspace", "config", "tmp", "memory", "home"]) {
 			const path = join(directory, name);
 			await mkdir(path, { recursive: true, mode: 0o700 });
 			if ((await lstat(path)).isSymbolicLink()) unavailable();
@@ -781,6 +781,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					cwd: join(directory, "workspace"),
 					env: {
 						PATH: process.env.PATH,
+						HOME: join(directory, "home"),
 						TMPDIR: join(directory, "tmp"),
 						CLAUDE_CONFIG_DIR: join(directory, "config"),
 						ANTHROPIC_BASE_URL: transport.modelAccess.endpoint,
