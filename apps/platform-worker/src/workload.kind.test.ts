@@ -1072,11 +1072,28 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					(row) =>
 						row.status === "available" && row.service_availability === "ready",
 				);
+				const [initial] = await sql<
+					{ workload_revision: number; fence: number }[]
+				>`select workload_revision, fence from platform.agent_applications where agent_id=${seed.agentId}`;
+				const workloadSelector = `agent-infra.agora.io/agent=${workloadResourceNameV1(seed.agentId)}`;
 				const stopped = await request("stop", "api-workload-stop", token);
 				expect(stopped.status).toBe(202);
 				await tickUntil(
 					(row) =>
 						row.status === "stopped" && row.service_availability === null,
+				);
+				const [stoppedBaseline] = await sql<
+					{ workload_revision: number; fence: number }[]
+				>`select workload_revision, fence from platform.agent_applications where agent_id=${seed.agentId}`;
+				const stoppedWorkloads = await client.list<V1StatefulSet>(
+					"StatefulSet",
+					workloadSelector,
+				);
+				expect(
+					stoppedWorkloads.every((workload) => workload.spec?.replicas === 0),
+				).toBe(true);
+				expect(await client.list<V1Pod>("Pod", workloadSelector)).toHaveLength(
+					0,
 				);
 				const restarted = await request(
 					"restart",
@@ -1092,8 +1109,14 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					{ workload_revision: number; fence: number }[]
 				>`
 					select workload_revision, fence from platform.agent_applications where agent_id=${seed.agentId}`;
-				expect(Number(recovered?.workload_revision)).toBeGreaterThan(1);
-				expect(Number(recovered?.fence)).toBeGreaterThan(1);
+				expect(Number(recovered?.workload_revision)).toBeGreaterThan(
+					Number(
+						stoppedBaseline?.workload_revision ?? initial?.workload_revision,
+					),
+				);
+				expect(Number(recovered?.fence)).toBeGreaterThan(
+					Number(stoppedBaseline?.fence ?? initial?.fence),
+				);
 			} finally {
 				await worker?.stop();
 				await assembly?.close();
