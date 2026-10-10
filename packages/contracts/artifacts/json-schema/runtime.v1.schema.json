@@ -1743,6 +1743,16 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "displayName": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "modelId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
               "modelOptionId": {
                 "minLength": 1,
                 "type": "string"
@@ -1763,6 +1773,8 @@
             "required": [
               "schemaVersion",
               "modelOptionId",
+              "modelId",
+              "displayName",
               "reasoningLevels"
             ],
             "type": "object"
