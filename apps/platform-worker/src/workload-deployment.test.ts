@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RuntimeBrowserCapabilityAssemblyV1 } from "@agent-infra/agent-runtime";
 import {
 	FakeRuntimeDriver,
 	FileRuntimeStore,
@@ -497,16 +498,7 @@ describe("authenticated Workload Runtime probe", () => {
 				browser: browserProbe,
 			}),
 		});
-		let assembled:
-			| {
-					readonly declaration: BrowserCapabilityDeclarationV1;
-					readonly binding: NonNullable<
-						RuntimeBrowserCapabilityProbeEvidenceV1["binding"]
-					>;
-					readonly manifestDigest: string;
-					readonly probe: RuntimeBrowserCapabilityProbeEvidenceV1;
-			  }
-			| undefined;
+		let assembled: RuntimeBrowserCapabilityAssemblyV1 | undefined;
 		const host = await RuntimeHost.open({
 			store: await FileRuntimeStore.open(join(directory, "host.json")),
 			driver,
