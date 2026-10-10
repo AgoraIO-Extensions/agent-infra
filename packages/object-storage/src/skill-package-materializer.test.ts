@@ -122,7 +122,38 @@ describe("Skill package materializer", () => {
 				.mode & 0o777,
 		).toBe(0o444);
 		expect((await stat(directory)).mode & 0o777).toBe(0o555);
+		expect((await stat(join(assemblyRoot, "runtime-data"))).mode & 0o777).toBe(
+			0o770,
+		);
 	});
+
+	it("creates the isolated runtime-data subPath on an empty assembly root", async () => {
+		const assemblyRoot = await root();
+		const adapter = materializer(assemblyRoot);
+		expect(
+			await lstat(join(assemblyRoot, "runtime-data")).catch(() => null),
+		).toBeNull();
+		await adapter.materialize({ packages: [] });
+		const info = await stat(join(assemblyRoot, "runtime-data"));
+		expect(info.isDirectory()).toBe(true);
+		expect(info.mode & 0o777).toBe(0o770);
+	});
+
+	it.each(["file", "symlink"] as const)(
+		"rejects an unsafe pre-existing runtime-data %s",
+		async (kind) => {
+			const assemblyRoot = await root();
+			const path = join(assemblyRoot, "runtime-data");
+			if (kind === "file") await writeFile(path, "foreign");
+			else await symlink("/tmp", path);
+			const adapter = materializer(assemblyRoot);
+			await expect(adapter.materialize({ packages: [] })).rejects.toMatchObject(
+				{
+					code: "conflict",
+				},
+			);
+		},
+	);
 
 	it("rejects a stale generation expectation before replacing CURRENT", async () => {
 		const assemblyRoot = await root();
