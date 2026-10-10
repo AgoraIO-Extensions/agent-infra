@@ -47,7 +47,7 @@ export function useOwnApplication({
 	const query = useQuery({
 		queryKey: scope.queryKey,
 		queryFn: ({ signal }) =>
-			loadOwnApplication(applicationId ?? "", scope.client, signal),
+			loadOwnApplication(applicationId, scope.client, signal),
 		enabled: allowed,
 		retry: false,
 		staleTime: 15_000,

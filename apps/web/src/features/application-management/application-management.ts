@@ -52,11 +52,11 @@ function unavailable(status: number | undefined): CollectionReadUnavailable {
 }
 
 export async function loadOwnApplication(
-	applicationId: string,
+	applicationId: string | undefined,
 	client?: Client,
 	signal?: AbortSignal,
 ): Promise<ApplicationManagementState> {
-	if (!applicationId) return { kind: "empty" };
+	if (applicationId === undefined) return { kind: "empty" };
 	signal?.throwIfAborted();
 	const result: Awaited<
 		RequestResult<

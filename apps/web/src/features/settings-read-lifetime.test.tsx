@@ -230,8 +230,15 @@ it("distinguishes absent selection from an unavailable requested application", a
 	const { client, requests } = setup(
 		() => new Response("Controlled missing resource", { status: 404 }),
 	);
-	expect(await loadOwnApplication("", client)).toEqual({ kind: "empty" });
+	expect(await loadOwnApplication(undefined, client)).toEqual({
+		kind: "empty",
+	});
 	expect(requests).toHaveLength(0);
+	expect(await loadOwnApplication("", client)).toEqual({
+		kind: "unavailable",
+		reason: "not-found",
+		retryable: false,
+	});
 	expect(await loadOwnApplication("foreign-or-missing", client)).toEqual({
 		kind: "unavailable",
 		reason: "not-found",

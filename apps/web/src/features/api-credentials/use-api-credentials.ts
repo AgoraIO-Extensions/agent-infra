@@ -65,7 +65,15 @@ export function useApiCredentials({
 		? { kind: "denied" }
 		: (queryFailure ?? query.data ?? { kind: "loading" });
 	async function refetch() {
-		if (!scope.active || !allowed) return undefined;
+		const current = queryClient.getQueryData<ApiCredentialsState>(
+			scope.queryKey,
+		);
+		if (
+			!scope.active ||
+			!allowed ||
+			(current?.kind === "unavailable" && !current.retryable)
+		)
+			return undefined;
 		return query.refetch({ cancelRefetch: false });
 	}
 	return { state, isFetching: allowed && query.isFetching, refetch };
