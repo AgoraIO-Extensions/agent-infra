@@ -896,44 +896,6 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					secretAdmission: { admitSecrets: unused },
 					channelAdmission: { admitChannels: unused },
 				};
-				assembly = assemblePlatformApi({
-					databaseUrl: database.databaseUrl,
-					taskAdmissionPolicy: {
-						maximumWaitingTasksPerAgent: 1,
-						waitingTimeoutMs: 30_000,
-					},
-					identity: {
-						resolve: async () => null,
-						resolveUser: async (userId) => ({
-							schemaVersion: 1,
-							userId,
-							accountStatus: "active",
-							organizationIds: [],
-							authorizationRevision: "directory-revision",
-						}),
-						hydrateUsers: async () => [],
-					},
-					admissions,
-					allocateApplicationIds: unused,
-					prepareApplicationSecrets: unused,
-					prepareConfigurationSecrets: unused,
-					presentAgent: unused,
-				});
-				const api = createPlatformApp(assembly.dependencies);
-				const request = (
-					command: "stop" | "restart",
-					key: string,
-					bearer: string,
-				) =>
-					api.request(`/api/v2/agents/${seed.agentId}/commands`, {
-						method: "POST",
-						headers: {
-							Authorization: `Bearer ${bearer}`,
-							"Content-Type": "application/json",
-							"Idempotency-Key": key,
-						},
-						body: JSON.stringify({ schemaVersion: 1, command }),
-					});
 				const probeRuntime = async (input: {
 					baseUrl: string;
 					manifest: { health: { path: string } };
@@ -1056,6 +1018,44 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				const [initial] = await sql<
 					{ workload_revision: number; fence: number }[]
 				>`select workload_revision, fence from platform.agent_applications where agent_id=${seed.agentId}`;
+				assembly = assemblePlatformApi({
+					databaseUrl: database.databaseUrl,
+					taskAdmissionPolicy: {
+						maximumWaitingTasksPerAgent: 1,
+						waitingTimeoutMs: 30_000,
+					},
+					identity: {
+						resolve: async () => null,
+						resolveUser: async (userId) => ({
+							schemaVersion: 1,
+							userId,
+							accountStatus: "active",
+							organizationIds: [],
+							authorizationRevision: "directory-revision",
+						}),
+						hydrateUsers: async () => [],
+					},
+					admissions,
+					allocateApplicationIds: unused,
+					prepareApplicationSecrets: unused,
+					prepareConfigurationSecrets: unused,
+					presentAgent: unused,
+				});
+				const api = createPlatformApp(assembly.dependencies);
+				const request = (
+					command: "stop" | "restart",
+					key: string,
+					bearer: string,
+				) =>
+					api.request(`/api/v2/agents/${seed.agentId}/commands`, {
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${bearer}`,
+							"Content-Type": "application/json",
+							"Idempotency-Key": key,
+						},
+						body: JSON.stringify({ schemaVersion: 1, command }),
+					});
 				const workloadSelector = `agent-infra.agora.io/agent=${workloadResourceNameV1(seed.agentId)}`;
 				const stopped = await request("stop", "api-workload-stop", token);
 				expect(stopped.status).toBe(202);
