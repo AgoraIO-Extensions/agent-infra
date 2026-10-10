@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { TextDecoder } from "node:util";
 import type {
 	RuntimeFileBridgeBindingV1,
 	RuntimeFileBridgeFactoryV1,
@@ -19,6 +20,8 @@ export interface RuntimeFileExchangeOptionsV1 {
 	readonly timeoutMs?: number;
 	readonly fetch?: typeof fetch;
 }
+
+const maximumResponseBytes = 65_536;
 
 function invalid(): never {
 	throw new Error("RUNTIME_FILE_EXCHANGE_CONFIGURATION_INVALID");
@@ -57,6 +60,44 @@ function sameDescriptor(left: FileDescriptorV1, right: FileDescriptorV1) {
 		left.sizeBytes === right.sizeBytes &&
 		left.sha256 === right.sha256
 	);
+}
+
+async function boundedJson(response: Response) {
+	const reader = response.body?.getReader();
+	if (!reader) throw new Error("RUNTIME_FILE_EXCHANGE_RESPONSE_INVALID");
+	const chunks: Uint8Array[] = [];
+	let bytes = 0;
+	try {
+		while (true) {
+			const next = await reader.read();
+			if (next.done) break;
+			bytes += next.value.byteLength;
+			if (bytes > maximumResponseBytes) {
+				await reader.cancel().catch(() => undefined);
+				throw new Error("RUNTIME_FILE_EXCHANGE_RESPONSE_TOO_LARGE");
+			}
+			chunks.push(next.value);
+		}
+		return JSON.parse(
+			new TextDecoder("utf-8", { fatal: true }).decode(
+				Buffer.concat(chunks, bytes),
+			),
+		);
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+function assertFreshAccess(access: {
+	expiresAt: string;
+	file: { expiresAt: string };
+}) {
+	const now = Date.now();
+	if (
+		Date.parse(access.expiresAt) <= now ||
+		Date.parse(access.file.expiresAt) <= now
+	)
+		throw new Error("RUNTIME_FILE_EXCHANGE_EXPIRED");
 }
 
 export function createRuntimeFileBridgeFactoryV1(
@@ -113,7 +154,11 @@ export function createRuntimeFileBridgeFactoryV1(
 			await response.body?.cancel();
 			throw new Error("RUNTIME_FILE_EXCHANGE_UNAVAILABLE");
 		}
-		return FileAccessResponseV1Schema.parse(await response.json());
+		const access = FileAccessResponseV1Schema.parse(
+			await boundedJson(response),
+		);
+		assertFreshAccess(access);
+		return access;
 	}
 
 	return (binding) => {
@@ -251,7 +296,9 @@ export function createRuntimeFileBridgeFactoryV1(
 					});
 					if (!response.ok)
 						throw new Error("RUNTIME_FILE_RESULT_COMPLETE_FAILED");
-					const file = FileProjectionV1Schema.parse(await response.json());
+					const file = FileProjectionV1Schema.parse(
+						await boundedJson(response),
+					);
 					if (
 						file.fileId !== access.file.fileId ||
 						file.status !== "available" ||

@@ -22,6 +22,7 @@ const grant = {
 function response(
 	file: Record<string, unknown>,
 	path = "/api/v1/conversations/conversation-1/files/file-1/content",
+	expiresAt = "2099-01-01T00:00:00Z",
 ) {
 	return new Response(
 		JSON.stringify({
@@ -29,7 +30,7 @@ function response(
 			accessId: "access-1",
 			file,
 			path,
-			expiresAt: "2099-01-01T00:00:00Z",
+			expiresAt,
 			grant,
 		}),
 		{ status: 200, headers: { "content-type": "application/json" } },
@@ -142,4 +143,38 @@ it("keeps result idempotency stable when descriptor property order changes", asy
 		});
 	expect(keys).toHaveLength(2);
 	expect(keys[0]).toBe(keys[1]);
+});
+
+it("rejects an expired access response before content transfer", async () => {
+	const fetcher = vi.fn(async (input: string | URL | Request) => {
+		if (String(input).endsWith("runtime-exchange"))
+			return response(
+				{
+					schemaVersion: 1,
+					fileId: "input-1",
+					kind: "attachment",
+					descriptor: {
+						name: "input.png",
+						mediaType: "image/png",
+						sizeBytes: 1,
+						sha256: "a".repeat(64),
+					},
+					status: "available",
+					createdAt: "2026-01-01T00:00:00Z",
+					expiresAt: "2026-01-01T00:00:00Z",
+				},
+				undefined,
+				"2026-01-01T00:00:00Z",
+			);
+		throw new Error("content transfer must not start");
+	});
+	const bridge = createRuntimeFileBridgeFactoryV1({
+		origin: "https://files.example.test",
+		serviceToken: "s".repeat(32),
+		fetch: fetcher,
+	})(binding);
+	await expect(bridge.readInput("input-1")).rejects.toThrow(
+		"RUNTIME_FILE_EXCHANGE_EXPIRED",
+	);
+	expect(fetcher).toHaveBeenCalledOnce();
 });
