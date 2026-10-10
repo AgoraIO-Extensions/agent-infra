@@ -1,9 +1,9 @@
+import { FileLimitsV1Schema } from "@agent-infra/contracts/files";
 import { Paperclip, RotateCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
-import { Button, buttonVariants } from "../../components/ui/button.js";
+import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
-import { Label } from "../../components/ui/label.js";
 import type { Client } from "../../pilot/generated/client/index.js";
 import { client as defaultClient } from "../../pilot/generated/client.gen.js";
 import type {
@@ -54,23 +54,38 @@ export function useConversationFiles({
 	const [downloading, setDownloading] = useState<string>();
 	const controllers = useRef(new Map<string, AbortController>());
 
-	const refreshLimits = useCallback(async () => {
-		if (!attachmentsEnabled || !conversationId) return undefined;
-		const result = await readFileLimits({
-			client,
-			path: { conversationId },
-			responseStyle: "fields",
-			throwOnError: false,
-		});
-		if (!result.data || result.response?.status !== 200) {
-			setLimits(undefined);
-			setLimitsError(true);
-			return undefined;
-		}
-		setLimits(result.data);
-		setLimitsError(false);
-		return result.data;
-	}, [attachmentsEnabled, client, conversationId]);
+	const refreshLimits = useCallback(
+		async (signal?: AbortSignal) => {
+			if (!attachmentsEnabled || !conversationId) return undefined;
+			// An unreadable, mismatched or failed response keeps upload closed.
+			const failClosed = () => {
+				setLimits(undefined);
+				setLimitsError(true);
+				return undefined;
+			};
+			try {
+				const result = await readFileLimits({
+					client,
+					path: { conversationId },
+					responseStyle: "fields",
+					throwOnError: false,
+					signal,
+				});
+				if (signal?.aborted) return undefined;
+				if (!result.data || result.response?.status !== 200)
+					return failClosed();
+				const parsed = FileLimitsV1Schema.safeParse(result.data);
+				if (!parsed.success) return failClosed();
+				setLimits(parsed.data);
+				setLimitsError(false);
+				return parsed.data;
+			} catch {
+				if (signal?.aborted) return undefined;
+				return failClosed();
+			}
+		},
+		[attachmentsEnabled, client, conversationId],
+	);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset transfer state when the conversation scope changes
 	useEffect(() => {
@@ -82,6 +97,13 @@ export function useConversationFiles({
 			controllers.current.clear();
 		};
 	}, [conversationId]);
+	// The picker stays disabled until the current limits are known, so read them
+	// once per conversation scope instead of on the first file selection.
+	useEffect(() => {
+		const controller = new AbortController();
+		void refreshLimits(controller.signal);
+		return () => controller.abort();
+	}, [refreshLimits]);
 	const updateUpload = useCallback(
 		(localId: string, patch: Partial<ConversationUpload>) => {
 			setUploads((current) =>
@@ -314,34 +336,36 @@ export function ConversationFilePicker({
 	onRemove: (localId: string) => void;
 	onRetry: (localId: string) => void;
 }) {
-	const inputId = "conversation-file-picker";
+	const inputRef = useRef<HTMLInputElement>(null);
 	if (!attachmentsEnabled) return null;
+	const unavailable = !limits || limitsError;
 	return (
 		<div className="space-y-2" data-testid="conversation-file-picker">
 			<div className="flex flex-wrap items-center gap-2">
-				<Label htmlFor={inputId} className="sr-only">
-					添加附件
-				</Label>
-				<Input
-					id={inputId}
-					type="file"
-					multiple
-					accept={limits?.mediaTypes.join(",")}
-					disabled={!limits || limitsError}
-					className="sr-only"
-					onChange={(event) => {
-						if (event.currentTarget.files)
-							onSelect([...event.currentTarget.files]);
-						event.currentTarget.value = "";
-					}}
-				/>
-				<Label
-					htmlFor={inputId}
-					aria-disabled={!limits || limitsError}
-					className={`${buttonVariants({ variant: "outline" })} ${!limits || limitsError ? "pointer-events-none opacity-50" : "cursor-pointer"}`}
+				<Button
+					type="button"
+					variant="outline"
+					disabled={unavailable}
+					onClick={() => inputRef.current?.click()}
 				>
 					<Paperclip aria-hidden="true" /> 添加附件
-				</Label>
+				</Button>
+				<span className="sr-only">
+					<Input
+						ref={inputRef}
+						type="file"
+						multiple
+						tabIndex={-1}
+						aria-label="添加附件"
+						accept={limits?.mediaTypes.join(",")}
+						disabled={unavailable}
+						onChange={(event) => {
+							if (event.currentTarget.files)
+								onSelect([...event.currentTarget.files]);
+							event.currentTarget.value = "";
+						}}
+					/>
+				</span>
 				{limits ? (
 					<p className="text-muted-foreground text-xs" role="status">
 						支持 {limits.mediaTypes.join(", ")}，单文件最大{" "}

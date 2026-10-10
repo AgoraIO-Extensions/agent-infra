@@ -194,6 +194,35 @@ describe("functional conversation screen", () => {
 		).toBe(false);
 	});
 
+	it("closes the attachment entry when the limits response is not the contract shape", async () => {
+		setup((request) =>
+			new URL(request.url).pathname ===
+			"/api/v1/conversations/conversation-1/files/limits"
+				? Response.json({ items: [], nextCursor: null })
+				: undefined,
+		);
+		await screen.findByText("文件限制暂不可用，上传入口已关闭。");
+		expect(
+			(screen.getByRole("button", { name: "添加附件" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+	});
+
+	it("reads the read-only file limits before the attachment entry opens", async () => {
+		const { requests } = setup();
+		await screen.findByText(/支持 text\/plain/);
+		expect(
+			(screen.getByRole("button", { name: "添加附件" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(false);
+		const limits = requests.filter((request) =>
+			new URL(request.url).pathname.endsWith("/files/limits"),
+		);
+		expect(limits).toHaveLength(1);
+		expect(limits[0]?.method).toBe("GET");
+		expect(await limits[0]?.text()).toBe("");
+	});
+
 	it("binds an available uploaded file to the submitted message", async () => {
 		const originalCrypto = globalThis.crypto;
 		vi.stubGlobal("crypto", {

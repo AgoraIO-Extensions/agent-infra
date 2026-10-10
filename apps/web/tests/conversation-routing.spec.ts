@@ -12,6 +12,7 @@ import {
 	history,
 } from "../src/features/conversation/conversation-test-fixtures";
 import { captureDesignContract, designViewports } from "./design-contract";
+import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
 
 async function routingFixture(
 	page: Page,
@@ -178,6 +179,8 @@ async function routingFixture(
 					reason: "missing",
 				}),
 			});
+		if (isFileLimitsRequest(request.method(), url.pathname))
+			return route.fulfill({ json: controlledFileLimits() });
 		if (url.pathname === "/api/v1/session")
 			return route.fulfill({
 				json: {
