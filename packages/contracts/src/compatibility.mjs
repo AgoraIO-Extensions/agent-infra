@@ -1303,6 +1303,28 @@ function isDeploymentConfigurationV2OpenApiAddition(previous, current) {
 	);
 }
 
+// #1765 adds the reviewed V4 Worker/File Authority request schema without
+// changing any previously published file path or schema.
+function isRuntimeFileExchangeOpenApiAddition(previous, current) {
+	const name = "RuntimeFileExchangeRequestV1";
+	if (
+		previous.components?.schemas?.[name] !== undefined ||
+		current.components?.schemas?.[name] === undefined
+	)
+		return false;
+	const addition = {
+		schemas: { [name]: current.components.schemas[name] },
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"fddfd2571c71fbf998f3da7edbd75b5d021f9d57e02028e5ab48e8f7e3e94168"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // Only the reviewed #442 additive file surface may differ; every old contract remains exact.
 function isFileAuthorityOpenApiAddition(previous, current) {
 	const paths = [
@@ -2457,6 +2479,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isConnectionInstallationAuthorizationUrlAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
+			!isRuntimeFileExchangeOpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current) &&
 			!isCustomAgentModelSelectionOpenApiAddition(previous, current) &&
 			!isCustomAgentModelProjectionOpenApiAddition(previous, current)
