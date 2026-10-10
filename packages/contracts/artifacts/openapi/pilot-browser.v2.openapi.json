@@ -2061,6 +2061,69 @@
         ],
         "type": "object"
       },
+      "AgentUserUseRevokeRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedRevision": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "expectedRevision"
+        ],
+        "type": "object"
+      },
+      "AgentUserUseRevokeResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "authorizationRevision": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "granted": {
+            "const": false,
+            "type": "boolean"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "userId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "agentId",
+          "userId",
+          "granted",
+          "authorizationRevision",
+          "replayed"
+        ],
+        "type": "object"
+      },
       "ApplicationDisableRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -4854,6 +4917,11 @@
                       "minLength": 1,
                       "type": "string"
                     },
+                    "authorizationUrl": {
+                      "format": "uri",
+                      "maxLength": 8192,
+                      "type": "string"
+                    },
                     "expiresAt": {
                       "exclusiveMinimum": 0,
                       "maximum": 9007199254740991,
@@ -4943,6 +5011,11 @@
                   "properties": {
                     "authorizationId": {
                       "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorizationUrl": {
+                      "format": "uri",
+                      "maxLength": 8192,
                       "type": "string"
                     },
                     "expiresAt": {
@@ -5065,6 +5138,11 @@
                   "properties": {
                     "authorizationId": {
                       "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorizationUrl": {
+                      "format": "uri",
+                      "maxLength": 8192,
                       "type": "string"
                     },
                     "expiresAt": {
@@ -6544,6 +6622,139 @@
             "description": "Dependency is temporarily unavailable"
           }
         }
+      }
+    },
+    "/api/v2/agents/{agentId}/api-use-grants/{userId}": {
+      "delete": {
+        "operationId": "revokeAgentUserApiUseV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentUserUseRevokeRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentUserUseRevokeResponseV1"
+                }
+              }
+            },
+            "description": "Explicit user API use revocation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotInternalErrorV1"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
       }
     },
     "/api/v2/agents/{agentId}/application-managers/{applicationId}": {

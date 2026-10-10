@@ -1,10 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type ApprovedConnectionConsumerTargetV1,
 	resolveApprovedConnectionConsumerProfileV1,
 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
 	ConnectionInstallationAuthorizationV1Schema,
+	ConnectionInstallationCallbackV1Schema,
 	ConnectionInstallationCommandV1Schema,
 	type RuntimeOAuthConfigurationV1,
 	RuntimeOAuthConfigurationV1Schema,
@@ -16,6 +18,8 @@ import {
 	type ConnectionInstallationSavedV1,
 	type ConnectionInstallationStoreV1,
 	type ConnectionInstallationTransactionV1,
+	isAgentAccessAllowedV1,
+	isTaskAuthorizationCurrentV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
 	type TaskUserDirectoryV1,
@@ -32,6 +36,37 @@ import {
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof drizzle>["transaction"]>[0]
 >[0];
+function parseAuthorizationRedirect(
+	value: string,
+	configuration: RuntimeOAuthConfigurationV1,
+	expiresAt: number,
+) {
+	if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now())
+		throw new ConnectionInstallationErrorV1("invalid_input");
+	const actual = new URL(value);
+	const expected = new URL(configuration.authorizationEndpoint);
+	const keys = [...actual.searchParams.keys()].sort().join(",");
+	if (
+		actual.protocol !== "https:" ||
+		actual.origin !== expected.origin ||
+		actual.pathname !== expected.pathname ||
+		actual.username ||
+		actual.password ||
+		actual.hash ||
+		keys !==
+			"client_id,code_challenge,code_challenge_method,redirect_uri,resource,response_type,scope,state" ||
+		actual.searchParams.get("client_id") !== configuration.clientId ||
+		actual.searchParams.get("redirect_uri") !== configuration.callbackUrl ||
+		actual.searchParams.get("resource") !== configuration.resource ||
+		actual.searchParams.get("response_type") !== "code" ||
+		actual.searchParams.get("scope") !== configuration.scope ||
+		actual.searchParams.get("code_challenge_method") !== "S256" ||
+		!/^[a-f0-9]{64}$/.test(actual.searchParams.get("state") ?? "") ||
+		!/^[A-Za-z0-9_-]{43}$/.test(actual.searchParams.get("code_challenge") ?? "")
+	)
+		throw new ConnectionInstallationErrorV1("invalid_input");
+	return actual.searchParams.get("state") as string;
+}
 function decode(
 	row: typeof authorizations.$inferSelect,
 ): ConnectionInstallationSavedV1 {
@@ -119,6 +154,116 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 			return row ? decode(row) : null;
 		};
 		return {
+			claimCallback: async ({ stateHash, now }) => {
+				await tx.execute(sql`
+					update platform.connection_installation_authorizations
+					set binding=(jsonb_set(
+						binding,
+						'{callback,status}',
+						to_jsonb('unknown'::text),
+						true
+					) #- '{callback,attemptId}' #- '{callback,attemptExpiresAt}'),
+					revision=revision+1, updated_at=clock_timestamp()
+					where binding->'callback'->>'status'='sending'
+					  and (binding->'callback'->>'attemptExpiresAt')::bigint <= ${now}
+				`);
+				const rows = await tx.execute(sql`
+					select id, binding, confirmation_revision, identity_revision, agent_authorization_revision, status, expires_at
+					from platform.connection_installation_authorizations
+					where binding->'callback'->>'stateHash'=${stateHash}
+					  and binding->'callback'->>'status'='pending'
+					  and (binding->'callback'->>'expiresAt')::bigint > ${now}
+					  and expires_at > clock_timestamp()
+					  and status in ('awaiting_confirmation','confirmed')
+					for update
+				`);
+				if (rows.length !== 1) return null;
+				const row = rows[0];
+				if (!row) return null;
+				const binding = row.binding as Record<string, unknown>;
+				const callback = ConnectionInstallationCallbackV1Schema.parse(
+					binding.callback,
+				);
+				const authorization = ConnectionInstallationAuthorizationV1Schema.parse(
+					{
+						schemaVersion: 1,
+						authorizationId: row.id,
+						confirmationRevision: row.confirmation_revision,
+						...binding,
+						status: row.status,
+						expiresAt: new Date(row.expires_at as string).getTime(),
+					},
+				);
+				const current = await this.#operations(tx).current(
+					authorization.principal.id,
+					authorization.reference.executionId,
+				);
+				if (!current) return null;
+				if (
+					current.user.accountStatus !== "active" ||
+					current.agent.status !== "available" ||
+					current.agent.desiredState !== "running" ||
+					!isTaskAuthorizationCurrentV1({
+						boundary: current.boundary,
+						user: current.user,
+						agent: current.agent,
+					}) ||
+					!isAgentAccessAllowedV1(
+						current.agent,
+						{
+							schemaVersion: 1,
+							userId: current.user.userId,
+							accountStatus: current.user.accountStatus,
+							organizationIds: current.user.organizationIds,
+							isAdministrator: false,
+						},
+						"use",
+					) ||
+					!isDeepStrictEqual(current.reference, authorization.reference) ||
+					!isDeepStrictEqual(current.scope, authorization.scope) ||
+					current.user.authorizationRevision !== row.identity_revision ||
+					current.agentAuthorizationRevision !==
+						row.agent_authorization_revision
+				)
+					return null;
+				const attemptId = randomUUID();
+				await tx.execute(sql`
+					update platform.connection_installation_authorizations
+					set binding=jsonb_set(
+						jsonb_set(
+							jsonb_set(binding, '{callback,status}', to_jsonb('sending'::text), true),
+							'{callback,attemptId}', to_jsonb(${attemptId}::text), true
+						),
+						'{callback,attemptExpiresAt}', to_jsonb(${now + 15_000}::bigint), true
+					), revision=revision+1, updated_at=clock_timestamp()
+					where id=${row.id}
+				`);
+				return {
+					authorizationId: row.id as string,
+					runtimeOrigin: callback.runtimeOrigin,
+					callbackPath: "/internal/runtime/oauth/v1/callback",
+					attemptId,
+					expiresAt: callback.expiresAt,
+					issuer: this.#configuration.issuer,
+				};
+			},
+			settleCallback: async ({ stateHash, attemptId, now, status }) => {
+				const result = await tx.execute(sql`
+					update platform.connection_installation_authorizations
+					set binding=(jsonb_set(
+						binding,
+						'{callback,status}',
+						to_jsonb(case when coalesce((binding->'callback'->>'attemptExpiresAt')::bigint, 0) > ${now} then ${status} else 'unknown' end::text),
+						true
+					) #- '{callback,attemptId}' #- '{callback,attemptExpiresAt}'),
+						revision=revision+1, updated_at=clock_timestamp()
+					where binding->'callback'->>'stateHash'=${stateHash}
+					  and binding->'callback'->>'status'='sending'
+					  and binding->'callback'->>'attemptId'=${attemptId}
+					returning binding->'callback'->>'status' as status
+				`);
+				return result[0]?.status === status;
+			},
 			hasUnresolvedSend: async (id, exclude) => {
 				const rows = await tx
 					.select({
@@ -452,18 +597,75 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 		attemptId: string;
 		attemptOwner: string;
 		status: "completed" | "unknown";
+		authorizationUrl?: string;
+		authorizationExpiresAt?: number;
 	}): Promise<boolean> {
 		try {
 			const result = await this.#database.transaction(async (tx) => {
 				await tx.execute(sql`set local lock_timeout = '5s'`);
 				await tx.execute(sql`set local statement_timeout = '15s'`);
-				return tx.execute(sql`
+				const owned = await tx.execute(sql`
+					select c.command, c.authorization_id, a.binding, a.expires_at
+					from platform.connection_installation_commands c
+					join platform.connection_installation_authorizations a on a.id=c.authorization_id
+					where c.id=${input.commandId} and c.status='sending' and c.attempt_id=${input.attemptId} and c.attempt_owner=${input.attemptOwner}
+					for update
+				`);
+				const command = owned[0];
+				if (!command) return 0;
+				const binding = command.binding as Record<string, unknown>;
+				const scope = binding.scope as Record<string, unknown> | undefined;
+				if (
+					!scope ||
+					scope.configFingerprint !== this.#configuration.configFingerprint ||
+					!isDeepStrictEqual(scope.source, this.#configuration.source) ||
+					!isDeepStrictEqual(scope.oauthConfiguration, {
+						ref: this.#configuration.ref,
+						revision: this.#configuration.revision,
+					})
+				)
+					throw new ConnectionInstallationErrorV1("invalid_input");
+				const status = await tx.execute(sql`
 				update platform.connection_installation_commands
 				set status=case when attempt_expires_at is null or attempt_expires_at > clock_timestamp() then ${input.status} else 'unknown' end, attempt_expires_at=null, updated_at=clock_timestamp()
 				where id=${input.commandId} and status='sending' and attempt_id=${input.attemptId} and attempt_owner=${input.attemptOwner}
+				returning status
 				`);
+				const effectiveStatus = status[0]?.status;
+				if (
+					input.authorizationUrl !== undefined &&
+					input.authorizationExpiresAt !== undefined &&
+					effectiveStatus === "completed" &&
+					command.command === "begin"
+				) {
+					const state = parseAuthorizationRedirect(
+						input.authorizationUrl,
+						this.#configuration,
+						input.authorizationExpiresAt,
+					);
+					if (
+						input.authorizationExpiresAt >
+						new Date(command.expires_at as string).getTime()
+					)
+						throw new ConnectionInstallationErrorV1("invalid_input");
+					const callback = {
+						stateHash: createHash("sha256").update(state).digest("hex"),
+						runtimeOrigin: this.#configuration.runtimeOrigin,
+						expiresAt: input.authorizationExpiresAt,
+						status: "pending" as const,
+					};
+					await tx.execute(sql`
+						update platform.connection_installation_authorizations
+						set binding=jsonb_set(
+							jsonb_set(binding, '{authorizationUrl}', to_jsonb(${input.authorizationUrl}::text), true),
+							'{callback}', ${JSON.stringify(callback)}::jsonb, true
+						), revision=revision+1, updated_at=clock_timestamp()
+						where id=${command.authorization_id}
+					`);
+				}
+				return status.length;
 			});
-			return Number(result.count ?? 0) === 1;
+			return result === 1;
 		} catch {
 			throw new ConnectionInstallationErrorV1("unavailable");
 		}

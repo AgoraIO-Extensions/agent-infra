@@ -2026,6 +2026,35 @@ function isAgentApplicationUseGrantOpenApiAddition(previous, current) {
 	return changed && findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #1111 admits only the browser Owner user-use revoke operation and its schemas.
+function isAgentUserUseRevokeOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/api-use-grants/{userId}";
+	const schemas = [
+		"AgentUserUseRevokeRequestV1",
+		"AgentUserUseRevokeResponseV1",
+	];
+	if (
+		previous.paths?.[path] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: current.paths?.[path] },
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"dbd33b71470eeac957b6ae9436effe45fc68c8b822b03edd3097dd10b8541d83"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #481 admits only this exact machine/personal lifecycle contract and its audit variants.
 function isAgentApiManagementOpenApiAddition(previous, current) {
 	const actions = [
@@ -2307,6 +2336,31 @@ function isConnectionInstallationOpenApiAddition(previous, current) {
 	}
 	return changed && findBreakingChanges(previous, normalized).length === 0;
 }
+function isConnectionInstallationAuthorizationUrlAddition(previous, current) {
+	const normalized = structuredClone(current);
+	const paths = [
+		["/api/connection-installations", "post", "202"],
+		["/api/connection-installations/{authorizationId}", "post", "200"],
+		["/api/connection-installations/{authorizationId}/confirm", "post", "202"],
+	];
+	let changed = false;
+	for (const [path, method, status] of paths) {
+		const before =
+			previous.paths?.[path]?.[method]?.responses?.[status]?.content?.[
+				"application/json"
+			]?.schema?.properties?.authorizationUrl;
+		const after =
+			normalized.paths?.[path]?.[method]?.responses?.[status]?.content?.[
+				"application/json"
+			]?.schema?.properties?.authorizationUrl;
+		if (before !== undefined || after === undefined) return false;
+		delete normalized.paths[path][method].responses[status].content[
+			"application/json"
+		].schema.properties.authorizationUrl;
+		changed = true;
+	}
+	return changed && findBreakingChanges(previous, normalized).length === 0;
+}
 function findBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
 	let current = currentValue;
@@ -2333,6 +2387,7 @@ function findBreakingChanges(previousValue, currentValue) {
 		if (
 			!sameValue(previous, current) &&
 			!isAgentApplicationUseGrantOpenApiAddition(previous, current) &&
+			!isAgentUserUseRevokeOpenApiAddition(previous, current) &&
 			!isAgentApiManagementOpenApiAddition(previous, current) &&
 			!isAgentApiCreationOpenApiAddition(previous, current) &&
 			!isConnectionCapabilityOpenApiAddition(previous, current) &&
@@ -2370,6 +2425,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&
 			!isConnectionInstallationOpenApiAddition(previous, current) &&
+			!isConnectionInstallationAuthorizationUrlAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current) &&

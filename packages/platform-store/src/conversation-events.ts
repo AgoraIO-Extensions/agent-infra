@@ -931,6 +931,18 @@ export class PostgresConversationEventTransactionV1
 					returning id
 				`;
 				if (transitionedConversation.length !== 1) unavailable();
+				if (
+					["completed", "failed", "cancelled"].includes(
+						plan.transition.executionStatus,
+					)
+				) {
+					// Confirm the pending stop with the original Turn's persisted terminal event.
+					await transaction`
+						update platform.conversation_stops
+						set status = 'completed', updated_at = now()
+						where execution_id = ${plan.event.executionId} and status = 'submitted'
+					`;
+				}
 			}
 			return { outcome: "accepted", event: plan.event };
 		});

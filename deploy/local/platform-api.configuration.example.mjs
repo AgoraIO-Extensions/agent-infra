@@ -22,6 +22,9 @@ export const publicOrigin = requiredEnv("PLATFORM_PUBLIC_ORIGIN");
 
 // apiInput is the credential-free Platform admission boundary. Keep Worker
 // private keys and raw model credentials out of this API-only module.
+// To enable the file boundary, set apiInput.files to a deployment-owned
+// PlatformFileDeploymentV1 using createS3ObjectStorageV1. Keep S3 credentials
+// in the deployment adapter; never expose them through API contracts or Web.
 // apiInput.taskAdmissionPolicy is required: maximumWaitingTasksPerAgent (tasks)
 // and waitingTimeoutMs (milliseconds) must both be positive safe integers.
 // Supply reviewed deployment values explicitly; fixture values are not defaults.

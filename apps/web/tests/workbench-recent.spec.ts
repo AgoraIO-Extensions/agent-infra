@@ -19,6 +19,7 @@ import type {
 	ConversationDetailProjectionV2,
 } from "../src/pilot/generated-v2/types.gen";
 import { captureDesignContract, designViewports } from "./design-contract";
+import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
 
 type ControlledSession = {
 	tag: "old" | "new";
@@ -268,6 +269,8 @@ async function workbenchFixture(
 			unexpected.push(`${request.method()} ${url.pathname}`);
 			return route.abort();
 		}
+		if (isFileLimitsRequest(request.method(), url.pathname))
+			return route.fulfill({ json: controlledFileLimits() });
 		if (
 			request.method() === "GET" &&
 			url.pathname === "/api/v1/connection/capability"

@@ -356,6 +356,20 @@ export type AgentProjectionV2 = {
     };
 };
 
+export type AgentUserUseRevokeRequestV1 = {
+    expectedRevision: number;
+    schemaVersion: 1;
+};
+
+export type AgentUserUseRevokeResponseV1 = {
+    agentId: string;
+    authorizationRevision: string | null;
+    granted: false;
+    replayed: boolean;
+    schemaVersion: 1;
+    userId: string;
+};
+
 export type ApplicationDisableRequestV1 = {
     status: 'disabled';
 };
@@ -1070,6 +1084,7 @@ export type BeginPlatformConnectionInstallationV1Responses = {
      */
     202: {
         authorizationId: string;
+        authorizationUrl?: string;
         expiresAt: number;
         schemaVersion: 1;
         status: 'awaiting_confirmation' | 'confirmed' | 'revoked' | 'expired' | 'unknown';
@@ -1098,6 +1113,7 @@ export type ReadPlatformConnectionInstallationV1Responses = {
      */
     200: {
         authorizationId: string;
+        authorizationUrl?: string;
         expiresAt: number;
         schemaVersion: 1;
         status: 'awaiting_confirmation' | 'confirmed' | 'revoked' | 'expired' | 'unknown';
@@ -1129,6 +1145,7 @@ export type ConfirmPlatformConnectionInstallationV1Responses = {
      */
     202: {
         authorizationId: string;
+        authorizationUrl?: string;
         expiresAt: number;
         schemaVersion: 1;
         status: 'awaiting_confirmation' | 'confirmed' | 'revoked' | 'expired' | 'unknown';
@@ -1784,6 +1801,61 @@ export type GetAgentV2Responses = {
 };
 
 export type GetAgentV2Response = GetAgentV2Responses[keyof GetAgentV2Responses];
+
+export type RevokeAgentUserApiUseV1Data = {
+    body: AgentUserUseRevokeRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+        userId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/api-use-grants/{userId}';
+};
+
+export type RevokeAgentUserApiUseV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeAgentUserApiUseV1Error = RevokeAgentUserApiUseV1Errors[keyof RevokeAgentUserApiUseV1Errors];
+
+export type RevokeAgentUserApiUseV1Responses = {
+    /**
+     * Explicit user API use revocation
+     */
+    200: AgentUserUseRevokeResponseV1;
+};
+
+export type RevokeAgentUserApiUseV1Response = RevokeAgentUserApiUseV1Responses[keyof RevokeAgentUserApiUseV1Responses];
 
 export type RevokeAgentApplicationManagerV1Data = {
     body: AgentApplicationManagerRequestV1;

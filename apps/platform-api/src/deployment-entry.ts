@@ -19,6 +19,7 @@ const {
 	connectionConsumerProfile,
 	connectionConsumerProfileApproval,
 	connectionInstallationConfiguration,
+	connectionInstallationCallback,
 	apiInput,
 	directorySearch,
 } = await import(configurationModule);
@@ -59,6 +60,9 @@ export function createPlatformApiAssemblyInput() {
 						publicOrigin,
 					},
 				}
+			: {}),
+		...(connectionInstallationCallback
+			? { connectionInstallationCallback }
 			: {}),
 		databaseUrl,
 		identity: browser.identity,

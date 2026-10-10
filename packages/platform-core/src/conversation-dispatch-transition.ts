@@ -134,6 +134,34 @@ export function executionTerminal(
 	);
 }
 
+export function decideConversationStopConfirmationTimeoutV1(input: {
+	readonly executionStatus: ConversationDispatchExecutionStatusV1;
+	readonly confirmationDeadline: number;
+	readonly observedAt: number;
+	readonly alreadyTimedOut: boolean;
+}) {
+	if (
+		(input.executionStatus !== "processing" &&
+			input.executionStatus !== "unknown") ||
+		input.alreadyTimedOut ||
+		input.observedAt < input.confirmationDeadline
+	)
+		return undefined;
+	return {
+		status: "unknown" as const,
+		reason: "STOP_CONFIRMATION_TIMEOUT" as const,
+	};
+}
+
+export function decideConversationStopConfirmationStatusV1(input: {
+	readonly executionStatus: ConversationDispatchExecutionStatusV1;
+	readonly confirmationTimedOut: boolean;
+}): ConversationDispatchExecutionStatusV1 {
+	return input.executionStatus === "processing" && input.confirmationTimedOut
+		? "unknown"
+		: input.executionStatus;
+}
+
 /** Decide against the latest state under the same lock as retry/outbox commit. */
 export function decideConversationDispatchRetryTransitionV1(input: {
 	readonly operation: ConversationDispatchOperationV1;

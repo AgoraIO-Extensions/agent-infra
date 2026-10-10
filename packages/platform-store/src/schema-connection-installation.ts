@@ -28,7 +28,13 @@ export const connectionInstallationAuthorizations = platformSchema.table(
 				Pick<
 					ConnectionInstallationAuthorizationV1,
 					"principal" | "reference" | "scope"
-				>
+				> &
+					Partial<
+						Pick<
+							ConnectionInstallationAuthorizationV1,
+							"authorizationUrl" | "callback"
+						>
+					>
 			>()
 			.notNull(),
 		identityRevision: text("identity_revision").notNull(),

@@ -1,4 +1,5 @@
 import type {
+	BrowserCapabilityAvailableV1,
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
@@ -13,6 +14,8 @@ import {
 } from "./session-runtime-driver.js";
 
 export interface PiRuntimeDriverOptions {
+	/** Deployment-owned verified Browser projection; never selected by a wire command. */
+	readonly browserCapability?: BrowserCapabilityAvailableV1;
 	path: string;
 	configVersion: string;
 	defaultModelOptionId: string;

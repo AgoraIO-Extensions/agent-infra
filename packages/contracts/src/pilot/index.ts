@@ -1,5 +1,6 @@
 export * from "./agent-api-lifecycle.ts";
 export * from "./agent-application-manager.ts";
+export * from "./agent-user-use-grants.ts";
 export * from "./application-api-credentials.ts";
 export * from "./application-material-grants.ts";
 export * from "./application-registration.ts";

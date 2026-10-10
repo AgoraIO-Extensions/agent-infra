@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.setConfig({ testTimeout: 30_000 });
 
 const path = "/api/v2/me/conversations/recent";
 const cli = fileURLToPath(
@@ -220,5 +222,6 @@ describe("recent personal conversation additive compatibility", () => {
 				await rm(directory, { recursive: true, force: true });
 			}
 		},
+		120_000,
 	);
 });

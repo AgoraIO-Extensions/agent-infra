@@ -7,6 +7,7 @@ import {
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
+import { FakeObjectStorageV1 } from "@agent-infra/object-storage";
 import {
 	migratePlatformDatabase,
 	PostgresAgentConfigurationQueryV1,
@@ -795,6 +796,50 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			status: "unavailable",
 			reason: "unapproved",
 		});
+	});
+	it("passes the deployment-owned file adapter into the API assembly", () => {
+		const files = {
+			storage: new FakeObjectStorageV1(),
+			issuer: "platform-files",
+			keyVersion: "key-v1",
+			privateKey: generateKeyPairSync("ed25519").privateKey,
+			publicKeys: new Map(),
+			runtimeIssuer: "platform-runtime",
+			runtimePublicKeys: new Map(),
+			intentTtlMs: 60_000,
+			accessTtlMs: 60_000,
+			maxConcurrentTransfers: 1,
+			services: [],
+			resolveActor: async () => null,
+			readLimits: async () => ({
+				configurationRevision: 1,
+				declarations: {
+					agent: {
+						revision: "agent",
+						expiresAt: "2099-01-01T00:00:00Z",
+						mediaTypes: ["text/plain"],
+						maxBytes: 1024,
+					},
+					channel: {
+						revision: "channel",
+						expiresAt: "2099-01-01T00:00:00Z",
+						mediaTypes: ["text/plain"],
+						maxBytes: 1024,
+					},
+					deployment: {
+						revision: "deployment",
+						expiresAt: "2099-01-01T00:00:00Z",
+						mediaTypes: ["text/plain"],
+						maxBytes: 1024,
+					},
+				},
+			}),
+		} satisfies NonNullable<ProductionPlatformApiInputV1["files"]>;
+		const input = createProductionPlatformApiAssemblyInputV1({
+			...fixture.input,
+			files,
+		});
+		expect(input.files).toBe(files);
 	});
 	it("fails closed without a request scope and closes its owned query once", async () => {
 		const input = createProductionPlatformApiAssemblyInputV1(fixture.input);

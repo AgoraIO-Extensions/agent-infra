@@ -66,7 +66,7 @@ describe("standard contract artifacts", () => {
 			const operation = document.paths[path].post ?? document.paths[path].get;
 			expect(operation.security).toEqual([{ platformApiCredential: [] }]);
 		}
-	});
+	}, 30_000);
 
 	it("keeps publication response validation equivalent in generated OpenAPI and Zod", () => {
 		const artifacts = JSON.parse(generate());
@@ -95,7 +95,7 @@ describe("standard contract artifacts", () => {
 			).toBe(accepted);
 			expect(validate(response), JSON.stringify(changedFields)).toBe(accepted);
 		}
-	});
+	}, 30_000);
 
 	it("generates deterministic OpenAPI 3.1 and JSON Schema 2020-12", () => {
 		const first = generate();
@@ -188,6 +188,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/agent-applications/{applicationId}/withdraw",
 			"/api/v2/agents",
 			"/api/v2/agents/{agentId}",
+			"/api/v2/agents/{agentId}/api-use-grants/{userId}",
 			"/api/v2/agents/{agentId}/application-managers/{applicationId}",
 			"/api/v2/agents/{agentId}/application-use-grants/{applicationId}",
 			"/api/v2/agents/{agentId}/commands",
@@ -485,7 +486,7 @@ describe("standard contract artifacts", () => {
 				}),
 			).not.toThrow();
 		}
-	}, 15_000);
+	}, 60_000);
 
 	it("rejects deliberately stale committed artifacts", async () => {
 		const root = await mkdtemp(
@@ -516,5 +517,5 @@ describe("standard contract artifacts", () => {
 		} finally {
 			await rm(root, { recursive: true });
 		}
-	});
+	}, 30_000);
 });

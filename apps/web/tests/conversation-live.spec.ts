@@ -11,11 +11,13 @@ import {
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import {
 	execution,
 	history,
 } from "../src/features/conversation/conversation-test-fixtures";
+import { keepConversationStreamOpen } from "./conversation-stream";
+import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
 
 const timestamp = "2026-09-28T02:00:00Z";
 const agentId = "agent-1";
@@ -85,31 +87,6 @@ function activeAgent() {
 			modelSelection: true,
 			supplementaryInstruction: true,
 		},
-	});
-}
-
-async function keepConversationStreamOpen(page: Page) {
-	await page.addInitScript(() => {
-		const realFetch = window.fetch.bind(window);
-		window.fetch = async (input, init) => {
-			const request = new Request(input, init);
-			const response = await realFetch(request);
-			if (!new URL(request.url).pathname.endsWith("/events")) return response;
-			void response.body?.cancel();
-			const body = new ReadableStream<Uint8Array>({
-				start(controller) {
-					controller.enqueue(new TextEncoder().encode(": heartbeat\n\n"));
-					const close = () => controller.close();
-					if (request.signal.aborted) close();
-					else request.signal.addEventListener("abort", close, { once: true });
-				},
-			});
-			return new Response(body, {
-				status: response.status,
-				statusText: response.statusText,
-				headers: response.headers,
-			});
-		};
 	});
 }
 
@@ -225,6 +202,8 @@ test("submits once, renders incremental SSE, and restores the completed reply", 
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
+		if (isFileLimitsRequest(request.method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
 		if (path === "/api/v2/me/conversations/recent")
 			return route.fulfill({
 				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
@@ -394,6 +373,8 @@ test("renders an authorization failure without retaining another subject's conve
 	});
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const path = new URL(route.request().url()).pathname;
+		if (isFileLimitsRequest(route.request().method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
 		if (path === "/api/v2/me/conversations/recent")
 			return route.fulfill({
 				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
@@ -455,6 +436,8 @@ test("recovers an ordinary conversation 404 through read-only reconnect", async 
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		if (route.request().method() !== "GET") writes += 1;
 		const path = new URL(route.request().url()).pathname;
+		if (isFileLimitsRequest(route.request().method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
 		if (path === "/api/v2/me/conversations/recent")
 			return route.fulfill({
 				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
@@ -536,6 +519,8 @@ test("clears a loaded execution after 404 and recovers without resending", async
 		const request = route.request();
 		if (request.method() !== "GET") writes += 1;
 		const url = new URL(request.url());
+		if (isFileLimitsRequest(request.method(), url.pathname))
+			return route.fulfill({ json: controlledFileLimits() });
 		if (url.pathname === "/api/v2/me/conversations/recent")
 			return route.fulfill({
 				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
@@ -668,6 +653,8 @@ test("saves the next-message model and stops the bound execution", async ({
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
+		if (isFileLimitsRequest(request.method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
 		if (path === "/api/v2/me/conversations/recent")
 			return route.fulfill({
 				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
@@ -935,6 +922,8 @@ test("regenerates a terminal answer and opens its execution details", async ({
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const request = route.request();
 		const path = new URL(request.url()).pathname;
+		if (isFileLimitsRequest(request.method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
 		if (path === "/api/v2/me/conversations/recent")
 			return route.fulfill({
 				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),
@@ -1048,6 +1037,8 @@ for (const source of ["standard", "custom"] as const) {
 			await page.route(/\/api\/v[12]\//, async (route) => {
 				const request = route.request();
 				const path = new URL(request.url()).pathname;
+				if (isFileLimitsRequest(request.method(), path))
+					return route.fulfill({ json: controlledFileLimits() });
 				if (
 					request.method() === "GET" &&
 					path === "/api/v1/connection/capability"

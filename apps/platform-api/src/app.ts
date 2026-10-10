@@ -17,6 +17,10 @@ import {
 	type AgentApplicationGrantRouteDependencies,
 	registerAgentApplicationGrantRoutes,
 } from "./http/agent-application-grant-routes.js";
+import {
+	type AgentUserUseGrantRouteDependencies,
+	registerAgentUserUseGrantRoutes,
+} from "./http/agent-user-use-grant-routes.js";
 import { registerApplicationApiCredentialRoutes } from "./http/application-api-credential-routes.js";
 import {
 	type ApplicationMaterialGrantRouteDependencies,
@@ -28,6 +32,10 @@ import {
 } from "./http/application-registration-routes.js";
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
+import {
+	type ConnectionInstallationCallbackRouteDependenciesV1,
+	registerConnectionInstallationCallbackRoutesV1,
+} from "./http/connection-installation-callback-routes.js";
 import {
 	type ConnectionInstallationRouteDependenciesV1,
 	registerConnectionInstallationRoutesV1,
@@ -91,9 +99,11 @@ type ApiObservability = Pick<
 
 export interface PlatformAppDependencies {
 	readonly connectionInstallations?: ConnectionInstallationRouteDependenciesV1;
+	readonly connectionInstallationCallback?: ConnectionInstallationCallbackRouteDependenciesV1;
 	readonly agentApiCreation?: AgentApiCreationRouteDependencies;
 	readonly agentApiLifecycle?: AgentApiLifecycleRouteDependencies;
 	readonly agentApplicationGrants?: AgentApplicationGrantRouteDependencies;
+	readonly agentUserUseGrants?: AgentUserUseGrantRouteDependencies;
 	readonly applicationApiCredentials?: Parameters<
 		typeof registerApplicationApiCredentialRoutes
 	>[1];
@@ -186,6 +196,11 @@ export function createPlatformApp(
 			app,
 			dependencies.connectionInstallations,
 		);
+	if (dependencies.connectionInstallationCallback)
+		registerConnectionInstallationCallbackRoutesV1(
+			app,
+			dependencies.connectionInstallationCallback,
+		);
 	if (dependencies.personalRelayKeys)
 		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);
 	registerV2ManagementRoutes(app, dependencies.management);
@@ -196,6 +211,8 @@ export function createPlatformApp(
 			app,
 			dependencies.agentApplicationGrants,
 		);
+	if (dependencies.agentUserUseGrants)
+		registerAgentUserUseGrantRoutes(app, dependencies.agentUserUseGrants);
 	if (dependencies.agentApiLifecycle)
 		registerAgentApiLifecycleRoutes(app, dependencies.agentApiLifecycle);
 	if (dependencies.applications)

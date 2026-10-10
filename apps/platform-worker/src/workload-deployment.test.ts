@@ -204,6 +204,36 @@ describe("production Worker deployment", () => {
 			).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
 		},
 	);
+	it("passes a validated deployment-owned file reconciliation adapter", async () => {
+		const deployment = await input();
+		const files = {
+			storage: {
+				scan: async () => ({ objects: [], cursor: null }),
+				remove: async () => {},
+			},
+			batchSize: 10,
+			orphanGraceMs: 60_000,
+		} satisfies NonNullable<ProductionWorkloadWorkerInputV1["files"]>;
+		const options = await createProductionWorkloadWorkerOptionsV1({
+			...deployment,
+			files,
+		});
+		expect(options.files).toBe(files);
+	});
+	it("rejects malformed file reconciliation configuration before Kubernetes access", async () => {
+		const deployment = await input();
+		Object.defineProperty(deployment, "files", {
+			value: { storage: {}, batchSize: 0, orphanGraceMs: 0 },
+		});
+		Object.defineProperty(deployment, "kubernetes", {
+			get() {
+				throw new Error("Kubernetes credentials must not be read");
+			},
+		});
+		await expect(
+			createProductionWorkloadWorkerOptionsV1(deployment),
+		).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
+	});
 
 	it("uses the explicitly selected namespace client rather than kubeconfig current-context", async () => {
 		const requests: { url?: string; authorization?: string }[] = [];
