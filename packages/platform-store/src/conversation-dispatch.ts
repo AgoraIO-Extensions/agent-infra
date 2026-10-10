@@ -1038,12 +1038,6 @@ export class PostgresConversationDispatchStoreV1
 			if (!state) throw new StaleDispatchLease();
 			await applyTransition(transaction, state, input.claim, input.transition);
 			if (
-				input.claim.operation === "conversation.turn.stop.v1" &&
-				input.status === "succeeded" &&
-				!["completed", "failed", "cancelled"].includes(state.execution.status)
-			)
-				throw new StaleDispatchLease();
-			if (
 				input.claim.operation === "conversation.turn.supplement.v1" &&
 				input.status === "failed"
 			) {
