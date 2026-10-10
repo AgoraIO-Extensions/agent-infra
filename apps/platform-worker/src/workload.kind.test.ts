@@ -1063,6 +1063,22 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					(row) =>
 						row.status === "stopped" && row.service_availability === null,
 				);
+				for (let attempt = 0; attempt < 120; attempt++) {
+					const stoppedWorkloads = await client.list<V1StatefulSet>(
+						"StatefulSet",
+						workloadSelector,
+					);
+					const stoppedPods = await client.list<V1Pod>("Pod", workloadSelector);
+					if (
+						stoppedWorkloads.every(
+							(workload) => workload.spec?.replicas === 0,
+						) &&
+						stoppedPods.length === 0
+					)
+						break;
+					await worker?.tick();
+					await setTimeout(500);
+				}
 				const [stoppedBaseline] = await sql<
 					{ workload_revision: number; fence: number }[]
 				>`select workload_revision, fence from platform.agent_applications where agent_id=${seed.agentId}`;
