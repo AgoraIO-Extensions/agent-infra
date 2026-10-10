@@ -844,10 +844,28 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			const workerLogs: string[] = [];
 			try {
 				await migratePlatformDatabase(database);
+				const imageDigest = process.env.WORKLOAD_KIND_IMAGE_A;
+				if (!imageDigest) throw new Error("WORKLOAD_KIND_IMAGE_A is required");
 				const seed = await seedStandardWorkloadHostV1(
 					database.databaseUrl,
-					process.env.WORKLOAD_KIND_IMAGE_A ?? "",
+					imageDigest,
 				);
+				const customConfiguration = {
+					...seed.configuration,
+					modelConfiguration: null,
+					source: {
+						kind: "custom" as const,
+						imageDigest,
+						admissionRevision: "api-workload-admission",
+						interactionMode: "platform-adapter" as const,
+						connectionEnabled: false,
+					},
+					secrets: [],
+				};
+				await sql`update platform.agent_configuration_revisions
+					set source_reference=${imageDigest}, configuration=${sql.json(customConfiguration as unknown as postgres.JSONValue)}
+					where agent_id=${seed.agentId} and revision=1`;
+				await sql`delete from platform.secret_records where agent_id=${seed.agentId}`;
 				const hash = (value: string) =>
 					createHash("sha256").update(value).digest("hex");
 				await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision)
@@ -921,8 +939,6 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					);
 					return { core: "passed" as const, capabilities: {} };
 				};
-				if (!process.env.WORKLOAD_KIND_IMAGE_A)
-					throw new Error("WORKLOAD_KIND_IMAGE_A is required");
 				const fetchViaProbe = async (input: Parameters<typeof fetch>[0]) => {
 					const url = String(input);
 					try {
@@ -975,6 +991,9 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				} as unknown as typeof client;
 				worker = createPlatformWorkloadWorkerV1({
 					...seed.workerOptions,
+					templateModelBindings: [],
+					modelCatalog: undefined,
+					modelAccess: undefined,
 					client: workerClient,
 					workerId: "api-workload-worker",
 					pollIntervalMs: 1,
