@@ -918,7 +918,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					);
 					return { core: "passed" as const, capabilities: {} };
 				};
-				const fetchViaProbe = async (input: RequestInfo | URL) => {
+				const fetchViaProbe = async (input: Parameters<typeof fetch>[0]) => {
 					const url = String(input);
 					try {
 						await kubectl(
