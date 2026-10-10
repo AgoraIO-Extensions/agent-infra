@@ -2089,6 +2089,62 @@ function isRuntimeSkillCapabilityOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1717 delivers the optional, signed Browser declaration/probe facts through
+// the existing readiness and Runtime capability contracts. The fields are
+// additive and remain optional when Browser is absent; no existing operation,
+// response or required field changes.
+function isRuntimeBrowserEvidenceOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	let changed = false;
+	const host = normalized.components?.schemas?.RuntimeCapabilitiesV1;
+	const previousHost = previous.components?.schemas?.RuntimeCapabilitiesV1;
+	if (
+		host?.properties?.browser !== undefined &&
+		previousHost?.properties?.browser === undefined &&
+		normalized.components?.schemas?.RuntimeBrowserCapabilityProbeEvidenceV1
+	) {
+		delete host.properties.browser;
+		delete normalized.components.schemas
+			.RuntimeBrowserCapabilityProbeEvidenceV1;
+		changed = true;
+	}
+	const readinessNames = [
+		"WorkloadReadinessGrantClaimsV1",
+		"WorkloadReadinessRequestV1",
+		"WorkloadReadinessResponseV1",
+	];
+	if (
+		readinessNames.every(
+			(name) => normalized.components?.schemas?.[name] !== undefined,
+		)
+	) {
+		for (const name of readinessNames) {
+			const schema = normalized.components.schemas[name];
+			if (schema.properties?.browserDeclaration !== undefined) {
+				if (
+					previous.components?.schemas?.[name]?.properties
+						?.browserDeclaration !== undefined
+				)
+					return false;
+				delete schema.properties.browserDeclaration;
+				changed = true;
+			}
+		}
+		const response = normalized.components.schemas.WorkloadReadinessResponseV1;
+		const previousResponse =
+			previous.components?.schemas?.WorkloadReadinessResponseV1;
+		if (
+			response.properties?.capabilities?.properties?.browser !== undefined &&
+			previousResponse?.properties?.capabilities?.properties?.browser ===
+				undefined
+		) {
+			delete response.properties.capabilities.properties.browser;
+			changed = true;
+		}
+	}
+	return changed && sameValue(previous, normalized);
+}
+
 // #1541 corrects only the approved opaque S3 VersionId inside fixed Skill package references.
 // Normalize this exact difference before the ordinary comparison; no other field is exempt.
 function normalizeSkillPackageObjectVersions(previous, current, changes) {
@@ -2240,6 +2296,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
+			!isRuntimeBrowserEvidenceOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
