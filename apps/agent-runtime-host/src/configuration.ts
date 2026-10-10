@@ -69,22 +69,22 @@ export function readRuntimeModelConfigurationV3(
 
 export function readRuntimeModelConfigurationV4(
 	environment: NodeJS.ProcessEnv,
+	driver: "codex" | "claude" | "acp" | "pi" = "codex",
 ): CodexPilotConfiguration {
 	try {
 		const value = RuntimeModelConfigurationV4Schema.parse(
 			JSON.parse(environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? ""),
 		);
 		const modelOptions = value.modelOptions.map((option) => {
-			if (
-				option.protocol !== "openai-responses-v1" ||
-				option.authentication !== "bearer"
-			)
-				runtimeConfigurationInvalid();
+			const expectedProtocol =
+				driver === "codex" ? "openai-responses-v1" : "anthropic-messages-v1";
+			if (option.protocol !== expectedProtocol) runtimeConfigurationInvalid();
 			return {
 				modelOptionId: option.modelOptionId,
 				endpoint: option.endpoint,
 				model: option.model,
 				reasoningLevels: option.reasoningLevels,
+				authentication: option.authentication,
 			};
 		});
 		return {

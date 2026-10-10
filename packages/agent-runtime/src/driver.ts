@@ -62,6 +62,8 @@ export interface RuntimeExternalActionAuthorizationResult {
 	readonly revalidate?: () => void;
 }
 
+export type RuntimeModelCredentialResolver = () => Promise<string>;
+
 export type RuntimeExternalActionAuthorizer = (
 	action: RuntimeExternalActionAuthorization,
 ) =>

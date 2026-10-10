@@ -21,6 +21,9 @@ import type {
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeModelDirectory,
+	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+	RuntimeModelCredentialResolver,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -29,6 +32,7 @@ import {
 } from "./driver-operation.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
+import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 
 export interface SessionRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -49,6 +53,9 @@ export interface SessionRuntimeDriverOptions {
 	) => Promise<NativeSession>;
 	readonly retireSession: (directory: string) => Promise<void>;
 	readonly completionStatus: (reason: string) => RuntimeStatusV1;
+	readonly authorizeModelAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 }
 export interface NativeSessionOptions {
 	directory: string;
@@ -57,6 +64,7 @@ export interface NativeSessionOptions {
 	history?: { checkpoint: string; complete: boolean };
 	selection: RuntimeSelectionV1;
 	admit: () => Promise<void>;
+	resolveModelCredential?: RuntimeModelCredentialResolver;
 	update: (event?: Pick<RuntimeEventV1, "type" | "payload">) => Promise<void>;
 }
 export interface NativeSession {
@@ -109,6 +117,8 @@ interface Turn {
 	nativeCheckpoint?: string;
 	nativeTerminalCheckpoint?: string;
 	events: RuntimeEventV1[];
+	operationRef?: string;
+	attemptRef?: string;
 }
 interface Session {
 	schemaVersion: 1;
@@ -162,6 +172,35 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		private readonly options: SessionRuntimeDriverOptions,
 		private readonly index: DurableJsonFile<Index>,
 	) {}
+	async validateExternalAction(
+		action: import("./driver.js").RuntimeExternalActionAuthorization,
+	) {
+		if (
+			action.kind !== "model" ||
+			action.runtimeOperationId !== action.executionId
+		)
+			runtimeAuthorizationDenied();
+		let binding: Binding | undefined;
+		let file: DurableJsonFile<Session> | undefined;
+		for (const entry of this.index.read().sessions) {
+			const candidate = await this.file(entry);
+			if (candidate.read().nativeId === action.nativeSessionRef) {
+				binding = entry;
+				file = candidate;
+				break;
+			}
+		}
+		if (!binding || !file) runtimeAuthorizationDenied();
+		const turn = file
+			.read()
+			.turns.find((item) => item.executionId === action.executionId);
+		if (
+			!turn ||
+			turn.operationRef !== action.operationRef ||
+			turn.attemptRef !== action.attemptRef
+		)
+			runtimeAuthorizationDenied();
+	}
 	static async open(options: SessionRuntimeDriverOptions) {
 		if (
 			!isAbsolute(options.path) ||
@@ -743,6 +782,24 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		await mkdir(workspace, { recursive: true, mode: 0o700 });
 		if ((await realpath(workspace)) !== workspace) unavailable();
 		let admitted: () => void = () => {};
+		const operationRef = randomUUID();
+		const attemptRef = randomUUID();
+		let activeNativeSessionRef = before.nativeId ?? "";
+		const resolveModelCredential = this.options.authorizeModelAction
+			? async () => {
+					const authorized = await this.options.authorizeModelAction?.({
+						kind: "model",
+						nativeSessionRef: activeNativeSessionRef,
+						executionId: command.executionId,
+						runtimeOperationId: command.executionId,
+						operationRef,
+						attemptRef,
+					});
+					if (!authorized?.relayKey)
+						throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+					return authorized.relayKey;
+				}
+			: undefined;
 		const admission = new Promise<void>((resolve) => {
 			admitted = resolve;
 		});
@@ -762,6 +819,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					await this.status(file, command.executionId, "running");
 					admitted();
 				},
+				...(resolveModelCredential ? { resolveModelCredential } : {}),
 				cwd: workspace,
 				nativeId: before.nativeId,
 				history: before.turns.at(-1)?.nativeTerminalCheckpoint
@@ -792,6 +850,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				native = reuse.native;
 				native.startTurn?.(sessionOptions);
 			} else native = await this.options.openSession(sessionOptions);
+			activeNativeSessionRef = native.nativeId;
 		} catch {
 			unavailable();
 		}
@@ -836,6 +895,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					selection,
 					status: "unknown",
 					events: [],
+					operationRef,
+					attemptRef,
 				});
 			});
 		} catch {
