@@ -50,7 +50,14 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 		await expect(
 			driver.getModelDirectory(result.nativeSessionRef),
 		).resolves.toEqual({
-			options: [{ modelOptionId: "primary", reasoningLevels: ["high"] }],
+			options: [
+				{
+					modelOptionId: "primary",
+					modelId: "provider/model",
+					displayName: "provider/model",
+					reasoningLevels: ["high"],
+				},
+			],
 			current: { modelOptionId: "primary", reasoningLevel: "high" },
 		});
 		await vi.waitFor(async () =>
