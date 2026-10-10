@@ -721,7 +721,7 @@ Session-owned Sandbox 的 P0 验收须从 Web、企微和 API 三入口分别为
 Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也适用，渠道不合并。
 覆盖并发、幂等、撤权、旧代次 late call、停止/unknown、SSE 与 Pod/Worker/Host/Runtime 重启恢复，
 绑定准确源码、镜像 Digest、配置和 CNI；目录名、thread ID、fixture 或健康检查不构成运行证明。
-文档合并仅冻结契约，不表示上述隔离或完整 Pilot 已验收；唯一交接见
+文档合并仅冻结契约，不表示上述隔离或 P0 真实环境验收已完成；唯一交接见
 [Sandbox ADR](../adr/0017-session-owned-sandbox-isolation.md)。
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、带 Execution 级有效模型选择的 Turn、流式事件与按已确认游标重放、停止、状态和 capability。

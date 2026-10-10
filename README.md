@@ -25,7 +25,7 @@
 ## 当前状态
 
 仓库已进入 M1 领域功能实现阶段，已交付 Platform 管理、配置、Conversation 持久化与
-HTTP/SSE、RuntimeHost 和 Codex Driver 组件。主系统本地整装、真实 GitHub Pilot 和完整
+HTTP/SSE、RuntimeHost 和 Codex Driver 组件。主系统本地整装、P0 首发真实环境闭环和完整
 M1 上线是独立验收层次，当前仍有未完成门禁，见 [阶段验收与交付边界 #144](https://github.com/AgoraIO-Extensions/agent-infra/issues/144)。
 
 | 部署单元 | 目录 | 当前能力 |
@@ -77,7 +77,7 @@ AGENT_INFRA_CODEX_NATIVE_TEST=1 pnpm --filter @agent-infra/agent-runtime test
 再跨正常关闭与异常退出恢复原 Session、Turn、合成历史及工作区，检查幂等和缺失/损坏数据。
 测试不使用模型凭证，不证明模型调用成功。普通 `pnpm test` 保留模拟 conformance，
 未设置上述变量时跳过原生进程测试；CI 必须执行两者。
-Pod/PVC 调谐、多人运行上下文隔离和真实 Pilot 仍由对应交付任务验收。
+Pod/PVC 调谐、多人运行上下文隔离和真实环境验收仍由对应交付任务承接。
 
 ## 开发工作流
 
