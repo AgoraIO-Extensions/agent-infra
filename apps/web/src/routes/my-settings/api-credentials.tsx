@@ -3,10 +3,12 @@ import {
 	useLocation,
 	useNavigate,
 } from "@tanstack/react-router";
+import { useState } from "react";
 import { ApiCredentialsScreen } from "../../features/api-credentials/api-credentials-screen.js";
 import {
 	useApiCredentials,
 	useIssuePersonalApiCredential,
+	useNarrowPersonalApiCredential,
 	useRevokePersonalApiCredential,
 } from "../../features/api-credentials/use-api-credentials.js";
 import { ApplicationManagementScreen } from "../../features/application-management/application-management-screen.js";
@@ -28,6 +30,8 @@ function ApiCredentialsRoute() {
 	const credentials = useApiCredentials({ identityKey });
 	const issue = useIssuePersonalApiCredential();
 	const revoke = useRevokePersonalApiCredential();
+	const narrow = useNarrowPersonalApiCredential();
+	const [narrowingCredentialId, setNarrowingCredentialId] = useState<string>();
 	const search = useLocation({
 		select: (location) => location.search as Record<string, unknown>,
 	});
@@ -59,6 +63,37 @@ function ApiCredentialsRoute() {
 					await credentials.refetch().catch(() => undefined);
 					return result;
 				}}
+				onNarrow={async (credentialId, body) => {
+					setNarrowingCredentialId(credentialId);
+					try {
+						const result = await narrow.mutateAsync({ credentialId, body });
+						const refreshed = await credentials.refetch();
+						if (refreshed?.error || refreshed?.data?.kind !== "ready") {
+							throw new Error(
+								"更新已受理，但无法读取最新元数据。请重新加载确认状态。",
+							);
+						}
+						const current = refreshed.data.credentials.find(
+							(item) => item.credentialId === credentialId,
+						);
+						if (
+							!current ||
+							current.expiresAt !== result.metadata.expiresAt ||
+							current.scopes.length !== result.metadata.scopes.length ||
+							!current.scopes.every((scope) =>
+								result.metadata.scopes.includes(scope),
+							)
+						) {
+							throw new Error(
+								"更新已受理，但读取的元数据尚未同步。请重新加载确认状态。",
+							);
+						}
+						return result;
+					} finally {
+						setNarrowingCredentialId(undefined);
+					}
+				}}
+				narrowingCredentialId={narrowingCredentialId}
 				isIssuing={issue.isPending}
 				revokingCredentialId={revoke.isPending ? revoke.variables : undefined}
 				issueError={issue.error}
