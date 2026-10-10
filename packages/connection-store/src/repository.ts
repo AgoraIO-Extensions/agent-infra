@@ -899,18 +899,29 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		const missing = await this.sql`
 			SELECT release.id FROM connection_provider_releases release
 			JOIN connection_provider_release_dependencies dependencies ON dependencies.id = release.id
-			WHERE NOT (release.id = ANY(${[...executorReleaseIds]}::text[])) AND
-				((release.status = 'PUBLISHED' AND
-					(release.runtime_registered OR dependencies.accounts > 0 OR dependencies.grants > 0 OR dependencies.declarations > 0))
-					OR dependencies.unfinished_calls > 0)
+			WHERE (release.runtime_registered = true OR release.id = ANY(${[...this.publishedProviderReleaseIds.values()]}::text[]))
+				AND NOT (release.id = ANY(${[...executorReleaseIds]}::text[]))
+				AND (release.status = 'PUBLISHED' OR dependencies.unfinished_calls > 0)
 		`;
 		if (missing.length)
 			throw new Error(
 				"Provider runtime is missing releases with live dependencies",
 			);
+		const legacyUnregistered = await this.sql`
+			SELECT release.id AS "releaseId", dependencies.accounts::int AS accounts,
+				dependencies.grants::int AS grants, dependencies.declarations::int AS declarations,
+				dependencies.unfinished_calls::int AS "unfinishedCalls"
+			FROM connection_provider_releases release
+			JOIN connection_provider_release_dependencies dependencies ON dependencies.id = release.id
+			WHERE release.runtime_registered = false
+				AND NOT (release.id = ANY(${[...executorReleaseIds]}::text[]))
+				AND (dependencies.accounts > 0 OR dependencies.grants > 0 OR dependencies.declarations > 0 OR dependencies.unfinished_calls > 0)
+			ORDER BY release.id LIMIT 50
+		`;
 		await this
 			.sql`UPDATE connection_provider_releases SET runtime_registered = true
 			WHERE id = ANY(${[...executorReleaseIds]}::text[]) AND runtime_registered = false`;
+		return { legacyUnregistered };
 	}
 
 	/** @deprecated Use publishProviderCatalog. */

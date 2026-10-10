@@ -412,7 +412,17 @@ export async function createConnectionRuntime(
 			rehoboamLegacyProviderReleaseIds.map((id) => [id, rehoboam]),
 		),
 	};
-	await repository.assertProviderRuntimeCoverage(Object.keys(executorRoutes));
+	const runtimeCoverage = await repository.assertProviderRuntimeCoverage(
+		Object.keys(executorRoutes),
+	);
+	if (runtimeCoverage?.legacyUnregistered.length)
+		console.warn(
+			JSON.stringify({
+				service: "connection-api",
+				event: "legacy_provider_runtime_unregistered",
+				releases: runtimeCoverage.legacyUnregistered,
+			}),
+		);
 	const executors = new ProviderExecutorRouter(executorRoutes);
 	const service = new ConnectionApplicationService(
 		repository,

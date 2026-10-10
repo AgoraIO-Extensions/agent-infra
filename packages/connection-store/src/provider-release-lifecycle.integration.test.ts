@@ -80,11 +80,39 @@ integration(
       VALUES (${credential}, ${account}, 'fixture', 'fixture', 'fixture', 'ACTIVE')`;
 			await sql`INSERT INTO connection_consumer_action_declarations (id, consumer_id, provider_release_id, revision, digest, status)
       VALUES (${consumer}, ${consumer}, ${source}, 1, 'fixture', 'PUBLISHED')`;
+			await expect(
+				repository.assertProviderRuntimeCoverage(existingRoutes),
+			).rejects.toThrow();
+			const adoption = await repository.assertProviderRuntimeCoverage([
+				...existingRoutes,
+				target,
+			]);
+			expect(
+				adoption.legacyUnregistered.find((item) => item.releaseId === source),
+			).toMatchObject({
+				accounts: 1,
+				grants: 1,
+				declarations: 1,
+				unfinishedCalls: 0,
+			});
+			expect(
+				(
+					await sql`SELECT runtime_registered FROM connection_provider_releases WHERE id = ${source}`
+				)[0]?.runtime_registered,
+			).toBe(false);
 			await repository.assertProviderRuntimeCoverage([
 				...existingRoutes,
 				source,
 				target,
 			]);
+			expect(
+				(
+					await sql`SELECT runtime_registered FROM connection_provider_releases WHERE id = ${source}`
+				)[0]?.runtime_registered,
+			).toBe(true);
+			await expect(
+				repository.assertProviderRuntimeCoverage([...existingRoutes, target]),
+			).rejects.toThrow();
 			await repository.changeProviderReleaseLifecycle({
 				actorPrincipalId: actor,
 				releaseId: source,
@@ -224,4 +252,5 @@ integration(
 			await sql.end();
 		}
 	},
+	30_000,
 );
