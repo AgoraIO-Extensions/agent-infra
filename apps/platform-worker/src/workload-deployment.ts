@@ -224,6 +224,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			),
 			...(input.files ? { files: input.files } : {}),
 			fetch: runtimeFetch,
+			...(input.browserBinding ? { browserBinding: input.browserBinding } : {}),
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,
 			log: input.log,
