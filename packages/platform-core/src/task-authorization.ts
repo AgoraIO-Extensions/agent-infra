@@ -132,6 +132,21 @@ export interface TaskAuthorizationBoundaryV1 {
 	readonly identityRevision: string;
 	readonly agentAuthorizationRevision: string;
 	readonly accessSources: readonly TaskAccessSourceV1[];
+	readonly directorySnapshotBinding?: DirectorySnapshotBindingV1;
+}
+
+function sameDirectorySnapshotBinding(
+	a: DirectorySnapshotBindingV1 | undefined,
+	b: DirectorySnapshotBindingV1 | undefined,
+): boolean {
+	if (!a || !b) return a === b;
+	return (
+		a.schemaVersion === b.schemaVersion &&
+		a.source === b.source &&
+		a.revision === b.revision &&
+		a.fetchedAt === b.fetchedAt &&
+		a.validUntil === b.validUntil
+	);
 }
 
 export function parseCurrentTaskUserV1(input: unknown): CurrentTaskUserV1 {
@@ -285,7 +300,7 @@ export function parseTaskAuthorizationBoundaryV1(
 	input: unknown,
 ): TaskAuthorizationBoundaryV1 {
 	const value = object(input);
-	exact(value, [
+	const keys = [
 		"schemaVersion",
 		"principal",
 		"agentId",
@@ -293,7 +308,10 @@ export function parseTaskAuthorizationBoundaryV1(
 		"identityRevision",
 		"agentAuthorizationRevision",
 		"accessSources",
-	]);
+	];
+	if (Object.hasOwn(value, "directorySnapshotBinding"))
+		keys.push("directorySnapshotBinding");
+	exact(value, keys);
 	if (
 		value.schemaVersion !== 1 ||
 		![
@@ -353,6 +371,12 @@ export function parseTaskAuthorizationBoundaryV1(
 	) {
 		throw new TypeError("Task access sources are invalid");
 	}
+	const directorySnapshotBinding = Object.hasOwn(
+		value,
+		"directorySnapshotBinding",
+	)
+		? parseDirectorySnapshotBindingV1(value.directorySnapshotBinding)
+		: undefined;
 	return {
 		schemaVersion: 1,
 		principal: subject,
@@ -361,6 +385,7 @@ export function parseTaskAuthorizationBoundaryV1(
 		identityRevision: value.identityRevision as string,
 		agentAuthorizationRevision: value.agentAuthorizationRevision as string,
 		accessSources: sources,
+		...(directorySnapshotBinding ? { directorySnapshotBinding } : {}),
 	};
 }
 
@@ -387,6 +412,9 @@ export function captureTaskAuthorizationBoundaryV1(input: {
 		identityRevision: user.authorizationRevision,
 		agentAuthorizationRevision: input.agentAuthorizationRevision,
 		accessSources: sources,
+		...(user.directorySnapshotBinding
+			? { directorySnapshotBinding: user.directorySnapshotBinding }
+			: {}),
 	});
 }
 
@@ -475,6 +503,9 @@ export function capturePersonalApiTaskAuthorizationBoundaryV1(input: {
 		accessSources: [
 			{ kind: "api-use", useGrantRevision: grant.authorizationRevision },
 		],
+		...(user.directorySnapshotBinding
+			? { directorySnapshotBinding: user.directorySnapshotBinding }
+			: {}),
 	});
 }
 
@@ -517,6 +548,13 @@ export function isTaskAuthorizationCurrentV1(input: {
 		boundary.principal.kind !== "user" ||
 		boundary.principal.id !== user.userId ||
 		boundary.agentId !== agent.agentId
+	)
+		return false;
+	if (
+		!sameDirectorySnapshotBinding(
+			boundary.directorySnapshotBinding,
+			user.directorySnapshotBinding,
+		)
 	)
 		return false;
 	if (isTaskApiChannelV1(boundary.channelId, boundary.principal))
