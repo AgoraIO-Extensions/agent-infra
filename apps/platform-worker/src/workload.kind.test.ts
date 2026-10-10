@@ -1059,6 +1059,8 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				const workloadSelector = `agent-infra.agora.io/agent=${workloadResourceNameV1(seed.agentId)}`;
 				const stopped = await request("stop", "api-workload-stop", token);
 				expect(stopped.status).toBe(202);
+				await sql`update platform.workload_reconciliations
+					set next_attempt_at=clock_timestamp() where agent_id=${seed.agentId}`;
 				await tickUntil(
 					(row) =>
 						row.status === "stopped" && row.service_availability === null,
@@ -1105,6 +1107,8 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					appToken,
 				);
 				expect(restarted.status).toBe(202);
+				await sql`update platform.workload_reconciliations
+					set next_attempt_at=clock_timestamp() where agent_id=${seed.agentId}`;
 				await tickUntil(
 					(row) =>
 						row.status === "available" && row.service_availability === "ready",
