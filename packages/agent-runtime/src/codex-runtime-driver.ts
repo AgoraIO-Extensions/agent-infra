@@ -732,6 +732,8 @@ interface CodexTextDeltaBatch {
 		readonly delta: NonNullable<
 			ReturnType<typeof agentMessageDeltaNotification>
 		>;
+		/** When the delta arrived; its event keeps this time, not the commit's. */
+		readonly receivedAt: string;
 	}[];
 	flushing: Promise<void> | undefined;
 	/** When the last batch commit began; spacing applies across flushes. */
@@ -9109,7 +9111,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		delta: NonNullable<ReturnType<typeof agentMessageDeltaNotification>>,
 	) {
 		if (batch.failure !== undefined) throw batch.failure;
-		batch.pending.push({ conversationKey, delta });
+		batch.pending.push({
+			conversationKey,
+			delta,
+			receivedAt: new Date().toISOString(),
+		});
 		batch.flushing ??= this.flushTextDeltas(batch);
 		// Bound the memory held for deltas that are not yet durable.
 		if (batch.pending.length >= maximumPendingTextDeltas)
@@ -9170,7 +9176,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		deltas: CodexTextDeltaBatch["pending"],
 	) {
 		const streamKeys = new Set<string>();
-		for (const [index, { conversationKey, delta }] of deltas.entries()) {
+		for (const [
+			index,
+			{ conversationKey, delta, receivedAt },
+		] of deltas.entries()) {
 			try {
 				const resolved = this.resolveNotificationJournal(
 					state,
@@ -9185,6 +9194,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					resolved.journal,
 					delta.nativeItemId,
 					delta.delta,
+					receivedAt,
 				);
 				if (resolved.execution)
 					streamKeys.add(
@@ -9384,13 +9394,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		journal: CodexEventJournal,
 		nativeItemId: string,
 		delta: string,
+		occurredAt = new Date().toISOString(),
 	) {
 		this.assertJournalOpen(journal);
 		const { cursor, adapterEventKey } = this.nextEventIdentity(session);
 		const event: CodexJournalTextEvent = {
 			cursor,
 			adapterEventKey,
-			occurredAt: new Date().toISOString(),
+			occurredAt,
 			nativeItemId,
 			type: "text",
 			payload: { delta },
