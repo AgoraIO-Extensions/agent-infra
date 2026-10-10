@@ -54,8 +54,10 @@ function unavailable(status: number | undefined): CollectionReadUnavailable {
 export async function loadOwnApplication(
 	applicationId: string,
 	client?: Client,
+	signal?: AbortSignal,
 ): Promise<ApplicationManagementState> {
 	if (!applicationId) return { kind: "empty" };
+	signal?.throwIfAborted();
 	const result: Awaited<
 		RequestResult<
 			GetOwnApplicationV2Responses,
@@ -64,11 +66,12 @@ export async function loadOwnApplication(
 		>
 	> = await getOwnApplicationV2({
 		client,
+		signal,
 		path: { applicationId },
 		responseStyle: "fields",
 		throwOnError: false,
 	});
-	if (result.response?.status === 404) return { kind: "empty" };
+	signal?.throwIfAborted();
 	if (result.response?.status !== 200)
 		return unavailable(result.response?.status);
 	if (!result.data || !metadataSchema.safeParse(result.data).success) {
