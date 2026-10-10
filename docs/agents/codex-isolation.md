@@ -3,7 +3,7 @@
 本入口用于 [#404](https://github.com/AgoraIO-Extensions/agent-infra/issues/404)，依据
 [PRD 多用户隔离](../prd/PRD-agent-platform-M1.md#72-多用户隔离)和
 [Runtime HLD](../architecture/HLD-agent-runtime-M1.md#6-数据归属与标识)。
-它不批准新的隔离架构，也不替代 Pod/Pilot 验收。
+它不批准新的隔离架构，也不替代 Pod/真实环境验收。
 
 ## 运行
 
