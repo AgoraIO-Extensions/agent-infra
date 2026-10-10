@@ -164,7 +164,10 @@ test("complete admin collection supports later-page search and URL refresh", asy
 	expect(
 		await page.getByRole("button", { name: /停用|重试创建|开始对话/ }).count(),
 	).toBe(0);
-	expect(await page.locator('main a[href*="/agents/"]').count()).toBe(0);
+	expect(await page.locator('main a[href*="/agents/"]').count()).toBe(1);
+	expect(
+		await page.locator('main a[href*="/agents/"]').getAttribute("href"),
+	).toBe("/agents/inventory-10/configuration");
 	expect(data.requests.every((request) => request.method === "GET")).toBe(true);
 });
 
