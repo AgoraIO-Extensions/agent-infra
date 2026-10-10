@@ -274,6 +274,13 @@
       "when": 1791608400000,
       "tag": "0038_supervised_provider_admission",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1791624380468,
+      "tag": "0039_static_spaces_v3_admission",
+      "breakpoints": true
     }
   ]
 }

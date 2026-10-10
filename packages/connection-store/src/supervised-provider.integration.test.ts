@@ -5,6 +5,7 @@ import { githubConnectionCatalog } from "@agent-infra/openconnector-adapter";
 import {
 	staticSpacesConnectionCatalog,
 	staticSpacesPilot,
+	staticSpacesV2ConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/providers/static-spaces";
 import postgres from "postgres";
 import { expect, it } from "vitest";
@@ -30,6 +31,7 @@ if (process.env.CI && !url)
 		const releaseId = staticSpacesConnectionCatalog.providerReleaseId;
 		try {
 			await repo.publishProviderCatalog(staticSpacesConnectionCatalog);
+			await repo.publishProviderCatalog(staticSpacesV2ConnectionCatalog);
 			await sql
 				.begin(async (tx) => {
 					await tx`INSERT INTO connection_principals (id,display_name,email) VALUES (${staticSpacesPilot.principalId},'Pilot test',${`${randomUUID()}@example.invalid`}) ON CONFLICT DO NOTHING`;
@@ -58,6 +60,31 @@ if (process.env.CI && !url)
 							staticSpacesPilot.consumerId,
 						),
 					).toBe(true);
+					const wrongApproval = {
+						...profile,
+						supervisedPilot: {
+							...profile.supervisedPilot,
+							approvalIssue: "1681",
+						},
+					};
+					await tx`UPDATE connection_provider_releases SET deployment_profile=${tx.json(wrongApproval)} WHERE id=${releaseId}`;
+					expect(
+						await allowed(
+							staticSpacesPilot.principalId,
+							staticSpacesPilot.consumerId,
+						),
+					).toBe(false);
+					await tx`UPDATE connection_provider_releases SET deployment_profile=${tx.json(profile)} WHERE id=${releaseId}`;
+					await tx`SELECT connection_close_supervised_provider(${staticSpacesV2ConnectionCatalog.providerReleaseId},${staticSpacesPilot.principalId},'TEST_FAILED')`;
+					expect(
+						await allowed(
+							staticSpacesPilot.principalId,
+							staticSpacesPilot.consumerId,
+						),
+					).toBe(true);
+					const [oldAdmission] =
+						await tx`SELECT connection_supervised_provider_allowed(${staticSpacesV2ConnectionCatalog.providerReleaseId}) AS allowed`;
+					expect(oldAdmission?.allowed).toBe(false);
 					expect(await allowed("other", staticSpacesPilot.consumerId)).toBe(
 						false,
 					);
@@ -110,6 +137,7 @@ if (process.env.CI && !url)
 			await sql.end();
 		}
 	},
+	30000,
 );
 (url ? it : it.skip)(
 	"ordinary credential, discovery, Consent and dispatch paths enforce pilot admission and credential revocation stays closed",
@@ -132,6 +160,7 @@ if (process.env.CI && !url)
 				supervisedPilot: {
 					...staticSpacesPilot,
 					principalId,
+					approvalIssue: "1681",
 					consumerId,
 					startsAt: new Date(Date.now() - 1000).toISOString(),
 					expiresAt: new Date(Date.now() + 60000).toISOString(),
@@ -219,6 +248,27 @@ if (process.env.CI && !url)
 			const service = new ConnectionApplicationService(repo, {
 				execute: async () => ({ id: "841" }),
 			});
+			await expect(
+				service.executeDirectActionForIdentity(
+					context,
+					"static-spaces.list_files",
+					{
+						kind: "shared",
+						slug: "connection-test",
+						prefix: "connection-onboarding/run/",
+					},
+				),
+			).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+			const [beforeSubmission] =
+				await sql`SELECT count(*)::int AS count FROM connection_calls WHERE principal_id=${principalId}`;
+			expect(beforeSubmission?.count).toBe(0);
+			expect(
+				await repo.isProviderAdmissionOpen({
+					providerReleaseId: catalog.providerReleaseId,
+					principalId,
+					consumerId,
+				}),
+			).toBe(true);
 			await service.executeDirectActionForIdentity(
 				context,
 				"static-spaces.get_current_user",
@@ -390,4 +440,5 @@ if (process.env.CI && !url)
 			await sql.end();
 		}
 	},
+	30000,
 );

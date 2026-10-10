@@ -70,8 +70,10 @@ import {
 } from "@agent-infra/openconnector-adapter/providers/rehoboam";
 import {
 	StaticSpacesAdapter,
+	StaticSpacesV2Adapter,
 	staticSpacesConnectionCatalog,
 	staticSpacesOrigins,
+	staticSpacesV2ConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/providers/static-spaces";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 import { createConnectionApp } from "./app";
@@ -130,8 +132,8 @@ export async function publishStartupConsumerDeclarations(
 			for (const consumer of group) {
 				for (const catalog of catalogs) {
 					if (
-						catalog.providerReleaseId ===
-							"static-spaces-connection-v2-supervised" &&
+						catalog.provider === "static-spaces" &&
+						catalog.providerReleaseId.endsWith("-supervised") &&
 						!(await repository.isProviderAdmissionOpen?.({
 							providerReleaseId: catalog.providerReleaseId,
 							consumerId: consumer.id,
@@ -398,7 +400,16 @@ export async function createConnectionRuntime(
 		: undefined;
 	const executorRoutes = {
 		...(staticSpaces
-			? { [staticSpacesConnectionCatalog.providerReleaseId]: staticSpaces }
+			? {
+					[staticSpacesConnectionCatalog.providerReleaseId]: staticSpaces,
+					[staticSpacesV2ConnectionCatalog.providerReleaseId]:
+						new StaticSpacesV2Adapter(
+							observeProviderFetch(
+								"static-spaces",
+								providerFetch(Object.values(staticSpacesOrigins)),
+							),
+						),
+				}
 			: {}),
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 		...Object.fromEntries(

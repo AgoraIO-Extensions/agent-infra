@@ -1103,8 +1103,8 @@ export function createConnectionOAuthApp(
 		async function visibleCatalogs(principalId: string, consumerId?: string) {
 			const eligible = await Promise.all(
 				(management.catalogs ?? []).map(async (catalog) =>
-					catalog.providerReleaseId !==
-						"static-spaces-connection-v2-supervised" ||
+					catalog.provider !== "static-spaces" ||
+					!catalog.providerReleaseId.endsWith("-supervised") ||
 					(await management.providerAdmission?.isProviderAdmissionOpen({
 						providerReleaseId: catalog.providerReleaseId,
 						principalId,

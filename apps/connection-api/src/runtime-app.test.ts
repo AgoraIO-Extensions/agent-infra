@@ -16,6 +16,68 @@ const tokenUrl = "https://github.com/login/oauth/access_token";
 const profileUrl = "https://api.github.com/user";
 
 describe("startup Consumer declaration scheduling", () => {
+	it("v3 supervised declarations skip other Consumers and a closed pilot", async () => {
+		const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		const publishConsumerDeclaration = vi.fn(
+			async (_input: {
+				consumer: { id: string; name: string };
+				providerReleaseId: string;
+			}) => ({
+				declarationId: "test",
+			}),
+		);
+		let open = true;
+		const isProviderAdmissionOpen = vi.fn(
+			async (input: { consumerId?: string }) =>
+				open && input.consumerId === "consumer-codex",
+		);
+		const consumers = ["consumer-codex", "portable-pat", "rehoboam"].map(
+			(id) => ({ id, name: id }),
+		);
+		const catalogs = [
+			{ provider: "github", providerReleaseId: "github", actions: [] },
+			{
+				provider: "static-spaces",
+				providerReleaseId: "static-spaces-connection-v3-supervised",
+				actions: [],
+			},
+		];
+		try {
+			await publishStartupConsumerDeclarations(
+				{ publishConsumerDeclaration, isProviderAdmissionOpen },
+				consumers,
+				catalogs,
+			);
+			expect(
+				publishConsumerDeclaration.mock.calls.filter(
+					([input]) =>
+						input.providerReleaseId ===
+						"static-spaces-connection-v3-supervised",
+				),
+			).toEqual([
+				[
+					expect.objectContaining({
+						consumer: expect.objectContaining({ id: "consumer-codex" }),
+					}),
+				],
+			]);
+			open = false;
+			publishConsumerDeclaration.mockClear();
+			await publishStartupConsumerDeclarations(
+				{ publishConsumerDeclaration, isProviderAdmissionOpen },
+				consumers,
+				catalogs,
+			);
+			expect(publishConsumerDeclaration).toHaveBeenCalledTimes(3);
+			expect(
+				publishConsumerDeclaration.mock.calls.every(
+					([input]) => input.providerReleaseId === "github",
+				),
+			).toBe(true);
+		} finally {
+			log.mockRestore();
+		}
+	});
 	it("overlaps independent Consumers while preserving duplicate-ID revision order", async () => {
 		const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
 		const active = new Set<string>();
