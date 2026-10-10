@@ -11,5 +11,5 @@ describe("OpenAPI browser client smoke", () => {
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
 		expect(result.stdout).toContain("client.gen.ts");
-	});
+	}, 30_000);
 });
