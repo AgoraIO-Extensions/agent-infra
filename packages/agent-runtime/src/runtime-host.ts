@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { isDeepStrictEqual } from "node:util";
 
 import type {
@@ -35,6 +36,7 @@ import type {
 	WorkloadReadinessResponseV1,
 } from "@agent-infra/contracts/runtime";
 import {
+	maximumRuntimeEventReplayPageBytesV4,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverLookupV1Schema,
@@ -122,6 +124,32 @@ function isTerminalRuntimeStatus(status: RuntimeStatusV1) {
 	return (
 		status === "completed" || status === "failed" || status === "cancelled"
 	);
+}
+
+/** A replay page always keeps the first eight events, as before #1637. */
+const minimumReplayPageEvents = 8;
+const maximumReplayPageEvents = 64;
+
+/**
+ * One replay page: the first eight events, then more only while the page stays
+ * within the event bytes the Worker accepts. A busy Host answers each read
+ * slowly, so a page that carries the waiting backlog keeps the drain ahead of
+ * a streaming reply (#1637).
+ */
+function replayPage<T>(events: readonly T[]) {
+	const page: T[] = [];
+	let bytes = 0;
+	for (const event of events) {
+		if (page.length === maximumReplayPageEvents) break;
+		bytes += Buffer.byteLength(JSON.stringify(event)) + 1;
+		if (
+			page.length >= minimumReplayPageEvents &&
+			bytes > maximumRuntimeEventReplayPageBytesV4
+		)
+			break;
+		page.push(event);
+	}
+	return page;
 }
 
 function driverInvalid(): never {
@@ -537,7 +565,7 @@ export class RuntimeHost {
 					request.hostSessionRef,
 					request.executionId,
 				);
-				const events = replay.data.slice(0, 8);
+				const events = replayPage(replay.data);
 				if (events.length > 0) {
 					// One authority check and one durable write cover the whole page.
 					await this.eventAuthorityV4(request, verification);

@@ -1,9 +1,11 @@
+import { Buffer } from "node:buffer";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+	maximumRuntimeEventReplayPageBytesV4,
 	RuntimeBusinessGrantClaimsV4Schema,
 	type RuntimeBusinessRequestV4,
 	RuntimeEventAckRequestV4Schema,
@@ -600,6 +602,81 @@ it("records a replay page with one Host write and a re-read with none (#1637)", 
 		),
 	).resolves.toMatchObject({ confirmedCursor: "page-cursor-8" });
 	expect(writes()).toBe(2);
+});
+
+it("returns up to 64 waiting events per replay page, all recorded in one write (#1637)", async () => {
+	const f = await setup();
+	const accepted = await f.host.submitTurnV4(f.transport);
+	vi.spyOn(f.driver, "replayEvents").mockResolvedValue(pageEvents(1, 100));
+	Object.assign(f.driver, { acknowledgeEvents: vi.fn(async () => undefined) });
+	const writes = hostWrites(f.path);
+	const read = await event(
+		f.transport.businessRequest,
+		accepted.hostSessionRef,
+	);
+	const replay = await f.host.readEventsV4(
+		RuntimeEventReadRequestV4Schema.parse(read.request),
+		read.verification,
+	);
+	expect(replay.events.map((item) => item.cursor)).toEqual(
+		pageEvents(1, 64).map((item) => item.cursor),
+	);
+	expect(writes()).toBe(1);
+	const ack = await event(
+		f.transport.businessRequest,
+		accepted.hostSessionRef,
+		"page-cursor-64",
+	);
+	await expect(
+		f.host.acknowledgeEventsV4(
+			RuntimeEventAckRequestV4Schema.parse(ack.request),
+			ack.verification,
+		),
+	).resolves.toMatchObject({ confirmedCursor: "page-cursor-64" });
+	const beyond = await event(
+		f.transport.businessRequest,
+		accepted.hostSessionRef,
+		"page-cursor-65",
+	);
+	await expect(
+		f.host.acknowledgeEventsV4(
+			RuntimeEventAckRequestV4Schema.parse(beyond.request),
+			beyond.verification,
+		),
+	).rejects.toThrow();
+});
+
+it("grows a replay page past eight events only within the Worker's byte bound (#1637)", async () => {
+	const f = await setup();
+	const accepted = await f.host.submitTurnV4(f.transport);
+	const sized = (bytes: number) =>
+		pageEvents(1, 20).map((item) => ({
+			...item,
+			payload: { delta: "x".repeat(bytes) },
+		}));
+	const replayed = vi.spyOn(f.driver, "replayEvents");
+	Object.assign(f.driver, { acknowledgeEvents: vi.fn(async () => undefined) });
+	const pageLength = async (bytes: number) => {
+		replayed.mockResolvedValueOnce(sized(bytes));
+		const read = await event(
+			f.transport.businessRequest,
+			accepted.hostSessionRef,
+		);
+		const replay = await f.host.readEventsV4(
+			RuntimeEventReadRequestV4Schema.parse(read.request),
+			read.verification,
+		);
+		const body = Buffer.byteLength(
+			replay.events.map((item) => JSON.stringify(item)).join(","),
+		);
+		return { length: replay.events.length, body };
+	};
+	// Fourteen 70 KiB events fit the 1 MiB bound; a fifteenth would not.
+	const grown = await pageLength(70 * 1024);
+	expect(grown.length).toBe(14);
+	expect(grown.body).toBeLessThanOrEqual(maximumRuntimeEventReplayPageBytesV4);
+	// Eight events larger than the bound still form a page, as before #1637.
+	expect((await pageLength(160 * 1024)).length).toBe(8);
 });
 
 it("refuses a whole page past the delivered-cursor bound without recording any of it", async () => {

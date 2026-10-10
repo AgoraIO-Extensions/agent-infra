@@ -4,6 +4,7 @@ import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import {
 	ExecutionGrantV1Schema,
+	maximumRuntimeEventReplayPageBytesV4,
 	type RuntimeAuthorizationRenewRequestV3,
 	RuntimeAuthorizationRenewRequestV3Schema,
 	RuntimeAuthorizationRenewResponseV3Schema,
@@ -975,7 +976,7 @@ export function createWorkerRuntimeHostClientV4(
 					JSON.parse(
 						await boundedResponseText(
 							response,
-							maximumEventFrameBytes * 8 + 16_384,
+							maximumRuntimeEventReplayPageBytesV4 + 16_384,
 						),
 					),
 					parsed.data,
