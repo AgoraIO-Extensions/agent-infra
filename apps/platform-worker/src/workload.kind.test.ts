@@ -34,7 +34,10 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
-import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import {
+	createKubernetesRuntimeAdapterV1,
+	workloadResourceNameV1,
+} from "./kubernetes-runtime-adapter.js";
 import { createPlatformWorkloadWorkerV1 } from "./workload-worker.js";
 
 const execFile = promisify(execFileCallback);
@@ -967,8 +970,13 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						select state from platform.workload_reconciliations where agent_id=${seed.agentId}`;
 					const [outbox] = await sql<{ status: string; operation: string }[]>`
 						select status, operation from platform.outbox_items where scope_id=${seed.agentId}`;
+					const statefulSet = await client.read<V1StatefulSet>(
+						"StatefulSet",
+						workloadResourceNameV1(seed.agentId),
+					);
+					const pods = await client.list<V1Pod>("Pod", "");
 					throw new Error(
-						`API Workload lifecycle did not converge: ${JSON.stringify({ state, outbox, workerLogs: workerLogs.slice(-8) })}`,
+						`API Workload lifecycle did not converge: ${JSON.stringify({ state, outbox, statefulSet, pods, workerLogs: workerLogs.slice(-8) })}`,
 					);
 				}
 				await tickUntil(
