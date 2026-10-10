@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
+import { createDirectoryOrganizationIdsResolverV1 } from "./directory-authority.js";
 import {
 	createPostgresLdapBrowserDeployment,
 	createProductionPlatformApiAssemblyInputV1,
@@ -14,7 +15,8 @@ if (!configurationModule || new URL(configurationModule).protocol !== "file:") {
 const {
 	ldap,
 	isPlatformDisabled,
-	organizationIds,
+	organizationIds: configuredOrganizationIds,
+	directorySnapshot,
 	publicOrigin,
 	connectionConsumerProfile,
 	connectionConsumerProfileApproval,
@@ -30,6 +32,13 @@ if (typeof ldap?.verifyCurrentStatus !== "function") {
 }
 if (typeof directorySearch !== "function") {
 	throw new Error("Directory search authority is required");
+}
+let organizationIds = configuredOrganizationIds;
+if (directorySnapshot !== undefined) {
+	organizationIds = createDirectoryOrganizationIdsResolverV1(directorySnapshot);
+}
+if (typeof organizationIds !== "function") {
+	throw new Error("Directory organization authority is required");
 }
 const tokenFile = process.env.PLATFORM_API_PROXY_TOKEN_FILE;
 if (!tokenFile?.startsWith("/")) {
