@@ -1,4 +1,25 @@
+import { randomUUID } from "node:crypto";
 import postgres from "postgres";
+
+export class PlatformUserDisableError extends Error {
+	readonly code:
+		| "invalid_input"
+		| "not_authorized"
+		| "resource_unavailable"
+		| "dependency_unavailable";
+
+	constructor(
+		code:
+			| "invalid_input"
+			| "not_authorized"
+			| "resource_unavailable"
+			| "dependency_unavailable",
+	) {
+		super("Platform user governance is unavailable");
+		this.name = "PlatformUserDisableError";
+		this.code = code;
+	}
+}
 
 const unavailable = () => new Error("LDAP_IDENTITY_STORE_UNAVAILABLE");
 function text(value: string) {
@@ -65,6 +86,104 @@ export class PostgresLdapIdentityIds {
 		}
 	}
 	async close() {
+		await this.sql.end();
+	}
+}
+
+export interface CurrentPlatformUserV1 {
+	readonly userId: string;
+	readonly accountStatus: "active" | "disabled";
+	readonly isSystemAdmin: boolean;
+}
+
+/** The durable Platform override consumed by every current-identity gate. */
+export class PostgresPlatformUserDisablesV1 {
+	private readonly sql: ReturnType<typeof postgres>;
+	private readonly currentUser: (
+		userId: string,
+	) => Promise<CurrentPlatformUserV1 | null>;
+
+	constructor(
+		databaseUrl: string,
+		currentUser: (userId: string) => Promise<CurrentPlatformUserV1 | null>,
+	) {
+		this.sql = postgres(databaseUrl, { max: 4, connect_timeout: 5 });
+		this.currentUser = currentUser;
+	}
+
+	async isPlatformDisabled(userId: string): Promise<boolean> {
+		try {
+			const [row] = await this.sql`
+				select user_id from platform.platform_user_disables where user_id=${id(userId)}
+			`;
+			return row !== undefined;
+		} catch {
+			throw new PlatformUserDisableError("dependency_unavailable");
+		}
+	}
+
+	async setPlatformDisabled(input: {
+		readonly actorUserId: string;
+		readonly targetUserId: string;
+		readonly disabled: boolean;
+		readonly traceId: string;
+		readonly requestId?: string;
+	}): Promise<boolean> {
+		try {
+			id(input.actorUserId);
+			id(input.targetUserId);
+			text(input.traceId);
+			if (input.requestId !== undefined) text(input.requestId);
+			if (typeof input.disabled !== "boolean") throw new Error();
+		} catch {
+			throw new PlatformUserDisableError("invalid_input");
+		}
+		try {
+			return await this.sql.begin(async (sql) => {
+				// Match all existing current-authority readers before resolving identity.
+				await sql`lock table platform.platform_user_disables in share row exclusive mode`;
+				const actor = await this.currentUser(input.actorUserId);
+				if (
+					!actor ||
+					actor.userId !== input.actorUserId ||
+					actor.accountStatus !== "active" ||
+					!actor.isSystemAdmin
+				)
+					throw new PlatformUserDisableError("not_authorized");
+				const target = await this.currentUser(input.targetUserId);
+				if (!target || target.userId !== input.targetUserId)
+					throw new PlatformUserDisableError("resource_unavailable");
+				if (!input.disabled && target.accountStatus !== "active")
+					throw new PlatformUserDisableError("resource_unavailable");
+				const rows = input.disabled
+					? await sql`
+							insert into platform.platform_user_disables (user_id)
+							values (${input.targetUserId})
+							on conflict (user_id) do nothing returning user_id
+						`
+					: await sql`
+							delete from platform.platform_user_disables
+							where user_id=${input.targetUserId} returning user_id
+						`;
+				if (rows.length === 0) return false;
+				await sql`
+					insert into platform.audit_events
+						(id, trace_id, request_id, actor_type, actor_id, action,
+						target_type, target_id, outcome)
+					values (${randomUUID()}, ${input.traceId}, ${input.requestId ?? null},
+						'user', ${input.actorUserId},
+						${input.disabled ? "platform.user.disabled" : "platform.user.reenabled"},
+						'user', ${input.targetUserId}, 'succeeded')
+				`;
+				return true;
+			});
+		} catch (error) {
+			if (error instanceof PlatformUserDisableError) throw error;
+			throw new PlatformUserDisableError("dependency_unavailable");
+		}
+	}
+
+	async close(): Promise<void> {
 		await this.sql.end();
 	}
 }

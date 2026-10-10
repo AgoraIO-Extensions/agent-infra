@@ -73,6 +73,16 @@ import {
 	resolvePendingSecretRecordAttachmentsV1,
 } from "./secret-record-attachments.js";
 
+function isOwnerHandoffChanges(
+	changes: UpdateAgentConfigurationCommandV2["changes"],
+): boolean {
+	const keys = Object.keys(changes);
+	return (
+		keys.length > 0 &&
+		keys.every((key) => key === "coOwnerIds" || key === "availability")
+	);
+}
+
 export { beginInitialAgentConfigurationAdmissionV1 } from "./agent-configuration-initial.js";
 export {
 	parseAgentConfigurationChangesV1,
@@ -160,6 +170,7 @@ function createAgentConfigurationUseCaseV1Internal(
 		attachment?: PendingSecretRecordAttachmentResolverV1,
 		release?: StandardTemplateReleaseTargetV1,
 		keyless?: UpdateAgentConfigurationCommandV3,
+		allowAdministratorRescue = false,
 	): Promise<AgentConfigurationResultV1> => {
 		const firstReleaseAuthority = release
 			? await admitStandardTemplateRelease(
@@ -172,7 +183,7 @@ function createAgentConfigurationUseCaseV1Internal(
 		if (!release)
 			await admitCurrentAuthorization(
 				dependencies.authorizationAdmission,
-				command,
+				{ ...command, accessOnly: allowAdministratorRescue },
 				actorContext,
 			);
 		let readDecision: Awaited<
@@ -220,7 +231,7 @@ function createAgentConfigurationUseCaseV1Internal(
 				}
 			: await admitCurrentAuthorization(
 					dependencies.authorizationAdmission,
-					command,
+					{ ...command, accessOnly: allowAdministratorRescue },
 					actorContext,
 				);
 		if (
@@ -894,6 +905,7 @@ function createAgentConfigurationUseCaseV1Internal(
 					attachment,
 					undefined,
 					command,
+					isOwnerHandoffChanges(commonChanges),
 				);
 			}
 			const command = parseCommand(commandInput);
@@ -905,6 +917,9 @@ function createAgentConfigurationUseCaseV1Internal(
 				() => command.changes,
 				false,
 				attachment,
+				undefined,
+				undefined,
+				isOwnerHandoffChanges(command.changes),
 			);
 		},
 		async replayLegacyV1(commandInput, actorContextInput) {

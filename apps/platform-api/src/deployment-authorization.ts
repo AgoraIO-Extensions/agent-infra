@@ -54,6 +54,10 @@ export function createDeploymentAuthorizationAdmission(input: {
 				actorId: identity.userId,
 				organizationIds: identity.organizationIds,
 				isAdministrator: identity.roles.includes("system_admin"),
+				...(request.accessOnly === true &&
+				identity.roles.includes("system_admin")
+					? { allowAdministratorRescue: true }
+					: {}),
 			});
 			if (current.outcome !== "found") return rejected;
 			return {

@@ -598,7 +598,13 @@ export const PlatformAuditProjectionV1Schema = z.strictObject({
 	auditId: OpaqueIdV1Schema,
 	action: nonEmptyString(),
 	actor: BrowserUserProjectionV1Schema,
-	subjectType: z.enum(["agent_application", "agent", "configuration", "grant"]),
+	subjectType: z.enum([
+		"agent_application",
+		"agent",
+		"configuration",
+		"grant",
+		"user",
+	]),
 	subjectId: OpaqueIdV1Schema,
 	result: z.enum(["succeeded", "failed"]),
 	summary: nonEmptyString(),
@@ -614,6 +620,7 @@ export const PlatformAuditProjectionV2Schema =
 			"agent",
 			"configuration",
 			"grant",
+			"user",
 			"unknown",
 		]),
 		actor: z.union([
@@ -646,6 +653,11 @@ export const DeploymentTemplateProjectionV2Schema = z.strictObject({
 	connectionEnabled: z.boolean(),
 	allowedEnvironmentKeys: z.array(nonEmptyString()),
 	allowedSecretKeys: z.array(nonEmptyString()),
+});
+
+export const PlatformUserDisableCommandV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	disabled: z.boolean(),
 });
 
 export const DeploymentModelProjectionV2Schema = z.strictObject({
@@ -699,6 +711,7 @@ const auditPageV2 = z.strictObject({
 	nextCursor: OpaqueCursorV1Schema.nullable(),
 });
 const applicationPath = z.strictObject({ applicationId: pathId() });
+const platformUserPath = z.strictObject({ userId: z.uuidv4() });
 const agentPath = z.strictObject({ agentId: pathId() });
 const conversationPath = z.strictObject({ conversationId: pathId() });
 const executionPath = z.strictObject({
@@ -1254,6 +1267,17 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/admin/users/{userId}/disable": {
+		put: {
+			operationId: "setPlatformUserDisabledV2",
+			requestParams: { path: platformUserPath },
+			requestBody: requiredJsonRequestBody(PlatformUserDisableCommandV1Schema),
+			responses: {
+				"204": { description: "Platform user status updated" },
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents/{agentId}/state": {
 		get: {
 			operationId: "getAgentApiStateV1",
@@ -1895,6 +1919,7 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	PlatformUserDisableCommandV1: PlatformUserDisableCommandV1Schema,
 	AgentApiStateResponseV1: AgentApiStateResponseV1Schema,
 	AgentApplicationManagerRequestV1: AgentApplicationManagerRequestV1Schema,
 	AgentApplicationManagerResponseV1: AgentApplicationManagerResponseV1Schema,
