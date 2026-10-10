@@ -7,7 +7,6 @@ import {
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
-import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
 import { FakeObjectStorageV1 } from "@agent-infra/object-storage";
 import {
 	migratePlatformDatabase,
@@ -127,17 +126,11 @@ const modelConfiguration = (credentialValue: string) => ({
 	defaultOptionId: "option-a",
 	defaultReasoningLevel: "medium",
 });
-let deploymentTemplateRevision = "template-uninitialized";
 const applicationBody = {
 	schemaVersion: 2,
 	name: "Production assembly test",
 	description: "Synthetic persistent lifecycle",
-	source: {
-		kind: "standard",
-		templateId: "codex",
-		templateRevision: deploymentTemplateRevision,
-	},
-	defaultRelayKey: "synthetic-initial-default-relay-key",
+	source: { kind: "standard", templateId: "codex" },
 	coOwnerIds: [],
 	availability: [{ kind: "organization", organizationId: "org-a" }],
 	modelConfiguration: modelConfiguration(plaintext.model),
@@ -187,46 +180,6 @@ function deploymentInput(
 		layers: [],
 	});
 	const imageDigest = `sha256:${sha256(manifest)}`;
-	const modelBinding = {
-		templateId: "codex",
-		imageDigest,
-		driver: "codex" as const,
-		protocol: "openai-responses-v1" as const,
-	};
-	const validation = {
-		schemaVersion: 1 as const,
-		templateId: "codex",
-		imageDigest,
-		driver: "codex" as const,
-		configurationRevision: "config-a",
-		status: "passed" as const,
-		evidenceKind: "real-runtime-model" as const,
-		executionId: "execution-a",
-		modelId: "model-a",
-		validatedAt: Date.now() - 1_000,
-		validUntil: Date.now() + 60_000,
-	};
-	const readiness = standardTemplateReadinessV1({
-		templateId: "codex",
-		imageDigest,
-		binding: modelBinding,
-		configurationRevision: "config-a",
-		validation,
-		now: Date.now(),
-	});
-	if (readiness.state !== "ready") throw new Error("Fixture readiness failed");
-	deploymentTemplateRevision = `template-${sha256(
-		JSON.stringify({
-			registration: {
-				templateId: "codex",
-				imageDigest,
-				modelBinding,
-				configurationRevision: "config-a",
-			},
-			validation: readiness.revision,
-		}),
-	)}`;
-	applicationBody.source.templateRevision = deploymentTemplateRevision;
 	const fetch = vi.fn<typeof globalThis.fetch>(async (request) => {
 		const url = new URL(
 			request instanceof Request ? request.url : request.toString(),
@@ -263,24 +216,6 @@ function deploymentInput(
 		databaseUrl,
 		imageRepository: "registry.example.test/agents/codex",
 		identity,
-		agentApiCreation: {
-			allowedPrincipals: [
-				{ kind: "user", id: "alice" },
-				{ kind: "application", id: "alice" },
-			],
-			candidates: async () => [
-				{
-					optionId: "option-a",
-					endpointId: "endpoint-a",
-					modelId: "model-a",
-					reasoningLevels: ["medium", "high"],
-				},
-			],
-			keylessModelAdmission: {
-				admitModels: async ({ requested }) =>
-					requested ? { ...requested, catalogRevision: "catalog-a" } : null,
-			},
-		},
 		loadAuthorityContext: async () => ({
 			schemaVersion: 1,
 			users: Object.values(identities).map(({ userId, accountStatus }) => ({
@@ -305,38 +240,8 @@ function deploymentInput(
 				allowedSecretKeys: ["BOT_TOKEN"],
 				platformManagedKeys: ["PORT"],
 				connectionEnabled: false,
-				modelBinding,
-				configurationRevision: "config-a",
-				loadValidation: async () => validation,
 			},
 		],
-		agentDefaultRelayKeyPolicy: {
-			relayEndpointId: "endpoint-a",
-			relayBaseUrl: "https://models.example.test/v1",
-			templateBindings: [
-				{
-					templateId: "codex",
-					imageDigest,
-					driver: "codex",
-					reasoningLevels: ["medium", "high"],
-					protocol: "openai-responses-v1",
-				},
-			],
-		},
-		personalRelayKeyValidation: {
-			profile: "sub2api-key-billing-v1",
-			billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing",
-			fetch: async (request) =>
-				new URL(
-					request instanceof Request ? request.url : request.toString(),
-				).pathname.endsWith("/models")
-					? Response.json({ data: [{ id: "model-a" }] })
-					: Response.json({
-							object: "sub2api.key_billing",
-							schema_version: 1,
-							billing_scope: "token",
-						}),
-		},
 		modelCatalog: {
 			revision: "catalog-a",
 			load: async () => ({
@@ -349,7 +254,6 @@ function deploymentInput(
 						baseUrl: "https://models.example.test/v1",
 						origin: "https://models.example.test",
 						protocol: "openai-responses-v1",
-						authentication: "bearer",
 						security: { tls: "verify-peer", redirects: "reject" },
 						capabilities: {
 							streaming: true,

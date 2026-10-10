@@ -517,7 +517,11 @@ export function registerV2ManagementRoutes(
 			);
 			const hasDefaultRelayKey =
 				"defaultRelayKey" in body && body.defaultRelayKey !== undefined;
-			if ((body.source.kind === "standard") !== hasDefaultRelayKey)
+			if (
+				body.source.kind === "standard" &&
+				!hasDefaultRelayKey &&
+				dependencies.validateDefaultRelayKey
+			)
 				fail("INVALID_REQUEST", metadata.traceId);
 			const idempotencyKey = parseIdempotencyKey(
 				context.req.raw,
