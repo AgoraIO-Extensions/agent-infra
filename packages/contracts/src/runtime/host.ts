@@ -102,6 +102,8 @@ export const RuntimeModelDirectoryRequestV1Schema = z.strictObject({
 export const RuntimeModelDirectoryOptionV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	modelOptionId: OpaqueIdV1Schema,
+	modelId: z.string().min(1).max(256),
+	displayName: z.string().min(1).max(256),
 	reasoningLevels: z.array(OpaqueIdV1Schema).max(64),
 });
 

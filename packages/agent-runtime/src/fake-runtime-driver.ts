@@ -389,6 +389,8 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 		return {
 			options: defaultSelections.map((selection) => ({
 				modelOptionId: selection.modelOptionId,
+				modelId: selection.modelOptionId,
+				displayName: selection.modelOptionId,
 				reasoningLevels: [selection.reasoningLevel],
 			})),
 			current: {

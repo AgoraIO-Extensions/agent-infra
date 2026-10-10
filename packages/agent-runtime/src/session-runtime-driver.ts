@@ -1083,6 +1083,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const selection = handle.native.modelSelection();
 		const options = this.options.modelOptions.map((option) => ({
 			modelOptionId: option.modelOptionId,
+			modelId: option.nativeModelId,
+			displayName: option.nativeModelId,
 			reasoningLevels: [...option.reasoningLevels],
 		}));
 		const currentModel = selection.currentModel;

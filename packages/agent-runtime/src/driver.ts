@@ -11,6 +11,8 @@ import type {
 
 export interface RuntimeModelDirectoryOption {
 	readonly modelOptionId: string;
+	readonly modelId: string;
+	readonly displayName: string;
 	readonly reasoningLevels: readonly string[];
 }
 

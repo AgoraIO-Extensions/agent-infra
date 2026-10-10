@@ -1163,6 +1163,8 @@ export class RuntimeHost {
 			options: directory.options.map((option) => ({
 				schemaVersion: 1,
 				modelOptionId: option.modelOptionId,
+				modelId: option.modelId,
+				displayName: option.displayName,
 				reasoningLevels: [...option.reasoningLevels],
 			})),
 			current: directory.current,
