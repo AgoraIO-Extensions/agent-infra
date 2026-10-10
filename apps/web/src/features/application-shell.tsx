@@ -16,6 +16,7 @@ import {
 	Menu,
 	MessageCircle,
 	Plus,
+	Settings2,
 	X,
 } from "lucide-react";
 import {
@@ -188,9 +189,14 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 													? "申请详情"
 													: pathname.startsWith("/my-agents")
 														? "我的 Agent"
-														: pathname === "/agents" || pathname === "/agents/"
-															? "Agent 目录"
-															: "Agent 详情";
+														: pathname === "/my-settings/api-credentials"
+															? "API 凭证与应用"
+															: pathname === "/my-settings/relay-key"
+																? "个人 Relay Key"
+																: pathname === "/agents" ||
+																		pathname === "/agents/"
+																	? "Agent 目录"
+																	: "Agent 详情";
 	const navigation = (
 		<>
 			<Link className="platform-brand" to="/" onClick={() => setSheet(false)}>
@@ -243,6 +249,11 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				<nav aria-label="我的管理" className="platform-nav-group">
 					<p className="platform-nav-label">我的管理</p>
 					<Link
+						aria-current={
+							pathname.startsWith("/my-agents") && pathname !== "/my-agents/new"
+								? "page"
+								: undefined
+						}
 						className={`platform-nav-item ${pathname.startsWith("/my-agents") && pathname !== "/my-agents/new" ? "selected" : ""}`}
 						to="/my-agents"
 						onClick={() => setSheet(false)}
@@ -251,6 +262,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						我的 Agent
 					</Link>
 					<Link
+						aria-current={pathname === "/my-agents/new" ? "page" : undefined}
 						className={`platform-nav-item ${pathname === "/my-agents/new" ? "selected" : ""}`}
 						to="/my-agents/new"
 						onClick={() => setSheet(false)}
@@ -259,12 +271,35 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						创建申请
 					</Link>
 					<Link
+						aria-current={pathname === "/audit" ? "page" : undefined}
 						className={`platform-nav-item ${pathname === "/audit" ? "selected" : ""}`}
 						to="/audit"
 						onClick={() => setSheet(false)}
 					>
 						<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
 						我的执行审计
+					</Link>
+					<Link
+						aria-current={
+							pathname === "/my-settings/api-credentials" ? "page" : undefined
+						}
+						className={`platform-nav-item ${pathname === "/my-settings/api-credentials" ? "selected" : ""}`}
+						to="/my-settings/api-credentials"
+						onClick={() => setSheet(false)}
+					>
+						<Settings2 size={17} strokeWidth={1.8} aria-hidden="true" />
+						API 凭证与应用
+					</Link>
+					<Link
+						aria-current={
+							pathname === "/my-settings/relay-key" ? "page" : undefined
+						}
+						className={`platform-nav-item ${pathname === "/my-settings/relay-key" ? "selected" : ""}`}
+						to="/my-settings/relay-key"
+						onClick={() => setSheet(false)}
+					>
+						<KeyRound size={17} strokeWidth={1.8} aria-hidden="true" />
+						个人 Relay Key
 					</Link>
 					{connectionUrl ? (
 						<a
@@ -405,7 +440,9 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							<BreadcrumbItem>
 								{pathname.startsWith("/admin")
 									? "系统管理"
-									: pathname.startsWith("/my-agents") || pathname === "/audit"
+									: pathname.startsWith("/my-agents") ||
+											pathname === "/audit" ||
+											pathname.startsWith("/my-settings")
 										? "我的管理"
 										: "工作区"}
 							</BreadcrumbItem>

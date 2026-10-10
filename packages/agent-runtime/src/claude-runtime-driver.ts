@@ -20,6 +20,10 @@ import { claudeQuery } from "./claude-query.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
 import { claudeWorkspaceTools } from "./claude-workspace.js";
 import { validateModelAccess } from "./codex-app-server-bridge.js";
+import {
+	type CodexBrowserToolDescriptorV1,
+	createCodexBrowserToolDescriptorsV1,
+} from "./codex-browser-tools.js";
 import type {
 	RuntimeDriver,
 	RuntimeDriverCommand,
@@ -45,6 +49,8 @@ export interface ClaudeRuntimeModelOption {
 	readonly authentication: "api-key" | "bearer";
 }
 export interface ClaudeRuntimeDriverOptions {
+	/** Deployment-owned verified Browser projection; never selected by a wire command. */
+	readonly browserCapability?: import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1;
 	readonly path: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
@@ -1037,6 +1043,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		_nativeSessionRef: string,
 	): Promise<RuntimeModelDirectory> {
 		return unavailable();
+	}
+
+
+	/** Return the same bounded Browser descriptor contract used by Codex. */
+	getBrowserToolDescriptors(): readonly CodexBrowserToolDescriptorV1[] {
+		return createCodexBrowserToolDescriptorsV1(this.options.browserCapability);
 	}
 	async replayEvents(ref: string, executionId: string, afterCursor?: string) {
 		const turn = (await this.forReference(ref))
