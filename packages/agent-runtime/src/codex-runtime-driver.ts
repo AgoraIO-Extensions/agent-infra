@@ -367,6 +367,7 @@ export interface CodexRuntimeModelOption {
 	readonly reasoningLevels: readonly string[];
 	readonly endpoint?: string;
 	readonly credential?: string;
+	readonly authentication?: "api-key" | "bearer";
 }
 
 interface ConfiguredCodexRuntimeModelOption {

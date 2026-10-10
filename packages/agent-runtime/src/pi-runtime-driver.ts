@@ -25,6 +25,7 @@ export interface PiRuntimeDriverOptions {
 		directory: string,
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
+		resolveModelCredential?: () => Promise<string>,
 	) => Promise<NativeProcessLaunch>;
 }
 
@@ -53,6 +54,7 @@ export const PiRuntimeDriver = {
 						session.directory,
 						session.selection,
 						() => callbacks.admit(),
+						session.resolveModelCredential,
 					),
 				});
 				return {

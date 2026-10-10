@@ -17,7 +17,7 @@ export interface OpenCodeRuntimeOptions {
 		model: string;
 		reasoningLevels: readonly string[];
 		endpoint: string;
-		credential: string;
+		credential?: string;
 		authentication: "api-key" | "bearer";
 	}[];
 }
@@ -50,7 +50,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 			nativeModelId: `anthropic/${option.model}`,
 			reasoningLevels: option.reasoningLevels,
 		})),
-		launch: async (directory, selection, admit) => {
+		launch: async (directory, selection, admit, resolveModelCredential) => {
 			const option = options.modelOptions.find(
 				(option) => option.modelOptionId === selection.modelOptionId,
 			);
@@ -59,6 +59,9 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 				...option,
 				effort: selection.reasoningLevel,
 				admit,
+				...(resolveModelCredential
+					? { resolveCredential: resolveModelCredential }
+					: {}),
 				client: "opencode",
 			});
 			try {
