@@ -110,10 +110,17 @@ export function useConversationCommands({
 		mutation.mutate(attempt.id);
 		return true;
 	}
-	function submitText(text: SubmitText) {
+	function submitText(text: SubmitText, attachments: readonly string[] = []) {
 		// The server chooses initial or supplement atomically at acceptance.
 		// Only the receipt establishes which execution accepted this message.
-		return start({ kind: "message", body: { schemaVersion: 1, text } });
+		return start({
+			kind: "message",
+			body: {
+				schemaVersion: 1,
+				text,
+				...(attachments.length ? { attachments: [...attachments] } : {}),
+			},
+		});
 	}
 	const visible = scope.active && scope.lastAttemptId === mutation.variables;
 	const revoke = useCallback(() => {
