@@ -863,6 +863,10 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				const tokenSecret = await client.read<V1Secret>("Secret", tokenName);
 				if (!tokenSecret?.data?.token)
 					throw new Error("Runtime token is missing");
+				const serviceToken = Buffer.from(
+					tokenSecret.data.token,
+					"base64",
+				).toString();
 				const seed = await seedStandardWorkloadHostV1(
 					database.databaseUrl,
 					imageDigest,
@@ -951,8 +955,9 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						"--",
 						"node",
 						"-e",
-						"fetch(process.argv[1],{signal:AbortSignal.timeout(2500)}).then(r=>{if(!r.ok)process.exit(2)}).catch(()=>process.exit(3))",
+						"fetch(process.argv[1],{headers:{authorization:'Bearer '+process.argv[2]},signal:AbortSignal.timeout(2500)}).then(r=>{if(!r.ok)process.exit(2)}).catch(()=>process.exit(3))",
 						`${input.baseUrl}${input.manifest.health.path}`,
+						serviceToken,
 					);
 					return { core: "passed" as const, capabilities: {} };
 				};
@@ -965,8 +970,9 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 							"--",
 							"node",
 							"-e",
-							"fetch(process.argv[1],{signal:AbortSignal.timeout(2500)}).then(r=>{if(!r.ok)process.exit(2)}).catch(()=>process.exit(3))",
+							"fetch(process.argv[1],{headers:{authorization:'Bearer '+process.argv[2]},signal:AbortSignal.timeout(2500)}).then(r=>{if(!r.ok)process.exit(2)}).catch(()=>process.exit(3))",
 							url,
+							serviceToken,
 						);
 						return new Response(null, { status: 200 });
 					} catch {
