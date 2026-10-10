@@ -882,6 +882,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						connectionEnabled: false,
 					},
 					secrets: [],
+					environment: [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: "pi" }],
 				};
 				await sql`update platform.agent_configuration_revisions
 					set source_reference=${imageDigest}, configuration=${sql.json(customConfiguration as unknown as postgres.JSONValue)}
