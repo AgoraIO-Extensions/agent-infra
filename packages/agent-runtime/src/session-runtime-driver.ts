@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import {
+	type BrowserCapabilityAvailableV1,
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
@@ -13,6 +14,7 @@ import {
 	type RuntimeStatusV1,
 	RuntimeStatusV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { createCodexBrowserToolDescriptorsV1 } from "./codex-browser-tools.js";
 import type {
 	RuntimeDriver,
 	RuntimeDriverCommand,
@@ -33,6 +35,8 @@ export interface SessionRuntimeModelOption {
 	readonly reasoningLevels: readonly string[];
 }
 export interface SessionRuntimeDriverOptions {
+	/** Deployment-owned verified Browser projection; never selected by a wire command. */
+	readonly browserCapability?: BrowserCapabilityAvailableV1;
 	readonly path: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
@@ -1068,6 +1072,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			connection: false,
 			supplementaryInstruction: false,
 		};
+	}
+
+	/** Return bounded Browser descriptors from the deployment-owned projection. */
+	getBrowserToolDescriptors() {
+		return createCodexBrowserToolDescriptorsV1(this.options.browserCapability);
 	}
 	async replayEvents(ref: string, executionId: string, afterCursor?: string) {
 		const turn = (await this.forReference(ref))
