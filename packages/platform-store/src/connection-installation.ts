@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type ApprovedConnectionConsumerTargetV1,
 	resolveApprovedConnectionConsumerProfileV1,
@@ -17,6 +18,8 @@ import {
 	type ConnectionInstallationSavedV1,
 	type ConnectionInstallationStoreV1,
 	type ConnectionInstallationTransactionV1,
+	isAgentAccessAllowedV1,
+	isTaskAuthorizationCurrentV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
 	type TaskUserDirectoryV1,
@@ -154,17 +157,18 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 			claimCallback: async ({ stateHash, now }) => {
 				await tx.execute(sql`
 					update platform.connection_installation_authorizations
-					set binding=jsonb_set(
+					set binding=(jsonb_set(
 						binding,
 						'{callback,status}',
 						to_jsonb('unknown'::text),
 						true
-					), revision=revision+1, updated_at=clock_timestamp()
+					) #- '{callback,attemptId}' #- '{callback,attemptExpiresAt}'),
+					revision=revision+1, updated_at=clock_timestamp()
 					where binding->'callback'->>'status'='sending'
 					  and (binding->'callback'->>'attemptExpiresAt')::bigint <= ${now}
 				`);
 				const rows = await tx.execute(sql`
-					select id, binding
+					select id, binding, confirmation_revision, identity_revision, agent_authorization_revision, status, expires_at
 					from platform.connection_installation_authorizations
 					where binding->'callback'->>'stateHash'=${stateHash}
 					  and binding->'callback'->>'status'='pending'
@@ -173,16 +177,63 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					  and status in ('awaiting_confirmation','confirmed')
 					for update
 				`);
+				if (rows.length !== 1) return null;
 				const row = rows[0];
 				if (!row) return null;
 				const binding = row.binding as Record<string, unknown>;
 				const callback = ConnectionInstallationCallbackV1Schema.parse(
 					binding.callback,
 				);
+				const authorization = ConnectionInstallationAuthorizationV1Schema.parse(
+					{
+						schemaVersion: 1,
+						authorizationId: row.id,
+						confirmationRevision: row.confirmation_revision,
+						...binding,
+						status: row.status,
+						expiresAt: new Date(row.expires_at as string).getTime(),
+					},
+				);
+				const current = await this.#operations(tx).current(
+					authorization.principal.id,
+					authorization.reference.executionId,
+				);
+				if (!current) return null;
+				if (
+					current.user.accountStatus !== "active" ||
+					current.agent.status !== "available" ||
+					current.agent.desiredState !== "running" ||
+					!isTaskAuthorizationCurrentV1({
+						boundary: current.boundary,
+						user: current.user,
+						agent: current.agent,
+					}) ||
+					!isAgentAccessAllowedV1(
+						current.agent,
+						{
+							schemaVersion: 1,
+							userId: current.user.userId,
+							accountStatus: current.user.accountStatus,
+							organizationIds: current.user.organizationIds,
+							isAdministrator: false,
+						},
+						"use",
+					) ||
+					!isDeepStrictEqual(current.reference, authorization.reference) ||
+					!isDeepStrictEqual(current.scope, authorization.scope) ||
+					current.user.authorizationRevision !== row.identity_revision ||
+					current.agentAuthorizationRevision !==
+						row.agent_authorization_revision
+				)
+					return null;
+				const attemptId = randomUUID();
 				await tx.execute(sql`
 					update platform.connection_installation_authorizations
 					set binding=jsonb_set(
-						jsonb_set(binding, '{callback,status}', to_jsonb('sending'::text), true),
+						jsonb_set(
+							jsonb_set(binding, '{callback,status}', to_jsonb('sending'::text), true),
+							'{callback,attemptId}', to_jsonb(${attemptId}::text), true
+						),
 						'{callback,attemptExpiresAt}', to_jsonb(${now + 15_000}::bigint), true
 					), revision=revision+1, updated_at=clock_timestamp()
 					where id=${row.id}
@@ -190,21 +241,29 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				return {
 					authorizationId: row.id as string,
 					runtimeOrigin: callback.runtimeOrigin,
+					callbackPath: "/internal/runtime/oauth/v1/callback",
+					attemptId,
 					expiresAt: callback.expiresAt,
 					issuer: this.#configuration.issuer,
 				};
 			},
-			settleCallback: async ({ stateHash, status }) => {
+			settleCallback: async ({ stateHash, attemptId, now, status }) => {
 				const result = await tx.execute(sql`
 					update platform.connection_installation_authorizations
 					set binding=(jsonb_set(
-						binding, '{callback,status}', to_jsonb(${status}::text), true
-					) #- '{callback,attemptExpiresAt}'),
+						binding,
+						'{callback,status}',
+						to_jsonb(case when coalesce((binding->'callback'->>'attemptExpiresAt')::bigint, 0) > ${now} then ${status} else 'unknown' end::text),
+						true
+					) #- '{callback,attemptId}' #- '{callback,attemptExpiresAt}'),
 						revision=revision+1, updated_at=clock_timestamp()
 					where binding->'callback'->>'stateHash'=${stateHash}
 					  and binding->'callback'->>'status'='sending'
+					  and binding->'callback'->>'attemptId'=${attemptId}
+					  and coalesce((binding->'callback'->>'attemptExpiresAt')::bigint, 0) > ${now}
+					returning binding->'callback'->>'status' as status
 				`);
-				return Number(result.count ?? 0) === 1;
+				return result[0]?.status === status;
 			},
 			hasUnresolvedSend: async (id, exclude) => {
 				const rows = await tx

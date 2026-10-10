@@ -99,6 +99,8 @@ export interface ConnectionInstallationTransactionV1 {
 	}): Promise<ConnectionInstallationCallbackClaimV1 | null>;
 	settleCallback?(input: {
 		stateHash: string;
+		attemptId: string;
+		now: number;
 		status: "delivered" | "unknown";
 	}): Promise<boolean>;
 	hasUnresolvedSend(
@@ -148,6 +150,8 @@ export interface ConnectionInstallationTransactionV1 {
 export interface ConnectionInstallationCallbackClaimV1 {
 	readonly authorizationId: string;
 	readonly runtimeOrigin: string;
+	readonly callbackPath: "/internal/runtime/oauth/v1/callback";
+	readonly attemptId: string;
 	readonly expiresAt: number;
 	readonly issuer: string;
 }
@@ -413,6 +417,8 @@ export function createConnectionInstallationAuthorizationV1(options: {
 			},
 			settle: async (input: {
 				stateHash: string;
+				attemptId: string;
+				now: number;
 				status: "delivered" | "unknown";
 			}) => {
 				if (!/^[a-f0-9]{64}$/.test(input.stateHash)) return false;

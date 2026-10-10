@@ -51,6 +51,8 @@ export interface ProductionPlatformApiInputV1
 		NonNullable<PlatformApiAssemblyInput["connectionInstallation"]>,
 		"profile" | "approval"
 	>;
+	/** Deployment-owned protected callback forwarder; absent keeps OAuth unavailable. */
+	readonly connectionInstallationCallback?: PlatformApiAssemblyInput["connectionInstallationCallback"];
 	readonly connectionConsumerProfileApproval?: unknown;
 	readonly wecom?: PlatformApiAssemblyInput["wecom"];
 	readonly wecomIdentity?: PlatformApiAssemblyInput["wecomIdentity"];
@@ -197,6 +199,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 						approval: input.connectionConsumerProfileApproval,
 					},
 				}
+			: {}),
+		...(input.connectionInstallationCallback
+			? { connectionInstallationCallback: input.connectionInstallationCallback }
 			: {}),
 		agentApiCreation: {
 			allowedPrincipals,

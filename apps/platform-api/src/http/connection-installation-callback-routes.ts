@@ -23,6 +23,7 @@ export interface ConnectionInstallationCallbackRouteDependenciesV1 {
 	/** Deployment-owned protected forwarder. It must use callback-only auth and no retry. */
 	readonly forward: (input: {
 		target: ConnectionInstallationCallbackClaimV1;
+		callbackPath: "/internal/runtime/oauth/v1/callback";
 		request: RuntimeOAuthCallbackRequestV1;
 		signal: AbortSignal;
 	}) => Promise<void>;
@@ -60,12 +61,18 @@ function callbackRequest(request: Request, issuer: string) {
 			"INVALID_REQUEST",
 			requestMetadata(request).traceId,
 		);
-	return RuntimeOAuthCallbackRequestV1Schema.parse({
+	const parsed = RuntimeOAuthCallbackRequestV1Schema.safeParse({
 		schemaVersion: 1,
 		state,
 		issuer: iss,
 		...(code === null ? { error } : { code }),
 	});
+	if (!parsed.success)
+		throw new HttpProtocolError(
+			"INVALID_REQUEST",
+			requestMetadata(request).traceId,
+		);
+	return parsed.data;
 }
 
 export function registerConnectionInstallationCallbackRoutesV1(
@@ -93,6 +100,15 @@ export function registerConnectionInstallationCallbackRoutesV1(
 		context.header("Cache-Control", "no-store");
 		context.header("Referrer-Policy", "no-referrer");
 		const request = context.req.raw;
+		if (new URL(request.url).origin !== dependencies.publicOrigin) {
+			return context.json(
+				new HttpProtocolError(
+					"INVALID_REQUEST",
+					requestMetadata(request).traceId,
+				).body,
+				400,
+			);
+		}
 		let claimed: ConnectionInstallationCallbackClaimV1 | null = null;
 		let hash: string | undefined;
 		try {
@@ -106,6 +122,8 @@ export function registerConnectionInstallationCallbackRoutesV1(
 				if (claimed && hash)
 					await dependencies.installation.callback.settle({
 						stateHash: hash,
+						attemptId: claimed.attemptId,
+						now: Date.now(),
 						status: "unknown",
 					});
 				throw new HttpProtocolError(
@@ -113,13 +131,20 @@ export function registerConnectionInstallationCallbackRoutesV1(
 					requestMetadata(request).traceId,
 				);
 			}
+			const forwardSignal = AbortSignal.any([
+				request.signal,
+				AbortSignal.timeout(10_000),
+			]);
 			await dependencies.forward({
 				target: claimed,
+				callbackPath: claimed.callbackPath,
 				request: parsed,
-				signal: request.signal,
+				signal: forwardSignal,
 			});
 			const settled = await dependencies.installation.callback.settle({
 				stateHash: hash,
+				attemptId: claimed.attemptId,
+				now: Date.now(),
 				status: "delivered",
 			});
 			if (!settled)
@@ -131,7 +156,12 @@ export function registerConnectionInstallationCallbackRoutesV1(
 		} catch (error) {
 			if (hash && claimed) {
 				await dependencies.installation.callback
-					.settle({ stateHash: hash, status: "unknown" })
+					.settle({
+						stateHash: hash,
+						attemptId: claimed.attemptId,
+						now: Date.now(),
+						status: "unknown",
+					})
 					.catch(() => undefined);
 			}
 			const protocol =

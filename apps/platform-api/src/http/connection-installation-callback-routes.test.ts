@@ -6,6 +6,8 @@ function fixture() {
 	const claim = vi.fn(async () => ({
 		authorizationId: "authorization-a",
 		runtimeOrigin: "https://runtime.test:3443/",
+		callbackPath: "/internal/runtime/oauth/v1/callback",
+		attemptId: "attempt-a",
 		expiresAt: Date.now() + 60_000,
 		issuer: "https://connection.test/",
 	}));
@@ -49,6 +51,8 @@ it("claims a mapped state, forwards only the callback payload, and settles once"
 	);
 	expect(f.settle).toHaveBeenCalledWith({
 		stateHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+		attemptId: "attempt-a",
+		now: expect.any(Number),
 		status: "delivered",
 	});
 });
@@ -68,6 +72,16 @@ it.each([
 	expect(f.forward).not.toHaveBeenCalled();
 });
 
+it("rejects a callback received on an alternate origin", async () => {
+	const f = fixture();
+	const response = await f.app.request(
+		"https://alias.platform.test/connection/callback?code=code-a&iss=https%3A%2F%2Fconnection.test%2F&state=" +
+			"a".repeat(64),
+	);
+	expect(response.status).toBe(400);
+	expect(f.claim).not.toHaveBeenCalled();
+});
+
 it("marks a failed forward unknown and never retries it", async () => {
 	const f = fixture();
 	f.forward.mockRejectedValueOnce(new Error("transport lost"));
@@ -75,6 +89,8 @@ it("marks a failed forward unknown and never retries it", async () => {
 	expect(response.status).toBe(503);
 	expect(f.settle).toHaveBeenCalledWith({
 		stateHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+		attemptId: "attempt-a",
+		now: expect.any(Number),
 		status: "unknown",
 	});
 });

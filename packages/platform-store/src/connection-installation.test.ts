@@ -367,12 +367,11 @@ it("claims one pending command with an owned attempt and permanently fences unkn
 	const callbackStateHash = createHash("sha256")
 		.update("a".repeat(64))
 		.digest("hex");
-	expect(
-		await producer.callback.claim({
-			stateHash: callbackStateHash,
-			now: Date.now(),
-		}),
-	).toMatchObject({
+	const callbackClaim = await producer.callback.claim({
+		stateHash: callbackStateHash,
+		now: Date.now(),
+	});
+	expect(callbackClaim).toMatchObject({
 		authorizationId: authorization.authorizationId,
 		runtimeOrigin: configuration.runtimeOrigin,
 		issuer: configuration.issuer,
@@ -380,6 +379,8 @@ it("claims one pending command with an owned attempt and permanently fences unkn
 	expect(
 		await producer.callback.settle({
 			stateHash: callbackStateHash,
+			attemptId: callbackClaim?.attemptId ?? "missing",
+			now: Date.now(),
 			status: "unknown",
 		}),
 	).toBe(true);

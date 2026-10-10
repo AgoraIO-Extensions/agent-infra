@@ -52,6 +52,7 @@ export const ConnectionInstallationCallbackV1Schema = z.strictObject({
 		}),
 	expiresAt: z.number().int().positive().safe(),
 	status: ConnectionInstallationCallbackStatusV1Schema,
+	attemptId: OpaqueIdV1Schema.optional(),
 	attemptExpiresAt: z.number().int().positive().safe().optional(),
 });
 export type ConnectionInstallationCallbackV1 = z.infer<
