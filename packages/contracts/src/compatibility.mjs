@@ -1751,6 +1751,132 @@ function isScopedAuditCredentialSecurityAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #1260/#1259 compose the reviewed A-lane OpenAPI additions on current main.
+function isA2ParallelModelConfigurationOpenApiAddition(previous, current) {
+	const directName = "AgentApiCreationRequestV1";
+	const directKey =
+		current.components?.schemas?.[directName]?.anyOf?.[0]?.properties
+			?.defaultRelayKey;
+	const directAdded =
+		previous.components?.schemas?.[directName]?.anyOf?.[0]?.properties
+			?.defaultRelayKey === undefined &&
+		isDeepStrictEqual(directKey, {
+			minLength: 1,
+			type: "string",
+			writeOnly: true,
+		});
+	const applicationName = "AgentApplicationCreateRequestV2";
+	const applicationKey =
+		current.components?.schemas?.[applicationName]?.properties?.defaultRelayKey;
+	const applicationAdded =
+		previous.components?.schemas?.[applicationName]?.properties
+			?.defaultRelayKey === undefined &&
+		isDeepStrictEqual(applicationKey, {
+			minLength: 1,
+			type: "string",
+			writeOnly: true,
+		});
+	const readiness =
+		current.components?.schemas?.DeploymentTemplateProjectionV2?.properties
+			?.readiness;
+	const createRevision =
+		current.components?.schemas?.AgentApplicationCreateRequestV2?.properties
+			?.source?.anyOf?.[0]?.properties?.templateRevision;
+	const updateRevision =
+		current.components?.schemas?.AgentApplicationUpdateRequestV2?.properties
+			?.source?.anyOf?.[0]?.properties?.templateRevision;
+	const readinessAddition = { readiness, createRevision, updateRevision };
+	const readinessAdded =
+		previous.components?.schemas?.DeploymentTemplateProjectionV2?.properties
+			?.readiness === undefined &&
+		previous.components?.schemas?.AgentApplicationCreateRequestV2?.properties
+			?.source?.anyOf?.[0]?.properties?.templateRevision === undefined &&
+		previous.components?.schemas?.AgentApplicationUpdateRequestV2?.properties
+			?.source?.anyOf?.[0]?.properties?.templateRevision === undefined &&
+		createHash("sha256")
+			.update(JSON.stringify(readinessAddition))
+			.digest("hex") ===
+			"4a1caabb7b8190f3cf6362aa915c81048146767d58bd96fdbdda4fe375ad8b16";
+	const relayPaths = [
+		"/api/v2/agents/{agentId}/default-relay-key",
+		"/api/v2/agents/{agentId}/default-relay-key/candidates",
+	];
+	const relayAddition = Object.fromEntries(
+		relayPaths.map((path) => [path, current.paths?.[path]]),
+	);
+	const relayAdded =
+		relayPaths.every((path) => previous.paths?.[path] === undefined) &&
+		createHash("sha256").update(JSON.stringify(relayAddition)).digest("hex") ===
+			"cb5d42ff2f8ad50c3c85325e38e6f5ff40fdef88e65744033406a2016929f310";
+	if (!directAdded && !applicationAdded && !readinessAdded && !relayAdded)
+		return false;
+	const normalized = structuredClone(current);
+	if (directAdded) {
+		delete normalized.components.schemas[directName].anyOf[0].properties
+			.defaultRelayKey;
+	}
+	if (applicationAdded) {
+		delete normalized.components.schemas[applicationName].properties
+			.defaultRelayKey;
+	}
+	if (readinessAdded) {
+		delete normalized.components.schemas.DeploymentTemplateProjectionV2
+			.properties.readiness;
+		for (const name of [
+			"AgentApplicationCreateRequestV2",
+			"AgentApplicationUpdateRequestV2",
+		])
+			delete normalized.components.schemas[name].properties.source.anyOf[0]
+				.properties.templateRevision;
+	}
+	if (relayAdded) {
+		for (const path of relayPaths) delete normalized.paths[path];
+	}
+	return sameValue(previous, normalized);
+}
+
+// #1260 adds one write-only create input; every other request and route stays exact.
+function isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) {
+	const name = "AgentApplicationCreateRequestV2";
+	const previousSchema = previous.components?.schemas?.[name];
+	const currentSchema = current.components?.schemas?.[name];
+	if (
+		previousSchema?.properties?.defaultRelayKey !== undefined ||
+		!isDeepStrictEqual(currentSchema?.properties?.defaultRelayKey, {
+			minLength: 1,
+			type: "string",
+			writeOnly: true,
+		}) ||
+		currentSchema?.required?.includes("defaultRelayKey")
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[name].properties.defaultRelayKey;
+	return sameValue(previous, normalized);
+}
+
+// #1260 adds the same write-only key input to direct Agent creation custom requests.
+function isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) {
+	const name = "AgentApiCreationRequestV1";
+	const previousSchema = previous.components?.schemas?.[name];
+	const currentSchema = current.components?.schemas?.[name];
+	const previousInput = previousSchema?.anyOf?.[0]?.properties?.defaultRelayKey;
+	const currentInput = currentSchema?.anyOf?.[0]?.properties?.defaultRelayKey;
+	if (
+		previousInput !== undefined ||
+		!isDeepStrictEqual(currentInput, {
+			minLength: 1,
+			type: "string",
+			writeOnly: true,
+		})
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas[name].anyOf[0].properties
+		.defaultRelayKey;
+	return sameValue(previous, normalized);
+}
+
 // #1260 admits only these exact session-bound default Key operations.
 function isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) {
 	const paths = [
@@ -2203,6 +2329,35 @@ function isAgentApiManagementOpenApiAddition(previous, current) {
 	return changed && sameValue(previous, normalized);
 }
 
+// #1259 adds only optional readiness metadata and the displayed selection revision.
+function isTemplateReadinessV2OpenApiAddition(previous, current) {
+	const schemas = current.components?.schemas;
+	const addition = {
+		readiness: schemas?.DeploymentTemplateProjectionV2?.properties?.readiness,
+		createRevision:
+			schemas?.AgentApplicationCreateRequestV2?.properties?.source?.anyOf?.[0]
+				?.properties?.templateRevision,
+		updateRevision:
+			schemas?.AgentApplicationUpdateRequestV2?.properties?.source?.anyOf?.[0]
+				?.properties?.templateRevision,
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"4a1caabb7b8190f3cf6362aa915c81048146767d58bd96fdbdda4fe375ad8b16"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas.DeploymentTemplateProjectionV2.properties
+		.readiness;
+	for (const name of [
+		"AgentApplicationCreateRequestV2",
+		"AgentApplicationUpdateRequestV2",
+	])
+		delete normalized.components.schemas[name].properties.source.anyOf[0]
+			.properties.templateRevision;
+	return sameValue(previous, normalized);
+}
+
 // #481 adds the credential-authenticated direct Agent creation contract beside
 // the existing browser Agent list path.
 function isAgentApiCreationOpenApiAddition(previous, current) {
@@ -2218,10 +2373,34 @@ function isAgentApiCreationOpenApiAddition(previous, current) {
 		)
 	)
 		return false;
+	const normalized = structuredClone(current);
+	const directSchema = normalized.components.schemas.AgentApiCreationRequestV1;
+	const defaultRelayKey = directSchema.anyOf?.[0]?.properties?.defaultRelayKey;
+	if (
+		defaultRelayKey !== undefined &&
+		!isDeepStrictEqual(defaultRelayKey, {
+			minLength: 1,
+			type: "string",
+			writeOnly: true,
+		})
+	)
+		return false;
+	if (
+		previous.components?.schemas?.AgentApiCreationRequestV1?.anyOf?.[0]
+			?.properties?.defaultRelayKey !== undefined &&
+		!isDeepStrictEqual(
+			previous.components.schemas.AgentApiCreationRequestV1.anyOf[0].properties
+				.defaultRelayKey,
+			defaultRelayKey,
+		)
+	)
+		return false;
+	if (defaultRelayKey !== undefined)
+		delete directSchema.anyOf[0].properties.defaultRelayKey;
 	const addition = {
-		path: { post: current.paths[path].post },
+		path: { post: normalized.paths[path].post },
 		schemas: Object.fromEntries(
-			names.map((name) => [name, current.components.schemas[name]]),
+			names.map((name) => [name, normalized.components.schemas[name]]),
 		),
 	};
 	if (
@@ -2229,10 +2408,9 @@ function isAgentApiCreationOpenApiAddition(previous, current) {
 		"5605586625e0634b7344bbceb4bae9b41b48e56bb5a38457dc2d5b003e136a86"
 	)
 		return false;
-	const normalized = structuredClone(current);
 	delete normalized.paths[path].post;
 	for (const name of names) delete normalized.components.schemas[name];
-	return sameValue(previous, normalized);
+	return findBreakingChanges(previous, normalized).length === 0;
 }
 
 // #1494 adds optional verified Skill metadata to Runtime capabilities.
@@ -2721,6 +2899,8 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 	const changes = [];
 	if (previous.openapi !== undefined) {
+		if (isA2ParallelModelConfigurationOpenApiAddition(previous, current))
+			return changes;
 		if (
 			!sameValue(previous, current) &&
 			!isAgentApplicationUseGrantOpenApiAddition(previous, current) &&
@@ -2745,6 +2925,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isOwnApplicationDisableV2OpenApiAddition(previous, current) &&
 			!isAgentLifecycleV2OpenApiAddition(previous, current) &&
 			!isDeploymentConfigurationV2OpenApiAddition(previous, current) &&
+			!isTemplateReadinessV2OpenApiAddition(previous, current) &&
 			!isAgentOwnerScopeOpenApiAddition(previous, current) &&
 			!isAdministratorAgentReadV2OpenApiAddition(previous, current) &&
 			!isPersonalApiCredentialV2OpenApiAddition(previous, current) &&
@@ -2753,6 +2934,8 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isPersonalRelayKeyAuditOpenApiAddition(previous, current) &&
 			!isPersonalRelayKeyV2OpenApiAddition(previous, current) &&
 			!isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) &&
+			!isApplicationDefaultRelayKeyV2OpenApiAddition(previous, current) &&
+			!isAgentDefaultRelayKeyInputOpenApiAddition(previous, current) &&
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isTaskHttpV1SseOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
