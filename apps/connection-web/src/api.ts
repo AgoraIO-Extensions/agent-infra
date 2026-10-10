@@ -174,7 +174,19 @@ async function patConsumerRequest<T>(path: string, init?: RequestInit) {
 			...init?.headers,
 		},
 	});
-	if (!response.ok) throw new Error("Agent 接入操作失败");
+	if (!response.ok) {
+		const message =
+			response.status === 401
+				? "登录已失效，请重新登录后再试。"
+				: response.status === 403
+					? "仅 Connection 管理员可管理 Agent，请联系管理员。"
+					: response.status === 400
+						? "请检查 Consumer ID、Agent 名称及 HTTPS Callback URL。"
+						: response.status === 409
+							? "当前配置已发生变化，请刷新后重试。"
+							: "Agent 接入服务暂时不可用，请稍后重试。";
+		throw new Error(message);
+	}
 	return (response.status === 204 ? undefined : await response.json()) as T;
 }
 

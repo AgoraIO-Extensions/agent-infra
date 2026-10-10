@@ -14,9 +14,9 @@ Token authentication, company approval, external account connection and Consumer
 
 ## Register an Agent Consumer and obtain its service credential
 
-Ask a Connection administrator to use [Administration > Agent integration](__CONNECTION_ORIGIN__/connection/admin/agents).
+Developers and ordinary users must submit the Consumer ID, Agent name and fixed Callback URL to a Connection administrator for registration. The management page is administrator-only; ordinary users visiting it return to My Connection. Administrators use [Agent integration management (administrators only)](__CONNECTION_ORIGIN__/connection/admin/agents).
 
-Provide a stable `consumerId` (3-80 lowercase letters/digits/hyphens, beginning with a letter or digit), `consumerName` (1-100 characters) and fixed HTTPS `callbackUrl`, e.g. `https://agent.example/connection/callback`. The callback cannot contain username/password or a fragment and cannot be supplied or changed by a binding request.
+Provide a stable `consumerId` (3-80 lowercase letters/digits/hyphens, beginning with a letter or digit), `consumerName` (1-100 characters) and fixed HTTPS `callbackUrl`, e.g. `https://agent.example/connection/callback`. The callback cannot contain username/password or a fragment and cannot be supplied or changed by a binding request. Registration validates the URL format without accessing or checking the existence of the callback endpoint. Implement the callback and ensure it is reachable from the user's browser before starting user binding.
 
 Registration displays the service credential once. Deliver it securely and store it only in backend Secret configuration. This service credential authenticates binding create/claim calls; it is not the user PAT and cannot be used to call MCP. Ordinary users must contact the administrator rather than substitute a personal PAT.
 

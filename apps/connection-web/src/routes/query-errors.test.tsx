@@ -25,6 +25,7 @@ vi.mock("../api", () => ({
 			listConnectionAccessRequests: vi.fn(async () => ({ requests: [] })),
 			getSharedConnections: failedQuery,
 			listAdministrators: failedQuery,
+			listPatConsumers: failedQuery,
 			listTokens: failedQuery,
 		},
 		{ get: (target, key) => Reflect.get(target, key) ?? vi.fn() },
@@ -38,6 +39,7 @@ vi.mock("../shell", () => ({
 
 import { AdministratorsPage } from "../pages/administrators-page";
 import { ConnectionsPage } from "../pages/connections-page";
+import { PatConsumersPage } from "../pages/pat-consumers-page";
 import { SharedConnectionsPage } from "../pages/shared-connections-page";
 import { TokensPage } from "../pages/tokens-page";
 
@@ -70,6 +72,7 @@ describe("Connection 查询失败状态", () => {
 	});
 
 	it.each([
+		["Agent 接入", <PatConsumersPage />, "还没有 Agent"],
 		["Token", <TokensPage />, "还没有访问令牌"],
 		["管理员", <AdministratorsPage />, "没有可管理的员工"],
 		["共享 Connection", <SharedConnectionsPage />, "还没有共享组"],
