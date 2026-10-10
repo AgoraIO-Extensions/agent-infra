@@ -871,34 +871,14 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					database.databaseUrl,
 					imageDigest,
 				);
-				const customConfiguration = {
-					...seed.configuration,
-					modelConfiguration: null,
-					source: {
-						kind: "custom" as const,
-						imageDigest,
-						admissionRevision: "api-workload-admission",
-						interactionMode: "platform-adapter" as const,
-						identityResponsibility: "platform-managed" as const,
-						allowedEnvironmentKeys: [],
-						allowedSecretKeys: [],
-						platformManagedKeys: [],
-						connectionEnabled: false,
-					},
-					secrets: [],
-					environment: [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: "pi" }],
-				};
-				await sql`update platform.agent_configuration_revisions
-					set source_reference=${imageDigest}, configuration=${sql.json(customConfiguration as unknown as postgres.JSONValue)}
-					where agent_id=${seed.agentId} and revision=1`;
-				await sql`delete from platform.secret_records where agent_id=${seed.agentId}`;
 				const hash = (value: string) =>
 					createHash("sha256").update(value).digest("hex");
 				await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision)
 					values ('api-workload-application','API Workload','selector-host-owner','app-revision')`;
 				await sql`update platform.agent_applications
 					set creation_channel='api', creator_principal_type='application',
-						creator_principal_id='api-workload-application', approval_revision=null
+						creator_principal_id='api-workload-application', approval_revision=null,
+						status='available', service_availability='ready'
 					where agent_id=${seed.agentId}`;
 				await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes)
 					values ('api-workload-user','user','selector-host-owner',${hash(token)}, '["agent:manage","agent:read"]'::jsonb),
@@ -1023,9 +1003,6 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				} as unknown as typeof client;
 				worker = createPlatformWorkloadWorkerV1({
 					...seed.workerOptions,
-					templateModelBindings: [],
-					modelCatalog: undefined,
-					modelAccess: undefined,
 					client: workerClient,
 					workerId: "api-workload-worker",
 					pollIntervalMs: 1,
