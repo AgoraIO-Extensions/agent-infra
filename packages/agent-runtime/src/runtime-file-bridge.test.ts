@@ -219,6 +219,9 @@ describe("RuntimeHost execution file bridge", () => {
 					expectedIssuer: "agent-platform",
 					now: () => "2026-10-10T00:00:00Z",
 				},
+				validateGrantV4: vi.fn(async () => {
+					throw new Error("validator must not run without a bridge");
+				}),
 			});
 			await expect(host.getFileBridge({} as never)).rejects.toThrow(
 				"Runtime authorization is unavailable",
@@ -243,6 +246,7 @@ describe("RuntimeHost execution file bridge", () => {
 					expectedIssuer: "agent-platform",
 					now: () => "2026-08-28T10:00:00Z",
 				},
+				fileBridge: () => bridge(),
 			});
 			const binding = {
 				agentId: "agent-1",
