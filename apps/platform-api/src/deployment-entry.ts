@@ -19,7 +19,6 @@ if (!configurationModule || new URL(configurationModule).protocol !== "file:") {
 }
 const {
 	ldap,
-	isPlatformDisabled,
 	organizationIds: configuredOrganizationIds,
 	directorySnapshot,
 	publicOrigin,
