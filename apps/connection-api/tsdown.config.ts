@@ -1,6 +1,14 @@
+import { fileURLToPath } from "node:url";
+import { bundleInventory } from "@agent-infra/config/bundle-inventory.ts";
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
+	plugins: [
+		bundleInventory(
+			"connection-api",
+			fileURLToPath(new URL("../../", import.meta.url)),
+		),
+	],
 	entry: [
 		"./src/bootstrap-admin.ts",
 		"./src/bootstrap-production.ts",

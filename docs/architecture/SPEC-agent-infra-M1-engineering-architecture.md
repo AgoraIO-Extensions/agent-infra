@@ -718,6 +718,13 @@ Hermes 的群聊和线程规则保留在 Hermes Adapter 内。Codex 不绑定企
 
 ## 17. 安全基线
 
+Connection canonical 发布签名和完整 SBOM 遵循
+[已批准签名 ADR](../adr/ADR-connection-signed-release-evidence.md)：限定仓库的 tag 发布身份
+使用 GitHub OIDC/Sigstore，分别绑定镜像 digest、executor manifest 原字节与完整 SBOM。
+最终镜像 scanner 与实际 bundler 输入共同覆盖发布组件，许可/来源声明进入实际产物。
+部署对 issuer、仓库 immutable ID、workflow/ref/source 和 subject/hash 验证失败即拒绝，
+保持原上海目标、TLS、单写和 migration receipt 门禁。签名不代替 Legal 或 Provider onboarding。
+
 - 所有用户与服务入口使用公司身份和 TLS；公司 LDAP egress 仅允许 9.1 节记录的固定 transport
   profile 与例外。
 - 平台、Connection 和 Agent 使用不同运行身份与数据库账号。

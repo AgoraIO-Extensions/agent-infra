@@ -6,6 +6,11 @@ import {
 	migrationJob,
 	reviewedMigrationPlan,
 } from "./connection-reviewed-migrations.mjs";
+import {
+	expectedSourceEvidence,
+	resolveVerifiedSubject,
+	verifyRelease,
+} from "./connection-supply-chain.mjs";
 
 class ReleaseError extends Error {}
 
@@ -239,6 +244,7 @@ function publishedRelease(version, migrationPr) {
 		]),
 	);
 	validatePublishedRun(runs[0], sha);
+	return sha;
 }
 
 export async function main(args = process.argv.slice(2)) {
@@ -346,9 +352,34 @@ export async function main(args = process.argv.slice(2)) {
 		migrationContext = { plan, job, createJob };
 	}
 	if (mode === "--preflight") return;
-	publishedRelease(version, migrationPr);
+	const sourceSha = publishedRelease(version, migrationPr);
+	const expected = expectedSourceEvidence();
+	for (const update of updates) {
+		const subject = resolveVerifiedSubject(
+			update.deployment,
+			version,
+			sourceSha,
+		);
+		update.image = verifyRelease(subject, expected);
+		kube(
+			"-n",
+			shanghai.namespace,
+			"set",
+			"image",
+			`deployment/${update.deployment}`,
+			`${update.container}=${update.image}`,
+			"--dry-run=server",
+			"-o",
+			"name",
+		);
+	}
 	if (migrationContext) {
 		const { plan, job, createJob } = migrationContext;
+		job.spec.template.spec.containers.find(
+			(container) => container.name === "migrate",
+		).image = updates.find(
+			(update) => update.deployment === "connection-api",
+		).image;
 		await applyReviewedMigrations(kube, job, plan, createJob);
 		console.log(
 			"Reviewed schema migration Job and committed ledger hashes verified",

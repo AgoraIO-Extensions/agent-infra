@@ -8,6 +8,7 @@
 **/.turbo/
 **/.tanstack/
 **/dist/
+/build-evidence/
 **/coverage/
 **/playwright-report/
 **/test-results/
