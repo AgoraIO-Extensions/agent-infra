@@ -1050,10 +1050,10 @@ export class PostgresConversationExecutionTransactionV1
 			if (!reservationId) unavailable();
 			await transaction`
 				insert into platform.conversation_stops
-					(execution_id, stop_request_id, status, created_at, updated_at)
+					(execution_id, stop_request_id, status, confirmation_deadline, created_at, updated_at)
 				values
 					(${plan.targetExecution.executionId}, ${plan.stopRequestId}, 'submitted',
-					 ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
+					 ${plan.confirmationDeadline}, ${plan.outboxIntent.occurredAt}, ${plan.outboxIntent.occurredAt})
 			`;
 			await transaction`
 				insert into platform.outbox_items
