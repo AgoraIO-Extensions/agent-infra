@@ -5719,6 +5719,30 @@ describe("Codex Runtime Driver", () => {
 			);
 		});
 
+		it("keeps each batched delta's arrival time rather than the commit time", async () => {
+			const f = await runningTurn();
+			const sleep = () => new Promise((resolve) => setTimeout(resolve, 20));
+			const before = Date.now();
+			await f.bridge.emitAgentMessageDelta("early ");
+			await sleep();
+			const between = Date.now();
+			await f.bridge.emitAgentMessageDelta("late");
+			await sleep();
+			const committed = Date.now();
+			f.release.resolve();
+			await f.holding;
+			const text = await vi.waitFor(async () => {
+				const events = await f.texts();
+				expect(events).toHaveLength(2);
+				return events;
+			});
+			const [early, late] = text.map((event) => Date.parse(event.occurredAt));
+			expect(early).toBeGreaterThanOrEqual(before);
+			expect(early).toBeLessThanOrEqual(between);
+			expect(late).toBeGreaterThanOrEqual(between);
+			expect(late).toBeLessThan(committed);
+		});
+
 		it("orders a completion after the deltas received before it", async () => {
 			const f = await runningTurn();
 			await f.bridge.emitAgentMessageDelta("before ");
@@ -5759,10 +5783,7 @@ describe("Codex Runtime Driver", () => {
 			await f.holding;
 			const updates = vi.spyOn(DurableJsonFile.prototype, "update");
 			await expect(
-				f.driver.getStatus(
-					f.accepted.nativeSessionRef,
-					f.command.executionId,
-				),
+				f.driver.getStatus(f.accepted.nativeSessionRef, f.command.executionId),
 			).resolves.toBe("running");
 			expect(updates).not.toHaveBeenCalled();
 		});
