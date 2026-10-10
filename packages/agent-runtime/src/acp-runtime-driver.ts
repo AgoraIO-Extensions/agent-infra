@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
+	BrowserCapabilityAvailableV1,
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
@@ -13,6 +14,8 @@ export interface AcpRuntimeModelOption {
 	readonly reasoningLevels: readonly string[];
 }
 export interface GenericAcpRuntimeDriverOptions {
+	/** Deployment-owned verified Browser projection; never selected by a wire command. */
+	readonly browserCapability?: BrowserCapabilityAvailableV1;
 	readonly path: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
