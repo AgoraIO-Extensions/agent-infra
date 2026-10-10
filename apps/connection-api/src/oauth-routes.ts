@@ -75,6 +75,10 @@ export type ConnectionOAuthServerOptions = {
 	dynamicClientRegistration?: { clientName: string };
 	issuer: string;
 	management?: {
+		providerAdmission?: Pick<
+			PostgresConnectionRepository,
+			"isProviderAdmissionOpen"
+		>;
 		providerLifecycle?: Pick<
 			PostgresConnectionRepository,
 			"getProviderReleaseLifecycle" | "changeProviderReleaseLifecycle"
@@ -1096,6 +1100,25 @@ export function createConnectionOAuthApp(
 			});
 		});
 
+		async function visibleCatalogs(principalId: string, consumerId?: string) {
+			const eligible = await Promise.all(
+				(management.catalogs ?? []).map(async (catalog) =>
+					catalog.providerReleaseId !==
+						"static-spaces-connection-v2-supervised" ||
+					(await management.providerAdmission?.isProviderAdmissionOpen({
+						providerReleaseId: catalog.providerReleaseId,
+						principalId,
+						consumerId,
+					}))
+						? catalog
+						: null,
+				),
+			);
+			return eligible.filter(
+				(catalog): catalog is NonNullable<typeof catalog> => catalog !== null,
+			);
+		}
+
 		app.get("/api/v1/connection/admin/access-policies", async (context) => {
 			const session = await currentBrowserApiAdministrator(context);
 			if (session instanceof Response) return session;
@@ -1108,7 +1131,7 @@ export function createConnectionOAuthApp(
 			context.header("cache-control", "no-store");
 			return context.json({
 				...(await catalog.listCatalog()),
-				providers: management.catalogs ?? [],
+				providers: await visibleCatalogs(session.account.principalId),
 				approvalDirectoryEnabled: management.approvalDirectoryEnabled === true,
 			});
 		});
@@ -3136,7 +3159,12 @@ export function createConnectionOAuthApp(
 						id: consumer.consumerId,
 						name: consumer.consumerName,
 					},
-					providers: (management.catalogs ?? []).map((catalog) => ({
+					providers: (
+						await visibleCatalogs(
+							session.account.principalId,
+							consumer.consumerId,
+						)
+					).map((catalog) => ({
 						actions: catalog.actions,
 						providerId: catalog.provider,
 						providerReleaseId: catalog.providerReleaseId,

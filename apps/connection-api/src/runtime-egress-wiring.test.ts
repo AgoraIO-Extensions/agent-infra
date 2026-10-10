@@ -16,6 +16,7 @@ vi.mock("@agent-infra/connection-store", async (importOriginal) => {
 		async assertProviderRuntimeCoverage(releases: string[]) {
 			expect(releases).toContain("rehoboam-connection-v10");
 			expect(releases).toContain("datalego-connection-v6");
+			expect(releases).toContain("static-spaces-connection-v2-supervised");
 		}
 		async publishConsumerDeclaration() {
 			return { declarationId: "synthetic" };
@@ -134,10 +135,10 @@ describe("production GitHub OAuth transport wiring", () => {
 			});
 			try {
 				if (!captured.oauth) throw new Error("OAuth Adapter was not assembled");
-				expect(captured.origins.flat()).not.toContain(
+				expect(captured.origins.flat()).toContain(
 					"https://publish-static-spaces.sh3.agoralab.co",
 				);
-				expect(captured.origins.flat()).not.toContain(
+				expect(captured.origins.flat()).toContain(
 					"https://auth-static-spaces.sh3.agoralab.co",
 				);
 				const identity = await captured.oauth.exchangeCode({

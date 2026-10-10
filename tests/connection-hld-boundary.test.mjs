@@ -82,7 +82,7 @@ test("runtime publication, consumer grants and approval management share every P
 		"jenkinsReleaseConnectionCatalog",
 		"manhattanConnectionCatalog",
 		"rehoboamConnectionCatalog",
-		"staticSpacesConnectionCatalog (onboarding gated)",
+		"staticSpacesConnectionCatalog",
 	]);
 	assert.equal(loops, 2);
 	assert.equal(managementBindings, 1);

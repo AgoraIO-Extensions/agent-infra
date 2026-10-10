@@ -11,10 +11,7 @@ import { jiraServerConnectionCatalog } from "./providers/jira/definition.ts";
 import { manhattanConnectionCatalog } from "./providers/manhattan/definition.ts";
 import { rehoboamV11ConnectionCatalog as rehoboamConnectionCatalog } from "./providers/rehoboam/definition.ts";
 
-import {
-	staticSpacesConnectionCatalog,
-	staticSpacesVerificationMatrix,
-} from "./providers/static-spaces/definition.ts";
+import { staticSpacesConnectionCatalog } from "./providers/static-spaces/definition.ts";
 
 const catalogs = [
 	githubConnectionCatalog,
@@ -26,11 +23,7 @@ const catalogs = [
 	jenkinsReleaseConnectionCatalog,
 	manhattanConnectionCatalog,
 	rehoboamConnectionCatalog,
-	...(staticSpacesVerificationMatrix.every(
-		(action) => action.status === "LIVE_VERIFIED",
-	)
-		? [staticSpacesConnectionCatalog]
-		: []),
+	staticSpacesConnectionCatalog,
 ] as const;
 
 export const connectionProviderCatalogs = catalogs.map((catalog) => ({

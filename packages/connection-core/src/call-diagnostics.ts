@@ -127,6 +127,7 @@ const requestIdNames = [
 	"x-github-request-id",
 	"x-arequestid",
 	"x-atlassian-request-id",
+	"x-kong-request-id",
 	"traceparent",
 ];
 function validRequestId(name: string, value: unknown): value is string {

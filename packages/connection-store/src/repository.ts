@@ -932,11 +932,31 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		return this.publishProviderCatalog(catalog, upgradePolicy);
 	}
 
+	async isProviderAdmissionOpen(input: {
+		providerReleaseId: string;
+		principalId?: string;
+		consumerId?: string;
+		externalAccount?: string;
+	}) {
+		const [row] = await this.sql<{ allowed: boolean }[]>`
+			SELECT connection_supervised_provider_allowed(${input.providerReleaseId},
+				${input.principalId ?? null}, ${input.consumerId ?? null}, ${input.externalAccount ?? null}) AS allowed
+		`;
+		return row?.allowed === true;
+	}
+
 	async publishConsumerDeclaration(input: {
 		actionVersionIds: readonly string[];
 		consumer: { id: string; name: string };
 		providerReleaseId: string;
 	}) {
+		if (
+			!(await this.isProviderAdmissionOpen({
+				providerReleaseId: input.providerReleaseId,
+				consumerId: input.consumer.id,
+			}))
+		)
+			forbidden();
 		const actionVersionIds = [...input.actionVersionIds].sort();
 		if (
 			!input.consumer.id ||
@@ -2350,6 +2370,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				FOR SHARE OF account, release, consumer, declaration, credential
 			`;
 		if (!subject) forbidden();
+		const [admission] = await sql<{ allowed: boolean }[]>`
+			SELECT connection_supervised_provider_allowed(${subject.provider_release_id},
+				${input.principalId}, ${input.consumerId}, ${subject.external_account}) AS allowed
+		`;
+		if (!admission?.allowed) forbidden();
 		const credentialScopes = Array.isArray(subject.credential_scopes)
 			? subject.credential_scopes.filter(
 					(scope): scope is string => typeof scope === "string",
@@ -3225,7 +3250,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					AND credential.connection_id = account.id
 					AND credential.revision = active_grant.credential_revision
 					AND credential.status = 'ACTIVE'
-			WHERE active_grant.id = ${input.grantId}
+			WHERE connection_supervised_provider_allowed(active_grant.provider_release_id,
+				active_grant.principal_id, active_grant.consumer_id, account.external_account,
+				instance.id, active_grant.actor_key)
+				AND active_grant.id = ${input.grantId}
 				AND active_grant.status = 'ACTIVE'
 				AND active_grant.principal_id = ${input.principalId}
 				AND active_grant.consumer_id = ${input.consumerId}
@@ -3737,6 +3765,15 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			},
 		);
 		if (permit.providerId !== input.providerId) forbidden();
+		const releaseId = this.publishedProviderReleaseIds.get(input.providerId);
+		if (
+			!releaseId ||
+			!(await this.isProviderAdmissionOpen({
+				providerReleaseId: releaseId,
+				principalId: input.principalId,
+			}))
+		)
+			forbidden();
 		return { requiredScopes: permit.requiredScopes };
 	}
 
@@ -3757,6 +3794,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				ON credential.id=account.last_credential_version_id AND credential.connection_id=account.id
 			WHERE account.id=${input.connectionId} AND account.owner_principal_id=${input.principalId}
 				AND account.owner_type='PERSONAL' AND account.status='ACTIVE'
+				AND connection_supervised_provider_allowed(account.provider_release_id, ${input.principalId})
 		`;
 		if (active) {
 			const readiness = await this.getProviderUpgradeReadiness(input);
@@ -3963,6 +4001,14 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		expectedConnectionId?: string;
 		expectedCredentialVersionId?: string;
 	}) {
+		if (
+			!(await this.isProviderAdmissionOpen({
+				providerReleaseId: input.providerReleaseId,
+				principalId: input.principalId,
+				externalAccount: input.externalAccount,
+			}))
+		)
+			forbidden();
 		const grantedScopes = [...new Set(input.grantedScopes)].sort();
 		if (
 			grantedScopes.length === 0 ||
@@ -4551,6 +4597,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					JOIN connection_provider_releases release
 						ON release.id = action.provider_release_id
 					WHERE action.status = 'PUBLISHED' AND release.status = 'PUBLISHED'
+					AND connection_supervised_provider_allowed(release.id, ${principalId})
 					ORDER BY action.id
 					`,
 			this.sql<

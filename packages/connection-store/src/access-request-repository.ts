@@ -377,6 +377,7 @@ export class PostgresConnectionAccessRequestRepository
 				ON release.id = policy.provider_release_id
 			WHERE policy.status = 'PUBLISHED'
 				AND profile.status = 'PUBLISHED' AND release.status = 'PUBLISHED'
+				AND connection_supervised_provider_allowed(release.id, ${principalId})
 			ORDER BY release.provider, profile.name
 		`;
 			const options = await Promise.all(
