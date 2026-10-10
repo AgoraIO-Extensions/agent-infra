@@ -940,9 +940,42 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						return new Response(null, { status: 503 });
 					}
 				};
+				const workerClient = {
+					...client,
+					async create(object: Parameters<typeof client.create>[0]) {
+						try {
+							return await client.create(object);
+						} catch (error) {
+							workerLogs.push(
+								JSON.stringify({
+									op: "create",
+									kind: object.kind,
+									name: object.metadata?.name,
+									code: error instanceof Error ? error.message : String(error),
+								}),
+							);
+							throw error;
+						}
+					},
+					async replace(object: Parameters<typeof client.replace>[0]) {
+						try {
+							return await client.replace(object);
+						} catch (error) {
+							workerLogs.push(
+								JSON.stringify({
+									op: "replace",
+									kind: object.kind,
+									name: object.metadata?.name,
+									code: error instanceof Error ? error.message : String(error),
+								}),
+							);
+							throw error;
+						}
+					},
+				} as unknown as typeof client;
 				worker = createPlatformWorkloadWorkerV1({
 					...seed.workerOptions,
-					client,
+					client: workerClient,
 					workerId: "api-workload-worker",
 					pollIntervalMs: 1,
 					policy: workloadPolicy,
