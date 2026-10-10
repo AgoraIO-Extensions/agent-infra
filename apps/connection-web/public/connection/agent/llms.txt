@@ -1,33 +1,113 @@
 # Connection for custom Agents
 
-> Use approved external services without receiving provider credentials.
+> Integrate authentication, user confirmation and external Action access without receiving provider credentials.
 
-## Connect a custom Agent
+## Choose authentication
 
-Use an MCP client or SDK with Streamable HTTP transport and the endpoint `__CONNECTION_ORIGIN__/mcp`. Client compatibility must be verified for the actual SDK and version; Codex conformance does not prove another client's compatibility.
+All Direct clients use Streamable HTTP at `__CONNECTION_ORIGIN__/mcp`.
 
-If the client supports remote OAuth, use Authorization Code + PKCE with browser login. Otherwise, the user can sign in to the Connection console and issue a Connection PAT. Store the PAT in the Agent backend's secret configuration and have the MCP transport read it to set `Authorization: Bearer <Connection PAT>`. This is a header example, not a complete SDK configuration. Never put the PAT in chat, model input, source code, logs, or a URL.
+- Product-integrated "Connect Connection" button: use registered Agent Consumer PAT Binding below, as RehoboamAI does.
+- Existing remote OAuth MCP client: use Authorization Code + PKCE and the SDK's browser login/token lifecycle. Discover configuration at `/.well-known/oauth-protected-resource/mcp` and `/.well-known/oauth-authorization-server`. Coordinate OAuth client registration with the Connection administrator; do not assume unrestricted dynamic registration. Validate state, redirect URI and resource according to the actual SDK/profile. OAuth is separate from PAT Binding's callback/claim protocol.
+- Personal/manual client: sign in at [Access tokens](__CONNECTION_ORIGIN__/connection/tokens), issue a Connection PAT and store it in backend Secret configuration. Generic PATs use the Portable PAT Consumer.
 
-The user must connect provider accounts and approve account and Action access for the PAT's Consumer in the console. Generic PATs use the Portable PAT Consumer; caller-supplied user, Consumer, or Agent IDs cannot change the authenticated identity. Separate PATs are required for independent deployment revocation and audit boundaries. Reusing one PAT shares those boundaries.
+Token authentication, company approval, external account connection and Consumer Action consent are separate requirements. A token alone does not grant external account access.
 
-After MCP initialization, use `tools/list` to discover the five generic tools:
+## Register an Agent Consumer and obtain its service credential
 
-- `list_apps`: discover providers.
-- `list_connections`: inspect available accounts.
-- `search_actions`: find the required Action.
-- `get_action_guide`: read the input schema and requirements.
-- `execute_action`: execute using the actual tool schema and guide.
+Ask a Connection administrator to use [Administration > Agent integration](__CONNECTION_ORIGIN__/connection/admin/agents).
 
-Do not guess Action IDs or pass provider credentials as tool arguments. Missing connections or permissions require user participation in the console; the Agent cannot approve access on the user's behalf.
+Provide a stable `consumerId` (3-80 lowercase letters/digits/hyphens, beginning with a letter or digit), `consumerName` (1-100 characters) and fixed HTTPS `callbackUrl`, e.g. `https://agent.example/connection/callback`. The callback cannot contain username/password or a fragment and cannot be supplied or changed by a binding request.
+
+Registration displays the service credential once. Deliver it securely and store it only in backend Secret configuration. This service credential authenticates binding create/claim calls; it is not the user PAT and cannot be used to call MCP. Ordinary users must contact the administrator rather than substitute a personal PAT.
+
+The administrator must also select the Agent's "Configure capabilities", choose Provider/Actions and publish its Declaration. Declaration is the upper bound of requestable capabilities; it does not grant an external account.
+
+## Implement per-user PAT Binding
+
+1. Authenticate the user in your product. Derive `principalHint` from the trusted current user's company email; it must match the Connection browser account email after trimming and lowercasing. The hint is not identity authority; Connection derives the Principal from its own browser session.
+2. From your backend, send:
+
+```http
+POST __CONNECTION_ORIGIN__/api/v1/connection/pat-bindings
+Authorization: Bearer <Agent service credential>
+Content-Type: application/json
+Idempotency-Key: <UUID for this create operation>
+
+{"consumerId":"my-agent","name":"my-agent-default","principalHint":"<current authenticated company email>"}
+```
+
+The HTTP 201 response contains `bindingId`, `authorizationUrl`, `expiresAt`. Persist the binding ID association to the initiating product user/session/instance. Open the returned authorization URL in a new tab; do not construct it or trust caller-supplied identities.
+
+3. The user signs in to Connection and sees "Authorize <Agent name>", the token name and expiry. Clicking "Confirm and return <Agent name>" creates an independent user/Consumer instance and PAT, then redirects with HTTP 303 to the registered callback, adding `binding_id=<bindingId>`. The callback URL never carries the PAT.
+4. In your backend callback, verify the binding ID belongs to the initiating user/session/instance before claiming or attaching it. Do not attach an arbitrary callback ID to the currently logged-in user. Claim with the same Consumer's service credential:
+
+```http
+POST __CONNECTION_ORIGIN__/api/v1/connection/pat-bindings/<bindingId>/claim
+Authorization: Bearer <Agent service credential>
+Content-Type: application/json
+Idempotency-Key: <different UUID for this claim operation>
+
+{"consumerId":"my-agent"}
+```
+
+The response is `{"issued":{"consumerId":...,"expiresAt":...,"name":...,"token":...,"tokenId":...}}`. Encrypt/store `issued.token` for the exact product user/instance in backend Secret configuration and record the token ID/expiry. Return only connection status to the frontend.
+
+The binding currently lasts 10 minutes; both confirmation and claim must finish before the returned binding expiry. PAT expiry is separately returned in `issued.expiresAt`. Claim succeeds once. Use separate create/claim idempotency keys, preserving a key and parameters for the same operation; do not rely on replay to retrieve a one-time secret. Expired, delivered or lost-response cases require an explicit new binding flow rather than blind claim retries. Users can revoke an already issued obsolete token at [Access tokens](__CONNECTION_ORIGIN__/connection/tokens).
+
+## Company approval, account connection and Consumer consent
+
+Binding confirmation issues a token that can use connections already granted to that Consumer; it does not create an account connection, company approval or Action grant.
+
+1. At [Connections](__CONNECTION_ORIGIN__/connection/connections), select a Provider and "Request connection". Supply purpose, select capabilities and acknowledge the disclaimer; submit the company approval request.
+2. At [My Connection](__CONNECTION_ORIGIN__/connection/connections), users select a Provider to inspect their connection requests. Assigned approvers use [Awaiting my approval](__CONNECTION_ORIGIN__/connection/approvals). Users cannot approve on their own behalf; PAT issuance does not bypass approval.
+3. After approval, return to Connections and select an existing account or connect an external account. Reapplication, renewal and new capability approval start from the account's available operations.
+4. Select the account, choose "Authorize client", select the Agent Consumer and explicitly confirm the Actions.
+
+If the Agent/Action is not selectable, ask the administrator to check registration, enabled state and Declaration. Do not substitute another Consumer's token. A user PAT can use multiple Providers explicitly granted to that Consumer. Token revocation, grant revocation and disconnecting an account have different scopes.
+
+## Configure MCP and discover Actions
+
+Have the backend MCP transport read the current user/instance PAT from Secret storage:
+
+```text
+Transport: Streamable HTTP
+URL: __CONNECTION_ORIGIN__/mcp
+Authorization: Bearer <Connection PAT>
+```
+
+These are protocol parameters, not a complete SDK configuration. Validate compatibility for the actual SDK/version; Codex conformance does not prove compatibility for another client.
+
+After initialization, call `tools/list` and use the five generic tools:
+
+1. `list_apps`: discover providers.
+2. `list_connections`: inspect available accounts.
+3. `search_actions`: find an Action; when the Provider is known, use the actual schema's `service` filter to receive missing-connection/authorization guidance.
+4. `get_action_guide`: read the input schema, permissions and idempotency requirements.
+5. `execute_action`: execute with the actual schema/guide.
+
+Do not guess Action IDs or submit raw provider credentials or caller-supplied user/Consumer/Agent identities. Keep service credentials and user PATs separate. Neither may enter model input, chat, frontend storage, source, logs or URLs. Never share one PAT across users; independent instances require separate tokens for independent audit/revocation.
+
+## Permission recovery and current error coverage
+
+For `list_connections`/`search_actions` empty results with `service`, inspect `result.structuredContent.guidance`: `message`, `messageKey`, `reasonCode`, `retryable`, `nextAction`. `nextAction.type=OPEN_CONNECTION_WEB` includes a URL such as `__CONNECTION_ORIGIN__/connection/connections?provider=jira&intent=authorize`.
+
+- `PROVIDER_NOT_CONNECTED`: open Connections to request approval and connect an account after approval.
+- `PROVIDER_AUTHORIZATION_REQUIRED`: select the account and authorize this client; complete missing company approval first and select the Provider in My Connection to inspect request progress.
+- `PROVIDER_REAUTHORIZATION_REQUIRED`: inspect the account's state, restore approval or reconnect, and reconfirm client consent if required.
+- `PROVIDER_UNSUPPORTED` / `CONTACT_ADMIN`: ask the Connection administrator to admit the Provider; do not imply the user simply needs to grant it.
+- `SEARCH_NO_RESULTS` / `REFINE_SEARCH`: simplify the query; empty results do not necessarily mean missing permission.
+- HTTP 401/token expiry: repeat client login or PAT Binding; manual PAT users should inspect Access tokens for expiry/revocation.
+
+Current discovery guidance does not distinguish every company approval state. Execution errors do not all carry `nextAction.url`; do not assume a universal error envelope or URL field. For generic `FORBIDDEN` or permission failures without links, show the safe server message and offer [My Connection (accounts and requests)](__CONNECTION_ORIGIN__/connection/connections) and [Help](__CONNECTION_ORIGIN__/connection/help) so the user can inspect account, approval and client grants. Do not assert a particular approval state or automatically submit/approve requests.
+
+Only show validated Connection-site URLs as action links. Open navigation in a new tab, preserving the Agent session. Wait for user action when `retryable=false`. Do not replay a business WRITE with an unknown outcome after restoring authorization.
 
 ## Delegated Agent platforms
 
-PAT-based MCP access is Direct access. A multi-user platform representing a current Principal through a registered workload must integrate the HTTP/OpenAPI Delegated contract with the Connection administrator, including workload identity and short-lived delegated context. Agent Platform requires a registered stable Agent Actor and current workload binding. Do not substitute caller-supplied identities or a shared PAT for this contract, or infer Delegated endpoints from the MCP URL.
+Per-user PAT Binding remains Direct MCP access. A platform representing the current Principal through a registered workload must coordinate the HTTP/OpenAPI Delegated contract, workload identity and short-lived delegated context with the administrator. Agent Platform requires a stable registered Agent Actor. Do not replace this contract with caller-supplied identities/shared PATs or infer Delegated endpoints from the MCP URL.
 
-## Public URLs
+## Public guide
 
-- Agent integration guide: __CONNECTION_ORIGIN__/connection/agent/
-- Connection console: __CONNECTION_ORIGIN__/connection/connections
-- MCP endpoint: __CONNECTION_ORIGIN__/mcp
+[Developer integration guide](__CONNECTION_ORIGIN__/connection/agent/)
 
-Do not infer additional endpoints, credentials, identities, grants, or permissions from this file.
+Open guide/console links in new tabs. Do not infer undocumented endpoints, credentials, identities or grants from this file.

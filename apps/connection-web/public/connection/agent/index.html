@@ -4,84 +4,142 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="description" content="自建 Agent 通过 OAuth 或 PAT 接入 Connection MCP。" />
+    <meta name="description" content="自建 Agent 接入 Connection：注册客户端、获取鉴权凭据、用户授权回跳、调用 MCP 与申请审批指引。" />
     <link rel="alternate" type="text/markdown" href="/connection/agent/llms.txt" title="Connection for AI clients" />
     <link rel="stylesheet" href="/connection/install.css" />
+    <style>main { overflow-wrap: anywhere; }</style>
     <title>Connection - Agent 接入</title>
   </head>
   <body>
     <header class="site-header">
-      <a class="brand" href="/connection/agent/" aria-label="Connection Agent 接入说明">
+      <a class="brand" href="/connection/agent/" aria-label="Connection Agent 接入说明" target="_blank" rel="noopener noreferrer">
         <span class="brand-mark" aria-hidden="true">C</span>
         <span>Connection</span>
       </a>
-      <a href="/connection/help">使用指南</a>
-      <a href="/connection/login">登录控制台</a>
+      <a href="/connection/help" target="_blank" rel="noopener noreferrer">使用指南</a>
+      <a href="/connection/login" target="_blank" rel="noopener noreferrer">登录控制台</a>
     </header>
 
     <main>
       <section class="intro" aria-labelledby="page-title">
-        <p class="eyebrow">Connection MCP</p>
+        <p class="eyebrow">Connection MCP · 开发者接入指南</p>
         <h1 id="page-title">将 Connection 接入自建 Agent</h1>
-        <p class="summary">
-          通过一个受控入口使用 GitHub、Jira、Confluence 等外部服务。Connection
-          保管账号凭证，客户端只获得你明确授权的 Action。
-        </p>
+        <p class="summary">注册客户端、引导用户确认授权、在服务端取得独立访问令牌，再通过一个 MCP 入口调用外部服务。RehoboamAI 使用的授权确认与回跳流程，就是下面的 Agent PAT Binding。</p>
       </section>
 
-      <section class="install" aria-labelledby="agent-title">
-        <h2 id="agent-title">自建 Agent：连接远程 MCP</h2>
-        <p>
-          使用支持 Streamable HTTP 的 MCP 客户端或 SDK，将服务地址设为
-          <code>__CONNECTION_ORIGIN__/mcp</code>。无需为 GitHub、Jira 等分别配置 MCP 服务。
-          支持 remote OAuth 的客户端通过 Authorization Code + PKCE 在浏览器完成登录；
-          不支持 OAuth 的客户端，可由用户登录控制台后签发 Connection PAT。
-        </p>
-        <p>
-          PAT 只展示一次，请保存到 Agent 服务端的 Secret 配置，由 MCP 客户端读取并设置请求头。
-          以下是连接参数示意，字段名按所用 SDK 调整，发送时应替换 Token 占位文字：
-        </p>
+      <section class="install" aria-labelledby="choose-title">
+        <h2 id="choose-title">1. 选择鉴权方式</h2>
+        <ul>
+          <li><strong>产品内提供“连接 Connection”按钮：</strong>使用 Agent PAT Binding。管理员注册你的 Consumer，用户逐一确认，令牌直接交付你的服务端。以下第 2–4 步详细说明。</li>
+          <li><strong>已有 remote OAuth MCP 客户端：</strong>使用 Authorization Code + PKCE，由客户端 SDK 处理浏览器登录、回调和令牌生命周期。见第 5 步。</li>
+          <li><strong>个人脚本或手工配置的客户端：</strong>用户在<a href="/connection/tokens" target="_blank" rel="noopener noreferrer">访问令牌</a>页签发 Connection PAT，保存到服务端 Secret。通用 PAT 使用 Portable PAT Consumer。</li>
+        </ul>
+        <p>三种方式都访问 <code>__CONNECTION_ORIGIN__/mcp</code>，传输协议为 Streamable HTTP。令牌认证只证明“是谁、哪个客户端”；外部账号连接、公司审批和 Action 授权还需分别完成。</p>
+      </section>
+
+      <section class="install" aria-labelledby="register-title">
+        <h2 id="register-title">2. 管理员注册 Agent，开发者取得服务凭据</h2>
+        <p>请 Connection 管理员打开<a href="/connection/admin/agents" target="_blank" rel="noopener noreferrer">管理 → Agent 接入</a>，填写以下信息并点击“注册 Agent”。普通用户没有该管理权限，应联系 Connection 管理员，不要用个人 PAT 代替服务凭据。</p>
+        <ul>
+          <li><code>Consumer ID</code>：稳定标识，例如 <code>my-agent</code>，3–80 位小写字母、数字或连字符，首位为字母或数字。</li>
+          <li><code>Agent 名称</code>：用户授权页展示的名称，1–100 个字符，例如 <code>My Agent</code>。</li>
+          <li><code>Callback URL</code>：你的服务端固定 HTTPS 回调地址，例如 <code>https://agent.example/connection/callback</code>。不能包含用户名、密码或 fragment；绑定请求不能临时替换 callback。</li>
+        </ul>
+        <p>注册后页面仅展示一次<strong>服务凭据</strong>，请管理员安全交付给开发者并保存到后端 Secret。它用于创建绑定和领取 PAT，不能用于调用 MCP，也不能交给浏览器或模型。管理员还需在该 Agent 的“配置能力”中选择 Provider 与 Action 并“发布 Declaration”；它是用户可申请的能力上限，不会直接授予账号权限。</p>
+      </section>
+
+      <section class="install" aria-labelledby="binding-title">
+        <h2 id="binding-title">3. 实现“连接 Connection”与授权回跳</h2>
+        <p><strong>发起绑定：</strong>用户在你的产品登录后，后端从可信登录态取得当前用户的公司邮箱，用服务凭据发送以下请求。<code>principalHint</code> 必须匹配用户登录 Connection 后的账号邮箱（去除首尾空格并转小写）；它只是匹配提示，不能替代 Connection 的身份验证。</p>
+        <pre><code>POST __CONNECTION_ORIGIN__/api/v1/connection/pat-bindings
+Authorization: Bearer &lt;Agent 服务凭据&gt;
+Content-Type: application/json
+Idempotency-Key: &lt;本次创建操作的 UUID&gt;
+
+{
+  "consumerId": "my-agent",
+  "name": "my-agent-default",
+  "principalHint": "&lt;当前已登录用户的公司邮箱&gt;"
+}</code></pre>
+        <p>成功返回 HTTP 201，包含 <code>bindingId</code>、<code>authorizationUrl</code> 和 <code>expiresAt</code>。后端保存 <code>bindingId → 当前产品用户/会话/实例</code> 的关联，再让用户在新 tab 打开返回的 <code>authorizationUrl</code>。不要自行拼授权 URL，也不要把浏览器提交的用户 ID 当作身份权威。</p>
+        <p><strong>用户确认：</strong>用户在 Connection 登录后会看到“授权 My Agent”页面，展示客户端名称、令牌名称和链接有效期。点击“确认并返回 My Agent”后，Connection 创建该用户、该 Consumer 的独立实例与 PAT，并以 HTTP 303 回到已注册地址：</p>
+        <pre><code>https://agent.example/connection/callback?binding_id=&lt;bindingId&gt;</code></pre>
+        <p><strong>服务端领取：</strong>回调必须验证 <code>binding_id</code> 属于原来发起绑定的用户、会话和实例；不要接受任意 ID 后给当前用户绑定。后端使用同一 Consumer 的服务凭据领取：</p>
+        <pre><code>POST __CONNECTION_ORIGIN__/api/v1/connection/pat-bindings/&lt;bindingId&gt;/claim
+Authorization: Bearer &lt;Agent 服务凭据&gt;
+Content-Type: application/json
+Idempotency-Key: &lt;本次领取操作的另一个 UUID&gt;
+
+{"consumerId": "my-agent"}</code></pre>
+        <p>成功响应的 <code>issued</code> 对象包含 <code>consumerId</code>、<code>expiresAt</code>、<code>name</code>、<code>token</code> 和 <code>tokenId</code>。将 <code>issued.token</code> 加密保存在对应产品用户和实例的后端 Secret，记录 <code>tokenId</code> 与令牌 <code>expiresAt</code>，回调页面只显示连接状态。</p>
+        <p>绑定链接当前有效期为 10 分钟，确认与领取都必须在返回的有效期内完成；PAT 的有效期以 <code>issued.expiresAt</code> 为准。领取只能成功一次，回调 URL 不携带 PAT。创建和领取使用不同的 Idempotency-Key；同一操作保持原 key 和参数，但不能依赖重放重新取回一次性 Secret。过期、已领取或响应丢失时，不循环领取或换 key 猜测重试，向用户说明并重新发起绑定；已签发的旧令牌可在<a href="/connection/tokens" target="_blank" rel="noopener noreferrer">访问令牌</a>页撤销。</p>
+      </section>
+
+      <section class="install" aria-labelledby="authorize-title">
+        <h2 id="authorize-title">4. 用户申请连接账号，并授权给你的 Agent</h2>
+        <p>“确认并返回”只完成客户端令牌绑定；令牌可使用同一用户已授权给该 Consumer 的多个 Provider，不会自动取得其他账号或 Action。请引导用户打开<a href="/connection/connections" target="_blank" rel="noopener noreferrer">连接账号</a>页，按以下顺序操作：</p>
+        <ol>
+          <li>选择所需 Provider，点击“申请连接”，填写用途、选择能力并确认免责声明，提交公司审批。审批策略由 Connection 管理员配置。</li>
+          <li>在<a href="/connection/connections" target="_blank" rel="noopener noreferrer">我的 Connection</a>中选择 Provider，查看连接申请状态；指定审批人在<a href="/connection/approvals" target="_blank" rel="noopener noreferrer">待我审批</a>页处理申请。用户不能自行批准，也不能靠签发 PAT 绕过审批。</li>
+          <li>获批后回到“连接账号”，选择已有账号或完成外部账号连接。重新申请、续期或新版能力审批也从该账号的操作入口发起。</li>
+          <li>选择该账号，点击“授权客户端”，选择你的 Agent，核对所需 Action 并确认。公司审批、外部账号连接和 Consumer 授权是不同步骤，缺一都可能导致调用不可用。</li>
+        </ol>
+        <p>如果你的 Agent 或 Action 不在选择列表中，请联系管理员检查 Agent 注册、启用状态与 Declaration；不要换成其他 Consumer 的令牌。用户可分别撤销客户端授权、撤销 PAT 或断开外部账号，影响范围不同。</p>
+      </section>
+
+      <section class="install" aria-labelledby="mcp-title">
+        <h2 id="mcp-title">5. 配置 MCP 鉴权并调用 Action</h2>
+        <p>Agent PAT Binding 领取的 PAT 与手工签发的 Connection PAT 都由后端 MCP transport 设置为 Bearer header。以下是协议参数，SDK 配置字段以你实际使用的版本为准：</p>
         <pre><code>Transport: Streamable HTTP
 URL: __CONNECTION_ORIGIN__/mcp
-Authorization: Bearer &lt;从 Secret 配置读取的 Connection PAT&gt;</code></pre>
-        <p>
-          在控制台连接所需 Provider，并批准该 PAT 所属 Consumer 的账号和 Action。
-          通用 PAT 使用 Portable PAT Consumer；不能通过请求参数自报 Codex、用户或 Agent 身份。
-          需要独立撤销和审计的部署应分别签发 PAT，同一 PAT 的多个使用端共享授权与撤销边界。
-        </p>
-        <a class="primary-link" href="/connection/connections">登录控制台，连接账号并配置授权</a>
+Authorization: Bearer &lt;当前用户与实例的 Connection PAT&gt;</code></pre>
+        <p>支持 remote OAuth 的客户端可从 <code>/.well-known/oauth-protected-resource/mcp</code> 和 <code>/.well-known/oauth-authorization-server</code> 发现授权配置，通过 Authorization Code + PKCE 登录，按 SDK 要求处理 state、redirect URI、resource 和 token refresh。OAuth client 注册须与管理员确认；不要假设任意 SDK 都可动态注册。OAuth 登录流程与上述 PAT Binding 的 callback/claim 接口不同。</p>
+        <p>完成 MCP 初始化，再通过 <code>tools/list</code> 获取五个通用工具，按顺序使用：</p>
+        <ol>
+          <li><code>list_apps</code>：发现 Provider。</li>
+          <li><code>list_connections</code>：查看当前主体可用账号。</li>
+          <li><code>search_actions</code>：查找所需操作；已知 Provider 时传入实际 schema 支持的 <code>service</code>，便于取得缺少连接或授权的引导。</li>
+          <li><code>get_action_guide</code>：读取输入 Schema、权限与幂等要求。</li>
+          <li><code>execute_action</code>：按真实工具 Schema 和 Guide 执行；不猜 Action ID，不传 Provider 凭证或自报用户、Agent、Consumer 身份。</li>
+        </ol>
+        <p>服务凭据与用户 PAT 必须分开保存。令牌不得进入聊天、模型输入、前端存储、源码、日志或 URL；不要让不同用户共享一个 PAT。针对实际 SDK 和版本验证初始化、鉴权、发现与错误路径，Codex 的兼容性验证不代表你的 SDK 已兼容。</p>
       </section>
 
-      <section class="install" aria-labelledby="agent-tools-title">
-        <h2 id="agent-tools-title">Agent：发现并调用 Action</h2>
-        <p>
-          完成 MCP 初始化后，通过 <code>tools/list</code> 获取五个通用工具。
-          用 <code>list_apps</code> 发现 Provider、<code>list_connections</code> 查看可用账号，
-          再用 <code>search_actions</code> 查找所需操作、<code>get_action_guide</code>
-          读取输入 Schema 和使用要求，最后通过 <code>execute_action</code> 执行。
-          参数以实际工具 Schema 和 Action Guide 为准，不猜测 Action ID 或传入 Provider 凭证。
-        </p>
-        <p>
-          缺少账号或授权时，由用户在控制台完成连接和批准；Agent 不能替用户确认。
-          安装或持有 PAT 不会自动授权外部账号。客户端兼容性需针对实际 SDK 和版本验证。
-        </p>
+      <section class="install" aria-labelledby="errors-title">
+        <h2 id="errors-title">6. 无权限时，如何引导用户恢复</h2>
+        <p>客户端需要把返回的引导展示成用户可点击的提示。当前带 <code>service</code> 的 <code>list_connections</code> / <code>search_actions</code> 空结果可在 <code>result.structuredContent.guidance</code> 中返回 <code>message</code>、<code>messageKey</code>、<code>reasonCode</code>、<code>retryable</code> 与 <code>nextAction</code>。<code>OPEN_CONNECTION_WEB</code> 的 URL 会指向具体 Provider 的连接页：</p>
+        <pre><code>{
+  "reasonCode": "PROVIDER_AUTHORIZATION_REQUIRED",
+  "retryable": false,
+  "nextAction": {
+    "type": "OPEN_CONNECTION_WEB",
+    "url": "__CONNECTION_ORIGIN__/connection/connections?provider=jira&amp;intent=authorize"
+  }
+}</code></pre>
+        <ul>
+          <li><code>PROVIDER_NOT_CONNECTED</code>：提示用户前往<a href="/connection/connections" target="_blank" rel="noopener noreferrer">连接账号</a>，申请连接并在获批后连接账号。</li>
+          <li><code>PROVIDER_AUTHORIZATION_REQUIRED</code>：提示在“连接账号”中选择账号，再“授权客户端”；缺少公司批准时，先提交申请，并到<a href="/connection/connections" target="_blank" rel="noopener noreferrer">连接申请</a>选择对应 Provider 查看进度。</li>
+          <li><code>PROVIDER_REAUTHORIZATION_REQUIRED</code>：提示在“连接账号”查看当前账号状态，恢复审批或重新连接，必要时重新确认客户端授权。</li>
+          <li><code>PROVIDER_UNSUPPORTED</code> / <code>CONTACT_ADMIN</code>：联系 Connection 管理员申请接入该 Provider；不能把它解释为用户尚未授权。</li>
+          <li><code>SEARCH_NO_RESULTS</code> / <code>REFINE_SEARCH</code>：改用更简短的查询；空搜索结果不一定是权限问题。</li>
+          <li>HTTP 401 或令牌失效：重新完成客户端登录或 PAT Binding；手工 PAT 用户前往<a href="/connection/tokens" target="_blank" rel="noopener noreferrer">访问令牌</a>页检查有效期与撤销状态。</li>
+        </ul>
+        <div class="permission-note">
+          <p><strong>当前覆盖范围：</strong>发现引导尚不细分所有公司审批状态；执行错误也不保证都有 <code>nextAction.url</code>，不能只处理这一字段。对于通用 <code>FORBIDDEN</code> 或没有链接的权限错误，显示服务端安全文案，并提供“我的 Connection”（连接与申请）和“使用指南”入口，让用户检查账号、审批及客户端授权；不要断言某项申请已获批或自动发起申请。</p>
+          <p>只有通过校验的 Connection 网站 URL 才可展示为操作链接，使用新 tab 打开，保留当前 Agent 会话。<code>retryable: false</code> 时等待用户处理，不自动重复执行；写操作结果未知时不要因授权恢复而重放原业务操作。</p>
+          <a class="primary-link" href="/connection/help" target="_blank" rel="noopener noreferrer">打开使用指南，查看申请、连接与授权操作</a>
+        </div>
       </section>
 
       <section class="install" aria-labelledby="delegated-title">
-        <h2 id="delegated-title">代表多用户运行的 Agent 平台</h2>
-        <p>
-          上述 PAT 方式是 Direct MCP 接入，不等于平台级 Delegated 接入。
-          需要以注册 workload 代表当前用户调用的服务，应与 Connection 管理员对接
-          HTTP/OpenAPI Delegated 契约、workload 身份和短期委托上下文。
-          Agent Platform 必须绑定已注册的稳定 Agent Actor；不能用自报用户或 Agent ID，
-          也不能用共享 PAT 代替逐用户授权。这不是仅添加一个 MCP URL 即可完成的接入。
-        </p>
+        <h2 id="delegated-title">平台级 Delegated 接入</h2>
+        <p>以上逐用户 PAT Binding 仍属于 Direct MCP。需要以注册 workload 代表当前 Principal 调用的 Agent 平台，应与 Connection 管理员对接 HTTP/OpenAPI Delegated 契约、workload 身份和短期委托上下文；Agent Platform 还需绑定稳定 Agent Actor。不能用自报身份或共享 PAT 替代该契约，也不能从 MCP URL 推测 Delegated 接口。</p>
       </section>
     </main>
 
     <footer>
       <span>面向 AI 客户端的说明：</span>
-      <a href="/connection/agent/llms.txt">llms.txt</a>
+      <a href="/connection/agent/llms.txt" target="_blank" rel="noopener noreferrer">llms.txt</a>
     </footer>
   </body>
 </html>
