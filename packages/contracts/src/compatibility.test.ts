@@ -197,6 +197,9 @@ function restorePreApplicationUseGrantContract(value: {
 	delete value.paths[
 		"/api/v2/agents/{agentId}/application-use-grants/{applicationId}"
 	];
+	delete value.paths["/api/v2/agents/{agentId}/api-use-grants/{userId}"];
+	delete value.components.schemas.AgentUserUseRevokeRequestV1;
+	delete value.components.schemas.AgentUserUseRevokeResponseV1;
 	const actions = value.components.schemas.ScopedPlatformAuditActionV1 as
 		| { enum: string[] }
 		| undefined;
@@ -598,6 +601,11 @@ describe("contract compatibility command", () => {
 			const previous = structuredClone(current);
 			restorePreAgentApiManagementContract(previous);
 			for (const document of [current, previous]) {
+				delete document.paths[
+					"/api/v2/agents/{agentId}/api-use-grants/{userId}"
+				];
+				delete document.components.schemas.AgentUserUseRevokeRequestV1;
+				delete document.components.schemas.AgentUserUseRevokeResponseV1;
 				if (document.paths["/api/v2/agents"])
 					delete document.paths["/api/v2/agents"].post;
 				delete document.components.schemas.AgentApiCreationRequestV1;
