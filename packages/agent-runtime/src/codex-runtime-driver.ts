@@ -33,6 +33,10 @@ import {
 	validateModelEndpoint,
 } from "./codex-app-server-bridge.js";
 import {
+	type CodexBrowserToolDescriptorV1,
+	createCodexBrowserToolDescriptorsV1,
+} from "./codex-browser-tools.js";
+import {
 	type CodexConnectionEvidence,
 	type CodexConnectionEvidenceUpdateRequest,
 	type CodexConnectionEvidenceUpdateResponse,
@@ -311,6 +315,8 @@ import {
 } from "./standard-mcp-client.js";
 
 export interface CodexRuntimeDriverOptions {
+	/** Deployment-owned verified Browser projection; never selected by a wire command. */
+	readonly browserCapability?: import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1;
 	readonly installedSkill?: CodexInstalledSkillDescriptorV1;
 	readonly standardConnectionClient?: StandardMcpClientOptions;
 	/** Deployment-owned. Private execution still requires a verified native barrier. */
@@ -3155,6 +3161,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly recoveryLaunchPath?: string,
 		private readonly standardConnectionOptions?: StandardMcpClientOptions,
 		private readonly installedSkill?: CodexInstalledSkillDescriptorV1,
+		private readonly browserCapability?: import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1,
 	) {}
 
 	private readonly connectionRecoveries = new Map<
@@ -4459,6 +4466,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				options.launchPath,
 				standardConnection,
 				installedSkill,
+				options.browserCapability,
 			);
 		} catch (error) {
 			await modelTransport?.close().catch(() => {});
@@ -5806,6 +5814,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		_nativeSessionRef: string,
 	): Promise<RuntimeModelDirectory> {
 		return unavailable();
+	}
+
+	/** Return bounded Browser descriptors from the deployment-owned capability projection. */
+	getBrowserToolDescriptors(): readonly CodexBrowserToolDescriptorV1[] {
+		return createCodexBrowserToolDescriptorsV1(this.browserCapability);
 	}
 
 	async probeReadiness(signal: AbortSignal) {

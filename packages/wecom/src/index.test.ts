@@ -85,6 +85,39 @@ describe("WeCom callback boundary", () => {
 	});
 });
 
+it.each(["image", "file", "voice", "video"] as const)(
+	"maps a bot %s callback to opaque media metadata",
+	async (kind) => {
+		const payload = {
+			...message,
+			msgtype: kind,
+			[kind]:
+				kind === "file"
+					? { url: "https://provider.test/media/file-1", name: "report.pdf" }
+					: { url: `https://provider.test/media/${kind}-1` },
+		};
+		const adapter = createWecomAdapterV1({
+			now: () => now,
+			protectReply: async () => "protected-handle",
+		});
+		await expect(
+			adapter.receive(config, request(payload)),
+		).resolves.toMatchObject({
+			type: "message",
+			message: {
+				text: "",
+				media: [
+					{
+						kind,
+						mediaId: `https://provider.test/media/${kind}-1`,
+						...(kind === "file" ? { name: "report.pdf" } : { name: null }),
+					},
+				],
+			},
+		});
+	},
+);
+
 it.each([
 	["wrong robot", { ...message, aibotid: "bot-other" }],
 	[
@@ -151,6 +184,23 @@ it("validates application XML identity and rejects DTD or duplicate fields", asy
 			senderId: "member-1",
 			text: "hello <world>",
 			conversationType: "single",
+		},
+	});
+	const mediaXml = `<xml><ToUserName>corp-1</ToUserName><FromUserName>member-1</FromUserName><CreateTime>${now.getTime() / 1000}</CreateTime><MsgType>file</MsgType><MediaId>media-1</MediaId><FileName>report.pdf</FileName><MsgId>1235</MsgId><AgentID>42</AgentID></xml>`;
+	await expect(
+		adapter.receive(app, request(mediaXml, "corp-1")),
+	).resolves.toMatchObject({
+		type: "message",
+		message: {
+			text: "",
+			media: [
+				{
+					kind: "file",
+					mediaId: "media-1",
+					name: "report.pdf",
+					mediaType: "application/octet-stream",
+				},
+			],
 		},
 	});
 	const outerRequest = async (fields: string) => {
