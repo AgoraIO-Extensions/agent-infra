@@ -158,7 +158,9 @@ test("reads the read-only limits, uploads one attachment and keeps narrow layout
 		.toBe(true);
 	if (viewport) await page.setViewportSize(viewport);
 	const chooser = page.waitForEvent("filechooser");
-	await picker.click();
+	await picker.focus();
+	await expect(picker).toBeFocused();
+	await picker.press("Enter");
 	await (await chooser).setFiles({
 		name: "notes.txt",
 		mimeType: "text/plain",
