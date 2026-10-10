@@ -1,8 +1,12 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FileDescriptorV1 } from "@agent-infra/contracts/files";
 import { describe, expect, it, vi } from "vitest";
+import {
+	ingressVerifiedRuntimeHost,
+	runtimeGrantFixture,
+} from "./grant-fixture.test-support.js";
 import { FakeRuntimeDriver, FileRuntimeStore, RuntimeHost } from "./index.js";
 import {
 	assertRuntimeFileBridgeContextMatchesV1,
@@ -220,6 +224,54 @@ describe("RuntimeHost execution file bridge", () => {
 				"Runtime authorization is unavailable",
 			);
 			await host.close();
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("does not persist bridge authority material in FileRuntimeStore records", async () => {
+		const directory = await mkdtemp(
+			join(tmpdir(), "runtime-file-bridge-store-"),
+		);
+		const storePath = join(directory, "host.json");
+		try {
+			const store = await FileRuntimeStore.open(storePath);
+			const host = await RuntimeHost.open({
+				store,
+				driver: await FakeRuntimeDriver.open(join(directory, "driver.json")),
+				grantValidation: {
+					expectedIssuer: "agent-platform",
+					now: () => "2026-08-28T10:00:00Z",
+				},
+			});
+			const binding = {
+				agentId: "agent-1",
+				actorId: "actor-1",
+				channelId: "web",
+				conversationId: "conversation-1",
+				executionId: "execution-1",
+				turnId: "turn-1",
+				sessionGeneration: 1,
+				traceId: "trace-1",
+			};
+			const grant = runtimeGrantFixture(binding, ["turn.submit"], {
+				attachments: [{ attachmentId: "input-1", operations: ["read"] }],
+			});
+			await ingressVerifiedRuntimeHost(host).submitTurn({
+				schemaVersion: 1,
+				requestId: "request-1",
+				...binding,
+				deliveryFence: 1,
+				grant,
+				input: { text: "persist only references", attachments: ["input-1"] },
+			});
+			await host.close();
+			const durable = await readFile(storePath, "utf8");
+			expect(durable).toContain('"executionId":"execution-1"');
+			expect(durable).not.toContain("fileBridge");
+			expect(durable).not.toContain("temporary");
+			expect(durable).not.toContain('"body"');
+			expect(durable).not.toContain("objectUrl");
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
