@@ -117,9 +117,9 @@ CREATE TRIGGER supervised_dispatch_guard BEFORE UPDATE OF status ON connection_d
 CREATE FUNCTION connection_close_supervised_provider_on_terminal_change() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE release_id text;
 BEGIN
-  IF TG_TABLE_NAME = 'connection_calls' AND NEW.status = 'UNCERTAIN' THEN
+  IF TG_TABLE_NAME = 'connection_calls' AND NEW.status IN ('UNCERTAIN', 'FAILED') THEN
     SELECT provider_release_id INTO release_id FROM connection_action_versions WHERE id = NEW.action_version_id;
-    PERFORM connection_close_supervised_provider(release_id, NEW.principal_id, 'UNCERTAIN');
+    PERFORM connection_close_supervised_provider(release_id, NEW.principal_id, NEW.status);
   ELSIF TG_TABLE_NAME = 'connection_grants' AND NEW.status IN ('REVOKED', 'TERMINATED', 'PAUSED_CREDENTIAL') THEN
     PERFORM connection_close_supervised_provider(NEW.provider_release_id, NEW.principal_id, 'GRANT_REVOKED');
   ELSIF TG_TABLE_NAME = 'connection_credential_versions' AND NEW.status = 'REVOKED' THEN

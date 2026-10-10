@@ -252,6 +252,12 @@ if (process.env.CI && !url)
 					await tx`UPDATE connection_dispatches SET status='SUBMISSION_STARTED' WHERE effect_id IN (SELECT id FROM connection_effects WHERE call_id=${call.call.callId})`;
 				}),
 			).rejects.toMatchObject({ code: "23514" });
+			const failedRead = await repo.createCall({
+				invocation: context,
+				action: "static-spaces.get_current_user",
+				argsHash: suffix,
+				input: {},
+			});
 			const uncertain = await repo.createCall({
 				invocation: context,
 				action: "static-spaces.publish_space",
@@ -273,6 +279,10 @@ if (process.env.CI && !url)
 				callId: uncertain.call.callId,
 				status: "UNCERTAIN",
 			});
+			await repo.setCallResult({
+				callId: failedRead.call.callId,
+				status: "FAILED",
+			});
 			await repo.pauseCredentialForReauthorization(context);
 			expect(
 				await repo.isProviderAdmissionOpen({
@@ -287,7 +297,7 @@ if (process.env.CI && !url)
 			const closures =
 				await sql`SELECT detail->>'reason' AS reason FROM connection_audit_records WHERE event='SUPERVISED_PILOT_CLOSED' AND detail->>'providerReleaseId'=${catalog.providerReleaseId}`;
 			expect(closures.map((row) => row.reason)).toEqual(
-				expect.arrayContaining(["UNCERTAIN", "CREDENTIAL_REVOKED"]),
+				expect.arrayContaining(["UNCERTAIN", "FAILED", "CREDENTIAL_REVOKED"]),
 			);
 			await expect(
 				repo.startDispatch({

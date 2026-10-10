@@ -27,7 +27,8 @@
 - `download_file` 对每个新增文件回读原始 bytes、size、SHA-256；`get_markdown_review` 回读该
   Markdown 原文和 API 返回的 review URL，不新增评论。
 - 同 idempotency key 的重复成功调用不得再次外部写入。未知结果保留 `UNCERTAIN`，关闭本
-  Provider 新准入且不自动重放，随后只读对账；不能再执行本轮其他 WRITE。
+  Provider 新准入且不自动重放，随后只读对账；不能再执行本轮其他 WRITE。执行失败同样停止本轮新准入，涵盖 READ
+  泄漏/隔离响应校验失败，不依赖不可信异常正文来决定是否关闭。
 - 保留 call ID、Grant/ActionVersion、Effect/Dispatch 终态及安全上游 request ID；不得记录 Token、
   query/document正文或以网关 request ID 冒充外部效果证明。
 
