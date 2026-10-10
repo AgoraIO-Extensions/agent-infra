@@ -415,6 +415,14 @@ it("recovers only the original control ref through production Worker/Core and Po
 								})
 							).outcome,
 						).toBe("accepted");
+						const [pendingStop] = await sql`
+							select status from platform.conversation_stops
+							where execution_id = ${executionId}`;
+						expect(pendingStop?.status).toBe("submitted");
+						const [pendingOutbox] = await sql`
+							select status from platform.outbox_items
+							where id = ${`conversation:stop:${stopRequestId}`}`;
+						expect(pendingOutbox?.status).toBe("retry_scheduled");
 						phase = "terminal";
 						const terminal = {
 							schemaVersion: 1,

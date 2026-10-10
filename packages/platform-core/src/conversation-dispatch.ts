@@ -49,7 +49,11 @@ import type {
 import { isConversationGenerationBarrierConfirmedV1 } from "./conversation-generation-isolation.js";
 
 export { parseConversationMetadataRecoveryV1 } from "./conversation-dispatch-input.js";
-export { decideConversationDispatchRetryTransitionV1 } from "./conversation-dispatch-transition.js";
+export {
+	decideConversationDispatchRetryTransitionV1,
+	decideConversationStopConfirmationStatusV1,
+	decideConversationStopConfirmationTimeoutV1,
+} from "./conversation-dispatch-transition.js";
 export {
 	type ConversationDispatchAuthorityV1,
 	type ConversationDispatchAuthorizationPortV1,
@@ -860,11 +864,17 @@ export function createConversationDispatchUseCaseV1(
 				(claim.executionStatus === "unknown" ||
 					claim.executionStatus === "processing") &&
 				dependencies.runtimeHost.recoverOriginalStatus !== undefined;
+			const recoveringStop =
+				claim.operation === "conversation.turn.stop.v1" &&
+				claim.stopConfirmationTimedOut === true &&
+				claim.hostSessionRef !== null &&
+				dependencies.runtimeHost.recoverOriginalStatus !== undefined;
 			if (
 				(claim.operation === "conversation.turn.supplement.v1" ||
 					claim.operation === "conversation.turn.stop.v1") &&
 				claim.executionStatus !== "processing" &&
-				!recoveringMissingStop
+				!recoveringMissingStop &&
+				!recoveringStop
 			) {
 				return retry(
 					dependencies.store,
@@ -910,7 +920,7 @@ export function createConversationDispatchUseCaseV1(
 				leaseDurationMs,
 			);
 			try {
-				if (recoveringOriginalTurn || recoveringMissingStop) {
+				if (recoveringOriginalTurn || recoveringStop || recoveringMissingStop) {
 					const status = parseRuntimeStatusResponse(
 						dependencies.runtimeHost.recoverOriginalStatus
 							? await dependencies.runtimeHost.recoverOriginalStatus(
@@ -984,6 +994,18 @@ export function createConversationDispatchUseCaseV1(
 							{},
 						);
 					}
+					if (status.outcome === "recovery_failed" && recoveringStop) {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							status.code,
+							"unknown",
+							{ executionStatus: "unknown", conversationStatus: "active" },
+						);
+					}
 					if (recoveringMissingStop) {
 						if (!(await dispatchHeartbeat.stop()))
 							return { schemaVersion: 1, outcome: "stale" };
@@ -994,6 +1016,18 @@ export function createConversationDispatchUseCaseV1(
 							"RUNTIME_ACCEPTANCE_UNKNOWN",
 							"unknown",
 							{},
+						);
+					}
+					if (status.outcome === "not_found" && recoveringStop) {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"unknown",
+							{ executionStatus: "unknown", conversationStatus: "active" },
 						);
 					}
 					if (status.outcome === "recovery_failed") {
@@ -1044,15 +1078,37 @@ export function createConversationDispatchUseCaseV1(
 					if (status.status === "unavailable") {
 						throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
 					}
-					response = {
-						schemaVersion:
-							isTurnOperation(claim.operation) && claim.modelOptionId !== null
-								? 2
-								: 1,
-						hostSessionRef: status.hostSessionRef ?? unavailable(),
-						operationId: operationId(claim),
-						result: { outcome: "accepted", status: status.status },
-					};
+					if (recoveringStop && status.status === "unknown") {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						return retry(
+							dependencies.store,
+							claim,
+							retryDelayMs,
+							"RUNTIME_ACCEPTANCE_UNKNOWN",
+							"unknown",
+							{},
+						);
+					}
+					if (recoveringStop && status.status === "running") {
+						response = parseRuntimeResponse(
+							await dependencies.runtimeHost.dispatch(
+								runtimeRequest(claim, authority),
+								dispatchHeartbeat.signal,
+							),
+							claim,
+						);
+					} else {
+						response = {
+							schemaVersion:
+								isTurnOperation(claim.operation) && claim.modelOptionId !== null
+									? 2
+									: 1,
+							hostSessionRef: status.hostSessionRef ?? unavailable(),
+							operationId: operationId(claim),
+							result: { outcome: "accepted", status: status.status },
+						};
+					}
 				} else {
 					response = parseRuntimeResponse(
 						await dependencies.runtimeHost.dispatch(
@@ -1213,6 +1269,16 @@ export function createConversationDispatchUseCaseV1(
 						? { schemaVersion: 1, outcome: "already_completed" }
 						: { schemaVersion: 1, outcome: "stale" };
 				}
+				if (claim.operation === "conversation.turn.stop.v1") {
+					return retry(
+						dependencies.store,
+						claim,
+						retryDelayMs,
+						"RUNTIME_STOP_REJECTED",
+						"retry",
+						{},
+					);
+				}
 				return reject(
 					dependencies.store,
 					claim,
@@ -1221,6 +1287,21 @@ export function createConversationDispatchUseCaseV1(
 						? "ORIGINAL_RESPONSE_ALREADY_FINISHED"
 						: response.result.code,
 				);
+			}
+			if (
+				claim.operation === "conversation.turn.stop.v1" &&
+				!["completed", "failed", "cancelled"].includes(response.result.status)
+			) {
+				// Stop acceptance is an ACK; retain its work until the original Turn confirms a terminal result.
+				const scheduled = await dependencies.store.retry({
+					claim,
+					retryDelayMs,
+					errorCode: "STOP_CONFIRMATION_PENDING",
+					transition: {},
+				});
+				return scheduled
+					? { schemaVersion: 1, outcome: "accepted" }
+					: { schemaVersion: 1, outcome: "stale" };
 			}
 			if (
 				claim.operation === "conversation.turn.supplement.v1" ||

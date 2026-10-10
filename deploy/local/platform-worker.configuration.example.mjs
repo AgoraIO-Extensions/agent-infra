@@ -15,6 +15,10 @@ export const serviceToken = await requiredFile("PLATFORM_WORKER_SERVICE_TOKEN_FI
 // policy.namespace must match the Pod namespace in PLATFORM_WORKER_NAMESPACE.
 export const workloadInput = missing("workloadInput");
 
+// workloadInput.files is optional during deployments without file support. If
+// enabled, provide the same deployment-owned S3-compatible adapter used by the
+// API and bounded batch/orphan settings for reconciliation.
+
 // Use runtimeImageBinding() from environment.mjs when constructing
 // templateModelBindings. The binding is a reviewed repository+Digest pair
 // supplied by the Harness; the model catalog and admission policy remain

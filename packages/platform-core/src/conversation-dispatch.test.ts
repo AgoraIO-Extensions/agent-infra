@@ -16,7 +16,56 @@ import {
 	type ConversationRuntimeOperationEventV2,
 	createConversationDispatchUseCaseV1,
 	decideConversationDispatchRetryTransitionV1,
+	decideConversationStopConfirmationStatusV1,
+	decideConversationStopConfirmationTimeoutV1,
 } from "./index.js";
+
+describe("stop confirmation timeout", () => {
+	it.each([
+		"submitted",
+		"waiting",
+		"completed",
+		"failed",
+		"cancelled",
+	] as const)("does not mark %s as unknown", (executionStatus) => {
+		expect(
+			decideConversationStopConfirmationTimeoutV1({
+				executionStatus,
+				confirmationDeadline: 100,
+				observedAt: 101,
+				alreadyTimedOut: false,
+			}),
+		).toBeUndefined();
+	});
+
+	it("marks an active stop as unknown exactly once after its deadline", () => {
+		expect(
+			decideConversationStopConfirmationTimeoutV1({
+				executionStatus: "processing",
+				confirmationDeadline: 100,
+				observedAt: 100,
+				alreadyTimedOut: false,
+			}),
+		).toEqual({ status: "unknown", reason: "STOP_CONFIRMATION_TIMEOUT" });
+		expect(
+			decideConversationStopConfirmationTimeoutV1({
+				executionStatus: "unknown",
+				confirmationDeadline: 100,
+				observedAt: 101,
+				alreadyTimedOut: true,
+			}),
+		).toBeUndefined();
+	});
+
+	it("does not let a timed-out stop return to processing", () => {
+		expect(
+			decideConversationStopConfirmationStatusV1({
+				executionStatus: "processing",
+				confirmationTimedOut: true,
+			}),
+		).toBe("unknown");
+	});
+});
 
 describe("current-state retry transition", () => {
 	it.each(["completed", "failed", "cancelled"] as const)(

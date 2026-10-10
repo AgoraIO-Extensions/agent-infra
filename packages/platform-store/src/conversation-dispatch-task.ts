@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
 	type AgentManagementStateV1,
 	type ConversationDispatchExecutionStatusV1,
+	decideConversationStopConfirmationTimeoutV1,
 	decideConversationTaskWaitingV1,
 	isTaskApiChannelV1,
 	isTaskApplicationAuthorizationCurrentV1,
@@ -307,6 +308,59 @@ export async function recordTaskStatus(
 				...(reason ? { reason } : {}),
 			})})
 	`;
+}
+
+/** Observe a durable stop deadline under the same locks as cancellation and terminal transitions. */
+export async function observeStopConfirmationTimeout(
+	transaction: Transaction,
+	state: DispatchState,
+	workerId: string,
+): Promise<boolean> {
+	const [stop] = await transaction<
+		{
+			confirmation_deadline: Date;
+			confirmation_timed_out_at: Date | null;
+			observed_at: Date;
+		}[]
+	>`select confirmation_deadline, confirmation_timed_out_at,
+			clock_timestamp() as observed_at
+		from platform.conversation_stops
+		where execution_id = ${state.execution.execution_id}
+		for update`;
+	if (!stop) return false;
+	const decision = decideConversationStopConfirmationTimeoutV1({
+		executionStatus: state.execution.status,
+		confirmationDeadline: stop.confirmation_deadline.getTime(),
+		observedAt: stop.observed_at.getTime(),
+		alreadyTimedOut: stop.confirmation_timed_out_at !== null,
+	});
+	if (!decision) return false;
+	const rows = await transaction<{ execution_id: string }[]>`
+		update platform.conversation_stops
+		set confirmation_timed_out_at = clock_timestamp(), updated_at = clock_timestamp()
+		where execution_id = ${state.execution.execution_id}
+			and confirmation_timed_out_at is null
+			and confirmation_deadline <= clock_timestamp()
+		returning execution_id
+	`;
+	if (rows.length === 0) return false;
+	const executions = await transaction<{ execution_id: string }[]>`
+		update platform.conversation_executions
+		set status = 'unknown', updated_at = clock_timestamp()
+		where execution_id = ${state.execution.execution_id}
+			and status in ('processing', 'unknown')
+		returning execution_id
+	`;
+	if (executions.length !== 1) throw new StaleDispatchLease();
+	state.execution.status = decision.status;
+	await recordTaskStatus(
+		transaction,
+		state,
+		decision.status,
+		workerId,
+		decision.reason,
+	);
+	return true;
 }
 
 export async function finishWaitingTask(
