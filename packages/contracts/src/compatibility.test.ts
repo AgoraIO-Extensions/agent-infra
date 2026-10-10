@@ -1780,27 +1780,34 @@ describe("contract compatibility command", () => {
 				remove(value: OpenApiDocument) {
 					delete value.components.schemas.RuntimeModelDirectoryRequestV1;
 					delete value.components.schemas.RuntimeModelDirectoryResponseV1;
-					const commands = value.components.schemas.ExecutionGrantCommandV1
-						.enum as string[];
-					value.components.schemas.ExecutionGrantCommandV1.enum =
-						commands.filter((command) => command !== "model-directory.read");
+						const schema = value.components.schemas.ExecutionGrantCommandV1;
+						if (!schema) throw new Error("ExecutionGrantCommandV1 missing");
+						const commands = schema.enum as string[];
+						schema.enum = commands.filter(
+							(command) => command !== "model-directory.read",
+						);
 				},
 			},
 			{
 				name: "pilot-delegated.v1.openapi.json",
 				remove(value: OpenApiDocument) {
-					const commands = value.components.schemas.ExecutionGrantCommandV1
-						.enum as string[];
-					value.components.schemas.ExecutionGrantCommandV1.enum =
-						commands.filter((command) => command !== "model-directory.read");
+						const schema = value.components.schemas.ExecutionGrantCommandV1;
+						if (!schema) throw new Error("ExecutionGrantCommandV1 missing");
+						const commands = schema.enum as string[];
+						schema.enum = commands.filter(
+							(command) => command !== "model-directory.read",
+						);
 				},
 			},
 			{
 				name: "pilot-browser.v1.openapi.json",
 				remove(value: OpenApiDocument) {
-					delete value.paths[
-						"/api/v1/conversations/{conversationId}/model-selection"
-					].get;
+						const path =
+							value.paths[
+								"/api/v1/conversations/{conversationId}/model-selection"
+							];
+						if (!path) throw new Error("model-selection path missing");
+						delete path.get;
 					delete value.components.schemas
 						.ConversationModelSelectionProjectionV1;
 				},
