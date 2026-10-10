@@ -325,6 +325,24 @@ export type ConversationDetailProjectionV1 = {
     messages: Array<MessageProjectionV1>;
 };
 
+export type ConversationModelSelectionProjectionV1 = {
+    agentId: string;
+    available: boolean;
+    conversationId: string;
+    currentModelOptionId: string | null;
+    currentReasoningLevel: string | null;
+    options: Array<{
+        displayName: string;
+        modelId: string;
+        optionId: string;
+        reasoningLevels: Array<string>;
+    }>;
+    schemaVersion: 1;
+    selectedModelOptionId: string | null;
+    selectedReasoningLevel: string | null;
+    source: 'standard' | 'custom-platform-adapter';
+};
+
 export type ConversationProjectionV1 = {
     agentId: string;
     conversationId: string;
@@ -2938,6 +2956,57 @@ export type SubmitMessageResponses = {
 };
 
 export type SubmitMessageResponse = SubmitMessageResponses[keyof SubmitMessageResponses];
+
+export type GetConversationModelSelectionData = {
+    body?: never;
+    path: {
+        conversationId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/model-selection';
+};
+
+export type GetConversationModelSelectionErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetConversationModelSelectionError = GetConversationModelSelectionErrors[keyof GetConversationModelSelectionErrors];
+
+export type GetConversationModelSelectionResponses = {
+    /**
+     * Current Runtime model selection
+     */
+    200: ConversationModelSelectionProjectionV1;
+};
+
+export type GetConversationModelSelectionResponse = GetConversationModelSelectionResponses[keyof GetConversationModelSelectionResponses];
 
 export type UpdateConversationModelSelectionData = {
     body: ModelSelectionUpdateRequestV1;

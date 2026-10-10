@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { imageDockerfiles, sha256 } from "./image-manifest.mjs";
 import { verifyCustomBaseImage } from "./custom-base-image.mjs";
+import { describeOciArchiveDifference } from "./oci-archive-diff.mjs";
 
 import { runCommand } from "./run-command.mjs";
 import {
@@ -282,11 +283,13 @@ async function buildImage({
 		"--label", `agent-infra.lockfile-sha256=${sha256(await readFile(join(contextPath, "pnpm-lock.yaml")))}`,
 	] : [];
 	const digests = [];
+	const archivePaths = [];
 	let archivePath;
 	for (const pass of [1, 2]) {
 		assertCheckout(git, commitSha);
 		const metadataPath = join(temp, `${image.name}-${pass}.json`);
 		archivePath = join(temp, `${image.name}-${pass}.oci.tar`);
+		archivePaths.push(archivePath);
 		runCommand(
 			docker,
 			[
@@ -336,6 +339,10 @@ async function buildImage({
 		digests.push(digest);
 	}
 	if (digests[0] !== digests[1]) {
+		// Diagnostics only explain the mismatch; the build still fails here.
+		for (const line of await describeOciArchiveDifference(...archivePaths)) {
+			console.error(`${image.key} reproducibility: ${line}`);
+		}
 		fail(`${image.key} image is not reproducible`);
 	}
 	runCommand(

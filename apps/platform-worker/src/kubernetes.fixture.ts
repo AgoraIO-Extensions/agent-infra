@@ -18,6 +18,7 @@ import {
 	type KubernetesWorkloadPolicyV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
+import { createWorkloadInteractionOriginV1 } from "./kubernetes-runtime-policy.js";
 
 export const workloadTestPolicy: KubernetesWorkloadPolicyV1 = {
 	namespace: "workload-test",
@@ -158,7 +159,19 @@ export function workloadDesiredFixture(
 			connectionDatabaseAccess: false,
 			decryptionKeyringAccess: false,
 		},
-		route: { name, exposure, tlsRequired: true },
+		route: {
+			name,
+			exposure,
+			tlsRequired: true,
+			...(exposure === "self-managed"
+				? {
+						interactionOrigin: createWorkloadInteractionOriginV1({
+							routeHostSuffix: workloadTestPolicy.routeHostSuffix,
+							agentId,
+						}),
+					}
+				: {}),
+		},
 		secretRefs: [],
 	});
 }

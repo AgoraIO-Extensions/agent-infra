@@ -20,6 +20,7 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
+	RuntimeModelDirectory,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -72,6 +73,13 @@ export interface NativeSession {
 	>;
 	cancel(): Promise<void>;
 	close(): Promise<void>;
+	/** Native IDs are mapped to public option IDs by SessionRuntimeDriver. */
+	modelSelection?(): {
+		models: readonly string[];
+		currentModel: string | null;
+		reasoningLevels: readonly string[];
+		currentReasoning: string | null;
+	};
 }
 
 interface Binding {
@@ -1071,6 +1079,35 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			resultFiles: false,
 			connection: false,
 			supplementaryInstruction: false,
+		};
+	}
+	async getModelDirectory(ref: string): Promise<RuntimeModelDirectory> {
+		const handle = this.handles.get(ref);
+		if (!handle?.native.modelSelection) unavailable();
+		const selection = handle.native.modelSelection();
+		const options = this.options.modelOptions.map((option) => ({
+			modelOptionId: option.modelOptionId,
+			modelId: option.nativeModelId,
+			displayName: option.nativeModelId,
+			reasoningLevels: [...option.reasoningLevels],
+		}));
+		const currentModel = selection.currentModel;
+		const currentReasoning = selection.currentReasoning;
+		const currentOption = this.options.modelOptions.find(
+			(option) => option.nativeModelId === currentModel,
+		);
+		if (
+			!currentOption ||
+			!currentReasoning ||
+			!currentOption.reasoningLevels.includes(currentReasoning)
+		)
+			unavailable();
+		return {
+			options,
+			current: {
+				modelOptionId: currentOption.modelOptionId,
+				reasoningLevel: currentReasoning,
+			},
 		};
 	}
 

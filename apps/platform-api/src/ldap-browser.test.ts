@@ -5,6 +5,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import {
 	createLdapBrowserAdapter,
+	type LdapBrowserInput,
 	type LdapSessionStore,
 } from "./ldap-browser.js";
 
@@ -72,7 +73,10 @@ function memorySessions(): LdapSessionStore {
 	};
 }
 
-function fixture(sessions = memorySessions()) {
+function fixture(
+	sessions = memorySessions(),
+	organizationAuthority?: LdapBrowserInput["organizationAuthority"],
+) {
 	let current: LdapAccount | null = account;
 	let disabled = false;
 	let organizationIds: readonly string[] = ["org-a"];
@@ -98,6 +102,7 @@ function fixture(sessions = memorySessions()) {
 			if (!organizationsAvailable) throw new Error("directory unavailable");
 			return organizationIds;
 		},
+		...(organizationAuthority ? { organizationAuthority } : {}),
 		now: () => now,
 	});
 	const login = (
@@ -197,6 +202,34 @@ describe("LDAP browser adapter", () => {
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
 		state.setNow(1000 + 15 * 60_000);
 		expect(await state.adapter.identityAdapter.resolve(request)).toBeNull();
+	});
+
+	it("carries a snapshot binding into current identity and task resolution", async () => {
+		const now = Date.now();
+		const binding = {
+			schemaVersion: 1 as const,
+			source: "internal",
+			revision: "00000000-0000-4000-8000-000000000001",
+			fetchedAt: now - 1_000,
+			validUntil: now + 10_000,
+		};
+		const state = fixture(memorySessions(), async () => ({
+			organizationIds: ["org-bound"],
+			binding,
+		}));
+		const result = await state.login();
+		const cookie = result?.headers.get("set-cookie")?.split(";")[0] ?? "";
+		const request = new Request(`${origin}/api/v1/session`, {
+			headers: { cookie },
+		});
+		expect(await state.adapter.identityAdapter.resolve(request)).toMatchObject({
+			directorySnapshotBinding: binding,
+		});
+		expect(
+			await state.adapter.identityAdapter.resolveUser?.(account.userId),
+		).toMatchObject({
+			directorySnapshotBinding: binding,
+		});
 	});
 
 	it("slides an active session after validation but enforces idle and absolute expiry", async () => {

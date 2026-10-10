@@ -147,6 +147,30 @@ describe("trusted identity boundary", () => {
 		]);
 	});
 
+	it("rejects directory binding leakage into Browser user projections", async () => {
+		const error = await caught(
+			hydrateBrowserUsers(
+				adapter(activeIdentity, [
+					{
+						userId: "user-01",
+						displayName: "One",
+						roles: ["employee"],
+						directorySnapshotBinding: {
+							schemaVersion: 1,
+							source: "internal",
+							revision: "00000000-0000-4000-8000-000000000001",
+							fetchedAt: 1,
+							validUntil: 2,
+						},
+					},
+				]),
+				["user-01"],
+				traceId,
+			),
+		);
+		expect(error.body.code).toBe("DEPENDENCY_UNAVAILABLE");
+	});
+
 	it("snapshots hydrated users and roles without invoking custom prototypes", async () => {
 		let customMapCalls = 0;
 		const roles = ["employee"];

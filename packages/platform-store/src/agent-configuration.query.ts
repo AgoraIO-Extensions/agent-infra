@@ -402,14 +402,36 @@ export class PostgresAgentConfigurationQueryV1 {
 											active.sourceReference
 									)
 										throw new AgentConfigurationStoreError();
+									const deployment = validateAgentWorkloadDesiredV1(
+										verified.deployment,
+									);
 									runtime = {
 										revision: row.revision,
 										state,
 										verifiedConfiguration,
 										verifiedSourceReference: active.sourceReference,
-										deployment: validateAgentWorkloadDesiredV1(
-											verified.deployment,
-										),
+										deployment: {
+											agentId: deployment.agentId,
+											configRevision: deployment.configRevision,
+											workloadRevision: deployment.workloadRevision,
+											fence: deployment.fence,
+											desiredState: deployment.desiredState,
+											imageDigest: deployment.imageDigest,
+											runtimeManifest: {
+												interactionMode:
+													deployment.runtimeManifest.interactionMode,
+											},
+											route: {
+												exposure: deployment.route.exposure,
+												...(deployment.route.exposure === "self-managed" &&
+												deployment.route.interactionOrigin
+													? {
+															interactionOrigin:
+																deployment.route.interactionOrigin.origin,
+														}
+													: {}),
+											},
+										},
 									};
 								} catch {
 									/* Incomplete history or invalid deployment is not runtime evidence. */

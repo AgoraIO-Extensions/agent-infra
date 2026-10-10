@@ -4,9 +4,29 @@ import type { PostgresAgentConfigurationQueryV1 } from "@agent-infra/platform-st
 
 import type { createDeploymentIdentityScope } from "./deployment-identity.js";
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
+import type { IdentityContext } from "./http/identity.js";
 import type { PresentPlatformAgent } from "./projection.js";
 
 type Presentation = Awaited<ReturnType<PresentPlatformAgent>>;
+
+function canonicalHttpsOrigin(value: unknown): value is string {
+	if (typeof value !== "string" || value.length === 0) return false;
+	try {
+		const url = new URL(value);
+		return (
+			value === url.origin &&
+			url.protocol === "https:" &&
+			url.username === "" &&
+			url.password === "" &&
+			url.pathname === "/" &&
+			url.search === "" &&
+			url.hash === "" &&
+			url.hostname !== ""
+		);
+	} catch {
+		return false;
+	}
+}
 
 /** Project only current, authorized Store evidence and the deployed resource policy. */
 export function createDeploymentPresentation(input: {
@@ -17,6 +37,12 @@ export function createDeploymentPresentation(input: {
 	>;
 	readonly resourceProfile: Presentation["resourceProfile"];
 	readonly imageRepository: string;
+	/** Deployment-owned, readiness-aware resolver for platform-identity Web routes. */
+	readonly resolveCustomAgentInteractionUrl?: (input: {
+		readonly agentId: string;
+		readonly identity: IdentityContext;
+		readonly request: Request;
+	}) => Promise<string | null>;
 }): PresentPlatformAgent {
 	const resourceProfile = AgentResourceProfileProjectionV1Schema.parse(
 		input.resourceProfile,
@@ -67,6 +93,25 @@ export function createDeploymentPresentation(input: {
 			connection: verified?.connection === true,
 			supplementaryInstruction: verified?.supplementaryInstruction === true,
 		});
+		let interactionUrl = runtime.interactionUrl;
+		if (
+			interactionUrl === null &&
+			browserSource.kind === "custom" &&
+			browserSource.interactionMode === "self-managed" &&
+			browserSource.identityResponsibility === "platform-managed" &&
+			input.resolveCustomAgentInteractionUrl
+		) {
+			try {
+				const candidate = await input.resolveCustomAgentInteractionUrl({
+					agentId,
+					identity,
+					request: input.identityScope.currentRequest(),
+				});
+				if (canonicalHttpsOrigin(candidate)) interactionUrl = candidate;
+			} catch {
+				// A route dependency that cannot prove readiness stays unavailable.
+			}
+		}
 		return {
 			source: browserSource,
 			resourceProfile,
@@ -84,7 +129,7 @@ export function createDeploymentPresentation(input: {
 				})),
 			],
 			capabilities,
-			interactionUrl: runtime.interactionUrl,
+			interactionUrl,
 		};
 	};
 }

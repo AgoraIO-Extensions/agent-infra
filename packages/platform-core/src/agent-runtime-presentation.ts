@@ -24,7 +24,7 @@ export type AgentRuntimePresentationDecisionV1 =
 			readonly outcome: "found";
 			readonly sourceReference: string;
 			readonly capabilities: Readonly<Record<string, boolean>> | null;
-			readonly interactionUrl: null;
+			readonly interactionUrl: string | null;
 	  }
 	| { readonly outcome: "unavailable" | "stale" };
 
@@ -41,6 +41,8 @@ export interface AgentRuntimePresentationDeploymentV1 {
 	};
 	readonly route: {
 		readonly exposure: "internal-only" | "platform-auth" | "self-managed";
+		/** Store-projected deployment origin; never a Service, Pod or caller URL. */
+		readonly interactionOrigin?: string;
 	};
 }
 
@@ -55,6 +57,25 @@ export interface AgentRuntimePresentationFactsV1 {
 		readonly verifiedSourceReference: string;
 		readonly deployment: AgentRuntimePresentationDeploymentV1;
 	};
+}
+
+function isCanonicalHttpsOriginV1(value: unknown): value is string {
+	if (typeof value !== "string" || value.length === 0) return false;
+	try {
+		const url = new URL(value);
+		return (
+			value === url.origin &&
+			url.protocol === "https:" &&
+			url.username === "" &&
+			url.password === "" &&
+			url.pathname === "/" &&
+			url.search === "" &&
+			url.hash === "" &&
+			url.hostname !== ""
+		);
+	} catch {
+		return false;
+	}
 }
 
 export function isAgentRuntimePresentationVisibleV1(
@@ -166,6 +187,13 @@ export function decideAgentRuntimePresentationV1(input: {
 		deployment.route.exposure !== exposure
 	)
 		return unavailable;
+	const interactionUrl =
+		mode === "self-managed" &&
+		configuration.source.kind === "custom" &&
+		configuration.source.identityResponsibility === "self-managed" &&
+		isCanonicalHttpsOriginV1(deployment.route.interactionOrigin)
+			? deployment.route.interactionOrigin
+			: null;
 	return {
 		outcome: "found",
 		sourceReference: facts.sourceReference,
@@ -176,6 +204,6 @@ export function decideAgentRuntimePresentationV1(input: {
 					),
 				) as Readonly<Record<string, boolean>>)
 			: null,
-		interactionUrl: null,
+		interactionUrl,
 	};
 }

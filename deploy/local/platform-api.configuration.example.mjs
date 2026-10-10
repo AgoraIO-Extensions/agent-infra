@@ -18,6 +18,10 @@ export const ldap = missing("ldap");
 // on dependency failure rather than returning a permissive default.
 export const isPlatformDisabled = missing("isPlatformDisabled");
 export const organizationIds = missing("organizationIds");
+// Optional generic #1341/#1683 consumer. When supplied, this takes precedence
+// over organizationIds and must map every matched snapshot department to a
+// reviewed Platform organization ID. The endpoint/token are deployment-owned.
+export const directorySnapshot = undefined;
 export const publicOrigin = requiredEnv("PLATFORM_PUBLIC_ORIGIN");
 
 // apiInput is the credential-free Platform admission boundary. Keep Worker
