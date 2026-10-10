@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import type { DirectorySnapshotBindingV1 } from "@agent-infra/platform-core";
+import {
+	type DirectorySnapshotBindingV1,
+	parseDirectorySnapshotBindingV1,
+} from "@agent-infra/platform-core";
 import type { LdapAccount } from "./ldap.js";
 
 export interface LdapPrincipalAuthorities {
@@ -24,14 +27,35 @@ export async function resolveLdapPrincipal(
 	if (typeof disabled !== "boolean")
 		throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 	const isDisabled = account.accountStatus === "disabled" || disabled;
+	const organizationAuthority = authorities.organizationAuthority;
+	const hasOrganizationAuthority =
+		!isDisabled && organizationAuthority !== undefined;
 	const authority =
-		!isDisabled && authorities.organizationAuthority
-			? await authorities.organizationAuthority(account)
+		hasOrganizationAuthority && typeof organizationAuthority === "function"
+			? await organizationAuthority(account)
 			: null;
+	if (
+		hasOrganizationAuthority &&
+		(!authority ||
+			!Array.isArray(authority.organizationIds) ||
+			!authority.binding)
+	)
+		throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
 	const organizationIds = isDisabled
 		? []
-		: (authority?.organizationIds ??
-			(await authorities.organizationIds(account)));
+		: authority
+			? authority.organizationIds
+			: await authorities.organizationIds(account);
+	let directorySnapshotBinding: DirectorySnapshotBindingV1 | undefined;
+	if (authority) {
+		try {
+			directorySnapshotBinding = parseDirectorySnapshotBindingV1(
+				authority.binding,
+			);
+		} catch {
+			throw new Error("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+		}
+	}
 	if (
 		!Array.isArray(organizationIds) ||
 		organizationIds.some(
@@ -56,6 +80,6 @@ export async function resolveLdapPrincipal(
 				]),
 			)
 			.digest("hex"),
-		...(authority ? { directorySnapshotBinding: authority.binding } : {}),
+		...(directorySnapshotBinding ? { directorySnapshotBinding } : {}),
 	};
 }

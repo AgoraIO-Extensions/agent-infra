@@ -52,8 +52,8 @@ describe("LDAP principal authority", () => {
 			schemaVersion: 1 as const,
 			source: "internal",
 			revision: "00000000-0000-4000-8000-000000000001",
-			fetchedAt: 1_000,
-			validUntil: 2_000,
+			fetchedAt: Date.now() - 1_000,
+			validUntil: Date.now() + 60_000,
 		};
 		const identity = await resolveLdapPrincipal(account, {
 			isPlatformDisabled: async () => false,
@@ -65,5 +65,34 @@ describe("LDAP principal authority", () => {
 		});
 		expect(identity.organizationIds).toEqual(["org-a"]);
 		expect(identity.directorySnapshotBinding).toEqual(binding);
+	});
+
+	it("fails closed when configured directory authority is incomplete", async () => {
+		const organizationIds = vi.fn(async () => ["legacy-org"]);
+		for (const authority of [
+			null,
+			{ organizationIds: ["org-a"] },
+			{ binding: { schemaVersion: 1 } },
+			{
+				organizationIds: ["org-a"],
+				binding: {
+					schemaVersion: 1,
+					source: "internal",
+					revision: "stale",
+					fetchedAt: 2_000,
+					validUntil: 1_000,
+				},
+			},
+		]) {
+			organizationIds.mockClear();
+			await expect(
+				resolveLdapPrincipal(account, {
+					isPlatformDisabled: async () => false,
+					organizationIds,
+					organizationAuthority: async () => authority as never,
+				}),
+			).rejects.toThrow("LDAP_BROWSER_AUTHORITY_UNAVAILABLE");
+			expect(organizationIds).not.toHaveBeenCalled();
+		}
 	});
 });
