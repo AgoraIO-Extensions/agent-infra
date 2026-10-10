@@ -98,6 +98,7 @@ describe("Administrator employee access control", () => {
 		fireEvent.focus(screen.getByRole("combobox", { name: "员工" }));
 		await screen.findByRole("option", { name: /Alice/ });
 		fireEvent.click(screen.getByRole("option", { name: /Alice/ }));
+		await screen.findByText("当前状态：已禁用");
 		fireEvent.click(screen.getByRole("button", { name: "解除禁用" }));
 		await screen.findByText(/操作未确认/);
 		expect(screen.getByRole("button", { name: "禁用员工" })).toBeTruthy();

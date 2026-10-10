@@ -79,8 +79,10 @@ export function AdminUserGovernance() {
 				}。`,
 			);
 		} catch {
-			if (attempt === generation.current)
+			if (attempt === generation.current) {
+				setStatus("unavailable");
 				setMessage("操作未确认，请刷新目录记录后重试。未显示上游错误详情。");
+			}
 		} finally {
 			setBusy(false);
 		}
@@ -127,14 +129,14 @@ export function AdminUserGovernance() {
 			</p>
 			<div className="flex flex-wrap gap-3">
 				<Button
-					disabled={busy || !userId}
+					disabled={busy || status === "loading" || !userId}
 					onClick={() => void updateDisabled(true)}
 					variant="destructive"
 				>
 					{busy ? "提交中…" : "禁用员工"}
 				</Button>
 				<Button
-					disabled={busy || !userId}
+					disabled={busy || status === "loading" || !userId}
 					onClick={() => void updateDisabled(false)}
 					variant="outline"
 				>
