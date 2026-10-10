@@ -1029,6 +1029,18 @@ export class RuntimeHost {
 			if (browserAssemblyEpoch !== this.browserAssemblyEpoch) return;
 			this.options.onBrowserCapabilityAssembly?.(input);
 		};
+		publishBrowserAssembly(
+			request.browserDeclaration
+				? {
+						failure: {
+							status: "unavailable",
+							errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+							reason: "Browser capability readiness is pending",
+							retryable: true,
+						},
+					}
+				: undefined,
+		);
 		if (!this.options.driver.probeReadiness) driverInvalid();
 		const controller = new AbortController();
 		const bounded = AbortSignal.any([

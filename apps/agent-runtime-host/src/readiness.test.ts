@@ -304,6 +304,54 @@ describe("HTTP Workload readiness", () => {
 			errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
 		});
 	});
+	it("revokes prior Browser availability while replacement readiness is pending", async () => {
+		let calls = 0;
+		let release: ((value: RuntimeCapabilitiesV1) => void) | undefined;
+		const probe = vi.fn(() => {
+			calls += 1;
+			if (calls === 1)
+				return Promise.resolve({ ...caps, browser: browserProbe });
+			return new Promise<RuntimeCapabilitiesV1>((resolve) => {
+				release = resolve;
+			});
+		});
+		const h = await harness(probe);
+		const first = await h.app.request(
+			"/internal/runtime/v1/readiness",
+			post(request(browserDeclaration, browserBinding)),
+		);
+		expect(first.status).toBe(200);
+		const available = await h.app.request(
+			"/internal/runtime/v1/browser-capability?schemaVersion=1",
+			{ headers: { authorization: "Bearer transport-a" } },
+		);
+		expect(
+			BrowserCapabilityProjectionV1Schema.parse(await available.json()).status,
+		).toBe("available");
+		const replacement = h.app.request(
+			"/internal/runtime/v1/readiness",
+			post(
+				request(browserDeclaration, {
+					...browserBinding,
+					sessionId: "session-b",
+				}),
+			),
+		);
+		await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+		const during = await h.app.request(
+			"/internal/runtime/v1/browser-capability?schemaVersion=1",
+			{ headers: { authorization: "Bearer transport-a" } },
+		);
+		expect(
+			BrowserCapabilityProjectionV1Schema.parse(await during.json()),
+		).toMatchObject({
+			status: "unavailable",
+			errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+			retryable: true,
+		});
+		release?.({ ...caps, browser: browserProbe });
+		expect((await replacement).status).toBe(200);
+	});
 	it("calls only the dedicated probe and leaves durable business state unchanged", async () => {
 		const probe = vi.fn(async () => caps);
 		const h = await harness(probe);
