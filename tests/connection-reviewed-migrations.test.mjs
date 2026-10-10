@@ -45,7 +45,7 @@ const api = {
 	},
 };
 
-test("reviewed mode accepts only a merged successful PR and append-only schema changes", () => {
+test("reviewed mode requires a merged PR and append-only schema changes without rechecking CI/review", () => {
 	assert.deepEqual(validateMigrationPlan(before, after, changes), [
 		changes[0][1],
 	]);
@@ -62,16 +62,21 @@ test("reviewed mode accepts only a merged successful PR and append-only schema c
 		),
 	);
 	const pr = { state: "MERGED", mergeCommit: { oid: sha }, headRefOid: sha };
-	const checks = ["CI", "review"].map((name) => ({
-		name,
-		status: "COMPLETED",
-		conclusion: "SUCCESS",
-	}));
-	validateMigrationReview(pr, checks);
+	validateMigrationReview(pr);
+	validateMigrationReview({ ...pr, statusCheckRollup: [] });
+	validateMigrationReview({
+		...pr,
+		statusCheckRollup: ["CI", "review"].map((name) => ({
+			name,
+			status: "COMPLETED",
+			conclusion: "FAILURE",
+		})),
+	});
+	assert.throws(() => validateMigrationReview({ ...pr, state: "OPEN" }));
 	assert.throws(() =>
-		validateMigrationReview({ ...pr, state: "OPEN" }, checks),
+		validateMigrationReview({ ...pr, headRefOid: "invalid" }),
 	);
-	assert.throws(() => validateMigrationReview(pr, checks.slice(1)));
+	assert.throws(() => validateMigrationReview({ ...pr, mergeCommit: null }));
 });
 
 test("migration manifest isolates database/TLS, avoids API service selectors and has no retry", () => {
