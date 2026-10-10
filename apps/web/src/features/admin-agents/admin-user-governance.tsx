@@ -55,6 +55,7 @@ export function AdminUserGovernance() {
 	async function updateDisabled(disabled: boolean) {
 		const targetUserId = userId.trim();
 		if (!targetUserId || busy) return;
+		const attempt = ++generation.current;
 		setBusy(true);
 		setMessage("");
 		try {
@@ -66,6 +67,7 @@ export function AdminUserGovernance() {
 			});
 			if (result.response?.status !== 200 || !result.data)
 				throw new Error("request failed");
+			if (attempt !== generation.current) return;
 			setStatus(result.data.disabled ? "disabled" : "enabled");
 			setMessage(
 				`${disabled ? "禁用" : "解除禁用"}已确认；当前状态：${
@@ -77,7 +79,8 @@ export function AdminUserGovernance() {
 				}。`,
 			);
 		} catch {
-			setMessage("操作未确认，请刷新目录记录后重试。未显示上游错误详情。");
+			if (attempt === generation.current)
+				setMessage("操作未确认，请刷新目录记录后重试。未显示上游错误详情。");
 		} finally {
 			setBusy(false);
 		}
