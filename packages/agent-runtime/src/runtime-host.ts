@@ -1595,8 +1595,36 @@ export class RuntimeHost {
 					operation,
 					(this.options.grantValidationV2?.now ?? Date.now)(),
 				);
+			const recordResultFile = this.options.driver.recordResultFile?.bind(
+				this.options.driver,
+			);
+			const originalFileBridge = context?.fileBridge;
+			const driverContext =
+				originalFileBridge && recordResultFile
+					? {
+							...context,
+							fileBridge: {
+								readInput(fileId: string) {
+									return originalFileBridge.readInput(fileId);
+								},
+								async writeResult(
+									descriptor: Parameters<
+										RuntimeFileBridgePortV1["writeResult"]
+									>[0],
+									body: Parameters<RuntimeFileBridgePortV1["writeResult"]>[1],
+								) {
+									const result = await originalFileBridge.writeResult(
+										descriptor,
+										body,
+									);
+									await recordResultFile(operation.command, result);
+									return result;
+								},
+							},
+						}
+					: context;
 			const executed = await callDriverWithUncertainty(() =>
-				this.options.driver.execute(operation.command, context),
+				this.options.driver.execute(operation.command, driverContext),
 			);
 			if (executed === driverUncertain) {
 				if (isInterruption(operation)) {
