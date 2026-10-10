@@ -2988,6 +2988,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND instance.principal_id = ${input.principalId}
 				AND instance.status = 'ACTIVE'
 				AND consumer.status = 'ACTIVE'
+				AND connection_supervised_provider_allowed(active_grant.provider_release_id,
+					active_grant.principal_id, active_grant.consumer_id, account.external_account,
+					instance.id, active_grant.actor_key)
 			ORDER BY root.provider_id, root.id
 		`;
 		if (rows.length === 0) forbidden();
@@ -3060,6 +3063,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND instance.kind = 'WORKLOAD'
 				AND instance.status = 'ACTIVE'
 				AND root.actor_key = ${actorKey ?? ""}
+				AND connection_supervised_provider_allowed(active_grant.provider_release_id,
+					active_grant.principal_id, active_grant.consumer_id, account.external_account,
+					instance.id, active_grant.actor_key)
 		`;
 		if (rows.length === 0) forbidden();
 		return rows.map(invocation);

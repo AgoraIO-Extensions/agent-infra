@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { ConnectionApplicationService } from "@agent-infra/connection-core";
+import { githubConnectionCatalog } from "@agent-infra/openconnector-adapter";
 import {
 	staticSpacesConnectionCatalog,
 	staticSpacesPilot,
@@ -223,6 +224,44 @@ if (process.env.CI && !url)
 				"static-spaces.get_current_user",
 				{},
 			);
+			// Another Provider must survive a still-ACTIVE Grant whose pilot closes.
+			await repo.publishProviderCatalog(githubConnectionCatalog);
+			const githubAction = githubConnectionCatalog.actions.find(
+				(action) => action.name === "github.get_current_user",
+			);
+			if (!githubAction) throw new Error("Missing GitHub fixture Action");
+			await repo.publishConsumerDeclaration({
+				providerReleaseId: githubConnectionCatalog.providerReleaseId,
+				consumer: { id: consumerId, name: "Pilot Codex" },
+				actionVersionIds: [githubAction.id],
+			});
+			const githubPermit = await seedApprovedConnectPermit(sql, {
+				principalId,
+				providerReleaseId: githubConnectionCatalog.providerReleaseId,
+				scopes: githubAction.requiredScopes,
+			});
+			const githubConnection = await repo.storeProviderCredential({
+				accessRequestId: githubPermit,
+				accessToken: "test-only-github-credential",
+				displayName: "GitHub fixture",
+				externalAccount: suffix,
+				grantedScopes: githubAction.requiredScopes,
+				principalId,
+				providerId: "github",
+				providerReleaseId: githubConnectionCatalog.providerReleaseId,
+			});
+			const githubPreview =
+				await repo.createCurrentConsumerAuthorizationPreview({
+					principalId,
+					consumerId,
+					connectionId: githubConnection.connectionId,
+				});
+			await repo.confirmCurrentConsumerAuthorization({
+				principalId,
+				previewId: githubPreview.previewId,
+				confirmationToken: githubPreview.confirmationToken,
+				idempotencyKey: `github-${suffix}`,
+			});
 			// Authorize a real persisted dispatch without sending any upstream request.
 			const call = await repo.createCall({
 				invocation: context,
@@ -283,6 +322,33 @@ if (process.env.CI && !url)
 				callId: failedRead.call.callId,
 				status: "FAILED",
 			});
+			const identity = { principalId, consumerId, instanceId };
+			expect(await service.listDirectActionsForIdentity(identity)).toEqual([
+				expect.objectContaining({ name: "github.get_current_user" }),
+			]);
+			await expect(
+				service.executeDirectActionForIdentity(
+					identity,
+					"github.get_current_user",
+					{},
+				),
+			).resolves.toMatchObject({ status: "SUCCEEDED" });
+			await expect(repo.listAuthorizedActions(context)).rejects.toMatchObject({
+				code: "FORBIDDEN",
+			});
+			await expect(
+				repo.resolveDirectIdentities({ ...identity, principalId: "wrong" }),
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
+			await expect(
+				repo.resolveDirectIdentities({ ...identity, consumerId: "wrong" }),
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
+			await expect(
+				repo.resolveDirectIdentities({ ...identity, instanceId: "wrong" }),
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
+			await repo.revokeGrant({ principalId, grantId: context.grantId });
+			const [revoked] =
+				await sql`SELECT status FROM connection_grants WHERE id=${context.grantId}`;
+			expect(revoked?.status).toBe("REVOKED");
 			await repo.pauseCredentialForReauthorization(context);
 			expect(
 				await repo.isProviderAdmissionOpen({
