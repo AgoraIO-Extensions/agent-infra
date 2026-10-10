@@ -31,7 +31,6 @@ import { createPlatformApp } from "../../platform-api/src/app.js";
 import { assemblePlatformApi } from "../../platform-api/src/assembly.js";
 import {
 	workloadDesiredFixture,
-	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
@@ -919,6 +918,8 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					);
 					return { core: "passed" as const, capabilities: {} };
 				};
+				if (!process.env.WORKLOAD_KIND_IMAGE_A)
+					throw new Error("WORKLOAD_KIND_IMAGE_A is required");
 				const fetchViaProbe = async (input: Parameters<typeof fetch>[0]) => {
 					const url = String(input);
 					try {
@@ -942,14 +943,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					workerId: "api-workload-worker",
 					pollIntervalMs: 1,
 					policy: workloadPolicy,
-					registry: workloadRegistryFixture({
-						schemaVersion: 1,
-						interactionMode: "platform-adapter",
-						protocol: "acp",
-						service: { port: 3003 },
-						health: { path: "/healthz" },
-						capabilities: {},
-					}),
+					registry: seed.workerOptions.registry,
 					fetch: fetchViaProbe,
 					log: (message) => workerLogs.push(message),
 					probeRuntime,
