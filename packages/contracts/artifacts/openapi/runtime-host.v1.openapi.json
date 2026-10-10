@@ -210,6 +210,47 @@
       "RuntimeBrowserCapabilityProbeEvidenceV1": {
         "additionalProperties": false,
         "properties": {
+          "binding": {
+            "additionalProperties": false,
+            "properties": {
+              "agentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "imageDigest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "resourceFence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "sessionGeneration": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "sessionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "workloadRevision": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "agentId",
+              "sessionId",
+              "sessionGeneration",
+              "resourceFence",
+              "workloadRevision",
+              "imageDigest"
+            ],
+            "type": "object"
+          },
           "capabilityVersion": {
             "exclusiveMinimum": 0,
             "maximum": 100,

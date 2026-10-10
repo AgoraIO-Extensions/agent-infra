@@ -102,12 +102,23 @@ export const BrowserCapabilityConformanceReceiptV1Schema = z.strictObject({
 	operations: z.array(BrowserCapabilityOperationV1Schema).min(1).max(16),
 });
 
+/** Receiver binding for evidence produced by one Session-owned Sandbox. */
+export const BrowserCapabilityBindingV1Schema = z.strictObject({
+	agentId: OpaqueIdV1Schema,
+	sessionId: OpaqueIdV1Schema,
+	sessionGeneration: z.number().int().positive().safe(),
+	resourceFence: z.number().int().positive().safe(),
+	workloadRevision: z.number().int().positive().safe(),
+	imageDigest: sha256Digest,
+});
+
 /** Internal probe facts accepted only through the authenticated readiness seam. */
 export const RuntimeBrowserCapabilityProbeEvidenceV1Schema = z.strictObject({
 	capabilityVersion: z.number().int().positive().max(100),
 	operations: z.array(BrowserCapabilityOperationV1Schema).min(1).max(16),
 	provenance: BrowserCapabilityProvenanceV1Schema,
 	conformance: BrowserCapabilityConformanceReceiptV1Schema,
+	binding: BrowserCapabilityBindingV1Schema.optional(),
 });
 
 const browserCapabilityBase = {
@@ -192,6 +203,9 @@ export type BrowserCapabilityDeclarationV1 = z.infer<
 >;
 export type RuntimeBrowserCapabilityProbeEvidenceV1 = z.infer<
 	typeof RuntimeBrowserCapabilityProbeEvidenceV1Schema
+>;
+export type BrowserCapabilityBindingV1 = z.infer<
+	typeof BrowserCapabilityBindingV1Schema
 >;
 export type BrowserCapabilityProjectionV1 = z.infer<
 	typeof BrowserCapabilityProjectionV1Schema

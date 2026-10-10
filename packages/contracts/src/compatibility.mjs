@@ -2106,7 +2106,20 @@ function isRuntimeBrowserEvidenceOpenApiAddition(previous, current) {
 		delete host.properties.browser;
 		delete normalized.components.schemas
 			.RuntimeBrowserCapabilityProbeEvidenceV1;
+		delete normalized.components.schemas.BrowserCapabilityBindingV1;
 		changed = true;
+	}
+	for (const name of [
+		"RuntimeBrowserCapabilityProbeEvidenceV1",
+		"BrowserCapabilityBindingV1",
+	]) {
+		if (
+			normalized.components?.schemas?.[name] !== undefined &&
+			previous.components?.schemas?.[name] === undefined
+		) {
+			delete normalized.components.schemas[name];
+			changed = true;
+		}
 	}
 	const readinessNames = [
 		"WorkloadReadinessGrantClaimsV1",
@@ -2127,6 +2140,15 @@ function isRuntimeBrowserEvidenceOpenApiAddition(previous, current) {
 				)
 					return false;
 				delete schema.properties.browserDeclaration;
+				changed = true;
+			}
+			if (schema.properties?.browserBinding !== undefined) {
+				if (
+					previous.components?.schemas?.[name]?.properties?.browserBinding !==
+					undefined
+				)
+					return false;
+				delete schema.properties.browserBinding;
 				changed = true;
 			}
 		}

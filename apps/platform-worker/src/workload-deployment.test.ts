@@ -481,6 +481,14 @@ describe("authenticated Workload Runtime probe", () => {
 				evidenceHash: "b".repeat(64),
 				operations: ["navigate", "observe"],
 			},
+			binding: {
+				agentId: base.agentId,
+				sessionId: "session-a",
+				sessionGeneration: 1,
+				resourceFence: base.fence,
+				workloadRevision: base.workloadRevision,
+				imageDigest: base.imageDigest,
+			},
 		};
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
 		Object.assign(driver, {
@@ -492,6 +500,9 @@ describe("authenticated Workload Runtime probe", () => {
 		let assembled:
 			| {
 					readonly declaration: BrowserCapabilityDeclarationV1;
+					readonly binding: NonNullable<
+						RuntimeBrowserCapabilityProbeEvidenceV1["binding"]
+					>;
 					readonly manifestDigest: string;
 					readonly probe: RuntimeBrowserCapabilityProbeEvidenceV1;
 			  }
@@ -532,6 +543,7 @@ describe("authenticated Workload Runtime probe", () => {
 		await expect(
 			probe({
 				...base,
+				browserBinding: browserProbe.binding,
 				manifest: {
 					...base.manifest,
 					capabilities: {
@@ -547,6 +559,7 @@ describe("authenticated Workload Runtime probe", () => {
 		).resolves.toMatchObject({ capabilities: { browser: browserProbe } });
 		expect(assembled).toEqual({
 			declaration: browserDeclaration,
+			binding: browserProbe.binding,
 			manifestDigest: base.imageDigest,
 			probe: browserProbe,
 		});

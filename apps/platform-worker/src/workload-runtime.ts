@@ -79,6 +79,14 @@ export interface WorkloadRuntimeOptionsV1 {
 		readonly fence: number;
 		readonly imageDigest: string;
 		readonly manifest: AgentWorkloadDesiredV1["runtimeManifest"];
+		readonly browserBinding?: {
+			readonly agentId: string;
+			readonly sessionId: string;
+			readonly sessionGeneration: number;
+			readonly resourceFence: number;
+			readonly workloadRevision: number;
+			readonly imageDigest: string;
+		};
 		readonly signal: AbortSignal;
 	}) => Promise<{
 		readonly core: "passed" | "failed";

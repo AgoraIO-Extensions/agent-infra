@@ -266,7 +266,20 @@ export function createWorkloadRuntimeProbeV1(options: {
 						...(input.manifest.capabilities?.browser
 							? { browserDeclaration: input.manifest.capabilities.browser }
 							: {}),
+						...(input.manifest.capabilities?.browser && input.browserBinding
+							? { browserBinding: input.browserBinding }
+							: {}),
 					});
+					if (
+						input.manifest.capabilities?.browser &&
+						(!input.browserBinding ||
+							input.browserBinding.agentId !== input.agentId ||
+							input.browserBinding.workloadRevision !==
+								input.workloadRevision ||
+							input.browserBinding.resourceFence !== input.fence ||
+							input.browserBinding.imageDigest !== input.imageDigest)
+					)
+						throw new Error();
 					const authorization = await options.authorization.authorize(
 						{ request },
 						signal,

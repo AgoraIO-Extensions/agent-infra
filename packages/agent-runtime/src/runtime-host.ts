@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 import type {
+	BrowserCapabilityBindingV1,
 	BrowserCapabilityDeclarationV1,
 	RuntimeAuthorizationRenewRequestV3,
 	RuntimeBrowserCapabilityProbeEvidenceV1,
@@ -100,6 +101,7 @@ interface RuntimeHostOptions {
 		input:
 			| {
 					readonly declaration: BrowserCapabilityDeclarationV1;
+					readonly binding: BrowserCapabilityBindingV1;
 					readonly manifestDigest: string;
 					readonly probe: RuntimeBrowserCapabilityProbeEvidenceV1;
 			  }
@@ -1087,9 +1089,21 @@ export class RuntimeHost {
 				);
 			verify(request, authenticatedWorkerId);
 			this.options.onBrowserCapabilityAssembly?.(
-				request.browserDeclaration && capabilities.browser
+				request.browserDeclaration &&
+					request.browserBinding &&
+					request.browserBinding.agentId === request.agentId &&
+					request.browserBinding.workloadRevision ===
+						request.workloadRevision &&
+					request.browserBinding.resourceFence === request.fence &&
+					request.browserBinding.imageDigest === request.imageDigest &&
+					capabilities.browser?.binding &&
+					isDeepStrictEqual(
+						request.browserBinding,
+						capabilities.browser.binding,
+					)
 					? {
 							declaration: request.browserDeclaration,
+							binding: request.browserBinding,
 							manifestDigest: request.imageDigest,
 							probe: capabilities.browser,
 						}
