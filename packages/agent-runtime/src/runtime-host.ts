@@ -350,6 +350,7 @@ export class RuntimeHost {
 		controller: AbortController;
 		done: Promise<void>;
 	}>();
+	private browserAssemblyEpoch = 0;
 	private closed = false;
 
 	private readonly v3?: RuntimeHostV3;
@@ -1013,6 +1014,21 @@ export class RuntimeHost {
 				true,
 			);
 		verify(request, authenticatedWorkerId);
+		const browserAssemblyEpoch = ++this.browserAssemblyEpoch;
+		const publishBrowserAssembly = (
+			input:
+				| {
+						readonly declaration: BrowserCapabilityDeclarationV1;
+						readonly binding: BrowserCapabilityBindingV1;
+						readonly manifestDigest: string;
+						readonly probe: RuntimeBrowserCapabilityProbeEvidenceV1;
+				  }
+				| RuntimeBrowserCapabilityAssemblyFailureV1
+				| undefined,
+		) => {
+			if (browserAssemblyEpoch !== this.browserAssemblyEpoch) return;
+			this.options.onBrowserCapabilityAssembly?.(input);
+		};
 		if (!this.options.driver.probeReadiness) driverInvalid();
 		const controller = new AbortController();
 		const bounded = AbortSignal.any([
@@ -1093,7 +1109,7 @@ export class RuntimeHost {
 			const browserBinding = request.browserBinding;
 			const browserProbe = capabilities.browser;
 			if (!request.browserDeclaration) {
-				this.options.onBrowserCapabilityAssembly?.(undefined);
+				publishBrowserAssembly(undefined);
 			} else if (
 				browserBinding &&
 				browserBinding.agentId === request.agentId &&
@@ -1103,14 +1119,14 @@ export class RuntimeHost {
 				browserProbe?.binding &&
 				isDeepStrictEqual(browserBinding, browserProbe.binding)
 			) {
-				this.options.onBrowserCapabilityAssembly?.({
+				publishBrowserAssembly({
 					declaration: request.browserDeclaration,
 					binding: browserBinding,
 					manifestDigest: request.imageDigest,
 					probe: browserProbe,
 				});
 			} else {
-				this.options.onBrowserCapabilityAssembly?.({
+				publishBrowserAssembly({
 					failure: {
 						status: "unavailable",
 						errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
@@ -1127,7 +1143,7 @@ export class RuntimeHost {
 				capabilities,
 			});
 		} catch (error) {
-			this.options.onBrowserCapabilityAssembly?.(
+			publishBrowserAssembly(
 				request.browserDeclaration
 					? {
 							failure: {

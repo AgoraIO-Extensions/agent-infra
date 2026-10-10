@@ -17,6 +17,7 @@ import type {
 	BrowserCapabilityBindingV1,
 	BrowserCapabilityDeclarationV1,
 	RuntimeBrowserCapabilityProbeEvidenceV1,
+	RuntimeCapabilitiesV1,
 } from "@agent-infra/contracts/runtime";
 import { BrowserCapabilityProjectionV1Schema } from "@agent-infra/contracts/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -263,6 +264,45 @@ describe("HTTP Workload readiness", () => {
 			BrowserCapabilityProjectionV1Schema.parse(await afterGeneration.json())
 				.status,
 		).toBe("unavailable");
+	});
+	it("does not let an older readiness completion overwrite newer Browser evidence", async () => {
+		const pending: ((value: RuntimeCapabilitiesV1) => void)[] = [];
+		const probe = vi.fn(
+			() =>
+				new Promise<RuntimeCapabilitiesV1>((resolve) => {
+					pending.push(resolve);
+				}),
+		);
+		const h = await harness(probe);
+		const older = h.app.request(
+			"/internal/runtime/v1/readiness",
+			post(request(browserDeclaration, browserBinding)),
+		);
+		await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+		const newer = h.app.request(
+			"/internal/runtime/v1/readiness",
+			post(
+				request(browserDeclaration, {
+					...browserBinding,
+					sessionId: "session-b",
+				}),
+			),
+		);
+		await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+		pending[1]?.({ ...caps, browser: browserProbe });
+		expect((await newer).status).toBe(200);
+		pending[0]?.({ ...caps, browser: browserProbe });
+		expect((await older).status).toBe(200);
+		const discovery = await h.app.request(
+			"/internal/runtime/v1/browser-capability?schemaVersion=1",
+			{ headers: { authorization: "Bearer transport-a" } },
+		);
+		expect(
+			BrowserCapabilityProjectionV1Schema.parse(await discovery.json()),
+		).toMatchObject({
+			status: "unavailable",
+			errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+		});
 	});
 	it("calls only the dedicated probe and leaves durable business state unchanged", async () => {
 		const probe = vi.fn(async () => caps);
