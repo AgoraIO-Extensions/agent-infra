@@ -324,8 +324,10 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 			revokeUserUse("agent-a", "same-id", "user-revoke-concurrent"),
 			revokeUserUse("agent-a", "same-id", "user-revoke-concurrent"),
 		]);
-		expect(first.status).toBe(200);
-		expect(second.status).toBe(200);
+		const firstBody = await first.clone().text();
+		const secondBody = await second.clone().text();
+		expect(first.status, firstBody).toBe(200);
+		expect(second.status, secondBody).toBe(200);
 		expect(await first.json()).toMatchObject({
 			agentId: "agent-a",
 			userId: "same-id",
@@ -335,7 +337,11 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 			granted: false,
 			replayed: expect.any(Boolean),
 		});
-		const replay = await revokeUserUse("agent-a", "same-id", "user-revoke");
+		const replay = await revokeUserUse(
+			"agent-a",
+			"same-id",
+			"user-revoke-concurrent",
+		);
 		expect(replay.status).toBe(200);
 		expect(await replay.json()).toMatchObject({
 			granted: false,

@@ -57,8 +57,6 @@ export interface PostgresAgentManagementOptionsV1 {
 	readonly userDirectory?: TaskUserDirectoryV1;
 }
 
-type JsonValue = Parameters<ReturnType<typeof postgres>["json"]>[0];
-
 interface IdempotencyRow {
 	readonly requestDigest: string;
 	readonly status: "reserved" | "completed";
@@ -986,7 +984,7 @@ export class PostgresAgentManagementTransactionV1
 					await transaction`
 						insert into platform.audit_events
 							(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
-						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, 'api.agent.use.replayed', 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${transaction.json(saved as unknown as JsonValue)})
+						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, 'api.agent.use.replayed', 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${JSON.stringify(saved)}::jsonb)
 					`;
 					const finalActor = await resolveCurrentPersonalApiUserV1(
 						this.#userDirectory,
@@ -1024,10 +1022,11 @@ export class PostgresAgentManagementTransactionV1
 					nextRevision: randomUUID(),
 					occurredAt: new Date(),
 				});
+				const occurredAt = plan.occurredAt.toISOString();
 				if (plan.mutation === "revoke") {
 					await transaction`
 						update platform.agent_principal_grants
-						set revoked_at = ${plan.occurredAt}, authorization_revision = ${plan.result.authorizationRevision}
+						set revoked_at = ${occurredAt}, authorization_revision = ${plan.result.authorizationRevision}
 						where agent_id = ${command.agentId} and principal_type = 'user'
 							and principal_id = ${command.userId} and grant_type = 'use'
 					`;
@@ -1060,13 +1059,13 @@ export class PostgresAgentManagementTransactionV1
 				await transaction`
 					insert into platform.audit_events
 						(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
-						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, ${plan.audit.action}, 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${transaction.json(plan.result as unknown as JsonValue)})
+						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, ${plan.audit.action}, 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${JSON.stringify(plan.result)}::jsonb)
 				`;
 				if (!existing)
 					await transaction`
 						insert into platform.idempotency_records
 							(id, scope_type, scope_id, actor_id, command_type, idempotency_key, request_digest, status, result, created_at, updated_at)
-						values (${randomUUID()}, 'agent', ${command.agentId}, ${command.actorId}, ${commandType}, ${command.idempotencyKey}, ${digest}, 'completed', ${transaction.json(plan.result as unknown as JsonValue)}, ${plan.occurredAt}, ${plan.occurredAt})
+						values (${randomUUID()}, 'agent', ${command.agentId}, ${command.actorId}, ${commandType}, ${command.idempotencyKey}, ${digest}, 'completed', ${JSON.stringify(plan.result)}::jsonb, ${occurredAt}, ${occurredAt})
 					`;
 				const finalActor = await resolveCurrentPersonalApiUserV1(
 					this.#userDirectory,
