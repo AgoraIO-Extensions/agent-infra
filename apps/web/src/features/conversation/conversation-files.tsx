@@ -1,6 +1,9 @@
 import { Paperclip, RotateCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button, buttonVariants } from "../../components/ui/button.js";
+import { Input } from "../../components/ui/input.js";
+import { Label } from "../../components/ui/label.js";
 import type { Client } from "../../pilot/generated/client/index.js";
 import { client as defaultClient } from "../../pilot/generated/client.gen.js";
 import type {
@@ -320,10 +323,10 @@ export function ConversationFilePicker({
 	return (
 		<div className="space-y-2" data-testid="conversation-file-picker">
 			<div className="flex flex-wrap items-center gap-2">
-				<label htmlFor={inputId} className="sr-only">
+				<Label htmlFor={inputId} className="sr-only">
 					添加附件
-				</label>
-				<input
+				</Label>
+				<Input
 					id={inputId}
 					type="file"
 					multiple
@@ -336,13 +339,13 @@ export function ConversationFilePicker({
 						event.currentTarget.value = "";
 					}}
 				/>
-				<label
+				<Label
 					htmlFor={inputId}
 					aria-disabled={!limits || limitsError}
 					className={`${buttonVariants({ variant: "outline" })} ${!limits || limitsError ? "pointer-events-none opacity-50" : "cursor-pointer"}`}
 				>
 					<Paperclip aria-hidden="true" /> 添加附件
-				</label>
+				</Label>
 				{limits ? (
 					<p className="text-muted-foreground text-xs" role="status">
 						支持 {limits.mediaTypes.join(", ")}，单文件最大{" "}
@@ -369,9 +372,9 @@ export function ConversationFilePicker({
 					{item.status === "available" && <span role="status">已上传</span>}
 					{(item.status === "failed" || item.status === "expired") && (
 						<>
-							<span className="text-destructive" role="alert">
-								{item.error}
-							</span>
+							<Alert variant="destructive" className="max-w-sm py-1">
+								<AlertDescription>{item.error}</AlertDescription>
+							</Alert>
 							<Button
 								type="button"
 								variant="ghost"
