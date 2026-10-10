@@ -111,7 +111,8 @@ export function ActiveConversation({
 	});
 	const customPlatformAdapter =
 		agent.source.kind === "custom" &&
-		agent.source.interactionMode === "platform-adapter";
+		agent.source.interactionMode === "platform-adapter" &&
+		agent.capabilities.modelSelection;
 	const runtimeSelection = useConversationModelSelection({
 		conversationId,
 		identityKey,
