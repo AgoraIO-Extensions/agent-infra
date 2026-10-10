@@ -9,6 +9,8 @@
 2026-10-10，七项 Action 的真实账号 guarded Adapter canary 成功；该结果不是 Connection HTTP/MCP
 E2E，也未达到测试计划的发布验收标准。生产目录仍不发布 StaticSpaces，
 `staticSpacesVerificationMatrix` 仍为 `UNVERIFIED`。
+当前配置的 Connection MCP `list_connections(service=static-spaces)` 实际返回 `PROVIDER_UNSUPPORTED`，
+不是已连接账号或已完成 Consent/Grant；完整 Connection 链路尚不可执行。
 结构化结果见 [验证记录](static-spaces-onboarding-evidence.json)。
 生产依赖许可证清单见 [CycloneDX 清单](static-spaces-production-dependencies.cdx.json)，由当前
 lockfile 对应安装树的 `pnpm licenses list --prod --json` 生成，排除了本机路径。它是源码依赖
@@ -34,7 +36,7 @@ Application 和组 ID。测试不添加成员、
 | Stable identity | 活跃、非 superuser；stable `pk=841`；个人目标禁止调用方 username | Connection ownership 和 Grant 实际链路 |
 | Credential lifecycle | 独立临时 Token 创建 201、身份 200、撤销 204、撤销后身份 403；当前 Token 重新验证 200 | 实际到期、Connection reauth/disconnect/revoke |
 | Egress | 与 runtime 相同的 DNS pinning、固定 origin、TLS 校验、禁止 redirect 的真实 transport；写入前核对空间 immutable identity | 生产 Pod 完整受控链路 |
-| 限流与幂等 | 上游没有原生幂等合同；response-lost 仅提交一次，保留 submission uncertainty | 部署边缘限流、request ID 合同的 Owner 确认 |
+| 限流与幂等 | 网关 `X-Kong-Request-Id` 已实测并纳入有界诊断；上游没有原生幂等合同；response-lost 仅提交一次 | 部署边缘限流、Provider mutating receipt 合同的 Owner 确认 |
 | Schema | 七项真实输出通过当前 Adapter Schema；下载 bytes、HTML 和归档回执 hash 校验通过 | Connection Call/Effect 的完整投影 |
 | READ/WRITE | 七项 guarded Adapter canary；权限拒绝 403、禁止覆盖 409；本轮四个文件清理成功 | 正式 Connection/MCP canary |
 | 供应链与评审 | executor digest 固定；无新依赖或上游源码复制；已生成生产依赖许可证清单 | 正式 Legal/Security 签收和签名发布证据 |
@@ -46,6 +48,11 @@ Connection 不实现 OAuth refresh，不在失效后自动换号或换凭证。
 response-lost canary 在真实上游完成上传后丢弃响应；Adapter 返回 `submissionUncertain=true`，
 实际提交次数为 1，随后只读核对字节并清理。它证明真实效果和 Adapter 不重试；不证明持久
 Call/Effect 已进入 `UNCERTAIN`，该项必须由 Connection 完整 E2E 补齐。
+
+身份和 Publish API 的真实 READ 均返回 `X-Kong-Request-Id`；当前代码将其加入既有 request ID
+白名单，只保留格式合法且长度受限的值。Token、query 和正文仍不进入诊断。验证记录中的
+`requestCorrelation` 是本地 observer 对真实 Provider 请求的投影，不是生产 Call/Effect 回执。
+成功响应未观察到 RateLimit/Retry-After header，不能由此推断部署没有限流。
 
 ## 受监督运行
 

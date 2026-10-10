@@ -106,5 +106,64 @@
     "failure": {
       "code": "CANARY_FAILED"
     }
+  },
+  "requestCorrelation": {
+    "verificationLayer": "DIRECT_PROVIDER_FETCH_DIAGNOSTICS",
+    "gatewayHeader": "x-kong-request-id",
+    "rateLimitHeadersObserved": false,
+    "providerMutatingReceiptContract": "NOT_VERIFIED",
+    "diagnostics": {
+      "executionId": "96e1d7e5-8074-4a72-acc3-4595ebc529dd",
+      "phase": "EXECUTE",
+      "requests": [
+        {
+          "sequence": 1,
+          "service": "static-spaces",
+          "method": "GET",
+          "origin": "https://auth-static-spaces.sh3.agoralab.co",
+          "pathTemplate": "/api/v3/core/users/me/",
+          "startedAt": "2026-10-10T01:44:32.351Z",
+          "finishedAt": "2026-10-10T01:44:32.645Z",
+          "durationMs": 292,
+          "status": 200,
+          "outcome": "RESPONSE_HEADERS",
+          "errorCategory": null,
+          "requestIds": [
+            {
+              "name": "x-kong-request-id",
+              "value": "94afc77220339e339e85d347c192b43b"
+            }
+          ]
+        },
+        {
+          "sequence": 2,
+          "service": "static-spaces",
+          "method": "GET",
+          "origin": "https://publish-static-spaces.sh3.agoralab.co",
+          "pathTemplate": "/v1/files",
+          "startedAt": "2026-10-10T01:44:32.650Z",
+          "finishedAt": "2026-10-10T01:44:32.908Z",
+          "durationMs": 258,
+          "status": 200,
+          "outcome": "RESPONSE_HEADERS",
+          "errorCategory": null,
+          "requestIds": [
+            {
+              "name": "x-kong-request-id",
+              "value": "2b31de20df50c4798b0cba16dcdbc40a"
+            }
+          ]
+        }
+      ],
+      "droppedRequests": 0
+    }
+  },
+  "configuredMcpDiscovery": {
+    "tool": "list_connections",
+    "service": "static-spaces",
+    "connectionCount": 0,
+    "reasonCode": "PROVIDER_UNSUPPORTED",
+    "retryable": false,
+    "completed": false
   }
 }
