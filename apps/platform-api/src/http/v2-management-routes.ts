@@ -522,8 +522,9 @@ export function registerV2ManagementRoutes(
 				body.source.kind === "standard" &&
 				!hasDefaultRelayKey &&
 				dependencies.enforceDefaultRelayKey
-			)
+			) {
 				fail("INVALID_REQUEST", metadata.traceId);
+			}
 			const idempotencyKey = parseIdempotencyKey(
 				context.req.raw,
 				metadata.traceId,
@@ -558,7 +559,8 @@ export function registerV2ManagementRoutes(
 			);
 			await dependencies.foundation.submit(
 				{
-					schemaVersion: body.source.kind === "standard" ? 3 : 2,
+					schemaVersion:
+						body.source.kind === "standard" && hasDefaultRelayKey ? 3 : 2,
 					...ids,
 					idempotencyKey,
 					requestId: metadata.requestId,
