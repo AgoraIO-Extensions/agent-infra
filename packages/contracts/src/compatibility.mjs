@@ -1943,7 +1943,7 @@ function isAgentUserUseRevokeOpenApiAddition(previous, current) {
 	};
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"ad2d9f4b78dbef23e2be6c2f8c81c358c2248b2233b53b55a235a7a75a9204f5"
+		"dbd33b71470eeac957b6ae9436effe45fc68c8b822b03edd3097dd10b8541d83"
 	)
 		return false;
 	const normalized = structuredClone(current);

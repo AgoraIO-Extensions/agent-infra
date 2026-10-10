@@ -197,6 +197,9 @@ function restorePreApplicationUseGrantContract(value: {
 	delete value.paths[
 		"/api/v2/agents/{agentId}/application-use-grants/{applicationId}"
 	];
+	delete value.paths["/api/v2/agents/{agentId}/api-use-grants/{userId}"];
+	delete value.components.schemas.AgentUserUseRevokeRequestV1;
+	delete value.components.schemas.AgentUserUseRevokeResponseV1;
 	const actions = value.components.schemas.ScopedPlatformAuditActionV1 as
 		| { enum: string[] }
 		| undefined;
