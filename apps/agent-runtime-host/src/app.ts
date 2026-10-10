@@ -17,6 +17,7 @@ import {
 	type RuntimeExecutionGrantV2,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeGenerationCancelRequestV3Schema,
+	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
@@ -280,6 +281,18 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		);
 		return context.json(
 			await options.host.capabilities(
+				request,
+				await options.verifyGrant(request.grant),
+			),
+		);
+	});
+	app.post("/internal/runtime/v1/model-directory", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeModelDirectoryRequestV1Schema,
+		);
+		return context.json(
+			await options.host.modelDirectory(
 				request,
 				await options.verifyGrant(request.grant),
 			),

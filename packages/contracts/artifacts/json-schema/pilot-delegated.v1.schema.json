@@ -1716,6 +1716,7 @@
               "session.status",
               "events.replay",
               "capabilities.read",
+              "model-directory.read",
               "generation.cancel",
               "tool.invoke"
             ],
@@ -1841,6 +1842,7 @@
         "session.status",
         "events.replay",
         "capabilities.read",
+        "model-directory.read",
         "generation.cancel",
         "tool.invoke"
       ],

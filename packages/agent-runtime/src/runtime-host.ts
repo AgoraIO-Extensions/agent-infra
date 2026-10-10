@@ -11,6 +11,8 @@ import type {
 	RuntimeEventReadRequestV4,
 	RuntimeGenerationCancelRequestV1,
 	RuntimeGenerationCancelRequestV3,
+	RuntimeModelDirectoryRequestV1,
+	RuntimeModelDirectoryResponseV1,
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
 	RuntimePinnedExecutionKeyScopeV4,
@@ -47,6 +49,8 @@ import {
 	RuntimeEventReplayResponseV4Schema,
 	RuntimeEventSchema,
 	RuntimeGenerationCancelRequestV1Schema,
+	RuntimeModelDirectoryRequestV1Schema,
+	RuntimeModelDirectoryResponseV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
@@ -1066,6 +1070,16 @@ export class RuntimeHost {
 					true,
 				);
 			}
+			const parsedCapabilities =
+				RuntimeCapabilitiesV1Schema.safeParse(capabilities);
+			if (!parsedCapabilities.success)
+				throw new RuntimeHostError(
+					"RUNTIME_READINESS_UNAVAILABLE",
+					"Workload readiness is unavailable",
+					503,
+					true,
+				);
+			capabilities = parsedCapabilities.data;
 			if (bounded.aborted) throw interrupted();
 			if (this.closed)
 				throw new RuntimeHostError(
@@ -1115,6 +1129,46 @@ export class RuntimeHost {
 			schemaVersion: 1,
 			capabilities: capabilities.data,
 		};
+	}
+
+	/** Read-only public model choices for an already-bound Host Session. */
+	async modelDirectory(
+		value: RuntimeModelDirectoryRequestV1,
+		verification: unknown,
+	): Promise<RuntimeModelDirectoryResponseV1> {
+		this.requireLegacyHost();
+		const parsed = RuntimeModelDirectoryRequestV1Schema.safeParse(value);
+		if (!parsed.success) invalidRequest();
+		const request = parsed.data;
+		validateRuntimeExecutionGrant(
+			request,
+			"model-directory.read",
+			verification,
+			this.options.grantValidation,
+		);
+		const session = this.options.store.getSessionForQuery(
+			request.hostSessionRef,
+			request,
+			request.deliveryFence,
+		);
+		const nativeSessionRef =
+			session.nativeSessionRef ?? nativeSessionRequired();
+		const directory = await callDriver(() =>
+			this.options.driver.getModelDirectory(nativeSessionRef),
+		);
+		return RuntimeModelDirectoryResponseV1Schema.parse({
+			schemaVersion: 1,
+			hostSessionRef: request.hostSessionRef,
+			executionId: request.executionId,
+			options: directory.options.map((option) => ({
+				schemaVersion: 1,
+				modelOptionId: option.modelOptionId,
+				modelId: option.modelId,
+				displayName: option.displayName,
+				reasoningLevels: [...option.reasoningLevels],
+			})),
+			current: directory.current,
+		});
 	}
 
 	async replay(

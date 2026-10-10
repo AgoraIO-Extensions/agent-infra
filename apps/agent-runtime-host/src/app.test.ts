@@ -280,6 +280,8 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 			getStatus: (nativeSessionRef, executionId) =>
 				driver.getStatus(nativeSessionRef, executionId),
 			getCapabilities: () => driver.getCapabilities(),
+			getModelDirectory: (nativeSessionRef) =>
+				driver.getModelDirectory(nativeSessionRef),
 			replayEvents: (nativeSessionRef, executionId, afterCursor) =>
 				driver.replayEvents(nativeSessionRef, executionId, afterCursor),
 			subscribeEvents: (nativeSessionRef, executionId, afterCursor, signal) =>

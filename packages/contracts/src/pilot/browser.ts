@@ -495,6 +495,24 @@ export const ModelSelectionUpdateRequestV1Schema = z.strictObject({
 	reasoningLevel: nonEmptyString(),
 });
 
+/**
+ * The model directory returned by the Runtime for one authorized Platform
+ * conversation.  Runtime model ids are safe display data; endpoint, key and
+ * native ACP session details deliberately have no representation here.
+ */
+export const ConversationModelSelectionProjectionV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	conversationId: OpaqueIdV1Schema,
+	agentId: OpaqueIdV1Schema,
+	source: z.enum(["standard", "custom-platform-adapter"]),
+	available: z.boolean(),
+	options: z.array(ModelOptionProjectionV1Schema),
+	currentModelOptionId: OpaqueIdV1Schema.nullable(),
+	currentReasoningLevel: nonEmptyString().nullable(),
+	selectedModelOptionId: OpaqueIdV1Schema.nullable(),
+	selectedReasoningLevel: nonEmptyString().nullable(),
+});
+
 export const CommandAcceptedProjectionV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	status: z.enum(["submitted", "processing", "already_finished"]),
@@ -1184,6 +1202,17 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 		},
 	},
 	"/api/v1/conversations/{conversationId}/model-selection": {
+		get: {
+			operationId: "getConversationModelSelection",
+			requestParams: { path: conversationPath },
+			responses: {
+				"200": jsonResponse(
+					"Current Runtime model selection",
+					ConversationModelSelectionProjectionV1Schema,
+				),
+				...errorResponses,
+			},
+		},
 		put: {
 			operationId: "updateConversationModelSelection",
 			requestParams: { path: conversationPath, header: idempotencyHeader },
@@ -1850,6 +1879,8 @@ export const pilotBrowserSchemasV1 = {
 	ChannelBindingInputV1: ChannelBindingInputV1Schema,
 	ChannelBindingProjectionV1: ChannelBindingProjectionV1Schema,
 	ConversationDetailProjectionV1: ConversationDetailProjectionV1Schema,
+	ConversationModelSelectionProjectionV1:
+		ConversationModelSelectionProjectionV1Schema,
 	ConversationProjectionV1: ConversationProjectionV1Schema,
 	ExecutionDetailProjectionV1: ExecutionDetailProjectionV1Schema,
 	ExecutionProcessSummaryV1: ExecutionProcessSummaryV1Schema,

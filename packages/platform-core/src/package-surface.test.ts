@@ -163,6 +163,7 @@ describe("platform-core package surface", () => {
 			"parseCurrentTaskApiUseGrantV1",
 			"parseCurrentTaskApplicationV1",
 			"parseCurrentTaskUserV1",
+			"parseDirectorySnapshotBindingV1",
 			"parsePersonalApiCredentialIdV1",
 			"parsePersonalApiCredentialIssuanceV1",
 			"parsePersonalApiCredentialNarrowingV1",

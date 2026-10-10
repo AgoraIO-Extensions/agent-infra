@@ -115,6 +115,9 @@ describe("AgentDetailScreen", () => {
 		expect(
 			screen.getByRole("link", { name: "打开 Agent" }).getAttribute("href"),
 		).toBe("https://agent.example.test/");
+		expect(screen.getByText("入口身份责任", { selector: "dt" })).toBeTruthy();
+		expect(screen.getByText("由自有入口校验")).toBeTruthy();
+		expect(screen.getByText("自有交互入口已就绪。")).toBeTruthy();
 		expect(screen.queryByRole("link", { name: "个人历史" })).toBeNull();
 		expect(screen.queryByRole("link", { name: "开始对话" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "开始对话" })).toBeNull();
@@ -198,6 +201,8 @@ describe("AgentDetailScreen", () => {
 		);
 
 		expect(screen.queryByRole("link", { name: "打开 Agent" })).toBeNull();
+		expect(screen.getByText("自定义 Agent · 平台交互入口")).toBeTruthy();
+		expect(screen.getByText("由平台校验")).toBeTruthy();
 		expect(screen.getByText("模型范围", { selector: "dt" })).toBeTruthy();
 		expect(screen.getByText("默认选项", { selector: "dt" })).toBeTruthy();
 		expect(screen.getByText(/Primary model.*medium、high/)).toBeTruthy();
@@ -220,6 +225,10 @@ describe("AgentDetailScreen", () => {
 		);
 
 		expect(screen.queryByRole("link", { name: "打开 Agent" })).toBeNull();
+		expect(screen.getByText("由平台校验")).toBeTruthy();
+		expect(
+			screen.getByText("平台身份入口需经过 Auth Gateway；当前未提供直接入口。"),
+		).toBeTruthy();
 	});
 
 	it("renders one opaque unavailable state for a missing or forbidden Agent", async () => {

@@ -13,6 +13,7 @@ import {
 	KubernetesRuntimeCapabilitiesV1Schema,
 	WorkloadCleanupRequestV1Schema,
 	WorkloadCleanupResultV1Schema,
+	WorkloadRouteOriginV1Schema,
 	WorkloadRouteSwitchRequestV1Schema,
 	WorkloadRouteSwitchResultV1Schema,
 } from "./kubernetes.ts";
@@ -82,6 +83,7 @@ export const kubernetesWorkloadSchemasV1 = {
 	KubernetesRuntimeCapabilitiesV1: KubernetesRuntimeCapabilitiesV1Schema,
 	WorkloadCleanupRequestV1: WorkloadCleanupRequestV1Schema,
 	WorkloadCleanupResultV1: WorkloadCleanupResultV1Schema,
+	WorkloadRouteOriginV1: WorkloadRouteOriginV1Schema,
 	WorkloadRouteSwitchRequestV1: WorkloadRouteSwitchRequestV1Schema,
 	WorkloadRouteSwitchResultV1: WorkloadRouteSwitchResultV1Schema,
 } as const;

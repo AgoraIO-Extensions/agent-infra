@@ -1793,6 +1793,90 @@ describe("contract compatibility command", () => {
 		expect(result.stderr).toBe("");
 	});
 
+	it("accepts only the reviewed custom Agent model selection additions", async () => {
+		type OpenApiDocument = {
+			components: {
+				schemas: Record<string, Record<string, unknown>>;
+			};
+			paths: Record<string, { get?: unknown }>;
+		};
+		const cases = [
+			{
+				name: "runtime-host.v1.openapi.json",
+				remove(value: OpenApiDocument) {
+					delete value.components.schemas.RuntimeModelDirectoryRequestV1;
+					delete value.components.schemas.RuntimeModelDirectoryResponseV1;
+					const schema = value.components.schemas.ExecutionGrantCommandV1;
+					if (!schema) throw new Error("ExecutionGrantCommandV1 missing");
+					const commands = schema.enum as string[];
+					schema.enum = commands.filter(
+						(command) => command !== "model-directory.read",
+					);
+				},
+			},
+			{
+				name: "pilot-delegated.v1.openapi.json",
+				remove(value: OpenApiDocument) {
+					const schema = value.components.schemas.ExecutionGrantCommandV1;
+					if (!schema) throw new Error("ExecutionGrantCommandV1 missing");
+					const commands = schema.enum as string[];
+					schema.enum = commands.filter(
+						(command) => command !== "model-directory.read",
+					);
+				},
+			},
+			{
+				name: "pilot-browser.v1.openapi.json",
+				remove(value: OpenApiDocument) {
+					const path =
+						value.paths[
+							"/api/v1/conversations/{conversationId}/model-selection"
+						];
+					if (!path) throw new Error("model-selection path missing");
+					delete path.get;
+					delete value.components.schemas
+						.ConversationModelSelectionProjectionV1;
+				},
+			},
+		] as const;
+		const directory = await mkdtemp(resolve(tmpdir(), "custom-agent-compat-"));
+		try {
+			for (const entry of cases) {
+				const current = JSON.parse(
+					await readFile(
+						new URL(`../artifacts/openapi/${entry.name}`, import.meta.url),
+						"utf8",
+					),
+				);
+				const previous = structuredClone(current);
+				entry.remove(previous);
+				const previousPath = resolve(directory, `previous-${entry.name}`);
+				const currentPath = resolve(directory, `current-${entry.name}`);
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const altered = structuredClone(current);
+				if (entry.name === "runtime-host.v1.openapi.json") {
+					altered.components.schemas.RuntimeModelDirectoryResponseV1.properties.options.maxItems = 63;
+				} else if (entry.name === "pilot-browser.v1.openapi.json") {
+					altered.components.schemas.ConversationModelSelectionProjectionV1.properties.available.type =
+						"string";
+				} else {
+					altered.components.schemas.ExecutionGrantCommandV1.enum =
+						altered.components.schemas.ExecutionGrantCommandV1.enum.filter(
+							(value: string) => value !== "turn.submit",
+						);
+				}
+				await writeFile(currentPath, JSON.stringify(altered));
+				expect(comparePaths(currentPath, previousPath).status, entry.name).toBe(
+					1,
+				);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("accepts the additive server-resolved Connection capability", async () => {
 		const current = JSON.parse(
 			await readFile(pilotBrowserArtifactPath, "utf8"),

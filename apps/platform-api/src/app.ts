@@ -2,6 +2,10 @@ import type { startObservability } from "@agent-infra/observability";
 import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
 import {
+	type CustomAgentAuthGatewayRouteOptionsV1,
+	registerCustomAgentAuthGatewayRoutesV1,
+} from "./custom-agent-auth-gateway.js";
+import {
 	type AgentApiCreationRouteDependencies,
 	registerAgentApiCreationRoutes,
 } from "./http/agent-api-creation-routes.js";
@@ -111,6 +115,10 @@ export interface PlatformAppDependencies {
 		request: Request,
 		work: () => Promise<Response>,
 	) => Promise<Response>;
+	/** Optional deployment-owned platform-identity route for custom Agents. */
+	readonly customAgentGateway?: CustomAgentAuthGatewayRouteOptionsV1 & {
+		readonly path: string;
+	};
 	readonly files?: FileRoutesDependenciesV1;
 	readonly applications?: ApplicationRegistrationRouteDependencies;
 	readonly applicationMaterialGrants?: ApplicationMaterialGrantRouteDependencies;
@@ -172,6 +180,11 @@ export function createPlatformApp(
 			});
 			return context.res;
 		});
+	if (dependencies.customAgentGateway)
+		registerCustomAgentAuthGatewayRoutesV1(
+			app,
+			dependencies.customAgentGateway,
+		);
 	if (dependencies.wecomSetup)
 		registerWecomSetupRoutesV1(app, dependencies.wecomSetup);
 	if (dependencies.wecomApplicationSetup)

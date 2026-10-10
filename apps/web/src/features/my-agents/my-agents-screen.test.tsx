@@ -71,6 +71,23 @@ describe("MyAgentsScreen", () => {
 		expect(screen.getAllByRole("link", { name: "查看 Agent" })).toHaveLength(1);
 	});
 
+	it("distinguishes custom application entry modes in the application list", async () => {
+		const application = AgentApplicationProjectionV2Schema.parse({
+			...pendingApplication,
+			source: {
+				kind: "custom",
+				imageReference: "registry.example/agents/release:v1",
+				interactionMode: "platform-adapter",
+			},
+		});
+		await renderWithMyAgentsRouter(
+			<MyAgentsScreen state={{ kind: "ready", applications: [application] }} />,
+		);
+
+		expect(screen.getByText("自定义 Agent · 平台交互入口")).toBeTruthy();
+		expect(screen.queryByText("自定义 Agent", { exact: true })).toBeNull();
+	});
+
 	it("renders an explicit empty current applicant history", async () => {
 		await renderWithMyAgentsRouter(
 			<MyAgentsScreen state={{ kind: "ready", applications: [] }} />,
