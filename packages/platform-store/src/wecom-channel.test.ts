@@ -137,7 +137,7 @@ function channel(target = store) {
 				(purpose, subject_id, key_version, key_id, ciphertext)
 				values ('personal', ${input.senderId}, 1, ${keyId},
 					${sql.json({ purpose: "personal", subjectId: input.senderId, keyId, keyVersion: 1 })})
-				on conflict (purpose, subject_id, key_version) do nothing`;
+				on conflict do nothing`;
 			return base.receive(input, connectionFence, signal);
 		},
 	};
@@ -1011,7 +1011,7 @@ describe("existing WeCom transaction cancellation", () => {
 			(purpose, subject_id, key_version, key_id, ciphertext)
 			values ('personal', ${userId}, 1, ${keyId},
 				${sql.json({ purpose: "personal", subjectId: userId, keyId, keyVersion: 1 })})
-			on conflict (purpose, subject_id, key_version) do nothing`;
+			on conflict do nothing`;
 		const suffix = ++sequence;
 		const input = {
 			...message,
