@@ -28,6 +28,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { runtimeFetch as inClusterRuntimeFetch } from "./runtime-transport.js";
+import type { WorkloadBrowserBindingResolverV1 } from "./workload-runtime.js";
 import type { PlatformWorkloadWorkerOptionsV1 } from "./workload-worker.js";
 
 type ProbeRequest = Omit<WorkloadReadinessRequestV1, "grant">;
@@ -72,6 +73,8 @@ export interface ProductionWorkloadWorkerInputV1 {
 	readonly files?: PlatformWorkloadWorkerOptionsV1["files"];
 	readonly runtimeModelVersion?: PlatformWorkloadWorkerOptionsV1["runtimeModelVersion"];
 	readonly runtimeProbe: WorkloadRuntimeProbeAuthorizationV1;
+	/** Server-resolved binding for the current Session-owned Browser Sandbox. */
+	readonly browserBinding?: WorkloadBrowserBindingResolverV1;
 	/** Separate transports keep registry authentication out of model and Runtime requests. */
 	readonly modelFetch?: typeof fetch;
 	readonly runtimeFetch?: typeof fetch;
@@ -199,6 +202,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			workerId: input.workerId,
 			authorization: input.runtimeProbe,
 			fetch: runtimeFetch,
+			...(input.browserBinding ? { browserBinding: input.browserBinding } : {}),
 		});
 		signal.throwIfAborted();
 		return {

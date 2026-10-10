@@ -1126,6 +1126,21 @@ export class RuntimeHost {
 				core: "passed",
 				capabilities,
 			});
+		} catch (error) {
+			this.options.onBrowserCapabilityAssembly?.(
+				request.browserDeclaration
+					? {
+							failure: {
+								status: "unavailable",
+								errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+								reason:
+									"Browser capability readiness probe did not complete successfully",
+								retryable: true,
+							},
+						}
+					: undefined,
+			);
+			throw error;
 		} finally {
 			bounded.removeEventListener("abort", abort);
 		}

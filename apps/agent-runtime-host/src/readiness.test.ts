@@ -206,6 +206,23 @@ describe("HTTP Workload readiness", () => {
 		expect(
 			BrowserCapabilityProjectionV1Schema.parse(await discovery.json()).status,
 		).toBe("available");
+		probe.mockRejectedValueOnce(new Error("probe unavailable"));
+		const failed = await h.app.request(
+			"/internal/runtime/v1/readiness",
+			post(body),
+		);
+		expect(failed.status).toBe(503);
+		const afterFailed = await h.app.request(
+			"/internal/runtime/v1/browser-capability?schemaVersion=1",
+			{ headers: { authorization: "Bearer transport-a" } },
+		);
+		expect(
+			BrowserCapabilityProjectionV1Schema.parse(await afterFailed.json()),
+		).toMatchObject({
+			status: "unavailable",
+			errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+			retryable: true,
+		});
 		const foreign = await h.app.request(
 			"/internal/runtime/v1/readiness",
 			post(
