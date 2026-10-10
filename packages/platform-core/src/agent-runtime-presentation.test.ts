@@ -10,6 +10,7 @@ import {
 	decideAgentRuntimePresentationV1,
 	snapshotAgentRuntimePresentationExpectationV1,
 } from "./agent-runtime-presentation.js";
+import type { AgentConfigurationRecordV2 } from "./agent-configuration-types.js";
 
 const management: AgentManagementStateV1 = {
 	schemaVersion: 1,
@@ -212,7 +213,7 @@ describe("Agent runtime presentation policy", () => {
 				connectionEnabled: false,
 			},
 			modelConfiguration: null,
-		};
+		} as unknown as AgentConfigurationRecordV2;
 		const deployment = {
 			...current.deployment,
 			imageDigest: configuration.source.imageDigest,
