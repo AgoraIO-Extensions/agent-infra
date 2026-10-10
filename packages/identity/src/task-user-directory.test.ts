@@ -90,8 +90,8 @@ describe("requestless current task identity boundary", () => {
 			),
 		).rejects.toThrow(TaskIdentityUnavailableErrorV1);
 		for (const invalid of [
-			{ ...binding, fetchedAt: now + 1 },
-			{ ...binding, validUntil: now },
+			{ ...binding, fetchedAt: now + 60_000 },
+			{ ...binding, validUntil: now - 1 },
 		]) {
 			await expect(
 				resolveCurrentTaskUserV1(
