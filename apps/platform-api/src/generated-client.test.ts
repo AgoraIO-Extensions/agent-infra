@@ -118,6 +118,7 @@ const applicationProjection = {
 	name: applicationRecord.name,
 	description: applicationRecord.description,
 	source: { kind: "standard" as const, templateId: "template-1" },
+	defaultRelayKey: "synthetic-generated-client-default-relay-key",
 	status: management.status,
 	resourceProfile: {
 		profileId: "standard-medium",
@@ -191,6 +192,7 @@ function testApp() {
 	};
 	const app = createPlatformApp({
 		management: {
+			validateDefaultRelayKey: vi.fn().mockResolvedValue("valid"),
 			identity: identityAdapter,
 			foundation: { submit: vi.fn().mockResolvedValue({}) },
 			revision: { revise: vi.fn().mockResolvedValue({}) },
