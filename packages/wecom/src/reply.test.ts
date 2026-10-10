@@ -188,6 +188,29 @@ describe("reply protection and external send", () => {
 			}),
 		);
 	});
+	it("rejects unsupported result media before sending text", async () => {
+		let calls = 0;
+		const adapter = sender(async () => {
+			calls++;
+			return Response.json({ errcode: 0 });
+		});
+		expect(
+			await adapter.send({
+				scope,
+				replyHandle: await protect(route),
+				text: "reply",
+				media: [
+					{
+						fileId: "file-1",
+						name: "report.pdf",
+						mediaType: "application/pdf",
+						sizeBytes: 42,
+					},
+				],
+			}),
+		).toBe("failed");
+		expect(calls).toBe(0);
+	});
 	it("requires a successful provider acknowledgment", async () => {
 		const handle = await protect(route);
 		expect(
