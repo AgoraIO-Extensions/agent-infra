@@ -2,13 +2,13 @@ import { Hono } from "hono";
 import { expect, it, vi } from "vitest";
 import { registerConnectionInstallationCallbackRoutesV1 } from "./connection-installation-callback-routes.js";
 
-function fixture() {
+function fixture(expired = false) {
 	const claim = vi.fn(async () => ({
 		authorizationId: "authorization-a",
 		runtimeOrigin: "https://runtime.test:3443/",
 		callbackPath: "/internal/runtime/oauth/v1/callback",
 		attemptId: "attempt-a",
-		expiresAt: Date.now() + 60_000,
+		expiresAt: expired ? Date.now() - 1 : Date.now() + 60_000,
 		issuer: "https://connection.test/",
 	}));
 	const settle = vi.fn(async () => true);
@@ -111,5 +111,15 @@ it("accepts an OAuth denial without treating it as a credential", async () => {
 				state: "a".repeat(64),
 			},
 		}),
+	);
+});
+
+it("does not forward a state that expires after claim", async () => {
+	const f = fixture(true);
+	const response = await f.app.request(valid);
+	expect(response.status).toBe(404);
+	expect(f.forward).not.toHaveBeenCalled();
+	expect(f.settle).toHaveBeenCalledWith(
+		expect.objectContaining({ attemptId: "attempt-a", status: "unknown" }),
 	);
 });

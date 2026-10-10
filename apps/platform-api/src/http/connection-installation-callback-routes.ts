@@ -131,9 +131,22 @@ export function registerConnectionInstallationCallbackRoutesV1(
 					requestMetadata(request).traceId,
 				);
 			}
+			const remaining = claimed.expiresAt - Date.now();
+			if (remaining <= 0) {
+				await dependencies.installation.callback.settle({
+					stateHash: hash,
+					attemptId: claimed.attemptId,
+					now: Date.now(),
+					status: "unknown",
+				});
+				throw new HttpProtocolError(
+					"RESOURCE_UNAVAILABLE",
+					requestMetadata(request).traceId,
+				);
+			}
 			const forwardSignal = AbortSignal.any([
 				request.signal,
-				AbortSignal.timeout(10_000),
+				AbortSignal.timeout(Math.min(10_000, remaining)),
 			]);
 			await dependencies.forward({
 				target: claimed,

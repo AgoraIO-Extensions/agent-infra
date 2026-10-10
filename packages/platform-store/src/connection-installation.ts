@@ -260,7 +260,6 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					where binding->'callback'->>'stateHash'=${stateHash}
 					  and binding->'callback'->>'status'='sending'
 					  and binding->'callback'->>'attemptId'=${attemptId}
-					  and coalesce((binding->'callback'->>'attemptExpiresAt')::bigint, 0) > ${now}
 					returning binding->'callback'->>'status' as status
 				`);
 				return result[0]?.status === status;
