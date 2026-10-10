@@ -613,6 +613,18 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 				`);
 				const command = owned[0];
 				if (!command) return 0;
+				const binding = command.binding as Record<string, unknown>;
+				const scope = binding.scope as Record<string, unknown> | undefined;
+				if (
+					!scope ||
+					scope.configFingerprint !== this.#configuration.configFingerprint ||
+					!isDeepStrictEqual(scope.source, this.#configuration.source) ||
+					!isDeepStrictEqual(scope.oauthConfiguration, {
+						ref: this.#configuration.ref,
+						revision: this.#configuration.revision,
+					})
+				)
+					throw new ConnectionInstallationErrorV1("invalid_input");
 				const status = await tx.execute(sql`
 				update platform.connection_installation_commands
 				set status=case when attempt_expires_at is null or attempt_expires_at > clock_timestamp() then ${input.status} else 'unknown' end, attempt_expires_at=null, updated_at=clock_timestamp()
