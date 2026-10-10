@@ -47,6 +47,8 @@ function bridge(
 	return createRuntimeFileBridgeV1({
 		binding,
 		now: () => 10_000,
+		isRevoked: () => false,
+		isCurrent: () => true,
 		readInput: async (context) => ({
 			fileId: context.fileId,
 			descriptor,
@@ -167,6 +169,20 @@ describe("RuntimeHost execution file bridge", () => {
 		expect(encoded).toContain('"executionId":"execution-1"');
 	});
 
+	it("requires revocation and current-generation checks for every bridge", () => {
+		expect(() =>
+			createRuntimeFileBridgeV1({
+				binding,
+				readInput: async () => ({
+					fileId: "input-1",
+					descriptor,
+					body: new ReadableStream<Uint8Array>(),
+				}),
+				writeResult: async () => projection,
+			} as never),
+		).toThrow("RUNTIME_FILE_BRIDGE_AUTHORITY_REQUIRED");
+	});
+
 	it("keeps a RuntimeHost without deployment bridge fail-closed", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "runtime-file-bridge-"));
 		try {
@@ -178,7 +194,7 @@ describe("RuntimeHost execution file bridge", () => {
 					now: () => "2026-10-10T00:00:00Z",
 				},
 			});
-			expect(() => host.getFileBridge()).toThrow(
+			await expect(host.getFileBridge({} as never)).rejects.toThrow(
 				"Runtime authorization is unavailable",
 			);
 			await host.close();

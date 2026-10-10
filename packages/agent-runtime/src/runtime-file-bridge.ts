@@ -59,6 +59,11 @@ export interface RuntimeFileBridgePortV1 {
 	): Promise<RuntimeFileResultV1>;
 }
 
+/** Creates a port bound to exactly one validated Runtime business request. */
+export type RuntimeFileBridgeFactoryV1 = (
+	binding: RuntimeFileBridgeBindingV1,
+) => RuntimeFileBridgePortV1;
+
 type RuntimeFileBridgeBindingKey = keyof RuntimeFileBridgeBindingV1;
 const bindingKeys: readonly RuntimeFileBridgeBindingKey[] = [
 	"actorId",
@@ -225,9 +230,13 @@ export function createRuntimeFileBridgeV1(options: {
 	assertBinding(options.binding);
 	if (
 		typeof options.readInput !== "function" ||
-		typeof options.writeResult !== "function"
+		typeof options.writeResult !== "function" ||
+		typeof options.isRevoked !== "function" ||
+		typeof options.isCurrent !== "function"
 	)
 		throw new TypeError("RUNTIME_FILE_BRIDGE_AUTHORITY_REQUIRED");
+	const isRevoked = options.isRevoked;
+	const isCurrent = options.isCurrent;
 	const binding = Object.freeze({
 		...options.binding,
 		inputFileIds: Object.freeze([...options.binding.inputFileIds]),
@@ -238,9 +247,9 @@ export function createRuntimeFileBridgeV1(options: {
 		const current = now();
 		if (!Number.isSafeInteger(current) || current >= binding.expiresAt)
 			throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_EXPIRED");
-		if (options.isRevoked?.(binding) === true)
+		if (isRevoked(binding) === true)
 			throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_REVOKED");
-		if (options.isCurrent && !options.isCurrent(binding))
+		if (!isCurrent(binding))
 			throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
 	}
 	return {

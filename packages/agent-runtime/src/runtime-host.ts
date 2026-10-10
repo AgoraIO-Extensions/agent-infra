@@ -85,7 +85,11 @@ import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
-import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
+import {
+	createRuntimeFileBridgeBindingV1,
+	type RuntimeFileBridgeFactoryV1,
+	type RuntimeFileBridgePortV1,
+} from "./runtime-file-bridge.js";
 import { RuntimeHostV3 } from "./runtime-host-v3.js";
 import { RuntimeHostV4 } from "./runtime-host-v4.js";
 
@@ -101,8 +105,8 @@ export interface RuntimeHostOptions {
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
 	store: FileRuntimeStore;
 	driver: RuntimeDriver;
-	/** Request-scoped file bridge; absent until a deployment owns the data plane. */
-	fileBridge?: RuntimeFileBridgePortV1;
+	/** Factory for a bridge bound to the validated request supplied to getFileBridge. */
+	fileBridge?: RuntimeFileBridgeFactoryV1;
 	grantValidation: ExecutionGrantValidationOptions;
 	afterOperationPrepared?: (operationId: string) => void | Promise<void>;
 	afterDriverResult?: (operationId: string) => void | Promise<void>;
@@ -448,10 +452,20 @@ export class RuntimeHost {
 	 * Return the request-scoped file port only when deployment wiring supplied
 	 * one. A missing bridge stays fail-closed and never enables Driver media.
 	 */
-	getFileBridge(): RuntimeFileBridgePortV1 {
+	async getFileBridge(
+		request:
+			| RuntimeSubmitTurnTransportV4["businessRequest"]
+			| RuntimeSupplementTransportV4["businessRequest"],
+	): Promise<RuntimeFileBridgePortV1> {
 		this.requireLegacyHost();
-		if (!this.options.fileBridge) runtimeAuthorizationDenied();
-		return this.options.fileBridge;
+		if (!this.options.fileBridge || !this.options.validateGrantV4)
+			runtimeAuthorizationDenied();
+		const accepted = await this.options.validateGrantV4(request);
+		const binding = await createRuntimeFileBridgeBindingV1({
+			request: accepted.request,
+			claims: accepted.claims,
+		});
+		return this.options.fileBridge(binding);
 	}
 	private requireLegacyHost() {
 		if (this.closed) runtimeAuthorizationDenied();
