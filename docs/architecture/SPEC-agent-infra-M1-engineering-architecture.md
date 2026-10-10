@@ -544,6 +544,12 @@ Connection Adapter 按 `src/providers/<名称>/{actions,definition,executors,ind
 `provider-source-layout.json` 和校验脚本约束，不引入动态 Loader 或账号升级。
 目录说明见 [连接器布局](../connection/provider-layout.md)。
 
+StaticSpaces 的上海单用户受监督准入按
+[已批准 pilot ADR](../adr/ADR-connection-static-spaces-supervised-pilot.md) 和
+[HLD 4.3.1](HLD-connection-M1.md#431-上海-staticspaces-单用户受监督-pilot) 实施。
+沿用 Provider 目录和不可变版本；风险接受不等于真实验收，不使用环境开关或 fixture 开放目录。
+服务端准入不得替代公司审批、Consent/Grant、Credential fence 和持久 Call/Effect/Dispatch。
+
 默认从精确上游 Commit 导出 allowlist 审核后的 Provider execution closure，形成
 `packages/openconnector-kernel` 受控源码 package；该 package 记录来源 Commit、复制文件清单和 digest，
 保留许可证与 notice。`connection-api` 只通过 OpenConnector Adapter 依赖它，把 Provider、OAuth 和

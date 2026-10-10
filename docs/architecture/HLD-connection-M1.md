@@ -80,7 +80,7 @@
 | 内部网站 | Jira | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
 | 内部网站 | Bitbucket | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
 | 内部网站 | Jenkins | 纳入（只读） | 每个公司 Jenkins deployment 使用独立 Provider ID 和 ProviderRelease，共享审核过的只读 Adapter；pilot runtime 仅开放 `jenkins-release` |
-| 内部网站 | StaticSpaces | 纳入实现；未获生产发布批准 | 按 3.2.2 的个人 Token、七项 Action 和 onboarding 门禁实现；不自动进入启动发布目录 |
+| 内部网站 | StaticSpaces | 上海单用户受监督 pilot 已批准；广泛生产未批准 | 按 3.2.2 与 4.3.1 的具名边界发布；v1 普通目录仍保持未验证关闭 |
 
 本表属于 **[设计决策]**，不把不同产品或 deployment 合并为共享 Credential、endpoint 或授权范围。每个纳入项仍必须分别通过 13.4 的 Provider Onboarding；Microsoft Outlook 在状态从“待定”变更前不是 M1 交付依赖。
 
@@ -388,7 +388,8 @@ WRITE 不支持原生幂等，复用 Connection 入站幂等与 Call/Effect/Disp
 本实现批准不关闭 G-02/G-03。真实 Token acceptance、identity、reauth/revoke、错误、限流、
 隔离 READ/WRITE 与 response-lost、供应链和安全评审均按 13.4 完成后才能发布。
 `staticSpacesVerificationMatrix` 缺少真实证据时，启动目录不包含该 ProviderRelease，
-不得用环境变量、fixture 或兼容开关绕过。删除、成员/组授权、ACL 管理、用户创建、browser
+不得用环境变量、fixture 或兼容开关绕过。4.3.1 批准的独立受限 pilot profile 按其具名
+批准及服务端边界准入，不把风险接受转换成 v1 真实验收。删除、成员/组授权、ACL 管理、用户创建、browser
 runtime state 和订阅管理不在首期范围。
 
 ### 3.3 非目标
@@ -481,6 +482,20 @@ Connection Owner 于 2026-09-01 在 [#301](https://github.com/AgoraIO-Extensions
 
 该决定是对 G-01 未关闭行为的具名、限环境 pilot 批准，不是通用例外机制。其他环境、客户端版本、
 delegated workload 或支持声明仍须按原门禁取得 Owner 结论和 conformance 证据。
+
+### 4.3.1 上海 StaticSpaces 单用户受监督 pilot
+
+Connection Owner 于 2026-10-10 在
+[#1681](https://github.com/AgoraIO-Extensions/agent-infra/issues/1681) 明确批准
+[StaticSpaces 单用户受监督 pilot ADR](../adr/ADR-connection-static-spaces-supervised-pilot.md)。
+完整账号、Consumer、空间、期限、风险接受、不可豁免保护及退出规则以该 ADR 为准。
+该批准只允许既有上海部署中的独立受限 ProviderRelease/ActionVersion 用于本人 Codex 联调，
+不扩展到其他 Principal/Consumer、Delegated caller、账号或空间，不关闭广泛生产门禁。
+
+缺少已核实的稳定 Principal/Consumer ID、批准记录与最终 head/profile/digest 绑定、有效期限，
+或未通过既有身份/授权/持久执行保护时不得激活。不得改写 v1 归档或把其验证矩阵伪装为通过。
+独立 pilot 的公司连接审批、Consent/Grant 和每次 dispatch 必须校验服务端边界；失效或未知效果
+立即关闭本 Provider 新准入，已有未完成效果与已登记路由继续按生命周期规则保留及对账。
 
 ## 5. 方案比较与选型
 

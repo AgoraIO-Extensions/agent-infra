@@ -109,7 +109,8 @@ async function startupPhase<T>(
 }
 
 export async function publishStartupConsumerDeclarations(
-	repository: Pick<PostgresConnectionRepository, "publishConsumerDeclaration">,
+	repository: Pick<PostgresConnectionRepository, "publishConsumerDeclaration"> &
+		Partial<Pick<PostgresConnectionRepository, "isProviderAdmissionOpen">>,
 	consumers: readonly { id: string; name: string }[],
 	catalogs: readonly {
 		provider: string;
@@ -128,6 +129,15 @@ export async function publishStartupConsumerDeclarations(
 		[...groups.values()].map(async (group) => {
 			for (const consumer of group) {
 				for (const catalog of catalogs) {
+					if (
+						catalog.providerReleaseId ===
+							"static-spaces-connection-v2-supervised" &&
+						!(await repository.isProviderAdmissionOpen?.({
+							providerReleaseId: catalog.providerReleaseId,
+							consumerId: consumer.id,
+						}))
+					)
+						continue;
 					await startupPhase("consumer_declaration", catalog.provider, () =>
 						repository.publishConsumerDeclaration({
 							consumer,
@@ -457,6 +467,7 @@ export async function createConnectionRuntime(
 			issuer: config.publicBaseUrl,
 			management: {
 				providerLifecycle: repository,
+				providerAdmission: repository,
 				approvalCatalog,
 				approvalService,
 				notificationDispatcher,

@@ -74,6 +74,7 @@ describe("Connection store migrations", () => {
 			"0035_provider_oauth_transactions",
 			"0036_retire_datalego_oauth_pilot",
 			"0037_provider_release_lifecycle",
+			"0038_supervised_provider_admission",
 		]);
 		for (const migration of journal.entries) {
 			await access(resolve(directory, `${migration.tag}.sql`));
