@@ -53,7 +53,10 @@ import {
 } from "./file-assembly.js";
 import { createApplicationCredentialProcessDeliveryV1 } from "./http/application-api-credential-routes.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
-import type { ConversationAuthorization } from "./http/conversation-routes.js";
+import type {
+	ConversationAuthorization,
+	ConversationModelSelectionReaderV1,
+} from "./http/conversation-routes.js";
 import type { DeploymentConfigurationRoutesDependencies } from "./http/deployment-configuration-routes.js";
 import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import {
@@ -136,6 +139,10 @@ export interface PlatformApiAssemblyInput {
 		readonly replyEncryptionPublicKeyPem: string;
 	};
 	readonly directory?: DirectoryRouteDependencies;
+	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
+	readonly modelSelection?: ConversationModelSelectionReaderV1;
+	/** Optional deployment-owned platform identity route for custom Agents. */
+	readonly customAgentGateway?: PlatformAppDependencies["customAgentGateway"];
 }
 
 export interface PlatformApiAssembly {
@@ -689,6 +696,7 @@ export function assemblePlatformApi(
 		conversation: {
 			identity: input.identity,
 			authorization: conversationAuthorization,
+			...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 			commands: (identity) =>
 				createConversationExecutionUseCaseV1({
 					transaction: conversationTransaction,
@@ -720,6 +728,9 @@ export function assemblePlatformApi(
 				? { connectionCapability: input.connectionCapability }
 				: {}),
 		},
+		...(input.customAgentGateway
+			? { customAgentGateway: input.customAgentGateway }
+			: {}),
 		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },
 		skillHubRead: skillHubRead.dependencies,
 		...(input.directory ? { directory: input.directory } : {}),

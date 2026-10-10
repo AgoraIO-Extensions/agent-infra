@@ -488,6 +488,21 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				},
 			}),
 		).toThrow("Image registry Runtime Manifest mismatch");
+
+		const invalidCapabilitiesLabel = JSON.stringify({
+			...admitted.runtimeManifest,
+			capabilities: { modelSelection: "enabled" },
+		});
+		expect(() =>
+			validateImageRegistryAdmissionResultV1(request, {
+				...admitted,
+				runtimeManifestLabel: invalidCapabilitiesLabel,
+				runtimeManifestParsingEvidence: {
+					...admitted.runtimeManifestParsingEvidence,
+					utf8ByteLength: Buffer.byteLength(invalidCapabilitiesLabel, "utf8"),
+				},
+			}),
+		).toThrow("Image registry Runtime Manifest mismatch");
 	});
 
 	it("accepts stable redacted rejection errors and rejects expanded error payloads", () => {

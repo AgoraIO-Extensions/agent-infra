@@ -46,6 +46,7 @@ import {
 	type KubernetesWorkloadPolicyV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
+import { createWorkloadInteractionOriginV1 } from "./kubernetes-runtime-policy.js";
 import { runtimeFetch } from "./runtime-transport.js";
 import {
 	validateWorkloadSkillMaterializationV1,
@@ -919,7 +920,19 @@ export function createWorkloadRuntimeV1(
 						connectionDatabaseAccess: false,
 						decryptionKeyringAccess: false,
 					},
-					route: { name, exposure, tlsRequired: true },
+					route: {
+						name,
+						exposure,
+						tlsRequired: true,
+						...(exposure === "self-managed"
+							? {
+									interactionOrigin: createWorkloadInteractionOriginV1({
+										routeHostSuffix: options.policy.routeHostSuffix,
+										agentId: state.agentId,
+									}),
+								}
+							: {}),
+					},
 					secretRefs: secretBindings.map(({ record }) =>
 						recordReference(record),
 					),

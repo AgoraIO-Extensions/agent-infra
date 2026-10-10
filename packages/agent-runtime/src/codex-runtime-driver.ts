@@ -96,6 +96,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeExternalActionAuthorizer,
+	RuntimeModelDirectory,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 	RuntimeOriginalEvidenceRecoveryRef,
@@ -5807,6 +5808,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					}
 				: {}),
 		};
+	}
+
+	async getModelDirectory(
+		_nativeSessionRef: string,
+	): Promise<RuntimeModelDirectory> {
+		return unavailable();
 	}
 
 	/** Return bounded Browser descriptors from the deployment-owned capability projection. */
