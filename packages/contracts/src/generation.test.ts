@@ -183,6 +183,7 @@ describe("standard contract artifacts", () => {
 			"/api/v2/admin/agent-applications/{applicationId}/decision",
 			"/api/v2/admin/agents",
 			"/api/v2/admin/audit",
+			"/api/v2/admin/users/{userId}/disable",
 			"/api/v2/agent-applications",
 			"/api/v2/agent-applications/{applicationId}",
 			"/api/v2/agent-applications/{applicationId}/withdraw",

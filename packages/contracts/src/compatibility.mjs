@@ -2364,6 +2364,48 @@ function isConnectionInstallationOpenApiAddition(previous, current) {
 	}
 	return changed && findBreakingChanges(previous, normalized).length === 0;
 }
+
+// #1756 adds the administrator employee disable/reenable operation, its
+// command schema, and the two bounded user governance audit actions.
+function isPlatformUserDisableOpenApiAddition(previous, current) {
+	const path = "/api/v2/admin/users/{userId}/disable";
+	const schema = "PlatformUserDisableCommandV1";
+	const actions = ["platform.user.disabled", "platform.user.reenabled"];
+	const oldActions =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const newActions =
+		current.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const addedPath =
+		previous.paths?.[path] === undefined && current.paths?.[path] !== undefined;
+	const addedSchema =
+		previous.components?.schemas?.[schema] === undefined &&
+		current.components?.schemas?.[schema] !== undefined;
+	const addedActions =
+		Array.isArray(newActions) &&
+		actions.every(
+			(action) => !oldActions?.includes(action) && newActions.includes(action),
+		);
+	if (!addedPath && !addedSchema && !addedActions) return false;
+	if (addedPath !== addedSchema) return false;
+	const normalized = structuredClone(current);
+	if (normalized.paths?.[path] !== undefined) delete normalized.paths[path];
+	if (normalized.components?.schemas?.[schema] !== undefined)
+		delete normalized.components.schemas[schema];
+	if (addedActions)
+		normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
+			newActions.filter((action) => !actions.includes(action));
+	for (const name of [
+		"PlatformAuditProjectionV1",
+		"PlatformAuditProjectionV2",
+	]) {
+		const subjectType =
+			normalized.components?.schemas?.[name]?.properties?.subjectType?.enum;
+		if (Array.isArray(subjectType) && subjectType.includes("user"))
+			normalized.components.schemas[name].properties.subjectType.enum =
+				subjectType.filter((kind) => kind !== "user");
+	}
+	return findBreakingChanges(previous, normalized).length === 0;
+}
 function isConnectionInstallationAuthorizationUrlAddition(previous, current) {
 	const normalized = structuredClone(current);
 	const paths = [
@@ -2454,6 +2496,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&
 			!isConnectionInstallationOpenApiAddition(previous, current) &&
+			!isPlatformUserDisableOpenApiAddition(previous, current) &&
 			!isConnectionInstallationAuthorizationUrlAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&
