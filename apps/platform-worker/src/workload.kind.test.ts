@@ -896,6 +896,10 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					createHash("sha256").update(value).digest("hex");
 				await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision)
 					values ('api-workload-application','API Workload','selector-host-owner','app-revision')`;
+				await sql`update platform.agent_applications
+					set creation_channel='api', creator_principal_type='application',
+						creator_principal_id='api-workload-application', approval_revision=null
+					where agent_id=${seed.agentId}`;
 				await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes)
 					values ('api-workload-user','user','selector-host-owner',${hash(token)}, '["agent:manage","agent:read"]'::jsonb),
 						('api-workload-app','application','api-workload-application',${hash(appToken)}, '["agent:manage","agent:read"]'::jsonb)`;
