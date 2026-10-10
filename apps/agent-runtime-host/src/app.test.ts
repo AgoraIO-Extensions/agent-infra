@@ -88,6 +88,9 @@ async function setup(
 	const host = await RuntimeHost.open({
 		store: await FileRuntimeStore.open(hostPath),
 		driver: wrapDriver?.(driver) ?? driver,
+		validateGrantV4: async () => {
+			throw new Error("V4 grant validator must not run without a file bridge");
+		},
 		grantValidation: {
 			expectedIssuer: "agent-platform",
 			now: () => "2026-08-28T10:00:00Z",
@@ -102,6 +105,7 @@ async function setup(
 			),
 		}),
 		driver,
+		host,
 		hostPath,
 	};
 }
@@ -165,6 +169,13 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost HTTP/SSE adapter", () => {
+	it("keeps the deployment host file bridge fail-closed when absent", async () => {
+		const { host } = await setup();
+		await expect(host.getFileBridge({} as never)).rejects.toThrow(
+			/Runtime authorization is unavailable/,
+		);
+	});
+
 	it("adds a selection-required V2 Turn route without removing V1", async () => {
 		const { app } = await setup();
 		const legacy = await app.request("/internal/runtime/v1/turns", {
