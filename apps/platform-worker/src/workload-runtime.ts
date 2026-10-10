@@ -10,6 +10,7 @@ import {
 	type AgentWorkloadDesiredV1,
 	type PlatformSecretRecordV1,
 	RuntimeCapabilitySetV1Schema,
+	resolveRuntimeManifestCapabilitiesV1,
 	validateAgentWorkloadDesiredV1,
 	validateImageRegistryAdmissionResultV1,
 	validatePlatformSecretRecordV1,
@@ -534,8 +535,8 @@ export function createWorkloadRuntimeV1(
 					: optional.success
 						? optional.data
 						: RuntimeCapabilitySetV1Schema.parse({});
-				const declared = RuntimeCapabilitySetV1Schema.parse(
-					desired.runtimeManifest.capabilities ?? {},
+				const declared = resolveRuntimeManifestCapabilitiesV1(
+					desired.runtimeManifest,
 				);
 				const browserResult =
 					desired.runtimeManifest.capabilities?.browser &&
