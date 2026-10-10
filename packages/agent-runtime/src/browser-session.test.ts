@@ -8,7 +8,7 @@ const capability: BrowserCapabilityAvailableV1 = {
 	schemaVersion: 1,
 	capabilityVersion: 1,
 	status: "available",
-	operations: ["navigate", "observe"],
+	operations: ["navigate", "observe", "interact"],
 	policy: {
 		allowedOrigins: ["https://example.test/"],
 		maxContexts: 1,
@@ -41,7 +41,7 @@ const capability: BrowserCapabilityAvailableV1 = {
 		verifiedAt: "2026-10-09T00:00:00Z",
 		manifestDigest: `sha256:${"b".repeat(64)}`,
 		evidenceHash: "c".repeat(64),
-		operations: ["navigate", "observe"],
+		operations: ["navigate", "observe", "interact"],
 	},
 };
 
@@ -61,6 +61,7 @@ function fakePage() {
 			name === "aria-label" ? "Continue" : null,
 		innerText: async () => "Continue",
 		evaluate: async () => "button",
+		click: async () => undefined,
 	};
 	const page = {
 		on: (event: string, listener: (value: unknown) => void) => {
@@ -136,6 +137,17 @@ it("composes one Session facade over Context lifecycle and observe controller", 
 		text: "Continue",
 		tabCount: 1,
 	});
+	const target = observation.elements[0];
+	if (!target) throw new Error("Expected a controlled target");
+	const action = await session.act({
+		kind: "click",
+		page,
+		target,
+		operationRef: "test-operation",
+		attemptRef: "test-attempt",
+		idempotencyKey: "test-click",
+	});
+	expect(action).toMatchObject({ status: "completed" });
 	await session.close();
 	expect(session.snapshot().status).toBe("closed");
 	const restarted = await session.start();

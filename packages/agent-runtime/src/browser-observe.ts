@@ -140,6 +140,11 @@ export type BrowserObservationV1 = Readonly<{
 	elements: readonly BrowserElementReferenceV1[];
 }>;
 
+export type BrowserControlledFixtureV1 = Readonly<{
+	url: string;
+	body: string;
+}>;
+
 export type BrowserArtifactV1 = Readonly<{
 	page: BrowserPageReferenceV1;
 	descriptor: FileDescriptorV1;
@@ -382,6 +387,7 @@ export function createBrowserObserveControllerV1(input: {
 	readonly capability:
 		| BrowserCapabilityAvailableV1
 		| (() => BrowserCapabilityAvailableV1);
+	readonly controlledFixture?: BrowserControlledFixtureV1;
 	readonly recoveryBinding?: BrowserContextRecoveryBindingV1;
 	readonly maxTextBytes?: number;
 }) {
@@ -408,11 +414,27 @@ export function createBrowserObserveControllerV1(input: {
 		return new Set(readCapability().policy.allowedOrigins.map(normalizeOrigin));
 	}
 
+	function applyActionTimeout(page: Page) {
+		page.setDefaultTimeout?.(readCapability().policy.actionTimeoutMs);
+	}
+
 	async function installPolicy() {
 		if (policyInstalled) return;
 		await input.context.route("**/*", async (route: Route) => {
 			try {
-				assertAllowedUrl(route.request().url(), allowedOrigins());
+				const requestUrl = route.request().url();
+				assertAllowedUrl(requestUrl, allowedOrigins());
+				if (input.controlledFixture) {
+					if (input.controlledFixture.url === requestUrl) {
+						await route.fulfill({
+							contentType: "text/html",
+							body: input.controlledFixture.body,
+						});
+					} else {
+						await route.abort("blockedbyclient");
+					}
+					return;
+				}
 				await route.continue();
 			} catch {
 				await route.abort("blockedbyclient");
@@ -432,9 +454,10 @@ export function createBrowserObserveControllerV1(input: {
 		await installPolicy();
 		const capability = readCapability();
 		assertAllowedUrl(url, allowedOrigins());
-		if (input.context.pages().length >= capability.policy.maxPages)
+		if (input.context.pages().length > capability.policy.maxPages)
 			throw new Error("BROWSER_PAGE_LIMIT_EXCEEDED");
 		const page = input.context.pages()[0] ?? (await input.context.newPage());
+		applyActionTimeout(page);
 		const state = pageStateFor(page, pages);
 		await page.goto(url, {
 			waitUntil: "domcontentloaded",
@@ -448,6 +471,7 @@ export function createBrowserObserveControllerV1(input: {
 		reference: BrowserPageReferenceV1,
 	): Promise<BrowserObservationV1> {
 		const state = requirePage(reference);
+		applyActionTimeout(state.page);
 		const root = state.activeFrame ?? state.page;
 		const origin = new URL(state.page.url()).origin;
 		const body = root.locator("body");

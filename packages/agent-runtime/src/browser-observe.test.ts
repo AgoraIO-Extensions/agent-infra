@@ -58,6 +58,7 @@ class FakePage {
 		click: vi.fn(async (): Promise<void> => undefined),
 		evaluate: vi.fn(async () => "button"),
 	};
+	setDefaultTimeout = vi.fn();
 
 	on(event: string, handler: (value: unknown) => void) {
 		this.handlers.set(event, handler);
@@ -138,6 +139,74 @@ describe("Browser observe controller", () => {
 		await expect(
 			controller.navigate("https://other.example/app"),
 		).rejects.toThrow("BROWSER_NAVIGATION_ORIGIN_DENIED");
+	});
+
+	it("reuses the persistent context's initial page at the one-page limit", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const onePageCapability = {
+			...capability,
+			policy: { ...capability.policy, maxPages: 1 },
+		};
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability: onePageCapability,
+		});
+
+		await expect(
+			controller.navigate("https://example.test/app"),
+		).resolves.toEqual(expect.objectContaining({ pageRevision: 2 }));
+	});
+
+	it("keeps controlled fixture fulfillment inside the policy route", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability,
+			controlledFixture: {
+				url: "https://example.test/fixture",
+				body: "<title>Fixture</title>",
+			},
+		});
+		await controller.navigate("https://example.test/fixture");
+		const fulfill = vi.fn(async () => undefined);
+		const continueRoute = vi.fn(async () => undefined);
+		const abort = vi.fn(async () => undefined);
+		const handler = context.routes[0] as (route: unknown) => Promise<void>;
+		await handler({
+			request: () => ({ url: () => "https://example.test/fixture" }),
+			fulfill,
+			continue: continueRoute,
+			abort,
+		});
+		expect(fulfill).toHaveBeenCalledWith({
+			contentType: "text/html",
+			body: "<title>Fixture</title>",
+		});
+		expect(continueRoute).not.toHaveBeenCalled();
+		await handler({
+			request: () => ({ url: () => "https://example.test/favicon.ico" }),
+			fulfill,
+			continue: continueRoute,
+			abort,
+		});
+		expect(abort).toHaveBeenCalledWith("blockedbyclient");
+		expect(continueRoute).not.toHaveBeenCalled();
+	});
+
+	it("applies the capability action timeout to navigation and observation", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability,
+		});
+		const reference = await controller.navigate("https://example.test/timeout");
+		await controller.observe(reference);
+		expect(page.setDefaultTimeout).toHaveBeenCalledWith(
+			capability.policy.actionTimeoutMs,
+		);
 	});
 
 	it("rebinds persisted page metadata and invalidates old elements", async () => {
