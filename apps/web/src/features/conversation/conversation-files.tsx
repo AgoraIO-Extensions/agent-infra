@@ -82,10 +82,6 @@ export function useConversationFiles({
 			controllers.current.clear();
 		};
 	}, [conversationId]);
-	useEffect(() => {
-		if (attachmentsEnabled && conversationId) void refreshLimits();
-	}, [attachmentsEnabled, conversationId, refreshLimits]);
-
 	const updateUpload = useCallback(
 		(localId: string, patch: Partial<ConversationUpload>) => {
 			setUploads((current) =>
