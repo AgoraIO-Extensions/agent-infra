@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
 import type {
 	ApplicationCredentialRequest,
@@ -31,8 +31,9 @@ export function useOwnApplication({
 				crypto.randomUUID(),
 			] as const,
 			active: false,
+			client,
 		}),
-		[identityKey, applicationId],
+		[identityKey, applicationId, client],
 	);
 	useLayoutEffect(() => {
 		scope.active = true;
@@ -43,11 +44,10 @@ export function useOwnApplication({
 		};
 	}, [queryClient, scope]);
 	const allowed = Boolean(identityKey);
-	const [refreshFailure, setRefreshFailure] =
-		useState<ApplicationManagementState | null>(null);
 	const query = useQuery({
 		queryKey: scope.queryKey,
-		queryFn: () => loadOwnApplication(applicationId ?? "", client),
+		queryFn: ({ signal }) =>
+			loadOwnApplication(applicationId, scope.client, signal),
 		enabled: allowed,
 		retry: false,
 		staleTime: 15_000,
@@ -63,24 +63,10 @@ export function useOwnApplication({
 		: null;
 	const state = !allowed
 		? { kind: "denied" as const }
-		: (refreshFailure ??
-			queryFailure ??
-			query.data ?? { kind: "loading" as const });
+		: (queryFailure ?? query.data ?? { kind: "loading" as const });
 	async function refetch() {
 		if (!scope.active || !allowed) return undefined;
-		const result = await query.refetch({ cancelRefetch: false });
-		if (result.error) {
-			setRefreshFailure({
-				kind: "unavailable",
-				retryable:
-					!(result.error instanceof Error) ||
-					!("retryable" in result.error) ||
-					result.error.retryable !== false,
-			});
-		} else {
-			setRefreshFailure(null);
-		}
-		return result;
+		return query.refetch({ cancelRefetch: false });
 	}
 	return { state, isFetching: allowed && query.isFetching, refetch };
 }
