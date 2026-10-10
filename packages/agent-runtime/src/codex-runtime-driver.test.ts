@@ -5739,6 +5739,34 @@ describe("Codex Runtime Driver", () => {
 			]);
 		});
 
+		it("spaces later delta commits so a steady stream shares writes", async () => {
+			const f = await runningTurn();
+			f.release.resolve();
+			await f.holding;
+			await f.bridge.emitAgentMessageDelta("first ");
+			await vi.waitFor(async () => expect(await f.texts()).toHaveLength(1));
+			const updates = vi.spyOn(DurableJsonFile.prototype, "update");
+			for (const delta of ["second ", "third ", "fourth"])
+				await f.bridge.emitAgentMessageDelta(delta);
+			await vi.waitFor(async () => expect(await f.texts()).toHaveLength(4));
+			// The three deltas inside the spacing window committed together.
+			expect(updates).toHaveBeenCalledTimes(1);
+		});
+
+		it("answers a running status from the committed snapshot without a write", async () => {
+			const f = await runningTurn();
+			f.release.resolve();
+			await f.holding;
+			const updates = vi.spyOn(DurableJsonFile.prototype, "update");
+			await expect(
+				f.driver.getStatus(
+					f.accepted.nativeSessionRef,
+					f.command.executionId,
+				),
+			).resolves.toBe("running");
+			expect(updates).not.toHaveBeenCalled();
+		});
+
 		it("fails the native process and exposes nothing when a batch cannot be persisted", async () => {
 			const f = await runningTurn();
 			// The batch write fails once the earlier write releases the queue.

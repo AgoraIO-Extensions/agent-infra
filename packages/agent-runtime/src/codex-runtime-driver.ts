@@ -616,12 +616,20 @@ interface CodexTextDeltaBatch {
 		>;
 	}[];
 	flushing: Promise<void> | undefined;
+	/** When the last batch commit began; spacing applies across flushes. */
+	lastCommitStartedAt: number | undefined;
 	failure: unknown;
 	readonly fail: (error: unknown) => void;
 }
 
 /** Received deltas held before the read loop waits for their persistence. */
 const maximumPendingTextDeltas = 512;
+/**
+ * Minimum spacing between delta batch commits. Each commit rewrites the whole
+ * Driver state, so this bounds that CPU per second in a CPU-limited Session Pod
+ * and leaves room for Host event reads; the first delta still commits at once.
+ */
+const textDeltaFlushIntervalMs = 100;
 
 /** The first delta of a batch that could not be appended, and why. */
 class TextDeltaFailure extends Error {
@@ -4013,6 +4021,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const textDeltas: CodexTextDeltaBatch = {
 			pending: [],
 			flushing: undefined,
+			lastCommitStartedAt: undefined,
 			failure: undefined,
 			fail: (error) => rpc.failNotification(error),
 		};
@@ -6178,7 +6187,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		options?: { readonly skipUnchanged?: boolean },
 	) {
 		return this.file.update((state) => {
-			assertDriverState(state);
+			// The committed state passed this check when it was opened or committed,
+			// so only the changed draft needs the full-state validation (#1637).
 			const result = change(state);
 			assertDriverState(state);
 			return result;
@@ -8687,6 +8697,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async flushTextDeltas(batch: CodexTextDeltaBatch) {
 		try {
 			while (batch.pending.length > 0) {
+				// Later deltas gather while the spacing after the last commit elapses.
+				const wait =
+					batch.lastCommitStartedAt === undefined
+						? 0
+						: batch.lastCommitStartedAt + textDeltaFlushIntervalMs - Date.now();
+				if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+				batch.lastCommitStartedAt = Date.now();
 				let taken: CodexTextDeltaBatch["pending"] = [];
 				let streamKeys: Set<string>;
 				try {
@@ -9485,6 +9502,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					turnId: nativeTurnId,
 				});
 		}
+		if (
+			status === "running" &&
+			this.runningStatusDurable(nativeSessionRef, executionId, nativeTurnId)
+		)
+			return status;
 		const result = await this.update(
 			(state) => {
 				const session = ownRecordValue(state.sessions, nativeSessionRef);
@@ -9515,6 +9537,48 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			);
 		}
 		return result.persistedStatus;
+	}
+
+	/**
+	 * Whether `setExecutionStatus(…, "running")` would leave the committed state
+	 * unchanged. A status read during a running Turn is answered from the
+	 * committed snapshot instead of queueing a full-state write behind the
+	 * Turn's own delta batches (#1637); any other case takes the update path.
+	 */
+	private runningStatusDurable(
+		nativeSessionRef: string,
+		executionId: string,
+		nativeTurnId: string,
+	) {
+		const state = this.readSnapshot();
+		const session = ownRecordValue(state.sessions, nativeSessionRef);
+		const execution = session
+			? ownRecordValue(session.executions, executionId)
+			: undefined;
+		if (!session || !execution) return false;
+		const journal = ownRecordValue(session.journals ?? {}, nativeTurnId);
+		const result = ownRecordValue(
+			state.operations,
+			operationKey({
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				kind: "submit-turn",
+				operationId: executionId,
+			}),
+		)?.record?.result;
+		return (
+			execution.nativeTurnId === nativeTurnId &&
+			execution.status === "running" &&
+			session.activeExecutionId === executionId &&
+			journal !== undefined &&
+			journal.pendingOperationKey === undefined &&
+			journal.nativeCompletionStatus === undefined &&
+			result !== undefined &&
+			Object.keys(result).length === 2 &&
+			result.outcome === "accepted" &&
+			result.status === "running"
+		);
 	}
 
 	private setExecutionStatus(
