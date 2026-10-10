@@ -2375,25 +2375,37 @@ function isPlatformUserDisableOpenApiAddition(previous, current) {
 		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
 	const newActions =
 		current.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
-	const addedPath =
-		previous.paths?.[path] === undefined && current.paths?.[path] !== undefined;
-	const addedSchema =
-		previous.components?.schemas?.[schema] === undefined &&
-		current.components?.schemas?.[schema] !== undefined;
-	const addedActions =
-		Array.isArray(newActions) &&
-		actions.every(
-			(action) => !oldActions?.includes(action) && newActions.includes(action),
+	const hasGovernanceAddition =
+		previous.paths?.[path] !== undefined ||
+		current.paths?.[path] !== undefined ||
+		previous.components?.schemas?.[schema] !== undefined ||
+		current.components?.schemas?.[schema] !== undefined ||
+		oldActions?.some((action) => actions.includes(action)) ||
+		newActions?.some((action) => actions.includes(action)) ||
+		[
+			previous.components?.schemas?.PlatformAuditProjectionV1,
+			previous.components?.schemas?.PlatformAuditProjectionV2,
+			current.components?.schemas?.PlatformAuditProjectionV1,
+			current.components?.schemas?.PlatformAuditProjectionV2,
+		].some((schemaValue) =>
+			schemaValue?.properties?.subjectType?.enum?.includes("user"),
 		);
-	if (!addedPath && !addedSchema && !addedActions) return false;
-	if (addedPath !== addedSchema) return false;
+	if (!hasGovernanceAddition) return false;
 	const normalized = structuredClone(current);
+	const normalizedPrevious = structuredClone(previous);
 	if (normalized.paths?.[path] !== undefined) delete normalized.paths[path];
 	if (normalized.components?.schemas?.[schema] !== undefined)
 		delete normalized.components.schemas[schema];
-	if (addedActions)
+	if (normalizedPrevious.paths?.[path] !== undefined)
+		delete normalizedPrevious.paths[path];
+	if (normalizedPrevious.components?.schemas?.[schema] !== undefined)
+		delete normalizedPrevious.components.schemas[schema];
+	if (Array.isArray(newActions))
 		normalized.components.schemas.ScopedPlatformAuditActionV1.enum =
 			newActions.filter((action) => !actions.includes(action));
+	if (Array.isArray(oldActions))
+		normalizedPrevious.components.schemas.ScopedPlatformAuditActionV1.enum =
+			oldActions.filter((action) => !actions.includes(action));
 	for (const name of [
 		"PlatformAuditProjectionV1",
 		"PlatformAuditProjectionV2",
@@ -2403,8 +2415,14 @@ function isPlatformUserDisableOpenApiAddition(previous, current) {
 		if (Array.isArray(subjectType) && subjectType.includes("user"))
 			normalized.components.schemas[name].properties.subjectType.enum =
 				subjectType.filter((kind) => kind !== "user");
+		const oldSubjectType =
+			normalizedPrevious.components?.schemas?.[name]?.properties?.subjectType
+				?.enum;
+		if (Array.isArray(oldSubjectType))
+			normalizedPrevious.components.schemas[name].properties.subjectType.enum =
+				oldSubjectType.filter((kind) => kind !== "user");
 	}
-	return findBreakingChanges(previous, normalized).length === 0;
+	return findBreakingChanges(normalizedPrevious, normalized).length === 0;
 }
 function isConnectionInstallationAuthorizationUrlAddition(previous, current) {
 	const normalized = structuredClone(current);
