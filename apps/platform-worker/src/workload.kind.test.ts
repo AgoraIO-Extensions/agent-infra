@@ -839,6 +839,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			const appToken = `papi_${"A".repeat(43)}`;
 			let worker: ReturnType<typeof createPlatformWorkloadWorkerV1> | undefined;
 			let assembly: ReturnType<typeof assemblePlatformApi> | undefined;
+			const workerLogs: string[] = [];
 			try {
 				await migratePlatformDatabase(database);
 				const seed = await seedStandardWorkloadHostV1(
@@ -950,6 +951,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						capabilities: {},
 					}),
 					fetch: fetchViaProbe,
+					log: (message) => workerLogs.push(message),
 					probeRuntime,
 				});
 				async function tickUntil(
@@ -967,7 +969,13 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						if (row && predicate(row)) return row;
 						await setTimeout(500);
 					}
-					throw new Error("API Workload lifecycle did not converge");
+					const [state] = await sql<{ state: unknown }[]>`
+						select state from platform.workload_reconciliations where agent_id=${seed.agentId}`;
+					const [outbox] = await sql<{ status: string; operation: string }[]>`
+						select status, operation from platform.outbox_items where scope_id=${seed.agentId}`;
+					throw new Error(
+						`API Workload lifecycle did not converge: ${JSON.stringify({ state, outbox, workerLogs: workerLogs.slice(-8) })}`,
+					);
 				}
 				await tickUntil(
 					(row) =>
