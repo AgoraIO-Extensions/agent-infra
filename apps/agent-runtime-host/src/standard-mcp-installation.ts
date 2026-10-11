@@ -120,6 +120,7 @@ async function writeRotationJournal(
 	path: string,
 	entries: RotationJournal["entries"],
 	operation: RotationJournal["operation"],
+	allowExisting: boolean,
 ) {
 	const directory = await openProtectedStandardMcpDirectory(path);
 	const temporary = `.stage-rotation-${randomUUID()}`;
@@ -140,6 +141,14 @@ async function writeRotationJournal(
 			await file.sync();
 		} finally {
 			await file.close();
+		}
+		if (!allowExisting) {
+			try {
+				await lstat(join(path, rotationJournalName));
+				unavailable();
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
 		}
 		await rename(
 			protectedStandardMcpPath(directory, path, temporary),
@@ -337,12 +346,15 @@ export async function replaceProtectedStandardMcpMaterials(
 	guard?: () => void,
 	operation: RotationJournal["operation"] = "forward",
 ) {
+	if (operation === "forward")
+		await recoverProtectedStandardMcpMaterialRotation(path);
 	return withProtectedStandardMcpMaterialLock(path, async () => {
 		assertStandardMcpProcessProtection();
 		await writeRotationJournal(
 			path,
 			replacements.map((replacement) => ({ ...replacement })),
 			operation,
+			operation === "rollback",
 		);
 		const directory = await openProtectedStandardMcpDirectory(path, guard);
 		try {
