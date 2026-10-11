@@ -36,6 +36,13 @@ export interface RuntimeFileBridgeBindingV1 {
 export type RuntimeFileBridgeOperationV1 = "read" | "write";
 
 /**
+ * Synthetic `fileId` for the operation-local write context. The authority
+ * allocates the real result object, so no file id exists before a result is
+ * confirmed.
+ */
+export const RUNTIME_FILE_BRIDGE_RESULT_FILE_ID_V1 = "result";
+
+/**
  * Per-call context passed to deployment-owned callbacks. It is deliberately
  * separate from the binding so the operation and file id cannot be confused
  * with the execution-wide facts.
@@ -133,6 +140,15 @@ export function assertRuntimeFileBridgeContextV1(
 		!assertId(value.fileId) ||
 		(value.operation !== "read" && value.operation !== "write") ||
 		(expectedOperation !== undefined && value.operation !== expectedOperation)
+	)
+		invalidContext();
+	// The operation decides which file identifiers are reachable. A read may only
+	// name a signed input, and a write may only name the synthetic result id.
+	if (
+		(value.operation === "read" &&
+			!value.inputFileIds.includes(value.fileId)) ||
+		(value.operation === "write" &&
+			value.fileId !== RUNTIME_FILE_BRIDGE_RESULT_FILE_ID_V1)
 	)
 		invalidContext();
 }
@@ -268,7 +284,7 @@ export function createRuntimeFileBridgeV1(options: {
 				body,
 				// The execution binding carries the unique result owner; no file id exists
 				// until the authority allocates the confirmed result object.
-				context(binding, "result", "write"),
+				context(binding, RUNTIME_FILE_BRIDGE_RESULT_FILE_ID_V1, "write"),
 			);
 		},
 	};
