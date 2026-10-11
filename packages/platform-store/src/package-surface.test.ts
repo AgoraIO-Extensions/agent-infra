@@ -106,6 +106,7 @@ describe("platform-store package surface", () => {
 			"requireCurrentPersonalApiTaskAdmissionV1",
 			"resolveApiAuditCredentialIdentityV1",
 			"resolvePersonalApiTaskAdmissionAuthorityV1",
+			"resolveTimedOutUnknownStopInTransactionV1",
 			"validateWecomSetupCredentialRecordV1",
 		]);
 		expect(surface.PostgresPersonalRelayKeyStoreV1).toBeTypeOf("function");
