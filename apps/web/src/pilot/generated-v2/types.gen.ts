@@ -2372,6 +2372,194 @@ export type UpdateAgentConfigurationV2Responses = {
 
 export type UpdateAgentConfigurationV2Response = UpdateAgentConfigurationV2Responses[keyof UpdateAgentConfigurationV2Responses];
 
+export type GetAgentDefaultRelayKeyV2Data = {
+    body?: never;
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/default-relay-key';
+};
+
+export type GetAgentDefaultRelayKeyV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentDefaultRelayKeyV2Error = GetAgentDefaultRelayKeyV2Errors[keyof GetAgentDefaultRelayKeyV2Errors];
+
+export type GetAgentDefaultRelayKeyV2Responses = {
+    /**
+     * Key state only
+     */
+    200: {
+        configurationRevision: number;
+        isSet: false;
+        keyVersion: null;
+        schemaVersion: 1;
+    } | {
+        configurationRevision: number;
+        isSet: true;
+        keyVersion: number;
+        schemaVersion: 1;
+    };
+};
+
+export type GetAgentDefaultRelayKeyV2Response = GetAgentDefaultRelayKeyV2Responses[keyof GetAgentDefaultRelayKeyV2Responses];
+
+export type ReplaceAgentDefaultRelayKeyV2Data = {
+    body: {
+        configurationRevision: number;
+        expectedVersion: number | null;
+        keyValue: string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/default-relay-key';
+};
+
+export type ReplaceAgentDefaultRelayKeyV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReplaceAgentDefaultRelayKeyV2Error = ReplaceAgentDefaultRelayKeyV2Errors[keyof ReplaceAgentDefaultRelayKeyV2Errors];
+
+export type ReplaceAgentDefaultRelayKeyV2Responses = {
+    /**
+     * Committed Key state
+     */
+    200: {
+        configurationRevision: number;
+        isSet: false;
+        keyVersion: null;
+        schemaVersion: 1;
+    } | {
+        configurationRevision: number;
+        isSet: true;
+        keyVersion: number;
+        schemaVersion: 1;
+    };
+};
+
+export type ReplaceAgentDefaultRelayKeyV2Response = ReplaceAgentDefaultRelayKeyV2Responses[keyof ReplaceAgentDefaultRelayKeyV2Responses];
+
+export type GetAgentDefaultRelayKeyCandidatesV2Data = {
+    body: {
+        configurationRevision: number;
+        keyValue: string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/default-relay-key/candidates';
+};
+
+export type GetAgentDefaultRelayKeyCandidatesV2Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetAgentDefaultRelayKeyCandidatesV2Error = GetAgentDefaultRelayKeyCandidatesV2Errors[keyof GetAgentDefaultRelayKeyCandidatesV2Errors];
+
+export type GetAgentDefaultRelayKeyCandidatesV2Responses = {
+    /**
+     * Compatible candidates
+     */
+    200: {
+        candidates: Array<{
+            endpointId: string;
+            modelId: string;
+            reasoningLevels: Array<string>;
+        }>;
+        configurationRevision: number;
+        schemaVersion: 1;
+    };
+};
+
+export type GetAgentDefaultRelayKeyCandidatesV2Response = GetAgentDefaultRelayKeyCandidatesV2Responses[keyof GetAgentDefaultRelayKeyCandidatesV2Responses];
+
 export type CommandAgentLifecycleV2Data = {
     body: AgentLifecycleCommandRequestV1;
     headers: {
