@@ -452,7 +452,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 				select a.id, a.current_configuration_revision from platform.agents a
 				join platform.agent_applications ap on ap.agent_id = a.id
 				left join platform.workload_reconciliations w on w.agent_id = a.id
-				where ap.approval_revision is not null
+				where (ap.approval_revision is not null or ap.creation_channel = 'api')
 				and a.id <> all(${sql.array(excluded as string[])}::text[])
 				and (
 					(w.agent_id is null and ap.status <> 'creation_failed')
