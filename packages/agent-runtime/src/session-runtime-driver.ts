@@ -80,7 +80,20 @@ export interface NativeSession {
 		reasoningLevels: readonly string[];
 		currentReasoning: string | null;
 	};
+	discoverCommands?(input: {
+		readonly signal: AbortSignal;
+		readonly expiresAt: number;
+		readonly allowedRoots: readonly string[];
+	}): Promise<unknown>;
 }
+
+export type SessionNativeCommandReadContext = Readonly<{
+	nativeSessionRef: string;
+	signal: AbortSignal;
+	expiresAt: number;
+	assertCurrent(): void;
+	revalidate(): Promise<void>;
+}>;
 
 interface Binding {
 	ref: string;
@@ -1071,6 +1084,42 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.turns.find((turn) => turn.executionId === executionId);
 		if (!turn) unavailable();
 		return turn.status;
+	}
+
+	async discoverNativeCommands(read: SessionNativeCommandReadContext) {
+		const handle = this.handles.get(read.nativeSessionRef);
+		if (!handle || handle.native.discoverCommands === undefined) unavailable();
+		const assertCurrent = () => {
+			if (
+				read.signal.aborted ||
+				read.expiresAt <= Date.now() ||
+				this.closed ||
+				this.handles.get(read.nativeSessionRef) !== handle
+			)
+				unavailable();
+			read.assertCurrent();
+		};
+		assertCurrent();
+		try {
+			await read.revalidate();
+		} catch {
+			unavailable();
+		}
+		assertCurrent();
+		const result = await handle.native.discoverCommands({
+			signal: read.signal,
+			expiresAt: read.expiresAt,
+			allowedRoots: [
+				join(this.options.path, read.nativeSessionRef, "workspace"),
+			],
+		});
+		try {
+			await read.revalidate();
+		} catch {
+			unavailable();
+		}
+		assertCurrent();
+		return result;
 	}
 	async getCapabilities() {
 		return {
