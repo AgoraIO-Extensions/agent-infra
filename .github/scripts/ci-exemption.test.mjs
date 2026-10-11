@@ -114,6 +114,15 @@ test("CI label transitions cancel older PR runs and retain checks on lookup fail
     "${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}");
   assert.equal(workflow.jobs["ci_heavy"].name, "CI heavy validation");
   assert.deepEqual(workflow.jobs["ci_heavy"].needs, ["ci-exemption", "changes"]);
+	assert.equal(workflow.jobs.changes.outputs.images, "${{ steps.scope.outputs.images }}");
+	const classifier = workflow.jobs.changes.steps.find((value) => value.id === "scope").run;
+	assert.match(classifier, /all_images=\$\(node --input-type=module -e/);
+	assert.match(classifier, /add_image web agent-runtime-host/);
+	assert.match(classifier, /add_image agent-runtime-host custom-agent-base platform-worker/);
+	const imageBuild = workflow.jobs["ci_heavy"].steps.find((value) => value.id === "images");
+	assert.equal(imageBuild.if, "${{ needs.changes.outputs.images != '' }}");
+	assert.equal(imageBuild.env.IMAGE_NAMES, "${{ needs.changes.outputs.images }}");
+	assert.match(imageBuild.run, /--images=/);
   assert.deepEqual(workflow.jobs["workload-kind"].needs, ["ci-exemption", "changes"]);
   assert.equal(workflow.jobs["workload-kind"].if,
     "${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}");
