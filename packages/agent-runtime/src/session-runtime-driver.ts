@@ -20,10 +20,10 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
-	RuntimeModelDirectory,
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelCredentialResolver,
+	RuntimeModelDirectory,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
