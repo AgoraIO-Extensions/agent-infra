@@ -22,6 +22,7 @@ import {
 	it,
 	vi,
 } from "vitest";
+import { decideAgentAccessUpdatePolicy } from "../../../packages/platform-core/src/agent-management-access-policy.ts";
 import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
@@ -865,6 +866,85 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 					{ userId: "bob", accountStatus: "active" },
 				]),
 			);
+			const state = {
+				schemaVersion: 1 as const,
+				applicationId: "application_owner_policy",
+				agentId: "agent_owner_policy",
+				applicantId: "alice",
+				status: "available" as const,
+				revision: 1,
+				approvalRevision: 1,
+				decisionReason: null,
+				serviceAvailability: "ready" as const,
+				desiredState: "running" as const,
+				workloadRevision: 1,
+				fence: 1,
+				ownerIds: ["alice"],
+				availability: [],
+				failureCode: null,
+			};
+			const command = {
+				schemaVersion: 1 as const,
+				agentId: state.agentId,
+				expectedRevision: state.revision,
+				desiredOwnerIds: ["bob"],
+				desiredAvailability: [],
+				requestId: "request_owner_policy",
+				traceId: "trace_owner_policy",
+			};
+			const policyAuthority = {
+				schemaVersion: 1 as const,
+				users: authority.users,
+				organizationIds: authority.organizationIds,
+			};
+			expect(
+				decideAgentAccessUpdatePolicy(
+					command,
+					state,
+					{
+						schemaVersion: 1,
+						userId: "alice",
+						accountStatus: "disabled",
+						organizationIds: [],
+						isAdministrator: false,
+					},
+					policyAuthority,
+				),
+			).toEqual({ outcome: "denied", planFragment: null });
+			expect(
+				decideAgentAccessUpdatePolicy(
+					command,
+					state,
+					{
+						schemaVersion: 1,
+						userId: "administrator",
+						accountStatus: "active",
+						organizationIds: ["org-admin"],
+						isAdministrator: true,
+					},
+					policyAuthority,
+				),
+			).toMatchObject({
+				outcome: "accepted",
+				planFragment: { ownerIds: ["bob"] },
+			});
+			expect(
+				decideAgentAccessUpdatePolicy(
+					{ ...command, desiredOwnerIds: ["alice"] },
+					state,
+					{
+						schemaVersion: 1,
+						userId: "administrator",
+						accountStatus: "active",
+						organizationIds: ["org-admin"],
+						isAdministrator: true,
+					},
+					policyAuthority,
+				),
+			).toMatchObject({
+				outcome: "conflict",
+				reason: "last_valid_owner_required",
+			});
 		} finally {
 			await reader.unsafe(
 				"delete from platform.platform_user_disables where user_id='alice'",
