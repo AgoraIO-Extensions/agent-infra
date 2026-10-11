@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type {
 	RuntimeDriverCommandV1,
@@ -6031,6 +6031,62 @@ describe("Codex Runtime Driver", () => {
 				expect(Reflect.get(f.bridge, "closed")).toBe(true),
 			);
 			expect(await f.texts()).toEqual([]);
+		});
+
+		it("restarts from the committed journal without losing or repeating a delta (#1637)", async () => {
+			const f = await runningTurn();
+			await f.bridge.emitAgentMessageDelta("one ");
+			await f.bridge.emitAgentMessageDelta("two ");
+			f.release.resolve();
+			await f.holding;
+			const committed = await vi.waitFor(async () => {
+				const events = await f.texts();
+				expect(events).toHaveLength(2);
+				return events;
+			});
+			// The Pod dies while a later batch still waits behind another write:
+			// the disk holds only what was committed.
+			const file = (f.driver as unknown as { file: DurableJsonFile<unknown> })
+				.file;
+			const release = Promise.withResolvers<void>();
+			const holding = file.update(() => release.promise);
+			await f.bridge.emitAgentMessageDelta("three ");
+			await f.bridge.emitAgentMessageDelta("four");
+			const restartedPath = join(dirname(f.path), "restarted.json");
+			await copyFile(f.path, restartedPath);
+			release.resolve();
+			await holding;
+			const restarted = await openDriver(restartedPath, new TestCodexBridge());
+			drivers.push(restarted);
+			const replayed = (
+				await restarted.replayEvents(
+					f.accepted.nativeSessionRef,
+					f.command.executionId,
+				)
+			).filter((event) => event.type === "text");
+			expect(
+				replayed.map((event) => [
+					event.cursor,
+					event.payload,
+					event.occurredAt,
+				]),
+			).toEqual(
+				committed.map((event) => [
+					event.cursor,
+					event.payload,
+					event.occurredAt,
+				]),
+			);
+			// The surviving Driver commits the later batch exactly once, after them.
+			const all = await vi.waitFor(async () => {
+				const events = await f.texts();
+				expect(events).toHaveLength(4);
+				return events;
+			});
+			expect(all.slice(0, 2).map((event) => event.cursor)).toEqual(
+				committed.map((event) => event.cursor),
+			);
+			expect(new Set(all.map((event) => event.cursor)).size).toBe(4);
 		});
 
 		it("replays from the shared committed snapshot instead of a copy per read", async () => {
