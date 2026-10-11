@@ -561,7 +561,7 @@ export function registerV2ManagementRoutes(
 						: {}),
 					secrets: prepared.secrets,
 					channels: [],
-				} as Parameters<ApplicationFoundationUseCaseV1["submit"]>[0],
+				} as unknown as Parameters<ApplicationFoundationUseCaseV1["submit"]>[0],
 				{ schemaVersion: 1, userId: identity.userId, rawRequestDigest },
 				prepared.attachment,
 			);
