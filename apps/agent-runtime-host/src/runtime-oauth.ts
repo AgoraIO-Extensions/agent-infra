@@ -175,6 +175,7 @@ export async function prepareRuntimeOAuth(options: {
 			store: options.store,
 			configuration,
 			target,
+			principal,
 			scope,
 			verifyGrant: createRuntimeOAuthGrantVerifier({
 				key: options.key,

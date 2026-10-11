@@ -112,3 +112,68 @@ export async function exchangeStandardOAuthCode(options: {
 		standardOAuthUnavailable();
 	}
 }
+
+/**
+ * Revoke one token at the fixed deployment endpoint. This is deliberately a
+ * one-shot operation: shutdown cleanup may swallow a network failure, but it
+ * never retries or sends a token to a different endpoint.
+ */
+export async function revokeStandardOAuthToken(options: {
+	configuration: RuntimeOAuthConfigurationV1;
+	token: string;
+	tokenTypeHint: "access_token" | "refresh_token";
+	signal: AbortSignal;
+	assertCurrent: () => void;
+	fetch?: FetchLike;
+}) {
+	const configuration = structuredClone(options.configuration);
+	const token = validateStandardMcpToken(options.token);
+	let endpoint: URL;
+	try {
+		endpoint = new URL(configuration.revocationEndpoint);
+	} catch {
+		standardOAuthUnavailable();
+	}
+	if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password)
+		standardOAuthUnavailable();
+	const signal = AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]);
+	const assertCurrent = () => {
+		if (signal.aborted) standardOAuthUnavailable();
+		options.assertCurrent();
+	};
+	try {
+		assertCurrent();
+		const body = new URLSearchParams({
+			token,
+			token_type_hint: options.tokenTypeHint,
+			client_id: configuration.clientId,
+		});
+		const response = await (options.fetch ?? fetch)(endpoint, {
+			method: "POST",
+			headers: { "content-type": "application/x-www-form-urlencoded" },
+			body,
+			redirect: "error",
+			signal,
+		});
+		assertCurrent();
+		if (response.status !== 200) standardOAuthUnavailable();
+		const reader = response.body?.getReader();
+		if (!reader) return;
+		let length = 0;
+		try {
+			for (;;) {
+				const part = await reader.read();
+				assertCurrent();
+				if (part.done) break;
+				length += part.value.byteLength;
+				if (length > 16_384) standardOAuthUnavailable();
+			}
+		} finally {
+			await reader.cancel().catch(() => undefined);
+			reader.releaseLock();
+		}
+		assertCurrent();
+	} catch {
+		standardOAuthUnavailable();
+	}
+}

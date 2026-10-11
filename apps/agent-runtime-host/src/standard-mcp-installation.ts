@@ -60,7 +60,39 @@ export async function ensurePrivateDirectory(path: string) {
 	}
 }
 
+const materialLockTails = new Map<string, Promise<void>>();
+
+export async function withProtectedStandardMcpMaterialLock<T>(
+	path: string,
+	operation: () => Promise<T>,
+) {
+	const previous = materialLockTails.get(path) ?? Promise.resolve();
+	let release!: () => void;
+	const current = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	materialLockTails.set(path, current);
+	await previous;
+	try {
+		return await operation();
+	} finally {
+		release();
+		if (materialLockTails.get(path) === current) materialLockTails.delete(path);
+	}
+}
+
 export async function publishMaterial(
+	path: string,
+	name: string,
+	token: string,
+	guard?: () => void,
+) {
+	return withProtectedStandardMcpMaterialLock(path, () =>
+		publishMaterialUnlocked(path, name, token, guard),
+	);
+}
+
+async function publishMaterialUnlocked(
 	path: string,
 	name: string,
 	token: string,
