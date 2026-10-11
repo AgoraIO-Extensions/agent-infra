@@ -109,7 +109,10 @@ import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
-import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
+import type {
+	RuntimeFileBridgePortV1,
+	RuntimeFileInputV1,
+} from "./runtime-file-bridge.js";
 
 interface CodexAppServerTransport {
 	[codexSkillLaunch]?: CodexSkillLaunchProvenance;
@@ -697,6 +700,66 @@ type CodexNativeInputItem =
 interface MaterializedCodexInput {
 	readonly items: readonly CodexNativeInputItem[];
 	readonly cleanup: () => Promise<void>;
+}
+
+/**
+ * Image media types the pinned Codex `local_image` consumer accepts. Anything
+ * else is rejected before the native Turn, never materialized or forwarded.
+ */
+const codexInputImageMediaTypes = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+]);
+const codexInputMaximumBytes = 50 * 1024 * 1024;
+/** Bounds elapsed time so a stalled source cannot hold the execution open. */
+const codexInputTransferTimeoutMs = 30_000;
+
+/**
+ * Transfers one bounded attachment into memory and verifies it against the
+ * admitted descriptor. The deadline and every exit path cancel the upstream
+ * stream, so a stalled, oversized or rejected source releases its resources
+ * instead of keeping the business execution and its temporary directory alive.
+ */
+async function readCodexInputBytes(input: RuntimeFileInputV1): Promise<Buffer> {
+	if (input.descriptor.sizeBytes > codexInputMaximumBytes) unavailable();
+	const reader = input.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	let expired = false;
+	const timer = setTimeout(() => {
+		expired = true;
+		// Cancel the pending read so the deadline also ends the upstream transfer.
+		void reader.cancel().catch(() => {});
+	}, codexInputTransferTimeoutMs);
+	try {
+		while (true) {
+			const next = await reader.read();
+			if (expired) unavailable();
+			if (next.done) break;
+			if (!(next.value instanceof Uint8Array)) unavailable();
+			size += next.value.byteLength;
+			if (size > codexInputMaximumBytes) unavailable();
+			chunks.push(next.value);
+		}
+	} finally {
+		clearTimeout(timer);
+		try {
+			await reader.cancel();
+		} catch {
+			// Preserve any transfer, deadline or descriptor validation failure.
+		} finally {
+			reader.releaseLock();
+		}
+	}
+	if (size !== input.descriptor.sizeBytes) unavailable();
+	const bytes = Buffer.concat(chunks);
+	if (
+		createHash("sha256").update(bytes).digest("hex") !== input.descriptor.sha256
+	)
+		unavailable();
+	return bytes;
 }
 
 function operationKey(
@@ -5036,28 +5099,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				const input = await fileBridge.readInput(fileId);
 				if (
 					input.fileId !== fileId ||
-					!input.descriptor.mediaType.startsWith("image/") ||
-					input.descriptor.sizeBytes > 50 * 1024 * 1024
+					!codexInputImageMediaTypes.has(input.descriptor.mediaType)
 				)
 					unavailable();
-				const reader = input.body.getReader();
-				const chunks: Uint8Array[] = [];
-				let size = 0;
-				try {
-					while (true) {
-						const next = await reader.read();
-						if (next.done) break;
-						if (!(next.value instanceof Uint8Array)) unavailable();
-						size += next.value.byteLength;
-						if (size > 50 * 1024 * 1024) unavailable();
-						chunks.push(next.value);
-					}
-				} finally {
-					reader.releaseLock();
-				}
-				if (size !== input.descriptor.sizeBytes) unavailable();
+				const bytes = await readCodexInputBytes(input);
 				const path = join(directory, `${String(index).padStart(2, "0")}.image`);
-				await writeFile(path, Buffer.concat(chunks), {
+				await writeFile(path, bytes, {
 					flag: "wx",
 					mode: 0o600,
 				});

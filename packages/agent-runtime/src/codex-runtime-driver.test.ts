@@ -2588,7 +2588,7 @@ describe("Codex Runtime Driver", () => {
 				name: "screen.png",
 				mediaType: "image/png",
 				sizeBytes: bytes.byteLength,
-				sha256: "a".repeat(64),
+				sha256: createHash("sha256").update(bytes).digest("hex"),
 			},
 			body: new ReadableStream<Uint8Array>({
 				start(controller) {
@@ -2629,6 +2629,147 @@ describe("Codex Runtime Driver", () => {
 		const temporaryPath = String(localImage.path);
 		await expect(readFile(temporaryPath)).rejects.toThrow();
 		expect(result.result).toMatchObject({ outcome: "accepted" });
+	});
+
+	it("rejects an attachment outside the Codex image allowlist before native submission", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const bytes = new Uint8Array([60, 115, 118, 103, 62]);
+		const fileBridge = {
+			readInput: async (fileId: string) => ({
+				fileId,
+				descriptor: {
+					name: "vector.svg",
+					mediaType: "image/svg+xml",
+					sizeBytes: bytes.byteLength,
+					sha256: createHash("sha256").update(bytes).digest("hex"),
+				},
+				body: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(bytes);
+						controller.close();
+					},
+				}),
+			}),
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+		};
+
+		await expect(
+			driver.execute(
+				submitCommand({
+					input: { text: "describe this image", attachments: ["file-1"] },
+				}),
+				{ fileBridge },
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(bridge.requests.some(({ method }) => method === "turn/start")).toBe(
+			false,
+		);
+	});
+
+	it("rejects an attachment whose bytes do not match the admitted digest", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+		const fileBridge = {
+			readInput: async (fileId: string) => ({
+				fileId,
+				descriptor: {
+					name: "screen.png",
+					mediaType: "image/png",
+					sizeBytes: bytes.byteLength,
+					sha256: "a".repeat(64),
+				},
+				body: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(bytes);
+						controller.close();
+					},
+				}),
+			}),
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+		};
+
+		await expect(
+			driver.execute(
+				submitCommand({
+					input: { text: "describe this image", attachments: ["file-1"] },
+				}),
+				{ fileBridge },
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(bridge.requests.some(({ method }) => method === "turn/start")).toBe(
+			false,
+		);
+	});
+
+	it("fails closed and cancels a stalled attachment at the transfer deadline", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		let cancelled = false;
+		let announced = () => {};
+		const transferStarted = new Promise<void>((resolve) => {
+			announced = resolve;
+		});
+		const fileBridge = {
+			readInput: async (fileId: string) => ({
+				fileId,
+				descriptor: {
+					name: "screen.png",
+					mediaType: "image/png",
+					sizeBytes: 8,
+					sha256: "b".repeat(64),
+				},
+				body: new ReadableStream<Uint8Array>({
+					pull() {
+						announced();
+					},
+					cancel() {
+						cancelled = true;
+					},
+				}),
+			}),
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+		};
+
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const outcome = driver
+				.execute(
+					submitCommand({
+						input: { text: "describe this image", attachments: ["file-1"] },
+					}),
+					{ fileBridge },
+				)
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+			await transferStarted;
+			await vi.advanceTimersByTimeAsync(30_000);
+
+			expect(await outcome).toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			expect(cancelled).toBe(true);
+			expect(
+				bridge.requests.some(({ method }) => method === "turn/start"),
+			).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("keeps Codex attachment capability fail-closed without a bridge", async () => {
