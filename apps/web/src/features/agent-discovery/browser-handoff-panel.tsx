@@ -6,6 +6,7 @@ import {
 	ShieldCheck,
 	UserRound,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
@@ -23,6 +24,7 @@ export type BrowserHandoffBindingV1 = Readonly<{
 	sessionGeneration: number;
 	resourceFence: number;
 	capabilityVersion: number;
+	capabilityRevision: number;
 	pageRevision: number;
 }>;
 
@@ -50,7 +52,14 @@ export type BrowserHandoffPanelStateV1 = Readonly<{
 
 export type BrowserSideEffectConfirmationV1 = Readonly<{
 	confirmationId: string;
-	status: "pending" | "confirmed" | "rejected" | "cancelled" | "unknown";
+	status:
+		| "pending"
+		| "confirmed"
+		| "rejected"
+		| "cancelled"
+		| "expired"
+		| "unknown";
+	expiresAt: string;
 	operation: string;
 	targetOrigin: string;
 	/** Already redacted and bounded by the trusted producer. */
@@ -109,6 +118,7 @@ function validBinding(binding: BrowserHandoffBindingV1): boolean {
 			binding.sessionGeneration,
 			binding.resourceFence,
 			binding.capabilityVersion,
+			binding.capabilityRevision,
 			binding.pageRevision,
 		].every((value) => Number.isSafeInteger(value) && value >= 1)
 	);
@@ -126,6 +136,7 @@ function sameBinding(
 		left.sessionGeneration === right.sessionGeneration &&
 		left.resourceFence === right.resourceFence &&
 		left.capabilityVersion === right.capabilityVersion &&
+		left.capabilityRevision === right.capabilityRevision &&
 		left.pageRevision === right.pageRevision
 	);
 }
@@ -178,6 +189,25 @@ function actionInput(
 	return { id, binding };
 }
 
+function useExpiryClock(
+	expiresAt: string | undefined,
+	active: boolean,
+	readNow: () => number,
+) {
+	const [tick, setTick] = useState(0);
+	useEffect(() => {
+		if (!active || !expiresAt) return;
+		const delay = Date.parse(expiresAt) - readNow();
+		if (delay <= 0) {
+			setTick((value) => value + 1);
+			return;
+		}
+		const timer = setTimeout(() => setTick((value) => value + 1), delay);
+		return () => clearTimeout(timer);
+	}, [active, expiresAt, readNow]);
+	return tick;
+}
+
 function BlockedPanel({ message }: { readonly message: string }) {
 	return (
 		<Alert
@@ -194,6 +224,7 @@ function BlockedPanel({ message }: { readonly message: string }) {
 }
 
 function HandoffPanel({
+	browserAvailable = false,
 	currentBinding,
 	handoff,
 	now,
@@ -202,6 +233,7 @@ function HandoffPanel({
 	onTakeOver,
 }: Pick<
 	BrowserHandoffPanelProps,
+	| "browserAvailable"
 	| "currentBinding"
 	| "handoff"
 	| "now"
@@ -209,7 +241,17 @@ function HandoffPanel({
 	| "onReturnToAgent"
 	| "onTakeOver"
 >) {
+	const readNow = now ?? Date.now;
+	useExpiryClock(
+		handoff?.expiresAt,
+		handoff?.status === "requested" || handoff?.status === "active",
+		readNow,
+	);
 	if (!handoff) return null;
+	if (!browserAvailable)
+		return (
+			<BlockedPanel message="Browser Capability 当前不可用，接管操作已阻断。" />
+		);
 	if (
 		!currentBinding ||
 		!validBinding(currentBinding) ||
@@ -221,7 +263,7 @@ function HandoffPanel({
 		);
 	const isExpired =
 		(handoff.status === "requested" || handoff.status === "active") &&
-		(now ?? Date.now)() >= Date.parse(handoff.expiresAt);
+		readNow() >= Date.parse(handoff.expiresAt);
 	const status = isExpired ? "expired" : handoff.status;
 	const terminal = [
 		"completed",
@@ -232,6 +274,12 @@ function HandoffPanel({
 	].includes(status);
 	const blocked = status === "crashed" || status === "unknown";
 	const input = actionInput(handoff.handoffId, currentBinding);
+	const invokeIfCurrent = (
+		callback: (input: BrowserHandoffActionInputV1) => void,
+	) => {
+		if (readNow() >= Date.parse(handoff.expiresAt)) return;
+		callback(input);
+	};
 	return (
 		<Alert
 			aria-live="polite"
@@ -266,14 +314,17 @@ function HandoffPanel({
 				{status === "requested" ? (
 					<div className="mt-3 flex flex-col gap-2 sm:flex-row">
 						{onPauseAgent ? (
-							<Button onClick={() => onPauseAgent(input)} type="button">
+							<Button
+								onClick={() => invokeIfCurrent(onPauseAgent)}
+								type="button"
+							>
 								暂停 Agent
 							</Button>
 						) : null}
 						{onTakeOver ? (
 							<Button
 								variant="outline"
-								onClick={() => onTakeOver(input)}
+								onClick={() => invokeIfCurrent(onTakeOver)}
 								type="button"
 							>
 								接管浏览器
@@ -285,7 +336,7 @@ function HandoffPanel({
 					<Button
 						className="mt-3"
 						variant="outline"
-						onClick={() => onReturnToAgent(input)}
+						onClick={() => invokeIfCurrent(onReturnToAgent)}
 						type="button"
 					>
 						交回 Agent
@@ -307,7 +358,7 @@ function HandoffPanel({
 }
 
 function ConfirmationPanel({
-	browserAvailable = true,
+	browserAvailable = false,
 	confirmation,
 	currentBinding,
 	handoff,
@@ -336,6 +387,12 @@ function ConfirmationPanel({
 		return (
 			<BlockedPanel message="确认绑定已过期或无法核验，当前不会执行外部副作用。" />
 		);
+	const readNow = now ?? Date.now;
+	useExpiryClock(
+		confirmation.expiresAt,
+		confirmation.status === "pending",
+		readNow,
+	);
 	const handoffInvalid = handoff !== undefined && !isSafeHandoff(handoff);
 	const handoffBlocked =
 		handoffInvalid ||
@@ -352,15 +409,34 @@ function ConfirmationPanel({
 	const handoffExpired =
 		handoff !== undefined &&
 		(handoff.status === "requested" || handoff.status === "active") &&
-		(now ?? Date.now)() >= Date.parse(handoff.expiresAt);
+		readNow() >= Date.parse(handoff.expiresAt);
 	const origin = safeOrigin(confirmation.targetOrigin);
 	const summary = boundedSummary(confirmation.redactedTargetSummary);
-	if (!origin || !summary || !confirmation.confirmationId) return null;
+	if (!origin)
+		return (
+			<BlockedPanel message="确认目标 origin 无法核验，当前不会执行外部副作用。" />
+		);
+	if (!summary)
+		return <BlockedPanel message="确认摘要为空，当前不会执行外部副作用。" />;
+	if (!confirmation.confirmationId)
+		return (
+			<BlockedPanel message="确认请求缺少有效 ID，当前不会执行外部副作用。" />
+		);
+	const confirmationExpired = readNow() >= Date.parse(confirmation.expiresAt);
 	const blockedByBinding =
-		!browserAvailable || handoffBlocked || handoffExpired;
+		!browserAvailable ||
+		handoffBlocked ||
+		handoffExpired ||
+		confirmationExpired;
 	const terminal = confirmation.status !== "pending";
 	const blocked = confirmation.status === "unknown" || blockedByBinding;
 	const input = actionInput(confirmation.confirmationId, currentBinding);
+	const invokeIfCurrent = (
+		callback: (input: BrowserHandoffActionInputV1) => void,
+	) => {
+		if (readNow() >= Date.parse(confirmation.expiresAt)) return;
+		callback(input);
+	};
 	return (
 		<Alert
 			aria-live="polite"
@@ -402,14 +478,17 @@ function ConfirmationPanel({
 				{confirmation.status === "pending" && !blockedByBinding ? (
 					<div className="mt-3 flex flex-col gap-2 sm:flex-row">
 						{onConfirmSideEffect ? (
-							<Button onClick={() => onConfirmSideEffect(input)} type="button">
+							<Button
+								onClick={() => invokeIfCurrent(onConfirmSideEffect)}
+								type="button"
+							>
 								确认执行
 							</Button>
 						) : null}
 						{onRejectSideEffect ? (
 							<Button
 								variant="outline"
-								onClick={() => onRejectSideEffect(input)}
+								onClick={() => invokeIfCurrent(onRejectSideEffect)}
 								type="button"
 							>
 								拒绝
@@ -418,7 +497,7 @@ function ConfirmationPanel({
 						{onCancelConfirmation ? (
 							<Button
 								variant="ghost"
-								onClick={() => onCancelConfirmation(input)}
+								onClick={() => invokeIfCurrent(onCancelConfirmation)}
 								type="button"
 							>
 								取消
@@ -435,6 +514,7 @@ export function BrowserHandoffPanel(props: BrowserHandoffPanelProps) {
 	return (
 		<>
 			<HandoffPanel
+				browserAvailable={props.browserAvailable}
 				currentBinding={props.currentBinding}
 				handoff={props.handoff}
 				now={props.now}

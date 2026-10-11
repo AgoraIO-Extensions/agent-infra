@@ -16,6 +16,7 @@ const binding: BrowserHandoffBindingV1 = {
 	sessionGeneration: 2,
 	resourceFence: 7,
 	capabilityVersion: 1,
+	capabilityRevision: 1,
 	pageRevision: 4,
 };
 
@@ -30,6 +31,7 @@ const requested: BrowserHandoffPanelStateV1 = {
 const confirmation: BrowserSideEffectConfirmationV1 = {
 	confirmationId: "confirmation-1",
 	status: "pending",
+	expiresAt: "2026-10-11T12:00:00.000Z",
 	operation: "submit",
 	targetOrigin: "https://example.test/",
 	redactedTargetSummary: "提交公开表单（已脱敏）",
@@ -44,6 +46,7 @@ describe("Browser handoff and confirmation panel", () => {
 		const onPauseAgent = vi.fn();
 		render(
 			<BrowserHandoffPanel
+				browserAvailable
 				currentBinding={binding}
 				handoff={requested}
 				onPauseAgent={onPauseAgent}
@@ -81,6 +84,7 @@ describe("Browser handoff and confirmation panel", () => {
 		} as BrowserHandoffPanelStateV1;
 		render(
 			<BrowserHandoffPanel
+				browserAvailable
 				handoff={handoff}
 				currentBinding={binding}
 				onReturnToAgent={onReturnToAgent}
@@ -115,6 +119,9 @@ describe("Browser handoff and confirmation panel", () => {
 		expect(screen.getByText("https://example.test")).toBeTruthy();
 		expect(screen.getByText("提交公开表单（已脱敏）")).toBeTruthy();
 		expect(screen.getByText(/密码、MFA、Cookie/)).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "确认执行" }).parentElement?.className,
+		).toContain("sm:flex-row");
 		expect(screen.queryByText(binding.subjectId)).toBeNull();
 		screen.getByRole("button", { name: "确认执行" }).click();
 		screen.getByRole("button", { name: "拒绝" }).click();
@@ -158,6 +165,7 @@ describe("Browser handoff and confirmation panel", () => {
 		const stale = { ...binding, pageRevision: binding.pageRevision + 1 };
 		render(
 			<BrowserHandoffPanel
+				browserAvailable
 				currentBinding={stale}
 				handoff={requested}
 				onTakeOver={onTakeOver}
@@ -169,6 +177,7 @@ describe("Browser handoff and confirmation panel", () => {
 
 		render(
 			<BrowserHandoffPanel
+				browserAvailable
 				currentBinding={binding}
 				handoff={requested}
 				now={() => Date.parse("2026-10-11T13:00:00.000Z")}
@@ -199,5 +208,31 @@ describe("Browser handoff and confirmation panel", () => {
 		).toContain("不会执行此副作用");
 		expect(screen.queryByRole("button")).toBeNull();
 		expect(onConfirmSideEffect).not.toHaveBeenCalled();
+		cleanup();
+
+		const onTakeOver = vi.fn();
+		render(
+			<BrowserHandoffPanel
+				browserAvailable={false}
+				currentBinding={binding}
+				handoff={requested}
+				onTakeOver={onTakeOver}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toContain("当前不可用");
+		expect(screen.queryByRole("button")).toBeNull();
+
+		cleanup();
+		render(
+			<BrowserHandoffPanel
+				browserAvailable
+				confirmation={confirmation}
+				currentBinding={binding}
+				now={() => Date.parse("2026-10-11T13:00:00.000Z")}
+				onConfirmSideEffect={onConfirmSideEffect}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toContain("不会执行此副作用");
+		expect(screen.queryByRole("button")).toBeNull();
 	});
 });
