@@ -56,6 +56,8 @@ it("admits only the reviewed installation paths, headers and restricted response
 		"/api/connection-installations/{authorizationId}",
 		"/api/connection-installations/{authorizationId}/confirm",
 	];
+	const installationPath = paths[0];
+	if (!installationPath) throw new Error("installation path fixture missing");
 	const previous = structuredClone(current);
 	for (const path of paths) delete previous.paths[path];
 	const directory = await mkdtemp(resolve(tmpdir(), "installation-compat-"));
@@ -67,13 +69,13 @@ it("admits only the reviewed installation paths, headers and restricted response
 		expect(comparePaths(after, before).status).toBe(0);
 		for (const mutate of [
 			(document: typeof current) => {
-				document.paths[paths[0]!].post.security = [];
+				document.paths[installationPath].post.security = [];
 			},
 			(document: typeof current) => {
-				document.paths[paths[0]!].post.parameters = [];
+				document.paths[installationPath].post.parameters = [];
 			},
 			(document: typeof current) => {
-				document.paths[paths[0]!].post.responses[202].content[
+				document.paths[installationPath].post.responses[202].content[
 					"application/json"
 				].schema.properties.token = { type: "string" };
 			},
@@ -524,7 +526,9 @@ describe("contract compatibility command", () => {
 		const path = "/internal/v1/files/runtime-exchange";
 		const previous = structuredClone(current);
 		delete previous.paths[path];
-		const directory = await mkdtemp(resolve(tmpdir(), "runtime-file-path-compat-"));
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "runtime-file-path-compat-"),
+		);
 		const previousPath = resolve(directory, "previous.json");
 		const currentPath = resolve(directory, "current.json");
 		try {
