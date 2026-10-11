@@ -152,6 +152,15 @@ export async function replaceProtectedStandardMcpMaterials(
 						directory,
 						activeGuard,
 					);
+					if (
+						(await readProtectedStandardMcpBytes(
+							path,
+							replacement.name,
+							4096,
+							activeGuard,
+						)) !== replacement.expected
+					)
+						unavailable();
 					await rename(
 						temporaryPath,
 						protectedStandardMcpPath(directory, path, replacement.name),
