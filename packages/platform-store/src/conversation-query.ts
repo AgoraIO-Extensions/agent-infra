@@ -597,36 +597,38 @@ async function readEvents(
 	run: RunStatement = runStatement,
 ): Promise<ConversationQueryEventV1[]> {
 	// Every event of an Execution carries the same trace: its first audit
-	// record. Look it up once per Execution, not once per event (#1732).
+	// record. Look it up once per Execution in the page, not once per event,
+	// so an incremental replay costs only the Executions it returns (#1732).
 	const rows = await run(database<EventRow[]>`
-		with traces as materialized (
-			select t.execution_id,
+		with page as materialized (
+			select e.event_id, e.conversation_id, e.execution_id, e.sequence,
+				e.conversation_cursor, e.event_type, e.event_payload, e.occurred_at
+			from platform.conversation_events e
+			join platform.conversation_executions x
+				on x.execution_id = e.execution_id and x.conversation_id = e.conversation_id
+			join platform.conversations c on c.id = x.conversation_id
+				and c.agent_id = x.agent_id and c.actor_id = x.actor_id
+				and c.principal_type = x.principal_type and c.channel_id = x.channel_id
+			where e.conversation_id = ${conversationId}
+				and e.conversation_cursor > ${options.afterCursor ?? 0}
+				${options.executionId === undefined ? database`` : database`and e.execution_id = ${options.executionId}`}
+			order by e.conversation_cursor
+			${options.limit === undefined ? database`` : database`limit ${options.limit}`}
+		), traces as materialized (
+			select executions.execution_id,
 				(
 					select a.trace_id
 					from platform.conversation_audit_events a
-					where a.execution_id = t.execution_id
+					where a.execution_id = executions.execution_id
 					order by a.occurred_at, a.id
 					limit 1
 				) as trace_id
-			from platform.conversation_executions t
-			where t.conversation_id = ${conversationId}
-				${options.executionId === undefined ? database`` : database`and t.execution_id = ${options.executionId}`}
+			from (select distinct execution_id from page) executions
 		)
-		select e.event_id, e.conversation_id, e.execution_id, e.sequence,
-			e.conversation_cursor, e.event_type, e.event_payload, e.occurred_at,
-			traces.trace_id
-		from platform.conversation_events e
-		join platform.conversation_executions x
-			on x.execution_id = e.execution_id and x.conversation_id = e.conversation_id
-		join platform.conversations c on c.id = x.conversation_id
-			and c.agent_id = x.agent_id and c.actor_id = x.actor_id
-			and c.principal_type = x.principal_type and c.channel_id = x.channel_id
-		left join traces on traces.execution_id = e.execution_id
-		where e.conversation_id = ${conversationId}
-			and e.conversation_cursor > ${options.afterCursor ?? 0}
-			${options.executionId === undefined ? database`` : database`and e.execution_id = ${options.executionId}`}
-		order by e.conversation_cursor
-		${options.limit === undefined ? database`` : database`limit ${options.limit}`}
+		select page.*, traces.trace_id
+		from page
+		left join traces on traces.execution_id = page.execution_id
+		order by page.conversation_cursor
 	`);
 	return rows.map(event);
 }

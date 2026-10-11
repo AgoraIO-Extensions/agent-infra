@@ -816,16 +816,35 @@ describe("long Conversation reads (#1732)", () => {
 		return Number(row?.scans);
 	}
 
-	it("looks up each Execution's trace once instead of once per event", async () => {
-		const reader = new PostgresConversationQueryV1({ databaseUrl });
+	/** Audit table scans made by one read on its own connections. */
+	async function auditScansDuring<T>(
+		read: (reader: PostgresConversationQueryV1) => Promise<T>,
+	) {
+		const reader = new PostgresConversationQueryV1({
+			databaseUrl,
+			replayWindow: 100,
+		});
 		const before = await auditScans();
-		let detail: Awaited<ReturnType<typeof reader.get>>;
+		let result: T;
 		try {
-			detail = await reader.get(longScope, "long-history");
+			result = await read(reader);
 		} finally {
 			// A backend flushes its table statistics when it exits.
 			await reader.close();
 		}
+		let scans = before;
+		for (let attempt = 0; attempt < 50 && scans === before; attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			scans = await auditScans();
+		}
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		return { result, scans: (await auditScans()) - before };
+	}
+
+	it("looks up each Execution's trace once instead of once per event", async () => {
+		const { result: detail, scans } = await auditScansDuring((reader) =>
+			reader.get(longScope, "long-history"),
+		);
 		expect(detail?.events).toHaveLength(2 * eventsPerExecution);
 		expect(
 			new Set(
@@ -836,15 +855,33 @@ describe("long Conversation reads (#1732)", () => {
 			"trace-long-1",
 			"trace-long-2",
 		]);
-		let scans = before;
-		for (let attempt = 0; attempt < 50 && scans === before; attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 100));
-			scans = await auditScans();
-		}
 		// Two Executions are looked up by the event and the execution reads;
 		// a per-event lookup would scan the audit table 300 times.
-		expect(scans - before).toBeGreaterThan(0);
-		expect(scans - before).toBeLessThanOrEqual(8);
+		expect(scans).toBeGreaterThan(0);
+		expect(scans).toBeLessThanOrEqual(8);
+	});
+
+	it("looks up traces only for the Executions an incremental replay returns", async () => {
+		const replays = 20;
+		const { result: replay, scans } = await auditScansDuring(async (reader) => {
+			let last: Awaited<ReturnType<typeof reader.replay>>;
+			for (let attempt = 0; attempt < replays; attempt++)
+				last = await reader.replay(longScope, "long-history", {
+					kind: "last-event-id",
+					value: `long-event-${2 * eventsPerExecution - 10}`,
+				});
+			return last;
+		});
+		expect(replay).toMatchObject({ outcome: "events" });
+		const events = replay?.outcome === "events" ? replay.events : [];
+		expect(events).toHaveLength(10);
+		expect(new Set(events.map((event) => event.traceId))).toEqual(
+			new Set(["trace-long-2"]),
+		);
+		// Each replay reads only the latest Execution's trace; reading every
+		// Execution of the Conversation would double the lookups.
+		expect(scans).toBeGreaterThanOrEqual(replays);
+		expect(scans).toBeLessThan(replays + replays / 2);
 	});
 
 	it("cancels the database statement when the caller aborts the read", async () => {
