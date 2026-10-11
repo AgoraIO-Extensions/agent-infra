@@ -8,6 +8,22 @@ import { parse } from "yaml";
 
 import { imageDockerfiles, imageNames, sha256 } from "./image-manifest.mjs";
 
+export { imageNames };
+
+export function selectedImageNames(option) {
+	if (option === undefined) return imageNames;
+	if (!option.startsWith("--images=")) throw new Error("image selection must use --images=");
+	const names = option.slice("--images=".length).split(",").filter(Boolean);
+	if (
+		names.length === 0 ||
+		new Set(names).size !== names.length ||
+		names.some((name) => !imageNames.includes(name))
+	) {
+		throw new Error(`image selection is invalid: ${names.join(",")}`);
+	}
+	return names;
+}
+
 const root = resolve(import.meta.dirname, "../..");
 const directory = join(root, ".ci-images");
 
@@ -70,7 +86,13 @@ async function build() {
     await mkdir(context);
     command("git", ["archive", "--format=tar", `--output=${archive}`, expected.commit]);
     command("tar", ["-xf", archive, "-C", context]);
-    for (const name of imageNames) {
+    const imageOption = process.argv.slice(3).find((value) => value.startsWith("--images="));
+    assert.equal(
+      process.argv.length - 3,
+      imageOption === undefined ? 0 : 1,
+      "usage: ci-image-build.mjs build [--images=name,...]",
+    );
+    for (const name of selectedImageNames(imageOption)) {
       const iid = join(temp, `${name}.id`);
       const cacheArgs = process.env.GITHUB_ACTIONS === "true"
         ? [
@@ -131,7 +153,7 @@ async function build() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
-    assert.equal(process.argv[2], "build", "usage: ci-image-build.mjs build");
+    assert.equal(process.argv[2], "build", "usage: ci-image-build.mjs build [--images=name,...]");
     await build();
   } catch (error) {
     console.error(error instanceof Error ? error.message : "image build failed");

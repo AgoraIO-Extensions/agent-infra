@@ -65,6 +65,7 @@ jobs:
       web: ${{ steps.scope.outputs.web }}
       runtime: ${{ steps.scope.outputs.runtime }}
       workload: ${{ steps.scope.outputs.workload }}
+      images: ${{ steps.scope.outputs.images }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -85,11 +86,21 @@ jobs:
           web=false
           runtime=false
           workload=false
+          all_images=$(node --input-type=module -e 'import { imageNames } from "./deploy/release/image-manifest.mjs"; process.stdout.write(imageNames.join(","))')
+          images=''
+          add_image() {
+            for image in "$@"; do
+              if [[ ",$images," != *",$image,"* ]]; then
+                images="${images:+$images,}$image"
+              fi
+            done
+          }
           if [[ "$EVENT_NAME" == push ]]; then
             source=true
             web=true
             runtime=true
             workload=true
+            images="$all_images"
           else
             if ! files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA"); then
               echo '::warning::Unable to classify changed paths; running full validation.'
@@ -97,6 +108,7 @@ jobs:
               web=true
               runtime=true
               workload=true
+              images="$all_images"
             else
               while IFS= read -r path; do
                 case "$path" in
@@ -107,6 +119,7 @@ jobs:
                     source=true
                     web=true
                     runtime=true
+                    images="$all_images"
                     ;;
                   pnpm-lock.yaml|turbo.json|tsconfig*.json)
                     # Dependency/build graph changes can invalidate every surface.
@@ -114,6 +127,7 @@ jobs:
                     web=true
                     runtime=true
                     workload=true
+                    images="$all_images"
                     ;;
                   packages/config/*|packages/contracts/*|packages/test-support/*)
                     # Shared packages feed multiple deployed surfaces.
@@ -121,10 +135,29 @@ jobs:
                     web=true
                     runtime=true
                     workload=true
+                    images="$all_images"
                     ;;
                   apps/web/*)
                     source=true
                     web=true
+                    add_image web agent-runtime-host
+                    ;;
+                  apps/platform-api/*)
+                    source=true
+                    add_image platform-api
+                    ;;
+                  apps/platform-worker/*)
+                    source=true
+                    workload=true
+                    add_image platform-worker
+                    ;;
+                  apps/enterprise-directory-sync/*)
+                    source=true
+                    add_image enterprise-directory-sync
+                    ;;
+                  apps/connection-api/*)
+                    source=true
+                    add_image connection-api
                     ;;
                   deploy/images/*|deploy/release/*)
                     # Release/image tooling changes can affect every image surface.
@@ -132,17 +165,25 @@ jobs:
                     web=true
                     runtime=true
                     workload=true
+                    images="$all_images"
                     ;;
                   apps/agent-runtime-host/*|deploy/runtime/*)
                     source=true
                     runtime=true
+                    add_image agent-runtime-host custom-agent-base
                     ;;
                   packages/agent-runtime/*)
                     source=true
                     runtime=true
                     workload=true
+                    add_image agent-runtime-host custom-agent-base platform-worker
                     ;;
-                  apps/platform-worker/*|packages/platform-core/*|packages/platform-store/*|packages/observability/*|packages/identity/*|packages/image-registry/*|packages/model-catalog/*|packages/object-storage/*|packages/secret-store/*|packages/wecom/*|deploy/kind/*|tests/workload-fixture.test.mjs|tests/fixtures/workload/*)
+                  packages/platform-core/*|packages/platform-store/*|packages/observability/*|packages/identity/*|packages/image-registry/*|packages/model-catalog/*|packages/object-storage/*|packages/secret-store/*|packages/wecom/*)
+                    source=true
+                    workload=true
+                    add_image platform-api platform-worker
+                    ;;
+                  deploy/kind/*|tests/workload-fixture.test.mjs|tests/fixtures/workload/*)
                     source=true
                     workload=true
                     ;;
@@ -155,6 +196,7 @@ jobs:
                     web=true
                     runtime=true
                     workload=true
+                    images="$all_images"
                     ;;
                 esac
               done <<< "$files"
@@ -165,6 +207,7 @@ jobs:
             echo "web=$web"
             echo "runtime=$runtime"
             echo "workload=$workload"
+            echo "images=$images"
           } >> "$GITHUB_OUTPUT"
 
   web-tests:
@@ -492,11 +535,12 @@ jobs:
 
       - name: Build deployment images
         id: images
-        if: ${{ needs.changes.outputs.source == 'true' }}
+        if: ${{ needs.changes.outputs.images != '' }}
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           CI_CACHE_WRITE: ${{ github.event_name == 'push' }}
-        run: node deploy/release/ci-image-build.mjs build
+          IMAGE_NAMES: ${{ needs.changes.outputs.images }}
+        run: node deploy/release/ci-image-build.mjs build --images="${IMAGE_NAMES}"
 
       - name: Verify built Web image compatibility
         if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.web == 'true' }}
