@@ -40,7 +40,7 @@ Host 启动时可消费部署批准的私有文件 export，随后使用已有�
 要求复用上述私有接收边界，配置只在启动时捕获，变更须受控重新装配。
 
 callback 凭据只认证专用 HTTPS `/internal/runtime/oauth/v1/callback`；Worker serviceToken
-与 installation JWS 继续认证 begin/confirm/status。两类凭据不得相同，也不跨路由兼容。
+与 installation JWS 继续认证 begin/confirm/status/refresh。两类凭据不得相同，也不跨路由兼容。
 缺失/非法 callback 材料关闭 OAuth 安装能力，普通业务/控制入口保持；回跳仍须满足
 原 state、主体/执行/代次、配置和秘密保护校验，成功不发布可用 MCP 安装。
 平台固定 callback 与其 SecretRef 装配须按

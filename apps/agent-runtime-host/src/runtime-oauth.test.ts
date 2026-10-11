@@ -109,6 +109,8 @@ afterEach(async () => {
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const access = "synthetic-oauth-access-material";
 const refresh = "synthetic-oauth-refresh-material";
+const refreshedAccess = "synthetic-oauth-refreshed-access";
+const refreshedRefresh = "synthetic-oauth-refreshed-refresh";
 const callbackServiceToken = "synthetic-callback-material-123";
 
 async function fixture() {
@@ -143,7 +145,8 @@ async function fixture() {
 			paths.push(req.url ?? "");
 			const chunks: Buffer[] = [];
 			for await (const part of req) chunks.push(Buffer.from(part));
-			calls.push(new URLSearchParams(Buffer.concat(chunks).toString()));
+			const body = new URLSearchParams(Buffer.concat(chunks).toString());
+			calls.push(body);
 			if (behavior === "lost") {
 				req.socket.destroy();
 				return;
@@ -171,16 +174,18 @@ async function fixture() {
 					await chmod(join(root, "materials", accessName), 0o400);
 				}
 			}
+			const refreshing = body.get("grant_type") === "refresh_token";
+			const responseBody = {
+				access_token: refreshing ? refreshedAccess : access,
+				...(refreshing && behavior === "refresh-no-rotation"
+					? {}
+					: { refresh_token: refreshing ? refreshedRefresh : refresh }),
+				token_type: "Bearer",
+				expires_in: 3600,
+				scope: "mcp",
+			};
 			res.writeHead(200, { "content-type": "application/json" });
-			res.end(
-				JSON.stringify({
-					access_token: access,
-					refresh_token: refresh,
-					token_type: "Bearer",
-					expires_in: 3600,
-					scope: "mcp",
-				}),
-			);
+			res.end(JSON.stringify(responseBody));
 		},
 	);
 	await new Promise<void>((resolve) => issuer.listen(0, "127.0.0.1", resolve));
@@ -326,7 +331,7 @@ async function fixture() {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	});
 	function signed(
-		command: "begin" | "confirm" | "status",
+		command: "begin" | "confirm" | "status" | "refresh",
 		patch: Partial<RuntimeOAuthGrantClaimsV1> = {},
 		authorizationId = "authorization-a",
 	): RuntimeOAuthAuthorizedRequestV1 {
@@ -555,7 +560,7 @@ it("requires callback-only authentication before accepting an original OAuth cod
 	expect(f.calls).toHaveLength(0);
 });
 
-it.each(["begin", "confirm", "status"] as const)(
+it.each(["begin", "confirm", "status", "refresh"] as const)(
 	"refuses callback-only authentication on the %s command",
 	async (command) => {
 		const f = await fixture();
@@ -665,6 +670,68 @@ it("uses real HTTPS/SDK/files for one exchange and keeps received credentials un
 			/\.(access|refresh)$/.test(name),
 		),
 	).toHaveLength(2);
+});
+
+it("rotates protected access and refresh material through the fixed OAuth endpoint", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const result = await f.post("refresh", f.signed("refresh"));
+	expect(result.status).toBe(200);
+	expect(result.body.phase).toBe("awaiting_verification");
+	const refreshRequest = f.calls.find(
+		(body) => body.get("grant_type") === "refresh_token",
+	);
+	expect(refreshRequest?.get("refresh_token")).toBe(refresh);
+	expect(refreshRequest?.get("resource")).toBe(f.target.url);
+	const names = await readdir(join(f.root, "materials"));
+	const accessName = names.find((name) => name.endsWith(".access"));
+	const refreshName = names.find((name) => name.endsWith(".refresh"));
+	expect(
+		await readFile(join(f.root, "materials", accessName as string), "utf8"),
+	).toBe(refreshedAccess);
+	expect(
+		await readFile(join(f.root, "materials", refreshName as string), "utf8"),
+	).toBe(refreshedRefresh);
+	expect(JSON.stringify(result)).not.toContain(refreshedAccess);
+	expect(JSON.stringify(result)).not.toContain(refreshedRefresh);
+});
+
+it("retains the refresh token when rotation omits a replacement", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("refresh-no-rotation");
+	expect((await f.post("refresh", f.signed("refresh"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const refreshName = (await readdir(join(f.root, "materials"))).find((name) =>
+		name.endsWith(".refresh"),
+	);
+	expect(
+		await readFile(join(f.root, "materials", refreshName as string), "utf8"),
+	).toBe(refresh);
+});
+
+it("keeps rotated material unavailable after a lost refresh response", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("lost");
+	const result = await f.post("refresh", f.signed("refresh"));
+	expect(result.body.phase).toBe("unknown");
+	const accessName = (await readdir(join(f.root, "materials"))).find((name) =>
+		name.endsWith(".access"),
+	);
+	expect(
+		await readFile(join(f.root, "materials", accessName as string), "utf8"),
+	).toBe(access);
 });
 
 it("revokes and removes protected token material exactly once on explicit revoke", async () => {

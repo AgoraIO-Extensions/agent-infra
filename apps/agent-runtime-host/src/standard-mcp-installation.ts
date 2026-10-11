@@ -92,6 +92,88 @@ export async function publishMaterial(
 	);
 }
 
+export async function replaceProtectedStandardMcpMaterials(
+	path: string,
+	replacements: readonly {
+		name: string;
+		expected: string;
+		next: string;
+	}[],
+	guard?: () => void,
+) {
+	return withProtectedStandardMcpMaterialLock(path, async () => {
+		assertStandardMcpProcessProtection();
+		const directory = await openProtectedStandardMcpDirectory(path, guard);
+		try {
+			for (const replacement of replacements) {
+				if (
+					(await readProtectedStandardMcpBytes(
+						path,
+						replacement.name,
+						4096,
+						guard,
+					)) !== replacement.expected
+				)
+					unavailable();
+				const temporary = `.stage-${randomUUID()}`;
+				const temporaryPath = protectedStandardMcpPath(
+					directory,
+					path,
+					temporary,
+				);
+				try {
+					const file = await open(
+						temporaryPath,
+						constants.O_WRONLY |
+							constants.O_CREAT |
+							constants.O_EXCL |
+							constants.O_NOFOLLOW,
+						0o400,
+					);
+					try {
+						assertStandardMcpProcessProtection();
+						guard?.();
+						await file.writeFile(replacement.next, "utf8");
+						await file.sync();
+					} finally {
+						await file.close();
+					}
+					await assertProtectedStandardMcpDirectoryCurrent(
+						path,
+						directory,
+						guard,
+					);
+					await rename(
+						temporaryPath,
+						protectedStandardMcpPath(directory, path, replacement.name),
+					);
+					await directory.sync();
+					await assertProtectedStandardMcpDirectoryCurrent(
+						path,
+						directory,
+						guard,
+					);
+					if (
+						(await readProtectedStandardMcpBytes(
+							path,
+							replacement.name,
+							4096,
+							guard,
+						)) !== replacement.next
+					)
+						unavailable();
+				} finally {
+					await unlink(temporaryPath).catch((error: NodeJS.ErrnoException) => {
+						if (error.code !== "ENOENT") throw error;
+					});
+				}
+			}
+		} finally {
+			await directory.close();
+		}
+	});
+}
+
 async function publishMaterialUnlocked(
 	path: string,
 	name: string,
