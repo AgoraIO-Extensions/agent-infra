@@ -815,11 +815,24 @@ it("recovers a durable rotation journal before using protected material", async 
 	const accessName = names.find((name) => name.endsWith(".access")) as string;
 	const refreshName = names.find((name) => name.endsWith(".refresh")) as string;
 	const accessPath = join(f.root, "materials", accessName);
+	const recordName = (await readdir(join(f.root, "records"))).find((name) =>
+		name.endsWith(".json"),
+	) as string;
+	const recordPath = join(f.root, "records", recordName);
+	const record = JSON.parse(await readFile(recordPath, "utf8")) as Record<
+		string,
+		unknown
+	>;
+	record.phase = "exchange_started";
+	await writeFile(recordPath, JSON.stringify(record));
+	expect(JSON.parse(await readFile(recordPath, "utf8")).phase).toBe(
+		"exchange_started",
+	);
 	await chmod(accessPath, 0o600);
 	await writeFile(accessPath, refreshedAccess);
 	await chmod(accessPath, 0o400);
 	await writeFile(
-		join(f.root, "materials", ".oauth-rotation.json"),
+		join(f.root, "materials", "oauth-rotation.json"),
 		JSON.stringify({
 			schemaVersion: 1,
 			entries: [
@@ -829,13 +842,16 @@ it("recovers a durable rotation journal before using protected material", async 
 		}),
 		{ mode: 0o400 },
 	);
+	expect(await readdir(join(f.root, "materials"))).toContain(
+		"oauth-rotation.json",
+	);
 	await recoverProtectedStandardMcpMaterialRotation(join(f.root, "materials"));
 	expect(await readFile(accessPath, "utf8")).toBe(access);
 	expect(await readFile(join(f.root, "materials", refreshName), "utf8")).toBe(
 		refresh,
 	);
 	await expect(
-		readFile(join(f.root, "materials", ".oauth-rotation.json")),
+		readFile(join(f.root, "materials", "oauth-rotation.json")),
 	).rejects.toMatchObject({ code: "ENOENT" });
 });
 

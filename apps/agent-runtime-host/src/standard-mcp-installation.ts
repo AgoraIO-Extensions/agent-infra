@@ -70,7 +70,7 @@ export async function ensurePrivateDirectory(path: string) {
 }
 
 const materialLockTails = new Map<string, Promise<void>>();
-const rotationJournalName = ".oauth-rotation.json";
+const rotationJournalName = "oauth-rotation.json";
 
 type RotationJournal = {
 	schemaVersion: 1;
@@ -167,6 +167,39 @@ async function removeRotationJournal(path: string) {
 	}
 }
 
+async function readProtectedRotationJournal(
+	path: string,
+	directory: import("node:fs/promises").FileHandle,
+) {
+	assertStandardMcpProcessProtection();
+	await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+	const journalPath = join(path, rotationJournalName);
+	const before = await lstat(journalPath);
+	if (
+		!before.isFile() ||
+		before.uid !== process.getuid?.() ||
+		before.nlink !== 1 ||
+		!([0o400, 0o600] as number[]).includes(before.mode & 0o777) ||
+		before.size < 1 ||
+		before.size > 16_384
+	)
+		unavailable();
+	const text = await readFile(journalPath, "utf8");
+	const after = await lstat(journalPath);
+	assertStandardMcpProcessProtection();
+	await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+	if (
+		before.dev !== after.dev ||
+		before.ino !== after.ino ||
+		before.size !== after.size ||
+		before.mtimeMs !== after.mtimeMs ||
+		after.uid !== before.uid ||
+		after.nlink !== 1
+	)
+		unavailable();
+	return text;
+}
+
 /** Recover a rotation left durable before a Host restart. */
 export async function recoverProtectedStandardMcpMaterialRotation(
 	path: string,
@@ -182,13 +215,27 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 			);
 			try {
 				journal = parseRotationJournal(
-					JSON.parse(await readFile(journalPath, "utf8")),
+					JSON.parse(await readProtectedRotationJournal(path, directory)),
 				);
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+					return;
+				}
 				throw error;
 			}
+			const key = journal.entries[0].name.replace(/\.(access|refresh)$/, "");
+			const records = join(dirname(path), "records");
+			let committed = false;
+			try {
+				const record = JSON.parse(
+					await readProtectedStandardMcpBytes(records, `${key}.json`, 16_384),
+				) as { phase?: unknown };
+				committed = record.phase === "awaiting_verification";
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
 			for (const entry of journal.entries) {
+				if (committed) continue;
 				let current: string | undefined;
 				try {
 					current = await readProtectedStandardMcpBytes(path, entry.name, 4096);
@@ -277,7 +324,6 @@ export async function replaceProtectedStandardMcpMaterials(
 	}[],
 	guard?: () => void,
 ) {
-	await recoverProtectedStandardMcpMaterialRotation(path);
 	return withProtectedStandardMcpMaterialLock(path, async () => {
 		assertStandardMcpProcessProtection();
 		await writeRotationJournal(
@@ -377,7 +423,6 @@ export async function replaceProtectedStandardMcpMaterials(
 				for (const replacement of replacements) {
 					await replaceOne(replacement, () => completed.push(replacement));
 				}
-				await removeRotationJournal(path);
 			} catch (error) {
 				const rollbackErrors: unknown[] = [];
 				for (const replacement of completed.reverse()) {
@@ -407,6 +452,14 @@ export async function replaceProtectedStandardMcpMaterials(
 			await directory.close();
 		}
 	});
+}
+
+export async function finalizeProtectedStandardMcpMaterialRotation(
+	path: string,
+) {
+	return withProtectedStandardMcpMaterialLock(path, () =>
+		removeRotationJournal(path),
+	);
 }
 
 async function publishMaterialUnlocked(

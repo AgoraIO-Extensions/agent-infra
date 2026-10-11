@@ -40,6 +40,7 @@ import {
 import { standardMcpInstallationKey } from "./standard-mcp-input.js";
 import {
 	ensurePrivateDirectory,
+	finalizeProtectedStandardMcpMaterialRotation,
 	publishMaterial,
 	recoverProtectedStandardMcpMaterialRotation,
 	replaceProtectedStandardMcpMaterials,
@@ -565,6 +566,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			record.phase = "awaiting_verification";
 			record.tokenExpiresAt = tokens.expiresAt;
 			await writeRecord(records, `${key}.json`, record);
+			await finalizeProtectedStandardMcpMaterialRotation(materials);
 			check(snapshot, record, true);
 		} catch {
 			if (rotated) {
