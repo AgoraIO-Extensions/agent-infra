@@ -18,10 +18,21 @@ export function installationUnavailable(): never {
 		false,
 	);
 }
-export type WorkerInstallationAuthorization = Pick<
-	RuntimeOAuthGrantClaimsV1,
-	"principal" | "reference" | "authorizationId" | "command"
+type WorkerInstallationCommand = Exclude<
+	RuntimeOAuthGrantClaimsV1["command"],
+	"refresh"
+>;
+
+/** Worker ledger commands remain begin/confirm/status; Host owns refresh. */
+export type WorkerInstallationAuthorization = Omit<
+	Pick<
+		RuntimeOAuthGrantClaimsV1,
+		"principal" | "reference" | "authorizationId" | "command"
+	>,
+	"command"
 > & {
+	readonly command: WorkerInstallationCommand;
+} & {
 	readonly scope: import("@agent-infra/contracts/runtime").RuntimeOAuthScopeV1;
 	readonly revision: string;
 	readonly commandId?: string;
