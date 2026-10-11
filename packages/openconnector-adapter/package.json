@@ -30,7 +30,7 @@
 		"@cfworker/json-schema": "4.1.1",
 		"@agent-infra/connection-core": "workspace:*",
 		"@agent-infra/openconnector-kernel": "workspace:*",
-		"undici": "7.29.0"
+		"undici": "7.29.1"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",

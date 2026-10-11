@@ -67,6 +67,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=builder --chown=node:node /prod/connection-api/ ./
 COPY --from=builder --chown=node:node /app/build-evidence/connection-api/bundle-inventory.json ./third-party/build-evidence/bundle-inventory.json
+COPY --from=builder --chown=node:node /app/packages/openconnector-kernel/LICENSE.txt /app/packages/openconnector-kernel/NOTICE.md /app/packages/openconnector-kernel/PROVENANCE.json ./third-party/openconnector-kernel/
 EXPOSE 3002
 USER node
 CMD ["node", "dist/index.mjs"]

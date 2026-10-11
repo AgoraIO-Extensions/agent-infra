@@ -143,7 +143,12 @@ export function validateEvidenceBytes(evidence, subject, expected) {
   const sbom = JSON.parse(sbomBytes);
   requireValue(sbom.bomFormat === "CycloneDX" && sbom.metadata?.component?.hashes?.some((entry) => entry.alg === "SHA-256" && entry.content === subject.digest.slice(7)), "SBOM subject mismatch");
   requireValue(sbom.metadata?.properties?.some((entry) => entry.name === "connection:coverage" && entry.value === "final-image-and-actual-bundler-inputs") && sbom.components?.some((entry) => entry.properties?.some((property) => property.name === "connection:origin" && property.value === "actual-bundler-inputs")), "Incomplete SBOM coverage");
-  completeSbom(sbom, JSON.parse(bundleBytes), subject);
+  const completed = completeSbom(sbom, JSON.parse(bundleBytes), subject);
+  const requiredComponents = completed.components.slice(sbom.components.length);
+  const origins = new Set(["actual-bundler-inputs", "final-image-runtime-matches-build-runtime"]);
+  const signedComponents = sbom.components.filter((component) => component.properties?.some((property) => property.name === "connection:origin" && origins.has(property.value)));
+  const records = (components) => components.map((component) => JSON.stringify(component)).sort();
+  requireValue(JSON.stringify(records(signedComponents)) === JSON.stringify(records(requiredComponents)), "Signed SBOM runtime or bundle inventory mismatch");
   return { manifestBytes, sbomBytes, manifestBundle: bytes("manifestBundle"), sbomBundle: bytes("sbomBundle") };
 }
 

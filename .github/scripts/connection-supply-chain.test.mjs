@@ -90,3 +90,24 @@ test("release CLI rejects malformed evidence without echoing credential-like inp
     assert.equal(`${result.stdout}${result.stderr}`.includes("credential-canary-not-real"), false);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+// Recompute the manifest hash so these exercise semantic coverage, not byte tampering.
+test("signed SBOM rejects omitted, extra or altered runtime and bundle records", () => {
+  const mutations = [
+    (sbom) => { sbom.components = sbom.components.filter((component) => component.name !== "node"); },
+    (sbom) => { sbom.components.find((component) => component.name === "node").hashes[0].content = "0".repeat(64); },
+    (sbom) => { const component = sbom.components.find((component) => component.name === "bundled-package"); component.properties.find((property) => property.name === "connection:inputs").value = JSON.stringify([{ path: "node_modules/bundled-package/index.js", sha256: "0".repeat(64) }]); },
+    (sbom) => { sbom.components.push(structuredClone(sbom.components.find((component) => component.name === "bundled-package"))); },
+  ];
+  for (const mutate of mutations) {
+    const modified = evidence();
+    const sbom = JSON.parse(Buffer.from(modified.sbom, "base64"));
+    mutate(sbom);
+    const sbomBytes = bytes(sbom);
+    modified.sbom = sbomBytes.toString("base64");
+    const manifest = JSON.parse(Buffer.from(modified.manifest, "base64"));
+    manifest.sbomSha256 = hash(sbomBytes);
+    modified.manifest = bytes(manifest).toString("base64");
+    assert.throws(() => validateEvidenceBytes(modified, subject, expected), /Signed SBOM runtime or bundle inventory mismatch/);
+  }
+});
