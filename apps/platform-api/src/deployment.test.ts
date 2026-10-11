@@ -1401,7 +1401,7 @@ describe("production API creation with user and application Tokens", () => {
 			{ agents: 0, grants: 0, secrets: 0, keys: 0, outbox: 0 },
 		]);
 	});
-	it.each(["missing-model", "missing-key", "rejected-key", "failed-key"])(
+	it.each(["missing-key", "rejected-key", "failed-key"])(
 		"fails closed with %s provider",
 		async (failure) => {
 			await createPlatformApiShutdown(running)();
@@ -1411,9 +1411,6 @@ describe("production API creation with user and application Tokens", () => {
 				...fixture.input,
 				agentApiCreation: {
 					...configured,
-					...(failure === "missing-model"
-						? { keylessModelAdmission: undefined }
-						: {}),
 					...(failure === "missing-key" ? { candidates: undefined } : {}),
 				},
 			};

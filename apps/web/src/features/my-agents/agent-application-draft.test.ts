@@ -20,13 +20,13 @@ const standardCreateDraft = {
 	environment: [{ name: "LOG_LEVEL", value: "debug" }],
 	secrets: [{ name: "MODEL_API_KEY", value: "never-echo" }],
 	configureModels: false,
+	defaultRelayKey: "agent-relay-key-value",
 	models: [
 		{
 			optionId: "model-primary",
 			endpointId: "endpoint-primary",
 			modelId: "gpt-5",
 			reasoningLevels: "medium\nhigh",
-			credentialValue: "never-echo-model",
 		},
 	],
 	defaultModelOptionId: "model-primary",
@@ -38,6 +38,7 @@ describe("Agent application draft", () => {
 		expect(buildAgentApplicationRequest("create", standardCreateDraft)).toEqual(
 			{
 				schemaVersion: 2,
+				defaultRelayKey: "agent-relay-key-value",
 				name: "Release assistant",
 				description: "Helps the release team",
 				source: { kind: "standard", templateId: "codex" },
@@ -56,7 +57,6 @@ describe("Agent application draft", () => {
 							endpointId: "endpoint-primary",
 							modelId: "gpt-5",
 							reasoningLevels: ["medium", "high"],
-							credentialValue: "never-echo-model",
 						},
 					],
 					defaultOptionId: "model-primary",
@@ -116,7 +116,7 @@ describe("Agent application draft", () => {
 				...standardCreateDraft,
 				models: [
 					standardCreateDraft.models[0],
-					{ ...standardCreateDraft.models[0], credentialValue: "" },
+					{ ...standardCreateDraft.models[0], optionId: "duplicate-model" },
 				],
 			},
 			{
@@ -143,7 +143,6 @@ describe("Agent application draft", () => {
 					{
 						...standardCreateDraft.models[0],
 						optionId: "legacy-model",
-						credentialValue: "",
 					},
 				],
 			},
@@ -172,7 +171,6 @@ describe("Agent application draft", () => {
 						optionId: "",
 						modelId: "",
 						reasoningLevels: "",
-						credentialValue: "",
 					},
 				],
 			},
@@ -189,15 +187,11 @@ describe("Agent application draft", () => {
 		expect(errors["model.0.modelId"]).toBe("请选择模型。");
 	});
 
-	it("requires credentials for model options not persisted on update", () => {
-		const draft = {
-			...standardCreateDraft,
-			models: [{ ...standardCreateDraft.models[0], credentialValue: "" }],
-		};
+	it("requires one default Relay Key instead of per-model credentials", () => {
+		const draft = { ...standardCreateDraft, defaultRelayKey: "" };
 		const context = {
 			modelConfigurationVisible: true,
-			persistedModelOptionIds: ["persisted-option"],
-			requiresReplacementCredential: false,
+			requiresDefaultRelayKey: true,
 			staleModel: false,
 			staleModelIndexes: [],
 			staleTemplate: false,
@@ -205,27 +199,32 @@ describe("Agent application draft", () => {
 			defaultModelReasoningLevels: ["medium", "high"],
 		};
 
-		expect(
-			validateAgentApplicationDraft(draft, context)["model.0.credentialValue"],
-		).toBe("请输入模型凭证。");
-		expect(
-			validateAgentApplicationDraft(
-				{
-					...draft,
-					models: [{ ...draft.models[0], credentialValue: " \t" }],
-				},
-				context,
-			)["model.0.credentialValue"],
-		).toBe("请输入模型凭证。");
+		expect(validateAgentApplicationDraft(draft, context).defaultRelayKey).toBe(
+			"请输入 Agent 默认 Relay Key。",
+		);
 		expect(
 			validateAgentApplicationDraft(
 				{
 					...draft,
-					models: [{ ...draft.models[0], optionId: "persisted-option" }],
+					defaultRelayKey: "agent-relay-key-value",
 				},
 				context,
-			)["model.0.credentialValue"],
+			).defaultRelayKey,
 		).toBeUndefined();
+	});
+
+	it("requires a current template readiness revision when the gate is enabled", () => {
+		const errors = validateAgentApplicationDraft(
+			{ ...standardCreateDraft, templateRevision: "" },
+			{
+				modelConfigurationVisible: false,
+				requiresTemplateReadiness: true,
+				staleModel: false,
+				staleTemplate: false,
+				standardChoicesBlocked: false,
+			},
+		);
+		expect(errors.templateId).toBe("模板验证状态已过期，请刷新后重试。");
 	});
 
 	it("marks only repeated environment and Secret names", () => {
