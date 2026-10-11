@@ -135,7 +135,6 @@ export async function publishStartupConsumerDeclarations(
 				for (const catalog of catalogs) {
 					if (
 						catalog.provider === "static-spaces" &&
-						catalog.providerReleaseId.endsWith("-supervised") &&
 						!(await repository.isProviderAdmissionOpen?.({
 							providerReleaseId: catalog.providerReleaseId,
 							consumerId: consumer.id,
