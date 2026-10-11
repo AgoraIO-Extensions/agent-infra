@@ -264,5 +264,26 @@ describe("Skill Hub Agent binding persistence", () => {
 		} finally {
 			await deniedResolver.close();
 		}
+		await client`
+			update platform.agents set current_configuration_revision = 9 where id = 'agent-1'
+		`;
+		const stale = new PostgresSkillHubAgentBindingAdmissionV1({
+			databaseUrl: database?.databaseUrl ?? "",
+			resolveGrantBoundary: async ({ requested }) => requested,
+		});
+		try {
+			expect(
+				await stale.resolveSyncBindings({
+					agentId: "agent-1",
+					agentVersion: "agent-version-1",
+					configurationRevision: 8,
+					actorId: "owner-1",
+					organizationIds: ["org-1"],
+					isAdministrator: false,
+				}),
+			).toEqual([]);
+		} finally {
+			await stale.close();
+		}
 	});
 });

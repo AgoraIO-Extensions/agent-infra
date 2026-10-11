@@ -15,6 +15,7 @@ import {
 import { and, eq, inArray, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { agents } from "./schema-agents.js";
 import { idempotencyRecords } from "./schema-operations.js";
 import {
 	skillHubAgentBindings,
@@ -81,6 +82,19 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 		readonly isAdministrator: boolean;
 	}): Promise<readonly SkillHubSyncBindingV1[]> {
 		try {
+			const [agent] = await this.#database
+				.select({
+					currentConfigurationRevision: agents.currentConfigurationRevision,
+				})
+				.from(agents)
+				.where(eq(agents.id, input.agentId))
+				.limit(1);
+			if (
+				!agent ||
+				Number(agent.currentConfigurationRevision) !==
+					input.configurationRevision
+			)
+				return [];
 			const rows = await this.#database
 				.select({
 					binding: skillHubAgentBindings,
@@ -162,6 +176,8 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 				boundaryRows.map((row) => [row.skillVersionId, row.grant]),
 			);
 			return rows.map((row) => {
+				const persistedGrant = parseSkillHubGrantV1(row.binding.grant);
+				const boundaryGrant = grants.get(row.binding.skillVersionId);
 				const registration = parseSkillHubRegistrationV1({
 					schemaVersion: 1,
 					name: row.name,
@@ -201,7 +217,8 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 					row.parentStatus !== "active" ||
 					!admitted.has(row.binding.skillVersionId) ||
 					!installed.has(row.binding.skillVersionId) ||
-					!grants.has(row.binding.skillVersionId) ||
+					boundaryGrant === undefined ||
+					!isSkillHubGrantWithinBoundaryV1(persistedGrant, boundaryGrant) ||
 					row.binding.state === "synced"
 				)
 					throw new SkillHubAgentBindingAdmissionErrorV1();
@@ -221,7 +238,7 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 						manifestDigest: registration.manifestDigest,
 						signatureDigest: registration.signatureDigest,
 					}),
-					grant: grants.get(row.binding.skillVersionId),
+					grant: persistedGrant,
 					configurationRevision: row.binding.configurationRevision,
 					syncRevision: row.binding.syncRevision,
 					state: row.binding.state,
