@@ -11,6 +11,7 @@ import {
 	parseCurrentTaskApplicationV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
+	parseTimedOutUnknownStopResolutionInputV1,
 	planTaskSystemControlV1,
 } from "./task-authorization.js";
 
@@ -61,6 +62,31 @@ function requiredBoundary(overrides: Parameters<typeof capture>[0] = {}) {
 }
 
 describe("task authorization boundary", () => {
+	it("strictly parses timed-out unknown stop resolution input", () => {
+		const input = {
+			conversationId: "conversation",
+			executionId: "execution",
+			stopRequestId: "stop",
+			sessionGeneration: 1,
+			operatorId: "operator",
+			idempotencyKey: "resolve-1",
+			requestDigest: "a".repeat(64),
+			traceId: "trace",
+			requestId: "request",
+		};
+		expect(parseTimedOutUnknownStopResolutionInputV1(input)).toEqual(input);
+		for (const invalid of [
+			{ ...input, sessionGeneration: 0 },
+			{ ...input, requestDigest: "bad" },
+			{ ...input, idempotencyKey: "bad key" },
+			{ ...input, unexpected: true },
+		]) {
+			expect(() =>
+				parseTimedOutUnknownStopResolutionInputV1(invalid),
+			).toThrow();
+		}
+	});
+
 	it("keeps directory and Agent revisions distinct while accepting current unchanged scope", () => {
 		const boundary = requiredBoundary();
 		expect(boundary).toMatchObject({

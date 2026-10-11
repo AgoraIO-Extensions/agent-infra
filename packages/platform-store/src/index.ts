@@ -166,7 +166,10 @@ export {
 export {
 	PostgresTaskAuthorizationStoreV1,
 	recordTaskSystemControlInTransactionV1,
+	resolveTimedOutUnknownStopInTransactionV1,
 	TaskAuthorizationStoreError,
+	type TimedOutUnknownStopResolutionInputV1,
+	type TimedOutUnknownStopResolutionResultV1,
 } from "./task-authorization.js";
 export {
 	type LegacyTaskMetadataV1,

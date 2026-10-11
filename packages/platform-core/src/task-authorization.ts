@@ -41,6 +41,18 @@ export interface CurrentTaskApplicationV1 {
 	readonly useGrant: CurrentTaskApiUseGrantV1 | null;
 }
 
+export interface TimedOutUnknownStopResolutionInputV1 {
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly stopRequestId: string;
+	readonly sessionGeneration: number;
+	readonly operatorId: string;
+	readonly idempotencyKey: string;
+	readonly requestDigest: string;
+	readonly traceId: string;
+	readonly requestId: string;
+}
+
 /**
  * Opaque directory snapshot fact carried by trusted identity adapters.
  * Consumers must compare it at their own sensitive-operation boundary.
@@ -63,6 +75,50 @@ function object(input: unknown): Record<string, unknown> {
 		throw new TypeError("Task authority is invalid");
 	}
 	return snapshotAgentManagementDataObject(input);
+}
+
+export function parseTimedOutUnknownStopResolutionInputV1(
+	input: unknown,
+): TimedOutUnknownStopResolutionInputV1 {
+	const value = object(input);
+	exact(value, [
+		"conversationId",
+		"executionId",
+		"stopRequestId",
+		"sessionGeneration",
+		"operatorId",
+		"idempotencyKey",
+		"requestDigest",
+		"traceId",
+		"requestId",
+	]);
+	if (
+		!text(value.conversationId) ||
+		!text(value.executionId) ||
+		!text(value.stopRequestId) ||
+		!Number.isSafeInteger(value.sessionGeneration) ||
+		(value.sessionGeneration as number) < 1 ||
+		!text(value.operatorId) ||
+		!text(value.idempotencyKey, 128) ||
+		!/^[A-Za-z0-9._~-]{1,128}$/.test(value.idempotencyKey) ||
+		!text(value.requestDigest, 64) ||
+		!/^[a-f0-9]{64}$/.test(value.requestDigest) ||
+		!text(value.traceId) ||
+		!text(value.requestId)
+	) {
+		throw new TypeError("Timed-out unknown stop resolution input is invalid");
+	}
+	return {
+		conversationId: value.conversationId,
+		executionId: value.executionId,
+		stopRequestId: value.stopRequestId,
+		sessionGeneration: value.sessionGeneration as number,
+		operatorId: value.operatorId,
+		idempotencyKey: value.idempotencyKey,
+		requestDigest: value.requestDigest,
+		traceId: value.traceId,
+		requestId: value.requestId,
+	};
 }
 
 export function parseDirectorySnapshotBindingV1(
