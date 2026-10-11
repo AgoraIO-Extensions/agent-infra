@@ -2,6 +2,58 @@
 	"version": 1,
 	"providers": [
 		{
+			"provider": "argus",
+			"providerReleaseId": "argus-connection-v1",
+			"executorDigest": "sha256:c3e75af8a40be1288a470d5296097ac92e716c758d6924599928e1e67bc76d76",
+			"sourceCommit": "606f111c2cf7dce903f34c86c44fba4f3ef41062",
+			"credentialUpgradeBehavior": "DIRECT",
+			"authDigest": "sha256:75325f1e41ab4020e3675b7c682788c58708ee54922f46ac7e9eb08c17d41aad",
+			"deploymentDigest": "sha256:372eccd9756a010514e6db49b8b7b89a7de8c3e553225fa9592ae6fd340bc4db",
+			"actions": [
+				{
+					"id": "argus.get_call_detail@v1",
+					"name": "argus.get_call_detail",
+					"authorizationDigest": "sha256:32ca9ab8154a9630f715f396794aefa80550fe3a32f629345400e3f43c95df07"
+				},
+				{
+					"id": "argus.get_call_users@v1",
+					"name": "argus.get_call_users",
+					"authorizationDigest": "sha256:fb5e28bbcba0b5b089d3ac614e0a507b5b7530d565a5e00c6aa33226cd9890b1"
+				},
+				{
+					"id": "argus.get_counter_meta@v1",
+					"name": "argus.get_counter_meta",
+					"authorizationDigest": "sha256:90d3b04391fd1dbbbbdf909a30784d590904f4b9e3d60834810d82b25a37fbe5"
+				},
+				{
+					"id": "argus.get_counter_series@v1",
+					"name": "argus.get_counter_series",
+					"authorizationDigest": "sha256:b371e82c1ace942a4adf593a758cfbaf71f6c03fad5650fec17a042794c16de2"
+				},
+				{
+					"id": "argus.get_event_list@v1",
+					"name": "argus.get_event_list",
+					"authorizationDigest": "sha256:3aa884bf33aabd0353ad5f9eadbfa81b87005460452e0cffa9876f950e985078"
+				},
+				{
+					"id": "argus.get_user_sessions@v1",
+					"name": "argus.get_user_sessions",
+					"authorizationDigest": "sha256:8110bf5b4733b85089c0e84551ce51ea1bd4b984d8b29aa4fc764642352dc453"
+				},
+				{
+					"id": "argus.get_voqa_series@v1",
+					"name": "argus.get_voqa_series",
+					"authorizationDigest": "sha256:4e62438ec0d79adf92cd45dad946e270cec94f6b8fbf7ceffdbe5191d1e63a49"
+				},
+				{
+					"id": "argus.search_calls@v1",
+					"name": "argus.search_calls",
+					"authorizationDigest": "sha256:f65bd2495e028da3847df2b5b7c251148df90feea0bc66d9d44fea2c410ff153"
+				}
+			],
+			"compatibility": []
+		},
+		{
 			"provider": "bitbucket",
 			"providerReleaseId": "bitbucket-server-6.7.2-openconnector-0618e8cdaeaaaa77e2eb23938ac639867d4f03d7-connection-v8",
 			"executorDigest": "sha256:36e421531152628f993691b6e61e4966dc84af4ad4fced71ab4b84f44b025b67",

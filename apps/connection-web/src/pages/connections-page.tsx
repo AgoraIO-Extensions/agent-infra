@@ -192,7 +192,7 @@ export function ConnectionsPage() {
 		"provider",
 	);
 	const callbackProvider =
-		callbackProviderId === "manhattan" || callbackProviderId === "datalego"
+		callbackProviderId === "manhattan" || callbackProviderId === "datalego" || callbackProviderId === "argus"
 			? callbackProviderId
 			: "github";
 	const manhattanOAuth = useMutation({
@@ -204,6 +204,10 @@ export function ConnectionsPage() {
 		mutationFn: connectionApi.startDatalegoOAuth,
 		onSuccess: ({ authorizationUrl }) =>
 			window.location.assign(authorizationUrl),
+	});
+	const argusOAuth = useMutation({
+		mutationFn: connectionApi.startArgusOAuth,
+		onSuccess: ({ authorizationUrl }) => window.location.assign(authorizationUrl),
 	});
 	const oauth = useGithubOAuth();
 	useEffect(() => {
@@ -246,14 +250,15 @@ export function ConnectionsPage() {
 			if (
 				provider === "manhattan" ||
 				provider === "github" ||
-				provider === "datalego"
+				provider === "datalego" || provider === "argus"
 			) {
 				startedOAuthRequest.current = approvedAccessRequestId;
 				if (provider === "github")
 					oauth.begin(undefined, approvedAccessRequestId);
 				else if (provider === "manhattan")
 					manhattanOAuth.mutate({ accessRequestId: approvedAccessRequestId });
-				else datalegoOAuth.mutate({ accessRequestId: approvedAccessRequestId });
+				else if (provider === "datalego") datalegoOAuth.mutate({ accessRequestId: approvedAccessRequestId });
+				else argusOAuth.mutate({ accessRequestId: approvedAccessRequestId });
 			}
 		}
 		if (provider === "bitbucket") setBitbucketOpen(true);
@@ -279,6 +284,7 @@ export function ConnectionsPage() {
 		completedAccessRequestId,
 		manhattanOAuth.mutate,
 		datalegoOAuth.mutate,
+		argusOAuth.mutate,
 		oauth.begin,
 	]);
 	const accessRequests = useQuery({
@@ -561,6 +567,10 @@ export function ConnectionsPage() {
 					? { reconnectConnectionId: targetId }
 					: { accessRequestId: approvedAccessRequestId },
 			);
+		else if (providerId === "argus")
+			argusOAuth.mutate(
+				targetId ? { reconnectConnectionId: targetId } : { accessRequestId: approvedAccessRequestId },
+			);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
 		else if (providerId === "github" && targetId)
@@ -817,6 +827,7 @@ export function ConnectionsPage() {
 					正在前往 DataLego 授权页面…
 				</p>
 			) : null}
+			{argusOAuth.isPending ? <p className="alert" role="status">正在前往 Argus 授权页面…</p> : null}
 			{oauth.isError ? <PageError error={oauth.error} /> : null}
 			{approvedRequest.isError ? (
 				<PageError error={approvedRequest.error} />
@@ -834,6 +845,7 @@ export function ConnectionsPage() {
 				<PageError error={manhattanOAuth.error} />
 			) : null}
 			{datalegoOAuth.isError ? <PageError error={datalegoOAuth.error} /> : null}
+			{argusOAuth.isError ? <PageError error={argusOAuth.error} /> : null}
 			{jiraError ? <PageError error={jiraError} /> : null}
 			{confluenceError ? <PageError error={confluenceError} /> : null}
 			{jenkinsError ? <PageError error={jenkinsError} /> : null}

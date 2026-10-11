@@ -2893,7 +2893,7 @@
 					"accessRequestId": { "type": "string" },
 					"providerId": {
 						"type": "string",
-						"enum": ["github", "manhattan", "datalego"],
+						"enum": ["argus", "github", "manhattan", "datalego"],
 						"default": "github"
 					},
 					"reconnectConnectionId": { "type": "string" },

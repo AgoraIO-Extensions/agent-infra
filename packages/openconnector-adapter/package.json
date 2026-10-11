@@ -14,6 +14,7 @@
 		"./datalego-v5": "./src/datalego-v5.ts",
 		"./datalego-v6": "./src/datalego-v6.ts",
 		"./datalego-oauth": "./src/datalego-oauth.ts",
+		"./argus": "./src/argus.ts",
 		"./manhattan": "./src/manhattan.ts",
 		"./rehoboam": "./src/rehoboam.ts",
 		"./static-spaces": "./src/static-spaces.ts",
