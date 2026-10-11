@@ -1,5 +1,11 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	writeFileSync,
+} from "node:fs";
 import {
 	chmod,
 	mkdir,
@@ -43,6 +49,7 @@ import {
 import { createProtectedRuntimeOAuthClient } from "./runtime-oauth-client.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
 import { standardMcpInstallationKey } from "./standard-mcp-input.js";
+import { replaceProtectedStandardMcpMaterials } from "./standard-mcp-installation.js";
 
 const protection = vi.hoisted(() => ({
 	check: vi.fn(),
@@ -764,6 +771,35 @@ it("rejects omitted refresh rotation when protected refresh material drifts", as
 	expect(
 		await readFile(join(f.root, "materials", refreshName as string), "utf8"),
 	).toBe("replacement-refresh-material");
+});
+
+it("restores prior material when the guard expires after the first rename", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const names = await readdir(join(f.root, "materials"));
+	const accessName = names.find((name) => name.endsWith(".access")) as string;
+	const refreshName = names.find((name) => name.endsWith(".refresh")) as string;
+	const accessPath = join(f.root, "materials", accessName);
+	await expect(
+		replaceProtectedStandardMcpMaterials(
+			join(f.root, "materials"),
+			[
+				{ name: accessName, expected: access, next: refreshedAccess },
+				{ name: refreshName, expected: refresh, next: refreshedRefresh },
+			],
+			() => {
+				if (readFileSync(accessPath, "utf8") === refreshedAccess)
+					throw new Error("expired");
+			},
+		),
+	).rejects.toThrow("expired");
+	expect(readFileSync(accessPath, "utf8")).toBe(access);
+	expect(readFileSync(join(f.root, "materials", refreshName), "utf8")).toBe(
+		refresh,
+	);
 });
 
 it("keeps rotated material unavailable after a lost refresh response", async () => {
