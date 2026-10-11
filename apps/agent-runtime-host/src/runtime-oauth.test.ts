@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import {
 	chmod,
 	mkdir,
@@ -725,6 +726,40 @@ it("does not delete a replacement token after revoking the original bytes", asyn
 	expect(
 		await readFile(join(f.root, "materials", accessName as string), "utf8"),
 	).toBe("replacement-access-material");
+});
+
+it("does not send material from a replaced directory", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const materials = join(f.root, "materials");
+	const displaced = join(f.root, "materials.displaced");
+	let moved = false;
+	protection.afterSecretStat = (path) => {
+		if (!moved && path.endsWith(".access")) {
+			moved = true;
+			renameSync(materials, displaced);
+			mkdirSync(materials, { mode: 0o700 });
+			writeFileSync(
+				join(materials, "replacement.access"),
+				"replacement-directory-access",
+			);
+			chmodSync(join(materials, "replacement.access"), 0o400);
+		}
+	};
+	await expect(f.assembly.client.revoke()).rejects.toThrow();
+	expect(
+		f.calls.every(
+			(body) => body.get("token") !== "replacement-directory-access",
+		),
+	).toBe(true);
+	expect(
+		(await readdir(displaced)).filter((name) =>
+			/\.(access|refresh)$/.test(name),
+		),
+	).toHaveLength(2);
 });
 
 it("recovers begin after the verifier was published before the transaction record", async () => {
