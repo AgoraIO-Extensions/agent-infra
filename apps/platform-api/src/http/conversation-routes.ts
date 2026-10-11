@@ -151,6 +151,12 @@ export interface ConversationRoutesDependencies {
 	 * Terminal delivery adds at most two writes (default 2 s); stalls exclude event-loop starvation.
 	 */
 	readonly streamReadTimeoutMs?: number;
+	/**
+	 * Consecutive authorization checks or replay reads that may fail only
+	 * transiently (timeout or dependency unavailable) before an open stream is
+	 * closed, 0–100; default 10. While they fail the stream writes nothing (#1606).
+	 */
+	readonly streamTransientFailureLimit?: number;
 }
 
 type ConversationProjection = ReturnType<
@@ -804,6 +810,15 @@ export function registerConversationRoutes(
 				"Conversation stream intervals must be integers from 1 to 30000 ms",
 			);
 	}
+	const transientFailureLimit = dependencies.streamTransientFailureLimit ?? 10;
+	if (
+		!Number.isInteger(transientFailureLimit) ||
+		transientFailureLimit < 0 ||
+		transientFailureLimit > 100
+	)
+		throw new Error(
+			"Conversation stream transient failure limit must be an integer from 0 to 100",
+		);
 	app.get("/api/v2/me/conversations/recent", (context) =>
 		boundary(context, async (metadata) => {
 			const identity = await resolveIdentity(
@@ -1354,6 +1369,9 @@ export function registerConversationRoutes(
 							if (request.signal.aborted || stream.aborted) abort();
 							let currentIdentity = identity;
 							let checkedAt = performance.now();
+							// The last check or read attempt; paused retries wait from it.
+							let attemptedAt = checkedAt;
+							let transientFailures = 0;
 							const watcher = dependencies.eventWake?.watch(conversationId);
 							const write = async <T>(task: () => Promise<T>): Promise<T> => {
 								try {
@@ -1391,8 +1409,11 @@ export function registerConversationRoutes(
 								)
 									await writeAuthorizationRevoked(output, metadata.traceId);
 							};
-							const check = async () => {
-								if (lifetime.signal.aborted) return false;
+							const check = async (): Promise<
+								"allowed" | "paused" | "closed"
+							> => {
+								if (lifetime.signal.aborted) return "closed";
+								attemptedAt = performance.now();
 								let result: StreamAuthorization;
 								try {
 									result = await streamRead(
@@ -1413,50 +1434,78 @@ export function registerConversationRoutes(
 										reason: "dependency_unavailable",
 									};
 								}
-								if (lifetime.signal.aborted) return false;
+								if (lifetime.signal.aborted) return "closed";
 								if (result.outcome === "closed") {
+									// A slow or unavailable check proves nothing about access:
+									// pause output and retry instead of closing (#1606).
+									if (
+										result.reason === "dependency_unavailable" &&
+										transientFailure()
+									)
+										return "paused";
 									await terminate(result.reason);
-									return false;
+									return "closed";
 								}
 								currentIdentity = result.identity;
-								checkedAt = performance.now();
-								return true;
+								checkedAt = attemptedAt;
+								return "allowed";
+							};
+							/**
+							 * Counts one transient check or read failure; false once the
+							 * bound is spent. Only a successful replay read resets it, so
+							 * neither a failing check nor a failing read can pause forever.
+							 */
+							const transientFailure = () => {
+								transientFailures++;
+								return transientFailures <= transientFailureLimit;
 							};
 							try {
-								let replay: ConversationReplayResultV1 = initialReplay;
-								let cursor = replay.resumeCursor;
+								// A batch read but not yet written; it is written only after
+								// a current authorization check succeeds (#1561, #1606).
+								let pending: ConversationReplayResultV1 | undefined =
+									initialReplay;
+								let cursor = initialReplay.resumeCursor;
 								while (!lifetime.signal.aborted) {
-									const batch = replay;
-									if (batch.outcome === "reload") {
-										if (!(await check())) return;
-										await writeSseMessage(
-											output,
-											ConversationSseMessageV1Schema.parse({
-												schemaVersion: 1,
-												kind: "control",
-												type: "timeline.reload",
-												reason: batch.reason,
-												resumeCursor: batch.resumeCursor,
-											}),
-										);
-										return;
-									}
-									// One current authorization check covers a batch written
-									// back to back; a failed check writes none of it (#1561).
-									if (batch.events.length > 0 && !(await check())) return;
-									for (const persisted of batch.events) {
-										const message = eventProjection(persisted);
-										if (v2) await writeSseMessageV2(output, message);
-										// V1 skips V2 facts but advances the durable cursor.
-										else if (message.schemaVersion === 1)
-											await writeSseMessage(output, message);
-										cursor = persisted.conversationCursor;
+									if (pending) {
+										const batch = pending;
+										const state =
+											batch.outcome === "reload" || batch.events.length > 0
+												? await check()
+												: "allowed";
+										if (state === "closed") return;
+										if (state === "allowed") {
+											pending = undefined;
+											if (batch.outcome === "reload") {
+												await writeSseMessage(
+													output,
+													ConversationSseMessageV1Schema.parse({
+														schemaVersion: 1,
+														kind: "control",
+														type: "timeline.reload",
+														reason: batch.reason,
+														resumeCursor: batch.resumeCursor,
+													}),
+												);
+												return;
+											}
+											for (const persisted of batch.events) {
+												const message = eventProjection(persisted);
+												if (v2) await writeSseMessageV2(output, message);
+												// V1 skips V2 facts but advances the durable cursor.
+												else if (message.schemaVersion === 1)
+													await writeSseMessage(output, message);
+												cursor = persisted.conversationCursor;
+											}
+										}
 									}
 									// A commit wakeup reads sooner; polling remains the guarantee.
-									// Waits never extend past the next authorization deadline.
+									// Waits never extend past the next authorization deadline,
+									// and a paused stream retries one interval after its attempt.
 									const waitMs = Math.max(
 										1,
-										Math.ceil(pollIntervalMs - (performance.now() - checkedAt)),
+										Math.ceil(
+											pollIntervalMs - (performance.now() - attemptedAt),
+										),
 									);
 									const woken = watcher
 										? await watcher.wait(waitMs, lifetime.signal)
@@ -1466,28 +1515,43 @@ export function registerConversationRoutes(
 												});
 												return "timeout" as const;
 											})();
+									if (lifetime.signal.aborted) return;
+									// A paused batch is retried with its own check.
+									if (pending) continue;
 									if (
-										(woken === "timeout" ||
-											performance.now() - checkedAt >= pollIntervalMs) &&
-										!(await check())
-									)
+										woken === "timeout" ||
+										performance.now() - checkedAt >= pollIntervalMs
+									) {
+										const state = await check();
+										if (state === "closed") return;
+										if (state === "paused") continue;
+									}
+									let next: ConversationReplayResultV1 | undefined;
+									try {
+										next = await streamRead(
+											() =>
+												dependencies.query.replay(
+													scope(currentIdentity),
+													conversationId,
+													{ kind: "cursor", value: cursor },
+													lifetime.signal,
+												),
+											readTimeoutMs,
+											lifetime.signal,
+										);
+									} catch {
+										if (lifetime.signal.aborted) return;
+										attemptedAt = performance.now();
+										if (transientFailure()) continue;
+										await terminate("dependency_unavailable");
 										return;
-									const next = await streamRead(
-										() =>
-											dependencies.query.replay(
-												scope(currentIdentity),
-												conversationId,
-												{ kind: "cursor", value: cursor },
-												lifetime.signal,
-											),
-										readTimeoutMs,
-										lifetime.signal,
-									);
+									}
 									if (!next) {
 										await terminate("resource_unavailable");
 										return;
 									}
-									replay = next;
+									transientFailures = 0;
+									pending = next;
 								}
 							} catch {
 								await terminate("dependency_unavailable");

@@ -24,6 +24,7 @@ export type ConversationTimelineState = {
 		| "idle"
 		| "loading"
 		| "ready"
+		| "reconnecting"
 		| "disconnected"
 		| "unavailable"
 		| "denied";
@@ -41,7 +42,18 @@ type ReadingSession = {
 	seenCursors: Set<string>;
 	needsHistory: boolean;
 	reloadCursor?: string;
+	/** Automatic reconnects since the stream last proved healthy (#1606). */
+	reconnectAttempts?: number;
+	reconnectTimer?: ReturnType<typeof setTimeout>;
 };
+
+/** Delays of automatic stream reconnects after a transient end (#1606). */
+const defaultReconnectDelaysMs: readonly number[] = [
+	500, 1_000, 2_000, 4_000, 8_000,
+];
+/** A stream the server accepted and kept open this long was healthy; its end
+ * starts the automatic attempts afresh. */
+const defaultHealthyStreamMs = 10_000;
 
 function emptyState(): ConversationTimelineState {
 	return {
@@ -68,12 +80,17 @@ function reduceTimelineEvents(
 	return added.length === 0 ? current : [...current, ...added];
 }
 
-/** Read-only, per-page consumer. Abort on unmount or identity changes. Reconnect
- * is explicit and only resumes reads; it never replays an execution command. */
+/** Read-only, per-page consumer. Abort on unmount or identity changes. A
+ * transient stream end reconnects automatically a bounded number of times, then
+ * reconnect is explicit; both only resume reads and never replay a command. */
 export function createConversationTimeline({
 	client = defaultClient,
+	reconnectDelaysMs = defaultReconnectDelaysMs,
+	healthyStreamMs = defaultHealthyStreamMs,
 }: {
 	client?: Client;
+	reconnectDelaysMs?: readonly number[];
+	healthyStreamMs?: number;
 } = {}) {
 	let state = emptyState();
 	let current: ReadingSession | undefined;
@@ -84,9 +101,30 @@ export function createConversationTimeline({
 		for (const listener of listeners) listener();
 	}
 
+	function cancelReconnect(session: ReadingSession | undefined) {
+		if (!session?.reconnectTimer) return;
+		clearTimeout(session.reconnectTimer);
+		session.reconnectTimer = undefined;
+	}
+
+	/** Schedules the next automatic stream read; false once the delays are spent. */
+	function scheduleReconnect(session: ReadingSession) {
+		const attempt = session.reconnectAttempts ?? 0;
+		const delay = reconnectDelaysMs[attempt];
+		if (delay === undefined) return false;
+		session.reconnectAttempts = attempt + 1;
+		publish({ ...state, status: "reconnecting", failure: null });
+		session.reconnectTimer = setTimeout(() => {
+			session.reconnectTimer = undefined;
+			if (current === session) void readStream(session);
+		}, delay);
+		return true;
+	}
+
 	function stop() {
 		const previous = current;
 		current = undefined;
+		cancelReconnect(previous);
 		previous?.historyRequest?.abort();
 		previous?.stream?.abort();
 	}
@@ -120,6 +158,7 @@ export function createConversationTimeline({
 
 	async function readHistory(session: ReadingSession) {
 		if (current !== session) return;
+		cancelReconnect(session);
 		session.stream?.abort();
 		session.historyRequest?.abort();
 		const request = new AbortController();
@@ -171,6 +210,7 @@ export function createConversationTimeline({
 			session.cursor === null ? [] : [session.cursor],
 		);
 		session.needsHistory = false;
+		session.reconnectAttempts = 0;
 		publish({
 			...state,
 			status: "ready",
@@ -183,9 +223,13 @@ export function createConversationTimeline({
 
 	async function readStream(session: ReadingSession) {
 		if (current !== session) return;
+		cancelReconnect(session);
 		session.stream?.abort();
 		const request = new AbortController();
 		session.stream = request;
+		// Set once the server accepts the stream; a request that is slow to fail
+		// never counts as a healthy stream (#1606).
+		const opened: { at?: number } = {};
 		const active = () => current === session && !request.signal.aborted;
 		let streamFailure: ConversationReadFailure | undefined;
 		try {
@@ -218,6 +262,10 @@ export function createConversationTimeline({
 					}
 					if (!response.body)
 						throw new ConversationReadError({ kind: "invalid" });
+					opened.at = performance.now();
+					// The server accepted the reconnect after re-authorizing it.
+					if (active() && state.status === "reconnecting")
+						publish({ ...state, status: "ready", failure: null });
 					return response;
 				},
 				onSseError: (error) => {
@@ -256,23 +304,45 @@ export function createConversationTimeline({
 					throw new ConversationReadError({ kind: "invalid" });
 				session.seenCursors.add(cursor);
 				session.cursor = cursor;
+				// A delivered event proves the stream healthy again.
+				session.reconnectAttempts = 0;
 				publish({ ...state, status: "ready", events, failure: null });
 			}
 			if (!active()) return;
+			if (streamEnded(session, opened.at, streamFailure)) return;
 			if (streamFailure) fail(session, streamFailure);
 			else publish({ ...state, status: "disconnected" });
 		} catch (error) {
 			if (active()) {
-				fail(
-					session,
+				const failure =
 					error instanceof ConversationReadError
 						? error.failure
-						: { kind: "network" },
-				);
+						: ({ kind: "network" } as const);
+				if (!streamEnded(session, opened.at, failure)) fail(session, failure);
 			}
 		} finally {
 			request.abort();
 		}
+	}
+
+	/**
+	 * A stream closed by the server without revocation, a network drop or a
+	 * temporarily unavailable service reconnects from the last consumed cursor.
+	 * Authorization, HTTP and invalid-data failures never do.
+	 */
+	function streamEnded(
+		session: ReadingSession,
+		acceptedAt: number | undefined,
+		failure: ConversationReadFailure | undefined,
+	) {
+		if (failure && failure.kind !== "network" && failure.kind !== "service")
+			return false;
+		if (
+			acceptedAt !== undefined &&
+			performance.now() - acceptedAt >= healthyStreamMs
+		)
+			session.reconnectAttempts = 0;
+		return scheduleReconnect(session);
 	}
 
 	return {
@@ -302,6 +372,8 @@ export function createConversationTimeline({
 		async reconnect() {
 			const session = current;
 			if (!session) return;
+			cancelReconnect(session);
+			session.reconnectAttempts = 0;
 			if (session.needsHistory) await readHistory(session);
 			else {
 				publish({ ...state, status: "ready", failure: null });
@@ -311,6 +383,7 @@ export function createConversationTimeline({
 		disconnect() {
 			const session = current;
 			if (!session) return;
+			cancelReconnect(session);
 			session.historyRequest?.abort();
 			session.stream?.abort();
 			publish({

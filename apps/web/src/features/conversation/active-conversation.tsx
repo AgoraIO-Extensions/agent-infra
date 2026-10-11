@@ -249,7 +249,8 @@ export function ActiveConversation({
 		denied ||
 		runtimeSelectionUnavailable ||
 		conversation?.status === "unavailable" ||
-		timeline.status !== "ready";
+		// A stream reconnecting on its own keeps the composer usable (#1606).
+		(timeline.status !== "ready" && timeline.status !== "reconnecting");
 	const selectionDirty =
 		(modelId !== undefined &&
 			modelId !== conversation?.selectedModelOptionId) ||
@@ -327,6 +328,9 @@ export function ActiveConversation({
 					</Button>
 				</div>
 				{timeline.status === "loading" && <p role="status">正在读取会话…</p>}
+				{timeline.status === "reconnecting" && (
+					<p role="status">会话连接中断，正在自动重新连接，草稿会保留。</p>
+				)}
 				{(timeline.status === "disconnected" ||
 					timeline.status === "unavailable") && (
 					<Alert className="space-y-2 bg-muted">
