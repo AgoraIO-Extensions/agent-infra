@@ -99,6 +99,159 @@ it("projects an admitted credential-free V3 record through V4 without rebinding 
 		}),
 	).toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
 });
+
+it.each([
+	["claude", "claude", "anthropic-messages-v1", "api-key"],
+	["opencode", "acp", "anthropic-messages-v1", "bearer"],
+	["pi", "pi", "anthropic-messages-v1", "api-key"],
+] as const)(
+	"projects keyless V4 model configuration for the %s template",
+	async (templateId, driver, protocol, authentication) => {
+		const configuration = decodeAgentConfigurationRecordV3({
+			...configurationV2,
+			schemaVersion: 3,
+			source: { ...configurationV2.source, templateId },
+			modelConfiguration: {
+				catalogRevision: "catalog-a",
+				defaultOptionId: "primary",
+				defaultReasoningLevel: "high",
+				options: [
+					{
+						optionId: "primary",
+						endpointId: "endpoint-a",
+						modelId: "model-a",
+						reasoningLevels: ["high"],
+					},
+				],
+			},
+		});
+		const endpoint = {
+			...catalogFixture().endpoints[0],
+			protocol,
+			...(protocol === "anthropic-messages-v1" ? { authentication } : {}),
+		};
+		const standardTemplateBinding = {
+			templateId,
+			imageDigest: configuration.source.imageDigest,
+			driver,
+			protocol,
+		};
+		const projected = await projectRuntimeModelConfigurationV4({
+			configuration,
+			catalog: createFakeModelCatalogAdapterV1({
+				...catalogFixture(),
+				endpoints: [endpoint],
+			}),
+			standardTemplateBinding,
+			signal: AbortSignal.timeout(1000),
+		});
+		expect(validateRuntimeModelProjectionV4(projected, configuration)).toEqual(
+			projected,
+		);
+		const injected = RuntimeModelConfigurationV4Schema.parse(
+			JSON.parse(runtimeModelInjectionV4(projected).configuration),
+		);
+		expect(injected.modelOptions[0]).toMatchObject({
+			modelOptionId: "primary",
+			model: "model-a",
+			protocol,
+			authentication,
+		});
+		expect(JSON.stringify(projected)).not.toContain("credential");
+	},
+);
+
+it("rejects a keyless V4 template Driver bound to the wrong model protocol", async () => {
+	const configuration = decodeAgentConfigurationRecordV3({
+		...configurationV2,
+		schemaVersion: 3,
+		source: { ...configurationV2.source, templateId: "claude" },
+		modelConfiguration: {
+			catalogRevision: "catalog-a",
+			defaultOptionId: "primary",
+			defaultReasoningLevel: "high",
+			options: [
+				{
+					optionId: "primary",
+					endpointId: "endpoint-a",
+					modelId: "model-a",
+					reasoningLevels: ["high"],
+				},
+			],
+		},
+	});
+	await expect(
+		projectRuntimeModelConfigurationV4({
+			configuration,
+			catalog: createFakeModelCatalogAdapterV1({
+				...catalogFixture(),
+				endpoints: [
+					{
+						...catalogFixture().endpoints[0],
+						protocol: "anthropic-messages-v1",
+						authentication: "api-key",
+					},
+				],
+			}),
+			standardTemplateBinding: {
+				templateId: "claude",
+				imageDigest: configuration.source.imageDigest,
+				driver: "codex",
+				protocol: "anthropic-messages-v1",
+			} as unknown as StandardTemplateModelBindingV1,
+			signal: AbortSignal.timeout(1000),
+		}),
+	).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+});
+
+it("rejects non-admitted model or reasoning levels for a non-Codex V4 Driver", async () => {
+	const configuration = decodeAgentConfigurationRecordV3({
+		...configurationV2,
+		schemaVersion: 3,
+		source: { ...configurationV2.source, templateId: "pi" },
+		modelConfiguration: {
+			catalogRevision: "catalog-a",
+			defaultOptionId: "primary",
+			defaultReasoningLevel: "high",
+			options: [
+				{
+					optionId: "primary",
+					endpointId: "endpoint-a",
+					modelId: "not-allowed",
+					reasoningLevels: ["high"],
+				},
+			],
+		},
+	});
+	await expect(
+		projectRuntimeModelConfigurationV4({
+			configuration,
+			catalog: createFakeModelCatalogAdapterV1({
+				...catalogFixture(),
+				endpoints: [
+					{
+						...catalogFixture().endpoints[0],
+						protocol: "anthropic-messages-v1",
+						authentication: "api-key",
+						allowedModels: ["other-model"],
+						capabilities: {
+							...catalogFixture().endpoints[0]?.capabilities,
+							reasoningLevels: ["medium"],
+						},
+					},
+				],
+			}),
+			standardTemplateBinding: {
+				templateId: "pi",
+				imageDigest: configuration.source.imageDigest,
+				driver: "pi",
+				protocol: "anthropic-messages-v1",
+			},
+			signal: AbortSignal.timeout(1000),
+		}),
+	).rejects.toThrow(/^MODEL_CONFIGURATION_UNAVAILABLE$/);
+});
+
 const standardBinding = {
 	templateId: "arbitrary-template-a",
 	imageDigest: `sha256:${"a".repeat(64)}`,

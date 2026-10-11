@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
 	type AgentWorkloadDesiredV1,
 	type SecretActivationFenceV1,
@@ -12,8 +13,10 @@ import {
 	type RuntimeModelProjectionV4,
 	runtimeModelInjectionV1,
 	runtimeModelInjectionV4,
+	type StandardTemplateModelBindingV1,
 	validateRuntimeModelProjectionV1,
 	validateRuntimeModelProjectionV4,
+	validateStandardTemplateModelBindingsV1,
 } from "@agent-infra/model-catalog";
 import type {
 	KubernetesObject,
@@ -130,6 +133,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	readonly modelProjection?:
 		| RuntimeModelProjectionV1
 		| RuntimeModelProjectionV4;
+	/** Candidate-owned trusted tuple; never a global policy Driver. */
+	readonly standardTemplateBinding?: StandardTemplateModelBindingV1;
 	readonly probe: (input: {
 		readonly desired: AgentWorkloadDesiredV1;
 		readonly serviceOrigin: string;
@@ -153,6 +158,21 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			: options.modelProjection.schemaVersion === 4
 				? validateRuntimeModelProjectionV4(options.modelProjection)
 				: validateRuntimeModelProjectionV1(options.modelProjection);
+	const standardTemplateBinding =
+		options.standardTemplateBinding === undefined
+			? undefined
+			: validateStandardTemplateModelBindingsV1([
+					options.standardTemplateBinding,
+				])[0];
+	if (
+		standardTemplateBinding !== undefined &&
+		(!modelProjection ||
+			!isDeepStrictEqual(
+				modelProjection.standardTemplateBinding,
+				standardTemplateBinding,
+			))
+	)
+		throw new WorkloadKubernetesError("policy");
 	const modelInjection = modelProjection
 		? modelProjection.schemaVersion === 4
 			? runtimeModelInjectionV4(modelProjection)
@@ -201,6 +221,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		policy,
 		modelProjection,
 		modelInjection,
+		standardTemplateBinding,
 		egress,
 	});
 
