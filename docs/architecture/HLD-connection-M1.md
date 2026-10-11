@@ -80,7 +80,7 @@
 | 内部网站 | Jira | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
 | 内部网站 | Bitbucket | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
 | 内部网站 | Jenkins | 纳入（只读） | 每个公司 Jenkins deployment 使用独立 Provider ID 和 ProviderRelease，共享审核过的只读 Adapter；pilot runtime 仅开放 `jenkins-release` |
-| 内部网站 | StaticSpaces | 上海单用户受监督 pilot 已批准；广泛生产未批准 | 按 3.2.2 与 4.3.1 的具名边界发布；v1 普通目录仍保持未验证关闭 |
+| 内部网站 | StaticSpaces | 上海具名长期受限接入已批准；广泛生产未批准 | 按 3.2.2 与 4.3.2 的独立版本边界发布；v1 普通目录和已关闭 pilot 不重开 |
 
 本表属于 **[设计决策]**，不把不同产品或 deployment 合并为共享 Credential、endpoint 或授权范围。每个纳入项仍必须分别通过 13.4 的 Provider Onboarding；Microsoft Outlook 在状态从“待定”变更前不是 M1 交付依赖。
 
@@ -388,8 +388,8 @@ WRITE 不支持原生幂等，复用 Connection 入站幂等与 Call/Effect/Disp
 本实现批准不关闭 G-02/G-03。真实 Token acceptance、identity、reauth/revoke、错误、限流、
 隔离 READ/WRITE 与 response-lost、供应链和安全评审均按 13.4 完成后才能发布。
 `staticSpacesVerificationMatrix` 缺少真实证据时，启动目录不包含该 ProviderRelease，
-不得用环境变量、fixture 或兼容开关绕过。4.3.1 批准的独立受限 pilot profile 按其具名
-批准及服务端边界准入，不把风险接受转换成 v1 真实验收。删除、成员/组授权、ACL 管理、用户创建、browser
+不得用环境变量、fixture 或兼容开关绕过。4.3.2 的独立长期受限 profile 按其具名
+批准及服务端边界准入，不把风险接受转换成 v1 真实验收；4.3.1 已关闭 pilot 不重开。删除、成员/组授权、ACL 管理、用户创建、browser
 runtime state 和订阅管理不在首期范围。
 
 ### 3.3 非目标
@@ -445,7 +445,7 @@ LDAP 或 MCP OAuth 安全参数的部署不得启动业务路由。
 | ID | 待确认项 | 未关闭时行为 | Owner |
 | --- | --- | --- | --- |
 | G-01 | 公司 LDAP 精确契约、Connection OAuth Authorization Server、目标 Direct MCP Client 版本的 MCP/OAuth profile 和 delegated workload identity | 除 4.3 节明确批准的受监督 HCI pilot 外，身份相关业务路由不启动，不声明对应客户端受支持，也不发布 Direct 登录 | Identity/Security |
-| G-02 | Confluence/Jira/Jenkins 的 exact deployment 与认证、GitHub/Bitbucket 的完整 scope 和写操作测试账号、StaticSpaces 3.2.2 的个人 Token 与七项 Action onboarding、各 Provider 错误/限流/幂等契约，以及 Outlook 是否纳入 | 除 4.3 节 pilot 内的受监督发布外，缺少对应证据的 ProviderRelease 或写 Action 不得进入生产 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
+| G-02 | Confluence/Jira/Jenkins 的 exact deployment 与认证、GitHub/Bitbucket 的完整 scope 和写操作测试账号、StaticSpaces 3.2.2 的个人 Token 与七项 Action onboarding、各 Provider 错误/限流/幂等契约，以及 Outlook 是否纳入 | 除 4.3.1/4.3.2 明确批准的具名受限发布外，缺少对应证据的 ProviderRelease 或写 Action 不得进入生产 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
 | G-03 | `UNCERTAIN` 用户文案、对账责任和支持流程 | 写 Action 只在测试环境开放 | Product/Support |
 | G-04 | 公司 KMS、网络出口、审计保留和对象存储产品 | 除 4.3 节已接受风险的具名 pilot 外，Credential 和 Provider 执行业务路由不启动；缺少正式 Adapter 时始终启动失败 | Security/SRE |
 | G-05 | Shared Connection 永久 disable 或可恢复语义 | 禁止实现不可逆 tombstone | Product |
@@ -496,6 +496,15 @@ Connection Owner 于 2026-10-10 在
 或未通过既有身份/授权/持久执行保护时不得激活。不得改写 v1 归档或把其验证矩阵伪装为通过。
 独立 pilot 的公司连接审批、Consent/Grant 和每次 dispatch 必须校验服务端边界；失效或未知效果
 立即关闭本 Provider 新准入，已有未完成效果与已登记路由继续按生命周期规则保留及对账。
+
+### 4.3.2 StaticSpaces 现有 API 受限接入
+
+Owner 已批准不改 StaticSpaces 上游的交付方向，具体范围、现有 API 限制、UNCERTAIN 不重放、
+残余风险和新版本激活政策进入
+[现有 API 受限接入 ADR](../adr/ADR-connection-static-spaces-existing-api-restricted.md)。
+Owner 于 2026-10-11 明确批准该 ADR 的长期具名受限方案与残余风险并授权实现；新版本仍须
+通过实现/发布门禁和显式授权。该批准不重开或延长 4.3.1 已关闭 pilot，不将缺失上游能力
+改写为通过，也不把新方案标记为 `LIVE_VERIFIED`。
 
 ## 5. 方案比较与选型
 
