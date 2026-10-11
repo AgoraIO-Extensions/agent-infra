@@ -395,7 +395,9 @@ function ConfirmationPanel({
 		return (
 			<BlockedPanel message="确认绑定已过期或无法核验，当前不会执行外部副作用。" />
 		);
-	const handoffInvalid = handoff !== undefined && !isSafeHandoff(handoff);
+	const handoffInvalid =
+		handoff !== undefined &&
+		(!isSafeHandoff(handoff) || !sameBinding(handoff.binding, currentBinding));
 	const handoffBlocked =
 		handoffInvalid ||
 		(handoff !== undefined &&
