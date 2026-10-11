@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type FileHandle } from "node:fs";
 import { open, readdir, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -51,6 +51,70 @@ interface Transaction {
 	expiresAt: number;
 	requestDigest: string;
 	tokenExpiresAt?: number;
+}
+
+async function readProtectedOAuthMaterial(
+	directory: FileHandle,
+	directoryPath: string,
+	name: string,
+) {
+	assertStandardMcpProcessProtection();
+	const file = await open(
+		protectedStandardMcpPath(directory, directoryPath, name),
+		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+	);
+	try {
+		assertStandardMcpProcessProtection();
+		const before = await file.stat();
+		if (
+			!before.isFile() ||
+			before.uid !== process.getuid?.() ||
+			before.nlink !== 1 ||
+			![0o400, 0o600].includes(before.mode & 0o777) ||
+			before.size < 1 ||
+			before.size > 4096
+		)
+			unavailable();
+		const bytes = Buffer.alloc(before.size + 1);
+		try {
+			let length = 0;
+			while (length < bytes.length) {
+				assertStandardMcpProcessProtection();
+				const { bytesRead } = await file.read(
+					bytes,
+					length,
+					bytes.length - length,
+					length,
+				);
+				if (!bytesRead) break;
+				length += bytesRead;
+			}
+			const after = await file.stat();
+			if (
+				length !== before.size ||
+				before.dev !== after.dev ||
+				before.ino !== after.ino ||
+				before.size !== after.size ||
+				before.mtimeMs !== after.mtimeMs ||
+				before.ctimeMs !== after.ctimeMs ||
+				after.uid !== before.uid ||
+				after.nlink !== 1 ||
+				after.mode !== before.mode
+			)
+				unavailable();
+			await assertProtectedStandardMcpDirectoryCurrent(
+				directoryPath,
+				directory,
+			);
+			return new TextDecoder("utf-8", { fatal: true }).decode(
+				bytes.subarray(0, length),
+			);
+		} finally {
+			bytes.fill(0);
+		}
+	} finally {
+		await file.close();
+	}
 }
 function digest(value: unknown) {
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -275,10 +339,10 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					? "refresh_token"
 					: "access_token";
 				try {
-					const token = await readProtectedStandardMcpBytes(
+					const token = await readProtectedOAuthMaterial(
+						directory,
 						materials,
 						name,
-						4096,
 					);
 					await revokeStandardOAuthToken({
 						configuration,
@@ -293,7 +357,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 						directory,
 					);
 					if (
-						(await readProtectedStandardMcpBytes(materials, name, 4096)) !==
+						(await readProtectedOAuthMaterial(directory, materials, name)) !==
 						token
 					)
 						throw new Error("OAuth material changed during revoke");
