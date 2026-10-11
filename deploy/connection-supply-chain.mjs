@@ -152,17 +152,25 @@ export function validateEvidenceBytes(evidence, subject, expected) {
   return { manifestBytes, sbomBytes, manifestBundle: bytes("manifestBundle"), sbomBundle: bytes("sbomBundle") };
 }
 
+export function verifiedImageDigest(signatures, subject) {
+  certificateArguments(subject);
+  requireValue(Array.isArray(signatures) && signatures.length > 0, "Unsigned image");
+  const references = [subject.image, `${subject.image}:${subject.tag}`];
+  const digests = new Set(signatures.map((signature) => {
+    requireValue(references.includes(signature.critical?.identity?.["docker-reference"]), "Wrong signed image repository");
+    const value = signature.critical?.image?.["docker-manifest-digest"];
+    requireValue(digest.test(value), "Invalid signed image digest");
+    return value;
+  }));
+  requireValue(digests.size === 1, "Ambiguous signed image");
+  return [...digests][0];
+}
+
 export function resolveVerifiedSubject(application, version, sourceSha) {
   const subject = { version: 1, repository, repositoryId, application, tag: version, sourceSha, image: `${registry}/${application}` };
   const binary = trustedCosign();
   const signatures = JSON.parse(runCosign(binary, ["verify", ...certificateArguments(subject), `${subject.image}:${version}`]));
-  requireValue(Array.isArray(signatures) && signatures.length > 0, "Unsigned image");
-  const digests = new Set(signatures.map((signature) => {
-    requireValue(signature.critical?.identity?.["docker-reference"] === subject.image, "Wrong signed image repository");
-    return signature.critical?.image?.["docker-manifest-digest"];
-  }));
-  requireValue(digests.size === 1, "Ambiguous signed image");
-  subject.digest = [...digests][0]; validateSubject(subject);
+  subject.digest = verifiedImageDigest(signatures, subject); validateSubject(subject);
   return subject;
 }
 
