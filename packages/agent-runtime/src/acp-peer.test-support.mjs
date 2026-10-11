@@ -56,6 +56,24 @@ const connection = new AgentSideConnection(
 				join(process.cwd(), "session.json"),
 				JSON.stringify({ sessionId, count }),
 			);
+			if (process.env.ACP_TEST_MODE === "available-commands")
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "available_commands_update",
+						availableCommands: [
+							{
+								name: "research_codebase",
+								description: "Research the current repository",
+								input: { hint: "topic" },
+							},
+							{
+								name: "compact",
+								description: "Compact the current session",
+							},
+						],
+					},
+				});
 			return { sessionId, configOptions: configOptions() };
 		},
 		loadSession: async (params) => {

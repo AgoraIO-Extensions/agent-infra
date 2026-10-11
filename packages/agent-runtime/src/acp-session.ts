@@ -9,6 +9,10 @@ import {
 	type SessionNotification,
 	type ToolCall,
 } from "@agentclientprotocol/sdk";
+import {
+	type AcpNativeCommandDirectoryV1,
+	createAcpNativeCommandDirectoryV1,
+} from "./acp-native-command.js";
 import { spawnAcpProcess } from "./acp-process.js";
 
 import { acpStream } from "./acp-stream.js";
@@ -41,6 +45,13 @@ export async function openAcpSession(options: {
 	const { child, exited } = native;
 	let updates = Promise.resolve();
 	let loading = true;
+	let commandDirectory: AcpNativeCommandDirectoryV1 | undefined;
+	let commandDirectoryUnavailable = false;
+	const pendingCommandUpdates = new Map<string, AcpNativeCommandDirectoryV1>();
+	let commandDirectoryReady: () => void = () => {};
+	const commandsReady = new Promise<void>((resolve) => {
+		commandDirectoryReady = resolve;
+	});
 	const tools = new Map<
 		string,
 		Pick<ToolCall, "toolCallId" | "kind" | "rawInput">
@@ -48,8 +59,43 @@ export async function openAcpSession(options: {
 	let activeSessionId: string | undefined;
 	const connection = client({ name: "agent-infra" })
 		.onNotification("session/update", async ({ params }) => {
-			if (loading || params.sessionId !== activeSessionId) return;
 			const update = params.update;
+			if (update.sessionUpdate === "available_commands_update") {
+				if (activeSessionId === undefined) {
+					if (commandDirectoryUnavailable) return;
+					try {
+						if (
+							!pendingCommandUpdates.has(params.sessionId) &&
+							pendingCommandUpdates.size >= 16
+						)
+							throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+						pendingCommandUpdates.set(
+							params.sessionId,
+							createAcpNativeCommandDirectoryV1({
+								nativeId: params.sessionId,
+								commands: update.availableCommands,
+							}),
+						);
+					} catch {
+						pendingCommandUpdates.clear();
+						commandDirectoryUnavailable = true;
+						commandDirectoryReady();
+					}
+					return;
+				}
+				if (params.sessionId !== activeSessionId) return;
+				try {
+					commandDirectory = createAcpNativeCommandDirectoryV1({
+						nativeId: params.sessionId,
+						commands: update.availableCommands,
+					});
+				} catch {
+					commandDirectoryUnavailable = true;
+				}
+				commandDirectoryReady();
+				return;
+			}
+			if (loading || params.sessionId !== activeSessionId) return;
 			if (
 				update.sessionUpdate === "tool_call" ||
 				update.sessionUpdate === "tool_call_update"
@@ -98,6 +144,8 @@ export async function openAcpSession(options: {
 	let closing: Promise<void> | undefined;
 	const close = () => {
 		closing ??= (async () => {
+			commandDirectoryUnavailable = true;
+			commandDirectoryReady();
 			connection.close();
 			await native.close();
 			await options.launch.close?.();
@@ -140,6 +188,11 @@ export async function openAcpSession(options: {
 		let configOptions = session.configOptions ?? [];
 		activeSessionId = nativeId;
 		loading = false;
+		if (pendingCommandUpdates.has(nativeId)) {
+			commandDirectory = pendingCommandUpdates.get(nativeId);
+			pendingCommandUpdates.delete(nativeId);
+			commandDirectoryReady();
+		}
 		return {
 			nativeId,
 			modelSelection: () => {
@@ -210,6 +263,43 @@ export async function openAcpSession(options: {
 				});
 				await updates;
 				return response;
+			},
+			async discoverCommands(input: {
+				readonly signal: AbortSignal;
+				readonly expiresAt: number;
+				readonly allowedRoots: readonly string[];
+			}) {
+				if (
+					input.signal.aborted ||
+					input.expiresAt <= Date.now() ||
+					commandDirectoryUnavailable
+				)
+					throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+				if (!commandDirectory) {
+					const remaining = input.expiresAt - Date.now();
+					let timer: ReturnType<typeof setTimeout> | undefined;
+					let abort: (() => void) | undefined;
+					try {
+						const interrupted = new Promise<void>((resolve) => {
+							const onAbort = () => resolve();
+							abort = onAbort;
+							input.signal.addEventListener("abort", onAbort, { once: true });
+							timer = setTimeout(onAbort, remaining);
+						});
+						await Promise.race([commandsReady, interrupted]);
+					} finally {
+						if (timer) clearTimeout(timer);
+						if (abort) input.signal.removeEventListener("abort", abort);
+					}
+				}
+				if (
+					input.signal.aborted ||
+					input.expiresAt <= Date.now() ||
+					commandDirectoryUnavailable ||
+					!commandDirectory
+				)
+					throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+				return commandDirectory;
 			},
 			cancel: () =>
 				connection.agent.notify("session/cancel", { sessionId: nativeId }),

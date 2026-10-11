@@ -41,6 +41,78 @@ it("discovers grouped native models, reads the current choice, and rejects choic
 	}
 });
 
+it("captures bounded ACP available command updates for the live session", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "acp-commands-"));
+	await mkdir(join(cwd, "workspace"));
+	const session = await openAcpSession({
+		directory: cwd,
+		cwd: join(cwd, "workspace"),
+		launch: {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "available-commands" },
+		},
+		update: async () => {},
+	});
+	try {
+		await expect(
+			session.discoverCommands?.({
+				signal: new AbortController().signal,
+				expiresAt: Date.now() + 5_000,
+				allowedRoots: [],
+			}),
+		).resolves.toMatchObject({
+			nativeId: session.nativeId,
+			commands: [
+				{
+					name: "compact",
+					description: "Compact the current session",
+					source: "acp",
+				},
+				{
+					name: "research_codebase",
+					argumentHint: "topic",
+					source: "acp",
+				},
+			],
+		});
+	} finally {
+		await session.close();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+it("fails closed when the ACP session is retired", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "acp-command-retire-"));
+	await mkdir(join(cwd, "workspace"));
+	const session = await openAcpSession({
+		directory: cwd,
+		cwd: join(cwd, "workspace"),
+		launch: {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "available-commands" },
+		},
+		update: async () => {},
+	});
+	await session.close();
+	try {
+		await expect(
+			session.discoverCommands?.({
+				signal: new AbortController().signal,
+				expiresAt: Date.now() + 5_000,
+				allowedRoots: [],
+			}),
+		).rejects.toThrow("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 it("filters foreign-session text and tool notifications before the Driver callback", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "acp-session-binding-"));
 	await mkdir(join(cwd, "workspace"));
