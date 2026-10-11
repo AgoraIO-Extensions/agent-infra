@@ -32,6 +32,7 @@ import { createPlatformApp } from "../../platform-api/src/app.js";
 import { assemblePlatformApi } from "../../platform-api/src/assembly.js";
 import {
 	workloadDesiredFixture,
+	workloadRegistryFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createWorkerKubernetesClientV1 } from "./kubernetes-client.js";
@@ -845,9 +846,8 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 			const workerLogs: string[] = [];
 			try {
 				await migratePlatformDatabase(database);
-				const imageDigest = process.env.WORKLOAD_KIND_HOST_IMAGE;
-				if (!imageDigest)
-					throw new Error("WORKLOAD_KIND_HOST_IMAGE is required");
+				const imageDigest = process.env.WORKLOAD_KIND_IMAGE_A;
+				if (!imageDigest) throw new Error("WORKLOAD_KIND_IMAGE_A is required");
 				const { publicKey } = generateKeyPairSync("ed25519");
 				const grantPublicKey = publicKey
 					.export({ type: "spki", format: "pem" })
@@ -1035,7 +1035,14 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 							serviceTokenSecret: { name: tokenName, key: "token" },
 						},
 					},
-					registry: seed.workerOptions.registry,
+					registry: workloadRegistryFixture({
+						schemaVersion: 1,
+						interactionMode: "platform-adapter",
+						protocol: "acp",
+						service: { port: 8080 },
+						health: { path: "/healthz" },
+						capabilities: {},
+					}),
 					fetch: fetchViaProbe,
 					log: (message) => workerLogs.push(message),
 					probeRuntime,
