@@ -4,11 +4,16 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RuntimeBrowserCapabilityAssemblyV1 } from "@agent-infra/agent-runtime";
 import {
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
+import type {
+	BrowserCapabilityDeclarationV1,
+	RuntimeBrowserCapabilityProbeEvidenceV1,
+} from "@agent-infra/contracts/runtime";
 import { KubeConfig } from "@kubernetes/client-node";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExecutionGrantVerifier } from "../../../packages/agent-runtime/src/grant.js";
@@ -432,6 +437,126 @@ describe("production Worker deployment", () => {
 });
 
 describe("authenticated Workload Runtime probe", () => {
+	it("passes the admitted Browser declaration and local probe evidence to Host assembly", async () => {
+		const directory = await temporaryDirectory();
+		const base = probeInput();
+		const browserDeclaration: BrowserCapabilityDeclarationV1 = {
+			schemaVersion: 1,
+			capabilityVersion: 1,
+			operations: ["navigate", "observe"],
+			policy: {
+				allowedOrigins: ["https://example.test/"],
+				maxContexts: 1,
+				maxTabs: 1,
+				maxPages: 1,
+				maxViewportWidth: 1280,
+				maxViewportHeight: 720,
+				maxConcurrentActions: 1,
+				maxDownloads: 0,
+				maxDownloadBytes: 0,
+				maxUploadBytes: 0,
+				maxScreenshotBytes: 1024,
+				maxBrowserDurationMs: 60_000,
+				maxRetainedProfileBytes: 100_000,
+				navigationTimeoutMs: 15_000,
+				actionTimeoutMs: 5_000,
+				requireSideEffectConfirmation: true,
+				allowUserHandoff: false,
+			},
+		};
+		const browserProbe: RuntimeBrowserCapabilityProbeEvidenceV1 = {
+			capabilityVersion: 1,
+			operations: ["navigate", "observe"],
+			provenance: {
+				browser: "chromium",
+				chromiumVersion: "153.0.8010.12",
+				playwrightVersion: "1.63.0",
+				imageDigest: base.imageDigest,
+			},
+			conformance: {
+				schemaVersion: 1,
+				receiptId: "browser-receipt",
+				probeVersion: "browser-probe",
+				verifiedAt: new Date().toISOString(),
+				manifestDigest: base.imageDigest,
+				evidenceHash: "b".repeat(64),
+				operations: ["navigate", "observe"],
+			},
+			binding: {
+				agentId: base.agentId,
+				sessionId: "session-a",
+				sessionGeneration: 1,
+				resourceFence: base.fence,
+				workloadRevision: base.workloadRevision,
+				imageDigest: base.imageDigest,
+			},
+		};
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		Object.assign(driver, {
+			probeReadiness: async () => ({
+				...(await driver.getCapabilities()),
+				browser: browserProbe,
+			}),
+		});
+		let assembled: RuntimeBrowserCapabilityAssemblyV1 | undefined;
+		const host = await RuntimeHost.open({
+			store: await FileRuntimeStore.open(join(directory, "host.json")),
+			driver,
+			grantValidation: { expectedIssuer: runtimeAuth.grantIssuer },
+			readinessVerifier: createWorkloadReadinessVerifierV1({
+				binding: {
+					workerId: runtimeAuth.workerId,
+					agentId: base.agentId,
+					workloadRevision: base.workloadRevision,
+					fence: base.fence,
+					imageDigest: base.imageDigest,
+				},
+				publicKeys: new Map([[runtimeAuth.grantKeyId, keys.publicKey]]),
+				expectedIssuer: runtimeAuth.grantIssuer,
+			}),
+			onBrowserCapabilityAssembly: (input) => {
+				assembled = input;
+			},
+		});
+		const app = createRuntimeHostApp({
+			host,
+			readinessWorkerId: runtimeAuth.workerId,
+			serviceToken: "synthetic-runtime-transport",
+			verifyGrant: createExecutionGrantVerifier(
+				new Map([[runtimeAuth.grantKeyId, keys.publicKey]]),
+			),
+		});
+		const probe = createWorkloadRuntimeProbeV1({
+			namespace: workloadTestPolicy.namespace,
+			workerId: runtimeAuth.workerId,
+			authorization: authorize(),
+			fetch: async (url, init) => app.request(String(url), init),
+		});
+		await expect(
+			probe({
+				...base,
+				browserBinding: browserProbe.binding,
+				manifest: {
+					...base.manifest,
+					capabilities: {
+						modelSelection: false,
+						attachments: false,
+						resultFiles: false,
+						connection: false,
+						supplementaryInstruction: false,
+						browser: browserDeclaration,
+					},
+				},
+			}),
+		).resolves.toMatchObject({ capabilities: { browser: browserProbe } });
+		expect(assembled).toEqual({
+			declaration: browserDeclaration,
+			binding: browserProbe.binding,
+			manifestDigest: base.imageDigest,
+			probe: browserProbe,
+		});
+		await host.close();
+	});
 	it("checks the real RuntimeHost endpoint using the Worker readiness signer without business side effects", async () => {
 		const directory = await temporaryDirectory();
 		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));

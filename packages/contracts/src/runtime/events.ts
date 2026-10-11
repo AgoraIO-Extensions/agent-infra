@@ -6,6 +6,7 @@ import {
 	Rfc3339TimestampV1Schema,
 	SchemaVersionV1Schema,
 } from "../index.ts";
+import { RuntimeBrowserCapabilityProbeEvidenceV1Schema } from "./browser-capability.ts";
 
 export const RuntimeStatusV1Schema = z.enum([
 	"idle",
@@ -37,6 +38,7 @@ export const RuntimeCapabilitiesV1Schema = z.strictObject({
 	connection: z.boolean(),
 	supplementaryInstruction: z.boolean(),
 	skills: z.array(RuntimeSkillCapabilityV1Schema).max(150).optional(),
+	browser: RuntimeBrowserCapabilityProbeEvidenceV1Schema.optional(),
 });
 
 const runtimeEventBase = {

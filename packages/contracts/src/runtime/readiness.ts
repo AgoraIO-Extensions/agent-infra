@@ -4,6 +4,10 @@ import {
 	RequestIdV1Schema,
 	TraceIdV1Schema,
 } from "../index.ts";
+import {
+	BrowserCapabilityBindingV1Schema,
+	BrowserCapabilityDeclarationV1Schema,
+} from "./browser-capability.ts";
 import { RuntimeCapabilitiesV1Schema } from "./events.ts";
 
 export const WorkloadReadinessBindingV1Schema = z.strictObject({
@@ -26,6 +30,8 @@ export const WorkloadReadinessRequestBindingV1Schema =
 		schemaVersion: z.literal(1),
 		requestId: RequestIdV1Schema,
 		traceId: TraceIdV1Schema,
+		browserDeclaration: BrowserCapabilityDeclarationV1Schema.optional(),
+		browserBinding: BrowserCapabilityBindingV1Schema.optional(),
 	});
 export const WorkloadReadinessGrantClaimsV1Schema =
 	WorkloadReadinessRequestBindingV1Schema.extend({

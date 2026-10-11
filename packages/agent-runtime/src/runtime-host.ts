@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 
 import type {
+	BrowserCapabilityBindingV1,
+	BrowserCapabilityDeclarationV1,
 	RuntimeAuthorizationRenewRequestV3,
+	RuntimeBrowserCapabilityProbeEvidenceV1,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeCapabilitiesResponseV1,
 	RuntimeCapabilitiesV1,
@@ -64,6 +67,7 @@ import {
 	WorkloadReadinessRequestV1Schema,
 	WorkloadReadinessResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
+import type { RuntimeBrowserCapabilityAssemblyFailureV1 } from "./browser-capability.js";
 import type {
 	RuntimeDriver,
 	RuntimeExternalActionAuthorization,
@@ -98,6 +102,17 @@ interface RuntimeHostOptions {
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
 	}>;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
+	onBrowserCapabilityAssembly?: (
+		input:
+			| {
+					readonly declaration: BrowserCapabilityDeclarationV1;
+					readonly binding: BrowserCapabilityBindingV1;
+					readonly manifestDigest: string;
+					readonly probe: RuntimeBrowserCapabilityProbeEvidenceV1;
+			  }
+			| RuntimeBrowserCapabilityAssemblyFailureV1
+			| undefined,
+	) => void;
 	store: FileRuntimeStore;
 	driver: RuntimeDriver;
 	grantValidation: ExecutionGrantValidationOptions;
@@ -339,6 +354,7 @@ export class RuntimeHost {
 		controller: AbortController;
 		done: Promise<void>;
 	}>();
+	private browserAssemblyEpoch = 0;
 	private closed = false;
 
 	private readonly v3?: RuntimeHostV3;
@@ -1002,6 +1018,33 @@ export class RuntimeHost {
 				true,
 			);
 		verify(request, authenticatedWorkerId);
+		const browserAssemblyEpoch = ++this.browserAssemblyEpoch;
+		const publishBrowserAssembly = (
+			input:
+				| {
+						readonly declaration: BrowserCapabilityDeclarationV1;
+						readonly binding: BrowserCapabilityBindingV1;
+						readonly manifestDigest: string;
+						readonly probe: RuntimeBrowserCapabilityProbeEvidenceV1;
+				  }
+				| RuntimeBrowserCapabilityAssemblyFailureV1
+				| undefined,
+		) => {
+			if (browserAssemblyEpoch !== this.browserAssemblyEpoch) return;
+			this.options.onBrowserCapabilityAssembly?.(input);
+		};
+		publishBrowserAssembly(
+			request.browserDeclaration
+				? {
+						failure: {
+							status: "unavailable",
+							errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+							reason: "Browser capability readiness is pending",
+							retryable: true,
+						},
+					}
+				: undefined,
+		);
 		if (!this.options.driver.probeReadiness) driverInvalid();
 		const controller = new AbortController();
 		const bounded = AbortSignal.any([
@@ -1089,12 +1132,57 @@ export class RuntimeHost {
 					true,
 				);
 			verify(request, authenticatedWorkerId);
+			const browserBinding = request.browserBinding;
+			const browserProbe = capabilities.browser;
+			if (!request.browserDeclaration) {
+				publishBrowserAssembly(undefined);
+			} else if (
+				browserBinding &&
+				browserBinding.agentId === request.agentId &&
+				browserBinding.workloadRevision === request.workloadRevision &&
+				browserBinding.resourceFence === request.fence &&
+				browserBinding.imageDigest === request.imageDigest &&
+				browserProbe?.binding &&
+				isDeepStrictEqual(browserBinding, browserProbe.binding)
+			) {
+				publishBrowserAssembly({
+					declaration: request.browserDeclaration,
+					binding: browserBinding,
+					manifestDigest: request.imageDigest,
+					probe: browserProbe,
+				});
+			} else {
+				publishBrowserAssembly({
+					failure: {
+						status: "unavailable",
+						errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+						reason:
+							"Browser capability evidence does not match the admitted Sandbox binding",
+						retryable: true,
+					},
+				});
+			}
 			const { grant: _proof, ...binding } = request;
 			return WorkloadReadinessResponseV1Schema.parse({
 				...binding,
 				core: "passed",
 				capabilities,
 			});
+		} catch (error) {
+			publishBrowserAssembly(
+				request.browserDeclaration
+					? {
+							failure: {
+								status: "unavailable",
+								errorCode: "BROWSER_CAPABILITY_UNAVAILABLE",
+								reason:
+									"Browser capability readiness probe did not complete successfully",
+								retryable: true,
+							},
+						}
+					: undefined,
+			);
+			throw error;
 		} finally {
 			bounded.removeEventListener("abort", abort);
 		}
