@@ -1,4 +1,7 @@
-import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
+import type {
+	BrowserCapabilityDeclarationV1,
+	BrowserCapabilityProjectionV1,
+} from "@agent-infra/contracts/runtime";
 import { describe, expect, it } from "vitest";
 
 import { agentConfigurationConformanceRecordV1 } from "./agent-configuration.conformance.js";
@@ -94,6 +97,28 @@ function fixture() {
 }
 
 describe("Agent runtime presentation policy", () => {
+	it("fails closed when Browser is declared but verified projection is missing", () => {
+		const input = fixture();
+		const runtime = input.facts.runtime;
+		if (!runtime) throw new Error();
+		const facts = {
+			...input.facts,
+			runtime: {
+				...runtime,
+				deployment: {
+					...runtime.deployment,
+					runtimeManifest: {
+						...runtime.deployment.runtimeManifest,
+						capabilities: { browser: {} as never },
+					},
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toEqual({
+			outcome: "unavailable",
+		});
+	});
+
 	it("projects the verified Browser state without exposing probe internals", () => {
 		const input = fixture();
 		const browser: BrowserCapabilityProjectionV1 = {
@@ -137,11 +162,24 @@ describe("Agent runtime presentation policy", () => {
 			},
 		};
 		const runtime = input.facts.runtime;
-		if (!runtime || !runtime.state.capabilities) throw new Error();
+		if (!runtime?.state.capabilities) throw new Error();
+		const browserDeclaration: BrowserCapabilityDeclarationV1 = {
+			schemaVersion: 1,
+			capabilityVersion: 1,
+			operations: browser.operations,
+			policy: browser.policy,
+		};
 		const facts = {
 			...input.facts,
 			runtime: {
 				...runtime,
+				deployment: {
+					...runtime.deployment,
+					runtimeManifest: {
+						...runtime.deployment.runtimeManifest,
+						capabilities: { browser: browserDeclaration },
+					},
+				},
 				state: {
 					...runtime.state,
 					capabilities: { ...runtime.state.capabilities, browser },

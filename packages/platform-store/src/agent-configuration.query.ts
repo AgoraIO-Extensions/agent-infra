@@ -431,6 +431,15 @@ export class PostgresAgentConfigurationQueryV1 {
 											runtimeManifest: {
 												interactionMode:
 													deployment.runtimeManifest.interactionMode,
+												...(deployment.runtimeManifest.capabilities?.browser
+													? {
+															capabilities: {
+																browser:
+																	deployment.runtimeManifest.capabilities
+																		.browser,
+															},
+														}
+													: {}),
 											},
 											route: {
 												exposure: deployment.route.exposure,

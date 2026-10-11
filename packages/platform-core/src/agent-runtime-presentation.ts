@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
+import type {
+	BrowserCapabilityDeclarationV1,
+	BrowserCapabilityProjectionV1,
+} from "@agent-infra/contracts/runtime";
 
 import type { AgentConfigurationRecord } from "./agent-configuration.js";
 import {
@@ -43,6 +46,9 @@ export interface AgentRuntimePresentationDeploymentV1 {
 	readonly imageDigest: string;
 	readonly runtimeManifest: {
 		readonly interactionMode: "platform-adapter" | "self-managed";
+		readonly capabilities?: {
+			readonly browser?: BrowserCapabilityDeclarationV1;
+		};
 	};
 	readonly route: {
 		readonly exposure: "internal-only" | "platform-auth" | "self-managed";
@@ -138,7 +144,7 @@ export function decideAgentRuntimePresentationV1(input: {
 		!isDeepStrictEqual(management, input.expected.management)
 	)
 		return { outcome: "stale" };
-	const unavailable: AgentRuntimePresentationDecisionV1 = {
+	const foundWithoutRuntimeProjection: AgentRuntimePresentationDecisionV1 = {
 		outcome: "found",
 		sourceReference: facts.sourceReference,
 		capabilities: null,
@@ -151,7 +157,7 @@ export function decideAgentRuntimePresentationV1(input: {
 		management.serviceAvailability !== "ready" ||
 		management.desiredState !== "running"
 	)
-		return unavailable;
+		return foundWithoutRuntimeProjection;
 	const { state, deployment, verifiedConfiguration: configuration } = runtime;
 	if (
 		state.agentId !== input.agentId ||
@@ -175,7 +181,7 @@ export function decideAgentRuntimePresentationV1(input: {
 		deployment.desiredState !== "running" ||
 		deployment.imageDigest !== configuration.source.imageDigest
 	)
-		return unavailable;
+		return foundWithoutRuntimeProjection;
 	const mode =
 		configuration.source.kind === "standard"
 			? "platform-adapter"
@@ -191,7 +197,11 @@ export function decideAgentRuntimePresentationV1(input: {
 		deployment.runtimeManifest.interactionMode !== mode ||
 		deployment.route.exposure !== exposure
 	)
-		return unavailable;
+		return foundWithoutRuntimeProjection;
+	const browserDeclared =
+		deployment.runtimeManifest.capabilities?.browser !== undefined;
+	if (browserDeclared && !state.capabilities.browser)
+		return { outcome: "unavailable" };
 	const interactionUrl =
 		mode === "self-managed" &&
 		configuration.source.kind === "custom" &&
@@ -209,7 +219,7 @@ export function decideAgentRuntimePresentationV1(input: {
 							([, value]) => typeof value === "boolean",
 						),
 					),
-					...(state.capabilities.browser
+					...(browserDeclared && state.capabilities.browser
 						? { browser: state.capabilities.browser }
 						: {}),
 				} as Readonly<Record<string, boolean>> & {
