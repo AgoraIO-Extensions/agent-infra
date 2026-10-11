@@ -85,3 +85,12 @@ Legal/开源合规及实际独立凭证 expiry 尚未取得证据；Owner 已对
 实施由 [#1834](https://github.com/AgoraIO-Extensions/agent-infra/issues/1834) 跟踪，使用独立
 `static-spaces-connection-v4-restricted` 与七项 `@v4`；准入批准引用 #1830/#1831，
 新的 run、最终源码/digest 与迁移回执在实现发布时固定。
+
+## 凭证升级的版本归属修复
+
+真实 v4 接入复用已有 Token 时，旧 Credential 撤销被归到升级后的版本，触发 v4 永久关闭。
+关闭审计保留，不恢复 v4。由 [#1858](https://github.com/AgoraIO-Extensions/agent-infra/issues/1858)
+修复升级事务的撤销顺序，旧 Credential 撤销仍关闭原版本；真正的新版本撤权、断开、失败及未知
+继续永久关闭新准入。新 immutable `static-spaces-connection-v5-restricted` 承接本文已批准的同一
+身份、账号、空间、七项 Action、run/marker 与风险范围，不增加权限；v4→v5 必须重新审批和显式
+Consent/Grant，不能复用 v4 授权。旧 v1-v4 执行器与审计继续保留。

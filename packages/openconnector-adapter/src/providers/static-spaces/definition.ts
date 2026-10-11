@@ -7,8 +7,9 @@ export {
 	staticSpacesConnectionCatalog as staticSpacesV3ConnectionCatalog,
 	staticSpacesPilot,
 } from "./versions/static-spaces-v3.ts";
+export { staticSpacesConnectionCatalog as staticSpacesV4ConnectionCatalog } from "./versions/static-spaces-v4.ts";
 export {
 	staticSpacesConnectionCatalog,
 	staticSpacesConnectionCatalog as providerDefinition,
 	staticSpacesRestrictedApproval,
-} from "./versions/static-spaces-v4.ts";
+} from "./versions/static-spaces-v5.ts";

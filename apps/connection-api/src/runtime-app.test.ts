@@ -20,6 +20,7 @@ describe("startup Consumer declaration scheduling", () => {
 		"static-spaces-connection-v2-supervised",
 		"static-spaces-connection-v3-supervised",
 		"static-spaces-connection-v4-restricted",
+		"static-spaces-connection-v5-restricted",
 	])(
 		"%s declarations skip denied Consumers and a closed release",
 		async (providerReleaseId) => {
