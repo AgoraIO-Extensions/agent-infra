@@ -148,6 +148,7 @@ beforeAll(async () => {
 		{ idx: 50, tag: "0050_connection_installation_attempts" },
 		{ idx: 51, tag: "0051_connection_installation_attempt_expiry" },
 		{ idx: 52, tag: "0052_stop_confirmation_deadline" },
+		{ idx: 53, tag: "0053_conversation_audit_execution_index" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
