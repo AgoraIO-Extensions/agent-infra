@@ -211,6 +211,75 @@ describe("System controls use the durable typed Execution principal", () => {
 		).rejects.toBeInstanceOf(TaskAuthorizationStoreError);
 	});
 
+	it("returns the committed result for concurrent identical submissions", async () => {
+		await seed("user");
+		await client`update platform.conversations set status = 'active' where id = 'conversation'`;
+		await client`update platform.conversation_executions set status = 'unknown' where execution_id = 'execution'`;
+		await client`insert into platform.conversation_stops (execution_id, stop_request_id, status, confirmation_deadline, confirmation_timed_out_at, created_at, updated_at)
+			values ('execution', 'ops-stop', 'submitted', now() - interval '1 minute', now(), now(), now())`;
+		await client`create function platform.pause_unknown_stop_reservation() returns trigger language plpgsql as $$ begin perform pg_advisory_xact_lock(1824001); perform pg_sleep(0.3); return NEW; end $$`;
+		await client`create trigger pause_unknown_stop_reservation after insert on platform.idempotency_records for each row execute function platform.pause_unknown_stop_reservation()`;
+		const input = {
+			conversationId: "conversation",
+			executionId: "execution",
+			stopRequestId: "ops-stop",
+			sessionGeneration: 1,
+			operatorId: "operator",
+			idempotencyKey: "concurrent-resolution",
+			requestDigest: "a".repeat(64),
+			traceId: "trace-ops",
+			requestId: "request-ops",
+		};
+		try {
+			const first = store.resolveTimedOutUnknownStop(input);
+			let reservationHeld = false;
+			for (let attempt = 0; attempt < 100 && !reservationHeld; attempt += 1) {
+				const [lock] =
+					await client`select pg_try_advisory_lock(1824001) as acquired`;
+				reservationHeld = lock?.acquired === false;
+				if (lock?.acquired) await client`select pg_advisory_unlock(1824001)`;
+				if (!reservationHeld)
+					await new Promise((resolve) => setTimeout(resolve, 5));
+			}
+			expect(reservationHeld).toBe(true);
+			const second = store.resolveTimedOutUnknownStop(input);
+			const results = await Promise.all([first, second]);
+			expect(results.map((result) => result.replayed).sort()).toEqual([
+				false,
+				true,
+			]);
+		} finally {
+			await client`drop trigger pause_unknown_stop_reservation on platform.idempotency_records`;
+			await client`drop function platform.pause_unknown_stop_reservation()`;
+		}
+	});
+
+	it("rejects a conversation and execution binding mismatch", async () => {
+		await seed("user");
+		await client`insert into platform.conversations
+			(id, agent_id, actor_id, channel_id, principal_type, status, session_generation, authorization_revision)
+			values ('other-conversation', 'other-agent', 'same-id', 'api', 'user', 'active', 1, 'agent-1')`;
+		await client`update platform.conversation_executions set status = 'unknown' where execution_id = 'execution'`;
+		await client`insert into platform.conversation_stops (execution_id, stop_request_id, status, confirmation_deadline, confirmation_timed_out_at, created_at, updated_at)
+			values ('execution', 'ops-stop', 'submitted', now() - interval '1 minute', now(), now(), now())`;
+		await expect(
+			store.resolveTimedOutUnknownStop({
+				conversationId: "other-conversation",
+				executionId: "execution",
+				stopRequestId: "ops-stop",
+				sessionGeneration: 1,
+				operatorId: "operator",
+				idempotencyKey: "binding-mismatch",
+				requestDigest: "a".repeat(64),
+				traceId: "trace-ops",
+				requestId: "request-ops",
+			}),
+		).rejects.toBeInstanceOf(TaskAuthorizationStoreError);
+		expect(
+			await client`select id from platform.task_control_records`,
+		).toHaveLength(0);
+	});
+
 	it.each([
 		{ name: "stale generation", sessionGeneration: 2 },
 		{ name: "non-unknown execution", executionStatus: "processing" },

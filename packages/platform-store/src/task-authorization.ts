@@ -12,6 +12,7 @@ import {
 	parseTaskPrincipalV1,
 	parseTimedOutUnknownStopResolutionInputV1,
 	planTaskSystemControlV1,
+	planTimedOutUnknownStopResolutionV1,
 	type TaskAuthorizationBoundaryV1,
 	type TaskPrincipalV1,
 	type TimedOutUnknownStopResolutionInputV1,
@@ -317,7 +318,20 @@ export async function resolveTimedOutUnknownStopInTransactionV1(
 		requestDigest: input.requestDigest,
 		occurredAt,
 	});
-	if (!reservationId) throw new TaskAuthorizationStoreError();
+	if (!reservationId) {
+		const raced = await readIdempotency(transaction, scope);
+		if (
+			!raced ||
+			raced.request_digest !== input.requestDigest ||
+			raced.status !== "completed" ||
+			!raced.result
+		)
+			throw new TaskAuthorizationStoreError();
+		return {
+			...(raced.result as TimedOutUnknownStopResolutionResultV1),
+			replayed: true,
+		};
+	}
 	const [conversation] = await transaction<
 		{
 			id: string;
@@ -365,23 +379,35 @@ export async function resolveTimedOutUnknownStopInTransactionV1(
 			and stop_request_id = ${input.stopRequestId}
 		for update
 	`;
-	if (
-		!conversation ||
-		!agent ||
-		!execution ||
-		!stop ||
-		execution.conversation_id !== conversation.id ||
-		execution.agent_id !== conversation.agent_id ||
-		execution.actor_id !== conversation.actor_id ||
-		execution.principal_type !== conversation.principal_type ||
-		execution.channel_id !== conversation.channel_id ||
-		conversation.status !== "active" ||
-		Number(execution.session_generation) !== input.sessionGeneration ||
-		execution.status !== "unknown" ||
-		stop.status !== "submitted" ||
-		stop.confirmation_timed_out_at === null
-	)
+	if (!conversation || !execution || !agent || !stop)
 		throw new TaskAuthorizationStoreError();
+	const resolution = planTimedOutUnknownStopResolutionV1({
+		command: input,
+		agentId: agent.id,
+		conversation: {
+			id: conversation.id,
+			agentId: conversation.agent_id,
+			actorId: conversation.actor_id,
+			principalType: conversation.principal_type,
+			channelId: conversation.channel_id,
+			status: conversation.status,
+		},
+		execution: {
+			executionId: execution.execution_id,
+			conversationId: execution.conversation_id,
+			agentId: execution.agent_id,
+			actorId: execution.actor_id,
+			principalType: execution.principal_type,
+			channelId: execution.channel_id,
+			sessionGeneration: Number(execution.session_generation),
+			status: execution.status,
+		},
+		stop: {
+			stopRequestId: stop.stop_request_id,
+			status: stop.status,
+			confirmationTimedOut: stop.confirmation_timed_out_at !== null,
+		},
+	});
 	const [record] = await transaction<{ id: string; boundary: unknown }[]>`
 		select id, boundary from platform.task_authorization_records
 		where execution_id = ${input.executionId} for update
@@ -453,9 +479,9 @@ export async function resolveTimedOutUnknownStopInTransactionV1(
 	const result: TimedOutUnknownStopResolutionResultV1 = {
 		schemaVersion: 1,
 		status: "resolved",
-		conversationId: input.conversationId,
-		executionId: input.executionId,
-		stopRequestId: input.stopRequestId,
+		conversationId: resolution.conversationId,
+		executionId: resolution.executionId,
+		stopRequestId: resolution.stopRequestId,
 		controlRecordId: control.controlRecordId,
 		replayed: false,
 	};

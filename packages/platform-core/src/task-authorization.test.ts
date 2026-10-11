@@ -13,6 +13,7 @@ import {
 	parseTaskAuthorizationBoundaryV1,
 	parseTimedOutUnknownStopResolutionInputV1,
 	planTaskSystemControlV1,
+	planTimedOutUnknownStopResolutionV1,
 } from "./task-authorization.js";
 
 const user: CurrentTaskUserV1 = {
@@ -85,6 +86,57 @@ describe("task authorization boundary", () => {
 				parseTimedOutUnknownStopResolutionInputV1(invalid),
 			).toThrow();
 		}
+	});
+
+	it.each([
+		["stale generation", { execution: { sessionGeneration: 2 } }],
+		["non-unknown execution", { execution: { status: "processing" } }],
+		["missing durable timeout", { stop: { confirmationTimedOut: false } }],
+	] as const)("rejects %s in the resolution decision", (_name, override) => {
+		const command = parseTimedOutUnknownStopResolutionInputV1({
+			conversationId: "conversation",
+			executionId: "execution",
+			stopRequestId: "stop",
+			sessionGeneration: 1,
+			operatorId: "operator",
+			idempotencyKey: "resolve-1",
+			requestDigest: "a".repeat(64),
+			traceId: "trace",
+			requestId: "request",
+		});
+		const execution = {
+			executionId: "execution",
+			conversationId: "conversation",
+			agentId: "agent",
+			actorId: "actor",
+			principalType: "user",
+			channelId: "api",
+			sessionGeneration: 1,
+			status: "unknown" as const,
+			...override.execution,
+		};
+		const stop = {
+			stopRequestId: "stop",
+			status: "submitted",
+			confirmationTimedOut: true,
+			...override.stop,
+		};
+		expect(() =>
+			planTimedOutUnknownStopResolutionV1({
+				command,
+				agentId: "agent",
+				conversation: {
+					id: "conversation",
+					agentId: "agent",
+					actorId: "actor",
+					principalType: "user",
+					channelId: "api",
+					status: "active",
+				},
+				execution,
+				stop,
+			}),
+		).toThrow("Timed-out unknown stop resolution target is invalid");
 	});
 
 	it("keeps directory and Agent revisions distinct while accepting current unchanged scope", () => {

@@ -53,6 +53,16 @@ export interface TimedOutUnknownStopResolutionInputV1 {
 	readonly requestId: string;
 }
 
+export interface TimedOutUnknownStopResolutionPlanV1 {
+	readonly schemaVersion: 1;
+	readonly status: "ready";
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly stopRequestId: string;
+	readonly sessionGeneration: number;
+	readonly reason: "recovery";
+}
+
 /**
  * Opaque directory snapshot fact carried by trusted identity adapters.
  * Consumers must compare it at their own sensitive-operation boundary.
@@ -118,6 +128,67 @@ export function parseTimedOutUnknownStopResolutionInputV1(
 		requestDigest: value.requestDigest,
 		traceId: value.traceId,
 		requestId: value.requestId,
+	};
+}
+
+export function planTimedOutUnknownStopResolutionV1(input: {
+	readonly command: TimedOutUnknownStopResolutionInputV1;
+	readonly agentId: string | undefined;
+	readonly conversation: {
+		readonly id: string;
+		readonly agentId: string;
+		readonly actorId: string;
+		readonly principalType: string;
+		readonly channelId: string;
+		readonly status: string;
+	};
+	readonly execution: {
+		readonly executionId: string;
+		readonly conversationId: string;
+		readonly agentId: string;
+		readonly actorId: string;
+		readonly principalType: string;
+		readonly channelId: string;
+		readonly sessionGeneration: number;
+		readonly status: ConversationDispatchExecutionStatusV1;
+	};
+	readonly stop:
+		| {
+				readonly stopRequestId: string;
+				readonly status: string;
+				readonly confirmationTimedOut: boolean;
+		  }
+		| undefined;
+}): TimedOutUnknownStopResolutionPlanV1 {
+	const command = parseTimedOutUnknownStopResolutionInputV1(input.command);
+	if (
+		!input.agentId ||
+		input.agentId !== input.conversation.agentId ||
+		input.agentId !== input.execution.agentId ||
+		input.conversation.id !== command.conversationId ||
+		input.execution.executionId !== command.executionId ||
+		input.execution.conversationId !== input.conversation.id ||
+		input.execution.actorId !== input.conversation.actorId ||
+		input.execution.principalType !== input.conversation.principalType ||
+		input.execution.channelId !== input.conversation.channelId ||
+		input.conversation.status !== "active" ||
+		input.execution.sessionGeneration !== command.sessionGeneration ||
+		input.execution.status !== "unknown" ||
+		!input.stop ||
+		input.stop.stopRequestId !== command.stopRequestId ||
+		input.stop.status !== "submitted" ||
+		!input.stop.confirmationTimedOut
+	) {
+		throw new TypeError("Timed-out unknown stop resolution target is invalid");
+	}
+	return {
+		schemaVersion: 1,
+		status: "ready",
+		conversationId: command.conversationId,
+		executionId: command.executionId,
+		stopRequestId: command.stopRequestId,
+		sessionGeneration: command.sessionGeneration,
+		reason: "recovery",
 	};
 }
 
