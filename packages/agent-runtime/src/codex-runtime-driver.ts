@@ -114,6 +114,7 @@ import type {
 	RuntimeFileBridgePortV1,
 	RuntimeFileResultV1,
 } from "./runtime-file-bridge.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 interface CodexAppServerTransport {
 	[codexSkillLaunch]?: CodexSkillLaunchProvenance;
@@ -325,6 +326,8 @@ export interface CodexRuntimeDriverOptions {
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
 	readonly browserCapability?: import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1;
 	readonly installedSkill?: CodexInstalledSkillDescriptorV1;
+	/** Deployment-owned verified Hub generation mounted at the fixed Runtime root. */
+	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly standardConnectionClient?: StandardMcpClientOptions;
 	/** Deployment-owned. Private execution still requires a verified native barrier. */
 	readonly nativeLane?: "official-model-only" | "private-callback";
@@ -3215,6 +3218,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly recoveryLaunchPath?: string,
 		private readonly standardConnectionOptions?: StandardMcpClientOptions,
 		private readonly installedSkill?: CodexInstalledSkillDescriptorV1,
+		private readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1,
 		private readonly browserCapability?: import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1,
 	) {}
 
@@ -4520,6 +4524,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				options.launchPath,
 				standardConnection,
 				installedSkill,
+				options.skillDirectory,
 				options.browserCapability,
 			);
 		} catch (error) {
@@ -5933,26 +5938,39 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	async getCapabilities() {
+		const installedSkills = this.installedSkill
+			? [
+					{
+						schemaVersion: 1 as const,
+						name: this.installedSkill.manifest.name,
+						version: this.installedSkill.manifest.version,
+						manifestSha256: this.installedSkill.manifestSha256,
+						packageDigest: this.installedSkill.manifest.packageDigest.sha256,
+						readOnly: true as const,
+					},
+				]
+			: [];
+		const mountedSkills = this.skillDirectory?.findSkills().map((skill) => ({
+			schemaVersion: 1 as const,
+			name: skill.name,
+			version: skill.version,
+			manifestSha256: skill.manifestDigest,
+			packageDigest: skill.packageDigest,
+			readOnly: true as const,
+		}));
+		const skills = [...installedSkills, ...(mountedSkills ?? [])];
+		if (new Set(skills.map((skill) => skill.name)).size !== skills.length)
+			throw new RuntimeHostError(
+				"RUNTIME_SKILL_DIRECTORY_INVALID",
+				"Skill directories overlap",
+				503,
+			);
 		return {
 			...capabilities,
 			connection:
 				this.connectionClientOptions !== undefined ||
 				this.standardConnectionOptions !== undefined,
-			...(this.installedSkill
-				? {
-						skills: [
-							{
-								schemaVersion: 1 as const,
-								name: this.installedSkill.manifest.name,
-								version: this.installedSkill.manifest.version,
-								manifestSha256: this.installedSkill.manifestSha256,
-								packageDigest:
-									this.installedSkill.manifest.packageDigest.sha256,
-								readOnly: true as const,
-							},
-						],
-					}
-				: {}),
+			...(skills.length > 0 ? { skills } : {}),
 		};
 	}
 
