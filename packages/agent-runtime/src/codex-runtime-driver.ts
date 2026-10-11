@@ -9954,6 +9954,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		status: PersistedTurnStatus,
 		cancelNative = true,
 	) {
+		if (status !== "running") {
+			// A status poll can observe the native terminal before the notification
+			// handler. Keep accepted deltas ahead of the terminal journal event.
+			await Promise.all(
+				[...this.textDeltaBatches].map((batch) =>
+					this.drainTextDeltas(batch),
+				),
+			);
+		}
 		if (status !== "running" && cancelNative) {
 			const session = this.session(nativeSessionRef);
 			if (session.threadId)

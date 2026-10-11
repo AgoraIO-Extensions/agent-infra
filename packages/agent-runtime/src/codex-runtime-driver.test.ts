@@ -6016,6 +6016,29 @@ describe("Codex Runtime Driver", () => {
 			expect(updates).not.toHaveBeenCalled();
 		});
 
+		it("drains a pending delta before a polled terminal status", async () => {
+			const f = await runningTurn();
+			f.release.resolve();
+			await f.holding;
+			await f.bridge.emitAgentMessageDelta("first ");
+			await vi.waitFor(async () => expect(await f.texts()).toHaveLength(1));
+
+			// The second batch is inside the 100 ms spacing window when the status
+			// poll observes the native terminal.
+			await f.bridge.emitAgentMessageDelta("second");
+			f.bridge.setTurnStatus("completed");
+			expect(
+				await f.driver.getStatus(f.accepted.nativeSessionRef, f.command.executionId),
+			).toBe("completed");
+
+			expect((await f.replay()).map((event) => event.type)).toEqual([
+				"status",
+				"text",
+				"text",
+				"completed",
+			]);
+		});
+
 		it("fails the native process and exposes nothing when a batch cannot be persisted", async () => {
 			const f = await runningTurn();
 			// The batch write fails once the earlier write releases the queue.
