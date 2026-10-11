@@ -1,9 +1,9 @@
 import { AgentResourceProfileProjectionV1Schema } from "@agent-infra/contracts/pilot";
 import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
 import {
-	type AgentDefaultRelayKeyBindingV1,
 	type AgentConfigurationAuthorityContextV1,
 	type AgentConfigurationUseCaseDependenciesV1,
+	type AgentDefaultRelayKeyBindingV1,
 	captureAgentApiCreatePrincipalsV1,
 	PersonalRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
@@ -289,8 +289,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 						encrypt: (
 							binding: AgentDefaultRelayKeyBindingV1,
 							keyValue: string,
-						) =>
-							relayKeyEncryptor.encrypt({ ...binding, plaintext: keyValue }),
+						) => relayKeyEncryptor.encrypt({ ...binding, plaintext: keyValue }),
 						candidates: createAgentDefaultRelayKeyCandidatesV1({
 							modelCatalog: input.modelCatalog,
 							...input.agentDefaultRelayKeyPolicy,
