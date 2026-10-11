@@ -272,6 +272,19 @@ describe("RuntimeHost execution file bridge", () => {
 		},
 	);
 
+	it("revalidates after an asynchronous result write", async () => {
+		let clock = 10_000;
+		const writeResult = vi.fn(async () => {
+			clock = 20_000;
+			return projection;
+		});
+		const port = bridge({ now: () => clock, writeResult });
+		await expect(
+			port.writeResult(descriptor, new ReadableStream<Uint8Array>()),
+		).rejects.toThrow("RUNTIME_FILE_BRIDGE_CONTEXT_EXPIRED");
+		expect(writeResult).toHaveBeenCalledTimes(1);
+	});
+
 	it("rejects a context with a wrong operation or substituted binding", () => {
 		const wrong = {
 			...binding,

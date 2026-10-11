@@ -407,6 +407,7 @@ export function createRuntimeFileBridgeV1(options: {
 				// until the authority allocates the confirmed result object.
 				context(binding, RUNTIME_FILE_BRIDGE_RESULT_FILE_ID_V1, "write"),
 			);
+			assertLive();
 			return createRuntimeFileResultReceiptV1(binding, projection);
 		},
 	};
