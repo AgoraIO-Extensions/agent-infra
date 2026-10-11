@@ -78,6 +78,10 @@ Action 完成 E2E 后另行启用。Bitbucket、Jira 和 Confluence 必须分别
 
 ## 测试层级与门禁
 
+StaticSpaces 的真实 Adapter 探测、受监督 canary 入口和未关闭门禁见
+[StaticSpaces onboarding 验证](../connection/static-spaces-onboarding.md)。直接 Adapter 结果不能
+替代本文要求的完整 Connection E2E，也不自动授权生产 Catalog 发布。
+
 - 每个 PR：UT、Adapter contract、PostgreSQL integration；不访问第三方站点。
 - 合并后：真实 Provider read smoke，只读取专用测试项目。
 - Nightly：所有已批准 Action 的测试项目 CRUD/workflow E2E。
