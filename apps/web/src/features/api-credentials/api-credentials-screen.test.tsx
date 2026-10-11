@@ -146,6 +146,6 @@ describe("ApiCredentialsScreen", () => {
 			expect(screen.getByText("凭证已收窄，已读取最新元数据。")).toBeTruthy(),
 		);
 		expect(screen.queryByRole("form", { name: /收窄凭证/ })).toBeNull();
-		expect(document.activeElement).toBe(button);
+		await waitFor(() => expect(document.activeElement).toBe(button));
 	});
 });
