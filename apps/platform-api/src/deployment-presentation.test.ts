@@ -51,6 +51,76 @@ const management = {
 };
 
 describe("deployment presentation platform identity route", () => {
+	it("keeps Runtime model selection hidden until the API reader is wired", async () => {
+		const request = new Request("https://platform.test/agents/agent_01");
+		const base = {
+			identityScope: {
+				currentRequest: () => request,
+				currentIdentity: async () => identity,
+			} as never,
+			configurationQuery: {
+				readRuntimePresentation: vi.fn().mockResolvedValue({
+					outcome: "found",
+					sourceReference: "sha256:custom",
+					capabilities: { modelSelection: true },
+					interactionUrl: null,
+				}),
+			},
+			resourceProfile: {
+				profileId: "profile_01",
+				displayName: "Small",
+				estimatedResources: {
+					cpuMillicores: 100,
+					memoryMiB: 128,
+					storageGiB: 1,
+				},
+			},
+			imageRepository: "registry.example.test/agents",
+		};
+		const unavailable = await createDeploymentPresentation(base)({
+			agentId: "agent_01",
+			configuration: {
+				...configuration,
+				source: {
+					kind: "custom",
+					interactionMode: "platform-adapter",
+					connectionEnabled: false,
+				},
+			},
+			management,
+		});
+		expect(unavailable.capabilities.modelSelection).toBe(false);
+		const available = await createDeploymentPresentation({
+			...base,
+			modelSelectionAvailable: true,
+		})({
+			agentId: "agent_01",
+			configuration: {
+				...configuration,
+				source: {
+					kind: "custom",
+					interactionMode: "platform-adapter",
+					connectionEnabled: false,
+				},
+			},
+			management,
+		});
+		expect(available.capabilities.modelSelection).toBe(true);
+		const standard = await createDeploymentPresentation(base)({
+			agentId: "agent_01",
+			configuration: {
+				...configuration,
+				source: {
+					kind: "standard",
+					templateId: "codex",
+					connectionEnabled: false,
+				},
+			},
+			management,
+		});
+		expect(standard.capabilities.modelSelection).toBe(true);
+	});
+
 	it("uses only a resolver-provided canonical HTTPS origin", async () => {
 		const request = new Request("https://platform.test/agents/agent_01");
 		const present = createDeploymentPresentation({

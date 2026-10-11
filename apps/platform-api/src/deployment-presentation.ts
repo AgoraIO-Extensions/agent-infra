@@ -39,6 +39,8 @@ export function createDeploymentPresentation(input: {
 	>;
 	readonly resourceProfile: Presentation["resourceProfile"];
 	readonly imageRepository: string;
+	/** Runtime model capability is public only when the API reader is wired. */
+	readonly modelSelectionAvailable?: boolean;
 	/** Deployment-owned, readiness-aware resolver for platform-identity Web routes. */
 	readonly resolveCustomAgentInteractionUrl?: (input: {
 		readonly agentId: string;
@@ -88,8 +90,13 @@ export function createDeploymentPresentation(input: {
 			};
 		}
 		const verified = runtime.capabilities;
+		const customPlatformAdapter =
+			browserSource.kind === "custom" &&
+			browserSource.interactionMode === "platform-adapter";
 		const capabilities = AgentProjectionV1Schema.shape.capabilities.parse({
-			modelSelection: verified?.modelSelection === true,
+			modelSelection:
+				verified?.modelSelection === true &&
+				(!customPlatformAdapter || input.modelSelectionAvailable === true),
 			attachments: verified?.attachments === true,
 			resultFiles: verified?.resultFiles === true,
 			connection: verified?.connection === true,

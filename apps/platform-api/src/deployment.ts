@@ -336,6 +336,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 					configurationQuery,
 					resourceProfile,
 					imageRepository: input.imageRepository,
+					modelSelectionAvailable: input.modelSelection !== undefined,
 					...(input.resolveCustomAgentInteractionUrl
 						? {
 								resolveCustomAgentInteractionUrl:
