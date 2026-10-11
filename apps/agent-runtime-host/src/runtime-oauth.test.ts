@@ -178,6 +178,19 @@ async function fixture() {
 				}
 			}
 			const refreshing = body.get("grant_type") === "refresh_token";
+			if (refreshing && behavior === "refresh-drift") {
+				const refreshName = (await readdir(join(root, "materials"))).find(
+					(name) => name.endsWith(".refresh"),
+				);
+				if (refreshName) {
+					await chmod(join(root, "materials", refreshName), 0o600);
+					await writeFile(
+						join(root, "materials", refreshName),
+						"replacement-refresh-material",
+					);
+					await chmod(join(root, "materials", refreshName), 0o400);
+				}
+			}
 			if (refreshing && behavior === "refresh-record-fail")
 				protection.failRecordWrite = true;
 			if (refreshing && behavior === "refresh-bad-status") {
@@ -733,6 +746,24 @@ it("retains the refresh token when rotation omits a replacement", async () => {
 	expect(
 		await readFile(join(f.root, "materials", refreshName as string), "utf8"),
 	).toBe(refresh);
+});
+
+it("rejects omitted refresh rotation when protected refresh material drifts", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("refresh-drift");
+	expect((await f.post("refresh", f.signed("refresh"))).body.phase).toBe(
+		"unknown",
+	);
+	const refreshName = (await readdir(join(f.root, "materials"))).find((name) =>
+		name.endsWith(".refresh"),
+	);
+	expect(
+		await readFile(join(f.root, "materials", refreshName as string), "utf8"),
+	).toBe("replacement-refresh-material");
 });
 
 it("keeps rotated material unavailable after a lost refresh response", async () => {

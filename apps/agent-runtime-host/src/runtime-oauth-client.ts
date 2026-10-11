@@ -549,15 +549,11 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			check(snapshot, record, true);
 			const replacements = [
 				{ name: accessName, expected: accessToken, next: tokens.accessToken },
-				...(tokens.refreshToken
-					? [
-							{
-								name: refreshName,
-								expected: refreshToken,
-								next: tokens.refreshToken,
-							},
-						]
-					: []),
+				{
+					name: refreshName,
+					expected: refreshToken,
+					next: tokens.refreshToken ?? refreshToken,
+				},
 			];
 			await replaceProtectedStandardMcpMaterials(materials, replacements, () =>
 				check(snapshot, record, true),
