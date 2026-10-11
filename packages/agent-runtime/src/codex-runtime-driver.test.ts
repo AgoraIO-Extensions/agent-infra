@@ -61,6 +61,7 @@ import {
 	type CodexSkillLaunchProvenance,
 	codexSkillLaunch,
 } from "./codex-skill-launch.internal.js";
+import type { RuntimeBrowserToolExecutionRequestV1 } from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
@@ -3390,6 +3391,10 @@ describe("Codex Runtime Driver", () => {
 					executeTool: async (request) => {
 						received.push(request);
 						return {
+							actionId: request.actionId,
+							operationRef: request.operationRef,
+							attemptRef: request.attemptRef,
+							binding: request.binding,
 							phase: "completed",
 							contentItems: [{ type: "inputText", text: "observed" }],
 							success: true,
@@ -3435,6 +3440,169 @@ describe("Codex Runtime Driver", () => {
 				resourceFence: 7,
 			},
 		});
+	});
+
+	it("does not execute a Browser action twice when an actionId is replayed", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(join(directory, "driver.json")),
+				authorizeExternalAction: async () => ({ revalidate: () => {} }),
+			},
+			async () => bridge,
+		);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		let calls = 0;
+		const browser = {
+			capabilityVersion: 3,
+			binding: {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) => {
+				calls += 1;
+				return {
+					actionId: request.actionId,
+					operationRef: request.operationRef,
+					attemptRef: request.attemptRef,
+					binding: request.binding,
+					phase: "completed" as const,
+					contentItems: [{ type: "inputText" as const, text: "done" }],
+					success: true,
+				};
+			},
+		};
+		const request = {
+			tool: "browser_click",
+			arguments: { selector: "#submit" },
+			pageRevision: 1,
+			actionId: "browser-action-replay",
+		};
+		const first = await driver.executeBrowserTool(
+			accepted.nativeSessionRef,
+			command.executionId,
+			request,
+			{ browser },
+		);
+		const replay = await driver.executeBrowserTool(
+			accepted.nativeSessionRef,
+			command.executionId,
+			request,
+			{ browser },
+		);
+		expect(first).toMatchObject({ phase: "completed", success: true });
+		expect(replay).toMatchObject({ phase: "completed", success: true });
+		expect(calls).toBe(1);
+	});
+
+	it("records an unknown result when the Browser response identity mismatches", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(join(directory, "driver.json")),
+				authorizeExternalAction: async () => ({ revalidate: () => {} }),
+			},
+			async () => bridge,
+		);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const browser = {
+			capabilityVersion: 3,
+			binding: {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) => ({
+				actionId: request.actionId,
+				operationRef: "foreign-operation",
+				attemptRef: request.attemptRef,
+				binding: request.binding,
+				phase: "completed" as const,
+				contentItems: [],
+				success: true,
+			}),
+		};
+		await expect(
+			driver.executeBrowserTool(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{ tool: "browser_observe", arguments: {}, pageRevision: 1 },
+				{ browser },
+			),
+		).resolves.toMatchObject({ phase: "unknown", success: false });
+		const events = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(
+			events
+				.filter(
+					(event): event is RuntimeEventV2 =>
+						event.type === "operation" && event.payload.kind === "tool",
+				)
+				.map((event) => event.payload.phase),
+		).toEqual(["intent", "started", "unknown"]);
+	});
+
+	it("does not complete a Browser action after cancellation", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(join(directory, "driver.json")),
+				authorizeExternalAction: async () => ({ revalidate: () => {} }),
+			},
+			async () => bridge,
+		);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const controller = new AbortController();
+		const browser = {
+			capabilityVersion: 3,
+			binding: {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) => {
+				controller.abort();
+				return {
+					actionId: request.actionId,
+					operationRef: request.operationRef,
+					attemptRef: request.attemptRef,
+					binding: request.binding,
+					phase: "completed" as const,
+					contentItems: [],
+					success: true,
+				};
+			},
+		};
+		await expect(
+			driver.executeBrowserTool(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{ tool: "browser_observe", arguments: {}, pageRevision: 1 },
+				{ browser },
+				controller.signal,
+			),
+		).resolves.toMatchObject({ phase: "unknown", success: false });
 	});
 
 	it.each([
@@ -3503,7 +3671,11 @@ describe("Codex Runtime Driver", () => {
 				workloadRevision: 4,
 				imageDigest: `sha256:${"a".repeat(64)}`,
 			},
-			executeTool: async () => ({
+			executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) => ({
+				actionId: request.actionId,
+				operationRef: request.operationRef,
+				attemptRef: request.attemptRef,
+				binding: request.binding,
 				phase: "unknown" as const,
 				contentItems: [],
 				success: false,

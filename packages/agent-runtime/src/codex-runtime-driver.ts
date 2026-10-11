@@ -107,6 +107,7 @@ import {
 	codexSkillLaunch,
 } from "./codex-skill-launch.internal.js";
 import type {
+	RuntimeBrowserToolExecutionRequestV1,
 	RuntimeBrowserToolExecutionResultV1,
 	RuntimeDriver,
 	RuntimeDriverCommand,
@@ -1821,6 +1822,95 @@ function latestOperationAttemptFacts(events: readonly CodexJournalEvent[]) {
 			latest.set(operationAttemptKey(event.payload), event.payload);
 	}
 	return [...latest.values()];
+}
+
+type RuntimeBrowserExecutionBinding =
+	RuntimeBrowserToolExecutionRequestV1["binding"];
+
+function sameRuntimeBrowserExecutionBinding(
+	left: RuntimeBrowserExecutionBinding,
+	right: RuntimeBrowserExecutionBinding,
+) {
+	return (
+		left.agentId === right.agentId &&
+		left.conversationId === right.conversationId &&
+		left.executionId === right.executionId &&
+		left.capabilityVersion === right.capabilityVersion &&
+		left.pageRevision === right.pageRevision &&
+		left.sessionGeneration === right.sessionGeneration &&
+		left.resourceFence === right.resourceFence
+	);
+}
+
+function runtimeBrowserResultIdentityMatches(
+	result: unknown,
+	request: RuntimeBrowserToolExecutionRequestV1,
+): result is RuntimeBrowserToolExecutionResultV1 {
+	if (!isPlainRecord(result)) return false;
+	return (
+		result.actionId === request.actionId &&
+		result.operationRef === request.operationRef &&
+		result.attemptRef === request.attemptRef &&
+		isPlainRecord(result.binding) &&
+		sameRuntimeBrowserExecutionBinding(
+			result.binding as RuntimeBrowserExecutionBinding,
+			request.binding,
+		) &&
+		(result.phase === "completed" ||
+			result.phase === "failed" ||
+			result.phase === "unknown")
+	);
+}
+
+function runtimeBrowserUnknownResult(
+	request: RuntimeBrowserToolExecutionRequestV1,
+): RuntimeBrowserToolExecutionResultV1 {
+	return {
+		actionId: request.actionId,
+		operationRef: request.operationRef,
+		attemptRef: request.attemptRef,
+		binding: request.binding,
+		phase: "unknown",
+		contentItems: [],
+		success: false,
+		failureCode: "recovery_unconfirmed",
+	};
+}
+
+function runtimeBrowserReplayResult(
+	fact: Extract<RuntimeOperationFactV2, { kind: "tool" }>,
+	request: RuntimeBrowserToolExecutionRequestV1,
+	compatible: boolean,
+): RuntimeBrowserToolExecutionResultV1 {
+	if (!compatible || !fact.browser) return runtimeBrowserUnknownResult(request);
+	const identity = {
+		actionId: fact.browser.actionId,
+		operationRef: fact.operationRef,
+		attemptRef: fact.attemptRef,
+		binding: request.binding,
+	};
+	if (fact.phase === "completed")
+		return {
+			...identity,
+			phase: "completed",
+			contentItems: [],
+			success: true,
+		};
+	if (fact.phase === "failed")
+		return {
+			...identity,
+			phase: "failed",
+			contentItems: [],
+			success: false,
+			failureCode: fact.failureCode ?? "operation_failed",
+		};
+	return {
+		...identity,
+		phase: "unknown",
+		contentItems: [],
+		success: false,
+		failureCode: "recovery_unconfirmed",
+	};
 }
 
 function latestModelOperationAttemptFact(events: readonly CodexJournalEvent[]) {
@@ -5117,8 +5207,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			)
 				unavailable();
 			this.assertJournalOpen(journal);
-			const operationRef = randomUUID();
-			const attemptRef = randomUUID();
 			const binding = {
 				agentId: browser.binding.agentId,
 				conversationId: browser.binding.conversationId,
@@ -5128,6 +5216,45 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				sessionGeneration: browser.binding.sessionGeneration,
 				resourceFence: browser.binding.resourceFence,
 			};
+			const existing = latestOperationAttemptFacts(journal.events).find(
+				(fact): fact is Extract<RuntimeOperationFactV2, { kind: "tool" }> =>
+					fact.kind === "tool" && fact.browser?.actionId === actionId,
+			);
+			if (existing?.browser) {
+				const compatible =
+					existing.toolId === `browser:${request.tool}` &&
+					existing.browser.capabilityVersion === binding.capabilityVersion &&
+					existing.browser.pageRevision === binding.pageRevision &&
+					existing.browser.sessionGeneration === binding.sessionGeneration &&
+					existing.browser.resourceFence === binding.resourceFence;
+				if (
+					!compatible ||
+					existing.phase === "intent" ||
+					existing.phase === "started"
+				)
+					journal.externalActionsBlocked = true;
+				const replayRequest = {
+					...request,
+					actionId,
+					operationRef: existing.operationRef,
+					attemptRef: existing.attemptRef,
+					binding,
+				};
+				return {
+					execution,
+					operationRef: existing.operationRef,
+					attemptRef: existing.attemptRef,
+					actionId,
+					binding,
+					replay: runtimeBrowserReplayResult(
+						existing,
+						replayRequest,
+						compatible,
+					),
+				};
+			}
+			const operationRef = randomUUID();
+			const attemptRef = randomUUID();
 			this.appendOperationFact(session, journal, {
 				kind: "tool",
 				operationRef,
@@ -5149,10 +5276,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				attemptRef,
 				actionId,
 				binding,
+				replay: undefined,
 				cursor: journal.events.at(-1)?.cursor ?? "",
 			};
 		});
 		this.notifyEventStream(this.eventStreamKey(nativeSessionRef, executionId));
+		if (prepared.replay) return prepared.replay;
+		const browserRequest: RuntimeBrowserToolExecutionRequestV1 = {
+			tool: request.tool,
+			arguments: request.arguments,
+			actionId: prepared.actionId,
+			operationRef: prepared.operationRef,
+			attemptRef: prepared.attemptRef,
+			binding: prepared.binding,
+		};
 
 		const persist = async (
 			phase: "started" | "completed" | "failed" | "unknown",
@@ -5211,22 +5348,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (typeof authorization?.revalidate !== "function") unavailable();
 			authorization.revalidate();
 			await persist("started");
-			const result = await browser.executeTool(
-				{
-					tool: request.tool,
-					arguments: request.arguments,
-					actionId: prepared.actionId,
-					operationRef: prepared.operationRef,
-					attemptRef: prepared.attemptRef,
-					binding: {
-						...prepared.binding,
-						executionId,
-						capabilityVersion: browser.capabilityVersion,
-						pageRevision: request.pageRevision,
-					},
-				},
-				signal,
-			);
+			// Persistence can yield to cancellation or authority revocation. Recheck
+			// immediately before controller I/O so a cancelled action cannot start.
+			authorization.revalidate();
+			signal.throwIfAborted();
+			const result = await browser.executeTool(browserRequest, signal);
+			// A response is only an outcome for this action after the same authority
+			// and cancellation boundary has been observed again.
+			authorization.revalidate();
+			signal.throwIfAborted();
+			if (!runtimeBrowserResultIdentityMatches(result, browserRequest)) {
+				await persist("unknown", "recovery_unconfirmed");
+				return runtimeBrowserUnknownResult(browserRequest);
+			}
 			if (result.phase === "completed") await persist("completed");
 			else if (result.phase === "failed")
 				await persist("failed", "operation_failed");
@@ -5234,12 +5368,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			return result;
 		} catch {
 			await persist("unknown", "recovery_unconfirmed").catch(() => {});
-			return {
-				phase: "unknown",
-				contentItems: [],
-				success: false,
-				failureCode: "recovery_unconfirmed",
-			};
+			return runtimeBrowserUnknownResult(browserRequest);
 		}
 	}
 

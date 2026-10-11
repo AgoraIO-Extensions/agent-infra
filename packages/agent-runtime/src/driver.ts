@@ -47,6 +47,11 @@ export interface RuntimeBrowserToolExecutionRequestV1 {
 }
 
 export interface RuntimeBrowserToolExecutionResultV1 {
+	/** Response identity must echo the admitted request before it can resolve. */
+	readonly actionId: string;
+	readonly operationRef: string;
+	readonly attemptRef: string;
+	readonly binding: RuntimeBrowserToolExecutionRequestV1["binding"];
 	readonly phase: "completed" | "failed" | "unknown";
 	readonly contentItems: readonly {
 		readonly type: "inputText";
