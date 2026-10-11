@@ -72,7 +72,9 @@ import {
 } from "@agent-infra/contracts/runtime";
 import type { RuntimeBrowserCapabilityAssemblyFailureV1 } from "./browser-capability.js";
 import type {
+	RuntimeBrowserExecutionContextV1,
 	RuntimeDriver,
+	RuntimeDriverCommand,
 	RuntimeDriverExecutionContextV1,
 	RuntimeExternalActionAuthorization,
 } from "./driver.js";
@@ -199,6 +201,28 @@ function acceptanceUnknown() {
 
 function isInterruption(operation: Pick<StoredOperation, "kind">) {
 	return operation.kind === "stop" || operation.kind === "generation-cancel";
+}
+
+/**
+ * Bind Browser execution context only to the exact admitted Session command.
+ * A Runtime Host may serve historical or foreign requests while its current
+ * readiness assembly is still live; those requests must execute without a
+ * Browser context and fail closed in the Driver.
+ */
+export function runtimeBrowserExecutionContextForCommand(
+	browser: RuntimeBrowserExecutionContextV1 | undefined,
+	command: Pick<
+		RuntimeDriverCommand,
+		"agentId" | "conversationId" | "sessionGeneration"
+	>,
+): RuntimeBrowserExecutionContextV1 | undefined {
+	if (
+		browser?.binding.agentId !== command.agentId ||
+		browser.binding.conversationId !== command.conversationId ||
+		browser.binding.sessionGeneration !== command.sessionGeneration
+	)
+		return undefined;
+	return browser;
 }
 
 type RuntimeOperationResponse =
@@ -392,6 +416,7 @@ export class RuntimeHost {
 		done: Promise<void>;
 	}>();
 	private browserAssemblyEpoch = 0;
+	private browserExecutionContext?: RuntimeBrowserExecutionContextV1;
 	private closed = false;
 
 	private readonly v3?: RuntimeHostV3;
@@ -1134,6 +1159,20 @@ export class RuntimeHost {
 				| undefined,
 		) => {
 			if (browserAssemblyEpoch !== this.browserAssemblyEpoch) return;
+			this.browserExecutionContext =
+				input && "binding" in input && "probe" in input
+					? {
+							capabilityVersion: input.probe.capabilityVersion,
+							binding: {
+								agentId: input.binding.agentId,
+								conversationId: input.binding.sessionId,
+								sessionGeneration: input.binding.sessionGeneration,
+								resourceFence: input.binding.resourceFence,
+								workloadRevision: input.binding.workloadRevision,
+								imageDigest: input.binding.imageDigest,
+							},
+						}
+					: undefined;
 			this.options.onBrowserCapabilityAssembly?.(input);
 		};
 		publishBrowserAssembly(
@@ -1769,8 +1808,15 @@ export class RuntimeHost {
 							},
 						}
 					: context;
+			const browser = runtimeBrowserExecutionContextForCommand(
+				this.browserExecutionContext,
+				operation.command,
+			);
+			const executionContext = browser
+				? { ...(driverContext ?? {}), browser }
+				: driverContext;
 			const executed = await callDriverWithUncertainty(() =>
-				this.options.driver.execute(operation.command, driverContext),
+				this.options.driver.execute(operation.command, executionContext),
 			);
 			if (executed === driverUncertain) {
 				if (isInterruption(operation)) {
