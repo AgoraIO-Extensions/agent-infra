@@ -6,7 +6,7 @@ import {
 	RefreshCw,
 	Shield,
 } from "lucide-react";
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,10 @@ import {
 	personalApiCredentialScopeLabels,
 	personalApiCredentialScopes,
 } from "./api-credentials.js";
+import {
+	type NarrowCredential,
+	NarrowCredentialForm,
+} from "./narrow-credential-form.js";
 
 export type ApiCredentialsViewState =
 	| ApiCredentialsState
@@ -39,6 +43,8 @@ type ApiCredentialsScreenProps = {
 		body: PersonalApiCredentialIssueRequestV1,
 	) => Promise<PersonalApiCredentialIssueResponse>;
 	onRevoke?: (credentialId: string) => Promise<unknown>;
+	onNarrow?: NarrowCredential;
+	narrowingCredentialId?: string;
 	isIssuing?: boolean;
 	revokingCredentialId?: string;
 	issueError?: unknown;
@@ -73,6 +79,8 @@ export function ApiCredentialsScreen({
 	onRetry,
 	onIssue,
 	onRevoke,
+	onNarrow,
+	narrowingCredentialId,
 	isIssuing = false,
 	revokingCredentialId,
 	issueError,
@@ -308,6 +316,9 @@ export function ApiCredentialsScreen({
 									key={credential.credentialId}
 									credential={credential}
 									onRevoke={onRevoke}
+									onNarrow={onNarrow}
+									onRefresh={onRetry}
+									narrowingCredentialId={narrowingCredentialId}
 									pending={credential.credentialId === revokingCredentialId}
 								/>
 							))}
@@ -322,13 +333,48 @@ export function ApiCredentialsScreen({
 function CredentialRow({
 	credential,
 	onRevoke,
+	onNarrow,
+	onRefresh,
+	narrowingCredentialId,
 	pending,
 }: {
 	credential: PersonalApiCredentialMetadataV1;
 	onRevoke?: (credentialId: string) => Promise<unknown>;
+	onNarrow?: NarrowCredential;
+	onRefresh?: () => void;
+	narrowingCredentialId?: string;
 	pending: boolean;
 }) {
 	const revoked = Boolean(credential.revokedAt);
+	const [now, setNow] = useState(Date.now);
+	const [editing, setEditing] = useState(false);
+	const [notice, setNotice] = useState(false);
+	const narrowButton = useRef<HTMLButtonElement>(null);
+	const restoreFocus = useRef(false);
+	const expiry = credential.expiresAt
+		? new Date(credential.expiresAt).getTime()
+		: null;
+	const expired = expiry !== null && expiry <= now;
+	useEffect(() => {
+		if (revoked || expiry === null || expiry <= now) return;
+		const timer = window.setTimeout(
+			() => setNow(Date.now()),
+			Math.min(Math.max(0, expiry - Date.now()), 2_147_483_647),
+		);
+		return () => window.clearTimeout(timer);
+	}, [expiry, now, revoked]);
+	const active = !revoked && !expired;
+	const busy = pending || Boolean(narrowingCredentialId);
+	useEffect(() => {
+		if (restoreFocus.current && !editing && !busy) {
+			narrowButton.current?.focus();
+			restoreFocus.current = false;
+		}
+	}, [editing, busy]);
+	function closeForm() {
+		restoreFocus.current = true;
+		setEditing(false);
+	}
 	return (
 		<li className="rounded border bg-card p-4">
 			<div className="flex flex-wrap items-start justify-between gap-3">
@@ -339,9 +385,9 @@ function CredentialRow({
 						</code>
 						<Badge
 							variant="outline"
-							data-status={revoked ? "disabled" : "available"}
+							data-status={revoked || expired ? "disabled" : "available"}
 						>
-							{revoked ? "已撤销" : "有效"}
+							{revoked ? "已撤销" : expired ? "已过期" : "有效"}
 						</Badge>
 					</div>
 					<dl className="mt-3 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
@@ -359,21 +405,64 @@ function CredentialRow({
 						</div>
 						<div>
 							<dt className="text-muted-foreground">最近使用</dt>
-							<dd>{formatDate(credential.lastUsedAt)}</dd>
+							<dd>
+								{credential.lastUsedAt
+									? formatDate(credential.lastUsedAt)
+									: "尚未使用"}
+							</dd>
 						</div>
 					</dl>
 				</div>
-				{!revoked && onRevoke ? (
-					<Button
-						type="button"
-						variant="destructive"
-						onClick={() => void onRevoke(credential.credentialId)}
-						disabled={pending}
-					>
-						{pending ? "正在撤销…" : "撤销"}
-					</Button>
-				) : null}
+				<div className="flex flex-wrap gap-2">
+					{active && onNarrow ? (
+						<Button
+							type="button"
+							variant="outline"
+							ref={narrowButton}
+							aria-expanded={editing}
+							disabled={busy}
+							onClick={() => {
+								setNotice(false);
+								setEditing((current) => !current);
+							}}
+						>
+							收窄权限与有效期
+						</Button>
+					) : null}
+					{!revoked && onRevoke ? (
+						<Button
+							type="button"
+							variant="destructive"
+							onClick={() => {
+								setEditing(false);
+								void onRevoke(credential.credentialId).catch(() => undefined);
+							}}
+							disabled={busy}
+						>
+							{pending ? "正在撤销…" : "撤销"}
+						</Button>
+					) : null}
+				</div>
 			</div>
+			{notice ? (
+				<p role="status" className="mt-3 text-sm">
+					凭证已收窄，已读取最新元数据。
+				</p>
+			) : null}
+			{active && editing && onNarrow ? (
+				<NarrowCredentialForm
+					key={JSON.stringify([credential.scopes, credential.expiresAt])}
+					credential={credential}
+					onNarrow={onNarrow}
+					onRefresh={onRefresh}
+					onCancel={closeForm}
+					onComplete={() => {
+						setNotice(true);
+						closeForm();
+					}}
+					disabled={busy}
+				/>
+			) : null}
 		</li>
 	);
 }
