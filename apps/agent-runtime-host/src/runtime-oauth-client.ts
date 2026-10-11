@@ -269,41 +269,46 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			)
 		).filter((name) => materialNames.has(name));
 		try {
+			const failures: unknown[] = [];
 			for (const name of names) {
 				const tokenTypeHint = name.endsWith(".refresh")
 					? "refresh_token"
 					: "access_token";
-				const token = await readProtectedStandardMcpBytes(
-					materials,
-					name,
-					4096,
-				);
-				await revokeStandardOAuthToken({
-					configuration,
-					token,
-					tokenTypeHint,
-					signal: AbortSignal.timeout(10_000),
-					assertCurrent: assertStandardMcpProcessProtection,
-					...(options.fetch ? { fetch: options.fetch } : {}),
-				});
-				let unchanged = true;
 				try {
+					const token = await readProtectedStandardMcpBytes(
+						materials,
+						name,
+						4096,
+					);
+					await revokeStandardOAuthToken({
+						configuration,
+						token,
+						tokenTypeHint,
+						signal: AbortSignal.timeout(10_000),
+						assertCurrent: assertStandardMcpProcessProtection,
+						...(options.fetch ? { fetch: options.fetch } : {}),
+					});
 					await assertProtectedStandardMcpDirectoryCurrent(
 						materials,
 						directory,
 					);
-				} catch {
-					unchanged = false;
+					if (
+						(await readProtectedStandardMcpBytes(materials, name, 4096)) !==
+						token
+					)
+						throw new Error("OAuth material changed during revoke");
+					await unlink(protectedStandardMcpPath(directory, materials, name));
+				} catch (error) {
+					failures.push(error);
 				}
-				if (!unchanged)
-					throw new Error("protected OAuth material changed during revoke");
-				if (
-					(await readProtectedStandardMcpBytes(materials, name, 4096)) !== token
-				)
-					throw new Error("OAuth material changed during revoke");
-				await unlink(protectedStandardMcpPath(directory, materials, name));
 			}
-			await directory.sync();
+			try {
+				await directory.sync();
+			} catch (error) {
+				failures.push(error);
+			}
+			if (failures.length > 0)
+				throw new AggregateError(failures, "OAuth revocation incomplete");
 		} finally {
 			await directory.close();
 		}
