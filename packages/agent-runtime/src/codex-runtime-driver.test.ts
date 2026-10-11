@@ -10334,6 +10334,49 @@ async function skillDiscoveryFixture(
 }
 
 describe("installed Codex Skill complete discovery (controlled behavior only)", () => {
+	it("discovers a verified mounted Hub Skill through native skills/list", async () => {
+		const skillDirectory: RuntimeFilesystemSkillDirectoryV1 = {
+			generationId: "d".repeat(64),
+			findSkills: () => [
+				{
+					schemaVersion: 1,
+					name: "hub-skill",
+					version: "1.0.0",
+					packageDigest: "a".repeat(64),
+					manifestDigest: "b".repeat(64),
+					targetPath: ".agents/skills/hub-skill",
+					readOnly: true,
+				},
+			],
+			readSkill: async () => new Uint8Array([1]),
+		};
+		const f = await skillDiscoveryFixture(undefined, {
+			installedSkill: undefined,
+			skillDirectory,
+		});
+		f.bridge.metadata = {
+			name: "hub-skill",
+			description: "Mounted Hub Skill",
+			path: "/opt/agent-infra-skill-hub/.agents/skills/hub-skill/SKILL.md",
+			scope: "project",
+			enabled: true,
+			pluginId: null,
+		};
+		await expect(f.driver.discoverNativeSkills(f.read)).resolves.toMatchObject({
+			capabilities: [
+				{
+					name: "hub-skill",
+					description: "Mounted Hub Skill",
+					availability: "discovered",
+				},
+			],
+		});
+		expect(f.bridge.requests).toContainEqual({
+			method: "skills/extraRoots/set",
+			params: { extraRoots: ["/opt/agent-infra-skill-hub"] },
+		});
+	});
+
 	it.each(["null metadata", "null interface fields"])(
 		"admits the official absent %s shape without accepting assets or dependencies",
 		async (kind) => {
