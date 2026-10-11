@@ -18,13 +18,13 @@ import {
 	registerAgentApplicationGrantRoutes,
 } from "./http/agent-application-grant-routes.js";
 import {
-	type AgentUserUseGrantRouteDependencies,
-	registerAgentUserUseGrantRoutes,
-} from "./http/agent-user-use-grant-routes.js";
-import {
 	type AgentDefaultRelayKeyRoutesDependencies,
 	registerAgentDefaultRelayKeyRoutes,
 } from "./http/agent-default-relay-key-routes.js";
+import {
+	type AgentUserUseGrantRouteDependencies,
+	registerAgentUserUseGrantRoutes,
+} from "./http/agent-user-use-grant-routes.js";
 import { registerApplicationApiCredentialRoutes } from "./http/application-api-credential-routes.js";
 import {
 	type ApplicationMaterialGrantRouteDependencies,
