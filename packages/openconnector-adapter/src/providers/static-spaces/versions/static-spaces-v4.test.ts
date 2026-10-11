@@ -482,8 +482,8 @@ test("Credential and READ reject changed owner groups or Application before cont
 });
 
 test("ZIP Unicode-path extra fields cannot override the inspected ownership path", () => {
-	const name = Buffer.from(path),
-		content = Buffer.from(marker);
+	const name = Buffer.from(path);
+	const content = Buffer.from(marker);
 	const override = Buffer.concat([
 		Buffer.from([1]),
 		Buffer.alloc(4),
