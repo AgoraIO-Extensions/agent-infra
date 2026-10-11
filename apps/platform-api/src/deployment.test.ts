@@ -11,6 +11,7 @@ import { FakeObjectStorageV1 } from "@agent-infra/object-storage";
 import {
 	migratePlatformDatabase,
 	PostgresAgentConfigurationQueryV1,
+	PostgresPlatformUserDisablesV1,
 } from "@agent-infra/platform-store";
 import {
 	afterAll,
@@ -840,6 +841,36 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 			files,
 		});
 		expect(input.files).toBe(files);
+	});
+	it("merges Platform-only user disables into the authority context", async () => {
+		const userGovernance = new PostgresPlatformUserDisablesV1(
+			database.databaseUrl,
+			async () => null,
+		);
+		await reader.unsafe(
+			"insert into platform.platform_user_disables(user_id) values ('alice')",
+		);
+		try {
+			const input = createProductionPlatformApiAssemblyInputV1({
+				...fixture.input,
+				userGovernance,
+			});
+			const loadAuthorityContext = input.agentApiCreation?.loadAuthorityContext;
+			if (!loadAuthorityContext)
+				throw new Error("Missing API authority loader");
+			const authority = await loadAuthorityContext();
+			expect(authority.users).toEqual(
+				expect.arrayContaining([
+					{ userId: "alice", accountStatus: "disabled" },
+					{ userId: "bob", accountStatus: "active" },
+				]),
+			);
+		} finally {
+			await reader.unsafe(
+				"delete from platform.platform_user_disables where user_id='alice'",
+			);
+			await userGovernance.close();
+		}
 	});
 	it("fails closed without a request scope and closes its owned query once", async () => {
 		const input = createProductionPlatformApiAssemblyInputV1(fixture.input);

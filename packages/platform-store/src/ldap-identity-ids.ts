@@ -131,7 +131,7 @@ export class PostgresPlatformUserDisablesV1 {
 	async isPlatformDisabled(userId: string): Promise<boolean> {
 		try {
 			const [row] = await this.sql`
-				select user_id from platform.platform_user_disables where user_id=${id(userId)}
+				select user_id from platform.platform_user_disables where user_id=${text(userId)}
 			`;
 			return row !== undefined;
 		} catch {
