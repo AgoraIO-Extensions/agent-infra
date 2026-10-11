@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	type BrowserHandoffBindingV1,
@@ -39,7 +39,12 @@ const confirmation: BrowserSideEffectConfirmationV1 = {
 };
 
 describe("Browser handoff and confirmation panel", () => {
-	afterEach(() => cleanup());
+	const fixtureNow = Date.parse("2026-10-11T10:00:00.000Z");
+	beforeEach(() => vi.useFakeTimers({ now: fixtureNow }));
+	afterEach(() => {
+		cleanup();
+		vi.useRealTimers();
+	});
 
 	it("offers takeover and passes only the opaque id plus verified binding", () => {
 		const onTakeOver = vi.fn();
