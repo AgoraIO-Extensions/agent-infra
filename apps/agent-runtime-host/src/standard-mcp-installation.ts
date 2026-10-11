@@ -238,7 +238,11 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 				}
 				throw error;
 			}
-			const key = journal.entries[0].name.replace(/\.(access|refresh)$/, "");
+			const activeJournal = journal;
+			if (!activeJournal) unavailable();
+			const firstEntry = activeJournal.entries[0];
+			if (!firstEntry) unavailable();
+			const key = firstEntry.name.replace(/\.(access|refresh)$/, "");
 			const records = join(dirname(path), "records");
 			let committed = false;
 			try {
@@ -250,7 +254,7 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 			}
 			const currentValues = new Map<string, string | undefined>();
-			for (const entry of journal.entries) {
+			for (const entry of activeJournal.entries) {
 				let current: string | undefined;
 				try {
 					current = await readProtectedStandardMcpBytes(path, entry.name, 4096);
@@ -259,17 +263,17 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 				}
 				currentValues.set(entry.name, current);
 			}
-			for (const entry of journal.entries) {
+			for (const entry of activeJournal.entries) {
 				const current = currentValues.get(entry.name);
 				if (current !== entry.expected && current !== entry.next) unavailable();
 			}
 			const target =
-				journal.operation === "rollback"
+				activeJournal.operation === "rollback"
 					? "next"
 					: committed
 						? "next"
 						: "expected";
-			for (const entry of journal.entries) {
+			for (const entry of activeJournal.entries) {
 				const current = currentValues.get(entry.name);
 				const targetValue = entry[target];
 				if (current === targetValue) continue;
