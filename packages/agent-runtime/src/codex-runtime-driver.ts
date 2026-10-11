@@ -5092,7 +5092,6 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				const reader = input.body.getReader();
 				const chunks: Uint8Array[] = [];
 				let size = 0;
-				let complete = false;
 				try {
 					while (true) {
 						const next = await reader.read();
@@ -5102,14 +5101,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						if (size > 50 * 1024 * 1024) unavailable();
 						chunks.push(next.value);
 					}
-					complete = true;
 				} finally {
-					if (!complete) await reader.cancel().catch(() => undefined);
-					reader.releaseLock();
+					try {
+						await reader.cancel().catch(() => undefined);
+					} finally {
+						reader.releaseLock();
+					}
 				}
 				if (size !== input.descriptor.sizeBytes) unavailable();
+				const bytes = Buffer.concat(chunks);
+				if (
+					createHash("sha256").update(bytes).digest("hex") !==
+					input.descriptor.sha256
+				)
+					unavailable();
 				const path = join(directory, `${String(index).padStart(2, "0")}.image`);
-				await writeFile(path, Buffer.concat(chunks), {
+				await writeFile(path, bytes, {
 					flag: "wx",
 					mode: 0o600,
 				});

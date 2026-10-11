@@ -2629,7 +2629,7 @@ describe("Codex Runtime Driver", () => {
 				name: "screen.png",
 				mediaType: "image/png",
 				sizeBytes: bytes.byteLength,
-				sha256: "a".repeat(64),
+				sha256: createHash("sha256").update(bytes).digest("hex"),
 			},
 			body: new ReadableStream<Uint8Array>({
 				start(controller) {
@@ -2670,6 +2670,50 @@ describe("Codex Runtime Driver", () => {
 		const temporaryPath = String(localImage.path);
 		await expect(readFile(temporaryPath)).rejects.toThrow();
 		expect(result.result).toMatchObject({ outcome: "accepted" });
+	});
+
+	it("rejects a same-size image attachment whose digest differs from the descriptor", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+		const substituted = new Uint8Array(bytes);
+		substituted[0] = 138;
+		const readInput = vi.fn(async (fileId: string) => ({
+			fileId,
+			descriptor: {
+				name: "screen.png",
+				mediaType: "image/png",
+				sizeBytes: substituted.byteLength,
+				sha256: createHash("sha256").update(bytes).digest("hex"),
+			},
+			body: new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(substituted);
+					controller.close();
+				},
+			}),
+		}));
+		const fileBridge = {
+			readInput,
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+		};
+
+		await expect(
+			driver.execute(
+				submitCommand({
+					input: { text: "describe this image", attachments: ["file-1"] },
+				}),
+				{ fileBridge },
+			),
+		).rejects.toThrow("Codex Runtime is unavailable");
+		expect(readInput).toHaveBeenCalledWith("file-1");
+		expect(bridge.requests.some(({ method }) => method === "turn/start")).toBe(
+			false,
+		);
 	});
 
 	it("keeps Codex attachment capability fail-closed without a bridge", async () => {
