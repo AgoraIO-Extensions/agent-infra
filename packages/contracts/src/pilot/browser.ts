@@ -19,6 +19,12 @@ import {
 	AgentApplicationManagerResponseV1Schema,
 } from "./agent-application-manager.ts";
 import {
+	AgentDefaultRelayKeyCandidatesRequestV1Schema,
+	AgentDefaultRelayKeyCandidatesV1Schema,
+	AgentDefaultRelayKeyReplaceRequestV1Schema,
+	AgentDefaultRelayKeyStateV1Schema,
+} from "./agent-default-relay-key.ts";
+import {
 	AgentUserUseRevokeRequestV1Schema,
 	AgentUserUseRevokeResponseV1Schema,
 } from "./agent-user-use-grants.ts";
@@ -26,12 +32,6 @@ import {
 	ApplicationApiCredentialRequestV1Schema,
 	ApplicationApiCredentialResponseV1Schema,
 } from "./application-api-credentials.ts";
-import {
-	AgentDefaultRelayKeyCandidatesRequestV1Schema,
-	AgentDefaultRelayKeyCandidatesV1Schema,
-	AgentDefaultRelayKeyReplaceRequestV1Schema,
-	AgentDefaultRelayKeyStateV1Schema,
-} from "./agent-default-relay-key.ts";
 import {
 	ApplicationMaterialGrantRequestV1Schema,
 	ApplicationMaterialGrantResponseV1Schema,
