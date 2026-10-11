@@ -371,6 +371,11 @@ export async function createProtectedRuntimeOAuthClient(options: {
 						token
 					)
 						throw new Error("OAuth material changed during revoke");
+					assertStandardMcpProcessProtection();
+					await assertProtectedStandardMcpDirectoryCurrent(
+						materials,
+						directory,
+					);
 					await unlink(protectedStandardMcpPath(directory, materials, name));
 				} catch (error) {
 					failures.push(error);
