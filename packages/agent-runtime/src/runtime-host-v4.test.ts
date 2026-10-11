@@ -332,10 +332,63 @@ it("passes the request-scoped file bridge only through the Driver execution cont
 		return execute(command, context);
 	});
 	await f.host.submitTurnV4(f.transport);
-	expect(contexts[0]).toEqual({ fileBridge });
+	const context = contexts[0] as { fileBridge?: RuntimeFileBridgePortV1 };
+	// The Host hands the Driver its own boundary-checking view of the deployment
+	// port instead of the bare factory object.
+	expect(context.fileBridge).toMatchObject({
+		readInput: expect.any(Function),
+		writeResult: expect.any(Function),
+		revalidate: expect.any(Function),
+	});
+	expect(context.fileBridge).not.toBe(fileBridge);
+	await context.fileBridge?.readInput("input-1");
+	expect(fileBridge.readInput).toHaveBeenCalledWith("input-1", undefined);
 	expect(JSON.stringify(await readFile(f.path, "utf8"))).not.toContain(
 		"fileBridge",
 	);
+});
+
+it("re-checks current execution authority at the native submission boundary", async () => {
+	const fileBridge = {
+		readInput: vi.fn(),
+		writeResult: vi.fn(),
+		revalidate: vi.fn(),
+	} as unknown as RuntimeFileBridgePortV1;
+	const f = await setup(fileBridge);
+	const execute = f.driver.execute.bind(f.driver);
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command, context) => {
+		// The Driver revalidates before its native submission boundary.
+		context?.fileBridge?.revalidate();
+		return execute(command, context);
+	});
+
+	await f.host.submitTurnV4(f.transport);
+	expect(fileBridge.revalidate).toHaveBeenCalledTimes(1);
+});
+
+it("refuses the deployment bridge once its execution authority lapses", async () => {
+	const fileBridge = {
+		readInput: vi.fn(),
+		writeResult: vi.fn(),
+		revalidate: vi.fn(),
+	} as unknown as RuntimeFileBridgePortV1;
+	const f = await setup(fileBridge);
+	const execute = f.driver.execute.bind(f.driver);
+	const denials: unknown[] = [];
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command, context) => {
+		f.expire();
+		try {
+			context?.fileBridge?.revalidate();
+		} catch (error) {
+			denials.push(error);
+		}
+		return execute(command, context);
+	});
+
+	await f.host.submitTurnV4(f.transport);
+	expect(denials).toHaveLength(1);
+	// A lapsed authority never reaches the deployment port.
+	expect(fileBridge.revalidate).not.toHaveBeenCalled();
 });
 
 it("decides bridge expiry on the injected grant clock instead of the wall clock", async () => {
@@ -371,7 +424,11 @@ it("decides bridge expiry on the injected grant clock instead of the wall clock"
 
 	// The grant is live on the deployment clock even though the wall clock is far
 	// beyond its expiry.
-	await expect(host.getFileBridge(request)).resolves.toBe(fileBridge);
+	await expect(host.getFileBridge(request)).resolves.toMatchObject({
+		readInput: expect.any(Function),
+		writeResult: expect.any(Function),
+		revalidate: expect.any(Function),
+	});
 	clock += 60_000;
 	await expect(host.getFileBridge(request)).rejects.toThrow(
 		"RUNTIME_FILE_BRIDGE_BINDING_INVALID",
