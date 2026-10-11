@@ -732,41 +732,67 @@ it("does not revoke a foreign principal in the shared material tree", async () =
 		/^[a-f0-9]{64}\.json$/.test(name),
 	);
 	expect(sourceName).toBeDefined();
-	const foreign = JSON.parse(
+	const baseRecord = JSON.parse(
 		await readFile(join(records, sourceName as string), "utf8"),
 	) as Record<string, unknown>;
-	foreign.principal = { kind: "user", id: "bob" };
-	foreign.authorizationId = "foreign-authorization";
-	const foreignKey = createHash("sha256")
-		.update(
-			JSON.stringify([
-				standardMcpInstallationKey(
-					{ kind: "user", id: "bob" },
-					f.scope.agentId,
-					f.target,
-				),
-				foreign.authorizationId,
-			]),
-		)
-		.digest("hex");
-	await writeFile(
-		join(records, `${foreignKey}.json`),
-		JSON.stringify(foreign),
-		{
-			mode: 0o600,
-		},
+	const addForeign = async (
+		suffix: string,
+		token: string,
+		principal = { kind: "user", id: "alice" },
+		scopePatch: Record<string, unknown> = {},
+	) => {
+		const foreign = structuredClone(baseRecord);
+		foreign.principal = principal;
+		foreign.authorizationId = `foreign-${suffix}`;
+		foreign.scope = { ...f.scope, ...scopePatch };
+		const agentId =
+			typeof scopePatch.agentId === "string"
+				? scopePatch.agentId
+				: f.scope.agentId;
+		const foreignKey = createHash("sha256")
+			.update(
+				JSON.stringify([
+					standardMcpInstallationKey(principal, agentId, f.target),
+					foreign.authorizationId,
+				]),
+			)
+			.digest("hex");
+		await writeFile(
+			join(records, `${foreignKey}.json`),
+			JSON.stringify(foreign),
+			{ mode: 0o600 },
+		);
+		await writeFile(join(materials, `${foreignKey}.access`), token, {
+			mode: 0o400,
+		});
+		return { foreignKey, token };
+	};
+	const foreignPrincipal = await addForeign(
+		"principal",
+		"synthetic-foreign-principal",
+		{ kind: "user", id: "bob" },
 	);
-	const foreignToken = "synthetic-foreign-access";
-	await writeFile(join(materials, `${foreignKey}.access`), foreignToken, {
-		mode: 0o400,
-	});
+	const foreignAgent = await addForeign(
+		"agent",
+		"synthetic-foreign-agent",
+		{ kind: "user", id: "alice" },
+		{ agentId: "agent-b" },
+	);
+	const foreignConsumer = await addForeign(
+		"consumer",
+		"synthetic-foreign-consumer",
+		{ kind: "user", id: "alice" },
+		{ configFingerprint: "a".repeat(64) },
+	);
 	await f.assembly.client.revoke();
 	const tokens = f.calls.map((body) => body.get("token"));
 	expect(tokens).toEqual(expect.arrayContaining([access, refresh]));
-	expect(tokens).not.toContain(foreignToken);
-	expect(await readFile(join(materials, `${foreignKey}.access`), "utf8")).toBe(
-		foreignToken,
-	);
+	for (const foreign of [foreignPrincipal, foreignAgent, foreignConsumer]) {
+		expect(tokens).not.toContain(foreign.token);
+		expect(
+			await readFile(join(materials, `${foreign.foreignKey}.access`), "utf8"),
+		).toBe(foreign.token);
+	}
 });
 
 it("retains protected material when remote revocation is unknown", async () => {
