@@ -19,6 +19,7 @@ import {
 	createRuntimeFileBridgeV1,
 	type RuntimeFileBridgeBindingV1,
 	type RuntimeFileBridgeContextV1,
+	readRuntimeFileResultReceiptV1,
 } from "./runtime-file-bridge.js";
 
 const binding: RuntimeFileBridgeBindingV1 = Object.freeze({
@@ -202,14 +203,30 @@ describe("RuntimeHost execution file bridge", () => {
 			) => projection,
 		);
 		const port = bridge({ binding: longBinding, writeResult });
-		await expect(
-			port.writeResult(descriptor, new ReadableStream<Uint8Array>()),
-		).resolves.toEqual(projection);
+		const receipt = await port.writeResult(
+			descriptor,
+			new ReadableStream<Uint8Array>(),
+		);
+		expect(receipt.projection).toEqual(projection);
 		expect(writeResult.mock.calls[0]?.[2]).toMatchObject({
 			fileId: "result",
 			operation: "write",
 			executionId: longBinding.executionId,
 		});
+	});
+
+	it("keeps confirmed receipt metadata immutable at runtime", async () => {
+		const receipt = await bridge().writeResult(
+			descriptor,
+			new ReadableStream<Uint8Array>(),
+		);
+		const metadata = readRuntimeFileResultReceiptV1(receipt);
+		expect(Object.isFrozen(metadata)).toBe(true);
+		expect(Object.isFrozen(metadata.binding)).toBe(true);
+		expect(Object.isFrozen(metadata.projection)).toBe(true);
+		expect(() => {
+			(metadata as { binding: unknown }).binding = {};
+		}).toThrow();
 	});
 
 	it("rejects a file outside the signed input set before invoking the reader", async () => {
@@ -254,6 +271,19 @@ describe("RuntimeHost execution file bridge", () => {
 			expect(writeResult).not.toHaveBeenCalled();
 		},
 	);
+
+	it("revalidates after an asynchronous result write", async () => {
+		let clock = 10_000;
+		const writeResult = vi.fn(async () => {
+			clock = 20_000;
+			return projection;
+		});
+		const port = bridge({ now: () => clock, writeResult });
+		await expect(
+			port.writeResult(descriptor, new ReadableStream<Uint8Array>()),
+		).rejects.toThrow("RUNTIME_FILE_BRIDGE_CONTEXT_EXPIRED");
+		expect(writeResult).toHaveBeenCalledTimes(1);
+	});
 
 	it("rejects a context with a wrong operation or substituted binding", () => {
 		const wrong = {

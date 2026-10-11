@@ -10,7 +10,7 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import type {
 	RuntimeFileBridgePortV1,
-	RuntimeFileResultV1,
+	RuntimeFileResultReceiptV1,
 } from "./runtime-file-bridge.js";
 
 /** Verified Browser binding supplied only for one Runtime execution. */
@@ -147,7 +147,7 @@ export interface RuntimeDriver {
 	/** Persist metadata only after a request-local bridge has confirmed a result file. */
 	recordResultFile?(
 		command: RuntimeDriverCommand,
-		result: RuntimeFileResultV1,
+		result: RuntimeFileResultReceiptV1,
 	): Promise<void>;
 	subscribeEvents(
 		nativeSessionRef: string,

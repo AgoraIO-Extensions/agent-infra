@@ -115,7 +115,9 @@ describe("Worker V4 runtime file client", () => {
 					},
 				}),
 			),
-		).resolves.toMatchObject({ fileId: "result-1", status: "available" });
+		).resolves.toMatchObject({
+			projection: { fileId: "result-1", status: "available" },
+		});
 		expect(calls).toHaveLength(3);
 	});
 
@@ -134,6 +136,45 @@ describe("Worker V4 runtime file client", () => {
 			"WORKER_RUNTIME_FILE_BINDING_STALE",
 		);
 		expect(calls).toBe(0);
+	});
+
+	it("revalidates before minting a receipt after completion", async () => {
+		let clock = 1;
+		const localBinding = { ...binding, expiresAt: 100 };
+		const resultDescriptor = { ...descriptor, name: "result.txt" };
+		const result = access(
+			{
+				fileId: "result-1",
+				kind: "result",
+				status: "pending",
+				descriptor: resultDescriptor,
+			},
+			"/api/v1/conversations/conversation-1/files/result-1/content",
+		);
+		let calls = 0;
+		const factory = createWorkerRuntimeFileBridgeFactoryV1({
+			origin: "https://platform.example",
+			serviceToken: "s".repeat(32),
+			now: () => clock,
+			fetch: async (_input) => {
+				calls += 1;
+				if (calls === 1) return Response.json(result);
+				if (calls === 2) return new Response(null, { status: 201 });
+				clock = 101;
+				return Response.json({ ...result.file, status: "available" });
+			},
+		});
+		await expect(
+			factory(localBinding).writeResult(
+				resultDescriptor,
+				new ReadableStream({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode("abc"));
+						controller.close();
+					},
+				}),
+			),
+		).rejects.toThrow("WORKER_RUNTIME_FILE_BINDING_STALE");
 	});
 
 	it("revalidates while an input stream is being consumed", async () => {

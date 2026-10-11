@@ -3,10 +3,10 @@ import { TextDecoder } from "node:util";
 import type {
 	RuntimeFileBridgeBindingV1,
 	RuntimeFileBridgeFactoryV1,
-	RuntimeFileBridgePortV1,
 	RuntimeFileInputV1,
 	RuntimeFileResultV1,
 } from "@agent-infra/agent-runtime";
+import { createRuntimeFileBridgeV1 } from "@agent-infra/agent-runtime";
 import {
 	FileAccessResponseV1Schema,
 	type FileDescriptorV1,
@@ -203,11 +203,7 @@ export function createRuntimeFileBridgeFactoryV1(
 	}
 
 	return (binding) => {
-		const port: RuntimeFileBridgePortV1 = {
-			revalidate() {
-				if (Date.now() >= binding.expiresAt)
-					throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_EXPIRED");
-			},
+		const rawPort = {
 			async readInput(fileId: string): Promise<RuntimeFileInputV1> {
 				if (!binding.inputFileIds.includes(fileId))
 					throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
@@ -360,6 +356,13 @@ export function createRuntimeFileBridgeFactoryV1(
 				}
 			},
 		};
-		return port;
+		return createRuntimeFileBridgeV1({
+			binding,
+			readInput: (context) => rawPort.readInput(context.fileId),
+			writeResult: (descriptor, body) => rawPort.writeResult(descriptor, body),
+			now: () => Date.now(),
+			isRevoked: () => false,
+			isCurrent: () => true,
+		});
 	};
 }
