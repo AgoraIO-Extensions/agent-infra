@@ -1751,6 +1751,26 @@ function isScopedAuditCredentialSecurityAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #1260 admits only these exact session-bound default Key operations.
+function isAgentDefaultRelayKeyV2OpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/agents/{agentId}/default-relay-key",
+		"/api/v2/agents/{agentId}/default-relay-key/candidates",
+	];
+	if (paths.some((path) => previous.paths?.[path] !== undefined)) return false;
+	const addition = Object.fromEntries(
+		paths.map((path) => [path, current.paths?.[path]]),
+	);
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"cb5d42ff2f8ad50c3c85325e38e6f5ff40fdef88e65744033406a2016929f310"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	return sameValue(previous, normalized);
+}
+
 // #1060 extends only the canonical audit action at its existing schema locations.
 function withoutPersonalApiAgentReadAudit(previous, current) {
 	const normalized = structuredClone(current);
