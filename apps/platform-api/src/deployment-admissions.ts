@@ -439,7 +439,6 @@ export function createDeploymentAdmissionsV1(
 					: undefined;
 				if (
 					selection.kind === "standard" &&
-					template?.loadValidation &&
 					(readiness?.state !== "ready" ||
 						selection.templateRevision !== readiness.revision)
 				)
@@ -474,9 +473,8 @@ export function createDeploymentAdmissionsV1(
 					if (!template) return denied;
 					const currentReadiness = await readTemplateReadiness(template);
 					if (
-						(template.loadValidation &&
-							(currentReadiness.state !== "ready" ||
-								currentReadiness.revision !== readiness?.revision)) ||
+						currentReadiness.state !== "ready" ||
+						currentReadiness.revision !== readiness?.revision ||
 						result.immutableDigest !== template.imageDigest ||
 						manifest.interactionMode !== "platform-adapter" ||
 						(template.connectionEnabled &&
