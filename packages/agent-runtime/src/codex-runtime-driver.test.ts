@@ -53,6 +53,7 @@ import {
 	runtimeGrantFixture,
 } from "./grant-fixture.test-support.js";
 import { RuntimeHost } from "./runtime-host.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 type CancelTurnTestHook = (
 	turn: CodexNativeTurn,
@@ -424,6 +425,7 @@ function driverOptions(
 	path: string,
 	configVersion = "synthetic-config-1",
 	installedSkill?: CodexInstalledSkillDescriptorV1,
+	skillDirectory?: RuntimeFilesystemSkillDirectoryV1,
 ) {
 	return {
 		nativeLane: "private-callback" as const,
@@ -444,6 +446,7 @@ function driverOptions(
 			},
 		],
 		...(installedSkill ? { installedSkill } : {}),
+		...(skillDirectory ? { skillDirectory } : {}),
 	};
 }
 
@@ -500,9 +503,10 @@ function openDriver(
 	onOpen?: (options: CodexAppServerBridgeOptions) => void,
 	configVersion?: string,
 	installedSkill?: CodexInstalledSkillDescriptorV1,
+	skillDirectory?: RuntimeFilesystemSkillDirectoryV1,
 ) {
 	return openCodexRuntimeDriverForTest(
-		driverOptions(path, configVersion, installedSkill),
+		driverOptions(path, configVersion, installedSkill, skillDirectory),
 		async (options) => {
 			onOpen?.(options);
 			return bridge;
@@ -1266,6 +1270,43 @@ describe("Codex installed Skill descriptor receipt", () => {
 					version: "0.1.0-candidate.1",
 					manifestSha256: descriptor.manifestSha256,
 					packageDigest: descriptor.manifest.packageDigest.sha256,
+					readOnly: true,
+				},
+			],
+		});
+	});
+	it("publishes verified mounted Hub Skill metadata in runtime capabilities", async () => {
+		const directory: RuntimeFilesystemSkillDirectoryV1 = {
+			generationId: "d".repeat(64),
+			findSkills: () => [
+				{
+					schemaVersion: 1,
+					name: "hub-skill",
+					version: "1.0.0",
+					packageDigest: "a".repeat(64),
+					manifestDigest: "b".repeat(64),
+					targetPath: ".agents/skills/hub-skill",
+					readOnly: true,
+				},
+			],
+			readSkill: async () => new Uint8Array([1]),
+		};
+		const driver = await openDriver(
+			join(await runtimeDirectory(), "driver.json"),
+			new TestCodexBridge(),
+			undefined,
+			undefined,
+			undefined,
+			directory,
+		);
+		drivers.push(driver);
+		expect(await driver.getCapabilities()).toMatchObject({
+			skills: [
+				{
+					name: "hub-skill",
+					version: "1.0.0",
+					manifestSha256: "b".repeat(64),
+					packageDigest: "a".repeat(64),
 					readOnly: true,
 				},
 			],

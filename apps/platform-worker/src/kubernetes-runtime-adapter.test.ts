@@ -1,3 +1,5 @@
+import { SkillWorkloadProjectionV1Schema } from "@agent-infra/contracts";
+import { runtimeSkillHubBindingEnvironmentNameV1 } from "@agent-infra/contracts/runtime";
 import type {
 	V1Ingress,
 	V1PersistentVolumeClaim,
@@ -18,6 +20,70 @@ import {
 } from "./kubernetes-runtime-adapter.js";
 
 describe("GA Kubernetes Workload adapter", () => {
+	const skillProjection = SkillWorkloadProjectionV1Schema.parse({
+		schemaVersion: 1,
+		agentId: "agent-a",
+		agentVersion: "agent-version-1",
+		skillVersion: {
+			schemaVersion: 1,
+			skillId: "skill-a",
+			skillVersionId: "skill-version-a",
+			provider: "system",
+			version: "1.0.0",
+			packageObjectVersion: "object-a",
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			signatureDigest: "c".repeat(64),
+		},
+		manifest: {
+			schemaVersion: 1,
+			name: "workspace-summary",
+			version: "1.0.0",
+			entryPath: "SKILL.md",
+			files: [{ path: "SKILL.md", sizeBytes: 1, sha256: "a".repeat(64) }],
+			packageDigest: "a".repeat(64),
+		},
+		targetPath: ".agents/skills/workspace-summary",
+		readOnly: true,
+		grant: {
+			schemaVersion: 1,
+			tools: [],
+			connections: [],
+			fileRoots: [],
+			networkOrigins: [],
+			scripts: false,
+		},
+	});
+
+	it("projects the verified Skill generation into the Runtime environment", async () => {
+		const f = fixture();
+		const desired = {
+			...workloadDesiredFixture(),
+			skills: [skillProjection],
+			skillGenerationId: "a".repeat(64),
+		};
+		const adapter = f.adapter();
+		const identity = await adapter.apply(desired);
+		if (!identity || identity === "pending") throw new Error();
+		const workload = f.resources.get(`StatefulSet/${desired.service.name}`) as
+			| V1StatefulSet
+			| undefined;
+		const entry = workload?.spec?.template.spec?.containers?.[0]?.env?.find(
+			(value) => value.name === runtimeSkillHubBindingEnvironmentNameV1,
+		);
+		if (!entry?.value) throw new Error("Missing Runtime Skill binding");
+		const binding = JSON.parse(entry.value) as {
+			agentId: string;
+			generationId: string;
+			projections: readonly unknown[];
+		};
+		expect(binding).toMatchObject({
+			agentId: "agent-a",
+			generationId: "a".repeat(64),
+		});
+		expect(binding.projections).toHaveLength(1);
+	});
+
 	it("mounts the verified Skill generation through a fixed read-only Hub root", async () => {
 		const f = fixture();
 		const desired = {
