@@ -67,6 +67,7 @@ import {
 	ingressVerifiedRuntimeHost,
 	runtimeGrantFixture,
 } from "./grant-fixture.test-support.js";
+import { createRuntimeFileBridgeV1 } from "./runtime-file-bridge.js";
 import { RuntimeHost } from "./runtime-host.js";
 
 type CancelTurnTestHook = (
@@ -3374,8 +3375,32 @@ describe("Codex Runtime Driver", () => {
 			createdAt: new Date().toISOString(),
 			expiresAt: new Date(Date.now() + 60_000).toISOString(),
 		};
-		await driver.recordResultFile(command, projection);
-		await driver.recordResultFile(command, projection);
+		const receiptBridge = createRuntimeFileBridgeV1({
+			binding: {
+				actorId: "actor-codex",
+				channelId: "web",
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				executionId: command.executionId,
+				sessionGeneration: command.sessionGeneration,
+				grantId: "grant-codex",
+				expiresAt: Date.now() + 60_000,
+				inputFileIds: [],
+			},
+			now: () => Date.now(),
+			isRevoked: () => false,
+			isCurrent: () => true,
+			readInput: async () => {
+				throw new Error("unused");
+			},
+			writeResult: async () => projection,
+		});
+		const receipt = await receiptBridge.writeResult(
+			projection.descriptor,
+			new ReadableStream<Uint8Array>(),
+		);
+		await driver.recordResultFile(command, receipt);
+		await driver.recordResultFile(command, receipt);
 		const events = await driver.replayEvents(
 			accepted.nativeSessionRef,
 			command.executionId,
@@ -3392,16 +3417,39 @@ describe("Codex Runtime Driver", () => {
 				},
 			}),
 		]);
+		await bridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () => {
+			await expect(
+				driver.getStatus(accepted.nativeSessionRef, command.executionId),
+			).resolves.toBe("completed");
+		});
+		const secondCommand = submitCommand({
+			operationId: "execution-codex-2",
+			executionId: "execution-codex-2",
+		});
+		await expect(driver.execute(secondCommand)).resolves.toMatchObject({
+			result: { outcome: "accepted", status: "running" },
+		});
+		await expect(
+			driver.recordResultFile(secondCommand, receipt),
+		).rejects.toThrow();
+		await bridge.emitTurnCompleted("completed");
+		const finalEvents = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
 		await driver.close();
 		const recovered = await openDriver(path, new TestCodexBridge());
 		drivers.push(recovered);
 		await expect(
 			recovered.replayEvents(accepted.nativeSessionRef, command.executionId),
-		).resolves.toEqual(events);
+		).resolves.toEqual(finalEvents);
 		await expect(
 			recovered.recordResultFile(command, {
-				...projection,
-				descriptor: { ...projection.descriptor, name: "forged.txt" },
+				projection: {
+					...projection,
+					descriptor: { ...projection.descriptor, name: "forged.txt" },
+				},
 			}),
 		).rejects.toThrow();
 		await expect(
@@ -3411,7 +3459,7 @@ describe("Codex Runtime Driver", () => {
 					executionId: "foreign-execution",
 					operationId: command.operationId,
 				},
-				projection,
+				receipt,
 			),
 		).rejects.toThrow();
 	});

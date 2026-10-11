@@ -1,5 +1,5 @@
-import type {
-	FileDescriptorV1,
+import {
+	type FileDescriptorV1,
 	FileProjectionV1Schema,
 } from "@agent-infra/contracts/files";
 import {
@@ -14,6 +14,25 @@ import {
 export type RuntimeFileResultV1 = ReturnType<
 	typeof FileProjectionV1Schema.parse
 >;
+
+/**
+ * A confirmed result projection tied to the request-local bridge that produced
+ * it. The binding is kept in a private WeakMap so a plain projection, or a
+ * copied/edited receipt, cannot be accepted by the Driver.
+ */
+export interface RuntimeFileResultReceiptV1 {
+	readonly projection: RuntimeFileResultV1;
+}
+
+type RuntimeFileResultReceiptMetadataV1 = Readonly<{
+	binding: RuntimeFileBridgeBindingV1;
+	projection: RuntimeFileResultV1;
+}>;
+
+const runtimeFileResultReceipts = new WeakMap<
+	object,
+	RuntimeFileResultReceiptMetadataV1
+>();
 
 /**
  * Request-local file authority for one RuntimeHost operation.
@@ -63,12 +82,47 @@ export interface RuntimeFileBridgePortV1 {
 	writeResult(
 		descriptor: FileDescriptorV1,
 		body: ReadableStream<Uint8Array>,
-	): Promise<RuntimeFileResultV1>;
+	): Promise<RuntimeFileResultReceiptV1>;
 	/**
 	 * Re-checks the current Session/Execution authority before bytes that were
 	 * already read cross into a native side effect.
 	 */
 	revalidate(): void;
+}
+
+function freezeProjection(value: RuntimeFileResultV1): RuntimeFileResultV1 {
+	const projection = FileProjectionV1Schema.parse(value);
+	return Object.freeze({
+		...projection,
+		descriptor: Object.freeze({ ...projection.descriptor }),
+	});
+}
+
+/** Creates a bridge-owned result receipt after the authority confirms a projection. */
+function createRuntimeFileResultReceiptV1(
+	binding: RuntimeFileBridgeBindingV1,
+	projection: RuntimeFileResultV1,
+): RuntimeFileResultReceiptV1 {
+	assertBinding(binding);
+	const frozenProjection = freezeProjection(projection);
+	const receipt = Object.freeze({ projection: frozenProjection });
+	runtimeFileResultReceipts.set(receipt, {
+		binding,
+		projection: frozenProjection,
+	});
+	return receipt;
+}
+
+/** Reads the private bridge metadata and rejects copied or forged receipts. */
+export function readRuntimeFileResultReceiptV1(
+	value: RuntimeFileResultReceiptV1,
+): RuntimeFileResultReceiptMetadataV1 {
+	if (!value || typeof value !== "object")
+		throw new TypeError("RUNTIME_FILE_RESULT_RECEIPT_INVALID");
+	const metadata = runtimeFileResultReceipts.get(value);
+	if (!metadata || value.projection !== metadata.projection)
+		throw new TypeError("RUNTIME_FILE_RESULT_RECEIPT_INVALID");
+	return metadata;
 }
 
 /** Creates a port bound to exactly one validated Runtime business request. */
@@ -338,13 +392,14 @@ export function createRuntimeFileBridgeV1(options: {
 		},
 		async writeResult(descriptor, body) {
 			assertLive();
-			return options.writeResult(
+			const projection = await options.writeResult(
 				descriptor,
 				body,
 				// The execution binding carries the unique result owner; no file id exists
 				// until the authority allocates the confirmed result object.
 				context(binding, RUNTIME_FILE_BRIDGE_RESULT_FILE_ID_V1, "write"),
 			);
+			return createRuntimeFileResultReceiptV1(binding, projection);
 		},
 	};
 }

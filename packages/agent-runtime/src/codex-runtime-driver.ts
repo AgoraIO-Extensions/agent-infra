@@ -129,8 +129,10 @@ import {
 import type {
 	RuntimeFileBridgePortV1,
 	RuntimeFileInputV1,
+	RuntimeFileResultReceiptV1,
 	RuntimeFileResultV1,
 } from "./runtime-file-bridge.js";
+import { readRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 const runtimeSkillHubMountRootV1 = "/opt/agent-infra-skill-hub";
@@ -6705,9 +6707,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	async recordResultFile(
 		command: RuntimeDriverCommand,
-		result: RuntimeFileResultV1,
+		result: RuntimeFileResultReceiptV1,
 	) {
-		const projection = FileProjectionV1Schema.parse(result);
+		const { binding, projection } = readRuntimeFileResultReceiptV1(result);
+		if (
+			binding.agentId !== command.agentId ||
+			binding.conversationId !== command.conversationId ||
+			binding.executionId !== command.executionId ||
+			binding.sessionGeneration !== command.sessionGeneration
+		)
+			runtimeAuthorizationDenied();
+		FileProjectionV1Schema.parse(projection);
 		if (
 			projection.kind !== "result" ||
 			projection.status !== "available" ||

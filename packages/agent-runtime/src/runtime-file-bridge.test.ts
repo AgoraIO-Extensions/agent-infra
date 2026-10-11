@@ -202,9 +202,11 @@ describe("RuntimeHost execution file bridge", () => {
 			) => projection,
 		);
 		const port = bridge({ binding: longBinding, writeResult });
-		await expect(
-			port.writeResult(descriptor, new ReadableStream<Uint8Array>()),
-		).resolves.toEqual(projection);
+		const receipt = await port.writeResult(
+			descriptor,
+			new ReadableStream<Uint8Array>(),
+		);
+		expect(receipt.projection).toEqual(projection);
 		expect(writeResult.mock.calls[0]?.[2]).toMatchObject({
 			fileId: "result",
 			operation: "write",
