@@ -1686,47 +1686,47 @@
 		},
 		{
 			"provider": "static-spaces",
-			"providerReleaseId": "static-spaces-connection-v3-supervised",
-			"executorDigest": "sha256:3ecd451b6e620175976cabcdce425c2181762b9c53c9217d6f5c5502f08a61b3",
+			"providerReleaseId": "static-spaces-connection-v4-restricted",
+			"executorDigest": "sha256:f969c66c3b76c1084c07a4c5d819051963033b9feb594986272ec4e1fdec177b",
 			"sourceCommit": "4b9afc47750ae2a8e73f01345745dbe3262d9e1e",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:1d906d6d213d93609954aa900327df81ae626c25c5b3c39e4dc60d639d8a2345",
-			"deploymentDigest": "sha256:2426a95a0095691367caa6b5a51133965bb99257ab2e6ef4b329b9ef6e46dd69",
+			"deploymentDigest": "sha256:26875f09f737b8eb86d822db11e68a9e1d14717fb48785d967e1a210f0088f2f",
 			"actions": [
 				{
-					"id": "static-spaces.download_file@v3",
+					"id": "static-spaces.download_file@v4",
 					"name": "static-spaces.download_file",
-					"authorizationDigest": "sha256:99ff13ff91d87503360f7062732d7ab472342f7c0369ec2338bb023c23011a54"
+					"authorizationDigest": "sha256:2b6d7225b6ac0ecee8ea04fa5a8f2d95f6cf552969857db738bd24c60ea15338"
 				},
 				{
-					"id": "static-spaces.get_current_user@v3",
+					"id": "static-spaces.get_current_user@v4",
 					"name": "static-spaces.get_current_user",
-					"authorizationDigest": "sha256:f90e8357fd9c75ed8ab8249a96d4887d3a3d1f349383b8895499e812d4b4d1ce"
+					"authorizationDigest": "sha256:50df0ae072d127d7325ab7c727f8b94d41ee200d0fad62e767700e3724e4bcda"
 				},
 				{
-					"id": "static-spaces.get_markdown_review@v3",
+					"id": "static-spaces.get_markdown_review@v4",
 					"name": "static-spaces.get_markdown_review",
-					"authorizationDigest": "sha256:f1543452d736d80a18188b91da76fe40b87afc38ce65bee215e7fdbc38d55d08"
+					"authorizationDigest": "sha256:555f0cbedb7353e0c46ae784fa16518306f5f7e5cfdf882e2657e545ab215a39"
 				},
 				{
-					"id": "static-spaces.list_files@v3",
+					"id": "static-spaces.list_files@v4",
 					"name": "static-spaces.list_files",
-					"authorizationDigest": "sha256:6f136b406b8a7800c397f03113fc472dace63916ece0af4ebe414a5421ab1d56"
+					"authorizationDigest": "sha256:b21f9c79cfdf11996c45c3f7596406440339c669bb7c7276bd7d3dd0f0effee1"
 				},
 				{
-					"id": "static-spaces.publish_space@v3",
+					"id": "static-spaces.publish_space@v4",
 					"name": "static-spaces.publish_space",
-					"authorizationDigest": "sha256:7d95ba403d5e91b3f0fd8b790d4d58bfb535e423d42ef0dbc94fe94787a2fef5"
+					"authorizationDigest": "sha256:b522c67beffa7ce88b09727bf9e2d54b3b0ca31a79334c6d4323725053c35771"
 				},
 				{
-					"id": "static-spaces.upload_html@v3",
+					"id": "static-spaces.upload_html@v4",
 					"name": "static-spaces.upload_html",
-					"authorizationDigest": "sha256:07eff2d42e12650d38cfadf078d87fec1ce3a3edf25b79806ca3049152cc6666"
+					"authorizationDigest": "sha256:e7582b6e7efe642b26d3e4dad7f43b122dececfe4ccb0d9c25c68370e8ac7037"
 				},
 				{
-					"id": "static-spaces.upload_static_package@v3",
+					"id": "static-spaces.upload_static_package@v4",
 					"name": "static-spaces.upload_static_package",
-					"authorizationDigest": "sha256:d9f02d236c6918efc9cf1c57fe0d0db29fe94c8e98f81057cab0b92933b40e03"
+					"authorizationDigest": "sha256:277500627137a97834740716275b0cc779d38b57350bc6ab52b3e451bd1eb9c7"
 				}
 			],
 			"compatibility": []

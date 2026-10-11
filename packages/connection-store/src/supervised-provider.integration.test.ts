@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { ConnectionApplicationService } from "@agent-infra/connection-core";
 import { githubConnectionCatalog } from "@agent-infra/openconnector-adapter";
 import {
-	staticSpacesConnectionCatalog,
+	staticSpacesV3ConnectionCatalog as staticSpacesConnectionCatalog,
 	staticSpacesPilot,
 	staticSpacesV2ConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/providers/static-spaces";

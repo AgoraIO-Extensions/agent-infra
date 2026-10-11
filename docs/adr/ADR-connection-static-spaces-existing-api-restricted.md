@@ -2,9 +2,9 @@
 
 ## 状态
 
-Proposed。Connection Owner 于 2026-10-11 批准“不改上游、准备受限接入”的交付方向。
-本 ADR 是该方向的具体评审对象，由 [#1672](https://github.com/AgoraIO-Extensions/agent-infra/issues/1672)
-跟踪。发布/激活批准和残余风险接受须绑定本文及最终版本，不能由方向批准推断为已激活。
+Accepted。Connection Owner 于 2026-10-11 明确批准 [#1831](https://github.com/AgoraIO-Extensions/agent-infra/pull/1831) 的长期受限方案及文中残余风险，并授权实现。
+本 ADR 是该方向的批准契约，由 [#1672](https://github.com/AgoraIO-Extensions/agent-infra/issues/1672)
+跟踪。发布/激活必须绑定本文及最终实现版本；架构批准不代表运行环境已激活。
 上游改造任务 [EEP-1832](https://jira.agoralab.co/browse/EEP-1832) 已取消。
 
 ## 问题与已知能力
@@ -22,7 +22,7 @@ Connection 上海 v89 的实际镜像/SBOM/manifest 签名、运行容器文件�
 [#1745](https://github.com/AgoraIO-Extensions/agent-infra/issues/1745)。供应链证据不能替代
 Legal 签收、凭证到期或新版本的真实授权链路。
 
-## 决定提案
+## 决定
 
 使用现有 HTTP API，不新增 StaticSpaces 幂等、回执、查询或限流接口。
 仅允许具名受限接入；不将缺失能力记录为已实现，也不把受限批准转成 `LIVE_VERIFIED`。
@@ -39,13 +39,13 @@ Legal 签收、凭证到期或新版本的真实授权链路。
 | WRITE | 仅新批准 run 的隔离路径和 marker；拒绝覆盖、其他空间、成员/ACL 参数扩权 |
 | 版本 | 新的 immutable ProviderRelease/ActionVersion/profile/digest；不修改归档版本 |
 | 授权 | 新批准记录、前置公司审批和显式 Consent/Grant，不继承已撤销的 Grant |
-| 有效期提案 | 长期保持上述受限范围，沿用正常 Grant 生命周期；不是旧 pilot 续期，显式撤权或停用立即停止新准入 |
+| 有效期 | 长期保持上述受限范围，沿用正常 Grant 生命周期；不是旧 pilot 续期，显式撤权或停用立即停止新准入 |
 | 停用 | 撤权、账号/空间身份变化、凭证拒绝、隔离失败或未知效果时关闭新准入；保留在途效果审计 |
 
 账号、Consumer、空间及参数限制必须覆盖 Credential 接入、发现、声明、Consent/Grant 和每次
 server-side dispatch，不能只隐藏卡片或用环境开关放行。旧 v2/v3 永久关闭；原 pilot 在
 2026-10-11 05:00 UTC 已到期，不重开、不延期。长期受限运行政策是本文独立的发布评审对象，不能套用旧 pilot 的批准；
-本 ADR 未接受前，不开放新的 profile。
+激活前须绑定最终实现版本、审批记录和发布回执，不沿用旧 pilot 的激活。
 
 ## 写入与错误语义
 
@@ -64,12 +64,11 @@ server-side dispatch，不能只隐藏卡片或用环境开关放行。旧 v2/v3
 
 ## 风险与激活门禁
 
-本提案接受现有 API 的能力限制作为待评审风险，不豁免服务端身份、Credential 隔离、
+本决定接受现有 API 的能力限制作为限范围已接受风险，不豁免服务端身份、Credential 隔离、
 Consent/Grant、持久 Call/Effect/Dispatch、单写、签名供应链和提交后未知不重放。
-Legal/开源合规及实际独立凭证 expiry 尚未取得证据；其是否可在具名受限模式接受、由谁签收，
-须形成明确评审结论，不能仅因我们可修改上游源码就标记通过。
+Legal/开源合规及实际独立凭证 expiry 尚未取得证据；Owner 已对该具名受限范围接受这些未验证项，不将其记为 Legal 签收或 expiry 验证通过，也不扩展为广泛生产批准。
 
-先通过 HLD/工程 Spec/本 ADR 的评审，再实现和绑定新版本、审批记录及激活/停用政策。
+本次 HLD/工程 Spec/ADR 策略已获 Owner 批准；实现和激活须绑定新版本、审批记录及停用政策。
 实现 PR 的当前 head 检查、正式 release/迁移回执、部署目标保护仍须通过。旧成功证据用于
 定位回归基线，新版本必须通过真实页面公司审批、当前 Token 接入、显式 Consent/Grant，
 再执行七项 MCP 的 READ/隔离 WRITE、bytes/hash、同键不重放及 marker/hash 清理。
@@ -77,3 +76,7 @@ Legal/开源合规及实际独立凭证 expiry 尚未取得证据；其是否可
 不要求第二个公司测试身份；授权/参数/跨主体拒绝由已有通用负向测试及单账号实际撤权证据
 分别证明，明确各自层次，不把模拟身份负向当作真实跨用户验收。response-lost/部分写入测试
 在受控本地边界验证 UNKNOWN 不重放，不在生产增加故障开关或复用过期 pilot。
+
+实施由 [#1834](https://github.com/AgoraIO-Extensions/agent-infra/issues/1834) 跟踪，使用独立
+`static-spaces-connection-v4-restricted` 与七项 `@v4`；准入批准引用 #1830/#1831，
+新的 run、最终源码/digest 与迁移回执在实现发布时固定。

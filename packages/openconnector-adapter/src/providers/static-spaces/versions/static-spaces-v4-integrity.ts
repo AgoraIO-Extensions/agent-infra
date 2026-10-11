@@ -1,0 +1,2 @@
+export const staticSpacesV4ExecutorDigest =
+	"sha256:f969c66c3b76c1084c07a4c5d819051963033b9feb594986272ec4e1fdec177b";

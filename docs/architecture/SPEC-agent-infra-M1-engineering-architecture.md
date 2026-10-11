@@ -544,9 +544,10 @@ Connection Adapter 按 `src/providers/<名称>/{actions,definition,executors,ind
 `provider-source-layout.json` 和校验脚本约束，不引入动态 Loader 或账号升级。
 目录说明见 [连接器布局](../connection/provider-layout.md)。
 
-StaticSpaces 的上海单用户受监督准入按
-[已批准 pilot ADR](../adr/ADR-connection-static-spaces-supervised-pilot.md) 和
-[HLD 4.3.1](HLD-connection-M1.md#431-上海-staticspaces-单用户受监督-pilot) 实施。
+StaticSpaces 的上海具名长期受限准入按
+[已批准受限接入 ADR](../adr/ADR-connection-static-spaces-existing-api-restricted.md) 和
+[HLD 4.3.2](HLD-connection-M1.md#432-staticspaces-现有-api-受限接入) 实施；
+[旧 pilot](../adr/ADR-connection-static-spaces-supervised-pilot.md) 的关闭审计及原期限保留。
 沿用 Provider 目录和不可变版本；风险接受不等于真实验收，不使用环境开关或 fixture 开放目录。
 服务端准入不得替代公司审批、Consent/Grant、Credential fence 和持久 Call/Effect/Dispatch。
 
@@ -900,10 +901,11 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 
 评审通过后，任何改变部署单元、权威数据归属、身份传递、Connection 授权或 Agent Runtime Contract 的修改都应新增 ADR，不通过零散代码变更隐式改变架构。
 
-## StaticSpaces 现有 API 受限接入提案
+## StaticSpaces 现有 API 受限接入
 
 不改上游的受限交付方向按
-[HLD 4.3.2](HLD-connection-M1.md#432-staticspaces-现有-api-受限接入提案) 与
+[HLD 4.3.2](HLD-connection-M1.md#432-staticspaces-现有-api-受限接入) 与
 [具体 ADR](../adr/ADR-connection-static-spaces-existing-api-restricted.md) 评审。
-当前仅为 Proposed，不激活 Provider、不重新授权旧 Grant、不扩展或续期已关闭 pilot。
+Owner 已批准 ADR 的受限策略；激活须消费新的批准版本和显式 Grant，不复用旧 Grant，
+不扩展或续期已关闭 pilot。
 运行授权、凭证隔离、持久执行、签名发布及上海目标/数据库保护继续遵守本 Spec 和 HLD。

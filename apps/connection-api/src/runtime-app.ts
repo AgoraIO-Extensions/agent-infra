@@ -71,9 +71,11 @@ import {
 import {
 	StaticSpacesAdapter,
 	StaticSpacesV2Adapter,
+	StaticSpacesV3Adapter,
 	staticSpacesConnectionCatalog,
 	staticSpacesOrigins,
 	staticSpacesV2ConnectionCatalog,
+	staticSpacesV3ConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/providers/static-spaces";
 import { createGuardedFetch } from "@agent-infra/openconnector-kernel";
 import { createConnectionApp } from "./app";
@@ -402,6 +404,13 @@ export async function createConnectionRuntime(
 		...(staticSpaces
 			? {
 					[staticSpacesConnectionCatalog.providerReleaseId]: staticSpaces,
+					[staticSpacesV3ConnectionCatalog.providerReleaseId]:
+						new StaticSpacesV3Adapter(
+							observeProviderFetch(
+								"static-spaces",
+								providerFetch(Object.values(staticSpacesOrigins)),
+							),
+						),
 					[staticSpacesV2ConnectionCatalog.providerReleaseId]:
 						new StaticSpacesV2Adapter(
 							observeProviderFetch(

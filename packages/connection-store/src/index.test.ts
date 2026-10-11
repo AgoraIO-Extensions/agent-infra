@@ -76,6 +76,7 @@ describe("Connection store migrations", () => {
 			"0037_provider_release_lifecycle",
 			"0038_supervised_provider_admission",
 			"0039_static_spaces_v3_admission",
+			"0040_static_spaces_restricted_admission",
 		]);
 		for (const migration of journal.entries) {
 			await access(resolve(directory, `${migration.tag}.sql`));
