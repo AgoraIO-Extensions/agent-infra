@@ -816,7 +816,7 @@ it("recovers a durable rotation journal before using protected material", async 
 	const refreshName = names.find((name) => name.endsWith(".refresh")) as string;
 	const accessPath = join(f.root, "materials", accessName);
 	const recordName = (await readdir(join(f.root, "records"))).find((name) =>
-		name.endsWith(".json"),
+		name.endsWith(".json") && !name.startsWith("current-"),
 	) as string;
 	const recordPath = join(f.root, "records", recordName);
 	const record = JSON.parse(await readFile(recordPath, "utf8")) as Record<
