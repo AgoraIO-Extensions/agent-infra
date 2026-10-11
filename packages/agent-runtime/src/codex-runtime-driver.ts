@@ -116,6 +116,8 @@ import type {
 } from "./runtime-file-bridge.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
+const runtimeSkillHubMountRootV1 = "/opt/agent-infra-skill-hub";
+
 interface CodexAppServerTransport {
 	[codexSkillLaunch]?: CodexSkillLaunchProvenance;
 	send(frame: CodexAppServerFrame): Promise<void>;
@@ -274,7 +276,92 @@ function approveSkillResponse(
 	// Hash the entire approved response, including metadata that is not projected.
 	return {
 		digest: createHash("sha256").update(JSON.stringify(value)).digest("hex"),
+		descriptionByName: new Map([
+			[descriptor.manifest.name, approvedWorkspaceSummary.description],
+		]),
 		description: approvedWorkspaceSummary.description,
+	};
+}
+
+function approveMountedSkillResponse(
+	value: unknown,
+	cwd: string,
+	entries: ReadonlyArray<
+		ReturnType<RuntimeFilesystemSkillDirectoryV1["findSkills"]>[number]
+	>,
+) {
+	if (
+		!isPlainRecord(value) ||
+		!hasOnlyKeys(value, ["data"]) ||
+		!Array.isArray(value.data) ||
+		value.data.length !== 1
+	)
+		skillDirectoryInvalid();
+	const entry = value.data[0];
+	if (
+		!isPlainRecord(entry) ||
+		!hasOnlyKeys(entry, ["cwd", "skills", "errors"]) ||
+		entry.cwd !== cwd ||
+		!Array.isArray(entry.errors) ||
+		entry.errors.length !== 0 ||
+		!Array.isArray(entry.skills) ||
+		entry.skills.length !== entries.length
+	)
+		skillDirectoryInvalid();
+	const byName = new Map(entries.map((item) => [item.name, item]));
+	const seen = new Set<string>();
+	for (const skill of entry.skills) {
+		if (
+			!isPlainRecord(skill) ||
+			!hasOnlyKeys(skill, [
+				"name",
+				"description",
+				"shortDescription",
+				"interface",
+				"dependencies",
+				"path",
+				"scope",
+				"enabled",
+				"pluginId",
+			]) ||
+			typeof skill.name !== "string" ||
+			seen.has(skill.name)
+		)
+			skillDirectoryInvalid();
+		const projected = byName.get(skill.name);
+		if (
+			!projected ||
+			typeof skill.path !== "string" ||
+			skill.path !==
+				`${runtimeSkillHubMountRootV1}/${projected.targetPath}/SKILL.md` ||
+			skill.enabled !== true ||
+			skill.pluginId !== null ||
+			(skill.scope !== "user" && skill.scope !== "project") ||
+			typeof skill.description !== "string" ||
+			skill.description.length > 4096 ||
+			(skill.shortDescription !== undefined &&
+				skill.shortDescription !== null &&
+				(typeof skill.shortDescription !== "string" ||
+					skill.shortDescription.length > 1024)) ||
+			(skill.interface !== undefined && skill.interface !== null) ||
+			(skill.dependencies !== undefined &&
+				skill.dependencies !== null &&
+				(!isPlainRecord(skill.dependencies) ||
+					!hasOnlyKeys(skill.dependencies, ["tools"]) ||
+					!Array.isArray(skill.dependencies.tools) ||
+					skill.dependencies.tools.length !== 0))
+		)
+			skillDirectoryInvalid();
+		seen.add(skill.name);
+	}
+	return {
+		digest: createHash("sha256").update(JSON.stringify(value)).digest("hex"),
+		descriptionByName: new Map(
+			entry.skills.map((skill) => [
+				skill.name as string,
+				skill.description as string,
+			]),
+		),
 	};
 }
 
@@ -4007,7 +4094,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		let skillProcess: NativeSkillProcess | undefined;
 		if (
-			this.installedSkill &&
+			(this.installedSkill || this.skillDirectory) &&
 			this.requiredRuntime.lane === "official-model-only"
 		) {
 			try {
@@ -4098,11 +4185,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				metadataRead,
 			);
 			assertCurrent?.();
-			if (skillProcess && this.installedSkill) {
+			if (skillProcess && (this.installedSkill || this.skillDirectory)) {
 				if (metadataRead) await metadataRead.revalidate();
+				const extraRoots = this.installedSkill
+					? [this.installedSkill.manifest.extraRoot]
+					: [runtimeSkillHubMountRootV1];
 				const roots = rpc.request(
 					"skills/extraRoots/set",
-					{ extraRoots: [this.installedSkill.manifest.extraRoot] },
+					{ extraRoots },
 					(value) => {
 						if (!isEmptyRecord(value)) protocolInvalid();
 					},
@@ -4166,6 +4256,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenCodexBridge,
 	) {
+		if (
+			options.installedSkill !== undefined &&
+			options.skillDirectory !== undefined
+		)
+			configurationInvalid();
 		const installedSkillInput = options.installedSkill;
 		const installedSkill =
 			installedSkillInput === undefined
@@ -4335,7 +4430,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				model: defaultSelection.model,
 				reasoningEffort: defaultSelection.effort,
 				...requiredBridgeOptions,
-				...(!privateLane && installedSkill
+				...(!privateLane && (installedSkill || options.skillDirectory)
 					? { disableBundledSkills: true }
 					: {}),
 				...(privateLane
@@ -4404,7 +4499,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		const conversationContainedConfiguration = {
 			...containedConfiguration,
-			...(!privateLane && installedSkill ? { disableBundledSkills: true } : {}),
+			...(!privateLane && (installedSkill || options.skillDirectory)
+				? { disableBundledSkills: true }
+				: {}),
 			...(connectionClient
 				? { connectionProfile: connectionClient.profile }
 				: {}),
@@ -4866,9 +4963,25 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	async discoverNativeSkills(read: CodexNativeCommandReadContext) {
 		const binding = this.nativeCommandBinding(read);
 		const descriptor = this.installedSkill;
+		const mountedEntries = this.skillDirectory?.findSkills();
+		const mountedGenerationId = this.skillDirectory?.generationId;
+		const mountedSnapshot = this.skillDirectory
+			? JSON.stringify([mountedGenerationId, mountedEntries])
+			: undefined;
+		const assertMountedCurrent = () => {
+			if (
+				this.skillDirectory &&
+				JSON.stringify([
+					this.skillDirectory.generationId,
+					this.skillDirectory.findSkills(),
+				]) !== mountedSnapshot
+			)
+				skillDirectoryInvalid();
+		};
 		if (
-			!descriptor ||
-			descriptor.deployment.configVersion !== binding.configVersion
+			(!descriptor && !mountedEntries) ||
+			(descriptor &&
+				descriptor.deployment.configVersion !== binding.configVersion)
 		)
 			unavailable();
 		let assertProcess: (() => void) | undefined;
@@ -4916,18 +5029,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				read.signal,
 			),
 		);
-		const approved = approveSkillResponse(
-			response,
-			process.launch.cwd,
-			descriptor,
-		);
+		const approved = descriptor
+			? approveSkillResponse(response, process.launch.cwd, descriptor)
+			: approveMountedSkillResponse(
+					response,
+					process.launch.cwd,
+					mountedEntries ?? [],
+				);
+		assertMountedCurrent();
 		const revision = createHash("sha256")
 			.update(
 				JSON.stringify([
 					"codex-installed-skill-directory-v1",
 					binding,
 					binding.requiredRuntime,
-					descriptor,
+					descriptor ?? mountedEntries,
+					mountedGenerationId,
 					process.launch.processId,
 					process.launch.cwd,
 					epoch,
@@ -4935,26 +5052,39 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				]),
 			)
 			.digest("hex");
-		const directory = {
-			revision,
-			capabilities: [
-				{
+		const capabilities = descriptor
+			? [
+					{
+						id: createHash("sha256")
+							.update(`installed-skill:${revision}`)
+							.digest("hex"),
+						kind: "skill" as const,
+						name: descriptor.manifest.name,
+						description:
+							approved.descriptionByName.get(descriptor.manifest.name) ?? "",
+						source: {
+							name: descriptor.manifest.source.repository,
+							version: descriptor.manifest.version,
+						},
+						availability: "discovered" as const,
+					},
+				]
+			: (mountedEntries ?? []).map((entry) => ({
 					id: createHash("sha256")
-						.update(`installed-skill:${revision}`)
+						.update(`mounted-skill:${revision}:${entry.name}`)
 						.digest("hex"),
 					kind: "skill" as const,
-					name: descriptor.manifest.name,
-					description: approved.description,
-					source: {
-						name: descriptor.manifest.source.repository,
-						version: descriptor.manifest.version,
-					},
-					// Native enabled means discoverable; execution/loading is a later slice.
+					name: entry.name,
+					description: approved.descriptionByName.get(entry.name) ?? "",
+					source: { name: "agent-infra-skill-hub", version: entry.version },
 					availability: "discovered" as const,
-				},
-			],
+				}));
+		const directory = {
+			revision,
+			capabilities,
 		};
 		await metadataRead.revalidate();
+		assertMountedCurrent();
 		return directory;
 	}
 
