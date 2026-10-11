@@ -67,6 +67,8 @@ export interface ProductionPlatformApiInputV1
 	>;
 	/** Deployment-owned protected callback forwarder; absent keeps OAuth unavailable. */
 	readonly connectionInstallationCallback?: PlatformApiAssemblyInput["connectionInstallationCallback"];
+	/** Deployment-owned recipient for one-time application credential material. */
+	readonly applicationCredentialDelivery?: PlatformApiAssemblyInput["applicationCredentialDelivery"];
 	readonly connectionConsumerProfileApproval?: unknown;
 	readonly wecom?: PlatformApiAssemblyInput["wecom"];
 	readonly wecomIdentity?: PlatformApiAssemblyInput["wecomIdentity"];
@@ -270,6 +272,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 			: {}),
 		...(input.connectionInstallationCallback
 			? { connectionInstallationCallback: input.connectionInstallationCallback }
+			: {}),
+		...(input.applicationCredentialDelivery
+			? { applicationCredentialDelivery: input.applicationCredentialDelivery }
 			: {}),
 		agentApiCreation: {
 			allowedPrincipals,

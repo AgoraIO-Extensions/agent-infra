@@ -843,6 +843,26 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		});
 		expect(input.files).toBe(files);
 	});
+	it("passes the deployment-owned application credential delivery into the API assembly", () => {
+		const applicationCredentialDelivery = {
+			principalType: "application" as const,
+			principalId: "application-process",
+			async prepare() {},
+			async commit() {
+				return "accepted" as const;
+			},
+			abort() {},
+		} satisfies NonNullable<
+			ProductionPlatformApiInputV1["applicationCredentialDelivery"]
+		>;
+		const input = createProductionPlatformApiAssemblyInputV1({
+			...fixture.input,
+			applicationCredentialDelivery,
+		});
+		expect(input.applicationCredentialDelivery).toBe(
+			applicationCredentialDelivery,
+		);
+	});
 	it("merges Platform-only user disables into the authority context", async () => {
 		const userGovernance = new PostgresPlatformUserDisablesV1(
 			database.databaseUrl,
