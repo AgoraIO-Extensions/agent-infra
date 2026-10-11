@@ -40,7 +40,11 @@ export async function readClaudeSessionHistory(
 			process.execPath,
 			["--input-type=module", "-e", script, sdk, id, workspace, userId ?? ""],
 			{
-				env: { PATH: process.env.PATH, CLAUDE_CONFIG_DIR: config },
+				env: {
+					PATH: process.env.PATH,
+					HOME: workspace,
+					CLAUDE_CONFIG_DIR: config,
+				},
 				timeout: 10_000,
 				maxBuffer: 1_048_576,
 			},

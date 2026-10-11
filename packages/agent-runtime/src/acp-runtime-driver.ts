@@ -29,6 +29,7 @@ export interface GenericAcpRuntimeDriverOptions {
 		directory: string,
 		selection: RuntimeSelectionV1,
 		admit: () => Promise<void>,
+		resolveModelCredential?: () => Promise<string>,
 	) => Promise<AcpLaunch>;
 }
 
@@ -52,7 +53,12 @@ export const GenericAcpRuntimeDriver = {
 				const phases = new Map<string, string>();
 				return openAcpSession({
 					...session,
-					launch: await options.launch(session.directory, selection, admit),
+					launch: await options.launch(
+						session.directory,
+						selection,
+						admit,
+						session.resolveModelCredential,
+					),
 					update: async ({ update: event }) => {
 						if (
 							event.sessionUpdate === "agent_message_chunk" &&

@@ -30,6 +30,8 @@ import type {
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeModelDirectory,
+	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -39,13 +41,14 @@ import {
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
+import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 
 export interface ClaudeRuntimeModelOption {
 	readonly modelOptionId: string;
 	readonly model: string;
 	readonly reasoningLevels: readonly string[];
 	readonly endpoint: string;
-	readonly credential: string;
+	readonly credential?: string;
 	readonly authentication: "api-key" | "bearer";
 }
 export interface ClaudeRuntimeDriverOptions {
@@ -56,6 +59,9 @@ export interface ClaudeRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly ClaudeRuntimeModelOption[];
+	readonly authorizeModelAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 }
 interface Binding {
 	ref: string;
@@ -81,6 +87,8 @@ interface Turn {
 	};
 	status: RuntimeStatusV1;
 	events: RuntimeEventV1[];
+	operationRef?: string;
+	attemptRef?: string;
 }
 interface Session {
 	schemaVersion: 1;
@@ -132,6 +140,35 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	private closed = false;
 	private readonly pending = new Set<Promise<RuntimeDriverOperationRecord>>();
 	private closing?: Promise<void>;
+	async validateExternalAction(
+		action: import("./driver.js").RuntimeExternalActionAuthorization,
+	) {
+		if (
+			action.kind !== "model" ||
+			action.runtimeOperationId !== action.executionId
+		)
+			runtimeAuthorizationDenied();
+		let binding: Binding | undefined;
+		let file: DurableJsonFile<Session> | undefined;
+		for (const entry of this.index.read().sessions) {
+			const candidate = await this.file(entry);
+			if (candidate.read().nativeId === action.nativeSessionRef) {
+				binding = entry;
+				file = candidate;
+				break;
+			}
+		}
+		if (!binding || !file) runtimeAuthorizationDenied();
+		const turn = file
+			.read()
+			.turns.find((item) => item.executionId === action.executionId);
+		if (
+			!turn ||
+			turn.operationRef !== action.operationRef ||
+			turn.attemptRef !== action.attemptRef
+		)
+			runtimeAuthorizationDenied();
+	}
 	private constructor(
 		private readonly options: ClaudeRuntimeDriverOptions,
 		private readonly executable: string,
@@ -660,12 +697,14 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				unavailable();
 			}
 		}
-		for (const name of ["workspace", "config", "tmp", "memory"]) {
+		for (const name of ["workspace", "config", "tmp", "memory", "home"]) {
 			const path = join(directory, name);
 			await mkdir(path, { recursive: true, mode: 0o700 });
 			if ((await lstat(path)).isSymbolicLink()) unavailable();
 		}
 		const userMessageId = randomUUID();
+		const operationRef = randomUUID();
+		const attemptRef = randomUUID();
 		await file.update((state) => {
 			state.operations.push({
 				key: operationKey(command),
@@ -680,6 +719,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				selection,
 				status: "unknown",
 				events: [],
+				operationRef,
+				attemptRef,
 			});
 		});
 		let admitted: () => void = () => {};
@@ -689,6 +730,23 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const transport = await openRuntimeMessagesTransport({
 			...option,
 			effort: selection.reasoningLevel,
+			...(this.options.authorizeModelAction
+				? {
+						resolveCredential: async () => {
+							const authorized = await this.options.authorizeModelAction?.({
+								kind: "model",
+								nativeSessionRef: before.nativeId,
+								executionId: command.executionId,
+								runtimeOperationId: command.executionId,
+								operationRef,
+								attemptRef,
+							});
+							if (!authorized?.relayKey)
+								throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+							return authorized.relayKey;
+						},
+					}
+				: {}),
 			receipt: async (response, endTurn = false) => {
 				await file.update((state) => {
 					const turn =
@@ -723,6 +781,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					cwd: join(directory, "workspace"),
 					env: {
 						PATH: process.env.PATH,
+						HOME: join(directory, "home"),
 						TMPDIR: join(directory, "tmp"),
 						CLAUDE_CONFIG_DIR: join(directory, "config"),
 						ANTHROPIC_BASE_URL: transport.modelAccess.endpoint,

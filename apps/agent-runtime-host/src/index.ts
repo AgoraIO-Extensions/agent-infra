@@ -14,6 +14,7 @@ import {
 	FileRuntimeStore,
 	openOpenCodeRuntime,
 	openPiRuntime,
+	type RuntimeExternalActionAuthorization,
 	RuntimeHost,
 	RuntimeHostError,
 	verifyCodexPilotInstallation,
@@ -32,6 +33,7 @@ import {
 	readCodexPilotConfiguration,
 	readRuntimeFileExchangeOptions,
 	readRuntimeModelConfigurationV3,
+	readRuntimeModelConfigurationV4,
 	readWorkloadReadinessBindingV1,
 	runtimeConfigurationInvalid,
 } from "./configuration.js";
@@ -272,9 +274,28 @@ export async function assembleRuntimeHost(
 		};
 	const messagesConfiguration =
 		binding === "claude" || binding === "acp" || binding === "pi"
-			? readRuntimeModelConfigurationV3(environment, binding)
+			? (() => {
+					let schemaVersion: unknown;
+					try {
+						schemaVersion = JSON.parse(
+							environment.AGENT_INFRA_RUNTIME_MODEL_CONFIG ?? "{}",
+						)?.schemaVersion;
+					} catch {
+						runtimeConfigurationInvalid();
+					}
+					return schemaVersion === 4
+						? readRuntimeModelConfigurationV4(environment, binding)
+						: readRuntimeModelConfigurationV3(environment, binding);
+				})()
 			: undefined;
 	const activeConfiguration = configuration ?? messagesConfiguration;
+	const messagesRuntimeOptions = messagesConfiguration?.modelOptions.map(
+		(option) => ({
+			...option,
+			endpoint: option.endpoint ?? runtimeConfigurationInvalid(),
+			authentication: option.authentication ?? "bearer",
+		}),
+	);
 	const agentId = activeConfiguration
 		? required("AGENT_INFRA_RUNTIME_AGENT_ID")
 		: undefined;
@@ -410,6 +431,18 @@ export async function assembleRuntimeHost(
 				? binding === "acp"
 					? await openOpenCodeRuntime({
 							...messagesConfiguration,
+							modelOptions: messagesRuntimeOptions ?? [],
+							...(messagesConfiguration.schemaVersion === 4
+								? {
+										authorizeModelAction: async (
+											action: RuntimeExternalActionAuthorization,
+										) => {
+											if (!assembledHost)
+												throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+											return assembledHost.authorizeExternalAction(action);
+										},
+									}
+								: {}),
 							path: join(dataDirectory, "acp-driver"),
 							executable:
 								environment.AGENT_INFRA_OPENCODE_EXECUTABLE ??
@@ -418,10 +451,34 @@ export async function assembleRuntimeHost(
 					: binding === "pi"
 						? await openPiRuntime({
 								...messagesConfiguration,
+								modelOptions: messagesRuntimeOptions ?? [],
+								...(messagesConfiguration.schemaVersion === 4
+									? {
+											authorizeModelAction: async (
+												action: RuntimeExternalActionAuthorization,
+											) => {
+												if (!assembledHost)
+													throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+												return assembledHost.authorizeExternalAction(action);
+											},
+										}
+									: {}),
 								path: join(dataDirectory, "pi-driver"),
 							})
 						: await ClaudeRuntimeDriver.open({
 								...messagesConfiguration,
+								modelOptions: messagesRuntimeOptions ?? [],
+								...(messagesConfiguration.schemaVersion === 4
+									? {
+											authorizeModelAction: async (
+												action: RuntimeExternalActionAuthorization,
+											) => {
+												if (!assembledHost)
+													throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+												return assembledHost.authorizeExternalAction(action);
+											},
+										}
+									: {}),
 								path: join(dataDirectory, "claude-driver"),
 							})
 				: await FakeRuntimeDriver.open(join(dataDirectory, "fake-driver.json"));
@@ -429,7 +486,7 @@ export async function assembleRuntimeHost(
 			if ("close" in driver) await driver.close();
 		};
 		const rawValidateV4 =
-			runtimeWorkerId && configuration?.schemaVersion === 4
+			runtimeWorkerId && activeConfiguration?.schemaVersion === 4
 				? createRuntimeExecutionGrantValidatorV4(
 						new Map([[keyId, publicKey]]),
 						{
