@@ -259,6 +259,10 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 				}
 				currentValues.set(entry.name, current);
 			}
+			for (const entry of journal.entries) {
+				const current = currentValues.get(entry.name);
+				if (current !== entry.expected && current !== entry.next) unavailable();
+			}
 			const target =
 				journal.operation === "rollback"
 					? "next"
@@ -280,26 +284,40 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 					0o400,
 				);
 				try {
+					assertStandardMcpProcessProtection();
+					await assertProtectedStandardMcpDirectoryCurrent(path, directory);
 					await file.writeFile(targetValue, "utf8");
 					await file.sync();
 				} finally {
 					await file.close();
 				}
+				assertStandardMcpProcessProtection();
+				await assertProtectedStandardMcpDirectoryCurrent(path, directory);
 				await rename(
 					protectedStandardMcpPath(directory, path, temporary),
 					protectedStandardMcpPath(directory, path, entry.name),
 				);
+				assertStandardMcpProcessProtection();
+				await assertProtectedStandardMcpDirectoryCurrent(path, directory);
 			}
 			const names = await readdir(
 				process.platform === "linux" ? `/proc/self/fd/${directory.fd}` : path,
 			);
 			for (const name of names) {
-				if (name.startsWith(".stage-"))
+				if (name.startsWith(".stage-")) {
+					assertStandardMcpProcessProtection();
 					await unlink(protectedStandardMcpPath(directory, path, name));
+				}
 			}
+			assertStandardMcpProcessProtection();
 			await directory.sync();
+			assertStandardMcpProcessProtection();
+			await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+			assertStandardMcpProcessProtection();
 			await unlink(journalPath);
+			assertStandardMcpProcessProtection();
 			await directory.sync();
+			await assertProtectedStandardMcpDirectoryCurrent(path, directory);
 		} finally {
 			await directory.close();
 		}
