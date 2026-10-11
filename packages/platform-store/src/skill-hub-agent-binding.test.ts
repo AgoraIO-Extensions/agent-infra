@@ -20,6 +20,7 @@ import {
 	type PostgresTestDatabase,
 	startPostgresTestDatabase,
 } from "./postgres-test.ts";
+import { PostgresSkillHubAgentBindingAdmissionV1 } from "./skill-hub-agent-binding.ts";
 
 const occurredAt = new Date("2026-10-09T00:00:00.000Z");
 const actor = {
@@ -212,5 +213,77 @@ describe("Skill Hub Agent binding persistence", () => {
 		expect(
 			await client`select count(*)::int as count from platform.skill_hub_agent_bindings`,
 		).toEqual([{ count: 1 }]);
+		const resolver = new PostgresSkillHubAgentBindingAdmissionV1({
+			databaseUrl: database?.databaseUrl ?? "",
+			resolveGrantBoundary: async ({ requested }) => requested,
+		});
+		try {
+			const resolved = await resolver.resolveSyncBindings({
+				agentId: "agent-1",
+				agentVersion: "agent-version-1",
+				configurationRevision: 8,
+				actorId: "owner-1",
+				organizationIds: ["org-1"],
+				isAdministrator: false,
+			});
+			expect(resolved).toHaveLength(1);
+			expect(resolved[0]).toMatchObject({
+				state: "pending_sync",
+				configurationRevision: 8,
+				skillName: "workspace-summary",
+				skillVersion: { skillVersionId: "skill-version-1" },
+			});
+		} finally {
+			await resolver.close();
+		}
+		const deniedResolver = new PostgresSkillHubAgentBindingAdmissionV1({
+			databaseUrl: database?.databaseUrl ?? "",
+			resolveGrantBoundary: async ({ requested }) => requested,
+		});
+		try {
+			await expect(
+				deniedResolver.resolveSyncBindings({
+					agentId: "agent-1",
+					agentVersion: "agent-version-1",
+					configurationRevision: 8,
+					actorId: "owner-2",
+					organizationIds: [],
+					isAdministrator: false,
+				}),
+			).rejects.toMatchObject({ code: "unavailable" });
+			expect(
+				await deniedResolver.resolveSyncBindings({
+					agentId: "agent-1",
+					agentVersion: "agent-version-1",
+					configurationRevision: 6,
+					actorId: "owner-1",
+					organizationIds: ["org-1"],
+					isAdministrator: false,
+				}),
+			).toEqual([]);
+		} finally {
+			await deniedResolver.close();
+		}
+		await client`
+			update platform.agents set current_configuration_revision = 9 where id = 'agent-1'
+		`;
+		const stale = new PostgresSkillHubAgentBindingAdmissionV1({
+			databaseUrl: database?.databaseUrl ?? "",
+			resolveGrantBoundary: async ({ requested }) => requested,
+		});
+		try {
+			expect(
+				await stale.resolveSyncBindings({
+					agentId: "agent-1",
+					agentVersion: "agent-version-1",
+					configurationRevision: 8,
+					actorId: "owner-1",
+					organizationIds: ["org-1"],
+					isAdministrator: false,
+				}),
+			).toEqual([]);
+		} finally {
+			await stale.close();
+		}
 	});
 });
