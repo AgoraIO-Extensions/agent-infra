@@ -138,18 +138,21 @@ export async function refreshStandardOAuthToken(options: {
 	};
 	try {
 		assertCurrent();
-		const response = await (options.fetch ?? fetch)(endpoint, {
-			method: "POST",
-			headers: { "content-type": "application/x-www-form-urlencoded" },
-			body: new URLSearchParams({
-				grant_type: "refresh_token",
-				refresh_token: refreshToken,
-				client_id: configuration.clientId,
-				resource: configuration.resource,
-			}),
-			redirect: "error",
-			signal,
-		});
+		const response = await (options.fetch ?? fetch)(
+			configuration.tokenEndpoint,
+			{
+				method: "POST",
+				headers: { "content-type": "application/x-www-form-urlencoded" },
+				body: new URLSearchParams({
+					grant_type: "refresh_token",
+					refresh_token: refreshToken,
+					client_id: configuration.clientId,
+					resource: configuration.resource,
+				}),
+				redirect: "error",
+				signal,
+			},
+		);
 		assertCurrent();
 		if (response.status >= 300 && response.status < 400)
 			standardOAuthUnavailable();

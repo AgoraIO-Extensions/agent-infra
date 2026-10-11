@@ -14,7 +14,10 @@ import { createServer, request as httpsRequest } from "node:https";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { revokeStandardOAuthToken } from "@agent-infra/agent-runtime";
+import {
+	refreshStandardOAuthToken,
+	revokeStandardOAuthToken,
+} from "@agent-infra/agent-runtime";
 import {
 	connectionConsumerProfileFingerprintV1,
 	resolveApprovedConnectionConsumerProfileV1,
@@ -785,6 +788,28 @@ it("rejects a non-HTTPS revocation endpoint before sending material", async () =
 		}),
 	).rejects.toThrow();
 	expect(requests).toBe(0);
+});
+
+it("preserves the approved token endpoint bytes during refresh", async () => {
+	const f = await fixture();
+	const tokenEndpoint = "https://EXAMPLE.test:443/oauth/token";
+	let seen: string | undefined;
+	await refreshStandardOAuthToken({
+		configuration: { ...f.configuration, tokenEndpoint },
+		refreshToken: refresh,
+		signal: new AbortController().signal,
+		assertCurrent: () => undefined,
+		fetch: async (url) => {
+			seen = String(url);
+			return Response.json({
+				access_token: refreshedAccess,
+				token_type: "Bearer",
+				expires_in: 3600,
+				scope: "mcp",
+			});
+		},
+	});
+	expect(seen).toBe(tokenEndpoint);
 });
 
 it("does not revoke a foreign principal in the shared material tree", async () => {

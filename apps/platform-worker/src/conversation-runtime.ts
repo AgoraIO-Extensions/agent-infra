@@ -1274,7 +1274,7 @@ export function createConversationRuntimeV2(
 				};
 				readonly command: {
 					commandId: string;
-					command: "begin" | "confirm" | "status" | "refresh";
+					command: "begin" | "confirm" | "status";
 				};
 				readonly attemptId: string;
 				readonly attemptOwner: string;
@@ -1301,7 +1301,7 @@ export function createConversationRuntimeV2(
 			input: {
 				execution: ConversationRuntimeEventRequestV1;
 				authorizationId: string;
-				command: "begin" | "confirm" | "status" | "refresh";
+				command: "begin" | "confirm" | "status";
 				commandId?: string;
 				attemptId?: string;
 				attemptOwner?: string;
@@ -1324,9 +1324,7 @@ export function createConversationRuntimeV2(
 				if (
 					typeof input.authorizationId !== "string" ||
 					!input.authorizationId ||
-					!(["begin", "confirm", "status", "refresh"] as const).includes(
-						input.command,
-					)
+					!(["begin", "confirm", "status"] as const).includes(input.command)
 				)
 					installationUnavailable();
 				const { runtimeGrant, ...execution } = input.execution;
@@ -1567,22 +1565,6 @@ export function createConversationRuntimeV2(
 					throw error;
 				installationUnavailable();
 			}
-		},
-		async refresh(
-			input: {
-				execution: ConversationRuntimeEventRequestV1;
-				authorizationId: string;
-			},
-			signal?: AbortSignal,
-		) {
-			return this.request(
-				{
-					execution: input.execution,
-					authorizationId: input.authorizationId,
-					command: "refresh",
-				},
-				signal,
-			);
 		},
 	};
 	return {

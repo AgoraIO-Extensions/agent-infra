@@ -435,7 +435,7 @@ export function createConnectionInstallationAuthorizationV1(options: {
 				reference: ConnectionInstallationExecutionV1;
 				scope: ConnectionInstallationScopeV1;
 				authorizationId: string;
-				command: "begin" | "confirm" | "status" | "refresh";
+				command: "begin" | "confirm" | "status";
 				commandId?: string;
 				attemptId?: string;
 				attemptOwner?: string;
@@ -487,14 +487,11 @@ export function createConnectionInstallationAuthorizationV1(options: {
 								snapshot.authorizationId,
 								attempt,
 							)) ||
-							!(
-								snapshot.command === "refresh" ||
-								(await transaction.commandAllowed(
-									snapshot.authorizationId,
-									snapshot.command,
-									attempt,
-								))
-							)
+							!(await transaction.commandAllowed(
+								snapshot.authorizationId,
+								snapshot.command,
+								attempt,
+							))
 						)
 							denied();
 					}
