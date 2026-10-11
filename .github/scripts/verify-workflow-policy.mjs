@@ -138,7 +138,7 @@ const SOURCE_OUTCOME_CONTRACTS = {
     operation: "pr-gates",
   },
   "publish-ghcr.yml": {
-    needs: ["upgrade-validation", "publish"],
+    needs: ["upgrade-validation", "publish", "connection-evidence"],
     operation: "publish-ghcr",
   },
 };
@@ -720,7 +720,25 @@ export function validateTrustedScriptSources(sources) {
   return errors;
 }
 
+export function validateConnectionSigningWorkflow(workflow) {
+  const errors = [];
+  const signer = workflow?.jobs?.["connection-evidence"];
+  const expectedCondition = "startsWith(github.ref_name, 'connection-v') && github.repository_id == '1316991471' && github.event_name == 'push'";
+  if (signer?.if !== expectedCondition ||
+      !sameObject(signer?.permissions, { contents: "read", actions: "read", packages: "write", "id-token": "write" }) ||
+      JSON.stringify(signer?.strategy?.matrix?.name) !== JSON.stringify(["connection-api", "connection-web"])) {
+    errors.push("Connection signing must pin release repository/event and only Connection images");
+  }
+  if (workflow?.permissions?.["id-token"] === "write" || Object.entries(workflow?.jobs ?? {}).some(([name, job]) => name !== "connection-evidence" && job.permissions?.["id-token"] === "write")) {
+    errors.push("OIDC signing permission must not reach other Jobs");
+  }
+  const signingStep = signer?.steps?.find((step) => step.name === "Sign and independently verify release evidence");
+  if (signingStep?.run !== 'bash deploy/sign-connection-release.sh "$SUBJECT_APPLICATION" "connection-subjects/$SUBJECT_APPLICATION.json"') errors.push("Connection signing must use the reviewed verification entrypoint");
+  return errors;
+}
+
 export function validateWorkflowDocuments(workflows) {
+  const signingErrors = validateConnectionSigningWorkflow(workflows["publish-ghcr.yml"]);
   const errors = [];
   const names = Object.keys(workflows).sort();
   if (names.join("\0") !== REQUIRED_WORKFLOWS.join("\0")) {
@@ -2087,7 +2105,7 @@ export function validateWorkflowDocuments(workflows) {
       }
     }
   }
-  return errors;
+  return [...errors, ...signingErrors];
 }
 
 async function main() {

@@ -253,6 +253,9 @@ pnpm install --frozen-lockfile
 clean 或覆盖开发文件。
 
 使用 Node.js 24、仓库 `packageManager` 指定的 pnpm、GitHub `gh` 登录和上海集群权限。
+部署验签还需要 `cosign` 3.0.2 在 PATH 中；Linux/macOS 的 x64、arm64 官方二进制 hash
+由 `deploy/connection-supply-chain.mjs` 固定，不接受其他二进制或关闭验签的环境开关。
+工具来源与 OIDC 信任范围见[签名 ADR](../adr/ADR-connection-signed-release-evidence.md)。
 kubectl 与 API server 的 minor 版本差不能超过 1；例如 Kubernetes 1.34 使用 kubectl 1.34。
 不要沿用机器上旧的 kubectl 1.27 或仅按全局 context 名称猜测集群。
 
@@ -290,6 +293,14 @@ approval fence 和既有账号升级回归门禁。存在 migration 变化时拒
 迁移流程，不能用手工导表或跳过 hook 替代。部署要求该 tag、同一 SHA 的 GHCR workflow 完成且
 成功，随后只执行 API/Web 的 `set image`，等待新镜像的 Pod Ready 和 Deployment generation
 生效。它不触发 bootstrap，不自动创建业务对象、升级用户授权或执行 Provider WRITE。
+
+发布 workflow 对两份 Connection 镜像生成最终镜像与实际 bundler 输入合并的 SBOM，
+核对许可/来源文件、Node runtime bytes，分别签名镜像、executor manifest 和 SBOM。
+只有限定仓库 tag push 的签名 Job 获得 OIDC 权限；原生 workflow 终态包含签名验证结果。
+部署从可信 OCI attestation 回读原字节及独立签名 bundle，核对 issuer、workflow/tag/source、
+证书中的 immutable repository ID 和当前源码/许可 hash。全部通过后，API/Web 与 schema Job
+使用不可变 image digest。缺失、错身份、篡改、服务失败或未签的历史镜像均拒绝，不降级。
+目标/runtime dry-run 不代表验签通过；签名也不代替 Legal 签收或 Provider onboarding。
 
 `connection:gz3:release` 只保留发布/预检兼容别名；包含 `--deploy` 时在外部副作用前立即拒绝。
 

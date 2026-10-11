@@ -10,6 +10,7 @@ RUN pnpm --filter @agent-infra/connection-web build
 
 FROM nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752 AS runner
 COPY --from=builder /app/apps/connection-web/dist /usr/share/nginx/html
+COPY --from=builder /app/build-evidence/connection-web/bundle-inventory.json /usr/share/connection-evidence/bundle-inventory.json
 COPY apps/connection-web/nginx-main.conf /etc/nginx/nginx.conf
 COPY apps/connection-web/nginx.conf /etc/nginx/conf.d/default.conf
 USER nginx

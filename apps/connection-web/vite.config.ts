@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+import { bundleInventory } from "@agent-infra/config/bundle-inventory.ts";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
@@ -22,6 +24,10 @@ export default defineConfig({
 		tsconfigPaths: true,
 	},
 	plugins: [
+		bundleInventory(
+			"connection-web",
+			fileURLToPath(new URL("../../", import.meta.url)),
+		),
 		{
 			name: "connection-manual",
 			configureServer(server) {
