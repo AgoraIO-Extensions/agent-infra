@@ -287,6 +287,16 @@ export function createDeploymentAdmissionsV1(
 						? templates.find((item) => item.templateId === selection.templateId)
 						: undefined;
 				if (selection.kind === "standard" && !template) return denied;
+				const readiness = template
+					? await readTemplateReadiness(template)
+					: undefined;
+				if (
+					selection.kind === "standard" &&
+					template?.loadValidation &&
+					(readiness?.state !== "ready" ||
+						selection.templateRevision !== readiness.revision)
+				)
+					return denied;
 				const imageReference =
 					selection.kind === "custom"
 						? selection.imageReference
