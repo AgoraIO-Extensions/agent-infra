@@ -847,11 +847,9 @@ describe("production API lifecycle over HTTP and PostgreSQL", () => {
 		const applicationCredentialDelivery = {
 			principalType: "application" as const,
 			principalId: "application-process",
-			async prepare() {},
-			async commit() {
-				return "accepted" as const;
+			accept() {
+				return true;
 			},
-			abort() {},
 		} satisfies NonNullable<
 			ProductionPlatformApiInputV1["applicationCredentialDelivery"]
 		>;
