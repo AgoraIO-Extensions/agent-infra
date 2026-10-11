@@ -16,7 +16,7 @@
 	},
 	"dependencies": {
 		"@agent-infra/provider-egress-contracts": "workspace:*",
-		"hono": "^4.12.32"
+		"hono": "^4.13.7"
 	},
 	"devDependencies": {
 		"@agent-infra/config": "workspace:*",

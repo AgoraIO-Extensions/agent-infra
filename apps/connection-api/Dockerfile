@@ -65,6 +65,7 @@ FROM node:24-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f935954
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=builder --chown=node:node /prod/connection-api/ ./
+COPY --from=builder --chown=node:node /app/packages/openconnector-kernel/LICENSE.txt /app/packages/openconnector-kernel/NOTICE.md /app/packages/openconnector-kernel/PROVENANCE.json ./third-party/openconnector-kernel/
 EXPOSE 3002
 USER node
 CMD ["node", "dist/index.mjs"]
