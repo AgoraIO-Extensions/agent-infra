@@ -128,6 +128,14 @@ export async function revokeStandardOAuthToken(options: {
 }) {
 	const configuration = structuredClone(options.configuration);
 	const token = validateStandardMcpToken(options.token);
+	let endpoint: URL;
+	try {
+		endpoint = new URL(configuration.revocationEndpoint);
+	} catch {
+		standardOAuthUnavailable();
+	}
+	if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password)
+		standardOAuthUnavailable();
 	const signal = AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]);
 	const assertCurrent = () => {
 		if (signal.aborted) standardOAuthUnavailable();
@@ -140,16 +148,13 @@ export async function revokeStandardOAuthToken(options: {
 			token_type_hint: options.tokenTypeHint,
 			client_id: configuration.clientId,
 		});
-		const response = await (options.fetch ?? fetch)(
-			configuration.revocationEndpoint,
-			{
-				method: "POST",
-				headers: { "content-type": "application/x-www-form-urlencoded" },
-				body,
-				redirect: "error",
-				signal,
-			},
-		);
+		const response = await (options.fetch ?? fetch)(endpoint, {
+			method: "POST",
+			headers: { "content-type": "application/x-www-form-urlencoded" },
+			body,
+			redirect: "error",
+			signal,
+		});
 		assertCurrent();
 		if (response.status !== 200) standardOAuthUnavailable();
 		const reader = response.body?.getReader();
