@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
 	exchangeStandardOAuthCode,
-	RuntimeHostError,
 	revokeStandardOAuthToken,
 	standardOAuthUnavailable as unavailable,
 } from "@agent-infra/agent-runtime";
@@ -248,18 +247,10 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			).filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
 			for (const name of names) {
 				const key = name.slice(0, -5);
-				try {
-					const record = await load(key, true);
-					if (isDeepStrictEqual(record.principal, principal)) {
-						materialNames.add(`${key}.access`);
-						materialNames.add(`${key}.refresh`);
-					}
-				} catch (error) {
-					if (
-						!(error instanceof RuntimeHostError) ||
-						error.code !== "CONNECTION_OAUTH_UNAVAILABLE"
-					)
-						throw error;
+				const record = await load(key, true);
+				if (record && isDeepStrictEqual(record.principal, principal)) {
+					materialNames.add(`${key}.access`);
+					materialNames.add(`${key}.refresh`);
 				}
 			}
 			await assertProtectedStandardMcpDirectoryCurrent(
@@ -334,11 +325,16 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			throw error;
 		}
 	}
+	async function load(key: string): Promise<Transaction>;
+	async function load(
+		key: string,
+		forRevoke: true,
+	): Promise<Transaction | undefined>;
 	async function load(key: string, forRevoke = false) {
 		const record = parseTransaction(await read(`${key}.json`));
 		if (forRevoke) assertStandardMcpProcessProtection();
 		else current();
-		if (
+		const matches =
 			!isDeepStrictEqual(record.scope, scope) ||
 			record.configurationFingerprint !== configurationFingerprint ||
 			!isDeepStrictEqual(record.configuration, {
@@ -346,9 +342,11 @@ export async function createProtectedRuntimeOAuthClient(options: {
 				revision: configuration.revision,
 			}) ||
 			record.scope.configFingerprint !== target.configFingerprint ||
-			!isDeepStrictEqual(record.scope.source, target.source)
-		)
+			!isDeepStrictEqual(record.scope.source, target.source);
+		if (matches) {
+			if (forRevoke) return undefined;
 			unavailable();
+		}
 		return record;
 	}
 	function response(record: Transaction): RuntimeOAuthResponseV1 {
