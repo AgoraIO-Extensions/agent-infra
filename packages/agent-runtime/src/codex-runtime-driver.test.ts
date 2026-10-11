@@ -53,7 +53,10 @@ import {
 	runtimeGrantFixture,
 } from "./grant-fixture.test-support.js";
 import { RuntimeHost } from "./runtime-host.js";
-import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+import {
+	type RuntimeFilesystemSkillDirectoryV1,
+	RuntimeSkillDirectoryErrorV1,
+} from "./skill-hub-directory.js";
 
 type CancelTurnTestHook = (
 	turn: CodexNativeTurn,
@@ -10361,6 +10364,83 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 		await expect(
 			f.driver.readNativeSkill(f.read, "hub-skill", "SKILL.md"),
 		).resolves.toEqual(Uint8Array.from([1, 2, 3]));
+	});
+
+	it("reads another listed resource and propagates missing-resource rejection", async () => {
+		const entries = ["hub-skill", "another-skill"].map((name) => ({
+			schemaVersion: 1 as const,
+			name,
+			version: "1.0.0",
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			targetPath: `.agents/skills/${name}`,
+			readOnly: true as const,
+		}));
+		const directory: RuntimeFilesystemSkillDirectoryV1 = {
+			generationId: "d".repeat(64),
+			findSkills: () => entries,
+			readSkill: async (name) => {
+				if (name !== "another-skill") throw new RuntimeSkillDirectoryErrorV1();
+				return Uint8Array.from([4, 5, 6]);
+			},
+		};
+		const f = await skillDiscoveryFixture(undefined, {
+			installedSkill: undefined,
+			skillDirectory: directory,
+		});
+		await expect(
+			f.driver.readNativeSkill(f.read, "another-skill", "README.md"),
+		).resolves.toEqual(Uint8Array.from([4, 5, 6]));
+		await expect(
+			f.driver.readNativeSkill(f.read, "missing-skill", "SKILL.md"),
+		).rejects.toMatchObject({ code: "RUNTIME_SKILL_DIRECTORY_UNAVAILABLE" });
+	});
+
+	it("rejects an authority change before reading a mounted resource", async () => {
+		let reads = 0;
+		const directory: RuntimeFilesystemSkillDirectoryV1 = {
+			generationId: "d".repeat(64),
+			findSkills: () => [],
+			readSkill: async () => {
+				reads++;
+				return Uint8Array.from([1]);
+			},
+		};
+		const f = await skillDiscoveryFixture(undefined, {
+			installedSkill: undefined,
+			skillDirectory: directory,
+		});
+		f.read.revalidate = async () => ({
+			...f.binding,
+			principal: { kind: "user", id: "revoked-reader" },
+		});
+		await expect(
+			f.driver.readNativeSkill(f.read, "hub-skill", "SKILL.md"),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		expect(reads).toBe(0);
+	});
+
+	it("cancels an in-flight mounted resource read", async () => {
+		let started = false;
+		const pending = Promise.withResolvers<Uint8Array>();
+		const directory: RuntimeFilesystemSkillDirectoryV1 = {
+			generationId: "d".repeat(64),
+			findSkills: () => [],
+			readSkill: async () => {
+				started = true;
+				return pending.promise;
+			},
+		};
+		const f = await skillDiscoveryFixture(undefined, {
+			installedSkill: undefined,
+			skillDirectory: directory,
+		});
+		const query = f.driver.readNativeSkill(f.read, "hub-skill", "SKILL.md");
+		await vi.waitFor(() => expect(started).toBe(true));
+		f.abort.abort();
+		await expect(query).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
 	});
 
 	it("rejects a generation switch during final authority revalidation", async () => {
