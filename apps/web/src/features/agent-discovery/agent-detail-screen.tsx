@@ -30,10 +30,25 @@ import {
 	BrowserCapabilityStatus,
 	type BrowserWorkflowState,
 } from "./browser-capability-status.js";
+import type {
+	BrowserHandoffActionInputV1,
+	BrowserHandoffBindingV1,
+	BrowserHandoffPanelStateV1,
+	BrowserSideEffectConfirmationV1,
+} from "./browser-handoff-panel.js";
 
 type AgentDetailScreenProps = {
 	browserCapability?: BrowserCapabilityProjectionV1;
 	browserWorkflow?: BrowserWorkflowState;
+	browserHandoff?: BrowserHandoffPanelStateV1;
+	browserConfirmation?: BrowserSideEffectConfirmationV1;
+	browserCurrentBinding?: BrowserHandoffBindingV1;
+	onBrowserCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
+	onBrowserConfirmSideEffect?: (input: BrowserHandoffActionInputV1) => void;
+	onBrowserPauseAgent?: (input: BrowserHandoffActionInputV1) => void;
+	onBrowserRejectSideEffect?: (input: BrowserHandoffActionInputV1) => void;
+	onBrowserReturnToAgent?: (input: BrowserHandoffActionInputV1) => void;
+	onBrowserTakeOver?: (input: BrowserHandoffActionInputV1) => void;
 	onRetry?: () => void;
 	ownerSettings?: { readonly agentId: string };
 	retrying?: boolean;
@@ -81,6 +96,15 @@ function interactionReadiness(
 export function AgentDetailScreen({
 	browserCapability,
 	browserWorkflow,
+	browserHandoff,
+	browserConfirmation,
+	browserCurrentBinding,
+	onBrowserCancelConfirmation,
+	onBrowserConfirmSideEffect,
+	onBrowserPauseAgent,
+	onBrowserRejectSideEffect,
+	onBrowserReturnToAgent,
+	onBrowserTakeOver,
 	onRetry,
 	ownerSettings,
 	retrying = false,
@@ -342,6 +366,15 @@ export function AgentDetailScreen({
 						<BrowserCapabilityStatus
 							capability={browserCapability}
 							workflow={browserWorkflow}
+							handoff={browserHandoff}
+							confirmation={browserConfirmation}
+							currentBinding={browserCurrentBinding}
+							onCancelConfirmation={onBrowserCancelConfirmation}
+							onConfirmSideEffect={onBrowserConfirmSideEffect}
+							onPauseAgent={onBrowserPauseAgent}
+							onRejectSideEffect={onBrowserRejectSideEffect}
+							onReturnToAgent={onBrowserReturnToAgent}
+							onTakeOver={onBrowserTakeOver}
 						/>
 					)}
 				</div>

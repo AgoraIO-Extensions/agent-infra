@@ -8,6 +8,13 @@ import {
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import {
+	type BrowserHandoffActionInputV1,
+	type BrowserHandoffBindingV1,
+	BrowserHandoffPanel,
+	type BrowserHandoffPanelStateV1,
+	type BrowserSideEffectConfirmationV1,
+} from "./browser-handoff-panel.js";
 
 const statusLabels = {
 	available: "可用",
@@ -27,6 +34,15 @@ const statusDescriptions = {
 type BrowserCapabilityStatusProps = {
 	readonly workflow?: BrowserWorkflowState;
 	readonly capability: BrowserCapabilityProjectionV1;
+	readonly handoff?: BrowserHandoffPanelStateV1;
+	readonly confirmation?: BrowserSideEffectConfirmationV1;
+	readonly currentBinding?: BrowserHandoffBindingV1;
+	readonly onCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onConfirmSideEffect?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onPauseAgent?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onRejectSideEffect?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onReturnToAgent?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onTakeOver?: (input: BrowserHandoffActionInputV1) => void;
 };
 
 export type BrowserWorkflowState =
@@ -193,6 +209,15 @@ function BrowserCapabilityAvailable({
 export function BrowserCapabilityStatus({
 	capability,
 	workflow,
+	handoff,
+	confirmation,
+	currentBinding,
+	onCancelConfirmation,
+	onConfirmSideEffect,
+	onPauseAgent,
+	onRejectSideEffect,
+	onReturnToAgent,
+	onTakeOver,
 }: BrowserCapabilityStatusProps) {
 	return (
 		<>
@@ -202,6 +227,18 @@ export function BrowserCapabilityStatus({
 				<BrowserCapabilityUnavailable capability={capability} />
 			)}
 			<BrowserWorkflowStatus workflow={workflow} />
+			<BrowserHandoffPanel
+				handoff={handoff}
+				confirmation={confirmation}
+				currentBinding={currentBinding}
+				browserAvailable={capability.status === "available"}
+				onCancelConfirmation={onCancelConfirmation}
+				onConfirmSideEffect={onConfirmSideEffect}
+				onPauseAgent={onPauseAgent}
+				onRejectSideEffect={onRejectSideEffect}
+				onReturnToAgent={onReturnToAgent}
+				onTakeOver={onTakeOver}
+			/>
 		</>
 	);
 }
