@@ -277,6 +277,36 @@ async function runtimeDirectory() {
 	return directory;
 }
 
+/**
+ * Makes the driver's current input materialization unremovable and returns the
+ * blocked path. The first materialized image identifies that directory.
+ */
+async function blockMaterializedInputDirectory(): Promise<string | undefined> {
+	for (const name of await readdir(tmpdir())) {
+		if (!name.startsWith("agent-infra-codex-input-")) continue;
+		const candidate = join(tmpdir(), name);
+		let entries: string[];
+		try {
+			entries = await readdir(candidate);
+		} catch {
+			continue;
+		}
+		if (!entries.includes("00.image")) continue;
+		const blocked = join(candidate, "blocked");
+		await mkdir(blocked, { recursive: true });
+		await writeFile(join(blocked, "keep"), "x");
+		await chmod(blocked, 0o500);
+		return blocked;
+	}
+	return undefined;
+}
+
+/** True for the filesystem errors a blocked materialization raises. */
+function isPermissionError(error: unknown): boolean {
+	const code = (error as { code?: unknown } | undefined)?.code;
+	return code === "EACCES" || code === "EPERM";
+}
+
 function submitRequest(): RuntimeSubmitTurnRequestV1 {
 	const binding = {
 		agentId: "agent-codex",
@@ -2645,6 +2675,7 @@ describe("Codex Runtime Driver", () => {
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
 		drivers.push(driver);
 		const bytes = new Uint8Array([60, 115, 118, 103, 62]);
+		let cancelled = false;
 		const fileBridge = {
 			readInput: async (fileId: string) => ({
 				fileId,
@@ -2658,6 +2689,9 @@ describe("Codex Runtime Driver", () => {
 					start(controller) {
 						controller.enqueue(bytes);
 						controller.close();
+					},
+					cancel() {
+						cancelled = true;
 					},
 				}),
 			}),
@@ -2677,6 +2711,47 @@ describe("Codex Runtime Driver", () => {
 		expect(bridge.requests.some(({ method }) => method === "turn/start")).toBe(
 			false,
 		);
+		expect(cancelled).toBe(true);
+	});
+
+	it("releases the body of an attachment whose descriptor exceeds the byte bound", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		let cancelled = false;
+		const fileBridge = {
+			readInput: async (fileId: string) => ({
+				fileId,
+				descriptor: {
+					name: "screen.png",
+					mediaType: "image/png",
+					sizeBytes: 50 * 1024 * 1024 + 1,
+					sha256: "b".repeat(64),
+				},
+				body: new ReadableStream<Uint8Array>({
+					cancel() {
+						cancelled = true;
+					},
+				}),
+			}),
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+		};
+
+		await expect(
+			driver.execute(
+				submitCommand({
+					input: { text: "describe this image", attachments: ["file-1"] },
+				}),
+				{ fileBridge },
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		expect(bridge.requests.some(({ method }) => method === "turn/start")).toBe(
+			false,
+		);
+		expect(cancelled).toBe(true);
 	});
 
 	it("rejects an attachment whose bytes do not match the admitted digest", async () => {
@@ -2923,16 +2998,7 @@ describe("Codex Runtime Driver", () => {
 				if (fileId === "file-2" && !blocked) {
 					// The first attachment is already materialized, so its directory is
 					// identifiable; make its removal fail after native acceptance.
-					for (const name of await readdir(tmpdir())) {
-						if (!name.startsWith("agent-infra-codex-input-")) continue;
-						const candidate = join(tmpdir(), name);
-						if (!(await readdir(candidate)).includes("00.image")) continue;
-						blocked = join(candidate, "blocked");
-						await mkdir(blocked, { recursive: true });
-						await writeFile(join(blocked, "keep"), "x");
-						await chmod(blocked, 0o500);
-						break;
-					}
+					blocked = await blockMaterializedInputDirectory();
 				}
 				return {
 					fileId,
@@ -2972,6 +3038,69 @@ describe("Codex Runtime Driver", () => {
 			await expect(
 				driver.execute(command, { fileBridge }),
 			).resolves.toMatchObject({ result: { outcome: "accepted" } });
+		},
+	);
+
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"retains materialization after a failed attachment and surfaces its cleanup failure",
+		async () => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
+			drivers.push(driver);
+			const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+			let blocked: string | undefined;
+			const readInput = vi.fn(async (fileId: string) => {
+				if (fileId === "file-2" && !blocked) {
+					blocked = await blockMaterializedInputDirectory();
+				}
+				const unsupported = fileId === "file-2";
+				return {
+					fileId,
+					descriptor: {
+						name: unsupported ? "vector.svg" : "screen.png",
+						mediaType: unsupported ? "image/svg+xml" : "image/png",
+						sizeBytes: bytes.byteLength,
+						sha256: createHash("sha256").update(bytes).digest("hex"),
+					},
+					body: new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(bytes);
+							controller.close();
+						},
+					}),
+				};
+			});
+			const fileBridge = {
+				readInput,
+				writeResult: async () => {
+					throw new Error("unused");
+				},
+			};
+			const command = submitCommand({
+				input: {
+					text: "describe this image",
+					attachments: ["file-1", "file-2"],
+				},
+			});
+
+			// The failed materialization keeps ownership of its temporary bytes.
+			const first = await driver.execute(command, { fileBridge }).then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			expect(isPermissionError(first)).toBe(true);
+			expect(blocked).toBeDefined();
+			const second = await driver.execute(command, { fileBridge }).then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			expect(isPermissionError(second)).toBe(true);
+			if (!blocked) throw new Error("missing blocked materialization");
+			await chmod(blocked, 0o700);
+			await expect(
+				driver.execute(command, { fileBridge }),
+			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
 		},
 	);
 

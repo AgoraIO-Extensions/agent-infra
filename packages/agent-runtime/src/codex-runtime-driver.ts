@@ -807,13 +807,22 @@ async function releaseCodexInputReader(
 }
 
 /**
+ * Cancels an acquired body that will not be transferred, under the same bounded
+ * cancellation discipline as a transfer.
+ */
+async function cancelCodexInputBody(
+	body: ReadableStream<Uint8Array>,
+): Promise<void> {
+	await releaseCodexInputReader(body.getReader());
+}
+
+/**
  * Transfers one bounded attachment into memory and verifies it against the
  * admitted descriptor. The deadline and every exit path cancel the upstream
  * stream, so a stalled, oversized or rejected source releases its resources
  * instead of keeping the business execution and its temporary directory alive.
  */
 async function readCodexInputBytes(input: RuntimeFileInputV1): Promise<Buffer> {
-	if (input.descriptor.sizeBytes > codexInputMaximumBytes) unavailable();
 	const reader = input.body.getReader();
 	const chunks: Uint8Array[] = [];
 	let size = 0;
@@ -824,6 +833,8 @@ async function readCodexInputBytes(input: RuntimeFileInputV1): Promise<Buffer> {
 		void reader.cancel().catch(() => {});
 	}, codexInputTransferTimeoutMs);
 	try {
+		// Rejecting an oversized descriptor must still release its upstream body.
+		if (input.descriptor.sizeBytes > codexInputMaximumBytes) unavailable();
 		while (true) {
 			const next = await reader.read();
 			if (expired) unavailable();
@@ -5199,8 +5210,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				if (
 					input.fileId !== fileId ||
 					!codexInputImageMediaTypes.has(input.descriptor.mediaType)
-				)
+				) {
+					// The rejected body is never transferred, so it must not stay live.
+					await cancelCodexInputBody(input.body);
 					unavailable();
+				}
 				const bytes = await readCodexInputBytes(input);
 				const path = join(directory, `${String(index).padStart(2, "0")}.image`);
 				await writeFile(path, bytes, {
@@ -5224,7 +5238,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				},
 			};
 		} catch (error) {
-			await cleanupCodexInputDirectory(directory).catch(() => {});
+			try {
+				await cleanupCodexInputDirectory(directory);
+			} catch (cleanupError) {
+				// Retain ownership of the remaining private bytes and surface the
+				// cleanup failure; a later attempt must retry it before proceeding.
+				this.pendingInputCleanups.set(key, directory);
+				throw cleanupError;
+			}
 			throw error;
 		}
 	}
