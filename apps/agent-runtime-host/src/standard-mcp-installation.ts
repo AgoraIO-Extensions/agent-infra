@@ -435,7 +435,6 @@ export async function replaceProtectedStandardMcpMaterials(
 					expected: string;
 					next: string;
 				},
-				onReplaced?: () => void,
 				safeRollback = false,
 			) => {
 				const activeGuard = safeRollback ? undefined : guard;
@@ -489,7 +488,6 @@ export async function replaceProtectedStandardMcpMaterials(
 						temporaryPath,
 						protectedStandardMcpPath(directory, path, replacement.name),
 					);
-					onReplaced?.();
 					await directory.sync();
 					await assertProtectedStandardMcpDirectoryCurrent(
 						path,
@@ -518,19 +516,26 @@ export async function replaceProtectedStandardMcpMaterials(
 			}[] = [];
 			try {
 				for (const replacement of replacements) {
-					await replaceOne(replacement, () => completed.push(replacement));
+					completed.push(replacement);
+					await replaceOne(replacement);
 				}
 			} catch (error) {
 				const rollbackErrors: unknown[] = [];
 				for (const replacement of completed.reverse()) {
 					try {
+						const current = await readProtectedStandardMcpBytes(
+							path,
+							replacement.name,
+							4096,
+						);
+						if (current === replacement.expected) continue;
+						if (current !== replacement.next) unavailable();
 						await replaceOne(
 							{
 								name: replacement.name,
 								expected: replacement.next,
 								next: replacement.expected,
 							},
-							undefined,
 							true,
 						);
 					} catch (rollbackError) {
