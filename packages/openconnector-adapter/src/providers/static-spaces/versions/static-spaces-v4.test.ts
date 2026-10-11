@@ -480,3 +480,62 @@ test("Credential and READ reject changed owner groups or Application before cont
 		assert.equal(contentRequests, 0);
 	}
 });
+
+test("ZIP Unicode-path extra fields cannot override the inspected ownership path", () => {
+	const name = Buffer.from(path),
+		content = Buffer.from(marker);
+	const override = Buffer.concat([
+		Buffer.from([1]),
+		Buffer.alloc(4),
+		Buffer.from("../outside.html"),
+	]);
+	override.writeUInt32LE(crc32(name), 1);
+	const extra = Buffer.alloc(4 + override.length);
+	extra.writeUInt16LE(0x7075, 0);
+	extra.writeUInt16LE(override.length, 2);
+	override.copy(extra, 4);
+	const zip = (localExtra: Buffer, centralExtra: Buffer) => {
+		const local = Buffer.alloc(30);
+		local.writeUInt32LE(0x04034b50);
+		local.writeUInt32LE(crc32(content), 14);
+		local.writeUInt32LE(content.length, 18);
+		local.writeUInt32LE(content.length, 22);
+		local.writeUInt16LE(name.length, 26);
+		local.writeUInt16LE(localExtra.length, 28);
+		const central = Buffer.alloc(46);
+		central.writeUInt32LE(0x02014b50);
+		central.writeUInt32LE(crc32(content), 16);
+		central.writeUInt32LE(content.length, 20);
+		central.writeUInt32LE(content.length, 24);
+		central.writeUInt16LE(name.length, 28);
+		central.writeUInt16LE(centralExtra.length, 30);
+		const end = Buffer.alloc(22);
+		end.writeUInt32LE(0x06054b50);
+		end.writeUInt16LE(1, 8);
+		end.writeUInt16LE(1, 10);
+		end.writeUInt32LE(central.length + name.length + centralExtra.length, 12);
+		end.writeUInt32LE(
+			local.length + name.length + localExtra.length + content.length,
+			16,
+		);
+		return Buffer.concat([
+			local,
+			name,
+			localExtra,
+			content,
+			central,
+			name,
+			centralExtra,
+			end,
+		]).toString("base64");
+	};
+	inspectRestrictedArchive(zip(Buffer.alloc(0), Buffer.alloc(0)), "zip");
+	assert.throws(
+		() => inspectRestrictedArchive(zip(extra, Buffer.alloc(0)), "zip"),
+		/admission denied/,
+	);
+	assert.throws(
+		() => inspectRestrictedArchive(zip(Buffer.alloc(0), extra), "zip"),
+		/admission denied/,
+	);
+});

@@ -133,6 +133,7 @@ export function inspectRestrictedArchive(encoded: unknown, format: unknown) {
 			const end = start + size;
 			if (
 				flags & ~0x800 ||
+				extraLength !== 0 ||
 				![0, 8].includes(method) ||
 				end > archive.length ||
 				expected > 2097152
@@ -176,6 +177,7 @@ export function inspectRestrictedArchive(encoded: unknown, format: unknown) {
 				.toString("utf8");
 			if (
 				!local ||
+				archive.readUInt16LE(offset + 30) !== 0 ||
 				centralName !== local.name ||
 				archive.readUInt32LE(offset + 42) !== local.offset ||
 				archive.readUInt32LE(offset + 20) !== local.size ||
