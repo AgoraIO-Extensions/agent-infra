@@ -102,6 +102,32 @@ describe("RuntimeHost execution file bridge", () => {
 		expect(Object.isFrozen(writeContext)).toBe(true);
 	});
 
+	it("forwards the caller signal and never reaches the reader once aborted", async () => {
+		const forwarded: (AbortSignal | undefined)[] = [];
+		const readInput = vi.fn(
+			async (context: RuntimeFileBridgeContextV1, signal?: AbortSignal) => {
+				forwarded.push(signal);
+				return {
+					fileId: context.fileId,
+					descriptor,
+					body: new ReadableStream<Uint8Array>(),
+				};
+			},
+		);
+		const port = bridge({ readInput });
+		const signal = new AbortController().signal;
+
+		await port.readInput("input-1", signal);
+		expect(forwarded[0]).toBe(signal);
+
+		const aborted = new AbortController();
+		aborted.abort();
+		await expect(port.readInput("input-1", aborted.signal)).rejects.toThrow(
+			"RUNTIME_FILE_INPUT_ABORTED",
+		);
+		expect(readInput).toHaveBeenCalledTimes(1);
+	});
+
 	it("keeps result writes valid for a maximum-length execution id", async () => {
 		const longBinding = { ...binding, executionId: "e".repeat(255) };
 		const writeResult = vi.fn(

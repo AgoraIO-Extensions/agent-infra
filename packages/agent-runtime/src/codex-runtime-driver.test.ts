@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { createServer, type IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2618,7 +2626,7 @@ describe("Codex Runtime Driver", () => {
 			type: "local_image",
 			path: expect.any(String),
 		});
-		expect(readInput).toHaveBeenCalledWith("file-1");
+		expect(readInput).toHaveBeenCalledWith("file-1", expect.any(AbortSignal));
 		const localImage = input?.[1];
 		if (
 			!localImage ||
@@ -2771,6 +2779,201 @@ describe("Codex Runtime Driver", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it("bounds a stalled bridge acquisition and cancels its late body", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		let cancelled = false;
+		let announced = () => {};
+		const acquisitionStarted = new Promise<void>((resolve) => {
+			announced = resolve;
+		});
+		const lateInput = (fileId: string) => ({
+			fileId,
+			descriptor: {
+				name: "screen.png",
+				mediaType: "image/png",
+				sizeBytes: 8,
+				sha256: "b".repeat(64),
+			},
+			body: new ReadableStream<Uint8Array>({
+				cancel() {
+					cancelled = true;
+				},
+			}),
+		});
+		let resolveLate: (() => void) | undefined;
+		const fileBridge = {
+			readInput: (fileId: string) => {
+				const pending = new Promise<ReturnType<typeof lateInput>>((resolve) => {
+					resolveLate = () => resolve(lateInput(fileId));
+				});
+				announced();
+				return pending;
+			},
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+		};
+
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const outcome = driver
+				.execute(
+					submitCommand({
+						input: { text: "describe this image", attachments: ["file-1"] },
+					}),
+					{ fileBridge },
+				)
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+			await acquisitionStarted;
+			await vi.advanceTimersByTimeAsync(30_000);
+
+			expect(await outcome).toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			expect(
+				bridge.requests.some(({ method }) => method === "turn/start"),
+			).toBe(false);
+
+			resolveLate?.();
+			for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
+			expect(cancelled).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("bounds waiting for a stalled attachment cancellation", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		let announced = () => {};
+		const transferStarted = new Promise<void>((resolve) => {
+			announced = resolve;
+		});
+		const fileBridge = {
+			readInput: async (fileId: string) => ({
+				fileId,
+				descriptor: {
+					name: "screen.png",
+					mediaType: "image/png",
+					sizeBytes: 8,
+					sha256: "b".repeat(64),
+				},
+				body: new ReadableStream<Uint8Array>({
+					pull(controller) {
+						announced();
+						// Exceeds the byte bound while the source never ends its cancel.
+						controller.enqueue(new Uint8Array(50 * 1024 * 1024 + 1));
+					},
+					cancel() {
+						return new Promise<void>(() => {});
+					},
+				}),
+			}),
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+		};
+
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const outcome = driver
+				.execute(
+					submitCommand({
+						input: { text: "describe this image", attachments: ["file-1"] },
+					}),
+					{ fileBridge },
+				)
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+			await transferStarted;
+			await vi.advanceTimersByTimeAsync(1_000);
+
+			expect(await outcome).toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+			expect(
+				bridge.requests.some(({ method }) => method === "turn/start"),
+			).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"does not replay an accepted Turn while failed materialization cleanup remains",
+		async () => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(join(directory, "driver.json"), bridge);
+			drivers.push(driver);
+			const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+			let blocked: string | undefined;
+			const readInput = vi.fn(async (fileId: string) => {
+				if (fileId === "file-2" && !blocked) {
+					// The first attachment is already materialized, so its directory is
+					// identifiable; make its removal fail after native acceptance.
+					for (const name of await readdir(tmpdir())) {
+						if (!name.startsWith("agent-infra-codex-input-")) continue;
+						const candidate = join(tmpdir(), name);
+						if (!(await readdir(candidate)).includes("00.image")) continue;
+						blocked = join(candidate, "blocked");
+						await mkdir(blocked, { recursive: true });
+						await writeFile(join(blocked, "keep"), "x");
+						await chmod(blocked, 0o500);
+						break;
+					}
+				}
+				return {
+					fileId,
+					descriptor: {
+						name: "screen.png",
+						mediaType: "image/png",
+						sizeBytes: bytes.byteLength,
+						sha256: createHash("sha256").update(bytes).digest("hex"),
+					},
+					body: new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(bytes);
+							controller.close();
+						},
+					}),
+				};
+			});
+			const fileBridge = {
+				readInput,
+				writeResult: async () => {
+					throw new Error("unused");
+				},
+			};
+			const command = submitCommand({
+				input: {
+					text: "describe this image",
+					attachments: ["file-1", "file-2"],
+				},
+			});
+
+			await expect(driver.execute(command, { fileBridge })).rejects.toThrow();
+			expect(blocked).toBeDefined();
+			// The accepted Turn must not report success while its input remains.
+			await expect(driver.execute(command, { fileBridge })).rejects.toThrow();
+			if (!blocked) throw new Error("missing blocked materialization");
+			await chmod(blocked, 0o700);
+			await expect(
+				driver.execute(command, { fileBridge }),
+			).resolves.toMatchObject({ result: { outcome: "accepted" } });
+		},
+	);
 
 	it("keeps Codex attachment capability fail-closed without a bridge", async () => {
 		const directory = await runtimeDirectory();

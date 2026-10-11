@@ -715,6 +715,96 @@ const codexInputImageMediaTypes = new Set([
 const codexInputMaximumBytes = 50 * 1024 * 1024;
 /** Bounds elapsed time so a stalled source cannot hold the execution open. */
 const codexInputTransferTimeoutMs = 30_000;
+/** Bounds the bridge exchange itself, before any transfer deadline exists. */
+const codexInputAcquisitionTimeoutMs = 30_000;
+/** Bounds waiting for an upstream cancel so cleanup is never held hostage. */
+const codexInputCancellationTimeoutMs = 1_000;
+const codexInputCleanupAttempts = 3;
+const codexInputCleanupRetryDelayMs = 50;
+
+/**
+ * Removes one materialized input directory under a bounded retry. Temporary
+ * paths stay in process memory: a final failure is reported to the caller so a
+ * replay cannot present an accepted Turn while its materialization still exists.
+ */
+async function cleanupCodexInputDirectory(directory: string): Promise<void> {
+	for (let attempt = 1; ; attempt += 1) {
+		try {
+			await rm(directory, { recursive: true, force: true });
+			return;
+		} catch (error) {
+			if (attempt >= codexInputCleanupAttempts) throw error;
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, codexInputCleanupRetryDelayMs);
+			});
+		}
+	}
+}
+
+/**
+ * Acquires one attachment through the request-scoped bridge under the same
+ * deadline discipline as its transfer. The signal reaches the deployment
+ * authority so it can stop its own exchange, and a late acquisition is
+ * cancelled instead of leaking a body after the operation already failed.
+ */
+async function acquireCodexInput(
+	fileBridge: RuntimeFileBridgePortV1,
+	fileId: string,
+): Promise<RuntimeFileInputV1> {
+	const controller = new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	// The deadline exists before the exchange starts, so no authority call can
+	// escape it.
+	const deadline = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(() => {
+			controller.abort();
+			reject(unavailableError());
+		}, codexInputAcquisitionTimeoutMs);
+	});
+	let acquisition: Promise<RuntimeFileInputV1>;
+	try {
+		acquisition = fileBridge.readInput(fileId, controller.signal);
+	} catch (error) {
+		clearTimeout(timer);
+		throw error;
+	}
+	try {
+		return await Promise.race([acquisition, deadline]);
+	} catch (error) {
+		controller.abort();
+		void acquisition.then(
+			(input) => input.body.cancel().catch(() => {}),
+			() => {},
+		);
+		throw error;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * Cancels the upstream body and releases the reader without awaiting a cancel
+ * that may never settle.
+ */
+async function releaseCodexInputReader(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			reader.cancel().then(
+				() => undefined,
+				() => undefined,
+			),
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, codexInputCancellationTimeoutMs);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+		reader.releaseLock();
+	}
+}
 
 /**
  * Transfers one bounded attachment into memory and verifies it against the
@@ -745,13 +835,7 @@ async function readCodexInputBytes(input: RuntimeFileInputV1): Promise<Buffer> {
 		}
 	} finally {
 		clearTimeout(timer);
-		try {
-			await reader.cancel();
-		} catch {
-			// Preserve any transfer, deadline or descriptor validation failure.
-		} finally {
-			reader.releaseLock();
-		}
+		await releaseCodexInputReader(reader);
 	}
 	if (size !== input.descriptor.sizeBytes) unavailable();
 	const bytes = Buffer.concat(chunks);
@@ -3155,6 +3239,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		string,
 		Promise<CodexNativeSourceResponseV1>
 	>();
+	/**
+	 * Temporary input directories whose cleanup failed. They stay in process
+	 * memory only: a replay retries the removal before it may report success.
+	 */
+	private readonly pendingInputCleanups = new Map<string, string>();
 
 	private retainPendingSourceTurn(turnKey: string, requestId: string): void {
 		const requests =
@@ -5068,12 +5157,21 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (command.operationId !== command.executionId) stateInvalid();
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
+		const key = operationKey(command);
+		const leaked = this.pendingInputCleanups.get(key);
+		if (leaked) {
+			// An accepted Turn must not replay as success while the materialization
+			// of an earlier attempt is still present.
+			await cleanupCodexInputDirectory(leaked);
+			this.pendingInputCleanups.delete(key);
+		}
 		let materialized: MaterializedCodexInput | undefined;
 		const ensureInput = async () => {
 			materialized ??= await this.materializeCodexInput(
 				command,
 				text,
 				fileBridge,
+				key,
 			);
 			return materialized;
 		};
@@ -5089,14 +5187,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async materializeCodexInput(
 		command: CodexSubmitTurnCommand,
 		text: string,
-		fileBridge?: RuntimeFileBridgePortV1,
+		fileBridge: RuntimeFileBridgePortV1 | undefined,
+		key: string,
 	): Promise<MaterializedCodexInput> {
 		if (!fileBridge) unavailable();
 		const directory = await mkdtemp(join(tmpdir(), "agent-infra-codex-input-"));
 		try {
 			const items: CodexNativeInputItem[] = [{ type: "text", text }];
 			for (const [index, fileId] of command.input.attachments.entries()) {
-				const input = await fileBridge.readInput(fileId);
+				const input = await acquireCodexInput(fileBridge, fileId);
 				if (
 					input.fileId !== fileId ||
 					!codexInputImageMediaTypes.has(input.descriptor.mediaType)
@@ -5113,14 +5212,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			let cleaned = false;
 			return {
 				items,
-				async cleanup() {
+				cleanup: async () => {
 					if (cleaned) return;
-					cleaned = true;
-					await rm(directory, { recursive: true, force: true });
+					try {
+						await cleanupCodexInputDirectory(directory);
+						cleaned = true;
+					} catch (error) {
+						this.pendingInputCleanups.set(key, directory);
+						throw error;
+					}
 				},
 			};
 		} catch (error) {
-			await rm(directory, { recursive: true, force: true });
+			await cleanupCodexInputDirectory(directory).catch(() => {});
 			throw error;
 		}
 	}

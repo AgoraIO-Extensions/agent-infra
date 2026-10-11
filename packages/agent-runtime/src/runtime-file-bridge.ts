@@ -52,7 +52,7 @@ export interface RuntimeFileInputV1 {
 }
 
 export interface RuntimeFileBridgePortV1 {
-	readInput(fileId: string): Promise<RuntimeFileInputV1>;
+	readInput(fileId: string, signal?: AbortSignal): Promise<RuntimeFileInputV1>;
 	writeResult(
 		descriptor: FileDescriptorV1,
 		body: ReadableStream<Uint8Array>,
@@ -216,6 +216,8 @@ export function createRuntimeFileBridgeV1(options: {
 	readonly binding: RuntimeFileBridgeBindingV1;
 	readonly readInput: (
 		context: RuntimeFileBridgeContextV1,
+		/** Aborted when the caller stops waiting for this exchange. */
+		signal?: AbortSignal,
 	) => Promise<RuntimeFileInputV1>;
 	readonly writeResult: (
 		descriptor: FileDescriptorV1,
@@ -253,11 +255,16 @@ export function createRuntimeFileBridgeV1(options: {
 			throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
 	}
 	return {
-		async readInput(fileId: string) {
+		async readInput(fileId: string, signal?: AbortSignal) {
 			assertLive();
 			if (!assertId(fileId) || !inputFileIds.has(fileId))
 				throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
-			const result = await options.readInput(context(binding, fileId, "read"));
+			// A caller that already stopped waiting must not reach the authority.
+			if (signal?.aborted) throw new Error("RUNTIME_FILE_INPUT_ABORTED");
+			const result = await options.readInput(
+				context(binding, fileId, "read"),
+				signal,
+			);
 			if (result.fileId !== fileId) invalidBinding();
 			return result;
 		},
