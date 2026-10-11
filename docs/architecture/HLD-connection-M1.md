@@ -80,7 +80,7 @@
 | 内部网站 | Jira | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
 | 内部网站 | Bitbucket | 纳入 | 按公司内部部署建立独立 ProviderRelease，并完成获批 Action 的真实账号 E2E |
 | 内部网站 | Jenkins | 纳入（只读） | 每个公司 Jenkins deployment 使用独立 Provider ID 和 ProviderRelease，共享审核过的只读 Adapter；pilot runtime 仅开放 `jenkins-release` |
-| 内部网站 | StaticSpaces | 上海具名长期受限接入已批准；广泛生产未批准 | 按 3.2.2 与 4.3.2 的独立版本边界发布；v1 普通目录和已关闭 pilot 不重开 |
+| 内部网站 | StaticSpaces | v5 具名受限与 v6 普通使用范围已批准；新版本激活须完成发布验收 | 按 3.2.2、4.3.2 与 [4.3.3](#433-staticspaces-普通使用批准) 的独立版本边界发布；v1 普通目录和已关闭 pilot 不重开，旧 Grant 不扩权 |
 
 本表属于 **[设计决策]**，不把不同产品或 deployment 合并为共享 Credential、endpoint 或授权范围。每个纳入项仍必须分别通过 13.4 的 Provider Onboarding；Microsoft Outlook 在状态从“待定”变更前不是 M1 交付依赖。
 
