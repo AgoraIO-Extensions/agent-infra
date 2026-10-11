@@ -21,7 +21,7 @@ export const browserConformanceChecks = Object.freeze([
 
 const digestPattern = /^sha256:[0-9a-f]{64}$/u;
 const hashPattern = /^[0-9a-f]{64}$/u;
-const versionPattern = /^[\x21-\x7e]{1,128}$/u;
+const versionPattern = /^[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?$/u;
 
 function record(value) {
 	return value && typeof value === "object" && !Array.isArray(value)
@@ -29,20 +29,31 @@ function record(value) {
 		: undefined;
 }
 
-function rejection(reasons) {
-	return { status: "rejected", reasons: [...new Set(reasons)] };
+function rejection(reasons, evidence = {}) {
+	return {
+		status: "rejected",
+		reasons: [...new Set(reasons)],
+		evidence: Object.fromEntries(Object.entries(evidence).sort()),
+	};
 }
 
-function checkEntry(value, path, reasons) {
+function checkEntry(value, path, reasons, evidence) {
 	const entry = record(value);
 	if (!entry) {
 		reasons.push(`${path}:missing`);
 		return;
 	}
-	if (entry.status !== "passed")
-		reasons.push(`${path}:${String(entry.status)}`);
+	const status = entry.status;
+	if (!["passed", "failed", "unknown", "blocked"].includes(status))
+		reasons.push(`${path}:invalid-status`);
+	else if (status !== "passed") reasons.push(`${path}:${status}`);
 	if (!hashPattern.test(entry.evidenceHash ?? ""))
 		reasons.push(`${path}:evidence-hash`);
+	else if (status !== "passed") evidence[path] = entry.evidenceHash;
+	for (const key of Object.keys(entry)) {
+		if (!["status", "evidenceHash"].includes(key))
+			reasons.push(`${path}:unbounded-field`);
+	}
 }
 
 /**
@@ -52,8 +63,21 @@ function checkEntry(value, path, reasons) {
  */
 export function validateBrowserConformanceReceipt(value) {
 	const reasons = [];
+	const rejectedEvidence = {};
 	const input = record(value);
 	if (!input) return rejection(["receipt:shape"]);
+	for (const key of Object.keys(input)) {
+		if (
+			![
+				"schemaVersion",
+				"classification",
+				"commit",
+				"deployment",
+				"templates",
+			].includes(key)
+		)
+			reasons.push("receipt:unbounded-field");
+	}
 	if (input.schemaVersion !== 1) reasons.push("receipt:schema-version");
 	if (input.classification !== "browser-m1-conformance")
 		reasons.push("receipt:classification");
@@ -62,6 +86,17 @@ export function validateBrowserConformanceReceipt(value) {
 	const deployment = record(input.deployment);
 	if (!deployment) reasons.push("deployment:missing");
 	else {
+		for (const key of Object.keys(deployment)) {
+			if (
+				![
+					"imageDigest",
+					"chromiumVersion",
+					"playwrightVersion",
+					"capabilityRevision",
+				].includes(key)
+			)
+				reasons.push("deployment:unbounded-field");
+		}
 		if (!digestPattern.test(deployment.imageDigest ?? ""))
 			reasons.push("deployment:image-digest");
 		if (!versionPattern.test(deployment.chromiumVersion ?? ""))
@@ -114,7 +149,12 @@ export function validateBrowserConformanceReceipt(value) {
 		if (!checks) reasons.push(`${path}:checks-missing`);
 		else {
 			for (const check of browserConformanceChecks)
-				checkEntry(checks[check], `${path}.${check}`, reasons);
+				checkEntry(
+					checks[check],
+					`${path}.${check}`,
+					reasons,
+					rejectedEvidence,
+				);
 			for (const key of Object.keys(checks)) {
 				if (!browserConformanceChecks.includes(key))
 					reasons.push(`${path}:unknown-check`);
@@ -140,7 +180,7 @@ export function validateBrowserConformanceReceipt(value) {
 	for (const template of browserConformanceTemplates) {
 		if (!seen.has(template)) reasons.push(`templates:missing-${template}`);
 	}
-	if (reasons.length) return rejection(reasons);
+	if (reasons.length) return rejection(reasons, rejectedEvidence);
 	return {
 		status: "passed",
 		commit: input.commit,
