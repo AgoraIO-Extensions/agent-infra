@@ -1142,10 +1142,15 @@ function stripRuntimeBrowserOperationFacts(value) {
 			visit(entry);
 		});
 	};
-	for (const schema of Object.values(
-		normalized.components?.schemas ?? normalized.schemas ?? {},
-	))
-		visit(schema);
+	const schemas = normalized.components?.schemas ?? normalized.schemas ?? {};
+	for (const name of [
+		"RuntimeOperationFactV2",
+		"ExecutionOperationEventV2",
+		"ScopedPlatformAuditProjectionV1",
+		"TaskSseMessageV1",
+		"PersistedConversationEventV2",
+	])
+		visit(schemas[name]);
 	return normalized;
 }
 
