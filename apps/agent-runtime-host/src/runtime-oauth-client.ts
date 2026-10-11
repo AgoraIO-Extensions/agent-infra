@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
 	exchangeStandardOAuthCode,
+	RuntimeHostError,
 	revokeStandardOAuthToken,
 	standardOAuthUnavailable as unavailable,
 } from "@agent-infra/agent-runtime";
@@ -235,6 +236,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	async function revokeAndClearMaterialsUnsafe() {
 		assertStandardMcpProcessProtection();
 		const recordDirectory = await openProtectedStandardMcpDirectory(records);
+		const materialNames = new Set<string>();
 		let names: string[];
 		try {
 			names = (
@@ -244,21 +246,28 @@ export async function createProtectedRuntimeOAuthClient(options: {
 						: records,
 				)
 			).filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
+			for (const name of names) {
+				const key = name.slice(0, -5);
+				try {
+					const record = await load(key, true);
+					if (isDeepStrictEqual(record.principal, principal)) {
+						materialNames.add(`${key}.access`);
+						materialNames.add(`${key}.refresh`);
+					}
+				} catch (error) {
+					if (
+						!(error instanceof RuntimeHostError) ||
+						error.code !== "CONNECTION_OAUTH_UNAVAILABLE"
+					)
+						throw error;
+				}
+			}
+			await assertProtectedStandardMcpDirectoryCurrent(
+				records,
+				recordDirectory,
+			);
 		} finally {
 			await recordDirectory.close();
-		}
-		const materialNames = new Set<string>();
-		for (const name of names) {
-			const key = name.slice(0, -5);
-			try {
-				const record = await load(key, true);
-				if (isDeepStrictEqual(record.principal, principal)) {
-					materialNames.add(`${key}.access`);
-					materialNames.add(`${key}.refresh`);
-				}
-			} catch {
-				// A stale, foreign or malformed transaction is never a revoke target.
-			}
 		}
 		const directory = await openProtectedStandardMcpDirectory(materials);
 		names = (
@@ -297,6 +306,10 @@ export async function createProtectedRuntimeOAuthClient(options: {
 				}
 				if (!unchanged)
 					throw new Error("protected OAuth material changed during revoke");
+				if (
+					(await readProtectedStandardMcpBytes(materials, name, 4096)) !== token
+				)
+					throw new Error("OAuth material changed during revoke");
 				await unlink(protectedStandardMcpPath(directory, materials, name));
 			}
 			await directory.sync();
