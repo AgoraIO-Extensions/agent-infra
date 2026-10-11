@@ -28,7 +28,6 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { runtimeFetch as inClusterRuntimeFetch } from "./runtime-transport.js";
-import type { WorkloadSkillMaterializerV1 } from "./skill-materialization.js";
 import type { WorkloadBrowserBindingResolverV1 } from "./workload-runtime.js";
 import type { PlatformWorkloadWorkerOptionsV1 } from "./workload-worker.js";
 
@@ -73,7 +72,7 @@ export interface ProductionWorkloadWorkerInputV1 {
 	/** Deployment-owned ObjectStorage adapter used by the bounded reconciliation worker. */
 	readonly files?: PlatformWorkloadWorkerOptionsV1["files"];
 	/** Deployment-owned immutable Skill materializer; no caller paths or URLs cross this boundary. */
-	readonly skillMaterializer?: WorkloadSkillMaterializerV1;
+	readonly skillMaterializer?: PlatformWorkloadWorkerOptionsV1["skillMaterializer"];
 	readonly runtimeModelVersion?: PlatformWorkloadWorkerOptionsV1["runtimeModelVersion"];
 	readonly runtimeProbe: WorkloadRuntimeProbeAuthorizationV1;
 	/** Server-resolved binding for the current Session-owned Browser Sandbox. */

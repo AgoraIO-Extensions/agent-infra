@@ -25,7 +25,6 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
-import type { WorkloadSkillMaterializerV1 } from "./skill-materialization.js";
 import {
 	createProductionWorkloadWorkerOptionsV1,
 	createWorkloadReadinessAuthorizationV1,
@@ -242,11 +241,13 @@ describe("production Worker deployment", () => {
 	});
 	it("forwards the deployment-owned Skill materializer to Worker options", async () => {
 		const deployment = await input();
-		const materializer: WorkloadSkillMaterializerV1 = {
+		const materializer = {
 			async materialize() {
 				return { generationId: "a".repeat(64), skills: [] };
 			},
-		};
+		} satisfies NonNullable<
+			ProductionWorkloadWorkerInputV1["skillMaterializer"]
+		>;
 		const options = await createProductionWorkloadWorkerOptionsV1({
 			...deployment,
 			skillMaterializer: materializer,
@@ -321,6 +322,7 @@ describe("production Worker deployment", () => {
 				},
 			]);
 			expect(options).not.toHaveProperty("keyring");
+			expect(options.skillMaterializer).toBeUndefined();
 			expect(JSON.stringify(options.policy)).not.toContain("PRIVATE KEY");
 		} finally {
 			server.closeAllConnections();
