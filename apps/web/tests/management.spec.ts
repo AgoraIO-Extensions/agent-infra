@@ -1025,7 +1025,7 @@ test("Owner configuration, Secret clearing, lifecycle and custom image upgrade",
 	await replaceModels.focus();
 	await page.keyboard.press("Space");
 	await expect(replaceModels).toBeChecked();
-	await expect(page.getByLabel("替换 Agent 默认 Relay Key")).toHaveValue("");
+	await expect(page.getByLabel("新模型凭证")).toHaveValue("");
 	await page.keyboard.press("Space");
 	await expect(replaceModels).not.toBeChecked();
 	await page.getByRole("button", { name: "添加 Secret" }).click();
