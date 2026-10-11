@@ -872,6 +872,22 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					database.databaseUrl,
 					imageDigest,
 				);
+				const apiConfiguration = {
+					...seed.configuration,
+					source: {
+						kind: "custom" as const,
+						imageDigest,
+						admissionRevision: "api-workload-admission",
+						interactionMode: "platform-adapter" as const,
+						connectionEnabled: false,
+					},
+					modelConfiguration: null,
+					secrets: [],
+				};
+				await sql`update platform.agent_configuration_revisions
+					set configuration=${sql.json(apiConfiguration)}
+					where agent_id=${seed.agentId} and revision=1`;
+				await sql`delete from platform.secret_records where agent_id=${seed.agentId}`;
 				const hash = (value: string) =>
 					createHash("sha256").update(value).digest("hex");
 				await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision)
