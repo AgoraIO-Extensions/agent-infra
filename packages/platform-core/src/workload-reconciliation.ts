@@ -109,10 +109,18 @@ export interface WorkloadCapabilitiesV1 {
 	readonly connection?: boolean;
 	readonly supplementaryInstruction?: boolean;
 	readonly skills?: readonly WorkloadSkillCapabilityV1[];
+	readonly browser?: WorkloadBrowserCapabilityProjectionV1;
 	readonly [key: string]:
 		| boolean
 		| readonly WorkloadSkillCapabilityV1[]
+		| WorkloadBrowserCapabilityProjectionV1
 		| undefined;
+}
+
+/** Opaque, server-validated Browser projection retained by Workload state. */
+export interface WorkloadBrowserCapabilityProjectionV1 {
+	readonly status: string;
+	readonly [key: string]: unknown;
 }
 
 export interface WorkloadReconciliationStateV1 {

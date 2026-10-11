@@ -1,13 +1,16 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { discoverRuntimeBrowserCapabilityV1 } from "@agent-infra/agent-runtime";
 import {
 	type BrowserCapabilityBindingV1,
+	BrowserCapabilityProjectionV1Schema,
 	RuntimeCapabilitiesV1Schema,
 } from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
 	type PlatformSecretRecordV1,
 	RuntimeCapabilitySetV1Schema,
+	resolveRuntimeManifestCapabilitiesV1,
 	validateAgentWorkloadDesiredV1,
 	validateImageRegistryAdmissionResultV1,
 	validatePlatformSecretRecordV1,
@@ -533,9 +536,34 @@ export function createWorkloadRuntimeV1(
 					: optional.success
 						? optional.data
 						: RuntimeCapabilitySetV1Schema.parse({});
-				const declared = RuntimeCapabilitySetV1Schema.parse(
-					desired.runtimeManifest.capabilities ?? {},
+				const declared = resolveRuntimeManifestCapabilitiesV1(
+					desired.runtimeManifest,
 				);
+				const browserResult =
+					desired.runtimeManifest.capabilities?.browser &&
+					runtimeCapabilities.success &&
+					runtimeCapabilities.data.browser
+						? discoverRuntimeBrowserCapabilityV1(
+								{ schemaVersion: 1 },
+								{
+									declaration: desired.runtimeManifest.capabilities.browser,
+									manifestDigest: desired.imageDigest,
+									probe: runtimeCapabilities.data.browser,
+								},
+							)
+						: desired.runtimeManifest.capabilities?.browser
+							? discoverRuntimeBrowserCapabilityV1(
+									{ schemaVersion: 1 },
+									{
+										declaration: desired.runtimeManifest.capabilities.browser,
+										manifestDigest: desired.imageDigest,
+										probe: undefined,
+									},
+								)
+							: undefined;
+				const browser = browserResult
+					? BrowserCapabilityProjectionV1Schema.parse(browserResult)
+					: undefined;
 				recordCapabilities({
 					...Object.fromEntries(
 						Object.entries(declared).map(([name, value]) => [
@@ -546,6 +574,7 @@ export function createWorkloadRuntimeV1(
 					...(runtimeCapabilities.success && runtimeCapabilities.data.skills
 						? { skills: runtimeCapabilities.data.skills }
 						: {}),
+					...(browser ? { browser } : {}),
 				});
 				return probe.core === "passed";
 			},

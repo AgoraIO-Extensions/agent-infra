@@ -12,7 +12,10 @@ import {
 	requireAgentManagementExactKeys,
 	snapshotAgentManagementDataObject,
 } from "./agent-management-input.js";
-import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
+import type {
+	WorkloadBrowserCapabilityProjectionV1,
+	WorkloadReconciliationStateV1,
+} from "./workload-reconciliation.js";
 
 export interface AgentRuntimePresentationExpectationV1 {
 	readonly configurationRevision: number;
@@ -23,7 +26,11 @@ export type AgentRuntimePresentationDecisionV1 =
 	| {
 			readonly outcome: "found";
 			readonly sourceReference: string;
-			readonly capabilities: Readonly<Record<string, boolean>> | null;
+			readonly capabilities:
+				| (Readonly<Record<string, boolean>> & {
+						readonly browser?: WorkloadBrowserCapabilityProjectionV1;
+				  })
+				| null;
 			readonly interactionUrl: string | null;
 	  }
 	| { readonly outcome: "unavailable" | "stale" };
@@ -38,6 +45,9 @@ export interface AgentRuntimePresentationDeploymentV1 {
 	readonly imageDigest: string;
 	readonly runtimeManifest: {
 		readonly interactionMode: "platform-adapter" | "self-managed";
+		readonly capabilities?: {
+			readonly browser?: Record<string, unknown>;
+		};
 	};
 	readonly route: {
 		readonly exposure: "internal-only" | "platform-auth" | "self-managed";
@@ -133,20 +143,24 @@ export function decideAgentRuntimePresentationV1(input: {
 		!isDeepStrictEqual(management, input.expected.management)
 	)
 		return { outcome: "stale" };
-	const unavailable: AgentRuntimePresentationDecisionV1 = {
+	const foundWithoutRuntimeProjection: AgentRuntimePresentationDecisionV1 = {
 		outcome: "found",
 		sourceReference: facts.sourceReference,
 		capabilities: null,
 		interactionUrl: null,
 	};
 	const runtime = facts.runtime;
+	const browserDeclared =
+		runtime?.deployment.runtimeManifest.capabilities?.browser !== undefined;
 	if (
 		!runtime ||
 		management.status !== "available" ||
 		management.serviceAvailability !== "ready" ||
 		management.desiredState !== "running"
 	)
-		return unavailable;
+		return browserDeclared
+			? { outcome: "unavailable" }
+			: foundWithoutRuntimeProjection;
 	const { state, deployment, verifiedConfiguration: configuration } = runtime;
 	if (
 		state.agentId !== input.agentId ||
@@ -170,7 +184,9 @@ export function decideAgentRuntimePresentationV1(input: {
 		deployment.desiredState !== "running" ||
 		deployment.imageDigest !== configuration.source.imageDigest
 	)
-		return unavailable;
+		return browserDeclared
+			? { outcome: "unavailable" }
+			: foundWithoutRuntimeProjection;
 	const mode =
 		configuration.source.kind === "standard"
 			? "platform-adapter"
@@ -186,7 +202,11 @@ export function decideAgentRuntimePresentationV1(input: {
 		deployment.runtimeManifest.interactionMode !== mode ||
 		deployment.route.exposure !== exposure
 	)
-		return unavailable;
+		return browserDeclared
+			? { outcome: "unavailable" }
+			: foundWithoutRuntimeProjection;
+	if (browserDeclared && !state.capabilities.browser)
+		return { outcome: "unavailable" };
 	const interactionUrl =
 		mode === "self-managed" &&
 		configuration.source.kind === "custom" &&
@@ -198,11 +218,18 @@ export function decideAgentRuntimePresentationV1(input: {
 		outcome: "found",
 		sourceReference: facts.sourceReference,
 		capabilities: state.capabilities
-			? (Object.fromEntries(
-					Object.entries(state.capabilities).filter(
-						([, value]) => typeof value === "boolean",
+			? ({
+					...Object.fromEntries(
+						Object.entries(state.capabilities).filter(
+							([, value]) => typeof value === "boolean",
+						),
 					),
-				) as Readonly<Record<string, boolean>>)
+					...(browserDeclared && state.capabilities.browser
+						? { browser: state.capabilities.browser }
+						: {}),
+				} as Readonly<Record<string, boolean>> & {
+					browser?: WorkloadBrowserCapabilityProjectionV1;
+				})
 			: null,
 		interactionUrl,
 	};

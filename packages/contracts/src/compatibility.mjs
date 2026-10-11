@@ -2656,6 +2656,28 @@ function isConnectionInstallationAuthorizationUrlAddition(previous, current) {
 	}
 	return changed && findBreakingChanges(previous, normalized).length === 0;
 }
+
+// #1760 projects the already-versioned Browser projection into Agent API
+// capabilities. The field is optional, so Browser-absent consumers keep the
+// historical response shape.
+function isPilotBrowserProjectionOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	let changed = false;
+	for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
+		const currentCapabilities =
+			normalized.components?.schemas?.[name]?.properties?.capabilities;
+		const previousCapabilities =
+			previous.components?.schemas?.[name]?.properties?.capabilities;
+		if (
+			currentCapabilities?.properties?.browser !== undefined &&
+			previousCapabilities?.properties?.browser === undefined
+		) {
+			delete currentCapabilities.properties.browser;
+			changed = true;
+		}
+	}
+	return changed && findBreakingChanges(previous, normalized).length === 0;
+}
 function findBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
 	let current = currentValue;
@@ -2694,6 +2716,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserEvidenceOpenApiAddition(previous, current) &&
+			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&

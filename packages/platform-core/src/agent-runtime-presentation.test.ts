@@ -11,6 +11,7 @@ import {
 	decideAgentRuntimePresentationV1,
 	snapshotAgentRuntimePresentationExpectationV1,
 } from "./agent-runtime-presentation.js";
+import type { WorkloadBrowserCapabilityProjectionV1 } from "./workload-reconciliation.js";
 
 const management: AgentManagementStateV1 = {
 	schemaVersion: 1,
@@ -93,6 +94,171 @@ function fixture() {
 }
 
 describe("Agent runtime presentation policy", () => {
+	it("fails closed when Browser is declared but verified projection is missing", () => {
+		const input = fixture();
+		const runtime = input.facts.runtime;
+		if (!runtime) throw new Error();
+		const facts = {
+			...input.facts,
+			runtime: {
+				...runtime,
+				deployment: {
+					...runtime.deployment,
+					runtimeManifest: {
+						...runtime.deployment.runtimeManifest,
+						capabilities: { browser: {} as never },
+					},
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toEqual({
+			outcome: "unavailable",
+		});
+	});
+	it("fails closed while a Browser-declared Workload is not ready", () => {
+		const input = fixture();
+		const runtime = input.facts.runtime;
+		if (!runtime) throw new Error();
+		const facts = {
+			...input.facts,
+			management: {
+				...input.facts.management,
+				serviceAvailability: "updating" as const,
+			},
+			runtime: {
+				...runtime,
+				deployment: {
+					...runtime.deployment,
+					runtimeManifest: {
+						...runtime.deployment.runtimeManifest,
+						capabilities: { browser: {} as never },
+					},
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toEqual({
+			outcome: "stale",
+		});
+	});
+	it("fails closed when a Browser Workload fence is stale", () => {
+		const input = fixture();
+		const runtime = input.facts.runtime;
+		if (!runtime) throw new Error();
+		const facts = {
+			...input.facts,
+			runtime: {
+				...runtime,
+				deployment: {
+					...runtime.deployment,
+					fence: runtime.deployment.fence + 1,
+					runtimeManifest: {
+						...runtime.deployment.runtimeManifest,
+						capabilities: { browser: {} as never },
+					},
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toEqual({
+			outcome: "unavailable",
+		});
+	});
+	it("fails closed when Browser deployment exposure disagrees with configuration", () => {
+		const input = fixture();
+		const runtime = input.facts.runtime;
+		if (!runtime) throw new Error();
+		const facts = {
+			...input.facts,
+			runtime: {
+				...runtime,
+				deployment: {
+					...runtime.deployment,
+					route: { exposure: "platform-auth" as const },
+					runtimeManifest: {
+						...runtime.deployment.runtimeManifest,
+						capabilities: { browser: {} as never },
+					},
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toEqual({
+			outcome: "unavailable",
+		});
+	});
+
+	it("projects the verified Browser state without exposing probe internals", () => {
+		const input = fixture();
+		const browser: WorkloadBrowserCapabilityProjectionV1 = {
+			schemaVersion: 1,
+			capabilityVersion: 1,
+			status: "available",
+			operations: ["navigate", "observe"],
+			policy: {
+				allowedOrigins: ["https://example.test/"],
+				maxContexts: 1,
+				maxTabs: 1,
+				maxPages: 1,
+				maxViewportWidth: 1280,
+				maxViewportHeight: 720,
+				maxConcurrentActions: 1,
+				maxDownloads: 0,
+				maxDownloadBytes: 0,
+				maxUploadBytes: 0,
+				maxScreenshotBytes: 1024,
+				maxBrowserDurationMs: 60_000,
+				maxRetainedProfileBytes: 100_000,
+				navigationTimeoutMs: 15_000,
+				actionTimeoutMs: 5_000,
+				requireSideEffectConfirmation: true,
+				allowUserHandoff: false,
+			},
+			provenance: {
+				browser: "chromium",
+				chromiumVersion: "140.0.7339.0",
+				playwrightVersion: "1.55.0",
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			conformance: {
+				schemaVersion: 1,
+				receiptId: "browser-receipt",
+				probeVersion: "browser-probe",
+				verifiedAt: "2026-10-10T00:00:00.000Z",
+				manifestDigest: `sha256:${"a".repeat(64)}`,
+				evidenceHash: "b".repeat(64),
+				operations: ["navigate", "observe"],
+			},
+		};
+		const runtime = input.facts.runtime;
+		if (!runtime?.state.capabilities) throw new Error();
+		const browserDeclaration = {
+			schemaVersion: 1,
+			capabilityVersion: 1,
+			operations: browser.operations,
+			policy: browser.policy,
+		};
+		const facts = {
+			...input.facts,
+			runtime: {
+				...runtime,
+				deployment: {
+					...runtime.deployment,
+					runtimeManifest: {
+						...runtime.deployment.runtimeManifest,
+						capabilities: { browser: browserDeclaration },
+					},
+				},
+				state: {
+					...runtime.state,
+					capabilities: { ...runtime.state.capabilities, browser },
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toMatchObject(
+			{
+				outcome: "found",
+				capabilities: { modelSelection: true, browser },
+			},
+		);
+	});
 	it.each([false, true])(
 		"rejects another Agent's configuration before projecting source or capabilities (runtime present: %s)",
 		(hasRuntime) => {
