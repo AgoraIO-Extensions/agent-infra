@@ -878,7 +878,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				await sql`update platform.agent_applications
 					set creation_channel='api', creator_principal_type='application',
 						creator_principal_id='api-workload-application', approval_revision=null,
-						status='available', service_availability='starting'
+						status='creating', service_availability=null
 					where agent_id=${seed.agentId}`;
 				await sql`insert into platform.platform_api_credentials(id,principal_type,principal_id,credential_hash,scopes)
 					values ('api-workload-user','user','selector-host-owner',${hash(token)}, '["agent:manage","agent:read"]'::jsonb),
