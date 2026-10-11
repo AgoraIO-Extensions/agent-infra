@@ -110,11 +110,11 @@ import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
-import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 import type {
 	RuntimeFileBridgePortV1,
 	RuntimeFileResultV1,
 } from "./runtime-file-bridge.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 interface CodexAppServerTransport {
 	[codexSkillLaunch]?: CodexSkillLaunchProvenance;
