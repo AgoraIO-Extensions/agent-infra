@@ -115,6 +115,31 @@ describe("Agent runtime presentation policy", () => {
 			outcome: "unavailable",
 		});
 	});
+	it("fails closed while a Browser-declared Workload is not ready", () => {
+		const input = fixture();
+		const runtime = input.facts.runtime;
+		if (!runtime) throw new Error();
+		const facts = {
+			...input.facts,
+			management: {
+				...input.facts.management,
+				serviceAvailability: "updating" as const,
+			},
+			runtime: {
+				...runtime,
+				deployment: {
+					...runtime.deployment,
+					runtimeManifest: {
+						...runtime.deployment.runtimeManifest,
+						capabilities: { browser: {} as never },
+					},
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toEqual({
+			outcome: "stale",
+		});
+	});
 	it("fails closed when a Browser Workload fence is stale", () => {
 		const input = fixture();
 		const runtime = input.facts.runtime;

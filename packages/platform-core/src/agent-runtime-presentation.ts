@@ -150,16 +150,18 @@ export function decideAgentRuntimePresentationV1(input: {
 		interactionUrl: null,
 	};
 	const runtime = facts.runtime;
+	const browserDeclared =
+		runtime?.deployment.runtimeManifest.capabilities?.browser !== undefined;
 	if (
 		!runtime ||
 		management.status !== "available" ||
 		management.serviceAvailability !== "ready" ||
 		management.desiredState !== "running"
 	)
-		return foundWithoutRuntimeProjection;
+		return browserDeclared
+			? { outcome: "unavailable" }
+			: foundWithoutRuntimeProjection;
 	const { state, deployment, verifiedConfiguration: configuration } = runtime;
-	const browserDeclared =
-		deployment.runtimeManifest.capabilities?.browser !== undefined;
 	if (
 		state.agentId !== input.agentId ||
 		state.phase !== "ready" ||
