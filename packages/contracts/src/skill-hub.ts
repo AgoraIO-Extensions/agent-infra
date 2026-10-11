@@ -157,6 +157,7 @@ const skillHubSyncBindingBase = {
 	agentVersion: identifier,
 	skillName: packageName,
 	skillVersion: SkillVersionRefV1Schema,
+	grant: SkillGrantV1Schema,
 	configurationRevision: positiveRevision,
 	syncRevision: positiveRevision,
 };
