@@ -52,9 +52,67 @@ jobs:
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
+  changes:
+    name: Classify changes
+    needs: ci-exemption
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    outputs:
+      source: ${{ steps.scope.outputs.source }}
+      web: ${{ steps.scope.outputs.web }}
+      runtime: ${{ steps.scope.outputs.runtime }}
+      workload: ${{ steps.scope.outputs.workload }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Classify changed paths
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source=false
+          web=false
+          runtime=false
+          workload=false
+          if [[ "$EVENT_NAME" == push ]]; then
+            source=true
+            web=true
+            runtime=true
+            workload=true
+          else
+            while IFS= read -r path; do
+              case "$path" in
+                .github/*|docs/*|README.md|AGENTS.md|*.md) ;;
+                *) source=true ;;
+              esac
+              case "$path" in
+                apps/web/*|packages/contracts/*|tests/web*|tests/pilot/*) web=true ;;
+                apps/agent-runtime-host/*|packages/agent-runtime/*|deploy/runtime/*|tests/runtime*) runtime=true ;;
+                apps/platform-worker/*|packages/platform-store/*|packages/platform-core/*|deploy/kind/*|deploy/helm/*|tests/workload*) workload=true ;;
+              esac
+            done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          fi
+          {
+            echo "source=$source"
+            echo "web=$web"
+            echo "runtime=$runtime"
+            echo "workload=$workload"
+          } >> "$GITHUB_OUTPUT"
+
   ci:
     name: CI
-    needs: ci-exemption
+    needs: [ci-exemption, changes]
     # Failure to read the label must run CI, never grant an exemption.
     if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
     runs-on: ubuntu-24.04
@@ -73,6 +131,8 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install pnpm
         run: npm install --global pnpm@11.20.0
@@ -84,13 +144,16 @@ jobs:
         run: pnpm check
 
       - name: Check TypeScript
+        if: ${{ needs.changes.outputs.source == 'true' }}
         run: pnpm check-types
 
       - name: Run tests
+        if: ${{ needs.changes.outputs.source == 'true' }}
         run: pnpm test
 
       - name: Validate real observability Collector and PostgreSQL
         id: observability
+        if: ${{ needs.changes.outputs.source == 'true' }}
         timeout-minutes: 10
         env:
           AO_SESSION_ID: observability-${{ github.run_id }}-${{ github.run_attempt }}
@@ -150,7 +213,7 @@ jobs:
           NODE
 
       - name: Preserve observability acceptance evidence
-        if: always()
+        if: ${{ always() && steps.observability.outcome != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: observability-${{ github.run_id }}-${{ github.run_attempt }}
@@ -159,12 +222,14 @@ jobs:
           retention-days: 14
 
       - name: Build pinned Codex native test environment
+        if: ${{ needs.changes.outputs.runtime == 'true' }}
         run: >-
           docker build --target builder -f apps/agent-runtime-host/Dockerfile
           --tag agent-infra-codex-native-test .
 
       - name: Verify native Codex metadata command
         id: codex_native_command
+        if: ${{ needs.changes.outputs.runtime == 'true' }}
         shell: bash
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -234,6 +299,7 @@ jobs:
           retention-days: 14
 
       - name: Verify native Codex recovery
+        if: ${{ needs.changes.outputs.runtime == 'true' }}
         run: |
           docker run --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
@@ -245,6 +311,7 @@ jobs:
             src/codex-native-recovery.test.ts --cache=false
 
       - name: Verify native Claude conformance in the pinned Linux image
+        if: ${{ needs.changes.outputs.runtime == 'true' }}
         run: |
           docker run --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
@@ -255,6 +322,7 @@ jobs:
             src/runtime-driver-conformance.test.ts --cache=false
 
       - name: Verify Generic ACP, OpenCode and Pi conformance in the pinned Linux image
+        if: ${{ needs.changes.outputs.runtime == 'true' }}
         run: |
           docker run --init --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
@@ -267,15 +335,26 @@ jobs:
             src/opencode-native.test.ts src/runtime-driver-conformance.test.ts --maxWorkers=1 --cache=false
 
       - name: Build applications
+        if: ${{ needs.changes.outputs.source == 'true' }}
         run: pnpm build
 
       - name: Smoke test applications
+        if: ${{ needs.changes.outputs.source == 'true' }}
         run: pnpm smoke
 
+      - name: Cache Playwright browsers
+        if: ${{ needs.changes.outputs.web == 'true' }}
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install browser for Web validation
+        if: ${{ needs.changes.outputs.web == 'true' }}
         run: pnpm --filter @agent-infra/web exec playwright install --with-deps chromium
 
       - name: Validate Web management journeys
+        if: ${{ needs.changes.outputs.web == 'true' }}
         run: pnpm --filter @agent-infra/web test:browser
 
       - name: Upload Web browser evidence
@@ -289,11 +368,13 @@ jobs:
 
       - name: Build deployment images
         id: images
+        if: ${{ needs.changes.outputs.source == 'true' }}
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node deploy/release/ci-image-build.mjs build
 
       - name: Verify built Web image compatibility
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.web == 'true' }}
         timeout-minutes: 3
         shell: bash
         env:
@@ -396,6 +477,7 @@ jobs:
 
       - name: Verify installed workspace-summary image
         id: installed_skill
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.runtime == 'true' }}
         timeout-minutes: 10
         shell: bash
         env:
@@ -489,11 +571,13 @@ jobs:
 
       - name: Probe native Codex runtime image
         id: runtime_probe
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.runtime == 'true' }}
         run: >-
           node deploy/release/runtime-probe.mjs --build-manifest
           .ci-images/build.json "$RUNNER_TEMP/codex-runtime-probe.json"
 
       - name: Verify pinned Chromium supply and controlled launch
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.web == 'true' }}
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
@@ -522,12 +606,14 @@ jobs:
           if-no-files-found: warn
 
       - name: Verify Custom Base Image inheritance
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.runtime == 'true' }}
         run: >-
           node deploy/release/custom-base-image.mjs
           "agent-infra-ci/custom-agent-base:$SOURCE_COMMIT"
           "$RUNNER_TEMP/custom-base-image.json"
 
       - name: Preserve Custom Base Image evidence
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.runtime == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: custom-base-image-${{ github.event.pull_request.head.sha || github.sha }}
@@ -577,8 +663,8 @@ jobs:
 
   workload-kind:
     name: Workload kind
-    needs: ci-exemption
-    if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
+    needs: [ci-exemption, changes]
+    if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -591,6 +677,13 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Cache kind binary
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/go/bin/kind
+          key: ${{ runner.os }}-kind-v0.30.0
       - name: Install tools and dependencies
         run: |
           npm install --global pnpm@11.20.0
