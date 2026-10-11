@@ -276,6 +276,17 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 			await sql`select reason from platform.task_control_records c join platform.conversation_executions e on e.execution_id=c.execution_id where e.actor_id=${f.userId} and e.principal_type='user'`,
 		).toEqual([{ reason: "authorization_revoked" }]);
 	});
+	it("rolls back when current organization access disappears before commit", async () => {
+		const f = await fixture();
+		let calls = 0;
+		f.setIdentity(async (scope) => {
+			const current = user(scope.senderId);
+			return ++calls >= 3 ? { ...current, organizationIds: [] } : current;
+		});
+		expect((await f.app.request(f.request())).status).toBe(200);
+		expect(f.outcomes).toEqual(["denied"]);
+		await noFacts(f);
+	});
 	it("commits receipt and every acceptance fact in one transaction and replays the immutable acceptance snapshot", async () => {
 		const f = await fixture();
 		expect((await f.app.request(f.request())).status).toBe(200);
