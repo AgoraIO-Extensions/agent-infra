@@ -5184,11 +5184,18 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				fileBridge,
 				key,
 			);
+			// Materialized bytes must never cross into a native side effect under a
+			// File Grant that lapsed while they were acquired.
+			fileBridge?.revalidate();
 			return materialized;
 		};
-		if (command.input.attachments.length > 0 && !this.operationRecord(command))
-			await ensureInput();
 		try {
+			if (
+				command.input.attachments.length > 0 &&
+				!this.operationRecord(command)
+			) {
+				await ensureInput();
+			}
 			return await this.executePreparedSubmitTurn(command, text, ensureInput);
 		} finally {
 			await materialized?.cleanup();

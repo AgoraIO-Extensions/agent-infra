@@ -57,6 +57,11 @@ export interface RuntimeFileBridgePortV1 {
 		descriptor: FileDescriptorV1,
 		body: ReadableStream<Uint8Array>,
 	): Promise<RuntimeFileResultV1>;
+	/**
+	 * Re-checks the current Session/Execution authority before bytes that were
+	 * already read cross into a native side effect.
+	 */
+	revalidate(): void;
 }
 
 /** Creates a port bound to exactly one validated Runtime business request. */
@@ -80,6 +85,42 @@ const contextKeys = new Set([...bindingKeys, "fileId", "operation"]);
 
 function invalidBinding(): never {
 	throw new TypeError("RUNTIME_FILE_BRIDGE_BINDING_INVALID");
+}
+
+/** Bounds waiting for an upstream cancel so a refused body cannot hold the port. */
+const bodyCancelTimeoutMs = 1_000;
+
+/** Reads the body of authority output without trusting its shape. */
+function resultBody(value: unknown): ReadableStream<Uint8Array> | undefined {
+	const body = (value as { body?: unknown } | undefined)?.body;
+	return typeof (body as ReadableStream<Uint8Array> | undefined)?.getReader ===
+		"function"
+		? (body as ReadableStream<Uint8Array>)
+		: undefined;
+}
+
+/**
+ * Cancels a body the port refuses to hand back, under bounded waiting so a
+ * never-settling source cannot keep the exchange open.
+ */
+async function cancelBody(body: ReadableStream<Uint8Array> | undefined) {
+	if (!body) return;
+	const reader = body.getReader();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			reader.cancel().then(
+				() => undefined,
+				() => undefined,
+			),
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, bodyCancelTimeoutMs);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+		reader.releaseLock();
+	}
 }
 
 function invalidContext(): never {
@@ -265,8 +306,19 @@ export function createRuntimeFileBridgeV1(options: {
 				context(binding, fileId, "read"),
 				signal,
 			);
-			if (result.fileId !== fileId) invalidBinding();
+			try {
+				// Authority can lapse while the exchange is in flight; its body must not
+				// stay live, and a mismatched binding is refused the same way.
+				assertLive();
+				if (result.fileId !== fileId) invalidBinding();
+			} catch (error) {
+				await cancelBody(resultBody(result));
+				throw error;
+			}
 			return result;
+		},
+		revalidate() {
+			assertLive();
 		},
 		async writeResult(descriptor, body) {
 			assertLive();
