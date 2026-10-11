@@ -112,6 +112,8 @@ const environment = {
 	MANHATTAN_OAUTH_CLIENT_SECRET: "synthetic-secret",
 	DATALEGO_OAUTH_CLIENT_ID: "synthetic-client",
 	DATALEGO_OAUTH_CLIENT_SECRET: "synthetic-secret",
+	ARGUS_OAUTH_CLIENT_ID: "synthetic-client",
+	ARGUS_OAUTH_CLIENT_SECRET: "synthetic-secret",
 	REHOBOAM_KONG_API_KEY: "synthetic-key",
 };
 
