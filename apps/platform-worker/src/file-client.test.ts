@@ -115,7 +115,9 @@ describe("Worker V4 runtime file client", () => {
 					},
 				}),
 			),
-		).resolves.toMatchObject({ fileId: "result-1", status: "available" });
+		).resolves.toMatchObject({
+			projection: { fileId: "result-1", status: "available" },
+		});
 		expect(calls).toHaveLength(3);
 	});
 
