@@ -19,6 +19,12 @@ import {
 	AgentApplicationManagerResponseV1Schema,
 } from "./agent-application-manager.ts";
 import {
+	AgentDefaultRelayKeyCandidatesRequestV1Schema,
+	AgentDefaultRelayKeyCandidatesV1Schema,
+	AgentDefaultRelayKeyReplaceRequestV1Schema,
+	AgentDefaultRelayKeyStateV1Schema,
+} from "./agent-default-relay-key.ts";
+import {
 	AgentUserUseRevokeRequestV1Schema,
 	AgentUserUseRevokeResponseV1Schema,
 } from "./agent-user-use-grants.ts";
@@ -1585,6 +1591,61 @@ export const pilotBrowserHttpOpenApiPathsV2 = {
 				"200": jsonResponse(
 					"Own application metadata",
 					ApplicationMetadataV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+
+	"/api/v2/agents/{agentId}/default-relay-key": {
+		get: {
+			operationId: "getAgentDefaultRelayKeyV2",
+			summary: "Read current Owner Agent default Relay Key state",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			responses: {
+				"200": jsonResponse(
+					"Key state only",
+					AgentDefaultRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "replaceAgentDefaultRelayKeyV2",
+			summary: "Replace an existing Agent default Relay Key",
+			description:
+				"Current Owner browser session only. Compare-and-swap on Key and configuration versions. Revalidates every currently configured model against fresh Key visibility and exact template/image binding. Does not create or migrate an Agent configuration. No-store; no Authorization header or query.",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			requestBody: requiredJsonRequestBody(
+				AgentDefaultRelayKeyReplaceRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Committed Key state",
+					AgentDefaultRelayKeyStateV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
+	"/api/v2/agents/{agentId}/default-relay-key/candidates": {
+		post: {
+			operationId: "getAgentDefaultRelayKeyCandidatesV2",
+			summary:
+				"Preview Key-visible models compatible with the current Agent template",
+			description:
+				"Preview is not a save authorization or proof of real model execution. The write independently revalidates. Current Owner browser session only; no-store.",
+			security: personalCredentialSecurity,
+			requestParams: { path: agentPath },
+			requestBody: requiredJsonRequestBody(
+				AgentDefaultRelayKeyCandidatesRequestV1Schema,
+			),
+			responses: {
+				"200": jsonResponse(
+					"Compatible candidates",
+					AgentDefaultRelayKeyCandidatesV1Schema,
 				),
 				...errorResponses,
 			},

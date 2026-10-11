@@ -20,6 +20,9 @@ const pilotBrowserArtifactPath = fileURLToPath(
 		import.meta.url,
 	),
 );
+const filesArtifactPath = fileURLToPath(
+	new URL("../artifacts/openapi/files.v1.openapi.json", import.meta.url),
+);
 const runtimeHostV2ArtifactPath = fileURLToPath(
 	new URL("../artifacts/openapi/runtime-host.v2.openapi.json", import.meta.url),
 );
@@ -53,6 +56,8 @@ it("admits only the reviewed installation paths, headers and restricted response
 		"/api/connection-installations/{authorizationId}",
 		"/api/connection-installations/{authorizationId}/confirm",
 	];
+	const installationPath = paths[0];
+	if (!installationPath) throw new Error("installation path fixture missing");
 	const previous = structuredClone(current);
 	for (const path of paths) delete previous.paths[path];
 	const directory = await mkdtemp(resolve(tmpdir(), "installation-compat-"));
@@ -64,13 +69,13 @@ it("admits only the reviewed installation paths, headers and restricted response
 		expect(comparePaths(after, before).status).toBe(0);
 		for (const mutate of [
 			(document: typeof current) => {
-				document.paths[paths[0]!].post.security = [];
+				document.paths[installationPath].post.security = [];
 			},
 			(document: typeof current) => {
-				document.paths[paths[0]!].post.parameters = [];
+				document.paths[installationPath].post.parameters = [];
 			},
 			(document: typeof current) => {
-				document.paths[paths[0]!].post.responses[202].content[
+				document.paths[installationPath].post.responses[202].content[
 					"application/json"
 				].schema.properties.token = { type: "string" };
 			},
@@ -515,6 +520,28 @@ describe("contract compatibility command", () => {
 		});
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
+	});
+	it("admits the runtime exchange path after its schema is already published", async () => {
+		const current = JSON.parse(await readFile(filesArtifactPath, "utf8"));
+		const path = "/internal/v1/files/runtime-exchange";
+		const previous = structuredClone(current);
+		delete previous.paths[path];
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "runtime-file-path-compat-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			const changed = structuredClone(current);
+			changed.paths[path].post.operationId = "changedRuntimeFileAccess";
+			await writeFile(currentPath, JSON.stringify(changed));
+			expect(comparePaths(currentPath, previousPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true });
+		}
 	});
 	it.each([1, 2])(
 		"admits only the exact application use grant addition for browser V%s",
@@ -2403,6 +2430,10 @@ describe("contract compatibility command", () => {
 		restorePreAgentApiManagementContract(current);
 		// Isolate lifecycle from later personal API/Relay Key and registration additions.
 		restorePreRelayKeyContract(current);
+		delete current.paths["/api/v2/agents/{agentId}/default-relay-key"];
+		delete current.paths[
+			"/api/v2/agents/{agentId}/default-relay-key/candidates"
+		];
 		delete current.paths["/api/v2/applications"];
 		delete current.paths["/api/v2/applications/{applicationId}"];
 		for (const name of [

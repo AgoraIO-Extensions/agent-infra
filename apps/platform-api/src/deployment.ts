@@ -3,6 +3,7 @@ import { OciImageReferenceV1Schema } from "@agent-infra/contracts/workload";
 import {
 	type AgentConfigurationAuthorityContextV1,
 	type AgentConfigurationUseCaseDependenciesV1,
+	type AgentDefaultRelayKeyBindingV1,
 	captureAgentApiCreatePrincipalsV1,
 	PersonalRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
@@ -11,6 +12,7 @@ import {
 	createRelayKeyEncryptorV1,
 	createSecretEncryptorV1,
 } from "@agent-infra/secret-store";
+import { createAgentDefaultRelayKeyCandidatesV1 } from "./agent-default-relay-key-validation.js";
 
 import type { PlatformApiAssemblyInput } from "./assembly.js";
 import { createConnectionCapability } from "./connection-consumer-profile.js";
@@ -82,6 +84,11 @@ export interface ProductionPlatformApiInputV1
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
+	/** Exact existing template/image/Driver bindings for default Key validation. */
+	readonly agentDefaultRelayKeyPolicy?: Pick<
+		Parameters<typeof createAgentDefaultRelayKeyCandidatesV1>[0],
+		"templateBindings" | "relayEndpointId" | "relayBaseUrl"
+	>;
 	/** Approved fixed billing profile and deployment-owned CA/TLS transport only. */
 	readonly personalRelayKeyValidation?: Parameters<
 		typeof createPersonalRelayKeyValidatorV1
@@ -287,6 +294,25 @@ export function createProductionPlatformApiAssemblyInputV1(
 				: {}),
 		},
 		...(personalRelayKeys ? { personalRelayKeys } : {}),
+		...(personalRelayKeys &&
+		relayKeyEncryptor &&
+		input.personalRelayKeyValidation &&
+		input.agentDefaultRelayKeyPolicy
+			? {
+					agentDefaultRelayKeys: {
+						currentIdentity: personalRelayKeys.currentIdentity,
+						encrypt: (
+							binding: AgentDefaultRelayKeyBindingV1,
+							keyValue: string,
+						) => relayKeyEncryptor.encrypt({ ...binding, plaintext: keyValue }),
+						candidates: createAgentDefaultRelayKeyCandidatesV1({
+							modelCatalog: input.modelCatalog,
+							...input.agentDefaultRelayKeyPolicy,
+							validation: input.personalRelayKeyValidation,
+						}),
+					},
+				}
+			: {}),
 		...(input.wecom ? { wecom: input.wecom } : {}),
 		...(input.wecomIdentity ? { wecomIdentity: input.wecomIdentity } : {}),
 		...(input.wecomCredentialEncryptionKeys
@@ -336,6 +362,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 					configurationQuery,
 					resourceProfile,
 					imageRepository: input.imageRepository,
+					modelSelectionAvailable: input.modelSelection !== undefined,
 					...(input.resolveCustomAgentInteractionUrl
 						? {
 								resolveCustomAgentInteractionUrl:
