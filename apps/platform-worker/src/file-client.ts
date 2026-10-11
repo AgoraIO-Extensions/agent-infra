@@ -94,6 +94,7 @@ async function boundedRuntimeFileJson(response: Response) {
 function boundedRuntimeFileUpload(
 	body: ReadableStream<Uint8Array>,
 	expected: number,
+	revalidate: () => void,
 ) {
 	const reader = body.getReader();
 	let bytes = 0;
@@ -101,7 +102,9 @@ function boundedRuntimeFileUpload(
 	const stream = new ReadableStream<Uint8Array>({
 		async pull(controller) {
 			try {
+				revalidate();
 				const next = await reader.read();
+				revalidate();
 				if (next.done) {
 					if (bytes !== expected)
 						throw new Error("WORKER_RUNTIME_FILE_SIZE_MISMATCH");
@@ -246,7 +249,9 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 				const body = new ReadableStream<Uint8Array>({
 					async pull(controller) {
 						try {
+							revalidate(binding);
 							const next = await reader.read();
+							revalidate(binding);
 							if (next.done) {
 								if (bytes !== access.file.descriptor.sizeBytes)
 									throw new Error("WORKER_RUNTIME_FILE_INPUT_SIZE_MISMATCH");
@@ -299,7 +304,9 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 					)
 						throw new Error("WORKER_RUNTIME_FILE_RESULT_INVALID");
 					if (access.file.status === "pending") {
-						bounded = boundedRuntimeFileUpload(body, descriptor.sizeBytes);
+						bounded = boundedRuntimeFileUpload(body, descriptor.sizeBytes, () =>
+							revalidate(binding),
+						);
 						const response = await send(target(access.path), {
 							method: "PUT",
 							duplex: "half",

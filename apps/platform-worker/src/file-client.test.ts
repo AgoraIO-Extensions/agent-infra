@@ -135,4 +135,31 @@ describe("Worker V4 runtime file client", () => {
 		);
 		expect(calls).toBe(0);
 	});
+
+	it("revalidates while an input stream is being consumed", async () => {
+		let checks = 0;
+		const factory = createWorkerRuntimeFileBridgeFactoryV1({
+			origin: "https://platform.example",
+			serviceToken: "s".repeat(32),
+			isCurrent: () => checks++ < 1,
+			fetch: async (input) =>
+				String(input).endsWith("runtime-exchange")
+					? Response.json(
+							access(
+								{
+									fileId: "input-1",
+									kind: "attachment",
+									status: "available",
+									descriptor,
+								},
+								"/api/v1/conversations/conversation-1/files/input-1/content",
+							),
+						)
+					: new Response("abc"),
+		});
+		const input = await factory(binding).readInput("input-1");
+		await expect(new Response(input.body).text()).rejects.toThrow(
+			"WORKER_RUNTIME_FILE_BINDING_STALE",
+		);
+	});
 });
