@@ -15,7 +15,7 @@ RUN rm /prod/enterprise-directory-sync/pnpm-lock.yaml \
     /prod/enterprise-directory-sync/node_modules/.modules.yaml \
     /prod/enterprise-directory-sync/node_modules/.package-map.json \
     /prod/enterprise-directory-sync/node_modules/.pnpm-workspace-state-v1.json
-RUN find /prod/enterprise-directory-sync -type f \( -name '*.d.ts' -o -name '*.d.ts.map' -o -name '*.d.mts' -o -name '*.d.mts.map' \) -delete
+RUN find /prod/enterprise-directory-sync -type f \( -name '*.d.ts' -o -name '*.d.ts.map' -o -name '*.d.mts' -o -name '*.d.mts.map' -o -name '*.d.cts' -o -name '*.d.cts.map' \) -delete
 RUN cp -R /prod/enterprise-directory-sync /prod/enterprise-directory-sync-normalized \
     && rm -r /prod/enterprise-directory-sync \
     && mv /prod/enterprise-directory-sync-normalized /prod/enterprise-directory-sync
