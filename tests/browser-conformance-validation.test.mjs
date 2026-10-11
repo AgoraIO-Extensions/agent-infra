@@ -116,6 +116,27 @@ test("rejects URL-shaped and token-shaped version values", () => {
 	}
 });
 
+test("rejects array-valued hashes, commits and versions", () => {
+	for (const mutate of [
+		(receipt_) => {
+			receipt_.commit = [receipt_.commit];
+		},
+		(receipt_) => {
+			receipt_.deployment.imageDigest = [receipt_.deployment.imageDigest];
+		},
+		(receipt_) => {
+			receipt_.templates[0].agentHash = [receipt_.templates[0].agentHash];
+		},
+		(receipt_) => {
+			receipt_.templates[0].checks.navigation.evidenceHash = [hash];
+		},
+	]) {
+		const invalid = receipt();
+		mutate(invalid);
+		assert.equal(validateBrowserConformanceReceipt(invalid).status, "rejected");
+	}
+});
+
 test("preserves only validated evidence hashes in rejection diagnostics", () => {
 	const unknown = receipt();
 	unknown.templates[0].checks.recovery = {

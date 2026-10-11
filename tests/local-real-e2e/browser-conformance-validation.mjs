@@ -23,6 +23,10 @@ const digestPattern = /^sha256:[0-9a-f]{64}$/u;
 const hashPattern = /^[0-9a-f]{64}$/u;
 const versionPattern = /^[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?$/u;
 
+function matches(pattern, value) {
+	return typeof value === "string" && pattern.test(value);
+}
+
 function record(value) {
 	return value && typeof value === "object" && !Array.isArray(value)
 		? value
@@ -47,7 +51,7 @@ function checkEntry(value, path, reasons, evidence) {
 	if (!["passed", "failed", "unknown", "blocked"].includes(status))
 		reasons.push(`${path}:invalid-status`);
 	else if (status !== "passed") reasons.push(`${path}:${status}`);
-	if (!hashPattern.test(entry.evidenceHash ?? ""))
+	if (!matches(hashPattern, entry.evidenceHash))
 		reasons.push(`${path}:evidence-hash`);
 	else if (status !== "passed") evidence[path] = entry.evidenceHash;
 	for (const key of Object.keys(entry)) {
@@ -81,8 +85,7 @@ export function validateBrowserConformanceReceipt(value) {
 	if (input.schemaVersion !== 1) reasons.push("receipt:schema-version");
 	if (input.classification !== "browser-m1-conformance")
 		reasons.push("receipt:classification");
-	if (!/^[0-9a-f]{40}$/u.test(input.commit ?? ""))
-		reasons.push("receipt:commit");
+	if (!matches(/^[0-9a-f]{40}$/u, input.commit)) reasons.push("receipt:commit");
 	const deployment = record(input.deployment);
 	if (!deployment) reasons.push("deployment:missing");
 	else {
@@ -97,11 +100,11 @@ export function validateBrowserConformanceReceipt(value) {
 			)
 				reasons.push("deployment:unbounded-field");
 		}
-		if (!digestPattern.test(deployment.imageDigest ?? ""))
+		if (!matches(digestPattern, deployment.imageDigest))
 			reasons.push("deployment:image-digest");
-		if (!versionPattern.test(deployment.chromiumVersion ?? ""))
+		if (!matches(versionPattern, deployment.chromiumVersion))
 			reasons.push("deployment:chromium-version");
-		if (!versionPattern.test(deployment.playwrightVersion ?? ""))
+		if (!matches(versionPattern, deployment.playwrightVersion))
 			reasons.push("deployment:playwright-version");
 		if (
 			!Number.isSafeInteger(deployment.capabilityRevision) ||
@@ -132,7 +135,7 @@ export function validateBrowserConformanceReceipt(value) {
 			seen.add(template.template);
 		}
 		for (const field of ["agentHash", "sessionHash", "executionHash"]) {
-			if (!hashPattern.test(template[field] ?? ""))
+			if (!matches(hashPattern, template[field]))
 				reasons.push(`${path}:${field}`);
 		}
 		if (deployment) {
