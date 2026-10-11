@@ -71,6 +71,7 @@ export async function ensurePrivateDirectory(path: string) {
 
 const materialLockTails = new Map<string, Promise<void>>();
 const rotationJournalName = "oauth-rotation.json";
+const rotationJournalMaximum = 65_536;
 
 type RotationJournal = {
 	schemaVersion: 1;
@@ -184,7 +185,7 @@ async function readProtectedRotationJournal(
 		before.nlink !== 1 ||
 		!([0o400, 0o600] as number[]).includes(before.mode & 0o777) ||
 		before.size < 1 ||
-		before.size > 16_384
+		before.size > rotationJournalMaximum
 	)
 		unavailable();
 	if ((await realpath(journalPath)) !== journalPath) unavailable();
@@ -275,11 +276,6 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 				} finally {
 					await file.close();
 				}
-				await unlink(
-					protectedStandardMcpPath(directory, path, entry.name),
-				).catch((error: NodeJS.ErrnoException) => {
-					if (error.code !== "ENOENT") throw error;
-				});
 				await rename(
 					protectedStandardMcpPath(directory, path, temporary),
 					protectedStandardMcpPath(directory, path, entry.name),
