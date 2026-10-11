@@ -10337,6 +10337,167 @@ async function skillDiscoveryFixture(
 }
 
 describe("installed Codex Skill complete discovery (controlled behavior only)", () => {
+	it("discovers a verified mounted Hub Skill through native skills/list", async () => {
+		const skillDirectory: RuntimeFilesystemSkillDirectoryV1 = {
+			generationId: "d".repeat(64),
+			findSkills: () => [
+				{
+					schemaVersion: 1,
+					name: "hub-skill",
+					version: "1.0.0",
+					packageDigest: "a".repeat(64),
+					manifestDigest: "b".repeat(64),
+					targetPath: ".agents/skills/hub-skill",
+					readOnly: true,
+				},
+			],
+			readSkill: async () => new Uint8Array([1]),
+		};
+		const f = await skillDiscoveryFixture(undefined, {
+			installedSkill: undefined,
+			skillDirectory,
+		});
+		f.bridge.metadata = {
+			name: "hub-skill",
+			description: "Mounted Hub Skill",
+			path: "/opt/agent-infra-skill-hub/.agents/skills/hub-skill/SKILL.md",
+			scope: "project",
+			enabled: true,
+			pluginId: null,
+		};
+		await expect(f.driver.discoverNativeSkills(f.read)).resolves.toMatchObject({
+			capabilities: [
+				{
+					name: "hub-skill",
+					description: "Mounted Hub Skill",
+					availability: "discovered",
+				},
+			],
+		});
+		expect(f.bridge.requests).toContainEqual({
+			method: "skills/extraRoots/set",
+			params: { extraRoots: ["/opt/agent-infra-skill-hub"] },
+		});
+	});
+
+	it("accepts an empty mounted Skill tool dependency declaration", async () => {
+		const skillDirectory: RuntimeFilesystemSkillDirectoryV1 = {
+			generationId: "d".repeat(64),
+			findSkills: () => [
+				{
+					schemaVersion: 1,
+					name: "hub-skill",
+					version: "1.0.0",
+					packageDigest: "a".repeat(64),
+					manifestDigest: "b".repeat(64),
+					targetPath: ".agents/skills/hub-skill",
+					readOnly: true,
+				},
+			],
+			readSkill: async () => new Uint8Array([1]),
+		};
+		const f = await skillDiscoveryFixture(undefined, {
+			installedSkill: undefined,
+			skillDirectory,
+		});
+		f.bridge.metadata = {
+			name: "hub-skill",
+			description: "Mounted Hub Skill",
+			path: "/opt/agent-infra-skill-hub/.agents/skills/hub-skill/SKILL.md",
+			scope: "project",
+			enabled: true,
+			pluginId: null,
+			dependencies: { tools: [] },
+		};
+		await expect(f.driver.discoverNativeSkills(f.read)).resolves.toMatchObject({
+			capabilities: [{ name: "hub-skill", availability: "discovered" }],
+		});
+	});
+
+	it.each([
+		["nonempty tools", { tools: ["secret-tool"] }],
+		["unknown dependency field", { tools: [], network: true }],
+	])(
+		"rejects mounted Skill dependencies with %s",
+		async (_label, dependencies) => {
+			const skillDirectory: RuntimeFilesystemSkillDirectoryV1 = {
+				generationId: "d".repeat(64),
+				findSkills: () => [
+					{
+						schemaVersion: 1,
+						name: "hub-skill",
+						version: "1.0.0",
+						packageDigest: "a".repeat(64),
+						manifestDigest: "b".repeat(64),
+						targetPath: ".agents/skills/hub-skill",
+						readOnly: true,
+					},
+				],
+				readSkill: async () => new Uint8Array([1]),
+			};
+			const f = await skillDiscoveryFixture(undefined, {
+				installedSkill: undefined,
+				skillDirectory,
+			});
+			f.bridge.metadata = {
+				name: "hub-skill",
+				description: "Mounted Hub Skill",
+				path: "/opt/agent-infra-skill-hub/.agents/skills/hub-skill/SKILL.md",
+				scope: "project",
+				enabled: true,
+				pluginId: null,
+				dependencies,
+			};
+			await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject(
+				{
+					code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+				},
+			);
+		},
+	);
+
+	it("rejects a mounted generation change during native discovery", async () => {
+		let generationId = "d".repeat(64);
+		const entry = {
+			schemaVersion: 1 as const,
+			name: "hub-skill",
+			version: "1.0.0",
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			targetPath: ".agents/skills/hub-skill",
+			readOnly: true as const,
+		};
+		const skillDirectory: RuntimeFilesystemSkillDirectoryV1 = {
+			get generationId() {
+				return generationId;
+			},
+			findSkills: () => [entry],
+			readSkill: async () => new Uint8Array([1]),
+		};
+		const f = await skillDiscoveryFixture(
+			(bridge) => {
+				bridge.beforeResponse = (method) => {
+					if (method === "skills/list") generationId = "e".repeat(64);
+				};
+			},
+			{ installedSkill: undefined, skillDirectory },
+		);
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+		});
+	});
+
+	it("rejects simultaneous legacy and Hub Skill roots before native setup", async () => {
+		const skillDirectory: RuntimeFilesystemSkillDirectoryV1 = {
+			generationId: "d".repeat(64),
+			findSkills: () => [],
+			readSkill: async () => new Uint8Array(),
+		};
+		await expect(
+			skillDiscoveryFixture(undefined, { skillDirectory }),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" });
+	});
+
 	it("reads a manifest-listed mounted Hub resource through the Driver seam", async () => {
 		const directory: RuntimeFilesystemSkillDirectoryV1 = {
 			generationId: "d".repeat(64),
