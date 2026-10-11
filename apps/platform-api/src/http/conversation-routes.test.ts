@@ -1656,24 +1656,125 @@ describe("Conversation persisted SSE", () => {
 	);
 
 	it.each([1, 2])(
-		"fails closed without misreporting a temporary authorization outage on V%d",
+		"closes after a bounded authorization outage without misreporting it on V%d",
 		async (version) => {
 			const authorize = vi
 				.fn()
 				.mockResolvedValueOnce({ outcome: "allowed", authority })
-				.mockRejectedValueOnce(new Error("private identity dependency detail"));
+				.mockRejectedValue(new Error("private identity dependency detail"));
 			const response = await testApp(
-				dependencies({ authorization: { authorize } }),
+				dependencies({
+					authorization: { authorize },
+					streamTransientFailureLimit: 2,
+				}),
 			).app.request(`/api/v${version}/conversations/conversation-1/events`);
 			const body = await response.text();
 
+			// The pending batch is never written without a successful check.
 			expect(body).toBe(
 				": conversation-stream.closed dependency_unavailable\n\n",
 			);
 			expect(body).not.toContain("authorization.revoked");
 			expect(body).not.toContain("private identity dependency detail");
+			// The connect check, then the limit of tolerated failures plus the last.
+			expect(authorize).toHaveBeenCalledTimes(1 + 2 + 1);
 		},
 	);
+
+	it("pauses across a transient authorization check failure and writes only after a fresh check (#1606)", async () => {
+		const order: string[] = [];
+		const authorize = vi
+			.fn()
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
+			.mockImplementationOnce(async () => {
+				order.push("check:failed");
+				throw new Error("authorization dependency timed out");
+			})
+			.mockImplementationOnce(async () => {
+				order.push("check:allowed");
+				return { outcome: "allowed", authority };
+			})
+			.mockResolvedValue({ outcome: "revoked" });
+		const input = dependencies({ authorization: { authorize } });
+		input.query.replay = vi
+			.fn()
+			.mockImplementationOnce(async () => {
+				order.push("read");
+				return {
+					outcome: "events",
+					events: [persistedEvent],
+					resumeCursor: "cursor-1",
+				};
+			})
+			.mockResolvedValue({
+				outcome: "events",
+				events: [],
+				resumeCursor: "cursor-1",
+			});
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events",
+		);
+		const body = await response.text();
+		expect(body.match(/id: event-1/g)).toHaveLength(1);
+		expect(body).not.toContain("closed dependency_unavailable");
+		// Revocation after the pause still closes at once with its signal.
+		expect(body).toContain(": conversation-stream.closed revoked");
+		expect(body).toContain("authorization.revoked");
+		expect(order).toEqual(["read", "check:failed", "check:allowed"]);
+		expect(body.indexOf("id: event-1")).toBeLessThan(
+			body.indexOf("closed revoked"),
+		);
+	});
+
+	it("retries a transiently failed replay read from the same cursor (#1606)", async () => {
+		const input = dependencies();
+		input.query.replay = vi
+			.fn()
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [],
+				resumeCursor: "cursor-0",
+			})
+			.mockRejectedValueOnce(new Error("replay statement timed out"))
+			.mockResolvedValueOnce({
+				outcome: "events",
+				events: [persistedEvent],
+				resumeCursor: "cursor-1",
+			})
+			.mockResolvedValue(undefined);
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1/events?cursor=cursor-0",
+		);
+		const body = await response.text();
+		expect(body).toContain("id: event-1");
+		expect(body).not.toContain("closed dependency_unavailable");
+		expect(body).toContain(": conversation-stream.closed resource_unavailable");
+		const cursors = vi
+			.mocked(input.query.replay)
+			.mock.calls.slice(1)
+			.map((call) => call[2]);
+		expect(cursors.slice(0, 2)).toEqual([
+			{ kind: "cursor", value: "cursor-0" },
+			{ kind: "cursor", value: "cursor-0" },
+		]);
+	});
+
+	it("closes at once when access is revoked during a paused check (#1606)", async () => {
+		const authorize = vi
+			.fn()
+			.mockResolvedValueOnce({ outcome: "allowed", authority })
+			.mockRejectedValueOnce(new Error("authorization dependency timed out"))
+			.mockResolvedValue({ outcome: "revoked" });
+		const response = await testApp(
+			dependencies({ authorization: { authorize } }),
+		).app.request("/api/v2/conversations/conversation-1/events");
+		const body = await response.text();
+		// The batch read before the outage is never written.
+		expect(body).not.toContain("id: event-1");
+		expect(body).toContain(": conversation-stream.closed revoked");
+		expect(body).toContain("authorization.revoked");
+		expect(authorize).toHaveBeenCalledTimes(3);
+	});
 
 	it.each([
 		{ version: 1, status: 403 },

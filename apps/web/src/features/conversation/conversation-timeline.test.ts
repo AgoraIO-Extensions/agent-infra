@@ -23,10 +23,12 @@ const readers: ReturnType<typeof createConversationTimeline>[] = [];
 function setup(
 	handler: (request: Request) => Response | Promise<Response>,
 	headers?: Record<string, string>,
+	reconnectDelaysMs: readonly number[] = [],
 ) {
 	const requests: Request[] = [];
 	const snapshots: ConversationTimelineState[] = [];
 	const reader = createConversationTimeline({
+		reconnectDelaysMs,
 		client: createClient({
 			baseUrl: "https://platform.example.test",
 			headers,
@@ -390,7 +392,7 @@ describe("Conversation generated-client data consumer", () => {
 		);
 	}
 
-	it("represents empty history as ready and stream EOF as disconnected", async () => {
+	it("represents empty history as ready and stream EOF as disconnected once no automatic reconnect remains", async () => {
 		const stream = sse();
 		const { reader } = setup((request) =>
 			route(request) === "stream"
@@ -458,6 +460,142 @@ describe("Conversation generated-client data consumer", () => {
 			);
 		});
 	}
+
+	it("reconnects automatically from the last consumed cursor after a transient end and never submits a task (#1606)", async () => {
+		const streams = [sse(), sse(), sse()];
+		let opened = 0;
+		const { reader, requests, snapshots } = setup(
+			(request) =>
+				route(request) === "stream"
+					? (streams[opened++] ?? sse()).response
+					: Response.json(history()),
+			undefined,
+			[1, 1],
+		);
+		await reader.open("conversation-1");
+		streams[0]?.send(event(2));
+		await vi.waitFor(() => expect(reader.getSnapshot().events).toHaveLength(2));
+		// The server closed the stream without revoking access.
+		streams[0]?.close();
+		await vi.waitFor(() => expect(opened).toBe(2));
+		await vi.waitFor(() => expect(reader.getSnapshot().status).toBe("ready"));
+		// A network drop reconnects the same way.
+		streams[1]?.disconnect();
+		await vi.waitFor(() => expect(opened).toBe(3));
+		streams[2]?.send(event(3));
+		await vi.waitFor(() => expect(reader.getSnapshot().events).toHaveLength(3));
+		expect(snapshots.map((snapshot) => snapshot.status)).toContain(
+			"reconnecting",
+		);
+		expect(reader.getSnapshot()).toMatchObject({
+			status: "ready",
+			failure: null,
+		});
+		const streamRequests = requests.filter(
+			(request) => route(request) === "stream",
+		);
+		expect(
+			streamRequests.map((request) =>
+				new URL(request.url).searchParams.get("cursor"),
+			),
+		).toEqual([
+			event(1).conversationCursor,
+			event(2).conversationCursor,
+			event(2).conversationCursor,
+		]);
+		expect(
+			requests.filter((request) => route(request) === "history"),
+		).toHaveLength(1);
+		expect(requests.every((request) => request.method === "GET")).toBe(true);
+	});
+
+	it("falls back to manual reconnect once the automatic attempts are spent (#1606)", async () => {
+		let opened = 0;
+		const { reader } = setup(
+			(request) => {
+				if (route(request) !== "stream") return Response.json(history());
+				opened++;
+				// Every stream ends at once, as during a longer outage.
+				const stream = sse();
+				stream.close();
+				return stream.response;
+			},
+			undefined,
+			[1, 1],
+		);
+		await reader.open("conversation-1");
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot()).toMatchObject({
+				status: "disconnected",
+				failure: null,
+			}),
+		);
+		expect(opened).toBe(3);
+		// A manual reconnect re-arms the bounded automatic attempts.
+		await reader.reconnect();
+		await vi.waitFor(() => {
+			expect(opened).toBe(6);
+			expect(reader.getSnapshot().status).toBe("disconnected");
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(opened).toBe(6);
+	});
+
+	it("never reconnects automatically after revocation or a denied read (#1606)", async () => {
+		const revoked = sse();
+		let opened = 0;
+		const { reader } = setup(
+			(request) => {
+				if (route(request) !== "stream") return Response.json(history());
+				opened++;
+				return revoked.response;
+			},
+			undefined,
+			[1, 1],
+		);
+		await reader.open("conversation-1");
+		revoked.send({
+			schemaVersion: 1,
+			kind: "control",
+			type: "authorization.revoked",
+			error: PilotProtocolErrorV1Schema.parse({
+				schemaVersion: 1,
+				code: "AUTHORIZATION_REVOKED",
+				message: "Synthetic revocation",
+				retryable: false,
+				traceId: "trace-timeline",
+			}),
+		});
+		await vi.waitFor(() => expect(reader.getSnapshot().status).toBe("denied"));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(opened).toBe(1);
+
+		let denied = 0;
+		const missing = setup(
+			(request) => {
+				if (route(request) !== "stream") return Response.json(history());
+				denied++;
+				return Response.json(
+					PilotProtocolErrorV1Schema.parse({
+						schemaVersion: 1,
+						code: "RESOURCE_UNAVAILABLE",
+						message: "Synthetic missing conversation",
+						retryable: false,
+						traceId: "trace-timeline",
+					}),
+					{ status: 404 },
+				);
+			},
+			undefined,
+			[1, 1],
+		);
+		await missing.reader.open("conversation-1");
+		await vi.waitFor(() =>
+			expect(missing.reader.getSnapshot().status).toBe("unavailable"),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(denied).toBe(1);
+	});
 
 	it("aborts pending history and clears all state without allowing reconnect", async () => {
 		const pending = deferred<Response>();

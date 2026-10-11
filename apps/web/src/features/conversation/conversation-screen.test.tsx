@@ -988,9 +988,8 @@ describe("functional conversation screen", () => {
 				.disabled,
 		).toBe(true);
 		act(() => streams.at(-1)?.disconnect());
-		await screen.findByRole("button", { name: "重新连接" });
-		fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
-		await waitFor(() => expect(streams.length).toBe(2));
+		// The read reconnects by itself and never repeats the command (#1606).
+		await waitFor(() => expect(streams.length).toBe(2), { timeout: 3_000 });
 		expect(
 			requests.filter((request) => request.method === "POST"),
 		).toHaveLength(1);
