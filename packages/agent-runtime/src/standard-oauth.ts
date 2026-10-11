@@ -113,6 +113,101 @@ export async function exchangeStandardOAuthCode(options: {
 	}
 }
 
+/** One fixed-target OAuth refresh. No discovery, rotation retry or redirect. */
+export async function refreshStandardOAuthToken(options: {
+	configuration: RuntimeOAuthConfigurationV1;
+	refreshToken: string;
+	signal: AbortSignal;
+	assertCurrent: () => void;
+	fetch?: FetchLike;
+}) {
+	const configuration = structuredClone(options.configuration);
+	const refreshToken = validateStandardMcpToken(options.refreshToken);
+	let endpoint: URL;
+	try {
+		endpoint = new URL(configuration.tokenEndpoint);
+	} catch {
+		standardOAuthUnavailable();
+	}
+	if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password)
+		standardOAuthUnavailable();
+	const signal = AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]);
+	const assertCurrent = () => {
+		if (signal.aborted) standardOAuthUnavailable();
+		options.assertCurrent();
+	};
+	try {
+		assertCurrent();
+		const response = await (options.fetch ?? fetch)(
+			configuration.tokenEndpoint,
+			{
+				method: "POST",
+				headers: { "content-type": "application/x-www-form-urlencoded" },
+				body: new URLSearchParams({
+					grant_type: "refresh_token",
+					refresh_token: refreshToken,
+					client_id: configuration.clientId,
+					resource: configuration.resource,
+				}),
+				redirect: "error",
+				signal,
+			},
+		);
+		assertCurrent();
+		if (response.status !== 200) standardOAuthUnavailable();
+		const reader = response.body?.getReader();
+		if (!reader) standardOAuthUnavailable();
+		const parts: Uint8Array[] = [];
+		let length = 0;
+		try {
+			for (;;) {
+				const part = await reader.read();
+				assertCurrent();
+				if (part.done) break;
+				length += part.value.byteLength;
+				if (length > 16_384) standardOAuthUnavailable();
+				parts.push(part.value);
+			}
+		} finally {
+			await reader.cancel().catch(() => undefined);
+			reader.releaseLock();
+		}
+		assertCurrent();
+		const body = JSON.parse(Buffer.concat(parts).toString("utf8")) as {
+			access_token?: unknown;
+			refresh_token?: unknown;
+			token_type?: unknown;
+			expires_in?: unknown;
+			scope?: unknown;
+		};
+		const accessToken = validateStandardMcpToken(body.access_token);
+		const expiresIn = body.expires_in;
+		if (
+			typeof body.token_type !== "string" ||
+			body.token_type.toLowerCase() !== "bearer" ||
+			typeof expiresIn !== "number" ||
+			!Number.isSafeInteger(expiresIn) ||
+			!expiresIn ||
+			expiresIn < 1 ||
+			expiresIn > 31_536_000 ||
+			(body.scope !== undefined && body.scope !== configuration.scope)
+		)
+			standardOAuthUnavailable();
+		if (body.refresh_token !== undefined)
+			validateStandardMcpToken(body.refresh_token);
+		return {
+			accessToken,
+			refreshToken:
+				body.refresh_token === undefined
+					? undefined
+					: (body.refresh_token as string),
+			expiresAt: Date.now() + (expiresIn as number) * 1000,
+		};
+	} catch {
+		standardOAuthUnavailable();
+	}
+}
+
 /**
  * Revoke one token at the fixed deployment endpoint. This is deliberately a
  * one-shot operation: shutdown cleanup may swallow a network failure, but it

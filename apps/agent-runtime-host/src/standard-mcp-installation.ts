@@ -1,6 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
+import {
+	lstat,
+	mkdir,
+	open,
+	readdir,
+	readFile,
+	realpath,
+	rename,
+	unlink,
+} from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -61,6 +70,312 @@ export async function ensurePrivateDirectory(path: string) {
 }
 
 const materialLockTails = new Map<string, Promise<void>>();
+const rotationJournalName = "oauth-rotation.json";
+const rotationJournalMaximum = 65_536;
+
+type RotationJournal = {
+	schemaVersion: 1;
+	operation: "forward" | "rollback";
+	entries: {
+		name: string;
+		expected: string;
+		next: string;
+	}[];
+};
+
+function parseRotationJournal(value: unknown): RotationJournal {
+	if (
+		!isRecord(value) ||
+		value.schemaVersion !== 1 ||
+		(value.operation !== "forward" && value.operation !== "rollback") ||
+		!Array.isArray(value.entries)
+	)
+		unavailable();
+	const entries = value.entries.map((entry) => {
+		if (
+			!isRecord(entry) ||
+			typeof entry.name !== "string" ||
+			!/^[a-f0-9]{64}\.(access|refresh)$/.test(entry.name) ||
+			typeof entry.expected !== "string" ||
+			typeof entry.next !== "string" ||
+			entry.expected.length < 1 ||
+			entry.expected.length > 4096 ||
+			entry.next.length < 1 ||
+			entry.next.length > 4096
+		)
+			unavailable();
+		return {
+			name: entry.name,
+			expected: entry.expected,
+			next: entry.next,
+		};
+	});
+	if (entries.length < 1 || entries.length > 2) unavailable();
+	if (new Set(entries.map((entry) => entry.name)).size !== entries.length)
+		unavailable();
+	return { schemaVersion: 1, operation: value.operation, entries };
+}
+
+async function writeRotationJournal(
+	path: string,
+	entries: RotationJournal["entries"],
+	operation: RotationJournal["operation"],
+	allowExisting: boolean,
+) {
+	const directory = await openProtectedStandardMcpDirectory(path);
+	const temporary = `.stage-rotation-${randomUUID()}`;
+	try {
+		const file = await open(
+			protectedStandardMcpPath(directory, path, temporary),
+			constants.O_WRONLY |
+				constants.O_CREAT |
+				constants.O_EXCL |
+				constants.O_NOFOLLOW,
+			0o400,
+		);
+		try {
+			await file.writeFile(
+				JSON.stringify({ schemaVersion: 1, operation, entries }),
+				"utf8",
+			);
+			await file.sync();
+		} finally {
+			await file.close();
+		}
+		if (!allowExisting) {
+			try {
+				await lstat(join(path, rotationJournalName));
+				unavailable();
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+		}
+		await rename(
+			protectedStandardMcpPath(directory, path, temporary),
+			protectedStandardMcpPath(directory, path, rotationJournalName),
+		);
+		await directory.sync();
+		await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+	} finally {
+		await unlink(protectedStandardMcpPath(directory, path, temporary)).catch(
+			(error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOENT") throw error;
+			},
+		);
+		await directory.close();
+	}
+}
+
+async function removeRotationJournal(path: string) {
+	const directory = await openProtectedStandardMcpDirectory(path);
+	try {
+		await unlink(
+			protectedStandardMcpPath(directory, path, rotationJournalName),
+		).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") throw error;
+		});
+		await directory.sync();
+	} finally {
+		await directory.close();
+	}
+}
+
+async function readProtectedRotationJournal(
+	path: string,
+	directory: import("node:fs/promises").FileHandle,
+) {
+	assertStandardMcpProcessProtection();
+	await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+	const journalPath = join(path, rotationJournalName);
+	const before = await lstat(journalPath);
+	if (
+		!before.isFile() ||
+		before.uid !== process.getuid?.() ||
+		before.nlink !== 1 ||
+		!([0o400, 0o600] as number[]).includes(before.mode & 0o777) ||
+		before.size < 1 ||
+		before.size > rotationJournalMaximum
+	)
+		unavailable();
+	if ((await realpath(journalPath)) !== journalPath) unavailable();
+	const text = await readFile(journalPath, "utf8");
+	const after = await lstat(journalPath);
+	assertStandardMcpProcessProtection();
+	await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+	if (
+		before.dev !== after.dev ||
+		before.ino !== after.ino ||
+		before.size !== after.size ||
+		before.mtimeMs !== after.mtimeMs ||
+		after.uid !== before.uid ||
+		after.nlink !== 1
+	)
+		unavailable();
+	if ((await realpath(journalPath)) !== journalPath) unavailable();
+	return text;
+}
+
+async function markRotationRecordUnknown(records: string, key: string) {
+	const directory = await openProtectedStandardMcpDirectory(records);
+	const name = `${key}.json`;
+	const temporary = `.stage-recovery-${randomUUID()}.json`;
+	try {
+		const record = JSON.parse(
+			await readProtectedStandardMcpBytes(records, name, 16_384),
+		);
+		if (!isRecord(record)) unavailable();
+		record.phase = "unknown";
+		const file = await open(
+			protectedStandardMcpPath(directory, records, temporary),
+			constants.O_WRONLY |
+				constants.O_CREAT |
+				constants.O_EXCL |
+				constants.O_NOFOLLOW,
+			0o600,
+		);
+		try {
+			assertStandardMcpProcessProtection();
+			await file.writeFile(JSON.stringify(record), "utf8");
+			await file.sync();
+		} finally {
+			await file.close();
+		}
+		assertStandardMcpProcessProtection();
+		await assertProtectedStandardMcpDirectoryCurrent(records, directory);
+		await rename(
+			protectedStandardMcpPath(directory, records, temporary),
+			protectedStandardMcpPath(directory, records, name),
+		);
+		assertStandardMcpProcessProtection();
+		await directory.sync();
+		await assertProtectedStandardMcpDirectoryCurrent(records, directory);
+	} finally {
+		await unlink(protectedStandardMcpPath(directory, records, temporary)).catch(
+			(error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOENT") throw error;
+			},
+		);
+		await directory.close();
+	}
+}
+
+/** Recover a rotation left durable before a Host restart. */
+export async function recoverProtectedStandardMcpMaterialRotation(
+	path: string,
+) {
+	return withProtectedStandardMcpMaterialLock(path, async () => {
+		const directory = await openProtectedStandardMcpDirectory(path);
+		let journal: RotationJournal | undefined;
+		try {
+			const journalPath = protectedStandardMcpPath(
+				directory,
+				path,
+				rotationJournalName,
+			);
+			try {
+				journal = parseRotationJournal(
+					JSON.parse(await readProtectedRotationJournal(path, directory)),
+				);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+					return;
+				}
+				throw error;
+			}
+			const activeJournal = journal;
+			if (!activeJournal) unavailable();
+			const firstEntry = activeJournal.entries[0];
+			if (!firstEntry) unavailable();
+			const key = firstEntry.name.replace(/\.(access|refresh)$/, "");
+			const records = join(dirname(path), "records");
+			let recordPhase: unknown;
+			try {
+				const record = JSON.parse(
+					await readProtectedStandardMcpBytes(records, `${key}.json`, 16_384),
+				) as { phase?: unknown };
+				recordPhase = record.phase;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+			const currentValues = new Map<string, string | undefined>();
+			for (const entry of activeJournal.entries) {
+				let current: string | undefined;
+				try {
+					current = await readProtectedStandardMcpBytes(path, entry.name, 4096);
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				}
+				currentValues.set(entry.name, current);
+			}
+			for (const entry of activeJournal.entries) {
+				const current = currentValues.get(entry.name);
+				if (current !== entry.expected && current !== entry.next) unavailable();
+			}
+			const target =
+				activeJournal.operation === "rollback"
+					? "next"
+					: recordPhase === "awaiting_verification"
+						? "next"
+						: "expected";
+			if (
+				activeJournal.operation === "rollback" &&
+				recordPhase === "awaiting_verification"
+			)
+				await markRotationRecordUnknown(records, key);
+			for (const entry of activeJournal.entries) {
+				const current = currentValues.get(entry.name);
+				const targetValue = entry[target];
+				if (current === targetValue) continue;
+				if (current !== entry.expected && current !== entry.next) unavailable();
+				const temporary = `.stage-recovery-${randomUUID()}`;
+				const file = await open(
+					protectedStandardMcpPath(directory, path, temporary),
+					constants.O_WRONLY |
+						constants.O_CREAT |
+						constants.O_EXCL |
+						constants.O_NOFOLLOW,
+					0o400,
+				);
+				try {
+					assertStandardMcpProcessProtection();
+					await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+					await file.writeFile(targetValue, "utf8");
+					await file.sync();
+				} finally {
+					await file.close();
+				}
+				assertStandardMcpProcessProtection();
+				await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+				await rename(
+					protectedStandardMcpPath(directory, path, temporary),
+					protectedStandardMcpPath(directory, path, entry.name),
+				);
+				assertStandardMcpProcessProtection();
+				await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+			}
+			const names = await readdir(
+				process.platform === "linux" ? `/proc/self/fd/${directory.fd}` : path,
+			);
+			for (const name of names) {
+				if (name.startsWith(".stage-")) {
+					assertStandardMcpProcessProtection();
+					await unlink(protectedStandardMcpPath(directory, path, name));
+				}
+			}
+			assertStandardMcpProcessProtection();
+			await directory.sync();
+			assertStandardMcpProcessProtection();
+			await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+			assertStandardMcpProcessProtection();
+			await unlink(journalPath);
+			assertStandardMcpProcessProtection();
+			await directory.sync();
+			await assertProtectedStandardMcpDirectoryCurrent(path, directory);
+		} finally {
+			await directory.close();
+		}
+	});
+}
 
 export async function withProtectedStandardMcpMaterialLock<T>(
 	path: string,
@@ -89,6 +404,158 @@ export async function publishMaterial(
 ) {
 	return withProtectedStandardMcpMaterialLock(path, () =>
 		publishMaterialUnlocked(path, name, token, guard),
+	);
+}
+
+export async function replaceProtectedStandardMcpMaterials(
+	path: string,
+	replacements: readonly {
+		name: string;
+		expected: string;
+		next: string;
+	}[],
+	guard?: () => void,
+	operation: RotationJournal["operation"] = "forward",
+) {
+	if (operation === "forward")
+		await recoverProtectedStandardMcpMaterialRotation(path);
+	return withProtectedStandardMcpMaterialLock(path, async () => {
+		assertStandardMcpProcessProtection();
+		await writeRotationJournal(
+			path,
+			replacements.map((replacement) => ({ ...replacement })),
+			operation,
+			operation === "rollback",
+		);
+		const directory = await openProtectedStandardMcpDirectory(path, guard);
+		try {
+			const replaceOne = async (
+				replacement: {
+					name: string;
+					expected: string;
+					next: string;
+				},
+				onReplaced?: () => void,
+				safeRollback = false,
+			) => {
+				const activeGuard = safeRollback ? undefined : guard;
+				if (
+					(await readProtectedStandardMcpBytes(
+						path,
+						replacement.name,
+						4096,
+						activeGuard,
+					)) !== replacement.expected
+				)
+					unavailable();
+				const temporary = `.stage-${randomUUID()}`;
+				const temporaryPath = protectedStandardMcpPath(
+					directory,
+					path,
+					temporary,
+				);
+				try {
+					const file = await open(
+						temporaryPath,
+						constants.O_WRONLY |
+							constants.O_CREAT |
+							constants.O_EXCL |
+							constants.O_NOFOLLOW,
+						0o400,
+					);
+					try {
+						assertStandardMcpProcessProtection();
+						activeGuard?.();
+						await file.writeFile(replacement.next, "utf8");
+						await file.sync();
+					} finally {
+						await file.close();
+					}
+					await assertProtectedStandardMcpDirectoryCurrent(
+						path,
+						directory,
+						activeGuard,
+					);
+					if (
+						(await readProtectedStandardMcpBytes(
+							path,
+							replacement.name,
+							4096,
+							activeGuard,
+						)) !== replacement.expected
+					)
+						unavailable();
+					await rename(
+						temporaryPath,
+						protectedStandardMcpPath(directory, path, replacement.name),
+					);
+					onReplaced?.();
+					await directory.sync();
+					await assertProtectedStandardMcpDirectoryCurrent(
+						path,
+						directory,
+						activeGuard,
+					);
+					if (
+						(await readProtectedStandardMcpBytes(
+							path,
+							replacement.name,
+							4096,
+							activeGuard,
+						)) !== replacement.next
+					)
+						unavailable();
+				} finally {
+					await unlink(temporaryPath).catch((error: NodeJS.ErrnoException) => {
+						if (error.code !== "ENOENT") throw error;
+					});
+				}
+			};
+			const completed: {
+				name: string;
+				expected: string;
+				next: string;
+			}[] = [];
+			try {
+				for (const replacement of replacements) {
+					await replaceOne(replacement, () => completed.push(replacement));
+				}
+			} catch (error) {
+				const rollbackErrors: unknown[] = [];
+				for (const replacement of completed.reverse()) {
+					try {
+						await replaceOne(
+							{
+								name: replacement.name,
+								expected: replacement.next,
+								next: replacement.expected,
+							},
+							undefined,
+							true,
+						);
+					} catch (rollbackError) {
+						rollbackErrors.push(rollbackError);
+					}
+				}
+				if (rollbackErrors.length > 0)
+					throw new AggregateError(
+						[error, ...rollbackErrors],
+						"Protected OAuth material rotation rollback failed",
+					);
+				await removeRotationJournal(path);
+				throw error;
+			}
+		} finally {
+			await directory.close();
+		}
+	});
+}
+
+export async function finalizeProtectedStandardMcpMaterialRotation(
+	path: string,
+) {
+	return withProtectedStandardMcpMaterialLock(path, () =>
+		removeRotationJournal(path),
 	);
 }
 

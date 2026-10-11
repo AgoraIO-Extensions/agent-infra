@@ -1,5 +1,11 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	writeFileSync,
+} from "node:fs";
 import {
 	chmod,
 	mkdir,
@@ -14,7 +20,10 @@ import { createServer, request as httpsRequest } from "node:https";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { revokeStandardOAuthToken } from "@agent-infra/agent-runtime";
+import {
+	refreshStandardOAuthToken,
+	revokeStandardOAuthToken,
+} from "@agent-infra/agent-runtime";
 import {
 	connectionConsumerProfileFingerprintV1,
 	resolveApprovedConnectionConsumerProfileV1,
@@ -40,6 +49,10 @@ import {
 import { createProtectedRuntimeOAuthClient } from "./runtime-oauth-client.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
 import { standardMcpInstallationKey } from "./standard-mcp-input.js";
+import {
+	recoverProtectedStandardMcpMaterialRotation,
+	replaceProtectedStandardMcpMaterials,
+} from "./standard-mcp-installation.js";
 
 const protection = vi.hoisted(() => ({
 	check: vi.fn(),
@@ -109,6 +122,8 @@ afterEach(async () => {
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const access = "synthetic-oauth-access-material";
 const refresh = "synthetic-oauth-refresh-material";
+const refreshedAccess = "synthetic-oauth-refreshed-access";
+const refreshedRefresh = "synthetic-oauth-refreshed-refresh";
 const callbackServiceToken = "synthetic-callback-material-123";
 
 async function fixture() {
@@ -143,7 +158,8 @@ async function fixture() {
 			paths.push(req.url ?? "");
 			const chunks: Buffer[] = [];
 			for await (const part of req) chunks.push(Buffer.from(part));
-			calls.push(new URLSearchParams(Buffer.concat(chunks).toString()));
+			const body = new URLSearchParams(Buffer.concat(chunks).toString());
+			calls.push(body);
 			if (behavior === "lost") {
 				req.socket.destroy();
 				return;
@@ -171,16 +187,46 @@ async function fixture() {
 					await chmod(join(root, "materials", accessName), 0o400);
 				}
 			}
+			const refreshing = body.get("grant_type") === "refresh_token";
+			if (refreshing && behavior === "refresh-drift") {
+				const refreshName = (await readdir(join(root, "materials"))).find(
+					(name) => name.endsWith(".refresh"),
+				);
+				if (refreshName) {
+					await chmod(join(root, "materials", refreshName), 0o600);
+					await writeFile(
+						join(root, "materials", refreshName),
+						"replacement-refresh-material",
+					);
+					await chmod(join(root, "materials", refreshName), 0o400);
+				}
+			}
+			if (refreshing && behavior === "refresh-record-fail")
+				protection.failRecordWrite = true;
+			if (refreshing && behavior === "refresh-bad-status") {
+				res.writeHead(500, { "content-type": "application/json" });
+				res.end(
+					JSON.stringify({
+						access_token: refreshedAccess,
+						refresh_token: refreshedRefresh,
+						token_type: "Bearer",
+						expires_in: 3600,
+						scope: "mcp",
+					}),
+				);
+				return;
+			}
+			const responseBody = {
+				access_token: refreshing ? refreshedAccess : access,
+				...(refreshing && behavior === "refresh-no-rotation"
+					? {}
+					: { refresh_token: refreshing ? refreshedRefresh : refresh }),
+				token_type: "Bearer",
+				expires_in: 3600,
+				scope: "mcp",
+			};
 			res.writeHead(200, { "content-type": "application/json" });
-			res.end(
-				JSON.stringify({
-					access_token: access,
-					refresh_token: refresh,
-					token_type: "Bearer",
-					expires_in: 3600,
-					scope: "mcp",
-				}),
-			);
+			res.end(JSON.stringify(responseBody));
 		},
 	);
 	await new Promise<void>((resolve) => issuer.listen(0, "127.0.0.1", resolve));
@@ -326,7 +372,7 @@ async function fixture() {
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	});
 	function signed(
-		command: "begin" | "confirm" | "status",
+		command: "begin" | "confirm" | "status" | "refresh",
 		patch: Partial<RuntimeOAuthGrantClaimsV1> = {},
 		authorizationId = "authorization-a",
 	): RuntimeOAuthAuthorizedRequestV1 {
@@ -555,7 +601,7 @@ it("requires callback-only authentication before accepting an original OAuth cod
 	expect(f.calls).toHaveLength(0);
 });
 
-it.each(["begin", "confirm", "status"] as const)(
+it.each(["begin", "confirm", "status", "refresh"] as const)(
 	"refuses callback-only authentication on the %s command",
 	async (command) => {
 		const f = await fixture();
@@ -667,6 +713,264 @@ it("uses real HTTPS/SDK/files for one exchange and keeps received credentials un
 	).toHaveLength(2);
 });
 
+it("rotates protected access and refresh material through the fixed OAuth endpoint", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const result = await f.post("refresh", f.signed("refresh"));
+	expect(result.status).toBe(200);
+	expect(result.body.phase).toBe("awaiting_verification");
+	const refreshRequest = f.calls.find(
+		(body) => body.get("grant_type") === "refresh_token",
+	);
+	expect(refreshRequest?.get("refresh_token")).toBe(refresh);
+	expect(refreshRequest?.get("resource")).toBe(f.target.url);
+	const names = await readdir(join(f.root, "materials"));
+	const accessName = names.find((name) => name.endsWith(".access"));
+	const refreshName = names.find((name) => name.endsWith(".refresh"));
+	expect(
+		await readFile(join(f.root, "materials", accessName as string), "utf8"),
+	).toBe(refreshedAccess);
+	expect(
+		await readFile(join(f.root, "materials", refreshName as string), "utf8"),
+	).toBe(refreshedRefresh);
+	expect(JSON.stringify(result)).not.toContain(refreshedAccess);
+	expect(JSON.stringify(result)).not.toContain(refreshedRefresh);
+});
+
+it("retains the refresh token when rotation omits a replacement", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("refresh-no-rotation");
+	expect((await f.post("refresh", f.signed("refresh"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const refreshName = (await readdir(join(f.root, "materials"))).find((name) =>
+		name.endsWith(".refresh"),
+	);
+	expect(
+		await readFile(join(f.root, "materials", refreshName as string), "utf8"),
+	).toBe(refresh);
+});
+
+it("rejects omitted refresh rotation when protected refresh material drifts", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("refresh-drift");
+	expect((await f.post("refresh", f.signed("refresh"))).body.phase).toBe(
+		"unknown",
+	);
+	const refreshName = (await readdir(join(f.root, "materials"))).find((name) =>
+		name.endsWith(".refresh"),
+	);
+	expect(
+		await readFile(join(f.root, "materials", refreshName as string), "utf8"),
+	).toBe("replacement-refresh-material");
+});
+
+it("restores prior material when the guard expires after the first rename", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const names = await readdir(join(f.root, "materials"));
+	const accessName = names.find((name) => name.endsWith(".access")) as string;
+	const refreshName = names.find((name) => name.endsWith(".refresh")) as string;
+	const accessPath = join(f.root, "materials", accessName);
+	await expect(
+		replaceProtectedStandardMcpMaterials(
+			join(f.root, "materials"),
+			[
+				{ name: accessName, expected: access, next: refreshedAccess },
+				{ name: refreshName, expected: refresh, next: refreshedRefresh },
+			],
+			() => {
+				if (readFileSync(accessPath, "utf8") === refreshedAccess)
+					throw new Error("expired");
+			},
+		),
+	).rejects.toThrow("expired");
+	expect(readFileSync(accessPath, "utf8")).toBe(access);
+	expect(readFileSync(join(f.root, "materials", refreshName), "utf8")).toBe(
+		refresh,
+	);
+});
+
+it("recovers a durable rotation journal before using protected material", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const names = await readdir(join(f.root, "materials"));
+	const accessName = names.find((name) => name.endsWith(".access")) as string;
+	const refreshName = names.find((name) => name.endsWith(".refresh")) as string;
+	const accessPath = join(f.root, "materials", accessName);
+	const recordName = (await readdir(join(f.root, "records"))).find(
+		(name) => name.endsWith(".json") && !name.startsWith("current-"),
+	) as string;
+	const recordPath = join(f.root, "records", recordName);
+	const record = JSON.parse(await readFile(recordPath, "utf8")) as Record<
+		string,
+		unknown
+	>;
+	record.phase = "exchange_started";
+	await writeFile(recordPath, JSON.stringify(record));
+	expect(JSON.parse(await readFile(recordPath, "utf8")).phase).toBe(
+		"exchange_started",
+	);
+	await chmod(accessPath, 0o600);
+	await writeFile(accessPath, refreshedAccess);
+	await chmod(accessPath, 0o400);
+	await writeFile(
+		join(f.root, "materials", "oauth-rotation.json"),
+		JSON.stringify({
+			schemaVersion: 1,
+			operation: "forward",
+			entries: [
+				{ name: accessName, expected: access, next: refreshedAccess },
+				{ name: refreshName, expected: refresh, next: refreshedRefresh },
+			],
+		}),
+		{ mode: 0o400 },
+	);
+	expect(await readdir(join(f.root, "materials"))).toContain(
+		"oauth-rotation.json",
+	);
+	await recoverProtectedStandardMcpMaterialRotation(join(f.root, "materials"));
+	expect(await readFile(accessPath, "utf8")).toBe(access);
+	expect(await readFile(join(f.root, "materials", refreshName), "utf8")).toBe(
+		refresh,
+	);
+	await expect(
+		readFile(join(f.root, "materials", "oauth-rotation.json")),
+	).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("marks an awaiting transaction unknown before clearing rollback recovery", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const names = await readdir(join(f.root, "materials"));
+	const accessName = names.find((name) => name.endsWith(".access")) as string;
+	const refreshName = names.find((name) => name.endsWith(".refresh")) as string;
+	const recordName = (await readdir(join(f.root, "records"))).find(
+		(name) => name.endsWith(".json") && !name.startsWith("current-"),
+	) as string;
+	const recordPath = join(f.root, "records", recordName);
+	const record = JSON.parse(await readFile(recordPath, "utf8")) as {
+		phase: string;
+	};
+	expect(record.phase).toBe("awaiting_verification");
+	await writeFile(
+		join(f.root, "materials", "oauth-rotation.json"),
+		JSON.stringify({
+			schemaVersion: 1,
+			operation: "rollback",
+			entries: [
+				{ name: accessName, expected: refreshedAccess, next: access },
+				{ name: refreshName, expected: refreshedRefresh, next: refresh },
+			],
+		}),
+		{ mode: 0o400 },
+	);
+	await recoverProtectedStandardMcpMaterialRotation(join(f.root, "materials"));
+	expect(JSON.parse(await readFile(recordPath, "utf8")).phase).toBe("unknown");
+	expect(await readdir(join(f.root, "materials"))).not.toContain(
+		"oauth-rotation.json",
+	);
+});
+
+it("keeps rotated material unavailable after a lost refresh response", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("lost");
+	const result = await f.post("refresh", f.signed("refresh"));
+	expect(result.body.phase).toBe("unknown");
+	const accessName = (await readdir(join(f.root, "materials"))).find((name) =>
+		name.endsWith(".access"),
+	);
+	expect(
+		await readFile(join(f.root, "materials", accessName as string), "utf8"),
+	).toBe(access);
+});
+
+it("retains prior material when refresh metadata persistence fails", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("refresh-record-fail");
+	expect((await f.post("refresh", f.signed("refresh"))).body.phase).toBe(
+		"unknown",
+	);
+	const names = await readdir(join(f.root, "materials"));
+	expect(
+		await readFile(
+			join(
+				f.root,
+				"materials",
+				names.find((name) => name.endsWith(".access")) as string,
+			),
+			"utf8",
+		),
+	).toBe(access);
+	expect(
+		await readFile(
+			join(
+				f.root,
+				"materials",
+				names.find((name) => name.endsWith(".refresh")) as string,
+			),
+			"utf8",
+		),
+	).toBe(refresh);
+	expect(await readdir(join(f.root, "materials"))).toContain(
+		"oauth-rotation.json",
+	);
+	await recoverProtectedStandardMcpMaterialRotation(join(f.root, "materials"));
+	expect(
+		await readFile(
+			join(
+				f.root,
+				"materials",
+				names.find((name) => name.endsWith(".access")) as string,
+			),
+			"utf8",
+		),
+	).toBe(access);
+	expect(await readdir(join(f.root, "materials"))).not.toContain(
+		"oauth-rotation.json",
+	);
+});
+
+it("rejects an unsuccessful refresh response before parsing token material", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("refresh-bad-status");
+	expect((await f.post("refresh", f.signed("refresh"))).body.phase).toBe(
+		"unknown",
+	);
+});
+
 it("revokes and removes protected token material exactly once on explicit revoke", async () => {
 	const f = await fixture();
 	await f.callback();
@@ -718,6 +1022,28 @@ it("rejects a non-HTTPS revocation endpoint before sending material", async () =
 		}),
 	).rejects.toThrow();
 	expect(requests).toBe(0);
+});
+
+it("preserves the approved token endpoint bytes during refresh", async () => {
+	const f = await fixture();
+	const tokenEndpoint = "https://EXAMPLE.test:443/oauth/token";
+	let seen: string | undefined;
+	await refreshStandardOAuthToken({
+		configuration: { ...f.configuration, tokenEndpoint },
+		refreshToken: refresh,
+		signal: new AbortController().signal,
+		assertCurrent: () => undefined,
+		fetch: async (url) => {
+			seen = String(url);
+			return Response.json({
+				access_token: refreshedAccess,
+				token_type: "Bearer",
+				expires_in: 3600,
+				scope: "mcp",
+			});
+		},
+	});
+	expect(seen).toBe(tokenEndpoint);
 });
 
 it("does not revoke a foreign principal in the shared material tree", async () => {

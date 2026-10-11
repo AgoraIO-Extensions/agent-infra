@@ -815,6 +815,285 @@
         }
       }
     },
+    "/internal/runtime/oauth/v1/refresh": {
+      "post": {
+        "operationId": "runtimeOAuthRefreshV1",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "agentId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "authorizationId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "command": {
+                    "const": "refresh",
+                    "type": "string"
+                  },
+                  "configFingerprint": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "confirmationRevision": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "grant": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "format": {
+                        "const": "runtime-connection-installation-jws",
+                        "type": "string"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "token": {
+                        "maxLength": 16384,
+                        "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "format",
+                      "token"
+                    ],
+                    "type": "object"
+                  },
+                  "oauthConfiguration": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref",
+                      "revision"
+                    ],
+                    "type": "object"
+                  },
+                  "podUid": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "reference": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "agentId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "conversationId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "executionId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "sessionGeneration": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "agentId",
+                      "conversationId",
+                      "executionId",
+                      "sessionGeneration"
+                    ],
+                    "type": "object"
+                  },
+                  "sandboxId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "sessionGeneration": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "source": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ref": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "ref",
+                      "revision"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "agentId",
+                  "sandboxId",
+                  "podUid",
+                  "sessionGeneration",
+                  "configFingerprint",
+                  "source",
+                  "oauthConfiguration",
+                  "schemaVersion",
+                  "authorizationId",
+                  "confirmationRevision",
+                  "reference",
+                  "grant",
+                  "command"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "authorizationId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "authorizationUrl": {
+                      "format": "uri",
+                      "maxLength": 8192,
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "phase": {
+                      "enum": [
+                        "awaiting_callback",
+                        "awaiting_confirmation",
+                        "awaiting_verification",
+                        "denied",
+                        "unknown",
+                        "expired"
+                      ],
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "authorizationId",
+                    "phase",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "RuntimeHost response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid RuntimeHost request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Execution Grant is not authorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime session or operation is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Generation, fence, or operation conflict"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "RuntimeHost operation failed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Runtime or Driver is unavailable"
+          }
+        }
+      }
+    },
     "/internal/runtime/oauth/v1/status": {
       "post": {
         "operationId": "runtimeOAuthStatusV1",

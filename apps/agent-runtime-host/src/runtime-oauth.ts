@@ -264,7 +264,7 @@ export function createRuntimeOAuthApp(
 		);
 		return context.json(await assembly.client.callback(request));
 	});
-	for (const command of ["begin", "confirm", "status"] as const) {
+	for (const command of ["begin", "confirm", "status", "refresh"] as const) {
 		app.post(`/internal/runtime/oauth/v1/${command}`, async (context) => {
 			const request = RuntimeOAuthAuthorizedRequestV1Schema.parse(
 				await boundedJson(context.req.raw),

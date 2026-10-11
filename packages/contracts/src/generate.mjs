@@ -954,7 +954,7 @@ function buildArtifacts() {
 			info: { title: "Runtime protected OAuth receiver", version: "1.0.0" },
 			security: [{ RuntimeServiceBearer: [] }],
 			paths: Object.fromEntries(
-				["begin", "callback", "confirm", "status"].map((command) => [
+				["begin", "callback", "confirm", "status", "refresh"].map((command) => [
 					`/internal/runtime/oauth/v1/${command}`,
 					{
 						post: postOperation(
