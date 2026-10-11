@@ -2430,6 +2430,10 @@ describe("contract compatibility command", () => {
 		restorePreAgentApiManagementContract(current);
 		// Isolate lifecycle from later personal API/Relay Key and registration additions.
 		restorePreRelayKeyContract(current);
+		delete current.paths["/api/v2/agents/{agentId}/default-relay-key"];
+		delete current.paths[
+			"/api/v2/agents/{agentId}/default-relay-key/candidates"
+		];
 		delete current.paths["/api/v2/applications"];
 		delete current.paths["/api/v2/applications/{applicationId}"];
 		for (const name of [
