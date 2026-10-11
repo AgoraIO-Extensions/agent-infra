@@ -774,3 +774,161 @@ it("does not treat a newly allocated empty Session with a missing allocation as 
 		await client`select sandbox_id from platform.session_sandbox_allocations where conversation_id='lost-allocation'`,
 	).toEqual([]);
 });
+
+describe("long Conversation reads (#1732)", () => {
+	const longScope = { actorId: "long-actor", channelId: "web" };
+	const eventsPerExecution = 150;
+
+	beforeAll(async () => {
+		await client`insert into platform.conversations
+			(id,agent_id,actor_id,channel_id,status,session_generation,authorization_revision,last_conversation_cursor)
+			values ('long-history','long-agent','long-actor','web','ready',1,'auth-long',${2 * eventsPerExecution})`;
+		let cursor = 0;
+		for (const [index, executionId] of ["long-1", "long-2"].entries()) {
+			await client`insert into platform.conversation_executions
+				(execution_id,conversation_id,agent_id,actor_id,channel_id,turn_id,status,session_generation,authorization_revision,created_at)
+				values (${executionId},'long-history','long-agent','long-actor','web',${`turn-${executionId}`},'completed',1,'auth-long',${`2026-09-06T00:0${index}:00.000Z`})`;
+			// The first audit record names the trace; later ones must not win.
+			for (const [offset, trace] of [
+				[1, `trace-${executionId}`],
+				[2, `later-${executionId}`],
+			] as const)
+				await client`insert into platform.conversation_audit_events
+					(id,conversation_id,execution_id,agent_id,actor_id,action,trace_id,request_id,occurred_at)
+					values (${`audit-${executionId}-${offset}`},'long-history',${executionId},'long-agent','long-actor',
+						'conversation.message.accepted',${trace},'request-long',${`2026-09-06T00:0${index}:0${offset}.000Z`})`;
+			for (let sequence = 1; sequence <= eventsPerExecution; sequence++) {
+				cursor++;
+				await client`insert into platform.conversation_events
+					(event_id,conversation_id,execution_id,adapter_event_key,sequence,conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,occurred_at,source)
+					values (${`long-event-${cursor}`},'long-history',${executionId},${`long-${cursor}`},${sequence},${cursor},'text.delta',
+						${client.json({ type: "text.delta", text: `part-${cursor}` })},${"d".repeat(64)},${`long-runtime-${cursor}`},now(),'runtime')`;
+			}
+		}
+		await seedSessionSandboxFixture(client, "long-history");
+	});
+
+	async function auditScans() {
+		const [row] = await client<{ scans: string }[]>`
+			select (coalesce(seq_scan, 0) + coalesce(idx_scan, 0))::text as scans
+			from pg_stat_user_tables
+			where schemaname = 'platform' and relname = 'conversation_audit_events'`;
+		return Number(row?.scans);
+	}
+
+	/** Audit table scans made by one read on its own connections. */
+	async function auditScansDuring<T>(
+		read: (reader: PostgresConversationQueryV1) => Promise<T>,
+	) {
+		const reader = new PostgresConversationQueryV1({
+			databaseUrl,
+			replayWindow: 100,
+		});
+		const before = await auditScans();
+		let result: T;
+		try {
+			result = await read(reader);
+		} finally {
+			// A backend flushes its table statistics when it exits.
+			await reader.close();
+		}
+		let scans = before;
+		for (let attempt = 0; attempt < 50 && scans === before; attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			scans = await auditScans();
+		}
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		return { result, scans: (await auditScans()) - before };
+	}
+
+	it("looks up each Execution's trace once instead of once per event", async () => {
+		const { result: detail, scans } = await auditScansDuring((reader) =>
+			reader.get(longScope, "long-history"),
+		);
+		expect(detail?.events).toHaveLength(2 * eventsPerExecution);
+		expect(
+			new Set(
+				detail?.events.map((event) => `${event.executionId}:${event.traceId}`),
+			),
+		).toEqual(new Set(["long-1:trace-long-1", "long-2:trace-long-2"]));
+		expect(detail?.executions.map((item) => item.traceId)).toEqual([
+			"trace-long-1",
+			"trace-long-2",
+		]);
+		// Two Executions are looked up by the event and the execution reads;
+		// a per-event lookup would scan the audit table 300 times.
+		expect(scans).toBeGreaterThan(0);
+		expect(scans).toBeLessThanOrEqual(8);
+	});
+
+	it("looks up traces only for the Executions an incremental replay returns", async () => {
+		const replays = 20;
+		const { result: replay, scans } = await auditScansDuring(async (reader) => {
+			let last: Awaited<ReturnType<typeof reader.replay>>;
+			for (let attempt = 0; attempt < replays; attempt++)
+				last = await reader.replay(longScope, "long-history", {
+					kind: "last-event-id",
+					value: `long-event-${2 * eventsPerExecution - 10}`,
+				});
+			return last;
+		});
+		expect(replay).toMatchObject({ outcome: "events" });
+		const events = replay?.outcome === "events" ? replay.events : [];
+		expect(events).toHaveLength(10);
+		expect(new Set(events.map((event) => event.traceId))).toEqual(
+			new Set(["trace-long-2"]),
+		);
+		// Each replay reads only the latest Execution's trace; reading every
+		// Execution of the Conversation would double the lookups.
+		expect(scans).toBeGreaterThanOrEqual(replays);
+		expect(scans).toBeLessThan(replays + replays / 2);
+	});
+
+	it("cancels the database statement when the caller aborts the read", async () => {
+		const locker = postgres(databaseUrl, { max: 1 });
+		const holder = await locker.reserve();
+		const blocked = async () => {
+			const [row] = await client<{ count: number }[]>`
+				select count(*)::int as count from pg_stat_activity
+				where wait_event_type = 'Lock' and query like '%conversation_events%'`;
+			return row?.count ?? 0;
+		};
+		try {
+			await holder`begin`;
+			await holder`lock table platform.conversation_events in access exclusive mode`;
+			const controller = new AbortController();
+			const reading = query.get(longScope, "long-history", controller.signal);
+			const settled = reading.then(
+				() => "resolved",
+				(error: unknown) => error,
+			);
+			for (let attempt = 0; attempt < 100 && (await blocked()) === 0; attempt++)
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(await blocked()).toBe(1);
+			const abortedAt = performance.now();
+			controller.abort();
+			expect(await settled).toBeInstanceOf(ConversationQueryError);
+			expect(performance.now() - abortedAt).toBeLessThan(1_000);
+			expect(await blocked()).toBe(0);
+		} finally {
+			await holder`rollback`.catch(() => undefined);
+			holder.release();
+			await locker.end();
+		}
+		// The pool stays usable after a cancelled read.
+		expect((await query.get(longScope, "long-history"))?.events).toHaveLength(
+			2 * eventsPerExecution,
+		);
+	});
+
+	it("does not start a read whose caller already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			query.get(longScope, "long-history", controller.signal),
+		).rejects.toBeInstanceOf(ConversationQueryError);
+		await expect(
+			query.replay(longScope, "long-history", undefined, controller.signal),
+		).rejects.toBeInstanceOf(ConversationQueryError);
+	});
+});

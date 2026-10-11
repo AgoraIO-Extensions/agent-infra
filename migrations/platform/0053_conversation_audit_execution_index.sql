@@ -1,0 +1,1 @@
+CREATE INDEX "conversation_audit_execution_idx" ON "platform"."conversation_audit_events" USING btree ("execution_id","occurred_at","id");

@@ -294,6 +294,21 @@ describe("Conversation HTTP routes", () => {
 		expect(input.query.getExecution).not.toHaveBeenCalled();
 	});
 
+	it("gives the detail read the request's abort signal so a closed page stops its query (#1732)", async () => {
+		const input = dependencies();
+		const controller = new AbortController();
+		const response = await testApp(input).app.request(
+			"/api/v2/conversations/conversation-1",
+			{ signal: controller.signal },
+		);
+		expect(response.status).toBe(200);
+		const signal = vi.mocked(input.query.get).mock.calls.at(-1)?.[2];
+		expect(signal).toBeInstanceOf(AbortSignal);
+		expect(signal?.aborted).toBe(false);
+		controller.abort();
+		expect(signal?.aborted).toBe(true);
+	});
+
 	it("maps generated command requests to the Core seam without caller identity", async () => {
 		const { app, dependencies: input } = testApp();
 		const create = await app.request("/api/v1/agents/agent-1/conversations", {
@@ -580,6 +595,7 @@ describe("Conversation HTTP routes", () => {
 		expect(input.query.get).toHaveBeenCalledWith(
 			{ actorId: "user-1", channelId: "web" },
 			"conversation-1",
+			expect.any(AbortSignal),
 		);
 	});
 
@@ -859,6 +875,7 @@ describe("Conversation persisted SSE", () => {
 			scope,
 			"conversation-1",
 			{ kind: "cursor", value: "cursor-1" },
+			expect.any(AbortSignal),
 		);
 	});
 	it("keeps V1 streaming after validated V2 facts using the original cursor", async () => {
@@ -910,6 +927,7 @@ describe("Conversation persisted SSE", () => {
 			{ actorId: identity.userId, channelId: "web" },
 			conversation.conversationId,
 			{ kind: "cursor", value: "cursor-2" },
+			expect.any(AbortSignal),
 		);
 	});
 	it.each([
@@ -1027,6 +1045,7 @@ describe("Conversation persisted SSE", () => {
 			{ actorId: "user-1", channelId: "web" },
 			"conversation-1",
 			{ kind: "last-event-id", value: "event-before" },
+			expect.any(AbortSignal),
 		);
 		expect(input.authorization.authorize).toHaveBeenCalledTimes(4);
 	});
@@ -1146,6 +1165,7 @@ describe("Conversation persisted SSE", () => {
 			{ actorId: identity.userId, channelId: "web" },
 			"conversation-1",
 			{ kind: "cursor", value: "cursor-1" },
+			expect.any(AbortSignal),
 		);
 	});
 
@@ -1167,6 +1187,10 @@ describe("Conversation persisted SSE", () => {
 			);
 			expect(await response.text()).toBe("");
 			expect(input.query.replay).toHaveBeenCalledTimes(1);
+			// The disconnect also reaches the replay's database statements (#1732).
+			expect(vi.mocked(input.query.replay).mock.calls[0]?.[3]?.aborted).toBe(
+				true,
+			);
 		},
 	);
 

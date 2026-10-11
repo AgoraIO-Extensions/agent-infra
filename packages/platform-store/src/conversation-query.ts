@@ -477,21 +477,61 @@ const conversationSelection = `
  ) as conversations
 `;
 
+/**
+ * Runs one top-level statement of a read. Only executed statements go through
+ * it: cancelling an unsent SQL fragment would reject a promise nobody awaits.
+ */
+type RunStatement = <T>(
+	statement: Promise<T> & { cancel(): unknown },
+) => Promise<T>;
+
+const runStatement: RunStatement = (statement) => statement;
+
+/**
+ * Statements of one read that stop when the caller aborts (#1732): an aborted
+ * browser read no longer keeps a pooled connection busy. postgres-js removes a
+ * queued statement and sends PostgreSQL a cancel request for the running one.
+ */
+function cancellableStatements(signal: AbortSignal | undefined) {
+	if (!signal) return { run: runStatement, dispose: () => {} };
+	const running = new Set<{ cancel(): unknown }>();
+	const cancel = () => {
+		for (const statement of running) statement.cancel();
+	};
+	signal.addEventListener("abort", cancel, { once: true });
+	const run: RunStatement = async (statement) => {
+		running.add(statement);
+		try {
+			if (signal.aborted) statement.cancel();
+			return await statement;
+		} finally {
+			running.delete(statement);
+		}
+	};
+	return {
+		run,
+		dispose: () => signal.removeEventListener("abort", cancel),
+	};
+}
+
 async function readConversation(
 	database: Database,
 	readScope: ConversationQueryScopeV1,
 	conversationId: string,
+	run: RunStatement = runStatement,
 ): Promise<ConversationRow | undefined> {
-	const rows = await database.unsafe<ConversationRow[]>(
-		`${conversationSelection}
+	const rows = await run(
+		database.unsafe<ConversationRow[]>(
+			`${conversationSelection}
 		 where id = $1 and actor_id = $2 and channel_id = $3 and principal_type = $4
 		 limit 1`,
-		[
-			conversationId,
-			readScope.actorId,
-			readScope.channelId,
-			readScope.principal?.kind ?? "user",
-		],
+			[
+				conversationId,
+				readScope.actorId,
+				readScope.channelId,
+				readScope.principal?.kind ?? "user",
+			],
+		),
 	);
 	if (rows.length > 1) return unavailable();
 	return rows[0];
@@ -500,13 +540,14 @@ async function readConversation(
 async function readMessages(
 	database: Database,
 	conversationId: string,
+	run: RunStatement = runStatement,
 ): Promise<ConversationQueryMessageV1[]> {
-	const rows = await database<MessageRow[]>`
+	const rows = await run(database<MessageRow[]>`
 		select message_id, text, execution_id, status, failure_code, created_at
 		from platform.conversation_messages
 		where conversation_id = ${conversationId}
 		order by created_at, message_id
-	`;
+	`);
 	return rows.map(message);
 }
 
@@ -514,8 +555,9 @@ async function readExecutions(
 	database: Database,
 	conversationId: string,
 	executionId?: string,
+	run: RunStatement = runStatement,
 ): Promise<ConversationQueryExecutionV1[]> {
-	const rows = await database<ExecutionRow[]>`
+	const rows = await run(database<ExecutionRow[]>`
 		select e.execution_id, e.conversation_id, e.status, e.created_at, e.updated_at,
 			(
 				select o.payload ->> 'messageId'
@@ -544,7 +586,7 @@ async function readExecutions(
 		where e.conversation_id = ${conversationId}
 			and (${executionId ?? null}::text is null or e.execution_id = ${executionId ?? null})
 		order by e.created_at, e.execution_id
-	`;
+	`);
 	return rows.map(execution);
 }
 
@@ -552,29 +594,42 @@ async function readEvents(
 	database: Database,
 	conversationId: string,
 	options: EventReadOptions = {},
+	run: RunStatement = runStatement,
 ): Promise<ConversationQueryEventV1[]> {
-	const rows = await database<EventRow[]>`
-		select e.event_id, e.conversation_id, e.execution_id, e.sequence,
-			e.conversation_cursor, e.event_type, e.event_payload, e.occurred_at,
-			(
-				select a.trace_id
-				from platform.conversation_audit_events a
-				where a.execution_id = e.execution_id
-				order by a.occurred_at, a.id
-				limit 1
-			) as trace_id
-		from platform.conversation_events e
-		join platform.conversation_executions x
-			on x.execution_id = e.execution_id and x.conversation_id = e.conversation_id
-		join platform.conversations c on c.id = x.conversation_id
-			and c.agent_id = x.agent_id and c.actor_id = x.actor_id
-			and c.principal_type = x.principal_type and c.channel_id = x.channel_id
-		where e.conversation_id = ${conversationId}
-			and e.conversation_cursor > ${options.afterCursor ?? 0}
-			${options.executionId === undefined ? database`` : database`and e.execution_id = ${options.executionId}`}
-		order by e.conversation_cursor
-		${options.limit === undefined ? database`` : database`limit ${options.limit}`}
-	`;
+	// Every event of an Execution carries the same trace: its first audit
+	// record. Look it up once per Execution in the page, not once per event,
+	// so an incremental replay costs only the Executions it returns (#1732).
+	const rows = await run(database<EventRow[]>`
+		with page as materialized (
+			select e.event_id, e.conversation_id, e.execution_id, e.sequence,
+				e.conversation_cursor, e.event_type, e.event_payload, e.occurred_at
+			from platform.conversation_events e
+			join platform.conversation_executions x
+				on x.execution_id = e.execution_id and x.conversation_id = e.conversation_id
+			join platform.conversations c on c.id = x.conversation_id
+				and c.agent_id = x.agent_id and c.actor_id = x.actor_id
+				and c.principal_type = x.principal_type and c.channel_id = x.channel_id
+			where e.conversation_id = ${conversationId}
+				and e.conversation_cursor > ${options.afterCursor ?? 0}
+				${options.executionId === undefined ? database`` : database`and e.execution_id = ${options.executionId}`}
+			order by e.conversation_cursor
+			${options.limit === undefined ? database`` : database`limit ${options.limit}`}
+		), traces as materialized (
+			select executions.execution_id,
+				(
+					select a.trace_id
+					from platform.conversation_audit_events a
+					where a.execution_id = executions.execution_id
+					order by a.occurred_at, a.id
+					limit 1
+				) as trace_id
+			from (select distinct execution_id from page) executions
+		)
+		select page.*, traces.trace_id
+		from page
+		left join traces on traces.execution_id = page.execution_id
+		order by page.conversation_cursor
+	`);
 	return rows.map(event);
 }
 
@@ -585,10 +640,11 @@ async function isWithinReplayTimeWindow(
 	latestCursor: number,
 	replayWindowMs: number,
 	executionId?: string,
+	run: RunStatement = runStatement,
 ): Promise<boolean> {
 	if (afterCursor === latestCursor) return true;
 	const anchorCursor = afterCursor + 1;
-	const rows = await database<EventWindowRow[]>`
+	const rows = await run(database<EventWindowRow[]>`
 		select persisted_at >= now() - (${replayWindowMs}::bigint * interval '1 millisecond')
 			as within_window
 		from platform.conversation_events
@@ -596,18 +652,27 @@ async function isWithinReplayTimeWindow(
 			${executionId === undefined ? database`and conversation_cursor = ${anchorCursor}` : database`and execution_id = ${executionId} and conversation_cursor > ${afterCursor}`}
 		order by conversation_cursor
 		limit 1
-	`;
+	`);
 	return rows[0]?.within_window === true;
 }
 
 async function repeatableRead<T>(
 	client: ReturnType<typeof postgres>,
-	read: (transaction: postgres.TransactionSql) => Promise<T>,
+	read: (transaction: postgres.TransactionSql, run: RunStatement) => Promise<T>,
+	signal?: AbortSignal,
 ): Promise<T> {
-	return (await client.begin(async (transaction) => {
-		await transaction`set transaction isolation level repeatable read read only`;
-		return read(transaction);
-	})) as T;
+	if (signal?.aborted) return unavailable();
+	const statements = cancellableStatements(signal);
+	try {
+		return (await client.begin(async (transaction) => {
+			await statements.run(
+				transaction`set transaction isolation level repeatable read read only`,
+			);
+			return read(transaction, statements.run);
+		})) as T;
+	} finally {
+		statements.dispose();
+	}
 }
 
 function countResource(value: unknown): number {
@@ -899,24 +964,35 @@ export class PostgresConversationQueryV1 {
 	async get(
 		inputScope: ConversationQueryScopeV1,
 		conversationIdInput: string,
+		signal?: AbortSignal,
 	): Promise<ConversationQueryDetailV1 | undefined> {
 		const readScope = scope(inputScope);
 		const conversationId = requestText(conversationIdInput);
 		try {
-			return await repeatableRead(this.#client, async (transaction) => {
-				const row = await readConversation(
-					transaction,
-					readScope,
-					conversationId,
-				);
-				if (!row) return undefined;
-				const [messages, executions, events] = await Promise.all([
-					readMessages(transaction, conversationId),
-					readExecutions(transaction, conversationId),
-					readEvents(transaction, conversationId),
-				]);
-				return { conversation: projection(row), messages, executions, events };
-			});
+			return await repeatableRead(
+				this.#client,
+				async (transaction, run) => {
+					const row = await readConversation(
+						transaction,
+						readScope,
+						conversationId,
+						run,
+					);
+					if (!row) return undefined;
+					const [messages, executions, events] = await Promise.all([
+						readMessages(transaction, conversationId, run),
+						readExecutions(transaction, conversationId, undefined, run),
+						readEvents(transaction, conversationId, {}, run),
+					]);
+					return {
+						conversation: projection(row),
+						messages,
+						executions,
+						events,
+					};
+				},
+				signal,
+			);
 		} catch (error) {
 			if (error instanceof ConversationQueryError) throw error;
 			return unavailable();
@@ -956,7 +1032,25 @@ export class PostgresConversationQueryV1 {
 		selectorInput:
 			| { readonly kind: "cursor" | "last-event-id"; readonly value: string }
 			| undefined,
-		executionIdInput?: string,
+		signal?: AbortSignal,
+	): Promise<ConversationReplayResultV1 | undefined> {
+		return this.#replay(
+			inputScope,
+			conversationIdInput,
+			selectorInput,
+			undefined,
+			signal,
+		);
+	}
+
+	async #replay(
+		inputScope: ConversationQueryScopeV1,
+		conversationIdInput: string,
+		selectorInput:
+			| { readonly kind: "cursor" | "last-event-id"; readonly value: string }
+			| undefined,
+		executionIdInput: string | undefined,
+		signal: AbortSignal | undefined,
 	): Promise<ConversationReplayResultV1 | undefined> {
 		const readScope = scope(inputScope);
 		const conversationId = requestText(conversationIdInput);
@@ -966,111 +1060,136 @@ export class PostgresConversationQueryV1 {
 				? undefined
 				: requestText(executionIdInput);
 		try {
-			return await repeatableRead(this.#client, async (transaction) => {
-				const conversation = await readConversation(
-					transaction,
-					readScope,
-					conversationId,
-				);
-				if (!conversation) return undefined;
-				if (
-					executionId !== undefined &&
-					(await readExecutions(transaction, conversationId, executionId))
-						.length !== 1
-				)
-					return undefined;
-				const latest = safeInteger(conversation.last_conversation_cursor, 0);
-				let resumePosition = latest;
-				if (executionId !== undefined) {
-					const [last] = await transaction<EventIdentityRow[]>`
+			return await repeatableRead(
+				this.#client,
+				async (transaction, run) => {
+					const conversation = await readConversation(
+						transaction,
+						readScope,
+						conversationId,
+						run,
+					);
+					if (!conversation) return undefined;
+					if (
+						executionId !== undefined &&
+						(
+							await readExecutions(
+								transaction,
+								conversationId,
+								executionId,
+								run,
+							)
+						).length !== 1
+					)
+						return undefined;
+					const latest = safeInteger(conversation.last_conversation_cursor, 0);
+					let resumePosition = latest;
+					if (executionId !== undefined) {
+						const [last] = await run(transaction<EventIdentityRow[]>`
 						select conversation_cursor from platform.conversation_events
 						where conversation_id = ${conversationId} and execution_id = ${executionId}
 						order by conversation_cursor desc limit 1
-					`;
-					resumePosition = last ? safeInteger(last.conversation_cursor, 1) : 0;
-				}
-				const resumeCursor = conversationCursor(conversationId, resumePosition);
-				let after = 0;
-				if (selector?.kind === "cursor") {
-					const decoded = decodeCursor(selector.value);
-					if (decoded[0] !== "conversation" || decoded[1] !== conversationId) {
-						return {
-							outcome: "reload",
-							reason: "cross_conversation_cursor",
-							resumeCursor,
-						};
+					`);
+						resumePosition = last
+							? safeInteger(last.conversation_cursor, 1)
+							: 0;
 					}
-					after = decoded[2];
-					if (executionId !== undefined && after !== 0) {
-						const [anchor] = await transaction<EventIdentityRow[]>`
+					const resumeCursor = conversationCursor(
+						conversationId,
+						resumePosition,
+					);
+					let after = 0;
+					if (selector?.kind === "cursor") {
+						const decoded = decodeCursor(selector.value);
+						if (
+							decoded[0] !== "conversation" ||
+							decoded[1] !== conversationId
+						) {
+							return {
+								outcome: "reload",
+								reason: "cross_conversation_cursor",
+								resumeCursor,
+							};
+						}
+						after = decoded[2];
+						if (executionId !== undefined && after !== 0) {
+							const [anchor] = await run(transaction<EventIdentityRow[]>`
 							select conversation_cursor from platform.conversation_events
 							where conversation_id = ${conversationId} and execution_id = ${executionId}
 								and conversation_cursor = ${after}
-						`;
-						if (!anchor)
-							return {
-								outcome: "reload",
-								reason: "cursor_expired",
-								resumeCursor,
-							};
-					}
-				} else if (selector?.kind === "last-event-id") {
-					const rows = await transaction<EventIdentityRow[]>`
+						`);
+							if (!anchor)
+								return {
+									outcome: "reload",
+									reason: "cursor_expired",
+									resumeCursor,
+								};
+						}
+					} else if (selector?.kind === "last-event-id") {
+						const rows = await run(transaction<EventIdentityRow[]>`
 						select conversation_cursor
 						from platform.conversation_events
 						where event_id = ${selector.value}
 							and conversation_id = ${conversationId}
 							${executionId === undefined ? transaction`` : transaction`and execution_id = ${executionId}`}
 						limit 1
-					`;
-					const identity = rows[0];
-					if (!identity) {
-						return {
-							outcome: "reload",
-							reason: "unknown_event_id",
-							resumeCursor,
-						};
+					`);
+						const identity = rows[0];
+						if (!identity) {
+							return {
+								outcome: "reload",
+								reason: "unknown_event_id",
+								resumeCursor,
+							};
+						}
+						after = safeInteger(identity.conversation_cursor, 1);
 					}
-					after = safeInteger(identity.conversation_cursor, 1);
-				}
-				let exceedsWindow = after < Math.max(0, latest - this.#replayWindow);
-				if (executionId !== undefined) {
-					const [pending] = await transaction<{ count: number }[]>`
+					let exceedsWindow = after < Math.max(0, latest - this.#replayWindow);
+					if (executionId !== undefined) {
+						const [pending] = await run(transaction<{ count: number }[]>`
 						select count(*)::int as count from platform.conversation_events
 						where conversation_id = ${conversationId} and execution_id = ${executionId}
 							and conversation_cursor > ${after}
-					`;
-					if (!pending) return unavailable();
-					exceedsWindow = pending.count > this.#replayWindow;
-				}
-				if (
-					after > resumePosition ||
-					exceedsWindow ||
-					!(await isWithinReplayTimeWindow(
-						transaction,
-						conversationId,
-						after,
-						resumePosition,
-						this.#replayWindowMs,
-						executionId,
-					))
-				) {
+					`);
+						if (!pending) return unavailable();
+						exceedsWindow = pending.count > this.#replayWindow;
+					}
+					if (
+						after > resumePosition ||
+						exceedsWindow ||
+						!(await isWithinReplayTimeWindow(
+							transaction,
+							conversationId,
+							after,
+							resumePosition,
+							this.#replayWindowMs,
+							executionId,
+							run,
+						))
+					) {
+						return {
+							outcome: "reload",
+							reason: "cursor_expired",
+							resumeCursor,
+						};
+					}
 					return {
-						outcome: "reload",
-						reason: "cursor_expired",
+						outcome: "events",
+						events: await readEvents(
+							transaction,
+							conversationId,
+							{
+								afterCursor: after,
+								limit: this.#replayWindow,
+								...(executionId === undefined ? {} : { executionId }),
+							},
+							run,
+						),
 						resumeCursor,
 					};
-				}
-				return {
-					outcome: "events",
-					events: await readEvents(transaction, conversationId, {
-						afterCursor: after,
-						limit: this.#replayWindow,
-						...(executionId === undefined ? {} : { executionId }),
-					}),
-					resumeCursor,
-				};
-			});
+				},
+				signal,
+			);
 		} catch (error) {
 			if (error instanceof ConversationQueryError) throw error;
 			return unavailable();
@@ -1084,8 +1203,15 @@ export class PostgresConversationQueryV1 {
 		selector:
 			| { readonly kind: "cursor" | "last-event-id"; readonly value: string }
 			| undefined,
+		signal?: AbortSignal,
 	): Promise<ConversationReplayResultV1 | undefined> {
-		return this.replay(inputScope, conversationId, selector, executionId);
+		return this.#replay(
+			inputScope,
+			conversationId,
+			selector,
+			executionId,
+			signal,
+		);
 	}
 
 	async close(): Promise<void> {
