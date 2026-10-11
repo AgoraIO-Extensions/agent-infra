@@ -1,8 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import type {
-	BrowserCapabilityDeclarationV1,
-	BrowserCapabilityProjectionV1,
-} from "@agent-infra/contracts/runtime";
 
 import type { AgentConfigurationRecord } from "./agent-configuration.js";
 import {
@@ -16,7 +12,10 @@ import {
 	requireAgentManagementExactKeys,
 	snapshotAgentManagementDataObject,
 } from "./agent-management-input.js";
-import type { WorkloadReconciliationStateV1 } from "./workload-reconciliation.js";
+import type {
+	WorkloadBrowserCapabilityProjectionV1,
+	WorkloadReconciliationStateV1,
+} from "./workload-reconciliation.js";
 
 export interface AgentRuntimePresentationExpectationV1 {
 	readonly configurationRevision: number;
@@ -29,7 +28,7 @@ export type AgentRuntimePresentationDecisionV1 =
 			readonly sourceReference: string;
 			readonly capabilities:
 				| (Readonly<Record<string, boolean>> & {
-						readonly browser?: BrowserCapabilityProjectionV1;
+						readonly browser?: WorkloadBrowserCapabilityProjectionV1;
 				  })
 				| null;
 			readonly interactionUrl: string | null;
@@ -47,7 +46,7 @@ export interface AgentRuntimePresentationDeploymentV1 {
 	readonly runtimeManifest: {
 		readonly interactionMode: "platform-adapter" | "self-managed";
 		readonly capabilities?: {
-			readonly browser?: BrowserCapabilityDeclarationV1;
+			readonly browser?: Record<string, unknown>;
 		};
 	};
 	readonly route: {
@@ -223,7 +222,7 @@ export function decideAgentRuntimePresentationV1(input: {
 						? { browser: state.capabilities.browser }
 						: {}),
 				} as Readonly<Record<string, boolean>> & {
-					browser?: BrowserCapabilityProjectionV1;
+					browser?: WorkloadBrowserCapabilityProjectionV1;
 				})
 			: null,
 		interactionUrl,

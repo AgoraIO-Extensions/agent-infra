@@ -719,9 +719,6 @@ importers:
       '@agent-infra/config':
         specifier: workspace:*
         version: link:../config
-      '@agent-infra/contracts':
-        specifier: workspace:*
-        version: link:../contracts
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3

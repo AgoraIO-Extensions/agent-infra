@@ -1,7 +1,3 @@
-import type {
-	BrowserCapabilityDeclarationV1,
-	BrowserCapabilityProjectionV1,
-} from "@agent-infra/contracts/runtime";
 import { describe, expect, it } from "vitest";
 
 import { agentConfigurationConformanceRecordV1 } from "./agent-configuration.conformance.js";
@@ -15,6 +11,7 @@ import {
 	decideAgentRuntimePresentationV1,
 	snapshotAgentRuntimePresentationExpectationV1,
 } from "./agent-runtime-presentation.js";
+import type { WorkloadBrowserCapabilityProjectionV1 } from "./workload-reconciliation.js";
 
 const management: AgentManagementStateV1 = {
 	schemaVersion: 1,
@@ -121,7 +118,7 @@ describe("Agent runtime presentation policy", () => {
 
 	it("projects the verified Browser state without exposing probe internals", () => {
 		const input = fixture();
-		const browser: BrowserCapabilityProjectionV1 = {
+		const browser: WorkloadBrowserCapabilityProjectionV1 = {
 			schemaVersion: 1,
 			capabilityVersion: 1,
 			status: "available",
@@ -163,7 +160,7 @@ describe("Agent runtime presentation policy", () => {
 		};
 		const runtime = input.facts.runtime;
 		if (!runtime?.state.capabilities) throw new Error();
-		const browserDeclaration: BrowserCapabilityDeclarationV1 = {
+		const browserDeclaration = {
 			schemaVersion: 1,
 			capabilityVersion: 1,
 			operations: browser.operations,

@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
 import type { AgentConfigurationRecord } from "./agent-configuration.js";
 import {
 	type AgentManagementDecisionV1,
@@ -110,12 +109,18 @@ export interface WorkloadCapabilitiesV1 {
 	readonly connection?: boolean;
 	readonly supplementaryInstruction?: boolean;
 	readonly skills?: readonly WorkloadSkillCapabilityV1[];
-	readonly browser?: BrowserCapabilityProjectionV1;
+	readonly browser?: WorkloadBrowserCapabilityProjectionV1;
 	readonly [key: string]:
 		| boolean
 		| readonly WorkloadSkillCapabilityV1[]
-		| BrowserCapabilityProjectionV1
+		| WorkloadBrowserCapabilityProjectionV1
 		| undefined;
+}
+
+/** Opaque, server-validated Browser projection retained by Workload state. */
+export interface WorkloadBrowserCapabilityProjectionV1 {
+	readonly status: string;
+	readonly [key: string]: unknown;
 }
 
 export interface WorkloadReconciliationStateV1 {
