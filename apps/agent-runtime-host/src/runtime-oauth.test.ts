@@ -39,6 +39,7 @@ import {
 } from "./runtime-oauth.js";
 import { createProtectedRuntimeOAuthClient } from "./runtime-oauth-client.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
+import { standardMcpInstallationKey } from "./standard-mcp-input.js";
 
 const protection = vi.hoisted(() => ({
 	check: vi.fn(),
@@ -717,6 +718,55 @@ it("rejects a non-HTTPS revocation endpoint before sending material", async () =
 		}),
 	).rejects.toThrow();
 	expect(requests).toBe(0);
+});
+
+it("does not revoke a foreign principal in the shared material tree", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const records = join(f.root, "records");
+	const materials = join(f.root, "materials");
+	const sourceName = (await readdir(records)).find((name) =>
+		/^[a-f0-9]{64}\.json$/.test(name),
+	);
+	expect(sourceName).toBeDefined();
+	const foreign = JSON.parse(
+		await readFile(join(records, sourceName as string), "utf8"),
+	) as Record<string, unknown>;
+	foreign.principal = { kind: "user", id: "bob" };
+	foreign.authorizationId = "foreign-authorization";
+	const foreignKey = createHash("sha256")
+		.update(
+			JSON.stringify([
+				standardMcpInstallationKey(
+					{ kind: "user", id: "bob" },
+					f.scope.agentId,
+					f.target,
+				),
+				foreign.authorizationId,
+			]),
+		)
+		.digest("hex");
+	await writeFile(
+		join(records, `${foreignKey}.json`),
+		JSON.stringify(foreign),
+		{
+			mode: 0o600,
+		},
+	);
+	const foreignToken = "synthetic-foreign-access";
+	await writeFile(join(materials, `${foreignKey}.access`), foreignToken, {
+		mode: 0o400,
+	});
+	await f.assembly.client.revoke();
+	const tokens = f.calls.map((body) => body.get("token"));
+	expect(tokens).toEqual(expect.arrayContaining([access, refresh]));
+	expect(tokens).not.toContain(foreignToken);
+	expect(await readFile(join(materials, `${foreignKey}.access`), "utf8")).toBe(
+		foreignToken,
+	);
 });
 
 it("retains protected material when remote revocation is unknown", async () => {
