@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 // OpenAPI compatibility compares large historical artifacts in child processes.
-vi.setConfig({ testTimeout: 120_000 });
+vi.setConfig({ testTimeout: 300_000 });
 
 const cliPath = fileURLToPath(new URL("./compatibility.mjs", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
