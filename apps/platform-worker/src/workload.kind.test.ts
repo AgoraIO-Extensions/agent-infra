@@ -900,16 +900,20 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					baseUrl: string;
 					manifest: { health: { path: string } };
 				}) => {
-					await kubectl(
-						"exec",
-						"worker-probe",
-						"--",
-						"node",
-						"-e",
-						"fetch(process.argv[1],{headers:{authorization:'Bearer '+process.argv[2]},signal:AbortSignal.timeout(2500)}).then(r=>{if(!r.ok)process.exit(2)}).catch(()=>process.exit(3))",
-						`${input.baseUrl}${input.manifest.health.path}`,
-						serviceToken,
-					);
+					try {
+						await kubectl(
+							"exec",
+							"worker-probe",
+							"--",
+							"node",
+							"-e",
+							"fetch(process.argv[1],{headers:{authorization:'Bearer '+process.argv[2]},signal:AbortSignal.timeout(2500)}).then(r=>{if(!r.ok)process.exit(2)}).catch(()=>process.exit(3))",
+							`${input.baseUrl}${input.manifest.health.path}`,
+							serviceToken,
+						);
+					} catch {
+						throw new Error("Runtime health probe failed");
+					}
 					return { core: "passed" as const, capabilities: {} };
 				};
 				const fetchViaProbe = async (input: Parameters<typeof fetch>[0]) => {
