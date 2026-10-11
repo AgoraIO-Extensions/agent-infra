@@ -58,6 +58,10 @@ import {
 	prepareRuntimeOAuth,
 	type RuntimeOAuthAssembly,
 } from "./runtime-oauth.js";
+import {
+	createRuntimeSkillHubDirectoryV1,
+	readRuntimeSkillHubBindingV1,
+} from "./skill-hub-configuration.js";
 import { createProtectedStandardMcpInput } from "./standard-mcp-input.js";
 import { receiveProtectedStandardMcpInstallation } from "./standard-mcp-installation.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
@@ -274,6 +278,11 @@ export async function assembleRuntimeHost(
 	const agentId = activeConfiguration
 		? required("AGENT_INFRA_RUNTIME_AGENT_ID")
 		: undefined;
+	const skillHubBinding = readRuntimeSkillHubBindingV1(environment);
+	if (skillHubBinding && binding !== "codex") runtimeConfigurationInvalid();
+	const skillDirectory = skillHubBinding
+		? createRuntimeSkillHubDirectoryV1(skillHubBinding)
+		: undefined;
 	const legacyMigration = await readRuntimeLegacyMigrationV1({
 		environment,
 		expectedIssuer,
@@ -346,6 +355,7 @@ export async function assembleRuntimeHost(
 				: undefined;
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
+					...(skillDirectory ? { skillDirectory } : {}),
 					...(standardConnectionClient ? { standardConnectionClient } : {}),
 					...(connectionProfile && installationRevision === undefined
 						? {

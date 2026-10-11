@@ -1,4 +1,8 @@
 import {
+	RuntimeSkillHubBindingV1Schema,
+	runtimeSkillHubBindingEnvironmentNameV1,
+} from "@agent-infra/contracts/runtime";
+import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
 } from "@agent-infra/contracts/workload";
@@ -64,6 +68,32 @@ export function createWorkloadInteractionOriginV1(input: {
 	return { schemaVersion: 1 as const, origin };
 }
 
+function skillHubRuntimeEnvironmentV1(value: AgentWorkloadDesiredV1) {
+	if (
+		value.skillGenerationId === undefined ||
+		value.skills === undefined ||
+		value.skills.length === 0
+	)
+		return undefined;
+	try {
+		const first = value.skills[0];
+		if (!first) throw new Error();
+		const binding = RuntimeSkillHubBindingV1Schema.parse({
+			schemaVersion: 1,
+			agentId: value.agentId,
+			agentVersion: first.agentVersion,
+			generationId: value.skillGenerationId,
+			projections: value.skills,
+		});
+		return {
+			name: runtimeSkillHubBindingEnvironmentNameV1,
+			value: JSON.stringify(binding),
+		};
+	} catch {
+		throw new WorkloadKubernetesError("policy");
+	}
+}
+
 export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 	readonly connectionConsumerControl?: boolean;
 	readonly policy: KubernetesWorkloadPolicyV1;
@@ -115,6 +145,9 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 		)
 			throw new WorkloadKubernetesError("policy");
 		const injection = modelBindings(value);
+		const skillHubRuntime = skillHubRuntimeEnvironmentV1(value);
+		if (Object.hasOwn(value.env, runtimeSkillHubBindingEnvironmentNameV1))
+			throw new WorkloadKubernetesError("policy");
 		const binding = modelProjection?.standardTemplateBinding;
 		if (
 			injection &&
@@ -150,6 +183,7 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 			...(injection && binding
 				? [{ name: "AGENT_INFRA_RUNTIME_DRIVER", value: binding.driver }]
 				: []),
+			...(skillHubRuntime ? [skillHubRuntime] : []),
 			...runtimeAuth,
 			...connection.env,
 		];

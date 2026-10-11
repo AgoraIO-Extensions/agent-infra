@@ -14,6 +14,7 @@ export * from "./host-v4-events.ts";
 export * from "./legacy-migration-v1.ts";
 export * from "./platform-entry-auth.ts";
 export * from "./readiness.ts";
+export * from "./skill-hub.ts";
 
 import { RuntimeBrowserCapabilityProbeEvidenceV1Schema } from "./browser-capability.ts";
 import {

@@ -24,6 +24,12 @@ export type RuntimeSkillDirectoryReadRequestV1 = Readonly<{
 	maximumBytes: number;
 }>;
 
+export interface RuntimeFilesystemSkillDirectoryV1 {
+	readonly generationId: string;
+	findSkills(): readonly RuntimeSkillDirectoryEntryV1[];
+	readSkill(name: string, relativePath: string): Promise<Uint8Array>;
+}
+
 export class RuntimeSkillDirectoryErrorV1 extends Error {
 	readonly code = "RUNTIME_SKILL_DIRECTORY_UNAVAILABLE" as const;
 
@@ -262,7 +268,7 @@ export function createFilesystemRuntimeSkillDirectoryV1(input: {
 	readonly generationId: string;
 	readonly projections: readonly unknown[];
 	readonly maximumResourceBytes?: number;
-}) {
+}): RuntimeFilesystemSkillDirectoryV1 {
 	const parsed = input.projections.map((projection) => {
 		const value = SkillWorkloadProjectionV1Schema.parse(projection);
 		if (
