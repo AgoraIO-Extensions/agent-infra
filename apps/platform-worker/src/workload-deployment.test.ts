@@ -25,6 +25,7 @@ import {
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { workloadResourceNameV1 } from "./kubernetes-runtime-adapter.js";
+import type { WorkloadSkillMaterializerV1 } from "./skill-materialization.js";
 import {
 	createProductionWorkloadWorkerOptionsV1,
 	createWorkloadReadinessAuthorizationV1,
@@ -229,6 +230,33 @@ describe("production Worker deployment", () => {
 		const deployment = await input();
 		Object.defineProperty(deployment, "files", {
 			value: { storage: {}, batchSize: 0, orphanGraceMs: 0 },
+		});
+		Object.defineProperty(deployment, "kubernetes", {
+			get() {
+				throw new Error("Kubernetes credentials must not be read");
+			},
+		});
+		await expect(
+			createProductionWorkloadWorkerOptionsV1(deployment),
+		).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
+	});
+	it("forwards the deployment-owned Skill materializer to Worker options", async () => {
+		const deployment = await input();
+		const materializer: WorkloadSkillMaterializerV1 = {
+			async materialize() {
+				return { generationId: "a".repeat(64), skills: [] };
+			},
+		};
+		const options = await createProductionWorkloadWorkerOptionsV1({
+			...deployment,
+			skillMaterializer: materializer,
+		});
+		expect(options.skillMaterializer).toBe(materializer);
+	});
+	it("rejects a malformed Skill materializer before Kubernetes access", async () => {
+		const deployment = await input();
+		Object.defineProperty(deployment, "skillMaterializer", {
+			value: { materialize: "not-a-function" },
 		});
 		Object.defineProperty(deployment, "kubernetes", {
 			get() {
