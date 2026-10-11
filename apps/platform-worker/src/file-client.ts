@@ -351,6 +351,7 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 						!sameFileDescriptor(file.descriptor, descriptor)
 					)
 						throw new Error("WORKER_RUNTIME_FILE_RESULT_INVALID");
+					revalidate(binding);
 					return createRuntimeFileResultReceiptV1(binding, file);
 				} catch (error) {
 					await bounded?.cancel().catch(() => undefined);
