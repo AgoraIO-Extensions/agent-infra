@@ -28,6 +28,7 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { runtimeFetch as inClusterRuntimeFetch } from "./runtime-transport.js";
+import type { WorkloadBrowserBindingResolverV1 } from "./workload-runtime.js";
 import type { PlatformWorkloadWorkerOptionsV1 } from "./workload-worker.js";
 
 type ProbeRequest = Omit<WorkloadReadinessRequestV1, "grant">;
@@ -72,6 +73,8 @@ export interface ProductionWorkloadWorkerInputV1 {
 	readonly files?: PlatformWorkloadWorkerOptionsV1["files"];
 	readonly runtimeModelVersion?: PlatformWorkloadWorkerOptionsV1["runtimeModelVersion"];
 	readonly runtimeProbe: WorkloadRuntimeProbeAuthorizationV1;
+	/** Server-resolved binding for the current Session-owned Browser Sandbox. */
+	readonly browserBinding?: WorkloadBrowserBindingResolverV1;
 	/** Separate transports keep registry authentication out of model and Runtime requests. */
 	readonly modelFetch?: typeof fetch;
 	readonly runtimeFetch?: typeof fetch;
@@ -199,6 +202,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			workerId: input.workerId,
 			authorization: input.runtimeProbe,
 			fetch: runtimeFetch,
+			...(input.browserBinding ? { browserBinding: input.browserBinding } : {}),
 		});
 		signal.throwIfAborted();
 		return {
@@ -220,6 +224,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			),
 			...(input.files ? { files: input.files } : {}),
 			fetch: runtimeFetch,
+			...(input.browserBinding ? { browserBinding: input.browserBinding } : {}),
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,
 			log: input.log,
@@ -263,7 +268,23 @@ export function createWorkloadRuntimeProbeV1(options: {
 						workloadRevision: input.workloadRevision,
 						fence: input.fence,
 						imageDigest: input.imageDigest,
+						...(input.manifest.capabilities?.browser
+							? { browserDeclaration: input.manifest.capabilities.browser }
+							: {}),
+						...(input.manifest.capabilities?.browser && input.browserBinding
+							? { browserBinding: input.browserBinding }
+							: {}),
 					});
+					if (
+						input.manifest.capabilities?.browser &&
+						(!input.browserBinding ||
+							input.browserBinding.agentId !== input.agentId ||
+							input.browserBinding.workloadRevision !==
+								input.workloadRevision ||
+							input.browserBinding.resourceFence !== input.fence ||
+							input.browserBinding.imageDigest !== input.imageDigest)
+					)
+						throw new Error();
 					const authorization = await options.authorization.authorize(
 						{ request },
 						signal,
@@ -294,7 +315,8 @@ export function createWorkloadRuntimeProbeV1(options: {
 					if (
 						Object.entries(request).some(
 							([field, value]) =>
-								claims[field as keyof typeof claims] !== value,
+								JSON.stringify(claims[field as keyof typeof claims]) !==
+								JSON.stringify(value),
 						)
 					)
 						throw new Error();
@@ -347,7 +369,8 @@ export function createWorkloadRuntimeProbeV1(options: {
 						if (
 							Object.entries(request).some(
 								([field, value]) =>
-									result[field as keyof typeof result] !== value,
+									JSON.stringify(result[field as keyof typeof result]) !==
+									JSON.stringify(value),
 							)
 						)
 							throw new Error();

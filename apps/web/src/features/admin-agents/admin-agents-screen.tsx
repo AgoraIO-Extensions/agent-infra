@@ -25,6 +25,7 @@ import {
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
 import type { AdminAgentsState } from "./admin-agents.js";
+import { AdminUserGovernance } from "./admin-user-governance.js";
 
 export const adminAgentStatuses = [
 	"creating",
@@ -119,6 +120,7 @@ export function AdminAgentsScreen({
 				</Alert>
 			) : (
 				<>
+					<AdminUserGovernance />
 					<div className="admin-agent-filters">
 						<div className="space-y-2">
 							<Label htmlFor={`${id}-status`}>产品状态</Label>
@@ -260,9 +262,19 @@ export function AdminAgentsScreen({
 											</TableCell>
 											<TableCell
 												data-label="系统操作"
-												aria-label="无可执行的系统操作"
+												aria-label="Owner 交接入口"
 											>
-												<span aria-hidden="true">—</span>
+												{agent.managementStatus === "disabled" ? (
+													<span aria-hidden="true">—</span>
+												) : (
+													<Link
+														className={buttonVariants({ variant: "outline" })}
+														params={{ agentId: agent.agentId }}
+														to="/agents/$agentId/configuration"
+													>
+														处理 Owner 交接
+													</Link>
+												)}
 											</TableCell>
 										</TableRow>
 									))}

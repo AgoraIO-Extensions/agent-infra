@@ -15,6 +15,7 @@ export * from "./legacy-migration-v1.ts";
 export * from "./platform-entry-auth.ts";
 export * from "./readiness.ts";
 
+import { RuntimeBrowserCapabilityProbeEvidenceV1Schema } from "./browser-capability.ts";
 import {
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverLookupV1Schema,
@@ -81,6 +82,8 @@ export const RuntimeHostV1SchemaDefinitions = {
 
 export const RuntimeEventV1SchemaDefinitions = {
 	RuntimeCapabilitiesV1: RuntimeCapabilitiesV1Schema,
+	RuntimeBrowserCapabilityProbeEvidenceV1:
+		RuntimeBrowserCapabilityProbeEvidenceV1Schema,
 	RuntimeSkillCapabilityV1: RuntimeSkillCapabilityV1Schema,
 	RuntimeEventV1: RuntimeEventV1Schema,
 	RuntimeStatusV1: RuntimeStatusV1Schema,

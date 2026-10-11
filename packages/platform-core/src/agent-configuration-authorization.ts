@@ -23,7 +23,7 @@ export async function admitCurrentAuthorization(
 	command: Pick<
 		UpdateAgentConfigurationCommandV2,
 		"agentId" | "requestId" | "traceId"
-	>,
+	> & { readonly accessOnly?: boolean },
 	actorContext: AgentConfigurationActorContextV1,
 ): Promise<
 	Extract<
@@ -44,6 +44,7 @@ export async function admitCurrentAuthorization(
 				actorId: actorContext.actorId,
 				requestId: command.requestId,
 				traceId: command.traceId,
+				...(command.accessOnly === true ? { accessOnly: true } : {}),
 			}),
 		);
 	} catch {

@@ -7,6 +7,7 @@ import {
 	type TaskUserDirectoryV1,
 	type WecomDeliveryStatusV1,
 	type WecomIdentityPortV1,
+	type WecomMediaResolverV1,
 	type WecomSendPortV1,
 } from "@agent-infra/platform-core";
 import { PostgresWecomChannelV1 } from "@agent-infra/platform-store";
@@ -24,6 +25,8 @@ export interface WecomWorkerDeploymentV1 {
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly observe: (status: WecomDeliveryStatusV1) => void;
 	readonly sender: WecomSendPortV1;
+	/** Deployment-owned resolver; bytes and file authority stay outside this seam. */
+	readonly mediaResolver?: WecomMediaResolverV1;
 	readonly connections?: WecomConnectionsDeploymentV1;
 	readonly setup?: WecomSetupWorkerDeploymentV1;
 }
@@ -46,7 +49,11 @@ export function createPlatformWecomWorkerV1(
 		identity: options.identity,
 		state: store,
 	});
-	const channel = createWecomChannelV1({ authorization, store });
+	const channel = createWecomChannelV1({
+		authorization,
+		store,
+		...(options.mediaResolver ? { media: options.mediaResolver } : {}),
+	});
 	const setup =
 		options.setup && options.connections
 			? createWecomSetupWorkerV1({
