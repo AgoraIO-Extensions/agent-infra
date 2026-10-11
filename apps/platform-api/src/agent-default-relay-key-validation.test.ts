@@ -26,7 +26,7 @@ function fixture(mode = "valid") {
 		if (mode === "unavailable") throw new Error(key);
 		return Response.json(
 			mode === "malformed"
-				? { data: [{ id: key + "!" }] }
+				? { data: [{ id: `${key}!` }] }
 				: { data: [{ id: "gpt-5" }, { id: "hidden" }] },
 		);
 	});
