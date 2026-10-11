@@ -49,7 +49,10 @@ import {
 import { createProtectedRuntimeOAuthClient } from "./runtime-oauth-client.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
 import { standardMcpInstallationKey } from "./standard-mcp-input.js";
-import { replaceProtectedStandardMcpMaterials } from "./standard-mcp-installation.js";
+import {
+	recoverProtectedStandardMcpMaterialRotation,
+	replaceProtectedStandardMcpMaterials,
+} from "./standard-mcp-installation.js";
 
 const protection = vi.hoisted(() => ({
 	check: vi.fn(),
@@ -800,6 +803,40 @@ it("restores prior material when the guard expires after the first rename", asyn
 	expect(readFileSync(join(f.root, "materials", refreshName), "utf8")).toBe(
 		refresh,
 	);
+});
+
+it("recovers a durable rotation journal before using protected material", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const names = await readdir(join(f.root, "materials"));
+	const accessName = names.find((name) => name.endsWith(".access")) as string;
+	const refreshName = names.find((name) => name.endsWith(".refresh")) as string;
+	const accessPath = join(f.root, "materials", accessName);
+	await chmod(accessPath, 0o600);
+	await writeFile(accessPath, refreshedAccess);
+	await chmod(accessPath, 0o400);
+	await writeFile(
+		join(f.root, "materials", ".oauth-rotation.json"),
+		JSON.stringify({
+			schemaVersion: 1,
+			entries: [
+				{ name: accessName, expected: access, next: refreshedAccess },
+				{ name: refreshName, expected: refresh, next: refreshedRefresh },
+			],
+		}),
+		{ mode: 0o400 },
+	);
+	await recoverProtectedStandardMcpMaterialRotation(join(f.root, "materials"));
+	expect(await readFile(accessPath, "utf8")).toBe(access);
+	expect(await readFile(join(f.root, "materials", refreshName), "utf8")).toBe(
+		refresh,
+	);
+	await expect(
+		readFile(join(f.root, "materials", ".oauth-rotation.json")),
+	).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("keeps rotated material unavailable after a lost refresh response", async () => {

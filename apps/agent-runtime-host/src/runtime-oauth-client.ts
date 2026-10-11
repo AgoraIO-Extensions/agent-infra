@@ -41,6 +41,7 @@ import { standardMcpInstallationKey } from "./standard-mcp-input.js";
 import {
 	ensurePrivateDirectory,
 	publishMaterial,
+	recoverProtectedStandardMcpMaterialRotation,
 	replaceProtectedStandardMcpMaterials,
 	withProtectedStandardMcpMaterialLock,
 } from "./standard-mcp-installation.js";
@@ -271,6 +272,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	const records = join(root, "records");
 	const materials = join(root, "materials");
 	await ensurePrivateDirectory(materials);
+	await recoverProtectedStandardMcpMaterialRotation(materials);
 	const abort = new AbortController();
 	let closed = false;
 	let revokePromise: Promise<void> | undefined;
