@@ -528,7 +528,11 @@ it("decides bridge expiry on the injected grant clock instead of the wall clock"
 
 	// The grant is live on the deployment clock even though the wall clock is far
 	// beyond its expiry.
-	await expect(host.getFileBridge(request)).resolves.toBe(fileBridge);
+	await expect(host.getFileBridge(request)).resolves.toMatchObject({
+		readInput: expect.any(Function),
+		writeResult: expect.any(Function),
+		revalidate: expect.any(Function),
+	});
 	clock += 60_000;
 	await expect(host.getFileBridge(request)).rejects.toThrow(
 		"RUNTIME_FILE_BRIDGE_BINDING_INVALID",

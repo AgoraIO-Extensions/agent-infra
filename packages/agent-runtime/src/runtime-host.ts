@@ -557,6 +557,7 @@ export class RuntimeHost {
 				port.revalidate();
 			},
 		};
+	}
 
 	private requireLegacyHost() {
 		if (this.closed) runtimeAuthorizationDenied();
@@ -1748,6 +1749,9 @@ export class RuntimeHost {
 							fileBridge: {
 								readInput(fileId: string) {
 									return originalFileBridge.readInput(fileId);
+								},
+								revalidate() {
+									originalFileBridge.revalidate();
 								},
 								async writeResult(
 									descriptor: Parameters<

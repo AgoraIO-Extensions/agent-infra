@@ -3111,10 +3111,7 @@ describe("Codex Runtime Driver", () => {
 					// The first attachment is already materialized, so its directory is
 					// identifiable; make its removal fail after native acceptance.
 
-					blocked = await blockMaterializedInputDirectory();
-=======
 					blocked = await blockMaterializedInputDirectory(bytes);
->>>>>>> 7d4182b4 (fix(runtime): revalidate file authority before native input submission)
 				}
 				return {
 					fileId,
@@ -3229,7 +3226,6 @@ describe("Codex Runtime Driver", () => {
 	);
 
 
-=======
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 		"reclaims input bytes a previous process could not remove",
 		async () => {
@@ -3310,8 +3306,6 @@ describe("Codex Runtime Driver", () => {
 			expect(await readdir(root)).toEqual([]);
 		},
 	);
-
->>>>>>> 9b08a223 (fix(runtime): reclaim materialized inputs a restarted Driver cannot forget)
 	it("keeps Codex attachment capability fail-closed without a bridge", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
