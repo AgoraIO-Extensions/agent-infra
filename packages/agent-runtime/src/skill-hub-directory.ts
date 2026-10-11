@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import { SkillWorkloadProjectionV1Schema } from "@agent-infra/contracts";
 
 const maxSkills = 150;
@@ -143,6 +147,153 @@ export function createRuntimeSkillDirectoryV1(input: {
 			)
 				unavailable();
 			return bytes.slice();
+		},
+	};
+}
+
+async function readMountedSkillFile(input: {
+	root: string;
+	path: string;
+	sizeBytes: number;
+	sha256: string;
+	maximumBytes: number;
+}): Promise<Uint8Array> {
+	const root = resolve(input.root);
+	if (!isAbsolute(input.root) || root !== input.root) unavailable();
+	const rootInfo = await lstat(root).catch(() => unavailable());
+	const rootReal = await realpath(root).catch(() => unavailable());
+	if (
+		rootReal !== root ||
+		!rootInfo.isDirectory() ||
+		rootInfo.isSymbolicLink() ||
+		rootInfo.mode & 0o222
+	)
+		unavailable();
+	const candidate = resolve(rootReal, input.path);
+	const within = relative(rootReal, candidate);
+	if (
+		!within ||
+		within === ".." ||
+		within.startsWith("../") ||
+		isAbsolute(within)
+	)
+		unavailable();
+	let current = candidate;
+	for (;;) {
+		const info = await lstat(current).catch(() => unavailable());
+		if (
+			info.isSymbolicLink() ||
+			info.mode & 0o222 ||
+			(current === candidate ? !info.isFile() : !info.isDirectory())
+		)
+			unavailable();
+		if (current === rootReal) break;
+		const parent = resolve(current, "..");
+		if (parent === current) unavailable();
+		current = parent;
+	}
+	const info = await lstat(candidate).catch(() => unavailable());
+	if (
+		info.nlink !== 1 ||
+		info.mode & 0o222 ||
+		!Number.isSafeInteger(input.sizeBytes) ||
+		input.sizeBytes < 0 ||
+		input.sizeBytes > input.maximumBytes ||
+		info.size !== input.sizeBytes
+	)
+		unavailable();
+	const handle = await open(
+		candidate,
+		constants.O_RDONLY | constants.O_NOFOLLOW,
+	).catch(() => unavailable());
+	try {
+		const before = await handle.stat();
+		if (
+			!before.isFile() ||
+			before.ino !== info.ino ||
+			before.dev !== info.dev ||
+			before.nlink !== 1 ||
+			before.mode & 0o222 ||
+			before.size !== input.sizeBytes
+		)
+			unavailable();
+		const bytes = Buffer.alloc(input.maximumBytes + 1);
+		let offset = 0;
+		while (offset < bytes.length) {
+			const { bytesRead } = await handle.read(
+				bytes,
+				offset,
+				bytes.length - offset,
+				offset,
+			);
+			if (bytesRead === 0) break;
+			offset += bytesRead;
+		}
+		const after = await handle.stat();
+		const currentInfo = await lstat(candidate);
+		if (
+			offset !== input.sizeBytes ||
+			!currentInfo.isFile() ||
+			currentInfo.ino !== before.ino ||
+			currentInfo.dev !== before.dev ||
+			currentInfo.nlink !== before.nlink ||
+			currentInfo.size !== before.size ||
+			after.ino !== before.ino ||
+			after.dev !== before.dev ||
+			after.nlink !== before.nlink ||
+			after.size !== before.size ||
+			after.mtimeMs !== before.mtimeMs ||
+			after.ctimeMs !== before.ctimeMs ||
+			createHash("sha256").update(bytes.subarray(0, offset)).digest("hex") !==
+				input.sha256
+		)
+			unavailable();
+		return Uint8Array.from(bytes.subarray(0, offset));
+	} finally {
+		await handle.close();
+	}
+}
+
+/** Read verified bytes from the Worker-mounted, read-only Hub generation. */
+export function createFilesystemRuntimeSkillDirectoryV1(input: {
+	readonly root: string;
+	readonly agentId: string;
+	readonly agentVersion: string;
+	readonly generationId: string;
+	readonly projections: readonly unknown[];
+	readonly maximumResourceBytes?: number;
+}) {
+	const parsed = input.projections.map((projection) => {
+		const value = SkillWorkloadProjectionV1Schema.parse(projection);
+		if (
+			value.agentId !== input.agentId ||
+			value.agentVersion !== input.agentVersion
+		)
+			unavailable();
+		return value;
+	});
+	const byName = new Map(
+		parsed.map((projection) => [projection.manifest.name, projection]),
+	);
+	const directory = createRuntimeSkillDirectoryV1(input);
+	return {
+		generationId: directory.generationId,
+		findSkills: directory.findSkills,
+		async readSkill(name: string, relativePath: string): Promise<Uint8Array> {
+			const projection = byName.get(name);
+			const file = projection?.manifest.files.find(
+				(entry) => entry.path === relativePath,
+			);
+			if (!projection || !file) unavailable();
+			return directory.readSkill(name, relativePath, async (request) =>
+				readMountedSkillFile({
+					root: input.root,
+					path: `${request.skill.targetPath}/${request.relativePath}`,
+					sizeBytes: file.sizeBytes,
+					sha256: file.sha256,
+					maximumBytes: request.maximumBytes,
+				}),
+			);
 		},
 	};
 }
