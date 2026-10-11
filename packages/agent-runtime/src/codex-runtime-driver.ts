@@ -4980,6 +4980,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		)
 			skillDirectoryInvalid();
 		await metadataRead.revalidate();
+		if (
+			directory.generationId !== generationId ||
+			JSON.stringify(directory.findSkills()) !== projectionSnapshot
+		)
+			skillDirectoryInvalid();
 		return bytes.slice();
 	}
 

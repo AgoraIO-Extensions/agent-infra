@@ -10363,6 +10363,44 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 		).resolves.toEqual(Uint8Array.from([1, 2, 3]));
 	});
 
+	it("rejects a generation switch during final authority revalidation", async () => {
+		let generationId = "d".repeat(64);
+		const entry = {
+			schemaVersion: 1 as const,
+			name: "hub-skill",
+			version: "1.0.0",
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			targetPath: ".agents/skills/hub-skill",
+			readOnly: true as const,
+		};
+		const directory: RuntimeFilesystemSkillDirectoryV1 = {
+			get generationId() {
+				return generationId;
+			},
+			findSkills: () => [entry],
+			readSkill: async () => Uint8Array.from([1, 2, 3]),
+		};
+		const f = await skillDiscoveryFixture(undefined, {
+			installedSkill: undefined,
+			skillDirectory: directory,
+		});
+		let revalidations = 0;
+		const final = Promise.withResolvers<typeof f.binding>();
+		f.read.revalidate = async () => {
+			revalidations++;
+			if (revalidations === 3) return final.promise;
+			return f.binding;
+		};
+		const pending = f.driver.readNativeSkill(f.read, "hub-skill", "SKILL.md");
+		await vi.waitFor(() => expect(revalidations).toBe(3));
+		generationId = "e".repeat(64);
+		final.resolve(f.binding);
+		await expect(pending).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+		});
+	});
+
 	it.each(["null metadata", "null interface fields"])(
 		"admits the official absent %s shape without accepting assets or dependencies",
 		async (kind) => {
