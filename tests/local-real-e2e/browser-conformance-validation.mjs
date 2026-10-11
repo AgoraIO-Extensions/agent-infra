@@ -21,7 +21,7 @@ export const browserConformanceChecks = Object.freeze([
 
 const digestPattern = /^sha256:[0-9a-f]{64}$/u;
 const hashPattern = /^[0-9a-f]{64}$/u;
-const versionPattern = /^[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?$/u;
+const versionPattern = /^[0-9]{1,6}(?:\.[0-9]{1,6}){2,3}$/u;
 
 function matches(pattern, value) {
 	return typeof value === "string" && pattern.test(value);

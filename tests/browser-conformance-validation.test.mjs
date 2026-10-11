@@ -114,6 +114,11 @@ test("rejects URL-shaped and token-shaped version values", () => {
 			template[field] = invalid.deployment[field];
 		assert.equal(validateBrowserConformanceReceipt(invalid).status, "rejected");
 	}
+	const oversized = receipt();
+	oversized.deployment.chromiumVersion = `1.${"2".repeat(100)}.3`;
+	for (const template of oversized.templates)
+		template.chromiumVersion = oversized.deployment.chromiumVersion;
+	assert.equal(validateBrowserConformanceReceipt(oversized).status, "rejected");
 });
 
 test("rejects array-valued hashes, commits and versions", () => {
