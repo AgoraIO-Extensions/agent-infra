@@ -18,15 +18,17 @@ const identity = {
 	hydrateUsers: vi.fn(async () => []),
 };
 
-function app(resolveTimedOutUnknownStop = vi.fn(async () => ({
-	schemaVersion: 1 as const,
-	status: "resolved" as const,
-	conversationId: "conversation",
-	executionId: "execution",
-	stopRequestId: "stop",
-	controlRecordId: "control",
-	replayed: false,
-}))) {
+function app(
+	resolveTimedOutUnknownStop = vi.fn(async () => ({
+		schemaVersion: 1 as const,
+		status: "resolved" as const,
+		conversationId: "conversation",
+		executionId: "execution",
+		stopRequestId: "stop",
+		controlRecordId: "control",
+		replayed: false,
+	})),
+) {
 	const application = new Hono();
 	registerUnknownStopOperationsRoutes(application, {
 		identity,
@@ -96,9 +98,12 @@ describe("unknown stop operations route", () => {
 		);
 		expect(extra.status).toBe(400);
 		const missingKey = await app().application.request(
-			request({ schemaVersion: 1, sessionGeneration: 1 }, {
-				"Idempotency-Key": "",
-			}),
+			request(
+				{ schemaVersion: 1, sessionGeneration: 1 },
+				{
+					"Idempotency-Key": "",
+				},
+			),
 		);
 		expect(missingKey.status).toBe(400);
 	});
