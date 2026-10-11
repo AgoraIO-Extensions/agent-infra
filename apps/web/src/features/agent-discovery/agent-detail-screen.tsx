@@ -30,10 +30,21 @@ import {
 	BrowserCapabilityStatus,
 	type BrowserWorkflowState,
 } from "./browser-capability-status.js";
+import type {
+	BrowserHandoffPanelStateV1,
+	BrowserSideEffectConfirmationV1,
+} from "./browser-handoff-panel.js";
 
 type AgentDetailScreenProps = {
 	browserCapability?: BrowserCapabilityProjectionV1;
 	browserWorkflow?: BrowserWorkflowState;
+	browserHandoff?: BrowserHandoffPanelStateV1;
+	browserConfirmation?: BrowserSideEffectConfirmationV1;
+	onBrowserCancelConfirmation?: (confirmationId: string) => void;
+	onBrowserConfirmSideEffect?: (confirmationId: string) => void;
+	onBrowserRejectSideEffect?: (confirmationId: string) => void;
+	onBrowserReturnToAgent?: (handoffId: string) => void;
+	onBrowserTakeOver?: (handoffId: string) => void;
 	onRetry?: () => void;
 	ownerSettings?: { readonly agentId: string };
 	retrying?: boolean;
@@ -81,6 +92,13 @@ function interactionReadiness(
 export function AgentDetailScreen({
 	browserCapability,
 	browserWorkflow,
+	browserHandoff,
+	browserConfirmation,
+	onBrowserCancelConfirmation,
+	onBrowserConfirmSideEffect,
+	onBrowserRejectSideEffect,
+	onBrowserReturnToAgent,
+	onBrowserTakeOver,
 	onRetry,
 	ownerSettings,
 	retrying = false,
@@ -342,6 +360,13 @@ export function AgentDetailScreen({
 						<BrowserCapabilityStatus
 							capability={browserCapability}
 							workflow={browserWorkflow}
+							handoff={browserHandoff}
+							confirmation={browserConfirmation}
+							onCancelConfirmation={onBrowserCancelConfirmation}
+							onConfirmSideEffect={onBrowserConfirmSideEffect}
+							onRejectSideEffect={onBrowserRejectSideEffect}
+							onReturnToAgent={onBrowserReturnToAgent}
+							onTakeOver={onBrowserTakeOver}
 						/>
 					)}
 				</div>

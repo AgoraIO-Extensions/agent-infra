@@ -8,6 +8,11 @@ import {
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import {
+	BrowserHandoffPanel,
+	type BrowserHandoffPanelStateV1,
+	type BrowserSideEffectConfirmationV1,
+} from "./browser-handoff-panel.js";
 
 const statusLabels = {
 	available: "可用",
@@ -27,6 +32,13 @@ const statusDescriptions = {
 type BrowserCapabilityStatusProps = {
 	readonly workflow?: BrowserWorkflowState;
 	readonly capability: BrowserCapabilityProjectionV1;
+	readonly handoff?: BrowserHandoffPanelStateV1;
+	readonly confirmation?: BrowserSideEffectConfirmationV1;
+	readonly onCancelConfirmation?: (confirmationId: string) => void;
+	readonly onConfirmSideEffect?: (confirmationId: string) => void;
+	readonly onRejectSideEffect?: (confirmationId: string) => void;
+	readonly onReturnToAgent?: (handoffId: string) => void;
+	readonly onTakeOver?: (handoffId: string) => void;
 };
 
 export type BrowserWorkflowState =
@@ -193,6 +205,13 @@ function BrowserCapabilityAvailable({
 export function BrowserCapabilityStatus({
 	capability,
 	workflow,
+	handoff,
+	confirmation,
+	onCancelConfirmation,
+	onConfirmSideEffect,
+	onRejectSideEffect,
+	onReturnToAgent,
+	onTakeOver,
 }: BrowserCapabilityStatusProps) {
 	return (
 		<>
@@ -202,6 +221,15 @@ export function BrowserCapabilityStatus({
 				<BrowserCapabilityUnavailable capability={capability} />
 			)}
 			<BrowserWorkflowStatus workflow={workflow} />
+			<BrowserHandoffPanel
+				handoff={handoff}
+				confirmation={confirmation}
+				onCancelConfirmation={onCancelConfirmation}
+				onConfirmSideEffect={onConfirmSideEffect}
+				onRejectSideEffect={onRejectSideEffect}
+				onReturnToAgent={onReturnToAgent}
+				onTakeOver={onTakeOver}
+			/>
 		</>
 	);
 }
