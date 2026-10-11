@@ -11,8 +11,13 @@ import {
 	ModelConfigurationErrorV1,
 	modelIdentifier,
 	modelOperationV1,
+	type StandardTemplateModelBindingV1,
+	standardTemplateDefinitionsV1,
+	standardTemplateReadinessV1,
 } from "@agent-infra/model-catalog";
 import {
+	type AgentConfigurationModelAdmissionPortV2,
+	type AgentConfigurationModelV2,
 	type AgentConfigurationRecordV2,
 	type AgentConfigurationSecretMetadataV1,
 	type AgentConfigurationSourceV1,
@@ -21,13 +26,18 @@ import {
 	captureAgentApiCreatePrincipalsV1,
 	parseAgentConfigurationChangesV1,
 } from "@agent-infra/platform-core";
+import type { z } from "zod";
 import type { IdentityContext } from "./http/identity.js";
 
 type Admissions = Pick<
 	AgentConfigurationUseCaseDependenciesV1,
 	"imageAdmission" | "modelAdmission" | "secretAdmission" | "channelAdmission"
->;
+> & { readonly keylessModelAdmission: AgentConfigurationModelAdmissionPortV2 };
 type StandardSource = Extract<AgentConfigurationSourceV1, { kind: "standard" }>;
+type Template = DeploymentAdmissionInputV1["templates"][number];
+type DeploymentTemplateProjectionV2 = z.infer<
+	typeof DeploymentConfigurationProjectionV2Schema
+>["templates"][number];
 
 export interface DeploymentAdmissionInputV1 {
 	/** The fixed repository used by this deployment's Workload policy, when applicable. */
@@ -47,7 +57,13 @@ export interface DeploymentAdmissionInputV1 {
 		| "allowedSecretKeys"
 		| "platformManagedKeys"
 		| "connectionEnabled"
-	> & { readonly imageReference: string; readonly displayName?: string })[];
+	> & {
+		readonly imageReference: string;
+		readonly displayName?: string;
+		readonly modelBinding?: StandardTemplateModelBindingV1;
+		readonly configurationRevision?: string;
+		readonly loadValidation?: (signal: AbortSignal) => Promise<unknown>;
+	})[];
 	readonly modelCatalog: {
 		readonly revision: string;
 		readonly load: (signal: AbortSignal) => Promise<unknown>;
@@ -66,6 +82,51 @@ function revision(prefix: string, value: unknown) {
 	return `${prefix}-${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
 }
 
+function snapshotTemplates(templates: readonly Template[]) {
+	return templates.map(({ loadValidation, ...registration }) => ({
+		...structuredClone(registration),
+		...(loadValidation ? { loadValidation } : {}),
+	}));
+}
+
+async function readTemplateReadiness(template: Template) {
+	if (!template.loadValidation)
+		return { state: "unverified" as const, revision: null };
+	try {
+		const signal = AbortSignal.timeout(10_000);
+		const loadValidation = template.loadValidation;
+		if (!loadValidation)
+			return { state: "unverified" as const, revision: null };
+		const validation = await modelOperationV1(signal, () =>
+			loadValidation(signal),
+		);
+		const readiness = standardTemplateReadinessV1({
+			templateId: template.templateId,
+			imageDigest: template.imageDigest,
+			binding: template.modelBinding,
+			configurationRevision: template.configurationRevision,
+			validation,
+			now: Date.now(),
+		});
+		return readiness.state === "ready"
+			? {
+					...readiness,
+					revision: revision("template", {
+						registration: {
+							templateId: template.templateId,
+							imageDigest: template.imageDigest,
+							modelBinding: template.modelBinding,
+							configurationRevision: template.configurationRevision,
+						},
+						validation: readiness.revision,
+					}),
+				}
+			: readiness;
+	} catch {
+		return { state: "unavailable" as const, revision: null };
+	}
+}
+
 /**
  * Read-only choices for the browser. This reads the same deployment inputs and
  * catalog snapshot used by admission; it never returns image, URL, or secret
@@ -75,16 +136,44 @@ export function createDeploymentConfigurationProjectionV2(input: {
 	readonly templates: DeploymentAdmissionInputV1["templates"];
 	readonly modelCatalog: DeploymentAdmissionInputV1["modelCatalog"];
 }) {
-	const templates = structuredClone(input.templates);
+	const templates = snapshotTemplates(input.templates);
 	const loadModelCatalog = input.modelCatalog.load;
-	const templateOptions = templates.map((template) => ({
-		templateId: template.templateId,
-		displayName: template.displayName ?? template.templateId,
-		connectionEnabled: template.connectionEnabled,
-		allowedEnvironmentKeys: [...template.allowedEnvironmentKeys],
-		allowedSecretKeys: [...template.allowedSecretKeys],
-	}));
 	return async () => {
+		const templateOptions: DeploymentTemplateProjectionV2[] = await Promise.all(
+			templates.map(async (template) => ({
+				templateId: template.templateId,
+				displayName:
+					template.displayName ??
+					standardTemplateDefinitionsV1.find(
+						(standard) =>
+							standard.driver === template.modelBinding?.driver ||
+							standard.templateId === template.templateId,
+					)?.displayName ??
+					template.templateId,
+				connectionEnabled: template.connectionEnabled,
+				allowedEnvironmentKeys: [...template.allowedEnvironmentKeys],
+				allowedSecretKeys: [...template.allowedSecretKeys],
+				readiness: await readTemplateReadiness(template),
+			})),
+		);
+		for (const standard of standardTemplateDefinitionsV1) {
+			if (
+				!templates.some(
+					(template) =>
+						template.modelBinding?.driver === standard.driver ||
+						template.templateId === standard.templateId,
+				)
+			) {
+				templateOptions.push({
+					templateId: standard.templateId,
+					displayName: standard.displayName,
+					connectionEnabled: false,
+					allowedEnvironmentKeys: [],
+					allowedSecretKeys: [],
+					readiness: { state: "unregistered" as const, revision: null },
+				});
+			}
+		}
 		let catalogStatus: "populated" | "empty" | "unavailable" | "stale";
 		let catalogRevision: string | null = null;
 		let endpoints: Array<{
@@ -124,7 +213,7 @@ export function createDeploymentConfigurationProjectionV2(input: {
 		const status =
 			catalogStatus === "unavailable" || catalogStatus === "stale"
 				? catalogStatus
-				: templateOptions.length > 0 || catalogStatus === "populated"
+				: templates.length > 0 || catalogStatus === "populated"
 					? "populated"
 					: "empty";
 		return DeploymentConfigurationProjectionV2Schema.parse({
@@ -183,14 +272,27 @@ export function createDeploymentAdmissionsV1(
 			typeof input.modelCatalog.load !== "function"
 		)
 			throw new Error();
-		templates = structuredClone(input.templates);
+		templates = snapshotTemplates(input.templates);
 		channels = structuredClone(input.channelPolicy);
 		if (
 			new Set(templates.map(({ templateId }) => templateId)).size !==
 			templates.length
 		)
 			throw new Error();
+		const drivers = templates.flatMap((template) =>
+			template.modelBinding ? [template.modelBinding.driver] : [],
+		);
+		if (new Set(drivers).size !== drivers.length) throw new Error();
 		for (const template of templates) {
+			const standard = standardTemplateDefinitionsV1.find(
+				(item) => item.templateId === template.templateId,
+			);
+			if (
+				standard &&
+				template.modelBinding &&
+				standard.driver !== template.modelBinding.driver
+			)
+				throw new Error();
 			if (
 				!template.templateId ||
 				!ImmutableOciDigestV1Schema.safeParse(template.imageDigest).success ||
@@ -273,7 +375,52 @@ export function createDeploymentAdmissionsV1(
 			throw new Error("PLATFORM_DEPLOYMENT_IDENTITY_UNAVAILABLE");
 		}
 	}
+	const keylessModelAdmission: AgentConfigurationModelAdmissionPortV2 = {
+		async admitModels(request) {
+			try {
+				const signal = AbortSignal.timeout(10_000);
+				const snapshot = ModelCatalogSnapshotV1Schema.parse(
+					await modelOperationV1(signal, () => loadModelCatalog(signal)),
+				);
+				if (
+					snapshot.revision !== modelCatalogRevision ||
+					snapshot.validUntil <= Date.now()
+				)
+					return null;
+				const options: AgentConfigurationModelV2["options"][number][] = [];
+				for (const option of request.requested.options) {
+					const endpoint = snapshot.endpoints.find(
+						(candidate) => candidate.endpointId === option.endpointId,
+					);
+					if (
+						!endpoint?.available ||
+						(endpoint.allowedModels !== null &&
+							!endpoint.allowedModels.includes(option.modelId)) ||
+						option.reasoningLevels.some(
+							(level) => !endpoint.capabilities.reasoningLevels.includes(level),
+						)
+					)
+						return null;
+					options.push({
+						optionId: option.optionId,
+						endpointId: option.endpointId,
+						modelId: option.modelId,
+						reasoningLevels: [...option.reasoningLevels].toSorted(),
+					});
+				}
+				return {
+					catalogRevision: snapshot.revision,
+					options,
+					defaultOptionId: request.requested.defaultOptionId,
+					defaultReasoningLevel: request.requested.defaultReasoningLevel,
+				};
+			} catch {
+				return null;
+			}
+		},
+	};
 	return {
+		keylessModelAdmission,
 		imageAdmission: {
 			async admitImage(request) {
 				const subjectRef = await resolveSubjectRef(request.traceId);
@@ -287,6 +434,15 @@ export function createDeploymentAdmissionsV1(
 						? templates.find((item) => item.templateId === selection.templateId)
 						: undefined;
 				if (selection.kind === "standard" && !template) return denied;
+				const readiness = template
+					? await readTemplateReadiness(template)
+					: undefined;
+				if (
+					selection.kind === "standard" &&
+					(readiness?.state !== "ready" ||
+						selection.templateRevision !== readiness.revision)
+				)
+					return denied;
 				const imageReference =
 					selection.kind === "custom"
 						? selection.imageReference
@@ -314,8 +470,11 @@ export function createDeploymentAdmissionsV1(
 				if (result.status !== "admitted") return denied;
 				const manifest = result.runtimeManifest;
 				if (selection.kind === "standard") {
+					if (!template) return denied;
+					const currentReadiness = await readTemplateReadiness(template);
 					if (
-						!template ||
+						currentReadiness.state !== "ready" ||
+						currentReadiness.revision !== readiness?.revision ||
 						result.immutableDigest !== template.imageDigest ||
 						manifest.interactionMode !== "platform-adapter" ||
 						(template.connectionEnabled &&
@@ -332,6 +491,7 @@ export function createDeploymentAdmissionsV1(
 							admissionRevision: revision("image", {
 								evidence: result.policyEvidence,
 								template,
+								readinessRevision: currentReadiness.revision,
 							}),
 							allowedEnvironmentKeys: [...template.allowedEnvironmentKeys],
 							allowedSecretKeys: [...template.allowedSecretKeys],

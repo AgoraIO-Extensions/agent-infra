@@ -3,6 +3,9 @@ import { useLayoutEffect, useRef } from "react";
 
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
 import {
+	loadAgentDefaultRelayKey,
+	previewAgentDefaultRelayKeyCandidates,
+	replaceAgentDefaultRelayKey,
 	updateAgentConfiguration,
 	upgradeAgentCustomImage,
 } from "./agent-configuration.js";
@@ -61,6 +64,22 @@ export function useAgentConfigurationSubmission(agentId: string) {
 			}
 		},
 	});
+	const relayKeySubmission = useMutation({
+		mutationKey: ["agents", agentId, "default-relay-key"],
+		mutationFn: async (keyValue: string) => {
+			const state = await loadAgentDefaultRelayKey(agentId);
+			return replaceAgentDefaultRelayKey(agentId, {
+				configurationRevision: state.configurationRevision,
+				expectedVersion: state.isSet ? state.keyVersion : null,
+				keyValue,
+			});
+		},
+		onSuccess: () =>
+			Promise.all([
+				queryClient.invalidateQueries({ queryKey: ["agents", agentId] }),
+				queryClient.invalidateQueries({ queryKey: ["agents"] }),
+			]),
+	});
 
 	useLayoutEffect(() => {
 		if (currentAgentId.current === agentId) return;
@@ -81,9 +100,23 @@ export function useAgentConfigurationSubmission(agentId: string) {
 
 	return {
 		...submission,
+		relayKeySubmission,
+		relayKeyError:
+			relayKeySubmission.isError && relayKeySubmission.error instanceof Error
+				? relayKeySubmission.error
+				: null,
+		relayKeySubmitting: relayKeySubmission.isPending,
 		saveConfiguration: (body: AgentConfigurationUpdateRequestV2Writable) =>
 			startSubmission({ kind: "configuration", body }),
 		upgradeImage: (imageReference: string) =>
 			startSubmission({ kind: "image", imageReference }),
+		replaceDefaultRelayKey: relayKeySubmission.mutate,
+		previewDefaultRelayKeyCandidates: async (keyValue: string) => {
+			const state = await loadAgentDefaultRelayKey(agentId);
+			return previewAgentDefaultRelayKeyCandidates(agentId, {
+				configurationRevision: state.configurationRevision,
+				keyValue,
+			});
+		},
 	};
 }

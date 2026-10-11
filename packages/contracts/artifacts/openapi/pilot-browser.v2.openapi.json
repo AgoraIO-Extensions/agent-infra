@@ -57,6 +57,11 @@
                 },
                 "type": "array"
               },
+              "defaultRelayKey": {
+                "minLength": 1,
+                "type": "string",
+                "writeOnly": true
+              },
               "description": {
                 "minLength": 1,
                 "type": "string"
@@ -724,6 +729,10 @@
                   "templateId": {
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "templateRevision": {
+                    "minLength": 1,
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -1256,6 +1265,10 @@
                     "type": "string"
                   },
                   "templateId": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "templateRevision": {
                     "minLength": 1,
                     "type": "string"
                   }
@@ -3101,6 +3114,39 @@
           "displayName": {
             "minLength": 1,
             "type": "string"
+          },
+          "readiness": {
+            "additionalProperties": false,
+            "properties": {
+              "revision": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "state": {
+                "enum": [
+                  "ready",
+                  "unregistered",
+                  "unverified",
+                  "failed",
+                  "disabled",
+                  "stale",
+                  "unavailable"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "revision"
+            ],
+            "type": "object"
           },
           "templateId": {
             "minLength": 1,

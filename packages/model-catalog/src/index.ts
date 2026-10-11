@@ -48,3 +48,5 @@ export {
 	validateRuntimeModelProjectionV4,
 	validateStandardTemplateModelBindingsV1,
 } from "./projection.js";
+export { standardTemplateDefinitionsV1 } from "./standard-templates.js";
+export { standardTemplateReadinessV1 } from "./template-readiness.js";

@@ -26,6 +26,7 @@ import {
 	conversationEventWakeChannelV1,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
+	PostgresAgentDefaultRelayKeyStoreV1,
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
 	PostgresApplicationApiCredentialIssuerStoreV1,
@@ -33,7 +34,6 @@ import {
 	PostgresApplicationMaterialGrantStoreV1,
 	PostgresApplicationRegistrationStoreV1,
 	PostgresApplicationRevisionTransactionV1,
-	PostgresAgentDefaultRelayKeyStoreV1,
 	PostgresCommitWakeupListenerV1,
 	PostgresConversationExecutionTransactionV1,
 	PostgresConversationQueryV1,
@@ -129,6 +129,9 @@ export interface PlatformApiAssemblyInput {
 		Parameters<typeof createAgentDefaultRelayKeyUseCaseV1>[0],
 		"transaction"
 	>;
+	readonly validateDefaultRelayKey?: (
+		keyValue: string,
+	) => Promise<"valid" | "invalid" | "unavailable">;
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly connectionCapability?: ConnectionCapabilityV1;
@@ -337,7 +340,9 @@ export function assemblePlatformApi(
 				})
 			: undefined;
 	const agentDefaultRelayKeyStore = input.agentDefaultRelayKeys
-		? new PostgresAgentDefaultRelayKeyStoreV1({ databaseUrl: input.databaseUrl })
+		? new PostgresAgentDefaultRelayKeyStoreV1({
+				databaseUrl: input.databaseUrl,
+			})
 		: undefined;
 	const agentDefaultRelayKeys =
 		agentDefaultRelayKeyStore && input.agentDefaultRelayKeys
@@ -698,6 +703,9 @@ export function assemblePlatformApi(
 			readAgentProjection: projections.readManagementAgentProjection,
 			personalApiAgentRead,
 			readApiAgentProjection: projections.readApiAgentProjection,
+			...(input.validateDefaultRelayKey
+				? { validateDefaultRelayKey: input.validateDefaultRelayKey }
+				: {}),
 		},
 		configuration: {
 			identity: input.identity,

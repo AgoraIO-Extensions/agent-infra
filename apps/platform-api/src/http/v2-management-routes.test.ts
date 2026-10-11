@@ -186,6 +186,7 @@ function createApp(
 		query: { listApplications, getApplication, listAgents, getAgent },
 		allocateApplicationIds,
 		prepareSecretReplacements: vi.fn().mockResolvedValue({ secrets: [] }),
+		validateDefaultRelayKey: vi.fn().mockResolvedValue("valid"),
 		readApplicationProjection,
 		readAgentProjection,
 	});
@@ -426,6 +427,7 @@ const headers = {
 
 const applicationBody = {
 	schemaVersion: 2,
+	defaultRelayKey: "agent-default-relay-key",
 	name: "Release assistant",
 	description: "Helps the release team",
 	source: { kind: "standard", templateId: "template-1" },
@@ -433,6 +435,18 @@ const applicationBody = {
 	availability: [{ kind: "organization", organizationId: "org-1" }],
 	environment: [],
 	secrets: [],
+	modelConfiguration: {
+		options: [
+			{
+				optionId: "option-a",
+				endpointId: "endpoint-a",
+				modelId: "model-a",
+				reasoningLevels: ["medium"],
+			},
+		],
+		defaultOptionId: "option-a",
+		defaultReasoningLevel: "medium",
+	},
 };
 
 describe("V2 management routes", () => {
@@ -574,12 +588,26 @@ describe("V2 management routes", () => {
 		expect(projection.configuration).not.toHaveProperty("actions");
 		expect(submit).toHaveBeenCalledWith(
 			expect.objectContaining({
-				schemaVersion: 2,
+				schemaVersion: 3,
 				applicationId: "application-1",
+				defaultRelayKey: "agent-default-relay-key",
 			}),
 			expect.objectContaining({ userId: "user-1" }),
 			undefined,
 		);
+	});
+
+	it("rejects a standard application that omits the Agent default Relay Key", async () => {
+		const { app, submit } = createApp();
+		const { defaultRelayKey: _defaultRelayKey, ...withoutKey } =
+			applicationBody;
+		const response = await app.request("/api/v2/agent-applications", {
+			method: "POST",
+			headers,
+			body: JSON.stringify(withoutKey),
+		});
+		expect(response.status).toBe(400);
+		expect(submit).not.toHaveBeenCalled();
 	});
 
 	it("runs administrator approval through the management command and rejects invalid scope", async () => {

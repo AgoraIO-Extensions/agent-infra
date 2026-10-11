@@ -15,7 +15,6 @@ export type AgentApplicationEnvironmentDraft = {
 };
 
 export type AgentApplicationModelDraft = {
-	credentialValue: string;
 	endpointId: string;
 	modelId: string;
 	optionId: string;
@@ -25,6 +24,7 @@ export type AgentApplicationModelDraft = {
 export type AgentApplicationFormDraft = {
 	coOwnerIds: string;
 	configureModels: boolean;
+	defaultRelayKey?: string;
 	defaultModelOptionId: string;
 	defaultReasoningLevel: string;
 	description: string;
@@ -38,6 +38,7 @@ export type AgentApplicationFormDraft = {
 	source?: AgentApplicationCreateRequestV2Writable["source"];
 	sourceKind: AgentApplicationSourceKind;
 	templateId: string;
+	templateRevision?: string;
 	userAvailabilityIds: string;
 };
 
@@ -73,8 +74,10 @@ export type AgentApplicationValidationContext = {
 	allowedEnvironmentKeys?: readonly string[];
 	allowedSecretKeys?: readonly string[];
 	modelConfigurationVisible: boolean;
-	persistedModelOptionIds?: readonly string[];
-	requiresReplacementCredential: boolean;
+	requiresTemplateReadiness?: boolean;
+	requiresDefaultRelayKey?: boolean;
+	/** @deprecated Kept for callers compiled against the pre-keyless draft. */
+	requiresReplacementCredential?: boolean;
 	staleModel: boolean;
 	staleModelIndexes?: readonly number[];
 	staleTemplate: boolean;
@@ -90,6 +93,8 @@ export function validateAgentApplicationDraft(
 	if (!draft.description.trim()) errors.description = "请输入用途说明。";
 	if (draft.sourceKind === "standard") {
 		if (!draft.templateId) errors.templateId = "请选择标准模板。";
+		if (context.requiresTemplateReadiness && !draft.templateRevision)
+			errors.templateId = "模板验证状态已过期，请刷新后重试。";
 		if (context.staleTemplate) errors.templateId = "该模板已移除，请重新选择。";
 		if (context.standardChoicesBlocked)
 			errors.templateId = context.configurationMessage ?? "部署选项暂不可用。";
@@ -156,6 +161,12 @@ export function validateAgentApplicationDraft(
 		draft.sourceKind === "standard" ? context.allowedSecretKeys : undefined,
 	);
 	if (context.modelConfigurationVisible) {
+		if (
+			context.requiresDefaultRelayKey &&
+			!context.standardChoicesBlocked &&
+			!draft.defaultRelayKey?.trim()
+		)
+			errors.defaultRelayKey = "请输入 Agent 默认 Relay Key。";
 		if (draft.models.length === 0)
 			errors.defaultModelOptionId = "至少添加一个模型选项。";
 		draft.models.forEach((model, index) => {
@@ -164,12 +175,6 @@ export function validateAgentApplicationDraft(
 			if (!model.modelId) errors[`model.${index}.modelId`] = "请选择模型。";
 			if (!model.reasoningLevels.trim())
 				errors[`model.${index}.reasoningLevels`] = "至少选择一个推理档位。";
-			const needsReplacementCredential =
-				context.requiresReplacementCredential ||
-				(context.persistedModelOptionIds !== undefined &&
-					!context.persistedModelOptionIds.includes(model.optionId));
-			if (needsReplacementCredential && !model.credentialValue.trim())
-				errors[`model.${index}.credentialValue`] = "请输入模型凭证。";
 			if (
 				model.modelId &&
 				(context.staleModelIndexes?.includes(index) ||
@@ -222,7 +227,13 @@ function requestBody(
 	const source: AgentApplicationCreateRequestV2Writable["source"] =
 		draft.source ??
 		(draft.sourceKind === "standard"
-			? { kind: "standard", templateId: draft.templateId.trim() }
+			? {
+					kind: "standard",
+					templateId: draft.templateId.trim(),
+					...(draft.templateRevision
+						? { templateRevision: draft.templateRevision }
+						: {}),
+				}
 			: draft.sourceKind === "custom-platform-adapter"
 				? {
 						kind: "custom",
@@ -246,9 +257,6 @@ function requestBody(
 					endpointId: model.endpointId.trim(),
 					modelId: model.modelId.trim(),
 					reasoningLevels: splitValues(model.reasoningLevels),
-					...(model.credentialValue.length > 0
-						? { credentialValue: model.credentialValue }
-						: {}),
 				})),
 				defaultOptionId: draft.defaultModelOptionId.trim(),
 				defaultReasoningLevel: draft.defaultReasoningLevel.trim(),
@@ -277,6 +285,9 @@ function requestBody(
 			name: value.name.trim(),
 			value: value.value,
 		})),
+		...(mode === "create" && draft.defaultRelayKey?.trim()
+			? { defaultRelayKey: draft.defaultRelayKey.trim() }
+			: {}),
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 	};
 }
