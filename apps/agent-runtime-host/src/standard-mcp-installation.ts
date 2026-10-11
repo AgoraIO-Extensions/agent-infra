@@ -74,6 +74,7 @@ const rotationJournalName = "oauth-rotation.json";
 
 type RotationJournal = {
 	schemaVersion: 1;
+	operation: "forward" | "rollback";
 	entries: {
 		name: string;
 		expected: string;
@@ -85,6 +86,7 @@ function parseRotationJournal(value: unknown): RotationJournal {
 	if (
 		!isRecord(value) ||
 		value.schemaVersion !== 1 ||
+		(value.operation !== "forward" && value.operation !== "rollback") ||
 		!Array.isArray(value.entries)
 	)
 		unavailable();
@@ -110,12 +112,13 @@ function parseRotationJournal(value: unknown): RotationJournal {
 	if (entries.length < 1 || entries.length > 2) unavailable();
 	if (new Set(entries.map((entry) => entry.name)).size !== entries.length)
 		unavailable();
-	return { schemaVersion: 1, entries };
+	return { schemaVersion: 1, operation: value.operation, entries };
 }
 
 async function writeRotationJournal(
 	path: string,
 	entries: RotationJournal["entries"],
+	operation: RotationJournal["operation"],
 ) {
 	const directory = await openProtectedStandardMcpDirectory(path);
 	const temporary = `.stage-rotation-${randomUUID()}`;
@@ -130,7 +133,7 @@ async function writeRotationJournal(
 		);
 		try {
 			await file.writeFile(
-				JSON.stringify({ schemaVersion: 1, entries }),
+				JSON.stringify({ schemaVersion: 1, operation, entries }),
 				"utf8",
 			);
 			await file.sync();
@@ -236,6 +239,7 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 			}
+			const currentValues = new Map<string, string | undefined>();
 			for (const entry of journal.entries) {
 				let current: string | undefined;
 				try {
@@ -243,12 +247,19 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 				} catch (error) {
 					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 				}
-				if (committed) {
-					if (current !== entry.next) unavailable();
-					continue;
-				}
-				if (current === entry.expected) continue;
-				if (current !== undefined && current !== entry.next) unavailable();
+				currentValues.set(entry.name, current);
+			}
+			const target =
+				journal.operation === "rollback"
+					? "next"
+					: committed
+						? "next"
+						: "expected";
+			for (const entry of journal.entries) {
+				const current = currentValues.get(entry.name);
+				const targetValue = entry[target];
+				if (current === targetValue) continue;
+				if (current !== entry.expected && current !== entry.next) unavailable();
 				const temporary = `.stage-recovery-${randomUUID()}`;
 				const file = await open(
 					protectedStandardMcpPath(directory, path, temporary),
@@ -259,7 +270,7 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 					0o400,
 				);
 				try {
-					await file.writeFile(entry.expected, "utf8");
+					await file.writeFile(targetValue, "utf8");
 					await file.sync();
 				} finally {
 					await file.close();
@@ -328,12 +339,14 @@ export async function replaceProtectedStandardMcpMaterials(
 		next: string;
 	}[],
 	guard?: () => void,
+	operation: RotationJournal["operation"] = "forward",
 ) {
 	return withProtectedStandardMcpMaterialLock(path, async () => {
 		assertStandardMcpProcessProtection();
 		await writeRotationJournal(
 			path,
 			replacements.map((replacement) => ({ ...replacement })),
+			operation,
 		);
 		const directory = await openProtectedStandardMcpDirectory(path, guard);
 		try {

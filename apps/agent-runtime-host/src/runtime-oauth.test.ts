@@ -815,8 +815,8 @@ it("recovers a durable rotation journal before using protected material", async 
 	const accessName = names.find((name) => name.endsWith(".access")) as string;
 	const refreshName = names.find((name) => name.endsWith(".refresh")) as string;
 	const accessPath = join(f.root, "materials", accessName);
-	const recordName = (await readdir(join(f.root, "records"))).find((name) =>
-		name.endsWith(".json") && !name.startsWith("current-"),
+	const recordName = (await readdir(join(f.root, "records"))).find(
+		(name) => name.endsWith(".json") && !name.startsWith("current-"),
 	) as string;
 	const recordPath = join(f.root, "records", recordName);
 	const record = JSON.parse(await readFile(recordPath, "utf8")) as Record<
@@ -835,6 +835,7 @@ it("recovers a durable rotation journal before using protected material", async 
 		join(f.root, "materials", "oauth-rotation.json"),
 		JSON.stringify({
 			schemaVersion: 1,
+			operation: "forward",
 			entries: [
 				{ name: accessName, expected: access, next: refreshedAccess },
 				{ name: refreshName, expected: refresh, next: refreshedRefresh },

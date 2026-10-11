@@ -577,6 +577,8 @@ export async function createProtectedRuntimeOAuthClient(options: {
 						expected: replacement.next,
 						next: replacement.expected,
 					})),
+					undefined,
+					"rollback",
 				).catch(() => undefined);
 			}
 			record.phase = "unknown";
