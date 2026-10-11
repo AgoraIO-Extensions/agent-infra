@@ -1581,6 +1581,87 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the exact administrator user governance addition", async () => {
+		const artifact = fileURLToPath(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+		);
+		const current = JSON.parse(await readFile(artifact, "utf8"));
+		const previous = structuredClone(current);
+		const governancePath = "/api/v2/admin/users/{userId}/disable";
+		const governanceSchemas = [
+			"PlatformUserDisableCommandV1",
+			"PlatformUserDisableStatusV1",
+			"PlatformUserDisableResultV1",
+		];
+		delete previous.paths[governancePath];
+		for (const schema of governanceSchemas)
+			delete previous.components.schemas[schema];
+		for (const name of [
+			"PlatformAuditProjectionV1",
+			"PlatformAuditProjectionV2",
+		]) {
+			const subjectType =
+				previous.components.schemas[name]?.properties?.subjectType?.enum;
+			if (Array.isArray(subjectType))
+				previous.components.schemas[name].properties.subjectType.enum =
+					subjectType.filter((kind) => kind !== "user");
+		}
+		const actions =
+			previous.components.schemas.ScopedPlatformAuditActionV1?.enum;
+		if (Array.isArray(actions))
+			previous.components.schemas.ScopedPlatformAuditActionV1.enum =
+				actions.filter(
+					(action) =>
+						!["platform.user.disabled", "platform.user.reenabled"].includes(
+							action,
+						),
+				);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-governance-compat-"),
+		);
+		const baseline = resolve(directory, "previous.json");
+		const candidate = resolve(directory, "candidate.json");
+		try {
+			await writeFile(baseline, JSON.stringify(previous));
+			expect(comparePaths(artifact, baseline).status).toBe(0);
+			const mutations: Record<string, (value: typeof current) => void> = {
+				removedPut: (value) => {
+					delete value.paths[governancePath].put;
+				},
+				changedRequest: (value) => {
+					value.components.schemas.PlatformUserDisableCommandV1.properties.disabled =
+						{
+							type: "string",
+						};
+				},
+				removedResult: (value) => {
+					delete value.components.schemas.PlatformUserDisableResultV1;
+				},
+				changedDescription: (value) => {
+					value.paths[governancePath].get.responses["200"].description =
+						"changed";
+				},
+			};
+			for (const [name, mutate] of Object.entries(mutations)) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(candidate, JSON.stringify(changed));
+				expect(comparePaths(candidate, baseline).status, name).toBe(1);
+			}
+			const existing = structuredClone(current);
+			const changedExisting = structuredClone(current);
+			delete changedExisting.paths[governancePath].put;
+			const existingPath = resolve(directory, "existing.json");
+			await writeFile(existingPath, JSON.stringify(existing));
+			await writeFile(candidate, JSON.stringify(changedExisting));
+			expect(comparePaths(candidate, existingPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the pinned personal credential contract and rejects security/material regressions", async () => {
 		const artifact = fileURLToPath(
 			new URL(

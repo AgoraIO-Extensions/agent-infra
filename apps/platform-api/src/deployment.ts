@@ -6,6 +6,7 @@ import {
 	captureAgentApiCreatePrincipalsV1,
 	PersonalRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
+import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
 import {
 	createRelayKeyEncryptorV1,
 	createSecretEncryptorV1,
@@ -77,6 +78,7 @@ export interface ProductionPlatformApiInputV1
 	readonly imageRepository: string;
 	/** An actual deployment identity boundary; no browser-provided identity headers. */
 	readonly identity: IdentityAdapter;
+	readonly userGovernance?: PostgresPlatformUserDisablesV1;
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
@@ -221,6 +223,19 @@ export function createProductionPlatformApiAssemblyInputV1(
 					},
 				}
 			: undefined;
+	const userGovernance =
+		input.userGovernance ??
+		new PostgresPlatformUserDisablesV1(input.databaseUrl, async (userId) => {
+			if (!input.identity.resolveMaterialGrantActor) throw new Error();
+			const actor = await input.identity.resolveMaterialGrantActor(userId);
+			return actor
+				? {
+						userId: actor.userId,
+						accountStatus: actor.accountStatus,
+						isSystemAdmin: actor.isSystemAdmin,
+					}
+				: null;
+		});
 	return {
 		...(input.connectionInstallation
 			? {
@@ -267,6 +282,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 			: {}),
 		...(input.files ? { files: input.files } : {}),
 		databaseUrl: input.databaseUrl,
+		userGovernance,
 		taskAdmissionPolicy: input.taskAdmissionPolicy,
 		identity: input.identity,
 		requestScope: identityScope.requestScope,

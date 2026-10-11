@@ -38,6 +38,7 @@ import {
 	PostgresPersonalApiCredentialStoreV1,
 	PostgresPersonalRelayKeyStoreV1,
 	PostgresPlatformAuditQueryV1,
+	type PostgresPlatformUserDisablesV1,
 	PostgresScopedPlatformAuditQueryV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
@@ -117,6 +118,7 @@ export interface PlatformApiAssemblyInput {
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
+	readonly userGovernance?: PostgresPlatformUserDisablesV1;
 	readonly personalRelayKeys?: Pick<
 		Parameters<typeof createPersonalRelayKeyUseCaseV1>[0],
 		"currentIdentity" | "validate" | "encrypt"
@@ -734,6 +736,14 @@ export function assemblePlatformApi(
 		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },
 		skillHubRead: skillHubRead.dependencies,
 		...(input.directory ? { directory: input.directory } : {}),
+		...(input.userGovernance
+			? {
+					userGovernance: {
+						identity: input.identity,
+						users: input.userGovernance,
+					},
+				}
+			: {}),
 	};
 	const adapters = [
 		...(wecomReceipts ? [wecomReceipts] : []),
@@ -759,6 +769,7 @@ export function assemblePlatformApi(
 		applicationApiCredentialStore,
 		...(installationStore ? [installationStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
+		...(input.userGovernance ? [input.userGovernance] : []),
 	];
 	return {
 		dependencies,

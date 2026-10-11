@@ -81,6 +81,10 @@ import {
 	registerTaskRoutes,
 	type TaskRoutesDependencies,
 } from "./http/task-routes.js";
+import {
+	registerUserGovernanceRoutes,
+	type UserGovernanceRoutesDependencies,
+} from "./http/user-governance-routes.js";
 import { registerV2ConfigurationRoutes } from "./http/v2-configuration-routes.js";
 import {
 	type ManagementRouteDependencies,
@@ -139,6 +143,7 @@ export interface PlatformAppDependencies {
 	readonly scopedAudit?: ScopedAuditRoutesDependencies;
 	readonly directory?: DirectoryRouteDependencies;
 	readonly skillHubRead?: SkillHubReadRoutesDependenciesV1;
+	readonly userGovernance?: UserGovernanceRoutesDependencies;
 }
 
 export function createPlatformHealthApp(observability?: ApiObservability) {
@@ -196,6 +201,8 @@ export function createPlatformApp(
 	else if (dependencies.wecomReceipts)
 		registerWecomReceiptRoutesV1(app, dependencies.wecomReceipts);
 	registerRetiredManagementRoutes(app);
+	if (dependencies.userGovernance)
+		registerUserGovernanceRoutes(app, dependencies.userGovernance);
 	if (dependencies.connectionInstallations)
 		registerConnectionInstallationRoutesV1(
 			app,
