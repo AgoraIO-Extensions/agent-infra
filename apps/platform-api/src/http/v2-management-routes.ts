@@ -556,6 +556,9 @@ export function registerV2ManagementRoutes(
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,
 					...applicationCommandFields(body, prepared, metadata.traceId),
+					...(schemaVersion === 3
+						? { defaultRelayKey: body.defaultRelayKey as string }
+						: {}),
 					secrets: prepared.secrets,
 					channels: [],
 				},
