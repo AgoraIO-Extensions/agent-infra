@@ -1411,11 +1411,18 @@ describe("production API creation with user and application Tokens", () => {
 				...fixture.input,
 				agentApiCreation: {
 					...configured,
-					...(failure === "missing-model"
-						? { keylessModelAdmission: undefined }
-						: {}),
 					...(failure === "missing-key" ? { candidates: undefined } : {}),
 				},
+				...(failure === "missing-model"
+					? {
+							modelCatalog: {
+								...fixture.input.modelCatalog,
+								load: async () => {
+									throw new Error("controlled model provider failure");
+								},
+							},
+						}
+					: {}),
 			};
 			if (failure === "rejected-key") candidates.mockResolvedValue([]);
 			if (failure === "failed-key")
