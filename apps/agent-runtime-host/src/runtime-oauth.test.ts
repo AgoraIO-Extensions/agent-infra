@@ -155,6 +155,19 @@ async function fixture() {
 				res.end();
 				return;
 			}
+			if (behavior === "replace-during-revoke") {
+				const accessName = (await readdir(join(root, "materials"))).find(
+					(name) => name.endsWith(".access"),
+				);
+				if (accessName) {
+					await chmod(join(root, "materials", accessName), 0o600);
+					await writeFile(
+						join(root, "materials", accessName),
+						"replacement-access-material",
+					);
+					await chmod(join(root, "materials", accessName), 0o400);
+				}
+			}
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(
 				JSON.stringify({
@@ -695,6 +708,23 @@ it("retains protected material when remote revocation is unknown", async () => {
 			/\.(access|refresh)$/.test(name),
 		),
 	).toHaveLength(2);
+});
+
+it("does not delete a replacement token after revoking the original bytes", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("replace-during-revoke");
+	await expect(f.assembly.client.revoke()).rejects.toThrow();
+	const accessName = (await readdir(join(f.root, "materials"))).find((name) =>
+		name.endsWith(".access"),
+	);
+	expect(accessName).toBeDefined();
+	expect(
+		await readFile(join(f.root, "materials", accessName as string), "utf8"),
+	).toBe("replacement-access-material");
 });
 
 it("recovers begin after the verifier was published before the transaction record", async () => {
