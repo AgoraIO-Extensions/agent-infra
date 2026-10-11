@@ -108,6 +108,8 @@ test("CI label transitions cancel older PR runs and retain checks on lookup fail
   assert.equal(workflow.jobs.ci.name, "CI");
   assert.deepEqual(workflow.jobs.ci.needs,
     ["ci-exemption", "changes", "web-tests", "backend-tests", "ci_heavy"]);
+	assert.equal(workflow.jobs.ci.steps.find((value) => value.name === "Require CI lanes").if,
+		"${{ needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success')) }}");
   assert.equal(workflow.jobs.ci.if,
     "${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}");
   assert.equal(workflow.jobs["ci_heavy"].name, "CI heavy validation");

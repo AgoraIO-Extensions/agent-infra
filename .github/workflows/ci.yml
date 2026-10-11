@@ -801,7 +801,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Require CI lanes
-        if: ${{ needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && (needs.web-tests.result != 'success' || needs.backend-tests.result != 'success')) }}
+        if: ${{ needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && ((needs.changes.outputs.web == 'true' && needs.web-tests.result != 'success') || needs.backend-tests.result != 'success')) }}
         run: |
           echo "Required CI lane failed or was unavailable."
           echo "ci-exemption=${{ needs.ci-exemption.result }}"
