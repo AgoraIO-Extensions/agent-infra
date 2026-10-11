@@ -24,6 +24,7 @@ import {
 	verifyRuntimeV2Fixture,
 } from "./grant-v2-fixture.test-support.js";
 import { createRuntimeExecutionGrantValidatorV4 } from "./grant-v4.js";
+import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
 import { RuntimeHost } from "./runtime-host.js";
 
 // These exercise the real Host/Store and signature validators with a controlled
@@ -150,7 +151,7 @@ function delivery<T extends RuntimeBusinessRequestV4>(request: T) {
 	};
 }
 
-async function setup() {
+async function setup(fileBridge?: RuntimeFileBridgePortV1) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-consumer-"));
 	cleanups.push(() => rm(directory, { recursive: true, force: true }));
 	const path = join(directory, "host.json");
@@ -173,6 +174,7 @@ async function setup() {
 			expectedWorkerId: "worker-fixture",
 			now: () => clock,
 		}),
+		...(fileBridge ? { fileBridge: () => fileBridge } : {}),
 	};
 	let host = await RuntimeHost.open(options);
 	cleanups.push(() => host.close());
@@ -306,6 +308,78 @@ it("binds the first durable native receipt and returns the original Key before s
 	expect(await f.driver.sideEffectCount()).toBe(1);
 	expect(await readFile(f.path, "utf8")).not.toContain(
 		"synthetic-pinned-key-k1",
+	);
+});
+
+it("passes the request-scoped file bridge only through the Driver execution context", async () => {
+	const fileBridge = {
+		readInput: vi.fn(),
+		writeResult: vi.fn(),
+	} as unknown as RuntimeFileBridgePortV1;
+	const f = await setup(fileBridge);
+	const execute = f.driver.execute.bind(f.driver);
+	const contexts: unknown[] = [];
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command, context) => {
+		contexts.push(context);
+		return execute(command, context);
+	});
+	await f.host.submitTurnV4(f.transport);
+	expect(contexts[0]).toEqual({ fileBridge });
+	expect(JSON.stringify(await readFile(f.path, "utf8"))).not.toContain(
+		"fileBridge",
+	);
+});
+
+it("records result metadata only after the bridge confirms the write", async () => {
+	const fileBridge = {
+		readInput: vi.fn(),
+		writeResult: vi.fn().mockResolvedValue({
+			schemaVersion: 1,
+			fileId: "result-1",
+			kind: "result",
+			descriptor: {
+				name: "answer.txt",
+				mediaType: "text/plain",
+				sizeBytes: 0,
+				sha256: "a".repeat(64),
+			},
+			status: "available",
+			createdAt: "2026-08-28T10:00:00Z",
+			expiresAt: "2026-08-28T11:00:00Z",
+		}),
+	} as unknown as RuntimeFileBridgePortV1;
+	const f = await setup(fileBridge);
+	const recordResultFile = vi.fn().mockResolvedValue(undefined);
+	(
+		f.driver as FakeRuntimeDriver & {
+			recordResultFile: typeof recordResultFile;
+		}
+	).recordResultFile = recordResultFile;
+	const execute = f.driver.execute.bind(f.driver);
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command, context) => {
+		if (context?.fileBridge) {
+			await context.fileBridge.writeResult(
+				{
+					name: "answer.txt",
+					mediaType: "text/plain",
+					sizeBytes: 0,
+					sha256: "a".repeat(64),
+				},
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.close();
+					},
+				}),
+			);
+		}
+		return execute(command, context);
+	});
+	await f.host.submitTurnV4(f.transport);
+	expect(fileBridge.writeResult).toHaveBeenCalledTimes(1);
+	expect(recordResultFile).toHaveBeenCalledTimes(1);
+	expect(recordResultFile).toHaveBeenCalledWith(
+		expect.objectContaining({ executionId: "execution-1" }),
+		expect.objectContaining({ fileId: "result-1", status: "available" }),
 	);
 });
 

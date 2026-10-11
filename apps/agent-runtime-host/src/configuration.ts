@@ -25,6 +25,15 @@ export function readWorkloadReadinessBindingV1(environment: NodeJS.ProcessEnv) {
 
 export const CODEX_PILOT_CONFIGURATION_VERSION = 2;
 
+export function readRuntimeFileExchangeOptions(environment: NodeJS.ProcessEnv) {
+	const origin = environment.AGENT_INFRA_RUNTIME_FILE_EXCHANGE_ORIGIN;
+	const serviceToken =
+		environment.AGENT_INFRA_RUNTIME_FILE_EXCHANGE_SERVICE_TOKEN;
+	if (origin === undefined && serviceToken === undefined) return undefined;
+	if (!origin || !serviceToken) runtimeConfigurationInvalid();
+	return { origin, serviceToken };
+}
+
 export function readRuntimeModelConfigurationV3(
 	environment: NodeJS.ProcessEnv,
 	driver: "codex" | "claude" | "acp" | "pi",

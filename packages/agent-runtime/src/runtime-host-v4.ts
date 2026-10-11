@@ -13,13 +13,14 @@ import {
 	validateRuntimePinnedExecutionKeyScopeV4,
 	validateRuntimePrivateRelayKeyFieldV1,
 } from "@agent-infra/contracts/runtime";
-
+import type { RuntimeDriverExecutionContextV1 } from "./driver.js";
 import {
 	type FileRuntimeStore,
 	requestDigest,
 	type StoredOperation,
 } from "./file-runtime-store.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
 
 type AcceptedV4 = {
 	readonly request: RuntimeBusinessRequestV4;
@@ -34,7 +35,12 @@ interface Options {
 		hostSessionRef: string,
 		operation: StoredOperation,
 		allowBusinessExecution?: boolean,
+		context?: RuntimeDriverExecutionContextV1,
 	) => Promise<{ readonly result: unknown }>;
+	readonly createFileBridge?: (
+		request: RuntimeBusinessRequestV4,
+		claims: RuntimeBusinessGrantClaimsV4,
+	) => Promise<RuntimeFileBridgePortV1>;
 	readonly serialize: <T>(key: string, work: () => Promise<T>) => Promise<T>;
 	readonly installKey: (
 		scope: RuntimePinnedExecutionKeyScopeV4,
@@ -193,9 +199,14 @@ export class RuntimeHostV4 {
 					privateField.keyDelivery.relayKey,
 				);
 				this.options.assertOpen();
+				const fileBridge = this.options.createFileBridge
+					? await this.options.createFileBridge(request, claims)
+					: undefined;
 				const dispatched = await this.options.dispatch(
 					prepared.session.hostSessionRef,
 					prepared.operation,
+					true,
+					fileBridge ? { fileBridge } : undefined,
 				);
 				const result = RuntimeOperationResponseV4Schema.parse({
 					schemaVersion: 4,

@@ -30,6 +30,7 @@ import { createRuntimeHostApp, runtimeHostService } from "./app.js";
 import {
 	readCodexInstalledSkillDeployment,
 	readCodexPilotConfiguration,
+	readRuntimeFileExchangeOptions,
 	readRuntimeModelConfigurationV3,
 	readWorkloadReadinessBindingV1,
 	runtimeConfigurationInvalid,
@@ -51,6 +52,7 @@ import {
 	readRuntimeLegacyJournal,
 } from "./legacy-migration-journal.js";
 import { assertRuntimeProcessProtection } from "./process-protection.js";
+import { createRuntimeFileBridgeFactoryV1 } from "./runtime-file-exchange.js";
 import {
 	createRuntimeOAuthApp,
 	prepareRuntimeOAuth,
@@ -228,6 +230,7 @@ export async function assembleRuntimeHost(
 		runtimeConfigurationInvalid();
 	const keyId = required("AGENT_INFRA_RUNTIME_GRANT_KEY_ID");
 	const serviceToken = required("AGENT_INFRA_RUNTIME_SERVICE_TOKEN");
+	const fileExchangeOptions = readRuntimeFileExchangeOptions(environment);
 	const expectedIssuer = required("AGENT_INFRA_RUNTIME_GRANT_ISSUER");
 	let publicKey: KeyObject;
 	try {
@@ -453,6 +456,11 @@ export async function assembleRuntimeHost(
 			store,
 			driver,
 			grantValidation: { expectedIssuer },
+			...(fileExchangeOptions
+				? {
+						fileBridge: createRuntimeFileBridgeFactoryV1(fileExchangeOptions),
+					}
+				: {}),
 			...(runtimeWorkerId
 				? {
 						grantValidationV2: {
