@@ -457,12 +457,21 @@ export function createWorkloadRuntimeV1(
 			if (!isDeepStrictEqual(modelProjection.standardTemplateBinding, binding))
 				throw new ModelConfigurationErrorV1();
 		}
+		const standardTemplateBinding =
+			state?.candidate.configuration.source.kind === "standard" &&
+			purpose === "authorize"
+				? standardTemplateModelBindingV1(
+						state.candidate.configuration.source,
+						templateModelBindings,
+					)
+				: undefined;
 		return createKubernetesRuntimeAdapterV1({
 			connectionConsumerControl:
 				purpose === "cleanup" || connectionConsumerControl,
 			client: options.client,
 			policy: options.policy,
 			modelProjection,
+			standardTemplateBinding,
 			async probe({ desired, serviceOrigin }) {
 				const baseUrl = serviceOrigin;
 				const healthFetch =
