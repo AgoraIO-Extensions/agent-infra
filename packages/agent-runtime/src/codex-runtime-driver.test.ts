@@ -2617,6 +2617,146 @@ describe("Codex Runtime Driver", () => {
 		);
 	});
 
+	it("maps an authorized image attachment to local_image and removes its temporary file", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+		const readInput = vi.fn(async (fileId: string) => ({
+			fileId,
+			descriptor: {
+				name: "screen.png",
+				mediaType: "image/png",
+				sizeBytes: bytes.byteLength,
+				sha256: "a".repeat(64),
+			},
+			body: new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(bytes);
+					controller.close();
+				},
+			}),
+		}));
+		const fileBridge = {
+			readInput,
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+		};
+
+		const result = await driver.execute(
+			submitCommand({
+				input: { text: "describe this image", attachments: ["file-1"] },
+			}),
+			{ fileBridge },
+		);
+		const start = bridge.requests.find(({ method }) => method === "turn/start");
+		const input = (start?.params as { input?: unknown[] } | undefined)?.input;
+		expect(input).toHaveLength(2);
+		expect(input?.[0]).toEqual({ type: "text", text: "describe this image" });
+		expect(input?.[1]).toMatchObject({
+			type: "local_image",
+			path: expect.any(String),
+		});
+		expect(readInput).toHaveBeenCalledWith("file-1");
+		const localImage = input?.[1];
+		if (
+			!localImage ||
+			typeof localImage !== "object" ||
+			!("path" in localImage)
+		)
+			throw new Error("missing local image path");
+		const temporaryPath = String(localImage.path);
+		await expect(readFile(temporaryPath)).rejects.toThrow();
+		expect(result.result).toMatchObject({ outcome: "accepted" });
+	});
+
+	it("keeps Codex attachment capability fail-closed without a bridge", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(join(directory, "driver.json"), bridge);
+		drivers.push(driver);
+		await expect(
+			driver.execute(
+				submitCommand({
+					input: { text: "no bridge", attachments: ["file-1"] },
+				}),
+			),
+		).rejects.toThrow();
+		expect(await driver.getCapabilities()).toMatchObject({
+			attachments: false,
+			resultFiles: false,
+		});
+		expect(bridge.requests.some(({ method }) => method === "turn/start")).toBe(
+			false,
+		);
+	});
+
+	it("journals an available result projection once and replays it after restart", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const projection = {
+			schemaVersion: 1 as const,
+			fileId: "result-file-codex",
+			kind: "result" as const,
+			descriptor: {
+				name: "answer.txt",
+				mediaType: "text/plain",
+				sizeBytes: 7,
+				sha256: "b".repeat(64),
+			},
+			status: "available" as const,
+			createdAt: new Date().toISOString(),
+			expiresAt: new Date(Date.now() + 60_000).toISOString(),
+		};
+		await driver.recordResultFile(command, projection);
+		await driver.recordResultFile(command, projection);
+		const events = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(events.filter((event) => event.type === "file")).toEqual([
+			expect.objectContaining({
+				executionId: command.executionId,
+				type: "file",
+				payload: {
+					fileId: projection.fileId,
+					name: projection.descriptor.name,
+					mimeType: projection.descriptor.mediaType,
+					sizeBytes: projection.descriptor.sizeBytes,
+				},
+			}),
+		]);
+		await driver.close();
+		const recovered = await openDriver(path, new TestCodexBridge());
+		drivers.push(recovered);
+		await expect(
+			recovered.replayEvents(accepted.nativeSessionRef, command.executionId),
+		).resolves.toEqual(events);
+		await expect(
+			recovered.recordResultFile(command, {
+				...projection,
+				descriptor: { ...projection.descriptor, name: "forged.txt" },
+			}),
+		).rejects.toThrow();
+		await expect(
+			recovered.recordResultFile(
+				{
+					...command,
+					executionId: "foreign-execution",
+					operationId: command.operationId,
+				},
+				projection,
+			),
+		).rejects.toThrow();
+	});
+
 	it("rejects an unsupported V2 selection before starting a native Turn", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();

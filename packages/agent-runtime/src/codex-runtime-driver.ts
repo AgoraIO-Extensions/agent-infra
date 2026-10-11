@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { lstat, mkdtemp, readFile, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import type {
 	RuntimeCapabilitiesV1,
 	RuntimeConnectionAssociationV1,
@@ -91,6 +93,7 @@ import {
 import type {
 	RuntimeDriver,
 	RuntimeDriverCommand,
+	RuntimeDriverExecutionContextV1,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
@@ -108,6 +111,10 @@ import {
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+import type {
+	RuntimeFileBridgePortV1,
+	RuntimeFileResultV1,
+} from "./runtime-file-bridge.js";
 
 interface CodexAppServerTransport {
 	[codexSkillLaunch]?: CodexSkillLaunchProvenance;
@@ -393,6 +400,19 @@ interface CodexJournalTextEvent {
 	payload: { delta: string };
 }
 
+interface CodexJournalFileEvent {
+	cursor: string;
+	adapterEventKey: string;
+	occurredAt: string;
+	type: "file";
+	payload: {
+		fileId: string;
+		name: string;
+		mimeType: string;
+		sizeBytes: number;
+	};
+}
+
 interface CodexJournalCompletedEvent {
 	cursor: string;
 	adapterEventKey: string;
@@ -412,6 +432,7 @@ interface CodexJournalOperationEvent {
 type CodexJournalEvent =
 	| CodexJournalStatusEvent
 	| CodexJournalTextEvent
+	| CodexJournalFileEvent
 	| CodexJournalOperationEvent
 	| CodexJournalCompletedEvent;
 
@@ -690,6 +711,15 @@ type CodexSubmitTurnCommand = Extract<
 	{ kind: "submit-turn" }
 >;
 
+type CodexNativeInputItem =
+	| { readonly type: "text"; readonly text: string }
+	| { readonly type: "local_image"; readonly path: string };
+
+interface MaterializedCodexInput {
+	readonly items: readonly CodexNativeInputItem[];
+	readonly cleanup: () => Promise<void>;
+}
+
 function operationKey(
 	command: Pick<
 		RuntimeDriverCommand,
@@ -869,6 +899,30 @@ function isCodexJournalEvent(value: unknown): value is CodexJournalEvent {
 			"type",
 			"payload",
 		])
+	) {
+		return true;
+	}
+	if (
+		isPlainRecord(value) &&
+		hasOnlyKeys(value, [
+			"cursor",
+			"adapterEventKey",
+			"occurredAt",
+			"type",
+			"payload",
+		]) &&
+		nonEmptyString(value.cursor) &&
+		nonEmptyString(value.adapterEventKey) &&
+		nonEmptyString(value.occurredAt) &&
+		value.type === "file" &&
+		isPlainRecord(value.payload) &&
+		hasOnlyKeys(value.payload, ["fileId", "name", "mimeType", "sizeBytes"]) &&
+		nonEmptyString(value.payload.fileId) &&
+		nonEmptyString(value.payload.name) &&
+		nonEmptyString(value.payload.mimeType) &&
+		typeof value.payload.sizeBytes === "number" &&
+		Number.isSafeInteger(value.payload.sizeBytes) &&
+		value.payload.sizeBytes >= 0
 	) {
 		return true;
 	}
@@ -4514,13 +4568,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 	}
 
-	async execute(command: RuntimeDriverCommand) {
+	async execute(
+		command: RuntimeDriverCommand,
+		context?: RuntimeDriverExecutionContextV1,
+	) {
 		const key = operationKey(command);
 		const inFlight = this.inFlightOperations.get(key);
 		if (inFlight) return inFlight;
 		const execution =
 			command.kind === "submit-turn"
-				? this.executeSubmitTurn(command)
+				? this.executeSubmitTurn(command, context?.fileBridge)
 				: isCodexInterruptionCommand(command)
 					? this.executeInterruption(command)
 					: Promise.reject(unavailableError());
@@ -4988,11 +5045,96 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			runtimeAuthorizationDenied();
 	}
 
-	private async executeSubmitTurn(command: CodexSubmitTurnCommand) {
-		if (command.input.attachments.length > 0) unavailable();
+	private async executeSubmitTurn(
+		command: CodexSubmitTurnCommand,
+		fileBridge?: RuntimeFileBridgePortV1,
+	) {
 		if (command.operationId !== command.executionId) stateInvalid();
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
+		let materialized: MaterializedCodexInput | undefined;
+		const ensureInput = async () => {
+			materialized ??= await this.materializeCodexInput(
+				command,
+				text,
+				fileBridge,
+			);
+			return materialized;
+		};
+		if (command.input.attachments.length > 0 && !this.operationRecord(command))
+			await ensureInput();
+		try {
+			return await this.executePreparedSubmitTurn(command, text, ensureInput);
+		} finally {
+			await materialized?.cleanup();
+		}
+	}
+
+	private async materializeCodexInput(
+		command: CodexSubmitTurnCommand,
+		text: string,
+		fileBridge?: RuntimeFileBridgePortV1,
+	): Promise<MaterializedCodexInput> {
+		if (!fileBridge) unavailable();
+		const directory = await mkdtemp(join(tmpdir(), "agent-infra-codex-input-"));
+		try {
+			const items: CodexNativeInputItem[] = [{ type: "text", text }];
+			for (const [index, fileId] of command.input.attachments.entries()) {
+				const input = await fileBridge.readInput(fileId);
+				if (
+					input.fileId !== fileId ||
+					!input.descriptor.mediaType.startsWith("image/") ||
+					input.descriptor.sizeBytes > 50 * 1024 * 1024
+				) {
+					await input.body.cancel().catch(() => undefined);
+					unavailable();
+				}
+				const reader = input.body.getReader();
+				const chunks: Uint8Array[] = [];
+				let size = 0;
+				let complete = false;
+				try {
+					while (true) {
+						const next = await reader.read();
+						if (next.done) break;
+						if (!(next.value instanceof Uint8Array)) unavailable();
+						size += next.value.byteLength;
+						if (size > 50 * 1024 * 1024) unavailable();
+						chunks.push(next.value);
+					}
+					complete = true;
+				} finally {
+					if (!complete) await reader.cancel().catch(() => undefined);
+					reader.releaseLock();
+				}
+				if (size !== input.descriptor.sizeBytes) unavailable();
+				const path = join(directory, `${String(index).padStart(2, "0")}.image`);
+				await writeFile(path, Buffer.concat(chunks), {
+					flag: "wx",
+					mode: 0o600,
+				});
+				items.push({ type: "local_image", path });
+			}
+			let cleaned = false;
+			return {
+				items,
+				async cleanup() {
+					if (cleaned) return;
+					cleaned = true;
+					await rm(directory, { recursive: true, force: true });
+				},
+			};
+		} catch (error) {
+			await rm(directory, { recursive: true, force: true });
+			throw error;
+		}
+	}
+
+	private async executePreparedSubmitTurn(
+		command: CodexSubmitTurnCommand,
+		text: string,
+		ensureInput: () => Promise<MaterializedCodexInput>,
+	) {
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) {
 			if (
@@ -5006,6 +5148,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!prepared.created) {
 			return this.unknown(command, prepared.operation.nativeSessionRef);
 		}
+		const nativeInput =
+			command.input.attachments.length > 0
+				? await ensureInput()
+				: { items: [{ type: "text", text }], cleanup: async () => {} };
 		const nativeSelection = this.operationSelection(prepared.operation);
 		if (!nativeSelection) stateInvalid();
 		const hasPersistedThread =
@@ -5068,7 +5214,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				{
 					threadId: session.threadId,
 					clientUserMessageId: command.operationId,
-					input: [{ type: "text", text }],
+					input: nativeInput.items,
 					...(nativeSelection ?? {}),
 				},
 				(value) => {
@@ -5917,6 +6063,83 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			// remain exact even for cursors older than the confirmed watermark.
 		});
 		this.notifyEventStream(this.eventStreamKey(nativeSessionRef, executionId));
+	}
+
+	async recordResultFile(
+		command: RuntimeDriverCommand,
+		result: RuntimeFileResultV1,
+	) {
+		const projection = FileProjectionV1Schema.parse(result);
+		if (
+			projection.kind !== "result" ||
+			projection.status !== "available" ||
+			Date.parse(projection.expiresAt) <= Date.now()
+		)
+			runtimeAuthorizationDenied();
+		if (
+			command.kind !== "submit-turn" ||
+			command.operationId !== command.executionId
+		)
+			runtimeAuthorizationDenied();
+		const streamKey = await this.update((state) => {
+			const candidates = Object.values(state.sessions).filter(
+				(session) =>
+					session.agentId === command.agentId &&
+					session.conversationId === command.conversationId &&
+					session.sessionGeneration === command.sessionGeneration &&
+					ownRecordValue(session.executions, command.executionId) !==
+						undefined &&
+					(command.nativeSessionRef === undefined ||
+						session.nativeSessionRef === command.nativeSessionRef),
+			);
+			if (candidates.length !== 1) runtimeAuthorizationDenied();
+			const session = candidates[0];
+			if (!session) runtimeAuthorizationDenied();
+			const execution = ownRecordValue(session.executions, command.executionId);
+			if (!execution) runtimeAuthorizationDenied();
+			const journal = ownRecordValue(
+				session.journals ?? {},
+				execution.nativeTurnId,
+			);
+			if (!journal) runtimeAuthorizationDenied();
+			const operation = ownRecordValue(state.operations, operationKey(command));
+			if (
+				!operation ||
+				operation.nativeSessionRef !== session.nativeSessionRef ||
+				operation.schemaVersion !== command.schemaVersion ||
+				!operation.record ||
+				operation.record.result.outcome !== "accepted" ||
+				operation.record.agentId !== command.agentId ||
+				operation.record.conversationId !== command.conversationId ||
+				operation.record.sessionGeneration !== command.sessionGeneration ||
+				operation.record.kind !== command.kind ||
+				operation.record.operationId !== command.operationId
+			)
+				runtimeAuthorizationDenied();
+			const existing = journal.events.find(
+				(event) =>
+					event.type === "file" && event.payload.fileId === projection.fileId,
+			);
+			if (existing) {
+				if (
+					!isDeepStrictEqual(existing.payload, {
+						fileId: projection.fileId,
+						name: projection.descriptor.name,
+						mimeType: projection.descriptor.mediaType,
+						sizeBytes: projection.descriptor.sizeBytes,
+					})
+				)
+					protocolInvalid();
+				return this.eventStreamKey(
+					session.nativeSessionRef,
+					command.executionId,
+				);
+			}
+			this.assertJournalOpen(journal);
+			this.appendFileEvent(session, journal, projection);
+			return this.eventStreamKey(session.nativeSessionRef, command.executionId);
+		});
+		this.notifyEventStream(streamKey);
 	}
 
 	async subscribeEvents(
@@ -8822,6 +9045,27 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		journal.events.push(event);
 	}
 
+	private appendFileEvent(
+		session: CodexSession,
+		journal: CodexEventJournal,
+		projection: RuntimeFileResultV1,
+	) {
+		const { cursor, adapterEventKey } = this.nextEventIdentity(session);
+		const event: CodexJournalFileEvent = {
+			cursor,
+			adapterEventKey,
+			occurredAt: new Date().toISOString(),
+			type: "file",
+			payload: {
+				fileId: projection.fileId,
+				name: projection.descriptor.name,
+				mimeType: projection.descriptor.mediaType,
+				sizeBytes: projection.descriptor.sizeBytes,
+			},
+		};
+		journal.events.push(event);
+	}
+
 	private appendCompletedEvent(
 		session: CodexSession,
 		journal: CodexEventJournal,
@@ -8906,6 +9150,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		if (event.type === "text") {
 			return { ...base, type: "text" as const, payload: event.payload };
+		}
+		if (event.type === "file") {
+			return { ...base, type: "file" as const, payload: event.payload };
 		}
 		return { ...base, type: "completed" as const, payload: event.payload };
 	}

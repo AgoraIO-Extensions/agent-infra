@@ -13,6 +13,7 @@ import {
 import type {
 	RuntimeDriver,
 	RuntimeDriverCommand,
+	RuntimeDriverExecutionContextV1,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 } from "./driver.js";
@@ -130,7 +131,10 @@ export class FakeRuntimeDriver implements RuntimeDriver {
 		// requires this hook so real Drivers cannot silently bypass ref validation.
 	}
 
-	async execute(command: RuntimeDriverCommand) {
+	async execute(
+		command: RuntimeDriverCommand,
+		_context?: RuntimeDriverExecutionContextV1,
+	) {
 		let eventStreamKey: string | undefined;
 		const record = await this.file.update((state) => {
 			const key = operationKey(command);
