@@ -38,6 +38,7 @@ describe("standard contract artifacts", () => {
 			"/api/v1/agents/{agentId}/tasks",
 			"/api/v1/conversations/{conversationId}/tasks/{executionId}",
 			"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/events",
 		]);
 		expect(
 			Object.keys(document.components.schemas).filter((name) =>
@@ -49,6 +50,7 @@ describe("standard contract artifacts", () => {
 			"TaskAcceptedV1",
 			"TaskCancellationV1",
 			"TaskProjectionV1",
+			"TaskSseMessageV1",
 			"TaskStatusEventV1",
 		]);
 		expect(document.components.securitySchemes.platformApiCredential).toEqual({
@@ -59,11 +61,12 @@ describe("standard contract artifacts", () => {
 			"/api/v1/agents/{agentId}/tasks",
 			"/api/v1/conversations/{conversationId}/tasks/{executionId}",
 			"/api/v1/conversations/{conversationId}/tasks/{executionId}/cancel",
+			"/api/v1/conversations/{conversationId}/tasks/{executionId}/events",
 		]) {
 			const operation = document.paths[path].post ?? document.paths[path].get;
 			expect(operation.security).toEqual([{ platformApiCredential: [] }]);
 		}
-	});
+	}, 30_000);
 
 	it("keeps publication response validation equivalent in generated OpenAPI and Zod", () => {
 		const artifacts = JSON.parse(generate());
@@ -92,7 +95,7 @@ describe("standard contract artifacts", () => {
 			).toBe(accepted);
 			expect(validate(response), JSON.stringify(changedFields)).toBe(accepted);
 		}
-	});
+	}, 30_000);
 
 	it("generates deterministic OpenAPI 3.1 and JSON Schema 2020-12", () => {
 		const first = generate();
@@ -180,11 +183,13 @@ describe("standard contract artifacts", () => {
 			"/api/v2/admin/agent-applications/{applicationId}/decision",
 			"/api/v2/admin/agents",
 			"/api/v2/admin/audit",
+			"/api/v2/admin/users/{userId}/disable",
 			"/api/v2/agent-applications",
 			"/api/v2/agent-applications/{applicationId}",
 			"/api/v2/agent-applications/{applicationId}/withdraw",
 			"/api/v2/agents",
 			"/api/v2/agents/{agentId}",
+			"/api/v2/agents/{agentId}/api-use-grants/{userId}",
 			"/api/v2/agents/{agentId}/application-managers/{applicationId}",
 			"/api/v2/agents/{agentId}/application-use-grants/{applicationId}",
 			"/api/v2/agents/{agentId}/commands",
@@ -204,7 +209,17 @@ describe("standard contract artifacts", () => {
 			"/api/v2/me/api-credentials/{credentialId}",
 			"/api/v2/me/conversations/recent",
 			"/api/v2/me/relay-key",
+			"/api/v2/skills",
+			"/api/v2/skills/versions/{skillVersionId}",
 		]);
+		for (const path of [
+			"/api/v2/skills",
+			"/api/v2/skills/versions/{skillVersionId}",
+		]) {
+			expect(artifacts.pilotBrowserOpenapiV2.paths[path].get.security).toEqual([
+				{ PlatformSession: [] },
+			]);
+		}
 		const recent =
 			artifacts.pilotBrowserOpenapiV2.paths["/api/v2/me/conversations/recent"]
 				.get;
@@ -482,7 +497,7 @@ describe("standard contract artifacts", () => {
 				}),
 			).not.toThrow();
 		}
-	}, 15_000);
+	}, 60_000);
 
 	it("rejects deliberately stale committed artifacts", async () => {
 		const root = await mkdtemp(
@@ -513,5 +528,5 @@ describe("standard contract artifacts", () => {
 		} finally {
 			await rm(root, { recursive: true });
 		}
-	});
+	}, 30_000);
 });

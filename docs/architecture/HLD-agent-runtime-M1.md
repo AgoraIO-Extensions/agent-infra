@@ -152,6 +152,8 @@ Browser Capability 使用 `packages/contracts/src/runtime/browser-capability.ts`
 
 Manifest declaration 不能证明浏览器已装配或可用。Worker/Host 只有在当前 Session-owned Sandbox 内的固定 Browser Runtime 完成 probe 后，才能把声明与实际结果取交集并向 Platform 返回 `available`。该契约不创建 Browser 专用调度器、不改变 Conversation/Execution/Sandbox 权威，也不把 BrowserContext、Cookie、Storage 或原生页面标识暴露给 Platform API。
 
+生产接收路径沿现有 signed readiness binding 传递准入后的 Manifest Browser declaration；RuntimeHost 返回的本地 probe evidence 只在同一 Agent、workload revision、fence 和 immutable image digest 下与该 declaration 组装。缺少 declaration 或 probe、binding 不匹配、receipt 过期或跨 Sandbox/镜像时，保持不可用状态，不能由查询参数、env 或 Owner 字段选择 `available`。
+
 ## 5. Platform Conversation Contract
 
 Web、任务 API、托管渠道和 Eval 执行复用同一 Platform Conversation Contract；Runtime 不另建身份、任务队列或 Eval 状态权威。Contract 定义以下语义，不暴露具体 Runtime 协议：
@@ -275,7 +277,7 @@ thread/read、skills/list 等等待边界同样受当前读取确认约束，不
 
 Codex 的首个只读原生命令定义为“查看原生会话状态”：目录显式绑定 `thread/read`，不假称 CLI `/status`。Driver 只用当前 Conversation 已持久绑定的 threadId，禁用历史正文投影，只返回映射后的状态及读取时间；原生未装载不触发 resume。它证明真实原生查询闭环，不代替产生 Turn 的命令验收。原生 `/compact` 作为独立有状态命令交付，返回空 ACK 后必须跟踪原 `contextCompaction` item 与 Turn 终态；不伪造普通 prompt 代跑，不绕过 §8.5.2 的当前模型和事实约束。
 
-Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，但不再是 Skill Hub 的权威模型。Skill Hub 的运行时投影遵循工程 Spec §11.6：Platform DB 保存 Skill Version 与 Agent Version 绑定，Platform Worker 消费不可变包对象版本、manifest、digest/signature 和只读策略，异步 materialize 到 Agent project 的 `.agents/skills/<name>` 并维护 `.agents/SKILLS.md`，再随受控 workspace 挂载到 Sandbox。`.magic/skills` 不属于本平台规范路径。
+Codex 的 workspace-summary 仍是当前固定安装 Skill 的兼容验收包，但不再是 Skill Hub 的权威模型。Skill Hub 的运行时投影遵循工程 Spec §11.6：Platform DB 保存 Skill Version 与 Agent Version 绑定，Platform Worker 消费不可变包对象版本、manifest、digest/signature 和只读策略，异步 materialize 到 Agent project 的 `.agents/skills/<name>` 并维护 `.agents/SKILLS.md`，再随受控 workspace 挂载到 Sandbox。`.magic/skills` 不属于本平台规范路径。固定 `extraRoot` 与 Hub root 的共存、同名冲突和显式迁移以 [ADR-0019 的路径决策](ADR-0019-magic-aligned-skill-hub.md#固定-extraroot-与-hub-agentskills-共存) 为准。
 
 每个 Conversation 独立 Runtime 进程只接收当前 Agent Version 已批准且同步成功的 Skill 根；调用前以 Runtime 实际返回的目录修订、enabled 状态、来源/版本、包摘要和加载证据作为准入。Host 将能力 ID 解析为受控相对路径，向固定 Driver 传递已冻结版本与有界任务文本；路径不由 Web 提供，Runtime 不能静默下载、改写或替换 Skill。初始 Prompt 只包含有界 metadata，read_skills 按需读取正文和配套资源。受控工作区样本、真实包摘要、只读挂载、跨 Conversation 文件隔离、实际 Skill 加载和工具结果必须分别验证；上游接口存在不能证明本仓已完成装配或权限门禁。
 
@@ -722,7 +724,7 @@ Session-owned Sandbox 的 P0 验收须从 Web、企微和 API 三入口分别为
 Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也适用，渠道不合并。
 覆盖并发、幂等、撤权、旧代次 late call、停止/unknown、SSE 与 Pod/Worker/Host/Runtime 重启恢复，
 绑定准确源码、镜像 Digest、配置和 CNI；目录名、thread ID、fixture 或健康检查不构成运行证明。
-文档合并仅冻结契约，不表示上述隔离或完整 Pilot 已验收；唯一交接见
+文档合并仅冻结契约，不表示上述隔离或 P0 真实环境验收已完成；唯一交接见
 [Sandbox ADR](../adr/0017-session-owned-sandbox-isolation.md)。
 
 - 四个标准模板运行同一 Conformance Suite：Session 创建/恢复、带 Execution 级有效模型选择的 Turn、流式事件与按已确认游标重放、停止、状态和 capability。

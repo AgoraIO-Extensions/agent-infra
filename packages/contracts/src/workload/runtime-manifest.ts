@@ -53,6 +53,21 @@ export const RuntimeManifestV1Schema = z.discriminatedUnion("interactionMode", [
 	PlatformAdapterRuntimeManifestV1Schema,
 ]);
 
+/** Image admission boundary: Browser Capability belongs to platform-adapter only. */
+export const RuntimeManifestBrowserAdmissionV1Schema =
+	RuntimeManifestV1Schema.superRefine((manifest, context) => {
+		if (
+			manifest.interactionMode === "self-managed" &&
+			manifest.capabilities?.browser !== undefined
+		) {
+			context.addIssue({
+				code: "custom",
+				path: ["capabilities", "browser"],
+				message: "Browser Capability requires platform-adapter",
+			});
+		}
+	});
+
 export type RuntimeCapabilitySetV1 = z.infer<
 	typeof RuntimeCapabilitySetV1Schema
 >;

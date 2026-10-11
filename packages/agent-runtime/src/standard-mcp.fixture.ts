@@ -161,7 +161,7 @@ export async function standardMcpFixture(
 		approval,
 	);
 	if (approved.status !== "available") throw new Error("Invalid fixture");
-	const target = { ...approved, url: origin + "/mcp" };
+	const target = { ...approved, url: `${origin}/mcp` };
 	const input: StandardMcpInput = {
 		schemaVersion: 1,
 		principal: { kind: "user", id: "user-a" },

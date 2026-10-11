@@ -6,6 +6,7 @@ import {
 	captureAgentApiCreatePrincipalsV1,
 	PersonalRelayKeyErrorV1,
 } from "@agent-infra/platform-core";
+import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
 import {
 	createRelayKeyEncryptorV1,
 	createSecretEncryptorV1,
@@ -26,9 +27,20 @@ import {
 import { createDeploymentPresentation } from "./deployment-presentation.js";
 import { createDeploymentSecretPreparation } from "./deployment-secrets.js";
 import { HttpProtocolError } from "./http/common.js";
+import type { ConversationModelSelectionReaderV1 } from "./http/conversation-routes.js";
 import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
+
+type CustomAgentGatewayRouteInput = NonNullable<
+	PlatformApiAssemblyInput["customAgentGateway"]
+>;
+
+/** Deployment-owned Gateway inputs; the production IdentityAdapter is bound by this module. */
+export type ProductionCustomAgentGatewayInputV1 = Omit<
+	CustomAgentGatewayRouteInput,
+	"identity"
+>;
 
 export interface ProductionPlatformApiInputV1
 	extends Omit<
@@ -51,17 +63,22 @@ export interface ProductionPlatformApiInputV1
 		NonNullable<PlatformApiAssemblyInput["connectionInstallation"]>,
 		"profile" | "approval"
 	>;
+	/** Deployment-owned protected callback forwarder; absent keeps OAuth unavailable. */
+	readonly connectionInstallationCallback?: PlatformApiAssemblyInput["connectionInstallationCallback"];
 	readonly connectionConsumerProfileApproval?: unknown;
 	readonly wecom?: PlatformApiAssemblyInput["wecom"];
 	readonly wecomIdentity?: PlatformApiAssemblyInput["wecomIdentity"];
 	readonly wecomCredentialEncryptionKeys?: PlatformApiAssemblyInput["wecomCredentialEncryptionKeys"];
 	readonly wecomApplicationSetup?: PlatformApiAssemblyInput["wecomApplicationSetup"];
+	/** Deployment-owned ObjectStorage/file authority adapter for Web and Runtime exchange. */
+	readonly files?: PlatformApiAssemblyInput["files"];
 	readonly databaseUrl: string;
 	readonly taskAdmissionPolicy: PlatformApiAssemblyInput["taskAdmissionPolicy"];
 	/** Same immutable image repository used by the Worker's resource policy. */
 	readonly imageRepository: string;
 	/** An actual deployment identity boundary; no browser-provided identity headers. */
 	readonly identity: IdentityAdapter;
+	readonly userGovernance?: PostgresPlatformUserDisablesV1;
 	readonly loadAuthorityContext: () => Promise<AgentConfigurationAuthorityContextV1>;
 	/** Public wrapping keys only. Worker private keys belong to the Worker deployment. */
 	readonly encryptionKeys: unknown;
@@ -75,6 +92,13 @@ export interface ProductionPlatformApiInputV1
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly directory?: DirectoryRouteDependencies;
+	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
+	readonly modelSelection?: ConversationModelSelectionReaderV1;
+	/** Optional deployment-owned platform identity route for custom Agents. */
+	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
+	readonly resolveCustomAgentInteractionUrl?: Parameters<
+		typeof createDeploymentPresentation
+	>[0]["resolveCustomAgentInteractionUrl"];
 }
 
 export function createProductionPlatformApiAssemblyInputV1(
@@ -120,6 +144,17 @@ export function createProductionPlatformApiAssemblyInputV1(
 		resourceProfile = AgentResourceProfileProjectionV1Schema.parse(
 			input.resourceProfile,
 		);
+		if (input.customAgentGateway) {
+			if (
+				typeof input.customAgentGateway.path !== "string" ||
+				!input.customAgentGateway.path.startsWith("/") ||
+				!input.customAgentGateway.path.includes("*") ||
+				/[?#\s]/.test(input.customAgentGateway.path) ||
+				typeof input.customAgentGateway.resolveDeployment !== "function" ||
+				typeof input.customAgentGateway.authorizeAgent !== "function"
+			)
+				throw new Error();
+		}
 	} catch {
 		throw new Error("PLATFORM_DEPLOYMENT_CONFIGURATION_INVALID");
 	}
@@ -188,6 +223,19 @@ export function createProductionPlatformApiAssemblyInputV1(
 					},
 				}
 			: undefined;
+	const userGovernance =
+		input.userGovernance ??
+		new PostgresPlatformUserDisablesV1(input.databaseUrl, async (userId) => {
+			if (!input.identity.resolveMaterialGrantActor) throw new Error();
+			const actor = await input.identity.resolveMaterialGrantActor(userId);
+			return actor
+				? {
+						userId: actor.userId,
+						accountStatus: actor.accountStatus,
+						isSystemAdmin: actor.isSystemAdmin,
+					}
+				: null;
+		});
 	return {
 		...(input.connectionInstallation
 			? {
@@ -197,6 +245,9 @@ export function createProductionPlatformApiAssemblyInputV1(
 						approval: input.connectionConsumerProfileApproval,
 					},
 				}
+			: {}),
+		...(input.connectionInstallationCallback
+			? { connectionInstallationCallback: input.connectionInstallationCallback }
 			: {}),
 		agentApiCreation: {
 			allowedPrincipals,
@@ -229,13 +280,24 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.wecomApplicationSetup
 			? { wecomApplicationSetup: input.wecomApplicationSetup }
 			: {}),
+		...(input.files ? { files: input.files } : {}),
 		databaseUrl: input.databaseUrl,
+		userGovernance,
 		taskAdmissionPolicy: input.taskAdmissionPolicy,
 		identity: input.identity,
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,
 		conversationReplayWindowMs: input.conversationReplayWindowMs,
 		...(input.directory ? { directory: input.directory } : {}),
+		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+		...(input.customAgentGateway
+			? {
+					customAgentGateway: {
+						...input.customAgentGateway,
+						identity: input.identity,
+					},
+				}
+			: {}),
 		connectionCapability,
 		allocateApplicationIds: allocateDeploymentApplicationIds,
 		prepareApplicationSecrets: secrets.prepareApplicationSecrets,
@@ -259,6 +321,12 @@ export function createProductionPlatformApiAssemblyInputV1(
 					configurationQuery,
 					resourceProfile,
 					imageRepository: input.imageRepository,
+					...(input.resolveCustomAgentInteractionUrl
+						? {
+								resolveCustomAgentInteractionUrl:
+									input.resolveCustomAgentInteractionUrl,
+							}
+						: {}),
 				}),
 		},
 	};

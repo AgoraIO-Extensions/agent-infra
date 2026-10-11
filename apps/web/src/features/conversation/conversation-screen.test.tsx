@@ -2,6 +2,7 @@ import {
 	AgentProjectionV2Schema,
 	CommandAcceptedProjectionV1Schema,
 	ConversationDetailProjectionV2Schema,
+	PersistedConversationEventV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { pilotFakeScenariosV2 } from "@agent-infra/test-support/pilot";
@@ -65,6 +66,14 @@ function setup(
 		if (path === "/api/v2/me/conversations/recent")
 			return Response.json({ items: [], nextCursor: null });
 		if (path === "/api/v2/agents/agent-1") return Response.json(agent);
+		if (path === "/api/v1/conversations/conversation-1/files/limits")
+			return Response.json({
+				schemaVersion: 1,
+				revision: "test-files-v1",
+				expiresAt: "2027-01-01T00:00:00Z",
+				mediaTypes: ["text/plain", "application/pdf"],
+				maxBytes: 10 * 1024 * 1024,
+			});
 		if (path.endsWith("/events")) {
 			const stream = sse();
 			streams.push(stream);
@@ -149,7 +158,191 @@ function userMessage(text = "Private question") {
 	} as const;
 }
 
+function fileProjection(status: "pending" | "available" = "available") {
+	return {
+		schemaVersion: 1,
+		fileId: "file-1",
+		kind: "attachment",
+		descriptor: {
+			name: "notes.txt",
+			mediaType: "text/plain",
+			sizeBytes: 5,
+			sha256: "a".repeat(64),
+		},
+		status,
+		createdAt: timestamp,
+		expiresAt: "2027-01-01T00:00:00Z",
+	};
+}
+
 describe("functional conversation screen", () => {
+	it("rejects unsupported and oversized files before creating an upload", async () => {
+		const { requests } = setup();
+		const input = await screen.findByLabelText("添加附件");
+		fireEvent.change(input, {
+			target: {
+				files: [
+					new File(["bad"], "bad.bin", { type: "application/octet-stream" }),
+				],
+			},
+		});
+		await screen.findByText("当前 Agent 不支持此文件类型。");
+		expect(
+			requests.some((request) =>
+				new URL(request.url).pathname.endsWith("/files"),
+			),
+		).toBe(false);
+	});
+
+	it("closes the attachment entry when the limits response is not the contract shape", async () => {
+		setup((request) =>
+			new URL(request.url).pathname ===
+			"/api/v1/conversations/conversation-1/files/limits"
+				? Response.json({ items: [], nextCursor: null })
+				: undefined,
+		);
+		await screen.findByText("文件限制暂不可用，上传入口已关闭。");
+		expect(
+			(screen.getByRole("button", { name: "添加附件" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+	});
+
+	it("reads the read-only file limits before the attachment entry opens", async () => {
+		const { requests } = setup();
+		await screen.findByText(/支持 text\/plain/);
+		expect(
+			(screen.getByRole("button", { name: "添加附件" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(false);
+		const limits = requests.filter((request) =>
+			new URL(request.url).pathname.endsWith("/files/limits"),
+		);
+		expect(limits).toHaveLength(1);
+		expect(limits[0]?.method).toBe("GET");
+		expect(await limits[0]?.text()).toBe("");
+	});
+
+	it("binds an available uploaded file to the submitted message", async () => {
+		const originalCrypto = globalThis.crypto;
+		vi.stubGlobal("crypto", {
+			...(originalCrypto ?? {}),
+			randomUUID: () => "upload-local-1",
+			subtle: { digest: async () => new ArrayBuffer(32) },
+		});
+		try {
+			const projection = fileProjection();
+			const { requests } = setup((request) => {
+				const path = new URL(request.url).pathname;
+				if (request.method === "POST" && path.endsWith("/files"))
+					return Response.json(projection, { status: 201 });
+				if (request.method === "POST" && path.endsWith("/files/file-1/access"))
+					return Response.json({
+						schemaVersion: 1,
+						accessId: "access-1",
+						file: projection,
+						path: "/api/v1/conversations/conversation-1/files/file-1/content",
+						grant: { format: "compact-jws", schemaVersion: 1, token: "grant" },
+						expiresAt: "2027-01-01T00:00:00Z",
+					});
+				if (request.method === "PUT" && path.endsWith("/content"))
+					return new Response(null, { status: 204 });
+				if (request.method === "POST" && path.endsWith("/complete"))
+					return Response.json(projection);
+				if (request.method === "POST" && path.endsWith("/messages"))
+					return receipt();
+				return undefined;
+			});
+			fireEvent.change(await screen.findByLabelText("添加附件"), {
+				target: {
+					files: [new File(["hello"], "notes.txt", { type: "text/plain" })],
+				},
+			});
+			await screen.findByText("已上传");
+			fireEvent.change(await composer(), {
+				target: { value: "Summarize this" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: "发送" }));
+			await screen.findByText("消息已受理，等待处理结果。");
+			const messageRequest = requests.find(
+				(request) =>
+					request.method === "POST" &&
+					new URL(request.url).pathname.endsWith("/messages"),
+			);
+			expect(await messageRequest?.json()).toEqual({
+				schemaVersion: 1,
+				text: "Summarize this",
+				attachments: ["file-1"],
+			});
+		} finally {
+			vi.stubGlobal("crypto", originalCrypto);
+		}
+	});
+
+	it("downloads a result.file through a fresh read grant", async () => {
+		const resultEvent = PersistedConversationEventV2Schema.parse({
+			...event(2),
+			type: "result.file",
+			payload: {
+				fileId: "result-1",
+				name: "report.txt",
+				mediaType: "text/plain",
+				sizeBytes: 5,
+			},
+		});
+		const { requests } = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (request.method === "POST" && path.endsWith("/files/result-1/access"))
+				return Response.json({
+					schemaVersion: 1,
+					accessId: "read-access-1",
+					file: { ...fileProjection(), fileId: "result-1", kind: "result" },
+					path: "/api/v1/conversations/conversation-1/files/result-1/content",
+					grant: {
+						format: "compact-jws",
+						schemaVersion: 1,
+						token: "read-grant",
+					},
+					expiresAt: "2027-01-01T00:00:00Z",
+				});
+			if (request.method === "GET" && path.endsWith("/files/result-1/content"))
+				return new Response("hello", { status: 200 });
+			if (path === "/api/v2/conversations/conversation-1")
+				return Response.json({
+					...history("conversation-1", [resultEvent]),
+					conversation: { ...history().conversation, status: "ready" },
+				});
+			return undefined;
+		});
+		const createObjectUrl = vi.fn(() => "blob:result-1");
+		const originalCreateObjectUrl = URL.createObjectURL;
+		Object.defineProperty(URL, "createObjectURL", {
+			configurable: true,
+			value: createObjectUrl,
+		});
+		try {
+			fireEvent.click(await screen.findByRole("button", { name: "下载" }));
+			await waitFor(() => expect(createObjectUrl).toHaveBeenCalled());
+			expect(
+				requests.some((request) =>
+					request.url.endsWith("/files/result-1/access"),
+				),
+			).toBe(true);
+			expect(
+				requests.some((request) =>
+					request.url.endsWith("/files/result-1/content"),
+				),
+			).toBe(true);
+		} finally {
+			if (originalCreateObjectUrl)
+				Object.defineProperty(URL, "createObjectURL", {
+					configurable: true,
+					value: originalCreateObjectUrl,
+				});
+			else delete (URL as { createObjectURL?: unknown }).createObjectURL;
+		}
+	});
+
 	it.each(["stream", "snapshot"] as const)(
 		"clears waiting and refreshes recent history when completion arrives via %s",
 		async (source) => {

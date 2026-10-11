@@ -119,6 +119,9 @@ describe("ImageRegistryAdapter V1 contract", () => {
 			},
 		});
 		const parsed = parseRuntimeManifestLabelV1(browserManifestLabel);
+		expect(parsed.runtimeManifest.interactionMode).toBe("platform-adapter");
+		if (parsed.runtimeManifest.interactionMode !== "platform-adapter")
+			throw new Error();
 		expect(parsed.runtimeManifest.capabilities?.browser).toMatchObject({
 			capabilityVersion: 1,
 			operations: ["navigate", "observe"],
@@ -129,10 +132,9 @@ describe("ImageRegistryAdapter V1 contract", () => {
 		>;
 		selfManaged.interactionMode = "self-managed";
 		delete selfManaged.protocol;
-		expect(
-			parseRuntimeManifestLabelV1(JSON.stringify(selfManaged)).runtimeManifest
-				.capabilities?.browser,
-		).toBeUndefined();
+		expect(() =>
+			parseRuntimeManifestLabelV1(JSON.stringify(selfManaged)),
+		).toThrow("Image registry Runtime Manifest is invalid");
 	});
 
 	it("classifies a correlation-safe invalid image reference without echoing it", () => {
@@ -483,6 +485,21 @@ describe("ImageRegistryAdapter V1 contract", () => {
 				runtimeManifestParsingEvidence: {
 					...admitted.runtimeManifestParsingEvidence,
 					utf8ByteLength: Buffer.byteLength(mismatchedLabel, "utf8"),
+				},
+			}),
+		).toThrow("Image registry Runtime Manifest mismatch");
+
+		const invalidCapabilitiesLabel = JSON.stringify({
+			...admitted.runtimeManifest,
+			capabilities: { modelSelection: "enabled" },
+		});
+		expect(() =>
+			validateImageRegistryAdmissionResultV1(request, {
+				...admitted,
+				runtimeManifestLabel: invalidCapabilitiesLabel,
+				runtimeManifestParsingEvidence: {
+					...admitted.runtimeManifestParsingEvidence,
+					utf8ByteLength: Buffer.byteLength(invalidCapabilitiesLabel, "utf8"),
 				},
 			}),
 		).toThrow("Image registry Runtime Manifest mismatch");

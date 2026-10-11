@@ -24,6 +24,9 @@ export type WorkerInstallationAuthorization = Pick<
 > & {
 	readonly scope: import("@agent-infra/contracts/runtime").RuntimeOAuthScopeV1;
 	readonly revision: string;
+	readonly commandId?: string;
+	readonly attemptId?: string;
+	readonly attemptOwner?: string;
 };
 export interface WorkerConnectionInstallationOptions {
 	/** Trusted, deployment-approved nonsecret snapshot. No caller config overlay. */
@@ -34,6 +37,7 @@ export interface WorkerConnectionInstallationOptions {
 		signal: AbortSignal,
 		finalCheck: () => Promise<void>,
 	) => Promise<WorkerInstallationAuthorization | null>;
+	readonly commandStore?: import("@agent-infra/platform-core").ConnectionInstallationCommandDrainStoreV1;
 }
 
 /** Actual ConversationRuntime caller owns current authorization and route checks. */

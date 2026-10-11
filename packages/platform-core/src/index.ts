@@ -57,6 +57,7 @@ export {
 export * from "./agent-default-relay-key.js";
 export * from "./agent-management.js";
 export * from "./agent-runtime-presentation.js";
+export * from "./agent-user-use-grants.js";
 export * from "./api-audit-identity.js";
 export * from "./application-api-credentials.js";
 export * from "./application-foundation.js";
@@ -132,6 +133,7 @@ export * from "./skill-hub.js";
 export * from "./skill-hub-agent-binding.js";
 export * from "./skill-hub-installation.js";
 export * from "./skill-hub-management.js";
+export * from "./skill-hub-read.js";
 export * from "./skill-package-publication.js";
 export * from "./skill-package-ref.js";
 export * from "./skill-provider-registry.js";

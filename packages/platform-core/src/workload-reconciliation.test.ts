@@ -8,12 +8,17 @@ import {
 	type WorkloadRuntimePortV1,
 } from "./workload-reconciliation.js";
 
-function fixture() {
+function fixture(
+	source: AgentConfigurationRecordV2["source"] = {
+		kind: "standard",
+		imageDigest: "image-a",
+	} as AgentConfigurationRecordV2["source"],
+) {
 	let configuration = {
 		schemaVersion: 2,
 		agentId: "agent-a",
 		revision: 1,
-		source: { kind: "standard", imageDigest: "image-a" },
+		source,
 	} as AgentConfigurationRecordV2;
 	let management = {
 		agentId: "agent-a",
@@ -74,11 +79,17 @@ function fixture() {
 				maximumAttempts: 3,
 			});
 		},
-		upgrade(image: string) {
+		upgrade(
+			image: string,
+			nextSource: AgentConfigurationRecordV2["source"] = {
+				...configuration.source,
+				imageDigest: image,
+			},
+		) {
 			configuration = {
 				...configuration,
 				revision: configuration.revision + 1,
-				source: { ...configuration.source, imageDigest: image },
+				source: nextSource,
 			};
 		},
 		stop(disabled = false) {
@@ -892,5 +903,130 @@ describe("durable Workload reconciliation", () => {
 		expect(f.state?.phase).toBe("stopped");
 		expect(f.runtime.discardUnactivatedSecrets).toHaveBeenCalledOnce();
 		expect(vi.mocked(f.runtime.promote).mock.calls).toHaveLength(1);
+	});
+	it.each(["self-managed", "platform-managed"] as const)(
+		"preserves custom self-managed interaction mode and %s identity responsibility across A-to-B",
+		async (identityResponsibility) => {
+			// Fixture-only: this port proves state-machine ordering, not live Kubernetes or Registry admission.
+			const sourceA = {
+				kind: "custom" as const,
+				imageDigest: "image-a",
+				admissionRevision: "admission-a",
+				interactionMode: "self-managed" as const,
+				identityResponsibility,
+				connectionEnabled: false,
+			};
+			const sourceB = {
+				...sourceA,
+				imageDigest: "image-b",
+				admissionRevision: "admission-b",
+			};
+			const f = fixture(sourceA);
+			await f.tick(8);
+			f.upgrade("image-b", sourceB);
+			await f.tick(8);
+
+			expect(f.state).toMatchObject({
+				phase: "ready",
+				verified: {
+					configuration: {
+						source: {
+							kind: "custom",
+							imageDigest: "image-b",
+							interactionMode: "self-managed",
+							identityResponsibility,
+						},
+					},
+				},
+			});
+			const promoted = vi.mocked(f.runtime.promote).mock.calls;
+			expect(
+				promoted.some(
+					([state]) =>
+						state.candidate.configuration.source.imageDigest === "image-b",
+				),
+			).toBe(true);
+		},
+	);
+	it("rejects a mode-changing candidate before route closure and retains verified A", async () => {
+		const sourceA = {
+			kind: "custom" as const,
+			imageDigest: "image-a",
+			admissionRevision: "admission-a",
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "self-managed" as const,
+			connectionEnabled: false,
+		};
+		const sourceB = {
+			kind: "custom" as const,
+			imageDigest: "image-b",
+			admissionRevision: "admission-b",
+			interactionMode: "platform-adapter" as const,
+			connectionEnabled: false,
+		};
+		const f = fixture(sourceA);
+		await f.tick(8);
+		vi.mocked(f.runtime.closeRoute).mockClear();
+		vi.mocked(f.runtime.promote).mockClear();
+		f.upgrade("image-b", sourceB);
+		await f.tick(2);
+
+		expect(f.state).toMatchObject({
+			phase: "rejected",
+			failureCode: "reconciliation_failed",
+			candidate: { configuration: { source: sourceA } },
+			verified: { configuration: { source: sourceA } },
+		});
+		expect(f.runtime.closeRoute).not.toHaveBeenCalled();
+		expect(f.runtime.promote).not.toHaveBeenCalled();
+	});
+	it("keeps verified B routed when a same-mode C candidate fails health", async () => {
+		const sourceB = {
+			kind: "custom" as const,
+			imageDigest: "image-b",
+			admissionRevision: "admission-b",
+			interactionMode: "self-managed" as const,
+			identityResponsibility: "platform-managed" as const,
+			connectionEnabled: false,
+		};
+		const sourceC = {
+			...sourceB,
+			imageDigest: "image-c",
+			admissionRevision: "admission-c",
+		};
+		const f = fixture(sourceB);
+		await f.tick(8);
+		f.upgrade("image-c", sourceC);
+		vi.mocked(f.runtime.observe).mockImplementation(async (state) =>
+			state.candidate.configuration.source.imageDigest === "image-c"
+				? "unhealthy"
+				: "healthy",
+		);
+		vi.mocked(f.runtime.promote).mockClear();
+		await f.tick(12);
+
+		expect(f.state).toMatchObject({
+			phase: "ready",
+			rollback: true,
+			failureCode: "health_check_failed",
+			candidate: { configuration: { source: sourceB } },
+			verified: { configuration: { source: sourceB } },
+		});
+		expect(
+			vi
+				.mocked(f.runtime.promote)
+				.mock.calls.some(
+					([state]) =>
+						state.candidate.configuration.source.imageDigest === "image-c",
+				),
+		).toBe(false);
+		expect(
+			vi
+				.mocked(f.runtime.promote)
+				.mock.calls.some(
+					([state]) =>
+						state.candidate.configuration.source.imageDigest === "image-b",
+				),
+		).toBe(true);
 	});
 });

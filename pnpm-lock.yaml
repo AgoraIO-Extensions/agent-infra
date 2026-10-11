@@ -198,6 +198,9 @@ importers:
       '@agent-infra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@agent-infra/enterprise-directory':
+        specifier: workspace:*
+        version: link:../../packages/enterprise-directory
       '@agent-infra/identity':
         specifier: workspace:*
         version: link:../../packages/identity
@@ -271,6 +274,9 @@ importers:
       '@agent-infra/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
+      '@agent-infra/object-storage':
+        specifier: workspace:*
+        version: link:../../packages/object-storage
       '@agent-infra/observability':
         specifier: workspace:*
         version: link:../../packages/observability

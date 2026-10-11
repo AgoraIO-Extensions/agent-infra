@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RuntimeBrowserCapabilityAssemblyInputV1 } from "@agent-infra/agent-runtime";
 import {
 	FakeRuntimeDriver,
 	FileRuntimeStore,
@@ -17,7 +18,9 @@ import { closeRuntimeHost, startRuntimeHost } from "./index.js";
 
 const resources: { root: string; host: RuntimeHost }[] = [];
 const token = "synthetic-browser-worker-token";
-async function setup() {
+async function setup(
+	browserCapability?: RuntimeBrowserCapabilityAssemblyInputV1,
+) {
 	const root = await mkdtemp(join(tmpdir(), "browser-discovery-http-"));
 	const host = await RuntimeHost.open({
 		store: await FileRuntimeStore.open(join(root, "host.json")),
@@ -28,12 +31,61 @@ async function setup() {
 	const options = {
 		host,
 		serviceToken: token,
+		...(browserCapability ? { browserCapability } : {}),
 		verifyGrant: () => {
 			throw new Error("discovery does not accept business grants");
 		},
 	};
 	return { options, app: createRuntimeHostApp(options) };
 }
+
+const availableAssembly = (): RuntimeBrowserCapabilityAssemblyInputV1 => ({
+	declaration: {
+		schemaVersion: 1,
+		capabilityVersion: 1,
+		operations: ["navigate", "observe"],
+		policy: {
+			allowedOrigins: ["https://example.test/"],
+			maxContexts: 1,
+			maxTabs: 1,
+			maxPages: 1,
+			maxViewportWidth: 1280,
+			maxViewportHeight: 720,
+			maxConcurrentActions: 1,
+			maxDownloads: 1,
+			maxDownloadBytes: 1024,
+			maxUploadBytes: 1024,
+			maxScreenshotBytes: 1024,
+			maxBrowserDurationMs: 60_000,
+			maxRetainedProfileBytes: 100_000,
+			navigationTimeoutMs: 15_000,
+			actionTimeoutMs: 5_000,
+			requireSideEffectConfirmation: true,
+			allowUserHandoff: false,
+		},
+	},
+	manifestDigest: `sha256:${"a".repeat(64)}`,
+	probe: {
+		capabilityVersion: 1,
+		operations: ["navigate", "observe"],
+		provenance: {
+			browser: "chromium",
+			chromiumVersion: "140.0.7339.0",
+			playwrightVersion: "1.55.0",
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+		conformance: {
+			schemaVersion: 1,
+			receiptId: "receipt-browser-1",
+			probeVersion: "probe-1",
+			verifiedAt: "2026-10-10T00:00:00.000Z",
+			manifestDigest: `sha256:${"a".repeat(64)}`,
+			evidenceHash: "b".repeat(64),
+			operations: ["navigate", "observe"],
+		},
+	},
+	now: () => Date.parse("2026-10-10T00:01:00.000Z"),
+});
 afterEach(async () => {
 	for (const { root, host } of resources.splice(0)) {
 		await host.close();
@@ -59,6 +111,21 @@ it("returns the versioned not_configured Browser state through the authenticated
 		status: "not_configured",
 		errorCode: "BROWSER_CAPABILITY_NOT_CONFIGURED",
 		retryable: false,
+	});
+});
+
+it("assembles an available Browser projection from admitted evidence", async () => {
+	const { app } = await setup(availableAssembly());
+	const response = await app.request(
+		"/internal/runtime/v1/browser-capability?schemaVersion=1",
+		{ headers: { authorization: `Bearer ${token}` } },
+	);
+	expect(response.status).toBe(200);
+	expect(
+		BrowserCapabilityProjectionV1Schema.parse(await response.json()),
+	).toMatchObject({
+		status: "available",
+		operations: ["navigate", "observe"],
 	});
 });
 

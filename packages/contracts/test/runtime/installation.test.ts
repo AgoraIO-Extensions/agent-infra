@@ -54,6 +54,8 @@ describe("MCP installation contracts", () => {
 			command: "begin",
 			requestDigest: "b".repeat(64),
 			status: "pending",
+			attemptId: null,
+			attemptOwner: null,
 			createdAt: Date.now(),
 			updatedAt: Date.now(),
 			token: "secret-token",

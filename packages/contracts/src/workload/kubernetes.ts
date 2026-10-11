@@ -141,6 +141,34 @@ export const WorkloadNetworkPolicyV1Schema = z.strictObject({
 	decryptionKeyringAccess: z.literal(false),
 });
 
+/** Deployment-owned public origin; never derived from a Service or Pod. */
+export const WorkloadRouteOriginV1Schema = z.strictObject({
+	schemaVersion: WorkloadSchemaVersionV1Schema,
+	origin: z
+		.string()
+		.min(1)
+		.refine(
+			(value) => {
+				try {
+					const url = new URL(value);
+					return (
+						value === url.origin &&
+						url.protocol === "https:" &&
+						url.username === "" &&
+						url.password === "" &&
+						url.pathname === "/" &&
+						url.search === "" &&
+						url.hash === "" &&
+						url.hostname !== ""
+					);
+				} catch {
+					return false;
+				}
+			},
+			{ message: "Route origin must be a canonical HTTPS origin" },
+		),
+});
+
 const internalWorkloadRouteV1Schema = z.strictObject({
 	name: z.string().min(1),
 	exposure: z.literal("internal-only"),
@@ -157,6 +185,7 @@ const ownerAuthWorkloadRouteV1Schema = z.strictObject({
 	name: z.string().min(1),
 	exposure: z.literal("self-managed"),
 	tlsRequired: z.literal(true),
+	interactionOrigin: WorkloadRouteOriginV1Schema.optional(),
 });
 
 export const WorkloadRouteV1Schema = z.union([
@@ -186,6 +215,10 @@ const desiredWorkloadBaseV1Schema = z.strictObject({
 	networkPolicy: WorkloadNetworkPolicyV1Schema,
 	secretRefs: z.array(KubernetesSecretReferenceV1Schema),
 	skills: z.array(SkillWorkloadProjectionV1Schema).max(32).optional(),
+	skillGenerationId: z
+		.string()
+		.regex(/^[a-f0-9]{64}$/)
+		.optional(),
 });
 
 const platformAdapterWorkloadBaseV1Schema = desiredWorkloadBaseV1Schema.extend({
@@ -338,6 +371,10 @@ const appliedWorkloadBaseV1Schema = z.strictObject({
 	networkPolicyRef: WorkloadOpaqueIdV1Schema,
 	secretRefs: z.array(KubernetesSecretReferenceV1Schema),
 	skills: z.array(SkillWorkloadProjectionV1Schema).max(32).optional(),
+	skillGenerationId: z
+		.string()
+		.regex(/^[a-f0-9]{64}$/)
+		.optional(),
 });
 
 const readyWorkloadAppliedV1Schema = appliedWorkloadBaseV1Schema.extend({
@@ -601,6 +638,7 @@ export const WorkloadCleanupResultV1Schema = z.union([
 export type AgentWorkloadDesiredV1 = z.infer<
 	typeof AgentWorkloadDesiredV1Schema
 >;
+export type WorkloadRouteOriginV1 = z.infer<typeof WorkloadRouteOriginV1Schema>;
 export type AgentWorkloadAppliedV1 = z.infer<
 	typeof AgentWorkloadAppliedV1Schema
 >;
@@ -640,7 +678,8 @@ export function validateAgentWorkloadDesiredV1(
 		) ||
 		(desired.skills ?? []).some((skill) => skill.agentId !== desired.agentId) ||
 		new Set((desired.skills ?? []).map((skill) => skill.targetPath)).size !==
-			(desired.skills ?? []).length
+			(desired.skills ?? []).length ||
+		(desired.skills !== undefined) !== (desired.skillGenerationId !== undefined)
 	) {
 		throw new Error("Desired Workload correlation mismatch");
 	}
@@ -690,7 +729,8 @@ export function validateAgentWorkloadAppliedV1(
 				applied.route.workloadRevision !== applied.workloadRevision)) ||
 		JSON.stringify(appliedSecrets) !== JSON.stringify(desiredSecrets) ||
 		JSON.stringify(applied.skills ?? []) !==
-			JSON.stringify(desired.skills ?? [])
+			JSON.stringify(desired.skills ?? []) ||
+		applied.skillGenerationId !== desired.skillGenerationId
 	) {
 		throw new Error("Applied Workload correlation mismatch");
 	}

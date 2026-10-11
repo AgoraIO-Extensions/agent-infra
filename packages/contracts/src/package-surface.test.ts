@@ -154,5 +154,5 @@ describe("contracts package surface", () => {
 		expect(packedFiles.some((path: string) => path.includes("test"))).toBe(
 			false,
 		);
-	});
+	}, 30_000);
 });

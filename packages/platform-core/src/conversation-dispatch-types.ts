@@ -144,6 +144,8 @@ export interface ConversationDispatchClaimV1 {
 	} | null;
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;
 	readonly stopPending: boolean;
+	/** Set only when the Store durably marked the stop confirmation timeout. */
+	readonly stopConfirmationTimedOut?: true;
 }
 
 export type ConversationDispatchClaimDecisionV1 =

@@ -38,6 +38,7 @@ import {
 	PostgresPersonalApiCredentialStoreV1,
 	PostgresPersonalRelayKeyStoreV1,
 	PostgresPlatformAuditQueryV1,
+	type PostgresPlatformUserDisablesV1,
 	PostgresScopedPlatformAuditQueryV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
@@ -53,7 +54,10 @@ import {
 } from "./file-assembly.js";
 import { createApplicationCredentialProcessDeliveryV1 } from "./http/application-api-credential-routes.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
-import type { ConversationAuthorization } from "./http/conversation-routes.js";
+import type {
+	ConversationAuthorization,
+	ConversationModelSelectionReaderV1,
+} from "./http/conversation-routes.js";
 import type { DeploymentConfigurationRoutesDependencies } from "./http/deployment-configuration-routes.js";
 import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import {
@@ -67,6 +71,7 @@ import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
 } from "./projection.js";
+import { assembleSkillHubReadApiV1 } from "./skill-hub-read-assembly.js";
 import {
 	assembleWecomApiV1,
 	assembleWecomReceiptApiV1,
@@ -86,6 +91,9 @@ export interface PlatformApiAssemblyInput {
 		readonly configuration: RuntimeOAuthConfigurationV1;
 		readonly profile: unknown;
 		readonly approval: unknown;
+	};
+	readonly connectionInstallationCallback?: {
+		readonly forward: import("./http/connection-installation-callback-routes.js").ConnectionInstallationCallbackRouteDependenciesV1["forward"];
 	};
 	readonly applicationCredentialDelivery?: Parameters<
 		typeof createApplicationCredentialProcessDeliveryV1
@@ -110,6 +118,7 @@ export interface PlatformApiAssemblyInput {
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
 	readonly identity: IdentityAdapter;
+	readonly userGovernance?: PostgresPlatformUserDisablesV1;
 	readonly personalRelayKeys?: Pick<
 		Parameters<typeof createPersonalRelayKeyUseCaseV1>[0],
 		"currentIdentity" | "validate" | "encrypt"
@@ -132,6 +141,10 @@ export interface PlatformApiAssemblyInput {
 		readonly replyEncryptionPublicKeyPem: string;
 	};
 	readonly directory?: DirectoryRouteDependencies;
+	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
+	readonly modelSelection?: ConversationModelSelectionReaderV1;
+	/** Optional deployment-owned platform identity route for custom Agents. */
+	readonly customAgentGateway?: PlatformAppDependencies["customAgentGateway"];
 }
 
 export interface PlatformApiAssembly {
@@ -291,6 +304,7 @@ export function assemblePlatformApi(
 		new PostgresApplicationMaterialGrantStoreV1({
 			databaseUrl: input.databaseUrl,
 		});
+	const skillHubRead = assembleSkillHubReadApiV1(input);
 	const applicationMaterialGrants = createApplicationMaterialGrantUseCaseV1({
 		store: applicationMaterialGrantStore,
 		resolveCurrentActor: (userId) =>
@@ -556,9 +570,26 @@ export function assemblePlatformApi(
 					connectionInstallations: {
 						identity: input.identity,
 						publicOrigin: input.connectionInstallation.publicOrigin,
+						callbackEnabled: () =>
+							input.connectionInstallationCallback !== undefined,
 						installation: createConnectionInstallationAuthorizationV1({
 							store: installationStore,
 						}),
+					},
+				}
+			: {}),
+		...(installationStore &&
+		input.connectionInstallation &&
+		input.connectionInstallationCallback
+			? {
+					connectionInstallationCallback: {
+						publicOrigin: input.connectionInstallation.publicOrigin,
+						callbackUrl: input.connectionInstallation.configuration.callbackUrl,
+						issuer: input.connectionInstallation.configuration.issuer,
+						installation: createConnectionInstallationAuthorizationV1({
+							store: installationStore,
+						}),
+						forward: input.connectionInstallationCallback.forward,
 					},
 				}
 			: {}),
@@ -614,6 +645,12 @@ export function assemblePlatformApi(
 			recordRefusal: (request) =>
 				managementTransaction.recordApiManagementRefusal(request),
 		},
+		agentUserUseGrants: {
+			identity: input.identity,
+			revoke: (command) => managementTransaction.revokeUserApiUse(command),
+			recordRefusal: (request) =>
+				managementTransaction.recordApiManagementRefusal(request),
+		},
 		agentApiLifecycle: {
 			lifecycle: createAgentApiLifecycleV1(managementTransaction),
 			readState: (request, material) =>
@@ -661,6 +698,7 @@ export function assemblePlatformApi(
 		conversation: {
 			identity: input.identity,
 			authorization: conversationAuthorization,
+			...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 			commands: (identity) =>
 				createConversationExecutionUseCaseV1({
 					transaction: conversationTransaction,
@@ -692,8 +730,20 @@ export function assemblePlatformApi(
 				? { connectionCapability: input.connectionCapability }
 				: {}),
 		},
+		...(input.customAgentGateway
+			? { customAgentGateway: input.customAgentGateway }
+			: {}),
 		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },
+		skillHubRead: skillHubRead.dependencies,
 		...(input.directory ? { directory: input.directory } : {}),
+		...(input.userGovernance
+			? {
+					userGovernance: {
+						identity: input.identity,
+						users: input.userGovernance,
+					},
+				}
+			: {}),
 	};
 	const adapters = [
 		...(wecomReceipts ? [wecomReceipts] : []),
@@ -715,9 +765,11 @@ export function assemblePlatformApi(
 		personalApiCredentialStore,
 		applicationRegistrationStore,
 		applicationMaterialGrantStore,
+		skillHubRead,
 		applicationApiCredentialStore,
 		...(installationStore ? [installationStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
+		...(input.userGovernance ? [input.userGovernance] : []),
 	];
 	return {
 		dependencies,

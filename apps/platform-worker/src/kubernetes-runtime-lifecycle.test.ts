@@ -18,6 +18,7 @@ describe("GA Kubernetes Workload adapter", () => {
 		const f = fixture();
 		const desired = {
 			...workloadDesiredFixture(),
+			skillGenerationId: "e".repeat(64),
 			skills: [
 				{
 					schemaVersion: 1 as const,
@@ -58,7 +59,10 @@ describe("GA Kubernetes Workload adapter", () => {
 		const result = await f.adapter().reconcile(desired);
 		expect(result).toMatchObject({
 			status: "applied",
-			applied: { skills: desired.skills },
+			applied: {
+				skills: desired.skills,
+				skillGenerationId: desired.skillGenerationId,
+			},
 		});
 	});
 	it("does not overwrite resources from a newer fence at the same revision", async () => {

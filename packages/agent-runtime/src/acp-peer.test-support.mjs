@@ -17,18 +17,20 @@ const configOptions = () => [
 		type: "select",
 		currentValue: model,
 		options:
-			process.env.ACP_TEST_MODE === "grouped-models"
-				? [
-						{
-							group: "models",
-							name: "Models",
-							options: (model === "provider/model"
-								? ["provider/model", "provider/other"]
-								: ["provider/other"]
-							).map((value) => ({ value, name: value })),
-						},
-					]
-				: [{ value: "provider/model", name: "Synthetic model" }],
+			process.env.ACP_TEST_MODE === "current-model-only"
+				? []
+				: process.env.ACP_TEST_MODE === "grouped-models"
+					? [
+							{
+								group: "models",
+								name: "Models",
+								options: (model === "provider/model"
+									? ["provider/model", "provider/other"]
+									: ["provider/other"]
+								).map((value) => ({ value, name: value })),
+							},
+						]
+					: [{ value: "provider/model", name: "Synthetic model" }],
 	},
 	{
 		id: "effort",
@@ -43,7 +45,10 @@ const connection = new AgentSideConnection(
 	() => ({
 		initialize: async () => ({
 			protocolVersion: 1,
-			agentCapabilities: { loadSession: true },
+			agentCapabilities:
+				process.env.ACP_TEST_MODE === "no-load-session"
+					? {}
+					: { loadSession: true },
 		}),
 		newSession: async () => {
 			sessionId = randomUUID();

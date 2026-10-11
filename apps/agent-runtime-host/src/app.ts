@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 
 import {
 	discoverRuntimeBrowserCapabilityV1,
+	type RuntimeBrowserCapabilityAssemblyV1,
 	type RuntimeHost,
 	RuntimeHostError,
 } from "@agent-infra/agent-runtime";
@@ -16,6 +17,7 @@ import {
 	type RuntimeExecutionGrantV2,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeGenerationCancelRequestV3Schema,
+	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
@@ -45,6 +47,10 @@ import {
 export const runtimeHostService = "agent-runtime-host";
 
 interface RuntimeHostAppOptions {
+	/** Admitted manifest plus local probe evidence; never selected by a caller. */
+	browserCapability?:
+		| RuntimeBrowserCapabilityAssemblyV1
+		| (() => RuntimeBrowserCapabilityAssemblyV1 | undefined);
 	/** Local approved deployment snapshot; transport headers cannot select it. */
 	connectionConsumer?: RuntimeConnectionConsumerProfile;
 	/** Identity authenticated by this deployment's service token. Never a caller field. */
@@ -166,7 +172,12 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 				];
 			}),
 		);
-		const result = discoverRuntimeBrowserCapabilityV1(query);
+		const result = discoverRuntimeBrowserCapabilityV1(
+			query,
+			typeof options.browserCapability === "function"
+				? options.browserCapability()
+				: options.browserCapability,
+		);
 		if ("code" in result)
 			return context.json(
 				result,
@@ -274,6 +285,18 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		);
 		return context.json(
 			await options.host.capabilities(
+				request,
+				await options.verifyGrant(request.grant),
+			),
+		);
+	});
+	app.post("/internal/runtime/v1/model-directory", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeModelDirectoryRequestV1Schema,
+		);
+		return context.json(
+			await options.host.modelDirectory(
 				request,
 				await options.verifyGrant(request.grant),
 			),

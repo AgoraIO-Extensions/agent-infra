@@ -140,6 +140,8 @@ export const platformAuditQueryActionsV1 = [
 	"api.agent.use.replayed",
 	"api.agent.use.refused",
 	"api.agent.state.refused",
+	"platform.user.disabled",
+	"platform.user.reenabled",
 
 	"relay_key.personal.read",
 	"relay_key.personal.replace",

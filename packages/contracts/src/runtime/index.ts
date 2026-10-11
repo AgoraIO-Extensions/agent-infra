@@ -12,8 +12,10 @@ export * from "./host-v3.ts";
 export * from "./host-v4.ts";
 export * from "./host-v4-events.ts";
 export * from "./legacy-migration-v1.ts";
+export * from "./platform-entry-auth.ts";
 export * from "./readiness.ts";
 
+import { RuntimeBrowserCapabilityProbeEvidenceV1Schema } from "./browser-capability.ts";
 import {
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverLookupV1Schema,
@@ -38,6 +40,8 @@ import {
 	RuntimeCapabilitiesResponseV1Schema,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeInputV1Schema,
+	RuntimeModelDirectoryRequestV1Schema,
+	RuntimeModelDirectoryResponseV1Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResultV1Schema,
@@ -61,6 +65,8 @@ export const RuntimeHostV1SchemaDefinitions = {
 	ExecutionGrantV1: ExecutionGrantV1Schema,
 	RuntimeCapabilitiesRequestV1: RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesResponseV1: RuntimeCapabilitiesResponseV1Schema,
+	RuntimeModelDirectoryRequestV1: RuntimeModelDirectoryRequestV1Schema,
+	RuntimeModelDirectoryResponseV1: RuntimeModelDirectoryResponseV1Schema,
 	RuntimeGenerationCancelRequestV1: RuntimeGenerationCancelRequestV1Schema,
 	RuntimeInputV1: RuntimeInputV1Schema,
 	RuntimeOperationResponseV1: RuntimeOperationResponseV1Schema,
@@ -76,6 +82,8 @@ export const RuntimeHostV1SchemaDefinitions = {
 
 export const RuntimeEventV1SchemaDefinitions = {
 	RuntimeCapabilitiesV1: RuntimeCapabilitiesV1Schema,
+	RuntimeBrowserCapabilityProbeEvidenceV1:
+		RuntimeBrowserCapabilityProbeEvidenceV1Schema,
 	RuntimeSkillCapabilityV1: RuntimeSkillCapabilityV1Schema,
 	RuntimeEventV1: RuntimeEventV1Schema,
 	RuntimeStatusV1: RuntimeStatusV1Schema,

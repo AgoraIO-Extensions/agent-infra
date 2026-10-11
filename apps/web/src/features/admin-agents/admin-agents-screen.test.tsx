@@ -79,7 +79,7 @@ describe("Administrator inventory presentation", () => {
 		fireEvent.click(screen.getByRole("button", { name: "上一页" }));
 		expect(change).toHaveBeenLastCalledWith({ page: 1 });
 	});
-	it("renders all five created states without inferring action or detail/use access", () => {
+	it("renders all five created states with a narrow Owner handoff entry", () => {
 		render(
 			<AdminAgentsScreen
 				state={{
@@ -98,10 +98,16 @@ describe("Administrator inventory presentation", () => {
 		expect(
 			screen.getAllByRole("columnheader").map((cell) => cell.textContent),
 		).toEqual(["Agent", "来源", "Owner", "状态", "系统操作"]);
-		expect(screen.getAllByLabelText("无可执行的系统操作")).toHaveLength(5);
+		expect(screen.getAllByLabelText("Owner 交接入口")).toHaveLength(5);
 		expect(
 			screen.getAllByRole("link").map((link) => link.getAttribute("href")),
-		).toEqual(["/admin/approvals"]);
+		).toEqual([
+			"/admin/approvals",
+			"/agents/$agentId/configuration",
+			"/agents/$agentId/configuration",
+			"/agents/$agentId/configuration",
+			"/agents/$agentId/configuration",
+		]);
 		for (const name of ["停用", "重试", "查看详情", "开始对话"])
 			expect(screen.queryByRole("button", { name })).toBeNull();
 	});

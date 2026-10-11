@@ -791,4 +791,60 @@ describe("RuntimeHost durable Session", () => {
 			code: "RUNTIME_TURN_NOT_ACTIVE",
 		});
 	});
+
+	it("reads a bound model directory without exposing native values or creating a Turn", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+		const store = await FileRuntimeStore.open(join(directory, "host.json"));
+		const runtimeHost = await host(store, driver);
+		const submittedRequest = submitRequest();
+		const submitted = await runtimeHost.submitTurn(submittedRequest);
+		const readRequest = {
+			schemaVersion: 1 as const,
+			requestId: "request-model-directory",
+			traceId: submittedRequest.traceId,
+			actorId: submittedRequest.actorId,
+			channelId: submittedRequest.channelId,
+			agentId: submittedRequest.agentId,
+			conversationId: submittedRequest.conversationId,
+			executionId: submittedRequest.executionId,
+			turnId: submittedRequest.turnId,
+			sessionGeneration: submittedRequest.sessionGeneration,
+			deliveryFence: 1,
+			hostSessionRef: submitted.hostSessionRef,
+			grant: grant(submittedRequest, ["model-directory.read"]),
+		};
+		const result = await runtimeHost.modelDirectory(readRequest);
+		expect(result).toMatchObject({
+			hostSessionRef: submitted.hostSessionRef,
+			executionId: submittedRequest.executionId,
+			current: {
+				modelOptionId: "model-option-primary",
+				reasoningLevel: "high",
+			},
+		});
+		expect(result.options).toEqual([
+			{
+				schemaVersion: 1,
+				modelOptionId: "model-option-primary",
+				modelId: "model-option-primary",
+				displayName: "model-option-primary",
+				reasoningLevels: ["high"],
+			},
+			{
+				schemaVersion: 1,
+				modelOptionId: "model-option-alternate",
+				modelId: "model-option-alternate",
+				displayName: "model-option-alternate",
+				reasoningLevels: ["low"],
+			},
+		]);
+		expect(JSON.stringify(result)).not.toContain("native");
+		await expect(
+			runtimeHost.modelDirectory({
+				...readRequest,
+				grant: grant(submittedRequest, ["capabilities.read"]),
+			}),
+		).rejects.toMatchObject({ httpStatus: 403 });
+	});
 });

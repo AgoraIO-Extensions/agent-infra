@@ -13,6 +13,7 @@ import {
 	KubernetesRuntimeCapabilitiesV1Schema,
 	WorkloadCleanupRequestV1Schema,
 	WorkloadCleanupResultV1Schema,
+	WorkloadRouteOriginV1Schema,
 	WorkloadRouteSwitchRequestV1Schema,
 	WorkloadRouteSwitchResultV1Schema,
 } from "./kubernetes.ts";
@@ -54,6 +55,10 @@ import {
 	WorkerWorkloadResultV1Schema,
 } from "./worker-result.ts";
 
+export {
+	type SkillWorkloadProjectionV1,
+	SkillWorkloadProjectionV1Schema,
+} from "../skill-hub.ts";
 export * from "./common.ts";
 export * from "./kubernetes.ts";
 export * from "./registry.ts";
@@ -61,6 +66,7 @@ export {
 	type RuntimeCapabilitySetV1,
 	RuntimeCapabilitySetV1Schema,
 	RuntimeHealthV1Schema,
+	RuntimeManifestBrowserAdmissionV1Schema,
 	type RuntimeManifestCapabilitySetV1,
 	RuntimeManifestCapabilitySetV1Schema,
 	type RuntimeManifestV1,
@@ -77,6 +83,7 @@ export const kubernetesWorkloadSchemasV1 = {
 	KubernetesRuntimeCapabilitiesV1: KubernetesRuntimeCapabilitiesV1Schema,
 	WorkloadCleanupRequestV1: WorkloadCleanupRequestV1Schema,
 	WorkloadCleanupResultV1: WorkloadCleanupResultV1Schema,
+	WorkloadRouteOriginV1: WorkloadRouteOriginV1Schema,
 	WorkloadRouteSwitchRequestV1: WorkloadRouteSwitchRequestV1Schema,
 	WorkloadRouteSwitchResultV1: WorkloadRouteSwitchResultV1Schema,
 } as const;

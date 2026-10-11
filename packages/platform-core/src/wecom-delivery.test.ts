@@ -72,6 +72,15 @@ function fixture() {
 }
 it("checks the original boundary and persists sending before producing the external effect", async () => {
 	const f = fixture();
+	const media = [
+		{
+			fileId: "result-file-1",
+			name: "report.pdf",
+			mediaType: "application/pdf",
+			sizeBytes: 42,
+		},
+	] as const;
+	f.store.claim.mockResolvedValueOnce({ ...claim, media });
 	await f.useCase.dispatch();
 	expect(f.authorization.authorize).toHaveBeenCalledWith(
 		claim.scope,
@@ -85,6 +94,7 @@ it("checks the original boundary and persists sending before producing the exter
 		scope: claim.scope,
 		replyHandle: "encrypted",
 		text: "final reply",
+		media,
 		revalidate: expect.any(Function),
 	});
 	const revalidate = f.sender.send.mock.calls[0]?.[0]?.revalidate;
@@ -94,7 +104,38 @@ it("checks the original boundary and persists sending before producing the exter
 		actorId: "actor",
 	});
 	expect(await revalidate?.()).toBe(false);
-	expect(f.store.finish).toHaveBeenCalledWith(claim, "sent");
+	expect(f.store.finish).toHaveBeenCalledWith(
+		expect.objectContaining({ receiptId: claim.receiptId, media }),
+		"sent",
+	);
+});
+it("passes confirmed result files and allows a media-only reply", async () => {
+	const f = fixture();
+	const media = [
+		{
+			fileId: "result-file-1",
+			name: "report.pdf",
+			mediaType: "application/pdf",
+			sizeBytes: 42,
+		},
+	] as const;
+	f.store.claim.mockResolvedValueOnce({
+		...claim,
+		textDeltas: [],
+		media,
+	});
+	await f.useCase.dispatch();
+	expect(f.sender.send).toHaveBeenCalledWith({
+		scope: claim.scope,
+		replyHandle: claim.replyHandle,
+		text: "",
+		media,
+		revalidate: expect.any(Function),
+	});
+	expect(f.store.finish).toHaveBeenCalledWith(
+		expect.objectContaining({ media }),
+		"sent",
+	);
 });
 it("cancels before sending when identity mapping or binding changes", async () => {
 	const f = fixture();

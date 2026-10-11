@@ -71,6 +71,28 @@ import {
 
 export { workloadResourceNameV1 } from "./kubernetes-runtime-comparison.js";
 
+/** Fixed Worker-owned mount root consumed by the Runtime Host Skill seam. */
+export const skillHubWorkloadMountRootV1 = "/opt/agent-infra-skill-hub";
+const skillHubRuntimeDataSubPathV1 = "runtime-data";
+
+function skillHubVolumeMountV1(value: AgentWorkloadDesiredV1): {
+	readonly name: string;
+	readonly mountPath: string;
+	readonly subPath: string;
+	readonly readOnly: true;
+} | null {
+	const generationId = value.skillGenerationId;
+	if (generationId === undefined) return null;
+	if (!/^[a-f0-9]{64}$/.test(generationId))
+		throw new WorkloadKubernetesError("policy");
+	return {
+		name: "data",
+		mountPath: skillHubWorkloadMountRootV1,
+		subPath: `generations/${generationId}/.agents`,
+		readOnly: true,
+	};
+}
+
 export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	/** Validated deployment copy, never an Agent/request environment value. */
 	readonly connectionConsumerSnapshot?: string | null;
@@ -1260,6 +1282,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				[ownerLabel]: name,
 				[revisionLabel]: String(value.workloadRevision),
 			};
+			const skillHubMount = skillHubVolumeMountV1(value);
 			const service: V1Service = {
 				apiVersion: "v1",
 				kind: "Service",
@@ -1424,8 +1447,12 @@ export function createKubernetesRuntimeAdapterV1(options: {
 										{
 											name: "data",
 											mountPath: value.persistentVolume.mountPath,
+											...(skillHubMount
+												? { subPath: skillHubRuntimeDataSubPathV1 }
+												: {}),
 										},
 										{ name: "runtime-tmp", mountPath: "/tmp" },
+										...(skillHubMount ? [skillHubMount] : []),
 									],
 								},
 							],
@@ -1670,6 +1697,9 @@ export function createKubernetesRuntimeAdapterV1(options: {
 					networkPolicyRef: workloadResourceNameV1(value.agentId),
 					secretRefs: value.secretRefs,
 					...(value.skills ? { skills: value.skills } : {}),
+					...(value.skillGenerationId
+						? { skillGenerationId: value.skillGenerationId }
+						: {}),
 					state: value.replicas === 0 ? "scaled-down" : "applying",
 					desiredReplicas: value.replicas,
 					readyReplicas: 0,

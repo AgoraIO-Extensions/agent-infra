@@ -325,6 +325,24 @@ export type ConversationDetailProjectionV1 = {
     messages: Array<MessageProjectionV1>;
 };
 
+export type ConversationModelSelectionProjectionV1 = {
+    agentId: string;
+    available: boolean;
+    conversationId: string;
+    currentModelOptionId: string | null;
+    currentReasoningLevel: string | null;
+    options: Array<{
+        displayName: string;
+        modelId: string;
+        optionId: string;
+        reasoningLevels: Array<string>;
+    }>;
+    schemaVersion: 1;
+    selectedModelOptionId: string | null;
+    selectedReasoningLevel: string | null;
+    source: 'standard' | 'custom-platform-adapter';
+};
+
 export type ConversationProjectionV1 = {
     agentId: string;
     conversationId: string;
@@ -647,7 +665,7 @@ export type PlatformAuditProjectionV1 = {
     result: 'succeeded' | 'failed';
     schemaVersion: 1;
     subjectId: string;
-    subjectType: 'agent_application' | 'agent' | 'configuration' | 'grant';
+    subjectType: 'agent_application' | 'agent' | 'configuration' | 'grant' | 'user';
     summary: string;
     traceId: string;
 };
@@ -657,7 +675,7 @@ export type RegenerateCommandRequestV1 = {
     schemaVersion: 1;
 };
 
-export type ScopedPlatformAuditActionV1 = 'skill.version.register' | 'skill.version.review' | 'skill.version.revoke' | 'skill.version.read' | 'skill.version.refused' | 'connection.installation.begin' | 'connection.installation.confirm' | 'agent.application.submitted' | 'agent.application.updated' | 'agent.application.resubmitted' | 'agent.application.withdrawn' | 'agent.application.approved' | 'agent.application.rejected' | 'agent.lifecycle.stopped' | 'agent.lifecycle.restarted' | 'agent.lifecycle.creation_retried' | 'agent.lifecycle.disabled' | 'agent.workload.creation_succeeded' | 'agent.workload.creation_failed' | 'agent.workload.service_starting' | 'agent.workload.service_ready' | 'agent.workload.service_updating' | 'agent.workload.service_unavailable' | 'agent.configuration.revised' | 'agent.access.updated' | 'api.access.rejected' | 'api.application.created' | 'api.credential.issued' | 'api.credential.revoked' | 'api.credential.narrowed' | 'api.credential.metadata.read' | 'api.credential.delivery.granted' | 'api.credential.delivery.revoked' | 'api.agent.grant.granted' | 'api.agent.grant.revoked' | 'api.agent.metadata.read' | 'api.agent.state.read' | 'api.agent.manager.granted' | 'api.agent.manager.revoked' | 'api.agent.manager.replayed' | 'api.agent.lifecycle.refused' | 'api.agent.manager.refused' | 'api.agent.use.granted' | 'api.agent.use.revoked' | 'api.agent.use.replayed' | 'api.agent.use.refused' | 'api.agent.state.refused' | 'relay_key.personal.read' | 'relay_key.personal.replace' | 'relay_key.personal.revoke' | 'task.api.access' | 'task.api.subscription.started' | 'task.api.subscription.ended' | 'task.authorization.accepted' | 'task.status.changed' | 'task.control.created' | 'execution.operation.observed' | 'conversation.task.accepted' | 'conversation.message.accepted' | 'conversation.regeneration.accepted' | 'conversation.stop.accepted' | 'conversation.model_selection.updated' | 'conversation.model_selection.fell_back' | 'conversation.task.status' | 'secret.decrypt' | 'secret.activate' | 'secret.rewrap' | 'secret.retire-key' | 'audit.query.completed' | 'audit.query.failed' | 'wecom.setup_started' | 'wecom.credentials_submitted' | 'wecom.setup_cancelled' | 'wecom.setup_expired' | 'wecom.setup_failed' | 'wecom.callback_verified' | 'wecom.setup_activated' | 'wecom.connection_verifying' | 'wecom.connection_connected' | 'wecom.connection_disconnected' | 'wecom.connection_auth_failed' | 'wecom.denied' | 'wecom.unavailable' | 'wecom.conflict' | 'wecom.accepted' | 'wecom.unknown' | 'wecom.sending' | 'wecom.sent' | 'wecom.failed' | 'wecom.cancelled' | 'wecom.expired' | 'wecom.abandoned' | 'api.agent.create.accepted' | 'api.agent.create.replayed' | 'api.agent.create.refused' | 'relay_key.agent_default.replace';
+export type ScopedPlatformAuditActionV1 = 'skill.version.register' | 'skill.version.review' | 'skill.version.revoke' | 'skill.version.read' | 'skill.version.refused' | 'connection.installation.begin' | 'connection.installation.confirm' | 'agent.application.submitted' | 'agent.application.updated' | 'agent.application.resubmitted' | 'agent.application.withdrawn' | 'agent.application.approved' | 'agent.application.rejected' | 'agent.lifecycle.stopped' | 'agent.lifecycle.restarted' | 'agent.lifecycle.creation_retried' | 'agent.lifecycle.disabled' | 'agent.workload.creation_succeeded' | 'agent.workload.creation_failed' | 'agent.workload.service_starting' | 'agent.workload.service_ready' | 'agent.workload.service_updating' | 'agent.workload.service_unavailable' | 'agent.configuration.revised' | 'agent.access.updated' | 'api.access.rejected' | 'api.application.created' | 'api.credential.issued' | 'api.credential.revoked' | 'api.credential.narrowed' | 'api.credential.metadata.read' | 'api.credential.delivery.granted' | 'api.credential.delivery.revoked' | 'api.agent.grant.granted' | 'api.agent.grant.revoked' | 'api.agent.metadata.read' | 'api.agent.state.read' | 'api.agent.manager.granted' | 'api.agent.manager.revoked' | 'api.agent.manager.replayed' | 'api.agent.lifecycle.refused' | 'api.agent.manager.refused' | 'api.agent.use.granted' | 'api.agent.use.revoked' | 'api.agent.use.replayed' | 'api.agent.use.refused' | 'api.agent.state.refused' | 'platform.user.disabled' | 'platform.user.reenabled' | 'relay_key.personal.read' | 'relay_key.personal.replace' | 'relay_key.personal.revoke' | 'task.api.access' | 'task.api.subscription.started' | 'task.api.subscription.ended' | 'task.authorization.accepted' | 'task.status.changed' | 'task.control.created' | 'execution.operation.observed' | 'conversation.task.accepted' | 'conversation.message.accepted' | 'conversation.regeneration.accepted' | 'conversation.stop.accepted' | 'conversation.model_selection.updated' | 'conversation.model_selection.fell_back' | 'conversation.task.status' | 'secret.decrypt' | 'secret.activate' | 'secret.rewrap' | 'secret.retire-key' | 'audit.query.completed' | 'audit.query.failed' | 'wecom.setup_started' | 'wecom.credentials_submitted' | 'wecom.setup_cancelled' | 'wecom.setup_expired' | 'wecom.setup_failed' | 'wecom.callback_verified' | 'wecom.setup_activated' | 'wecom.connection_verifying' | 'wecom.connection_connected' | 'wecom.connection_disconnected' | 'wecom.connection_auth_failed' | 'wecom.denied' | 'wecom.unavailable' | 'wecom.conflict' | 'wecom.accepted' | 'wecom.unknown' | 'wecom.sending' | 'wecom.sent' | 'wecom.failed' | 'wecom.cancelled' | 'wecom.expired' | 'wecom.abandoned' | 'api.agent.create.accepted' | 'api.agent.create.replayed' | 'api.agent.create.refused' | 'relay_key.agent_default.replace';
 
 export type ScopedPlatformAuditPageV1 = {
     items: Array<ScopedPlatformAuditProjectionV1>;
@@ -836,6 +854,62 @@ export type TaskProjectionV1 = {
     schemaVersion: 1;
     status: 'waiting' | 'submitted' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'unknown';
 };
+
+export type TaskSseMessageV1 = PersistedConversationEventV1 | {
+    conversationCursor: string;
+    conversationId: string;
+    eventId: SseEventIdV1;
+    executionId: string;
+    kind: 'event';
+    occurredAt: string;
+    payload: {
+        attemptRef: string;
+        durationMs?: number;
+        failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+        finishedAt?: string;
+        kind: 'model';
+        model: {
+            configVersion: string;
+            modelId: string;
+            modelOptionId: string;
+            reasoningLevel?: string;
+        };
+        operationRef: string;
+        parentOperationRef?: string;
+        phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+        startedAt?: string;
+        usage?: {
+            cachedInputTokens?: number;
+            inputTokens?: number;
+            outputTokens?: number;
+        };
+    } | {
+        attemptRef: string;
+        connection?: {
+            callRef: string;
+            serviceRef: string;
+            verification: 'verified';
+        } | {
+            callRef?: string;
+            reason: 'receipt_missing' | 'record_unavailable' | 'authorization_unavailable' | 'binding_mismatch' | 'response_unconfirmed';
+            serviceRef: string;
+            verification: 'unverified';
+        };
+        durationMs?: number;
+        failureCode?: 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
+        finishedAt?: string;
+        kind: 'tool';
+        operationRef: string;
+        parentOperationRef?: string;
+        phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+        resultRef?: string;
+        startedAt?: string;
+        toolId: string;
+    };
+    schemaVersion: 2;
+    sequence: number;
+    type: 'execution.operation';
+} | TaskStatusEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
 
 export type TaskStatusEventV1 = {
     conversationCursor: string;
@@ -2883,6 +2957,57 @@ export type SubmitMessageResponses = {
 
 export type SubmitMessageResponse = SubmitMessageResponses[keyof SubmitMessageResponses];
 
+export type GetConversationModelSelectionData = {
+    body?: never;
+    path: {
+        conversationId: string;
+    };
+    query?: never;
+    url: '/api/v1/conversations/{conversationId}/model-selection';
+};
+
+export type GetConversationModelSelectionErrors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GetConversationModelSelectionError = GetConversationModelSelectionErrors[keyof GetConversationModelSelectionErrors];
+
+export type GetConversationModelSelectionResponses = {
+    /**
+     * Current Runtime model selection
+     */
+    200: ConversationModelSelectionProjectionV1;
+};
+
+export type GetConversationModelSelectionResponse = GetConversationModelSelectionResponses[keyof GetConversationModelSelectionResponses];
+
 export type UpdateConversationModelSelectionData = {
     body: ModelSelectionUpdateRequestV1;
     headers: {
@@ -3151,6 +3276,63 @@ export type CancelAgentTaskResponses = {
 };
 
 export type CancelAgentTaskResponse = CancelAgentTaskResponses[keyof CancelAgentTaskResponses];
+
+export type StreamAgentTaskEventsData = {
+    body?: never;
+    headers?: {
+        'Last-Event-ID'?: SseEventIdV1;
+    };
+    path: {
+        conversationId: string;
+        executionId: string;
+    };
+    query?: {
+        cursor?: string;
+    };
+    url: '/api/v1/conversations/{conversationId}/tasks/{executionId}/events';
+};
+
+export type StreamAgentTaskEventsErrors = {
+    /**
+     * Task request failed
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    500: PilotProtocolErrorV1;
+    /**
+     * Task request failed
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type StreamAgentTaskEventsError = StreamAgentTaskEventsErrors[keyof StreamAgentTaskEventsErrors];
+
+export type StreamAgentTaskEventsResponses = {
+    /**
+     * Persisted events for this Execution
+     */
+    200: TaskSseMessageV1;
+};
+
+export type StreamAgentTaskEventsResponse = StreamAgentTaskEventsResponses[keyof StreamAgentTaskEventsResponses];
 
 export type GetCurrentSessionData = {
     body?: never;

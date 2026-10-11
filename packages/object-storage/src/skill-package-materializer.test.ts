@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
 	chmod,
 	lstat,
+	mkdir,
 	mkdtemp,
 	readdir,
 	readFile,
@@ -11,6 +12,7 @@ import {
 	rm,
 	stat,
 	symlink,
+	utimes,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -101,6 +103,10 @@ describe("Skill package materializer", () => {
 		expect(result).not.toHaveProperty("readOnly");
 		expect(result).not.toHaveProperty("available");
 		expect(await adapter.readCurrent()).toEqual(result);
+		const details = await adapter.readCurrentDetails();
+		expect(details?.result).toEqual(result);
+		expect(details?.packages[0]?.manifest).toEqual(prepared.manifest);
+		expect(details?.packages[0]?.manifestDigest).toBe(selection.manifestDigest);
 		const directory = project(assemblyRoot, result.generationId);
 		expect(
 			await readFile(
@@ -116,6 +122,63 @@ describe("Skill package materializer", () => {
 				.mode & 0o777,
 		).toBe(0o444);
 		expect((await stat(directory)).mode & 0o777).toBe(0o555);
+		expect((await stat(join(assemblyRoot, "runtime-data"))).mode & 0o777).toBe(
+			0o770,
+		);
+	});
+
+	it("creates the isolated runtime-data subPath on an empty assembly root", async () => {
+		const assemblyRoot = await root();
+		const adapter = materializer(assemblyRoot);
+		expect(
+			await lstat(join(assemblyRoot, "runtime-data")).catch(() => null),
+		).toBeNull();
+		await adapter.materialize({ packages: [] });
+		const info = await stat(join(assemblyRoot, "runtime-data"));
+		expect(info.isDirectory()).toBe(true);
+		expect(info.mode & 0o777).toBe(0o770);
+	});
+
+	it.each(["file", "symlink"] as const)(
+		"rejects an unsafe pre-existing runtime-data %s",
+		async (kind) => {
+			const assemblyRoot = await root();
+			const path = join(assemblyRoot, "runtime-data");
+			if (kind === "file") await writeFile(path, "foreign");
+			else await symlink("/tmp", path);
+			const adapter = materializer(assemblyRoot);
+			await expect(adapter.materialize({ packages: [] })).rejects.toMatchObject(
+				{
+					code: "conflict",
+				},
+			);
+		},
+	);
+
+	it("rejects a stale generation expectation before replacing CURRENT", async () => {
+		const assemblyRoot = await root();
+		const adapter = materializer(assemblyRoot);
+		const current = await adapter.materialize({ packages: [selection] });
+		await expect(
+			adapter.materialize({
+				packages: [selection],
+				expectedGenerationId: "b".repeat(64),
+			}),
+		).rejects.toMatchObject({ code: "conflict" });
+		expect(await adapter.readCurrent()).toEqual(current);
+	});
+
+	it("recovers a lock directory left before its owner record was written", async () => {
+		const assemblyRoot = await root();
+		const adapter = materializer(assemblyRoot);
+		const lock = join(assemblyRoot, ".materialize-lock");
+		await mkdir(lock, { mode: 0o700 });
+		const stale = new Date(Date.now() - 10_000);
+		await utimes(lock, stale, stale);
+		await expect(
+			adapter.materialize({ packages: [selection] }),
+		).resolves.toBeDefined();
+		expect(await adapter.readCurrent()).not.toBeNull();
 	});
 });
 

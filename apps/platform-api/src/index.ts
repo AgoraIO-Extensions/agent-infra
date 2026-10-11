@@ -263,6 +263,17 @@ export function createPlatformApiShutdown(
 }
 
 export {
+	createPlatformEntryContextSignerV1,
+	createPlatformEntryContextVerifierV1,
+} from "./custom-agent-auth.js";
+export {
+	type CustomAgentAuthDeploymentV1,
+	type CustomAgentAuthGatewayRouteOptionsV1,
+	createCustomAgentAuthGatewayRouteAdapterV1,
+	createCustomAgentAuthGatewayV1,
+	registerCustomAgentAuthGatewayRoutesV1,
+} from "./custom-agent-auth-gateway.js";
+export {
 	createProductionPlatformApiAssemblyInputV1,
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";
@@ -272,6 +283,10 @@ export {
 	type LdapSessionStore,
 } from "./ldap-browser.js";
 export { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.js";
+export {
+	createRuntimeModelSelectionReaderV1,
+	type RuntimeModelDirectoryTransportV1,
+} from "./runtime-model-selection-reader.js";
 export {
 	createPendingSecretRecordAttachmentResolverV1,
 	type PreparedSecretPlaintextV1,

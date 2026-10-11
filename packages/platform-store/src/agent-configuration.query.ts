@@ -91,7 +91,10 @@ export type AgentConfigurationQueryResultV1 =
 export type AgentConfigurationAuthorityQueryInputV1 = Omit<
 	AgentConfigurationQueryInputV1,
 	"intent"
->;
+> & {
+	/** Narrow marker used only by access-only administrator Owner rescue. */
+	readonly allowAdministratorRescue?: boolean;
+};
 
 export type AgentConfigurationAuthorityQueryResultV1<
 	Configuration extends AgentConfigurationRecord = AgentConfigurationRecordV2,
@@ -212,6 +215,8 @@ export class PostgresAgentConfigurationQueryV1 {
 				!validateText(input.agentId) ||
 				!validateText(input.actorId) ||
 				typeof input.isAdministrator !== "boolean" ||
+				(input.allowAdministratorRescue !== undefined &&
+					typeof input.allowAdministratorRescue !== "boolean") ||
 				!Array.isArray(input.organizationIds) ||
 				input.organizationIds.length > maxAccessTargets ||
 				input.organizationIds.some((id) => !validateText(id))
@@ -223,7 +228,13 @@ export class PostgresAgentConfigurationQueryV1 {
 						transaction,
 						input.agentId,
 					);
-					if (!management || !isAgentOwnerV1(management, input.actorId))
+					if (
+						!management ||
+						(!isAgentOwnerV1(management, input.actorId) &&
+							!(
+								input.isAdministrator && input.allowAdministratorRescue === true
+							))
+					)
 						return { outcome: "unavailable" };
 					if (
 						management.agentId !== input.agentId ||
@@ -402,14 +413,36 @@ export class PostgresAgentConfigurationQueryV1 {
 											active.sourceReference
 									)
 										throw new AgentConfigurationStoreError();
+									const deployment = validateAgentWorkloadDesiredV1(
+										verified.deployment,
+									);
 									runtime = {
 										revision: row.revision,
 										state,
 										verifiedConfiguration,
 										verifiedSourceReference: active.sourceReference,
-										deployment: validateAgentWorkloadDesiredV1(
-											verified.deployment,
-										),
+										deployment: {
+											agentId: deployment.agentId,
+											configRevision: deployment.configRevision,
+											workloadRevision: deployment.workloadRevision,
+											fence: deployment.fence,
+											desiredState: deployment.desiredState,
+											imageDigest: deployment.imageDigest,
+											runtimeManifest: {
+												interactionMode:
+													deployment.runtimeManifest.interactionMode,
+											},
+											route: {
+												exposure: deployment.route.exposure,
+												...(deployment.route.exposure === "self-managed" &&
+												deployment.route.interactionOrigin
+													? {
+															interactionOrigin:
+																deployment.route.interactionOrigin.origin,
+														}
+													: {}),
+											},
+										},
 									};
 								} catch {
 									/* Incomplete history or invalid deployment is not runtime evidence. */

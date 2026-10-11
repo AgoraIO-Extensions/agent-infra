@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// These tests intentionally spawn the compatibility CLI repeatedly; hosted CI
+// runners need a bounded budget larger than Vitest's 5s unit default.
+vi.setConfig({ testTimeout: 30_000 });
 
 const cliPath = fileURLToPath(new URL("./compatibility.mjs", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -197,6 +201,9 @@ function restorePreApplicationUseGrantContract(value: {
 	delete value.paths[
 		"/api/v2/agents/{agentId}/application-use-grants/{applicationId}"
 	];
+	delete value.paths["/api/v2/agents/{agentId}/api-use-grants/{userId}"];
+	delete value.components.schemas.AgentUserUseRevokeRequestV1;
+	delete value.components.schemas.AgentUserUseRevokeResponseV1;
 	const actions = value.components.schemas.ScopedPlatformAuditActionV1 as
 		| { enum: string[] }
 		| undefined;
@@ -598,6 +605,11 @@ describe("contract compatibility command", () => {
 			const previous = structuredClone(current);
 			restorePreAgentApiManagementContract(previous);
 			for (const document of [current, previous]) {
+				delete document.paths[
+					"/api/v2/agents/{agentId}/api-use-grants/{userId}"
+				];
+				delete document.components.schemas.AgentUserUseRevokeRequestV1;
+				delete document.components.schemas.AgentUserUseRevokeResponseV1;
 				if (document.paths["/api/v2/agents"])
 					delete document.paths["/api/v2/agents"].post;
 				delete document.components.schemas.AgentApiCreationRequestV1;
@@ -746,7 +758,7 @@ describe("contract compatibility command", () => {
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
-	});
+	}, 120_000);
 
 	it("admits only exact scoped audit cookie/Bearer documentation and rejects authority drift", async () => {
 		const current = JSON.parse(
@@ -1569,6 +1581,87 @@ describe("contract compatibility command", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("admits only the exact administrator user governance addition", async () => {
+		const artifact = fileURLToPath(
+			new URL(
+				"../artifacts/openapi/pilot-browser.v2.openapi.json",
+				import.meta.url,
+			),
+		);
+		const current = JSON.parse(await readFile(artifact, "utf8"));
+		const previous = structuredClone(current);
+		const governancePath = "/api/v2/admin/users/{userId}/disable";
+		const governanceSchemas = [
+			"PlatformUserDisableCommandV1",
+			"PlatformUserDisableStatusV1",
+			"PlatformUserDisableResultV1",
+		];
+		delete previous.paths[governancePath];
+		for (const schema of governanceSchemas)
+			delete previous.components.schemas[schema];
+		for (const name of [
+			"PlatformAuditProjectionV1",
+			"PlatformAuditProjectionV2",
+		]) {
+			const subjectType =
+				previous.components.schemas[name]?.properties?.subjectType?.enum;
+			if (Array.isArray(subjectType))
+				previous.components.schemas[name].properties.subjectType.enum =
+					subjectType.filter((kind) => kind !== "user");
+		}
+		const actions =
+			previous.components.schemas.ScopedPlatformAuditActionV1?.enum;
+		if (Array.isArray(actions))
+			previous.components.schemas.ScopedPlatformAuditActionV1.enum =
+				actions.filter(
+					(action) =>
+						!["platform.user.disabled", "platform.user.reenabled"].includes(
+							action,
+						),
+				);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-governance-compat-"),
+		);
+		const baseline = resolve(directory, "previous.json");
+		const candidate = resolve(directory, "candidate.json");
+		try {
+			await writeFile(baseline, JSON.stringify(previous));
+			expect(comparePaths(artifact, baseline).status).toBe(0);
+			const mutations: Record<string, (value: typeof current) => void> = {
+				removedPut: (value) => {
+					delete value.paths[governancePath].put;
+				},
+				changedRequest: (value) => {
+					value.components.schemas.PlatformUserDisableCommandV1.properties.disabled =
+						{
+							type: "string",
+						};
+				},
+				removedResult: (value) => {
+					delete value.components.schemas.PlatformUserDisableResultV1;
+				},
+				changedDescription: (value) => {
+					value.paths[governancePath].get.responses["200"].description =
+						"changed";
+				},
+			};
+			for (const [name, mutate] of Object.entries(mutations)) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(candidate, JSON.stringify(changed));
+				expect(comparePaths(candidate, baseline).status, name).toBe(1);
+			}
+			const existing = structuredClone(current);
+			const changedExisting = structuredClone(current);
+			delete changedExisting.paths[governancePath].put;
+			const existingPath = resolve(directory, "existing.json");
+			await writeFile(existingPath, JSON.stringify(existing));
+			await writeFile(candidate, JSON.stringify(changedExisting));
+			expect(comparePaths(candidate, existingPath).status).toBe(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 	it("admits only the pinned personal credential contract and rejects security/material regressions", async () => {
 		const artifact = fileURLToPath(
 			new URL(
@@ -1577,6 +1670,16 @@ describe("contract compatibility command", () => {
 			),
 		);
 		const current = JSON.parse(await readFile(artifact, "utf8"));
+		// This test isolates the credential compatibility contract. Skill Hub reads
+		// have their own pinned-addition test below; keeping them out avoids paying
+		// the subprocess cost for an unrelated contract mutation matrix.
+		for (const path of [
+			"/api/v2/skills",
+			"/api/v2/skills/versions/{skillVersionId}",
+		])
+			delete current.paths[path];
+		for (const name of ["SkillHubVersionMetadataV1", "SkillHubDirectoryPageV1"])
+			delete current.components.schemas[name];
 		const latest = structuredClone(current);
 		restorePreRelayKeyContract(current);
 		const previous = structuredClone(current);
@@ -1601,9 +1704,11 @@ describe("contract compatibility command", () => {
 		);
 		const baseline = resolve(directory, "previous.json");
 		const historicalCurrent = resolve(directory, "historical-current.json");
+		const contractArtifact = resolve(directory, "skill-hub-stripped.json");
 		try {
 			await writeFile(baseline, JSON.stringify(previous));
 			await writeFile(historicalCurrent, JSON.stringify(current));
+			await writeFile(contractArtifact, JSON.stringify(current));
 			expect(comparePaths(historicalCurrent, baseline).status).toBe(0);
 			const mutations: Record<string, (value: typeof current) => void> = {
 				anonymous: (value) => {
@@ -1706,7 +1811,9 @@ describe("contract compatibility command", () => {
 				await writeFile(path, JSON.stringify(existing));
 				if (baselineKind === "governance")
 					expect(comparePaths(path, baseline).status).toBe(0);
-				expect(comparePaths(artifact, path).status, baselineKind).toBe(0);
+				expect(comparePaths(contractArtifact, path).status, baselineKind).toBe(
+					0,
+				);
 				expect(
 					comparePaths(historicalCurrent, path).status,
 					`${baselineKind}-historical`,
@@ -1733,7 +1840,7 @@ describe("contract compatibility command", () => {
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
-	}, 30_000);
+	}, 120_000);
 	it("tracks published browser, file, readiness and template-release contracts", async () => {
 		const source = await readFile(cliPath, "utf8");
 		for (const path of [
@@ -1765,6 +1872,90 @@ describe("contract compatibility command", () => {
 		);
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
+	});
+
+	it("accepts only the reviewed custom Agent model selection additions", async () => {
+		type OpenApiDocument = {
+			components: {
+				schemas: Record<string, Record<string, unknown>>;
+			};
+			paths: Record<string, { get?: unknown }>;
+		};
+		const cases = [
+			{
+				name: "runtime-host.v1.openapi.json",
+				remove(value: OpenApiDocument) {
+					delete value.components.schemas.RuntimeModelDirectoryRequestV1;
+					delete value.components.schemas.RuntimeModelDirectoryResponseV1;
+					const schema = value.components.schemas.ExecutionGrantCommandV1;
+					if (!schema) throw new Error("ExecutionGrantCommandV1 missing");
+					const commands = schema.enum as string[];
+					schema.enum = commands.filter(
+						(command) => command !== "model-directory.read",
+					);
+				},
+			},
+			{
+				name: "pilot-delegated.v1.openapi.json",
+				remove(value: OpenApiDocument) {
+					const schema = value.components.schemas.ExecutionGrantCommandV1;
+					if (!schema) throw new Error("ExecutionGrantCommandV1 missing");
+					const commands = schema.enum as string[];
+					schema.enum = commands.filter(
+						(command) => command !== "model-directory.read",
+					);
+				},
+			},
+			{
+				name: "pilot-browser.v1.openapi.json",
+				remove(value: OpenApiDocument) {
+					const path =
+						value.paths[
+							"/api/v1/conversations/{conversationId}/model-selection"
+						];
+					if (!path) throw new Error("model-selection path missing");
+					delete path.get;
+					delete value.components.schemas
+						.ConversationModelSelectionProjectionV1;
+				},
+			},
+		] as const;
+		const directory = await mkdtemp(resolve(tmpdir(), "custom-agent-compat-"));
+		try {
+			for (const entry of cases) {
+				const current = JSON.parse(
+					await readFile(
+						new URL(`../artifacts/openapi/${entry.name}`, import.meta.url),
+						"utf8",
+					),
+				);
+				const previous = structuredClone(current);
+				entry.remove(previous);
+				const previousPath = resolve(directory, `previous-${entry.name}`);
+				const currentPath = resolve(directory, `current-${entry.name}`);
+				await writeFile(previousPath, JSON.stringify(previous));
+				await writeFile(currentPath, JSON.stringify(current));
+				expect(comparePaths(currentPath, previousPath).status).toBe(0);
+				const altered = structuredClone(current);
+				if (entry.name === "runtime-host.v1.openapi.json") {
+					altered.components.schemas.RuntimeModelDirectoryResponseV1.properties.options.maxItems = 63;
+				} else if (entry.name === "pilot-browser.v1.openapi.json") {
+					altered.components.schemas.ConversationModelSelectionProjectionV1.properties.available.type =
+						"string";
+				} else {
+					altered.components.schemas.ExecutionGrantCommandV1.enum =
+						altered.components.schemas.ExecutionGrantCommandV1.enum.filter(
+							(value: string) => value !== "turn.submit",
+						);
+				}
+				await writeFile(currentPath, JSON.stringify(altered));
+				expect(comparePaths(currentPath, previousPath).status, entry.name).toBe(
+					1,
+				);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	it("accepts the additive server-resolved Connection capability", async () => {
@@ -2234,6 +2425,8 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/me/conversations/recent" &&
 				path !== "/api/v2/me/api-credentials" &&
 				path !== "/api/v2/me/api-credentials/{credentialId}" &&
+				path !== "/api/v2/skills" &&
+				path !== "/api/v2/skills/versions/{skillVersionId}" &&
 				path !== "/api/v2/applications/{applicationId}/credentials" &&
 				path !== "/api/v2/applications/{applicationId}/material-grant" &&
 				path !==

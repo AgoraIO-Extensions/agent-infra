@@ -2,6 +2,10 @@ import type { startObservability } from "@agent-infra/observability";
 import { createHttpObservability } from "@agent-infra/observability/http";
 import { Hono } from "hono";
 import {
+	type CustomAgentAuthGatewayRouteOptionsV1,
+	registerCustomAgentAuthGatewayRoutesV1,
+} from "./custom-agent-auth-gateway.js";
+import {
 	type AgentApiCreationRouteDependencies,
 	registerAgentApiCreationRoutes,
 } from "./http/agent-api-creation-routes.js";
@@ -13,6 +17,10 @@ import {
 	type AgentApplicationGrantRouteDependencies,
 	registerAgentApplicationGrantRoutes,
 } from "./http/agent-application-grant-routes.js";
+import {
+	type AgentUserUseGrantRouteDependencies,
+	registerAgentUserUseGrantRoutes,
+} from "./http/agent-user-use-grant-routes.js";
 import { registerApplicationApiCredentialRoutes } from "./http/application-api-credential-routes.js";
 import {
 	type ApplicationMaterialGrantRouteDependencies,
@@ -24,6 +32,10 @@ import {
 } from "./http/application-registration-routes.js";
 import { HttpProtocolError, requestMetadata } from "./http/common.js";
 import type { ConfigurationRoutesDependencies } from "./http/configuration-routes.js";
+import {
+	type ConnectionInstallationCallbackRouteDependenciesV1,
+	registerConnectionInstallationCallbackRoutesV1,
+} from "./http/connection-installation-callback-routes.js";
 import {
 	type ConnectionInstallationRouteDependenciesV1,
 	registerConnectionInstallationRoutesV1,
@@ -62,9 +74,17 @@ import {
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
 import {
+	registerSkillHubReadRoutesV1,
+	type SkillHubReadRoutesDependenciesV1,
+} from "./http/skill-hub-read-routes.js";
+import {
 	registerTaskRoutes,
 	type TaskRoutesDependencies,
 } from "./http/task-routes.js";
+import {
+	registerUserGovernanceRoutes,
+	type UserGovernanceRoutesDependencies,
+} from "./http/user-governance-routes.js";
 import { registerV2ConfigurationRoutes } from "./http/v2-configuration-routes.js";
 import {
 	type ManagementRouteDependencies,
@@ -87,9 +107,11 @@ type ApiObservability = Pick<
 
 export interface PlatformAppDependencies {
 	readonly connectionInstallations?: ConnectionInstallationRouteDependenciesV1;
+	readonly connectionInstallationCallback?: ConnectionInstallationCallbackRouteDependenciesV1;
 	readonly agentApiCreation?: AgentApiCreationRouteDependencies;
 	readonly agentApiLifecycle?: AgentApiLifecycleRouteDependencies;
 	readonly agentApplicationGrants?: AgentApplicationGrantRouteDependencies;
+	readonly agentUserUseGrants?: AgentUserUseGrantRouteDependencies;
 	readonly applicationApiCredentials?: Parameters<
 		typeof registerApplicationApiCredentialRoutes
 	>[1];
@@ -97,6 +119,10 @@ export interface PlatformAppDependencies {
 		request: Request,
 		work: () => Promise<Response>,
 	) => Promise<Response>;
+	/** Optional deployment-owned platform-identity route for custom Agents. */
+	readonly customAgentGateway?: CustomAgentAuthGatewayRouteOptionsV1 & {
+		readonly path: string;
+	};
 	readonly files?: FileRoutesDependenciesV1;
 	readonly applications?: ApplicationRegistrationRouteDependencies;
 	readonly applicationMaterialGrants?: ApplicationMaterialGrantRouteDependencies;
@@ -116,6 +142,8 @@ export interface PlatformAppDependencies {
 	>[1];
 	readonly scopedAudit?: ScopedAuditRoutesDependencies;
 	readonly directory?: DirectoryRouteDependencies;
+	readonly skillHubRead?: SkillHubReadRoutesDependenciesV1;
+	readonly userGovernance?: UserGovernanceRoutesDependencies;
 }
 
 export function createPlatformHealthApp(observability?: ApiObservability) {
@@ -157,6 +185,11 @@ export function createPlatformApp(
 			});
 			return context.res;
 		});
+	if (dependencies.customAgentGateway)
+		registerCustomAgentAuthGatewayRoutesV1(
+			app,
+			dependencies.customAgentGateway,
+		);
 	if (dependencies.wecomSetup)
 		registerWecomSetupRoutesV1(app, dependencies.wecomSetup);
 	if (dependencies.wecomApplicationSetup)
@@ -168,10 +201,17 @@ export function createPlatformApp(
 	else if (dependencies.wecomReceipts)
 		registerWecomReceiptRoutesV1(app, dependencies.wecomReceipts);
 	registerRetiredManagementRoutes(app);
+	if (dependencies.userGovernance)
+		registerUserGovernanceRoutes(app, dependencies.userGovernance);
 	if (dependencies.connectionInstallations)
 		registerConnectionInstallationRoutesV1(
 			app,
 			dependencies.connectionInstallations,
+		);
+	if (dependencies.connectionInstallationCallback)
+		registerConnectionInstallationCallbackRoutesV1(
+			app,
+			dependencies.connectionInstallationCallback,
 		);
 	if (dependencies.personalRelayKeys)
 		registerPersonalRelayKeyRoutes(app, dependencies.personalRelayKeys);
@@ -183,6 +223,8 @@ export function createPlatformApp(
 			app,
 			dependencies.agentApplicationGrants,
 		);
+	if (dependencies.agentUserUseGrants)
+		registerAgentUserUseGrantRoutes(app, dependencies.agentUserUseGrants);
 	if (dependencies.agentApiLifecycle)
 		registerAgentApiLifecycleRoutes(app, dependencies.agentApiLifecycle);
 	if (dependencies.applications)
@@ -219,5 +261,7 @@ export function createPlatformApp(
 	if (dependencies.directory)
 		registerDirectoryRoutes(app, dependencies.directory);
 	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
+	if (dependencies.skillHubRead)
+		registerSkillHubReadRoutesV1(app, dependencies.skillHubRead);
 	return app;
 }

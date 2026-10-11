@@ -150,7 +150,9 @@ function decodeInstallation(
 
 async function audit(
 	transaction: Pick<Transaction, "insert">,
-	request: SkillHubRequestV1,
+	request: Omit<SkillHubRequestV1, "userId"> & {
+		readonly userId: string | null;
+	},
 	action: string,
 	versionId: string,
 	outcome: "succeeded" | "rejected" | "failed",
@@ -160,8 +162,8 @@ async function audit(
 		id: randomUUID(),
 		requestId: request.requestId,
 		traceId: request.traceId,
-		actorType: "user",
-		actorId: request.userId,
+		actorType: request.userId === null ? "unknown" : "user",
+		actorId: request.userId ?? "anonymous",
 		action,
 		targetType: "unknown",
 		targetId: versionId,
@@ -976,6 +978,65 @@ export class PostgresSkillHubLifecycleV1 {
 					{ state: version.state, replayed: false },
 				);
 				return version;
+			},
+		);
+	}
+
+	async recordReadRefusal(
+		context: { readonly requestId: string; readonly traceId: string },
+		userId: string | null,
+		reason:
+			| "authentication_required"
+			| "forbidden"
+			| "invalid_input"
+			| "unavailable",
+	) {
+		try {
+			await audit(
+				this.#database,
+				{ ...context, userId },
+				"skill.version.refused",
+				"unknown",
+				reason === "unavailable" ? "failed" : "rejected",
+				{ reason },
+			);
+		} catch {
+			throw new SkillHubOperationErrorV1("unavailable");
+		}
+	}
+
+	async readVisibleVersion(context: SkillHubRequestV1, versionId: string) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				// Reuse parent -> version locks so disable/revoke cannot race this read.
+				const version = await this.#version(
+					transaction,
+					parseSkillHubIdV1(versionId),
+				);
+				const [parent] = await transaction
+					.select()
+					.from(skillHubSkills)
+					.where(eq(skillHubSkills.id, version.skillId));
+				if (
+					!parent ||
+					!canViewSkillHubVersionV1(
+						version,
+						identity.actor,
+						parent.organizationId,
+						parent.status,
+					)
+				)
+					throw new SkillHubOperationErrorV1("not_found");
+				await audit(
+					transaction,
+					request,
+					"skill.version.read",
+					version.skillVersionId,
+					"succeeded",
+					{ state: version.state, replayed: false },
+				);
+				return Object.freeze({ ...version, name: parent.name });
 			},
 		);
 	}

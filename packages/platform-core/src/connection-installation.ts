@@ -43,6 +43,16 @@ export interface ConnectionInstallationAuthorizationFactV1 {
 		| "expired"
 		| "unknown";
 	readonly expiresAt: number;
+	/** Runtime-generated OAuth entry point; no credential material. */
+	readonly authorizationUrl?: string;
+	readonly callback?: ConnectionInstallationCallbackV1;
+}
+export interface ConnectionInstallationCallbackV1 {
+	readonly stateHash: string;
+	readonly runtimeOrigin: string;
+	readonly expiresAt: number;
+	readonly status: "pending" | "sending" | "delivered" | "unknown";
+	readonly attemptExpiresAt?: number;
 }
 export interface ConnectionInstallationCommandFactV1 {
 	readonly schemaVersion: 1;
@@ -51,6 +61,8 @@ export interface ConnectionInstallationCommandFactV1 {
 	readonly command: "begin" | "confirm" | "status";
 	readonly requestDigest: string;
 	readonly status: "pending" | "sending" | "completed" | "unknown" | "rejected";
+	readonly attemptId: string | null;
+	readonly attemptOwner: string | null;
 	readonly createdAt: number;
 	readonly updatedAt: number;
 }
@@ -81,10 +93,24 @@ export interface ConnectionInstallationSavedV1 {
 	readonly agentAuthorizationRevision: string;
 }
 export interface ConnectionInstallationTransactionV1 {
-	hasUnresolvedSend(authorizationId: string): Promise<boolean>;
+	claimCallback?(input: {
+		stateHash: string;
+		now: number;
+	}): Promise<ConnectionInstallationCallbackClaimV1 | null>;
+	settleCallback?(input: {
+		stateHash: string;
+		attemptId: string;
+		now: number;
+		status: "delivered" | "unknown";
+	}): Promise<boolean>;
+	hasUnresolvedSend(
+		authorizationId: string,
+		exclude?: { commandId: string; attemptId: string; attemptOwner: string },
+	): Promise<boolean>;
 	commandAllowed(
 		authorizationId: string,
 		command: "begin" | "confirm",
+		attempt?: { commandId: string; attemptId: string; attemptOwner: string },
 	): Promise<boolean>;
 	current(
 		userId: string,
@@ -121,10 +147,41 @@ export interface ConnectionInstallationTransactionV1 {
 		traceId: string,
 	): Promise<void>;
 }
+export interface ConnectionInstallationCallbackClaimV1 {
+	readonly authorizationId: string;
+	readonly runtimeOrigin: string;
+	readonly callbackPath: "/internal/runtime/oauth/v1/callback";
+	readonly attemptId: string;
+	readonly expiresAt: number;
+	readonly issuer: string;
+}
 export interface ConnectionInstallationStoreV1 {
 	transaction<T>(
 		work: (transaction: ConnectionInstallationTransactionV1) => Promise<T>,
 	): Promise<T>;
+}
+export interface ConnectionInstallationPendingCommandV1 {
+	readonly authorization: ConnectionInstallationAuthorizationFactV1;
+	readonly command: ConnectionInstallationCommandFactV1;
+}
+export interface ConnectionInstallationCommandDrainStoreV1 {
+	listPending(
+		limit: number,
+		executionIds?: readonly string[],
+	): Promise<readonly ConnectionInstallationPendingCommandV1[]>;
+	claimPending(input: {
+		commandId: string;
+		attemptId: string;
+		attemptOwner: string;
+	}): Promise<ConnectionInstallationPendingCommandV1 | null>;
+	settle(input: {
+		commandId: string;
+		attemptId: string;
+		attemptOwner: string;
+		status: "completed" | "unknown";
+		authorizationUrl?: string;
+		authorizationExpiresAt?: number;
+	}): Promise<boolean>;
 }
 
 function denied(): never {
@@ -245,7 +302,10 @@ export function createConnectionInstallationAuthorizationV1(options: {
 					denied();
 				const now = await transaction.now();
 				if (existing) requireSaved(existing, current, now);
-				if (request.command === "status") return existing!.authorization;
+				if (request.command === "status") {
+					if (!existing) denied();
+					return existing.authorization;
+				}
 				const replay = await transaction.receipt(
 					request.userId,
 					request.idempotencyKey as string,
@@ -316,6 +376,8 @@ export function createConnectionInstallationAuthorizationV1(options: {
 						command: request.command,
 						requestDigest: digest,
 						status: "pending",
+						attemptId: null,
+						attemptOwner: null,
 						createdAt: now,
 						updatedAt: now,
 					},
@@ -344,6 +406,29 @@ export function createConnectionInstallationAuthorizationV1(options: {
 	};
 	return {
 		execute,
+		callback: {
+			claim: async (input: { stateHash: string; now: number }) => {
+				if (!/^[a-f0-9]{64}$/.test(input.stateHash)) return null;
+				if (!options.store.transaction) return null;
+				return options.store.transaction(
+					(transaction) =>
+						transaction.claimCallback?.(input) ?? Promise.resolve(null),
+				);
+			},
+			settle: async (input: {
+				stateHash: string;
+				attemptId: string;
+				now: number;
+				status: "delivered" | "unknown";
+			}) => {
+				if (!/^[a-f0-9]{64}$/.test(input.stateHash)) return false;
+				if (!options.store.transaction) return false;
+				return options.store.transaction(
+					(transaction) =>
+						transaction.settleCallback?.(input) ?? Promise.resolve(false),
+				);
+			},
+		},
 		async authorize(
 			input: {
 				principal: { kind: "user" | "application"; id: string };
@@ -351,6 +436,9 @@ export function createConnectionInstallationAuthorizationV1(options: {
 				scope: ConnectionInstallationScopeV1;
 				authorizationId: string;
 				command: "begin" | "confirm" | "status";
+				commandId?: string;
+				attemptId?: string;
+				attemptOwner?: string;
 			},
 			signal: AbortSignal,
 			finalCheck: () => Promise<void>,
@@ -385,15 +473,28 @@ export function createConnectionInstallationAuthorizationV1(options: {
 							record.authorization.status !== "confirmed")
 					)
 						denied();
-					if (
-						snapshot.command !== "status" &&
-						((await transaction.hasUnresolvedSend(snapshot.authorizationId)) ||
+					if (snapshot.command !== "status") {
+						const attempt =
+							snapshot.commandId && snapshot.attemptId && snapshot.attemptOwner
+								? {
+										commandId: snapshot.commandId,
+										attemptId: snapshot.attemptId,
+										attemptOwner: snapshot.attemptOwner,
+									}
+								: undefined;
+						if (
+							(await transaction.hasUnresolvedSend(
+								snapshot.authorizationId,
+								attempt,
+							)) ||
 							!(await transaction.commandAllowed(
 								snapshot.authorizationId,
 								snapshot.command,
-							)))
-					)
-						denied();
+								attempt,
+							))
+						)
+							denied();
+					}
 					signal.throwIfAborted();
 					return {
 						...snapshot,

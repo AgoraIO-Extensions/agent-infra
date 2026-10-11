@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	createWecomReplyDecryptorV1,
 	createWecomReplyEncryptorV1,
@@ -40,6 +40,7 @@ function sender(
 	accessToken?: Parameters<
 		typeof createWecomSenderV1
 	>[0]["getApplicationAccessToken"],
+	sendMedia?: Parameters<typeof createWecomSenderV1>[0]["sendMedia"],
 ) {
 	const adapter = createWecomSenderV1({
 		resolveConfiguration:
@@ -57,6 +58,7 @@ function sender(
 		revealReply: reveal,
 		getApplicationAccessToken: accessToken ?? (async () => "fixture-token"),
 		fetch: fetcher,
+		...(sendMedia ? { sendMedia } : {}),
 		...(now ? { now } : {}),
 	});
 	return {
@@ -154,6 +156,60 @@ describe("reply protection and external send", () => {
 			}),
 		).toBe("unknown");
 		expect(calls).toBe(1);
+	});
+	it("delegates File Authority result media after the text reply", async () => {
+		const sendMedia = vi.fn(async () => "sent" as const);
+		const adapter = sender(
+			async () => Response.json({ errcode: 0 }),
+			undefined,
+			undefined,
+			undefined,
+			sendMedia,
+		);
+		const result = await adapter.send({
+			scope,
+			replyHandle: await protect(route),
+			text: "reply",
+			media: [
+				{
+					fileId: "file-1",
+					name: "report.pdf",
+					mediaType: "application/pdf",
+					sizeBytes: 42,
+				},
+			],
+		});
+		expect(result).toBe("sent");
+		expect(sendMedia).toHaveBeenCalledWith(
+			expect.objectContaining({
+				files: expect.arrayContaining([
+					expect.objectContaining({ fileId: "file-1" }),
+				]),
+			}),
+		);
+	});
+	it("rejects unsupported result media before sending text", async () => {
+		let calls = 0;
+		const adapter = sender(async () => {
+			calls++;
+			return Response.json({ errcode: 0 });
+		});
+		expect(
+			await adapter.send({
+				scope,
+				replyHandle: await protect(route),
+				text: "reply",
+				media: [
+					{
+						fileId: "file-1",
+						name: "report.pdf",
+						mediaType: "application/pdf",
+						sizeBytes: 42,
+					},
+				],
+			}),
+		).toBe("failed");
+		expect(calls).toBe(0);
 	});
 	it("requires a successful provider acknowledgment", async () => {
 		const handle = await protect(route);

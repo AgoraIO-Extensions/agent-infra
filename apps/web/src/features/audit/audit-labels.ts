@@ -51,6 +51,8 @@ export const auditActionLabels: Record<AuditRecord["action"], string> = {
 	"api.agent.use.refused": "拒绝应用 Agent 使用授权变更",
 	"api.agent.manager.refused": "管理授权请求拒绝",
 	"api.agent.state.refused": "状态读取拒绝",
+	"platform.user.disabled": "停用平台用户",
+	"platform.user.reenabled": "解除平台用户停用",
 	"relay_key.personal.read": "查看个人 Relay Key 状态",
 	"relay_key.personal.replace": "替换个人 Relay Key",
 	"relay_key.personal.revoke": "撤销个人 Relay Key",

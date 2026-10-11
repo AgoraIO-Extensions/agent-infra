@@ -7,6 +7,54 @@
           "minLength": 1,
           "type": "string"
         },
+        "authorizationUrl": {
+          "format": "uri",
+          "maxLength": 8192,
+          "type": "string"
+        },
+        "callback": {
+          "additionalProperties": false,
+          "properties": {
+            "attemptExpiresAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "attemptId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "expiresAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "runtimeOrigin": {
+              "format": "uri",
+              "type": "string"
+            },
+            "stateHash": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "sending",
+                "delivered",
+                "unknown"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "stateHash",
+            "runtimeOrigin",
+            "expiresAt",
+            "status"
+          ],
+          "type": "object"
+        },
         "confirmationRevision": {
           "minLength": 1,
           "type": "string"
@@ -180,9 +228,97 @@
       ],
       "type": "object"
     },
+    "ConnectionInstallationCallbackV1": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptExpiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "attemptId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "runtimeOrigin": {
+          "format": "uri",
+          "type": "string"
+        },
+        "stateHash": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "sending",
+            "delivered",
+            "unknown"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "stateHash",
+        "runtimeOrigin",
+        "expiresAt",
+        "status"
+      ],
+      "type": "object"
+    },
+    "ConnectionInstallationCommandAttemptV1": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "attemptOwner": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "commandId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "commandId",
+        "attemptId",
+        "attemptOwner"
+      ],
+      "type": "object"
+    },
     "ConnectionInstallationCommandV1": {
       "additionalProperties": false,
       "properties": {
+        "attemptId": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attemptOwner": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "authorizationId": {
           "minLength": 1,
           "type": "string"
@@ -235,6 +371,8 @@
         "command",
         "requestDigest",
         "status",
+        "attemptId",
+        "attemptOwner",
         "createdAt",
         "updatedAt"
       ],
@@ -258,6 +396,11 @@
       "properties": {
         "authorizationId": {
           "minLength": 1,
+          "type": "string"
+        },
+        "authorizationUrl": {
+          "format": "uri",
+          "maxLength": 8192,
           "type": "string"
         },
         "expiresAt": {

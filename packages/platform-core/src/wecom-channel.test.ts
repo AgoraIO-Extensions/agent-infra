@@ -5,6 +5,7 @@ import {
 	createWecomChannelV1,
 	type WecomAuthorizationPortV1,
 	type WecomChannelStorePortV1,
+	type WecomMediaResolverV1,
 	type WecomMessageV1,
 	type WecomReceiptV1,
 	wecomChannelIdV1,
@@ -24,7 +25,10 @@ const message: WecomMessageV1 = {
 	replyHandle: "encrypted",
 	replyExpiresAt: "2026-09-15T01:00:00Z",
 };
-function fixture(now = () => new Date("2026-09-15T00:00:00Z")) {
+function fixture(
+	now = () => new Date("2026-09-15T00:00:00Z"),
+	media?: WecomMediaResolverV1,
+) {
 	let allowed = true;
 	let nextId = 0;
 	const receipts = new Map<
@@ -63,6 +67,7 @@ function fixture(now = () => new Date("2026-09-15T00:00:00Z")) {
 	const useCase = createWecomChannelV1({
 		now,
 		store,
+		...(media ? { media } : {}),
 		authorization: {
 			async authorize(scope) {
 				return allowed
@@ -286,6 +291,24 @@ describe("managed WeCom channel", () => {
 	});
 });
 
+it("fails closed when a callback carries media without an authority resolver", async () => {
+	const f = fixture();
+	await expect(
+		f.useCase.receive({
+			...message,
+			media: [
+				{
+					kind: "image",
+					mediaId: "provider-media-1",
+					name: null,
+					mediaType: "image/jpeg",
+				},
+			],
+		}),
+	).rejects.toThrow("WeCom media resolver unavailable");
+	expect(f.receipts.size).toBe(0);
+});
+
 it("requires the current company identity, active Owner, binding and Agent availability", async () => {
 	const management = {
 		schemaVersion: 1 as const,
@@ -327,6 +350,7 @@ it("requires the current company identity, active Owner, binding and Agent avail
 	let organizations = ["org-1"];
 	let owners = ["owner"];
 	let channelEnabled = true;
+	let directoryRevision = "snapshot-1";
 	const auth = createWecomAuthorizationV1({
 		identity: {
 			async resolveSender() {
@@ -336,6 +360,13 @@ it("requires the current company identity, active Owner, binding and Agent avail
 					accountStatus: active ? "active" : "disabled",
 					organizationIds: organizations,
 					authorizationRevision: "identity-1",
+					directorySnapshotBinding: {
+						schemaVersion: 1,
+						source: "controlled-directory",
+						revision: directoryRevision,
+						fetchedAt: Date.now() - 1_000,
+						validUntil: Date.now() + 60_000,
+					},
 				};
 			},
 			async activeUsers() {
@@ -371,6 +402,11 @@ it("requires the current company identity, active Owner, binding and Agent avail
 		},
 	});
 	if (initial.outcome !== "allowed") throw new Error("Expected authorization");
+	directoryRevision = "snapshot-2";
+	expect(
+		await auth.authorize(message, "use", initial.authority.actor.taskBoundary),
+	).toMatchObject({ outcome: "denied" });
+	directoryRevision = "snapshot-1";
 	channelEnabled = false;
 	expect(await auth.authorize(message)).toMatchObject({ outcome: "denied" });
 	channelEnabled = true;

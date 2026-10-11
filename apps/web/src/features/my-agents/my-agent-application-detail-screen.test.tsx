@@ -291,4 +291,53 @@ describe("MyAgentApplicationDetailScreen", () => {
 		expect(screen.queryByText("MODEL_API_KEY")).toBeNull();
 		expect(screen.queryByRole("textbox")).toBeNull();
 	});
+
+	it.each([
+		[
+			"self-managed",
+			{
+				interactionMode: "self-managed",
+				identityResponsibility: "self-managed",
+			},
+			"自定义 Agent · 自有交互入口",
+			"由自有入口校验",
+		],
+		[
+			"platform-managed",
+			{
+				interactionMode: "self-managed",
+				identityResponsibility: "platform-managed",
+			},
+			"自定义 Agent · 自有交互入口",
+			"由平台校验",
+		],
+		[
+			"platform-adapter",
+			{ interactionMode: "platform-adapter" },
+			"自定义 Agent · 平台交互入口",
+			"由平台校验",
+		],
+	] as const)(
+		"projects the custom entry and identity responsibility (%s)",
+		async (_name, source, entryLabel, identityLabel) => {
+			const application = AgentApplicationProjectionV2Schema.parse({
+				...pendingApplication,
+				source: {
+					kind: "custom",
+					imageReference: "registry.example/agents/release:v1",
+					...source,
+				},
+			});
+			await renderWithMyAgentsRouter(
+				<MyAgentApplicationDetailScreen
+					onWithdraw={vi.fn()}
+					state={{ kind: "ready", application }}
+					withdrawing={false}
+				/>,
+			);
+
+			expect(screen.getByText(entryLabel)).toBeTruthy();
+			expect(screen.getByText(identityLabel)).toBeTruthy();
+		},
+	);
 });

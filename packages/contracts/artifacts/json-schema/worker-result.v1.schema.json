@@ -1382,6 +1382,10 @@
                       ],
                       "type": "object"
                     },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "skills": {
                       "items": {
                         "additionalProperties": false,
@@ -2739,6 +2743,10 @@
                       ],
                       "type": "object"
                     },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "skills": {
                       "items": {
                         "additionalProperties": false,
@@ -4096,6 +4104,10 @@
                       ],
                       "type": "object"
                     },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "skills": {
                       "items": {
                         "additionalProperties": false,
@@ -5447,6 +5459,10 @@
                         "kubernetesApiAccess"
                       ],
                       "type": "object"
+                    },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
                     },
                     "skills": {
                       "items": {
@@ -6800,6 +6816,10 @@
                       ],
                       "type": "object"
                     },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "skills": {
                       "items": {
                         "additionalProperties": false,
@@ -8152,6 +8172,10 @@
                       ],
                       "type": "object"
                     },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "skills": {
                       "items": {
                         "additionalProperties": false,
@@ -9156,6 +9180,24 @@
                           "const": "self-managed",
                           "type": "string"
                         },
+                        "interactionOrigin": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "origin": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "origin"
+                          ],
+                          "type": "object"
+                        },
                         "name": {
                           "minLength": 1,
                           "type": "string"
@@ -9503,6 +9545,10 @@
                         "kubernetesApiAccess"
                       ],
                       "type": "object"
+                    },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
                     },
                     "skills": {
                       "items": {
@@ -10508,6 +10554,24 @@
                           "const": "self-managed",
                           "type": "string"
                         },
+                        "interactionOrigin": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "origin": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "origin"
+                          ],
+                          "type": "object"
+                        },
                         "name": {
                           "minLength": 1,
                           "type": "string"
@@ -10855,6 +10919,10 @@
                         "kubernetesApiAccess"
                       ],
                       "type": "object"
+                    },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
                     },
                     "skills": {
                       "items": {
@@ -11860,6 +11928,24 @@
                           "const": "self-managed",
                           "type": "string"
                         },
+                        "interactionOrigin": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "origin": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "origin"
+                          ],
+                          "type": "object"
+                        },
                         "name": {
                           "minLength": 1,
                           "type": "string"
@@ -12207,6 +12293,10 @@
                         "kubernetesApiAccess"
                       ],
                       "type": "object"
+                    },
+                    "skillGenerationId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
                     },
                     "skills": {
                       "items": {
@@ -14847,6 +14937,24 @@
                                       "const": "self-managed",
                                       "type": "string"
                                     },
+                                    "interactionOrigin": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "origin": {
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "schemaVersion": {
+                                          "const": 1,
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "schemaVersion",
+                                        "origin"
+                                      ],
+                                      "type": "object"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -14984,6 +15092,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillGenerationId": {
+                              "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
                             },
                             "skills": {
@@ -15513,6 +15625,24 @@
                                       "const": "self-managed",
                                       "type": "string"
                                     },
+                                    "interactionOrigin": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "origin": {
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "schemaVersion": {
+                                          "const": 1,
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "schemaVersion",
+                                        "origin"
+                                      ],
+                                      "type": "object"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -15650,6 +15780,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillGenerationId": {
+                              "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
                             },
                             "skills": {
@@ -16422,6 +16556,24 @@
                                       "const": "self-managed",
                                       "type": "string"
                                     },
+                                    "interactionOrigin": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "origin": {
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "schemaVersion": {
+                                          "const": 1,
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "schemaVersion",
+                                        "origin"
+                                      ],
+                                      "type": "object"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -16559,6 +16711,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillGenerationId": {
+                              "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
                             },
                             "skills": {
@@ -17066,6 +17222,24 @@
                                       "const": "self-managed",
                                       "type": "string"
                                     },
+                                    "interactionOrigin": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "origin": {
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "schemaVersion": {
+                                          "const": 1,
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "schemaVersion",
+                                        "origin"
+                                      ],
+                                      "type": "object"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -17203,6 +17377,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillGenerationId": {
+                              "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
                             },
                             "skills": {
@@ -18581,6 +18759,24 @@
                                       "const": "self-managed",
                                       "type": "string"
                                     },
+                                    "interactionOrigin": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "origin": {
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "schemaVersion": {
+                                          "const": 1,
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "schemaVersion",
+                                        "origin"
+                                      ],
+                                      "type": "object"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -18718,6 +18914,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillGenerationId": {
+                              "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
                             },
                             "skills": {
@@ -19247,6 +19447,24 @@
                                       "const": "self-managed",
                                       "type": "string"
                                     },
+                                    "interactionOrigin": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "origin": {
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "schemaVersion": {
+                                          "const": 1,
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "schemaVersion",
+                                        "origin"
+                                      ],
+                                      "type": "object"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -19384,6 +19602,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillGenerationId": {
+                              "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
                             },
                             "skills": {
@@ -20156,6 +20378,24 @@
                                       "const": "self-managed",
                                       "type": "string"
                                     },
+                                    "interactionOrigin": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "origin": {
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "schemaVersion": {
+                                          "const": 1,
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "schemaVersion",
+                                        "origin"
+                                      ],
+                                      "type": "object"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -20293,6 +20533,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillGenerationId": {
+                              "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
                             },
                             "skills": {
@@ -20800,6 +21044,24 @@
                                       "const": "self-managed",
                                       "type": "string"
                                     },
+                                    "interactionOrigin": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "origin": {
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "schemaVersion": {
+                                          "const": 1,
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "schemaVersion",
+                                        "origin"
+                                      ],
+                                      "type": "object"
+                                    },
                                     "name": {
                                       "minLength": 1,
                                       "type": "string"
@@ -20937,6 +21199,10 @@
                             },
                             "serviceRef": {
                               "minLength": 1,
+                              "type": "string"
+                            },
+                            "skillGenerationId": {
+                              "pattern": "^[a-f0-9]{64}$",
                               "type": "string"
                             },
                             "skills": {

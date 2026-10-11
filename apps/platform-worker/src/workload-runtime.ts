@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { RuntimeCapabilitiesV1Schema } from "@agent-infra/contracts/runtime";
+import {
+	type BrowserCapabilityBindingV1,
+	RuntimeCapabilitiesV1Schema,
+} from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
 	type PlatformSecretRecordV1,
@@ -46,7 +49,21 @@ import {
 	type KubernetesWorkloadPolicyV1,
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
+import { createWorkloadInteractionOriginV1 } from "./kubernetes-runtime-policy.js";
 import { runtimeFetch } from "./runtime-transport.js";
+import {
+	validateWorkloadSkillMaterializationV1,
+	type WorkloadSkillMaterializationResultV1,
+	type WorkloadSkillMaterializerV1,
+} from "./skill-materialization.js";
+
+export type WorkloadBrowserBindingResolverV1 = (input: {
+	readonly agentId: string;
+	readonly workloadRevision: number;
+	readonly fence: number;
+	readonly imageDigest: string;
+	readonly manifest: AgentWorkloadDesiredV1["runtimeManifest"];
+}) => BrowserCapabilityBindingV1 | undefined;
 
 export interface WorkloadRuntimeOptionsV1 {
 	readonly workerId: string;
@@ -64,7 +81,11 @@ export interface WorkloadRuntimeOptionsV1 {
 	/** Trusted template/digest profiles; an explicit empty list supports custom Agents only. */
 	readonly templateModelBindings: readonly StandardTemplateModelBindingV1[];
 	readonly executionCapacityProfiles?: readonly WorkloadExecutionCapacityV1[];
+	/** Trusted deployment-owned fixed Skill materialization; failures reject preflight. */
+	readonly skillMaterializer?: WorkloadSkillMaterializerV1;
 	readonly fetch?: typeof fetch;
+	/** Deployment-owned Session binding for the current Browser Sandbox. */
+	readonly browserBinding?: WorkloadBrowserBindingResolverV1;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
 		readonly workloadRevision: number;
@@ -72,6 +93,14 @@ export interface WorkloadRuntimeOptionsV1 {
 		readonly fence: number;
 		readonly imageDigest: string;
 		readonly manifest: AgentWorkloadDesiredV1["runtimeManifest"];
+		readonly browserBinding?: {
+			readonly agentId: string;
+			readonly sessionId: string;
+			readonly sessionGeneration: number;
+			readonly resourceFence: number;
+			readonly workloadRevision: number;
+			readonly imageDigest: string;
+		};
 		readonly signal: AbortSignal;
 	}) => Promise<{
 		readonly core: "passed" | "failed";
@@ -461,6 +490,18 @@ export function createWorkloadRuntimeV1(
 							imageDigest: desired.imageDigest,
 							baseUrl,
 							manifest: desired.runtimeManifest,
+							...(desired.runtimeManifest.capabilities?.browser &&
+							options.browserBinding
+								? {
+										browserBinding: options.browserBinding({
+											agentId: desired.agentId,
+											workloadRevision: desired.workloadRevision,
+											fence: desired.fence,
+											imageDigest: desired.imageDigest,
+											manifest: desired.runtimeManifest,
+										}),
+									}
+								: {}),
 							signal: controller.signal,
 						}),
 						new Promise<never>((_resolve, reject) =>
@@ -837,6 +878,23 @@ export function createWorkloadRuntimeV1(
 							configuration.source.identityResponsibility === "platform-managed"
 						? "platform-auth"
 						: "self-managed";
+			let materializedSkills: WorkloadSkillMaterializationResultV1 | undefined;
+			if (options.skillMaterializer) {
+				materializedSkills = validateWorkloadSkillMaterializationV1(
+					{
+						agentId: state.agentId,
+						configurationRevision: configuration.revision,
+						workloadRevision: state.revision,
+						fence: state.fence,
+					},
+					await options.skillMaterializer.materialize({
+						agentId: state.agentId,
+						configurationRevision: configuration.revision,
+						workloadRevision: state.revision,
+						fence: state.fence,
+					}),
+				);
+			}
 			try {
 				const deployment = validateAgentWorkloadDesiredV1({
 					schemaVersion: 1,
@@ -895,10 +953,28 @@ export function createWorkloadRuntimeV1(
 						connectionDatabaseAccess: false,
 						decryptionKeyringAccess: false,
 					},
-					route: { name, exposure, tlsRequired: true },
+					route: {
+						name,
+						exposure,
+						tlsRequired: true,
+						...(exposure === "self-managed"
+							? {
+									interactionOrigin: createWorkloadInteractionOriginV1({
+										routeHostSuffix: options.policy.routeHostSuffix,
+										agentId: state.agentId,
+									}),
+								}
+							: {}),
+					},
 					secretRefs: secretBindings.map(({ record }) =>
 						recordReference(record),
 					),
+					...(materializedSkills
+						? {
+								skills: materializedSkills.skills,
+								skillGenerationId: materializedSkills.generationId,
+							}
+						: {}),
 					desiredState: "running",
 					replicas: 1,
 				});

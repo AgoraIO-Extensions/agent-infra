@@ -10,6 +10,7 @@ import {
 	history,
 	timestamp,
 } from "../src/features/conversation/conversation-test-fixtures";
+import { controlledFileLimits, isFileLimitsRequest } from "./file-limits";
 
 const longCode = `const value = "${"long-value-".repeat(80)}";`;
 const longTableValue = "long-table-value-".repeat(40);
@@ -71,6 +72,8 @@ test("assistant Markdown stays readable through history reload and version switc
 	});
 	await page.route(/\/api\/v[12]\//, async (route) => {
 		const path = new URL(route.request().url()).pathname;
+		if (isFileLimitsRequest(route.request().method(), path))
+			return route.fulfill({ json: controlledFileLimits() });
 		if (path === "/api/v2/me/conversations/recent")
 			return route.fulfill({
 				json: ConversationPageV1Schema.parse({ items: [], nextCursor: null }),

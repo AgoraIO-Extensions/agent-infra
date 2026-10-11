@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
+	BrowserCapabilityAvailableV1,
+	RuntimeCapabilitiesV1,
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
@@ -13,6 +18,8 @@ export interface AcpRuntimeModelOption {
 	readonly reasoningLevels: readonly string[];
 }
 export interface GenericAcpRuntimeDriverOptions {
+	/** Deployment-owned verified Browser projection; never selected by a wire command. */
+	readonly browserCapability?: BrowserCapabilityAvailableV1;
 	readonly path: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
@@ -28,8 +35,8 @@ export interface GenericAcpRuntimeDriverOptions {
 /** ACP lifecycle and event adaptation; durable operations are shared with Pi. */
 export type GenericAcpRuntimeDriver = SessionRuntimeDriver;
 export const GenericAcpRuntimeDriver = {
-	open(options: GenericAcpRuntimeDriverOptions) {
-		return SessionRuntimeDriver.open({
+	async open(options: GenericAcpRuntimeDriverOptions) {
+		const driver = await SessionRuntimeDriver.open({
 			...options,
 			cursorPrefix: "acp",
 			retireSession: retireAcpProcess,
@@ -89,5 +96,67 @@ export const GenericAcpRuntimeDriver = {
 				});
 			},
 		});
+		return Object.assign(driver, {
+			/**
+			 * Probe only the ACP handshake and Session creation. A readiness probe
+			 * must not submit a prompt or otherwise consume a model/Connection.
+			 */
+			probeReadiness: (signal: AbortSignal): Promise<RuntimeCapabilitiesV1> =>
+				probeAcpReadiness(options, signal),
+		});
 	},
 };
+
+async function probeAcpReadiness(
+	options: GenericAcpRuntimeDriverOptions,
+	signal: AbortSignal,
+): Promise<RuntimeCapabilitiesV1> {
+	if (signal.aborted) throw new Error("RUNTIME_READINESS_UNAVAILABLE");
+	const directory = await mkdtemp(join(tmpdir(), "agent-infra-acp-probe-"));
+	const cwd = join(directory, "workspace");
+	await mkdir(cwd, { recursive: true, mode: 0o700 });
+	let session: Awaited<ReturnType<typeof openAcpSession>> | undefined;
+	try {
+		const probe = (async () => {
+			const selection: RuntimeSelectionV1 = {
+				schemaVersion: 1,
+				modelOptionId: options.defaultModelOptionId,
+				reasoningLevel: options.defaultReasoningLevel,
+			};
+			session = await openAcpSession({
+				launch: await options.launch(directory, selection, async () => {}),
+				directory,
+				cwd,
+				update: async () => {},
+			});
+			if (signal.aborted) throw new Error("RUNTIME_READINESS_UNAVAILABLE");
+			const selectionState = session.modelSelection();
+			return {
+				modelSelection:
+					selectionState.models.length > 0 &&
+					selectionState.currentModel !== null,
+				attachments: false,
+				resultFiles: false,
+				connection: false,
+				supplementaryInstruction: false,
+			} satisfies RuntimeCapabilitiesV1;
+		})();
+		const interrupted = new Promise<never>((_, reject) => {
+			if (signal.aborted) {
+				reject(new Error("RUNTIME_READINESS_UNAVAILABLE"));
+				return;
+			}
+			signal.addEventListener(
+				"abort",
+				() => reject(new Error("RUNTIME_READINESS_UNAVAILABLE")),
+				{ once: true },
+			);
+		});
+		return await Promise.race([probe, interrupted]);
+	} catch {
+		throw new Error("RUNTIME_READINESS_UNAVAILABLE");
+	} finally {
+		await session?.close().catch(() => {});
+		await rm(directory, { recursive: true, force: true });
+	}
+}

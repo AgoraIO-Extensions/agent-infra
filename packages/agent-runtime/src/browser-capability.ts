@@ -1,7 +1,179 @@
-import { BrowserCapabilityDiscoveryRequestV1Schema } from "@agent-infra/contracts/runtime";
+import {
+	type BrowserCapabilityAvailableV1,
+	BrowserCapabilityConformanceReceiptV1Schema,
+	BrowserCapabilityDeclarationV1Schema,
+	BrowserCapabilityDiscoveryRequestV1Schema,
+	type BrowserCapabilityOperationV1,
+	BrowserCapabilityOperationV1Schema,
+	BrowserCapabilityProvenanceV1Schema,
+} from "@agent-infra/contracts/runtime";
+
+const BROWSER_CAPABILITY_MAX_RECEIPT_AGE_MS = 5 * 60 * 1000;
+
+export interface RuntimeBrowserCapabilityProbeEvidenceV1 {
+	readonly capabilityVersion: number;
+	readonly operations: readonly BrowserCapabilityOperationV1[];
+	readonly provenance: unknown;
+	readonly conformance: unknown;
+}
+
+export interface RuntimeBrowserCapabilityAssemblyInputV1 {
+	readonly declaration: unknown;
+	readonly manifestDigest: string;
+	readonly probe: unknown;
+	readonly now?: () => number;
+	readonly maxReceiptAgeMs?: number;
+}
+
+/**
+ * A configured Browser whose authenticated evidence was rejected. Keep this
+ * distinct from an absent declaration so discovery cannot erase a binding
+ * mismatch as `not_configured`.
+ */
+export interface RuntimeBrowserCapabilityAssemblyFailureV1 {
+	readonly failure: {
+		readonly status: "unavailable";
+		readonly errorCode: "BROWSER_CAPABILITY_UNAVAILABLE";
+		readonly reason: string;
+		readonly retryable: boolean;
+	};
+}
+
+export type RuntimeBrowserCapabilityAssemblyV1 =
+	| RuntimeBrowserCapabilityAssemblyInputV1
+	| RuntimeBrowserCapabilityAssemblyFailureV1;
+
+function unavailable(
+	status: "not_configured" | "probe_failed" | "unavailable" | "stale",
+	errorCode:
+		| "BROWSER_CAPABILITY_NOT_CONFIGURED"
+		| "BROWSER_CAPABILITY_PROBE_FAILED"
+		| "BROWSER_CAPABILITY_UNAVAILABLE"
+		| "BROWSER_CAPABILITY_STALE",
+	reason: string,
+	retryable: boolean,
+) {
+	return {
+		schemaVersion: 1 as const,
+		capabilityVersion: 1,
+		status,
+		errorCode,
+		reason,
+		retryable,
+	};
+}
+
+function assembleAvailable(
+	input: RuntimeBrowserCapabilityAssemblyInputV1,
+): BrowserCapabilityAvailableV1 | ReturnType<typeof unavailable> {
+	const declaration = BrowserCapabilityDeclarationV1Schema.safeParse(
+		input.declaration,
+	);
+	if (!declaration.success) {
+		return unavailable(
+			"unavailable",
+			"BROWSER_CAPABILITY_UNAVAILABLE",
+			"Browser capability declaration is unavailable",
+			false,
+		);
+	}
+	if (!input.probe) {
+		return unavailable(
+			"probe_failed",
+			"BROWSER_CAPABILITY_PROBE_FAILED",
+			"Browser capability probe evidence is unavailable",
+			true,
+		);
+	}
+	const probe = input.probe as Partial<RuntimeBrowserCapabilityProbeEvidenceV1>;
+	const capabilityVersion =
+		typeof probe.capabilityVersion === "number"
+			? probe.capabilityVersion
+			: undefined;
+	const operations = Array.isArray(probe.operations)
+		? probe.operations
+				.map((operation) =>
+					BrowserCapabilityOperationV1Schema.safeParse(operation),
+				)
+				.filter((result) => result.success)
+				.map((result) => result.data)
+		: [];
+	const provenance = BrowserCapabilityProvenanceV1Schema.safeParse(
+		probe.provenance,
+	);
+	const conformance = BrowserCapabilityConformanceReceiptV1Schema.safeParse(
+		probe.conformance,
+	);
+	if (
+		capabilityVersion !== declaration.data.capabilityVersion ||
+		operations.length !==
+			(Array.isArray(probe.operations) ? probe.operations.length : 0) ||
+		!provenance.success ||
+		!conformance.success
+	) {
+		return unavailable(
+			"probe_failed",
+			"BROWSER_CAPABILITY_PROBE_FAILED",
+			"Browser capability probe evidence does not match the declaration",
+			true,
+		);
+	}
+	if (conformance.data.manifestDigest !== input.manifestDigest) {
+		return unavailable(
+			"probe_failed",
+			"BROWSER_CAPABILITY_PROBE_FAILED",
+			"Browser capability receipt does not match the admitted manifest",
+			false,
+		);
+	}
+	const verifiedAt = Date.parse(conformance.data.verifiedAt);
+	const now = (input.now ?? Date.now)();
+	const maxAge = input.maxReceiptAgeMs ?? BROWSER_CAPABILITY_MAX_RECEIPT_AGE_MS;
+	if (
+		!Number.isFinite(verifiedAt) ||
+		!Number.isFinite(now) ||
+		!Number.isFinite(maxAge) ||
+		maxAge < 0 ||
+		now < verifiedAt ||
+		now - verifiedAt > maxAge
+	) {
+		return unavailable(
+			"stale",
+			"BROWSER_CAPABILITY_STALE",
+			"Browser capability conformance receipt is stale",
+			true,
+		);
+	}
+	const declared = new Set(declaration.data.operations);
+	const conformanceOperations = new Set(conformance.data.operations);
+	const intersectedOperations = operations.filter(
+		(operation) =>
+			declared.has(operation) && conformanceOperations.has(operation),
+	);
+	if (!intersectedOperations.length) {
+		return unavailable(
+			"probe_failed",
+			"BROWSER_CAPABILITY_PROBE_FAILED",
+			"Browser capability probe exposes no declared operation",
+			true,
+		);
+	}
+	return {
+		schemaVersion: 1 as const,
+		capabilityVersion: declaration.data.capabilityVersion,
+		status: "available" as const,
+		operations: intersectedOperations,
+		policy: declaration.data.policy,
+		provenance: provenance.data,
+		conformance: conformance.data,
+	};
+}
 
 /** Current Host has no approved production Browser assembly. */
-export function discoverRuntimeBrowserCapabilityV1(request: unknown) {
+export function discoverRuntimeBrowserCapabilityV1(
+	request: unknown,
+	assembly?: RuntimeBrowserCapabilityAssemblyV1,
+) {
 	// Schema libraries may ignore prototype-related keys. Preserve strictness
 	// against the complete decoded query without maintaining a second key list.
 	const unknownKeys =
@@ -31,12 +203,19 @@ export function discoverRuntimeBrowserCapabilityV1(request: unknown) {
 			retryable: false,
 		};
 	}
-	return {
-		schemaVersion: 1 as const,
-		capabilityVersion: 1,
-		status: "not_configured" as const,
-		errorCode: "BROWSER_CAPABILITY_NOT_CONFIGURED" as const,
-		reason: "Production Browser capability is not configured",
-		retryable: false,
-	};
+	if (!assembly)
+		return unavailable(
+			"not_configured",
+			"BROWSER_CAPABILITY_NOT_CONFIGURED",
+			"Production Browser capability is not configured",
+			false,
+		);
+	if ("failure" in assembly)
+		return unavailable(
+			assembly.failure.status,
+			assembly.failure.errorCode,
+			assembly.failure.reason,
+			assembly.failure.retryable,
+		);
+	return assembleAvailable(assembly);
 }

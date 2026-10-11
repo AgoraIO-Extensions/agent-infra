@@ -86,8 +86,8 @@ async function fixture(userId = `http-user-${++sequence}`) {
 	await sql`insert into platform.agent_owners (agent_id,owner_id,created_at) values (${config.agentId},'controlled-owner',now())`;
 	await sql`insert into platform.agent_availability (agent_id,target_type,target_id) values (${config.agentId},'organization','controlled-org')`;
 	await sql`insert into platform.agent_configuration_revisions (agent_id,revision,source_reference,configuration,created_at) values (${config.agentId},1,'controlled',${sql.json(configuration as unknown as postgres.JSONValue)},now())`;
-	await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('personal',${userId},1,1)`;
-	await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('personal',${userId},1,${`controlled-key-${suffix}`},${sql.json({ schemaVersion: 1, purpose: "personal", subjectId: userId, keyId: `controlled-key-${suffix}`, keyVersion: 1 })})`;
+	await sql`insert into platform.relay_key_subjects(purpose,subject_id,last_version,current_version) values('personal',${userId},1,1) on conflict do nothing`;
+	await sql`insert into platform.relay_key_versions(purpose,subject_id,key_version,key_id,ciphertext) values('personal',${userId},1,${`controlled-key-${suffix}`},${sql.json({ schemaVersion: 1, purpose: "personal", subjectId: userId, keyId: `controlled-key-${suffix}`, keyVersion: 1 })}) on conflict do nothing`;
 	const identity: WecomIdentityPortV1 = {
 		resolveSender: async (scope) => user(scope.senderId),
 		activeUsers: async (ids) => ids,
@@ -191,7 +191,7 @@ async function noFacts(input: {
 		await sql`select id from platform.idempotency_records where idempotency_key in ${sql([input.eventKey, input.conversationKey])}`,
 	).toEqual([]);
 	expect(
-		await sql`select id from platform.outbox_items where trace_id=${input.eventKey} or request_id=${input.eventKey}`,
+		await sql`select id from platform.outbox_items where operation <> 'conversation.turn.stop.v1' and (trace_id=${input.eventKey} or request_id=${input.eventKey})`,
 	).toEqual([]);
 }
 async function releasedLocks(
@@ -243,8 +243,10 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 		expect((await f.app.request(f.request())).status).toBe(503);
 		await noFacts(f);
 	});
-	it("rolls back every acceptance fact when current sender identity changes before commit", async () => {
-		const f = await fixture();
+	it("rolls back this admission and commits controls for the original user's prior task when disabled before commit", async () => {
+		const prior = await fixture();
+		expect((await prior.app.request(prior.request())).status).toBe(200);
+		const f = await fixture(prior.userId);
 		let calls = 0;
 		f.setIdentity(async (scope) => {
 			calls += 1;
@@ -252,7 +254,37 @@ describe("signed Hono callback through the original WeCom acceptance transaction
 				? user(scope.senderId)
 				: { ...user(scope.senderId), accountStatus: "disabled" };
 		});
-		expect((await f.app.request(f.request())).status).toBe(503);
+		expect((await f.app.request(f.request())).status).toBe(200);
+		expect(f.outcomes).toEqual(["denied"]);
+		await noFacts(f);
+		expect(
+			await sql`select reason from platform.task_control_records c join platform.conversation_executions e on e.execution_id=c.execution_id where e.actor_id=${f.userId}`,
+		).toEqual([{ reason: "authorization_revoked" }]);
+		expect(
+			await sql`select revoked_at is not null as revoked from platform.task_authorization_records a join platform.conversation_executions e on e.execution_id=a.execution_id where e.actor_id=${f.userId}`,
+		).toEqual([{ revoked: true }]);
+	});
+	it("uses the Platform disable override at admission", async () => {
+		const prior = await fixture();
+		expect((await prior.app.request(prior.request())).status).toBe(200);
+		const f = await fixture(prior.userId);
+		await sql`insert into platform.platform_user_disables (user_id) values (${f.userId})`;
+		expect((await f.app.request(f.request())).status).toBe(200);
+		expect(f.outcomes).toEqual(["denied"]);
+		await noFacts(f);
+		expect(
+			await sql`select reason from platform.task_control_records c join platform.conversation_executions e on e.execution_id=c.execution_id where e.actor_id=${f.userId} and e.principal_type='user'`,
+		).toEqual([{ reason: "authorization_revoked" }]);
+	});
+	it("rolls back when current organization access disappears before commit", async () => {
+		const f = await fixture();
+		let calls = 0;
+		f.setIdentity(async (scope) => {
+			const current = user(scope.senderId);
+			return ++calls >= 3 ? { ...current, organizationIds: [] } : current;
+		});
+		expect((await f.app.request(f.request())).status).toBe(200);
+		expect(f.outcomes).toEqual(["denied"]);
 		await noFacts(f);
 	});
 	it("commits receipt and every acceptance fact in one transaction and replays the immutable acceptance snapshot", async () => {

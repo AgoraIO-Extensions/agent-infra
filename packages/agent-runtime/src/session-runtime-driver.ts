@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import {
+	type BrowserCapabilityAvailableV1,
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
@@ -13,11 +14,13 @@ import {
 	type RuntimeStatusV1,
 	RuntimeStatusV1Schema,
 } from "@agent-infra/contracts/runtime";
+import { createCodexBrowserToolDescriptorsV1 } from "./codex-browser-tools.js";
 import type {
 	RuntimeDriver,
 	RuntimeDriverCommand,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
+	RuntimeModelDirectory,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -33,6 +36,8 @@ export interface SessionRuntimeModelOption {
 	readonly reasoningLevels: readonly string[];
 }
 export interface SessionRuntimeDriverOptions {
+	/** Deployment-owned verified Browser projection; never selected by a wire command. */
+	readonly browserCapability?: BrowserCapabilityAvailableV1;
 	readonly path: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
@@ -68,6 +73,13 @@ export interface NativeSession {
 	>;
 	cancel(): Promise<void>;
 	close(): Promise<void>;
+	/** Native IDs are mapped to public option IDs by SessionRuntimeDriver. */
+	modelSelection?(): {
+		models: readonly string[];
+		currentModel: string | null;
+		reasoningLevels: readonly string[];
+		currentReasoning: string | null;
+	};
 }
 
 interface Binding {
@@ -1068,6 +1080,40 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			connection: false,
 			supplementaryInstruction: false,
 		};
+	}
+	async getModelDirectory(ref: string): Promise<RuntimeModelDirectory> {
+		const handle = this.handles.get(ref);
+		if (!handle?.native.modelSelection) unavailable();
+		const selection = handle.native.modelSelection();
+		const options = this.options.modelOptions.map((option) => ({
+			modelOptionId: option.modelOptionId,
+			modelId: option.nativeModelId,
+			displayName: option.nativeModelId,
+			reasoningLevels: [...option.reasoningLevels],
+		}));
+		const currentModel = selection.currentModel;
+		const currentReasoning = selection.currentReasoning;
+		const currentOption = this.options.modelOptions.find(
+			(option) => option.nativeModelId === currentModel,
+		);
+		if (
+			!currentOption ||
+			!currentReasoning ||
+			!currentOption.reasoningLevels.includes(currentReasoning)
+		)
+			unavailable();
+		return {
+			options,
+			current: {
+				modelOptionId: currentOption.modelOptionId,
+				reasoningLevel: currentReasoning,
+			},
+		};
+	}
+
+	/** Return bounded Browser descriptors from the deployment-owned projection. */
+	getBrowserToolDescriptors() {
+		return createCodexBrowserToolDescriptorsV1(this.options.browserCapability);
 	}
 	async replayEvents(ref: string, executionId: string, afterCursor?: string) {
 		const turn = (await this.forReference(ref))

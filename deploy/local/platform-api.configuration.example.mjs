@@ -18,10 +18,17 @@ export const ldap = missing("ldap");
 // on dependency failure rather than returning a permissive default.
 export const isPlatformDisabled = missing("isPlatformDisabled");
 export const organizationIds = missing("organizationIds");
+// Optional generic #1341/#1683 consumer. When supplied, this takes precedence
+// over organizationIds and must map every matched snapshot department to a
+// reviewed Platform organization ID. The endpoint/token are deployment-owned.
+export const directorySnapshot = undefined;
 export const publicOrigin = requiredEnv("PLATFORM_PUBLIC_ORIGIN");
 
 // apiInput is the credential-free Platform admission boundary. Keep Worker
 // private keys and raw model credentials out of this API-only module.
+// To enable the file boundary, set apiInput.files to a deployment-owned
+// PlatformFileDeploymentV1 using createS3ObjectStorageV1. Keep S3 credentials
+// in the deployment adapter; never expose them through API contracts or Web.
 // apiInput.taskAdmissionPolicy is required: maximumWaitingTasksPerAgent (tasks)
 // and waitingTimeoutMs (milliseconds) must both be positive safe integers.
 // Supply reviewed deployment values explicitly; fixture values are not defaults.

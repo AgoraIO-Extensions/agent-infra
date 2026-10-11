@@ -34,11 +34,25 @@ export function agentSourceLabel(agent: Pick<AgentProjectionV2, "source">) {
 }
 
 export function agentConversationSourceLabel(
-	agent: Pick<AgentProjectionV2, "source">,
+	agent:
+		| Pick<AgentProjectionV2, "source">
+		| Pick<AgentApplicationProjectionV2, "source">,
 ) {
 	return agent.source.kind === "standard"
 		? `标准模板 · ${agent.source.templateId}`
 		: agent.source.interactionMode === "self-managed"
 			? "自定义 Agent · 自有交互入口"
 			: "自定义 Agent · 平台交互入口";
+}
+
+export function agentIdentityResponsibilityLabel(
+	agent:
+		| Pick<AgentProjectionV2, "source">
+		| Pick<AgentApplicationProjectionV2, "source">,
+) {
+	return agent.source.kind === "custom" &&
+		agent.source.interactionMode === "self-managed" &&
+		agent.source.identityResponsibility === "self-managed"
+		? "由自有入口校验"
+		: "由平台校验";
 }

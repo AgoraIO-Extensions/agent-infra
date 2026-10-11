@@ -70,7 +70,12 @@ export function parseMessageCommand(
 		values.schemaVersion !== 1 ||
 		values.command !== "message" ||
 		!isText(values.conversationId) ||
-		!isText(values.text) ||
+		(!isText(values.text) &&
+			!(
+				values.text === "" &&
+				Array.isArray(values.attachments) &&
+				values.attachments.length > 0
+			)) ||
 		typeof values.idempotencyKey !== "string" ||
 		!idempotencyKeyPattern.test(values.idempotencyKey) ||
 		!isText(values.requestId) ||

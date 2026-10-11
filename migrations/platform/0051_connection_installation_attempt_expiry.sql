@@ -1,0 +1,1 @@
+ALTER TABLE "platform"."connection_installation_commands" ADD COLUMN "attempt_expires_at" timestamp with time zone;

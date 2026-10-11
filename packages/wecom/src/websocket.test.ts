@@ -94,6 +94,27 @@ it("admits only authenticated text for the configured bot through the official S
 		threadId: null,
 	});
 });
+it("maps authenticated media callbacks to opaque media metadata", async () => {
+	const s = await setup();
+	await s.authenticate();
+	s.push({
+		msgid: "media-event",
+		msgtype: "file",
+		file: { url: "https://provider.test/media/file-1", name: "report.pdf" },
+	});
+	await expect.poll(() => s.messages.length).toBe(1);
+	expect(s.messages[0]).toMatchObject({
+		text: "",
+		media: [
+			{
+				kind: "file",
+				mediaId: "https://provider.test/media/file-1",
+				name: "report.pdf",
+				mediaType: "application/octet-stream",
+			},
+		],
+	});
+});
 it("returns unknown on lost ACK and does not resend after reconnect", async () => {
 	const s = await setup();
 	await s.authenticate();

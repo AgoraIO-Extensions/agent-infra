@@ -50,7 +50,7 @@ ARG SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"}}'
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates util-linux \
-	&& rm -rf /var/lib/apt/lists/* /var/log/* \
+	&& rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache \
 	&& npm install --global npm@11.19.1 --logs-max=0 \
 	&& rm -rf /root/.npm /tmp/node-compile-cache
 ENV NODE_ENV=production
@@ -88,7 +88,8 @@ ENV AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1
 COPY --from=builder --chown=node:node /prod/agent-runtime-host/ ./
 RUN printf 'Acquire::Retries "3";\n' > /tmp/chromium-apt.conf \
     && APT_CONFIG=/tmp/chromium-apt.conf node --input-type=module -e 'import {createRequire} from "node:module"; import {dirname,join} from "node:path"; import {execFileSync} from "node:child_process"; const runtimeRequire=createRequire(import.meta.resolve("@agent-infra/agent-runtime")); const cli=join(dirname(runtimeRequire.resolve("playwright-core/package.json")),"cli.js"); execFileSync(process.execPath,[cli,"install-deps","chromium"],{stdio:"inherit"});' \
-    && rm -rf /tmp/chromium-apt.conf /var/lib/apt/lists/* /var/log/*
+    && rm -rf /tmp/chromium-apt.conf /var/lib/apt/lists/* /var/log/* \
+       /var/cache/ldconfig/aux-cache /var/cache/fontconfig/*.cache-*
 COPY --from=isolation-tools /bin/setpriv /usr/bin/setpriv
 COPY --from=isolation-tools /lib/ld-musl-*.so.1 /usr/lib/
 COPY --from=isolation-tools /usr/lib/libcap-ng.so.0* /usr/lib/libeconf.so.0* /usr/lib/

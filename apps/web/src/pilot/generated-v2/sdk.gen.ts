@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { BeginPlatformConnectionInstallationV1Data, BeginPlatformConnectionInstallationV1Responses, CommandAgentApiLifecycleV1Data, CommandAgentApiLifecycleV1Errors, CommandAgentApiLifecycleV1Responses, CommandAgentLifecycleV2Data, CommandAgentLifecycleV2Errors, CommandAgentLifecycleV2Responses, ConfirmPlatformConnectionInstallationV1Data, ConfirmPlatformConnectionInstallationV1Responses, CreateAgentApiV1Data, CreateAgentApiV1Errors, CreateAgentApiV1Responses, CreateAgentApplicationV2Data, CreateAgentApplicationV2Errors, CreateAgentApplicationV2Responses, DecideAgentApplicationV2Data, DecideAgentApplicationV2Errors, DecideAgentApplicationV2Responses, DisableOwnApplicationV2Data, DisableOwnApplicationV2Errors, DisableOwnApplicationV2Responses, GetAgentApiStateV1Data, GetAgentApiStateV1Errors, GetAgentApiStateV1Responses, GetAgentApplicationV2Data, GetAgentApplicationV2Errors, GetAgentApplicationV2Responses, GetAgentV2Data, GetAgentV2Errors, GetAgentV2Responses, GetConversationV2Data, GetConversationV2Errors, GetConversationV2Responses, GetDeploymentConfigurationV2Data, GetDeploymentConfigurationV2Errors, GetDeploymentConfigurationV2Responses, GetExecutionDetailV2Data, GetExecutionDetailV2Errors, GetExecutionDetailV2Responses, GetOwnApplicationV2Data, GetOwnApplicationV2Errors, GetOwnApplicationV2Responses, GetPersonalRelayKeyV2Data, GetPersonalRelayKeyV2Errors, GetPersonalRelayKeyV2Responses, GrantAgentApplicationManagerV1Data, GrantAgentApplicationManagerV1Errors, GrantAgentApplicationManagerV1Responses, GrantAgentApplicationUseV1Data, GrantAgentApplicationUseV1Errors, GrantAgentApplicationUseV1Responses, GrantApplicationMaterialV2Data, GrantApplicationMaterialV2Errors, GrantApplicationMaterialV2Responses, IssueOrRotateApplicationApiCredentialV2Data, IssueOrRotateApplicationApiCredentialV2Errors, IssueOrRotateApplicationApiCredentialV2Responses, IssuePersonalApiCredentialV2Data, IssuePersonalApiCredentialV2Errors, IssuePersonalApiCredentialV2Responses, ListAdminAgentsV2Data, ListAdminAgentsV2Errors, ListAdminAgentsV2Responses, ListAgentApplicationsV2Data, ListAgentApplicationsV2Errors, ListAgentApplicationsV2Responses, ListAgentsV2Data, ListAgentsV2Errors, ListAgentsV2Responses, ListPendingAgentApplicationsV2Data, ListPendingAgentApplicationsV2Errors, ListPendingAgentApplicationsV2Responses, ListPersonalApiCredentialsV2Data, ListPersonalApiCredentialsV2Errors, ListPersonalApiCredentialsV2Responses, ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses, ListRecentPersonalConversationsV2Data, ListRecentPersonalConversationsV2Errors, ListRecentPersonalConversationsV2Responses, NarrowPersonalApiCredentialV2Data, NarrowPersonalApiCredentialV2Errors, NarrowPersonalApiCredentialV2Responses, ReadApplicationMaterialV2Data, ReadApplicationMaterialV2Errors, ReadApplicationMaterialV2Responses, ReadPlatformConnectionInstallationV1Data, ReadPlatformConnectionInstallationV1Responses, RegisterApplicationV2Data, RegisterApplicationV2Errors, RegisterApplicationV2Responses, ReplacePersonalRelayKeyV2Data, ReplacePersonalRelayKeyV2Errors, ReplacePersonalRelayKeyV2Responses, RevokeAgentApplicationManagerV1Data, RevokeAgentApplicationManagerV1Errors, RevokeAgentApplicationManagerV1Responses, RevokeAgentApplicationUseV1Data, RevokeAgentApplicationUseV1Errors, RevokeAgentApplicationUseV1Responses, RevokeApplicationMaterialV2Data, RevokeApplicationMaterialV2Errors, RevokeApplicationMaterialV2Responses, RevokePersonalApiCredentialV2Data, RevokePersonalApiCredentialV2Errors, RevokePersonalApiCredentialV2Responses, RevokePersonalRelayKeyV2Data, RevokePersonalRelayKeyV2Errors, RevokePersonalRelayKeyV2Responses, StreamConversationEventsV2Data, StreamConversationEventsV2Errors, StreamConversationEventsV2Response, StreamConversationEventsV2Responses, UpdateAgentApplicationV2Data, UpdateAgentApplicationV2Errors, UpdateAgentApplicationV2Responses, UpdateAgentConfigurationV2Data, UpdateAgentConfigurationV2Errors, UpdateAgentConfigurationV2Responses, WithdrawAgentApplicationV2Data, WithdrawAgentApplicationV2Errors, WithdrawAgentApplicationV2Responses } from './types.gen';
+import type { BeginPlatformConnectionInstallationV1Data, BeginPlatformConnectionInstallationV1Responses, CommandAgentApiLifecycleV1Data, CommandAgentApiLifecycleV1Errors, CommandAgentApiLifecycleV1Responses, CommandAgentLifecycleV2Data, CommandAgentLifecycleV2Errors, CommandAgentLifecycleV2Responses, ConfirmPlatformConnectionInstallationV1Data, ConfirmPlatformConnectionInstallationV1Responses, CreateAgentApiV1Data, CreateAgentApiV1Errors, CreateAgentApiV1Responses, CreateAgentApplicationV2Data, CreateAgentApplicationV2Errors, CreateAgentApplicationV2Responses, DecideAgentApplicationV2Data, DecideAgentApplicationV2Errors, DecideAgentApplicationV2Responses, DisableOwnApplicationV2Data, DisableOwnApplicationV2Errors, DisableOwnApplicationV2Responses, GetAgentApiStateV1Data, GetAgentApiStateV1Errors, GetAgentApiStateV1Responses, GetAgentApplicationV2Data, GetAgentApplicationV2Errors, GetAgentApplicationV2Responses, GetAgentV2Data, GetAgentV2Errors, GetAgentV2Responses, GetConversationV2Data, GetConversationV2Errors, GetConversationV2Responses, GetDeploymentConfigurationV2Data, GetDeploymentConfigurationV2Errors, GetDeploymentConfigurationV2Responses, GetExecutionDetailV2Data, GetExecutionDetailV2Errors, GetExecutionDetailV2Responses, GetOwnApplicationV2Data, GetOwnApplicationV2Errors, GetOwnApplicationV2Responses, GetPersonalRelayKeyV2Data, GetPersonalRelayKeyV2Errors, GetPersonalRelayKeyV2Responses, GetPlatformUserDisabledV2Data, GetPlatformUserDisabledV2Errors, GetPlatformUserDisabledV2Responses, GrantAgentApplicationManagerV1Data, GrantAgentApplicationManagerV1Errors, GrantAgentApplicationManagerV1Responses, GrantAgentApplicationUseV1Data, GrantAgentApplicationUseV1Errors, GrantAgentApplicationUseV1Responses, GrantApplicationMaterialV2Data, GrantApplicationMaterialV2Errors, GrantApplicationMaterialV2Responses, IssueOrRotateApplicationApiCredentialV2Data, IssueOrRotateApplicationApiCredentialV2Errors, IssueOrRotateApplicationApiCredentialV2Responses, IssuePersonalApiCredentialV2Data, IssuePersonalApiCredentialV2Errors, IssuePersonalApiCredentialV2Responses, ListAdminAgentsV2Data, ListAdminAgentsV2Errors, ListAdminAgentsV2Responses, ListAgentApplicationsV2Data, ListAgentApplicationsV2Errors, ListAgentApplicationsV2Responses, ListAgentsV2Data, ListAgentsV2Errors, ListAgentsV2Responses, ListPendingAgentApplicationsV2Data, ListPendingAgentApplicationsV2Errors, ListPendingAgentApplicationsV2Responses, ListPersonalApiCredentialsV2Data, ListPersonalApiCredentialsV2Errors, ListPersonalApiCredentialsV2Responses, ListPlatformAuditV2Data, ListPlatformAuditV2Errors, ListPlatformAuditV2Responses, ListRecentPersonalConversationsV2Data, ListRecentPersonalConversationsV2Errors, ListRecentPersonalConversationsV2Responses, ListSkillHubVersionsV1Data, ListSkillHubVersionsV1Errors, ListSkillHubVersionsV1Responses, NarrowPersonalApiCredentialV2Data, NarrowPersonalApiCredentialV2Errors, NarrowPersonalApiCredentialV2Responses, ReadApplicationMaterialV2Data, ReadApplicationMaterialV2Errors, ReadApplicationMaterialV2Responses, ReadPlatformConnectionInstallationV1Data, ReadPlatformConnectionInstallationV1Responses, ReadSkillHubVersionV1Data, ReadSkillHubVersionV1Errors, ReadSkillHubVersionV1Responses, RegisterApplicationV2Data, RegisterApplicationV2Errors, RegisterApplicationV2Responses, ReplacePersonalRelayKeyV2Data, ReplacePersonalRelayKeyV2Errors, ReplacePersonalRelayKeyV2Responses, RevokeAgentApplicationManagerV1Data, RevokeAgentApplicationManagerV1Errors, RevokeAgentApplicationManagerV1Responses, RevokeAgentApplicationUseV1Data, RevokeAgentApplicationUseV1Errors, RevokeAgentApplicationUseV1Responses, RevokeAgentUserApiUseV1Data, RevokeAgentUserApiUseV1Errors, RevokeAgentUserApiUseV1Responses, RevokeApplicationMaterialV2Data, RevokeApplicationMaterialV2Errors, RevokeApplicationMaterialV2Responses, RevokePersonalApiCredentialV2Data, RevokePersonalApiCredentialV2Errors, RevokePersonalApiCredentialV2Responses, RevokePersonalRelayKeyV2Data, RevokePersonalRelayKeyV2Errors, RevokePersonalRelayKeyV2Responses, SetPlatformUserDisabledV2Data, SetPlatformUserDisabledV2Errors, SetPlatformUserDisabledV2Responses, StreamConversationEventsV2Data, StreamConversationEventsV2Errors, StreamConversationEventsV2Response, StreamConversationEventsV2Responses, UpdateAgentApplicationV2Data, UpdateAgentApplicationV2Errors, UpdateAgentApplicationV2Responses, UpdateAgentConfigurationV2Data, UpdateAgentConfigurationV2Errors, UpdateAgentConfigurationV2Responses, WithdrawAgentApplicationV2Data, WithdrawAgentApplicationV2Errors, WithdrawAgentApplicationV2Responses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -71,6 +71,17 @@ export const listAdminAgentsV2 = <ThrowOnError extends boolean = false>(options?
 
 export const listPlatformAuditV2 = <ThrowOnError extends boolean = false>(options?: Options<ListPlatformAuditV2Data, ThrowOnError>): RequestResult<ListPlatformAuditV2Responses, ListPlatformAuditV2Errors, ThrowOnError> => (options?.client ?? client).get<ListPlatformAuditV2Responses, ListPlatformAuditV2Errors, ThrowOnError>({ url: '/api/v2/admin/audit', ...options });
 
+export const getPlatformUserDisabledV2 = <ThrowOnError extends boolean = false>(options: Options<GetPlatformUserDisabledV2Data, ThrowOnError>): RequestResult<GetPlatformUserDisabledV2Responses, GetPlatformUserDisabledV2Errors, ThrowOnError> => (options.client ?? client).get<GetPlatformUserDisabledV2Responses, GetPlatformUserDisabledV2Errors, ThrowOnError>({ url: '/api/v2/admin/users/{userId}/disable', ...options });
+
+export const setPlatformUserDisabledV2 = <ThrowOnError extends boolean = false>(options: Options<SetPlatformUserDisabledV2Data, ThrowOnError>): RequestResult<SetPlatformUserDisabledV2Responses, SetPlatformUserDisabledV2Errors, ThrowOnError> => (options.client ?? client).put<SetPlatformUserDisabledV2Responses, SetPlatformUserDisabledV2Errors, ThrowOnError>({
+    url: '/api/v2/admin/users/{userId}/disable',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
 export const listAgentApplicationsV2 = <ThrowOnError extends boolean = false>(options?: Options<ListAgentApplicationsV2Data, ThrowOnError>): RequestResult<ListAgentApplicationsV2Responses, ListAgentApplicationsV2Errors, ThrowOnError> => (options?.client ?? client).get<ListAgentApplicationsV2Responses, ListAgentApplicationsV2Errors, ThrowOnError>({ url: '/api/v2/agent-applications', ...options });
 
 export const createAgentApplicationV2 = <ThrowOnError extends boolean = false>(options: Options<CreateAgentApplicationV2Data, ThrowOnError>): RequestResult<CreateAgentApplicationV2Responses, CreateAgentApplicationV2Errors, ThrowOnError> => (options.client ?? client).post<CreateAgentApplicationV2Responses, CreateAgentApplicationV2Errors, ThrowOnError>({
@@ -115,6 +126,20 @@ export const createAgentApiV1 = <ThrowOnError extends boolean = false>(options: 
 });
 
 export const getAgentV2 = <ThrowOnError extends boolean = false>(options: Options<GetAgentV2Data, ThrowOnError>): RequestResult<GetAgentV2Responses, GetAgentV2Errors, ThrowOnError> => (options.client ?? client).get<GetAgentV2Responses, GetAgentV2Errors, ThrowOnError>({ url: '/api/v2/agents/{agentId}', ...options });
+
+export const revokeAgentUserApiUseV1 = <ThrowOnError extends boolean = false>(options: Options<RevokeAgentUserApiUseV1Data, ThrowOnError>): RequestResult<RevokeAgentUserApiUseV1Responses, RevokeAgentUserApiUseV1Errors, ThrowOnError> => (options.client ?? client).delete<RevokeAgentUserApiUseV1Responses, RevokeAgentUserApiUseV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/agents/{agentId}/api-use-grants/{userId}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 export const revokeAgentApplicationManagerV1 = <ThrowOnError extends boolean = false>(options: Options<RevokeAgentApplicationManagerV1Data, ThrowOnError>): RequestResult<RevokeAgentApplicationManagerV1Responses, RevokeAgentApplicationManagerV1Errors, ThrowOnError> => (options.client ?? client).delete<RevokeAgentApplicationManagerV1Responses, RevokeAgentApplicationManagerV1Errors, ThrowOnError>({
     security: [{
@@ -471,4 +496,24 @@ export const replacePersonalRelayKeyV2 = <ThrowOnError extends boolean = false>(
         'Content-Type': 'application/json',
         ...options.headers
     }
+});
+
+export const listSkillHubVersionsV1 = <ThrowOnError extends boolean = false>(options?: Options<ListSkillHubVersionsV1Data, ThrowOnError>): RequestResult<ListSkillHubVersionsV1Responses, ListSkillHubVersionsV1Errors, ThrowOnError> => (options?.client ?? client).get<ListSkillHubVersionsV1Responses, ListSkillHubVersionsV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/skills',
+    ...options
+});
+
+export const readSkillHubVersionV1 = <ThrowOnError extends boolean = false>(options: Options<ReadSkillHubVersionV1Data, ThrowOnError>): RequestResult<ReadSkillHubVersionV1Responses, ReadSkillHubVersionV1Errors, ThrowOnError> => (options.client ?? client).get<ReadSkillHubVersionV1Responses, ReadSkillHubVersionV1Errors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: '__Host-platform-session',
+            type: 'apiKey'
+        }],
+    url: '/api/v2/skills/versions/{skillVersionId}',
+    ...options
 });

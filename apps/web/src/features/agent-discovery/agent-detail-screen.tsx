@@ -1,3 +1,4 @@
+import type { BrowserCapabilityProjectionV1 } from "@agent-infra/contracts/runtime";
 import { Link } from "@tanstack/react-router";
 import {
 	ArrowLeft,
@@ -13,6 +14,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
+	agentConversationSourceLabel,
+	agentIdentityResponsibilityLabel,
 	agentManagementStatusLabels,
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
@@ -23,8 +26,14 @@ import {
 	canStartPlatformConversation,
 } from "./agent-discovery.js";
 import { agentChannelKindLabels } from "./agent-discovery-screen.js";
+import {
+	BrowserCapabilityStatus,
+	type BrowserWorkflowState,
+} from "./browser-capability-status.js";
 
 type AgentDetailScreenProps = {
+	browserCapability?: BrowserCapabilityProjectionV1;
+	browserWorkflow?: BrowserWorkflowState;
 	onRetry?: () => void;
 	ownerSettings?: { readonly agentId: string };
 	retrying?: boolean;
@@ -57,7 +66,21 @@ function safeInteractionUrl(input: string | null) {
 	}
 }
 
+function interactionReadiness(
+	agent: AgentProjectionV2,
+	interactionUrl: string | undefined,
+) {
+	if (agent.source.kind === "standard") return "平台交互入口由平台提供。";
+	if (agent.source.interactionMode === "platform-adapter")
+		return "平台交互入口由平台身份校验。";
+	if (agent.source.identityResponsibility === "self-managed")
+		return interactionUrl ? "自有交互入口已就绪。" : "自有交互入口尚未就绪。";
+	return "平台身份入口需经过 Auth Gateway；当前未提供直接入口。";
+}
+
 export function AgentDetailScreen({
+	browserCapability,
+	browserWorkflow,
 	onRetry,
 	ownerSettings,
 	retrying = false,
@@ -226,12 +249,12 @@ export function AgentDetailScreen({
 							</dd>
 							<dt className="text-muted-foreground">模板与入口</dt>
 							<dd className="break-all">
-								{agent.source.kind === "standard"
-									? `标准模板 · ${agent.source.templateId}`
-									: agent.source.interactionMode === "self-managed"
-										? "自定义 Agent · 自有交互入口"
-										: "自定义 Agent · 平台交互入口"}
+								{agentConversationSourceLabel(agent)}
 							</dd>
+							<dt className="text-muted-foreground">入口身份责任</dt>
+							<dd>{agentIdentityResponsibilityLabel(agent)}</dd>
+							<dt className="text-muted-foreground">入口状态</dt>
+							<dd>{interactionReadiness(agent, interactionUrl)}</dd>
 							<dt className="text-muted-foreground">可用范围</dt>
 							<dd className="break-words">
 								{agent.configuration.availability.length ? (
@@ -315,6 +338,12 @@ export function AgentDetailScreen({
 							</p>
 						)}
 					</section>
+					{browserCapability && (
+						<BrowserCapabilityStatus
+							capability={browserCapability}
+							workflow={browserWorkflow}
+						/>
+					)}
 				</div>
 				<aside className="agent-detail-aside" aria-label="Owner 与渠道">
 					<section
