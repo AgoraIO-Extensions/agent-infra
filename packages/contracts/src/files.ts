@@ -275,3 +275,21 @@ export const fileExchangeOpenApiPathsV1 = {
 		},
 	},
 };
+export const runtimeFileExchangeOpenApiPathsV1 = {
+	"/internal/v1/files/runtime-exchange": {
+		post: {
+			operationId: "exchangeRuntimeFileAccess",
+			parameters: [
+				idempotencyParameter,
+				{
+					name: "Authorization",
+					in: "header" as const,
+					required: true,
+					schema: z.string(),
+				},
+			],
+			requestBody: jsonBody(RuntimeFileExchangeRequestV1Schema),
+			responses: { "200": jsonResponse(FileAccessResponseV1Schema) },
+		},
+	},
+};

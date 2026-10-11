@@ -2,6 +2,7 @@ import { createHash, type KeyObject, timingSafeEqual } from "node:crypto";
 import type {
 	FileAccessClaimsV1,
 	FileAccessGrantV1,
+	RuntimeFileExchangeRequestV1,
 } from "@agent-infra/contracts/files";
 import type { ObjectStorageDataV1 } from "@agent-infra/object-storage";
 import {
@@ -203,6 +204,21 @@ export function assemblePlatformFilesV1(input: {
 						expiresAt: claims.expiresAt,
 					}),
 				};
+			},
+		},
+		runtimeExchange: {
+			// The V4 wire carries no signed grant, so nothing submitted in the request may
+			// become the authorized attachment allowlist or the authoritative grant expiry.
+			// Stay fail-closed until the current Runtime grant is resolved server-side
+			// (ADR-0014 §41 与 §45)。
+			async authenticate(
+				_request: Request,
+				_value: RuntimeFileExchangeRequestV1,
+			): Promise<{
+				conversationId: string;
+				authorization: FileAuthorizationPortV1;
+			}> {
+				throw new Error("Runtime file exchange denied");
 			},
 		},
 	};

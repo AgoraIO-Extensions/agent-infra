@@ -1307,21 +1307,37 @@ function isDeploymentConfigurationV2OpenApiAddition(previous, current) {
 // changing any previously published file path or schema.
 function isRuntimeFileExchangeOpenApiAddition(previous, current) {
 	const name = "RuntimeFileExchangeRequestV1";
+	const path = "/internal/v1/files/runtime-exchange";
+	const schemaAdded =
+		previous.components?.schemas?.[name] === undefined &&
+		current.components?.schemas?.[name] !== undefined;
+	const pathAdded =
+		previous.paths?.[path] === undefined && current.paths?.[path] !== undefined;
 	if (
-		previous.components?.schemas?.[name] !== undefined ||
-		current.components?.schemas?.[name] === undefined
+		(!schemaAdded && !pathAdded) ||
+		(current.components?.schemas?.[name] === undefined && pathAdded)
 	)
 		return false;
 	const addition = {
-		schemas: { [name]: current.components.schemas[name] },
+		...(pathAdded ? { paths: { [path]: current.paths[path] } } : {}),
+		...(schemaAdded
+			? { schemas: { [name]: current.components.schemas[name] } }
+			: {}),
 	};
+	const expectedHash =
+		schemaAdded && pathAdded
+			? "738d5a4d3d62fafdd3ee8ef4f3a01d176549493b6911efa6bf95840187dd9c07"
+			: schemaAdded
+				? "fddfd2571c71fbf998f3da7edbd75b5d021f9d57e02028e5ab48e8f7e3e94168"
+				: "03fadb80928e35acc47d14df7ae75b2a3423f8d9b3df79085935d629b0029d42";
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"fddfd2571c71fbf998f3da7edbd75b5d021f9d57e02028e5ab48e8f7e3e94168"
+		expectedHash
 	)
 		return false;
 	const normalized = structuredClone(current);
-	delete normalized.components.schemas[name];
+	if (pathAdded) delete normalized.paths[path];
+	if (schemaAdded) delete normalized.components.schemas[name];
 	return sameValue(previous, normalized);
 }
 

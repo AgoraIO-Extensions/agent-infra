@@ -1081,6 +1081,66 @@
           }
         }
       }
+    },
+    "/internal/v1/files/runtime-exchange": {
+      "post": {
+        "operationId": "exchangeRuntimeFileAccess",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "def": {
+                "checks": [
+                  {}
+                ],
+                "type": "string"
+              },
+              "format": "regex",
+              "maxLength": null,
+              "minLength": null,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "def": {
+                "type": "string"
+              },
+              "format": null,
+              "maxLength": null,
+              "minLength": null,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeFileExchangeRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileAccessResponseV1"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        }
+      }
     }
   }
 }

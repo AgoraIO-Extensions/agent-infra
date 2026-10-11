@@ -70,6 +70,22 @@ it("allocates a result only through the trusted execution exchange and rejects a
 				return { conversationId: scope.conversationId, authorization };
 			},
 		},
+		runtimeExchange: {
+			authenticate: async (request, value) => {
+				if (request.headers.get("test-service") !== "worker")
+					throw new Error("Denied");
+				if (
+					value.actorId !== scope.actorId ||
+					value.agentId !== scope.agentId ||
+					value.channelId !== scope.channelId ||
+					value.conversationId !== scope.conversationId ||
+					value.executionId !== execution.executionId ||
+					value.sessionGeneration !== execution.sessionGeneration
+				)
+					throw new Error("Binding denied");
+				return { conversationId: value.conversationId, authorization };
+			},
+		},
 	});
 	const request = {
 		method: "POST",
@@ -115,4 +131,81 @@ it("allocates a result only through the trusted execution exchange and rejects a
 	expect(
 		(await app.request("/internal/v1/files/exchange", request)).status,
 	).toBe(404);
+	store.seedExecution(execution);
+	const runtimeRequest = {
+		schemaVersion: 1,
+		operation: "result",
+		actorId: scope.actorId,
+		agentId: scope.agentId,
+		channelId: scope.channelId,
+		conversationId: scope.conversationId,
+		executionId: execution.executionId,
+		sessionGeneration: execution.sessionGeneration,
+		grantId: "grant-v4",
+		expiresAt: "2099-01-01T00:00:00Z",
+		idempotencyKey: "runtime-result-1",
+		descriptor: {
+			name: "runtime.txt",
+			mediaType: "text/plain",
+			sizeBytes: 5,
+			sha256:
+				"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+		},
+	};
+	const runtimeResponse = await app.request(
+		"/internal/v1/files/runtime-exchange",
+		{
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"Idempotency-Key": runtimeRequest.idempotencyKey,
+				"test-service": "worker",
+			},
+			body: JSON.stringify(runtimeRequest),
+		},
+	);
+	expect(runtimeResponse.status).toBe(200);
+	expect(
+		FileAccessResponseV1Schema.parse(await runtimeResponse.json()).file.kind,
+	).toBe("result");
+	const runtimeReplay = await app.request(
+		"/internal/v1/files/runtime-exchange",
+		{
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"Idempotency-Key": runtimeRequest.idempotencyKey,
+				"test-service": "worker",
+			},
+			body: JSON.stringify(runtimeRequest),
+		},
+	);
+	expect(runtimeReplay.status).toBe(200);
+	const crossSubject = await app.request(
+		"/internal/v1/files/runtime-exchange",
+		{
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"Idempotency-Key": runtimeRequest.idempotencyKey,
+				"test-service": "worker",
+			},
+			body: JSON.stringify({ ...runtimeRequest, actorId: "other-actor" }),
+		},
+	);
+	expect(crossSubject.status).toBe(404);
+	store.seedExecution({ ...execution, sessionGeneration: 2 });
+	const retired = await app.request("/internal/v1/files/runtime-exchange", {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			"Idempotency-Key": "runtime-result-retired",
+			"test-service": "worker",
+		},
+		body: JSON.stringify({
+			...runtimeRequest,
+			idempotencyKey: "runtime-result-retired",
+		}),
+	});
+	expect(retired.status).toBe(404);
 });
