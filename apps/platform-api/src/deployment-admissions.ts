@@ -474,9 +474,9 @@ export function createDeploymentAdmissionsV1(
 					if (!template) return denied;
 					const currentReadiness = await readTemplateReadiness(template);
 					if (
-						template.loadValidation &&
-						(currentReadiness.state !== "ready" ||
-							currentReadiness.revision !== readiness?.revision) ||
+						(template.loadValidation &&
+							(currentReadiness.state !== "ready" ||
+								currentReadiness.revision !== readiness?.revision)) ||
 						result.immutableDigest !== template.imageDigest ||
 						manifest.interactionMode !== "platform-adapter" ||
 						(template.connectionEnabled &&
