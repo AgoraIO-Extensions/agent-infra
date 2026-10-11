@@ -422,7 +422,11 @@ export {
 	type BrowserResultFileEventResultV1,
 	createBrowserResultFileEventAdapterV1,
 } from "./browser-result-file-event.js";
-export { createWorkerFileClientV1 } from "./file-client.js";
+export {
+	createWorkerFileClientV1,
+	createWorkerRuntimeFileBridgeFactoryV1,
+	type WorkerRuntimeFileExchangeOptionsV1,
+} from "./file-client.js";
 export { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
 export {
 	createSessionSandboxEgressV1,
