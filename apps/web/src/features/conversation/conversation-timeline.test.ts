@@ -24,11 +24,13 @@ function setup(
 	handler: (request: Request) => Response | Promise<Response>,
 	headers?: Record<string, string>,
 	reconnectDelaysMs: readonly number[] = [],
+	healthyStreamMs?: number,
 ) {
 	const requests: Request[] = [];
 	const snapshots: ConversationTimelineState[] = [];
 	const reader = createConversationTimeline({
 		reconnectDelaysMs,
+		...(healthyStreamMs === undefined ? {} : { healthyStreamMs }),
 		client: createClient({
 			baseUrl: "https://platform.example.test",
 			headers,
@@ -539,6 +541,31 @@ describe("Conversation generated-client data consumer", () => {
 		});
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(opened).toBe(6);
+	});
+
+	it("spends the automatic attempts on reconnects that are slow to fail (#1606)", async () => {
+		let opened = 0;
+		const { reader } = setup(
+			async (request) => {
+				if (route(request) !== "stream") return Response.json(history());
+				opened++;
+				// Fails only after longer than the healthy period, never accepted.
+				await new Promise((resolve) => setTimeout(resolve, 40));
+				throw new TypeError("Test slow network failure");
+			},
+			undefined,
+			[1, 1],
+			20,
+		);
+		await reader.open("conversation-1");
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot()).toMatchObject({
+				status: "unavailable",
+				failure: { kind: "network" },
+			}),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(opened).toBe(3);
 	});
 
 	it("never reconnects automatically after revocation or a denied read (#1606)", async () => {
