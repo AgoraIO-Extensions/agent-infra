@@ -5103,8 +5103,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					reader.releaseLock();
 				}
 				if (size !== input.descriptor.sizeBytes) unavailable();
+				const bytes = Buffer.concat(chunks);
+				if (
+					createHash("sha256").update(bytes).digest("hex") !==
+					input.descriptor.sha256
+				)
+					unavailable();
 				const path = join(directory, `${String(index).padStart(2, "0")}.image`);
-				await writeFile(path, Buffer.concat(chunks), {
+				await writeFile(path, bytes, {
 					flag: "wx",
 					mode: 0o600,
 				});
