@@ -547,6 +547,59 @@ describe("Initial Agent configuration admission", () => {
 		expect(calls).toEqual(["authorization"]);
 	});
 
+	it.each([
+		[
+			"the actor is Platform-disabled",
+			{
+				...initialAuthorityContext,
+				users: initialAuthorityContext.users.map((user) =>
+					user.userId === "owner_01"
+						? { ...user, accountStatus: "disabled" as const }
+						: user,
+				),
+			},
+		],
+		[
+			"a co-owner and available user are Platform-disabled",
+			{
+				...initialAuthorityContext,
+				users: initialAuthorityContext.users.map((user) =>
+					user.userId === "owner_02"
+						? { ...user, accountStatus: "disabled" as const }
+						: user,
+				),
+			},
+		],
+	] as const)(
+		"rejects initial access when %s",
+		async (_reason, authorityContext) => {
+			const { dependencies } = createInitialAdmissionDependencies();
+			const guarded = {
+				...dependencies,
+				authorizationAdmission: {
+					async authorize(
+						input: Parameters<
+							InitialAgentConfigurationAdmissionDependenciesV1["authorizationAdmission"]["authorize"]
+						>[0],
+					) {
+						const decision =
+							await dependencies.authorizationAdmission.authorize(input);
+						return decision.status === "admitted"
+							? { ...decision, authorityContext }
+							: decision;
+					},
+				},
+			};
+			await expect(
+				completeInitialAgentConfiguration(
+					initialCommand,
+					initialActor,
+					guarded,
+				),
+			).rejects.toMatchObject({ code: "not_authorized" });
+		},
+	);
+
 	it("rejects canonical authority fields in raw input before any dependency", async () => {
 		let authorizationCalls = 0;
 		const { dependencies } = createInitialAdmissionDependencies();
