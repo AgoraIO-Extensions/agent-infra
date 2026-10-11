@@ -82,12 +82,29 @@ describe("Skill Hub sync and Applied contracts", () => {
 			state: "synced",
 			appliedReceipt: receipt,
 		});
+		expect(
+			SkillHubSyncBindingV1Schema.safeParse({
+				...synced,
+				appliedReceipt: { ...receipt, agentId: "other-agent" },
+			}).success,
+		).toBe(false);
 		try {
 			validateSkillHubAppliedReceiptV1(synced, {
 				...receipt,
 				manifestDigest: "e".repeat(64),
 			});
 			throw new Error("expected mismatch");
+		} catch (error) {
+			expect((error as { message?: string }).message).toContain(
+				"binding mismatch",
+			);
+		}
+		try {
+			validateSkillHubAppliedReceiptV1(synced, {
+				...receipt,
+				generationId: "e".repeat(64),
+			});
+			throw new Error("expected generation mismatch");
 		} catch (error) {
 			expect((error as { message?: string }).message).toContain(
 				"binding mismatch",

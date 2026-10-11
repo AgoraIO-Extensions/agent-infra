@@ -167,12 +167,32 @@ const pendingSkillHubSyncBindingV1Schema = z.strictObject({
 	failureReason: z.null(),
 	appliedReceipt: z.null(),
 });
-const syncedSkillHubSyncBindingV1Schema = z.strictObject({
-	...skillHubSyncBindingBase,
-	state: z.literal("synced"),
-	failureReason: z.null(),
-	appliedReceipt: SkillHubAppliedReceiptV1Schema,
-});
+const syncedSkillHubSyncBindingV1Schema = z
+	.strictObject({
+		...skillHubSyncBindingBase,
+		state: z.literal("synced"),
+		failureReason: z.null(),
+		appliedReceipt: SkillHubAppliedReceiptV1Schema,
+	})
+	.superRefine((value, context) => {
+		const receipt = value.appliedReceipt;
+		if (
+			receipt.agentId !== value.agentId ||
+			receipt.agentVersion !== value.agentVersion ||
+			receipt.skillName !== value.skillName ||
+			receipt.configurationRevision !== value.configurationRevision ||
+			receipt.syncRevision !== value.syncRevision ||
+			receipt.skillVersionId !== value.skillVersion.skillVersionId ||
+			receipt.packageDigest !== value.skillVersion.packageDigest ||
+			receipt.manifestDigest !== value.skillVersion.manifestDigest ||
+			receipt.targetPath !== `.agents/skills/${value.skillName}`
+		)
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["appliedReceipt"],
+				message: "Applied receipt binding mismatch",
+			});
+	});
 const failedSkillHubSyncBindingV1Schema = z.strictObject({
 	...skillHubSyncBindingBase,
 	state: z.literal("failed"),
@@ -206,6 +226,7 @@ export function validateSkillHubAppliedReceiptV1(
 		receipt.configurationRevision !== binding.configurationRevision ||
 		receipt.syncRevision !== binding.syncRevision ||
 		receipt.skillVersionId !== binding.skillVersion.skillVersionId ||
+		receipt.generationId !== binding.appliedReceipt?.generationId ||
 		receipt.packageDigest !== binding.skillVersion.packageDigest ||
 		receipt.manifestDigest !== binding.skillVersion.manifestDigest ||
 		receipt.targetPath !== `.agents/skills/${binding.skillName}`
