@@ -9137,11 +9137,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						? 0
 						: batch.lastCommitStartedAt + textDeltaFlushIntervalMs - Date.now();
 				if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-				batch.lastCommitStartedAt = Date.now();
 				let taken: CodexTextDeltaBatch["pending"] = [];
 				let streamKeys: Set<string>;
 				try {
 					streamKeys = await this.update((state) => {
+						// Record the batch's actual execution time, after any earlier
+						// durable writes have left the queue. This keeps the spacing
+						// bound about adjacent text commits rather than queue admission.
+						batch.lastCommitStartedAt = Date.now();
 						// Deltas that arrived while the previous batch was persisting.
 						taken = batch.pending.splice(0);
 						return this.appendTextDeltas(state, taken);
@@ -9958,9 +9961,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			// A status poll can observe the native terminal before the notification
 			// handler. Keep accepted deltas ahead of the terminal journal event.
 			await Promise.all(
-				[...this.textDeltaBatches].map((batch) =>
-					this.drainTextDeltas(batch),
-				),
+				[...this.textDeltaBatches].map((batch) => this.drainTextDeltas(batch)),
 			);
 		}
 		if (status !== "running" && cancelNative) {

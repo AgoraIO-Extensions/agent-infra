@@ -6005,6 +6005,55 @@ describe("Codex Runtime Driver", () => {
 			expect(updates).toHaveBeenCalledTimes(1);
 		});
 
+		it("spaces commits after a blocked write queue starts the first batch", async () => {
+			const f = await runningTurn();
+			const originalPersist = (
+				DurableJsonFile.prototype as unknown as {
+					persist: (serialized: string) => Promise<void>;
+				}
+			).persist;
+			const persistStarts: number[] = [];
+			const firstTextPersistStarted = Promise.withResolvers<void>();
+			const firstTextPersistRelease = Promise.withResolvers<void>();
+			let persistCalls = 0;
+			vi.spyOn(
+				DurableJsonFile.prototype as unknown as {
+					persist: (serialized: string) => Promise<void>;
+				},
+				"persist",
+			).mockImplementation(async function (
+				this: DurableJsonFile<unknown>,
+				serialized,
+			) {
+				persistCalls++;
+				persistStarts.push(Date.now());
+				if (persistCalls === 2) {
+					firstTextPersistStarted.resolve();
+					await firstTextPersistRelease.promise;
+				}
+				return originalPersist.call(this, serialized);
+			});
+
+			await f.bridge.emitAgentMessageDelta("first ");
+			// Keep the first batch queued behind an earlier write for longer than the
+			// spacing interval; the second delta arrives while its persist is held.
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			f.release.resolve();
+			await f.holding;
+			await firstTextPersistStarted.promise;
+			await f.bridge.emitAgentMessageDelta("second");
+			firstTextPersistRelease.resolve();
+
+			await vi.waitFor(async () => expect(await f.texts()).toHaveLength(2));
+			const firstTextPersist = persistStarts.at(1);
+			const secondTextPersist = persistStarts.at(2);
+			expect(firstTextPersist).toBeDefined();
+			expect(secondTextPersist).toBeDefined();
+			if (firstTextPersist === undefined || secondTextPersist === undefined)
+				throw new Error("Text persistence timestamps were not recorded");
+			expect(secondTextPersist - firstTextPersist).toBeGreaterThanOrEqual(90);
+		});
+
 		it("answers a running status from the committed snapshot without a write", async () => {
 			const f = await runningTurn();
 			f.release.resolve();
@@ -6028,7 +6077,10 @@ describe("Codex Runtime Driver", () => {
 			await f.bridge.emitAgentMessageDelta("second");
 			f.bridge.setTurnStatus("completed");
 			expect(
-				await f.driver.getStatus(f.accepted.nativeSessionRef, f.command.executionId),
+				await f.driver.getStatus(
+					f.accepted.nativeSessionRef,
+					f.command.executionId,
+				),
 			).toBe("completed");
 
 			expect((await f.replay()).map((event) => event.type)).toEqual([
