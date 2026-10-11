@@ -103,3 +103,5 @@ kubectl rollout status daemonset/calico-node --namespace kube-system --timeout=3
 kubectl wait nodes --all --for=condition=Ready --timeout=300s
 export WORKLOAD_KIND_TEST=1
 pnpm --filter @agent-infra/platform-worker exec vitest run src/workload.kind.test.ts
+export WORKLOAD_KIND_SESSION_TEST=1
+pnpm --filter @agent-infra/platform-worker exec vitest run src/session-workload.kind.test.ts
