@@ -14,13 +14,13 @@ import {
 	registerAgentApiLifecycleRoutes,
 } from "./http/agent-api-lifecycle-routes.js";
 import {
-	type AgentDefaultRelayKeyRoutesDependencies,
-	registerAgentDefaultRelayKeyRoutes,
-} from "./http/agent-default-relay-key-routes.js";
-import {
 	type AgentApplicationGrantRouteDependencies,
 	registerAgentApplicationGrantRoutes,
 } from "./http/agent-application-grant-routes.js";
+import {
+	type AgentDefaultRelayKeyRoutesDependencies,
+	registerAgentDefaultRelayKeyRoutes,
+} from "./http/agent-default-relay-key-routes.js";
 import {
 	type AgentUserUseGrantRouteDependencies,
 	registerAgentUserUseGrantRoutes,
