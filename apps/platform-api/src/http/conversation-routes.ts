@@ -100,9 +100,11 @@ export interface ConversationQuery {
 		readonly items: readonly ConversationQueryProjectionV1[];
 		readonly nextCursor: string | null;
 	}>;
+	/** An aborted signal cancels the read's database statements (#1732). */
 	get(
 		scope: ConversationQueryScopeV1,
 		conversationId: string,
+		signal?: AbortSignal,
 	): Promise<ConversationQueryDetailV1 | undefined>;
 	getExecution(
 		scope: ConversationQueryScopeV1,
@@ -115,6 +117,7 @@ export interface ConversationQuery {
 		selector:
 			| { readonly kind: "cursor" | "last-event-id"; readonly value: string }
 			| undefined,
+		signal?: AbortSignal,
 	): Promise<ConversationReplayResultV1 | undefined>;
 }
 
@@ -954,7 +957,12 @@ export function registerConversationRoutes(
 					metadata.traceId,
 				);
 				const detail = await query(
-					() => dependencies.query.get(scope(identity), conversationId),
+					() =>
+						dependencies.query.get(
+							scope(identity),
+							conversationId,
+							context.req.raw.signal,
+						),
 					metadata.traceId,
 				);
 				if (!detail) return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
@@ -1319,6 +1327,7 @@ export function registerConversationRoutes(
 								scope(identity),
 								conversationId,
 								replaySelector(context.req.raw, metadata.traceId),
+								context.req.raw.signal,
 							),
 						metadata.traceId,
 					);
@@ -1469,6 +1478,7 @@ export function registerConversationRoutes(
 												scope(currentIdentity),
 												conversationId,
 												{ kind: "cursor", value: cursor },
+												lifetime.signal,
 											),
 										readTimeoutMs,
 										lifetime.signal,

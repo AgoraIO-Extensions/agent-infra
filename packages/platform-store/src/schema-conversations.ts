@@ -478,6 +478,12 @@ export const conversationAuditEvents = platformSchema.table(
 			table.conversationId,
 			table.occurredAt,
 		),
+		// The first audit record of an Execution names its trace (#1732).
+		index("conversation_audit_execution_idx").on(
+			table.executionId,
+			table.occurredAt,
+			table.id,
+		),
 	],
 );
 

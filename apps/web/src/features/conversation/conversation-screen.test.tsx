@@ -614,6 +614,50 @@ describe("functional conversation screen", () => {
 		expect(requests.some((request) => request.method === "POST")).toBe(false);
 	});
 
+	it("re-reads a preparing Session only after the previous read finishes (#1732)", async () => {
+		let reads = 0;
+		let inFlight = 0;
+		let maxInFlight = 0;
+		let aborted = 0;
+		setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (path !== "/api/v2/conversations/conversation-1") return undefined;
+			return (async () => {
+				reads++;
+				inFlight++;
+				maxInFlight = Math.max(maxInFlight, inFlight);
+				let pending = true;
+				request.signal.addEventListener(
+					"abort",
+					() => {
+						if (pending) aborted++;
+					},
+					{ once: true },
+				);
+				try {
+					// A re-read slower than the refresh interval, as on a busy database.
+					if (reads > 1)
+						await new Promise((resolve) => setTimeout(resolve, 2_500));
+					return Response.json({
+						...history("conversation-1", []),
+						conversation: { ...history().conversation, status: "ready" },
+						sessionAvailability: "preparing",
+					});
+				} finally {
+					pending = false;
+					inFlight--;
+				}
+			})();
+		});
+		await screen.findByText("会话准备中，完成后即可发送。草稿会保留。");
+		await waitFor(() => expect(reads).toBe(2), { timeout: 3_000 });
+		// A fixed interval would start, and abort, another read meanwhile.
+		await new Promise((resolve) => setTimeout(resolve, 2_800));
+		expect(reads).toBe(2);
+		expect(maxInFlight).toBe(1);
+		expect(aborted).toBe(0);
+	}, 10_000);
+
 	it("shows an upgrading Session as updating with read-only history until it is ready (#1523)", async () => {
 		let ready = false;
 		const { requests } = setup((request) => {

@@ -173,8 +173,22 @@ export function ActiveConversation({
 	useEffect(() => {
 		if (!preparing) return;
 		// No timeline event announces readiness; re-read the projection instead.
-		const timer = setInterval(() => void reader.refresh(), preparingRefreshMs);
-		return () => clearInterval(timer);
+		// The next read waits for the previous one to finish, so a slow read is
+		// never overlapped or aborted by its own successor (#1732).
+		let stopped = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const schedule = () => {
+			timer = setTimeout(() => {
+				void reader.refresh().finally(() => {
+					if (!stopped) schedule();
+				});
+			}, preparingRefreshMs);
+		};
+		schedule();
+		return () => {
+			stopped = true;
+			clearTimeout(timer);
+		};
 	}, [preparing, reader.refresh]);
 	// The Agent update that becomes ready commits this Session's Sandbox
 	// upgrade with it; re-read so an open page shows "更新中" (ADR 0023).
