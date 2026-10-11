@@ -501,6 +501,9 @@ export class RuntimeHost {
 		const binding = await createRuntimeFileBridgeBindingV1({
 			request,
 			claims,
+			// The bridge decides expiry on the deployment clock that validated the
+			// grant, not on the wall clock.
+			now: (this.options.grantValidationV2?.now ?? Date.now)(),
 		});
 		return this.options.fileBridge(binding);
 	}

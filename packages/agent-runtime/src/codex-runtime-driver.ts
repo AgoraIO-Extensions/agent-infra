@@ -5184,19 +5184,25 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				fileBridge,
 				key,
 			);
-			// Materialized bytes must never cross into a native side effect under a
-			// File Grant that lapsed while they were acquired.
-			fileBridge?.revalidate();
 			return materialized;
 		};
+		// Materialized bytes must never cross into a native side effect under a File
+		// Grant that lapsed while they were acquired.
+		const revalidateInput = () => fileBridge?.revalidate();
 		try {
 			if (
 				command.input.attachments.length > 0 &&
 				!this.operationRecord(command)
 			) {
 				await ensureInput();
+				revalidateInput();
 			}
-			return await this.executePreparedSubmitTurn(command, text, ensureInput);
+			return await this.executePreparedSubmitTurn(
+				command,
+				text,
+				ensureInput,
+				revalidateInput,
+			);
 		} finally {
 			await materialized?.cleanup();
 		}
@@ -5261,6 +5267,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		command: CodexSubmitTurnCommand,
 		text: string,
 		ensureInput: () => Promise<MaterializedCodexInput>,
+		revalidateInput: () => void,
 	) {
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) {
@@ -5335,8 +5342,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		let candidateModelTurn: CodexModelTurn | undefined;
 		let modelTurnAdmitted = false;
+		// A request that never reached the native side must not mark the session's
+		// acceptance uncertain.
+		let submissionStarted = false;
 		try {
-			const turn = await (await this.rpc(session.nativeSessionRef)).request(
+			const connection = await this.rpc(session.nativeSessionRef);
+			// The File Grant is checked once more at the submission boundary: a grant
+			// that lapsed during thread setup or admission must not cross it.
+			revalidateInput();
+			submissionStarted = true;
+			const turn = await connection.request(
 				"turn/start",
 				{
 					threadId: session.threadId,
@@ -5492,7 +5507,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					retryable: false,
 				});
 			}
-			if (modelTurnAdmitted || !this.hasPendingModelAdmission(command)) {
+			if (
+				submissionStarted &&
+				(modelTurnAdmitted || !this.hasPendingModelAdmission(command))
+			) {
 				const operation = this.operationRecord(command);
 				if (
 					operation?.state === "resolved" &&

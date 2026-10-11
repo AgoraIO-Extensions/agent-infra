@@ -2795,6 +2795,7 @@ describe("Codex Runtime Driver", () => {
 		const bytes = new TextEncoder().encode(
 			"codex-lapsed-authority-probe-image",
 		);
+		let revalidations = 0;
 		const fileBridge = {
 			readInput: async (fileId: string) => ({
 				fileId,
@@ -2812,7 +2813,11 @@ describe("Codex Runtime Driver", () => {
 				}),
 			}),
 			revalidate() {
-				throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
+				revalidations += 1;
+				// The authority lapses after materialization but before the native turn.
+				if (revalidations > 1) {
+					throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
+				}
 			},
 			writeResult: async () => {
 				throw new Error("unused");
@@ -2827,11 +2832,11 @@ describe("Codex Runtime Driver", () => {
 				{ fileBridge },
 			),
 		).rejects.toThrow("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
-		expect(
-			bridge.requests.some(
-				({ method }) => method === "turn/start" || method === "thread/start",
-			),
-		).toBe(false);
+		// The last check runs at the native submission boundary.
+		expect(revalidations).toBe(2);
+		expect(bridge.requests.some(({ method }) => method === "turn/start")).toBe(
+			false,
+		);
 		// The refused materialization is removed again.
 		expect(await materializedInputDirectories(bytes)).toEqual([]);
 	});
