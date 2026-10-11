@@ -852,6 +852,7 @@ type CodexNativeInputItem =
 
 interface MaterializedCodexInput {
 	readonly items: readonly CodexNativeInputItem[];
+	readonly directory: string;
 	readonly cleanup: () => Promise<void>;
 }
 
@@ -3476,6 +3477,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	 * memory only: a replay retries the removal before it may report success.
 	 */
 	private readonly pendingInputCleanups = new Map<string, string>();
+	/** Accepted native Turns own these directories until their terminal receipt. */
+	private readonly retainedInputDirectories = new Map<string, string>();
 
 	private retainPendingSourceTurn(turnKey: string, requestId: string): void {
 		const requests =
@@ -5508,6 +5511,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		// Materialized bytes must never cross into a native side effect under a File
 		// Grant that lapsed while they were acquired.
 		const revalidateInput = () => fileBridge?.revalidate();
+		const retainInputUntilTerminal = async (nativeTurn: CodexModelTurn) => {
+			if (!materialized) return;
+			const retained = materialized;
+			materialized = undefined;
+			await this.retainMaterializedInput(nativeTurn, retained);
+		};
 		try {
 			if (
 				command.input.attachments.length > 0 &&
@@ -5521,6 +5530,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				text,
 				ensureInput,
 				revalidateInput,
+				retainInputUntilTerminal,
 			);
 		} finally {
 			await materialized?.cleanup();
@@ -5565,6 +5575,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			let cleaned = false;
 			return {
 				items,
+				directory,
 				cleanup: async () => {
 					if (cleaned) return;
 					try {
@@ -5594,6 +5605,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		text: string,
 		ensureInput: () => Promise<MaterializedCodexInput>,
 		revalidateInput: () => void,
+		retainInputUntilTerminal: (nativeTurn: CodexModelTurn) => Promise<void>,
 	) {
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) {
@@ -5771,6 +5783,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 								nativeTurn.turnId,
 							),
 						);
+						await retainInputUntilTerminal(nativeTurn);
 						return record;
 					}
 				}
@@ -5803,6 +5816,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					),
 				);
 			}
+			await retainInputUntilTerminal(nativeTurn);
 			return record;
 		} catch (error) {
 			abandonModelAdmission();
@@ -6736,9 +6750,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (this.codexInputRootPath) {
 			try {
 				await cleanupCodexInputDirectory(this.codexInputRootPath);
+				this.retainedInputDirectories.clear();
 			} catch {
 				// A failed close leaves the root for the next open to reclaim.
 			}
+		} else {
+			await Promise.allSettled(
+				[...this.retainedInputDirectories.values()].map((directory) =>
+					cleanupCodexInputDirectory(directory),
+				),
+			);
+			this.retainedInputDirectories.clear();
 		}
 		try {
 			await this.file.readCommitted();
@@ -9291,15 +9313,22 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 						)
 					: undefined;
 			});
+			const completedConversationKey = owningSession
+				? this.modelConversationKey(codexConversationKey(owningSession))
+				: conversationKey === undefined
+					? undefined
+					: this.modelConversationKey(conversationKey);
 			this.recordNativeTurnCompleted(
-				owningSession
-					? this.modelConversationKey(codexConversationKey(owningSession))
-					: conversationKey === undefined
-						? undefined
-						: this.modelConversationKey(conversationKey),
+				completedConversationKey,
 				completed.threadId,
 				completed.nativeTurnId,
 			);
+			if (completedConversationKey !== undefined)
+				await this.cleanupRetainedMaterializedInput({
+					conversationKey: completedConversationKey,
+					threadId: completed.threadId,
+					turnId: completed.nativeTurnId,
+				});
 			if (streamKey) this.notifyEventStream(streamKey);
 			return;
 		}
@@ -9784,6 +9813,63 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 	}
 
+	private async retainMaterializedInput(
+		nativeTurn: CodexModelTurn,
+		materialized: MaterializedCodexInput,
+	) {
+		const key = this.nativeTurnKey(
+			nativeTurn.conversationKey,
+			nativeTurn.threadId,
+			nativeTurn.turnId,
+		);
+		if (this.retainedInputDirectories.has(key)) protocolInvalid();
+		const terminal = Object.values(this.readState().sessions).some(
+			(session) => {
+				if (
+					!session.threadId ||
+					session.threadId !== nativeTurn.threadId ||
+					this.modelConversationKey(codexConversationKey(session)) !==
+						nativeTurn.conversationKey
+				)
+					return false;
+				const execution = Object.values(session.executions).find(
+					(value) => value.nativeTurnId === nativeTurn.turnId,
+				);
+				const journal = execution
+					? ownRecordValue(session.journals ?? {}, execution.nativeTurnId)
+					: undefined;
+				return (
+					execution !== undefined &&
+					(execution.status !== "running" ||
+						journal?.nativeCompletionStatus !== undefined)
+				);
+			},
+		);
+		if (terminal) {
+			await materialized.cleanup();
+			return;
+		}
+		this.retainedInputDirectories.set(key, materialized.directory);
+	}
+
+	private async cleanupRetainedMaterializedInput(nativeTurn: CodexModelTurn) {
+		const key = this.nativeTurnKey(
+			nativeTurn.conversationKey,
+			nativeTurn.threadId,
+			nativeTurn.turnId,
+		);
+		const directory = this.retainedInputDirectories.get(key);
+		if (!directory) return;
+		try {
+			await cleanupCodexInputDirectory(directory);
+			if (this.retainedInputDirectories.get(key) === directory)
+				this.retainedInputDirectories.delete(key);
+		} catch {
+			// Driver shutdown retries the private root cleanup. A local cleanup
+			// failure must not hide the already confirmed native terminal.
+		}
+	}
+
 	private eventStreamKey(nativeSessionRef: string, executionId: string) {
 		return JSON.stringify([nativeSessionRef, executionId]);
 	}
@@ -10255,6 +10341,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			this.notifyEventStream(
 				this.eventStreamKey(nativeSessionRef, executionId),
 			);
+		}
+		if (result.persistedStatus !== "running") {
+			const session = this.session(nativeSessionRef);
+			if (session.threadId)
+				await this.cleanupRetainedMaterializedInput({
+					conversationKey: this.modelConversationKey(
+						codexConversationKey(session),
+					),
+					threadId: session.threadId,
+					turnId: nativeTurnId,
+				});
 		}
 		return result.persistedStatus;
 	}
