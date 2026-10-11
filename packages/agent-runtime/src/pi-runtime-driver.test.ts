@@ -157,6 +157,44 @@ it("reads the bounded Pi get_commands projection from a live native handle", asy
 	}
 });
 
+it("fails closed for missing, revoked, cancelled and expired Pi command reads", async () => {
+	const f = await fixture();
+	try {
+		const accepted = await f.driver.execute(command);
+		const base = {
+			nativeSessionRef: accepted.nativeSessionRef,
+			signal: new AbortController().signal,
+			expiresAt: Date.now() + 10_000,
+			assertCurrent: () => {},
+			revalidate: async () => {},
+		};
+		await expect(
+			f.driver.discoverNativeCommands({ ...base, nativeSessionRef: "missing" }),
+		).rejects.toThrow("Runtime session could not be recovered");
+		await expect(
+			f.driver.discoverNativeCommands({
+				...base,
+				revalidate: async () => {
+					throw new Error("revoked");
+				},
+			}),
+		).rejects.toThrow("Runtime session could not be recovered");
+		const cancelled = new AbortController();
+		cancelled.abort();
+		await expect(
+			f.driver.discoverNativeCommands({ ...base, signal: cancelled.signal }),
+		).rejects.toThrow("Runtime session could not be recovered");
+		await expect(
+			f.driver.discoverNativeCommands({
+				...base,
+				expiresAt: Date.now() - 1,
+			}),
+		).rejects.toThrow("Runtime session could not be recovered");
+	} finally {
+		await f.close();
+	}
+});
+
 it.each(["normal", "cancel", "abort-only"])(
 	"does not interpret abort ACK as a terminal result (%s)",
 	async (mode) => {

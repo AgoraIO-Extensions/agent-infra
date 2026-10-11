@@ -1100,7 +1100,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			read.assertCurrent();
 		};
 		assertCurrent();
-		await read.revalidate();
+		try {
+			await read.revalidate();
+		} catch {
+			unavailable();
+		}
 		assertCurrent();
 		const result = await handle.native.discoverCommands({
 			signal: read.signal,
@@ -1109,7 +1113,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				join(this.options.path, read.nativeSessionRef, "workspace"),
 			],
 		});
-		await read.revalidate();
+		try {
+			await read.revalidate();
+		} catch {
+			unavailable();
+		}
 		assertCurrent();
 		return result;
 	}
