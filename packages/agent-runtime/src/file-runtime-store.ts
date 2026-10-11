@@ -1544,6 +1544,45 @@ export class FileRuntimeStore {
 		this.checkAuthorizedOriginalExecution(this.file.read(), action, readNow);
 	}
 
+	/**
+	 * Final synchronous check for a prepared V4 business operation before a native
+	 * side effect. V4 scopes fences by operation id, so the Execution-keyed
+	 * original-evidence check above cannot serve this boundary.
+	 */
+	assertOperationAuthorityCurrent(
+		operationId: string,
+		executionId: string,
+		sessionGeneration: number,
+		readNow: () => number,
+	) {
+		const state = this.file.read();
+		assertStoreState(state);
+		const candidates = Object.values(state.sessions).filter(
+			(session) =>
+				session.sessionGeneration === sessionGeneration &&
+				session.operations[operationId]?.executionId === executionId,
+		);
+		if (candidates.length !== 1) runtimeAuthorizationDenied();
+		const session = candidates[0];
+		if (!session || session.generationBarrier) runtimeAuthorizationDenied();
+		const operation = session.operations[operationId];
+		if (
+			!operation ||
+			(operation.kind !== "submit-turn" && operation.kind !== "supplement")
+		)
+			runtimeAuthorizationDenied();
+		const authority = session.executionAuthorities?.[executionId];
+		const now = readNow();
+		if (
+			!authority?.authorizationRecordId ||
+			authority.stopped ||
+			authority.control !== undefined ||
+			authority.expiresAt <= now ||
+			authority.issuedAt > now
+		)
+			runtimeAuthorizationDenied();
+	}
+
 	/** Read-only admission check for a separately authorized installation command. */
 	assertOriginalExecutionBindingCurrent(
 		reference: RuntimeOriginalExecutionRef,

@@ -102,6 +102,89 @@ describe("RuntimeHost execution file bridge", () => {
 		expect(Object.isFrozen(writeContext)).toBe(true);
 	});
 
+	it("forwards the caller signal and never reaches the reader once aborted", async () => {
+		const forwarded: (AbortSignal | undefined)[] = [];
+		const readInput = vi.fn(
+			async (context: RuntimeFileBridgeContextV1, signal?: AbortSignal) => {
+				forwarded.push(signal);
+				return {
+					fileId: context.fileId,
+					descriptor,
+					body: new ReadableStream<Uint8Array>(),
+				};
+			},
+		);
+		const port = bridge({ readInput });
+		const signal = new AbortController().signal;
+
+		await port.readInput("input-1", signal);
+		expect(forwarded[0]).toBe(signal);
+
+		const aborted = new AbortController();
+		aborted.abort();
+		await expect(port.readInput("input-1", aborted.signal)).rejects.toThrow(
+			"RUNTIME_FILE_INPUT_ABORTED",
+		);
+		expect(readInput).toHaveBeenCalledTimes(1);
+	});
+
+	it("revalidates the current authority on demand", async () => {
+		let revoked = false;
+		const port = bridge({ isRevoked: () => revoked });
+
+		expect(() => port.revalidate()).not.toThrow();
+		revoked = true;
+		expect(() => port.revalidate()).toThrow(
+			"RUNTIME_FILE_BRIDGE_CONTEXT_REVOKED",
+		);
+	});
+
+	it("refuses bytes whose authority lapsed during the exchange", async () => {
+		let cancelled = false;
+		let live = true;
+		const port = bridge({
+			isRevoked: () => !live,
+			readInput: async (context: RuntimeFileBridgeContextV1) => {
+				// The deployment authority lapses while the exchange is in flight.
+				live = false;
+				return {
+					fileId: context.fileId,
+					descriptor,
+					body: new ReadableStream<Uint8Array>({
+						cancel() {
+							cancelled = true;
+						},
+					}),
+				};
+			},
+		});
+
+		await expect(port.readInput("input-1")).rejects.toThrow(
+			"RUNTIME_FILE_BRIDGE_CONTEXT_REVOKED",
+		);
+		expect(cancelled).toBe(true);
+	});
+
+	it("cancels the body when the authority returns a foreign file id", async () => {
+		let cancelled = false;
+		const port = bridge({
+			readInput: async () => ({
+				fileId: "input-2",
+				descriptor,
+				body: new ReadableStream<Uint8Array>({
+					cancel() {
+						cancelled = true;
+					},
+				}),
+			}),
+		});
+
+		await expect(port.readInput("input-1")).rejects.toThrow(
+			"RUNTIME_FILE_BRIDGE_BINDING_INVALID",
+		);
+		expect(cancelled).toBe(true);
+	});
+
 	it("keeps result writes valid for a maximum-length execution id", async () => {
 		const longBinding = { ...binding, executionId: "e".repeat(255) };
 		const writeResult = vi.fn(

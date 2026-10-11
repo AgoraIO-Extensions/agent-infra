@@ -503,7 +503,24 @@ export class RuntimeHost {
 			claims,
 			now: this.options.grantValidationV2?.now?.() ?? Date.now(),
 		});
-		return this.options.fileBridge(binding);
+		const port = this.options.fileBridge(binding);
+		const operationId = request.operation.id;
+		return {
+			readInput: (fileId, signal) => port.readInput(fileId, signal),
+			writeResult: (descriptor, body) => port.writeResult(descriptor, body),
+			revalidate: () => {
+				// A deployment port holds the binding, not Runtime authority: re-check
+				// that this exact operation is still current before bytes that were
+				// already materialized cross the native submission boundary.
+				this.options.store.assertOperationAuthorityCurrent(
+					operationId,
+					binding.executionId,
+					binding.sessionGeneration,
+					this.options.grantValidationV2?.now ?? Date.now,
+				);
+				port.revalidate();
+			},
+		};
 	}
 	private requireLegacyHost() {
 		if (this.closed) runtimeAuthorizationDenied();
@@ -1692,8 +1709,14 @@ export class RuntimeHost {
 					? {
 							...context,
 							fileBridge: {
-								readInput(fileId: string) {
-									return originalFileBridge.readInput(fileId);
+								readInput(fileId: string, signal?: AbortSignal) {
+									// Cancellation must still reach the authority when the
+									// Driver stops waiting for an attachment.
+									return originalFileBridge.readInput(fileId, signal);
+								},
+								revalidate() {
+									// Lapsed authority must reach the Driver's boundary check.
+									originalFileBridge.revalidate();
 								},
 								async writeResult(
 									descriptor: Parameters<

@@ -178,12 +178,19 @@ export function createRuntimeFileBridgeFactoryV1(
 		return url;
 	}
 
-	async function exchange(value: unknown, key: string) {
+	function deadline(signal?: AbortSignal) {
+		// The caller's abort must reach the exchange as well as the local timeout.
+		return signal
+			? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+			: AbortSignal.timeout(timeoutMs);
+	}
+
+	async function exchange(value: unknown, key: string, signal?: AbortSignal) {
 		const request = RuntimeFileExchangeRequestV1Schema.parse(value);
 		const response = await send(exchangeUrl, {
 			method: "POST",
 			redirect: "error",
-			signal: AbortSignal.timeout(timeoutMs),
+			signal: deadline(signal),
 			headers: {
 				Authorization: `Bearer ${options.serviceToken}`,
 				"Content-Type": "application/json",
@@ -204,7 +211,10 @@ export function createRuntimeFileBridgeFactoryV1(
 
 	return (binding) => {
 		const port: RuntimeFileBridgePortV1 = {
-			async readInput(fileId: string): Promise<RuntimeFileInputV1> {
+			async readInput(
+				fileId: string,
+				signal?: AbortSignal,
+			): Promise<RuntimeFileInputV1> {
 				if (!binding.inputFileIds.includes(fileId))
 					throw new Error("RUNTIME_FILE_INPUT_NOT_AUTHORIZED");
 				const key = idempotency(binding, "read", fileId);
@@ -224,6 +234,7 @@ export function createRuntimeFileBridgeFactoryV1(
 						idempotencyKey: key,
 					},
 					key,
+					signal,
 				);
 				if (
 					access.file.fileId !== fileId ||
@@ -233,7 +244,7 @@ export function createRuntimeFileBridgeFactoryV1(
 					throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
 				const response = await send(target(access.path), {
 					redirect: "error",
-					signal: AbortSignal.timeout(timeoutMs),
+					signal: deadline(signal),
 					headers: { "X-Platform-File-Grant": access.grant.token },
 				});
 				if (!response.ok || !response.body) {
@@ -270,6 +281,12 @@ export function createRuntimeFileBridgeFactoryV1(
 					descriptor: access.file.descriptor,
 					body,
 				};
+			},
+			revalidate() {
+				// The binding is the only authority this port holds; it must still be
+				// live when bytes that were already read cross into a native side effect.
+				if (binding.expiresAt <= Date.now())
+					throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
 			},
 			async writeResult(
 				descriptor: FileDescriptorV1,

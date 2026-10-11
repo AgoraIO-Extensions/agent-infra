@@ -1,6 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	lstat,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -112,6 +119,7 @@ import {
 } from "./runtime-authorization.js";
 import type {
 	RuntimeFileBridgePortV1,
+	RuntimeFileInputV1,
 	RuntimeFileResultV1,
 } from "./runtime-file-bridge.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
@@ -718,6 +726,187 @@ type CodexNativeInputItem =
 interface MaterializedCodexInput {
 	readonly items: readonly CodexNativeInputItem[];
 	readonly cleanup: () => Promise<void>;
+}
+
+/**
+ * Image media types the pinned Codex `local_image` consumer accepts. Anything
+ * else is rejected before the native Turn, never materialized or forwarded.
+ */
+const codexInputImageMediaTypes = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+]);
+const codexInputMaximumBytes = 50 * 1024 * 1024;
+/** Bounds elapsed time so a stalled source cannot hold the execution open. */
+const codexInputTransferTimeoutMs = 30_000;
+/** Bounds the bridge exchange itself, before any transfer deadline exists. */
+const codexInputAcquisitionTimeoutMs = 30_000;
+/** Bounds waiting for an upstream cancel so cleanup is never held hostage. */
+const codexInputCancellationTimeoutMs = 1_000;
+const codexInputCleanupAttempts = 3;
+const codexInputCleanupRetryDelayMs = 50;
+
+/**
+ * Removes one materialized input directory under a bounded retry. Temporary
+ * paths stay in process memory: a final failure is reported to the caller so a
+ * replay cannot present an accepted Turn while its materialization still exists.
+ */
+async function cleanupCodexInputDirectory(directory: string): Promise<void> {
+	for (let attempt = 1; ; attempt += 1) {
+		try {
+			await rm(directory, { recursive: true, force: true });
+			return;
+		} catch (error) {
+			if (attempt >= codexInputCleanupAttempts) throw error;
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, codexInputCleanupRetryDelayMs);
+			});
+		}
+	}
+}
+
+/**
+ * Acquires one attachment through the request-scoped bridge under the same
+ * deadline discipline as its transfer. The signal reaches the deployment
+ * authority so it can stop its own exchange, and a late acquisition is
+ * cancelled instead of leaking a body after the operation already failed.
+ */
+async function acquireCodexInput(
+	fileBridge: RuntimeFileBridgePortV1,
+	fileId: string,
+): Promise<RuntimeFileInputV1> {
+	const controller = new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	// The deadline exists before the exchange starts, so no authority call can
+	// escape it.
+	const deadline = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(() => {
+			controller.abort();
+			reject(unavailableError());
+		}, codexInputAcquisitionTimeoutMs);
+	});
+	let acquisition: Promise<RuntimeFileInputV1>;
+	try {
+		acquisition = fileBridge.readInput(fileId, controller.signal);
+	} catch (error) {
+		clearTimeout(timer);
+		throw error;
+	}
+	try {
+		return await Promise.race([acquisition, deadline]);
+	} catch (error) {
+		controller.abort();
+		void acquisition.then(
+			(input) => input.body.cancel().catch(() => {}),
+			() => {},
+		);
+		throw error;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * Cancels the upstream body and releases the reader without awaiting a cancel
+ * that may never settle.
+ */
+async function releaseCodexInputReader(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			reader.cancel().then(
+				() => undefined,
+				() => undefined,
+			),
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, codexInputCancellationTimeoutMs);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+		reader.releaseLock();
+	}
+}
+
+/**
+ * Cancels an acquired body that will not be transferred, under the same bounded
+ * cancellation discipline as a transfer.
+ */
+async function cancelCodexInputBody(
+	body: ReadableStream<Uint8Array>,
+): Promise<void> {
+	await releaseCodexInputReader(body.getReader());
+}
+
+/**
+ * Runtime-owned root for one Driver's materialized Codex inputs. It is derived
+ * from the Driver state path, so a restarted Driver reclaims exactly its own
+ * leftovers and no temporary path ever enters durable state.
+ */
+function codexInputRoot(path: string) {
+	return join(
+		tmpdir(),
+		`agent-infra-codex-input-${createHash("sha256").update(path).digest("hex").slice(0, 16)}`,
+	);
+}
+
+/**
+ * Reclaims input bytes a previous process could not remove. Failing this
+ * reclamation fails the Driver open: private attachment bytes must not outlive
+ * the execution that owned them.
+ */
+async function reclaimCodexInputRoot(root: string) {
+	try {
+		await rm(root, { recursive: true, force: true });
+		await mkdir(root, { recursive: true, mode: 0o700 });
+	} catch {
+		unavailable();
+	}
+}
+
+/**
+ * Transfers one bounded attachment into memory and verifies it against the
+ * admitted descriptor. The deadline and every exit path cancel the upstream
+ * stream, so a stalled, oversized or rejected source releases its resources
+ * instead of keeping the business execution and its temporary directory alive.
+ */
+async function readCodexInputBytes(input: RuntimeFileInputV1): Promise<Buffer> {
+	const reader = input.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	let expired = false;
+	const timer = setTimeout(() => {
+		expired = true;
+		// Cancel the pending read so the deadline also ends the upstream transfer.
+		void reader.cancel().catch(() => {});
+	}, codexInputTransferTimeoutMs);
+	try {
+		// Rejecting an oversized descriptor must still release its upstream body.
+		if (input.descriptor.sizeBytes > codexInputMaximumBytes) unavailable();
+		while (true) {
+			const next = await reader.read();
+			if (expired) unavailable();
+			if (next.done) break;
+			if (!(next.value instanceof Uint8Array)) unavailable();
+			size += next.value.byteLength;
+			if (size > codexInputMaximumBytes) unavailable();
+			chunks.push(next.value);
+		}
+	} finally {
+		clearTimeout(timer);
+		await releaseCodexInputReader(reader);
+	}
+	if (size !== input.descriptor.sizeBytes) unavailable();
+	const bytes = Buffer.concat(chunks);
+	if (
+		createHash("sha256").update(bytes).digest("hex") !== input.descriptor.sha256
+	)
+		unavailable();
+	return bytes;
 }
 
 function operationKey(
@@ -3137,6 +3326,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		string,
 		Promise<CodexNativeSourceResponseV1>
 	>();
+	/**
+	 * Temporary input directories whose cleanup failed. They stay in process
+	 * memory only: a replay retries the removal before it may report success.
+	 */
+	private readonly pendingInputCleanups = new Map<string, string>();
 
 	private retainPendingSourceTurn(turnKey: string, requestId: string): void {
 		const requests =
@@ -3220,6 +3414,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly installedSkill?: CodexInstalledSkillDescriptorV1,
 		private readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1,
 		private readonly browserCapability?: import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1,
+		/**
+		 * Reclaimed and recreated by `open`; absent only for direct construction
+		 * outside the open path.
+		 */
+		private readonly codexInputRootPath?: string,
 	) {}
 
 	private readonly connectionRecoveries = new Map<
@@ -4293,11 +4492,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		)
 			configurationInvalid();
 		const file = await CodexRuntimeDriver.openState(options.path);
+		const inputRoot = codexInputRoot(options.path);
 		let driver: CodexRuntimeDriver | undefined;
 		let modelTransport:
 			| Awaited<ReturnType<typeof openCodexModelTransport>>
 			| undefined;
 		try {
+			// A previous process may have failed to remove private attachment bytes;
+			// reclaim them before this Driver can materialize or report on any input.
+			await reclaimCodexInputRoot(inputRoot);
 			assertInstalledSkillCurrent();
 			modelTransport =
 				routes.length > 0
@@ -4526,6 +4729,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				installedSkill,
 				options.skillDirectory,
 				options.browserCapability,
+				inputRoot,
 			);
 		} catch (error) {
 			await modelTransport?.close().catch(() => {});
@@ -5052,19 +5256,41 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (command.operationId !== command.executionId) stateInvalid();
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
+		const key = operationKey(command);
+		const leaked = this.pendingInputCleanups.get(key);
+		if (leaked) {
+			// An accepted Turn must not replay as success while the materialization
+			// of an earlier attempt is still present.
+			await cleanupCodexInputDirectory(leaked);
+			this.pendingInputCleanups.delete(key);
+		}
 		let materialized: MaterializedCodexInput | undefined;
 		const ensureInput = async () => {
 			materialized ??= await this.materializeCodexInput(
 				command,
 				text,
 				fileBridge,
+				key,
 			);
 			return materialized;
 		};
-		if (command.input.attachments.length > 0 && !this.operationRecord(command))
-			await ensureInput();
+		// Materialized bytes must never cross into a native side effect under a File
+		// Grant that lapsed while they were acquired.
+		const revalidateInput = () => fileBridge?.revalidate();
 		try {
-			return await this.executePreparedSubmitTurn(command, text, ensureInput);
+			if (
+				command.input.attachments.length > 0 &&
+				!this.operationRecord(command)
+			) {
+				await ensureInput();
+				revalidateInput();
+			}
+			return await this.executePreparedSubmitTurn(
+				command,
+				text,
+				ensureInput,
+				revalidateInput,
+			);
 		} finally {
 			await materialized?.cleanup();
 		}
@@ -5073,43 +5299,30 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async materializeCodexInput(
 		command: CodexSubmitTurnCommand,
 		text: string,
-		fileBridge?: RuntimeFileBridgePortV1,
+		fileBridge: RuntimeFileBridgePortV1 | undefined,
+		key: string,
 	): Promise<MaterializedCodexInput> {
 		if (!fileBridge) unavailable();
-		const directory = await mkdtemp(join(tmpdir(), "agent-infra-codex-input-"));
+		const directory = await mkdtemp(
+			this.codexInputRootPath
+				? join(this.codexInputRootPath, "turn-")
+				: join(tmpdir(), "agent-infra-codex-input-"),
+		);
 		try {
 			const items: CodexNativeInputItem[] = [{ type: "text", text }];
 			for (const [index, fileId] of command.input.attachments.entries()) {
-				const input = await fileBridge.readInput(fileId);
+				const input = await acquireCodexInput(fileBridge, fileId);
 				if (
 					input.fileId !== fileId ||
-					!input.descriptor.mediaType.startsWith("image/") ||
-					input.descriptor.sizeBytes > 50 * 1024 * 1024
+					!codexInputImageMediaTypes.has(input.descriptor.mediaType)
 				) {
-					await input.body.cancel().catch(() => undefined);
+					// The rejected body is never transferred, so it must not stay live.
+					await cancelCodexInputBody(input.body);
 					unavailable();
 				}
-				const reader = input.body.getReader();
-				const chunks: Uint8Array[] = [];
-				let size = 0;
-				let complete = false;
-				try {
-					while (true) {
-						const next = await reader.read();
-						if (next.done) break;
-						if (!(next.value instanceof Uint8Array)) unavailable();
-						size += next.value.byteLength;
-						if (size > 50 * 1024 * 1024) unavailable();
-						chunks.push(next.value);
-					}
-					complete = true;
-				} finally {
-					if (!complete) await reader.cancel().catch(() => undefined);
-					reader.releaseLock();
-				}
-				if (size !== input.descriptor.sizeBytes) unavailable();
+				const bytes = await readCodexInputBytes(input);
 				const path = join(directory, `${String(index).padStart(2, "0")}.image`);
-				await writeFile(path, Buffer.concat(chunks), {
+				await writeFile(path, bytes, {
 					flag: "wx",
 					mode: 0o600,
 				});
@@ -5118,14 +5331,26 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			let cleaned = false;
 			return {
 				items,
-				async cleanup() {
+				cleanup: async () => {
 					if (cleaned) return;
-					cleaned = true;
-					await rm(directory, { recursive: true, force: true });
+					try {
+						await cleanupCodexInputDirectory(directory);
+						cleaned = true;
+					} catch (error) {
+						this.pendingInputCleanups.set(key, directory);
+						throw error;
+					}
 				},
 			};
 		} catch (error) {
-			await rm(directory, { recursive: true, force: true });
+			try {
+				await cleanupCodexInputDirectory(directory);
+			} catch (cleanupError) {
+				// Retain ownership of the remaining private bytes and surface the
+				// cleanup failure; a later attempt must retry it before proceeding.
+				this.pendingInputCleanups.set(key, directory);
+				throw cleanupError;
+			}
 			throw error;
 		}
 	}
@@ -5134,6 +5359,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		command: CodexSubmitTurnCommand,
 		text: string,
 		ensureInput: () => Promise<MaterializedCodexInput>,
+		revalidateInput: () => void,
 	) {
 		const prepared = await this.prepare(command);
 		if (prepared.operation.record) {
@@ -5208,8 +5434,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		let candidateModelTurn: CodexModelTurn | undefined;
 		let modelTurnAdmitted = false;
+		// A request that never reached the native side must not mark the session's
+		// acceptance uncertain.
+		let submissionStarted = false;
 		try {
-			const turn = await (await this.rpc(session.nativeSessionRef)).request(
+			const connection = await this.rpc(session.nativeSessionRef);
+			// The File Grant is checked once more at the submission boundary: a grant
+			// that lapsed during thread setup or admission must not cross it.
+			revalidateInput();
+			submissionStarted = true;
+			const turn = await connection.request(
 				"turn/start",
 				{
 					threadId: session.threadId,
@@ -5365,7 +5599,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					retryable: false,
 				});
 			}
-			if (modelTurnAdmitted || !this.hasPendingModelAdmission(command)) {
+			if (
+				submissionStarted &&
+				(modelTurnAdmitted || !this.hasPendingModelAdmission(command))
+			) {
 				const operation = this.operationRecord(command);
 				if (
 					operation?.state === "resolved" &&
