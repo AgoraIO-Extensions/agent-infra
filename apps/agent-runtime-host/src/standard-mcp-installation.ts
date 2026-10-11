@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants, type FileHandle } from "node:fs";
+import { constants } from "node:fs";
 import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -60,55 +60,24 @@ export async function ensurePrivateDirectory(path: string) {
 	}
 }
 
-const materialLockName = ".material-revoke.lock";
+const materialLockTails = new Map<string, Promise<void>>();
 
-export async function acquireProtectedStandardMcpMaterialLock(path: string) {
-	assertStandardMcpProcessProtection();
-	const directory = await openProtectedStandardMcpDirectory(path);
-	const lockPath = protectedStandardMcpPath(directory, path, materialLockName);
-	let lock: FileHandle | undefined;
+export async function withProtectedStandardMcpMaterialLock<T>(
+	path: string,
+	operation: () => Promise<T>,
+) {
+	const previous = materialLockTails.get(path) ?? Promise.resolve();
+	let release!: () => void;
+	const current = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	materialLockTails.set(path, current);
+	await previous;
 	try {
-		lock = await open(
-			lockPath,
-			constants.O_WRONLY |
-				constants.O_CREAT |
-				constants.O_EXCL |
-				constants.O_NOFOLLOW,
-			0o600,
-		);
-		const stat = await lock.stat();
-		if (
-			!stat.isFile() ||
-			stat.uid !== process.getuid?.() ||
-			stat.nlink !== 1 ||
-			(stat.mode & 0o777) !== 0o600
-		)
-			unavailable();
-		await lock.sync();
-		await directory.sync();
-		return async () => {
-			try {
-				const before = await lock.stat();
-				const after = await lstat(lockPath);
-				if (
-					before.dev !== after.dev ||
-					before.ino !== after.ino ||
-					before.uid !== after.uid ||
-					before.mode !== after.mode
-				)
-					unavailable();
-				await unlink(lockPath);
-				await directory.sync();
-			} finally {
-				await lock.close();
-				await directory.close();
-			}
-		};
-	} catch (error) {
-		await lock?.close();
-		await directory.close();
-		if ((error as NodeJS.ErrnoException).code === "EEXIST") unavailable();
-		throw error;
+		return await operation();
+	} finally {
+		release();
+		if (materialLockTails.get(path) === current) materialLockTails.delete(path);
 	}
 }
 
@@ -118,12 +87,9 @@ export async function publishMaterial(
 	token: string,
 	guard?: () => void,
 ) {
-	const release = await acquireProtectedStandardMcpMaterialLock(path);
-	try {
-		return await publishMaterialUnlocked(path, name, token, guard);
-	} finally {
-		await release();
-	}
+	return withProtectedStandardMcpMaterialLock(path, () =>
+		publishMaterialUnlocked(path, name, token, guard),
+	);
 }
 
 async function publishMaterialUnlocked(

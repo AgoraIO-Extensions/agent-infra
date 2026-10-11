@@ -32,9 +32,9 @@ import {
 } from "./standard-mcp-files.js";
 import { standardMcpInstallationKey } from "./standard-mcp-input.js";
 import {
-	acquireProtectedStandardMcpMaterialLock,
 	ensurePrivateDirectory,
 	publishMaterial,
+	withProtectedStandardMcpMaterialLock,
 } from "./standard-mcp-installation.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
 
@@ -295,7 +295,10 @@ export async function createProtectedRuntimeOAuthClient(options: {
 		return readProtectedStandardMcpBytes(records, name, 16_384);
 	}
 	async function revokeAndClearMaterials() {
-		await revokeAndClearMaterialsUnsafe();
+		await withProtectedStandardMcpMaterialLock(
+			materials,
+			revokeAndClearMaterialsUnsafe,
+		);
 	}
 	async function revokeAndClearMaterialsUnsafe() {
 		assertStandardMcpProcessProtection();
@@ -325,17 +328,12 @@ export async function createProtectedRuntimeOAuthClient(options: {
 		} finally {
 			await recordDirectory.close();
 		}
-		const releaseMaterialLock =
-			await acquireProtectedStandardMcpMaterialLock(materials);
-		let directory: FileHandle | undefined;
+		const directory = await openProtectedStandardMcpDirectory(materials);
 		try {
-			const openedDirectory =
-				await openProtectedStandardMcpDirectory(materials);
-			directory = openedDirectory;
 			names = (
 				await readdir(
 					process.platform === "linux"
-						? `/proc/self/fd/${openedDirectory.fd}`
+						? `/proc/self/fd/${directory.fd}`
 						: materials,
 				)
 			).filter((name) => materialNames.has(name));
@@ -346,7 +344,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					: "access_token";
 				try {
 					const token = await readProtectedOAuthMaterial(
-						openedDirectory,
+						directory,
 						materials,
 						name,
 					);
@@ -360,33 +358,27 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					});
 					await assertProtectedStandardMcpDirectoryCurrent(
 						materials,
-						openedDirectory,
+						directory,
 					);
 					if (
-						(await readProtectedOAuthMaterial(
-							openedDirectory,
-							materials,
-							name,
-						)) !== token
+						(await readProtectedOAuthMaterial(directory, materials, name)) !==
+						token
 					)
 						throw new Error("OAuth material changed during revoke");
-					await unlink(
-						protectedStandardMcpPath(openedDirectory, materials, name),
-					);
+					await unlink(protectedStandardMcpPath(directory, materials, name));
 				} catch (error) {
 					failures.push(error);
 				}
 			}
 			try {
-				await openedDirectory.sync();
+				await directory.sync();
 			} catch (error) {
 				failures.push(error);
 			}
 			if (failures.length > 0)
 				throw new AggregateError(failures, "OAuth revocation incomplete");
 		} finally {
-			await directory?.close();
-			await releaseMaterialLock();
+			await directory.close();
 		}
 	}
 	async function readOptionalMaterial(
