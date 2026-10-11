@@ -9,9 +9,9 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import {
-	BrowserHandoffPanel,
 	type BrowserHandoffActionInputV1,
 	type BrowserHandoffBindingV1,
+	BrowserHandoffPanel,
 	type BrowserHandoffPanelStateV1,
 	type BrowserSideEffectConfirmationV1,
 } from "./browser-handoff-panel.js";

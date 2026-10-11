@@ -150,8 +150,12 @@ function safeOrigin(value: string): string | undefined {
 }
 
 function boundedSummary(value: string): string {
-	return value
-		.replace(/[\u0000-\u001f\u007f]/gu, " ")
+	return [...value]
+		.filter((character) => {
+			const code = character.codePointAt(0) ?? 0;
+			return code >= 0x20 && code !== 0x7f;
+		})
+		.join("")
 		.trim()
 		.slice(0, 160);
 }
