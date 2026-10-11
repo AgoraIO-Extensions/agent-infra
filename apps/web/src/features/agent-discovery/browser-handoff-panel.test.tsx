@@ -234,5 +234,17 @@ describe("Browser handoff and confirmation panel", () => {
 		);
 		expect(screen.getByRole("alert").textContent).toContain("不会执行此副作用");
 		expect(screen.queryByRole("button")).toBeNull();
+
+		cleanup();
+		render(
+			<BrowserHandoffPanel
+				browserAvailable
+				confirmation={{ ...confirmation, expiresAt: "invalid" }}
+				currentBinding={binding}
+				onConfirmSideEffect={onConfirmSideEffect}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toContain("有效期无法核验");
+		expect(screen.queryByRole("button")).toBeNull();
 	});
 });

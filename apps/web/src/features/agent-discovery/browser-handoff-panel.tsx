@@ -197,7 +197,9 @@ function useExpiryClock(
 	const [tick, setTick] = useState(0);
 	useEffect(() => {
 		if (!active || !expiresAt) return;
-		const delay = Date.parse(expiresAt) - readNow();
+		const expiry = Date.parse(expiresAt);
+		if (!Number.isFinite(expiry)) return;
+		const delay = expiry - readNow();
 		if (delay <= 0) {
 			setTick((value) => value + 1);
 			return;
@@ -377,6 +379,12 @@ function ConfirmationPanel({
 	| "onConfirmSideEffect"
 	| "onRejectSideEffect"
 >) {
+	const readNow = now ?? Date.now;
+	useExpiryClock(
+		confirmation?.expiresAt,
+		confirmation?.status === "pending",
+		readNow,
+	);
 	if (!confirmation) return null;
 	if (
 		!currentBinding ||
@@ -387,12 +395,6 @@ function ConfirmationPanel({
 		return (
 			<BlockedPanel message="确认绑定已过期或无法核验，当前不会执行外部副作用。" />
 		);
-	const readNow = now ?? Date.now;
-	useExpiryClock(
-		confirmation.expiresAt,
-		confirmation.status === "pending",
-		readNow,
-	);
 	const handoffInvalid = handoff !== undefined && !isSafeHandoff(handoff);
 	const handoffBlocked =
 		handoffInvalid ||
@@ -422,7 +424,12 @@ function ConfirmationPanel({
 		return (
 			<BlockedPanel message="确认请求缺少有效 ID，当前不会执行外部副作用。" />
 		);
-	const confirmationExpired = readNow() >= Date.parse(confirmation.expiresAt);
+	const expiry = Date.parse(confirmation.expiresAt);
+	if (!Number.isFinite(expiry))
+		return (
+			<BlockedPanel message="确认有效期无法核验，当前不会执行外部副作用。" />
+		);
+	const confirmationExpired = readNow() >= expiry;
 	const blockedByBinding =
 		!browserAvailable ||
 		handoffBlocked ||
@@ -434,7 +441,7 @@ function ConfirmationPanel({
 	const invokeIfCurrent = (
 		callback: (input: BrowserHandoffActionInputV1) => void,
 	) => {
-		if (readNow() >= Date.parse(confirmation.expiresAt)) return;
+		if (!Number.isFinite(expiry) || readNow() >= expiry) return;
 		callback(input);
 	};
 	return (
