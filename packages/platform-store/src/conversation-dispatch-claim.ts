@@ -241,12 +241,14 @@ export async function claimWork(
 		{ outbox, conversation, execution },
 		input.workerId,
 	);
+	const previousAttempt = requireSafeCounter(outbox.attempt_count);
 	const previousFence = safeCounter(outbox.delivery_fence);
 	const executionFence = safeCounter(execution.delivery_fence);
 	if (
 		previousFence === undefined ||
 		executionFence === undefined ||
 		previousFence >= maximumSafeCounter ||
+		previousAttempt >= maximumSafeCounter ||
 		(isolationWork && executionFence > previousFence) ||
 		(isTurn(selectedOperation) &&
 			!isolationWork &&
@@ -318,6 +320,7 @@ export async function claimWork(
 		itemId: outbox.id,
 		leaseOwner: input.workerId,
 		operation: selectedOperation,
+		attemptCount: previousAttempt + 1,
 		requestId: outbox.request_id as string,
 		traceId: outbox.trace_id,
 		agentId: execution.agent_id,

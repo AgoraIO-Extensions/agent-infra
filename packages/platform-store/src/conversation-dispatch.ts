@@ -1078,6 +1078,21 @@ export class PostgresConversationDispatchStoreV1
 				`;
 				if (rows.length !== 1) throw new StaleDispatchLease();
 			}
+			if (
+				input.claim.operation === "conversation.turn.stop.v1" &&
+				input.status === "failed" &&
+				input.errorCode === "RUNTIME_RECOVERY_TIMEOUT"
+			) {
+				const rows = await transaction<{ execution_id: string }[]>`
+						update platform.conversation_stops
+						set status = 'completed', updated_at = clock_timestamp()
+						where execution_id = ${input.claim.executionId}
+							and stop_request_id = ${input.claim.stopRequestId}
+							and status = 'submitted'
+						returning execution_id
+					`;
+				if (rows.length !== 1) throw new StaleDispatchLease();
+			}
 			await closeOutbox(
 				transaction,
 				state,

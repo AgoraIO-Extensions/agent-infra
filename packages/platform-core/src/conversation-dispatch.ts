@@ -113,20 +113,31 @@ export function createConversationDispatchUseCaseV1(
 	options: {
 		readonly leaseDurationMs?: number;
 		readonly retryDelayMs?: number;
+		/** Maximum durable claims spent recovering an unknown Runtime execution. */
+		readonly maxRecoveryAttempts?: number;
 	} = {},
 ): ConversationDispatchUseCaseV1 {
 	const leaseDurationMs = options.leaseDurationMs ?? 30_000;
 	const retryDelayMs = options.retryDelayMs ?? 1_000;
+	const maxRecoveryAttempts = options.maxRecoveryAttempts ?? 120;
 	if (
 		!Number.isSafeInteger(leaseDurationMs) ||
 		leaseDurationMs < 3 ||
 		leaseDurationMs > 300_000 ||
 		!Number.isSafeInteger(retryDelayMs) ||
 		retryDelayMs < 0 ||
-		retryDelayMs > 86_400_000
+		retryDelayMs > 86_400_000 ||
+		!Number.isSafeInteger(maxRecoveryAttempts) ||
+		maxRecoveryAttempts < 1 ||
+		maxRecoveryAttempts > 1_000_000
 	) {
 		throw new ConversationDispatchError("invalid_input");
 	}
+	const recoveryExhausted = (claim: ConversationDispatchClaimV1) =>
+		claim.attemptCount !== undefined &&
+		claim.attemptCount >= maxRecoveryAttempts &&
+		(claim.executionStatus === "unknown" ||
+			claim.metadataRecovery !== undefined);
 	async function persistRuntimeEvents(
 		claim: ConversationDispatchClaimV1,
 		authority: ConversationDispatchAuthorityV1,
@@ -691,6 +702,26 @@ export function createConversationDispatchUseCaseV1(
 				}
 			}
 			if (
+				!claim.metadataRecovery &&
+				recoveryExhausted(claim) &&
+				(claim.operation === "conversation.turn.submit.v1" ||
+					claim.operation === "conversation.turn.regenerate.v1" ||
+					claim.operation === "conversation.turn.stop.v1")
+			) {
+				const finished = await dependencies.store.finish({
+					claim,
+					status: "failed",
+					transition: {
+						executionStatus: "failed",
+						conversationStatus: "ready",
+					},
+					errorCode: "RUNTIME_RECOVERY_TIMEOUT",
+				});
+				return finished
+					? { schemaVersion: 1, outcome: "rejected" }
+					: { schemaVersion: 1, outcome: "stale" };
+			}
+			if (
 				authority.controlOnly &&
 				(claim.operation === "conversation.turn.supplement.v1" ||
 					claim.executionStatus === "waiting" ||
@@ -742,6 +773,17 @@ export function createConversationDispatchUseCaseV1(
 				);
 			}
 			if (claim.metadataRecovery) {
+				if (recoveryExhausted(claim)) {
+					const finished = await dependencies.store.finish({
+						claim,
+						status: "failed",
+						transition: {},
+						errorCode: "RUNTIME_METADATA_RECOVERY_TIMEOUT",
+					});
+					return finished
+						? { schemaVersion: 1, outcome: "rejected" }
+						: { schemaVersion: 1, outcome: "stale" };
+				}
 				const recover = dependencies.runtimeHost.recoverOriginalStatus;
 				if (!recover || !claim.hostSessionRef)
 					return retry(
