@@ -3605,6 +3605,67 @@ describe("Codex Runtime Driver", () => {
 		).resolves.toMatchObject({ phase: "unknown", success: false });
 	});
 
+	it("records a pre-dispatch authorization failure without unknown recovery", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(join(directory, "driver.json")),
+				authorizeExternalAction: async () => {
+					throw new Error("authorization denied");
+				},
+			},
+			async () => bridge,
+		);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const browser = {
+			capabilityVersion: 3,
+			binding: {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) => ({
+				actionId: request.actionId,
+				operationRef: request.operationRef,
+				attemptRef: request.attemptRef,
+				binding: request.binding,
+				phase: "completed" as const,
+				contentItems: [],
+				success: true,
+			}),
+		};
+		await expect(
+			driver.executeBrowserTool(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{ tool: "browser_observe", arguments: {}, pageRevision: 1 },
+				{ browser },
+			),
+		).resolves.toMatchObject({
+			phase: "failed",
+			success: false,
+			failureCode: "operation_failed",
+		});
+		const events = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(
+			events
+				.filter(
+					(event): event is RuntimeEventV2 =>
+						event.type === "operation" && event.payload.kind === "tool",
+				)
+				.map((event) => event.payload.phase),
+		).toEqual(["intent", "failed"]);
+	});
+
 	it.each([
 		["missing context", undefined],
 		[

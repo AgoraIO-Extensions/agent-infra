@@ -1877,6 +1877,21 @@ function runtimeBrowserUnknownResult(
 	};
 }
 
+function runtimeBrowserFailedResult(
+	request: RuntimeBrowserToolExecutionRequestV1,
+): RuntimeBrowserToolExecutionResultV1 {
+	return {
+		actionId: request.actionId,
+		operationRef: request.operationRef,
+		attemptRef: request.attemptRef,
+		binding: request.binding,
+		phase: "failed",
+		contentItems: [],
+		success: false,
+		failureCode: "operation_failed",
+	};
+}
+
 function runtimeBrowserReplayResult(
 	fact: Extract<RuntimeOperationFactV2, { kind: "tool" }>,
 	request: RuntimeBrowserToolExecutionRequestV1,
@@ -5342,6 +5357,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			attemptRef: prepared.attemptRef,
 			kind: "tool",
 		};
+		let dispatched = false;
 		try {
 			if (!this.authorizeExternalAction) unavailable();
 			const authorization = await this.authorizeExternalAction(action);
@@ -5352,6 +5368,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			// immediately before controller I/O so a cancelled action cannot start.
 			authorization.revalidate();
 			signal.throwIfAborted();
+			dispatched = true;
 			const result = await browser.executeTool(browserRequest, signal);
 			// A response is only an outcome for this action after the same authority
 			// and cancellation boundary has been observed again.
@@ -5367,8 +5384,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			else await persist("unknown", "recovery_unconfirmed");
 			return result;
 		} catch {
-			await persist("unknown", "recovery_unconfirmed").catch(() => {});
-			return runtimeBrowserUnknownResult(browserRequest);
+			if (dispatched) {
+				await persist("unknown", "recovery_unconfirmed").catch(() => {});
+				return runtimeBrowserUnknownResult(browserRequest);
+			}
+			await persist("failed", "operation_failed").catch(() => {});
+			return runtimeBrowserFailedResult(browserRequest);
 		}
 	}
 
