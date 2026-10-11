@@ -24,6 +24,36 @@ export interface RuntimeBrowserExecutionContextV1 {
 		readonly workloadRevision: number;
 		readonly imageDigest: string;
 	};
+	readonly executeTool?: (
+		request: RuntimeBrowserToolExecutionRequestV1,
+		signal: AbortSignal,
+	) => Promise<RuntimeBrowserToolExecutionResultV1>;
+}
+
+export interface RuntimeBrowserToolExecutionRequestV1 {
+	readonly tool: string;
+	readonly arguments: Readonly<Record<string, unknown>>;
+	readonly actionId: string;
+	readonly operationRef: string;
+	readonly attemptRef: string;
+	readonly binding: Pick<
+		RuntimeBrowserExecutionContextV1["binding"],
+		"agentId" | "conversationId" | "sessionGeneration" | "resourceFence"
+	> & {
+		readonly executionId: string;
+		readonly capabilityVersion: number;
+		readonly pageRevision: number;
+	};
+}
+
+export interface RuntimeBrowserToolExecutionResultV1 {
+	readonly phase: "completed" | "failed" | "unknown";
+	readonly contentItems: readonly {
+		readonly type: "inputText";
+		readonly text: string;
+	}[];
+	readonly success: boolean;
+	readonly failureCode?: string;
 }
 
 export interface RuntimeModelDirectoryOption {
@@ -109,6 +139,18 @@ export interface RuntimeOriginalEvidenceReadContext {
 }
 
 export interface RuntimeDriver {
+	executeBrowserTool?(
+		nativeSessionRef: string,
+		executionId: string,
+		request: {
+			readonly tool: string;
+			readonly arguments: Readonly<Record<string, unknown>>;
+			readonly pageRevision: number;
+			readonly actionId?: string;
+		},
+		context: RuntimeDriverExecutionContextV1,
+		signal?: AbortSignal,
+	): Promise<RuntimeBrowserToolExecutionResultV1>;
 	/** Validate the action refs against the Driver's durable operation journal. */
 	validateExternalAction?(
 		action: RuntimeExternalActionAuthorization,

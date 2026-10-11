@@ -1119,6 +1119,47 @@ function isApplicationMaterialGrantV2OpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// Browser operation binding is an additive optional field on existing operation facts.
+function stripRuntimeBrowserOperationFacts(value) {
+	const normalized = structuredClone(value);
+	const visit = (node) => {
+		if (!node || typeof node !== "object") return;
+		if (Array.isArray(node)) {
+			node.forEach((entry) => {
+				visit(entry);
+			});
+			return;
+		}
+		if (
+			node.properties?.kind?.const === "tool" &&
+			node.properties?.operationRef !== undefined &&
+			node.properties?.attemptRef !== undefined &&
+			node.properties?.phase !== undefined &&
+			node.properties?.toolId !== undefined
+		)
+			delete node.properties.browser;
+		Object.values(node).forEach((entry) => {
+			visit(entry);
+		});
+	};
+	visit(normalized);
+	return normalized;
+}
+
+// #1862 adds only optional Browser binding metadata to existing operation
+// facts; old Runtime/API consumers can ignore the absent property.
+function isRuntimeBrowserOperationFactOpenApiAddition(previous, current) {
+	const normalized = stripRuntimeBrowserOperationFacts(current);
+	const currentBinding =
+		normalized.components?.schemas?.RuntimeBrowserActionBindingV1;
+	const previousBinding =
+		previous.components?.schemas?.RuntimeBrowserActionBindingV1;
+	if (currentBinding !== undefined && previousBinding === undefined)
+		delete normalized.components.schemas.RuntimeBrowserActionBindingV1;
+	if (sameValue(previous, current)) return false;
+	return sameValue(previous, normalized);
+}
+
 // #482 C admits only the frozen three Task HTTP paths and six closed schemas.
 function isTaskHttpV1OpenApiAddition(previous, current) {
 	const paths = [
@@ -1139,7 +1180,7 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
 	)
 		return false;
-	const addition = {
+	const addition = stripRuntimeBrowserOperationFacts({
 		paths: Object.fromEntries(
 			paths.map((path) => [path, current.paths?.[path]]),
 		),
@@ -1150,7 +1191,7 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 			platformApiCredential:
 				current.components?.securitySchemes?.platformApiCredential,
 		},
-	};
+	});
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		"062938f470294f68ec205f6e2007fa01a6306c40e3a59fe2195b8cad9e580a48"
@@ -1182,10 +1223,10 @@ function isTaskHttpV1SseOpenApiAddition(previous, current) {
 		previous.components?.schemas?.[schema] !== undefined
 	)
 		return false;
-	const addition = {
+	const addition = stripRuntimeBrowserOperationFacts({
 		paths: { [path]: current.paths?.[path] },
 		schemas: { [schema]: current.components?.schemas?.[schema] },
-	};
+	});
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		"6326d5f83b123da8233ac85fb694a1362d64ee5c4747618b37acba8759721167"
@@ -1421,14 +1462,14 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
 	)
 		return false;
-	const addition = {
+	const addition = stripRuntimeBrowserOperationFacts({
 		paths: Object.fromEntries(
 			paths.map((path) => [path, current.paths?.[path]]),
 		),
 		schemas: Object.fromEntries(
 			schemas.map((name) => [name, current.components?.schemas?.[name]]),
 		),
-	};
+	});
 	// #1534 later added the optional Session availability; the pinned digest
 	// covers the original publication. #1523 later added "updating".
 	const detail = addition.schemas.ConversationDetailProjectionV2;
@@ -2932,6 +2973,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserEvidenceOpenApiAddition(previous, current) &&
+			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&

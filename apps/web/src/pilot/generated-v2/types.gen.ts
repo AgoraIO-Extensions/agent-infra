@@ -905,6 +905,14 @@ export type RuntimeOperationFactV2 = {
     };
 } | {
     attemptRef: string;
+    browser?: {
+        actionId: string;
+        capabilityVersion: number;
+        pageRevision: number;
+        resourceFence: number;
+        sessionGeneration: number;
+        sideEffect: boolean;
+    };
     connection?: RuntimeConnectionAssociationV1;
     durationMs?: number;
     failureCode?: RuntimeOperationFailureV2;

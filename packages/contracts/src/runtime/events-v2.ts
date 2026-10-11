@@ -37,6 +37,19 @@ export type RuntimeConnectionAssociationV1 = z.infer<
 	typeof RuntimeConnectionAssociationV1Schema
 >;
 
+/** Browser action identity; parameters and page contents never cross this fact boundary. */
+export const RuntimeBrowserActionBindingV1Schema = z.strictObject({
+	actionId: OpaqueIdV1Schema,
+	capabilityVersion: z.number().int().positive().safe(),
+	pageRevision: z.number().int().positive().safe(),
+	sessionGeneration: z.number().int().positive().safe(),
+	resourceFence: z.number().int().positive().safe(),
+	sideEffect: z.boolean(),
+});
+export type RuntimeBrowserActionBindingV1 = z.infer<
+	typeof RuntimeBrowserActionBindingV1Schema
+>;
+
 /** Actual transport/tool boundary facts. No request, response, or credential text. */
 export const RuntimeOperationFailureV2Schema = z.enum([
 	"authorization_denied",
@@ -85,6 +98,7 @@ export const RuntimeOperationFactV2Schema = z.discriminatedUnion("kind", [
 		toolId: metadataId,
 		resultRef: OpaqueIdV1Schema.optional(),
 		connection: RuntimeConnectionAssociationV1Schema.optional(),
+		browser: RuntimeBrowserActionBindingV1Schema.optional(),
 	}),
 ]);
 
@@ -111,6 +125,7 @@ export type RuntimeEvent = z.infer<typeof RuntimeEventSchema>;
 
 export const RuntimeEventV2SchemaDefinitions = {
 	RuntimeConnectionAssociationV1: RuntimeConnectionAssociationV1Schema,
+	RuntimeBrowserActionBindingV1: RuntimeBrowserActionBindingV1Schema,
 	RuntimeOperationFailureV2: RuntimeOperationFailureV2Schema,
 	RuntimeOperationFactV2: RuntimeOperationFactV2Schema,
 	RuntimeEventV2: RuntimeEventV2Schema,

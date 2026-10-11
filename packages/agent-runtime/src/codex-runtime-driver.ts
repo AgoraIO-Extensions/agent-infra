@@ -107,6 +107,7 @@ import {
 	codexSkillLaunch,
 } from "./codex-skill-launch.internal.js";
 import type {
+	RuntimeBrowserToolExecutionResultV1,
 	RuntimeDriver,
 	RuntimeDriverCommand,
 	RuntimeDriverExecutionContextV1,
@@ -5063,6 +5064,182 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (this.inFlightOperations.get(key) === execution) {
 				this.inFlightOperations.delete(key);
 			}
+		}
+	}
+
+	/**
+	 * Execute one admitted Browser tool through the existing Driver operation
+	 * journal. The controller is request-local; the Driver owns only operation
+	 * identity and facts, while the Platform Worker remains the event authority.
+	 */
+	async executeBrowserTool(
+		nativeSessionRef: string,
+		executionId: string,
+		request: {
+			readonly tool: string;
+			readonly arguments: Readonly<Record<string, unknown>>;
+			readonly pageRevision: number;
+			readonly actionId?: string;
+		},
+		context: RuntimeDriverExecutionContextV1,
+		signal: AbortSignal = new AbortController().signal,
+	): Promise<RuntimeBrowserToolExecutionResultV1> {
+		const browser = context.browser;
+		if (
+			!browser ||
+			typeof browser.executeTool !== "function" ||
+			!Number.isSafeInteger(request.pageRevision) ||
+			request.pageRevision < 1 ||
+			!nonEmptyString(request.tool)
+		)
+			unavailable();
+		const actionId = request.actionId ?? randomUUID();
+		const prepared = await this.update((state) => {
+			signal.throwIfAborted();
+			const session = ownRecordValue(state.sessions, nativeSessionRef);
+			const execution = session
+				? ownRecordValue(session.executions, executionId)
+				: undefined;
+			const journal =
+				execution &&
+				Object.values(session?.journals ?? {}).find(
+					(value) => value.nativeTurnId === execution.nativeTurnId,
+				);
+			if (
+				!session ||
+				!execution ||
+				!journal ||
+				session.agentId !== browser.binding.agentId ||
+				session.conversationId !== browser.binding.conversationId ||
+				session.sessionGeneration !== browser.binding.sessionGeneration ||
+				execution.status !== "running" ||
+				session.activeExecutionId !== executionId
+			)
+				unavailable();
+			this.assertJournalOpen(journal);
+			const operationRef = randomUUID();
+			const attemptRef = randomUUID();
+			const binding = {
+				agentId: browser.binding.agentId,
+				conversationId: browser.binding.conversationId,
+				executionId,
+				capabilityVersion: browser.capabilityVersion,
+				pageRevision: request.pageRevision,
+				sessionGeneration: browser.binding.sessionGeneration,
+				resourceFence: browser.binding.resourceFence,
+			};
+			this.appendOperationFact(session, journal, {
+				kind: "tool",
+				operationRef,
+				attemptRef,
+				phase: "intent",
+				toolId: `browser:${request.tool}`,
+				browser: {
+					actionId,
+					capabilityVersion: binding.capabilityVersion,
+					pageRevision: binding.pageRevision,
+					sessionGeneration: binding.sessionGeneration,
+					resourceFence: binding.resourceFence,
+					sideEffect: false,
+				},
+			});
+			return {
+				execution,
+				operationRef,
+				attemptRef,
+				actionId,
+				binding,
+				cursor: journal.events.at(-1)?.cursor ?? "",
+			};
+		});
+		this.notifyEventStream(this.eventStreamKey(nativeSessionRef, executionId));
+
+		const persist = async (
+			phase: "started" | "completed" | "failed" | "unknown",
+			failureCode?: RuntimeOperationFactV2["failureCode"],
+		) => {
+			const cursor = await this.update((state) => {
+				const session = ownRecordValue(state.sessions, nativeSessionRef);
+				const execution = session
+					? ownRecordValue(session.executions, executionId)
+					: undefined;
+				const journal =
+					execution &&
+					Object.values(session?.journals ?? {}).find(
+						(value) => value.nativeTurnId === execution.nativeTurnId,
+					);
+				if (!session || !journal) unavailable();
+				const previous = latestOperationAttemptFacts(journal.events).find(
+					(fact) =>
+						fact.operationRef === prepared.operationRef &&
+						fact.attemptRef === prepared.attemptRef,
+				);
+				if (previous?.kind !== "tool") stateInvalid();
+				if (previous.phase !== "intent" && previous.phase !== "started")
+					return journal.events.at(-1)?.cursor ?? "";
+				this.appendOperationFact(session, journal, {
+					...previous,
+					phase,
+					...(phase === "started"
+						? { startedAt: new Date().toISOString() }
+						: {}),
+					...(phase === "completed" || phase === "failed" || phase === "unknown"
+						? { finishedAt: new Date().toISOString() }
+						: {}),
+					...(failureCode ? { failureCode } : {}),
+				});
+				if (phase === "unknown") journal.externalActionsBlocked = true;
+				return journal.events.at(-1)?.cursor ?? "";
+			});
+			this.notifyEventStream(
+				this.eventStreamKey(nativeSessionRef, executionId),
+			);
+			return cursor;
+		};
+
+		const action: RuntimeExternalActionAuthorization = {
+			nativeSessionRef,
+			executionId,
+			runtimeOperationId: executionId,
+			operationRef: prepared.operationRef,
+			attemptRef: prepared.attemptRef,
+			kind: "tool",
+		};
+		try {
+			if (!this.authorizeExternalAction) unavailable();
+			const authorization = await this.authorizeExternalAction(action);
+			if (typeof authorization?.revalidate !== "function") unavailable();
+			authorization.revalidate();
+			await persist("started");
+			const result = await browser.executeTool(
+				{
+					tool: request.tool,
+					arguments: request.arguments,
+					actionId: prepared.actionId,
+					operationRef: prepared.operationRef,
+					attemptRef: prepared.attemptRef,
+					binding: {
+						...prepared.binding,
+						executionId,
+						capabilityVersion: browser.capabilityVersion,
+						pageRevision: request.pageRevision,
+					},
+				},
+				signal,
+			);
+			if (result.phase === "completed") await persist("completed");
+			else if (result.phase === "failed")
+				await persist("failed", "operation_failed");
+			else await persist("unknown", "recovery_unconfirmed");
+			return result;
+		} catch {
+			await persist("unknown", "recovery_unconfirmed").catch(() => {});
+			return {
+				phase: "unknown",
+				contentItems: [],
+				success: false,
+				failureCode: "recovery_unconfirmed",
+			};
 		}
 	}
 
