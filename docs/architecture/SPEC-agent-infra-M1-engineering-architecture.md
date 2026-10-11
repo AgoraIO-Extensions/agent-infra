@@ -910,12 +910,12 @@ Owner 已批准 ADR 的受限策略；激活须消费新的批准版本和显式
 不扩展或续期已关闭 pilot。
 运行授权、凭证隔离、持久执行、签名发布及上海目标/数据库保护继续遵守本 Spec 和 HLD。
 
-## StaticSpaces 普通使用提案
+## StaticSpaces 普通使用批准
 
 解除测试专用限制的推广方案按
-[HLD 4.3.3](HLD-connection-M1.md#433-staticspaces-普通使用提案) 与
-[Proposed ADR](../adr/ADR-connection-static-spaces-standard-existing-api.md) 评审。
-当前运行仍遵守既有受限批准；新推广的风险接受须重新明确，不由旧批准继承。
+[HLD 4.3.3](HLD-connection-M1.md#433-staticspaces-普通使用批准) 与
+[Accepted ADR](../adr/ADR-connection-static-spaces-standard-existing-api.md) 评审。
+Owner 已批准普通范围及该 ADR 所列残余风险；新版本未部署/重新授权前，现网仍遵守受限批准。
 批准后以新 immutable ProviderRelease/ActionVersion 和追加迁移实现，复用现有个人 Token
 connector、Direct/Delegated 授权交集和受控 egress；升级必须重新公司审批及显式 Consent/Grant。
 未知 WRITE 的持久冻结按受影响 Connection 隔离，跨重连、Grant 和版本升级保留；不能以

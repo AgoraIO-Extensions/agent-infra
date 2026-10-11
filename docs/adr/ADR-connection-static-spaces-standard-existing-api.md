@@ -2,12 +2,11 @@
 
 ## 状态
 
-Proposed。用户已授权准备解除测试专用限制的方案；实施前需要 Connection Owner 对本文的推广范围、
-残余风险和激活条件作出明确批准。由 [#1877](https://github.com/AgoraIO-Extensions/agent-infra/issues/1877)
-交付提案，[#1672](https://github.com/AgoraIO-Extensions/agent-infra/issues/1672) 保留真实验收追踪。
-
-当前批准仍是 [具名受限接入 ADR](ADR-connection-static-spaces-existing-api-restricted.md)。
-本提案不修改现网权限、旧版本准入或已有 Grant，也不把此前仅测试范围的风险批准扩大到业务空间。
+Accepted。Connection Owner 在 #1878 合并后明确授权继续实施，批准本文普通用户、业务空间、
+覆盖/public 范围与逐项残余风险。实现由 [#1880](https://github.com/AgoraIO-Extensions/agent-infra/issues/1880)
+交付；[#1672](https://github.com/AgoraIO-Extensions/agent-infra/issues/1672) 保留真实验收追踪。
+该批准只适用新 static-spaces-connection-v6-standard，最终 executor digest 与发布证据绑定；
+不改旧版本/Grant 权限，不免除持久未知写入冻结、正常授权及供应链/迁移保护。
 
 ## 目标范围
 
@@ -65,18 +64,18 @@ WRITE 提交后无法证明终态时保持 UNCERTAIN，并冻结受影响 Connec
 文件当前 hash、网关 request ID 或新的成功写入不能单独证明旧 Dispatch 唯一成功或未发生。
 人工终态方案仍遵守既有独立评审与审计规则；不新增无证据的“恢复写入”开关。
 
-## 需要推广范围批准的风险
+## 已批准的推广范围风险
 
 已核对的上游源码为 4b9afc47750ae2a8e73f01345745dbe3262d9e1e。当前 v5 的单账号真实七项
 链路与上海签名部署证据见 #1672；它们不能外推为新版本、所有用户或所有空间的验收。
 
-| 项目 | 已知事实或证据缺口 | 拟批准的普通使用政策 |
+| 项目 | 已知事实或证据缺口 | 已批准的普通使用政策 |
 | --- | --- | --- |
 | 幂等与终态查询 | 未发现原生持久幂等账本或可查询终态回执 | 接受该能力缺失；只防止本系统重复提交，未知不自动重放，可能长期需要人工处理 |
 | 发布与整包 | 单文件原子替换；整包和空间发布非原子，可能涉及内容及权限元数据 | 接受部分完成风险；不承诺整批回滚，覆盖及 public 可见性明确提示 |
 | 上游限流 | 未取得边缘 rate-limit/quota 完整合同；没有源码配置不证明生产不存在限流 | 保留本地预算和上游拒绝，WRITE 不增加限流重试或扩容权限 |
-| 凭证生命周期 | 原 Token 接入与独立撤销有旧证据；实际独立 expiry 尚未核实 | 按账号拒绝/撤权停止准入；Owner 须明确接受未核实项或提供证据，不能记成 expiry 通过 |
-| Legal 与跨主体现场验证 | 签名/SBOM 不等于 Legal 签收；不预设第二公司测试身份 | Owner 须明确接受未完成项或补证；通用/真实 PG 负向与现场测试分层，不冒充多用户现场结果 |
+| 凭证生命周期 | 原 Token 接入与独立撤销有旧证据；实际独立 expiry 尚未核实 | 按账号拒绝/撤权停止准入；Owner 已接受该未核实项，补证仍保留，不能记成 expiry 通过 |
+| Legal 与跨主体现场验证 | 签名/SBOM 不等于 Legal 签收；不预设第二公司测试身份 | Owner 已接受未完成项，补证仍保留；通用/真实 PG 负向与现场测试分层，不冒充多用户现场结果 |
 
 批准必须覆盖所有获批用户、其获准业务空间和覆盖写入的推广范围，明确每项接受或仍阻塞，
 并绑定新版本和最终 digest；不能引用旧单用户 risk acceptance 自动放行。不可豁免的身份、
@@ -84,7 +83,7 @@ Credential 隔离、真实上游权限、持久执行、未知不重放、供应
 
 该政策改变 [HLD G-02/G-03](../architecture/HLD-connection-M1.md#42-待批准门禁) 和
 [13.4](../architecture/HLD-connection-M1.md#134-provider-onboarding) 的 StaticSpaces 准入范围。
-批准时必须同步这些条款的实际发布条件、UNKNOWN 文案及对账责任。Proposed 阶段不产生例外。
+批准时必须同步这些条款的实际发布条件、UNKNOWN 文案及对账责任。本批准适用以下 HLD 实际发布条件。
 已验证、已接受的能力缺失和未验证项分别记录；PUBLISHED 运行批准不等同 LIVE_VERIFIED，
 也不伪造 Legal/Security 或凭证 expiry 签收。
 

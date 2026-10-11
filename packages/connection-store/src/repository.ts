@@ -5036,8 +5036,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		invocation: InvocationContext;
 	}) {
 		await this.verifyInvocation({ ...input.invocation, action: input.action });
-		return this.sql.begin(async (sql) => {
-			const [action] = await sql<{ effect: "READ" | "WRITE"; id: string }[]>`
+		return this.sql
+			.begin(async (sql) => {
+				const [action] = await sql<{ effect: "READ" | "WRITE"; id: string }[]>`
 				SELECT action.id, action.effect
 				FROM connection_grant_actions grant_action
 				JOIN connection_action_versions action ON action.id = grant_action.action_version_id
@@ -5047,9 +5048,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					AND (${input.actionVersionId ?? null}::text IS NULL
 						OR action.id = ${input.actionVersionId ?? ""})
 			`;
-			if (!action) forbidden();
-			const callId = `call-${randomUUID()}`;
-			const [row] = await sql<StoredCallRow[]>`
+				if (!action) forbidden();
+				const callId = `call-${randomUUID()}`;
+				const [row] = await sql<StoredCallRow[]>`
 					INSERT INTO connection_calls (
 					id, principal_id, consumer_id, instance_id, grant_id, connection_id,
 					credential_version_id, action_version_id, request_hash, request_input,
@@ -5071,37 +5072,38 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					status, result, created_at, actor_key, ${input.action}::text AS action_name,
 					${action.id}::text AS action_version_id
 			`;
-			if (!row) {
-				const existing = input.idempotencyKey
-					? await this.findIdempotentCall({
-							action: input.action,
-							idempotencyKey: input.idempotencyKey,
-							invocation: input.invocation,
-						})
-					: undefined;
-				if (!existing) throw new Error("Connection call was not created");
-				return { call: existing, created: false };
-			}
-			if (action.effect === "WRITE") {
-				const effectId = `effect-${randomUUID()}`;
-				await sql`
+				if (!row) {
+					const existing = input.idempotencyKey
+						? await this.findIdempotentCall({
+								action: input.action,
+								idempotencyKey: input.idempotencyKey,
+								invocation: input.invocation,
+							})
+						: undefined;
+					if (!existing) throw new Error("Connection call was not created");
+					return { call: existing, created: false };
+				}
+				if (action.effect === "WRITE") {
+					const effectId = `effect-${randomUUID()}`;
+					await sql`
 					INSERT INTO connection_effects (id, call_id, status)
 					VALUES (${effectId}, ${callId}, 'PREPARED')
 				`;
-				await sql`
+					await sql`
 					INSERT INTO connection_dispatches (id, effect_id, status)
 					VALUES (${`dispatch-${randomUUID()}`}, ${effectId}, 'PENDING')
 				`;
-			}
-			await sql`
+				}
+				await sql`
 				INSERT INTO connection_audit_records (principal_id, call_id, event, detail)
 				VALUES (
 					${input.invocation.principalId}, ${callId}, 'CALL_AUTHORIZED',
 					${sql.json({ action: input.action, consumerId: input.invocation.consumerId })}
 				)
 			`;
-			return { call: storedCall(row), created: true };
-		});
+				return { call: storedCall(row), created: true };
+			})
+			.catch(staticSpacesWriteAdmissionError);
 	}
 
 	async findIdempotentCall(input: {
@@ -5263,7 +5265,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			FROM authorized
 			WHERE dispatch.id = authorized.id AND dispatch.status = 'PENDING'
 			RETURNING dispatch.id
-		`;
+		`.catch(staticSpacesWriteAdmissionError);
 		if (rows.length !== 1) forbidden();
 	}
 
@@ -5449,4 +5451,22 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			VALUES (${diagnostic.executionId}, ${callId}, ${sql.json(diagnostic)})
 			ON CONFLICT (execution_id) DO NOTHING`;
 	}
+}
+
+function staticSpacesWriteAdmissionError(error: unknown): never {
+	if (
+		error &&
+		typeof error === "object" &&
+		"code" in error &&
+		error.code === "23514" &&
+		"message" in error &&
+		typeof error.message === "string" &&
+		error.message.startsWith("StaticSpaces Connection has unresolved WRITE")
+	) {
+		throw new ConnectionError(
+			"FORBIDDEN",
+			"This Connection has an unresolved write; new writes are paused. Authorized reads remain available for reconciliation.",
+		);
+	}
+	throw error;
 }

@@ -445,8 +445,8 @@ LDAP 或 MCP OAuth 安全参数的部署不得启动业务路由。
 | ID | 待确认项 | 未关闭时行为 | Owner |
 | --- | --- | --- | --- |
 | G-01 | 公司 LDAP 精确契约、Connection OAuth Authorization Server、目标 Direct MCP Client 版本的 MCP/OAuth profile 和 delegated workload identity | 除 4.3 节明确批准的受监督 HCI pilot 外，身份相关业务路由不启动，不声明对应客户端受支持，也不发布 Direct 登录 | Identity/Security |
-| G-02 | Confluence/Jira/Jenkins 的 exact deployment 与认证、GitHub/Bitbucket 的完整 scope 和写操作测试账号、StaticSpaces 3.2.2 的个人 Token 与七项 Action onboarding、各 Provider 错误/限流/幂等契约，以及 Outlook 是否纳入 | 除 4.3.1/4.3.2 明确批准的具名受限发布外，缺少对应证据的 ProviderRelease 或写 Action 不得进入生产 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
-| G-03 | `UNCERTAIN` 用户文案、对账责任和支持流程 | 写 Action 只在测试环境开放 | Product/Support |
+| G-02 | Confluence/Jira/Jenkins 的 exact deployment 与认证、GitHub/Bitbucket 的完整 scope 和写操作测试账号、StaticSpaces 3.2.2 的个人 Token 与七项 Action onboarding、各 Provider 错误/限流/幂等契约，以及 Outlook 是否纳入 | 除 4.3.1/4.3.2 的具名受限发布及 4.3.3 的普通使用批准外，缺少对应证据的 ProviderRelease 或写 Action 不得进入生产 `PUBLISHED`；Outlook 不进入实现 | Product/Connection/Provider |
+| G-03 | `UNCERTAIN` 用户文案、对账责任和支持流程 | 除 4.3.1–4.3.3 明确批准的范围外，写 Action 只在测试环境开放 | Product/Support |
 | G-04 | 公司 KMS、网络出口、审计保留和对象存储产品 | 除 4.3 节已接受风险的具名 pilot 外，Credential 和 Provider 执行业务路由不启动；缺少正式 Adapter 时始终启动失败 | Security/SRE |
 | G-05 | Shared Connection 永久 disable 或可恢复语义 | 禁止实现不可逆 tombstone | Product |
 | G-06 | Effect Ledger acknowledged commit 的生产 RPO | 写 Action 保持关闭 | SRE/DBA |
@@ -509,17 +509,26 @@ Owner 于 2026-10-11 明确批准该 ADR 的长期具名受限方案与残余风
 最终实现版本为 `static-spaces-connection-v5-restricted`，保持该 ADR 的原批准范围。
 v4 已永久关闭；v4→v5 必须重新公司审批及显式 Consent/Grant，版本归属修复与保留规则见上述 ADR。
 
-### 4.3.3 StaticSpaces 普通使用提案
+### 4.3.3 StaticSpaces 普通使用批准
 
-解除固定测试主体、账号、Consumer、内容空间、run/marker 及禁止覆盖限制的方案见
+Owner 已通过 #1878 合并及继续实施确认批准
 [普通使用与现有 API 风险批准 ADR](../adr/ADR-connection-static-spaces-standard-existing-api.md)。
-该 ADR 当前为 Proposed，只授权准备提案；当前实际准入仍为 4.3.2。本节不属于 G-02/G-03
-已批准例外，也不改变 13.4 的现行发布门禁。
+仅新 static-spaces-connection-v6-standard 可按该范围上线：所有获批用户、注册 Consumer 与
+既有 Direct/Delegated 类型、上游允许的 user/shared/public 内容空间与安全相对路径，默认不覆盖，
+显式 overwrite=true 可覆盖。public 对所有登录用户可读，不是匿名公开。仍使用个人 Token，
+不增加公司共享凭证。#1880 绑定最终 digest、实际发布和验收证据，v1–v5 关闭审计与权限不变。
 
-实施前须批准普通用户/业务空间推广范围、覆盖与 public 风险、逐项未验证项，以及受影响
-Connection 的未知 WRITE 冻结与故障隔离；同步 G-02/G-03 和 13.4 的实际条件与对账责任。
-正常身份、授权、Credential、持久执行、签名供应链与迁移保护继续生效。新版本重新审批授权，
-不以 StaticSpaces full 名称变化给旧 Grant 自动扩权。
+G-02/13.4 对该版本允许采用已批准的现有 API 能力缺失及未验证项：无上游持久幂等/终态查询，
+非原子发布、边缘限流合同缺口、独立 expiry、Legal 与多主体现场证据缺口。缺口单独保留，
+不记成已验证，不以 PUBLISHED 声称 LIVE_VERIFIED。其余身份、权限、持久执行、供应链和迁移
+门禁继续生效；必须先证明单 Connection 的故障隔离与未知 WRITE 不重放才可激活。
+
+G-03 用户文案为“写入结果未知；此 Connection 的新写入已暂停，可读取内容用于对账；不要
+换键重试或重新授权重发”。Connection Owner/Support 承担 #1672 的对账与审计责任；按照
+20.6/34.4 提交可信终态证据和独立评审，缺证时持续 UNCERTAIN，不提供无证据恢复开关。
+持久未决 Effect 跨客户端、Grant、重连及版本保留冻结；其他 Connection 与正常授权 READ
+可继续。普通参数/READ ACL 拒绝只影响请求，凭证故障只影响对应账号，不关闭整个普通版本。
+新 Capability Profile/Policy、公司审批及显式 Consent/Grant 必须完成，旧 Grant 不自动扩权。
 
 ## 5. 方案比较与选型
 
@@ -1100,6 +1109,9 @@ stateDiagram-v2
 6. input/output Schema golden vector。
 7. read-only 与 mutating Action 真实测试账号。
 8. license、SBOM、executor signature/digest 和安全评审。
+
+StaticSpaces 普通版的批准例外仅按 [4.3.3](#433-staticspaces-普通使用批准) 执行；最终发布物和
+单 Connection 未知写入隔离证据必须绑定新版本，不可沿用 v5 验收替代。
 
 任何一个产品或 deployment 的成功不能外推到同品牌其他产品或 deployment。
 
