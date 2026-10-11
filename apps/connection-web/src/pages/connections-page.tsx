@@ -768,22 +768,7 @@ export function ConnectionsPage() {
 	};
 	return (
 		<ConsoleShell>
-			<PageHeader
-				title="我的 Connection"
-				action={
-					<Button
-						type="button"
-						onClick={() => {
-							const search = document.getElementById("connector-search");
-							search?.scrollIntoView?.({ behavior: "smooth", block: "center" });
-							search?.focus();
-						}}
-					>
-						<Plus aria-hidden="true" size={17} />
-						添加连接器
-					</Button>
-				}
-			/>
+			<PageHeader title="我的 Connection" />
 			{overview.isPending ? (
 				<div className="skeleton-block" role="status">
 					正在加载 Connection...
