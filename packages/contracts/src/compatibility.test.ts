@@ -1154,6 +1154,8 @@ describe("contract compatibility command", () => {
 			),
 		);
 		delete current.paths["/api/v2/applications/{applicationId}"];
+		delete current.components.schemas.AgentApplicationCreateRequestV2.properties
+			.defaultRelayKey;
 		const path = "/api/v2/applications";
 		const previous = structuredClone(current);
 		delete previous.paths[path];
@@ -2390,6 +2392,57 @@ describe("contract compatibility command", () => {
 		}
 	});
 
+	it("admits only the optional write-only application default Key and rejects adjacent drift", async () => {
+		const current = JSON.parse(
+			await readFile(
+				new URL(
+					"../artifacts/openapi/pilot-browser.v2.openapi.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const previous = structuredClone(current);
+		delete previous.components.schemas.AgentApplicationCreateRequestV2
+			.properties.defaultRelayKey;
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "default-key-create-compatibility-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+			for (const mutation of [
+				(value: typeof current) => {
+					value.components.schemas.AgentApplicationCreateRequestV2.properties.defaultRelayKey.writeOnly = false;
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentApplicationCreateRequestV2.properties.defaultRelayKey.minLength = 0;
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentApplicationCreateRequestV2.required.push(
+						"defaultRelayKey",
+					);
+				},
+				(value: typeof current) => {
+					value.components.schemas.AgentApplicationCreateRequestV2.additionalProperties = true;
+				},
+				(value: typeof current) => {
+					value.paths["/api/v2/agents"].get.security = [];
+				},
+			]) {
+				const changed = structuredClone(current);
+				mutation(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("admits only the V2 lifecycle addition and preserves existing audit authority", async () => {
 		const current = JSON.parse(
 			await readFile(
@@ -2409,6 +2462,7 @@ describe("contract compatibility command", () => {
 		];
 		delete current.paths["/api/v2/applications"];
 		delete current.paths["/api/v2/applications/{applicationId}"];
+		delete current.components.schemas.AgentApplicationCreateRequestV2.properties.defaultRelayKey;
 		for (const name of [
 			"ApplicationMetadataV1",
 			"ApplicationRegistrationRequestV1",
