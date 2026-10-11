@@ -6,9 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-// These tests intentionally spawn the compatibility CLI repeatedly; hosted CI
-// runners need a bounded budget larger than Vitest's 5s unit default.
-vi.setConfig({ testTimeout: 30_000 });
+// OpenAPI compatibility compares large historical artifacts in child processes.
+vi.setConfig({ testTimeout: 120_000 });
 
 const cliPath = fileURLToPath(new URL("./compatibility.mjs", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -2489,7 +2488,23 @@ describe("contract compatibility command", () => {
 		];
 		delete current.paths["/api/v2/applications"];
 		delete current.paths["/api/v2/applications/{applicationId}"];
-		delete current.components.schemas.AgentApplicationCreateRequestV2.properties.defaultRelayKey;
+		delete current.paths["/api/v2/agents/{agentId}/default-relay-key"];
+		delete current.paths[
+			"/api/v2/agents/{agentId}/default-relay-key/candidates"
+		];
+		delete current.paths["/api/v2/agents/{agentId}/api-use-grants/{userId}"];
+		delete current.components.schemas.AgentUserUseRevokeRequestV1;
+		delete current.components.schemas.AgentUserUseRevokeResponseV1;
+		delete current.components.schemas.AgentApplicationCreateRequestV2.properties
+			.defaultRelayKey;
+		delete current.components.schemas.DeploymentTemplateProjectionV2.properties
+			.readiness;
+		for (const name of [
+			"AgentApplicationCreateRequestV2",
+			"AgentApplicationUpdateRequestV2",
+		])
+			delete current.components.schemas[name].properties.source.anyOf[0]
+				.properties.templateRevision;
 		for (const name of [
 			"ApplicationMetadataV1",
 			"ApplicationRegistrationRequestV1",
