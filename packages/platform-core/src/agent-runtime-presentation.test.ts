@@ -162,6 +162,28 @@ describe("Agent runtime presentation policy", () => {
 			outcome: "unavailable",
 		});
 	});
+	it("fails closed when Browser deployment exposure disagrees with configuration", () => {
+		const input = fixture();
+		const runtime = input.facts.runtime;
+		if (!runtime) throw new Error();
+		const facts = {
+			...input.facts,
+			runtime: {
+				...runtime,
+				deployment: {
+					...runtime.deployment,
+					route: { exposure: "platform-auth" as const },
+					runtimeManifest: {
+						...runtime.deployment.runtimeManifest,
+						capabilities: { browser: {} as never },
+					},
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toEqual({
+			outcome: "unavailable",
+		});
+	});
 
 	it("projects the verified Browser state without exposing probe internals", () => {
 		const input = fixture();

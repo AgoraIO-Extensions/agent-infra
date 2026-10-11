@@ -202,7 +202,9 @@ export function decideAgentRuntimePresentationV1(input: {
 		deployment.runtimeManifest.interactionMode !== mode ||
 		deployment.route.exposure !== exposure
 	)
-		return foundWithoutRuntimeProjection;
+		return browserDeclared
+			? { outcome: "unavailable" }
+			: foundWithoutRuntimeProjection;
 	if (browserDeclared && !state.capabilities.browser)
 		return { outcome: "unavailable" };
 	const interactionUrl =
