@@ -344,7 +344,12 @@ function approveMountedSkillResponse(
 				(typeof skill.shortDescription !== "string" ||
 					skill.shortDescription.length > 1024)) ||
 			(skill.interface !== undefined && skill.interface !== null) ||
-			(skill.dependencies !== undefined && skill.dependencies !== null)
+			(skill.dependencies !== undefined &&
+				skill.dependencies !== null &&
+				(!isPlainRecord(skill.dependencies) ||
+					!hasOnlyKeys(skill.dependencies, ["tools"]) ||
+					!Array.isArray(skill.dependencies.tools) ||
+					skill.dependencies.tools.length !== 0))
 		)
 			skillDirectoryInvalid();
 		seen.add(skill.name);
@@ -4182,9 +4187,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			assertCurrent?.();
 			if (skillProcess && (this.installedSkill || this.skillDirectory)) {
 				if (metadataRead) await metadataRead.revalidate();
-				const extraRoots = this.skillDirectory
-					? [runtimeSkillHubMountRootV1]
-					: [this.installedSkill?.manifest.extraRoot];
+				const extraRoots = this.installedSkill
+					? [this.installedSkill.manifest.extraRoot]
+					: [runtimeSkillHubMountRootV1];
 				const roots = rpc.request(
 					"skills/extraRoots/set",
 					{ extraRoots },
