@@ -111,5 +111,52 @@ describe("file authority wire boundary", () => {
 				grantToken: "must-not-be-in-wire",
 			}).success,
 		).toBe(false);
+		expect(
+			RuntimeFileExchangeRequestV1Schema.safeParse(
+				(({ fileId: _fileId, ...missingFile } = read) => missingFile)(read),
+			).success,
+		).toBe(false);
+		expect(
+			RuntimeFileExchangeRequestV1Schema.safeParse({
+				...result,
+				fileId: "must-not-be-on-result",
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeFileExchangeRequestV1Schema.safeParse({
+				...read,
+				idempotencyKey: "a".repeat(129),
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeFileExchangeRequestV1Schema.safeParse({
+				...read,
+				idempotencyKey: "bad key",
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeFileExchangeRequestV1Schema.safeParse({
+				...read,
+				sessionGeneration: 0,
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeFileExchangeRequestV1Schema.safeParse({
+				...binding,
+				operation: "result",
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeFileExchangeRequestV1Schema.safeParse({
+				...read,
+				actorId: "",
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeFileExchangeRequestV1Schema.safeParse({
+				...read,
+				expiresAt: "not-a-timestamp",
+			}).success,
+		).toBe(false);
 	});
 });
