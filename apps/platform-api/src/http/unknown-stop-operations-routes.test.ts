@@ -98,12 +98,11 @@ describe("unknown stop operations route", () => {
 		);
 		expect(extra.status).toBe(400);
 		const missingKey = await app().application.request(
-			request(
-				{ schemaVersion: 1, sessionGeneration: 1 },
-				{
-					"Idempotency-Key": "",
-				},
-			),
+			new Request(`http://localhost${target}`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ schemaVersion: 1, sessionGeneration: 1 }),
+			}),
 		);
 		expect(missingKey.status).toBe(400);
 	});
