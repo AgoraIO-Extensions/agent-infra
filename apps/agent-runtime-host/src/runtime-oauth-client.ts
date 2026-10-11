@@ -1,10 +1,17 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { open, rename, unlink } from "node:fs/promises";
+import {
+	type FileHandle,
+	open,
+	readdir,
+	rename,
+	unlink,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
 	exchangeStandardOAuthCode,
+	revokeStandardOAuthToken,
 	standardOAuthUnavailable as unavailable,
 } from "@agent-infra/agent-runtime";
 import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
@@ -18,6 +25,7 @@ import {
 	RuntimeOAuthOriginalExecutionRefV1Schema,
 	type RuntimeOAuthResponseV1,
 	RuntimeOAuthScopeV1Schema,
+	type RuntimePrincipalV1,
 	RuntimePrincipalV1Schema,
 	runtimeOAuthScopeV1,
 } from "@agent-infra/contracts/runtime";
@@ -32,6 +40,7 @@ import { standardMcpInstallationKey } from "./standard-mcp-input.js";
 import {
 	ensurePrivateDirectory,
 	publishMaterial,
+	withProtectedStandardMcpMaterialLock,
 } from "./standard-mcp-installation.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
 
@@ -49,6 +58,70 @@ interface Transaction {
 	expiresAt: number;
 	requestDigest: string;
 	tokenExpiresAt?: number;
+}
+
+async function readProtectedOAuthMaterial(
+	directory: FileHandle,
+	directoryPath: string,
+	name: string,
+) {
+	assertStandardMcpProcessProtection();
+	const file = await open(
+		protectedStandardMcpPath(directory, directoryPath, name),
+		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+	);
+	try {
+		assertStandardMcpProcessProtection();
+		const before = await file.stat();
+		if (
+			!before.isFile() ||
+			before.uid !== process.getuid?.() ||
+			before.nlink !== 1 ||
+			![0o400, 0o600].includes(before.mode & 0o777) ||
+			before.size < 1 ||
+			before.size > 4096
+		)
+			unavailable();
+		const bytes = Buffer.alloc(before.size + 1);
+		try {
+			let length = 0;
+			while (length < bytes.length) {
+				assertStandardMcpProcessProtection();
+				const { bytesRead } = await file.read(
+					bytes,
+					length,
+					bytes.length - length,
+					length,
+				);
+				if (!bytesRead) break;
+				length += bytesRead;
+			}
+			const after = await file.stat();
+			if (
+				length !== before.size ||
+				before.dev !== after.dev ||
+				before.ino !== after.ino ||
+				before.size !== after.size ||
+				before.mtimeMs !== after.mtimeMs ||
+				before.ctimeMs !== after.ctimeMs ||
+				after.uid !== before.uid ||
+				after.nlink !== 1 ||
+				after.mode !== before.mode
+			)
+				unavailable();
+			await assertProtectedStandardMcpDirectoryCurrent(
+				directoryPath,
+				directory,
+			);
+			return new TextDecoder("utf-8", { fatal: true }).decode(
+				bytes.subarray(0, length),
+			);
+		} finally {
+			bytes.fill(0);
+		}
+	} finally {
+		await file.close();
+	}
 }
 function digest(value: unknown) {
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -159,6 +232,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	dataDirectory: string;
 	configuration: RuntimeOAuthConfigurationV1;
 	target: ApprovedConnectionConsumerTargetV1;
+	principal: RuntimePrincipalV1;
 	scope: import("@agent-infra/contracts/runtime").RuntimeOAuthScopeV1;
 	verifyGrant: ReturnType<typeof createRuntimeOAuthGrantVerifier>;
 	store: Pick<
@@ -172,6 +246,9 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	);
 	const configurationFingerprint = digest(configuration);
 	const target = structuredClone(options.target);
+	const principal = RuntimePrincipalV1Schema.parse(
+		structuredClone(options.principal),
+	);
 	const scope = RuntimeOAuthScopeV1Schema.parse(options.scope);
 	const root = join(
 		options.dataDirectory,
@@ -194,6 +271,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	await ensurePrivateDirectory(materials);
 	const abort = new AbortController();
 	let closed = false;
+	let revokePromise: Promise<void> | undefined;
 	let queued = 0;
 	let tail = Promise.resolve();
 	const current = () => {
@@ -222,6 +300,98 @@ export async function createProtectedRuntimeOAuthClient(options: {
 	async function read(name: string) {
 		return readProtectedStandardMcpBytes(records, name, 16_384);
 	}
+	async function revokeAndClearMaterials() {
+		await withProtectedStandardMcpMaterialLock(
+			materials,
+			revokeAndClearMaterialsUnsafe,
+		);
+	}
+	async function revokeAndClearMaterialsUnsafe() {
+		assertStandardMcpProcessProtection();
+		const recordDirectory = await openProtectedStandardMcpDirectory(records);
+		const materialNames = new Set<string>();
+		let names: string[];
+		try {
+			names = (
+				await readdir(
+					process.platform === "linux"
+						? `/proc/self/fd/${recordDirectory.fd}`
+						: records,
+				)
+			).filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
+			for (const name of names) {
+				const key = name.slice(0, -5);
+				const record = await load(key, true);
+				if (record && isDeepStrictEqual(record.principal, principal)) {
+					materialNames.add(`${key}.access`);
+					materialNames.add(`${key}.refresh`);
+				}
+			}
+			await assertProtectedStandardMcpDirectoryCurrent(
+				records,
+				recordDirectory,
+			);
+		} finally {
+			await recordDirectory.close();
+		}
+		const directory = await openProtectedStandardMcpDirectory(materials);
+		try {
+			names = (
+				await readdir(
+					process.platform === "linux"
+						? `/proc/self/fd/${directory.fd}`
+						: materials,
+				)
+			).filter((name) => materialNames.has(name));
+			const failures: unknown[] = [];
+			for (const name of names) {
+				const tokenTypeHint = name.endsWith(".refresh")
+					? "refresh_token"
+					: "access_token";
+				try {
+					const token = await readProtectedOAuthMaterial(
+						directory,
+						materials,
+						name,
+					);
+					await revokeStandardOAuthToken({
+						configuration,
+						token,
+						tokenTypeHint,
+						signal: AbortSignal.timeout(10_000),
+						assertCurrent: assertStandardMcpProcessProtection,
+						...(options.fetch ? { fetch: options.fetch } : {}),
+					});
+					await assertProtectedStandardMcpDirectoryCurrent(
+						materials,
+						directory,
+					);
+					if (
+						(await readProtectedOAuthMaterial(directory, materials, name)) !==
+						token
+					)
+						throw new Error("OAuth material changed during revoke");
+					assertStandardMcpProcessProtection();
+					await assertProtectedStandardMcpDirectoryCurrent(
+						materials,
+						directory,
+					);
+					await unlink(protectedStandardMcpPath(directory, materials, name));
+				} catch (error) {
+					failures.push(error);
+				}
+			}
+			try {
+				await directory.sync();
+			} catch (error) {
+				failures.push(error);
+			}
+			if (failures.length > 0)
+				throw new AggregateError(failures, "OAuth revocation incomplete");
+		} finally {
+			await directory.close();
+		}
+	}
 	async function readOptionalMaterial(
 		name: string,
 		maximum: number,
@@ -239,10 +409,16 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			throw error;
 		}
 	}
-	async function load(key: string) {
+	async function load(key: string): Promise<Transaction>;
+	async function load(
+		key: string,
+		forRevoke: true,
+	): Promise<Transaction | undefined>;
+	async function load(key: string, forRevoke = false) {
 		const record = parseTransaction(await read(`${key}.json`));
-		current();
-		if (
+		if (forRevoke) assertStandardMcpProcessProtection();
+		else current();
+		const matches =
 			!isDeepStrictEqual(record.scope, scope) ||
 			record.configurationFingerprint !== configurationFingerprint ||
 			!isDeepStrictEqual(record.configuration, {
@@ -250,9 +426,11 @@ export async function createProtectedRuntimeOAuthClient(options: {
 				revision: configuration.revision,
 			}) ||
 			record.scope.configFingerprint !== target.configFingerprint ||
-			!isDeepStrictEqual(record.scope.source, target.source)
-		)
+			!isDeepStrictEqual(record.scope.source, target.source);
+		if (matches) {
+			if (forRevoke) return undefined;
 			unavailable();
+		}
 		return record;
 	}
 	function response(record: Transaction): RuntimeOAuthResponseV1 {
@@ -584,6 +762,16 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			closed = true;
 			abort.abort();
 			await tail;
+		},
+		async revoke() {
+			if (revokePromise) return revokePromise;
+			closed = true;
+			abort.abort();
+			revokePromise = (async () => {
+				await tail;
+				await revokeAndClearMaterials();
+			})();
+			return revokePromise;
 		},
 	};
 }

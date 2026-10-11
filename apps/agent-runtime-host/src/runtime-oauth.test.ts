@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import {
 	chmod,
 	mkdir,
@@ -13,6 +14,7 @@ import { createServer, request as httpsRequest } from "node:https";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { revokeStandardOAuthToken } from "@agent-infra/agent-runtime";
 import {
 	connectionConsumerProfileFingerprintV1,
 	resolveApprovedConnectionConsumerProfileV1,
@@ -37,6 +39,7 @@ import {
 } from "./runtime-oauth.js";
 import { createProtectedRuntimeOAuthClient } from "./runtime-oauth-client.js";
 import { createRuntimeOAuthGrantVerifier } from "./runtime-oauth-grant.js";
+import { standardMcpInstallationKey } from "./standard-mcp-input.js";
 
 const protection = vi.hoisted(() => ({
 	check: vi.fn(),
@@ -132,10 +135,12 @@ async function fixture() {
 		mode: 0o400,
 	});
 	const calls: URLSearchParams[] = [];
+	const paths: string[] = [];
 	let behavior = "success";
 	const issuer = createServer(
 		{ cert: material.cert, key: material.key },
 		async (req, res) => {
+			paths.push(req.url ?? "");
 			const chunks: Buffer[] = [];
 			for await (const part of req) chunks.push(Buffer.from(part));
 			calls.push(new URLSearchParams(Buffer.concat(chunks).toString()));
@@ -152,6 +157,19 @@ async function fixture() {
 				res.writeHead(302, { location: "/second-token" });
 				res.end();
 				return;
+			}
+			if (behavior === "replace-during-revoke") {
+				const accessName = (await readdir(join(root, "materials"))).find(
+					(name) => name.endsWith(".access"),
+				);
+				if (accessName) {
+					await chmod(join(root, "materials", accessName), 0o600);
+					await writeFile(
+						join(root, "materials", accessName),
+						"replacement-access-material",
+					);
+					await chmod(join(root, "materials", accessName), 0o400);
+				}
 			}
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(
@@ -284,6 +302,7 @@ async function fixture() {
 		store,
 		configuration,
 		target,
+		principal,
 		scope,
 		verifyGrant,
 		fetch,
@@ -400,6 +419,7 @@ async function fixture() {
 		assembly,
 		directory,
 		root,
+		principal,
 		target,
 		scope,
 		configuration,
@@ -408,6 +428,7 @@ async function fixture() {
 		post,
 		callback,
 		calls,
+		paths,
 		fetch,
 		setBehavior: (next: string) => {
 			behavior = next;
@@ -638,6 +659,206 @@ it("uses real HTTPS/SDK/files for one exchange and keeps received credentials un
 			),
 		),
 	).rejects.toMatchObject({ code: "ENOENT" });
+	await f.assembly.client.close();
+	expect(
+		(await readdir(join(f.root, "materials"))).filter((name) =>
+			/\.(access|refresh)$/.test(name),
+		),
+	).toHaveLength(2);
+});
+
+it("revokes and removes protected token material exactly once on explicit revoke", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const before = f.calls.length;
+	expect(
+		(await readdir(join(f.root, "records"))).filter((name) =>
+			/^[a-f0-9]{64}\.json$/.test(name),
+		),
+	).toHaveLength(1);
+	await f.assembly.client.revoke();
+	const revocations = f.calls.slice(before);
+	expect(f.paths.slice(before)).toEqual(["/oauth/revoke", "/oauth/revoke"]);
+	expect(revocations).toHaveLength(2);
+	expect(new Set(revocations.map((body) => body.get("token")))).toEqual(
+		new Set([access, refresh]),
+	);
+	expect(revocations.map((body) => body.get("token_type_hint")).sort()).toEqual(
+		["access_token", "refresh_token"],
+	);
+	expect(
+		(await readdir(join(f.root, "materials"))).filter((name) =>
+			/\.(access|refresh)$/.test(name),
+		),
+	).toEqual([]);
+	await f.assembly.client.revoke();
+	expect(f.calls).toHaveLength(before + 2);
+});
+
+it("rejects a non-HTTPS revocation endpoint before sending material", async () => {
+	const f = await fixture();
+	let requests = 0;
+	await expect(
+		revokeStandardOAuthToken({
+			configuration: {
+				...f.configuration,
+				revocationEndpoint: "http://connection.invalid/oauth/revoke",
+			},
+			token: access,
+			tokenTypeHint: "access_token",
+			signal: new AbortController().signal,
+			assertCurrent: () => undefined,
+			fetch: async () => {
+				requests++;
+				return new Response(null, { status: 200 });
+			},
+		}),
+	).rejects.toThrow();
+	expect(requests).toBe(0);
+});
+
+it("does not revoke a foreign principal in the shared material tree", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const records = join(f.root, "records");
+	const materials = join(f.root, "materials");
+	const sourceName = (await readdir(records)).find((name) =>
+		/^[a-f0-9]{64}\.json$/.test(name),
+	);
+	expect(sourceName).toBeDefined();
+	const baseRecord = JSON.parse(
+		await readFile(join(records, sourceName as string), "utf8"),
+	) as Record<string, unknown>;
+	const addForeign = async (
+		suffix: string,
+		token: string,
+		principal = { kind: "user", id: "alice" },
+		scopePatch: Record<string, unknown> = {},
+	) => {
+		const foreign = structuredClone(baseRecord);
+		foreign.principal = principal;
+		foreign.authorizationId = `foreign-${suffix}`;
+		foreign.scope = { ...f.scope, ...scopePatch };
+		const agentId =
+			typeof scopePatch.agentId === "string"
+				? scopePatch.agentId
+				: f.scope.agentId;
+		const foreignKey = createHash("sha256")
+			.update(
+				JSON.stringify([
+					standardMcpInstallationKey(principal, agentId, f.target),
+					foreign.authorizationId,
+				]),
+			)
+			.digest("hex");
+		await writeFile(
+			join(records, `${foreignKey}.json`),
+			JSON.stringify(foreign),
+			{ mode: 0o600 },
+		);
+		await writeFile(join(materials, `${foreignKey}.access`), token, {
+			mode: 0o400,
+		});
+		return { foreignKey, token };
+	};
+	const foreignPrincipal = await addForeign(
+		"principal",
+		"synthetic-foreign-principal",
+		{ kind: "user", id: "bob" },
+	);
+	const foreignAgent = await addForeign(
+		"agent",
+		"synthetic-foreign-agent",
+		{ kind: "user", id: "alice" },
+		{ agentId: "agent-b" },
+	);
+	const foreignConsumer = await addForeign(
+		"consumer",
+		"synthetic-foreign-consumer",
+		{ kind: "user", id: "alice" },
+		{ configFingerprint: "a".repeat(64) },
+	);
+	await f.assembly.client.revoke();
+	const tokens = f.calls.map((body) => body.get("token"));
+	expect(tokens).toEqual(expect.arrayContaining([access, refresh]));
+	for (const foreign of [foreignPrincipal, foreignAgent, foreignConsumer]) {
+		expect(tokens).not.toContain(foreign.token);
+		expect(
+			await readFile(join(materials, `${foreign.foreignKey}.access`), "utf8"),
+		).toBe(foreign.token);
+	}
+});
+
+it("retains protected material when remote revocation is unknown", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("redirect");
+	await expect(f.assembly.client.revoke()).rejects.toThrow();
+	expect(
+		(await readdir(join(f.root, "materials"))).filter((name) =>
+			/\.(access|refresh)$/.test(name),
+		),
+	).toHaveLength(2);
+});
+
+it("does not delete a replacement token after revoking the original bytes", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("replace-during-revoke");
+	await expect(f.assembly.client.revoke()).rejects.toThrow();
+	const accessName = (await readdir(join(f.root, "materials"))).find((name) =>
+		name.endsWith(".access"),
+	);
+	expect(accessName).toBeDefined();
+	expect(
+		await readFile(join(f.root, "materials", accessName as string), "utf8"),
+	).toBe("replacement-access-material");
+});
+
+it("does not send material from a replaced directory", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const materials = join(f.root, "materials");
+	const displaced = join(f.root, "materials.displaced");
+	let moved = false;
+	protection.afterSecretStat = (path) => {
+		if (!moved && path.endsWith(".access")) {
+			moved = true;
+			renameSync(materials, displaced);
+			mkdirSync(materials, { mode: 0o700 });
+			writeFileSync(
+				join(materials, "replacement.access"),
+				"replacement-directory-access",
+			);
+			chmodSync(join(materials, "replacement.access"), 0o400);
+		}
+	};
+	await expect(f.assembly.client.revoke()).rejects.toThrow();
+	expect(
+		f.calls.every(
+			(body) => body.get("token") !== "replacement-directory-access",
+		),
+	).toBe(true);
+	expect(
+		(await readdir(displaced)).filter((name) =>
+			/\.(access|refresh)$/.test(name),
+		),
+	).toHaveLength(2);
 });
 
 it("recovers begin after the verifier was published before the transaction record", async () => {
@@ -767,6 +988,7 @@ it.each(["lost", "redirect"])(
 			store: f.store,
 			configuration: f.configuration,
 			target: f.target,
+			principal: f.principal,
 			scope: f.scope,
 			verifyGrant: f.verifyGrant,
 			fetch: f.fetch,
@@ -937,6 +1159,7 @@ it.each(["clientId", "callbackUrl", "tokenEndpoint"] as const)(
 			dataDirectory: f.directory,
 			configuration,
 			target: f.target,
+			principal: f.principal,
 			scope: f.scope,
 			verifyGrant: f.verifyGrant,
 			store: f.store,
