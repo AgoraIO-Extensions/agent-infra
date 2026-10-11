@@ -130,6 +130,8 @@ beforeEach(async () => {
 	await sql`truncate platform.agents, platform.platform_applications, platform.platform_api_credentials, platform.platform_user_disables, platform.audit_events, platform.outbox_items, platform.idempotency_records cascade`;
 	await sql`truncate platform.task_control_records, platform.task_authorization_records,
 		platform.conversation_stops, platform.conversation_executions, platform.conversations cascade`;
+	await sql`truncate platform.task_control_records, platform.task_authorization_records,
+		platform.conversation_stops, platform.conversation_executions, platform.conversations cascade`;
 	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('same-id','Robot application','human-responsible','app-1')`;
 	for (const agentId of ["agent-a", "agent-b", "agent-foreign"]) {
 		await sql`insert into platform.agents(id,authorization_revision) values(${agentId},'agent-1')`;
@@ -430,6 +432,63 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 			controls: 1,
 			idempotency: 1,
 		});
+		expect(
+			await sql`select status from platform.outbox_items where scope_id=${"resolve-conversation"}`,
+		).toHaveLength(0);
+		const [audit] =
+			await sql`select details::text as details from platform.audit_events where action='task.control.created' and target_id=${"resolve-execution"}`;
+		expect(audit?.details ?? "").not.toMatch(/credential|body|message/i);
+	});
+
+	it("rejects wrong Execution and cross-Session bindings without changing either target", async () => {
+		await seedUnknownStop(
+			true,
+			"binding-a-conversation",
+			"binding-a-execution",
+			"binding-a-stop",
+		);
+		await seedUnknownStop(
+			true,
+			"binding-b-conversation",
+			"binding-b-execution",
+			"binding-b-stop",
+		);
+		const wrongExecution = await resolveUnknownStop(
+			"binding-a-conversation",
+			"binding-b-execution",
+			"binding-b-stop",
+			"binding-wrong-execution",
+		);
+		expect(wrongExecution.status, await wrongExecution.clone().text()).toBe(
+			503,
+		);
+		const crossSession = await resolveUnknownStop(
+			"binding-b-conversation",
+			"binding-a-execution",
+			"binding-a-stop",
+			"binding-cross-session",
+		);
+		expect(crossSession.status, await crossSession.clone().text()).toBe(503);
+		const states = await sql`
+			select c.id, c.status as conversation_status, e.status as execution_status, s.status as stop_status
+			from platform.conversations c
+			join platform.conversation_executions e on e.conversation_id=c.id
+			join platform.conversation_stops s on s.execution_id=e.execution_id
+			where c.id in ('binding-a-conversation','binding-b-conversation') order by c.id`;
+		expect(states).toMatchObject([
+			{
+				id: "binding-a-conversation",
+				conversation_status: "active",
+				execution_status: "unknown",
+				stop_status: "submitted",
+			},
+			{
+				id: "binding-b-conversation",
+				conversation_status: "active",
+				execution_status: "unknown",
+				stop_status: "submitted",
+			},
+		]);
 	});
 
 	it.each([
@@ -491,6 +550,9 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 				controls: 0,
 				idempotency: 0,
 			});
+			expect(
+				await sql`select action from platform.audit_events where action='task.control.created'`,
+			).toHaveLength(0);
 		} finally {
 			await sql`drop trigger fail_unknown_stop_route_audit on platform.audit_events`;
 			await sql`drop function platform.fail_unknown_stop_route_audit()`;
