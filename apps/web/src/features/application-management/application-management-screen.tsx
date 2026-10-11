@@ -1,6 +1,12 @@
 import { AlertCircle, Building2, RefreshCw, ShieldOff } from "lucide-react";
-import { type FormEvent, useId, useState } from "react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+	type FormEvent,
+	useId,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -13,6 +19,7 @@ import {
 	personalApiCredentialScopeLabels,
 	personalApiCredentialScopes,
 } from "../api-credentials/api-credentials.js";
+import { ApplicationCredentialResult } from "./application-credential-result.js";
 import type {
 	ApplicationCredentialRequest,
 	ApplicationCredentialResponse,
@@ -26,6 +33,7 @@ export type ApplicationManagementViewState =
 type ApplicationManagementScreenProps = {
 	state: ApplicationManagementViewState;
 	onRetry?: () => void;
+	onOpenApplication?: (applicationId: string) => void;
 	onRegister?: (name: string) => Promise<ApplicationMetadataV1>;
 	onDisable?: (applicationId: string) => Promise<ApplicationMetadataV1>;
 	onIssueCredential?: (input: {
@@ -66,6 +74,7 @@ function unavailableMessage(
 export function ApplicationManagementScreen({
 	state,
 	onRetry,
+	onOpenApplication,
 	onRegister,
 	onDisable,
 	onIssueCredential,
@@ -76,16 +85,7 @@ export function ApplicationManagementScreen({
 }: ApplicationManagementScreenProps) {
 	const headingId = useId();
 	const [name, setName] = useState("");
-	const [recipientType, setRecipientType] = useState<"user" | "application">(
-		"user",
-	);
-	const [recipientId, setRecipientId] = useState("");
-	const [credentialId, setCredentialId] = useState("");
-	const [scopes, setScopes] =
-		useState<PersonalApiCredentialScope[]>(defaultScopes);
-	const [expiresAt, setExpiresAt] = useState("");
-	const [operation, setOperation] = useState<"issue" | "rotate">("issue");
-	const [credentialNotice, setCredentialNotice] = useState<string | null>(null);
+	const [applicationId, setApplicationId] = useState("");
 
 	async function submitRegistration(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -96,59 +96,6 @@ export function ApplicationManagementScreen({
 		} catch {
 			// The owner renders mutation errors through actionError.
 		}
-	}
-
-	async function submitCredential(event: FormEvent<HTMLFormElement>) {
-		event.preventDefault();
-		if (
-			state.kind !== "ready" ||
-			!onIssueCredential ||
-			scopes.length === 0 ||
-			!recipientId.trim()
-		)
-			return;
-		if (operation === "rotate" && !credentialId.trim()) return;
-		setCredentialNotice(null);
-		const body: ApplicationCredentialRequest =
-			operation === "issue"
-				? {
-						operation,
-						recipient: {
-							principalType: recipientType,
-							principalId: recipientId.trim(),
-						},
-						scopes,
-						expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
-					}
-				: {
-						operation,
-						credentialId: credentialId.trim(),
-						recipient: {
-							principalType: recipientType,
-							principalId: recipientId.trim(),
-						},
-						scopes,
-						expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
-					};
-		try {
-			const result = await onIssueCredential({
-				applicationId: state.application.applicationId,
-				body,
-			});
-			setCredentialNotice(
-				`已提交${operation === "issue" ? "签发" : "轮换"}请求。凭证材料不会由管理接口返回；当前投递状态：${result.delivery.status}。`,
-			);
-		} catch {
-			// The owner renders mutation errors through actionError.
-		}
-	}
-
-	function toggleScope(scope: PersonalApiCredentialScope) {
-		setScopes((current) =>
-			current.includes(scope)
-				? current.filter((value) => value !== scope)
-				: [...current, scope],
-		);
 	}
 
 	return (
@@ -175,11 +122,35 @@ export function ApplicationManagementScreen({
 					</AlertDescription>
 				</Alert>
 			) : null}
-			{credentialNotice ? (
-				<Alert>
-					<AlertTitle>应用凭证状态</AlertTitle>
-					<AlertDescription>{credentialNotice}</AlertDescription>
-				</Alert>
+			{onOpenApplication && state.kind !== "denied" ? (
+				<form
+					className="max-w-xl space-y-4 rounded border bg-card p-5"
+					onSubmit={(event) => {
+						event.preventDefault();
+						if (applicationId.trim()) onOpenApplication(applicationId.trim());
+					}}
+				>
+					<h2 className="font-semibold text-base">打开既有应用</h2>
+					<div className="space-y-2">
+						<Label htmlFor={`${headingId}-application`}>既有应用 ID</Label>
+						<Input
+							id={`${headingId}-application`}
+							value={applicationId}
+							onChange={(event) => setApplicationId(event.target.value)}
+							required
+							aria-describedby={`${headingId}-application-hint`}
+						/>
+						<p
+							id={`${headingId}-application-hint`}
+							className="text-muted-foreground text-sm"
+						>
+							输入你负责的应用 ID，读取详情后再管理凭证。
+						</p>
+					</div>
+					<Button type="submit" disabled={!applicationId.trim()}>
+						打开应用
+					</Button>
+				</form>
 			) : null}
 
 			{state.kind === "loading" ? (
@@ -246,24 +217,16 @@ export function ApplicationManagementScreen({
 			) : null}
 			{state.kind === "ready" ? (
 				<ApplicationDetails
+					key={JSON.stringify([
+						state.application.applicationId,
+						state.application.authorizationRevision,
+						state.application.status,
+					])}
 					application={state.application}
 					onDisable={onDisable}
 					isDisabling={isDisabling}
 					onIssueCredential={onIssueCredential}
 					isIssuingCredential={isIssuingCredential}
-					operation={operation}
-					setOperation={setOperation}
-					recipientType={recipientType}
-					setRecipientType={setRecipientType}
-					recipientId={recipientId}
-					setRecipientId={setRecipientId}
-					credentialId={credentialId}
-					setCredentialId={setCredentialId}
-					scopes={scopes}
-					toggleScope={toggleScope}
-					expiresAt={expiresAt}
-					setExpiresAt={setExpiresAt}
-					submitCredential={submitCredential}
 				/>
 			) : null}
 		</section>
@@ -276,25 +239,106 @@ type ApplicationDetailsProps = {
 	isDisabling: boolean;
 	onIssueCredential?: ApplicationManagementScreenProps["onIssueCredential"];
 	isIssuingCredential: boolean;
-	operation: "issue" | "rotate";
-	setOperation: (value: "issue" | "rotate") => void;
-	recipientType: "user" | "application";
-	setRecipientType: (value: "user" | "application") => void;
-	recipientId: string;
-	setRecipientId: (value: string) => void;
-	credentialId: string;
-	setCredentialId: (value: string) => void;
-	scopes: PersonalApiCredentialScope[];
-	toggleScope: (scope: PersonalApiCredentialScope) => void;
-	expiresAt: string;
-	setExpiresAt: (value: string) => void;
-	submitCredential: (event: FormEvent<HTMLFormElement>) => Promise<void>;
 };
 
 function ApplicationDetails(props: ApplicationDetailsProps) {
 	const { application } = props;
 	const id = useId();
 	const disabled = application.status === "disabled";
+	const active = useRef(false);
+	const pending = useRef(false);
+	const [recipientType, setRecipientType] = useState<"user" | "application">(
+		"user",
+	);
+	const [recipientId, setRecipientId] = useState("");
+	const [credentialId, setCredentialId] = useState("");
+	const [scopes, setScopes] =
+		useState<PersonalApiCredentialScope[]>(defaultScopes);
+	const [expiresAt, setExpiresAt] = useState("");
+	const [operation, setOperation] = useState<"issue" | "rotate">("issue");
+	const [credentialResult, setCredentialResult] =
+		useState<ApplicationCredentialResponse | null>(null);
+	const [submitting, setSubmitting] = useState(false);
+	useLayoutEffect(() => {
+		active.current = true;
+		return () => {
+			active.current = false;
+		};
+	}, []);
+
+	async function submitCredential(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (
+			disabled ||
+			pending.current ||
+			props.isIssuingCredential ||
+			!props.onIssueCredential ||
+			scopes.length === 0 ||
+			!recipientId.trim()
+		)
+			return;
+		if (operation === "rotate" && !credentialId.trim()) return;
+		const request = {
+			recipient: {
+				principalType: recipientType,
+				principalId: recipientId.trim(),
+			},
+			scopes,
+			expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+		};
+		const body: ApplicationCredentialRequest =
+			operation === "issue"
+				? { ...request, operation }
+				: { ...request, operation, credentialId: credentialId.trim() };
+		pending.current = true;
+		setSubmitting(true);
+		setCredentialResult(null);
+		try {
+			const result = await props.onIssueCredential({
+				applicationId: application.applicationId,
+				body,
+			});
+			if (
+				active.current &&
+				result.metadata.applicationId === application.applicationId
+			) {
+				setCredentialResult(result);
+			}
+		} catch {
+			// The owner renders mutation errors through actionError.
+		} finally {
+			pending.current = false;
+			if (active.current) setSubmitting(false);
+		}
+	}
+
+	function toggleScope(scope: PersonalApiCredentialScope) {
+		setScopes((current) =>
+			current.includes(scope)
+				? current.filter((value) => value !== scope)
+				: [...current, scope],
+		);
+	}
+
+	function prepareRotation() {
+		if (!credentialResult) return;
+		setOperation("rotate");
+		setCredentialId(credentialResult.metadata.credentialId);
+		setRecipientType(credentialResult.delivery.recipient.principalType);
+		setRecipientId(credentialResult.delivery.recipient.principalId);
+		setScopes(credentialResult.metadata.scopes);
+		const expiry = credentialResult.metadata.expiresAt;
+		setExpiresAt(
+			expiry
+				? new Date(
+						new Date(expiry).getTime() -
+							new Date(expiry).getTimezoneOffset() * 60_000,
+					)
+						.toISOString()
+						.slice(0, -1)
+				: "",
+		);
+	}
 	return (
 		<div className="space-y-6">
 			<div className="rounded border bg-card p-5">
@@ -343,6 +387,14 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 					</div>
 				</dl>
 			</div>
+			{credentialResult ? (
+				<ApplicationCredentialResult
+					result={credentialResult}
+					onPrepareRotation={
+						props.onIssueCredential ? prepareRotation : undefined
+					}
+				/>
+			) : null}
 			{disabled ? (
 				<Empty>
 					<EmptyTitle>应用已停用</EmptyTitle>
@@ -351,7 +403,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 			) : (
 				<form
 					className="max-w-3xl space-y-5 rounded border bg-card p-5"
-					onSubmit={props.submitCredential}
+					onSubmit={submitCredential}
 				>
 					<div>
 						<h2 className="font-semibold text-base">应用凭证元数据</h2>
@@ -365,67 +417,63 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						<div className="flex flex-wrap gap-2">
 							<Button
 								type="button"
-								size="sm"
-								variant={props.operation === "issue" ? "secondary" : "outline"}
-								onClick={() => props.setOperation("issue")}
+								aria-pressed={operation === "issue"}
+								variant={operation === "issue" ? "secondary" : "outline"}
+								onClick={() => setOperation("issue")}
 							>
 								签发
 							</Button>
 							<Button
 								type="button"
-								size="sm"
-								variant={props.operation === "rotate" ? "secondary" : "outline"}
-								onClick={() => props.setOperation("rotate")}
+								aria-pressed={operation === "rotate"}
+								variant={operation === "rotate" ? "secondary" : "outline"}
+								onClick={() => setOperation("rotate")}
 							>
 								轮换
 							</Button>
 						</div>
 					</fieldset>
-					{props.operation === "rotate" ? (
+					{operation === "rotate" ? (
 						<div className="space-y-2">
 							<Label htmlFor={`${id}-credential`}>要轮换的凭证 ID</Label>
 							<Input
 								id={`${id}-credential`}
-								value={props.credentialId}
-								onChange={(event) => props.setCredentialId(event.target.value)}
+								value={credentialId}
+								onChange={(event) => setCredentialId(event.target.value)}
 								required
 							/>
 						</div>
 					) : null}
 					<div className="grid gap-4 sm:grid-cols-2">
-						<div className="space-y-2">
-							<Label htmlFor={`${id}-recipient-type`}>接收主体类型</Label>
+						<fieldset className="space-y-2">
+							<legend className="font-medium text-sm">接收主体类型</legend>
 							<div className="flex gap-2">
 								<Button
 									type="button"
-									size="sm"
-									variant={
-										props.recipientType === "user" ? "secondary" : "outline"
-									}
-									onClick={() => props.setRecipientType("user")}
+									aria-pressed={recipientType === "user"}
+									variant={recipientType === "user" ? "secondary" : "outline"}
+									onClick={() => setRecipientType("user")}
 								>
 									用户
 								</Button>
 								<Button
 									type="button"
-									size="sm"
+									aria-pressed={recipientType === "application"}
 									variant={
-										props.recipientType === "application"
-											? "secondary"
-											: "outline"
+										recipientType === "application" ? "secondary" : "outline"
 									}
-									onClick={() => props.setRecipientType("application")}
+									onClick={() => setRecipientType("application")}
 								>
 									应用
 								</Button>
 							</div>
-						</div>
+						</fieldset>
 						<div className="space-y-2">
 							<Label htmlFor={`${id}-recipient`}>接收主体 ID</Label>
 							<Input
 								id={`${id}-recipient`}
-								value={props.recipientId}
-								onChange={(event) => props.setRecipientId(event.target.value)}
+								value={recipientId}
+								onChange={(event) => setRecipientId(event.target.value)}
 								required
 							/>
 						</div>
@@ -442,8 +490,8 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 									>
 										<Checkbox
 											id={checkboxId}
-											checked={props.scopes.includes(scope)}
-											onCheckedChange={() => props.toggleScope(scope)}
+											checked={scopes.includes(scope)}
+											onCheckedChange={() => toggleScope(scope)}
 										/>
 										<Label htmlFor={checkboxId} className="font-normal">
 											{personalApiCredentialScopeLabels[scope]}
@@ -455,7 +503,7 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 								);
 							})}
 						</div>
-						{props.scopes.length === 0 ? (
+						{scopes.length === 0 ? (
 							<Alert variant="destructive" className="p-2 text-sm">
 								至少选择一项权限范围。
 							</Alert>
@@ -466,23 +514,25 @@ function ApplicationDetails(props: ApplicationDetailsProps) {
 						<Input
 							id={`${id}-expiry`}
 							type="datetime-local"
-							value={props.expiresAt}
-							onChange={(event) => props.setExpiresAt(event.target.value)}
+							step="0.001"
+							value={expiresAt}
+							onChange={(event) => setExpiresAt(event.target.value)}
 						/>
 					</div>
 					<Button
 						type="submit"
 						disabled={
 							!props.onIssueCredential ||
-							props.scopes.length === 0 ||
-							!props.recipientId.trim() ||
-							(props.operation === "rotate" && !props.credentialId.trim()) ||
-							props.isIssuingCredential
+							scopes.length === 0 ||
+							!recipientId.trim() ||
+							(operation === "rotate" && !credentialId.trim()) ||
+							props.isIssuingCredential ||
+							submitting
 						}
 					>
-						{props.isIssuingCredential
+						{props.isIssuingCredential || submitting
 							? "正在提交…"
-							: props.operation === "issue"
+							: operation === "issue"
 								? "签发应用凭证"
 								: "轮换应用凭证"}
 					</Button>
