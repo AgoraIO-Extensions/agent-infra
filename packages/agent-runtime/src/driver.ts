@@ -8,7 +8,10 @@ import type {
 	RuntimePrincipalV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
-import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
+import type {
+	RuntimeFileBridgePortV1,
+	RuntimeFileResultV1,
+} from "./runtime-file-bridge.js";
 
 export interface RuntimeModelDirectoryOption {
 	readonly modelOptionId: string;
@@ -123,6 +126,11 @@ export interface RuntimeDriver {
 		nativeSessionRef: string,
 		executionId: string,
 		throughCursor: string,
+	): Promise<void>;
+	/** Persist metadata only after a request-local bridge has confirmed a result file. */
+	recordResultFile?(
+		command: RuntimeDriverCommand,
+		result: RuntimeFileResultV1,
 	): Promise<void>;
 	subscribeEvents(
 		nativeSessionRef: string,

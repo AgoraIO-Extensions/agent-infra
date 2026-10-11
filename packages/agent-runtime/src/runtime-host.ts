@@ -501,9 +501,7 @@ export class RuntimeHost {
 		const binding = await createRuntimeFileBridgeBindingV1({
 			request,
 			claims,
-			// The bridge decides expiry on the deployment clock that validated the
-			// grant, not on the wall clock.
-			now: (this.options.grantValidationV2?.now ?? Date.now)(),
+			now: this.options.grantValidationV2?.now?.() ?? Date.now(),
 		});
 		return this.options.fileBridge(binding);
 	}
@@ -1685,8 +1683,42 @@ export class RuntimeHost {
 					operation,
 					(this.options.grantValidationV2?.now ?? Date.now)(),
 				);
+			const recordResultFile = this.options.driver.recordResultFile?.bind(
+				this.options.driver,
+			);
+			const originalFileBridge = context?.fileBridge;
+			const driverContext =
+				originalFileBridge && recordResultFile
+					? {
+							...context,
+							fileBridge: {
+								readInput(fileId: string, signal?: AbortSignal) {
+									// Cancellation must still reach the authority when the
+									// Driver stops waiting for an attachment.
+									return originalFileBridge.readInput(fileId, signal);
+								},
+								revalidate() {
+									// Lapsed authority must reach the Driver's boundary check.
+									originalFileBridge.revalidate();
+								},
+								async writeResult(
+									descriptor: Parameters<
+										RuntimeFileBridgePortV1["writeResult"]
+									>[0],
+									body: Parameters<RuntimeFileBridgePortV1["writeResult"]>[1],
+								) {
+									const result = await originalFileBridge.writeResult(
+										descriptor,
+										body,
+									);
+									await recordResultFile(operation.command, result);
+									return result;
+								},
+							},
+						}
+					: context;
 			const executed = await callDriverWithUncertainty(() =>
-				this.options.driver.execute(operation.command, context),
+				this.options.driver.execute(operation.command, driverContext),
 			);
 			if (executed === driverUncertain) {
 				if (isInterruption(operation)) {

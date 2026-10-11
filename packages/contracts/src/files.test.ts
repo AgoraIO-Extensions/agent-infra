@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { FileAccessClaimsV1Schema, FileDescriptorV1Schema } from "./files.ts";
+import {
+	FileAccessClaimsV1Schema,
+	FileDescriptorV1Schema,
+	RuntimeFileExchangeRequestV1Schema,
+} from "./files.ts";
 
 describe("file authority wire boundary", () => {
 	it("accepts bounded descriptors and rejects caller-selected storage or owner", () => {
@@ -57,6 +61,54 @@ describe("file authority wire boundary", () => {
 			FileAccessClaimsV1Schema.safeParse({
 				...claims,
 				execution: { ...claims.execution, sessionGeneration: 0 },
+			}).success,
+		).toBe(false);
+	});
+	it("binds V4 file exchange operations to one execution and strict operation fields", () => {
+		const binding = {
+			schemaVersion: 1,
+			actorId: "actor_1",
+			agentId: "agent_1",
+			channelId: "web",
+			conversationId: "conversation_1",
+			executionId: "execution_1",
+			sessionGeneration: 2,
+			grantId: "grant_1",
+			expiresAt: "2026-09-15T00:01:00Z",
+			idempotencyKey: "exchange_1",
+		};
+		const read = {
+			...binding,
+			operation: "read" as const,
+			fileId: "file_1",
+		};
+		expect(RuntimeFileExchangeRequestV1Schema.parse(read)).toEqual(read);
+		expect(
+			RuntimeFileExchangeRequestV1Schema.safeParse({
+				...read,
+				descriptor: {
+					name: "wrong.txt",
+					mediaType: "text/plain",
+					sizeBytes: 1,
+					sha256: "a".repeat(64),
+				},
+			}).success,
+		).toBe(false);
+		const result = {
+			...binding,
+			operation: "result" as const,
+			descriptor: {
+				name: "result.txt",
+				mediaType: "text/plain",
+				sizeBytes: 1,
+				sha256: "a".repeat(64),
+			},
+		};
+		expect(RuntimeFileExchangeRequestV1Schema.parse(result)).toEqual(result);
+		expect(
+			RuntimeFileExchangeRequestV1Schema.safeParse({
+				...result,
+				grantToken: "must-not-be-in-wire",
 			}).success,
 		).toBe(false);
 	});

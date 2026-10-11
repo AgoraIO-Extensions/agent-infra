@@ -3222,6 +3222,70 @@ describe("Codex Runtime Driver", () => {
 		);
 	});
 
+	it("journals an available result projection once and replays it after restart", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const projection = {
+			schemaVersion: 1 as const,
+			fileId: "result-file-codex",
+			kind: "result" as const,
+			descriptor: {
+				name: "answer.txt",
+				mediaType: "text/plain",
+				sizeBytes: 7,
+				sha256: "b".repeat(64),
+			},
+			status: "available" as const,
+			createdAt: new Date().toISOString(),
+			expiresAt: new Date(Date.now() + 60_000).toISOString(),
+		};
+		await driver.recordResultFile(command, projection);
+		await driver.recordResultFile(command, projection);
+		const events = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(events.filter((event) => event.type === "file")).toEqual([
+			expect.objectContaining({
+				executionId: command.executionId,
+				type: "file",
+				payload: {
+					fileId: projection.fileId,
+					name: projection.descriptor.name,
+					mimeType: projection.descriptor.mediaType,
+					sizeBytes: projection.descriptor.sizeBytes,
+				},
+			}),
+		]);
+		await driver.close();
+		const recovered = await openDriver(path, new TestCodexBridge());
+		drivers.push(recovered);
+		await expect(
+			recovered.replayEvents(accepted.nativeSessionRef, command.executionId),
+		).resolves.toEqual(events);
+		await expect(
+			recovered.recordResultFile(command, {
+				...projection,
+				descriptor: { ...projection.descriptor, name: "forged.txt" },
+			}),
+		).rejects.toThrow();
+		await expect(
+			recovered.recordResultFile(
+				{
+					...command,
+					executionId: "foreign-execution",
+					operationId: command.operationId,
+				},
+				projection,
+			),
+		).rejects.toThrow();
+	});
+
 	it("rejects an unsupported V2 selection before starting a native Turn", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
