@@ -101,16 +101,45 @@ jobs:
               while IFS= read -r path; do
                 case "$path" in
                   *.md) ;;
-                  *) source=true ;;
+                  .github/workflows/*|package.json|pnpm-lock.yaml|turbo.json|tsconfig*.json)
+                    # Build and workflow changes can invalidate every validation surface.
+                    source=true
+                    web=true
+                    runtime=true
+                    workload=true
+                    ;;
+                  packages/config/*|packages/contracts/*|packages/test-support/*)
+                    # Shared packages feed multiple deployed surfaces.
+                    source=true
+                    web=true
+                    runtime=true
+                    workload=true
+                    ;;
+                  apps/web/*)
+                    source=true
+                    web=true
+                    ;;
+                  apps/agent-runtime-host/*|deploy/runtime/*|deploy/images/*|deploy/release/*)
+                    source=true
+                    runtime=true
+                    ;;
+                  packages/agent-runtime/*)
+                    source=true
+                    runtime=true
+                    workload=true
+                    ;;
+                  apps/platform-worker/*|packages/platform-core/*|packages/platform-store/*|packages/observability/*|packages/identity/*|packages/image-registry/*|packages/model-catalog/*|packages/object-storage/*|packages/secret-store/*|packages/wecom/*|deploy/kind/*|tests/workload-fixture.test.mjs|tests/fixtures/workload/*)
+                    source=true
+                    workload=true
+                    ;;
+                  .github/scripts/*)
+                    # CI helper tests are covered by the policy checks below.
+                    ;;
+                  *)
+                    source=true
+                    ;;
                 esac
               done <<< "$files"
-              if [[ "$source" == true ]]; then
-                # Shared lockfiles, build scripts, workflow changes, and backend
-                # changes can affect every validation surface.
-                web=true
-                runtime=true
-                workload=true
-              fi
             fi
           fi
           {
@@ -182,9 +211,9 @@ jobs:
       - name: Run database and backend tests serially
         run: pnpm test:packages:serial && pnpm test:apps:backend
 
-  ci:
-    name: CI
-    needs: [ci-exemption, changes, web-tests, backend-tests]
+  ci_heavy:
+    name: CI heavy validation
+    needs: [ci-exemption, changes]
     # Failure to read the label must run CI, never grant an exemption.
     if: ${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
     runs-on: ubuntu-24.04
@@ -198,16 +227,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Require split test jobs
-        if: ${{ needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || (needs.changes.outputs.source == 'true' && (needs.web-tests.result != 'success' || needs.backend-tests.result != 'success')) }}
-        run: |
-          echo "Required prerequisite job failed or was unavailable."
-          echo "ci-exemption=${{ needs.ci-exemption.result }}"
-          echo "changes=${{ needs.changes.result }}"
-          echo "web-tests=${{ needs.web-tests.result }}"
-          echo "backend-tests=${{ needs.backend-tests.result }}"
-          exit 1
 
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
@@ -306,11 +325,17 @@ jobs:
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.11.1
       - name: Build pinned Codex native test environment
         if: ${{ needs.changes.outputs.runtime == 'true' }}
-        run: >-
-          docker buildx build --target builder -f apps/agent-runtime-host/Dockerfile
-          --tag agent-infra-codex-native-test --load
-          --cache-from type=gha,scope=agent-infra-codex-native
-          --cache-to type=gha,mode=max,scope=agent-infra-codex-native .
+        env:
+          CI_CACHE_WRITE: ${{ github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cache_args=(--cache-from "type=gha,scope=agent-infra-codex-native")
+          if [[ "$CI_CACHE_WRITE" == true ]]; then
+            cache_args+=(--cache-to "type=gha,mode=max,scope=agent-infra-codex-native")
+          fi
+          docker buildx build --target builder -f apps/agent-runtime-host/Dockerfile \
+            --tag agent-infra-codex-native-test --load "${cache_args[@]}" .
 
       - name: Verify native Codex metadata command
         id: codex_native_command
@@ -452,6 +477,7 @@ jobs:
         if: ${{ needs.changes.outputs.source == 'true' }}
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_CACHE_WRITE: ${{ github.event_name == 'push' }}
         run: node deploy/release/ci-image-build.mjs build
 
       - name: Verify built Web image compatibility
@@ -563,6 +589,7 @@ jobs:
         shell: bash
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_CACHE_WRITE: ${{ github.event_name == 'push' }}
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/installed-skill-evidence"
@@ -604,12 +631,15 @@ jobs:
           printf '%s\n' "$config_version" > "$evidence/config-version.txt"
           capacity before-build
           git archive "$SOURCE_COMMIT" | tar -x -C "$context"
+          cache_args=(--cache-from "type=gha,scope=agent-infra-installed-skill")
+          if [[ "$CI_CACHE_WRITE" == true ]]; then
+            cache_args+=(--cache-to "type=gha,mode=max,scope=agent-infra-installed-skill")
+          fi
           timeout --signal=TERM --kill-after=5s 300s docker buildx build \
             --platform "linux/$architecture" --progress=plain --target installed-skill-test \
             --build-arg "SOURCE_COMMIT=$SOURCE_COMMIT" --label "ao.session=$session" \
             --tag "agent-infra-ci/installed-skill-test:$SOURCE_COMMIT" \
-            --cache-from type=gha,scope=agent-infra-installed-skill \
-            --cache-to type=gha,mode=max,scope=agent-infra-installed-skill \
+            "${cache_args[@]}" \
             --load \
             --file "$context/apps/agent-runtime-host/Dockerfile" \
             --iidfile "$evidence/test.iid" "$context" 2>&1 | tee "$evidence/test-build.log"
@@ -744,6 +774,27 @@ jobs:
           else
             git diff --check "$BASE_SHA" "$HEAD_SHA"
           fi
+
+  ci:
+    name: CI
+    needs: [ci-exemption, changes, web-tests, backend-tests, ci_heavy]
+    if: ${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require CI lanes
+        if: ${{ needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || needs.ci_heavy.result != 'success' || (needs.changes.outputs.source == 'true' && (needs.web-tests.result != 'success' || needs.backend-tests.result != 'success')) }}
+        run: |
+          echo "Required CI lane failed or was unavailable."
+          echo "ci-exemption=${{ needs.ci-exemption.result }}"
+          echo "changes=${{ needs.changes.result }}"
+          echo "web-tests=${{ needs.web-tests.result }}"
+          echo "backend-tests=${{ needs.backend-tests.result }}"
+          echo "ci_heavy=${{ needs.ci_heavy.result }}"
+          exit 1
+      - name: Report completed CI lanes
+        run: |
+          echo "CI lanes passed: web=${{ needs.web-tests.result }}, backend=${{ needs.backend-tests.result }}, heavy=${{ needs.ci_heavy.result }}"
 
   workload-kind:
     name: Workload kind

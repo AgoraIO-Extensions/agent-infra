@@ -72,8 +72,26 @@ async function build() {
     command("tar", ["-xf", archive, "-C", context]);
     for (const name of imageNames) {
       const iid = join(temp, `${name}.id`);
+      const cacheArgs = process.env.GITHUB_ACTIONS === "true"
+        ? [
+            "--cache-from",
+            `type=gha,scope=agent-infra-deployment-${name}`,
+            ...(process.env.CI_CACHE_WRITE === "true"
+              ? [
+                  "--cache-to",
+                  `type=gha,mode=max,scope=agent-infra-deployment-${name}`,
+                ]
+              : []),
+          ]
+        : [];
+      const buildCommand = process.env.GITHUB_ACTIONS === "true"
+        ? ["buildx", "build"]
+        : ["build"];
+      const buildxArgs = process.env.GITHUB_ACTIONS === "true"
+        ? ["--load", "--progress", "plain"]
+        : [];
       command("docker", [
-        "build",
+        ...buildCommand,
         "--file",
         join(context, imageDockerfiles[name]),
         "--build-arg",
@@ -86,6 +104,8 @@ async function build() {
         `agent-infra.lockfile-sha256=${expected.lockfileSha256}`,
         "--tag",
         `agent-infra-ci/${name}:${expected.commit}`,
+        ...cacheArgs,
+        ...buildxArgs,
         context,
       ], { stdio: "inherit" });
       const imageId = (await readFile(iid, "utf8")).trim();

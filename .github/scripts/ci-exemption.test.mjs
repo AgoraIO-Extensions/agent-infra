@@ -106,9 +106,12 @@ test("CI label transitions cancel older PR runs and retain checks on lookup fail
   assert.deepEqual(exemption.permissions, { "pull-requests": "read" });
   assert.equal(exemption.outputs.skip, "${{ steps.label.outputs.skip }}");
   assert.equal(workflow.jobs.ci.name, "CI");
-  assert.deepEqual(workflow.jobs.ci.needs, ["ci-exemption", "changes", "web-tests", "backend-tests"]);
+  assert.deepEqual(workflow.jobs.ci.needs,
+    ["ci-exemption", "changes", "web-tests", "backend-tests", "ci_heavy"]);
   assert.equal(workflow.jobs.ci.if,
     "${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}");
+  assert.equal(workflow.jobs["ci_heavy"].name, "CI heavy validation");
+  assert.deepEqual(workflow.jobs["ci_heavy"].needs, ["ci-exemption", "changes"]);
   assert.deepEqual(workflow.jobs["workload-kind"].needs, ["ci-exemption", "changes"]);
   assert.equal(workflow.jobs["workload-kind"].if,
     "${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}");
