@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
+import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
 import {
 	createDirectoryOrganizationAuthorityResolverV1,
@@ -18,7 +19,6 @@ if (!configurationModule || new URL(configurationModule).protocol !== "file:") {
 }
 const {
 	ldap,
-	isPlatformDisabled,
 	organizationIds: configuredOrganizationIds,
 	directorySnapshot,
 	publicOrigin,
@@ -55,10 +55,23 @@ if (!tokenFile?.startsWith("/")) {
 }
 const trustedProxyToken = await readFile(tokenFile, "utf8");
 const directory = createLdapIdentityDirectory(ldap);
+const userGovernance = new PostgresPlatformUserDisablesV1(
+	databaseUrl,
+	async (userId) => {
+		const account = await directory.currentByUserId(userId);
+		return account
+			? {
+					userId: account.userId,
+					accountStatus: account.accountStatus,
+					isSystemAdmin: account.roles.includes("system_admin"),
+				}
+			: null;
+	},
+);
 const browser = createPostgresLdapBrowserDeployment({
 	databaseUrl,
 	directory,
-	isPlatformDisabled,
+	isPlatformDisabled: userGovernance.isPlatformDisabled.bind(userGovernance),
 	organizationIds,
 	...(organizationAuthority ? { organizationAuthority } : {}),
 	publicOrigin,
@@ -79,6 +92,7 @@ export const browserAuth = browser.browserAuth;
 export function createPlatformApiAssemblyInput() {
 	return createProductionPlatformApiAssemblyInputV1({
 		...apiInput,
+		userGovernance,
 		directory: { identity: browser.identity, search: directorySearch },
 		connectionConsumerProfile,
 		connectionConsumerProfileApproval,

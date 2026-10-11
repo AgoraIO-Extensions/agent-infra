@@ -47,6 +47,193 @@
             "const": "runtime_host_readiness",
             "type": "string"
           },
+          "browserBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "agentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "imageDigest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "resourceFence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "sessionGeneration": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "sessionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "workloadRevision": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "agentId",
+              "sessionId",
+              "sessionGeneration",
+              "resourceFence",
+              "workloadRevision",
+              "imageDigest"
+            ],
+            "type": "object"
+          },
+          "browserDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "capabilityVersion": {
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "operations": {
+                "items": {
+                  "enum": [
+                    "navigate",
+                    "observe",
+                    "interact",
+                    "files",
+                    "handoff",
+                    "side_effects"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 16,
+                "minItems": 1,
+                "type": "array"
+              },
+              "policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "actionTimeoutMs": {
+                    "maximum": 120000,
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "allowUserHandoff": {
+                    "type": "boolean"
+                  },
+                  "allowedOrigins": {
+                    "items": {
+                      "pattern": "^https?:\\/\\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/$",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  },
+                  "maxBrowserDurationMs": {
+                    "maximum": 86400000,
+                    "minimum": 1000,
+                    "type": "integer"
+                  },
+                  "maxConcurrentActions": {
+                    "maximum": 16,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxContexts": {
+                    "maximum": 4,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxDownloadBytes": {
+                    "maximum": 10000000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxDownloads": {
+                    "maximum": 256,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxPages": {
+                    "maximum": 64,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxRetainedProfileBytes": {
+                    "maximum": 10000000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxScreenshotBytes": {
+                    "maximum": 100000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxTabs": {
+                    "maximum": 32,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxUploadBytes": {
+                    "maximum": 10000000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxViewportHeight": {
+                    "maximum": 4320,
+                    "minimum": 240,
+                    "type": "integer"
+                  },
+                  "maxViewportWidth": {
+                    "maximum": 7680,
+                    "minimum": 320,
+                    "type": "integer"
+                  },
+                  "navigationTimeoutMs": {
+                    "maximum": 300000,
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "requireSideEffectConfirmation": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "allowedOrigins",
+                  "maxContexts",
+                  "maxTabs",
+                  "maxPages",
+                  "maxViewportWidth",
+                  "maxViewportHeight",
+                  "maxConcurrentActions",
+                  "maxDownloads",
+                  "maxDownloadBytes",
+                  "maxUploadBytes",
+                  "maxScreenshotBytes",
+                  "maxBrowserDurationMs",
+                  "maxRetainedProfileBytes",
+                  "navigationTimeoutMs",
+                  "actionTimeoutMs",
+                  "requireSideEffectConfirmation",
+                  "allowUserHandoff"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "capabilityVersion",
+              "operations",
+              "policy"
+            ],
+            "type": "object"
+          },
           "expiresAt": {
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991,
@@ -150,6 +337,193 @@
             "minLength": 1,
             "type": "string"
           },
+          "browserBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "agentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "imageDigest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "resourceFence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "sessionGeneration": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "sessionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "workloadRevision": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "agentId",
+              "sessionId",
+              "sessionGeneration",
+              "resourceFence",
+              "workloadRevision",
+              "imageDigest"
+            ],
+            "type": "object"
+          },
+          "browserDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "capabilityVersion": {
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "operations": {
+                "items": {
+                  "enum": [
+                    "navigate",
+                    "observe",
+                    "interact",
+                    "files",
+                    "handoff",
+                    "side_effects"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 16,
+                "minItems": 1,
+                "type": "array"
+              },
+              "policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "actionTimeoutMs": {
+                    "maximum": 120000,
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "allowUserHandoff": {
+                    "type": "boolean"
+                  },
+                  "allowedOrigins": {
+                    "items": {
+                      "pattern": "^https?:\\/\\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/$",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  },
+                  "maxBrowserDurationMs": {
+                    "maximum": 86400000,
+                    "minimum": 1000,
+                    "type": "integer"
+                  },
+                  "maxConcurrentActions": {
+                    "maximum": 16,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxContexts": {
+                    "maximum": 4,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxDownloadBytes": {
+                    "maximum": 10000000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxDownloads": {
+                    "maximum": 256,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxPages": {
+                    "maximum": 64,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxRetainedProfileBytes": {
+                    "maximum": 10000000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxScreenshotBytes": {
+                    "maximum": 100000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxTabs": {
+                    "maximum": 32,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxUploadBytes": {
+                    "maximum": 10000000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxViewportHeight": {
+                    "maximum": 4320,
+                    "minimum": 240,
+                    "type": "integer"
+                  },
+                  "maxViewportWidth": {
+                    "maximum": 7680,
+                    "minimum": 320,
+                    "type": "integer"
+                  },
+                  "navigationTimeoutMs": {
+                    "maximum": 300000,
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "requireSideEffectConfirmation": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "allowedOrigins",
+                  "maxContexts",
+                  "maxTabs",
+                  "maxPages",
+                  "maxViewportWidth",
+                  "maxViewportHeight",
+                  "maxConcurrentActions",
+                  "maxDownloads",
+                  "maxDownloadBytes",
+                  "maxUploadBytes",
+                  "maxScreenshotBytes",
+                  "maxBrowserDurationMs",
+                  "maxRetainedProfileBytes",
+                  "navigationTimeoutMs",
+                  "actionTimeoutMs",
+                  "requireSideEffectConfirmation",
+                  "allowUserHandoff"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "capabilityVersion",
+              "operations",
+              "policy"
+            ],
+            "type": "object"
+          },
           "fence": {
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991,
@@ -204,11 +578,359 @@
             "minLength": 1,
             "type": "string"
           },
+          "browserBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "agentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "imageDigest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "resourceFence": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "sessionGeneration": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "sessionId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "workloadRevision": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "agentId",
+              "sessionId",
+              "sessionGeneration",
+              "resourceFence",
+              "workloadRevision",
+              "imageDigest"
+            ],
+            "type": "object"
+          },
+          "browserDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "capabilityVersion": {
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "operations": {
+                "items": {
+                  "enum": [
+                    "navigate",
+                    "observe",
+                    "interact",
+                    "files",
+                    "handoff",
+                    "side_effects"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 16,
+                "minItems": 1,
+                "type": "array"
+              },
+              "policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "actionTimeoutMs": {
+                    "maximum": 120000,
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "allowUserHandoff": {
+                    "type": "boolean"
+                  },
+                  "allowedOrigins": {
+                    "items": {
+                      "pattern": "^https?:\\/\\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\\/$",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  },
+                  "maxBrowserDurationMs": {
+                    "maximum": 86400000,
+                    "minimum": 1000,
+                    "type": "integer"
+                  },
+                  "maxConcurrentActions": {
+                    "maximum": 16,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxContexts": {
+                    "maximum": 4,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxDownloadBytes": {
+                    "maximum": 10000000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxDownloads": {
+                    "maximum": 256,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxPages": {
+                    "maximum": 64,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxRetainedProfileBytes": {
+                    "maximum": 10000000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxScreenshotBytes": {
+                    "maximum": 100000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxTabs": {
+                    "maximum": 32,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "maxUploadBytes": {
+                    "maximum": 10000000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxViewportHeight": {
+                    "maximum": 4320,
+                    "minimum": 240,
+                    "type": "integer"
+                  },
+                  "maxViewportWidth": {
+                    "maximum": 7680,
+                    "minimum": 320,
+                    "type": "integer"
+                  },
+                  "navigationTimeoutMs": {
+                    "maximum": 300000,
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "requireSideEffectConfirmation": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "allowedOrigins",
+                  "maxContexts",
+                  "maxTabs",
+                  "maxPages",
+                  "maxViewportWidth",
+                  "maxViewportHeight",
+                  "maxConcurrentActions",
+                  "maxDownloads",
+                  "maxDownloadBytes",
+                  "maxUploadBytes",
+                  "maxScreenshotBytes",
+                  "maxBrowserDurationMs",
+                  "maxRetainedProfileBytes",
+                  "navigationTimeoutMs",
+                  "actionTimeoutMs",
+                  "requireSideEffectConfirmation",
+                  "allowUserHandoff"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "capabilityVersion",
+              "operations",
+              "policy"
+            ],
+            "type": "object"
+          },
           "capabilities": {
             "additionalProperties": false,
             "properties": {
               "attachments": {
                 "type": "boolean"
+              },
+              "browser": {
+                "additionalProperties": false,
+                "properties": {
+                  "binding": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "agentId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "imageDigest": {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      "resourceFence": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "sessionGeneration": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "sessionId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "workloadRevision": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "agentId",
+                      "sessionId",
+                      "sessionGeneration",
+                      "resourceFence",
+                      "workloadRevision",
+                      "imageDigest"
+                    ],
+                    "type": "object"
+                  },
+                  "capabilityVersion": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 100,
+                    "type": "integer"
+                  },
+                  "conformance": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "evidenceHash": {
+                        "pattern": "^[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      "manifestDigest": {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      "operations": {
+                        "items": {
+                          "enum": [
+                            "navigate",
+                            "observe",
+                            "interact",
+                            "files",
+                            "handoff",
+                            "side_effects"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 16,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "probeVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "receiptId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "verifiedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "receiptId",
+                      "probeVersion",
+                      "verifiedAt",
+                      "manifestDigest",
+                      "evidenceHash",
+                      "operations"
+                    ],
+                    "type": "object"
+                  },
+                  "operations": {
+                    "items": {
+                      "enum": [
+                        "navigate",
+                        "observe",
+                        "interact",
+                        "files",
+                        "handoff",
+                        "side_effects"
+                      ],
+                      "type": "string"
+                    },
+                    "maxItems": 16,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "provenance": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "browser": {
+                        "const": "chromium",
+                        "type": "string"
+                      },
+                      "chromiumVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "imageDigest": {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      "playwrightVersion": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "browser",
+                      "chromiumVersion",
+                      "playwrightVersion",
+                      "imageDigest"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "capabilityVersion",
+                  "operations",
+                  "provenance",
+                  "conformance"
+                ],
+                "type": "object"
               },
               "connection": {
                 "type": "boolean"

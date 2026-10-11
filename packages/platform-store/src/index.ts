@@ -104,7 +104,12 @@ export {
 	openPostgresPlatformIdempotencyStore,
 	type PostgresPlatformIdempotencyOptionsV1,
 } from "./idempotency.ts";
-export { PostgresLdapIdentityIds } from "./ldap-identity-ids.js";
+export {
+	type CurrentPlatformUserV1,
+	PlatformUserDisableError,
+	PostgresLdapIdentityIds,
+	PostgresPlatformUserDisablesV1,
+} from "./ldap-identity-ids.js";
 export {
 	migratePlatformDatabase,
 	type PlatformMigrationOptions,

@@ -2271,6 +2271,84 @@ function isRuntimeSkillCapabilityOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1717 delivers the optional, signed Browser declaration/probe facts through
+// the existing readiness and Runtime capability contracts. The fields are
+// additive and remain optional when Browser is absent; no existing operation,
+// response or required field changes.
+function isRuntimeBrowserEvidenceOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	let changed = false;
+	const host = normalized.components?.schemas?.RuntimeCapabilitiesV1;
+	const previousHost = previous.components?.schemas?.RuntimeCapabilitiesV1;
+	if (
+		host?.properties?.browser !== undefined &&
+		previousHost?.properties?.browser === undefined &&
+		normalized.components?.schemas?.RuntimeBrowserCapabilityProbeEvidenceV1
+	) {
+		delete host.properties.browser;
+		delete normalized.components.schemas
+			.RuntimeBrowserCapabilityProbeEvidenceV1;
+		delete normalized.components.schemas.BrowserCapabilityBindingV1;
+		changed = true;
+	}
+	for (const name of [
+		"RuntimeBrowserCapabilityProbeEvidenceV1",
+		"BrowserCapabilityBindingV1",
+	]) {
+		if (
+			normalized.components?.schemas?.[name] !== undefined &&
+			previous.components?.schemas?.[name] === undefined
+		) {
+			delete normalized.components.schemas[name];
+			changed = true;
+		}
+	}
+	const readinessNames = [
+		"WorkloadReadinessGrantClaimsV1",
+		"WorkloadReadinessRequestV1",
+		"WorkloadReadinessResponseV1",
+	];
+	if (
+		readinessNames.every(
+			(name) => normalized.components?.schemas?.[name] !== undefined,
+		)
+	) {
+		for (const name of readinessNames) {
+			const schema = normalized.components.schemas[name];
+			if (schema.properties?.browserDeclaration !== undefined) {
+				if (
+					previous.components?.schemas?.[name]?.properties
+						?.browserDeclaration !== undefined
+				)
+					return false;
+				delete schema.properties.browserDeclaration;
+				changed = true;
+			}
+			if (schema.properties?.browserBinding !== undefined) {
+				if (
+					previous.components?.schemas?.[name]?.properties?.browserBinding !==
+					undefined
+				)
+					return false;
+				delete schema.properties.browserBinding;
+				changed = true;
+			}
+		}
+		const response = normalized.components.schemas.WorkloadReadinessResponseV1;
+		const previousResponse =
+			previous.components?.schemas?.WorkloadReadinessResponseV1;
+		if (
+			response.properties?.capabilities?.properties?.browser !== undefined &&
+			previousResponse?.properties?.capabilities?.properties?.browser ===
+				undefined
+		) {
+			delete response.properties.capabilities.properties.browser;
+			changed = true;
+		}
+	}
+	return changed && sameValue(previous, normalized);
+}
+
 // #1541 corrects only the approved opaque S3 VersionId inside fixed Skill package references.
 // Normalize this exact difference before the ordinary comparison; no other field is exempt.
 function normalizeSkillPackageObjectVersions(previous, current, changes) {
@@ -2386,6 +2464,173 @@ function isConnectionInstallationOpenApiAddition(previous, current) {
 	}
 	return changed && findBreakingChanges(previous, normalized).length === 0;
 }
+
+// #1756 adds the administrator employee disable/reenable operation, its
+// status/result schemas, and the two bounded user governance audit actions.
+function isPlatformUserDisableOpenApiAddition(previous, current) {
+	const path = "/api/v2/admin/users/{userId}/disable";
+	const schemas = [
+		"PlatformUserDisableCommandV1",
+		"PlatformUserDisableStatusV1",
+		"PlatformUserDisableResultV1",
+	];
+	const actions = ["platform.user.disabled", "platform.user.reenabled"];
+	const oldActions =
+		previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const newActions =
+		current.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+	const subjectTypeNames = [
+		"PlatformAuditProjectionV1",
+		"PlatformAuditProjectionV2",
+	];
+	const hasGovernance = (document) =>
+		document.paths?.[path] !== undefined ||
+		schemas.some(
+			(schema) => document.components?.schemas?.[schema] !== undefined,
+		) ||
+		actions.some((action) =>
+			document.components?.schemas?.ScopedPlatformAuditActionV1?.enum?.includes(
+				action,
+			),
+		) ||
+		subjectTypeNames.some((name) =>
+			document.components?.schemas?.[
+				name
+			]?.properties?.subjectType?.enum?.includes("user"),
+		);
+	const removeGovernance = (document) => {
+		if (document.paths?.[path] !== undefined) delete document.paths[path];
+		for (const schema of schemas) {
+			if (document.components?.schemas?.[schema] !== undefined)
+				delete document.components.schemas[schema];
+		}
+		const auditActions =
+			document.components?.schemas?.ScopedPlatformAuditActionV1?.enum;
+		if (Array.isArray(auditActions))
+			document.components.schemas.ScopedPlatformAuditActionV1.enum =
+				auditActions.filter((action) => !actions.includes(action));
+		for (const name of subjectTypeNames) {
+			const subjectType =
+				document.components?.schemas?.[name]?.properties?.subjectType?.enum;
+			if (Array.isArray(subjectType))
+				document.components.schemas[name].properties.subjectType.enum =
+					subjectType.filter((kind) => kind !== "user");
+		}
+		return document;
+	};
+	if (hasGovernance(previous)) {
+		if (!hasGovernance(current)) return false;
+		for (const schema of schemas) {
+			if (
+				previous.components?.schemas?.[schema] !== undefined &&
+				!sameValue(
+					previous.components.schemas[schema],
+					current.components?.schemas?.[schema],
+				)
+			)
+				return false;
+		}
+		if (
+			previous.paths?.[path] !== undefined &&
+			!sameValue(previous.paths[path], current.paths?.[path])
+		)
+			return false;
+		const previousGovernanceActions =
+			previous.components?.schemas?.ScopedPlatformAuditActionV1?.enum?.filter(
+				(action) => actions.includes(action),
+			);
+		const currentGovernanceActions =
+			current.components?.schemas?.ScopedPlatformAuditActionV1?.enum?.filter(
+				(action) => actions.includes(action),
+			);
+		if (!sameValue(previousGovernanceActions, currentGovernanceActions))
+			return false;
+		for (const name of subjectTypeNames) {
+			const previousGovernanceSubjects = previous.components?.schemas?.[
+				name
+			]?.properties?.subjectType?.enum?.filter((kind) => kind === "user");
+			const currentGovernanceSubjects = current.components?.schemas?.[
+				name
+			]?.properties?.subjectType?.enum?.filter((kind) => kind === "user");
+			if (!sameValue(previousGovernanceSubjects, currentGovernanceSubjects))
+				return false;
+		}
+		return (
+			findBreakingChanges(
+				removeGovernance(structuredClone(previous)),
+				removeGovernance(structuredClone(current)),
+			).length === 0
+		);
+	}
+	const pathValue = current.paths?.[path];
+	const currentSchemas = schemas.filter(
+		(schema) => current.components?.schemas?.[schema] !== undefined,
+	);
+	const hasPrimaryAddition =
+		pathValue !== undefined || currentSchemas.length > 0;
+	if (
+		hasPrimaryAddition &&
+		(pathValue === undefined || currentSchemas.length !== schemas.length)
+	)
+		return false;
+	if (Array.isArray(oldActions) || Array.isArray(newActions)) {
+		if (
+			!Array.isArray(oldActions) ||
+			!Array.isArray(newActions) ||
+			newActions.filter((action) => actions.includes(action)).length !==
+				actions.length ||
+			!sameValue(
+				newActions.filter((action) => !actions.includes(action)),
+				oldActions,
+			)
+		)
+			return false;
+	}
+	const subjectTypes = {};
+	for (const name of subjectTypeNames) {
+		const before =
+			previous.components?.schemas?.[name]?.properties?.subjectType?.enum;
+		const after =
+			current.components?.schemas?.[name]?.properties?.subjectType?.enum;
+		if (after === undefined) continue;
+		if (
+			!Array.isArray(before) ||
+			!Array.isArray(after) ||
+			before.includes("user") ||
+			after.filter((kind) => kind === "user").length !== 1 ||
+			!sameValue(
+				after.filter((kind) => kind !== "user"),
+				before,
+			)
+		)
+			return false;
+		subjectTypes[name] = after;
+	}
+	const addition = {
+		path,
+		pathValue,
+		schemas: Object.fromEntries(
+			currentSchemas.map((schema) => [
+				schema,
+				current.components.schemas[schema],
+			]),
+		),
+		auditActions: actions,
+		subjectTypes,
+	};
+	const additionHash = createHash("sha256")
+		.update(JSON.stringify(addition))
+		.digest("hex");
+	if (
+		![
+			"7d6b294b1fceccc25951e3a151230a1a814107d894e374074d64e6f7171b4d2a",
+			"b59e8320af07f35f0d8a5c59577f1ce00dbcb77ba2f89fead71e95e4fa249e8b",
+		].includes(additionHash)
+	)
+		return false;
+	const normalized = removeGovernance(structuredClone(current));
+	return findBreakingChanges(previous, normalized).length === 0;
+}
 function isConnectionInstallationAuthorizationUrlAddition(previous, current) {
 	const normalized = structuredClone(current);
 	const paths = [
@@ -2448,6 +2693,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
+			!isRuntimeBrowserEvidenceOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
 			!isOwnApplicationMetadataV2OpenApiAddition(previous, current) &&
@@ -2476,6 +2722,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&
 			!isConnectionInstallationOpenApiAddition(previous, current) &&
+			!isPlatformUserDisableOpenApiAddition(previous, current) &&
 			!isConnectionInstallationAuthorizationUrlAddition(previous, current) &&
 			!isAgentCreationAuditActionOpenApiAddition(previous, current) &&
 			!isScopedAuditCredentialSecurityAddition(previous, current) &&

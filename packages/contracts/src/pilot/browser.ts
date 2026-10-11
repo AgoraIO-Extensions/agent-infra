@@ -598,7 +598,13 @@ export const PlatformAuditProjectionV1Schema = z.strictObject({
 	auditId: OpaqueIdV1Schema,
 	action: nonEmptyString(),
 	actor: BrowserUserProjectionV1Schema,
-	subjectType: z.enum(["agent_application", "agent", "configuration", "grant"]),
+	subjectType: z.enum([
+		"agent_application",
+		"agent",
+		"configuration",
+		"grant",
+		"user",
+	]),
 	subjectId: OpaqueIdV1Schema,
 	result: z.enum(["succeeded", "failed"]),
 	summary: nonEmptyString(),
@@ -614,6 +620,7 @@ export const PlatformAuditProjectionV2Schema =
 			"agent",
 			"configuration",
 			"grant",
+			"user",
 			"unknown",
 		]),
 		actor: z.union([
@@ -647,6 +654,23 @@ export const DeploymentTemplateProjectionV2Schema = z.strictObject({
 	allowedEnvironmentKeys: z.array(nonEmptyString()),
 	allowedSecretKeys: z.array(nonEmptyString()),
 });
+
+export const PlatformUserDisableCommandV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	disabled: z.boolean(),
+});
+
+export const PlatformUserDisableStatusV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	userId: OpaqueIdV1Schema,
+	disabled: z.boolean(),
+});
+
+export const PlatformUserDisableResultV1Schema =
+	PlatformUserDisableStatusV1Schema.extend({
+		changed: z.boolean(),
+		auditOutcome: z.enum(["recorded", "not_required"]),
+	});
 
 export const DeploymentModelProjectionV2Schema = z.strictObject({
 	modelId: nonEmptyString(),
@@ -699,6 +723,7 @@ const auditPageV2 = z.strictObject({
 	nextCursor: OpaqueCursorV1Schema.nullable(),
 });
 const applicationPath = z.strictObject({ applicationId: pathId() });
+const platformUserPath = z.strictObject({ userId: z.uuidv4() });
 const agentPath = z.strictObject({ agentId: pathId() });
 const conversationPath = z.strictObject({ conversationId: pathId() });
 const executionPath = z.strictObject({
@@ -1254,6 +1279,31 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 export const pilotBrowserOpenApiPathsV1 = pilotBrowserHttpOpenApiPathsV1;
 
 export const pilotBrowserHttpOpenApiPathsV2 = {
+	"/api/v2/admin/users/{userId}/disable": {
+		get: {
+			operationId: "getPlatformUserDisabledV2",
+			requestParams: { path: platformUserPath },
+			responses: {
+				"200": jsonResponse(
+					"Current Platform user disable status",
+					PlatformUserDisableStatusV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+		put: {
+			operationId: "setPlatformUserDisabledV2",
+			requestParams: { path: platformUserPath },
+			requestBody: requiredJsonRequestBody(PlatformUserDisableCommandV1Schema),
+			responses: {
+				"200": jsonResponse(
+					"Platform user status and audit result",
+					PlatformUserDisableResultV1Schema,
+				),
+				...errorResponses,
+			},
+		},
+	},
 	"/api/v2/agents/{agentId}/state": {
 		get: {
 			operationId: "getAgentApiStateV1",
@@ -1895,6 +1945,9 @@ export const pilotBrowserSchemasV1 = {
 };
 
 export const pilotBrowserSchemasV2 = {
+	PlatformUserDisableCommandV1: PlatformUserDisableCommandV1Schema,
+	PlatformUserDisableStatusV1: PlatformUserDisableStatusV1Schema,
+	PlatformUserDisableResultV1: PlatformUserDisableResultV1Schema,
 	AgentApiStateResponseV1: AgentApiStateResponseV1Schema,
 	AgentApplicationManagerRequestV1: AgentApplicationManagerRequestV1Schema,
 	AgentApplicationManagerResponseV1: AgentApplicationManagerResponseV1Schema,

@@ -24,6 +24,20 @@ const scope = createDeploymentIdentityScope({
 		return [];
 	},
 });
+const administrator: IdentityContext = {
+	...identity,
+	userId: "administrator",
+	displayName: "Administrator",
+	roles: ["employee", "system_admin"],
+};
+const administratorScope = createDeploymentIdentityScope({
+	async resolve() {
+		return administrator;
+	},
+	async hydrateUsers() {
+		return [];
+	},
+});
 const authorityContext = {
 	schemaVersion: 1 as const,
 	users: [{ userId: "alice", accountStatus: "active" as const }],
@@ -112,6 +126,48 @@ describe("deployment authorization admission", () => {
 			actorId: "alice",
 			organizationIds: ["org_01"],
 			isAdministrator: false,
+		});
+	});
+
+	it("marks only access-only administrator updates for Owner rescue", async () => {
+		const readAuthority = vi.fn().mockResolvedValue({
+			outcome: "found",
+			configuration: {},
+			management: { agentId: "agent_01", ownerIds: ["former-owner"] },
+			authorizationRevision: "authorization_01",
+		});
+		const admission = createDeploymentAuthorizationAdmission({
+			identityScope: administratorScope,
+			configurationQuery: { readAuthority },
+			loadAuthorityContext: async () => authorityContext,
+		});
+		await administratorScope.requestScope(
+			new Request(
+				"https://platform.test/api/v2/agents/agent_01/configuration",
+				{ method: "PUT" },
+			),
+			async () => {
+				const adminRequest = { ...request, actorId: administrator.userId };
+				expect(
+					await admission.authorize({ ...adminRequest, accessOnly: true }),
+				).toMatchObject({ status: "admitted" });
+				expect(
+					await admission.authorize({ ...adminRequest, accessOnly: false }),
+				).toMatchObject({ status: "admitted" });
+			},
+		);
+		expect(readAuthority).toHaveBeenNthCalledWith(1, {
+			agentId: "agent_01",
+			actorId: "administrator",
+			organizationIds: ["org_01"],
+			isAdministrator: true,
+			allowAdministratorRescue: true,
+		});
+		expect(readAuthority).toHaveBeenNthCalledWith(2, {
+			agentId: "agent_01",
+			actorId: "administrator",
+			organizationIds: ["org_01"],
+			isAdministrator: true,
 		});
 	});
 

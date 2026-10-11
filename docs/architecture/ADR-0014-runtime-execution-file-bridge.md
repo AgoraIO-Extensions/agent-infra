@@ -32,6 +32,18 @@ Platform 已有 `FileAuthority`、`FileAccessGrantV1`、Execution Grant 附件�
 - Codex `local_image` 物化与清理实现；
 - `result.file` 写入/确认后的 Runtime event 投递与 Store 负向测试。
 
+## V4 Worker ↔ File Authority exchange
+
+V4 Runtime Grant 不能直接作为 File Grant 使用。Worker 与 Platform API 之间增加一个受认证的内部 exchange seam；该 seam 的 request 只传业务绑定和操作意图，Platform API 仍是唯一 `FileAccessGrantV1` 签发方。现有 `ExecutionGrantV1` exchange 保持兼容，不接收 V4 token 作为替代输入。
+
+请求使用独立的 `RuntimeFileExchangeRequestV1` wire，字段为：`schemaVersion`、`operation`（`read` 或 `result`）、`actorId`、`agentId`、`channelId`、`conversationId`、`executionId`、`sessionGeneration`、`grantId`、`expiresAt`、`fileId`（read 必填）、`descriptor`（result 必填）和 `idempotencyKey`。Worker 只从已验证的 Runtime bridge context 生成这些字段；调用方提交的 file ID、owner、execution 或 generation 不被信任。`result` 的 idempotency key 由当前 execution binding 与规范化 descriptor 共同确定，重试和响应丢失必须复用同一意图。
+
+Platform API 先认证 Worker service identity，并检查该 identity 被 deployment 映射到目标 Agent；随后在同一当前权限边界内重新读取 execution、actor、Agent、Channel、Conversation、session generation、grant 状态和 capability。任何绑定不一致、终态、撤权、过期或 service identity 越权都在对象访问前拒绝，且不返回对象存在性。通过后，Platform File Authority 执行现有 read access exchange，或创建 execution-bound result intent/access；响应复用现有 `FileAccessResponseV1`，其中短期 File Grant 只存在于 Worker 内存和一次有界数据面请求，不进入 RuntimeHost、Driver、journal、普通日志或业务 JSON。
+
+Worker 将 response 的短期 grant 封装为 Runtime bridge 的 stream port。RuntimeHost 只看到已校验的 `FileDescriptorV1`、有限流和 `RuntimeFileBridgeContextV1`；它不能读取 File Grant、S3 URL、objectRef 或 service token。读取固定对象版本并限制大小、时间和并发；结果写入完成确认再次检查当前 binding 与对象版本，只有 `available` 文件才能进入 `result.file` 事件。
+
+该 wire 必须先作为独立 contracts seam 生成 JSON Schema/OpenAPI 并由 Platform API、Worker、RuntimeHost 评审；在该 seam 合入前，不得把旧 `ExecutionGrantV1` 扩展为 V4 兼容层，也不得开启 Driver attachment/result capability。
+
 ## 后果
 
 该决定复用现有 File Authority 和 Runtime Grant，不新增对象存储、文件表或第二套授权 DTO。短期内所有 Driver capability 仍可保持 false；真实文件能力必须按 Driver 逐个通过受控 Fake、PostgreSQL/S3、重启/unknown 和跨主体负向测试后再开放。Web、企微和 ObjectStorage 只能消费已确认的 `fileId`，不能绕过此桥直接向 Runtime 提供文件。

@@ -1880,7 +1880,7 @@ describe("PostgreSQL Agent configuration query", () => {
 		});
 	});
 
-	it("returns current admission authority only to an Owner, including historical configurations", async () => {
+	it("returns current admission authority to Owners and the narrow rescue marker", async () => {
 		await clearDatabase();
 		await seed();
 		const legacy = {
@@ -1913,6 +1913,16 @@ describe("PostgreSQL Agent configuration query", () => {
 				query.readAuthority({ ...input, ...changes }),
 			).resolves.toEqual({ outcome: "unavailable" });
 		}
+		// The rescue marker only admits the access-only path to Core; the Core
+		// policy still rejects it while an active Owner remains.
+		await expect(
+			query.readAuthority({
+				...input,
+				actorId: "administrator",
+				isAdministrator: true,
+				allowAdministratorRescue: true,
+			}),
+		).resolves.toMatchObject({ outcome: "found" });
 		await adminClient`delete from platform.agent_owners where agent_id = 'agent_01' and owner_id = 'owner_01'`;
 		await expect(
 			query.readAuthority({ ...input, isAdministrator: true }),

@@ -463,6 +463,8 @@ export interface AgentConfigurationAuthorizationAdmissionPortV1 {
 		readonly actorId: string;
 		readonly requestId: string;
 		readonly traceId: string;
+		/** True only for an access-only owner handoff update. */
+		readonly accessOnly?: boolean;
 	}): Promise<
 		| {
 				readonly schemaVersion: 1;

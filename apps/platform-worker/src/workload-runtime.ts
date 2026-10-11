@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { RuntimeCapabilitiesV1Schema } from "@agent-infra/contracts/runtime";
+import {
+	type BrowserCapabilityBindingV1,
+	RuntimeCapabilitiesV1Schema,
+} from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
 	type PlatformSecretRecordV1,
@@ -54,6 +57,14 @@ import {
 	type WorkloadSkillMaterializerV1,
 } from "./skill-materialization.js";
 
+export type WorkloadBrowserBindingResolverV1 = (input: {
+	readonly agentId: string;
+	readonly workloadRevision: number;
+	readonly fence: number;
+	readonly imageDigest: string;
+	readonly manifest: AgentWorkloadDesiredV1["runtimeManifest"];
+}) => BrowserCapabilityBindingV1 | undefined;
+
 export interface WorkloadRuntimeOptionsV1 {
 	readonly workerId: string;
 	readonly client: WorkerKubernetesClientV1;
@@ -73,6 +84,8 @@ export interface WorkloadRuntimeOptionsV1 {
 	/** Trusted deployment-owned fixed Skill materialization; failures reject preflight. */
 	readonly skillMaterializer?: WorkloadSkillMaterializerV1;
 	readonly fetch?: typeof fetch;
+	/** Deployment-owned Session binding for the current Browser Sandbox. */
+	readonly browserBinding?: WorkloadBrowserBindingResolverV1;
 	readonly probeRuntime: (input: {
 		readonly agentId: string;
 		readonly workloadRevision: number;
@@ -80,6 +93,14 @@ export interface WorkloadRuntimeOptionsV1 {
 		readonly fence: number;
 		readonly imageDigest: string;
 		readonly manifest: AgentWorkloadDesiredV1["runtimeManifest"];
+		readonly browserBinding?: {
+			readonly agentId: string;
+			readonly sessionId: string;
+			readonly sessionGeneration: number;
+			readonly resourceFence: number;
+			readonly workloadRevision: number;
+			readonly imageDigest: string;
+		};
 		readonly signal: AbortSignal;
 	}) => Promise<{
 		readonly core: "passed" | "failed";
@@ -469,6 +490,18 @@ export function createWorkloadRuntimeV1(
 							imageDigest: desired.imageDigest,
 							baseUrl,
 							manifest: desired.runtimeManifest,
+							...(desired.runtimeManifest.capabilities?.browser &&
+							options.browserBinding
+								? {
+										browserBinding: options.browserBinding({
+											agentId: desired.agentId,
+											workloadRevision: desired.workloadRevision,
+											fence: desired.fence,
+											imageDigest: desired.imageDigest,
+											manifest: desired.runtimeManifest,
+										}),
+									}
+								: {}),
 							signal: controller.signal,
 						}),
 						new Promise<never>((_resolve, reject) =>
