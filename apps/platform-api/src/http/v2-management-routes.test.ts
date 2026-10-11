@@ -187,7 +187,7 @@ function createApp(
 		allocateApplicationIds,
 		prepareSecretReplacements: vi.fn().mockResolvedValue({ secrets: [] }),
 		validateDefaultRelayKey: vi.fn().mockResolvedValue("valid"),
-		enforceDefaultRelayKey: false,
+		enforceDefaultRelayKey: true,
 		readApplicationProjection,
 		readAgentProjection,
 	});
