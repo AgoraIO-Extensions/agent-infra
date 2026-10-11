@@ -50,8 +50,10 @@ import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
 export type { TimedOutUnknownStopResolutionInputV1 } from "@agent-infra/platform-core";
 
 export class TaskAuthorizationStoreError extends Error {
-	constructor() {
+	readonly code: "idempotency_conflict" | undefined;
+	constructor(code?: "idempotency_conflict") {
 		super("Task authorization persistence is unavailable");
+		this.code = code;
 	}
 }
 
@@ -304,7 +306,7 @@ export async function resolveTimedOutUnknownStopInTransactionV1(
 	const existing = await readIdempotency(transaction, scope);
 	if (existing) {
 		if (existing.request_digest !== input.requestDigest)
-			throw new TaskAuthorizationStoreError();
+			throw new TaskAuthorizationStoreError("idempotency_conflict");
 		if (existing.status !== "completed" || !existing.result)
 			throw new TaskAuthorizationStoreError();
 		return {
@@ -326,7 +328,11 @@ export async function resolveTimedOutUnknownStopInTransactionV1(
 			raced.status !== "completed" ||
 			!raced.result
 		)
-			throw new TaskAuthorizationStoreError();
+			throw new TaskAuthorizationStoreError(
+				raced?.request_digest !== input.requestDigest
+					? "idempotency_conflict"
+					: undefined,
+			);
 		return {
 			...(raced.result as TimedOutUnknownStopResolutionResultV1),
 			replayed: true,

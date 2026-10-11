@@ -128,6 +128,8 @@ beforeEach(async () => {
 		userId: typeof args[0] === "string" ? args[0] : "same-id",
 	}));
 	await sql`truncate platform.agents, platform.platform_applications, platform.platform_api_credentials, platform.platform_user_disables, platform.audit_events, platform.outbox_items, platform.idempotency_records cascade`;
+	await sql`truncate platform.task_control_records, platform.task_authorization_records,
+		platform.conversation_stops, platform.conversation_executions, platform.conversations cascade`;
 	await sql`insert into platform.platform_applications(id,name,responsible_user_id,authorization_revision) values('same-id','Robot application','human-responsible','app-1')`;
 	for (const agentId of ["agent-a", "agent-b", "agent-foreign"]) {
 		await sql`insert into platform.agents(id,authorization_revision) values(${agentId},'agent-1')`;
@@ -316,6 +318,184 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 			},
 		);
 	}
+
+	async function seedUnknownStop(
+		stopTimedOut = true,
+		conversationId = "unknown-stop-conversation",
+		executionId = "unknown-stop-execution",
+		stopRequestId = "unknown-stop-request",
+	) {
+		await sql`insert into platform.conversations
+			(id, agent_id, actor_id, principal_type, channel_id, status, session_generation, authorization_revision)
+			values (${conversationId}, 'agent-a', 'same-id', 'user', 'api', 'active', 1, 'agent-1')`;
+		await sql`insert into platform.conversation_executions
+			(execution_id, conversation_id, agent_id, actor_id, principal_type, channel_id, turn_id, status, session_generation, authorization_revision, created_at)
+			values (${executionId}, ${conversationId}, 'agent-a', 'same-id', 'user', 'api', 'unknown-stop-turn', 'unknown', 1, 'agent-1', now())`;
+		await sql`insert into platform.conversation_stops
+			(execution_id, stop_request_id, status, confirmation_deadline, confirmation_timed_out_at, created_at, updated_at)
+			values (${executionId}, ${stopRequestId}, 'submitted', now() - interval '1 minute', ${stopTimedOut ? sql`now()` : sql`null`}, now(), now())`;
+		await sql.begin((transaction) =>
+			insertTaskAuthorization(transaction, {
+				executionId,
+				traceId: "unknown-stop-trace",
+				requestId: "unknown-stop-request",
+				boundary: {
+					schemaVersion: 1,
+					principal: { kind: "user", id: "same-id" },
+					agentId: "agent-a",
+					channelId: "api",
+					identityRevision: "user-1",
+					agentAuthorizationRevision: "agent-1",
+					accessSources: [{ kind: "api-use", useGrantRevision: "user-use-1" }],
+				},
+			}),
+		);
+	}
+
+	function resolveUnknownStop(
+		conversationId = "unknown-stop-conversation",
+		executionId = "unknown-stop-execution",
+		stopRequestId = "unknown-stop-request",
+		key = "unknown-stop-resolve",
+		cookie = "session=administrator",
+		sessionGeneration = 1,
+	) {
+		return fetch(
+			`${origin}/internal/platform/v1/conversations/${conversationId}/executions/${executionId}/stops/${stopRequestId}/resolve-unknown`,
+			{
+				method: "POST",
+				headers: {
+					Cookie: cookie,
+					"Idempotency-Key": key,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1, sessionGeneration }),
+			},
+		);
+	}
+
+	it("resolves and replays an unknown stop through the real admin API and PostgreSQL", async () => {
+		await seedUnknownStop(
+			true,
+			"resolve-conversation",
+			"resolve-execution",
+			"resolve-stop",
+		);
+		const first = await resolveUnknownStop(
+			"resolve-conversation",
+			"resolve-execution",
+			"resolve-stop",
+			"resolve-key",
+		);
+		expect(first.status, await first.clone().text()).toBe(200);
+		expect(await first.json()).toMatchObject({
+			status: "resolved",
+			conversationId: "resolve-conversation",
+			executionId: "resolve-execution",
+			replayed: false,
+		});
+		const replay = await resolveUnknownStop(
+			"resolve-conversation",
+			"resolve-execution",
+			"resolve-stop",
+			"resolve-key",
+		);
+		expect(replay.status, await replay.clone().text()).toBe(200);
+		expect(await replay.json()).toMatchObject({
+			status: "resolved",
+			replayed: true,
+		});
+		const conflict = await resolveUnknownStop(
+			"resolve-conversation",
+			"resolve-execution",
+			"resolve-stop",
+			"resolve-key",
+			"session=administrator",
+			2,
+		);
+		expect(conflict.status, await conflict.clone().text()).toBe(409);
+		const [state] = await sql`
+			select c.status as conversation_status, e.status as execution_status,
+				s.status as stop_status,
+				(select count(*)::int from platform.task_control_records where execution_id=${"resolve-execution"}) as controls,
+				(select count(*)::int from platform.idempotency_records where scope_id=${"resolve-conversation"}) as idempotency
+			from platform.conversations c
+			join platform.conversation_executions e on e.conversation_id=c.id
+			join platform.conversation_stops s on s.execution_id=e.execution_id
+			where c.id=${"resolve-conversation"}`;
+		expect(state).toMatchObject({
+			conversation_status: "unavailable",
+			execution_status: "failed",
+			stop_status: "completed",
+			controls: 1,
+			idempotency: 1,
+		});
+	});
+
+	it.each([
+		["non-admin", "session=owner", 403],
+		["stale-generation", "session=administrator", 503],
+		["missing-timeout", "session=administrator", 503],
+	] as const)(
+		"rejects %s on the real operations route",
+		async (caseName, cookie, expected) => {
+			const timedOut = caseName !== "missing-timeout";
+			await seedUnknownStop(
+				timedOut,
+				`${caseName}-conversation`,
+				`${caseName}-execution`,
+				`${caseName}-stop`,
+			);
+			const generation = caseName === "stale-generation" ? 2 : 1;
+			const response = await resolveUnknownStop(
+				`${caseName}-conversation`,
+				`${caseName}-execution`,
+				`${caseName}-stop`,
+				`${caseName}-key`,
+				cookie,
+				generation,
+			);
+			expect(response.status, await response.clone().text()).toBe(expected);
+		},
+	);
+
+	it("rolls back the real operation when the control audit fails", async () => {
+		await seedUnknownStop(
+			true,
+			"audit-conversation",
+			"audit-execution",
+			"audit-stop",
+		);
+		await sql`create function platform.fail_unknown_stop_route_audit() returns trigger language plpgsql as $$ begin if NEW.action = 'task.control.created' then raise exception 'controlled unknown-stop route audit failure'; end if; return NEW; end $$`;
+		await sql`create trigger fail_unknown_stop_route_audit before insert on platform.audit_events for each row execute function platform.fail_unknown_stop_route_audit()`;
+		try {
+			const response = await resolveUnknownStop(
+				"audit-conversation",
+				"audit-execution",
+				"audit-stop",
+				"unknown-stop-audit",
+			);
+			expect(response.status, await response.clone().text()).toBe(503);
+			const [state] = await sql`
+				select c.status as conversation_status, e.status as execution_status, s.status as stop_status,
+					(select count(*)::int from platform.task_control_records where execution_id=${"audit-execution"}) as controls,
+					(select count(*)::int from platform.idempotency_records where scope_id=${"audit-conversation"}) as idempotency
+				from platform.conversations c
+				join platform.conversation_executions e on e.conversation_id=c.id
+				join platform.conversation_stops s on s.execution_id=e.execution_id
+				where c.id=${"audit-conversation"}`;
+			expect(state).toMatchObject({
+				conversation_status: "active",
+				execution_status: "unknown",
+				stop_status: "submitted",
+				controls: 0,
+				idempotency: 0,
+			});
+		} finally {
+			await sql`drop trigger fail_unknown_stop_route_audit on platform.audit_events`;
+			await sql`drop function platform.fail_unknown_stop_route_audit()`;
+		}
+	});
 
 	it("Owner revokes a typed user API-use grant and replays its original result", async () => {
 		await sql`insert into platform.agent_principal_grants

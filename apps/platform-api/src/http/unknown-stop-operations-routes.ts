@@ -5,6 +5,7 @@ import type {
 	PostgresTaskAuthorizationStoreV1,
 	TimedOutUnknownStopResolutionResultV1,
 } from "@agent-infra/platform-store";
+import { TaskAuthorizationStoreError } from "@agent-infra/platform-store";
 import type { Hono } from "hono";
 import { z } from "zod";
 import {
@@ -109,6 +110,13 @@ export function registerUnknownStopOperationsRoutes(
 			} catch (error) {
 				if (error instanceof HttpProtocolError)
 					return context.json(error.body, error.status);
+				if (
+					error instanceof TaskAuthorizationStoreError &&
+					error.code === "idempotency_conflict"
+				) {
+					const conflict = new HttpProtocolError("CONFLICT", metadata.traceId);
+					return context.json(conflict.body, conflict.status);
+				}
 				return context.json(
 					new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId)
 						.body,
