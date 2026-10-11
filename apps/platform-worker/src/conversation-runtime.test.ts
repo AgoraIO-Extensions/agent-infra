@@ -2098,6 +2098,31 @@ it("sends a separately authorized installation request from the original Worker 
 	}
 });
 
+it("sends an explicitly scoped OAuth refresh request from the original Worker execution", async () => {
+	const h = installationHarness();
+	h.fetcher.mockResolvedValue(
+		Response.json({
+			schemaVersion: 1,
+			authorizationId: "authorization-a",
+			phase: "awaiting_verification",
+			expiresAt: Date.now() + 600_000,
+		}),
+	);
+	try {
+		const runtimeGrant = await h.authorize();
+		const result = await h.runtime.connectionInstallation.refresh({
+			execution: h.events(runtimeGrant),
+			authorizationId: "authorization-a",
+		});
+		expect(result.phase).toBe("awaiting_verification");
+		expect(String(h.fetcher.mock.calls[0]?.[0])).toBe(
+			"https://runtime.test:3443/internal/runtime/oauth/v1/refresh",
+		);
+	} finally {
+		await h.runtime.close();
+	}
+});
+
 it("preserves command attempt ownership through the installation authorization", async () => {
 	const h = installationHarness();
 	const runtimeGrant = await h.authorize();

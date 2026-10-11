@@ -96,7 +96,7 @@ export const RuntimeOAuthGrantClaimsV1Schema = RuntimeOAuthScopeV1Schema.extend(
 		issuer: OpaqueIdV1Schema,
 		workerId: OpaqueIdV1Schema,
 		principal: RuntimePrincipalV1Schema,
-		command: z.enum(["begin", "confirm", "status"]),
+		command: z.enum(["begin", "confirm", "status", "refresh"]),
 		authorizationId: OpaqueIdV1Schema,
 		confirmationRevision: OpaqueIdV1Schema,
 		grantId: OpaqueIdV1Schema,
@@ -124,12 +124,16 @@ export const RuntimeOAuthConfirmRequestV1Schema = request.extend({
 export const RuntimeOAuthStatusRequestV1Schema = request.extend({
 	command: z.literal("status"),
 });
+export const RuntimeOAuthRefreshRequestV1Schema = request.extend({
+	command: z.literal("refresh"),
+});
 export const RuntimeOAuthAuthorizedRequestV1Schema = z.discriminatedUnion(
 	"command",
 	[
 		RuntimeOAuthBeginRequestV1Schema,
 		RuntimeOAuthConfirmRequestV1Schema,
 		RuntimeOAuthStatusRequestV1Schema,
+		RuntimeOAuthRefreshRequestV1Schema,
 	],
 );
 export type RuntimeOAuthAuthorizedRequestV1 = z.infer<
@@ -193,6 +197,7 @@ export const RuntimeOAuthV1SchemaDefinitions = {
 	RuntimeOAuthBeginRequestV1: RuntimeOAuthBeginRequestV1Schema,
 	RuntimeOAuthConfirmRequestV1: RuntimeOAuthConfirmRequestV1Schema,
 	RuntimeOAuthStatusRequestV1: RuntimeOAuthStatusRequestV1Schema,
+	RuntimeOAuthRefreshRequestV1: RuntimeOAuthRefreshRequestV1Schema,
 	RuntimeOAuthCallbackRequestV1: RuntimeOAuthCallbackRequestV1Schema,
 	RuntimeOAuthResponseV1: RuntimeOAuthResponseV1Schema,
 };

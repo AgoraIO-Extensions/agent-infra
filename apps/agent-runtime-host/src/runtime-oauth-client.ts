@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
 	exchangeStandardOAuthCode,
+	refreshStandardOAuthToken,
 	revokeStandardOAuthToken,
 	standardOAuthUnavailable as unavailable,
 } from "@agent-infra/agent-runtime";
@@ -40,6 +41,7 @@ import { standardMcpInstallationKey } from "./standard-mcp-input.js";
 import {
 	ensurePrivateDirectory,
 	publishMaterial,
+	replaceProtectedStandardMcpMaterials,
 	withProtectedStandardMcpMaterialLock,
 } from "./standard-mcp-installation.js";
 import { assertStandardMcpProcessProtection } from "./standard-mcp-protection.js";
@@ -508,6 +510,68 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			Date.now,
 		);
 	}
+	async function refreshRecord(
+		snapshot: RuntimeOAuthAuthorizedRequestV1,
+		key: string,
+		record: Transaction,
+	) {
+		if (record.phase !== "awaiting_verification") return response(record);
+		const accessName = `${key}.access`;
+		const refreshName = `${key}.refresh`;
+		const accessToken = await readProtectedStandardMcpBytes(
+			materials,
+			accessName,
+			4096,
+			() => check(snapshot, record, true),
+		);
+		const refreshToken = await readProtectedStandardMcpBytes(
+			materials,
+			refreshName,
+			4096,
+			() => check(snapshot, record, true),
+		);
+		await original(record.reference, record.principal);
+		check(snapshot, record, true);
+		record.phase = "exchange_started";
+		await writeRecord(records, `${key}.json`, record);
+		check(snapshot, record, true);
+		try {
+			const tokens = await refreshStandardOAuthToken({
+				configuration,
+				refreshToken,
+				signal: abort.signal,
+				...(options.fetch ? { fetch: options.fetch } : {}),
+				assertCurrent: () => {
+					check(snapshot, record, true);
+				},
+			});
+			check(snapshot, record, true);
+			const replacements = [
+				{ name: accessName, expected: accessToken, next: tokens.accessToken },
+				...(tokens.refreshToken
+					? [
+							{
+								name: refreshName,
+								expected: refreshToken,
+								next: tokens.refreshToken,
+							},
+						]
+					: []),
+			];
+			await replaceProtectedStandardMcpMaterials(materials, replacements, () =>
+				check(snapshot, record, true),
+			);
+			check(snapshot, record, true);
+			record.phase = "awaiting_verification";
+			record.tokenExpiresAt = tokens.expiresAt;
+			await writeRecord(records, `${key}.json`, record);
+			check(snapshot, record, true);
+		} catch {
+			record.phase = "unknown";
+			await writeRecord(records, `${key}.json`, record).catch(() => undefined);
+		}
+		return response(record);
+	}
 	return {
 		async authorized(request: RuntimeOAuthAuthorizedRequestV1) {
 			const snapshot = structuredClone(request);
@@ -649,6 +713,8 @@ export async function createProtectedRuntimeOAuthClient(options: {
 				}
 				const record = await load(key);
 				check(snapshot, record);
+				if (snapshot.command === "refresh")
+					return refreshRecord(snapshot, key, record);
 				if (snapshot.command === "status") return response(record);
 				if (record.phase !== "awaiting_confirmation") return response(record);
 				const code = await readProtectedStandardMcpBytes(
