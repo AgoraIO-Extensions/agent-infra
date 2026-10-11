@@ -899,3 +899,11 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 - 公司身份、KMS、对象存储、LLM Gateway 和企微现有接口是否满足本文所需契约。
 
 评审通过后，任何改变部署单元、权威数据归属、身份传递、Connection 授权或 Agent Runtime Contract 的修改都应新增 ADR，不通过零散代码变更隐式改变架构。
+
+## StaticSpaces 现有 API 受限接入提案
+
+不改上游的受限交付方向按
+[HLD 4.3.2](HLD-connection-M1.md#432-staticspaces-现有-api-受限接入提案) 与
+[具体 ADR](../adr/ADR-connection-static-spaces-existing-api-restricted.md) 评审。
+当前仅为 Proposed，不激活 Provider、不重新授权旧 Grant、不扩展或续期已关闭 pilot。
+运行授权、凭证隔离、持久执行、签名发布及上海目标/数据库保护继续遵守本 Spec 和 HLD。

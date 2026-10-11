@@ -95,3 +95,7 @@ _Avoid_: 测试计划、Mock 成功、其他 ActionVersion 的历史结果
 **Verified ActionVersion**:
 具备当前 Verification Evidence、可以进入对外发现和执行集合的不可变 ActionVersion。
 _Avoid_: 已实现 Action、已有测试策略、曾通过旧版本测试
+
+**Restricted Connection Approval（受限接入批准）**:
+Owner 对具名账号、使用者和内容范围内的外部能力限制与残余风险作出的接入批准；不等同于该 Provider 已完成广泛生产验证。
+_Avoid_: Verification Evidence、Verified ActionVersion、已关闭试点的续期

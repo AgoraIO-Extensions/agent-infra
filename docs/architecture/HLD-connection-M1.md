@@ -497,6 +497,14 @@ Connection Owner 于 2026-10-10 在
 独立 pilot 的公司连接审批、Consent/Grant 和每次 dispatch 必须校验服务端边界；失效或未知效果
 立即关闭本 Provider 新准入，已有未完成效果与已登记路由继续按生命周期规则保留及对账。
 
+### 4.3.2 StaticSpaces 现有 API 受限接入提案
+
+Owner 已批准不改 StaticSpaces 上游的交付方向，具体范围、现有 API 限制、UNCERTAIN 不重放、
+残余风险和新版本激活政策进入
+[现有 API 受限接入 ADR](../adr/ADR-connection-static-spaces-existing-api-restricted.md)。
+该 ADR 当前为 Proposed；接受并完成新版本评审前不形成新的发布豁免，不重开或延长 4.3.1 的
+已关闭 pilot，不将缺失上游能力改写为通过，也不把新方案标记为 `LIVE_VERIFIED`。
+
 ## 5. 方案比较与选型
 
 | 方案 | 描述 | 优点 | 代价与风险 |
