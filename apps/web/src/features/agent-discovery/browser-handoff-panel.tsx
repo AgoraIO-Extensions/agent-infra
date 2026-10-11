@@ -58,14 +58,24 @@ export type BrowserSideEffectConfirmationV1 = Readonly<{
 	binding: BrowserHandoffBindingV1;
 }>;
 
+export type BrowserHandoffActionInputV1 = Readonly<{
+	id: string;
+	binding: BrowserHandoffBindingV1;
+}>;
+
 type BrowserHandoffPanelProps = {
+	readonly browserAvailable?: boolean;
 	readonly confirmation?: BrowserSideEffectConfirmationV1;
+	/** Current server-authenticated binding used to validate every action. */
+	readonly currentBinding?: BrowserHandoffBindingV1;
 	readonly handoff?: BrowserHandoffPanelStateV1;
-	readonly onCancelConfirmation?: (confirmationId: string) => void;
-	readonly onConfirmSideEffect?: (confirmationId: string) => void;
-	readonly onRejectSideEffect?: (confirmationId: string) => void;
-	readonly onReturnToAgent?: (handoffId: string) => void;
-	readonly onTakeOver?: (handoffId: string) => void;
+	readonly now?: () => number;
+	readonly onCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onConfirmSideEffect?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onPauseAgent?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onRejectSideEffect?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onReturnToAgent?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onTakeOver?: (input: BrowserHandoffActionInputV1) => void;
 };
 
 const reasonLabels: Record<BrowserHandoffReasonV1, string> = {
@@ -101,6 +111,22 @@ function validBinding(binding: BrowserHandoffBindingV1): boolean {
 			binding.capabilityVersion,
 			binding.pageRevision,
 		].every((value) => Number.isSafeInteger(value) && value >= 1)
+	);
+}
+
+function sameBinding(
+	left: BrowserHandoffBindingV1,
+	right: BrowserHandoffBindingV1,
+): boolean {
+	return (
+		left.subjectId === right.subjectId &&
+		left.agentId === right.agentId &&
+		left.conversationId === right.conversationId &&
+		left.executionId === right.executionId &&
+		left.sessionGeneration === right.sessionGeneration &&
+		left.resourceFence === right.resourceFence &&
+		left.capabilityVersion === right.capabilityVersion &&
+		left.pageRevision === right.pageRevision
 	);
 }
 
@@ -141,23 +167,67 @@ function isSafeHandoff(state: BrowserHandoffPanelStateV1): boolean {
 	);
 }
 
+function actionInput(
+	id: string,
+	binding: BrowserHandoffBindingV1,
+): BrowserHandoffActionInputV1 {
+	return { id, binding };
+}
+
+function BlockedPanel({ message }: { readonly message: string }) {
+	return (
+		<Alert
+			aria-live="polite"
+			aria-atomic="true"
+			variant="destructive"
+			className="mt-3"
+		>
+			<AlertTriangle aria-hidden="true" />
+			<AlertTitle>Browser 操作已阻断</AlertTitle>
+			<AlertDescription>{message}</AlertDescription>
+		</Alert>
+	);
+}
+
 function HandoffPanel({
+	currentBinding,
 	handoff,
+	now,
+	onPauseAgent,
 	onReturnToAgent,
 	onTakeOver,
 }: Pick<
 	BrowserHandoffPanelProps,
-	"handoff" | "onReturnToAgent" | "onTakeOver"
+	| "currentBinding"
+	| "handoff"
+	| "now"
+	| "onPauseAgent"
+	| "onReturnToAgent"
+	| "onTakeOver"
 >) {
-	if (!handoff || !isSafeHandoff(handoff)) return null;
+	if (!handoff) return null;
+	if (
+		!currentBinding ||
+		!validBinding(currentBinding) ||
+		!isSafeHandoff(handoff) ||
+		!sameBinding(handoff.binding, currentBinding)
+	)
+		return (
+			<BlockedPanel message="接管绑定已过期或无法核验，当前不会打开接管操作。" />
+		);
+	const isExpired =
+		(handoff.status === "requested" || handoff.status === "active") &&
+		(now ?? Date.now)() >= Date.parse(handoff.expiresAt);
+	const status = isExpired ? "expired" : handoff.status;
 	const terminal = [
 		"completed",
 		"revoked",
 		"expired",
 		"crashed",
 		"unknown",
-	].includes(handoff.status);
-	const blocked = handoff.status === "crashed" || handoff.status === "unknown";
+	].includes(status);
+	const blocked = status === "crashed" || status === "unknown";
+	const input = actionInput(handoff.handoffId, currentBinding);
 	return (
 		<Alert
 			aria-live="polite"
@@ -167,18 +237,21 @@ function HandoffPanel({
 		>
 			{blocked ? (
 				<AlertTriangle aria-hidden="true" />
-			) : handoff.status === "requested" ? (
+			) : status === "requested" ? (
 				<LogIn aria-hidden="true" />
-			) : handoff.status === "active" ? (
+			) : status === "active" ? (
 				<UserRound aria-hidden="true" />
 			) : (
 				<Clock3 aria-hidden="true" />
 			)}
-			<AlertTitle>浏览器接管 · {handoffLabels[handoff.status]}</AlertTitle>
+			<AlertTitle>浏览器接管 · {handoffLabels[status]}</AlertTitle>
 			<AlertDescription>
 				<span className="block">
 					原因：{reasonLabels[handoff.reason]}。Agent、Session
 					和授权绑定由服务端维护。
+				</span>
+				<span className="mt-1 block text-muted-foreground">
+					页面版本：{currentBinding.pageRevision}
 				</span>
 				{handoff.terminalReasonCode ? (
 					<span className="mt-1 block text-muted-foreground">
@@ -186,26 +259,35 @@ function HandoffPanel({
 						{handoff.terminalReasonCode.replaceAll("BROWSER_HANDOFF_", "")}。
 					</span>
 				) : null}
-				{handoff.status === "requested" && onTakeOver ? (
-					<Button
-						className="mt-3"
-						onClick={() => onTakeOver(handoff.handoffId)}
-						type="button"
-					>
-						接管浏览器
-					</Button>
+				{status === "requested" ? (
+					<div className="mt-3 flex flex-col gap-2 sm:flex-row">
+						{onPauseAgent ? (
+							<Button onClick={() => onPauseAgent(input)} type="button">
+								暂停 Agent
+							</Button>
+						) : null}
+						{onTakeOver ? (
+							<Button
+								variant="outline"
+								onClick={() => onTakeOver(input)}
+								type="button"
+							>
+								接管浏览器
+							</Button>
+						) : null}
+					</div>
 				) : null}
-				{handoff.status === "active" && onReturnToAgent ? (
+				{status === "active" && onReturnToAgent ? (
 					<Button
 						className="mt-3"
 						variant="outline"
-						onClick={() => onReturnToAgent(handoff.handoffId)}
+						onClick={() => onReturnToAgent(input)}
 						type="button"
 					>
 						交回 Agent
 					</Button>
 				) : null}
-				{handoff.status === "returning" ? (
+				{status === "returning" ? (
 					<span className="mt-2 block text-muted-foreground">
 						正在重新校验页面、Session 和授权状态。
 					</span>
@@ -221,23 +303,60 @@ function HandoffPanel({
 }
 
 function ConfirmationPanel({
+	browserAvailable = true,
 	confirmation,
+	currentBinding,
+	handoff,
+	now,
 	onCancelConfirmation,
 	onConfirmSideEffect,
 	onRejectSideEffect,
 }: Pick<
 	BrowserHandoffPanelProps,
+	| "browserAvailable"
 	| "confirmation"
+	| "currentBinding"
+	| "handoff"
+	| "now"
 	| "onCancelConfirmation"
 	| "onConfirmSideEffect"
 	| "onRejectSideEffect"
 >) {
-	if (!confirmation || !validBinding(confirmation.binding)) return null;
+	if (!confirmation) return null;
+	if (
+		!currentBinding ||
+		!validBinding(currentBinding) ||
+		!validBinding(confirmation.binding) ||
+		!sameBinding(confirmation.binding, currentBinding)
+	)
+		return (
+			<BlockedPanel message="确认绑定已过期或无法核验，当前不会执行外部副作用。" />
+		);
+	const handoffInvalid = handoff !== undefined && !isSafeHandoff(handoff);
+	const handoffBlocked =
+		handoffInvalid ||
+		(handoff !== undefined &&
+			[
+				"requested",
+				"active",
+				"returning",
+				"revoked",
+				"expired",
+				"crashed",
+				"unknown",
+			].includes(handoff.status));
+	const handoffExpired =
+		handoff !== undefined &&
+		(handoff.status === "requested" || handoff.status === "active") &&
+		(now ?? Date.now)() >= Date.parse(handoff.expiresAt);
 	const origin = safeOrigin(confirmation.targetOrigin);
 	const summary = boundedSummary(confirmation.redactedTargetSummary);
 	if (!origin || !summary || !confirmation.confirmationId) return null;
+	const blockedByBinding =
+		!browserAvailable || handoffBlocked || handoffExpired;
 	const terminal = confirmation.status !== "pending";
-	const blocked = confirmation.status === "unknown";
+	const blocked = confirmation.status === "unknown" || blockedByBinding;
+	const input = actionInput(confirmation.confirmationId, currentBinding);
 	return (
 		<Alert
 			aria-live="polite"
@@ -261,6 +380,8 @@ function ConfirmationPanel({
 					<dd>{boundedSummary(confirmation.operation)}</dd>
 					<dt className="text-muted-foreground">目标 origin</dt>
 					<dd>{origin}</dd>
+					<dt className="text-muted-foreground">页面版本</dt>
+					<dd>{currentBinding.pageRevision}</dd>
 					<dt className="text-muted-foreground">摘要</dt>
 					<dd>{summary}</dd>
 				</dl>
@@ -268,22 +389,23 @@ function ConfirmationPanel({
 					密码、MFA、Cookie、页面正文和浏览器 URL 不会显示在此确认框中。
 				</p>
 				{blocked ? (
-					<p className="mt-2">结果无法确认，系统不会自动重放。</p>
+					<p className="mt-2">
+						{blockedByBinding
+							? "当前 Browser 或接管授权不可用，系统不会执行此副作用。"
+							: "结果无法确认，系统不会自动重放。"}
+					</p>
 				) : null}
-				{confirmation.status === "pending" ? (
-					<div className="mt-3 flex flex-wrap gap-2">
+				{confirmation.status === "pending" && !blockedByBinding ? (
+					<div className="mt-3 flex flex-col gap-2 sm:flex-row">
 						{onConfirmSideEffect ? (
-							<Button
-								onClick={() => onConfirmSideEffect(confirmation.confirmationId)}
-								type="button"
-							>
+							<Button onClick={() => onConfirmSideEffect(input)} type="button">
 								确认执行
 							</Button>
 						) : null}
 						{onRejectSideEffect ? (
 							<Button
 								variant="outline"
-								onClick={() => onRejectSideEffect(confirmation.confirmationId)}
+								onClick={() => onRejectSideEffect(input)}
 								type="button"
 							>
 								拒绝
@@ -292,9 +414,7 @@ function ConfirmationPanel({
 						{onCancelConfirmation ? (
 							<Button
 								variant="ghost"
-								onClick={() =>
-									onCancelConfirmation(confirmation.confirmationId)
-								}
+								onClick={() => onCancelConfirmation(input)}
 								type="button"
 							>
 								取消
@@ -311,12 +431,19 @@ export function BrowserHandoffPanel(props: BrowserHandoffPanelProps) {
 	return (
 		<>
 			<HandoffPanel
+				currentBinding={props.currentBinding}
 				handoff={props.handoff}
+				now={props.now}
+				onPauseAgent={props.onPauseAgent}
 				onReturnToAgent={props.onReturnToAgent}
 				onTakeOver={props.onTakeOver}
 			/>
 			<ConfirmationPanel
+				browserAvailable={props.browserAvailable}
 				confirmation={props.confirmation}
+				currentBinding={props.currentBinding}
+				handoff={props.handoff}
+				now={props.now}
 				onCancelConfirmation={props.onCancelConfirmation}
 				onConfirmSideEffect={props.onConfirmSideEffect}
 				onRejectSideEffect={props.onRejectSideEffect}

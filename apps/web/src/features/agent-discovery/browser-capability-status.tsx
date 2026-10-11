@@ -10,6 +10,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import {
 	BrowserHandoffPanel,
+	type BrowserHandoffActionInputV1,
+	type BrowserHandoffBindingV1,
 	type BrowserHandoffPanelStateV1,
 	type BrowserSideEffectConfirmationV1,
 } from "./browser-handoff-panel.js";
@@ -34,11 +36,13 @@ type BrowserCapabilityStatusProps = {
 	readonly capability: BrowserCapabilityProjectionV1;
 	readonly handoff?: BrowserHandoffPanelStateV1;
 	readonly confirmation?: BrowserSideEffectConfirmationV1;
-	readonly onCancelConfirmation?: (confirmationId: string) => void;
-	readonly onConfirmSideEffect?: (confirmationId: string) => void;
-	readonly onRejectSideEffect?: (confirmationId: string) => void;
-	readonly onReturnToAgent?: (handoffId: string) => void;
-	readonly onTakeOver?: (handoffId: string) => void;
+	readonly currentBinding?: BrowserHandoffBindingV1;
+	readonly onCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onConfirmSideEffect?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onPauseAgent?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onRejectSideEffect?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onReturnToAgent?: (input: BrowserHandoffActionInputV1) => void;
+	readonly onTakeOver?: (input: BrowserHandoffActionInputV1) => void;
 };
 
 export type BrowserWorkflowState =
@@ -207,8 +211,10 @@ export function BrowserCapabilityStatus({
 	workflow,
 	handoff,
 	confirmation,
+	currentBinding,
 	onCancelConfirmation,
 	onConfirmSideEffect,
+	onPauseAgent,
 	onRejectSideEffect,
 	onReturnToAgent,
 	onTakeOver,
@@ -224,8 +230,11 @@ export function BrowserCapabilityStatus({
 			<BrowserHandoffPanel
 				handoff={handoff}
 				confirmation={confirmation}
+				currentBinding={currentBinding}
+				browserAvailable={capability.status === "available"}
 				onCancelConfirmation={onCancelConfirmation}
 				onConfirmSideEffect={onConfirmSideEffect}
+				onPauseAgent={onPauseAgent}
 				onRejectSideEffect={onRejectSideEffect}
 				onReturnToAgent={onReturnToAgent}
 				onTakeOver={onTakeOver}

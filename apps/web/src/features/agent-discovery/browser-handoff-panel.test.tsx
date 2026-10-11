@@ -39,17 +39,27 @@ const confirmation: BrowserSideEffectConfirmationV1 = {
 describe("Browser handoff and confirmation panel", () => {
 	afterEach(() => cleanup());
 
-	it("offers takeover and passes only the opaque handoff id", () => {
+	it("offers takeover and passes only the opaque id plus verified binding", () => {
 		const onTakeOver = vi.fn();
-		render(<BrowserHandoffPanel handoff={requested} onTakeOver={onTakeOver} />);
+		const onPauseAgent = vi.fn();
+		render(
+			<BrowserHandoffPanel
+				currentBinding={binding}
+				handoff={requested}
+				onPauseAgent={onPauseAgent}
+				onTakeOver={onTakeOver}
+			/>,
+		);
 
 		expect(screen.getByRole("alert").textContent).toContain("MFA 验证");
 		expect(screen.getByRole("alert").textContent).toContain(
 			"Agent、Session 和授权绑定由服务端维护。",
 		);
+		expect(screen.getByRole("alert").textContent).toContain("页面版本：4");
+		screen.getByRole("button", { name: "暂停 Agent" }).click();
 		screen.getByRole("button", { name: "接管浏览器" }).click();
-		expect(onTakeOver).toHaveBeenCalledWith("handoff-1");
-		expect(onTakeOver.mock.calls[0]).toHaveLength(1);
+		expect(onPauseAgent).toHaveBeenCalledWith({ id: "handoff-1", binding });
+		expect(onTakeOver).toHaveBeenCalledWith({ id: "handoff-1", binding });
 	});
 
 	it.each([
@@ -72,13 +82,17 @@ describe("Browser handoff and confirmation panel", () => {
 		render(
 			<BrowserHandoffPanel
 				handoff={handoff}
+				currentBinding={binding}
 				onReturnToAgent={onReturnToAgent}
 			/>,
 		);
 		expect(screen.getByRole("alert").textContent).toContain(detail);
 		if (status === "active") {
 			screen.getByRole("button", { name: "交回 Agent" }).click();
-			expect(onReturnToAgent).toHaveBeenCalledWith("handoff-1");
+			expect(onReturnToAgent).toHaveBeenCalledWith({
+				id: "handoff-1",
+				binding,
+			});
 		} else {
 			expect(screen.queryByRole("button")).toBeNull();
 		}
@@ -91,6 +105,8 @@ describe("Browser handoff and confirmation panel", () => {
 		render(
 			<BrowserHandoffPanel
 				confirmation={confirmation}
+				currentBinding={binding}
+				browserAvailable
 				onCancelConfirmation={onCancelConfirmation}
 				onConfirmSideEffect={onConfirmSideEffect}
 				onRejectSideEffect={onRejectSideEffect}
@@ -103,14 +119,25 @@ describe("Browser handoff and confirmation panel", () => {
 		screen.getByRole("button", { name: "确认执行" }).click();
 		screen.getByRole("button", { name: "拒绝" }).click();
 		screen.getByRole("button", { name: "取消" }).click();
-		expect(onConfirmSideEffect).toHaveBeenCalledWith("confirmation-1");
-		expect(onRejectSideEffect).toHaveBeenCalledWith("confirmation-1");
-		expect(onCancelConfirmation).toHaveBeenCalledWith("confirmation-1");
+		expect(onConfirmSideEffect).toHaveBeenCalledWith({
+			id: "confirmation-1",
+			binding,
+		});
+		expect(onRejectSideEffect).toHaveBeenCalledWith({
+			id: "confirmation-1",
+			binding,
+		});
+		expect(onCancelConfirmation).toHaveBeenCalledWith({
+			id: "confirmation-1",
+			binding,
+		});
 	});
 
 	it("fails closed for unsafe origins, invalid bindings and unknown outcomes", () => {
 		render(
 			<BrowserHandoffPanel
+				currentBinding={binding}
+				browserAvailable
 				confirmation={{
 					...confirmation,
 					targetOrigin: "https://example.test/private?token=secret",
@@ -124,5 +151,53 @@ describe("Browser handoff and confirmation panel", () => {
 		);
 		expect(screen.queryByRole("button")).toBeNull();
 		expect(screen.queryByText("https://example.test")).toBeNull();
+	});
+
+	it("blocks a stale current binding and an expired handoff", () => {
+		const onTakeOver = vi.fn();
+		const stale = { ...binding, pageRevision: binding.pageRevision + 1 };
+		render(
+			<BrowserHandoffPanel
+				currentBinding={stale}
+				handoff={requested}
+				onTakeOver={onTakeOver}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toContain("无法核验");
+		expect(screen.queryByRole("button")).toBeNull();
+		cleanup();
+
+		render(
+			<BrowserHandoffPanel
+				currentBinding={binding}
+				handoff={requested}
+				now={() => Date.parse("2026-10-11T13:00:00.000Z")}
+				onTakeOver={onTakeOver}
+			/>,
+		);
+		expect(screen.getByRole("alert").textContent).toContain("已过期");
+		expect(screen.queryByRole("button")).toBeNull();
+		expect(onTakeOver).not.toHaveBeenCalled();
+	});
+
+	it("blocks confirmation while the browser or handoff is unavailable", () => {
+		const onConfirmSideEffect = vi.fn();
+		render(
+			<BrowserHandoffPanel
+				browserAvailable
+				confirmation={confirmation}
+				currentBinding={binding}
+				handoff={{ ...requested, status: "crashed" }}
+				onConfirmSideEffect={onConfirmSideEffect}
+			/>,
+		);
+		expect(
+			screen
+				.getAllByRole("alert")
+				.map((alert) => alert.textContent)
+				.join(" "),
+		).toContain("不会执行此副作用");
+		expect(screen.queryByRole("button")).toBeNull();
+		expect(onConfirmSideEffect).not.toHaveBeenCalled();
 	});
 });

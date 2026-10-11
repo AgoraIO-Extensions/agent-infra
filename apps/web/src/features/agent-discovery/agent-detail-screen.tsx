@@ -31,6 +31,8 @@ import {
 	type BrowserWorkflowState,
 } from "./browser-capability-status.js";
 import type {
+	BrowserHandoffActionInputV1,
+	BrowserHandoffBindingV1,
 	BrowserHandoffPanelStateV1,
 	BrowserSideEffectConfirmationV1,
 } from "./browser-handoff-panel.js";
@@ -40,11 +42,13 @@ type AgentDetailScreenProps = {
 	browserWorkflow?: BrowserWorkflowState;
 	browserHandoff?: BrowserHandoffPanelStateV1;
 	browserConfirmation?: BrowserSideEffectConfirmationV1;
-	onBrowserCancelConfirmation?: (confirmationId: string) => void;
-	onBrowserConfirmSideEffect?: (confirmationId: string) => void;
-	onBrowserRejectSideEffect?: (confirmationId: string) => void;
-	onBrowserReturnToAgent?: (handoffId: string) => void;
-	onBrowserTakeOver?: (handoffId: string) => void;
+	browserCurrentBinding?: BrowserHandoffBindingV1;
+	onBrowserCancelConfirmation?: (input: BrowserHandoffActionInputV1) => void;
+	onBrowserConfirmSideEffect?: (input: BrowserHandoffActionInputV1) => void;
+	onBrowserPauseAgent?: (input: BrowserHandoffActionInputV1) => void;
+	onBrowserRejectSideEffect?: (input: BrowserHandoffActionInputV1) => void;
+	onBrowserReturnToAgent?: (input: BrowserHandoffActionInputV1) => void;
+	onBrowserTakeOver?: (input: BrowserHandoffActionInputV1) => void;
 	onRetry?: () => void;
 	ownerSettings?: { readonly agentId: string };
 	retrying?: boolean;
@@ -94,8 +98,10 @@ export function AgentDetailScreen({
 	browserWorkflow,
 	browserHandoff,
 	browserConfirmation,
+	browserCurrentBinding,
 	onBrowserCancelConfirmation,
 	onBrowserConfirmSideEffect,
+	onBrowserPauseAgent,
 	onBrowserRejectSideEffect,
 	onBrowserReturnToAgent,
 	onBrowserTakeOver,
@@ -362,8 +368,10 @@ export function AgentDetailScreen({
 							workflow={browserWorkflow}
 							handoff={browserHandoff}
 							confirmation={browserConfirmation}
+							currentBinding={browserCurrentBinding}
 							onCancelConfirmation={onBrowserCancelConfirmation}
 							onConfirmSideEffect={onBrowserConfirmSideEffect}
+							onPauseAgent={onBrowserPauseAgent}
 							onRejectSideEffect={onBrowserRejectSideEffect}
 							onReturnToAgent={onBrowserReturnToAgent}
 							onTakeOver={onBrowserTakeOver}
