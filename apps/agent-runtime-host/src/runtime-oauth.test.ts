@@ -132,10 +132,12 @@ async function fixture() {
 		mode: 0o400,
 	});
 	const calls: URLSearchParams[] = [];
+	const paths: string[] = [];
 	let behavior = "success";
 	const issuer = createServer(
 		{ cert: material.cert, key: material.key },
 		async (req, res) => {
+			paths.push(req.url ?? "");
 			const chunks: Buffer[] = [];
 			for await (const part of req) chunks.push(Buffer.from(part));
 			calls.push(new URLSearchParams(Buffer.concat(chunks).toString()));
@@ -284,6 +286,7 @@ async function fixture() {
 		store,
 		configuration,
 		target,
+		principal,
 		scope,
 		verifyGrant,
 		fetch,
@@ -400,6 +403,7 @@ async function fixture() {
 		assembly,
 		directory,
 		root,
+		principal,
 		target,
 		scope,
 		configuration,
@@ -408,6 +412,7 @@ async function fixture() {
 		post,
 		callback,
 		calls,
+		paths,
 		fetch,
 		setBehavior: (next: string) => {
 			behavior = next;
@@ -638,6 +643,58 @@ it("uses real HTTPS/SDK/files for one exchange and keeps received credentials un
 			),
 		),
 	).rejects.toMatchObject({ code: "ENOENT" });
+	await f.assembly.client.close();
+	expect(
+		(await readdir(join(f.root, "materials"))).filter((name) =>
+			/\.(access|refresh)$/.test(name),
+		),
+	).toHaveLength(2);
+});
+
+it("revokes and removes protected token material exactly once on explicit revoke", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const before = f.calls.length;
+	expect(
+		(await readdir(join(f.root, "records"))).filter((name) =>
+			/^[a-f0-9]{64}\.json$/.test(name),
+		),
+	).toHaveLength(1);
+	await f.assembly.client.revoke();
+	const revocations = f.calls.slice(before);
+	expect(f.paths.slice(before)).toEqual(["/oauth/revoke", "/oauth/revoke"]);
+	expect(revocations).toHaveLength(2);
+	expect(new Set(revocations.map((body) => body.get("token")))).toEqual(
+		new Set([access, refresh]),
+	);
+	expect(revocations.map((body) => body.get("token_type_hint")).sort()).toEqual(
+		["access_token", "refresh_token"],
+	);
+	expect(
+		(await readdir(join(f.root, "materials"))).filter((name) =>
+			/\.(access|refresh)$/.test(name),
+		),
+	).toEqual([]);
+	await f.assembly.client.revoke();
+	expect(f.calls).toHaveLength(before + 2);
+});
+
+it("retains protected material when remote revocation is unknown", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("redirect");
+	await expect(f.assembly.client.revoke()).rejects.toThrow();
+	expect(
+		(await readdir(join(f.root, "materials"))).filter((name) =>
+			/\.(access|refresh)$/.test(name),
+		),
+	).toHaveLength(2);
 });
 
 it("recovers begin after the verifier was published before the transaction record", async () => {
@@ -767,6 +824,7 @@ it.each(["lost", "redirect"])(
 			store: f.store,
 			configuration: f.configuration,
 			target: f.target,
+			principal: f.principal,
 			scope: f.scope,
 			verifyGrant: f.verifyGrant,
 			fetch: f.fetch,
@@ -937,6 +995,7 @@ it.each(["clientId", "callbackUrl", "tokenEndpoint"] as const)(
 			dataDirectory: f.directory,
 			configuration,
 			target: f.target,
+			principal: f.principal,
 			scope: f.scope,
 			verifyGrant: f.verifyGrant,
 			store: f.store,
