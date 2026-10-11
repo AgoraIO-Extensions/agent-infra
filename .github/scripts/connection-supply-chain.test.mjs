@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { certificateArguments, completeSbom, hash, predicateType, releaseManifest, repository, repositoryId, requireRepositoryCertificate, validateEvidenceBytes, validateSubject, verifiedEvidencePayload } from "../../deploy/connection-supply-chain.mjs";
+import { certificateArguments, completeSbom, hash, predicateType, releaseManifest, repository, repositoryId, requireRepositoryCertificate, validateEvidenceBytes, validateSubject, verifiedImageDigest, verifiedEvidencePayload } from "../../deploy/connection-supply-chain.mjs";
 
 const subject = { version: 1, repository, repositoryId, application: "connection-api", sourceSha: "a".repeat(40), tag: "connection-v0.0.87", image: "ghcr.io/agoraio-extensions/agent-infra/connection-api", digest: `sha256:${"b".repeat(64)}` };
 const bytes = (value) => Buffer.from(JSON.stringify(value));
@@ -110,4 +110,14 @@ test("signed SBOM rejects omitted, extra or altered runtime and bundle records",
     modified.manifest = bytes(manifest).toString("base64");
     assert.throws(() => validateEvidenceBytes(modified, subject, expected), /Signed SBOM runtime or bundle inventory mismatch/);
   }
+});
+
+test("verified Cosign image claims accept only the exact repository or release tag", () => {
+  const claim = (reference = `${subject.image}:${subject.tag}`, digest = subject.digest) => ({ critical: { identity: { "docker-reference": reference }, image: { "docker-manifest-digest": digest } } });
+  assert.equal(verifiedImageDigest([claim()], subject), subject.digest);
+  assert.equal(verifiedImageDigest([claim(subject.image), claim()], subject), subject.digest);
+  for (const reference of [`${subject.image}:connection-v0.0.88`, `${subject.image}-other:${subject.tag}`, `${subject.image}@${subject.digest}`]) assert.throws(() => verifiedImageDigest([claim(reference)], subject), /Wrong signed image repository/);
+  assert.throws(() => verifiedImageDigest([], subject), /Unsigned image/);
+  assert.throws(() => verifiedImageDigest([claim(), claim(undefined, `sha256:${"c".repeat(64)}`)], subject), /Ambiguous signed image/);
+  assert.throws(() => verifiedImageDigest([claim(undefined, "latest")], subject), /Invalid signed image digest/);
 });
