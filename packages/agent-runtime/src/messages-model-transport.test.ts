@@ -240,6 +240,53 @@ it("admits the bound option before sending and prevents a native retry after a p
 	}
 });
 
+it("resolves a request-local execution credential immediately before upstream I/O", async () => {
+	let resolved = 0;
+	let upstreamCredential = "";
+	const transport = await openRuntimeMessagesTransport({
+		endpoint: "https://model.example.test/team",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		resolveCredential: async () => {
+			resolved += 1;
+			return "synthetic-execution-key";
+		},
+		admit: async () => {},
+		fetch: async (_url, init) => {
+			upstreamCredential =
+				new Headers(init?.headers).get("authorization") ?? "";
+			return new Response(messages(["ok"]), {
+				headers: { "content-type": "text/event-stream" },
+			});
+		},
+	});
+	try {
+		const response = await fetch(
+			`${transport.modelAccess.endpoint}/v1/messages`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${transport.modelAccess.credential}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					model: "claude-opus-5",
+					output_config: { effort: "high" },
+					thinking: { type: "adaptive" },
+					stream: true,
+					messages: [],
+				}),
+			},
+		);
+		await response.text();
+		expect(resolved).toBe(1);
+		expect(upstreamCredential).toBe("Bearer synthetic-execution-key");
+	} finally {
+		await transport.close();
+	}
+});
+
 it.each([200, 404, 501, 401])(
 	"contains token-count responses with status %s",
 	async (status) => {
