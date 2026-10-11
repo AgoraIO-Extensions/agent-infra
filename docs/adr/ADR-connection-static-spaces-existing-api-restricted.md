@@ -47,6 +47,11 @@ server-side dispatch，不能只隐藏卡片或用环境开关放行。旧 v2/v3
 2026-10-11 05:00 UTC 已到期，不重开、不延期。长期受限运行政策是本文独立的发布评审对象，不能套用旧 pilot 的批准；
 激活前须绑定最终实现版本、审批记录和发布回执，不沿用旧 pilot 的激活。
 
+固定组身份包含 UUID 与组名，防止同 UUID 被改名后对应另一角色。上游 Application binding 仅
+控制门户发现，不是 Publish API 内容授权；READ 始终按上游有效路径 ACL，WRITE 按真实角色组
+校验。普通 Token 没有全局 bindings/ACL 管理读取权限，受限接入不增加管理员凭证、不宣称取得
+或锁定完整 ACL/binding 快照，也不得用已通过的身份检查代替上游逐请求权限检查。
+
 ## 写入与错误语义
 
 - Connection 入站幂等键只防止同一请求创建重复 Call/Effect，不代表上游原生幂等。

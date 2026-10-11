@@ -368,15 +368,25 @@ export class StaticSpacesAdapter {
 		};
 		const identity = await get("/api/v3/core/users/me/");
 		const user = identity.user;
-		const groups = new Set(
-			(user?.groups ?? []).map((group: { pk: string }) => String(group.pk)),
-		);
+		const groups: { pk: unknown; name: unknown }[] = Array.isArray(user?.groups)
+			? user.groups
+			: [];
+		const hasGroup = (id: string, name: string) => {
+			const matches = groups.filter((group) => String(group?.pk) === id);
+			return matches.length === 1 && matches[0]?.name === name;
+		};
 		if (
 			String(user?.pk) !== "841" ||
 			user?.is_superuser !== false ||
 			user?.is_active !== true ||
-			!groups.has(staticSpacesRestrictedApproval.ownerGroupId) ||
-			!groups.has(staticSpacesRestrictedApproval.viewerGroupId)
+			!hasGroup(
+				staticSpacesRestrictedApproval.ownerGroupId,
+				"static-spaces-shared-connection-test-owners",
+			) ||
+			!hasGroup(
+				staticSpacesRestrictedApproval.viewerGroupId,
+				"static-spaces-shared-connection-test-viewers",
+			)
 		)
 			denied();
 		const applications = await get(

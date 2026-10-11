@@ -42,8 +42,14 @@ test("current catalog and valid v4 execution use the new version", async (t) => 
 				pk: 841,
 				username: "pilot@example.invalid",
 				groups: [
-					{ pk: staticSpacesRestrictedApproval.ownerGroupId },
-					{ pk: staticSpacesRestrictedApproval.viewerGroupId },
+					{
+						pk: staticSpacesRestrictedApproval.ownerGroupId,
+						name: "static-spaces-shared-connection-test-owners",
+					},
+					{
+						pk: staticSpacesRestrictedApproval.viewerGroupId,
+						name: "static-spaces-shared-connection-test-viewers",
+					},
 				],
 				is_active: true,
 				is_superuser: false,
@@ -235,8 +241,14 @@ test("identity preflight rejects oversized streams, compression and wrong media"
 				is_active: true,
 				is_superuser: false,
 				groups: [
-					{ pk: staticSpacesRestrictedApproval.ownerGroupId },
-					{ pk: staticSpacesRestrictedApproval.viewerGroupId },
+					{
+						pk: staticSpacesRestrictedApproval.ownerGroupId,
+						name: "static-spaces-shared-connection-test-owners",
+					},
+					{
+						pk: staticSpacesRestrictedApproval.viewerGroupId,
+						name: "static-spaces-shared-connection-test-viewers",
+					},
 				],
 			},
 		});
@@ -388,8 +400,14 @@ test("a response-lost WRITE is submitted once and never retried by the Adapter",
 				is_active: true,
 				is_superuser: false,
 				groups: [
-					{ pk: staticSpacesRestrictedApproval.ownerGroupId },
-					{ pk: staticSpacesRestrictedApproval.viewerGroupId },
+					{
+						pk: staticSpacesRestrictedApproval.ownerGroupId,
+						name: "static-spaces-shared-connection-test-owners",
+					},
+					{
+						pk: staticSpacesRestrictedApproval.viewerGroupId,
+						name: "static-spaces-shared-connection-test-viewers",
+					},
 				],
 			},
 		});
@@ -414,7 +432,7 @@ test("a response-lost WRITE is submitted once and never retried by the Adapter",
 });
 
 test("Credential and READ reject changed owner groups or Application before content access", async () => {
-	for (const change of ["owner", "application"]) {
+	for (const change of ["owner", "owner-name", "viewer-name", "application"]) {
 		let contentRequests = 0;
 		const adapter = new StaticSpacesAdapter(async (url) => {
 			const path = String(url);
@@ -445,8 +463,18 @@ test("Credential and READ reject changed owner groups or Application before cont
 									change === "owner"
 										? "replacement-owner"
 										: staticSpacesRestrictedApproval.ownerGroupId,
+								name:
+									change === "owner-name"
+										? "renamed-owner"
+										: "static-spaces-shared-connection-test-owners",
 							},
-							{ pk: staticSpacesRestrictedApproval.viewerGroupId },
+							{
+								pk: staticSpacesRestrictedApproval.viewerGroupId,
+								name:
+									change === "viewer-name"
+										? "renamed-viewer"
+										: "static-spaces-shared-connection-test-viewers",
+							},
 						],
 					},
 				});
