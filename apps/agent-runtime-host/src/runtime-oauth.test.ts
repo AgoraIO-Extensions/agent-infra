@@ -178,6 +178,21 @@ async function fixture() {
 				}
 			}
 			const refreshing = body.get("grant_type") === "refresh_token";
+			if (refreshing && behavior === "refresh-record-fail")
+				protection.failRecordWrite = true;
+			if (refreshing && behavior === "refresh-bad-status") {
+				res.writeHead(500, { "content-type": "application/json" });
+				res.end(
+					JSON.stringify({
+						access_token: refreshedAccess,
+						refresh_token: refreshedRefresh,
+						token_type: "Bearer",
+						expires_in: 3600,
+						scope: "mcp",
+					}),
+				);
+				return;
+			}
 			const responseBody = {
 				access_token: refreshing ? refreshedAccess : access,
 				...(refreshing && behavior === "refresh-no-rotation"
@@ -735,6 +750,51 @@ it("keeps rotated material unavailable after a lost refresh response", async () 
 	expect(
 		await readFile(join(f.root, "materials", accessName as string), "utf8"),
 	).toBe(access);
+});
+
+it("retains prior material when refresh metadata persistence fails", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("refresh-record-fail");
+	expect((await f.post("refresh", f.signed("refresh"))).body.phase).toBe(
+		"unknown",
+	);
+	const names = await readdir(join(f.root, "materials"));
+	expect(
+		await readFile(
+			join(
+				f.root,
+				"materials",
+				names.find((name) => name.endsWith(".access")) as string,
+			),
+			"utf8",
+		),
+	).toBe(access);
+	expect(
+		await readFile(
+			join(
+				f.root,
+				"materials",
+				names.find((name) => name.endsWith(".refresh")) as string,
+			),
+			"utf8",
+		),
+	).toBe(refresh);
+});
+
+it("rejects an unsuccessful refresh response before parsing token material", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	f.setBehavior("refresh-bad-status");
+	expect((await f.post("refresh", f.signed("refresh"))).body.phase).toBe(
+		"unknown",
+	);
 });
 
 it("revokes and removes protected token material exactly once on explicit revoke", async () => {

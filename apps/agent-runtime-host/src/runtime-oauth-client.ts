@@ -535,6 +535,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 		record.phase = "exchange_started";
 		await writeRecord(records, `${key}.json`, record);
 		check(snapshot, record, true);
+		let rotated: { name: string; expected: string; next: string }[] | undefined;
 		try {
 			const tokens = await refreshStandardOAuthToken({
 				configuration,
@@ -561,12 +562,23 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			await replaceProtectedStandardMcpMaterials(materials, replacements, () =>
 				check(snapshot, record, true),
 			);
+			rotated = replacements;
 			check(snapshot, record, true);
 			record.phase = "awaiting_verification";
 			record.tokenExpiresAt = tokens.expiresAt;
 			await writeRecord(records, `${key}.json`, record);
 			check(snapshot, record, true);
 		} catch {
+			if (rotated) {
+				await replaceProtectedStandardMcpMaterials(
+					materials,
+					rotated.map((replacement) => ({
+						name: replacement.name,
+						expected: replacement.next,
+						next: replacement.expected,
+					})),
+				).catch(() => undefined);
+			}
 			record.phase = "unknown";
 			await writeRecord(records, `${key}.json`, record).catch(() => undefined);
 		}

@@ -154,8 +154,7 @@ export async function refreshStandardOAuthToken(options: {
 			},
 		);
 		assertCurrent();
-		if (response.status >= 300 && response.status < 400)
-			standardOAuthUnavailable();
+		if (response.status !== 200) standardOAuthUnavailable();
 		const reader = response.body?.getReader();
 		if (!reader) standardOAuthUnavailable();
 		const parts: Uint8Array[] = [];
