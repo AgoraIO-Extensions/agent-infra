@@ -19,7 +19,10 @@ import { verifyClaudeInstallation } from "./claude-installation.js";
 import { claudeQuery } from "./claude-query.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
 import { claudeWorkspaceTools } from "./claude-workspace.js";
-import { validateModelAccess } from "./codex-app-server-bridge.js";
+import {
+	validateModelAccess,
+	validateModelEndpoint,
+} from "./codex-app-server-bridge.js";
 import {
 	type CodexBrowserToolDescriptorV1,
 	createCodexBrowserToolDescriptorsV1,
@@ -346,10 +349,20 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			throw new Error("RUNTIME_CONFIGURATION_INVALID");
 		}
 		for (const option of options.modelOptions) {
-			validateModelAccess({
-				endpoint: option.endpoint,
-				credential: option.credential,
-			});
+			if (option.credential === undefined) {
+				// V4 projections intentionally omit provider credentials. They are
+				// delivered by Host for this Execution immediately before the upstream
+				// request; accepting a keyless option without that seam would leave the
+				// transport unable to authenticate and would invite a static fallback.
+				if (!options.authorizeModelAction)
+					throw new Error("RUNTIME_CONFIGURATION_INVALID");
+				validateModelEndpoint(option.endpoint);
+			} else {
+				validateModelAccess({
+					endpoint: option.endpoint,
+					credential: option.credential,
+				});
+			}
 			if (
 				option.reasoningLevels.some(
 					(level) => !["low", "medium", "high", "xhigh", "max"].includes(level),
