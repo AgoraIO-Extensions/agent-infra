@@ -133,20 +133,22 @@ test("Issue Gate rejects missing and duplicated primary Issues", () => {
   assert.equal(evaluateIssueGate({ issueNumbers: [1, 2] }).ok, false);
 });
 
-test("Issue Gate accepts one open Issue without wontfix", () => {
-  assert.deepEqual(
-    evaluateIssueGate({
-      issueNumbers: [42],
-      issue: {
-        number: 42,
-        state: "open",
-        labels: [{ name: "bug" }],
-        created_at: "2026-08-11T08:00:00Z",
-      },
-      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
-    }),
-    { ok: true, description: "Primary Issue #42 is open" },
-  );
+test("Issue Gate accepts open and closed existing Issues without wontfix", () => {
+  for (const state of ["open", "closed"]) {
+    assert.deepEqual(
+      evaluateIssueGate({
+        issueNumbers: [42],
+        issue: {
+          number: 42,
+          state,
+          labels: [{ name: "bug" }],
+          created_at: "2026-08-11T08:00:00Z",
+        },
+        pullRequestCreatedAt: "2026-08-11T09:00:00Z",
+      }),
+      { ok: true, description: "Primary Issue #42 exists" },
+    );
+  }
 });
 
 test("Issue Gate requires the primary Issue to predate the PR", () => {
@@ -184,18 +186,17 @@ test("Issue Gate requires the primary Issue to predate the PR", () => {
   );
 });
 
-test("Issue Gate rejects a closed or wontfix Issue", () => {
+test("Issue Gate rejects a wontfix Issue", () => {
   assert.equal(
     evaluateIssueGate({
       issueNumbers: [42],
-      issue: { number: 42, state: "closed", labels: [] },
-    }).ok,
-    false,
-  );
-  assert.equal(
-    evaluateIssueGate({
-      issueNumbers: [42],
-      issue: { number: 42, state: "open", labels: [{ name: "wontfix" }] },
+      issue: {
+        number: 42,
+        state: "closed",
+        labels: [{ name: "wontfix" }],
+        created_at: "2026-08-11T08:00:00Z",
+      },
+      pullRequestCreatedAt: "2026-08-11T09:00:00Z",
     }).ok,
     false,
   );

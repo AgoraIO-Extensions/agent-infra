@@ -33,9 +33,6 @@ export function evaluateIssueGate({
   if (!issue || issue.pull_request || issue.number !== number) {
     return { ok: false, description: `Primary Issue #${number} is invalid` };
   }
-  if (issue.state !== "open") {
-    return { ok: false, description: `Primary Issue #${number} is not open` };
-  }
   if (labelNames(issue.labels).includes("wontfix")) {
     return { ok: false, description: `Primary Issue #${number} is marked wontfix` };
   }
@@ -47,7 +44,7 @@ export function evaluateIssueGate({
     return { ok: false, description: `Primary Issue #${number} must predate this PR` };
   }
 
-  return { ok: true, description: `Primary Issue #${number} is open` };
+  return { ok: true, description: `Primary Issue #${number} exists` };
 }
 
 function latestHumanValidationEvent(events = []) {
