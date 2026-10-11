@@ -129,6 +129,10 @@ export interface ManagementRouteDependencies {
 	readonly prepareSecretReplacements: (
 		input: SecretPreparationInput,
 	) => Promise<SecretPreparationResult>;
+	readonly validateDefaultRelayKey?: (
+		keyValue: string,
+	) => Promise<"valid" | "invalid" | "unavailable">;
+	readonly enforceDefaultRelayKey?: boolean;
 	readonly readApplicationProjection: (
 		input: ProjectionInput<AgentManagementApplicationProjectionV1>,
 	) => Promise<unknown>;
@@ -465,6 +469,9 @@ function applicationCommandFields(
 		coOwnerIds: body.coOwnerIds,
 		availability: body.availability,
 		source: body.source,
+		...("defaultRelayKey" in body && body.defaultRelayKey !== undefined
+			? { defaultRelayKey: body.defaultRelayKey }
+			: {}),
 		...(modelConfiguration === undefined ? {} : { modelConfiguration }),
 		environment: body.environment,
 	};
@@ -496,6 +503,15 @@ export function registerV2ManagementRoutes(
 				AgentApplicationCreateRequestV2Schema,
 				metadata.traceId,
 			);
+			const hasDefaultRelayKey =
+				"defaultRelayKey" in body && body.defaultRelayKey !== undefined;
+			if (
+				body.source.kind === "standard" &&
+				!hasDefaultRelayKey &&
+				dependencies.enforceDefaultRelayKey
+			) {
+				fail("INVALID_REQUEST", metadata.traceId);
+			}
 			const idempotencyKey = parseIdempotencyKey(
 				context.req.raw,
 				metadata.traceId,
@@ -511,6 +527,16 @@ export function registerV2ManagementRoutes(
 			} catch {
 				fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			}
+			if (body.defaultRelayKey !== undefined) {
+				if (!dependencies.validateDefaultRelayKey)
+					fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+				const validity = await dependencies.validateDefaultRelayKey(
+					body.defaultRelayKey,
+				);
+				if (validity === "invalid") fail("INVALID_REQUEST", metadata.traceId);
+				if (validity === "unavailable")
+					fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			}
 			const prepared = await prepareApplicationInput(
 				dependencies,
 				body,
@@ -518,17 +544,24 @@ export function registerV2ManagementRoutes(
 				metadata,
 				ids,
 			);
+			const schemaVersion =
+				body.source.kind === "standard" && hasDefaultRelayKey ? 3 : 2;
+			if (schemaVersion === 3 && body.defaultRelayKey === undefined)
+				fail("INVALID_REQUEST", metadata.traceId);
 			await dependencies.foundation.submit(
 				{
-					schemaVersion: 2,
+					schemaVersion,
 					...ids,
 					idempotencyKey,
 					requestId: metadata.requestId,
 					traceId: metadata.traceId,
 					...applicationCommandFields(body, prepared, metadata.traceId),
+					...(schemaVersion === 3
+						? { defaultRelayKey: body.defaultRelayKey as string }
+						: {}),
 					secrets: prepared.secrets,
 					channels: [],
-				},
+				} as unknown as Parameters<ApplicationFoundationUseCaseV1["submit"]>[0],
 				{ schemaVersion: 1, userId: identity.userId, rawRequestDigest },
 				prepared.attachment,
 			);

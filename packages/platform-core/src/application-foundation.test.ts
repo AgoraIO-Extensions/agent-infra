@@ -487,6 +487,25 @@ describe("Fake application foundation transaction", () => {
 });
 
 describe("Application foundation Secret sidecar", () => {
+	it("requires the default Relay Key admission dependency", async () => {
+		let plan: ApplicationFoundationWritePlanV1 | undefined;
+		const command = {
+			...applicationFoundationCommandV1,
+			defaultRelayKey: "relay-key-controlled-test-value",
+		};
+		await expect(
+			createUseCase({
+				async commit(nextPlan) {
+					plan = nextPlan;
+					return { outcome: "committed", result: nextPlan.result };
+				},
+			}).submit(command, applicationFoundationActorContextV1),
+		).rejects.toMatchObject({
+			code: "dependency_unavailable",
+		});
+		expect(plan).toBeUndefined();
+	});
+
 	it("fails closed before persistence when a Secret sidecar is missing", async () => {
 		let commits = 0;
 		const useCase = createApplicationFoundationUseCaseV1(

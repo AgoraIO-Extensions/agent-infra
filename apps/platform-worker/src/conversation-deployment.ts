@@ -229,8 +229,7 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			if (input.purpose === "business" && input.conversationId) {
 				const sandboxResource = input.sandboxResource;
 				if (
-					!sandboxResource ||
-					sandboxResource.status !== "ready" ||
+					sandboxResource?.status !== "ready" ||
 					sandboxResource.desiredState !== "running" ||
 					!sandboxResource.policy ||
 					sandboxResource.sandbox.sessionId !== input.conversationId ||

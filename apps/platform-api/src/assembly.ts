@@ -7,6 +7,7 @@ import {
 	createAgentApiCreationV1,
 	createAgentApiLifecycleV1,
 	createAgentConfigurationUseCaseV1,
+	createAgentDefaultRelayKeyUseCaseV1,
 	createAgentManagementV1,
 	createApplicationApiCredentialIssuerV1,
 	createApplicationFoundationUseCaseV1,
@@ -25,6 +26,7 @@ import {
 	conversationEventWakeChannelV1,
 	PostgresAgentConfigurationQueryV1,
 	PostgresAgentConfigurationTransactionV1,
+	PostgresAgentDefaultRelayKeyStoreV1,
 	PostgresAgentManagementQueryV1,
 	PostgresAgentManagementTransactionV1,
 	PostgresApplicationApiCredentialIssuerStoreV1,
@@ -123,6 +125,14 @@ export interface PlatformApiAssemblyInput {
 		Parameters<typeof createPersonalRelayKeyUseCaseV1>[0],
 		"currentIdentity" | "validate" | "encrypt"
 	>;
+	readonly agentDefaultRelayKeys?: Omit<
+		Parameters<typeof createAgentDefaultRelayKeyUseCaseV1>[0],
+		"transaction"
+	>;
+	readonly validateDefaultRelayKey?: (
+		keyValue: string,
+	) => Promise<"valid" | "invalid" | "unavailable">;
+	readonly enforceDefaultRelayKey?: boolean;
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly connectionCapability?: ConnectionCapabilityV1;
@@ -330,6 +340,18 @@ export function assemblePlatformApi(
 					encrypt: input.personalRelayKeys.encrypt,
 				})
 			: undefined;
+	const agentDefaultRelayKeyStore = input.agentDefaultRelayKeys
+		? new PostgresAgentDefaultRelayKeyStoreV1({
+				databaseUrl: input.databaseUrl,
+			})
+		: undefined;
+	const agentDefaultRelayKeys =
+		agentDefaultRelayKeyStore && input.agentDefaultRelayKeys
+			? createAgentDefaultRelayKeyUseCaseV1({
+					...input.agentDefaultRelayKeys,
+					transaction: agentDefaultRelayKeyStore,
+				})
+			: undefined;
 	const personalApiCredentials = createPersonalApiCredentialUseCaseV1({
 		transaction: personalApiCredentialStore,
 		userDirectory,
@@ -398,6 +420,9 @@ export function assemblePlatformApi(
 		transaction: foundationTransaction,
 		...admissions,
 		...channelAdmission,
+		...(input.agentDefaultRelayKeys
+			? { defaultRelayKey: input.agentDefaultRelayKeys }
+			: {}),
 	});
 	const agentApiCreation = input.agentApiCreation
 		? createAgentApiCreationV1({
@@ -616,6 +641,14 @@ export function assemblePlatformApi(
 					},
 				}
 			: {}),
+		...(agentDefaultRelayKeys
+			? {
+					agentDefaultRelayKeys: {
+						identity: input.identity,
+						keys: agentDefaultRelayKeys,
+					},
+				}
+			: {}),
 		...(wecomReceipts
 			? {
 					wecomReceipts: {
@@ -676,6 +709,10 @@ export function assemblePlatformApi(
 			readAgentProjection: projections.readManagementAgentProjection,
 			personalApiAgentRead,
 			readApiAgentProjection: projections.readApiAgentProjection,
+			...(input.validateDefaultRelayKey
+				? { validateDefaultRelayKey: input.validateDefaultRelayKey }
+				: {}),
+			...(input.agentDefaultRelayKeys ? { enforceDefaultRelayKey: true } : {}),
 		},
 		configuration: {
 			identity: input.identity,
@@ -776,6 +813,7 @@ export function assemblePlatformApi(
 		...(installationStore ? [installationStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
 		...(input.userGovernance ? [input.userGovernance] : []),
+		...(agentDefaultRelayKeyStore ? [agentDefaultRelayKeyStore] : []),
 	];
 	return {
 		dependencies,
