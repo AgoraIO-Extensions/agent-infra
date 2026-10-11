@@ -158,6 +158,8 @@ export function decideAgentRuntimePresentationV1(input: {
 	)
 		return foundWithoutRuntimeProjection;
 	const { state, deployment, verifiedConfiguration: configuration } = runtime;
+	const browserDeclared =
+		deployment.runtimeManifest.capabilities?.browser !== undefined;
 	if (
 		state.agentId !== input.agentId ||
 		state.phase !== "ready" ||
@@ -180,7 +182,9 @@ export function decideAgentRuntimePresentationV1(input: {
 		deployment.desiredState !== "running" ||
 		deployment.imageDigest !== configuration.source.imageDigest
 	)
-		return foundWithoutRuntimeProjection;
+		return browserDeclared
+			? { outcome: "unavailable" }
+			: foundWithoutRuntimeProjection;
 	const mode =
 		configuration.source.kind === "standard"
 			? "platform-adapter"
@@ -197,8 +201,6 @@ export function decideAgentRuntimePresentationV1(input: {
 		deployment.route.exposure !== exposure
 	)
 		return foundWithoutRuntimeProjection;
-	const browserDeclared =
-		deployment.runtimeManifest.capabilities?.browser !== undefined;
 	if (browserDeclared && !state.capabilities.browser)
 		return { outcome: "unavailable" };
 	const interactionUrl =

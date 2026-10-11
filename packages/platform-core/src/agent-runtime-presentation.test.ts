@@ -115,6 +115,28 @@ describe("Agent runtime presentation policy", () => {
 			outcome: "unavailable",
 		});
 	});
+	it("fails closed when a Browser Workload fence is stale", () => {
+		const input = fixture();
+		const runtime = input.facts.runtime;
+		if (!runtime) throw new Error();
+		const facts = {
+			...input.facts,
+			runtime: {
+				...runtime,
+				deployment: {
+					...runtime.deployment,
+					fence: runtime.deployment.fence + 1,
+					runtimeManifest: {
+						...runtime.deployment.runtimeManifest,
+						capabilities: { browser: {} as never },
+					},
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toEqual({
+			outcome: "unavailable",
+		});
+	});
 
 	it("projects the verified Browser state without exposing probe internals", () => {
 		const input = fixture();
