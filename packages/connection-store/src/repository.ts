@@ -4200,6 +4200,12 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						AND state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'SUSPENDED', 'DISCONNECTED')
 				`;
 			}
+			// Revoke the old Credential while the account still identifies its original release.
+			await sql`
+				UPDATE connection_credential_versions
+				SET status = 'REVOKED', revision = revision + 1
+				WHERE connection_id = ${connectionId} AND status = 'ACTIVE'
+			`;
 			if (existing) {
 				await sql`
 					UPDATE connection_accounts
@@ -4225,11 +4231,6 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				`;
 			}
 
-			await sql`
-				UPDATE connection_credential_versions
-				SET status = 'REVOKED', revision = revision + 1
-				WHERE connection_id = ${connectionId} AND status = 'ACTIVE'
-			`;
 			const credentialId = `credential-${randomUUID()}`;
 			const protectedCredential = this.protector.encrypt(
 				input.accessToken,

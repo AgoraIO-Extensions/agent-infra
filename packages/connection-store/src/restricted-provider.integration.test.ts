@@ -5,6 +5,7 @@ import { githubConnectionCatalog } from "@agent-infra/openconnector-adapter";
 import {
 	staticSpacesConnectionCatalog,
 	staticSpacesRestrictedApproval,
+	staticSpacesV4ConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/providers/static-spaces";
 import postgres from "postgres";
 import { expect, it } from "vitest";
@@ -17,9 +18,14 @@ const url = process.env.CONNECTION_TEST_DATABASE_URL;
 assertIsolatedTestDatabaseUrl(url, process.env.DATABASE_URL);
 if (process.env.CI && !url)
 	throw new Error("CONNECTION_TEST_DATABASE_URL is required in CI");
-(url ? it : it.skip)(
-	"restricted v4 enforces fixed identities, durable UNKNOWN closure and leaves other providers available",
-	async () => {
+(url ? it : it.skip).each([
+	"UNCERTAIN",
+	"GRANT_REVOKED",
+	"CREDENTIAL_REVOKED",
+	"DISCONNECTED",
+] as const)(
+	"restricted upgrade preserves new admission until %s",
+	async (terminal) => {
 		if (!url) return;
 		const admin = postgres(url, { max: 1 });
 		const databaseName = `connection_restricted_test_${randomUUID().replaceAll("-", "")}`;
@@ -45,6 +51,43 @@ if (process.env.CI && !url)
 			const catalog = staticSpacesConnectionCatalog;
 			const instanceId = `pilot-device-${suffix}`;
 			try {
+				// Reproduce the real existing-Token upgrade in this disposable database.
+				const previous = staticSpacesV4ConnectionCatalog;
+				await repo.publishProviderCatalog(previous);
+				await sql`INSERT INTO connection_principals(id,display_name,email) VALUES(${principalId},'Restricted',${`${suffix}@example.invalid`}) ON CONFLICT DO NOTHING`;
+				await repo.publishConsumerDeclaration({
+					providerReleaseId: previous.providerReleaseId,
+					consumer: { id: consumerId, name: "Restricted Codex" },
+					actionVersionIds: previous.actions.map((action) => action.id),
+				});
+				await sql`INSERT INTO connection_consumer_instances(id,consumer_id,kind,auth_subject,status,principal_id) VALUES(${`previous-${suffix}`},${consumerId},'DEVICE',${`previous-${suffix}`},'ACTIVE',${principalId})`;
+				const previousRequest = await seedApprovedConnectPermit(sql, {
+					principalId,
+					providerReleaseId: previous.providerReleaseId,
+					scopes: ["static-spaces.personal-api-token"],
+				});
+				const previousConnection = await repo.storeProviderCredential({
+					accessToken: "test-only-pilot-credential",
+					displayName: "Restricted",
+					externalAccount: "841",
+					grantedScopes: ["static-spaces.personal-api-token"],
+					principalId,
+					providerId: "static-spaces",
+					providerReleaseId: previous.providerReleaseId,
+					accessRequestId: previousRequest,
+				});
+				const previousPreview =
+					await repo.createCurrentConsumerAuthorizationPreview({
+						principalId,
+						consumerId,
+						connectionId: previousConnection.connectionId,
+					});
+				await repo.confirmCurrentConsumerAuthorization({
+					principalId,
+					previewId: previousPreview.previewId,
+					confirmationToken: previousPreview.confirmationToken,
+					idempotencyKey: `previous-${suffix}`,
+				});
 				await repo.publishProviderCatalog(catalog);
 				await sql`INSERT INTO connection_principals(id,display_name,email) VALUES(${principalId},'Pilot',${`${suffix}@example.invalid`}) ON CONFLICT DO NOTHING`;
 				await expect(
@@ -88,6 +131,23 @@ if (process.env.CI && !url)
 				const connection = await repo.storeProviderCredential({
 					...credential,
 					accessRequestId,
+				});
+				expect(connection.connectionId).toBe(previousConnection.connectionId);
+				expect(
+					await repo.isProviderAdmissionOpen({
+						providerReleaseId: previous.providerReleaseId,
+					}),
+				).toBe(false);
+				expect(
+					await repo.isProviderAdmissionOpen({
+						providerReleaseId: catalog.providerReleaseId,
+					}),
+				).toBe(true);
+				const [closure] =
+					await sql`SELECT detail->>'providerReleaseId' AS release_id, detail->>'reason' AS reason FROM connection_audit_records WHERE event='RESTRICTED_PROVIDER_CLOSED'`;
+				expect(closure).toMatchObject({
+					release_id: previous.providerReleaseId,
+					reason: "CREDENTIAL_REVOKED",
 				});
 				await expect(
 					repo.createCurrentConsumerAuthorizationPreview({
@@ -184,6 +244,36 @@ if (process.env.CI && !url)
 					confirmationToken: githubPreview.confirmationToken,
 					idempotencyKey: `github-${suffix}`,
 				});
+				if (terminal !== "UNCERTAIN") {
+					if (terminal === "GRANT_REVOKED") {
+						await repo.revokeGrant({ principalId, grantId: context.grantId });
+					} else if (terminal === "DISCONNECTED") {
+						await repo.disconnectConnection({
+							principalId,
+							connectionId: connection.connectionId,
+						});
+					} else {
+						await repo.pauseCredentialForReauthorization(context);
+					}
+					expect(
+						await repo.isProviderAdmissionOpen({
+							providerReleaseId: catalog.providerReleaseId,
+						}),
+					).toBe(false);
+					const closures =
+						await sql`SELECT detail->>'reason' AS reason FROM connection_audit_records WHERE event='RESTRICTED_PROVIDER_CLOSED' AND detail->>'providerReleaseId'=${catalog.providerReleaseId}`;
+					expect(closures.map((row) => row.reason)).toContain(terminal);
+					expect(
+						await service.listDirectActionsForIdentity({
+							principalId,
+							consumerId,
+							instanceId,
+						}),
+					).toEqual([
+						expect.objectContaining({ name: "github.get_current_user" }),
+					]);
+					return;
+				}
 				// Authorize a real persisted dispatch without sending any upstream request.
 				const call = await repo.createCall({
 					invocation: context,
@@ -245,7 +335,7 @@ if (process.env.CI && !url)
 					),
 				).rejects.toMatchObject({ code: "PROVIDER_UNCERTAIN" });
 				const [unknownCall] =
-					await sql`SELECT status FROM connection_calls WHERE principal_id=${principalId} AND action_version_id='static-spaces.publish_space@v4' AND status='UNCERTAIN'`;
+					await sql`SELECT status FROM connection_calls WHERE principal_id=${principalId} AND action_version_id=${catalog.actions.find((action) => action.name === "static-spaces.publish_space")?.id ?? ""} AND status='UNCERTAIN'`;
 				expect(unknownCall?.status).toBe("UNCERTAIN");
 				await expect(
 					lostResponse.executeDirectActionForIdentity(

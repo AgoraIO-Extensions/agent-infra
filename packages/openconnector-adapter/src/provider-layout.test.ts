@@ -12,7 +12,7 @@ test("provider entry points preserve executor identity and published action arra
 		["rehoboam", "rehoboam-v11.ts", "RehoboamV11Adapter"],
 		[
 			"static-spaces",
-			"providers/static-spaces/versions/static-spaces-v4.ts",
+			"providers/static-spaces/versions/static-spaces-v5.ts",
 			"StaticSpacesAdapter",
 		],
 	] as const) {

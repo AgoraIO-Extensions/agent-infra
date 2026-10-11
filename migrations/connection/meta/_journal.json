@@ -288,6 +288,13 @@
       "when": 1791723600000,
       "tag": "0040_static_spaces_restricted_admission",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1791723600001,
+      "tag": "0041_static_spaces_v5_admission",
+      "breakpoints": true
     }
   ]
 }
