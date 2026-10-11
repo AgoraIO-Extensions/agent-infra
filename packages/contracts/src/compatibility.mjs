@@ -1142,7 +1142,10 @@ function stripRuntimeBrowserOperationFacts(value) {
 			visit(entry);
 		});
 	};
-	visit(normalized);
+	for (const schema of Object.values(
+		normalized.components?.schemas ?? normalized.schemas ?? {},
+	))
+		visit(schema);
 	return normalized;
 }
 
