@@ -7,7 +7,10 @@ import {
 	readdir,
 	readFile,
 	rm,
+<<<<<<< HEAD
 	stat,
+=======
+>>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
 	writeFile,
 } from "node:fs/promises";
 import { createServer, type IncomingMessage, Server } from "node:http";
@@ -2959,7 +2962,10 @@ describe("Codex Runtime Driver", () => {
 		}
 	});
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
 	it("bounds a stalled bridge acquisition and cancels its late body", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
@@ -2993,7 +2999,10 @@ describe("Codex Runtime Driver", () => {
 				announced();
 				return pending;
 			},
+<<<<<<< HEAD
 			revalidate: () => {},
+=======
+>>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
 			writeResult: async () => {
 				throw new Error("unused");
 			},
@@ -3059,7 +3068,10 @@ describe("Codex Runtime Driver", () => {
 					},
 				}),
 			}),
+<<<<<<< HEAD
 			revalidate: () => {},
+=======
+>>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
 			writeResult: async () => {
 				throw new Error("unused");
 			},
@@ -3099,15 +3111,32 @@ describe("Codex Runtime Driver", () => {
 			const bridge = new TestCodexBridge();
 			const driver = await openDriver(join(directory, "driver.json"), bridge);
 			drivers.push(driver);
+<<<<<<< HEAD
 			const bytes = new TextEncoder().encode(
 				"codex-cleanup-replay-probe-image",
 			);
+=======
+			const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+>>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
 			let blocked: string | undefined;
 			const readInput = vi.fn(async (fileId: string) => {
 				if (fileId === "file-2" && !blocked) {
 					// The first attachment is already materialized, so its directory is
 					// identifiable; make its removal fail after native acceptance.
+<<<<<<< HEAD
 					blocked = await blockMaterializedInputDirectory(bytes);
+=======
+					for (const name of await readdir(tmpdir())) {
+						if (!name.startsWith("agent-infra-codex-input-")) continue;
+						const candidate = join(tmpdir(), name);
+						if (!(await readdir(candidate)).includes("00.image")) continue;
+						blocked = join(candidate, "blocked");
+						await mkdir(blocked, { recursive: true });
+						await writeFile(join(blocked, "keep"), "x");
+						await chmod(blocked, 0o500);
+						break;
+					}
+>>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
 				}
 				return {
 					fileId,
@@ -3127,7 +3156,10 @@ describe("Codex Runtime Driver", () => {
 			});
 			const fileBridge = {
 				readInput,
+<<<<<<< HEAD
 				revalidate: () => {},
+=======
+>>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
 				writeResult: async () => {
 					throw new Error("unused");
 				},
@@ -3151,6 +3183,7 @@ describe("Codex Runtime Driver", () => {
 		},
 	);
 
+<<<<<<< HEAD
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 		"retains materialization after a failed attachment and surfaces its cleanup failure",
 		async () => {
@@ -3299,6 +3332,8 @@ describe("Codex Runtime Driver", () => {
 	);
 
 
+=======
+>>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
 	it("keeps Codex attachment capability fail-closed without a bridge", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
