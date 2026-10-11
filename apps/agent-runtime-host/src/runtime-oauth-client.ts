@@ -32,6 +32,7 @@ import {
 } from "./standard-mcp-files.js";
 import { standardMcpInstallationKey } from "./standard-mcp-input.js";
 import {
+	acquireProtectedStandardMcpMaterialLock,
 	ensurePrivateDirectory,
 	publishMaterial,
 } from "./standard-mcp-installation.js";
@@ -324,15 +325,20 @@ export async function createProtectedRuntimeOAuthClient(options: {
 		} finally {
 			await recordDirectory.close();
 		}
-		const directory = await openProtectedStandardMcpDirectory(materials);
-		names = (
-			await readdir(
-				process.platform === "linux"
-					? `/proc/self/fd/${directory.fd}`
-					: materials,
-			)
-		).filter((name) => materialNames.has(name));
+		const releaseMaterialLock =
+			await acquireProtectedStandardMcpMaterialLock(materials);
+		let directory: FileHandle | undefined;
 		try {
+			const openedDirectory =
+				await openProtectedStandardMcpDirectory(materials);
+			directory = openedDirectory;
+			names = (
+				await readdir(
+					process.platform === "linux"
+						? `/proc/self/fd/${openedDirectory.fd}`
+						: materials,
+				)
+			).filter((name) => materialNames.has(name));
 			const failures: unknown[] = [];
 			for (const name of names) {
 				const tokenTypeHint = name.endsWith(".refresh")
@@ -340,7 +346,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					: "access_token";
 				try {
 					const token = await readProtectedOAuthMaterial(
-						directory,
+						openedDirectory,
 						materials,
 						name,
 					);
@@ -354,27 +360,33 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					});
 					await assertProtectedStandardMcpDirectoryCurrent(
 						materials,
-						directory,
+						openedDirectory,
 					);
 					if (
-						(await readProtectedOAuthMaterial(directory, materials, name)) !==
-						token
+						(await readProtectedOAuthMaterial(
+							openedDirectory,
+							materials,
+							name,
+						)) !== token
 					)
 						throw new Error("OAuth material changed during revoke");
-					await unlink(protectedStandardMcpPath(directory, materials, name));
+					await unlink(
+						protectedStandardMcpPath(openedDirectory, materials, name),
+					);
 				} catch (error) {
 					failures.push(error);
 				}
 			}
 			try {
-				await directory.sync();
+				await openedDirectory.sync();
 			} catch (error) {
 				failures.push(error);
 			}
 			if (failures.length > 0)
 				throw new AggregateError(failures, "OAuth revocation incomplete");
 		} finally {
-			await directory.close();
+			await directory?.close();
+			await releaseMaterialLock();
 		}
 	}
 	async function readOptionalMaterial(
