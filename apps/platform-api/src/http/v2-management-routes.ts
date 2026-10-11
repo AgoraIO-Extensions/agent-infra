@@ -544,10 +544,13 @@ export function registerV2ManagementRoutes(
 				metadata,
 				ids,
 			);
+			const schemaVersion =
+				body.source.kind === "standard" && hasDefaultRelayKey ? 3 : 2;
+			if (schemaVersion === 3 && body.defaultRelayKey === undefined)
+				fail("INVALID_REQUEST", metadata.traceId);
 			await dependencies.foundation.submit(
 				{
-					schemaVersion:
-						body.source.kind === "standard" && hasDefaultRelayKey ? 3 : 2,
+					schemaVersion,
 					...ids,
 					idempotencyKey,
 					requestId: metadata.requestId,
