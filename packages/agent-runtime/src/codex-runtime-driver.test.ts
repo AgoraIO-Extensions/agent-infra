@@ -3096,7 +3096,7 @@ describe("Codex Runtime Driver", () => {
 	});
 
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-		"does not replay an accepted Turn while failed materialization cleanup remains",
+		"keeps an accepted Turn's input while native work still owns it",
 		async () => {
 			const directory = await runtimeDirectory();
 			const bridge = new TestCodexBridge();
@@ -3145,15 +3145,27 @@ describe("Codex Runtime Driver", () => {
 				},
 			});
 
-			await expect(driver.execute(command, { fileBridge })).rejects.toThrow();
+			const accepted = await driver.execute(command, { fileBridge });
+			expect(accepted).toMatchObject({
+				result: { outcome: "accepted", status: "running" },
+			});
 			expect(blocked).toBeDefined();
-			// The accepted Turn must not report success while its input remains.
-			await expect(driver.execute(command, { fileBridge })).rejects.toThrow();
+			// Replaying the accepted Turn must not start another native request.
+			await expect(driver.execute(command, { fileBridge })).resolves.toEqual(
+				accepted,
+			);
+			expect(
+				bridge.requests.filter(({ method }) => method === "turn/start"),
+			).toHaveLength(1);
 			if (!blocked) throw new Error("missing blocked materialization");
+			const root = dirname(dirname(blocked));
 			await chmod(blocked, 0o700);
-			await expect(
-				driver.execute(command, { fileBridge }),
-			).resolves.toMatchObject({ result: { outcome: "accepted" } });
+			await bridge.emitTurnCompleted("completed");
+			await vi.waitFor(async () => {
+				expect(
+					(await readdir(root)).filter((entry) => entry.startsWith("turn-")),
+				).toHaveLength(0);
+			});
 		},
 	);
 
@@ -3226,7 +3238,7 @@ describe("Codex Runtime Driver", () => {
 	);
 
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-		"reclaims input bytes a previous process could not remove",
+		"reclaims input bytes a previous process could not remove after shutdown",
 		async () => {
 			const directory = await runtimeDirectory();
 			const path = join(directory, "driver.json");
@@ -3264,21 +3276,18 @@ describe("Codex Runtime Driver", () => {
 					throw new Error("unused");
 				},
 			};
-			const first = await driver
-				.execute(
-					submitCommand({
-						input: {
-							text: "describe this image",
-							attachments: ["file-1", "file-2"],
-						},
-					}),
-					{ fileBridge },
-				)
-				.then(
-					() => undefined,
-					(error: unknown) => error,
-				);
-			expect(isPermissionError(first)).toBe(true);
+			const first = await driver.execute(
+				submitCommand({
+					input: {
+						text: "describe this image",
+						attachments: ["file-1", "file-2"],
+					},
+				}),
+				{ fileBridge },
+			);
+			expect(first).toMatchObject({
+				result: { outcome: "accepted", status: "running" },
+			});
 			if (!blocked) throw new Error("missing blocked materialization");
 			const root = dirname(dirname(blocked));
 			expect(
