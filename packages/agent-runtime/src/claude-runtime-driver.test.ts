@@ -65,6 +65,19 @@ it("bounds and normalizes Claude native command metadata", async () => {
 				aliases: ["\u0000"],
 			},
 		],
+		[
+			{
+				name: "compact",
+				description: "one",
+				argumentHint: "",
+				aliases: ["shrink", "shrink"],
+			},
+		],
+		Array.from({ length: 151 }, (_, index) => ({
+			name: `command-${index}`,
+			description: "bounded",
+			argumentHint: "",
+		})),
 	] as const)
 		await expect(
 			Promise.resolve().then(() => parseClaudeNativeCommands(value)),

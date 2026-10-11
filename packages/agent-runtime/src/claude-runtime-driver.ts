@@ -205,6 +205,7 @@ export function parseClaudeNativeCommands(
 		);
 		if (
 			aliases.length > maxNativeCommandAliases ||
+			new Set(aliases).size !== aliases.length ||
 			aliases.some((alias) => names.has(alias))
 		)
 			nativeCommandsInvalid();
