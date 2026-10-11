@@ -8,6 +8,8 @@ import {
 	FileIntentRequestV1Schema,
 	FileLimitsV1Schema,
 	FileProjectionV1Schema,
+	type RuntimeFileExchangeRequestV1,
+	RuntimeFileExchangeRequestV1Schema,
 } from "@agent-infra/contracts/files";
 import {
 	type ObjectStorageDataV1,
@@ -41,6 +43,15 @@ export interface FileRoutesDependenciesV1 {
 		authenticate(
 			request: Request,
 			grant: FileAccessGrantV1,
+		): Promise<{
+			conversationId: string;
+			authorization: FileAuthorizationPortV1;
+		}>;
+	};
+	readonly runtimeExchange?: {
+		authenticate(
+			request: Request,
+			value: RuntimeFileExchangeRequestV1,
 		): Promise<{
 			conversationId: string;
 			authorization: FileAuthorizationPortV1;
@@ -143,6 +154,69 @@ export function registerFileRoutesV1(
 			);
 			return context.json(
 				FileLimitsV1Schema.parse({ schemaVersion: 1, ...limits }),
+			);
+		}),
+	);
+	app.post(
+		"/internal/v1/files/runtime-exchange",
+		handle(async (context) => {
+			if (!dependencies.runtimeExchange) return denied(context);
+			const request = context.req.raw;
+			const traceId = requestMetadata(request).traceId;
+			const { value } = await parseJson(
+				request,
+				RuntimeFileExchangeRequestV1Schema,
+				traceId,
+			);
+			const idempotencyKey = parseIdempotencyKey(request, traceId);
+			if (idempotencyKey !== value.idempotencyKey) return denied(context);
+			let trusted: Awaited<
+				ReturnType<
+					NonNullable<
+						FileRoutesDependenciesV1["runtimeExchange"]
+					>["authenticate"]
+				>
+			>;
+			try {
+				trusted = await dependencies.runtimeExchange.authenticate(
+					request,
+					value,
+				);
+			} catch {
+				return denied(context);
+			}
+			const file =
+				value.operation === "result"
+					? await dependencies.service.createResult(
+							{
+								conversationId: trusted.conversationId,
+								idempotencyKey,
+								descriptor: value.descriptor,
+							},
+							trusted.authorization,
+						)
+					: await dependencies.service.getFile(
+							{ conversationId: trusted.conversationId, fileId: value.fileId },
+							trusted.authorization,
+						);
+			const access = await dependencies.service.issueAccess(
+				{
+					conversationId: file.conversationId,
+					fileId: file.fileId,
+					operation: value.operation === "result" ? "write" : "read",
+					idempotencyKey,
+				},
+				trusted.authorization,
+			);
+			return context.json(
+				FileAccessResponseV1Schema.parse({
+					schemaVersion: 1,
+					accessId: access.accessId,
+					file: fileProjectionV1(file),
+					path: `/api/v1/conversations/${encodeURIComponent(file.conversationId)}/files/${encodeURIComponent(file.fileId)}/content`,
+					grant: dependencies.codec.sign(access),
+					expiresAt: access.expiresAt,
+				}),
 			);
 		}),
 	);

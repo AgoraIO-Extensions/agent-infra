@@ -3,7 +3,7 @@ import { FakeObjectStorageV1 } from "@agent-infra/object-storage";
 import { expect, it } from "vitest";
 import { assemblePlatformFilesV1 } from "./file-assembly.ts";
 
-it("requires both a signed execution delegation and a mapped service, then rechecks its actor", async () => {
+function createAssemblyFixture() {
 	const keys = generateKeyPairSync("ed25519");
 	const actor = {
 		schemaVersion: 1 as const,
@@ -20,8 +20,7 @@ it("requires both a signed execution delegation and a mapped service, then reche
 		maxBytes: 100,
 		mediaTypes: ["text/plain"],
 	};
-	let revoked = false;
-	let channelId = "web";
+	const state = { revoked: false, channelId: "web" };
 	const mapping = {
 		token: "synthetic-service-token-442-123456789",
 		agentIds: ["agent"],
@@ -41,7 +40,7 @@ it("requires both a signed execution delegation and a mapped service, then reche
 			accessTtlMs: 10000,
 			maxConcurrentTransfers: 2,
 			services: [mapping],
-			resolveActor: async () => (revoked ? null : actor),
+			resolveActor: async () => (state.revoked ? null : actor),
 			readLimits: async () => ({
 				configurationRevision: 1,
 				declarations: { agent: limits, channel: limits, deployment: limits },
@@ -59,13 +58,18 @@ it("requires both a signed execution delegation and a mapped service, then reche
 					schemaVersion: 1,
 					actorId: identity.userId,
 					agentId: "agent",
-					channelId,
+					channelId: state.channelId,
 					authorizationRevision: "auth-1",
 					supportsSupplementaryInstruction: false,
 				},
 			}),
 		},
 	});
+	return { assembled, keys, mapping, state };
+}
+
+it("requires both a signed execution delegation and a mapped service, then rechecks its actor", async () => {
+	const { assembled, keys, mapping, state } = createAssemblyFixture();
 	const claims = {
 		schemaVersion: 1,
 		issuer: "platform-runtime",
@@ -118,14 +122,61 @@ it("requires both a signed execution delegation and a mapped service, then reche
 			actorId: "alice",
 			execution: { executionId: "execution", attachments: ["file-input"] },
 		});
-		channelId = "other";
+		state.channelId = "other";
 		expect(
 			await accepted.authorization.authorize("conversation", "read"),
 		).toBeNull();
-		channelId = "web";
-		revoked = true;
+		state.channelId = "web";
+		state.revoked = true;
 		await expect(
 			accepted.authorization.authorize("conversation", "read"),
+		).rejects.toThrow();
+	} finally {
+		await assembled.close();
+	}
+});
+
+it("keeps the production Runtime exchange fail-closed until the grant is resolved server-side", async () => {
+	const { assembled, mapping } = createAssemblyFixture();
+	const request = new Request(
+		"http://platform/internal/v1/files/runtime-exchange",
+		{ headers: { Authorization: `Bearer ${mapping.token}` } },
+	);
+	const binding = {
+		schemaVersion: 1 as const,
+		actorId: "alice",
+		agentId: "agent",
+		channelId: "web",
+		conversationId: "conversation",
+		executionId: "execution",
+		sessionGeneration: 1,
+		grantId: "grant",
+		expiresAt: "2099-01-01T00:00:00Z",
+		idempotencyKey: "runtime-1",
+	};
+	try {
+		const runtimeExchange = assembled.dependencies.runtimeExchange;
+		if (!runtimeExchange) throw new Error("Runtime exchange missing");
+		await expect(
+			runtimeExchange.authenticate(request, {
+				...binding,
+				operation: "read",
+				fileId: "unlisted-same-conversation-file",
+			}),
+		).rejects.toThrow();
+		await expect(
+			runtimeExchange.authenticate(request, {
+				...binding,
+				operation: "result",
+				expiresAt: "2100-01-01T00:00:00Z",
+				descriptor: {
+					name: "runtime.txt",
+					mediaType: "text/plain",
+					sizeBytes: 5,
+					sha256:
+						"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+				},
+			}),
 		).rejects.toThrow();
 	} finally {
 		await assembled.close();

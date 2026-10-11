@@ -13,6 +13,7 @@ import {
 	fileExchangeOpenApiPathsV1,
 	fileOpenApiPathsV1,
 	fileSchemasV1,
+	runtimeFileExchangeOpenApiPathsV1,
 } from "./files.ts";
 import {
 	IdempotencyKeyV1Schema,
@@ -896,7 +897,11 @@ function buildArtifacts() {
 		fileOpenapi: createDocument({
 			openapi: "3.1.0",
 			info: { title: "Platform Authenticated Files API", version: "1.0.0" },
-			paths: { ...fileOpenApiPathsV1, ...fileExchangeOpenApiPathsV1 },
+			paths: {
+				...fileOpenApiPathsV1,
+				...fileExchangeOpenApiPathsV1,
+				...runtimeFileExchangeOpenApiPathsV1,
+			},
 			components: { schemas: fileSchemasV1 },
 		}),
 		platformAuthOpenapi: createDocument({
