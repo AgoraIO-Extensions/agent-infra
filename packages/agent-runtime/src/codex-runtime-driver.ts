@@ -4958,6 +4958,31 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return directory;
 	}
 
+	/** Read one manifest-listed Hub resource without creating a native Turn. */
+	async readNativeSkill(
+		read: CodexNativeCommandReadContext,
+		name: string,
+		relativePath: string,
+	): Promise<Uint8Array> {
+		const directory = this.skillDirectory;
+		if (!directory) skillDirectoryInvalid();
+		const binding = this.nativeCommandBinding(read);
+		const metadataRead = this.nativeMetadataRead(read, binding);
+		const generationId = directory.generationId;
+		const projectionSnapshot = JSON.stringify(directory.findSkills());
+		await metadataRead.revalidate();
+		const bytes = await metadataRead.wait(
+			directory.readSkill(name, relativePath),
+		);
+		if (
+			directory.generationId !== generationId ||
+			JSON.stringify(directory.findSkills()) !== projectionSnapshot
+		)
+			skillDirectoryInvalid();
+		await metadataRead.revalidate();
+		return bytes.slice();
+	}
+
 	async readNativeStatus(
 		selection: CodexNativeStatusSelection,
 		read: CodexNativeCommandReadContext,

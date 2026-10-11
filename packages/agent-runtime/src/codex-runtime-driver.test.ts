@@ -10334,6 +10334,35 @@ async function skillDiscoveryFixture(
 }
 
 describe("installed Codex Skill complete discovery (controlled behavior only)", () => {
+	it("reads a manifest-listed mounted Hub resource through the Driver seam", async () => {
+		const directory: RuntimeFilesystemSkillDirectoryV1 = {
+			generationId: "d".repeat(64),
+			findSkills: () => [
+				{
+					schemaVersion: 1,
+					name: "hub-skill",
+					version: "1.0.0",
+					packageDigest: "a".repeat(64),
+					manifestDigest: "b".repeat(64),
+					targetPath: ".agents/skills/hub-skill",
+					readOnly: true,
+				},
+			],
+			readSkill: async (name, relativePath) => {
+				expect(name).toBe("hub-skill");
+				expect(relativePath).toBe("SKILL.md");
+				return Uint8Array.from([1, 2, 3]);
+			},
+		};
+		const f = await skillDiscoveryFixture(undefined, {
+			installedSkill: undefined,
+			skillDirectory: directory,
+		});
+		await expect(
+			f.driver.readNativeSkill(f.read, "hub-skill", "SKILL.md"),
+		).resolves.toEqual(Uint8Array.from([1, 2, 3]));
+	});
+
 	it.each(["null metadata", "null interface fields"])(
 		"admits the official absent %s shape without accepting assets or dependencies",
 		async (kind) => {
