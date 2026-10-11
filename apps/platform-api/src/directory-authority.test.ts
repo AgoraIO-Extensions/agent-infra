@@ -8,7 +8,9 @@ import {
 	createDirectoryOrganizationIdsResolverV1,
 } from "./directory-authority.js";
 
-const now = Date.now();
+// Keep the fixture current so the 24-hour snapshot validity window does not
+// expire when the hosted suite runs after the original calendar date.
+const now = Date.now() - 60_000;
 const snapshot = createSnapshot({
 	source: "internal",
 	rootDepartmentId: 1,

@@ -5,6 +5,7 @@ import type {
 	BrowserCapabilityDeclarationV1,
 	RuntimeAuthorizationRenewRequestV3,
 	RuntimeBrowserCapabilityProbeEvidenceV1,
+	RuntimeBusinessRequestV4,
 	RuntimeCapabilitiesRequestV1,
 	RuntimeCapabilitiesResponseV1,
 	RuntimeCapabilitiesV1,
@@ -70,6 +71,7 @@ import {
 import type { RuntimeBrowserCapabilityAssemblyFailureV1 } from "./browser-capability.js";
 import type {
 	RuntimeDriver,
+	RuntimeDriverExecutionContextV1,
 	RuntimeExternalActionAuthorization,
 } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
@@ -89,10 +91,15 @@ import {
 	type RuntimeOriginalExecutionRef,
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
+import {
+	createRuntimeFileBridgeBindingV1,
+	type RuntimeFileBridgeFactoryV1,
+	type RuntimeFileBridgePortV1,
+} from "./runtime-file-bridge.js";
 import { RuntimeHostV3 } from "./runtime-host-v3.js";
 import { RuntimeHostV4 } from "./runtime-host-v4.js";
 
-interface RuntimeHostOptions {
+export interface RuntimeHostOptions {
 	grantValidationV2?: RuntimeGrantValidationOptionsV2;
 	allowLegacyBusiness?: boolean;
 	validateGrantV4?: (request: unknown) => Promise<{
@@ -115,6 +122,8 @@ interface RuntimeHostOptions {
 	) => void;
 	store: FileRuntimeStore;
 	driver: RuntimeDriver;
+	/** Factory for a bridge bound to the validated request supplied to getFileBridge. */
+	fileBridge?: RuntimeFileBridgeFactoryV1;
 	grantValidation: ExecutionGrantValidationOptions;
 	afterOperationPrepared?: (operationId: string) => void | Promise<void>;
 	afterDriverResult?: (operationId: string) => void | Promise<void>;
@@ -384,8 +393,16 @@ export class RuntimeHost {
 					if (this.closed) runtimeAuthorizationDenied();
 				},
 				validateGrant: options.validateGrantV4,
-				dispatch: (ref, operation, allowBusinessExecution) =>
-					this.dispatch(ref, operation, allowBusinessExecution),
+				dispatch: (ref, operation, allowBusinessExecution, context) =>
+					this.dispatch(ref, operation, allowBusinessExecution, context),
+				...(options.fileBridge
+					? {
+							createFileBridge: (
+								request: RuntimeBusinessRequestV4,
+								claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4,
+							) => this.createFileBridgeFor(request, claims),
+						}
+					: {}),
 				serialize: (key, work) => this.serialize(key, work),
 				installKey: (scope, hostSessionRef, relayKey) => {
 					const original = options.store.readOriginalExecutionKeyScopeV4(scope);
@@ -456,6 +473,37 @@ export class RuntimeHost {
 		// without changing running/unknown receipts or claiming native drain.
 		// In-flight requests retain their own credential until Driver close drains them.
 		this.executionKeys.clear();
+	}
+	/**
+	 * Return the request-scoped file port only when deployment wiring supplied
+	 * one. A missing bridge stays fail-closed and never enables Driver media.
+	 */
+	async getFileBridge(
+		request:
+			| RuntimeSubmitTurnTransportV4["businessRequest"]
+			| RuntimeSupplementTransportV4["businessRequest"],
+	): Promise<RuntimeFileBridgePortV1> {
+		this.requireLegacyHost();
+		if (!this.options.fileBridge || !this.options.validateGrantV4)
+			runtimeAuthorizationDenied();
+		const accepted = await this.options.validateGrantV4(request);
+		return this.createFileBridgeFor(accepted.request, accepted.claims);
+	}
+
+	private async createFileBridgeFor(
+		request:
+			| RuntimeSubmitTurnTransportV4["businessRequest"]
+			| RuntimeSupplementTransportV4["businessRequest"],
+		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4,
+	): Promise<RuntimeFileBridgePortV1> {
+		this.requireLegacyHost();
+		if (!this.options.fileBridge) runtimeAuthorizationDenied();
+		const binding = await createRuntimeFileBridgeBindingV1({
+			request,
+			claims,
+			now: this.options.grantValidationV2?.now?.() ?? Date.now(),
+		});
+		return this.options.fileBridge(binding);
 	}
 	private requireLegacyHost() {
 		if (this.closed) runtimeAuthorizationDenied();
@@ -1562,6 +1610,7 @@ export class RuntimeHost {
 		hostSessionRef: string,
 		operation: StoredOperation,
 		allowBusinessExecution = true,
+		context?: RuntimeDriverExecutionContextV1,
 	): Promise<RuntimeOperationResponse> {
 		if (
 			operation.state === "resolved" &&
@@ -1634,8 +1683,36 @@ export class RuntimeHost {
 					operation,
 					(this.options.grantValidationV2?.now ?? Date.now)(),
 				);
+			const recordResultFile = this.options.driver.recordResultFile?.bind(
+				this.options.driver,
+			);
+			const originalFileBridge = context?.fileBridge;
+			const driverContext =
+				originalFileBridge && recordResultFile
+					? {
+							...context,
+							fileBridge: {
+								readInput(fileId: string) {
+									return originalFileBridge.readInput(fileId);
+								},
+								async writeResult(
+									descriptor: Parameters<
+										RuntimeFileBridgePortV1["writeResult"]
+									>[0],
+									body: Parameters<RuntimeFileBridgePortV1["writeResult"]>[1],
+								) {
+									const result = await originalFileBridge.writeResult(
+										descriptor,
+										body,
+									);
+									await recordResultFile(operation.command, result);
+									return result;
+								},
+							},
+						}
+					: context;
 			const executed = await callDriverWithUncertainty(() =>
-				this.options.driver.execute(operation.command),
+				this.options.driver.execute(operation.command, driverContext),
 			);
 			if (executed === driverUncertain) {
 				if (isInterruption(operation)) {

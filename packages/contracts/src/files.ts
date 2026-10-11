@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { OpaqueIdV1Schema, Rfc3339TimestampV1Schema } from "./index.ts";
+import {
+	IdempotencyKeyV1Schema,
+	OpaqueIdV1Schema,
+	Rfc3339TimestampV1Schema,
+} from "./index.ts";
 import { ExecutionGrantV1Schema } from "./pilot/delegated.ts";
 
 export const FileDescriptorV1Schema = z.strictObject({
@@ -108,6 +112,37 @@ export const FileExchangeRequestV1Schema = z.discriminatedUnion("operation", [
 		descriptor: FileDescriptorV1Schema,
 	}),
 ]);
+
+const runtimeFileExchangeBindingV1 = {
+	schemaVersion: z.literal(1),
+	actorId: OpaqueIdV1Schema,
+	agentId: OpaqueIdV1Schema,
+	channelId: OpaqueIdV1Schema,
+	conversationId: OpaqueIdV1Schema,
+	executionId: OpaqueIdV1Schema,
+	sessionGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+	grantId: OpaqueIdV1Schema,
+	expiresAt: Rfc3339TimestampV1Schema,
+	idempotencyKey: IdempotencyKeyV1Schema,
+};
+export const RuntimeFileExchangeRequestV1Schema = z.discriminatedUnion(
+	"operation",
+	[
+		z.strictObject({
+			...runtimeFileExchangeBindingV1,
+			operation: z.literal("read"),
+			fileId: OpaqueIdV1Schema,
+		}),
+		z.strictObject({
+			...runtimeFileExchangeBindingV1,
+			operation: z.literal("result"),
+			descriptor: FileDescriptorV1Schema,
+		}),
+	],
+);
+export type RuntimeFileExchangeRequestV1 = z.infer<
+	typeof RuntimeFileExchangeRequestV1Schema
+>;
 export const fileSchemasV1 = {
 	FileDescriptorV1: FileDescriptorV1Schema,
 	FileLimitsV1: FileLimitsV1Schema,
@@ -119,6 +154,7 @@ export const fileSchemasV1 = {
 	FileAccessResponseV1: FileAccessResponseV1Schema,
 	FileCompleteRequestV1: FileCompleteRequestV1Schema,
 	FileExchangeRequestV1: FileExchangeRequestV1Schema,
+	RuntimeFileExchangeRequestV1: RuntimeFileExchangeRequestV1Schema,
 };
 export type FileAccessGrantV1 = z.infer<typeof FileAccessGrantV1Schema>;
 
