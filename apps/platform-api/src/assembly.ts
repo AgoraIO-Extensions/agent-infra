@@ -132,6 +132,7 @@ export interface PlatformApiAssemblyInput {
 	readonly validateDefaultRelayKey?: (
 		keyValue: string,
 	) => Promise<"valid" | "invalid" | "unavailable">;
+	readonly enforceDefaultRelayKey?: boolean;
 	readonly admissions: Admissions | ((queries: AssemblyQueries) => Admissions);
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly connectionCapability?: ConnectionCapabilityV1;
@@ -706,6 +707,7 @@ export function assemblePlatformApi(
 			...(input.validateDefaultRelayKey
 				? { validateDefaultRelayKey: input.validateDefaultRelayKey }
 				: {}),
+			...(input.agentDefaultRelayKeys ? { enforceDefaultRelayKey: true } : {}),
 		},
 		configuration: {
 			identity: input.identity,

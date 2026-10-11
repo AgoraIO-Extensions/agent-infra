@@ -439,6 +439,7 @@ export function createDeploymentAdmissionsV1(
 					: undefined;
 				if (
 					selection.kind === "standard" &&
+					template?.loadValidation &&
 					(readiness?.state !== "ready" ||
 						selection.templateRevision !== readiness.revision)
 				)

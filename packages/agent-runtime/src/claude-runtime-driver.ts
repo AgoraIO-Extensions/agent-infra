@@ -29,9 +29,9 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
-	RuntimeModelDirectory,
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
+	RuntimeModelDirectory,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
