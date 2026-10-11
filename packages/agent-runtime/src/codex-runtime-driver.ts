@@ -4251,6 +4251,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		options: CodexRuntimeDriverOptions,
 		openBridge: OpenCodexBridge,
 	) {
+		if (
+			options.installedSkill !== undefined &&
+			options.skillDirectory !== undefined
+		)
+			configurationInvalid();
 		const installedSkillInput = options.installedSkill;
 		const installedSkill =
 			installedSkillInput === undefined
@@ -4954,6 +4959,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const binding = this.nativeCommandBinding(read);
 		const descriptor = this.installedSkill;
 		const mountedEntries = this.skillDirectory?.findSkills();
+		const mountedGenerationId = this.skillDirectory?.generationId;
+		const mountedSnapshot = this.skillDirectory
+			? JSON.stringify([mountedGenerationId, mountedEntries])
+			: undefined;
+		const assertMountedCurrent = () => {
+			if (
+				this.skillDirectory &&
+				JSON.stringify([
+					this.skillDirectory.generationId,
+					this.skillDirectory.findSkills(),
+				]) !== mountedSnapshot
+			)
+				skillDirectoryInvalid();
+		};
 		if (
 			(!descriptor && !mountedEntries) ||
 			(descriptor &&
@@ -5012,6 +5031,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					process.launch.cwd,
 					mountedEntries ?? [],
 				);
+		assertMountedCurrent();
 		const revision = createHash("sha256")
 			.update(
 				JSON.stringify([
@@ -5019,6 +5039,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					binding,
 					binding.requiredRuntime,
 					descriptor ?? mountedEntries,
+					mountedGenerationId,
 					process.launch.processId,
 					process.launch.cwd,
 					epoch,
@@ -5058,6 +5079,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			capabilities,
 		};
 		await metadataRead.revalidate();
+		assertMountedCurrent();
 		return directory;
 	}
 

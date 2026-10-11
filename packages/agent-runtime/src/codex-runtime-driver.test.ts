@@ -10377,6 +10377,48 @@ describe("installed Codex Skill complete discovery (controlled behavior only)", 
 		});
 	});
 
+	it("rejects a mounted generation change during native discovery", async () => {
+		let generationId = "d".repeat(64);
+		const entry = {
+			schemaVersion: 1 as const,
+			name: "hub-skill",
+			version: "1.0.0",
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			targetPath: ".agents/skills/hub-skill",
+			readOnly: true as const,
+		};
+		const skillDirectory: RuntimeFilesystemSkillDirectoryV1 = {
+			get generationId() {
+				return generationId;
+			},
+			findSkills: () => [entry],
+			readSkill: async () => new Uint8Array([1]),
+		};
+		const f = await skillDiscoveryFixture(
+			(bridge) => {
+				bridge.beforeResponse = (method) => {
+					if (method === "skills/list") generationId = "e".repeat(64);
+				};
+			},
+			{ installedSkill: undefined, skillDirectory },
+		);
+		await expect(f.driver.discoverNativeSkills(f.read)).rejects.toMatchObject({
+			code: "RUNTIME_CODEX_SKILL_DIRECTORY_INVALID",
+		});
+	});
+
+	it("rejects simultaneous legacy and Hub Skill roots before native setup", async () => {
+		const skillDirectory: RuntimeFilesystemSkillDirectoryV1 = {
+			generationId: "d".repeat(64),
+			findSkills: () => [],
+			readSkill: async () => new Uint8Array(),
+		};
+		await expect(
+			skillDiscoveryFixture(undefined, { skillDirectory }),
+		).rejects.toMatchObject({ code: "RUNTIME_CODEX_CONFIGURATION_INVALID" });
+	});
+
 	it.each(["null metadata", "null interface fields"])(
 		"admits the official absent %s shape without accepting assets or dependencies",
 		async (kind) => {
