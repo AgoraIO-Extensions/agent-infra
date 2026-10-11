@@ -53,6 +53,16 @@ it("rejects a Platform-disabled administrator inside the governance transaction"
 	await client`delete from platform.platform_user_disables where user_id=${administrator}`;
 });
 
+it("reads opaque user IDs for current Platform gates", async () => {
+	const userId = "authentik_opaque_user_01";
+	await client`insert into platform.platform_user_disables(user_id) values (${userId})`;
+	try {
+		expect(await store.isPlatformDisabled(userId)).toBe(true);
+	} finally {
+		await client`delete from platform.platform_user_disables where user_id=${userId}`;
+	}
+});
+
 it("rolls back the disable when its required audit cannot be written", async () => {
 	await client`
 		create function platform.fail_platform_user_disable_audit()

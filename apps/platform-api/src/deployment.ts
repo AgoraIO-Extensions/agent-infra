@@ -236,6 +236,21 @@ export function createProductionPlatformApiAssemblyInputV1(
 					}
 				: null;
 		});
+	const loadAuthorityContext = async () => {
+		const authority = await input.loadAuthorityContext();
+		const users = await Promise.all(
+			authority.users.map(async (user) => {
+				if (user.accountStatus !== "active") return user;
+				return {
+					...user,
+					accountStatus: (await userGovernance.isPlatformDisabled(user.userId))
+						? ("disabled" as const)
+						: user.accountStatus,
+				};
+			}),
+		);
+		return { ...authority, users };
+	};
 	return {
 		...(input.connectionInstallation
 			? {
@@ -251,7 +266,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 			: {}),
 		agentApiCreation: {
 			allowedPrincipals,
-			loadAuthorityContext: input.loadAuthorityContext,
+			loadAuthorityContext,
 			admissions: ({ principal, authorizationAdmission }) => ({
 				...createDeploymentAdmissionsV1({
 					...apiAdmissionInput,
@@ -307,7 +322,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 			authorizationAdmission: createDeploymentAuthorizationAdmission({
 				identityScope,
 				configurationQuery,
-				loadAuthorityContext: input.loadAuthorityContext,
+				loadAuthorityContext,
 			}),
 		}),
 		deploymentConfiguration: {
