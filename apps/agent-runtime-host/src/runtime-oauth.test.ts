@@ -904,6 +904,23 @@ it("retains prior material when refresh metadata persistence fails", async () =>
 			"utf8",
 		),
 	).toBe(refresh);
+	expect(await readdir(join(f.root, "materials"))).toContain(
+		"oauth-rotation.json",
+	);
+	await recoverProtectedStandardMcpMaterialRotation(join(f.root, "materials"));
+	expect(
+		await readFile(
+			join(
+				f.root,
+				"materials",
+				names.find((name) => name.endsWith(".access")) as string,
+			),
+			"utf8",
+		),
+	).toBe(access);
+	expect(await readdir(join(f.root, "materials"))).not.toContain(
+		"oauth-rotation.json",
+	);
 });
 
 it("rejects an unsuccessful refresh response before parsing token material", async () => {
