@@ -86,6 +86,10 @@ import {
 	type TaskRoutesDependencies,
 } from "./http/task-routes.js";
 import {
+	registerUnknownStopOperationsRoutes,
+	type UnknownStopOperationsRouteDependencies,
+} from "./http/unknown-stop-operations-routes.js";
+import {
 	registerUserGovernanceRoutes,
 	type UserGovernanceRoutesDependencies,
 } from "./http/user-governance-routes.js";
@@ -134,6 +138,7 @@ export interface PlatformAppDependencies {
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
 	readonly tasks?: TaskRoutesDependencies;
+	readonly unknownStopOperations?: UnknownStopOperationsRouteDependencies;
 	readonly management: ManagementRouteDependencies;
 	readonly personalApiCredentials?: PersonalApiCredentialRouteDependencies;
 	readonly personalRelayKeys?: PersonalRelayKeyRoutesDependencies;
@@ -260,6 +265,11 @@ export function createPlatformApp(
 		files: dependencies.files,
 	});
 	if (dependencies.tasks) registerTaskRoutes(app, dependencies.tasks);
+	if (dependencies.unknownStopOperations)
+		registerUnknownStopOperationsRoutes(
+			app,
+			dependencies.unknownStopOperations,
+		);
 	registerSessionAuditRoutes(app, dependencies.sessionAudit);
 	if (dependencies.scopedAudit)
 		registerScopedAuditRoutes(app, dependencies.scopedAudit);
