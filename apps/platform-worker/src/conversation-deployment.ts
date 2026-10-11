@@ -4,6 +4,7 @@ import {
 	type ApprovedConnectionConsumerTargetV1,
 	resolveApprovedConnectionConsumerProfileV1,
 } from "@agent-infra/contracts/connection-consumer-profile";
+import type { BrowserCapabilityBindingV1 } from "@agent-infra/contracts/runtime";
 import {
 	type AgentWorkloadDesiredV1,
 	validateAgentWorkloadDesiredV1,
@@ -224,11 +225,44 @@ export function createProductionConversationRuntimeResolverV2(options: {
 				deployment.runtimeManifest.interactionMode !== "platform-adapter"
 			)
 				throw new Error();
+			let sessionBrowserBinding: BrowserCapabilityBindingV1 | undefined;
+			if (input.purpose === "business" && input.conversationId) {
+				const sandboxResource = input.sandboxResource;
+				if (
+					!sandboxResource ||
+					sandboxResource.status !== "ready" ||
+					sandboxResource.desiredState !== "running" ||
+					!sandboxResource.policy ||
+					sandboxResource.sandbox.sessionId !== input.conversationId ||
+					sandboxResource.sandbox.agentId !== input.agentId ||
+					sandboxResource.sandbox.generation !== input.sessionGeneration ||
+					sandboxResource.sandbox.workspaceScope !==
+						sandboxResource.sandbox.sandboxId ||
+					sandboxResource.policy.imageDigest !== deployment.imageDigest ||
+					sandboxResource.policy.configurationRevision !==
+						state.sourceConfigurationRevision ||
+					sandboxResource.policy.workloadRevision !==
+						deployment.workloadRevision ||
+					sandboxResource.policy.resourceConfigurationHash !==
+						workloadResourceConfigurationHashV1(workload.policy)
+				)
+					throw new Error();
+				sessionBrowserBinding = {
+					agentId: input.agentId,
+					sessionId: input.conversationId,
+					sessionGeneration: sandboxResource.sandbox.generation,
+					resourceFence: sandboxResource.resourceFence,
+					workloadRevision: deployment.workloadRevision,
+					imageDigest: deployment.imageDigest,
+				};
+			}
 			// observe checks actual ownership, UID/generation, Pod/spec/Secret/network
 			// drift, health and signed Runtime readiness; it never changes resources.
 			const health = await (input.purpose === "control"
 				? runtime.observeVerifiedControl(state)
-				: runtime.observe(state));
+				: sessionBrowserBinding
+					? runtime.observeSession(state, sessionBrowserBinding)
+					: runtime.observe(state));
 			if (health !== "healthy") throw new Error();
 			if (
 				input.purpose === "business" &&

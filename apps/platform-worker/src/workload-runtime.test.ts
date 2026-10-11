@@ -2918,17 +2918,24 @@ describe("assembled Workload Runtime contracts", () => {
 				imageDigest,
 			},
 		};
-		const probeRuntime = vi.fn(async () => ({
-			core: "passed" as const,
-			capabilities: {
-				modelSelection: false,
-				attachments: false,
-				resultFiles: false,
-				connection: false,
-				supplementaryInstruction: false,
-				browser: browserProbe,
-			},
-		}));
+		const probeRuntime = vi.fn(
+			async (input: {
+				readonly browserBinding?: RuntimeBrowserCapabilityProbeEvidenceV1["binding"];
+			}) => ({
+				core: "passed" as const,
+				capabilities: {
+					modelSelection: false,
+					attachments: false,
+					resultFiles: false,
+					connection: false,
+					supplementaryInstruction: false,
+					browser: {
+						...browserProbe,
+						...(input.browserBinding ? { binding: input.browserBinding } : {}),
+					},
+				},
+			}),
+		);
 		const f = fixture({
 			registry: workloadRegistryFixture({
 				schemaVersion: 1,
@@ -2963,6 +2970,22 @@ describe("assembled Workload Runtime contracts", () => {
 			provenance: browserProbe.provenance,
 			conformance: browserProbe.conformance,
 		});
+		if (!browserProbe.binding || !f.state)
+			throw new Error("Missing Browser binding");
+		const runtime = createWorkloadRuntimeV1(f.options);
+		const sessionA = { ...browserProbe.binding, sessionId: "session-a" };
+		const sessionB = { ...browserProbe.binding, sessionId: "session-b" };
+		await expect(runtime.observeSession(f.state, sessionA)).resolves.toBe(
+			"healthy",
+		);
+		await expect(runtime.observeSession(f.state, sessionB)).resolves.toBe(
+			"healthy",
+		);
+		expect(
+			probeRuntime.mock.calls
+				.slice(-2)
+				.map(([input]) => input.browserBinding?.sessionId),
+		).toEqual(["session-a", "session-b"]);
 	});
 	it("uses RuntimeHost Fake HTTP capabilities and persists only the declared intersection across Worker restarts", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "workload-runtime-"));

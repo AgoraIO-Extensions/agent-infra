@@ -393,6 +393,10 @@ export function createWorkloadRuntimeV1(
 	observeVerifiedControl(
 		state: WorkloadReconciliationStateV1,
 	): ReturnType<WorkloadRuntimePortV1["observe"]>;
+	observeSession(
+		state: WorkloadReconciliationStateV1,
+		browserBinding: BrowserCapabilityBindingV1,
+	): ReturnType<WorkloadRuntimePortV1["observe"]>;
 } {
 	if (!Array.isArray(options.templateModelBindings))
 		throw new TypeError("Template model bindings are required");
@@ -434,6 +438,7 @@ export function createWorkloadRuntimeV1(
 		state?: Pick<WorkloadReconciliationStateV1, "candidate">,
 		purpose: "authorize" | "cleanup" = "authorize",
 		connectionConsumerControl = false,
+		browserBinding?: BrowserCapabilityBindingV1,
 	) {
 		const modelProjection =
 			state?.candidate.configuration.source.kind === "standard"
@@ -480,6 +485,18 @@ export function createWorkloadRuntimeV1(
 					return true;
 				}
 				const controller = new AbortController();
+				const resolvedBrowserBinding =
+					browserBinding ??
+					(desired.runtimeManifest.capabilities?.browser &&
+					options.browserBinding
+						? options.browserBinding({
+								agentId: desired.agentId,
+								workloadRevision: desired.workloadRevision,
+								fence: desired.fence,
+								imageDigest: desired.imageDigest,
+								manifest: desired.runtimeManifest,
+							})
+						: undefined);
 				const timer = setTimeout(() => controller.abort(), 10_000);
 				let probe: Awaited<
 					ReturnType<WorkloadRuntimeOptionsV1["probeRuntime"]>
@@ -493,17 +510,8 @@ export function createWorkloadRuntimeV1(
 							imageDigest: desired.imageDigest,
 							baseUrl,
 							manifest: desired.runtimeManifest,
-							...(desired.runtimeManifest.capabilities?.browser &&
-							options.browserBinding
-								? {
-										browserBinding: options.browserBinding({
-											agentId: desired.agentId,
-											workloadRevision: desired.workloadRevision,
-											fence: desired.fence,
-											imageDigest: desired.imageDigest,
-											manifest: desired.runtimeManifest,
-										}),
-									}
+							...(resolvedBrowserBinding
+								? { browserBinding: resolvedBrowserBinding }
 								: {}),
 							signal: controller.signal,
 						}),
@@ -758,6 +766,34 @@ export function createWorkloadRuntimeV1(
 			if (!removed) return false;
 		}
 		return true;
+	}
+	async function observe(
+		state: WorkloadReconciliationStateV1,
+		browserBinding?: BrowserCapabilityBindingV1,
+	) {
+		observedCapabilities.delete(state);
+		if (!state.identity) return "pending" as const;
+		if (state.phase === "ready" && candidateKeyless(state))
+			await revalidateCandidateCatalog(state, true);
+		let capabilities: WorkloadCapabilitiesV1 | undefined;
+		const observation = createAdapter(
+			(value) => {
+				capabilities = value;
+			},
+			state,
+			"authorize",
+			false,
+			browserBinding,
+		);
+		const health = await observation.observe(
+			desired(state),
+			state.identity,
+			routeSelectorMode(state),
+			state.phase === "observing" ? "activation" : "required",
+		);
+		if (health === "healthy" && state.phase === "promoting" && capabilities)
+			observedCapabilities.set(state, capabilities);
+		return health;
 	}
 	return {
 		async capabilities(state) {
@@ -1180,24 +1216,11 @@ export function createWorkloadRuntimeV1(
 				? observation.observe(original, state.identity, "open", "required")
 				: health;
 		},
+		async observeSession(state, browserBinding) {
+			return observe(state, browserBinding);
+		},
 		async observe(state) {
-			observedCapabilities.delete(state);
-			if (!state.identity) return "pending";
-			if (state.phase === "ready" && candidateKeyless(state))
-				await revalidateCandidateCatalog(state, true);
-			let capabilities: WorkloadCapabilitiesV1 | undefined;
-			const observation = createAdapter((value) => {
-				capabilities = value;
-			}, state);
-			const health = await observation.observe(
-				desired(state),
-				state.identity,
-				routeSelectorMode(state),
-				state.phase === "observing" ? "activation" : "required",
-			);
-			if (health === "healthy" && state.phase === "promoting" && capabilities)
-				observedCapabilities.set(state, capabilities);
-			return health;
+			return observe(state);
 		},
 		async activateSecrets(state, input) {
 			assertCandidateMaterializationAllowed(state);
