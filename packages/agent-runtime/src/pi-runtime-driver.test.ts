@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { PiRuntimeDriver } from "./pi-runtime-driver.js";
+import type { SessionNativeCommandReadContext } from "./session-runtime-driver.js";
 
 const command = {
 	schemaVersion: 2 as const,
@@ -130,6 +131,31 @@ it.each([false, true])(
 		}
 	},
 );
+
+it("reads the bounded Pi get_commands projection from a live native handle", async () => {
+	const f = await fixture();
+	try {
+		const accepted = await f.driver.execute(command);
+		const read: SessionNativeCommandReadContext = {
+			nativeSessionRef: accepted.nativeSessionRef,
+			signal: new AbortController().signal,
+			expiresAt: Date.now() + 10_000,
+			assertCurrent: () => {},
+			revalidate: async () => {},
+		};
+		expect(await f.driver.discoverNativeCommands(read)).toMatchObject({
+			nativeId: expect.any(String),
+			commands: [
+				{
+					name: "workspace-summary",
+					source: "skill",
+				},
+			],
+		});
+	} finally {
+		await f.close();
+	}
+});
 
 it.each(["normal", "cancel", "abort-only"])(
 	"does not interpret abort ACK as a terminal result (%s)",

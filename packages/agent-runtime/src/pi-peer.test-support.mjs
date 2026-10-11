@@ -102,6 +102,17 @@ for await (const line of createInterface({ input: process.stdin })) {
 		ack();
 	}
 	if (command.type === "get_messages") ack({ messages });
+	if (command.type === "get_commands")
+		ack({
+			commands: [
+				{
+					name: "workspace-summary",
+					source: "skill",
+					description: "Summarize approved workspace files",
+					path: `${process.cwd()}/.agents/skills/workspace-summary/SKILL.md`,
+				},
+			],
+		});
 	if (command.type === "prompt") {
 		if (mode === "stale-terminal") {
 			ack();

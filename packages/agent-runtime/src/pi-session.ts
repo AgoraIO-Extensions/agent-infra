@@ -5,6 +5,7 @@ import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import type { NativeProcessLaunch } from "./native-process.js";
+import { readPiNativeCommandsV1 } from "./pi-native-command.js";
 import { openPiRpc, type PiFrame, piRecord } from "./pi-rpc.js";
 import type { NativeSessionOptions } from "./session-runtime-driver.js";
 
@@ -396,6 +397,20 @@ export async function openPiSession(
 		}
 		return {
 			nativeId,
+			async discoverCommands(input: {
+				readonly signal: AbortSignal;
+				readonly expiresAt: number;
+				readonly allowedRoots: readonly string[];
+			}) {
+				return readPiNativeCommandsV1({
+					nativeId,
+					expiresAt: input.expiresAt,
+					signal: input.signal,
+					allowedRoots: input.allowedRoots,
+					request: () => rpc.request("get_commands"),
+					close: rpc.close,
+				});
+			},
 			reusable: () =>
 				!exited && rpc.reusable() && (options.launch.reusable?.() ?? true),
 			async checkpoint() {
