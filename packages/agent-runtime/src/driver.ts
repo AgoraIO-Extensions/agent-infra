@@ -13,6 +13,19 @@ import type {
 	RuntimeFileResultV1,
 } from "./runtime-file-bridge.js";
 
+/** Verified Browser binding supplied only for one Runtime execution. */
+export interface RuntimeBrowserExecutionContextV1 {
+	readonly capabilityVersion: number;
+	readonly binding: {
+		readonly agentId: string;
+		readonly conversationId: string;
+		readonly sessionGeneration: number;
+		readonly resourceFence: number;
+		readonly workloadRevision: number;
+		readonly imageDigest: string;
+	};
+}
+
 export interface RuntimeModelDirectoryOption {
 	readonly modelOptionId: string;
 	readonly modelId: string;
@@ -35,6 +48,8 @@ export type RuntimeDriverCommand =
 /** Request-local execution dependencies; never part of a durable command. */
 export interface RuntimeDriverExecutionContextV1 {
 	readonly fileBridge?: RuntimeFileBridgePortV1;
+	/** Deployment-owned Browser context; absent means Browser execution is unavailable. */
+	readonly browser?: RuntimeBrowserExecutionContextV1;
 }
 export type RuntimeDriverOperationRecord =
 	| RuntimeDriverOperationRecordV1
