@@ -106,9 +106,13 @@ test("CI label transitions cancel older PR runs and retain checks on lookup fail
   assert.deepEqual(exemption.permissions, { "pull-requests": "read" });
   assert.equal(exemption.outputs.skip, "${{ steps.label.outputs.skip }}");
   assert.equal(workflow.jobs.ci.name, "CI");
-  for (const name of ["ci", "workload-kind"]) {
-    assert.equal(workflow.jobs[name].needs, "ci-exemption");
-    assert.equal(workflow.jobs[name].if,
-      "${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}");
-  }
+  assert.deepEqual(workflow.jobs.ci.needs, ["ci-exemption", "changes", "web-tests", "backend-tests"]);
+  assert.equal(workflow.jobs.ci.if,
+    "${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}");
+  assert.deepEqual(workflow.jobs["workload-kind"].needs, ["ci-exemption", "changes"]);
+  assert.equal(workflow.jobs["workload-kind"].if,
+    "${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}");
+  assert.equal(workflow.jobs.changes.name, "Classify changes");
+  assert.equal(workflow.jobs["web-tests"].name, "Web unit tests");
+  assert.equal(workflow.jobs["backend-tests"].name, "Backend integration tests");
 });

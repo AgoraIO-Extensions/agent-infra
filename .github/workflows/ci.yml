@@ -52,11 +52,141 @@ jobs:
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
+  changes:
+    name: Classify changes
+    needs: ci-exemption
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    outputs:
+      source: ${{ steps.scope.outputs.source }}
+      web: ${{ steps.scope.outputs.web }}
+      runtime: ${{ steps.scope.outputs.runtime }}
+      workload: ${{ steps.scope.outputs.workload }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Classify changed paths
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source=false
+          web=false
+          runtime=false
+          workload=false
+          if [[ "$EVENT_NAME" == push ]]; then
+            source=true
+            web=true
+            runtime=true
+            workload=true
+          else
+            if ! files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA"); then
+              echo '::warning::Unable to classify changed paths; running full validation.'
+              source=true
+              web=true
+              runtime=true
+              workload=true
+            else
+              while IFS= read -r path; do
+                case "$path" in
+                  *.md) ;;
+                  *) source=true ;;
+                esac
+              done <<< "$files"
+              if [[ "$source" == true ]]; then
+                # Shared lockfiles, build scripts, workflow changes, and backend
+                # changes can affect every validation surface.
+                web=true
+                runtime=true
+                workload=true
+              fi
+            fi
+          fi
+          {
+            echo "source=$source"
+            echo "web=$web"
+            echo "runtime=$runtime"
+            echo "workload=$workload"
+          } >> "$GITHUB_OUTPUT"
+
+  web-tests:
+    name: Web unit tests
+    needs: [ci-exemption, changes]
+    if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' && needs.changes.outputs.web == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          version: 11.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build Web dependencies
+        run: pnpm exec turbo run build --filter=@agent-infra/web
+      - name: Run Web tests
+        run: pnpm test:apps:web
+
+  backend-tests:
+    name: Backend integration tests
+    needs: [ci-exemption, changes]
+    if: ${{ !cancelled() && needs.ci-exemption.result == 'success' && needs.ci-exemption.outputs.skip != 'true' && needs.changes.result == 'success' && needs.changes.outputs.source == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          version: 11.20.0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check TypeScript
+        run: pnpm check-types
+      - name: Run pure package tests in parallel
+        run: pnpm test:packages:parallel
+      - name: Run database and backend tests serially
+        run: pnpm test:packages:serial && pnpm test:apps:backend
+
   ci:
     name: CI
-    needs: ci-exemption
+    needs: [ci-exemption, changes, web-tests, backend-tests]
     # Failure to read the label must run CI, never grant an exemption.
-    if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
+    if: ${{ always() && !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -69,13 +199,27 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      - name: Require split test jobs
+        if: ${{ needs.ci-exemption.result != 'success' || needs.changes.result != 'success' || (needs.changes.outputs.source == 'true' && (needs.web-tests.result != 'success' || needs.backend-tests.result != 'success')) }}
+        run: |
+          echo "Required prerequisite job failed or was unavailable."
+          echo "ci-exemption=${{ needs.ci-exemption.result }}"
+          echo "changes=${{ needs.changes.result }}"
+          echo "web-tests=${{ needs.web-tests.result }}"
+          echo "backend-tests=${{ needs.backend-tests.result }}"
+          exit 1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          version: 11.20.0
+
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-
-      - name: Install pnpm
-        run: npm install --global pnpm@11.20.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -83,14 +227,13 @@ jobs:
       - name: Check formatting and lint
         run: pnpm check
 
-      - name: Check TypeScript
-        run: pnpm check-types
-
-      - name: Run tests
-        run: pnpm test
+      - name: Build applications and workspace packages
+        if: ${{ needs.changes.outputs.source == 'true' }}
+        run: pnpm build
 
       - name: Validate real observability Collector and PostgreSQL
         id: observability
+        if: ${{ needs.changes.outputs.source == 'true' }}
         timeout-minutes: 10
         env:
           AO_SESSION_ID: observability-${{ github.run_id }}-${{ github.run_attempt }}
@@ -150,7 +293,7 @@ jobs:
           NODE
 
       - name: Preserve observability acceptance evidence
-        if: always()
+        if: ${{ always() && steps.observability.outcome != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: observability-${{ github.run_id }}-${{ github.run_attempt }}
@@ -158,13 +301,20 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Set up Docker Buildx
+        if: ${{ needs.changes.outputs.runtime == 'true' || needs.changes.outputs.source == 'true' }}
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.11.1
       - name: Build pinned Codex native test environment
+        if: ${{ needs.changes.outputs.runtime == 'true' }}
         run: >-
-          docker build --target builder -f apps/agent-runtime-host/Dockerfile
-          --tag agent-infra-codex-native-test .
+          docker buildx build --target builder -f apps/agent-runtime-host/Dockerfile
+          --tag agent-infra-codex-native-test --load
+          --cache-from type=gha,scope=agent-infra-codex-native
+          --cache-to type=gha,mode=max,scope=agent-infra-codex-native .
 
       - name: Verify native Codex metadata command
         id: codex_native_command
+        if: ${{ needs.changes.outputs.runtime == 'true' }}
         shell: bash
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -234,6 +384,7 @@ jobs:
           retention-days: 14
 
       - name: Verify native Codex recovery
+        if: ${{ needs.changes.outputs.runtime == 'true' }}
         run: |
           docker run --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
@@ -245,6 +396,7 @@ jobs:
             src/codex-native-recovery.test.ts --cache=false
 
       - name: Verify native Claude conformance in the pinned Linux image
+        if: ${{ needs.changes.outputs.runtime == 'true' }}
         run: |
           docker run --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
@@ -255,6 +407,7 @@ jobs:
             src/runtime-driver-conformance.test.ts --cache=false
 
       - name: Verify Generic ACP, OpenCode and Pi conformance in the pinned Linux image
+        if: ${{ needs.changes.outputs.runtime == 'true' }}
         run: |
           docker run --init --rm --pull=never --network=none --read-only \
             --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges \
@@ -266,16 +419,23 @@ jobs:
             src/pi-native.test.ts src/pi-runtime-driver.test.ts src/pi-policy.test.ts \
             src/opencode-native.test.ts src/runtime-driver-conformance.test.ts --maxWorkers=1 --cache=false
 
-      - name: Build applications
-        run: pnpm build
-
       - name: Smoke test applications
+        if: ${{ needs.changes.outputs.source == 'true' }}
         run: pnpm smoke
 
+      - name: Cache Playwright browsers
+        if: ${{ needs.changes.outputs.web == 'true' }}
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install browser for Web validation
+        if: ${{ needs.changes.outputs.web == 'true' }}
         run: pnpm --filter @agent-infra/web exec playwright install --with-deps chromium
 
       - name: Validate Web management journeys
+        if: ${{ needs.changes.outputs.web == 'true' }}
         run: pnpm --filter @agent-infra/web test:browser
 
       - name: Upload Web browser evidence
@@ -289,11 +449,13 @@ jobs:
 
       - name: Build deployment images
         id: images
+        if: ${{ needs.changes.outputs.source == 'true' }}
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node deploy/release/ci-image-build.mjs build
 
       - name: Verify built Web image compatibility
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.web == 'true' }}
         timeout-minutes: 3
         shell: bash
         env:
@@ -396,6 +558,7 @@ jobs:
 
       - name: Verify installed workspace-summary image
         id: installed_skill
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.runtime == 'true' }}
         timeout-minutes: 10
         shell: bash
         env:
@@ -441,10 +604,13 @@ jobs:
           printf '%s\n' "$config_version" > "$evidence/config-version.txt"
           capacity before-build
           git archive "$SOURCE_COMMIT" | tar -x -C "$context"
-          timeout --signal=TERM --kill-after=5s 300s docker build \
+          timeout --signal=TERM --kill-after=5s 300s docker buildx build \
             --platform "linux/$architecture" --progress=plain --target installed-skill-test \
             --build-arg "SOURCE_COMMIT=$SOURCE_COMMIT" --label "ao.session=$session" \
             --tag "agent-infra-ci/installed-skill-test:$SOURCE_COMMIT" \
+            --cache-from type=gha,scope=agent-infra-installed-skill \
+            --cache-to type=gha,mode=max,scope=agent-infra-installed-skill \
+            --load \
             --file "$context/apps/agent-runtime-host/Dockerfile" \
             --iidfile "$evidence/test.iid" "$context" 2>&1 | tee "$evidence/test-build.log"
           test_id=$(cat "$evidence/test.iid")
@@ -489,11 +655,13 @@ jobs:
 
       - name: Probe native Codex runtime image
         id: runtime_probe
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.runtime == 'true' }}
         run: >-
           node deploy/release/runtime-probe.mjs --build-manifest
           .ci-images/build.json "$RUNNER_TEMP/codex-runtime-probe.json"
 
       - name: Verify pinned Chromium supply and controlled launch
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.web == 'true' }}
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
@@ -522,12 +690,14 @@ jobs:
           if-no-files-found: warn
 
       - name: Verify Custom Base Image inheritance
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.runtime == 'true' }}
         run: >-
           node deploy/release/custom-base-image.mjs
           "agent-infra-ci/custom-agent-base:$SOURCE_COMMIT"
           "$RUNNER_TEMP/custom-base-image.json"
 
       - name: Preserve Custom Base Image evidence
+        if: ${{ steps.images.outcome == 'success' && needs.changes.outputs.runtime == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: custom-base-image-${{ github.event.pull_request.head.sha || github.sha }}
@@ -577,8 +747,8 @@ jobs:
 
   workload-kind:
     name: Workload kind
-    needs: ci-exemption
-    if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') }}
+    needs: [ci-exemption, changes]
+    if: ${{ !cancelled() && (needs.ci-exemption.result != 'success' || needs.ci-exemption.outputs.skip != 'true') && (needs.changes.result != 'success' || github.event_name == 'push' || needs.changes.outputs.workload == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -587,14 +757,28 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          version: 11.20.0
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Cache kind binary
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/go/bin/kind
+          key: ${{ runner.os }}-kind-v0.30.0
       - name: Install tools and dependencies
         run: |
-          npm install --global pnpm@11.20.0
-          go install sigs.k8s.io/kind@v0.30.0
+          mkdir -p "$HOME/go/bin"
+          export PATH="$HOME/go/bin:$PATH"
+          if ! command -v kind >/dev/null || [[ "$(kind version 2>/dev/null || true)" != "kind v0.30.0"* ]]; then
+            go install sigs.k8s.io/kind@v0.30.0
+          fi
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
           pnpm install --frozen-lockfile
       - name: Build Workload dependencies
