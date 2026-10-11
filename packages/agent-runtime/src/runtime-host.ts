@@ -497,13 +497,17 @@ export class RuntimeHost {
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4,
 	): Promise<RuntimeFileBridgePortV1> {
 		this.requireLegacyHost();
-		if (!this.options.fileBridge) runtimeAuthorizationDenied();
+		const fileBridge = this.options.fileBridge;
+		if (!fileBridge) runtimeAuthorizationDenied();
 		const binding = await createRuntimeFileBridgeBindingV1({
 			request,
 			claims,
 			now: this.options.grantValidationV2?.now?.() ?? Date.now(),
 		});
-		return this.options.fileBridge(binding);
+		// Both binding validation and factory creation await. A Host closed while
+		// they were pending must not issue new file authority afterwards.
+		this.requireLegacyHost();
+		return fileBridge(binding);
 	}
 	private requireLegacyHost() {
 		if (this.closed) runtimeAuthorizationDenied();
