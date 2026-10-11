@@ -8,7 +8,7 @@ import {
 	createDirectoryOrganizationIdsResolverV1,
 } from "./directory-authority.js";
 
-const now = Date.UTC(2026, 9, 10);
+const now = Date.now();
 const snapshot = createSnapshot({
 	source: "internal",
 	rootDepartmentId: 1,
