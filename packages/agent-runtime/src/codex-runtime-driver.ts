@@ -68,6 +68,15 @@ import {
 	validateCodexConnectionProfile,
 } from "./codex-connection-client.js";
 import {
+	type CodexArchivedJournalV1,
+	codexCursorSequence,
+	codexJournalArchiveRoot,
+	codexJournalDigest,
+	isCodexArchivedJournalV1,
+	readCodexJournalArchive,
+	writeCodexJournalArchive,
+} from "./codex-journal-archive.js";
+import {
 	type CodexModelRequestContext,
 	type CodexModelRequestJournal,
 	type CodexModelRequestOutcome,
@@ -111,7 +120,7 @@ import type {
 	RuntimeOriginalEvidenceReadContext,
 	RuntimeOriginalEvidenceRecoveryRef,
 } from "./driver.js";
-import { DurableJsonFile } from "./durable-json.js";
+import { DurableJsonFile, deepFreeze } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import {
 	type RuntimeOriginalExecutionRef,
@@ -692,6 +701,8 @@ interface CodexSession {
 	acceptanceUncertainOperationKey?: string;
 	eventSequence?: number;
 	journals?: Record<string, CodexEventJournal>;
+	/** Finished Turn journals held in their own immutable files (#1705). */
+	archivedJournals?: Record<string, CodexArchivedJournalV1>;
 	executions: Record<string, CodexExecution>;
 }
 
@@ -712,7 +723,8 @@ interface CodexOperation {
 }
 
 interface CodexDriverState {
-	schemaVersion: 1;
+	/** 2 adds archived journals; version 1 files are upgraded on open (#1705). */
+	schemaVersion: 2;
 	sessions: Record<string, CodexSession>;
 	operations: Record<string, CodexOperation>;
 }
@@ -1419,6 +1431,26 @@ function isCodexEventJournal(
 	);
 }
 
+/** Whether an archived file holds exactly the journal its index pins (#1705). */
+function archivedJournalMatches(
+	nativeTurnId: string,
+	value: unknown,
+	entry: CodexArchivedJournalV1,
+): value is CodexEventJournal {
+	if (!isCodexEventJournal(nativeTurnId, value)) return false;
+	const last = value.events.at(-1);
+	return (
+		value.events.length === entry.eventCount &&
+		codexCursorSequence(value.events[0]?.cursor ?? "") ===
+			entry.firstSequence &&
+		codexCursorSequence(last?.cursor ?? "") === entry.lastSequence &&
+		last?.type === "completed" &&
+		last.payload.status === entry.completedStatus &&
+		(value.externalActionsBlocked === true) ===
+			(entry.externalActionsBlocked === true)
+	);
+}
+
 function isNativeSourceRecord(
 	id: string,
 	value: unknown,
@@ -1970,6 +2002,7 @@ function isCodexSession(
 			"acceptanceUncertainOperationKey",
 			"eventSequence",
 			"journals",
+			"archivedJournals",
 			"executions",
 		]) ||
 		value.nativeSessionRef !== nativeSessionRef ||
@@ -2006,6 +2039,11 @@ function isCodexSession(
 				!Number.isSafeInteger(value.eventSequence) ||
 				value.eventSequence < 0)) ||
 		(value.journals !== undefined && !isPlainRecord(value.journals)) ||
+		(value.archivedJournals !== undefined &&
+			(!isPlainRecord(value.archivedJournals) ||
+				!Object.values(value.archivedJournals).every(
+					isCodexArchivedJournalV1,
+				))) ||
 		!isPlainRecord(value.executions)
 	) {
 		return false;
@@ -2168,6 +2206,19 @@ function isCodexSession(
 			eventCount += 1;
 		}
 	}
+	// Archived journals keep their place in the Session's dense event sequence.
+	const archived = Object.entries(
+		(value.archivedJournals ?? {}) as Record<string, CodexArchivedJournalV1>,
+	);
+	for (const [nativeTurnId, entry] of archived) {
+		if (
+			Object.hasOwn(journals, nativeTurnId) ||
+			value.eventSequence === undefined ||
+			entry.lastSequence > Number(value.eventSequence)
+		)
+			return false;
+		eventCount += entry.eventCount;
+	}
 	if (
 		(eventCount > 0 && value.eventSequence === undefined) ||
 		(value.eventSequence !== undefined && value.eventSequence !== eventCount)
@@ -2322,11 +2373,20 @@ function isCodexOperation(
 	);
 }
 
+/**
+ * Upgrades a version 1 Driver state in place. Version 2 only adds archived
+ * journals, so every version 1 state is a valid version 2 state (#1705).
+ */
+function upgradeDriverState(value: unknown) {
+	if (isPlainRecord(value) && value.schemaVersion === 1)
+		value.schemaVersion = 2;
+}
+
 function assertDriverState(value: unknown): asserts value is CodexDriverState {
 	if (
 		!isPlainRecord(value) ||
 		!hasOnlyKeys(value, ["schemaVersion", "sessions", "operations"]) ||
-		value.schemaVersion !== 1 ||
+		value.schemaVersion !== 2 ||
 		!isPlainRecord(value.sessions) ||
 		!isPlainRecord(value.operations)
 	) {
@@ -2401,6 +2461,20 @@ function assertDriverState(value: unknown): asserts value is CodexDriverState {
 			) {
 				stateInvalid();
 			}
+		}
+		for (const [nativeTurnId, entry] of Object.entries(
+			session.archivedJournals ?? {},
+		)) {
+			// Only a finished Turn is archived, and its terminal status is pinned.
+			const execution = Object.values(session.executions).find(
+				(candidate) => candidate.nativeTurnId === nativeTurnId,
+			);
+			if (
+				!execution ||
+				execution.status !== entry.completedStatus ||
+				session.activeExecutionId === execution.executionId
+			)
+				stateInvalid();
 		}
 		const uncertainOperationKey = session.acceptanceUncertainOperationKey;
 		if (!uncertainOperationKey) continue;
@@ -3445,6 +3519,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly resumedSessions = new Set<string>();
 	/** The last committed state that passed `assertDriverState`. */
 	private validatedState: CodexDriverState | undefined;
+	/** Directory of archived Turn journals; set once on open (#1705). */
+	private journalArchiveRoot: string | undefined;
+	/** Every archived journal, verified and frozen, keyed by Session and Turn. */
+	private readonly archivedJournalCache = new Map<string, CodexEventJournal>();
+	/** Archive passes run one at a time; shutdown waits for the last one. */
+	private journalArchiving: Promise<void> = Promise.resolve();
 	/** Text deltas received but not yet committed, one batch per native RPC. */
 	private readonly textDeltaBatches = new Set<CodexTextDeltaBatch>();
 	private readonly inFlightSessionResumes = new Map<string, Promise<void>>();
@@ -3673,6 +3753,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	) {
 		const options = this.connectionClientOptions;
 		if (!options?.resolveReadOnlyClient || !this.recoveryDirectory) return;
+		// An archived journal holds no native tool attempt, so it has no
+		// Connection evidence left to recover (#1705).
+		const known = ownRecordValue(
+			this.readSnapshot().sessions,
+			reference.nativeSessionRef,
+		);
+		const knownExecution =
+			known && ownRecordValue(known.executions, reference.executionId);
+		if (
+			known &&
+			knownExecution &&
+			ownRecordValue(known.archivedJournals ?? {}, knownExecution.nativeTurnId)
+		)
+			return;
 		const binding = structuredClone(read.assertCurrent());
 		const signal = AbortSignal.any([
 			read.signal,
@@ -4511,6 +4605,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if ((state && !state.isFile()) || (!state && native)) stateInvalid();
 			if (state && !native) {
 				const saved: unknown = JSON.parse(await readFile(options.path, "utf8"));
+				upgradeDriverState(saved);
 				assertDriverState(saved);
 				if (Object.keys(saved.sessions).length > 0) unavailable();
 			}
@@ -4908,8 +5003,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			throw error;
 		}
 		try {
+			await driver.loadArchivedJournals(codexJournalArchiveRoot(options.path));
 			await driver.recoverStandardMcpCalls();
 			await driver.recoverUnconfirmedModelOperations();
+			// Archives Turns finished before this open, including those of a state
+			// just upgraded from version 1; a failed pass only leaves them hot (#1705).
+			await driver.archiveFinishedJournals().catch(() => undefined);
 			assertInstalledSkillCurrent();
 			return driver;
 		} catch (error) {
@@ -4921,11 +5020,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private static async openState(path: string) {
 		try {
 			const file = await DurableJsonFile.open<CodexDriverState>(path, {
-				schemaVersion: 1,
+				schemaVersion: 2,
 				sessions: {},
 				operations: {},
 			});
 			await file.update((state) => {
+				upgradeDriverState(state);
 				for (const operation of Object.values(state.operations)) {
 					if (
 						isPlainRecord(operation) &&
@@ -5936,8 +6036,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			}
 			const results = await Promise.allSettled(
 				turns.map(async (turn) => {
-					const journal = this.session(prepared.operation.nativeSessionRef)
-						.journals?.[nativeTurn.turnId];
+					const journal = this.journalView(
+						this.session(prepared.operation.nativeSessionRef),
+						nativeTurn.turnId,
+					);
 					const source = Object.values(journal?.nativeSources ?? {}).find(
 						(source) =>
 							source.delivery === "started" &&
@@ -6002,7 +6104,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		return [
 			{ conversationKey, threadId: session.threadId, turnId: rootTurnId },
 			...Object.values(
-				session.journals?.[rootTurnId]?.nativeSources ?? {},
+				this.journalView(session, rootTurnId)?.nativeSources ?? {},
 			).flatMap((source) =>
 				source.bind &&
 				!source.bindDenied &&
@@ -6019,7 +6121,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		turn: CodexNativeTurn,
 		rootTurnId = turn.turnId,
 	) {
-		const journal = this.session(nativeSessionRef).journals?.[rootTurnId];
+		const journal = this.journalView(
+			this.session(nativeSessionRef),
+			rootTurnId,
+		);
 		const calls = new Set(
 			pendingNativeToolAttempts(journal)
 				.filter(
@@ -6222,7 +6327,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (!execution || !session.threadId) unavailable();
 		this.assertModelAdmissionConfirmed(session, execution);
 		if (execution.status === "running") this.assertRuntimeRequirements(session);
-		const journal = session.journals?.[execution.nativeTurnId];
+		const journal = this.journalView(session, execution.nativeTurnId);
 		const latestFact = journal
 			? latestModelOperationAttemptFact(journal.events)
 			: undefined;
@@ -6299,8 +6404,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			turnId: execution.nativeTurnId,
 		};
 		const restoreRequired =
-			!session.journals?.[execution.nativeTurnId]?.externalActionsBlocked &&
-			!session.journals?.[execution.nativeTurnId]?.nativeCompletionStatus &&
+			!this.journalView(session, execution.nativeTurnId)
+				?.externalActionsBlocked &&
+			!this.journalView(session, execution.nativeTurnId)
+				?.nativeCompletionStatus &&
 			!this.hasInterruption(nativeSessionRef, executionId) &&
 			this.beginModelTurnAdmission !== undefined &&
 			this.recognizeModelTurn !== undefined &&
@@ -6392,8 +6499,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (persistedStatus !== "running") {
 				await this.cancelModelTurn?.(nativeTurn);
 			} else if (
-				!this.session(nativeSessionRef).journals?.[execution.nativeTurnId]
-					?.nativeCompletionStatus &&
+				!this.journalView(
+					this.session(nativeSessionRef),
+					execution.nativeTurnId,
+				)?.nativeCompletionStatus &&
 				restoreRequired &&
 				(!restoreAdmission ||
 					this.hasInterruption(nativeSessionRef, executionId) ||
@@ -6502,7 +6611,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		// Committed facts remain readable without reopening the old native route.
 		// Sealed executions replay their journal before independent status recovery.
 		if (
-			!existingSession.journals?.[existingExecution.nativeTurnId]
+			!this.journalView(existingSession, existingExecution.nativeTurnId)
 				?.externalActionsBlocked &&
 			!this.hasInterruption(nativeSessionRef, executionId, existingState) &&
 			this.executionConfigurationMatches(
@@ -6518,10 +6627,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const execution = ownRecordValue(session.executions, executionId);
 		if (!execution) unavailable();
 		this.assertModelAdmissionConfirmed(session, execution, state);
-		const journal = ownRecordValue(
-			session.journals ?? {},
-			execution.nativeTurnId,
-		);
+		const journal = this.journalView(session, execution.nativeTurnId);
 		if (!journal) return [];
 		let events = journal.events;
 		if (afterCursor !== undefined) {
@@ -6540,30 +6646,61 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		executionId: string,
 		throughCursor: string,
 	) {
-		await this.update((state) => {
-			const session = ownRecordValue(state.sessions, nativeSessionRef);
-			const execution =
-				session && ownRecordValue(session.executions, executionId);
-			const journal =
-				session &&
-				execution &&
-				ownRecordValue(session.journals ?? {}, execution.nativeTurnId);
-			if (!journal) unavailable();
-			const index = journal.events.findIndex(
-				(event) => event.cursor === throughCursor,
+		const snapshot = this.readSnapshot();
+		const known = ownRecordValue(snapshot.sessions, nativeSessionRef);
+		const knownExecution =
+			known && ownRecordValue(known.executions, executionId);
+		if (
+			known &&
+			knownExecution &&
+			ownRecordValue(known.archivedJournals ?? {}, knownExecution.nativeTurnId)
+		) {
+			// An archived journal is final; acknowledging any of its events changes
+			// nothing and writes nothing (#1705).
+			const journal = this.journalView(known, knownExecution.nativeTurnId);
+			if (!journal?.events.some((event) => event.cursor === throughCursor))
+				unavailable();
+			this.notifyEventStream(
+				this.eventStreamKey(nativeSessionRef, executionId),
 			);
-			if (index < 0) unavailable();
-			const previous =
-				journal.acknowledgedCursor === undefined
-					? -1
-					: journal.events.findIndex(
-							(event) => event.cursor === journal.acknowledgedCursor,
-						);
-			if (index > previous) journal.acknowledgedCursor = throughCursor;
-			// Keep all records in this version. Existing afterCursor replay must
-			// remain exact even for cursors older than the confirmed watermark.
-		});
+			return;
+		}
+		const finished = await this.update(
+			(state) => {
+				const session = ownRecordValue(state.sessions, nativeSessionRef);
+				const execution =
+					session && ownRecordValue(session.executions, executionId);
+				const journal =
+					session &&
+					execution &&
+					ownRecordValue(session.journals ?? {}, execution.nativeTurnId);
+				if (!journal) unavailable();
+				const index = journal.events.findIndex(
+					(event) => event.cursor === throughCursor,
+				);
+				if (index < 0) unavailable();
+				const previous =
+					journal.acknowledgedCursor === undefined
+						? -1
+						: journal.events.findIndex(
+								(event) => event.cursor === journal.acknowledgedCursor,
+							);
+				if (index > previous) journal.acknowledgedCursor = throughCursor;
+				// Keep all records in this version. Existing afterCursor replay must
+				// remain exact even for cursors older than the confirmed watermark.
+				return execution &&
+					execution.status !== "running" &&
+					index === journal.events.length - 1
+					? { nativeSessionRef, nativeTurnId: execution.nativeTurnId }
+					: undefined;
+			},
+			{ skipUnchanged: true },
+		);
 		this.notifyEventStream(this.eventStreamKey(nativeSessionRef, executionId));
+		// The Worker confirmed a finished Turn through its last event: its journal
+		// can move to its own file. A failed archive only leaves it hot (#1705).
+		if (finished)
+			await this.archiveFinishedJournals(finished).catch(() => undefined);
 	}
 
 	async recordResultFile(
@@ -6598,10 +6735,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (!session) runtimeAuthorizationDenied();
 			const execution = ownRecordValue(session.executions, command.executionId);
 			if (!execution) runtimeAuthorizationDenied();
-			const journal = ownRecordValue(
-				session.journals ?? {},
-				execution.nativeTurnId,
-			);
+			// An archived journal is finished: a replayed file is matched, a new
+			// one is refused as for any completed journal.
+			const journal = this.journalView(session, execution.nativeTurnId);
 			if (!journal) runtimeAuthorizationDenied();
 			const operation = ownRecordValue(state.operations, operationKey(command));
 			if (
@@ -6762,6 +6898,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			);
 			this.retainedInputDirectories.clear();
 		}
+		await this.journalArchiving;
 		try {
 			await this.file.readCommitted();
 		} finally {
@@ -6769,6 +6906,289 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 		const rejected = results.find((result) => result.status === "rejected");
 		if (rejected?.status === "rejected") throw rejected.reason;
+	}
+
+	private archivedJournalKey(nativeSessionRef: string, nativeTurnId: string) {
+		return JSON.stringify([nativeSessionRef, nativeTurnId]);
+	}
+
+	/**
+	 * The committed journal of one Turn, hot or archived. An archived journal is
+	 * final and frozen; code that only reads a finished Turn sees it unchanged.
+	 */
+	private journalView(
+		session: CodexSession,
+		nativeTurnId: string,
+	): CodexEventJournal | undefined {
+		const hot = ownRecordValue(session.journals ?? {}, nativeTurnId);
+		if (hot) return hot;
+		if (!ownRecordValue(session.archivedJournals ?? {}, nativeTurnId))
+			return undefined;
+		const archived = this.archivedJournalCache.get(
+			this.archivedJournalKey(session.nativeSessionRef, nativeTurnId),
+		);
+		if (!archived) stateInvalid();
+		return archived;
+	}
+
+	/** Reads and verifies every archived journal once, before any request. */
+	private async loadArchivedJournals(root: string) {
+		this.journalArchiveRoot = root;
+		for (const session of Object.values(this.readSnapshot().sessions)) {
+			for (const [nativeTurnId, entry] of Object.entries(
+				session.archivedJournals ?? {},
+			)) {
+				let journal: unknown;
+				try {
+					journal = await readCodexJournalArchive(
+						root,
+						session.nativeSessionRef,
+						nativeTurnId,
+						entry,
+					);
+				} catch {
+					stateInvalid();
+				}
+				if (!archivedJournalMatches(nativeTurnId, journal, entry))
+					stateInvalid();
+				deepFreeze(journal);
+				this.archivedJournalCache.set(
+					this.archivedJournalKey(session.nativeSessionRef, nativeTurnId),
+					journal,
+				);
+			}
+		}
+	}
+
+	/**
+	 * The index entry for a journal that can no longer change, or undefined.
+	 * Its Turn finished with exactly one trailing terminal event, and nothing
+	 * can still append to it: no pending operation, native tool attempt, child
+	 * source, Connection recovery, unfinished standard MCP call or interruption.
+	 */
+	private archivableJournal(
+		state: CodexDriverState,
+		session: CodexSession,
+		journal: CodexEventJournal,
+	): Omit<CodexArchivedJournalV1, "sha256" | "bytes"> | undefined {
+		const execution = Object.values(session.executions).find(
+			(candidate) => candidate.nativeTurnId === journal.nativeTurnId,
+		);
+		const last = journal.events.at(-1);
+		if (
+			// A Session of another Runtime binding stays exactly as it was saved.
+			!this.runtimeRequirementsMatch(session) ||
+			!execution ||
+			execution.status === "running" ||
+			session.activeExecutionId === execution.executionId ||
+			last?.type !== "completed" ||
+			last.payload.status !== execution.status ||
+			journal.events.filter((event) => event.type === "completed").length !==
+				1 ||
+			journal.pendingOperationKey !== undefined ||
+			journal.connectionRecovery !== undefined ||
+			journal.connectionRecoveryCursor !== undefined ||
+			Object.keys(journal.nativeToolAttempts ?? {}).length > 0 ||
+			Object.keys(journal.nativeSources ?? {}).length > 0 ||
+			Object.values(journal.standardMcpCalls ?? {}).some(
+				(call) =>
+					call.held || (call.phase !== "completed" && call.phase !== "failed"),
+			)
+		)
+			return undefined;
+		const operation = ownRecordValue(
+			state.operations,
+			operationKey({
+				agentId: session.agentId,
+				conversationId: session.conversationId,
+				sessionGeneration: session.sessionGeneration,
+				kind: "submit-turn",
+				operationId: execution.executionId,
+			}),
+		);
+		if (
+			operation?.state !== "resolved" ||
+			operation.admissionPending ||
+			operation.admissionRecoveryPending ||
+			operation.record?.result.outcome !== "accepted" ||
+			Object.values(state.operations).some(
+				(candidate) =>
+					candidate.state === "prepared" &&
+					candidate.nativeSessionRef === session.nativeSessionRef &&
+					candidate.executionId === execution.executionId,
+			)
+		)
+			return undefined;
+		const sequences = journal.events.map((event) =>
+			codexCursorSequence(event.cursor),
+		);
+		const firstSequence = sequences[0];
+		const lastSequence = sequences.at(-1);
+		if (
+			firstSequence === undefined ||
+			lastSequence === undefined ||
+			sequences.some(
+				(sequence, index) =>
+					sequence === undefined ||
+					(index > 0 && sequence <= Number(sequences[index - 1])),
+			)
+		)
+			return undefined;
+		return {
+			eventCount: journal.events.length,
+			firstSequence,
+			lastSequence,
+			completedStatus: last.payload.status,
+			...(journal.externalActionsBlocked
+				? { externalActionsBlocked: true as const }
+				: {}),
+		};
+	}
+
+	/** Moves finished Turn journals out of the hot state, one pass at a time. */
+	private archiveFinishedJournals(target?: {
+		nativeSessionRef: string;
+		nativeTurnId: string;
+	}) {
+		const run = this.journalArchiving.then(() =>
+			this.archiveFinishedJournalsOnce(target),
+		);
+		this.journalArchiving = run.catch(() => undefined);
+		return run;
+	}
+
+	/**
+	 * Writes each archivable journal to its own file first, then commits one
+	 * hot-state change that drops those journals and records their index
+	 * entries. A crash in between leaves the journal hot and is repeated; a
+	 * journal changed in between stays hot for a later pass (#1705).
+	 */
+	private async archiveFinishedJournalsOnce(target?: {
+		nativeSessionRef: string;
+		nativeTurnId: string;
+	}) {
+		const root = this.journalArchiveRoot;
+		if (!root || this.closed) return;
+		const state = this.readSnapshot();
+		const candidates: {
+			nativeSessionRef: string;
+			nativeTurnId: string;
+			bytes: string;
+			entry: CodexArchivedJournalV1;
+		}[] = [];
+		for (const [nativeSessionRef, session] of Object.entries(state.sessions)) {
+			if (target && target.nativeSessionRef !== nativeSessionRef) continue;
+			for (const [nativeTurnId, journal] of Object.entries(
+				session.journals ?? {},
+			)) {
+				if (target && target.nativeTurnId !== nativeTurnId) continue;
+				const entry = this.archivableJournal(state, session, journal);
+				if (!entry) continue;
+				const bytes = JSON.stringify(journal);
+				candidates.push({
+					nativeSessionRef,
+					nativeTurnId,
+					bytes,
+					entry: {
+						...entry,
+						sha256: codexJournalDigest(bytes),
+						bytes: Buffer.byteLength(bytes, "utf8"),
+					},
+				});
+			}
+		}
+		if (candidates.length === 0) return;
+		for (const candidate of candidates) {
+			await writeCodexJournalArchive(
+				root,
+				candidate.nativeSessionRef,
+				candidate.nativeTurnId,
+				candidate.bytes,
+			);
+			// Readers find the archived copy as soon as its index entry commits.
+			const journal: unknown = JSON.parse(candidate.bytes);
+			deepFreeze(journal);
+			this.archivedJournalCache.set(
+				this.archivedJournalKey(
+					candidate.nativeSessionRef,
+					candidate.nativeTurnId,
+				),
+				journal as CodexEventJournal,
+			);
+		}
+		let archived = new Set<string>();
+		try {
+			archived = await this.commitArchivedJournals(candidates);
+		} finally {
+			// A copy whose index entry did not commit is never read again.
+			for (const candidate of candidates) {
+				const key = this.archivedJournalKey(
+					candidate.nativeSessionRef,
+					candidate.nativeTurnId,
+				);
+				if (!archived.has(key)) this.archivedJournalCache.delete(key);
+			}
+		}
+	}
+
+	/** One hot-state commit that swaps written journals for their index entries. */
+	private commitArchivedJournals(
+		candidates: readonly {
+			nativeSessionRef: string;
+			nativeTurnId: string;
+			bytes: string;
+			entry: CodexArchivedJournalV1;
+		}[],
+	) {
+		return this.update(
+			(draft) => {
+				const done = new Set<string>();
+				for (const candidate of candidates) {
+					const session = ownRecordValue(
+						draft.sessions,
+						candidate.nativeSessionRef,
+					);
+					const journals = session?.journals;
+					const journal =
+						journals && ownRecordValue(journals, candidate.nativeTurnId);
+					if (
+						!session ||
+						!journals ||
+						!journal ||
+						JSON.stringify(journal) !== candidate.bytes ||
+						!this.archivableJournal(draft, session, journal)
+					)
+						continue;
+					delete journals[candidate.nativeTurnId];
+					if (session.archivedJournals === undefined) {
+						Object.defineProperty(session, "archivedJournals", {
+							value: {},
+							enumerable: true,
+							writable: true,
+							configurable: true,
+						});
+					}
+					Object.defineProperty(
+						session.archivedJournals,
+						candidate.nativeTurnId,
+						{
+							value: candidate.entry,
+							enumerable: true,
+							writable: true,
+							configurable: true,
+						},
+					);
+					done.add(
+						this.archivedJournalKey(
+							candidate.nativeSessionRef,
+							candidate.nativeTurnId,
+						),
+					);
+				}
+				return done;
+			},
+			{ skipUnchanged: true },
+		);
 	}
 
 	private readState() {
@@ -6860,7 +7280,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		this.assertRuntimeRequirements(session);
 		if (this.executionConfigurationMatches(state, session, execution)) return;
 		const operation = this.executionOperation(state, session, execution);
-		const journal = session.journals?.[execution.nativeTurnId];
+		const journal = this.journalView(session, execution.nativeTurnId);
 		// A durable source barrier permits only original status/control RPCs.
 		// restoreExecutionStatus never registers admission for this sealed Turn.
 		if (
@@ -8369,7 +8789,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			try {
 				const session = this.session(nativeSessionRef);
 				const execution = ownRecordValue(session.executions, executionId);
-				const journal = execution && session.journals?.[execution.nativeTurnId];
+				// A Turn archived after this ACK keeps its acknowledgement (#1705).
+				const journal =
+					execution && this.journalView(session, execution.nativeTurnId);
 				if (!journal) unavailable();
 				const index = journal.events.findIndex(
 					(event) => event.cursor === cursor,
@@ -9635,6 +10057,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (existing.pendingOperationKey !== pendingOperationKey) stateInvalid();
 			return existing;
 		}
+		if (ownRecordValue(session.archivedJournals ?? {}, nativeTurnId)) {
+			// An archived journal is final and frozen: completed-journal checks
+			// still refuse any append, and nothing can change it in place.
+			if (pendingOperationKey !== undefined) stateInvalid();
+			const archived = this.journalView(session, nativeTurnId);
+			if (!archived) stateInvalid();
+			return archived;
+		}
 		const journal: CodexEventJournal = {
 			nativeTurnId,
 			...(pendingOperationKey === undefined ? {} : { pendingOperationKey }),
@@ -9801,10 +10231,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	}
 
 	private nextEventIdentity(session: CodexSession) {
-		const existingEvents = Object.values(session.journals ?? {}).flatMap(
-			(candidate) => candidate.events,
-		).length;
-		const sequence = Math.max(session.eventSequence ?? 0, existingEvents) + 1;
+		// The validated state keeps `eventSequence` equal to every hot and
+		// archived event, so it alone gives the next sequence (#1705).
+		const sequence = (session.eventSequence ?? 0) + 1;
 		session.eventSequence = sequence;
 		return {
 			sequence,

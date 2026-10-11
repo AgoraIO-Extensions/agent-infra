@@ -21,7 +21,8 @@ export async function seedNativeCommandState(
 	await writeFile(
 		path,
 		`${JSON.stringify({
-			schemaVersion: 1,
+			// The current Driver state version: opening it rewrites the same bytes.
+			schemaVersion: 2,
 			sessions: {
 				[nativeSessionRef]: {
 					nativeSessionRef: nativeSessionRef,

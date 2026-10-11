@@ -3,7 +3,7 @@ import { mkdir, open, readFile, rename } from "node:fs/promises";
 import { dirname } from "node:path";
 
 /** Freezes every reachable object without recursion depth limits. */
-function deepFreeze(value: unknown) {
+export function deepFreeze(value: unknown) {
 	const pending = [value];
 	while (pending.length > 0) {
 		const next = pending.pop();

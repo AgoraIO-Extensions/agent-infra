@@ -119,8 +119,14 @@ endpoint 或 credential。`AGENT_INFRA_RUNTIME_DRIVER=codex` 是固定模板绑�
 [工程 Spec §10.8](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#108-codex-原生模型传输边界)。
 
 `host.json` 与 `codex-driver.json` 位于该 Agent 数据目录；Driver 使用 #403 的
-`codex-driver.json.native` 持久目录装配。关闭进程不删除这些业务数据，损坏或丢失状态仍按
+`codex-driver.json.native` 持久目录装配，已结束 Turn 的 journal 归档在
+`codex-driver.json.journals`（[HLD §8.2](../../docs/architecture/HLD-agent-runtime-M1.md#82-事件去重)）。
+关闭进程不删除这些业务数据，损坏或丢失状态仍按
 [HLD §7.3](../../docs/architecture/HLD-agent-runtime-M1.md#73-重启恢复) 拒绝替代恢复。
+
+`codex-driver.json` 的 `schemaVersion` 2 引入 journal 归档，新镜像启动时原地升级版本 1
+状态并归档已结束 Turn。不含归档支持的旧镜像拒绝版本 2 状态，因此镜像回滚只能在新镜像首次
+启动该数据目录之前进行；之后回滚须先发布同样支持版本 2 的镜像。
 
 ## 就绪证明与历史 Session 迁移
 

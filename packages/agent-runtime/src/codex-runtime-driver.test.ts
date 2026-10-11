@@ -36,6 +36,11 @@ import {
 	type CodexModelAccess,
 	codexConversationKey,
 } from "./codex-app-server-bridge.js";
+import {
+	type CodexArchivedJournalV1,
+	codexJournalArchiveRoot,
+	readCodexJournalArchive,
+} from "./codex-journal-archive.js";
 import type {
 	CodexModelTurn,
 	CodexModelTurnAdmission,
@@ -199,6 +204,7 @@ interface StoredCodexSession {
 	acceptanceUncertainOperationKey?: string;
 	eventSequence?: number;
 	journals?: Record<string, StoredEventJournal>;
+	archivedJournals?: Record<string, CodexArchivedJournalV1>;
 	executions?: Record<string, StoredCodexExecution>;
 }
 
@@ -1362,7 +1368,7 @@ describe("Codex installed Skill descriptor receipt", () => {
 			drivers.push(driver);
 			expect(factory).not.toHaveBeenCalled();
 			expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-				schemaVersion: 1,
+				schemaVersion: 2,
 				sessions: {},
 				operations: {},
 			});
@@ -1547,7 +1553,7 @@ describe("Codex installed Skill descriptor receipt", () => {
 			expect(transport).not.toHaveBeenCalled();
 			expect(close.mock.contexts).toEqual([acquired]);
 			expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-				schemaVersion: 1,
+				schemaVersion: 2,
 				sessions: {},
 				operations: {},
 			});
@@ -1890,10 +1896,21 @@ describe("Codex Runtime Driver", () => {
 		const stored = JSON.parse(
 			await readFile(path, "utf8"),
 		) as StoredCodexDriverState;
+		// Confirmed through its terminal event, the journal moved to its own file
+		// with the acknowledgement it had (#1705).
+		const session = stored.sessions[accepted.nativeSessionRef];
+		expect(session?.journals?.[bridge.nativeTurnId]).toBeUndefined();
+		const entry = session?.archivedJournals?.[bridge.nativeTurnId];
+		if (!entry) throw new Error("missing archived journal");
 		expect(
-			stored.sessions[accepted.nativeSessionRef]?.journals?.[
-				bridge.nativeTurnId
-			]?.acknowledgedCursor,
+			(
+				(await readCodexJournalArchive(
+					codexJournalArchiveRoot(path),
+					accepted.nativeSessionRef,
+					bridge.nativeTurnId,
+					entry,
+				)) as StoredEventJournal & { acknowledgedCursor?: string }
+			).acknowledgedCursor,
 		).toBe(cursor);
 	});
 
@@ -6780,6 +6797,404 @@ describe("Codex Runtime Driver", () => {
 		});
 	});
 
+	describe("finished Turn journal archive (#1705)", () => {
+		type Driver = Awaited<ReturnType<typeof openDriver>>;
+		interface FinishedTurn {
+			nativeSessionRef: string;
+			executionId: string;
+			nativeTurnId: string;
+			events: Awaited<ReturnType<Driver["replayEvents"]>>;
+		}
+
+		const turnCompletedFrame = (
+			bridge: TestCodexBridge,
+			nativeTurnId: string,
+		) => ({
+			method: "turn/completed",
+			params: {
+				threadId: bridge.nativeThreadId,
+				turn: { id: nativeTurnId, status: "completed", items: [] },
+			},
+		});
+
+		/** Runs Turn `index` of one Session through its deltas to completion. */
+		async function finishTurn(
+			driver: Driver,
+			bridge: TestCodexBridge,
+			index: number,
+			deltas: readonly string[],
+			nativeSessionRef?: string,
+		): Promise<FinishedTurn> {
+			const executionId =
+				index === 0 ? "execution-codex" : `execution-codex-${index + 1}`;
+			const nativeTurnId =
+				index === 0
+					? bridge.nativeTurnId
+					: `${bridge.nativeTurnId}-${index + 1}`;
+			const accepted = await driver.execute(
+				submitCommand({
+					operationId: executionId,
+					executionId,
+					turnId: `turn-codex-${index + 1}`,
+					...(nativeSessionRef ? { nativeSessionRef } : {}),
+				}),
+			);
+			expect(accepted.result).toEqual({
+				outcome: "accepted",
+				status: "running",
+			});
+			for (const delta of deltas)
+				await bridge.emitFrame({
+					method: "item/agentMessage/delta",
+					params: {
+						threadId: bridge.nativeThreadId,
+						turnId: nativeTurnId,
+						itemId: `codex-native-item-${index + 1}`,
+						delta,
+					},
+				});
+			await bridge.emitFrame(turnCompletedFrame(bridge, nativeTurnId));
+			const events = await vi.waitFor(async () => {
+				const replayed = await driver.replayEvents(
+					accepted.nativeSessionRef,
+					executionId,
+				);
+				expect(replayed.at(-1)?.type).toBe("completed");
+				return replayed;
+			});
+			expect(events.filter((event) => event.type === "text")).toHaveLength(
+				deltas.length,
+			);
+			return {
+				nativeSessionRef: accepted.nativeSessionRef,
+				executionId,
+				nativeTurnId,
+				events,
+			};
+		}
+
+		async function acknowledgeAll(driver: Driver, turn: FinishedTurn) {
+			const last = turn.events.at(-1);
+			if (!last) throw new Error("missing terminal event");
+			await driver.acknowledgeEvents(
+				turn.nativeSessionRef,
+				turn.executionId,
+				last.cursor,
+			);
+		}
+
+		async function stored(path: string) {
+			return JSON.parse(
+				await readFile(path, "utf8"),
+			) as StoredCodexDriverState & {
+				schemaVersion: number;
+			};
+		}
+
+		async function archiveFile(path: string) {
+			const root = codexJournalArchiveRoot(path);
+			const names = (await readdir(root)).filter((name) =>
+				name.endsWith(".json"),
+			);
+			expect(names).toHaveLength(1);
+			return join(root, names[0] ?? "");
+		}
+
+		it("archives a Turn confirmed through its terminal event and replays it unchanged", async () => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(path, bridge);
+			drivers.push(driver);
+			const turn = await finishTurn(driver, bridge, 0, [
+				"archived ",
+				"answer ",
+				"text",
+			]);
+			const { nativeSessionRef, executionId, nativeTurnId, events } = turn;
+			const middle = events[2]?.cursor;
+			if (!middle || !events[0]) throw new Error("missing events");
+
+			// Confirming a prefix keeps the journal hot.
+			await driver.acknowledgeEvents(nativeSessionRef, executionId, middle);
+			expect(
+				(await stored(path)).sessions[nativeSessionRef]?.journals?.[
+					nativeTurnId
+				],
+			).toBeDefined();
+
+			await acknowledgeAll(driver, turn);
+			const state = await stored(path);
+			const session = state.sessions[nativeSessionRef];
+			expect(state.schemaVersion).toBe(2);
+			expect(session?.journals?.[nativeTurnId]).toBeUndefined();
+			expect(session?.archivedJournals?.[nativeTurnId]).toEqual({
+				sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+				bytes: (await readFile(await archiveFile(path))).byteLength,
+				eventCount: events.length,
+				firstSequence: 1,
+				lastSequence: events.length,
+				completedStatus: "completed",
+			});
+			expect(session?.eventSequence).toBe(events.length);
+			expect(JSON.stringify(state)).not.toContain("archived ");
+			expect(await driver.replayEvents(nativeSessionRef, executionId)).toEqual(
+				events,
+			);
+			expect(
+				await driver.replayEvents(nativeSessionRef, executionId, middle),
+			).toEqual(events.slice(3));
+
+			// A finished archive takes no further write for any acknowledgement.
+			await expect(
+				driver.acknowledgeEvents(nativeSessionRef, "other-execution", middle),
+			).rejects.toThrow();
+			const updates = vi.spyOn(DurableJsonFile.prototype, "update");
+			await acknowledgeAll(driver, turn);
+			await driver.acknowledgeEvents(
+				nativeSessionRef,
+				executionId,
+				events[0].cursor,
+			);
+			await expect(
+				driver.acknowledgeEvents(
+					nativeSessionRef,
+					executionId,
+					"codex-cursor-999",
+				),
+			).rejects.toThrow();
+			expect(updates).not.toHaveBeenCalled();
+
+			// A late duplicate terminal notification leaves the archived Turn as is.
+			await bridge.emitFrameAndWaitForProcessing(
+				turnCompletedFrame(bridge, nativeTurnId),
+			);
+			expect(bridge.isClosed()).toBe(false);
+			expect(await driver.getStatus(nativeSessionRef, executionId)).toBe(
+				"completed",
+			);
+			expect(await driver.replayEvents(nativeSessionRef, executionId)).toEqual(
+				events,
+			);
+			expect((await stored(path)).sessions[nativeSessionRef]).toEqual(session);
+
+			await driver.close();
+			const restarted = await openDriver(
+				path,
+				new TestCodexBridge(bridge.nativeThreadId, bridge.nativeTurnId),
+			);
+			drivers.push(restarted);
+			expect(
+				await restarted.replayEvents(nativeSessionRef, executionId),
+			).toEqual(events);
+			expect(
+				await restarted.replayEvents(nativeSessionRef, executionId, middle),
+			).toEqual(events.slice(3));
+		});
+
+		it("keeps the hot state from growing with the events of finished Turns", async () => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(path, bridge);
+			drivers.push(driver);
+			const deltas = (index: number, count: number) =>
+				Array.from(
+					{ length: count },
+					(_, delta) => `turn-${index}-delta-${delta}-${"x".repeat(100)} `,
+				);
+			const sizes: number[] = [];
+			let nativeSessionRef: string | undefined;
+			for (const [index, count] of [5, 10, 80, 10].entries()) {
+				const turn = await finishTurn(
+					driver,
+					bridge,
+					index,
+					deltas(index, count),
+					nativeSessionRef,
+				);
+				nativeSessionRef = turn.nativeSessionRef;
+				await acknowledgeAll(driver, turn);
+				sizes.push((await readFile(path)).byteLength);
+			}
+			const growth = sizes
+				.slice(1)
+				.map((size, index) => size - (sizes[index] ?? 0));
+			// Each later Turn adds the same fixed-size execution, operation and
+			// index entries, whether it streamed 10 or 80 deltas (AC-1).
+			expect(Math.max(...growth) - Math.min(...growth)).toBeLessThan(64);
+			expect(Math.max(...growth)).toBeLessThan(80 * 100);
+			expect(await readFile(path, "utf8")).not.toContain("-delta-");
+			const session = (await stored(path)).sessions[nativeSessionRef ?? ""];
+			expect(Object.keys(session?.journals ?? {})).toEqual([]);
+			expect(Object.keys(session?.archivedJournals ?? {})).toHaveLength(4);
+		});
+
+		it("upgrades a version 1 state on open and archives the Turns it finished", async () => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(path, bridge);
+			drivers.push(driver);
+			const first = await finishTurn(driver, bridge, 0, ["first answer"]);
+			const second = await finishTurn(
+				driver,
+				bridge,
+				1,
+				["second ", "answer"],
+				first.nativeSessionRef,
+			);
+			await driver.close();
+			// Without an acknowledgement both journals are still hot: this is a
+			// version 1 state except for its version number.
+			const saved = await stored(path);
+			expect(saved.sessions[first.nativeSessionRef]?.archivedJournals).toBe(
+				undefined,
+			);
+			await writeFile(path, JSON.stringify({ ...saved, schemaVersion: 1 }));
+
+			const reopened = await openDriver(
+				path,
+				new TestCodexBridge(bridge.nativeThreadId, bridge.nativeTurnId),
+			);
+			drivers.push(reopened);
+			const upgraded = await stored(path);
+			const session = upgraded.sessions[first.nativeSessionRef];
+			expect(upgraded.schemaVersion).toBe(2);
+			expect(Object.keys(session?.journals ?? {})).toEqual([]);
+			expect(Object.keys(session?.archivedJournals ?? {}).sort()).toEqual(
+				[first.nativeTurnId, second.nativeTurnId].sort(),
+			);
+			expect(session?.eventSequence).toBe(
+				first.events.length + second.events.length,
+			);
+			expect(
+				await reopened.replayEvents(first.nativeSessionRef, first.executionId),
+			).toEqual(first.events);
+			expect(
+				await reopened.replayEvents(
+					second.nativeSessionRef,
+					second.executionId,
+				),
+			).toEqual(second.events);
+		});
+
+		it("keeps a journal hot when its index commit fails and archives it on the next open", async () => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(path, bridge);
+			drivers.push(driver);
+			const turn = await finishTurn(driver, bridge, 0, ["kept ", "hot"]);
+			const original = DurableJsonFile.prototype.update;
+			let calls = 0;
+			vi.spyOn(DurableJsonFile.prototype, "update").mockImplementation(
+				function (this: DurableJsonFile<unknown>, ...args) {
+					calls += 1;
+					// The acknowledgement commits; the archive index commit that follows
+					// its journal file does not.
+					if (calls === 2)
+						return Promise.reject(new Error("synthetic index commit failure"));
+					return original.apply(this, args);
+				},
+			);
+			await acknowledgeAll(driver, turn);
+			expect(calls).toBe(2);
+			vi.restoreAllMocks();
+
+			const kept = (await stored(path)).sessions[turn.nativeSessionRef];
+			expect(kept?.journals?.[turn.nativeTurnId]).toBeDefined();
+			expect(kept?.archivedJournals).toBeUndefined();
+			// The journal file written before the failed commit is not yet indexed.
+			await archiveFile(path);
+			expect(
+				await driver.replayEvents(turn.nativeSessionRef, turn.executionId),
+			).toEqual(turn.events);
+
+			await driver.close();
+			const reopened = await openDriver(
+				path,
+				new TestCodexBridge(bridge.nativeThreadId, bridge.nativeTurnId),
+			);
+			drivers.push(reopened);
+			const archived = (await stored(path)).sessions[turn.nativeSessionRef];
+			expect(archived?.journals?.[turn.nativeTurnId]).toBeUndefined();
+			expect(archived?.archivedJournals?.[turn.nativeTurnId]).toBeDefined();
+			expect(
+				await reopened.replayEvents(turn.nativeSessionRef, turn.executionId),
+			).toEqual(turn.events);
+		});
+
+		it("keeps journals hot when their archive files cannot be written, during an upgrade or after an ACK", async () => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(path, bridge);
+			drivers.push(driver);
+			const turn = await finishTurn(driver, bridge, 0, ["blocked ", "archive"]);
+			await driver.close();
+			const saved = await stored(path);
+			await writeFile(path, JSON.stringify({ ...saved, schemaVersion: 1 }));
+			// A file where the archive directory belongs fails every archive write.
+			const root = codexJournalArchiveRoot(path);
+			await writeFile(root, "");
+
+			const upgraded = await openDriver(
+				path,
+				new TestCodexBridge(bridge.nativeThreadId, bridge.nativeTurnId),
+			);
+			drivers.push(upgraded);
+			await acknowledgeAll(upgraded, turn);
+			const hot = await stored(path);
+			expect(hot.schemaVersion).toBe(2);
+			expect(
+				hot.sessions[turn.nativeSessionRef]?.journals?.[turn.nativeTurnId],
+			).toBeDefined();
+			expect(hot.sessions[turn.nativeSessionRef]?.archivedJournals).toBe(
+				undefined,
+			);
+			expect(
+				await upgraded.replayEvents(turn.nativeSessionRef, turn.executionId),
+			).toEqual(turn.events);
+
+			await upgraded.close();
+			await rm(root);
+			const reopened = await openDriver(
+				path,
+				new TestCodexBridge(bridge.nativeThreadId, bridge.nativeTurnId),
+			);
+			drivers.push(reopened);
+			const archived = (await stored(path)).sessions[turn.nativeSessionRef];
+			expect(archived?.journals?.[turn.nativeTurnId]).toBeUndefined();
+			expect(archived?.archivedJournals?.[turn.nativeTurnId]).toBeDefined();
+			expect(
+				await reopened.replayEvents(turn.nativeSessionRef, turn.executionId),
+			).toEqual(turn.events);
+		});
+
+		it.each(["changed", "missing"] as const)(
+			"fails closed on open when an archived journal file is %s",
+			async (damage) => {
+				const path = join(await runtimeDirectory(), "driver.json");
+				const bridge = new TestCodexBridge();
+				const driver = await openDriver(path, bridge);
+				drivers.push(driver);
+				const turn = await finishTurn(driver, bridge, 0, ["archived"]);
+				await acknowledgeAll(driver, turn);
+				await driver.close();
+				const file = await archiveFile(path);
+				if (damage === "missing") await rm(file);
+				else
+					await writeFile(
+						file,
+						(await readFile(file, "utf8")).replace("archived", "archivee"),
+					);
+
+				await expect(
+					openDriver(
+						path,
+						new TestCodexBridge(bridge.nativeThreadId, bridge.nativeTurnId),
+					),
+				).rejects.toMatchObject({ code: "RUNTIME_CODEX_STATE_INVALID" });
+			},
+		);
+	});
+
 	it("streams existing and later persisted journal events once", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
@@ -9221,7 +9636,7 @@ describe("Codex Runtime Driver", () => {
 		[
 			"schema version",
 			{
-				schemaVersion: 2,
+				schemaVersion: 3,
 				sessions: {},
 				operations: {},
 			},
