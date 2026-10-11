@@ -9,6 +9,7 @@ import {
 } from "@agent-infra/contracts/runtime";
 
 export const runtimeSkillHubMountRootV1 = "/opt/agent-infra-skill-hub";
+const maximumRuntimeSkillHubBindingBytesV1 = 30_000;
 
 export function readRuntimeSkillHubBindingV1(
 	environment: NodeJS.ProcessEnv,
@@ -16,6 +17,11 @@ export function readRuntimeSkillHubBindingV1(
 	const raw = environment[runtimeSkillHubBindingEnvironmentNameV1];
 	if (raw === undefined) return undefined;
 	try {
+		if (
+			new TextEncoder().encode(raw).byteLength >
+			maximumRuntimeSkillHubBindingBytesV1
+		)
+			runtimeConfigurationInvalid();
 		const binding = RuntimeSkillHubBindingV1Schema.parse(JSON.parse(raw));
 		if (binding.agentId !== environment.AGENT_INFRA_RUNTIME_AGENT_ID)
 			runtimeConfigurationInvalid();

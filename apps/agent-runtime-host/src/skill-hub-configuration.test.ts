@@ -78,4 +78,13 @@ describe("Runtime Skill Hub configuration", () => {
 			}),
 		).toThrow("RUNTIME_CONFIGURATION_INVALID");
 	});
+
+	it("rejects an oversized raw environment value before parsing", () => {
+		expect(() =>
+			readRuntimeSkillHubBindingV1({
+				...environment(),
+				AGENT_INFRA_RUNTIME_SKILL_HUB_BINDING: `${" ".repeat(30_001)}${environment().AGENT_INFRA_RUNTIME_SKILL_HUB_BINDING}`,
+			}),
+		).toThrow("RUNTIME_CONFIGURATION_INVALID");
+	});
 });
