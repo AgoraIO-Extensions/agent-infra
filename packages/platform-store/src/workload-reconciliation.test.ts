@@ -325,6 +325,19 @@ async function expectResolverRejection() {
 }
 
 describe("PostgreSQL Workload steps", () => {
+	it("discovers API-created Agents without an approval revision", async () => {
+		await sql`update platform.agent_applications
+			set creation_channel = 'api', creator_principal_type = 'application',
+				creator_principal_id = 'api-application', approval_revision = null
+			where agent_id = 'agent-a'`;
+		const step = vi.fn(async (input: WorkloadReconciliationInputV1) =>
+			preflightState(input),
+		);
+		expect(await first.runNext("worker-api-discovery", step)).toBe("advanced");
+		expect(step).toHaveBeenCalledTimes(1);
+		expect(step.mock.calls[0]?.[0].management.status).toBe("creating");
+	});
+
 	it.each(["candidate", "verified"] as const)(
 		"rejects invalid historical %s configurations before a Worker step",
 		async (key) => {
