@@ -5,8 +5,9 @@ import type {
 	RuntimeFileBridgeFactoryV1,
 	RuntimeFileBridgePortV1,
 	RuntimeFileInputV1,
-	RuntimeFileResultV1,
+	RuntimeFileResultReceiptV1,
 } from "@agent-infra/agent-runtime";
+import { createRuntimeFileResultReceiptV1 } from "@agent-infra/agent-runtime";
 import {
 	type FileAccessGrantV1,
 	FileAccessResponseV1Schema,
@@ -276,7 +277,7 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 			async writeResult(
 				descriptor: FileDescriptorV1,
 				body: ReadableStream<Uint8Array>,
-			): Promise<RuntimeFileResultV1> {
+			): Promise<RuntimeFileResultReceiptV1> {
 				revalidate(binding);
 				const key = runtimeFileKey(binding, "result", descriptor);
 				let bounded: ReturnType<typeof boundedRuntimeFileUpload> | undefined;
@@ -350,7 +351,7 @@ export function createWorkerRuntimeFileBridgeFactoryV1(
 						!sameFileDescriptor(file.descriptor, descriptor)
 					)
 						throw new Error("WORKER_RUNTIME_FILE_RESULT_INVALID");
-					return file;
+					return createRuntimeFileResultReceiptV1(binding, file);
 				} catch (error) {
 					await bounded?.cancel().catch(() => undefined);
 					if (!body.locked) await body.cancel().catch(() => undefined);

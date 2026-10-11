@@ -19,6 +19,7 @@ import {
 	createRuntimeFileBridgeV1,
 	type RuntimeFileBridgeBindingV1,
 	type RuntimeFileBridgeContextV1,
+	readRuntimeFileResultReceiptV1,
 } from "./runtime-file-bridge.js";
 
 const binding: RuntimeFileBridgeBindingV1 = Object.freeze({
@@ -212,6 +213,20 @@ describe("RuntimeHost execution file bridge", () => {
 			operation: "write",
 			executionId: longBinding.executionId,
 		});
+	});
+
+	it("keeps confirmed receipt metadata immutable at runtime", async () => {
+		const receipt = await bridge().writeResult(
+			descriptor,
+			new ReadableStream<Uint8Array>(),
+		);
+		const metadata = readRuntimeFileResultReceiptV1(receipt);
+		expect(Object.isFrozen(metadata)).toBe(true);
+		expect(Object.isFrozen(metadata.binding)).toBe(true);
+		expect(Object.isFrozen(metadata.projection)).toBe(true);
+		expect(() => {
+			(metadata as { binding: unknown }).binding = {};
+		}).toThrow();
 	});
 
 	it("rejects a file outside the signed input set before invoking the reader", async () => {

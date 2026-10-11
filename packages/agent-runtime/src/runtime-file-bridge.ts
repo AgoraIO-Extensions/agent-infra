@@ -99,17 +99,25 @@ function freezeProjection(value: RuntimeFileResultV1): RuntimeFileResultV1 {
 }
 
 /** Creates a bridge-owned result receipt after the authority confirms a projection. */
-function createRuntimeFileResultReceiptV1(
+/** Adapter-only constructor for a confirmed projection; metadata remains private and frozen. */
+export function createRuntimeFileResultReceiptV1(
 	binding: RuntimeFileBridgeBindingV1,
 	projection: RuntimeFileResultV1,
 ): RuntimeFileResultReceiptV1 {
 	assertBinding(binding);
+	const frozenBinding = Object.freeze({
+		...binding,
+		inputFileIds: Object.freeze([...binding.inputFileIds]),
+	});
 	const frozenProjection = freezeProjection(projection);
 	const receipt = Object.freeze({ projection: frozenProjection });
-	runtimeFileResultReceipts.set(receipt, {
-		binding,
-		projection: frozenProjection,
-	});
+	runtimeFileResultReceipts.set(
+		receipt,
+		Object.freeze({
+			binding: frozenBinding,
+			projection: frozenProjection,
+		}),
+	);
 	return receipt;
 }
 
