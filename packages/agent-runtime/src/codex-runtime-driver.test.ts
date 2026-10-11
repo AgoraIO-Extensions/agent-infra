@@ -2650,7 +2650,7 @@ describe("Codex Runtime Driver", () => {
 		);
 	});
 
-	it("maps an authorized image attachment to local_image and removes its temporary file", async () => {
+	it("retains an authorized image until the native Turn terminates", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
@@ -2702,8 +2702,12 @@ describe("Codex Runtime Driver", () => {
 		)
 			throw new Error("missing local image path");
 		const temporaryPath = String(localImage.path);
-		await expect(readFile(temporaryPath)).rejects.toThrow();
+		await expect(readFile(temporaryPath)).resolves.toEqual(Buffer.from(bytes));
 		expect(result.result).toMatchObject({ outcome: "accepted" });
+		await bridge.emitTurnCompleted("completed");
+		await vi.waitFor(async () => {
+			await expect(readFile(temporaryPath)).rejects.toThrow();
+		});
 	});
 
 	it("rejects an attachment outside the Codex image allowlist before native submission", async () => {
