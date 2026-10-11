@@ -594,6 +594,11 @@ export function assemblePlatformApi(
 				}
 			: {}),
 		tasks,
+		unknownStopOperations: {
+			identity: input.identity,
+			resolveTimedOutUnknownStop: (request) =>
+				taskAuthorization.resolveTimedOutUnknownStop(request),
+		},
 		...(agentApiCreation
 			? {
 					agentApiCreation: {
