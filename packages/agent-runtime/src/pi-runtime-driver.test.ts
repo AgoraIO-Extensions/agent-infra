@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
-import { PiRuntimeDriver } from "./pi-runtime-driver.js";
+import {
+	PiRuntimeDriver,
+	type PiRuntimeDriverOptions,
+} from "./pi-runtime-driver.js";
 import type { SessionNativeCommandReadContext } from "./session-runtime-driver.js";
 
 const command = {
@@ -22,8 +25,30 @@ const command = {
 		reasoningLevel: "high",
 	},
 };
-async function fixture(mode = "normal") {
+async function fixture(mode = "normal", withExecutionKeys = false) {
 	const path = await mkdtemp(join(tmpdir(), "pi-driver-"));
+	const keyResolvers: Array<() => Promise<string>> = [];
+	const authorizeModelAction: NonNullable<
+		PiRuntimeDriverOptions["authorizeModelAction"]
+	> = async (action) => ({
+		relayKey: action.executionId === "execution-a" ? "key-a" : "key-b",
+	});
+	const launch: PiRuntimeDriverOptions["launch"] = async (
+		_directory,
+		_selection,
+		_admit,
+		resolveModelCredential,
+	) => {
+		if (withExecutionKeys && resolveModelCredential)
+			keyResolvers.push(resolveModelCredential);
+		return {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./pi-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { PI_PEER_MODE: mode },
+		};
+	};
 	const options = {
 		path,
 		configVersion: "configuration-a",
@@ -36,13 +61,8 @@ async function fixture(mode = "normal") {
 				reasoningLevels: ["high"],
 			},
 		],
-		launch: async () => ({
-			command: process.execPath,
-			args: [
-				fileURLToPath(new URL("./pi-peer.test-support.mjs", import.meta.url)),
-			],
-			env: { PI_PEER_MODE: mode },
-		}),
+		...(withExecutionKeys ? { authorizeModelAction } : {}),
+		launch,
 	};
 	let driver = await PiRuntimeDriver.open(options);
 	return {
@@ -50,6 +70,7 @@ async function fixture(mode = "normal") {
 		get driver() {
 			return driver;
 		},
+		keyResolvers,
 		async restart() {
 			await driver.close();
 			driver = await PiRuntimeDriver.open(options);
@@ -131,6 +152,37 @@ it.each([false, true])(
 		}
 	},
 );
+
+it("refreshes the execution Key when Pi reuses a native session", async () => {
+	const f = await fixture("normal", true);
+	try {
+		const first = await f.driver.execute(command);
+		await vi.waitFor(async () =>
+			expect(
+				await f.driver.getStatus(first.nativeSessionRef, command.executionId),
+			).toBe("completed"),
+		);
+		expect(f.keyResolvers).toHaveLength(1);
+		expect(await f.keyResolvers[0]?.()).toBe("key-a");
+
+		const second = await f.driver.execute({
+			...command,
+			nativeSessionRef: first.nativeSessionRef,
+			executionId: "execution-b",
+			turnId: "turn-b",
+			operationId: "operation-b",
+		});
+		await vi.waitFor(async () =>
+			expect(
+				await f.driver.getStatus(second.nativeSessionRef, "execution-b"),
+			).toBe("completed"),
+		);
+		expect(f.keyResolvers).toHaveLength(1);
+		expect(await f.keyResolvers[0]?.()).toBe("key-b");
+	} finally {
+		await f.close();
+	}
+});
 
 it("reads the bounded Pi get_commands projection from a live native handle", async () => {
 	const f = await fixture();
