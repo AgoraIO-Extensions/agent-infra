@@ -218,6 +218,7 @@ async function event(
 	request: RuntimeSubmitTurnTransportV4["businessRequest"],
 	hostSessionRef: string,
 	cursor?: string,
+	afterCursor: string | null = null,
 ) {
 	const {
 		input: _input,
@@ -235,7 +236,7 @@ async function event(
 			token: "a.b.c",
 		},
 		consumer: "platform_worker_persistence" as const,
-		...(cursor ? { confirmedCursor: cursor } : { afterCursor: null }),
+		...(cursor ? { confirmedCursor: cursor } : { afterCursor }),
 	};
 	const parsed = cursor
 		? RuntimeEventAckRequestV4Schema.parse(value)
@@ -751,6 +752,51 @@ it("grows a replay page past eight events only within the Worker's byte bound (#
 	expect(grown.body).toBeLessThanOrEqual(maximumRuntimeEventReplayPageBytesV4);
 	// Eight events larger than the bound still form a page, as before #1637.
 	expect((await pageLength(160 * 1024)).length).toBe(8);
+});
+
+it("drains a long reply in full pages with the Worker's batched ACKs (#1637)", async () => {
+	const f = await setup();
+	const accepted = await f.host.submitTurnV4(f.transport);
+	const all = pageEvents(1, 700);
+	vi.spyOn(f.driver, "replayEvents").mockImplementation(
+		async (_ref, _execution, after) =>
+			after === undefined
+				? all
+				: all.slice(all.findIndex((item) => item.cursor === after) + 1),
+	);
+	Object.assign(f.driver, { acknowledgeEvents: vi.fn(async () => undefined) });
+	let last: string | null = null;
+	let persisted = 0;
+	while (persisted < all.length) {
+		const read = await event(
+			f.transport.businessRequest,
+			accepted.hostSessionRef,
+			undefined,
+			last,
+		);
+		const replay = await f.host.readEventsV4(
+			RuntimeEventReadRequestV4Schema.parse(read.request),
+			read.verification,
+		);
+		expect(replay.events.length).toBeGreaterThan(0);
+		for (const item of replay.events) {
+			persisted++;
+			last = item.cursor;
+			// The Worker confirms every 32 persisted events (platform-core).
+			if (persisted % 32 === 0 || persisted === all.length) {
+				const ack = await event(
+					f.transport.businessRequest,
+					accepted.hostSessionRef,
+					item.cursor,
+				);
+				await f.host.acknowledgeEventsV4(
+					RuntimeEventAckRequestV4Schema.parse(ack.request),
+					ack.verification,
+				);
+			}
+		}
+	}
+	expect(persisted).toBe(all.length);
 });
 
 it("refuses a whole page past the delivered-cursor bound without recording any of it", async () => {
