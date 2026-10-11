@@ -32,7 +32,6 @@ export type WorkerInstallationAuthorization = Omit<
 	"command"
 > & {
 	readonly command: WorkerInstallationCommand;
-} & {
 	readonly scope: import("@agent-infra/contracts/runtime").RuntimeOAuthScopeV1;
 	readonly revision: string;
 	readonly commandId?: string;
