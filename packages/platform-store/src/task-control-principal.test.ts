@@ -70,6 +70,7 @@ beforeAll(async () => {
 }, 120_000);
 afterEach(async () => {
 	await client`truncate platform.platform_user_disables, platform.platform_api_credentials, platform.platform_applications, platform.audit_events, platform.task_control_records, platform.task_authorization_records,
+		platform.idempotency_records,
 		platform.conversation_stops, platform.outbox_items, platform.conversation_executions,
 		platform.conversations, platform.agents cascade`;
 });
@@ -155,6 +156,209 @@ async function expectNoControlEffects() {
 }
 
 describe("System controls use the durable typed Execution principal", () => {
+	it("resolves a timed-out unknown stop atomically and replays it", async () => {
+		await seed("user");
+		await client`update platform.conversations set status = 'active' where id = 'conversation'`;
+		await client`update platform.conversation_executions set status = 'unknown' where execution_id = 'execution'`;
+		await client`insert into platform.conversation_stops (execution_id, stop_request_id, status, confirmation_deadline, confirmation_timed_out_at, created_at, updated_at)
+			values ('execution', 'ops-stop', 'submitted', now() - interval '1 minute', now(), now(), now())`;
+		const input = {
+			conversationId: "conversation",
+			executionId: "execution",
+			stopRequestId: "ops-stop",
+			sessionGeneration: 1,
+			operatorId: "operator",
+			idempotencyKey: "resolve-unknown",
+			requestDigest: "a".repeat(64),
+			traceId: "trace-ops",
+			requestId: "request-ops",
+		};
+		const result = await store.resolveTimedOutUnknownStop(input);
+		expect(result).toMatchObject({
+			schemaVersion: 1,
+			status: "resolved",
+			conversationId: "conversation",
+			executionId: "execution",
+			stopRequestId: "ops-stop",
+			replayed: false,
+		});
+		const [state] = await client`
+			select c.status as conversation_status, e.status as execution_status,
+				s.status as stop_status, tc.reason, i.status as idempotency_status
+			from platform.conversations c
+			join platform.conversation_executions e on e.conversation_id = c.id
+			join platform.conversation_stops s on s.execution_id = e.execution_id
+			join platform.task_control_records tc on tc.execution_id = e.execution_id
+			join platform.idempotency_records i on i.scope_id = c.id
+			where c.id = 'conversation' and e.execution_id = 'execution'`;
+		expect(state).toMatchObject({
+			conversation_status: "unavailable",
+			execution_status: "failed",
+			stop_status: "completed",
+			reason: "recovery",
+			idempotency_status: "completed",
+		});
+		await expect(
+			store.resolveTimedOutUnknownStop(input),
+		).resolves.toMatchObject({
+			replayed: true,
+		});
+		await expect(
+			store.resolveTimedOutUnknownStop({
+				...input,
+				requestDigest: "b".repeat(64),
+			}),
+		).rejects.toBeInstanceOf(TaskAuthorizationStoreError);
+	});
+
+	it("returns the committed result for concurrent identical submissions", async () => {
+		await seed("user");
+		await client`update platform.conversations set status = 'active' where id = 'conversation'`;
+		await client`update platform.conversation_executions set status = 'unknown' where execution_id = 'execution'`;
+		await client`insert into platform.conversation_stops (execution_id, stop_request_id, status, confirmation_deadline, confirmation_timed_out_at, created_at, updated_at)
+			values ('execution', 'ops-stop', 'submitted', now() - interval '1 minute', now(), now(), now())`;
+		await client`create function platform.pause_unknown_stop_reservation() returns trigger language plpgsql as $$ begin perform pg_advisory_xact_lock(1824001); perform pg_sleep(0.3); return NEW; end $$`;
+		await client`create trigger pause_unknown_stop_reservation after insert on platform.idempotency_records for each row execute function platform.pause_unknown_stop_reservation()`;
+		const input = {
+			conversationId: "conversation",
+			executionId: "execution",
+			stopRequestId: "ops-stop",
+			sessionGeneration: 1,
+			operatorId: "operator",
+			idempotencyKey: "concurrent-resolution",
+			requestDigest: "a".repeat(64),
+			traceId: "trace-ops",
+			requestId: "request-ops",
+		};
+		try {
+			const first = store.resolveTimedOutUnknownStop(input);
+			let reservationHeld = false;
+			for (let attempt = 0; attempt < 100 && !reservationHeld; attempt += 1) {
+				const [lock] =
+					await client`select pg_try_advisory_lock(1824001) as acquired`;
+				reservationHeld = lock?.acquired === false;
+				if (lock?.acquired) await client`select pg_advisory_unlock(1824001)`;
+				if (!reservationHeld)
+					await new Promise((resolve) => setTimeout(resolve, 5));
+			}
+			expect(reservationHeld).toBe(true);
+			const second = store.resolveTimedOutUnknownStop(input);
+			const results = await Promise.all([first, second]);
+			expect(results.map((result) => result.replayed).sort()).toEqual([
+				false,
+				true,
+			]);
+		} finally {
+			await client`drop trigger pause_unknown_stop_reservation on platform.idempotency_records`;
+			await client`drop function platform.pause_unknown_stop_reservation()`;
+		}
+	});
+
+	it("rejects a conversation and execution binding mismatch", async () => {
+		await seed("user");
+		await client`insert into platform.conversations
+			(id, agent_id, actor_id, channel_id, principal_type, status, session_generation, authorization_revision)
+			values ('other-conversation', 'other-agent', 'same-id', 'api', 'user', 'active', 1, 'agent-1')`;
+		await client`update platform.conversation_executions set status = 'unknown' where execution_id = 'execution'`;
+		await client`insert into platform.conversation_stops (execution_id, stop_request_id, status, confirmation_deadline, confirmation_timed_out_at, created_at, updated_at)
+			values ('execution', 'ops-stop', 'submitted', now() - interval '1 minute', now(), now(), now())`;
+		await expect(
+			store.resolveTimedOutUnknownStop({
+				conversationId: "other-conversation",
+				executionId: "execution",
+				stopRequestId: "ops-stop",
+				sessionGeneration: 1,
+				operatorId: "operator",
+				idempotencyKey: "binding-mismatch",
+				requestDigest: "a".repeat(64),
+				traceId: "trace-ops",
+				requestId: "request-ops",
+			}),
+		).rejects.toBeInstanceOf(TaskAuthorizationStoreError);
+		expect(
+			await client`select id from platform.task_control_records`,
+		).toHaveLength(0);
+	});
+
+	it.each([
+		{ name: "stale generation", sessionGeneration: 2 },
+		{ name: "non-unknown execution", executionStatus: "processing" },
+		{ name: "missing durable timeout", timeout: null },
+	] as const)("rejects $name", async (change) => {
+		await seed("user");
+		await client`update platform.conversations set status = 'active' where id = 'conversation'`;
+		const executionStatus =
+			change.name === "non-unknown execution" ? "processing" : "unknown";
+		await client`update platform.conversation_executions set status = ${executionStatus} where execution_id = 'execution'`;
+		const timeout: Date | null =
+			change.name === "missing durable timeout" ? null : new Date();
+		await client`insert into platform.conversation_stops (execution_id, stop_request_id, status, confirmation_deadline, confirmation_timed_out_at, created_at, updated_at)
+			values ('execution', 'ops-stop', 'submitted', now() - interval '1 minute', ${timeout}, now(), now())`;
+		const input = {
+			conversationId: "conversation",
+			executionId: "execution",
+			stopRequestId: "ops-stop",
+			sessionGeneration: change.sessionGeneration ?? 1,
+			operatorId: "operator",
+			idempotencyKey: `reject-${change.name.replaceAll(" ", "-")}`,
+			requestDigest: "a".repeat(64),
+			traceId: "trace-ops",
+			requestId: "request-ops",
+		};
+		await expect(
+			store.resolveTimedOutUnknownStop(input),
+		).rejects.toBeInstanceOf(TaskAuthorizationStoreError);
+		expect(
+			await client`select id from platform.task_control_records`,
+		).toHaveLength(0);
+		expect(
+			await client`select status from platform.idempotency_records`,
+		).toHaveLength(0);
+	});
+
+	it("rolls back every resolution fact when its control audit fails", async () => {
+		await seed("user");
+		await client`update platform.conversations set status = 'active' where id = 'conversation'`;
+		await client`update platform.conversation_executions set status = 'unknown' where execution_id = 'execution'`;
+		await client`insert into platform.conversation_stops (execution_id, stop_request_id, status, confirmation_deadline, confirmation_timed_out_at, created_at, updated_at)
+			values ('execution', 'ops-stop', 'submitted', now() - interval '1 minute', now(), now(), now())`;
+		await client`create function platform.fail_unknown_stop_resolution_audit() returns trigger language plpgsql as $$ begin if NEW.action = 'task.control.created' then raise exception 'controlled unknown-stop audit failure'; end if; return NEW; end $$`;
+		await client`create trigger fail_unknown_stop_resolution_audit before insert on platform.audit_events for each row execute function platform.fail_unknown_stop_resolution_audit()`;
+		try {
+			await expect(
+				store.resolveTimedOutUnknownStop({
+					conversationId: "conversation",
+					executionId: "execution",
+					stopRequestId: "ops-stop",
+					sessionGeneration: 1,
+					operatorId: "operator",
+					idempotencyKey: "audit-failure",
+					requestDigest: "a".repeat(64),
+					traceId: "trace-ops",
+					requestId: "request-ops",
+				}),
+			).rejects.toBeInstanceOf(TaskAuthorizationStoreError);
+			expect(
+				await client`select status from platform.conversation_executions where execution_id = 'execution'`,
+			).toMatchObject([{ status: "unknown" }]);
+			expect(
+				await client`select status from platform.conversations where id = 'conversation'`,
+			).toMatchObject([{ status: "active" }]);
+			expect(
+				await client`select status from platform.conversation_stops where execution_id = 'execution'`,
+			).toMatchObject([{ status: "submitted" }]);
+			expect(
+				await client`select id from platform.task_control_records`,
+			).toHaveLength(0);
+			expect(
+				await client`select id from platform.idempotency_records`,
+			).toHaveLength(0);
+		} finally {
+			await client`drop trigger fail_unknown_stop_resolution_audit on platform.audit_events`;
+			await client`drop function platform.fail_unknown_stop_resolution_audit()`;
+		}
+	});
+
 	it("commits caller business writes, control, stop and audit in the same transaction", async () => {
 		await seed("user");
 		await client`update platform.conversation_executions set status = 'processing' where execution_id = 'execution'`;

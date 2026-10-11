@@ -11,7 +11,9 @@ import {
 	parseCurrentTaskApplicationV1,
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
+	parseTimedOutUnknownStopResolutionInputV1,
 	planTaskSystemControlV1,
+	planTimedOutUnknownStopResolutionV1,
 } from "./task-authorization.js";
 
 const user: CurrentTaskUserV1 = {
@@ -61,6 +63,83 @@ function requiredBoundary(overrides: Parameters<typeof capture>[0] = {}) {
 }
 
 describe("task authorization boundary", () => {
+	it("strictly parses timed-out unknown stop resolution input", () => {
+		const input = {
+			conversationId: "conversation",
+			executionId: "execution",
+			stopRequestId: "stop",
+			sessionGeneration: 1,
+			operatorId: "operator",
+			idempotencyKey: "resolve-1",
+			requestDigest: "a".repeat(64),
+			traceId: "trace",
+			requestId: "request",
+		};
+		expect(parseTimedOutUnknownStopResolutionInputV1(input)).toEqual(input);
+		for (const invalid of [
+			{ ...input, sessionGeneration: 0 },
+			{ ...input, requestDigest: "bad" },
+			{ ...input, idempotencyKey: "bad key" },
+			{ ...input, unexpected: true },
+		]) {
+			expect(() =>
+				parseTimedOutUnknownStopResolutionInputV1(invalid),
+			).toThrow();
+		}
+	});
+
+	it.each([
+		["stale generation", 2, "unknown", true],
+		["non-unknown execution", 1, "processing", true],
+		["missing durable timeout", 1, "unknown", false],
+	] as const)(
+		"rejects %s in the resolution decision",
+		(_name, sessionGeneration, executionStatus, confirmationTimedOut) => {
+			const command = parseTimedOutUnknownStopResolutionInputV1({
+				conversationId: "conversation",
+				executionId: "execution",
+				stopRequestId: "stop",
+				sessionGeneration: 1,
+				operatorId: "operator",
+				idempotencyKey: "resolve-1",
+				requestDigest: "a".repeat(64),
+				traceId: "trace",
+				requestId: "request",
+			});
+			const execution = {
+				executionId: "execution",
+				conversationId: "conversation",
+				agentId: "agent",
+				actorId: "actor",
+				principalType: "user",
+				channelId: "api",
+				sessionGeneration,
+				status: executionStatus as "unknown" | "processing",
+			};
+			const stop = {
+				stopRequestId: "stop",
+				status: "submitted",
+				confirmationTimedOut,
+			};
+			expect(() =>
+				planTimedOutUnknownStopResolutionV1({
+					command,
+					agentId: "agent",
+					conversation: {
+						id: "conversation",
+						agentId: "agent",
+						actorId: "actor",
+						principalType: "user",
+						channelId: "api",
+						status: "active",
+					},
+					execution,
+					stop,
+				}),
+			).toThrow("Timed-out unknown stop resolution target is invalid");
+		},
+	);
+
 	it("keeps directory and Agent revisions distinct while accepting current unchanged scope", () => {
 		const boundary = requiredBoundary();
 		expect(boundary).toMatchObject({

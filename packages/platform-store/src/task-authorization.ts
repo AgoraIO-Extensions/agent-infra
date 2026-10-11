@@ -10,9 +10,12 @@ import {
 	parseCurrentTaskUserV1,
 	parseTaskAuthorizationBoundaryV1,
 	parseTaskPrincipalV1,
+	parseTimedOutUnknownStopResolutionInputV1,
 	planTaskSystemControlV1,
+	planTimedOutUnknownStopResolutionV1,
 	type TaskAuthorizationBoundaryV1,
 	type TaskPrincipalV1,
+	type TimedOutUnknownStopResolutionInputV1,
 } from "@agent-infra/platform-core";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -30,6 +33,11 @@ import {
 import { finishWaitingTask } from "./conversation-dispatch-task.js";
 import { awaitConversationExecutionQueryV1 } from "./conversation-execution-abort.js";
 import {
+	completeIdempotency,
+	readIdempotency,
+	reserveIdempotency,
+} from "./conversation-execution-sql.js";
+import {
 	agents,
 	conversationExecutions,
 	conversations,
@@ -38,6 +46,8 @@ import {
 } from "./schema.js";
 import { persistTaskControl } from "./task-control-record.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
+
+export type { TimedOutUnknownStopResolutionInputV1 } from "@agent-infra/platform-core";
 
 export class TaskAuthorizationStoreError extends Error {
 	constructor() {
@@ -257,6 +267,228 @@ export async function recordTaskSystemControlInTransactionV1(
 	});
 }
 
+export interface TimedOutUnknownStopResolutionResultV1 {
+	readonly schemaVersion: 1;
+	readonly status: "resolved";
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly stopRequestId: string;
+	readonly controlRecordId: string;
+	readonly replayed: boolean;
+}
+
+const timedOutUnknownStopCommand = "conversation.unknown-stop.resolve";
+
+/**
+ * Resolve one timed-out unknown stop using the existing Task system-control
+ * writer. The caller must already have established the operator identity; all
+ * target facts and writes are checked in this transaction.
+ */
+export async function resolveTimedOutUnknownStopInTransactionV1(
+	transaction: postgres.TransactionSql,
+	rawInput: TimedOutUnknownStopResolutionInputV1,
+): Promise<TimedOutUnknownStopResolutionResultV1> {
+	const input = parseTimedOutUnknownStopResolutionInputV1(rawInput);
+	const [isolation] = await transaction<{ transaction_isolation: string }[]>`
+		show transaction_isolation
+	`;
+	if (isolation?.transaction_isolation !== "read committed")
+		throw new TaskAuthorizationStoreError();
+	const scope = {
+		scopeType: "conversation",
+		scopeId: input.conversationId,
+		actorId: input.operatorId,
+		commandType: timedOutUnknownStopCommand,
+		key: input.idempotencyKey,
+	};
+	const existing = await readIdempotency(transaction, scope);
+	if (existing) {
+		if (existing.request_digest !== input.requestDigest)
+			throw new TaskAuthorizationStoreError();
+		if (existing.status !== "completed" || !existing.result)
+			throw new TaskAuthorizationStoreError();
+		return {
+			...(existing.result as TimedOutUnknownStopResolutionResultV1),
+			replayed: true,
+		};
+	}
+	const occurredAt = new Date();
+	const reservationId = await reserveIdempotency(transaction, {
+		...scope,
+		requestDigest: input.requestDigest,
+		occurredAt,
+	});
+	if (!reservationId) {
+		const raced = await readIdempotency(transaction, scope);
+		if (
+			!raced ||
+			raced.request_digest !== input.requestDigest ||
+			raced.status !== "completed" ||
+			!raced.result
+		)
+			throw new TaskAuthorizationStoreError();
+		return {
+			...(raced.result as TimedOutUnknownStopResolutionResultV1),
+			replayed: true,
+		};
+	}
+	const [conversation] = await transaction<
+		{
+			id: string;
+			agent_id: string;
+			actor_id: string;
+			principal_type: string;
+			channel_id: string;
+			status: string;
+		}[]
+	>`
+		select id, agent_id, actor_id, principal_type, channel_id, status
+		from platform.conversations where id = ${input.conversationId} for update
+	`;
+	const [execution] = await transaction<
+		{
+			execution_id: string;
+			conversation_id: string;
+			agent_id: string;
+			actor_id: string;
+			principal_type: string;
+			channel_id: string;
+			session_generation: string;
+			status: ConversationDispatchExecutionStatusV1;
+			authorization_revision: string;
+		}[]
+	>`
+		select execution_id, conversation_id, agent_id, actor_id, principal_type,
+			channel_id, session_generation::text, status, authorization_revision
+		from platform.conversation_executions
+		where execution_id = ${input.executionId} for update
+	`;
+	const [agent] = await transaction<{ id: string }[]>`
+		select id from platform.agents where id = ${execution?.agent_id ?? ""} for update
+	`;
+	const [stop] = await transaction<
+		{
+			stop_request_id: string;
+			status: string;
+			confirmation_timed_out_at: Date | null;
+		}[]
+	>`
+		select stop_request_id, status, confirmation_timed_out_at
+		from platform.conversation_stops
+		where execution_id = ${input.executionId}
+			and stop_request_id = ${input.stopRequestId}
+		for update
+	`;
+	if (!conversation || !execution || !agent || !stop)
+		throw new TaskAuthorizationStoreError();
+	const resolution = planTimedOutUnknownStopResolutionV1({
+		command: input,
+		agentId: agent.id,
+		conversation: {
+			id: conversation.id,
+			agentId: conversation.agent_id,
+			actorId: conversation.actor_id,
+			principalType: conversation.principal_type,
+			channelId: conversation.channel_id,
+			status: conversation.status,
+		},
+		execution: {
+			executionId: execution.execution_id,
+			conversationId: execution.conversation_id,
+			agentId: execution.agent_id,
+			actorId: execution.actor_id,
+			principalType: execution.principal_type,
+			channelId: execution.channel_id,
+			sessionGeneration: Number(execution.session_generation),
+			status: execution.status,
+		},
+		stop: {
+			stopRequestId: stop.stop_request_id,
+			status: stop.status,
+			confirmationTimedOut: stop.confirmation_timed_out_at !== null,
+		},
+	});
+	const [record] = await transaction<{ id: string; boundary: unknown }[]>`
+		select id, boundary from platform.task_authorization_records
+		where execution_id = ${input.executionId} for update
+	`;
+	if (!record) throw new TaskAuthorizationStoreError();
+	const principal = parseTaskPrincipalV1({
+		kind: execution.principal_type,
+		id: execution.actor_id,
+	});
+	const boundary = parseTaskAuthorizationBoundaryV1(record.boundary);
+	const plan = planTaskSystemControlV1({
+		reason: "recovery",
+		workerId: `platform-ops:${input.operatorId}`,
+		boundary,
+		execution: {
+			executionId: execution.execution_id,
+			conversationId: execution.conversation_id,
+			sessionGeneration: Number(execution.session_generation),
+			actorId: execution.actor_id,
+			principal,
+			agentId: execution.agent_id,
+			channelId: execution.channel_id,
+			authorizationRevision: execution.authorization_revision,
+			status: execution.status,
+		},
+	});
+	const control = await persistTaskControl(transaction, {
+		plan,
+		authorizationRecordId: record.id,
+		agentId: execution.agent_id,
+		traceId: input.traceId,
+		requestId: input.requestId,
+	});
+	const [failed] = await transaction<{ execution_id: string }[]>`
+		update platform.conversation_executions
+		set status = 'failed', updated_at = clock_timestamp()
+		where execution_id = ${input.executionId}
+			and status = 'unknown'
+			and session_generation = ${input.sessionGeneration}
+		returning execution_id
+	`;
+	if (!failed) throw new TaskAuthorizationStoreError();
+	const [unavailable] = await transaction<{ id: string }[]>`
+		update platform.conversations
+		set status = 'unavailable', updated_at = clock_timestamp()
+		where id = ${input.conversationId}
+			and session_generation = ${input.sessionGeneration}
+		returning id
+	`;
+	if (!unavailable) throw new TaskAuthorizationStoreError();
+	const [completedStop] = await transaction<{ execution_id: string }[]>`
+		update platform.conversation_stops
+		set status = 'completed', updated_at = clock_timestamp()
+		where execution_id = ${input.executionId}
+			and stop_request_id = ${input.stopRequestId}
+			and status = 'submitted'
+		returning execution_id
+	`;
+	if (!completedStop) throw new TaskAuthorizationStoreError();
+	await transaction`
+		update platform.outbox_items
+		set status = 'failed', lease_owner = null, lease_expires_at = null,
+			updated_at = clock_timestamp()
+		where scope_type = 'conversation'
+			and scope_id = ${input.conversationId}
+			and payload->>'executionId' = ${input.executionId}
+			and status in ('pending', 'processing', 'retry_scheduled')
+	`;
+	const result: TimedOutUnknownStopResolutionResultV1 = {
+		schemaVersion: 1,
+		status: "resolved",
+		conversationId: resolution.conversationId,
+		executionId: resolution.executionId,
+		stopRequestId: resolution.stopRequestId,
+		controlRecordId: control.controlRecordId,
+		replayed: false,
+	};
+	await completeIdempotency(transaction, reservationId, result, occurredAt);
+	return result;
+}
+
 export class PostgresTaskAuthorizationStoreV1 {
 	readonly #client;
 	readonly #queryClient;
@@ -267,6 +499,19 @@ export class PostgresTaskAuthorizationStoreV1 {
 		// keep a separate pool so json() retains the postgres serialization contract.
 		this.#queryClient = postgres(options.databaseUrl, { max: 5 });
 		this.#database = drizzle(this.#queryClient);
+	}
+
+	async resolveTimedOutUnknownStop(
+		input: TimedOutUnknownStopResolutionInputV1,
+	): Promise<TimedOutUnknownStopResolutionResultV1> {
+		try {
+			return await this.#client.begin((transaction) =>
+				resolveTimedOutUnknownStopInTransactionV1(transaction, input),
+			);
+		} catch (error) {
+			if (error instanceof TaskAuthorizationStoreError) throw error;
+			throw new TaskAuthorizationStoreError();
+		}
 	}
 
 	/** Capture current access and its Agent revision from one consistent database snapshot. */
