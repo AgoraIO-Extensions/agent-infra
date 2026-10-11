@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import {
 	maximumRuntimeEventReplayPageBytesV4,
+	type RuntimeBusinessGrantClaimsV4,
 	RuntimeBusinessGrantClaimsV4Schema,
 	type RuntimeBusinessRequestV4,
 	RuntimeEventAckRequestV4Schema,
@@ -94,14 +95,17 @@ function submission() {
 	});
 }
 
-function delivery<T extends RuntimeBusinessRequestV4>(request: T) {
-	const claims = RuntimeBusinessGrantClaimsV4Schema.parse({
+function businessClaims(
+	request: RuntimeBusinessRequestV4,
+	clock = now,
+): RuntimeBusinessGrantClaimsV4 {
+	return RuntimeBusinessGrantClaimsV4Schema.parse({
 		schemaVersion: 4,
 		issuer: "platform-fixture",
 		audience: "runtime_host",
 		workerId: "worker-fixture",
-		issuedAt: now,
-		expiresAt: now + 30_000,
+		issuedAt: clock,
+		expiresAt: clock + 30_000,
 		grantId: request.requestId,
 		principal: request.principal,
 		executionSource: request.executionSource,
@@ -125,6 +129,10 @@ function delivery<T extends RuntimeBusinessRequestV4>(request: T) {
 		],
 		attachments: [],
 	});
+}
+
+function delivery<T extends RuntimeBusinessRequestV4>(request: T) {
+	const claims = businessClaims(request);
 	return {
 		businessRequest: {
 			...request,
@@ -334,6 +342,7 @@ it("passes the request-scoped file bridge only through the Driver execution cont
 	);
 });
 
+
 it("records result metadata only after the bridge confirms the write", async () => {
 	const fileBridge = {
 		readInput: vi.fn(),
@@ -384,6 +393,49 @@ it("records result metadata only after the bridge confirms the write", async () 
 	expect(recordResultFile).toHaveBeenCalledWith(
 		expect.objectContaining({ executionId: "execution-1" }),
 		expect.objectContaining({ fileId: "result-1", status: "available" }),
+
+	);
+});
+
+
+it("decides bridge expiry on the injected grant clock instead of the wall clock", async () => {
+	const directory = await mkdtemp(
+		join(tmpdir(), "runtime-host-v4-bridge-clock-"),
+	);
+	cleanups.push(() => rm(directory, { recursive: true, force: true }));
+	const store = await FileRuntimeStore.open(join(directory, "host.json"));
+	cleanups.push(() => store.close());
+	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
+	// A deployment clock decades away from the wall clock.
+	let clock = 1_000_000;
+	const request = submission();
+	const accepted = { request, claims: businessClaims(request, clock) };
+	const fileBridge = {
+		readInput: vi.fn(),
+		writeResult: vi.fn(),
+		revalidate: vi.fn(),
+	} as unknown as RuntimeFileBridgePortV1;
+	const host = await RuntimeHost.open({
+		store,
+		driver,
+		grantValidation: { expectedIssuer: "platform-fixture" },
+		grantValidationV2: {
+			expectedIssuer: "platform-fixture",
+			expectedWorkerId: "worker-fixture",
+			now: () => clock,
+		},
+		validateGrantV4: async () => accepted,
+		fileBridge: () => fileBridge,
+	});
+	cleanups.push(() => host.close());
+
+	// The grant is live on the deployment clock even though the wall clock is far
+	// beyond its expiry.
+	await expect(host.getFileBridge(request)).resolves.toBe(fileBridge);
+	clock += 60_000;
+	await expect(host.getFileBridge(request)).rejects.toThrow(
+		"RUNTIME_FILE_BRIDGE_BINDING_INVALID",
+
 	);
 });
 

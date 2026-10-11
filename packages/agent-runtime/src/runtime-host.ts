@@ -530,7 +530,9 @@ export class RuntimeHost {
 		const binding = await createRuntimeFileBridgeBindingV1({
 			request,
 			claims,
-			now: this.options.grantValidationV2?.now?.() ?? Date.now(),
+			// The bridge decides expiry on the deployment clock that validated the
+			// grant, not on the wall clock.
+			now: (this.options.grantValidationV2?.now ?? Date.now)(),
 		});
 		// Both binding validation and factory creation await. A Host closed while
 		// they were pending must not issue new file authority afterwards.
