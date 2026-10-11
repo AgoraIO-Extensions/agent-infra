@@ -100,7 +100,7 @@ test("CI label transitions cancel older PR runs and retain checks on lookup fail
     ["opened", "synchronize", "reopened", "labeled", "unlabeled"]);
   assert.deepEqual(workflow.on.push.branches, ["main"]);
   assert.deepEqual(workflow.concurrency, {
-    group: "ci-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.pull_request.head.sha || github.sha }}",
+    group: "ci-${{ github.event.pull_request.number || github.ref }}",
     "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
   });
   assert.deepEqual(exemption.permissions, { "pull-requests": "read" });
