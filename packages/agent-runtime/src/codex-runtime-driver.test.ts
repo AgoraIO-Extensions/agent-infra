@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import { createServer, type IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type {
 	RuntimeDriverCommandV1,
@@ -287,15 +287,19 @@ async function materializedInputDirectories(
 	firstImage: Uint8Array,
 ): Promise<string[]> {
 	const expected = Buffer.from(firstImage).toString("hex");
-	const names: string[] = [];
+	const directories: string[] = [];
 	for (const name of await readdir(tmpdir())) {
 		if (!name.startsWith("agent-infra-codex-input-")) continue;
-		try {
-			const image = await readFile(join(tmpdir(), name, "00.image"));
-			if (image.toString("hex") === expected) names.push(name);
-		} catch {}
+		const root = join(tmpdir(), name);
+		for (const entry of await readdir(root).catch(() => [])) {
+			const directory = join(root, entry);
+			try {
+				const image = await readFile(join(directory, "00.image"));
+				if (image.toString("hex") === expected) directories.push(directory);
+			} catch {}
+		}
 	}
-	return names;
+	return directories;
 }
 
 /**
@@ -306,14 +310,14 @@ async function blockMaterializedInputDirectory(
 	firstImage: Uint8Array,
 ): Promise<string | undefined> {
 	const candidates = await Promise.all(
-		(await materializedInputDirectories(firstImage)).map(async (name) => ({
-			name,
-			modified: (await stat(join(tmpdir(), name))).mtimeMs,
+		(await materializedInputDirectories(firstImage)).map(async (directory) => ({
+			directory,
+			modified: (await stat(directory)).mtimeMs,
 		})),
 	);
 	const newest = candidates.sort((a, b) => b.modified - a.modified)[0];
 	if (!newest) return undefined;
-	const blocked = join(tmpdir(), newest.name, "blocked");
+	const blocked = join(newest.directory, "blocked");
 	await mkdir(blocked, { recursive: true });
 	await writeFile(join(blocked, "keep"), "x");
 	await chmod(blocked, 0o500);
@@ -3198,6 +3202,87 @@ describe("Codex Runtime Driver", () => {
 			await expect(
 				driver.execute(command, { fileBridge }),
 			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
+		},
+	);
+
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"reclaims input bytes a previous process could not remove",
+		async () => {
+			const directory = await runtimeDirectory();
+			const path = join(directory, "driver.json");
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(path, bridge);
+			drivers.push(driver);
+			const bytes = new TextEncoder().encode(
+				"codex-restart-reclaim-probe-image",
+			);
+			let blocked: string | undefined;
+			const readInput = vi.fn(async (fileId: string) => {
+				if (fileId === "file-2" && !blocked) {
+					blocked = await blockMaterializedInputDirectory(bytes);
+				}
+				return {
+					fileId,
+					descriptor: {
+						name: "screen.png",
+						mediaType: "image/png",
+						sizeBytes: bytes.byteLength,
+						sha256: createHash("sha256").update(bytes).digest("hex"),
+					},
+					body: new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(bytes);
+							controller.close();
+						},
+					}),
+				};
+			});
+			const fileBridge = {
+				readInput,
+				revalidate: () => {},
+				writeResult: async () => {
+					throw new Error("unused");
+				},
+			};
+			const first = await driver
+				.execute(
+					submitCommand({
+						input: {
+							text: "describe this image",
+							attachments: ["file-1", "file-2"],
+						},
+					}),
+					{ fileBridge },
+				)
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+			expect(isPermissionError(first)).toBe(true);
+			if (!blocked) throw new Error("missing blocked materialization");
+			const root = dirname(dirname(blocked));
+			expect(
+				(await readdir(root)).filter((entry) => entry.startsWith("turn-")),
+			).toHaveLength(1);
+			// The cleanup obligation is never written into durable Driver state.
+			expect(await readFile(path, "utf8")).not.toContain(
+				"agent-infra-codex-input",
+			);
+			await driver.close();
+
+			// Bytes the previous process could not remove fail the restart instead of
+			// being silently forgotten.
+			await expect(
+				openDriver(path, new TestCodexBridge()),
+			).rejects.toMatchObject({
+				code: "RUNTIME_CODEX_UNAVAILABLE",
+			});
+
+			// Once removal is possible again, the restart reclaims them.
+			await chmod(blocked, 0o700);
+			const reopened = await openDriver(path, new TestCodexBridge());
+			drivers.push(reopened);
+			expect(await readdir(root)).toEqual([]);
 		},
 	);
 

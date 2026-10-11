@@ -1,6 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	lstat,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -830,6 +837,32 @@ async function cancelCodexInputBody(
 	body: ReadableStream<Uint8Array>,
 ): Promise<void> {
 	await releaseCodexInputReader(body.getReader());
+}
+
+/**
+ * Runtime-owned root for one Driver's materialized Codex inputs. It is derived
+ * from the Driver state path, so a restarted Driver reclaims exactly its own
+ * leftovers and no temporary path ever enters durable state.
+ */
+function codexInputRoot(path: string) {
+	return join(
+		tmpdir(),
+		`agent-infra-codex-input-${createHash("sha256").update(path).digest("hex").slice(0, 16)}`,
+	);
+}
+
+/**
+ * Reclaims input bytes a previous process could not remove. Failing this
+ * reclamation fails the Driver open: private attachment bytes must not outlive
+ * the execution that owned them.
+ */
+async function reclaimCodexInputRoot(root: string) {
+	try {
+		await rm(root, { recursive: true, force: true });
+		await mkdir(root, { recursive: true, mode: 0o700 });
+	} catch {
+		unavailable();
+	}
 }
 
 /**
@@ -3377,6 +3410,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly standardConnectionOptions?: StandardMcpClientOptions,
 		private readonly installedSkill?: CodexInstalledSkillDescriptorV1,
 		private readonly browserCapability?: import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1,
+		/**
+		 * Reclaimed and recreated by `open`; absent only for direct construction
+		 * outside the open path.
+		 */
+		private readonly codexInputRootPath?: string,
 	) {}
 
 	private readonly connectionRecoveries = new Map<
@@ -4450,11 +4488,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		)
 			configurationInvalid();
 		const file = await CodexRuntimeDriver.openState(options.path);
+		const inputRoot = codexInputRoot(options.path);
 		let driver: CodexRuntimeDriver | undefined;
 		let modelTransport:
 			| Awaited<ReturnType<typeof openCodexModelTransport>>
 			| undefined;
 		try {
+			// A previous process may have failed to remove private attachment bytes;
+			// reclaim them before this Driver can materialize or report on any input.
+			await reclaimCodexInputRoot(inputRoot);
 			assertInstalledSkillCurrent();
 			modelTransport =
 				routes.length > 0
@@ -4682,6 +4724,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				standardConnection,
 				installedSkill,
 				options.browserCapability,
+				inputRoot,
 			);
 		} catch (error) {
 			await modelTransport?.close().catch(() => {});
@@ -5255,7 +5298,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		key: string,
 	): Promise<MaterializedCodexInput> {
 		if (!fileBridge) unavailable();
-		const directory = await mkdtemp(join(tmpdir(), "agent-infra-codex-input-"));
+		const directory = await mkdtemp(
+			this.codexInputRootPath
+				? join(this.codexInputRootPath, "turn-")
+				: join(tmpdir(), "agent-infra-codex-input-"),
+		);
 		try {
 			const items: CodexNativeInputItem[] = [{ type: "text", text }];
 			for (const [index, fileId] of command.input.attachments.entries()) {
