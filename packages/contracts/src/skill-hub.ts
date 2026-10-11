@@ -130,6 +130,90 @@ export type SkillAgentVersionBindingV1 = z.infer<
 	typeof SkillAgentVersionBindingV1Schema
 >;
 
+const positiveRevision = z.number().int().positive();
+const failureReason = z.string().min(1).max(256);
+
+export const SkillHubAppliedReceiptV1Schema = z.strictObject({
+	schemaVersion: z.literal(1),
+	agentId: identifier,
+	agentVersion: identifier,
+	skillName: packageName,
+	configurationRevision: positiveRevision,
+	syncRevision: positiveRevision,
+	skillVersionId: identifier,
+	generationId: sha256,
+	packageDigest: sha256,
+	manifestDigest: sha256,
+	targetPath: z.string().regex(/^\.agents\/skills\/[a-z0-9][a-z0-9._-]{0,62}$/),
+	readOnly: z.literal(true),
+});
+export type SkillHubAppliedReceiptV1 = z.infer<
+	typeof SkillHubAppliedReceiptV1Schema
+>;
+
+const skillHubSyncBindingBase = {
+	schemaVersion: z.literal(1),
+	agentId: identifier,
+	agentVersion: identifier,
+	skillName: packageName,
+	skillVersion: SkillVersionRefV1Schema,
+	configurationRevision: positiveRevision,
+	syncRevision: positiveRevision,
+};
+
+const pendingSkillHubSyncBindingV1Schema = z.strictObject({
+	...skillHubSyncBindingBase,
+	state: z.literal("pending_sync"),
+	failureReason: z.null(),
+	appliedReceipt: z.null(),
+});
+const syncedSkillHubSyncBindingV1Schema = z.strictObject({
+	...skillHubSyncBindingBase,
+	state: z.literal("synced"),
+	failureReason: z.null(),
+	appliedReceipt: SkillHubAppliedReceiptV1Schema,
+});
+const failedSkillHubSyncBindingV1Schema = z.strictObject({
+	...skillHubSyncBindingBase,
+	state: z.literal("failed"),
+	failureReason,
+	appliedReceipt: z.null(),
+});
+const revokedSkillHubSyncBindingV1Schema = z.strictObject({
+	...skillHubSyncBindingBase,
+	state: z.literal("revoked"),
+	failureReason: z.null(),
+	appliedReceipt: z.null(),
+});
+
+export const SkillHubSyncBindingV1Schema = z.discriminatedUnion("state", [
+	pendingSkillHubSyncBindingV1Schema,
+	syncedSkillHubSyncBindingV1Schema,
+	failedSkillHubSyncBindingV1Schema,
+	revokedSkillHubSyncBindingV1Schema,
+]);
+export type SkillHubSyncBindingV1 = z.infer<typeof SkillHubSyncBindingV1Schema>;
+
+export function validateSkillHubAppliedReceiptV1(
+	binding: SkillHubSyncBindingV1,
+	receipt: SkillHubAppliedReceiptV1,
+): SkillHubAppliedReceiptV1 {
+	if (
+		binding.state !== "synced" ||
+		receipt.agentId !== binding.agentId ||
+		receipt.agentVersion !== binding.agentVersion ||
+		receipt.skillName !== binding.skillName ||
+		receipt.configurationRevision !== binding.configurationRevision ||
+		receipt.syncRevision !== binding.syncRevision ||
+		receipt.skillVersionId !== binding.skillVersion.skillVersionId ||
+		receipt.packageDigest !== binding.skillVersion.packageDigest ||
+		receipt.manifestDigest !== binding.skillVersion.manifestDigest ||
+		receipt.targetPath !== `.agents/skills/${binding.skillName}`
+	)
+		throw new Error("Skill Hub Applied receipt binding mismatch");
+	return receipt;
+}
+
 export const SkillWorkloadProjectionV1Schema = z
 	.strictObject({
 		schemaVersion: z.literal(1),
