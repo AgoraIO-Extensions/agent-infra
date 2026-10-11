@@ -3,7 +3,114 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { ClaudeRuntimeDriver } from "./claude-runtime-driver.js";
+import {
+	type ClaudeNativeCommandReadContext,
+	ClaudeRuntimeDriver,
+	parseClaudeNativeCommands,
+} from "./claude-runtime-driver.js";
+
+const commandRead = (
+	nativeSessionRef = "missing",
+): ClaudeNativeCommandReadContext => ({
+	nativeSessionRef,
+	signal: new AbortController().signal,
+	expiresAt: Date.now() + 10_000,
+	assertCurrent: () => {},
+	revalidate: async () => {},
+});
+
+it("bounds and normalizes Claude native command metadata", async () => {
+	expect(
+		parseClaudeNativeCommands([
+			{
+				name: "compact",
+				description: "Compact the current session",
+				argumentHint: "",
+				aliases: ["shrink"],
+			},
+		]),
+	).toEqual([
+		{
+			name: "compact",
+			description: "Compact the current session",
+			argumentHint: "",
+			aliases: ["shrink"],
+		},
+	]);
+	for (const value of [
+		[
+			{
+				name: "compact",
+				description: "",
+				argumentHint: "",
+			},
+		],
+		[
+			{
+				name: "compact",
+				description: "one",
+				argumentHint: "",
+			},
+			{
+				name: "compact",
+				description: "two",
+				argumentHint: "",
+			},
+		],
+		[
+			{
+				name: "compact",
+				description: "one",
+				argumentHint: "",
+				aliases: ["\u0000"],
+			},
+		],
+		[
+			{
+				name: "compact",
+				description: "one",
+				argumentHint: "",
+				aliases: ["shrink", "shrink"],
+			},
+		],
+		Array.from({ length: 151 }, (_, index) => ({
+			name: `command-${index}`,
+			description: "bounded",
+			argumentHint: "",
+		})),
+	] as const)
+		await expect(
+			Promise.resolve().then(() => parseClaudeNativeCommands(value)),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_COMMANDS_INVALID" });
+});
+
+it("rejects discovery for a missing Claude native session", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-driver-discovery-"));
+	const driver = await ClaudeRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				model: "claude-opus-5",
+				reasoningLevels: ["high"],
+				authentication: "bearer",
+				endpoint: "http://127.0.0.1:1",
+				credential: "synthetic-model-credential",
+			},
+		],
+	});
+	try {
+		await expect(
+			driver.discoverNativeCommands(commandRead()),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
 
 it("runs a native Claude Turn, durably replays its result and resumes the original Session", async () => {
 	const path = await mkdtemp(join(tmpdir(), "claude-driver-conformance-"));
@@ -104,6 +211,41 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 				).toBe("completed"),
 			{ timeout: 10000 },
 		);
+		const commands = await driver.discoverNativeCommands(
+			commandRead(accepted.nativeSessionRef),
+		);
+		expect(commands).toEqual([]);
+		await expect(
+			driver.discoverNativeCommands({
+				...commandRead(accepted.nativeSessionRef),
+				revalidate: async () => {
+					throw new Error("revoked");
+				},
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		const abort = new AbortController();
+		const held = Promise.withResolvers<void>();
+		const cancelled = driver.discoverNativeCommands({
+			...commandRead(accepted.nativeSessionRef),
+			signal: abort.signal,
+			revalidate: () => held.promise,
+		});
+		abort.abort();
+		await expect(cancelled).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		const retiringHeld = Promise.withResolvers<void>();
+		const retiringRead = driver.discoverNativeCommands({
+			...commandRead(accepted.nativeSessionRef),
+			revalidate: () => retiringHeld.promise,
+		});
+		await Promise.resolve();
+		const closing = driver.close();
+		retiringHeld.resolve();
+		await expect(retiringRead).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		await closing;
 		expect(
 			(
 				await driver.replayEvents(
