@@ -1,4 +1,9 @@
-import { ndJsonStream, type Stream } from "@agentclientprotocol/sdk";
+import {
+	type AvailableCommandsUpdate,
+	ndJsonStream,
+	type SessionNotification,
+	type Stream,
+} from "@agentclientprotocol/sdk";
 
 /** Keep SDK diagnostics free of peer data. Framing and request correlation remain in the SDK. */
 export function acpStream(
@@ -159,4 +164,18 @@ function sessionNotification(value: unknown) {
 			},
 		};
 	}
+	if (
+		update.sessionUpdate === "available_commands_update" &&
+		"availableCommands" in update &&
+		Array.isArray(update.availableCommands)
+	)
+		return {
+			sessionId: value.sessionId,
+			update: {
+				sessionUpdate: "available_commands_update",
+				availableCommands: update.availableCommands,
+			} as AvailableCommandsUpdate & {
+				sessionUpdate: "available_commands_update";
+			},
+		} satisfies SessionNotification;
 }
