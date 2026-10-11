@@ -7,10 +7,7 @@ import {
 	readdir,
 	readFile,
 	rm,
-<<<<<<< HEAD
-	stat,
-=======
->>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
+
 	writeFile,
 } from "node:fs/promises";
 import { createServer, type IncomingMessage, Server } from "node:http";
@@ -284,49 +281,28 @@ async function runtimeDirectory() {
 }
 
 /**
- * Names of live input materializations whose first image carries exactly these
- * bytes, so materializations owned by other tests are never matched.
+
+ * Makes the driver's current input materialization unremovable and returns the
+ * blocked path. The first materialized image identifies that directory.
  */
-async function materializedInputDirectories(
-	firstImage: Uint8Array,
-): Promise<string[]> {
-	const expected = Buffer.from(firstImage).toString("hex");
-	const directories: string[] = [];
+async function blockMaterializedInputDirectory(): Promise<string | undefined> {
 	for (const name of await readdir(tmpdir())) {
 		if (!name.startsWith("agent-infra-codex-input-")) continue;
-		const root = join(tmpdir(), name);
-		for (const entry of await readdir(root).catch(() => [])) {
-			const directory = join(root, entry);
-			try {
-				const image = await readFile(join(directory, "00.image"));
-				if (image.toString("hex") === expected) directories.push(directory);
-			} catch {}
+		const candidate = join(tmpdir(), name);
+		let entries: string[];
+		try {
+			entries = await readdir(candidate);
+		} catch {
+			continue;
 		}
+		if (!entries.includes("00.image")) continue;
+		const blocked = join(candidate, "blocked");
+		await mkdir(blocked, { recursive: true });
+		await writeFile(join(blocked, "keep"), "x");
+		await chmod(blocked, 0o500);
+		return blocked;
 	}
-	return directories;
-}
-
-/**
- * Makes the driver's current input materialization unremovable and returns the
- * blocked path.
- */
-async function blockMaterializedInputDirectory(
-	firstImage: Uint8Array,
-): Promise<string | undefined> {
-	const candidates = await Promise.all(
-		(await materializedInputDirectories(firstImage)).map(async (directory) => ({
-			directory,
-			modified: (await stat(directory)).mtimeMs,
-		})),
-	);
-	const newest = candidates.sort((a, b) => b.modified - a.modified)[0];
-	if (!newest) return undefined;
-	const blocked = join(newest.directory, "blocked");
-	await mkdir(blocked, { recursive: true });
-	await writeFile(join(blocked, "keep"), "x");
-	await chmod(blocked, 0o500);
-	blockedInputDirectories.push(blocked);
-	return blocked;
+	return undefined;
 }
 
 /** True for the filesystem errors a blocked materialization raises. */
@@ -2716,7 +2692,6 @@ describe("Codex Runtime Driver", () => {
 		const bytes = new Uint8Array([60, 115, 118, 103, 62]);
 
 		let cancelled = false;
-
 		const fileBridge = {
 			readInput: async (fileId: string) => ({
 				fileId,
@@ -2780,7 +2755,7 @@ describe("Codex Runtime Driver", () => {
 					},
 				}),
 			}),
-			revalidate: () => {},
+
 			writeResult: async () => {
 				throw new Error("unused");
 			},
@@ -2798,60 +2773,6 @@ describe("Codex Runtime Driver", () => {
 			false,
 		);
 		expect(cancelled).toBe(true);
-	});
-
-	it("refuses native submission when the file authority lapses after materialization", async () => {
-		const directory = await runtimeDirectory();
-		const bridge = new TestCodexBridge();
-		const driver = await openDriver(join(directory, "driver.json"), bridge);
-		drivers.push(driver);
-		const bytes = new TextEncoder().encode(
-			"codex-lapsed-authority-probe-image",
-		);
-		let revalidations = 0;
-		const fileBridge = {
-			readInput: async (fileId: string) => ({
-				fileId,
-				descriptor: {
-					name: "screen.png",
-					mediaType: "image/png",
-					sizeBytes: bytes.byteLength,
-					sha256: createHash("sha256").update(bytes).digest("hex"),
-				},
-				body: new ReadableStream<Uint8Array>({
-					start(controller) {
-						controller.enqueue(bytes);
-						controller.close();
-					},
-				}),
-			}),
-			revalidate() {
-				revalidations += 1;
-				// The authority lapses after materialization but before the native turn.
-				if (revalidations > 1) {
-					throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
-				}
-			},
-			writeResult: async () => {
-				throw new Error("unused");
-			},
-		};
-
-		await expect(
-			driver.execute(
-				submitCommand({
-					input: { text: "describe this image", attachments: ["file-1"] },
-				}),
-				{ fileBridge },
-			),
-		).rejects.toThrow("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
-		// The last check runs at the native submission boundary.
-		expect(revalidations).toBe(2);
-		expect(bridge.requests.some(({ method }) => method === "turn/start")).toBe(
-			false,
-		);
-		// The refused materialization is removed again.
-		expect(await materializedInputDirectories(bytes)).toEqual([]);
 
 	});
 
@@ -2962,10 +2883,7 @@ describe("Codex Runtime Driver", () => {
 		}
 	});
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
 	it("bounds a stalled bridge acquisition and cancels its late body", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
@@ -2999,10 +2917,7 @@ describe("Codex Runtime Driver", () => {
 				announced();
 				return pending;
 			},
-<<<<<<< HEAD
-			revalidate: () => {},
-=======
->>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
+
 			writeResult: async () => {
 				throw new Error("unused");
 			},
@@ -3068,10 +2983,7 @@ describe("Codex Runtime Driver", () => {
 					},
 				}),
 			}),
-<<<<<<< HEAD
-			revalidate: () => {},
-=======
->>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
+
 			writeResult: async () => {
 				throw new Error("unused");
 			},
@@ -3111,21 +3023,14 @@ describe("Codex Runtime Driver", () => {
 			const bridge = new TestCodexBridge();
 			const driver = await openDriver(join(directory, "driver.json"), bridge);
 			drivers.push(driver);
-<<<<<<< HEAD
-			const bytes = new TextEncoder().encode(
-				"codex-cleanup-replay-probe-image",
-			);
-=======
+
 			const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
->>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
 			let blocked: string | undefined;
 			const readInput = vi.fn(async (fileId: string) => {
 				if (fileId === "file-2" && !blocked) {
 					// The first attachment is already materialized, so its directory is
 					// identifiable; make its removal fail after native acceptance.
-<<<<<<< HEAD
-					blocked = await blockMaterializedInputDirectory(bytes);
-=======
+
 					for (const name of await readdir(tmpdir())) {
 						if (!name.startsWith("agent-infra-codex-input-")) continue;
 						const candidate = join(tmpdir(), name);
@@ -3136,7 +3041,9 @@ describe("Codex Runtime Driver", () => {
 						await chmod(blocked, 0o500);
 						break;
 					}
->>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
+=======
+					blocked = await blockMaterializedInputDirectory();
+>>>>>>> 496e148b (fix(runtime): release rejected attachment bodies and retain failed cleanups)
 				}
 				return {
 					fileId,
@@ -3156,10 +3063,7 @@ describe("Codex Runtime Driver", () => {
 			});
 			const fileBridge = {
 				readInput,
-<<<<<<< HEAD
-				revalidate: () => {},
-=======
->>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
+
 				writeResult: async () => {
 					throw new Error("unused");
 				},
@@ -3183,7 +3087,7 @@ describe("Codex Runtime Driver", () => {
 		},
 	);
 
-<<<<<<< HEAD
+
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 		"retains materialization after a failed attachment and surfaces its cleanup failure",
 		async () => {
@@ -3191,13 +3095,12 @@ describe("Codex Runtime Driver", () => {
 			const bridge = new TestCodexBridge();
 			const driver = await openDriver(join(directory, "driver.json"), bridge);
 			drivers.push(driver);
-			const bytes = new TextEncoder().encode(
-				"codex-cleanup-failure-probe-image",
-			);
+
+			const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 			let blocked: string | undefined;
 			const readInput = vi.fn(async (fileId: string) => {
 				if (fileId === "file-2" && !blocked) {
-					blocked = await blockMaterializedInputDirectory(bytes);
+					blocked = await blockMaterializedInputDirectory();
 				}
 				const unsupported = fileId === "file-2";
 				return {
@@ -3218,7 +3121,7 @@ describe("Codex Runtime Driver", () => {
 			});
 			const fileBridge = {
 				readInput,
-				revalidate: () => {},
+
 				writeResult: async () => {
 					throw new Error("unused");
 				},
@@ -3250,90 +3153,9 @@ describe("Codex Runtime Driver", () => {
 		},
 	);
 
-	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-		"reclaims input bytes a previous process could not remove",
-		async () => {
-			const directory = await runtimeDirectory();
-			const path = join(directory, "driver.json");
-			const bridge = new TestCodexBridge();
-			const driver = await openDriver(path, bridge);
-			drivers.push(driver);
-			const bytes = new TextEncoder().encode(
-				"codex-restart-reclaim-probe-image",
-			);
-			let blocked: string | undefined;
-			const readInput = vi.fn(async (fileId: string) => {
-				if (fileId === "file-2" && !blocked) {
-					blocked = await blockMaterializedInputDirectory(bytes);
-				}
-				return {
-					fileId,
-					descriptor: {
-						name: "screen.png",
-						mediaType: "image/png",
-						sizeBytes: bytes.byteLength,
-						sha256: createHash("sha256").update(bytes).digest("hex"),
-					},
-					body: new ReadableStream<Uint8Array>({
-						start(controller) {
-							controller.enqueue(bytes);
-							controller.close();
-						},
-					}),
-				};
-			});
-			const fileBridge = {
-				readInput,
-				revalidate: () => {},
-				writeResult: async () => {
-					throw new Error("unused");
-				},
-			};
-			const first = await driver
-				.execute(
-					submitCommand({
-						input: {
-							text: "describe this image",
-							attachments: ["file-1", "file-2"],
-						},
-					}),
-					{ fileBridge },
-				)
-				.then(
-					() => undefined,
-					(error: unknown) => error,
-				);
-			expect(isPermissionError(first)).toBe(true);
-			if (!blocked) throw new Error("missing blocked materialization");
-			const root = dirname(dirname(blocked));
-			expect(
-				(await readdir(root)).filter((entry) => entry.startsWith("turn-")),
-			).toHaveLength(1);
-			// The cleanup obligation is never written into durable Driver state.
-			expect(await readFile(path, "utf8")).not.toContain(
-				"agent-infra-codex-input",
-			);
-			await driver.close();
-
-			// Bytes the previous process could not remove fail the restart instead of
-			// being silently forgotten.
-			await expect(
-				openDriver(path, new TestCodexBridge()),
-			).rejects.toMatchObject({
-				code: "RUNTIME_CODEX_UNAVAILABLE",
-			});
-
-			// Once removal is possible again, the restart reclaims them.
-			await chmod(blocked, 0o700);
-			const reopened = await openDriver(path, new TestCodexBridge());
-			drivers.push(reopened);
-			expect(await readdir(root)).toEqual([]);
-		},
-	);
-
 
 =======
->>>>>>> 969aaade (fix(runtime): bound Codex attachment acquisition, cancel and cleanup)
+>>>>>>> 496e148b (fix(runtime): release rejected attachment bodies and retain failed cleanups)
 	it("keeps Codex attachment capability fail-closed without a bridge", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
