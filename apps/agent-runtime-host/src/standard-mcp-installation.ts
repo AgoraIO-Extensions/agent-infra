@@ -184,6 +184,7 @@ async function readProtectedRotationJournal(
 		before.size > 16_384
 	)
 		unavailable();
+	if ((await realpath(journalPath)) !== journalPath) unavailable();
 	const text = await readFile(journalPath, "utf8");
 	const after = await lstat(journalPath);
 	assertStandardMcpProcessProtection();
@@ -197,6 +198,7 @@ async function readProtectedRotationJournal(
 		after.nlink !== 1
 	)
 		unavailable();
+	if ((await realpath(journalPath)) !== journalPath) unavailable();
 	return text;
 }
 
@@ -235,12 +237,15 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 			}
 			for (const entry of journal.entries) {
-				if (committed) continue;
 				let current: string | undefined;
 				try {
 					current = await readProtectedStandardMcpBytes(path, entry.name, 4096);
 				} catch (error) {
 					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				}
+				if (committed) {
+					if (current !== entry.next) unavailable();
+					continue;
 				}
 				if (current === entry.expected) continue;
 				if (current !== undefined && current !== entry.next) unavailable();
