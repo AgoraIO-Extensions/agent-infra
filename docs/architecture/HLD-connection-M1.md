@@ -509,6 +509,18 @@ Owner 于 2026-10-11 明确批准该 ADR 的长期具名受限方案与残余风
 最终实现版本为 `static-spaces-connection-v5-restricted`，保持该 ADR 的原批准范围。
 v4 已永久关闭；v4→v5 必须重新公司审批及显式 Consent/Grant，版本归属修复与保留规则见上述 ADR。
 
+### 4.3.3 StaticSpaces 普通使用提案
+
+解除固定测试主体、账号、Consumer、内容空间、run/marker 及禁止覆盖限制的方案见
+[普通使用与现有 API 风险批准 ADR](../adr/ADR-connection-static-spaces-standard-existing-api.md)。
+该 ADR 当前为 Proposed，只授权准备提案；当前实际准入仍为 4.3.2。本节不属于 G-02/G-03
+已批准例外，也不改变 13.4 的现行发布门禁。
+
+实施前须批准普通用户/业务空间推广范围、覆盖与 public 风险、逐项未验证项，以及受影响
+Connection 的未知 WRITE 冻结与故障隔离；同步 G-02/G-03 和 13.4 的实际条件与对账责任。
+正常身份、授权、Credential、持久执行、签名供应链与迁移保护继续生效。新版本重新审批授权，
+不以 StaticSpaces full 名称变化给旧 Grant 自动扩权。
+
 ## 5. 方案比较与选型
 
 | 方案 | 描述 | 优点 | 代价与风险 |

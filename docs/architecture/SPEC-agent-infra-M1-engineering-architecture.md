@@ -909,3 +909,14 @@ M1 不承诺固定并发数，但发布前必须提供可重复的负载脚本�
 Owner 已批准 ADR 的受限策略；激活须消费新的批准版本和显式 Grant，不复用旧 Grant，
 不扩展或续期已关闭 pilot。
 运行授权、凭证隔离、持久执行、签名发布及上海目标/数据库保护继续遵守本 Spec 和 HLD。
+
+## StaticSpaces 普通使用提案
+
+解除测试专用限制的推广方案按
+[HLD 4.3.3](HLD-connection-M1.md#433-staticspaces-普通使用提案) 与
+[Proposed ADR](../adr/ADR-connection-static-spaces-standard-existing-api.md) 评审。
+当前运行仍遵守既有受限批准；新推广的风险接受须重新明确，不由旧批准继承。
+批准后以新 immutable ProviderRelease/ActionVersion 和追加迁移实现，复用现有个人 Token
+connector、Direct/Delegated 授权交集和受控 egress；升级必须重新公司审批及显式 Consent/Grant。
+未知 WRITE 的持久冻结按受影响 Connection 隔离，跨重连、Grant 和版本升级保留；不能以
+解除测试限制为理由放宽身份、归档、Credential、签名、迁移或 UNKNOWN 不重放保护。
