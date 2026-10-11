@@ -26,7 +26,7 @@ export type AgentRuntimePresentationDecisionV1 =
 			readonly sourceReference: string;
 			readonly capabilities:
 				| (Readonly<Record<string, boolean>> & {
-							readonly browser?: BrowserCapabilityProjectionV1;
+						readonly browser?: BrowserCapabilityProjectionV1;
 				  })
 				| null;
 			readonly interactionUrl: string | null;
@@ -205,9 +205,9 @@ export function decideAgentRuntimePresentationV1(input: {
 		capabilities: state.capabilities
 			? ({
 					...Object.fromEntries(
-					Object.entries(state.capabilities).filter(
-						([, value]) => typeof value === "boolean",
-					),
+						Object.entries(state.capabilities).filter(
+							([, value]) => typeof value === "boolean",
+						),
 					),
 					...(state.capabilities.browser
 						? { browser: state.capabilities.browser }

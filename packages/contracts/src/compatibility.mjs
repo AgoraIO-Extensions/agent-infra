@@ -2664,10 +2664,10 @@ function isPilotBrowserProjectionOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	let changed = false;
 	for (const name of ["AgentProjectionV1", "AgentProjectionV2"]) {
-		const currentCapabilities = normalized.components?.schemas?.[name]?.properties
-			?.capabilities;
-		const previousCapabilities = previous.components?.schemas?.[name]?.properties
-			?.capabilities;
+		const currentCapabilities =
+			normalized.components?.schemas?.[name]?.properties?.capabilities;
+		const previousCapabilities =
+			previous.components?.schemas?.[name]?.properties?.capabilities;
 		if (
 			currentCapabilities?.properties?.browser !== undefined &&
 			previousCapabilities?.properties?.browser === undefined
