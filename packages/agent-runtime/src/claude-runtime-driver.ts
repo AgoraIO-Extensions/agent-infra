@@ -39,6 +39,7 @@ import {
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
+import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 
 export interface ClaudeRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -123,6 +124,151 @@ const unknownResult = {
 	code: "RUNTIME_ACCEPTANCE_UNKNOWN",
 	message: "Runtime command acceptance could not be confirmed",
 } as const;
+
+const maxNativeCommands = 150;
+const maxNativeCommandText = 4096;
+const maxNativeCommandArgumentHint = 512;
+const maxNativeCommandAliases = 32;
+
+export type ClaudeNativeCommandReadContext = Readonly<{
+	nativeSessionRef: string;
+	signal: AbortSignal;
+	expiresAt: number;
+	assertCurrent(): void;
+	revalidate(): Promise<void>;
+}>;
+
+export type ClaudeNativeCommandV1 = Readonly<{
+	name: string;
+	description: string;
+	argumentHint: string;
+	aliases: readonly string[];
+}>;
+
+function nativeCommandsInvalid(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_NATIVE_COMMANDS_INVALID",
+		"Claude native command metadata is unavailable",
+		503,
+	);
+}
+
+function boundedNativeCommandText(
+	value: unknown,
+	maximum: number,
+	allowEmpty = false,
+): string {
+	if (
+		typeof value !== "string" ||
+		(!allowEmpty && value.length === 0) ||
+		value.length > maximum
+	)
+		nativeCommandsInvalid();
+	for (let index = 0; index < value.length; index++) {
+		const code = value.charCodeAt(index);
+		if (code < 0x20 || code === 0x7f) nativeCommandsInvalid();
+	}
+	return value;
+}
+
+export function parseClaudeNativeCommands(
+	value: readonly unknown[],
+): readonly ClaudeNativeCommandV1[] {
+	if (!Array.isArray(value) || value.length > maxNativeCommands)
+		nativeCommandsInvalid();
+	const names = new Set<string>();
+	const commands = value.map((command) => {
+		if (
+			typeof command !== "object" ||
+			command === null ||
+			!Object.hasOwn(command, "name") ||
+			!Object.hasOwn(command, "description") ||
+			!Object.hasOwn(command, "argumentHint") ||
+			(Object.hasOwn(command, "aliases") &&
+				command.aliases !== undefined &&
+				!Array.isArray(command.aliases))
+		)
+			nativeCommandsInvalid();
+		const record = command as Record<string, unknown>;
+		if (
+			Object.keys(record).some(
+				(key) =>
+					!["name", "description", "argumentHint", "aliases"].includes(key),
+			)
+		)
+			nativeCommandsInvalid();
+		const name = boundedNativeCommandText(record.name, maxNativeCommandText);
+		if (names.has(name)) nativeCommandsInvalid();
+		names.add(name);
+		const aliases = ((record.aliases ?? []) as unknown[]).map((alias) =>
+			boundedNativeCommandText(alias, maxNativeCommandText),
+		);
+		if (
+			aliases.length > maxNativeCommandAliases ||
+			aliases.some((alias) => names.has(alias))
+		)
+			nativeCommandsInvalid();
+		for (const alias of aliases) names.add(alias);
+		return Object.freeze({
+			name,
+			description: boundedNativeCommandText(
+				record.description,
+				maxNativeCommandText,
+			),
+			argumentHint: boundedNativeCommandText(
+				record.argumentHint,
+				maxNativeCommandArgumentHint,
+				true,
+			),
+			aliases: Object.freeze(aliases),
+		});
+	});
+	return Object.freeze(commands);
+}
+
+async function boundedNativeCommandRead<T>(
+	pending: Promise<T>,
+	read: Pick<ClaudeNativeCommandReadContext, "signal" | "expiresAt">,
+): Promise<T> {
+	if (read.signal.aborted || read.expiresAt <= Date.now())
+		runtimeAuthorizationDenied();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let onAbort: (() => void) | undefined;
+	try {
+		return await new Promise<T>((resolve, reject) => {
+			const finish = (work: () => void) => {
+				if (timer !== undefined) clearTimeout(timer);
+				if (onAbort) read.signal.removeEventListener("abort", onAbort);
+				work();
+			};
+			onAbort = () => {
+				try {
+					runtimeAuthorizationDenied();
+				} catch (error) {
+					finish(() => reject(error));
+				}
+			};
+			timer = setTimeout(
+				() => {
+					try {
+						runtimeAuthorizationDenied();
+					} catch (error) {
+						finish(() => reject(error));
+					}
+				},
+				Math.max(0, read.expiresAt - Date.now()),
+			);
+			read.signal.addEventListener("abort", onAbort, { once: true });
+			void pending.then(
+				(value) => finish(() => resolve(value)),
+				(error) => finish(() => reject(error)),
+			);
+		});
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+		if (onAbort) read.signal.removeEventListener("abort", onAbort);
+	}
+}
 
 export class ClaudeRuntimeDriver implements RuntimeDriver {
 	private readonly files = new Map<string, Promise<DurableJsonFile<Session>>>();
@@ -1030,6 +1176,39 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			unavailable();
 		return turn.status;
 	}
+
+	async discoverNativeCommands(
+		read: ClaudeNativeCommandReadContext,
+	): Promise<readonly ClaudeNativeCommandV1[]> {
+		const handle = this.handles.get(read.nativeSessionRef);
+		if (!handle || handle.retiring) unavailable();
+		const assertCurrent = () => {
+			if (
+				read.signal.aborted ||
+				read.expiresAt <= Date.now() ||
+				this.handles.get(read.nativeSessionRef) !== handle
+			)
+				runtimeAuthorizationDenied();
+			read.assertCurrent();
+		};
+		const revalidate = async () => {
+			assertCurrent();
+			try {
+				await boundedNativeCommandRead(read.revalidate(), read);
+			} catch {
+				runtimeAuthorizationDenied();
+			}
+			assertCurrent();
+		};
+		await revalidate();
+		const commands = await boundedNativeCommandRead(
+			handle.native.query.supportedCommands(),
+			read,
+		);
+		await revalidate();
+		return parseClaudeNativeCommands(commands);
+	}
+
 	async getCapabilities() {
 		return {
 			modelSelection: true,
