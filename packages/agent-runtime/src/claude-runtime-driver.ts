@@ -1186,6 +1186,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const assertCurrent = () => {
 			if (
 				read.signal.aborted ||
+				handle.retiring ||
 				read.expiresAt <= Date.now() ||
 				this.handles.get(read.nativeSessionRef) !== handle
 			)

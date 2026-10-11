@@ -234,6 +234,18 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 		await expect(cancelled).rejects.toMatchObject({
 			code: "RUNTIME_GRANT_INVALID",
 		});
+		const retiringHeld = Promise.withResolvers<void>();
+		const retiringRead = driver.discoverNativeCommands({
+			...commandRead(accepted.nativeSessionRef),
+			revalidate: () => retiringHeld.promise,
+		});
+		await Promise.resolve();
+		const closing = driver.close();
+		retiringHeld.resolve();
+		await expect(retiringRead).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		await closing;
 		expect(
 			(
 				await driver.replayEvents(
