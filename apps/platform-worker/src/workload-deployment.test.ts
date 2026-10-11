@@ -239,6 +239,35 @@ describe("production Worker deployment", () => {
 			createProductionWorkloadWorkerOptionsV1(deployment),
 		).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
 	});
+	it("forwards the deployment-owned Skill materializer to Worker options", async () => {
+		const deployment = await input();
+		const materializer = {
+			async materialize() {
+				return { generationId: "a".repeat(64), skills: [] };
+			},
+		} satisfies NonNullable<
+			ProductionWorkloadWorkerInputV1["skillMaterializer"]
+		>;
+		const options = await createProductionWorkloadWorkerOptionsV1({
+			...deployment,
+			skillMaterializer: materializer,
+		});
+		expect(options.skillMaterializer).toBe(materializer);
+	});
+	it("rejects a malformed Skill materializer before Kubernetes access", async () => {
+		const deployment = await input();
+		Object.defineProperty(deployment, "skillMaterializer", {
+			value: { materialize: "not-a-function" },
+		});
+		Object.defineProperty(deployment, "kubernetes", {
+			get() {
+				throw new Error("Kubernetes credentials must not be read");
+			},
+		});
+		await expect(
+			createProductionWorkloadWorkerOptionsV1(deployment),
+		).rejects.toThrow("WORKER_CONFIGURATION_INVALID");
+	});
 
 	it("uses the explicitly selected namespace client rather than kubeconfig current-context", async () => {
 		const requests: { url?: string; authorization?: string }[] = [];
@@ -293,6 +322,7 @@ describe("production Worker deployment", () => {
 				},
 			]);
 			expect(options).not.toHaveProperty("keyring");
+			expect(options.skillMaterializer).toBeUndefined();
 			expect(JSON.stringify(options.policy)).not.toContain("PRIVATE KEY");
 		} finally {
 			server.closeAllConnections();

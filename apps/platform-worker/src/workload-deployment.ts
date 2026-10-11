@@ -71,6 +71,8 @@ export interface ProductionWorkloadWorkerInputV1 {
 	readonly executionCapacityProfiles?: PlatformWorkloadWorkerOptionsV1["executionCapacityProfiles"];
 	/** Deployment-owned ObjectStorage adapter used by the bounded reconciliation worker. */
 	readonly files?: PlatformWorkloadWorkerOptionsV1["files"];
+	/** Deployment-owned immutable Skill materializer; no caller paths or URLs cross this boundary. */
+	readonly skillMaterializer?: PlatformWorkloadWorkerOptionsV1["skillMaterializer"];
 	readonly runtimeModelVersion?: PlatformWorkloadWorkerOptionsV1["runtimeModelVersion"];
 	readonly runtimeProbe: WorkloadRuntimeProbeAuthorizationV1;
 	/** Server-resolved binding for the current Session-owned Browser Sandbox. */
@@ -134,7 +136,9 @@ export async function createProductionWorkloadWorkerOptionsV1(
 					!Number.isSafeInteger(input.files.orphanGraceMs) ||
 					input.files.orphanGraceMs < 1 ||
 					typeof input.files.storage?.scan !== "function" ||
-					typeof input.files.storage?.remove !== "function"))
+					typeof input.files.storage?.remove !== "function")) ||
+			(input.skillMaterializer !== undefined &&
+				typeof input.skillMaterializer?.materialize !== "function")
 		)
 			throw new Error();
 		const templateModelBindings = validateStandardTemplateModelBindingsV1(
@@ -223,6 +227,9 @@ export async function createProductionWorkloadWorkerOptionsV1(
 				input.executionCapacityProfiles,
 			),
 			...(input.files ? { files: input.files } : {}),
+			...(input.skillMaterializer
+				? { skillMaterializer: input.skillMaterializer }
+				: {}),
 			fetch: runtimeFetch,
 			...(input.browserBinding ? { browserBinding: input.browserBinding } : {}),
 			pollIntervalMs: input.pollIntervalMs,
