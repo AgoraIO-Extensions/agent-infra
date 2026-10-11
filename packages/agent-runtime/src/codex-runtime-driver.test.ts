@@ -7108,6 +7108,52 @@ describe("Codex Runtime Driver", () => {
 			).toEqual(turn.events);
 		});
 
+		it("keeps journals hot when their archive files cannot be written, during an upgrade or after an ACK", async () => {
+			const path = join(await runtimeDirectory(), "driver.json");
+			const bridge = new TestCodexBridge();
+			const driver = await openDriver(path, bridge);
+			drivers.push(driver);
+			const turn = await finishTurn(driver, bridge, 0, ["blocked ", "archive"]);
+			await driver.close();
+			const saved = await stored(path);
+			await writeFile(path, JSON.stringify({ ...saved, schemaVersion: 1 }));
+			// A file where the archive directory belongs fails every archive write.
+			const root = codexJournalArchiveRoot(path);
+			await writeFile(root, "");
+
+			const upgraded = await openDriver(
+				path,
+				new TestCodexBridge(bridge.nativeThreadId, bridge.nativeTurnId),
+			);
+			drivers.push(upgraded);
+			await acknowledgeAll(upgraded, turn);
+			const hot = await stored(path);
+			expect(hot.schemaVersion).toBe(2);
+			expect(
+				hot.sessions[turn.nativeSessionRef]?.journals?.[turn.nativeTurnId],
+			).toBeDefined();
+			expect(hot.sessions[turn.nativeSessionRef]?.archivedJournals).toBe(
+				undefined,
+			);
+			expect(
+				await upgraded.replayEvents(turn.nativeSessionRef, turn.executionId),
+			).toEqual(turn.events);
+
+			await upgraded.close();
+			await rm(root);
+			const reopened = await openDriver(
+				path,
+				new TestCodexBridge(bridge.nativeThreadId, bridge.nativeTurnId),
+			);
+			drivers.push(reopened);
+			const archived = (await stored(path)).sessions[turn.nativeSessionRef];
+			expect(archived?.journals?.[turn.nativeTurnId]).toBeUndefined();
+			expect(archived?.archivedJournals?.[turn.nativeTurnId]).toBeDefined();
+			expect(
+				await reopened.replayEvents(turn.nativeSessionRef, turn.executionId),
+			).toEqual(turn.events);
+		});
+
 		it.each(["changed", "missing"] as const)(
 			"fails closed on open when an archived journal file is %s",
 			async (damage) => {
