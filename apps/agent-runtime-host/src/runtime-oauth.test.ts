@@ -14,6 +14,7 @@ import { createServer, request as httpsRequest } from "node:https";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { revokeStandardOAuthToken } from "@agent-infra/agent-runtime";
 import {
 	connectionConsumerProfileFingerprintV1,
 	resolveApprovedConnectionConsumerProfileV1,
@@ -694,6 +695,28 @@ it("revokes and removes protected token material exactly once on explicit revoke
 	).toEqual([]);
 	await f.assembly.client.revoke();
 	expect(f.calls).toHaveLength(before + 2);
+});
+
+it("rejects a non-HTTPS revocation endpoint before sending material", async () => {
+	const f = await fixture();
+	let requests = 0;
+	await expect(
+		revokeStandardOAuthToken({
+			configuration: {
+				...f.configuration,
+				revocationEndpoint: "http://connection.invalid/oauth/revoke",
+			},
+			token: access,
+			tokenTypeHint: "access_token",
+			signal: new AbortController().signal,
+			assertCurrent: () => undefined,
+			fetch: async () => {
+				requests++;
+				return new Response(null, { status: 200 });
+			},
+		}),
+	).rejects.toThrow();
+	expect(requests).toBe(0);
 });
 
 it("retains protected material when remote revocation is unknown", async () => {
