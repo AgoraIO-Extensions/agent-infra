@@ -95,7 +95,7 @@ describe("Worker V4 runtime file client", () => {
 		const factory = createWorkerRuntimeFileBridgeFactoryV1({
 			origin: "https://platform.example",
 			serviceToken: "s".repeat(32),
-			fetch: async (_input) => {
+			fetch: async (input) => {
 				calls.push(String(input));
 				if (calls.length === 1) return Response.json(result);
 				if (calls.length === 2) return new Response(null, { status: 201 });
@@ -156,7 +156,7 @@ describe("Worker V4 runtime file client", () => {
 			origin: "https://platform.example",
 			serviceToken: "s".repeat(32),
 			now: () => clock,
-			fetch: async (input) => {
+			fetch: async (_input) => {
 				calls += 1;
 				if (calls === 1) return Response.json(result);
 				if (calls === 2) return new Response(null, { status: 201 });
