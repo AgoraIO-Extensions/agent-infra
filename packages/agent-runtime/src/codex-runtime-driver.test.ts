@@ -7,7 +7,6 @@ import {
 	readdir,
 	readFile,
 	rm,
-
 	stat,
 	writeFile,
 } from "node:fs/promises";
@@ -2797,7 +2796,6 @@ describe("Codex Runtime Driver", () => {
 			false,
 		);
 		expect(cancelled).toBe(true);
-
 	});
 
 	it("refuses native submission when the file authority lapses after materialization", async () => {
@@ -2958,7 +2956,6 @@ describe("Codex Runtime Driver", () => {
 			vi.useRealTimers();
 		}
 	});
-
 
 	it("bounds a stalled bridge acquisition and cancels its late body", async () => {
 		const directory = await runtimeDirectory();
@@ -3156,7 +3153,6 @@ describe("Codex Runtime Driver", () => {
 		},
 	);
 
-
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 		"retains materialization after a failed attachment and surfaces its cleanup failure",
 		async () => {
@@ -3224,7 +3220,6 @@ describe("Codex Runtime Driver", () => {
 			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
 		},
 	);
-
 
 	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 		"reclaims input bytes a previous process could not remove",

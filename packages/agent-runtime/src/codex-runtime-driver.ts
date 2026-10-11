@@ -119,8 +119,8 @@ import {
 } from "./runtime-authorization.js";
 import type {
 	RuntimeFileBridgePortV1,
+	RuntimeFileInputV1,
 	RuntimeFileResultV1,
- RuntimeFileInputV1,
 } from "./runtime-file-bridge.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 

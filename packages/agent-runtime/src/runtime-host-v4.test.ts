@@ -352,7 +352,6 @@ it("passes the request-scoped file bridge only through the Driver execution cont
 	);
 });
 
-
 it("re-checks current execution authority at the native submission boundary", async () => {
 	const fileBridge = {
 		readInput: vi.fn(),
@@ -490,10 +489,8 @@ it("records result metadata only after the bridge confirms the write", async () 
 	expect(recordResultFile).toHaveBeenCalledWith(
 		expect.objectContaining({ executionId: "execution-1" }),
 		expect.objectContaining({ fileId: "result-1", status: "available" }),
-
 	);
 });
-
 
 it("decides bridge expiry on the injected grant clock instead of the wall clock", async () => {
 	const directory = await mkdtemp(
@@ -536,7 +533,6 @@ it("decides bridge expiry on the injected grant clock instead of the wall clock"
 	clock += 60_000;
 	await expect(host.getFileBridge(request)).rejects.toThrow(
 		"RUNTIME_FILE_BRIDGE_BINDING_INVALID",
-
 	);
 });
 
