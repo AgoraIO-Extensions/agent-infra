@@ -1080,7 +1080,8 @@ export class PostgresConversationDispatchStoreV1
 			}
 			if (
 				input.claim.operation === "conversation.turn.stop.v1" &&
-				input.status === "failed"
+				input.status === "failed" &&
+				input.errorCode === "RUNTIME_RECOVERY_TIMEOUT"
 			) {
 				const rows = await transaction<{ execution_id: string }[]>`
 						update platform.conversation_stops
