@@ -24,12 +24,27 @@ test("current catalog and valid v4 execution use the new version", async (t) => 
 		catalog.providerReleaseId,
 	);
 	let requests = 0;
-	const adapter = new StaticSpacesAdapter(async () => {
+	const adapter = new StaticSpacesAdapter(async (url) => {
 		requests++;
+		if (String(url).includes("/applications/"))
+			return Response.json({
+				results: [
+					{
+						pk: staticSpacesRestrictedApproval.applicationId,
+						slug: "static-spaces-shared-connection-test",
+						launch_url:
+							"https://static-spaces.sh3.agoralab.co/spaces/shared/connection-test/",
+					},
+				],
+			});
 		return Response.json({
 			user: {
 				pk: 841,
 				username: "pilot@example.invalid",
+				groups: [
+					{ pk: staticSpacesRestrictedApproval.ownerGroupId },
+					{ pk: staticSpacesRestrictedApproval.viewerGroupId },
+				],
 				is_active: true,
 				is_superuser: false,
 			},
@@ -396,4 +411,72 @@ test("a response-lost WRITE is submitted once and never retried by the Adapter",
 		}),
 	);
 	assert.equal(writes, 1);
+});
+
+test("Credential and READ reject changed owner groups or Application before content access", async () => {
+	for (const change of ["owner", "application"]) {
+		let contentRequests = 0;
+		const adapter = new StaticSpacesAdapter(async (url) => {
+			const path = String(url);
+			if (path.includes("/applications/"))
+				return Response.json({
+					results: [
+						{
+							pk:
+								change === "application"
+									? "replacement-application"
+									: staticSpacesRestrictedApproval.applicationId,
+							slug: "static-spaces-shared-connection-test",
+							launch_url:
+								"https://static-spaces.sh3.agoralab.co/spaces/shared/connection-test/",
+						},
+					],
+				});
+			if (path.includes("/core/users/me/"))
+				return Response.json({
+					user: {
+						pk: 841,
+						username: "test@example.invalid",
+						is_active: true,
+						is_superuser: false,
+						groups: [
+							{
+								pk:
+									change === "owner"
+										? "replacement-owner"
+										: staticSpacesRestrictedApproval.ownerGroupId,
+							},
+							{ pk: staticSpacesRestrictedApproval.viewerGroupId },
+						],
+					},
+				});
+			contentRequests++;
+			throw new Error("content must not be accessed");
+		});
+		await assert.rejects(
+			() => adapter.validateCredential("test-only-token"),
+			/admission denied/,
+		);
+		for (const action of catalog.actions.filter((a) => a.effect === "READ"))
+			await assert.rejects(
+				() =>
+					adapter.execute({
+						action: action.name,
+						actionVersionId: action.id,
+						providerId: "static-spaces",
+						providerReleaseId: catalog.providerReleaseId,
+						credential: { accessToken: "test-only-token" },
+						input: action.name.endsWith("get_current_user")
+							? {}
+							: {
+									kind: "shared",
+									slug: "connection-test",
+									path,
+									prefix: `connection-onboarding/${run}`,
+								},
+					}),
+				/admission denied/,
+			);
+		assert.equal(contentRequests, 0);
+	}
 });

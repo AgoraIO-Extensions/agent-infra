@@ -270,6 +270,7 @@ export class StaticSpacesAdapter {
 			staticSpacesRestrictedApproval.externalAccount
 		)
 			denied();
+		await this.preflight(accessToken);
 		return { ...credential, providerReleaseId: releaseId };
 	}
 	async execute(
@@ -312,7 +313,6 @@ export class StaticSpacesAdapter {
 					input.input.archive_base64,
 					input.input.archive_format,
 				);
-			await this.preflight(input.credential.accessToken);
 		}
 		await this.validateCredential(input.credential.accessToken);
 		return this.archived.execute({
