@@ -33,6 +33,7 @@ const services = new Set([
 	"rehoboam",
 	"manhattan",
 	"datalego",
+	"argus",
 	"static-spaces",
 ]);
 const methods = new Set([

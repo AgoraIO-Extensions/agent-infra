@@ -45,6 +45,8 @@ const accountBase = {
 	MANHATTAN_OAUTH_CLIENT_SECRET: "manhattan-oauth-secret",
 	DATALEGO_OAUTH_CLIENT_ID: "datalego-oauth-client",
 	DATALEGO_OAUTH_CLIENT_SECRET: "datalego-oauth-secret",
+	ARGUS_OAUTH_CLIENT_ID: "argus-oauth-client",
+	ARGUS_OAUTH_CLIENT_SECRET: "argus-oauth-secret",
 	REHOBOAM_KONG_API_KEY: "rehoboam-machine-key",
 };
 

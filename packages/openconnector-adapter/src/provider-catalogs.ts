@@ -12,8 +12,10 @@ import { manhattanConnectionCatalog } from "./providers/manhattan/definition.ts"
 import { rehoboamV11ConnectionCatalog as rehoboamConnectionCatalog } from "./providers/rehoboam/definition.ts";
 
 import { staticSpacesConnectionCatalog } from "./providers/static-spaces/definition.ts";
+import { argusConnectionCatalog } from "./argus.ts";
 
 const catalogs = [
+	argusConnectionCatalog,
 	githubConnectionCatalog,
 	bitbucketServerConnectionCatalog,
 	jiraServerConnectionCatalog,

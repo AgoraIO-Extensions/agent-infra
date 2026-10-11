@@ -46,7 +46,9 @@ export const issueTokenRequestSchema = z.strictObject({
 export const oauthTransactionRequestSchema = z
 	.strictObject({
 		accessRequestId: opaqueId.optional(),
-		providerId: z.enum(["github", "manhattan", "datalego"]).default("github"),
+		providerId: z
+			.enum(["argus", "github", "manhattan", "datalego"])
+			.default("github"),
 		reconnectConnectionId: opaqueId.optional(),
 		sharedScopeId: opaqueId.optional(),
 	})

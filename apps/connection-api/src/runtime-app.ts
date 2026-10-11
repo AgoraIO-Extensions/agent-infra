@@ -21,6 +21,7 @@ import {
 } from "@agent-infra/connection-store";
 import { connectionProviderCatalogs } from "@agent-infra/openconnector-adapter/provider-catalogs";
 import { createPinnedProviderFetch } from "@agent-infra/openconnector-adapter/provider-fetch";
+import { ArgusAdapter, ArgusOAuthAdapter, argusConnectionCatalog } from "@agent-infra/openconnector-adapter/argus";
 import {
 	BitbucketServerAdapter,
 	bitbucketServerConnectionCatalog,
@@ -178,7 +179,7 @@ export async function createConnectionRuntime(
 		config.databaseUrl,
 		config.credentialKey,
 	);
-	const catalogs = connectionProviderCatalogs;
+	const catalogs = [argusConnectionCatalog, ...connectionProviderCatalogs] as const;
 	const approvalRepository = new PostgresConnectionAccessRequestRepository(
 		config.databaseUrl,
 		(sql, connectionId) =>
@@ -367,6 +368,23 @@ export async function createConnectionRuntime(
 		config.manhattanOAuth.clientId,
 		config.manhattanOAuth.clientSecret,
 	);
+	const argus = new ArgusAdapter(
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: observeProviderFetch("argus", providerFetch([originFor("argus")])),
+		}),
+	);
+	const argusOAuth = new ArgusOAuthAdapter(
+		argus,
+		createGuardedFetch({
+			allowPrivateNetwork: false,
+			maxRedirects: 0,
+			fetch: providerFetch(["https://oauth.agoralab.co"]),
+		}),
+		config.argusOAuth.clientId,
+		config.argusOAuth.clientSecret,
+	);
 	const datalegoFetch = createGuardedFetch({
 		allowPrivateNetwork: false,
 		maxRedirects: 0,
@@ -399,6 +417,7 @@ export async function createConnectionRuntime(
 			)
 		: undefined;
 	const executorRoutes = {
+		[argusConnectionCatalog.providerReleaseId]: argus,
 		...(staticSpaces
 			? {
 					[staticSpacesConnectionCatalog.providerReleaseId]: staticSpaces,
@@ -450,6 +469,7 @@ export async function createConnectionRuntime(
 		executors,
 		githubOAuth,
 		{
+			argus,
 			bitbucket,
 			confluence,
 			[datalegoOAuth.providerId]: datalegoOAuth,
@@ -461,6 +481,7 @@ export async function createConnectionRuntime(
 			jira,
 		},
 		{
+			argus: argusOAuth,
 			manhattan: manhattanOAuth,
 			[datalegoOAuth.providerId]: datalegoOAuth,
 		},
@@ -486,6 +507,7 @@ export async function createConnectionRuntime(
 				catalogs,
 				githubRedirectUri: config.github.redirectUri,
 				providerRedirectUris: {
+					argus: config.argusOAuth.redirectUri,
 					manhattan: config.manhattanOAuth.redirectUri,
 					[datalegoOAuth.providerId]: config.datalegoOAuth.redirectUri,
 				},
@@ -495,6 +517,8 @@ export async function createConnectionRuntime(
 			service: oauth,
 		},
 		providerServiceHostAliases: {
+			"argus.agoralab.co": argusConnectionCatalog.provider,
+			"da.la3d.agoralab.co": argusConnectionCatalog.provider,
 			"10.80.1.129": jenkinsReleaseConnectionCatalog.provider,
 			"114.94.148.35": jenkinsReleaseConnectionCatalog.provider,
 			"github.com": githubConnectionCatalog.provider,
@@ -510,6 +534,7 @@ export async function createConnectionRuntime(
 		},
 		service,
 		supportedProviders: [
+			argusConnectionCatalog.provider,
 			githubConnectionCatalog.provider,
 			bitbucketServerConnectionCatalog.provider,
 			jiraServerConnectionCatalog.provider,

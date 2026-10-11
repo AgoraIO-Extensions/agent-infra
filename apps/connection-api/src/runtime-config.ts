@@ -37,6 +37,11 @@ export type FullConnectionRuntimeConfig = ConnectionApiRuntimeConfig & {
 		clientSecret: string;
 		redirectUri: string;
 	};
+	argusOAuth: {
+		clientId: string;
+		clientSecret: string;
+		redirectUri: string;
+	};
 	github: {
 		authorizationUrl?: string;
 		clientId: string;
@@ -380,6 +385,14 @@ export function fullConnectionRuntimeConfig(
 			clientSecret: requireValue(environment, "DATALEGO_OAUTH_CLIENT_SECRET"),
 			redirectUri: new URL(
 				"/oauth/callback?provider=datalego",
+				api.publicBaseUrl,
+			).toString(),
+		},
+		argusOAuth: {
+			clientId: requireValue(environment, "ARGUS_OAUTH_CLIENT_ID"),
+			clientSecret: requireValue(environment, "ARGUS_OAUTH_CLIENT_SECRET"),
+			redirectUri: new URL(
+				"/oauth/callback?provider=argus",
 				api.publicBaseUrl,
 			).toString(),
 		},

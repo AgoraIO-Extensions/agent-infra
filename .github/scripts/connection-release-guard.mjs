@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { verifyUpgradePaths } from "./provider-upgrade-guard.mjs";
 
 export const providerSources = {
+	argus: "packages/openconnector-adapter/src/argus.ts",
 	bitbucket: "packages/openconnector-adapter/src/bitbucket-server.ts",
 	confluence: "packages/openconnector-adapter/src/confluence-server.ts",
 	datalego: "packages/openconnector-adapter/src/datalego-v6.ts",

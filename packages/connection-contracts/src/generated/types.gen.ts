@@ -230,7 +230,7 @@ export type ConnectionsResponse = {
 
 export type OAuthTransactionRequest = unknown & {
     accessRequestId?: string;
-    providerId?: 'github' | 'manhattan' | 'datalego';
+	providerId?: 'argus' | 'github' | 'manhattan' | 'datalego';
     reconnectConnectionId?: string;
     sharedScopeId?: string;
 };

@@ -4295,6 +4295,39 @@ describe("Connection API", () => {
 		expect(response.headers.get("location")).not.toContain("secret-code");
 	});
 
+	it("Argus callback requires its own browser state before consuming an OAuth code", async () => {
+		let attempts = 0;
+		const app = createConnectionOAuthApp({
+			issuer: "https://connection.example/",
+			management: {
+				githubRedirectUri: "https://connection.example/oauth/callback",
+				service: {
+					completeProviderOAuth: async () => {
+						attempts += 1;
+					},
+				} as unknown as ConnectionApplicationService,
+			},
+			resource: "https://connection.example/mcp",
+			service: {} as ConnectionOAuthService,
+		});
+		const path =
+			"/oauth/callback?provider=argus&code=one-time-code&state=matching-state";
+		const denied = await app.request(path, {
+			headers: { cookie: "connection_manhattan_oauth_state=matching-state" },
+			redirect: "manual",
+		});
+		expect(denied.headers.get("location")).toBe(
+			"/connection/connections?oauth=callback_failed&provider=argus",
+		);
+		expect(attempts).toBe(0);
+		const accepted = await app.request(path, {
+			headers: { cookie: "connection_argus_oauth_state=matching-state" },
+			redirect: "manual",
+		});
+		expect(accepted.headers.get("location")).toBe("/connection/connections");
+		expect(attempts).toBe(1);
+	});
+
 	it("rejects unsupported OAuth callback providers before consuming state", async () => {
 		let attempts = 0;
 		const app = createConnectionOAuthApp({
@@ -4810,6 +4843,46 @@ describe("Connection API", () => {
 				structuredContent: {
 					actions: [{ actionId: "jenkins-release.get_build" }],
 				},
+			},
+		});
+	});
+
+	it.each([
+		"https://argus.agoralab.co/call/123",
+		"https://argus.agoralab.co/argus-service/",
+	])("resolves an Argus service URL by exact hostname: %s", async (service) => {
+		const app = createTestApp({
+			actions: [
+				{
+					description: "Search calls",
+					effect: "READ",
+					id: "argus.search_calls@v1",
+					inputSchema: { type: "object", required: [] },
+					name: "argus.search_calls",
+					requiredScopes: ["argus.read"],
+				},
+			],
+			providerServiceHostAliases: {
+				"argus.agoralab.co": "argus",
+			},
+			supportedProviders: ["argus"],
+		});
+		const response = await app.request("/mcp", {
+			body: JSON.stringify({
+				id: 1,
+				jsonrpc: "2.0",
+				method: "tools/call",
+				params: { name: "search_actions", arguments: { service } },
+			}),
+			headers: {
+				authorization: "Bearer test",
+				"content-type": "application/json",
+			},
+			method: "POST",
+		});
+		expect(await response.json()).toMatchObject({
+			result: {
+				structuredContent: { actions: [{ actionId: "argus.search_calls" }] },
 			},
 		});
 	});

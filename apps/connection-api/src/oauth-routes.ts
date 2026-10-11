@@ -110,6 +110,7 @@ const browserSessionCookie = "connection_session";
 const browserSessionCookiePath = "/";
 const manhattanOAuthStateCookie = "connection_manhattan_oauth_state";
 const datalegoOAuthStateCookie = "connection_datalego_oauth_state";
+const argusOAuthStateCookie = "connection_argus_oauth_state";
 
 const dynamicRegistrationFields = new Set([
 	"application_type",
@@ -2793,12 +2794,14 @@ export function createConnectionOAuthApp(
 				),
 			);
 			if (authorization instanceof Response) return authorization;
-			if (providerId === "manhattan" || providerId === "datalego")
+			if (providerId === "manhattan" || providerId === "datalego" || providerId === "argus")
 				setCookie(
 					context,
 					providerId === "manhattan"
 						? manhattanOAuthStateCookie
-						: datalegoOAuthStateCookie,
+						: providerId === "datalego"
+							? datalegoOAuthStateCookie
+							: argusOAuthStateCookie,
 					new URL(authorization.authorizationUrl).searchParams.get("state") ??
 						"",
 					{
@@ -3511,17 +3514,19 @@ export function createConnectionOAuthApp(
 			let stage: ProviderOAuthCallbackStage = "callback_input";
 			try {
 				const callbackProvider = context.req.query("provider") ?? "github";
-				if (!["github", "manhattan", "datalego"].includes(callbackProvider))
+				if (!["github", "manhattan", "datalego", "argus"].includes(callbackProvider))
 					throw new ConnectionError(
 						"INVALID_REQUEST",
 						"Unsupported OAuth provider",
 					);
 				const providerId = callbackProvider;
-				if (providerId === "manhattan" || providerId === "datalego") {
+				if (providerId === "manhattan" || providerId === "datalego" || providerId === "argus") {
 					const stateCookie =
 						providerId === "manhattan"
 							? manhattanOAuthStateCookie
-							: datalegoOAuthStateCookie;
+							: providerId === "datalego"
+								? datalegoOAuthStateCookie
+								: argusOAuthStateCookie;
 					const state = context.req.query("state") ?? "";
 					if (!state || getCookie(context, stateCookie) !== state)
 						throw new ConnectionError(
@@ -3548,6 +3553,8 @@ export function createConnectionOAuthApp(
 								stage = value;
 							},
 						));
+				if (providerId === "argus")
+					return context.redirect("/connection/connections", 303);
 				const success = new URLSearchParams({
 					oauth: "connected",
 					provider: providerId,
@@ -3564,11 +3571,11 @@ export function createConnectionOAuthApp(
 					}),
 				);
 				return context.redirect(
-					context.req.query("provider") === "manhattan"
+					["manhattan", "argus"].includes(context.req.query("provider") ?? "")
 						? (error as { providerAuthorizationDenied?: unknown })
 								.providerAuthorizationDenied === true
-							? "/connection/connections?oauth=permission_denied&provider=manhattan"
-							: "/connection/connections?oauth=callback_failed&provider=manhattan"
+							? `/connection/connections?oauth=permission_denied&provider=${context.req.query("provider")}`
+							: `/connection/connections?oauth=callback_failed&provider=${context.req.query("provider")}`
 						: context.req.query("provider") === "datalego"
 							? "/connection/connections?oauth=callback_failed&provider=datalego"
 							: "/connection/connections?oauth=callback_failed",

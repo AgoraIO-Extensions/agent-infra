@@ -740,6 +740,19 @@ export const connectionApi = {
 				headers: commandHeaders(),
 			}),
 		),
+	startArgusOAuth: (
+		input: { accessRequestId?: string; reconnectConnectionId?: string } = {},
+	) =>
+		unwrap<OAuthTransaction>(
+			startGithubOAuth({
+				body: parseClientInput(
+					oauthTransactionRequestSchema,
+					{ providerId: "argus", ...input },
+					"Argus 授权请求无效",
+				),
+				headers: commandHeaders(),
+			}),
+		),
 	connectProviderCredential: (body: ProviderCredentialRequest) =>
 		unwrap<ConnectionCreated>(
 			connectProviderCredential({

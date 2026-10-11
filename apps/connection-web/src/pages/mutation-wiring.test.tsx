@@ -306,6 +306,9 @@ const api = vi.hoisted(() => ({
 	startDatalegoOAuth: vi.fn(async () => ({
 		authorizationUrl: "https://oauth.agoralab.co/oauth/authorize",
 	})),
+	startArgusOAuth: vi.fn(async () => ({
+		authorizationUrl: "https://oauth.agoralab.co/oauth/authorize",
+	})),
 }));
 
 vi.mock("../api", async (importOriginal) => ({

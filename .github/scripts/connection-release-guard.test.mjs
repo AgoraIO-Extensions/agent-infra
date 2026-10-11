@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -150,6 +150,15 @@ test("DataLego v5 release guard retains v3/v4 catalogs and rejects rollback", ()
 		process.chdir(cwd);
 		rmSync(temp, { recursive: true, force: true });
 	}
+});
+
+test("tracks and parses the Argus provider catalog", () => {
+	assert.equal(providerSources.argus, "packages/openconnector-adapter/src/argus.ts");
+	const source = readFileSync(new URL("../../packages/openconnector-adapter/src/argus.ts", import.meta.url), "utf8");
+	const catalog = parseCatalogSource(source, "argus");
+	assert.equal(catalog.providerReleaseVersion, 1);
+	assert.equal(Object.keys(catalog.actions).length, 8);
+	assert.ok(Object.values(catalog.actions).every((version) => version === 1));
 });
 
 test("parses action and provider release versions", () => {
