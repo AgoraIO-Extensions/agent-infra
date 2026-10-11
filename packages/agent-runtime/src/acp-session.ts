@@ -47,7 +47,7 @@ export async function openAcpSession(options: {
 	let loading = true;
 	let commandDirectory: AcpNativeCommandDirectoryV1 | undefined;
 	let commandDirectoryUnavailable = false;
-	const pendingCommandUpdates = new Map<string, unknown>();
+	const pendingCommandUpdates = new Map<string, AcpNativeCommandDirectoryV1>();
 	let commandDirectoryReady: () => void = () => {};
 	const commandsReady = new Promise<void>((resolve) => {
 		commandDirectoryReady = resolve;
@@ -62,7 +62,25 @@ export async function openAcpSession(options: {
 			const update = params.update;
 			if (update.sessionUpdate === "available_commands_update") {
 				if (activeSessionId === undefined) {
-					pendingCommandUpdates.set(params.sessionId, update.availableCommands);
+					if (commandDirectoryUnavailable) return;
+					try {
+						if (
+							!pendingCommandUpdates.has(params.sessionId) &&
+							pendingCommandUpdates.size >= 16
+						)
+							throw new Error("RUNTIME_NATIVE_COMMAND_DIRECTORY_UNAVAILABLE");
+						pendingCommandUpdates.set(
+							params.sessionId,
+							createAcpNativeCommandDirectoryV1({
+								nativeId: params.sessionId,
+								commands: update.availableCommands,
+							}),
+						);
+					} catch {
+						pendingCommandUpdates.clear();
+						commandDirectoryUnavailable = true;
+						commandDirectoryReady();
+					}
 					return;
 				}
 				if (params.sessionId !== activeSessionId) return;
@@ -171,14 +189,7 @@ export async function openAcpSession(options: {
 		activeSessionId = nativeId;
 		loading = false;
 		if (pendingCommandUpdates.has(nativeId)) {
-			try {
-				commandDirectory = createAcpNativeCommandDirectoryV1({
-					nativeId,
-					commands: pendingCommandUpdates.get(nativeId),
-				});
-			} catch {
-				commandDirectoryUnavailable = true;
-			}
+			commandDirectory = pendingCommandUpdates.get(nativeId);
 			pendingCommandUpdates.delete(nativeId);
 			commandDirectoryReady();
 		}
