@@ -856,6 +856,42 @@ it("recovers a durable rotation journal before using protected material", async 
 	).rejects.toMatchObject({ code: "ENOENT" });
 });
 
+it("marks an awaiting transaction unknown before clearing rollback recovery", async () => {
+	const f = await fixture();
+	await f.callback();
+	expect((await f.post("confirm", f.signed("confirm"))).body.phase).toBe(
+		"awaiting_verification",
+	);
+	const names = await readdir(join(f.root, "materials"));
+	const accessName = names.find((name) => name.endsWith(".access")) as string;
+	const refreshName = names.find((name) => name.endsWith(".refresh")) as string;
+	const recordName = (await readdir(join(f.root, "records"))).find(
+		(name) => name.endsWith(".json") && !name.startsWith("current-"),
+	) as string;
+	const recordPath = join(f.root, "records", recordName);
+	const record = JSON.parse(await readFile(recordPath, "utf8")) as {
+		phase: string;
+	};
+	expect(record.phase).toBe("awaiting_verification");
+	await writeFile(
+		join(f.root, "materials", "oauth-rotation.json"),
+		JSON.stringify({
+			schemaVersion: 1,
+			operation: "rollback",
+			entries: [
+				{ name: accessName, expected: refreshedAccess, next: access },
+				{ name: refreshName, expected: refreshedRefresh, next: refresh },
+			],
+		}),
+		{ mode: 0o400 },
+	);
+	await recoverProtectedStandardMcpMaterialRotation(join(f.root, "materials"));
+	expect(JSON.parse(await readFile(recordPath, "utf8")).phase).toBe("unknown");
+	expect(await readdir(join(f.root, "materials"))).not.toContain(
+		"oauth-rotation.json",
+	);
+});
+
 it("keeps rotated material unavailable after a lost refresh response", async () => {
 	const f = await fixture();
 	await f.callback();

@@ -215,6 +215,50 @@ async function readProtectedRotationJournal(
 	return text;
 }
 
+async function markRotationRecordUnknown(records: string, key: string) {
+	const directory = await openProtectedStandardMcpDirectory(records);
+	const name = `${key}.json`;
+	const temporary = `.stage-recovery-${randomUUID()}.json`;
+	try {
+		const record = JSON.parse(
+			await readProtectedStandardMcpBytes(records, name, 16_384),
+		);
+		if (!isRecord(record)) unavailable();
+		record.phase = "unknown";
+		const file = await open(
+			protectedStandardMcpPath(directory, records, temporary),
+			constants.O_WRONLY |
+				constants.O_CREAT |
+				constants.O_EXCL |
+				constants.O_NOFOLLOW,
+			0o600,
+		);
+		try {
+			assertStandardMcpProcessProtection();
+			await file.writeFile(JSON.stringify(record), "utf8");
+			await file.sync();
+		} finally {
+			await file.close();
+		}
+		assertStandardMcpProcessProtection();
+		await assertProtectedStandardMcpDirectoryCurrent(records, directory);
+		await rename(
+			protectedStandardMcpPath(directory, records, temporary),
+			protectedStandardMcpPath(directory, records, name),
+		);
+		assertStandardMcpProcessProtection();
+		await directory.sync();
+		await assertProtectedStandardMcpDirectoryCurrent(records, directory);
+	} finally {
+		await unlink(protectedStandardMcpPath(directory, records, temporary)).catch(
+			(error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOENT") throw error;
+			},
+		);
+		await directory.close();
+	}
+}
+
 /** Recover a rotation left durable before a Host restart. */
 export async function recoverProtectedStandardMcpMaterialRotation(
 	path: string,
@@ -244,12 +288,12 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 			if (!firstEntry) unavailable();
 			const key = firstEntry.name.replace(/\.(access|refresh)$/, "");
 			const records = join(dirname(path), "records");
-			let committed = false;
+			let recordPhase: unknown;
 			try {
 				const record = JSON.parse(
 					await readProtectedStandardMcpBytes(records, `${key}.json`, 16_384),
 				) as { phase?: unknown };
-				committed = record.phase === "awaiting_verification";
+				recordPhase = record.phase;
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 			}
@@ -270,9 +314,14 @@ export async function recoverProtectedStandardMcpMaterialRotation(
 			const target =
 				activeJournal.operation === "rollback"
 					? "next"
-					: committed
+					: recordPhase === "awaiting_verification"
 						? "next"
 						: "expected";
+			if (
+				activeJournal.operation === "rollback" &&
+				recordPhase === "awaiting_verification"
+			)
+				await markRotationRecordUnknown(records, key);
 			for (const entry of activeJournal.entries) {
 				const current = currentValues.get(entry.name);
 				const targetValue = entry[target];
