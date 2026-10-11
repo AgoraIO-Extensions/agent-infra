@@ -122,6 +122,8 @@ export interface ConversationDispatchClaimV1 {
 	readonly stopRequestId: string | null;
 	readonly sessionGeneration: number;
 	readonly deliveryFence: number;
+	/** Durable outbox attempt number, used to bound unknown recovery. */
+	readonly attemptCount?: number;
 	readonly executionDeliveryFence: number;
 	readonly authorizationRevision: string;
 	readonly modelConfigurationRevision: number | null;

@@ -137,6 +137,7 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 			"generationIsolation",
 			"runtimeTerminalEventSeen",
 			"metadataRecovery",
+			"attemptCount",
 			"principal",
 			"sandbox",
 			"executionSource",
@@ -333,6 +334,9 @@ export function parseClaim(value: unknown): ConversationDispatchClaimV1 {
 		reasoningLevel,
 		hostSessionRef: nullableText(input.hostSessionRef),
 		runtimeCursor: nullableText(input.runtimeCursor),
+		...(input.attemptCount === undefined
+			? {}
+			: { attemptCount: nonNegativeInteger(input.attemptCount) }),
 		...(input.runtimeTerminalEventSeen === true
 			? { runtimeTerminalEventSeen: true as const }
 			: {}),

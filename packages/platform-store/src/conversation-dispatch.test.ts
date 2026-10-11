@@ -481,6 +481,7 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 			if (decision.outcome !== "claimed")
 				throw new Error(`Expected expired stop claim: ${decision.outcome}`);
 			expect(decision.claim.executionStatus).toBe("unknown");
+			expect(decision.claim.attemptCount).toBe(1);
 			const [stop] = await client`
 				select status, confirmation_timed_out_at
 				from platform.conversation_stops where execution_id = ${work.executionId}`;
@@ -502,6 +503,20 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					transition: { executionStatus: "processing" },
 				}),
 			).toBe(false);
+			expect(
+				await store.finish({
+					claim: decision.claim,
+					status: "failed",
+					transition: {
+						executionStatus: "failed",
+						conversationStatus: "ready",
+					},
+					errorCode: "RUNTIME_RECOVERY_TIMEOUT",
+				}),
+			).toBe(true);
+			const [completedStop] = await client`
+				select status from platform.conversation_stops where execution_id = ${work.executionId}`;
+			expect(completedStop?.status).toBe("completed");
 		} finally {
 			await store.close();
 		}
