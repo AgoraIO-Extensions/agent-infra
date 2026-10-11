@@ -17,6 +17,7 @@ import type { WorkloadReconciliationStateV1 } from "@agent-infra/platform-core";
 import { migratePlatformDatabase } from "@agent-infra/platform-store";
 import {
 	KubeConfig,
+	type KubernetesObject,
 	type V1PersistentVolumeClaim,
 	type V1Pod,
 	type V1Secret,
@@ -936,6 +937,42 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				};
 				const workerClient = {
 					...client,
+					async read<T extends KubernetesObject>(
+						kind: Parameters<typeof client.read>[0],
+						name: string,
+					) {
+						try {
+							return await client.read<T>(kind, name);
+						} catch (error) {
+							workerLogs.push(
+								JSON.stringify({
+									op: "read",
+									kind,
+									name,
+									code: error instanceof Error ? error.message : String(error),
+								}),
+							);
+							throw error;
+						}
+					},
+					async list<T extends KubernetesObject>(
+						kind: Parameters<typeof client.list>[0],
+						selector: string,
+					) {
+						try {
+							return await client.list<T>(kind, selector);
+						} catch (error) {
+							workerLogs.push(
+								JSON.stringify({
+									op: "list",
+									kind,
+									selector,
+									code: error instanceof Error ? error.message : String(error),
+								}),
+							);
+							throw error;
+						}
+					},
 					async create(object: Parameters<typeof client.create>[0]) {
 						try {
 							return await client.create(object);
@@ -1000,6 +1037,13 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						>`
 							select status, service_availability from platform.agent_applications where agent_id=${seed.agentId}`;
 						if (row && predicate(row)) return row;
+						const [failed] = await sql<
+							{ state: WorkloadReconciliationStateV1 }[]
+						>`select state from platform.workload_reconciliations where agent_id=${seed.agentId}`;
+						if (failed?.state?.phase === "failed")
+							throw new Error(
+								`API Workload lifecycle failed early: ${JSON.stringify({ state: failed.state, workerLogs: workerLogs.slice(-8) })}`,
+							);
 						await setTimeout(500);
 					}
 					const [state] = await sql<{ state: unknown }[]>`
