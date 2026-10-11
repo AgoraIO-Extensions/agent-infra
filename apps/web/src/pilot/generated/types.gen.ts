@@ -795,6 +795,14 @@ export type ScopedPlatformAuditProjectionV1 = {
             };
         } | {
             attemptRef: string;
+            browser?: {
+                actionId: string;
+                capabilityVersion: number;
+                pageRevision: number;
+                resourceFence: number;
+                sessionGeneration: number;
+                sideEffect: boolean;
+            };
             connection?: {
                 callRef: string;
                 serviceRef: string;
@@ -899,6 +907,14 @@ export type TaskProjectionV1 = {
             };
         } | {
             attemptRef: string;
+            browser?: {
+                actionId: string;
+                capabilityVersion: number;
+                pageRevision: number;
+                resourceFence: number;
+                sessionGeneration: number;
+                sideEffect: boolean;
+            };
             connection?: {
                 callRef: string;
                 serviceRef: string;
@@ -960,6 +976,14 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
         };
     } | {
         attemptRef: string;
+        browser?: {
+            actionId: string;
+            capabilityVersion: number;
+            pageRevision: number;
+            resourceFence: number;
+            sessionGeneration: number;
+            sideEffect: boolean;
+        };
         connection?: {
             callRef: string;
             serviceRef: string;

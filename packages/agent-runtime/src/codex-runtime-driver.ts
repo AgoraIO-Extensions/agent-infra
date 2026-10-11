@@ -107,6 +107,8 @@ import {
 	codexSkillLaunch,
 } from "./codex-skill-launch.internal.js";
 import type {
+	RuntimeBrowserToolExecutionRequestV1,
+	RuntimeBrowserToolExecutionResultV1,
 	RuntimeDriver,
 	RuntimeDriverCommand,
 	RuntimeDriverExecutionContextV1,
@@ -1823,6 +1825,110 @@ function latestOperationAttemptFacts(events: readonly CodexJournalEvent[]) {
 			latest.set(operationAttemptKey(event.payload), event.payload);
 	}
 	return [...latest.values()];
+}
+
+type RuntimeBrowserExecutionBinding =
+	RuntimeBrowserToolExecutionRequestV1["binding"];
+
+function sameRuntimeBrowserExecutionBinding(
+	left: RuntimeBrowserExecutionBinding,
+	right: RuntimeBrowserExecutionBinding,
+) {
+	return (
+		left.agentId === right.agentId &&
+		left.conversationId === right.conversationId &&
+		left.executionId === right.executionId &&
+		left.capabilityVersion === right.capabilityVersion &&
+		left.pageRevision === right.pageRevision &&
+		left.sessionGeneration === right.sessionGeneration &&
+		left.resourceFence === right.resourceFence
+	);
+}
+
+function runtimeBrowserResultIdentityMatches(
+	result: unknown,
+	request: RuntimeBrowserToolExecutionRequestV1,
+): result is RuntimeBrowserToolExecutionResultV1 {
+	if (!isPlainRecord(result)) return false;
+	return (
+		result.actionId === request.actionId &&
+		result.operationRef === request.operationRef &&
+		result.attemptRef === request.attemptRef &&
+		isPlainRecord(result.binding) &&
+		sameRuntimeBrowserExecutionBinding(
+			result.binding as RuntimeBrowserExecutionBinding,
+			request.binding,
+		) &&
+		(result.phase === "completed" ||
+			result.phase === "failed" ||
+			result.phase === "unknown")
+	);
+}
+
+function runtimeBrowserUnknownResult(
+	request: RuntimeBrowserToolExecutionRequestV1,
+): RuntimeBrowserToolExecutionResultV1 {
+	return {
+		actionId: request.actionId,
+		operationRef: request.operationRef,
+		attemptRef: request.attemptRef,
+		binding: request.binding,
+		phase: "unknown",
+		contentItems: [],
+		success: false,
+		failureCode: "recovery_unconfirmed",
+	};
+}
+
+function runtimeBrowserFailedResult(
+	request: RuntimeBrowserToolExecutionRequestV1,
+): RuntimeBrowserToolExecutionResultV1 {
+	return {
+		actionId: request.actionId,
+		operationRef: request.operationRef,
+		attemptRef: request.attemptRef,
+		binding: request.binding,
+		phase: "failed",
+		contentItems: [],
+		success: false,
+		failureCode: "operation_failed",
+	};
+}
+
+function runtimeBrowserReplayResult(
+	fact: Extract<RuntimeOperationFactV2, { kind: "tool" }>,
+	request: RuntimeBrowserToolExecutionRequestV1,
+	compatible: boolean,
+): RuntimeBrowserToolExecutionResultV1 {
+	if (!compatible || !fact.browser) return runtimeBrowserUnknownResult(request);
+	const identity = {
+		actionId: fact.browser.actionId,
+		operationRef: fact.operationRef,
+		attemptRef: fact.attemptRef,
+		binding: request.binding,
+	};
+	if (fact.phase === "completed")
+		return {
+			...identity,
+			phase: "completed",
+			contentItems: [],
+			success: true,
+		};
+	if (fact.phase === "failed")
+		return {
+			...identity,
+			phase: "failed",
+			contentItems: [],
+			success: false,
+			failureCode: fact.failureCode ?? "operation_failed",
+		};
+	return {
+		...identity,
+		phase: "unknown",
+		contentItems: [],
+		success: false,
+		failureCode: "recovery_unconfirmed",
+	};
 }
 
 function latestModelOperationAttemptFact(events: readonly CodexJournalEvent[]) {
@@ -5066,6 +5172,227 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			if (this.inFlightOperations.get(key) === execution) {
 				this.inFlightOperations.delete(key);
 			}
+		}
+	}
+
+	/**
+	 * Execute one admitted Browser tool through the existing Driver operation
+	 * journal. The controller is request-local; the Driver owns only operation
+	 * identity and facts, while the Platform Worker remains the event authority.
+	 */
+	async executeBrowserTool(
+		nativeSessionRef: string,
+		executionId: string,
+		request: {
+			readonly tool: string;
+			readonly arguments: Readonly<Record<string, unknown>>;
+			readonly pageRevision: number;
+			readonly actionId?: string;
+		},
+		context: RuntimeDriverExecutionContextV1,
+		signal: AbortSignal = new AbortController().signal,
+	): Promise<RuntimeBrowserToolExecutionResultV1> {
+		const browser = context.browser;
+		if (
+			!browser ||
+			typeof browser.executeTool !== "function" ||
+			!Number.isSafeInteger(request.pageRevision) ||
+			request.pageRevision < 1 ||
+			!nonEmptyString(request.tool)
+		)
+			unavailable();
+		const actionId = request.actionId ?? randomUUID();
+		const prepared = await this.update((state) => {
+			signal.throwIfAborted();
+			const session = ownRecordValue(state.sessions, nativeSessionRef);
+			const execution = session
+				? ownRecordValue(session.executions, executionId)
+				: undefined;
+			const journal =
+				execution &&
+				Object.values(session?.journals ?? {}).find(
+					(value) => value.nativeTurnId === execution.nativeTurnId,
+				);
+			if (
+				!session ||
+				!execution ||
+				!journal ||
+				session.agentId !== browser.binding.agentId ||
+				session.conversationId !== browser.binding.conversationId ||
+				session.sessionGeneration !== browser.binding.sessionGeneration ||
+				execution.status !== "running" ||
+				session.activeExecutionId !== executionId
+			)
+				unavailable();
+			this.assertJournalOpen(journal);
+			const binding = {
+				agentId: browser.binding.agentId,
+				conversationId: browser.binding.conversationId,
+				executionId,
+				capabilityVersion: browser.capabilityVersion,
+				pageRevision: request.pageRevision,
+				sessionGeneration: browser.binding.sessionGeneration,
+				resourceFence: browser.binding.resourceFence,
+			};
+			const existing = latestOperationAttemptFacts(journal.events).find(
+				(fact): fact is Extract<RuntimeOperationFactV2, { kind: "tool" }> =>
+					fact.kind === "tool" && fact.browser?.actionId === actionId,
+			);
+			if (existing?.browser) {
+				const compatible =
+					existing.toolId === `browser:${request.tool}` &&
+					existing.browser.capabilityVersion === binding.capabilityVersion &&
+					existing.browser.pageRevision === binding.pageRevision &&
+					existing.browser.sessionGeneration === binding.sessionGeneration &&
+					existing.browser.resourceFence === binding.resourceFence;
+				if (
+					!compatible ||
+					existing.phase === "intent" ||
+					existing.phase === "started"
+				)
+					journal.externalActionsBlocked = true;
+				const replayRequest = {
+					...request,
+					actionId,
+					operationRef: existing.operationRef,
+					attemptRef: existing.attemptRef,
+					binding,
+				};
+				return {
+					execution,
+					operationRef: existing.operationRef,
+					attemptRef: existing.attemptRef,
+					actionId,
+					binding,
+					replay: runtimeBrowserReplayResult(
+						existing,
+						replayRequest,
+						compatible,
+					),
+				};
+			}
+			const operationRef = randomUUID();
+			const attemptRef = randomUUID();
+			this.appendOperationFact(session, journal, {
+				kind: "tool",
+				operationRef,
+				attemptRef,
+				phase: "intent",
+				toolId: `browser:${request.tool}`,
+				browser: {
+					actionId,
+					capabilityVersion: binding.capabilityVersion,
+					pageRevision: binding.pageRevision,
+					sessionGeneration: binding.sessionGeneration,
+					resourceFence: binding.resourceFence,
+					sideEffect: false,
+				},
+			});
+			return {
+				execution,
+				operationRef,
+				attemptRef,
+				actionId,
+				binding,
+				replay: undefined,
+				cursor: journal.events.at(-1)?.cursor ?? "",
+			};
+		});
+		this.notifyEventStream(this.eventStreamKey(nativeSessionRef, executionId));
+		if (prepared.replay) return prepared.replay;
+		const browserRequest: RuntimeBrowserToolExecutionRequestV1 = {
+			tool: request.tool,
+			arguments: request.arguments,
+			actionId: prepared.actionId,
+			operationRef: prepared.operationRef,
+			attemptRef: prepared.attemptRef,
+			binding: prepared.binding,
+		};
+
+		const persist = async (
+			phase: "started" | "completed" | "failed" | "unknown",
+			failureCode?: RuntimeOperationFactV2["failureCode"],
+		) => {
+			const cursor = await this.update((state) => {
+				const session = ownRecordValue(state.sessions, nativeSessionRef);
+				const execution = session
+					? ownRecordValue(session.executions, executionId)
+					: undefined;
+				const journal =
+					execution &&
+					Object.values(session?.journals ?? {}).find(
+						(value) => value.nativeTurnId === execution.nativeTurnId,
+					);
+				if (!session || !journal) unavailable();
+				const previous = latestOperationAttemptFacts(journal.events).find(
+					(fact) =>
+						fact.operationRef === prepared.operationRef &&
+						fact.attemptRef === prepared.attemptRef,
+				);
+				if (previous?.kind !== "tool") stateInvalid();
+				if (previous.phase !== "intent" && previous.phase !== "started")
+					return journal.events.at(-1)?.cursor ?? "";
+				this.appendOperationFact(session, journal, {
+					...previous,
+					phase,
+					...(phase === "started"
+						? { startedAt: new Date().toISOString() }
+						: {}),
+					...(phase === "completed" || phase === "failed" || phase === "unknown"
+						? { finishedAt: new Date().toISOString() }
+						: {}),
+					...(failureCode ? { failureCode } : {}),
+				});
+				if (phase === "unknown") journal.externalActionsBlocked = true;
+				return journal.events.at(-1)?.cursor ?? "";
+			});
+			this.notifyEventStream(
+				this.eventStreamKey(nativeSessionRef, executionId),
+			);
+			return cursor;
+		};
+
+		const action: RuntimeExternalActionAuthorization = {
+			nativeSessionRef,
+			executionId,
+			runtimeOperationId: executionId,
+			operationRef: prepared.operationRef,
+			attemptRef: prepared.attemptRef,
+			kind: "tool",
+		};
+		let dispatched = false;
+		try {
+			if (!this.authorizeExternalAction) unavailable();
+			const authorization = await this.authorizeExternalAction(action);
+			if (typeof authorization?.revalidate !== "function") unavailable();
+			authorization.revalidate();
+			await persist("started");
+			// Persistence can yield to cancellation or authority revocation. Recheck
+			// immediately before controller I/O so a cancelled action cannot start.
+			authorization.revalidate();
+			signal.throwIfAborted();
+			dispatched = true;
+			const result = await browser.executeTool(browserRequest, signal);
+			// A response is only an outcome for this action after the same authority
+			// and cancellation boundary has been observed again.
+			authorization.revalidate();
+			signal.throwIfAborted();
+			if (!runtimeBrowserResultIdentityMatches(result, browserRequest)) {
+				await persist("unknown", "recovery_unconfirmed");
+				return runtimeBrowserUnknownResult(browserRequest);
+			}
+			if (result.phase === "completed") await persist("completed");
+			else if (result.phase === "failed")
+				await persist("failed", "operation_failed");
+			else await persist("unknown", "recovery_unconfirmed");
+			return result;
+		} catch {
+			if (dispatched) {
+				await persist("unknown", "recovery_unconfirmed").catch(() => {});
+				return runtimeBrowserUnknownResult(browserRequest);
+			}
+			await persist("failed", "operation_failed").catch(() => {});
+			return runtimeBrowserFailedResult(browserRequest);
 		}
 	}
 

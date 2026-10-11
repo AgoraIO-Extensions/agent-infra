@@ -1119,6 +1119,56 @@ function isApplicationMaterialGrantV2OpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// Browser operation binding is an additive optional field on existing operation facts.
+function stripRuntimeBrowserOperationFacts(value) {
+	const normalized = structuredClone(value);
+	const visit = (node) => {
+		if (!node || typeof node !== "object") return;
+		if (Array.isArray(node)) {
+			node.forEach((entry) => {
+				visit(entry);
+			});
+			return;
+		}
+		if (
+			node.properties?.kind?.const === "tool" &&
+			node.properties?.operationRef !== undefined &&
+			node.properties?.attemptRef !== undefined &&
+			node.properties?.phase !== undefined &&
+			node.properties?.toolId !== undefined
+		)
+			delete node.properties.browser;
+		Object.values(node).forEach((entry) => {
+			visit(entry);
+		});
+	};
+	const schemas = normalized.components?.schemas ?? normalized.schemas ?? {};
+	for (const name of [
+		"RuntimeOperationFactV2",
+		"ExecutionOperationEventV2",
+		"ScopedPlatformAuditProjectionV1",
+		"TaskSseMessageV1",
+		"TaskProjectionV1",
+		"PersistedConversationEventV2",
+	])
+		visit(schemas[name]);
+	return normalized;
+}
+
+// #1862 adds only optional Browser binding metadata to existing operation
+// facts; old Runtime/API consumers can ignore the absent property.
+function isRuntimeBrowserOperationFactOpenApiAddition(previous, current) {
+	const normalized = stripRuntimeBrowserOperationFacts(current);
+	const currentBinding =
+		normalized.components?.schemas?.RuntimeBrowserActionBindingV1;
+	const previousBinding =
+		previous.components?.schemas?.RuntimeBrowserActionBindingV1;
+	if (currentBinding !== undefined && previousBinding === undefined)
+		delete normalized.components.schemas.RuntimeBrowserActionBindingV1;
+	if (sameValue(previous, current)) return false;
+	return sameValue(previous, normalized);
+}
+
 // #482 C admits only the frozen three Task HTTP paths and six closed schemas.
 function isTaskHttpV1OpenApiAddition(previous, current) {
 	const paths = [
@@ -1139,7 +1189,7 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
 	)
 		return false;
-	const addition = {
+	const addition = stripRuntimeBrowserOperationFacts({
 		paths: Object.fromEntries(
 			paths.map((path) => [path, current.paths?.[path]]),
 		),
@@ -1150,13 +1200,13 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 			platformApiCredential:
 				current.components?.securitySchemes?.platformApiCredential,
 		},
-	};
+	});
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		"062938f470294f68ec205f6e2007fa01a6306c40e3a59fe2195b8cad9e580a48"
 	)
 		return false;
-	const normalized = structuredClone(current);
+	const normalized = stripRuntimeBrowserOperationFacts(current);
 	for (const path of paths) delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
 	if (
@@ -1169,7 +1219,7 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 		)
 			delete normalized.components.securitySchemes;
 	}
-	return sameValue(previous, normalized);
+	return sameValue(stripRuntimeBrowserOperationFacts(previous), normalized);
 }
 
 // #482 follow-up permits only the execution-scoped Task SSE path/schema.
@@ -1182,19 +1232,22 @@ function isTaskHttpV1SseOpenApiAddition(previous, current) {
 		previous.components?.schemas?.[schema] !== undefined
 	)
 		return false;
-	const addition = {
+	const addition = stripRuntimeBrowserOperationFacts({
 		paths: { [path]: current.paths?.[path] },
 		schemas: { [schema]: current.components?.schemas?.[schema] },
-	};
+	});
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		"6326d5f83b123da8233ac85fb694a1362d64ee5c4747618b37acba8759721167"
 	)
 		return false;
-	const normalized = structuredClone(current);
+	const normalized = stripRuntimeBrowserOperationFacts(current);
 	delete normalized.paths[path];
 	delete normalized.components.schemas[schema];
-	return findBreakingChanges(previous, normalized).length === 0;
+	return (
+		findBreakingChanges(stripRuntimeBrowserOperationFacts(previous), normalized)
+			.length === 0
+	);
 }
 
 // #1277 permits only the reviewed issuer operation; all previous contracts remain exact.
@@ -1421,14 +1474,14 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
 	)
 		return false;
-	const addition = {
+	const addition = stripRuntimeBrowserOperationFacts({
 		paths: Object.fromEntries(
 			paths.map((path) => [path, current.paths?.[path]]),
 		),
 		schemas: Object.fromEntries(
 			schemas.map((name) => [name, current.components?.schemas?.[name]]),
 		),
-	};
+	});
 	// #1534 later added the optional Session availability; the pinned digest
 	// covers the original publication. #1523 later added "updating".
 	const detail = addition.schemas.ConversationDetailProjectionV2;
@@ -1445,12 +1498,13 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		"097d6b3631a284fd8faf916f2c35a70d7c721c8bc832f3b97a96389fecfc541f"
 	)
 		return false;
-	const normalized = structuredClone(current);
+	const normalized = stripRuntimeBrowserOperationFacts(current);
 	for (const path of paths) delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
+	const normalizedPrevious = stripRuntimeBrowserOperationFacts(previous);
 	return (
-		sameValue(previous, normalized) ||
-		isAgentLifecycleV2OpenApiAddition(previous, normalized)
+		sameValue(normalizedPrevious, normalized) ||
+		isAgentLifecycleV2OpenApiAddition(normalizedPrevious, normalized)
 	);
 }
 
@@ -2932,6 +2986,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserEvidenceOpenApiAddition(previous, current) &&
+			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&

@@ -166,6 +166,47 @@
       ],
       "type": "object"
     },
+    "RuntimeBrowserActionBindingV1": {
+      "additionalProperties": false,
+      "properties": {
+        "actionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "capabilityVersion": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "pageRevision": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "resourceFence": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "sideEffect": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "actionId",
+        "capabilityVersion",
+        "pageRevision",
+        "sessionGeneration",
+        "resourceFence",
+        "sideEffect"
+      ],
+      "type": "object"
+    },
     "RuntimeBusinessCommandV2": {
       "enum": [
         "turn.submit",
@@ -1322,6 +1363,47 @@
                       "minLength": 1,
                       "type": "string"
                     },
+                    "browser": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "actionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "capabilityVersion": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "pageRevision": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "resourceFence": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "sessionGeneration": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "sideEffect": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "actionId",
+                        "capabilityVersion",
+                        "pageRevision",
+                        "sessionGeneration",
+                        "resourceFence",
+                        "sideEffect"
+                      ],
+                      "type": "object"
+                    },
                     "connection": {
                       "oneOf": [
                         {
@@ -1953,6 +2035,47 @@
                 "attemptRef": {
                   "minLength": 1,
                   "type": "string"
+                },
+                "browser": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "actionId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "capabilityVersion": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "pageRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "resourceFence": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "sessionGeneration": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "sideEffect": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "actionId",
+                    "capabilityVersion",
+                    "pageRevision",
+                    "sessionGeneration",
+                    "resourceFence",
+                    "sideEffect"
+                  ],
+                  "type": "object"
                 },
                 "connection": {
                   "oneOf": [
@@ -3134,6 +3257,47 @@
             "attemptRef": {
               "minLength": 1,
               "type": "string"
+            },
+            "browser": {
+              "additionalProperties": false,
+              "properties": {
+                "actionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "capabilityVersion": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "pageRevision": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "resourceFence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "sideEffect": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "actionId",
+                "capabilityVersion",
+                "pageRevision",
+                "sessionGeneration",
+                "resourceFence",
+                "sideEffect"
+              ],
+              "type": "object"
             },
             "connection": {
               "oneOf": [
