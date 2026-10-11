@@ -1148,6 +1148,7 @@ function stripRuntimeBrowserOperationFacts(value) {
 		"ExecutionOperationEventV2",
 		"ScopedPlatformAuditProjectionV1",
 		"TaskSseMessageV1",
+		"TaskProjectionV1",
 		"PersistedConversationEventV2",
 	])
 		visit(schemas[name]);
@@ -1205,7 +1206,7 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 		"062938f470294f68ec205f6e2007fa01a6306c40e3a59fe2195b8cad9e580a48"
 	)
 		return false;
-	const normalized = structuredClone(current);
+	const normalized = stripRuntimeBrowserOperationFacts(current);
 	for (const path of paths) delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
 	if (
@@ -1218,7 +1219,7 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 		)
 			delete normalized.components.securitySchemes;
 	}
-	return sameValue(previous, normalized);
+	return sameValue(stripRuntimeBrowserOperationFacts(previous), normalized);
 }
 
 // #482 follow-up permits only the execution-scoped Task SSE path/schema.
@@ -1240,10 +1241,13 @@ function isTaskHttpV1SseOpenApiAddition(previous, current) {
 		"6326d5f83b123da8233ac85fb694a1362d64ee5c4747618b37acba8759721167"
 	)
 		return false;
-	const normalized = structuredClone(current);
+	const normalized = stripRuntimeBrowserOperationFacts(current);
 	delete normalized.paths[path];
 	delete normalized.components.schemas[schema];
-	return findBreakingChanges(previous, normalized).length === 0;
+	return (
+		findBreakingChanges(stripRuntimeBrowserOperationFacts(previous), normalized)
+			.length === 0
+	);
 }
 
 // #1277 permits only the reviewed issuer operation; all previous contracts remain exact.
@@ -1494,12 +1498,13 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		"097d6b3631a284fd8faf916f2c35a70d7c721c8bc832f3b97a96389fecfc541f"
 	)
 		return false;
-	const normalized = structuredClone(current);
+	const normalized = stripRuntimeBrowserOperationFacts(current);
 	for (const path of paths) delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
+	const normalizedPrevious = stripRuntimeBrowserOperationFacts(previous);
 	return (
-		sameValue(previous, normalized) ||
-		isAgentLifecycleV2OpenApiAddition(previous, normalized)
+		sameValue(normalizedPrevious, normalized) ||
+		isAgentLifecycleV2OpenApiAddition(normalizedPrevious, normalized)
 	);
 }
 
