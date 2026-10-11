@@ -461,17 +461,17 @@ describe("Skill Hub authenticated HTTP reads with PostgreSQL", () => {
 			).installation.installationId,
 		).toBe(installed.installation.installationId);
 
-		const conflict = await fetchInstallation(
+		const installedConflict = await fetchInstallation(
 			"/api/v2/skills/installations",
 			"owner-a",
 			{
 				method: "POST",
-				headers: { "Idempotency-Key": "install-version-a-again" },
+				headers: { "Idempotency-Key": "install-version-a-new-key" },
 				body: JSON.stringify(command),
 			},
 		);
-		expect(conflict.status).toBe(409);
-		expect(((await conflict.json()) as { code: string }).code).toBe(
+		expect(installedConflict.status).toBe(409);
+		expect(((await installedConflict.json()) as { code: string }).code).toBe(
 			"INVALID_REQUEST",
 		);
 
@@ -481,10 +481,32 @@ describe("Skill Hub authenticated HTTP reads with PostgreSQL", () => {
 			{
 				method: "POST",
 				headers: { "Idempotency-Key": "install-private-a-as-b" },
-				body: JSON.stringify({ ...command, principalId: "owner-b" }),
+				body: JSON.stringify(command),
 			},
 		);
 		expect(crossPrincipal.status).toBe(404);
+
+		const organization = await fetchInstallation(
+			"/api/v2/skills/installations",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "install-organization-d" },
+				body: JSON.stringify({
+					principalType: "organization",
+					principalId: "org-a",
+					skillVersionId: "version-d",
+				}),
+			},
+		);
+		expect(organization.status).toBe(201);
+		expect(
+			(
+				(await organization.json()) as {
+					installation: { principalType: string };
+				}
+			).installation.principalType,
+		).toBe("organization");
 
 		const removed = await fetchInstallation(
 			`/api/v2/skills/installations/${installed.installation.installationId}`,
