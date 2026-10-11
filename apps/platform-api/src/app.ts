@@ -74,6 +74,10 @@ import {
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
 import {
+	registerSkillHubInstallationRoutesV1,
+	type SkillHubInstallationRoutesDependenciesV1,
+} from "./http/skill-hub-installation-routes.js";
+import {
 	registerSkillHubReadRoutesV1,
 	type SkillHubReadRoutesDependenciesV1,
 } from "./http/skill-hub-read-routes.js";
@@ -143,6 +147,7 @@ export interface PlatformAppDependencies {
 	readonly scopedAudit?: ScopedAuditRoutesDependencies;
 	readonly directory?: DirectoryRouteDependencies;
 	readonly skillHubRead?: SkillHubReadRoutesDependenciesV1;
+	readonly skillHubInstallations?: SkillHubInstallationRoutesDependenciesV1;
 	readonly userGovernance?: UserGovernanceRoutesDependencies;
 }
 
@@ -263,5 +268,10 @@ export function createPlatformApp(
 	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
 	if (dependencies.skillHubRead)
 		registerSkillHubReadRoutesV1(app, dependencies.skillHubRead);
+	if (dependencies.skillHubInstallations)
+		registerSkillHubInstallationRoutesV1(
+			app,
+			dependencies.skillHubInstallations,
+		);
 	return app;
 }

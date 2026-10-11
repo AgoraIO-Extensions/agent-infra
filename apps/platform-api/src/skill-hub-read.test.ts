@@ -84,6 +84,21 @@ const fetchRead = (
 			...extraHeaders,
 		},
 	});
+const fetchInstallation = (
+	path: string,
+	userId: string | null,
+	init: RequestInit = {},
+) =>
+	fetch(`${baseUrl}${path}`, {
+		...init,
+		headers: {
+			...(init.body !== undefined
+				? { "content-type": "application/json" }
+				: {}),
+			...(userId ? { cookie: `fixture-user=${userId}` } : {}),
+			...(init.headers ?? {}),
+		},
+	});
 const ids = (body: unknown) =>
 	SkillHubDirectoryPageV1Schema.parse(body).items.map(
 		(item) => item.skillVersionId,
@@ -145,6 +160,15 @@ beforeAll(async () => {
 				`approve-${key}`,
 				{ decision: "approve" },
 			);
+	}
+	for (const key of ["a", "c", "d", "e", "f"]) {
+		const now = new Date();
+		await sql`insert into platform.idempotency_records
+			(id, scope_type, scope_id, actor_id, command_type, idempotency_key,
+			 request_digest, status, result, created_at, updated_at)
+			values (${`admission-version-${key}`}, 'skill_package', ${`version-${key}`},
+			 'owner-a', 'skill.package.publish.v1', ${`admission-version-${key}`},
+			 ${"d".repeat(64)}, 'completed', ${sql.json({ operationId: `admission-version-${key}`, skillVersionId: `version-${key}` })}, ${now}, ${now})`;
 	}
 	await supplier.revokeVersion(trusted(), "version-i", "revoke-i");
 	await sql`update platform.skill_hub_skills set status = 'disabled' where id = 'skill-h'`;
@@ -393,5 +417,96 @@ describe("Skill Hub authenticated HTTP reads with PostgreSQL", () => {
 			throwOnError: true,
 		});
 		expect(detail.data?.skillVersionId).toBe("version-c");
+	});
+
+	it("installs and uninstalls through the authenticated idempotent API", async () => {
+		const command = {
+			principalType: "user",
+			principalId: "owner-a",
+			skillVersionId: "version-a",
+		};
+		const headers = { "Idempotency-Key": "install-version-a" };
+		const first = await fetchInstallation(
+			"/api/v2/skills/installations",
+			"owner-a",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify(command),
+			},
+		);
+		expect(first.status).toBe(201);
+		const installed = (await first.json()) as {
+			replayed: boolean;
+			installation: { installationId: string; state: string };
+		};
+		expect(installed.replayed).toBe(false);
+		expect(installed.installation.state).toBe("installed");
+
+		const replay = await fetchInstallation(
+			"/api/v2/skills/installations",
+			"owner-a",
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify(command),
+			},
+		);
+		expect(replay.status).toBe(200);
+		expect(
+			(
+				(await replay.json()) as {
+					installation: { installationId: string };
+				}
+			).installation.installationId,
+		).toBe(installed.installation.installationId);
+
+		const conflict = await fetchInstallation(
+			"/api/v2/skills/installations",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "install-version-a-again" },
+				body: JSON.stringify(command),
+			},
+		);
+		expect(conflict.status).toBe(409);
+		expect(((await conflict.json()) as { code: string }).code).toBe(
+			"INVALID_REQUEST",
+		);
+
+		const crossPrincipal = await fetchInstallation(
+			"/api/v2/skills/installations",
+			"owner-b",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "install-private-a-as-b" },
+				body: JSON.stringify({ ...command, principalId: "owner-b" }),
+			},
+		);
+		expect(crossPrincipal.status).toBe(404);
+
+		const removed = await fetchInstallation(
+			`/api/v2/skills/installations/${installed.installation.installationId}`,
+			"owner-a",
+			{
+				method: "DELETE",
+				headers: { "Idempotency-Key": "uninstall-version-a" },
+			},
+		);
+		expect(removed.status).toBe(200);
+		expect(
+			((await removed.json()) as { installation: { state: string } })
+				.installation.state,
+		).toBe("uninstalled");
+		expect(
+			(
+				await fetchInstallation("/api/v2/skills/installations", null, {
+					method: "POST",
+					headers: { "Idempotency-Key": "unauthenticated-install" },
+					body: JSON.stringify(command),
+				})
+			).status,
+		).toBe(401);
 	});
 });
