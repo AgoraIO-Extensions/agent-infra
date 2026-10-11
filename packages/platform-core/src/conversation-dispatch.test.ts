@@ -475,6 +475,7 @@ function setup(
 		store?: MemoryDispatchStore;
 		runtimeHost?: ConversationRuntimeHostPortV1;
 		authorization?: ConversationDispatchAuthorizationPortV1;
+		maxRecoveryAttempts?: number;
 	} = {},
 ) {
 	const store = options.store ?? new MemoryDispatchStore();
@@ -488,7 +489,13 @@ function setup(
 			runtimeHost,
 			events,
 		},
-		{ leaseDurationMs: 3_000, retryDelayMs: 0 },
+		{
+			leaseDurationMs: 3_000,
+			retryDelayMs: 0,
+			...(options.maxRecoveryAttempts === undefined
+				? {}
+				: { maxRecoveryAttempts: options.maxRecoveryAttempts }),
+		},
 	);
 	return { store, runtimeHost, events, useCase };
 }
@@ -499,6 +506,66 @@ function dispatch(
 ) {
 	return useCase.dispatch({ schemaVersion: 1, itemId, workerId: "worker-1" });
 }
+
+describe("bounded unknown recovery", () => {
+	it("fails an occupied unknown execution after the durable attempt limit", async () => {
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", attemptCount: 3 }),
+		);
+		const recoverOriginalStatus = vi.fn(async () => {
+			throw new Error("Runtime recovery is unavailable");
+		});
+		const runtimeHost =
+			new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;
+		runtimeHost.recoverOriginalStatus = recoverOriginalStatus;
+		const h = setup({
+			store,
+			maxRecoveryAttempts: 3,
+			runtimeHost,
+		});
+
+		await expect(dispatch(h.useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "rejected",
+		});
+		expect(recoverOriginalStatus).not.toHaveBeenCalled();
+		expect(store.outboxStatus).toBe("failed");
+		expect(store.errorCode).toBe("RUNTIME_RECOVERY_TIMEOUT");
+		expect(store.current.executionStatus).toBe("failed");
+	});
+
+	it("closes terminal metadata recovery after the same limit", async () => {
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "completed",
+				attemptCount: 3,
+				hostSessionRef: "host-session",
+				runtimeCursor: "cursor-1",
+				metadataRecovery: {
+					id: "metadata-recovery-1",
+					requestedAt: 1,
+					originalStatus: "succeeded",
+				},
+			}),
+		);
+		const recoverOriginalStatus = vi.fn(async () => {
+			throw new Error("Runtime recovery is unavailable");
+		});
+		const runtimeHost =
+			new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;
+		runtimeHost.recoverOriginalStatus = recoverOriginalStatus;
+		const h = setup({ store, maxRecoveryAttempts: 3, runtimeHost });
+
+		await expect(dispatch(h.useCase)).resolves.toEqual({
+			schemaVersion: 1,
+			outcome: "rejected",
+		});
+		expect(recoverOriginalStatus).not.toHaveBeenCalled();
+		expect(store.outboxStatus).toBe("failed");
+		expect(store.errorCode).toBe("RUNTIME_METADATA_RECOVERY_TIMEOUT");
+		expect(store.current.executionStatus).toBe("completed");
+	});
+});
 
 describe("Conversation Worker dispatch", () => {
 	it.each([
