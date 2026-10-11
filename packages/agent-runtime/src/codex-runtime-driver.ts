@@ -988,8 +988,15 @@ function codexInputRoot(path: string) {
  */
 async function reclaimCodexInputRoot(root: string) {
 	try {
+		let existed = true;
+		try {
+			await lstat(root);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			existed = false;
+		}
 		await rm(root, { recursive: true, force: true });
-		await mkdir(root, { recursive: true, mode: 0o700 });
+		if (existed) await mkdir(root, { recursive: true, mode: 0o700 });
 	} catch {
 		unavailable();
 	}
@@ -5527,6 +5534,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		key: string,
 	): Promise<MaterializedCodexInput> {
 		if (!fileBridge) unavailable();
+		if (this.codexInputRootPath) {
+			await mkdir(this.codexInputRootPath, { recursive: true, mode: 0o700 });
+		}
 		const directory = await mkdtemp(
 			this.codexInputRootPath
 				? join(this.codexInputRootPath, "turn-")
@@ -6723,6 +6733,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		await Promise.allSettled(
 			[...this.textDeltaBatches].map((batch) => batch.flushing),
 		);
+		if (this.codexInputRootPath) {
+			try {
+				await cleanupCodexInputDirectory(this.codexInputRootPath);
+			} catch {
+				// A failed close leaves the root for the next open to reclaim.
+			}
+		}
 		try {
 			await this.file.readCommitted();
 		} finally {
