@@ -1195,16 +1195,27 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const handle = this.handles.get(ref);
 		if (!handle?.native.modelSelection) unavailable();
 		const selection = handle.native.modelSelection();
-		const options = this.options.modelOptions.map((option) => ({
-			modelOptionId: option.modelOptionId,
-			modelId: option.nativeModelId,
-			displayName: option.nativeModelId,
-			reasoningLevels: [...option.reasoningLevels],
-		}));
+		const availableModels = new Set(selection.models);
+		const availableReasoningLevels = new Set(selection.reasoningLevels);
+		const options = this.options.modelOptions.flatMap((option) => {
+			if (!availableModels.has(option.nativeModelId)) return [];
+			const reasoningLevels = option.reasoningLevels.filter((level) =>
+				availableReasoningLevels.has(level),
+			);
+			if (reasoningLevels.length === 0) return [];
+			return [
+				{
+					modelOptionId: option.modelOptionId,
+					modelId: option.nativeModelId,
+					displayName: option.nativeModelId,
+					reasoningLevels,
+				},
+			];
+		});
 		const currentModel = selection.currentModel;
 		const currentReasoning = selection.currentReasoning;
-		const currentOption = this.options.modelOptions.find(
-			(option) => option.nativeModelId === currentModel,
+		const currentOption = options.find(
+			(option) => option.modelId === currentModel,
 		);
 		if (
 			!currentOption ||
