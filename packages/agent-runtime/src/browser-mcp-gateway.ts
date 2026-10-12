@@ -139,23 +139,27 @@ export async function createBrowserMcpGatewayV1(
 				? args.pageRevision
 				: 1;
 		try {
-			const result = await executeTool(
-				{
-					tool: name,
-					arguments: args,
-					actionId: randomUUID(),
-					operationRef: randomUUID(),
-					attemptRef: randomUUID(),
-					binding: {
-						...input.context.binding,
-						executionId: input.executionId,
-						capabilityVersion: input.context.capabilityVersion,
-						pageRevision,
-					},
+			const toolRequest = {
+				tool: name,
+				arguments: args,
+				actionId: randomUUID(),
+				operationRef: randomUUID(),
+				attemptRef: randomUUID(),
+				binding: {
+					...input.context.binding,
+					executionId: input.executionId,
+					capabilityVersion: input.context.capabilityVersion,
+					pageRevision,
 				},
-				extra.signal,
+			};
+			const result = await executeTool(toolRequest, extra.signal);
+			const bindingMatches = Object.entries(toolRequest.binding).every(
+				([key, value]) => Reflect.get(result.binding, key) === value,
 			);
-			return result.actionId && result.binding.executionId === input.executionId
+			return result.actionId === toolRequest.actionId &&
+				result.operationRef === toolRequest.operationRef &&
+				result.attemptRef === toolRequest.attemptRef &&
+				bindingMatches
 				? content(result)
 				: invalidResult();
 		} catch {

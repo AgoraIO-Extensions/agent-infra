@@ -115,14 +115,15 @@ export const GenericAcpRuntimeDriver = {
 						: options.browserCapability;
 				let gateway: BrowserMcpGatewayV1 | undefined;
 				try {
-					gateway =
-						executionBrowser && executionCapability && session.executionId
-							? await createBrowserMcpGatewayV1({
-									capability: executionCapability,
-									context: executionBrowser,
-									executionId: session.executionId,
-								})
-							: undefined;
+					if (executionBrowser) {
+						if (!executionCapability || !session.executionId)
+							throw new Error("RUNTIME_BROWSER_EXECUTION_UNAVAILABLE");
+						gateway = await createBrowserMcpGatewayV1({
+							capability: executionCapability,
+							context: executionBrowser,
+							executionId: session.executionId,
+						});
+					}
 				} catch (error) {
 					await launch.close?.().catch(() => {});
 					throw error;
