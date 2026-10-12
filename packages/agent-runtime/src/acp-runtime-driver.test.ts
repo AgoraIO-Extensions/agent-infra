@@ -481,6 +481,72 @@ it("does not advertise model selection from a current value without selectable v
 	}
 });
 
+it("projects the current native model and reasoning choices", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-model-directory-"));
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high", "low"],
+			},
+			{
+				modelOptionId: "secondary",
+				nativeModelId: "provider/other",
+				reasoningLevels: ["high", "low"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "grouped-models" },
+		}),
+	});
+	try {
+		const result = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-a",
+			turnId: "turn-a",
+			operationId: "operation-a",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "secondary",
+				reasoningLevel: "high",
+			},
+		});
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(result.nativeSessionRef, "execution-a"),
+			).toBe("completed"),
+		);
+		expect(await driver.getModelDirectory(result.nativeSessionRef)).toEqual({
+			options: [
+				{
+					modelOptionId: "secondary",
+					modelId: "provider/other",
+					displayName: "provider/other",
+					reasoningLevels: ["high"],
+				},
+			],
+			current: { modelOptionId: "secondary", reasoningLevel: "high" },
+		});
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("normalizes a native execution limit to a redacted error and failed terminal event", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-limit-"));
 	const driver = await GenericAcpRuntimeDriver.open({
