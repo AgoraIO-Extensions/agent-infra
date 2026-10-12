@@ -1687,6 +1687,22 @@ export class RuntimeHost {
 			nativeMetadataReadDenied();
 
 		const now = context.now ?? Date.now;
+		const assertAuthority = (
+			authority: ReturnType<
+				RuntimeNativeMetadataReadContextV1["assertCurrent"]
+			>,
+		) => {
+			if (
+				!isDeepStrictEqual(authority.principal, request.scope.principal) ||
+				!isDeepStrictEqual(authority.scope, {
+					agentId: request.scope.agentId,
+					conversationId: request.scope.conversationId,
+					executionId: request.scope.executionId,
+					sessionGeneration: request.scope.sessionGeneration,
+				})
+			)
+				nativeMetadataReadDenied();
+		};
 		const assertContext = () => {
 			this.requireLegacyHost();
 			if (
@@ -1700,21 +1716,12 @@ export class RuntimeHost {
 				!isDeepStrictEqual(context.scope, request.scope)
 			)
 				nativeMetadataReadDenied();
-			context.assertCurrent();
+			assertAuthority(context.assertCurrent());
 		};
 		const revalidateContext = async () => {
 			assertContext();
 			const authority = await context.revalidate();
-			if (
-				!isDeepStrictEqual(authority.principal, request.scope.principal) ||
-				!isDeepStrictEqual(authority.scope, {
-					agentId: request.scope.agentId,
-					conversationId: request.scope.conversationId,
-					executionId: request.scope.executionId,
-					sessionGeneration: request.scope.sessionGeneration,
-				})
-			)
-				nativeMetadataReadDenied();
+			assertAuthority(authority);
 			assertContext();
 		};
 
