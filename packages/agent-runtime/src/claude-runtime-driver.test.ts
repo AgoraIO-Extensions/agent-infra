@@ -23,6 +23,62 @@ const commandRead = (
 	revalidate: async () => {},
 });
 
+const attachmentCommand = {
+	schemaVersion: 2 as const,
+	kind: "submit-turn" as const,
+	agentId: "agent-file",
+	conversationId: "conversation-file",
+	sessionGeneration: 1,
+	executionId: "execution-file",
+	turnId: "turn-file",
+	operationId: "operation-file",
+	selection: {
+		schemaVersion: 1 as const,
+		modelOptionId: "primary",
+		reasoningLevel: "high",
+	},
+	input: { text: "inspect", attachments: ["file-1"] },
+};
+
+const openAttachmentDriver = (path: string) =>
+	ClaudeRuntimeDriver.open({
+		path,
+		configVersion: "claude-files",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				model: "claude-opus-5",
+				reasoningLevels: ["high"],
+				authentication: "bearer",
+				endpoint: "http://127.0.0.1:1",
+				credential: "synthetic-model-credential",
+			},
+		],
+	});
+
+const attachmentBridge = (
+	descriptor: { mediaType: string; sizeBytes: number; sha256: string },
+	bytes: Uint8Array,
+	revalidate: () => void = () => {},
+): RuntimeFileBridgePortV1 => ({
+	readInput: async () => ({
+		fileId: "file-1",
+		descriptor: { name: "image.png", ...descriptor },
+		body: new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(bytes);
+				controller.close();
+			},
+		}),
+	}),
+	writeResult: async () => {
+		throw new Error("unused");
+	},
+	revalidate,
+});
+
 it("bounds and normalizes Claude native command metadata", async () => {
 	expect(
 		parseClaudeNativeCommands([
@@ -487,6 +543,85 @@ it("maps an authorized image attachment into Claude native content", async () =>
 		await rm(path, { recursive: true, force: true });
 	}
 }, 30000);
+
+it("rejects an attachment outside the Claude image allowlist before native submission", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-driver-files-media-"));
+	const driver = await openAttachmentDriver(path);
+	const bytes = new TextEncoder().encode("<svg></svg>");
+	try {
+		await expect(
+			driver.execute(attachmentCommand, {
+				fileBridge: attachmentBridge(
+					{
+						mediaType: "image/svg+xml",
+						sizeBytes: bytes.byteLength,
+						sha256: createHash("sha256").update(bytes).digest("hex"),
+					},
+					bytes,
+				),
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("rejects an attachment whose bytes do not match the admitted digest", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-driver-files-digest-"));
+	const driver = await openAttachmentDriver(path);
+	const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+	try {
+		await expect(
+			driver.execute(attachmentCommand, {
+				fileBridge: attachmentBridge(
+					{
+						mediaType: "image/png",
+						sizeBytes: bytes.byteLength,
+						sha256: "a".repeat(64),
+					},
+					bytes,
+				),
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("refuses native submission when the file authority lapses after materialization", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-driver-files-authority-"));
+	const driver = await openAttachmentDriver(path);
+	const bytes = new TextEncoder().encode("claude-lapsed-authority-probe-image");
+	let revalidations = 0;
+	try {
+		await expect(
+			driver.execute(attachmentCommand, {
+				fileBridge: attachmentBridge(
+					{
+						mediaType: "image/png",
+						sizeBytes: bytes.byteLength,
+						sha256: createHash("sha256").update(bytes).digest("hex"),
+					},
+					bytes,
+					() => {
+						revalidations += 1;
+						// The authority lapses after materialization but before the native request.
+						if (revalidations > 1) {
+							throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
+						}
+					},
+				),
+			}),
+		).rejects.toThrow("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
+		// The last check runs at the native submission boundary.
+		expect(revalidations).toBe(2);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
 
 it("delivers a per-execution key for a credential-free Claude option", async () => {
 	const path = await mkdtemp(join(tmpdir(), "claude-driver-v4-"));

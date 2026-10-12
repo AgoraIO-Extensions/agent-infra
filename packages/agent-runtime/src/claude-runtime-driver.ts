@@ -993,6 +993,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				string
 			>[number]);
 		}
+		// A File Grant that lapsed while the attachments were acquired must not
+		// survive into retirement or the native request.
 		fileBridge?.revalidate();
 		// Paseo ensureQuery retirement order: detach old work, drain it, then resume the same native ID.
 		await this.retire(ref);
@@ -1193,6 +1195,16 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			if (standardMcp) await standardMcp.close().catch(() => {});
 			await transport.close();
 			return result(command, ref, unknownResult);
+		}
+		// The File Grant is checked once more at the native submission boundary: a
+		// grant that lapsed during retirement, transport or Connection setup must
+		// not cross into the native request.
+		try {
+			fileBridge?.revalidate();
+		} catch (error) {
+			if (standardMcp) await standardMcp.close().catch(() => {});
+			await transport.close();
+			throw error;
 		}
 		let native: ReturnType<typeof claudeQuery>;
 		try {
