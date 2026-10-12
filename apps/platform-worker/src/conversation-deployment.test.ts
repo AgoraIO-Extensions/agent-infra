@@ -352,6 +352,27 @@ describe("production SessionSandbox resource receiver", () => {
 			observed.resources.map(({ uid }) => uid),
 		);
 	});
+	it("waits briefly for a Pod readiness edge within the receiver lease", async () => {
+		const f = fixture();
+		let podReads = 0;
+		const originalRead = f.client.read.bind(f.client);
+		f.client.read = (async (kind, name) => {
+			const current = await originalRead(kind, name);
+			if (kind === "Pod" && current) {
+				podReads++;
+				if (podReads >= 2) {
+					(current as V1Pod).status = {
+						phase: "Running",
+						conditions: [{ type: "Ready", status: "True" }],
+					};
+				}
+			}
+			return current;
+		}) as typeof f.client.read;
+		const observed = await f.receive(f.claim, new AbortController().signal);
+		expect(observed.status).toBe("ready");
+		expect(podReads).toBeGreaterThanOrEqual(2);
+	});
 
 	it("rejects a mismatched persisted policy before any resource write", async () => {
 		const f = fixture();
