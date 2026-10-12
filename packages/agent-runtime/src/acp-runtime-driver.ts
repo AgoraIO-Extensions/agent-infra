@@ -10,7 +10,14 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import { retireAcpProcess } from "./acp-process.js";
 import { type AcpLaunch, openAcpSession } from "./acp-session.js";
-import { SessionRuntimeDriver } from "./session-runtime-driver.js";
+import type {
+	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+} from "./driver.js";
+import {
+	type NativeSessionOptions,
+	SessionRuntimeDriver,
+} from "./session-runtime-driver.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 export interface AcpRuntimeModelOption {
@@ -26,6 +33,11 @@ export interface GenericAcpRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly AcpRuntimeModelOption[];
+	/** OpenCode supports multiple prompts on one ACP Session with refreshed Keys. */
+	readonly reuseNativeSession?: boolean;
+	readonly authorizeModelAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly launch: (
 		directory: string,
@@ -52,22 +64,38 @@ export const GenericAcpRuntimeDriver = {
 							? "failed"
 							: "unknown",
 			openSession: async ({ selection, admit, update, ...session }) => {
+				const callbacks = {
+					admit,
+					update,
+					resolveModelCredential: session.resolveModelCredential,
+				};
+				// ACP sessions can process multiple prompts over one native Session.
+				// Keep the resolver stable inside the launch, while replacing its
+				// per-Execution callback before every reused Turn.
+				const resolveModelCredential = session.resolveModelCredential
+					? async () => {
+							const resolver = callbacks.resolveModelCredential;
+							if (!resolver) throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+							return resolver();
+						}
+					: undefined;
 				const phases = new Map<string, string>();
-				return openAcpSession({
+				const launch = await options.launch(
+					session.directory,
+					selection,
+					() => callbacks.admit(),
+					resolveModelCredential,
+				);
+				const native = await openAcpSession({
 					...session,
-					launch: await options.launch(
-						session.directory,
-						selection,
-						admit,
-						session.resolveModelCredential,
-					),
+					launch,
 					update: async ({ update: event }) => {
 						if (
 							event.sessionUpdate === "agent_message_chunk" &&
 							event.content.type === "text" &&
 							event.content.text
 						) {
-							await update({
+							await callbacks.update({
 								type: "text",
 								payload: { delta: event.content.text },
 							});
@@ -83,7 +111,7 @@ export const GenericAcpRuntimeDriver = {
 										: "started";
 							if (phases.get(event.toolCallId) !== phase) {
 								phases.set(event.toolCallId, phase);
-								await update({
+								await callbacks.update({
 									type: "tool",
 									payload: {
 										toolCallId: createHash("sha256")
@@ -99,9 +127,21 @@ export const GenericAcpRuntimeDriver = {
 									},
 								});
 							}
-						} else await update();
+						} else await callbacks.update();
 					},
 				});
+				return options.reuseNativeSession
+					? {
+							...native,
+							startTurn: (next: NativeSessionOptions) => {
+								callbacks.admit = next.admit;
+								callbacks.update = next.update;
+								callbacks.resolveModelCredential = next.resolveModelCredential;
+								phases.clear();
+								launch.beginTurn?.();
+							},
+						}
+					: native;
 			},
 		});
 		return Object.assign(driver, {

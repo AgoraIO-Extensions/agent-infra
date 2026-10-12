@@ -266,6 +266,11 @@ export async function openRuntimeMessagesTransport(
 			endpoint: `http://127.0.0.1:${address.port}`,
 			credential: token,
 		},
+		/** Start a new Execution on a reused native session. */
+		beginTurn() {
+			admitted = false;
+			failure = undefined;
+		},
 		failure: () => failure,
 		async close() {
 			if (closed) return;
