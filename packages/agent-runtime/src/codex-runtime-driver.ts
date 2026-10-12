@@ -9348,6 +9348,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				toolId: `mcp:${standardMcpDigest(client.toolName(input.tool)).slice(0, 32)}`,
 				connection: {
 					serviceRef: client.serviceRef,
+					consumerId: client.consumerId,
+					instanceRef: client.instanceRef,
+					credentialRevision: client.credentialRevision,
 					verification: "unverified",
 					reason: "record_unavailable",
 				},

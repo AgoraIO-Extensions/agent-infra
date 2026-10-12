@@ -578,6 +578,15 @@ export class StandardMcpClient {
 	get serviceRef() {
 		return this.#input.serviceRef;
 	}
+	get consumerId() {
+		return this.#input.consumerId;
+	}
+	get instanceRef() {
+		return this.#input.instanceRef;
+	}
+	get credentialRevision() {
+		return this.#input.credentialRevision;
+	}
 	get toolDefinitions() {
 		return [
 			{
