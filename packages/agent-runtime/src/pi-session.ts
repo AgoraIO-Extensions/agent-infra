@@ -103,7 +103,9 @@ function normalizePiPrompt(prompt: NativePromptV1): {
 		if (
 			block.type !== "image" ||
 			!piImageMediaTypes.has(block.mimeType) ||
-			!/^[A-Za-z0-9+/]+={0,2}$/.test(block.data)
+			// Shape only: the shared Driver already owns media type, size and digest
+			// validation, and an empty payload must not block the Session here.
+			!/^[A-Za-z0-9+/]*={0,2}$/.test(block.data)
 		)
 			throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
 		images.push({ type: "image", data: block.data, mimeType: block.mimeType });
