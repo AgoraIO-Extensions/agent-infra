@@ -118,8 +118,15 @@ function commandCapability(
 		"path",
 	]);
 	const name = boundedText(command.name, maxCapabilityText);
+	const rawDescription =
+		command.description === undefined ? "" : command.description;
+	if (
+		typeof rawDescription !== "string" ||
+		rawDescription.length > maxDescription
+	)
+		invalid();
 	const description = boundedText(
-		command.description === undefined ? "" : command.description,
+		rawDescription.replace(/[\r\n\t]/g, " "),
 		maxDescription,
 		true,
 	);
@@ -192,6 +199,8 @@ export function projectNativeMetadataCommandsV1(input: {
 			id: digest(["native-metadata-command-v1", revision, identity, command]),
 			...command,
 			parameters: [],
+			// The projection is read-only metadata. Command invocation keeps its
+			// separate Runtime authorization and is never granted by this object.
 			effect: "read_only",
 			availability: "available",
 		})),

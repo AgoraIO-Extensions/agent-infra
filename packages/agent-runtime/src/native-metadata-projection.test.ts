@@ -48,12 +48,22 @@ describe("non-Codex native metadata projection", () => {
 	it("projects bounded command metadata with stable identity", () => {
 		const first = projectCommands({
 			nativeId: nativeSessionRef,
-			commands: commandDirectory,
+			commands: [
+				{
+					...commandDirectory[0],
+					description: "Compact\n the\tcurrent session",
+				},
+			],
 			readAt: 1,
 		});
 		const second = projectCommands({
 			nativeId: nativeSessionRef,
-			commands: commandDirectory,
+			commands: [
+				{
+					...commandDirectory[0],
+					description: "Compact\n the\tcurrent session",
+				},
+			],
 			readAt: Date.now(),
 		});
 		expect(first).toEqual(second);
@@ -64,7 +74,7 @@ describe("non-Codex native metadata projection", () => {
 				{
 					kind: "command",
 					name: "compact",
-					description: "Compact the current session",
+					description: "Compact  the current session",
 					source: { name: "acp", version: "1" },
 					parameters: [],
 					effect: "read_only",
