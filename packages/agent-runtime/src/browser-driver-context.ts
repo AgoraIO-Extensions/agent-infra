@@ -51,6 +51,8 @@ function sameExecutionBinding(
 		request.conversationId === context.binding.conversationId &&
 		request.sessionGeneration === context.binding.sessionGeneration &&
 		request.resourceFence === context.binding.resourceFence &&
+		request.workloadRevision === context.binding.workloadRevision &&
+		request.imageDigest === context.binding.imageDigest &&
 		request.capabilityVersion === context.capabilityVersion
 	);
 }

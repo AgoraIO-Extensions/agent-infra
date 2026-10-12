@@ -5323,6 +5323,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				pageRevision: request.pageRevision,
 				sessionGeneration: browser.binding.sessionGeneration,
 				resourceFence: browser.binding.resourceFence,
+				workloadRevision: browser.binding.workloadRevision,
+				imageDigest: browser.binding.imageDigest,
 			};
 			const existing = latestOperationAttemptFacts(journal.events).find(
 				(fact): fact is Extract<RuntimeOperationFactV2, { kind: "tool" }> =>

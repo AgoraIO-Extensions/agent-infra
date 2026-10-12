@@ -66,7 +66,12 @@ export interface RuntimeBrowserToolExecutionRequestV1 {
 	readonly attemptRef: string;
 	readonly binding: Pick<
 		RuntimeBrowserExecutionContextV1["binding"],
-		"agentId" | "conversationId" | "sessionGeneration" | "resourceFence"
+		| "agentId"
+		| "conversationId"
+		| "sessionGeneration"
+		| "resourceFence"
+		| "workloadRevision"
+		| "imageDigest"
 	> & {
 		readonly executionId: string;
 		readonly capabilityVersion: number;
