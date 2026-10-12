@@ -182,6 +182,7 @@ export const skillHubAgentBindings = platformSchema.table(
 		configurationRevision: bigint("configuration_revision", {
 			mode: "number",
 		}).notNull(),
+		appliedReceipt: jsonb("applied_receipt"),
 	},
 	(table) => [
 		primaryKey({
@@ -209,6 +210,10 @@ export const skillHubAgentBindings = platformSchema.table(
 		check(
 			"skill_hub_agent_binding_failure_binding",
 			sql`(${table.state} = 'failed') = (${table.failureReason} is not null)`,
+		),
+		check(
+			"skill_hub_agent_binding_receipt_binding",
+			sql`(${table.state} = 'synced') = (${table.appliedReceipt} is not null)`,
 		),
 		index("skill_hub_agent_binding_agent_idx").on(
 			table.agentId,
