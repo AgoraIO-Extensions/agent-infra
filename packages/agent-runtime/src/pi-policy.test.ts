@@ -4,6 +4,7 @@ import {
 	readFile,
 	realpath,
 	rm,
+	stat,
 	symlink,
 	writeFile,
 } from "node:fs/promises";
@@ -67,3 +68,41 @@ it.each(["read", "write", "edit"] as const)(
 		}
 	},
 );
+
+it("reports Pi file dispatch after authorization and before filesystem I/O", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "pi-dispatch-")));
+	const workspace = join(root, "workspace");
+	await mkdir(workspace);
+	const events: { operation: string; path: string; existed: boolean }[] = [];
+	const tools = createPiWorkspaceTools(workspace, {
+		onFileDispatch: async (event) => {
+			let existed = true;
+			try {
+				await stat(event.path);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				existed = false;
+			}
+			events.push({ ...event, existed });
+		},
+	});
+	try {
+		await tools.write.execute(
+			"synthetic-dispatch",
+			{ path: "created.txt", content: "dispatch" },
+			undefined,
+			undefined,
+			{ cwd: workspace } as ExtensionContext,
+		);
+		expect(events.at(-1)).toEqual({
+			operation: "write",
+			path: join(workspace, "created.txt"),
+			existed: false,
+		});
+		expect(await readFile(join(workspace, "created.txt"), "utf8")).toBe(
+			"dispatch",
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
