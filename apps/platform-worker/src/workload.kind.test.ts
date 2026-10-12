@@ -1257,9 +1257,11 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 
 					async function tickUntil(
 						predicate: (state: WorkloadReconciliationStateV1) => boolean,
+						guard?: () => Promise<void>,
 					) {
 						for (let attempt = 0; attempt < 300; attempt++) {
 							await worker?.tick();
+							await guard?.();
 							const [row] = await sql<
 								{ state: WorkloadReconciliationStateV1 }[]
 							>`select state from platform.workload_reconciliations where agent_id=${seed.agentId}`;
@@ -1353,6 +1355,34 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 							),
 						).toMatchObject({ version: routeVersion });
 					}
+					async function assertNoCandidateRoute(expectedRevision: number) {
+						const name = workloadResourceNameV1(seed.agentId);
+						const service = await client.read<V1Service>("Service", name);
+						if (!service) return;
+						const selectedRevision =
+							service.spec?.selector?.["agent-infra.agora.io/revision"];
+						expect(["closed", String(expectedRevision)]).toContain(
+							selectedRevision,
+						);
+						if (selectedRevision === "closed") return;
+						const routedPods = (
+							await client.list<V1Pod>(
+								"Pod",
+								`agent-infra.agora.io/agent=${name}`,
+							)
+						).filter(
+							(pod) =>
+								pod.metadata?.labels?.["agent-infra.agora.io/revision"] ===
+								selectedRevision,
+						);
+						expect(
+							routedPods.every(
+								(pod) =>
+									pod.spec?.containers[0]?.image ===
+									`${workloadPolicy.imageRepository}@${imageB}`,
+							),
+						).toBe(true);
+					}
 
 					await tickUntil((state) => state.phase === "ready");
 					await assertSingleRoute(imageA);
@@ -1367,11 +1397,17 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						revision: 2,
 						source: sourceB,
 					});
-					await tickUntil(
+					const readyB = await tickUntil(
 						(state) =>
 							state.phase === "ready" &&
 							state.verified?.configuration.source.imageDigest === imageB,
 					);
+					const verifiedB = readyB.verified;
+					if (!verifiedB) throw new Error("Verified B deployment is missing");
+					const verifiedBDeployment = validateAgentWorkloadDesiredV1(
+						verifiedB.deployment,
+					);
+					const verifiedBRevision = verifiedBDeployment.workloadRevision;
 					await assertSingleRoute(imageB);
 
 					const mismatchSource = {
@@ -1388,6 +1424,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					});
 					const rejected = await tickUntil(
 						(state) => state.phase === "rejected",
+						() => assertNoCandidateRoute(verifiedBRevision),
 					);
 					expect(rejected.verified?.configuration.source.imageDigest).toBe(
 						imageB,
@@ -1410,6 +1447,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 							state.phase === "ready" &&
 							state.failureCode === "health_check_failed" &&
 							state.rollback === true,
+						() => assertNoCandidateRoute(verifiedBRevision),
 					);
 					expect(rolledBack.verified?.configuration.source.imageDigest).toBe(
 						imageB,
