@@ -1969,6 +1969,7 @@ describe("published Relay authority migration", () => {
 			51,
 			52,
 			53,
+			54,
 		]);
 		expect(journal.entries.find((entry) => entry.idx === 45)).toMatchObject({
 			idx: 45,
@@ -1990,21 +1991,25 @@ describe("published Relay authority migration", () => {
 			idx: 49,
 			tag: "0049_connection_installation_authorization",
 		});
-		expect(journal.entries.at(-4)).toMatchObject({
+		expect(journal.entries.at(-5)).toMatchObject({
 			idx: 50,
 			tag: "0050_connection_installation_attempts",
 		});
-		expect(journal.entries.at(-3)).toMatchObject({
+		expect(journal.entries.at(-4)).toMatchObject({
 			idx: 51,
 			tag: "0051_connection_installation_attempt_expiry",
 		});
-		expect(journal.entries.at(-2)).toMatchObject({
+		expect(journal.entries.at(-3)).toMatchObject({
 			idx: 52,
 			tag: "0052_stop_confirmation_deadline",
 		});
-		expect(journal.entries.at(-1)).toMatchObject({
+		expect(journal.entries.at(-2)).toMatchObject({
 			idx: 53,
 			tag: "0053_conversation_audit_execution_index",
+		});
+		expect(journal.entries.at(-1)).toMatchObject({
+			idx: 54,
+			tag: "0054_platform_execution_failure_events",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
