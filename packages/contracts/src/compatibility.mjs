@@ -3009,6 +3009,7 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 	const changes = [];
 	if (previous.openapi !== undefined) {
+		previous = normalizeRuntimeConnectionAssociationOpenApiAddition(previous);
 		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		if (isA2ParallelModelConfigurationOpenApiAddition(previous, current))
 			return changes;
