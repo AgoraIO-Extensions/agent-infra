@@ -45,7 +45,10 @@ export async function boundedRuntimeSkillRead<T>(input: {
 	signal: AbortSignal;
 	expiresAt: number;
 }): Promise<T> {
-	if (input.signal.aborted || input.expiresAt <= Date.now()) unavailable();
+	if (input.signal.aborted || input.expiresAt <= Date.now()) {
+		void input.pending.catch(() => {});
+		unavailable();
+	}
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let onAbort: (() => void) | undefined;
 	try {

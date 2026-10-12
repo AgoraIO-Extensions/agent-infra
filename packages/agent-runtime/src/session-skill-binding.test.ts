@@ -6,7 +6,10 @@ import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
 import type { RuntimeDriverCommand } from "./driver.js";
 import { PiRuntimeDriver } from "./pi-runtime-driver.js";
 import { SessionRuntimeDriver } from "./session-runtime-driver.js";
-import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+import {
+	boundedRuntimeSkillRead,
+	type RuntimeFilesystemSkillDirectoryV1,
+} from "./skill-hub-directory.js";
 
 it("passes the deployment-owned Skill Hub directory to newly opened sessions", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-skill-binding-"));
@@ -237,6 +240,19 @@ it("discovers and reads the bound Skill projection with generation revalidation"
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
 	}
+});
+
+it("observes an already-started expired Skill read without an unhandled rejection", async () => {
+	const pending = Promise.reject(new Error("late read failure"));
+	await expect(
+		boundedRuntimeSkillRead({
+			pending,
+			signal: new AbortController().signal,
+			expiresAt: Date.now() - 1,
+		}),
+	).rejects.toMatchObject({
+		code: "RUNTIME_SKILL_DIRECTORY_UNAVAILABLE",
+	});
 });
 
 it("keeps the Skill Hub directory unavailable when no binding is configured", async () => {
