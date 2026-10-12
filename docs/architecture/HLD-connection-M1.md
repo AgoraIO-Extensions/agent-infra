@@ -550,6 +550,8 @@ Owner 已于 2026-10-12 明确批准 [#1927](https://github.com/AgoraIO-Extensio
 superuser 接受，不记为成员授权或网页读取通过，普通首次发布仍须 membership/read 验证。
 遗留内部账号接口仅允许无密码操作；不创建 LDAP 用户、不生成/重设/回传密码。
 浏览器状态/订阅登记与内部维护不伪装成 Bearer Agent Action。
+Owner 另行批准 EEP-1834 的最小上游回执补充；目录组授权仅在新 group.pk/application
+pk/slug 合同部署后激活，必须核验 binding 的组、门户引用与请求空间。缺少引用不回退旧校验。
 
 此范围须新公司审批、Consumer 声明及显式 Consent；旧 v6 Grant 不自动扩权，v1–v6 原字节和
 审计保持。READ/WRITE 仍经授权交集、Credential fence、受控 egress；所有新 WRITE 保留

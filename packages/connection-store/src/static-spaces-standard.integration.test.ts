@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { ConnectionApplicationService } from "@agent-infra/connection-core";
 import {
 	staticSpacesConnectionCatalog as fullCatalog,
+	StaticSpacesAdapter,
 	staticSpacesV6ConnectionCatalog as standardCatalog,
 } from "@agent-infra/openconnector-adapter/providers/static-spaces";
 import postgres from "postgres";
@@ -57,7 +58,8 @@ for (const catalog of [standardCatalog, fullCatalog])
 					const credential = {
 						accessToken: "test-only-personal-token",
 						displayName: label,
-						externalAccount: label === "first" ? "951" : "952",
+						externalAccount:
+							label === "first" ? "951" : label === "other" ? "952" : "953",
 						grantedScopes: ["static-spaces.personal-api-token"],
 						principalId,
 						providerId: "static-spaces",
@@ -115,6 +117,80 @@ for (const catalog of [standardCatalog, fullCatalog])
 						principalId: other.principalId,
 					}),
 				).rejects.toMatchObject({ code: "FORBIDDEN" });
+				if (catalog === fullCatalog) {
+					const receipt = await setup("receipt");
+					const adapter = new StaticSpacesAdapter(async (url) => {
+						if (String(url).includes("/users/me/"))
+							return Response.json({
+								user: {
+									pk: 953,
+									username: "receipt@example.invalid",
+									is_active: true,
+									is_superuser: false,
+								},
+							});
+						return Response.json({
+							kind: "shared",
+							slug: "team",
+							path_prefix: "/spaces/shared/team/",
+							url_prefix:
+								"https://static-spaces.sh3.agoralab.co/spaces/shared/team/",
+							role: "viewer",
+							action: "add",
+							group: {
+								pk: "directory-pk",
+								name: "directory-1",
+								display_name: "Team",
+								path: "Team",
+								member_count: 1,
+								directory_uid: "1",
+							},
+							application: {
+								pk: "portal-pk",
+								slug: "static-spaces-shared-team",
+							},
+							acl: {
+								prefix: "/spaces/shared/team/",
+								groups: ["static-spaces-shared-team-viewers", "directory-1"],
+								enabled: true,
+							},
+							acl_groups: ["static-spaces-shared-team-viewers", "directory-1"],
+							application_binding: {
+								target: "portal-pk",
+								group: "wrong-directory-pk",
+								enabled: true,
+								negate: false,
+							},
+						});
+					});
+					const service = new ConnectionApplicationService(store, adapter);
+					await expect(
+						service.executeDirectActionForIdentity(
+							receipt,
+							"static-spaces.manage_shared_group_grant",
+							{
+								kind: "shared",
+								slug: "team",
+								group: "directory-1",
+								role: "viewer",
+								action: "add",
+								idempotencyKey: randomUUID(),
+							},
+						),
+					).rejects.toMatchObject({ code: "PROVIDER_UNCERTAIN" });
+					const effects =
+						await db`SELECT effect.status FROM connection_calls call JOIN connection_effects effect ON effect.call_id=call.id WHERE call.connection_id=${receipt.connection.connectionId}`;
+					expect(effects.map((e) => e.status)).toEqual(["UNCERTAIN"]);
+					await expect(
+						store.createCall({
+							invocation: receipt.context,
+							action: "static-spaces.delete_space",
+							argsHash: randomUUID(),
+							idempotencyKey: randomUUID(),
+							input: { kind: "shared", slug: "team" },
+						}),
+					).rejects.toMatchObject({ code: "FORBIDDEN" });
+				}
 				const action = "static-spaces.publish_space";
 				const make = (context: typeof first.context, key = randomUUID()) =>
 					store.createCall({

@@ -73,6 +73,7 @@ const review = {
 };
 const group = { pk: "group-1", name: "directory-1", is_superuser: false };
 const directory = {
+	pk: "group-1",
 	name: "directory-1",
 	display_name: "Team",
 	path: "R&D/Team",
@@ -127,6 +128,7 @@ const cases: [
 			role: "viewer",
 			action: "add",
 			group: directory,
+			application: { pk: "app", slug: "static-spaces-shared-team" },
 			acl,
 			acl_groups: acl.groups,
 			application_binding: {
@@ -777,4 +779,73 @@ test("file-level ACL is rejected rather than silently changed to a directory", a
 		{ providerStatus: 400 },
 	);
 	assert.equal(calls, 0);
+});
+
+test("directory grant binds group, application and slug references before success", async () => {
+	const entry = cases.find((c) => c[0] === "manage_shared_group_grant");
+	if (!entry) throw new Error("missing fixture");
+	const original = entry[2];
+	const binding = original.application_binding as Record<string, unknown>;
+	const mismatches = [
+		{
+			...original,
+			application_binding: { ...binding, group: "another-group" },
+		},
+		{
+			...original,
+			application_binding: { ...binding, target: "another-portal" },
+		},
+		{
+			...original,
+			application: { pk: "app", slug: "static-spaces-shared-other" },
+		},
+		{ ...original, application: null },
+		{ ...original, group: { ...directory, pk: undefined } },
+	];
+	for (const result of mismatches) {
+		let posts = 0;
+		const adapter = new StaticSpacesAdapter(async (url) => {
+			if (String(url).includes("/users/me/")) return Response.json(principal());
+			posts++;
+			return Response.json(result);
+		});
+		await assert.rejects(adapter.execute(invoke(entry[0], entry[1])));
+		assert.equal(posts, 1);
+	}
+});
+test("directory grant remove supports an absent portal without recreating it", async () => {
+	const input = {
+		kind: "shared",
+		slug: "team",
+		group: "directory-1",
+		role: "viewer",
+		action: "remove",
+	};
+	const viewer = "static-spaces-shared-team-viewers";
+	const result = {
+		...scope,
+		role: "viewer",
+		action: "remove",
+		group: directory,
+		application: null,
+		acl: { prefix: scope.path_prefix, groups: [viewer], enabled: true },
+		acl_groups: [viewer],
+		application_binding: {
+			deleted: false,
+			group: "directory-1",
+			reason: "application_not_found",
+		},
+	};
+	let posts = 0;
+	const adapter = new StaticSpacesAdapter(async (url) => {
+		if (String(url).includes("/users/me/")) return Response.json(principal());
+		posts++;
+		return Response.json(result);
+	});
+	assert.equal(
+		(await adapter.execute(invoke("manage_shared_group_grant", input)))
+			.application,
+		null,
+	);
+	assert.equal(posts, 1);
 });

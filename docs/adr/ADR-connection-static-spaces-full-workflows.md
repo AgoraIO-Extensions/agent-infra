@@ -4,6 +4,8 @@
 
 Accepted。Connection Owner 于 2026-10-12 明确批准 #1927 的 24 项 Action、统一
 `StaticSpaces full`、个人 superuser Token 准入及重新审批/Consent 边界，授权实施。
+Owner 同日另行批准 [EEP-1834](https://jira.agoralab.co/browse/EEP-1834) 的最小上游回执补充，
+仅增加目录组 pk 与门户 pk/slug，不改变输入、权限行为或凭证。
 实现追踪为 [#1927](https://github.com/AgoraIO-Extensions/agent-infra/issues/1927)。
 
 依据为 AI/agora-skills 的 main `1c3f22a8409e6438b1389a1c86fe86e93ecc3bbb`：
@@ -13,6 +15,9 @@ Accepted。Connection Owner 于 2026-10-12 明确批准 #1927 的 24 项 Action�
 通过 Connection 的提交差异取得完整文件源文本；系统代码核对版本为
 `4b9afc47750ae2a8e73f01345745dbe3262d9e1e`。
 文档存在不证明线上已部署所有 endpoint；实际验收须逐项标明。
+新回执补丁的源码提交为 `3c8dc811dacf09887dfcc6edcb13567d164aaf22`，由
+[上游 PR #5](https://bitbucket.agoralab.co/users/luxuhui_agora.io/repos/static-spaces/pull-requests/5)
+交付；源码引用不表示已经合并或部署上游。新目录组授权须上游回执字段先部署并验证后才能激活。
 
 ## 决策与版本边界
 
@@ -71,6 +76,11 @@ Accepted。Connection Owner 于 2026-10-12 明确批准 #1927 的 24 项 Action�
 个人空间默认由当前账号解析。读取他人 personal 文件可显式指定目标 username 并由 effective
 path ACL 判断；普通写入只能本人，管理员跨个人空间写入须显式指定目标并在提交前核验
 管理员身份。目标 username 不改变当前账号、组织、Credential 或 Grant。
+
+目录组授权回执必须包含 `group.pk` 与 `application: {pk, slug}`：add 的 binding.group/target
+分别匹配目录组/门户 pk，门户 slug 匹配请求空间；remove 的门户不存在时返回 null。
+缺字段、错误组或门户引用不得记为成功或回退旧校验。EEP-1834 是该 Action 的上游合同前置；
+仅接受已批准的 additive 回执改动，不加入旧 EEP-1832 的幂等、限流或恢复改造。
 
 ## 仅浏览器与内部能力
 

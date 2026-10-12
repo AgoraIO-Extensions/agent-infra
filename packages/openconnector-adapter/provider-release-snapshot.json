@@ -1692,8 +1692,8 @@
 		{
 			"provider": "static-spaces",
 			"providerReleaseId": "static-spaces-connection-v7-full",
-			"executorDigest": "sha256:f01744f1ea535a2d1a310dee365a77b0d1397eea2c39993828d1eb9cc7642ebe",
-			"sourceCommit": "4b9afc47750ae2a8e73f01345745dbe3262d9e1e",
+			"executorDigest": "sha256:08ac0209380239bfb46a21f4d53460fb077396b2f12c84535a37a59f4400c0e4",
+			"sourceCommit": "3c8dc811dacf09887dfcc6edcb13567d164aaf22",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:1d906d6d213d93609954aa900327df81ae626c25c5b3c39e4dc60d639d8a2345",
 			"deploymentDigest": "sha256:10678bf46c38052285cf40ca4daec26c8f5702162d0058b49c5eaf2dc2d79c67",

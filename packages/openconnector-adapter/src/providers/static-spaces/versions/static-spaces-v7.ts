@@ -497,7 +497,7 @@ export const staticSpacesConnectionCatalog = {
 	executorDigest: staticSpacesExecutorDigest,
 	provider: providerId,
 	providerReleaseId,
-	sourceCommit: "4b9afc47750ae2a8e73f01345745dbe3262d9e1e",
+	sourceCommit: "3c8dc811dacf09887dfcc6edcb13567d164aaf22",
 } as const;
 
 // HLD G-02/13.4: add reviewed real-account evidence before this release is published.

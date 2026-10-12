@@ -64,6 +64,22 @@ const directory = object({
 	member_count: { type: ["integer", "null"], minimum: 0 },
 	directory_uid: text,
 });
+const resourceId: Schema = {
+	type: ["string", "integer"],
+	minLength: 1,
+	maxLength: 256,
+	minimum: 1,
+};
+const directoryReference = object({ ...directory.properties, pk: resourceId });
+const applicationReference = object({ pk: resourceId, slug: text });
+function sharedApplicationSlug(value: unknown) {
+	const slug = String(value);
+	let normalized =
+		slug.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "space";
+	if (normalized !== slug)
+		normalized += `-${createHash("sha256").update(slug).digest("hex").slice(0, 8)}`;
+	return `static-spaces-shared-${normalized}`;
+}
 const acl = object(
 	{
 		id: pk,
@@ -351,7 +367,8 @@ export const extraOutputs: Record<string, Schema> = {
 			...scope,
 			role: { const: "viewer" },
 			action: { enum: ["add", "remove"] },
-			group: directory,
+			group: directoryReference,
+			application: { anyOf: [applicationReference, { type: "null" }] },
 			acl,
 			acl_groups: strings,
 			application_binding: { anyOf: [binding, removed] },
@@ -365,6 +382,7 @@ export const extraOutputs: Record<string, Schema> = {
 			"acl",
 			"acl_groups",
 			"application_binding",
+			"application",
 		],
 	),
 	delete_file: object(
@@ -564,6 +582,10 @@ export function extraPayload(
 	if (Buffer.byteLength(JSON.stringify(payload)) > 2097152) invalid();
 	return payload;
 }
+function invalidReceipt(): never {
+	throw new Error("StaticSpaces receipt does not match the requested target");
+}
+
 export function checkExtraResult(
 	name: string,
 	result: Record<string, unknown>,
@@ -579,7 +601,8 @@ export function checkExtraResult(
 		].includes(name) ||
 		(name === "manage_shared_membership" && "emails" in payload)
 	)
-		if (result.kind !== payload.kind || result.slug !== expected) invalid();
+		if (result.kind !== payload.kind || result.slug !== expected)
+			invalidReceipt();
 	const prefix = `/spaces/${payload.kind === "user" ? "users" : payload.kind}/${expected}/`;
 	if (
 		[
@@ -593,38 +616,32 @@ export function checkExtraResult(
 			result.path_prefix !== prefix ||
 			result.url_prefix !== `https://static-spaces.sh3.agoralab.co${prefix}`
 		)
-			invalid();
+			invalidReceipt();
 	}
 	if (
 		name === "delete_file" &&
 		result.path !== prefix + String(payload.relative_path)
 	)
-		invalid();
+		invalidReceipt();
 	if (
 		name === "render_index" &&
 		(result.path !== `${prefix}index.html` ||
 			result.url !== `https://static-spaces.sh3.agoralab.co${prefix}index.html`)
 	)
-		invalid();
+		invalidReceipt();
 	if (name === "delete_space") {
 		if (
 			(result.acl as Record<string, unknown>).prefix !== prefix ||
 			(result.directory as Record<string, unknown>).path_prefix !== prefix
 		)
-			invalid();
+			invalidReceipt();
 		if (payload.kind === "shared") {
-			const slug = String(payload.slug);
-			let normalized =
-				slug.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") ||
-				"space";
-			if (normalized !== slug)
-				normalized += `-${createHash("sha256").update(slug).digest("hex").slice(0, 8)}`;
 			if (
 				(result.application as Record<string, unknown>)?.slug !==
-				`static-spaces-shared-${normalized}`
+				sharedApplicationSlug(payload.slug)
 			)
-				invalid();
-		} else if (result.application !== null) invalid();
+				invalidReceipt();
+		} else if (result.application !== null) invalidReceipt();
 		const roles =
 			payload.kind === "user"
 				? ["viewers"]
@@ -641,7 +658,7 @@ export function checkExtraResult(
 			new Set(groups.map((g) => g.name)).size !== names.length ||
 			groups.some((g) => !names.includes(String(g.name)))
 		)
-			invalid();
+			invalidReceipt();
 	}
 	if (name === "manage_shared_group_grant") {
 		const rule = result.acl as Record<string, unknown>;
@@ -660,14 +677,32 @@ export function checkExtraResult(
 			groups.includes(String(payload.group)) !== (payload.action === "add") ||
 			JSON.stringify(groups) !== JSON.stringify(result.acl_groups)
 		)
-			invalid();
+			invalidReceipt();
 		const binding = result.application_binding as Record<string, unknown>;
+		const app = result.application as Record<string, unknown> | null;
+		const group = result.group as Record<string, unknown>;
+		if (app && app.slug !== sharedApplicationSlug(payload.slug))
+			invalidReceipt();
+		if (
+			payload.action === "add" &&
+			(!app ||
+				String(binding.target) !== String(app.pk) ||
+				String(binding.group) !== String(group.pk))
+		)
+			invalidReceipt();
+		if (
+			payload.action === "remove" &&
+			!app &&
+			(binding.deleted !== false || binding.reason !== "application_not_found")
+		)
+			invalidReceipt();
+
 		if (
 			payload.action === "add"
 				? binding.enabled !== true || binding.negate !== false
 				: binding.deleted === undefined || binding.group !== payload.group
 		)
-			invalid();
+			invalidReceipt();
 	}
 	if (name === "manage_shared_membership") {
 		const expectedGroup = `static-spaces-shared-${payload.slug}-${payload.role}s`;
@@ -682,14 +717,14 @@ export function checkExtraResult(
 					m.group !== expectedGroup || m.member !== (payload.action === "add"),
 			)
 		)
-			invalid();
+			invalidReceipt();
 		if ("username" in payload && result.username !== payload.username)
-			invalid();
+			invalidReceipt();
 		if (
 			"emails" in payload &&
 			JSON.stringify(result.emails) !== JSON.stringify(payload.emails)
 		)
-			invalid();
+			invalidReceipt();
 	}
 	if (
 		name === "admin_manage_membership" &&
@@ -697,12 +732,12 @@ export function checkExtraResult(
 			result.group !== payload.group ||
 			result.member !== (payload.action === "add"))
 	)
-		invalid();
+		invalidReceipt();
 	if (
 		name === "admin_check_access" &&
 		(result.username !== payload.username || result.path !== payload.path)
 	)
-		invalid();
+		invalidReceipt();
 	if (name === "admin_set_acl") {
 		const groups =
 			typeof result.groups === "string"
@@ -716,24 +751,24 @@ export function checkExtraResult(
 			Boolean(result.enabled) !== payload.enabled ||
 			JSON.stringify(groups) !== JSON.stringify(payload.groups)
 		)
-			invalid();
+			invalidReceipt();
 	}
 	if (
 		name === "admin_ensure_group" &&
 		(result.group as Record<string, unknown>).name !== payload.name
 	)
-		invalid();
+		invalidReceipt();
 	if (
 		name === "edit_markdown_comment" &&
 		((result.comment as Record<string, unknown>).id !== payload.comment_id ||
 			(result.comment as Record<string, unknown>).body !== payload.body)
 	)
-		invalid();
+		invalidReceipt();
 	if (
 		name === "delete_markdown_comment" &&
 		result.comment_id !== payload.comment_id
 	)
-		invalid();
+		invalidReceipt();
 	if (name === "create_markdown_comment") {
 		const thread = result.thread as {
 			id: string;
@@ -744,22 +779,22 @@ export function checkExtraResult(
 			("thread_id" in payload && thread.id !== payload.thread_id) ||
 			!thread.comments.some((c) => c.body === payload.body)
 		)
-			invalid();
+			invalidReceipt();
 		if (
 			"document_sha256" in payload &&
 			thread.anchor.document_sha256 !== payload.document_sha256
 		)
-			invalid();
+			invalidReceipt();
 	}
 	if (
 		name === "admin_ensure_internal_user" &&
 		(result.user as Record<string, unknown>).username !== payload.username
 	)
-		invalid();
+		invalidReceipt();
 	if (
 		name === "manage_shared_group_grant" &&
 		((result.group as Record<string, unknown>).name !== payload.group ||
 			result.action !== payload.action)
 	)
-		invalid();
+		invalidReceipt();
 }
