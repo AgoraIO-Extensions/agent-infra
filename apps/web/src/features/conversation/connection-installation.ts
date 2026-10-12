@@ -4,19 +4,17 @@ import {
 	beginPlatformConnectionInstallationV1,
 	readPlatformConnectionInstallationV1,
 } from "../../pilot/generated-v2/sdk.gen.js";
+import type {
+	BeginPlatformConnectionInstallationV1Data,
+	BeginPlatformConnectionInstallationV1Response,
+	ReadPlatformConnectionInstallationV1Data,
+} from "../../pilot/generated-v2/types.gen.js";
 
-export type ConnectionInstallationProjectionV1 = {
-	schemaVersion: 1;
-	authorizationId: string;
-	status:
-		| "awaiting_confirmation"
-		| "confirmed"
-		| "revoked"
-		| "expired"
-		| "unknown";
-	expiresAt: number;
-	authorizationUrl?: string;
-};
+type BeginHeaders = BeginPlatformConnectionInstallationV1Data["headers"];
+type ReadHeaders = ReadPlatformConnectionInstallationV1Data["headers"];
+
+export type ConnectionInstallationProjectionV1 =
+	BeginPlatformConnectionInstallationV1Response;
 
 export type ConnectionInstallationState =
 	| { kind: "idle" }
@@ -31,25 +29,17 @@ export type ConnectionInstallationState =
 	| { kind: "unknown"; projection: ConnectionInstallationProjectionV1 }
 	| { kind: "unavailable"; retryable: boolean };
 
-export function connectionRequestHeaders(idempotencyKey: string): {
-	Origin: string;
-	"X-Platform-CSRF": "1";
-	"Sec-Fetch-Site": "same-origin";
-	"Idempotency-Key": string;
-};
-export function connectionRequestHeaders(): {
-	Origin: string;
-	"X-Platform-CSRF": "1";
-	"Sec-Fetch-Site": "same-origin";
-	"Idempotency-Key"?: never;
-};
-export function connectionRequestHeaders(idempotencyKey?: string) {
+export function connectionRequestHeaders(idempotencyKey: string): BeginHeaders;
+export function connectionRequestHeaders(): ReadHeaders;
+export function connectionRequestHeaders(
+	idempotencyKey?: string,
+): BeginHeaders | ReadHeaders {
 	return {
 		Origin: window.location.origin,
 		"X-Platform-CSRF": "1" as const,
 		"Sec-Fetch-Site": "same-origin" as const,
 		...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
-	};
+	} as BeginHeaders | ReadHeaders;
 }
 
 export function safeConnectionAuthorizationUrl(

@@ -75,6 +75,14 @@ export function ConnectionInstallationPanel({
 			});
 			if (controller.signal.aborted) return;
 			setState(next);
+			if (
+				next.kind === "awaiting_confirmation" &&
+				!safeConnectionAuthorizationUrl(next.projection.authorizationUrl)
+			) {
+				setError("授权入口不可用，平台已拒绝继续安装。");
+				setState({ kind: "unavailable", retryable: false });
+				return;
+			}
 			if (next.kind === "awaiting_confirmation")
 				openAuthorization(next.projection.authorizationUrl);
 			if (next.kind === "awaiting_confirmation" || next.kind === "confirmed")
@@ -94,6 +102,7 @@ export function ConnectionInstallationPanel({
 		request.current = controller;
 		setError(undefined);
 		setRefreshing(true);
+		setPolls((value) => value + 1);
 		try {
 			const next = await readConnectionInstallation({
 				client,
@@ -101,7 +110,10 @@ export function ConnectionInstallationPanel({
 				signal: controller.signal,
 			});
 			if (controller.signal.aborted) return;
-			setPolls((value) => value + 1);
+			if (next.kind === "unavailable") {
+				setError("暂时无法读取安装状态。");
+				return;
+			}
 			setState(next);
 		} catch {
 			if (!controller.signal.aborted) setError("暂时无法读取安装状态。");

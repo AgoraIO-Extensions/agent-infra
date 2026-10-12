@@ -1,4 +1,5 @@
 import {
+	act,
 	cleanup,
 	fireEvent,
 	render,
@@ -76,4 +77,112 @@ it("does not open an invalid authorization URL", async () => {
 		).toBeTruthy(),
 	);
 	expect(window.open).not.toHaveBeenCalled();
+});
+
+it("fails closed when the authorization URL is absent", async () => {
+	api.beginPlatformConnectionInstallationV1.mockResolvedValue({
+		response: { status: 202 },
+		data: {
+			schemaVersion: 1,
+			authorizationId: "authorization-1",
+			status: "awaiting_confirmation",
+			expiresAt: Date.now() + 60_000,
+		},
+	});
+	render(
+		<ConnectionInstallationPanel
+			conversationId="conversation-1"
+			executionId="execution-1"
+		/>,
+	);
+	fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
+	await waitFor(() =>
+		expect(
+			screen.getByText("授权入口不可用，平台已拒绝继续安装。"),
+		).toBeTruthy(),
+	);
+	expect(screen.queryByRole("button", { name: "查询状态" })).toBeNull();
+	expect(window.open).not.toHaveBeenCalled();
+});
+
+it("polls awaiting confirmation into a terminal confirmed state", async () => {
+	vi.useFakeTimers();
+	api.beginPlatformConnectionInstallationV1.mockResolvedValue({
+		response: { status: 202 },
+		data: {
+			schemaVersion: 1,
+			authorizationId: "authorization-1",
+			status: "awaiting_confirmation",
+			expiresAt: Date.now() + 60_000,
+			authorizationUrl: "https://connector.test/authorize?state=x",
+		},
+	});
+	api.readPlatformConnectionInstallationV1.mockResolvedValue({
+		response: { status: 200 },
+		data: {
+			schemaVersion: 1,
+			authorizationId: "authorization-1",
+			status: "confirmed",
+			expiresAt: Date.now() + 60_000,
+		},
+	});
+	try {
+		render(
+			<ConnectionInstallationPanel
+				conversationId="conversation-1"
+				executionId="execution-1"
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
+		await act(async () => {
+			await Promise.resolve();
+		});
+		expect(screen.getByText("等待 Connection 确认")).toBeTruthy();
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2_000);
+		});
+		expect(screen.getByText("已确认")).toBeTruthy();
+		expect(api.readPlatformConnectionInstallationV1).toHaveBeenCalledTimes(1);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("bounds polling attempts after status failures", async () => {
+	vi.useFakeTimers();
+	api.beginPlatformConnectionInstallationV1.mockResolvedValue({
+		response: { status: 202 },
+		data: {
+			schemaVersion: 1,
+			authorizationId: "authorization-1",
+			status: "awaiting_confirmation",
+			expiresAt: Date.now() + 60_000,
+			authorizationUrl: "https://connector.test/authorize?state=x",
+		},
+	});
+	api.readPlatformConnectionInstallationV1.mockRejectedValue(
+		new Error("offline"),
+	);
+	try {
+		render(
+			<ConnectionInstallationPanel
+				conversationId="conversation-1"
+				executionId="execution-1"
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
+		await act(async () => {
+			await Promise.resolve();
+		});
+		expect(screen.getByText("等待 Connection 确认")).toBeTruthy();
+		for (let attempt = 0; attempt < 30; attempt++)
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(2_000);
+				await Promise.resolve();
+			});
+		expect(api.readPlatformConnectionInstallationV1).toHaveBeenCalledTimes(30);
+		expect(screen.getByText("轮询已暂停，请稍后重新读取状态。")).toBeTruthy();
+	} finally {
+		vi.useRealTimers();
+	}
 });
