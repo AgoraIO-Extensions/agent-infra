@@ -27,6 +27,7 @@ describe("capability profile follows the current runtime", () => {
 		"auth",
 		"deployment",
 		"directory-disabled",
+		"terms-unavailable",
 		"directory-denied",
 	] as const) {
 		integrationTest(
@@ -168,6 +169,8 @@ describe("capability profile follows the current runtime", () => {
  JOIN connection_access_authorizations access ON access.source_request_id = request.id JOIN connection_accounts account ON account.id = access.connection_id JOIN connection_credential_versions credential ON credential.connection_id = account.id WHERE request.id = ${requestId}`
 						)[0];
 					const before = await snapshot();
+					if (scenario === "terms-unavailable")
+						await sql`UPDATE connection_disclaimer_versions SET status = 'SUPERSEDED', revision = revision + 1 WHERE id = ${disclaimerId}`;
 					// Two runtime starts must serialize on the source and never duplicate current packages or notices.
 					await Promise.all([
 						catalog.reconcileCapabilityProfiles(),
@@ -223,6 +226,14 @@ describe("capability profile follows the current runtime", () => {
 						expect(current?.upgrade).toBeUndefined();
 					else {
 						expect(current?.upgrade?.targetProviderReleaseId).toBe(targetId);
+						if (scenario === "terms-unavailable")
+							expect(current?.upgrade?.reason).toContain(
+								"免责声明未发布或已停用",
+							);
+						if (scenario === "directory-disabled")
+							expect(current?.upgrade?.reason).toContain("目录门禁未启用");
+						if (scenario === "directory-denied")
+							expect(current?.upgrade?.reason).toContain("目录复核失败");
 						const pending =
 							await sql`SELECT id FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required' AND payload->>'sourceProfileId' = ${current?.id ?? ""}`;
 						expect(pending).toHaveLength(1);
@@ -260,6 +271,25 @@ describe("capability profile follows the current runtime", () => {
 							requests.markNotification(admin, notice.id, false),
 						).rejects.toMatchObject({ code: "FORBIDDEN" });
 						await sql`UPDATE connection_principal_roles SET status = 'ACTIVE', revoked_at = NULL WHERE principal_id = ${admin} AND role = 'CONNECTION_ADMIN'`;
+						if (scenario === "unproven" || scenario === "terms-unavailable") {
+							await catalog.retirePublishedCapabilityProfile({
+								sourceId: current.id,
+								expectedRevision: current.revision,
+								actorPrincipalId: admin,
+							});
+							expect(
+								(await requests.listNotifications(admin)).items.some(
+									(item) => item.id === notice.id,
+								),
+							).toBe(false);
+							expect(
+								(await requests.listWorkItems(admin)).find(
+									(item) => item.businessId === notice.businessId,
+								)?.status,
+							).toBe("CANCELED");
+							expect(await snapshot()).toEqual(before);
+							return;
+						}
 						let manualTarget = targetId;
 						let manualAction = newAction;
 						if (scenario === "directory-disabled") {
@@ -308,6 +338,11 @@ describe("capability profile follows the current runtime", () => {
 							...revisionInput,
 							actorPrincipalId: admin,
 						});
+						expect(
+							(await requests.listNotifications(admin)).items.some(
+								(item) => item.id === notice.id,
+							),
+						).toBe(false);
 						expect(
 							(await requests.listWorkItems(admin)).filter(
 								(item) =>

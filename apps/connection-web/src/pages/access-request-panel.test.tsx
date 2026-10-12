@@ -722,3 +722,33 @@ it("requires consent to each current disclaimer after the option bundle refreshe
 	});
 	client.clear();
 });
+
+it("shows an options request error without claiming the administrator has not opened access", async () => {
+	api.getConnectionAccessOptions.mockRejectedValueOnce(
+		new Error("Options unavailable"),
+	);
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
+	render(
+		<QueryClientProvider client={client}>
+			<AccessRequestPanel
+				providerId="bitbucket"
+				renewalTarget={null}
+				requestsError={null}
+				requestsPending={false}
+				startProviderId="bitbucket"
+				startSignal={1}
+				requests={[]}
+				onSubmitted={() => {}}
+			/>
+		</QueryClientProvider>,
+	);
+	await screen.findByRole("alert");
+	expect(
+		screen.queryByText(
+			"管理员尚未开放当前版本的能力包申请，请等待管理员更新能力包及审批策略。",
+		),
+	).toBeNull();
+	client.clear();
+});

@@ -554,7 +554,8 @@ export function AccessRequestPanel(props: {
 							role="status"
 							aria-label="正在加载申请"
 						/>
-					) : providerOptions.length ? (
+					) : options.isError ||
+						props.requestsError ? null : providerOptions.length ? (
 						<div className="approval-option-list">
 							{providerOptions.map((item, index) => (
 								<button
