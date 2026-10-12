@@ -216,6 +216,78 @@ export const RuntimeCapabilitiesResponseV1Schema = z.strictObject({
 	capabilities: RuntimeCapabilitiesV1Schema,
 });
 
+const runtimeSkillName = z.string().min(1).max(128);
+const runtimeSkillRelativePath = z
+	.string()
+	.min(1)
+	.max(512)
+	.regex(/^(?!\/)(?!.*\\)(?!.*(?:^|\/)\.\.?(?:\/|$)).+$/);
+const runtimeSkillGenerationId = z.string().regex(/^[a-f0-9]{64}$/);
+
+function isCanonicalBase64(value: string): boolean {
+	if (value.length % 4 !== 0) return false;
+	let padding = 0;
+	for (let index = 0; index < value.length; index += 1) {
+		const code = value.charCodeAt(index);
+		if (code === 61) {
+			padding += 1;
+			if (padding > 2 || index < value.length - 2) return false;
+			continue;
+		}
+		if (padding > 0) return false;
+		const alphabet =
+			(code >= 0x30 && code <= 0x39) ||
+			(code >= 0x41 && code <= 0x5a) ||
+			(code >= 0x61 && code <= 0x7a) ||
+			code === 0x2b ||
+			code === 0x2f;
+		if (!alphabet) return false;
+	}
+	return true;
+}
+
+/** Request for the deployment-owned, read-only mounted Skill directory. */
+export const RuntimeSkillDirectoryRequestV1Schema = z.strictObject({
+	...requestContext,
+	hostSessionRef: OpaqueIdV1Schema,
+});
+
+export const RuntimeSkillDirectoryEntryV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	name: runtimeSkillName,
+	version: z.string().min(1).max(128),
+	manifestSha256: z.string().regex(/^[a-f0-9]{64}$/),
+	packageDigest: z.string().regex(/^[a-f0-9]{64}$/),
+	readOnly: z.literal(true),
+});
+
+export const RuntimeSkillDirectoryResponseV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	hostSessionRef: OpaqueIdV1Schema,
+	generationId: runtimeSkillGenerationId,
+	skills: z.array(RuntimeSkillDirectoryEntryV1Schema).max(150),
+});
+
+/** Request for one bounded resource from the mounted Skill directory. */
+export const RuntimeSkillResourceReadRequestV1Schema = z.strictObject({
+	...RuntimeSkillDirectoryRequestV1Schema.shape,
+	skillName: runtimeSkillName,
+	relativePath: runtimeSkillRelativePath,
+});
+
+export const RuntimeSkillResourceReadResponseV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	hostSessionRef: OpaqueIdV1Schema,
+	skillName: runtimeSkillName,
+	relativePath: runtimeSkillRelativePath,
+	sizeBytes: z.number().int().nonnegative().max(1_048_576),
+	sha256: z.string().regex(/^[a-f0-9]{64}$/),
+	bytesBase64: z
+		.string()
+		.max(1_398_104)
+		.refine(isCanonicalBase64, "Invalid base64 resource bytes"),
+});
+
 export const RuntimeReplayResponseV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	events: z.array(RuntimeEventV1Schema),
@@ -277,6 +349,21 @@ export type RuntimeStatusResponseV2 = z.infer<
 >;
 export type RuntimeCapabilitiesResponseV1 = z.infer<
 	typeof RuntimeCapabilitiesResponseV1Schema
+>;
+export type RuntimeSkillDirectoryRequestV1 = z.infer<
+	typeof RuntimeSkillDirectoryRequestV1Schema
+>;
+export type RuntimeSkillDirectoryEntryV1 = z.infer<
+	typeof RuntimeSkillDirectoryEntryV1Schema
+>;
+export type RuntimeSkillDirectoryResponseV1 = z.infer<
+	typeof RuntimeSkillDirectoryResponseV1Schema
+>;
+export type RuntimeSkillResourceReadRequestV1 = z.infer<
+	typeof RuntimeSkillResourceReadRequestV1Schema
+>;
+export type RuntimeSkillResourceReadResponseV1 = z.infer<
+	typeof RuntimeSkillResourceReadResponseV1Schema
 >;
 export type RuntimeReplayResponseV1 = z.infer<
 	typeof RuntimeReplayResponseV1Schema

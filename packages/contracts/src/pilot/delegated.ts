@@ -20,6 +20,7 @@ export const ExecutionGrantCommandV1Schema = z.enum([
 	"events.replay",
 	"capabilities.read",
 	"model-directory.read",
+	"skills.read",
 	"generation.cancel",
 	"tool.invoke",
 ]);

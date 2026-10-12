@@ -19,6 +19,25 @@ import type {
 	RuntimeFileResultReceiptV1,
 } from "./runtime-file-bridge.js";
 
+/** Request-local authority for a mounted Skill metadata/resource read. */
+export type RuntimeNativeSkillReadContextV1 = {
+	readonly nativeSessionRef: string;
+	readonly signal: AbortSignal;
+	readonly expiresAt: number;
+	assertCurrent(): void;
+	revalidate(): Promise<unknown>;
+};
+
+/** Optional RuntimeHost consumer seam implemented by Drivers with mounted Skills. */
+export interface RuntimeNativeSkillReaderV1 {
+	discoverNativeSkills(read: RuntimeNativeSkillReadContextV1): Promise<unknown>;
+	readNativeSkill(
+		read: RuntimeNativeSkillReadContextV1,
+		name: string,
+		relativePath: string,
+	): Promise<Uint8Array>;
+}
+
 /** Verified Browser binding supplied only for one Runtime execution. */
 export interface RuntimeBrowserExecutionContextV1 {
 	readonly capabilityVersion: number;

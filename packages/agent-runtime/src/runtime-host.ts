@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type {
@@ -23,6 +24,10 @@ import type {
 	RuntimePinnedExecutionKeyScopeV4,
 	RuntimeReplayRequestV1,
 	RuntimeReplayResponseV1,
+	RuntimeSkillDirectoryRequestV1,
+	RuntimeSkillDirectoryResponseV1,
+	RuntimeSkillResourceReadRequestV1,
+	RuntimeSkillResourceReadResponseV1,
 	RuntimeStatusRequestV1,
 	RuntimeStatusRequestV2,
 	RuntimeStatusRequestV3,
@@ -58,6 +63,10 @@ import {
 	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeModelDirectoryResponseV1Schema,
 	RuntimeReplayRequestV1Schema,
+	RuntimeSkillDirectoryRequestV1Schema,
+	RuntimeSkillDirectoryResponseV1Schema,
+	RuntimeSkillResourceReadRequestV1Schema,
+	RuntimeSkillResourceReadResponseV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
 	RuntimeStatusV1Schema,
@@ -77,6 +86,8 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverExecutionContextV1,
 	RuntimeExternalActionAuthorization,
+	RuntimeNativeSkillReadContextV1,
+	RuntimeNativeSkillReaderV1,
 } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
 import {
@@ -324,6 +335,72 @@ async function callDriver<T>(work: () => Promise<T>) {
 	try {
 		return await work();
 	} catch (error) {
+		throwSessionRecoveryFailure(error);
+		driverInvalid();
+	}
+}
+
+function nativeSkillReadDenied(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_GRANT_INVALID",
+		"Runtime Skill read is no longer authorized",
+		403,
+	);
+}
+
+async function boundedNativeSkillRead<T>(input: {
+	readonly read: RuntimeNativeSkillReadContextV1;
+	readonly pending: Promise<T>;
+}): Promise<T> {
+	if (input.read.signal.aborted) {
+		void input.pending.catch(() => undefined);
+		nativeSkillReadDenied();
+	}
+	let onAbort: (() => void) | undefined;
+	try {
+		return await new Promise<T>((resolve, reject) => {
+			let settled = false;
+			const finish = (complete: () => void) => {
+				if (settled) return;
+				settled = true;
+				input.read.signal.removeEventListener("abort", onAbort as () => void);
+				complete();
+			};
+			onAbort = () => {
+				void input.pending.catch(() => undefined);
+				finish(() =>
+					reject(
+						new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Runtime Skill read is no longer authorized",
+							403,
+						),
+					),
+				);
+			};
+			input.read.signal.addEventListener("abort", onAbort, { once: true });
+			void input.pending.then(
+				(value) => finish(() => resolve(value)),
+				(error) => finish(() => reject(error)),
+			);
+		});
+	} finally {
+		if (onAbort) input.read.signal.removeEventListener("abort", onAbort);
+	}
+}
+
+async function callBoundedNativeSkillDriver<T>(input: {
+	readonly read: RuntimeNativeSkillReadContextV1;
+	readonly work: () => Promise<T>;
+}): Promise<T> {
+	try {
+		return await boundedNativeSkillRead({
+			read: input.read,
+			pending: input.work(),
+		});
+	} catch (error) {
+		if (error instanceof RuntimeHostError && error.httpStatus === 403)
+			throw error;
 		throwSessionRecoveryFailure(error);
 		driverInvalid();
 	}
@@ -1397,6 +1474,178 @@ export class RuntimeHost {
 			schemaVersion: 1,
 			capabilities: capabilities.data,
 		};
+	}
+
+	private nativeSkillReadContext(
+		request: RuntimeSkillDirectoryRequestV1 | RuntimeSkillResourceReadRequestV1,
+		verification: unknown,
+		signal: AbortSignal,
+		claims: ReturnType<typeof validateRuntimeExecutionGrant>,
+	) {
+		const now = () =>
+			Date.parse(
+				(
+					this.options.grantValidation.now ?? (() => new Date().toISOString())
+				)(),
+			);
+		const expiresAt = Math.min(Date.parse(claims.expiresAt), now() + 30_000);
+		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now())
+			runtimeAuthorizationDenied();
+		const nativeSessionRef =
+			this.options.store.getSessionForQuery(
+				request.hostSessionRef,
+				request,
+				request.deliveryFence,
+			).nativeSessionRef ?? nativeSessionRequired();
+		const deadline = new AbortController();
+		const readSignal = AbortSignal.any([signal, deadline.signal]);
+		const deadlineTimer = setTimeout(
+			() => deadline.abort(),
+			Math.max(0, expiresAt - now()),
+		);
+		const assertCurrent = () => {
+			if (readSignal.aborted || expiresAt <= now())
+				runtimeAuthorizationDenied();
+			this.requireLegacyHost();
+			this.options.store.getSessionForQuery(
+				request.hostSessionRef,
+				request,
+				request.deliveryFence,
+			);
+		};
+		return {
+			nativeSessionRef,
+			signal: readSignal,
+			expiresAt,
+			assertCurrent,
+			revalidate: async () => {
+				assertCurrent();
+				// The current Grant and durable session are checked again after every
+				// Driver await. This is a read-only context, never a business permit.
+				validateRuntimeExecutionGrant(
+					request,
+					"skills.read",
+					verification,
+					this.options.grantValidation,
+				);
+				assertCurrent();
+			},
+			close: () => {
+				clearTimeout(deadlineTimer);
+				deadline.abort();
+			},
+		};
+	}
+
+	async skillDirectory(
+		value: RuntimeSkillDirectoryRequestV1,
+		verification: unknown,
+		signal: AbortSignal = this.lifetime.signal,
+	): Promise<RuntimeSkillDirectoryResponseV1> {
+		this.requireLegacyHost();
+		const request = RuntimeSkillDirectoryRequestV1Schema.parse(value);
+		const claims = validateRuntimeExecutionGrant(
+			request,
+			"skills.read",
+			verification,
+			this.options.grantValidation,
+		);
+		const driver = (
+			this.options.driver as RuntimeDriver & Partial<RuntimeNativeSkillReaderV1>
+		).discoverNativeSkills;
+		if (!driver) driverInvalid();
+		const lease = this.nativeSkillReadContext(
+			request,
+			verification,
+			signal,
+			claims,
+		);
+		let raw: unknown;
+		try {
+			raw = await callBoundedNativeSkillDriver({
+				read: lease,
+				work: () => driver.call(this.options.driver, lease),
+			});
+			await lease.revalidate();
+		} finally {
+			lease.close();
+		}
+		if (
+			!raw ||
+			typeof raw !== "object" ||
+			!Array.isArray((raw as { entries?: unknown }).entries) ||
+			typeof (raw as { generationId?: unknown }).generationId !== "string"
+		)
+			driverInvalid();
+		const skills = (
+			raw as { entries: readonly Record<string, unknown>[] }
+		).entries.map((entry) => ({
+			schemaVersion: 1 as const,
+			name: entry.name,
+			version: entry.version,
+			manifestSha256: entry.manifestDigest,
+			packageDigest: entry.packageDigest,
+			readOnly: true as const,
+		}));
+		return RuntimeSkillDirectoryResponseV1Schema.parse({
+			schemaVersion: 1,
+			hostSessionRef: request.hostSessionRef,
+			generationId: (raw as { generationId: string }).generationId,
+			skills,
+		});
+	}
+
+	async readSkillResource(
+		value: RuntimeSkillResourceReadRequestV1,
+		verification: unknown,
+		signal: AbortSignal = this.lifetime.signal,
+	): Promise<RuntimeSkillResourceReadResponseV1> {
+		this.requireLegacyHost();
+		const request = RuntimeSkillResourceReadRequestV1Schema.parse(value);
+		const claims = validateRuntimeExecutionGrant(
+			request,
+			"skills.read",
+			verification,
+			this.options.grantValidation,
+		);
+		const driver = (
+			this.options.driver as RuntimeDriver & Partial<RuntimeNativeSkillReaderV1>
+		).readNativeSkill;
+		if (!driver) driverInvalid();
+		const lease = this.nativeSkillReadContext(
+			request,
+			verification,
+			signal,
+			claims,
+		);
+		let bytes: Uint8Array;
+		try {
+			bytes = await callBoundedNativeSkillDriver({
+				read: lease,
+				work: () =>
+					driver.call(
+						this.options.driver,
+						lease,
+						request.skillName,
+						request.relativePath,
+					),
+			});
+			await lease.revalidate();
+		} finally {
+			lease.close();
+		}
+		if (!(bytes instanceof Uint8Array) || bytes.byteLength > 1_048_576)
+			driverInvalid();
+		const encoded = Buffer.from(bytes);
+		return RuntimeSkillResourceReadResponseV1Schema.parse({
+			schemaVersion: 1,
+			hostSessionRef: request.hostSessionRef,
+			skillName: request.skillName,
+			relativePath: request.relativePath,
+			sizeBytes: encoded.byteLength,
+			sha256: createHash("sha256").update(encoded).digest("hex"),
+			bytesBase64: encoded.toString("base64"),
+		});
 	}
 
 	/** Read-only public model choices for an already-bound Host Session. */
