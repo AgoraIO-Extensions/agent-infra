@@ -1061,12 +1061,19 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 						outcome: "found",
 						status: "running",
 					})
-				: Response.json({
-						schemaVersion: 4,
-						executionId: "execution",
-						hostSessionRef: "host",
-						events: [modelFact],
-					}),
+				: String(url).endsWith("/authorizations/renew")
+					? // The resumed drain renews the running Turn's authority first (#1888).
+						Response.json({
+							schemaVersion: 3,
+							executionId: "execution",
+							expiresAt: Date.now() + 30_000,
+						})
+					: Response.json({
+							schemaVersion: 4,
+							executionId: "execution",
+							hostSessionRef: "host",
+							events: [modelFact],
+						}),
 		);
 		try {
 			expect(

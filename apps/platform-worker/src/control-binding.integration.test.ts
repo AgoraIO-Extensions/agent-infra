@@ -443,6 +443,9 @@ it("recovers only the original control ref through production Worker/Core and Po
 						expect(paths).toEqual([
 							"original-binding",
 							"status",
+							// The resumed drain's renewal finds the revocation and only
+							// latches the Host through a control status read (#1888).
+							"status",
 							"events/ack",
 							"events/stream",
 							"stops",
