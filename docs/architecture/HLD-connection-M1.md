@@ -206,6 +206,13 @@ Rehoboam 管理能力以 immutable `rehoboam-connection-v11` 增加 28 个 Actio
 确认绑定 owner、token hash、期限与资源/引用快照，使用 CAS、资源 reservation 和原生完成回执。
 未完成效果不盲重发，回查为纯 READ。配置不运行 Job；申请修改的审批通知/调度副作用必须展示。
 v10→v11 要求重新审批及新增 Action 显式授权，发布前仍需 13.4 真实 Provider 验收。
+
+已发布 Native 的发布族接入以 immutable `rehoboam-connection-v12` 增加
+`get_release_family_native_anchor` READ，要求 release READ，仅返回 Rehoboam 校验后的套件、状态、
+沿用交付及 committed 发布族归属。已有创建、初始化、查询、上游和恢复 Actions 沿用原契约：
+Native 使用原版本 ID，初始化由 Rehoboam 判断是否沿用原交付；补发须显式恢复，不重写原版本。
+`inherited_delivery` 不表示运行了新 Job。旧版本源码和路由保留；v11→v12 需重新批准，
+新增 READ 不自动进入原 Grant，业务权限、CAS、通知和审计真值仍属于 Rehoboam。
 详情见 [管理指南](../connection/rehoboam-management.md)。
 
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
