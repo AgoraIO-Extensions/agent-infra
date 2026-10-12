@@ -525,9 +525,10 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					extract(epoch from (available_at - clock_timestamp())) * 1000 as delay_ms
 				from platform.outbox_items where id = ${itemId}`;
 			expect(retry?.status).toBe("retry_scheduled");
-			// The commit trigger wakes the Worker immediately; retain only a small
-			// database-clock allowance rather than the former fixed one second.
-			expect(Number(retry?.delay_ms)).toBeLessThan(250);
+			// The receiver performs a bounded in-lease wait first; an unready Pod
+			// that remains unready returns to the paced retry and must not hot-loop.
+			expect(Number(retry?.delay_ms)).toBeGreaterThan(750);
+			expect(Number(retry?.delay_ms)).toBeLessThan(1_500);
 		} finally {
 			await store.close();
 		}
