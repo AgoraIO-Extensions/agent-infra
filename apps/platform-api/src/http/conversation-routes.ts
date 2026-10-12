@@ -106,6 +106,11 @@ export interface ConversationQuery {
 		conversationId: string,
 		signal?: AbortSignal,
 	): Promise<ConversationQueryDetailV1 | undefined>;
+	getProjection?(
+		scope: ConversationQueryScopeV1,
+		conversationId: string,
+		signal?: AbortSignal,
+	): Promise<ConversationQueryProjectionV1 | undefined>;
 	getExecution(
 		scope: ConversationQueryScopeV1,
 		conversationId: string,
@@ -786,12 +791,17 @@ async function deniedCommand(
 		{ schemaVersion: 1, operation: "conversation.read", conversationId },
 		traceId,
 	);
-	const detail = await query(
-		() => dependencies.query.get(scope(identity), conversationId),
+	const projection = await query(
+		() =>
+			dependencies.query.getProjection
+				? dependencies.query.getProjection(scope(identity), conversationId)
+				: dependencies.query
+						.get(scope(identity), conversationId)
+						.then((detail) => detail?.conversation),
 		traceId,
 	);
 	return fail(
-		detail?.conversation.status === "unavailable"
+		projection?.status === "unavailable"
 			? "CONVERSATION_UNAVAILABLE"
 			: "RESOURCE_UNAVAILABLE",
 		traceId,
@@ -1103,17 +1113,25 @@ export function registerConversationRoutes(
 				return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
 			if (decision.outcome === "conflict")
 				return fail("CONFLICT", metadata.traceId);
-			const [detail, effective] = await Promise.all([
+			const [projection, effective] = await Promise.all([
 				query(
-					() => dependencies.query.get(scope(identity), conversationId),
+					() =>
+						dependencies.query.getProjection
+							? dependencies.query.getProjection(
+									scope(identity),
+									conversationId,
+								)
+							: dependencies.query
+									.get(scope(identity), conversationId)
+									.then((detail) => detail?.conversation),
 					metadata.traceId,
 				),
 				effectiveConversation(useCase, conversationId, metadata.traceId),
 			]);
-			if (!detail) return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			if (!projection) return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			return context.json(
 				project(
-					() => conversationProjection(detail.conversation, effective),
+					() => conversationProjection(projection, effective),
 					metadata.traceId,
 				),
 			);

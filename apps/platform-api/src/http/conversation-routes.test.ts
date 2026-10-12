@@ -459,6 +459,29 @@ describe("Conversation HTTP routes", () => {
 		expect(input.commands(identity).accept).not.toHaveBeenCalled();
 	});
 
+	it("uses the projection-only query for model selection responses", async () => {
+		const input = dependencies();
+		input.query.getProjection = vi.fn().mockResolvedValue(conversation);
+		input.query.get = vi
+			.fn()
+			.mockRejectedValue(new Error("event history must not be read"));
+		const response = await testApp(input).app.request(
+			"/api/v1/conversations/conversation-1/model-selection",
+			{
+				method: "PUT",
+				headers: commandHeaders,
+				body: JSON.stringify({
+					schemaVersion: 1,
+					modelOptionId: "model-primary",
+					reasoningLevel: "medium",
+				}),
+			},
+		);
+		expect(response.status).toBe(200);
+		expect(input.query.getProjection).toHaveBeenCalledOnce();
+		expect(input.query.get).not.toHaveBeenCalled();
+	});
+
 	it("rejects caller identity, invalid idempotency, and busy commands with redacted errors", async () => {
 		const busy = dependencies();
 		busy.commands(identity).accept = vi
