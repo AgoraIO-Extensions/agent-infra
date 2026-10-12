@@ -120,6 +120,7 @@ export interface PlatformApiAssemblyInput {
 	readonly taskAdmissionPolicy: ConversationTaskAdmissionPolicyV1;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
+	readonly conversationEventWindow?: number;
 	readonly identity: IdentityAdapter;
 	readonly userGovernance?: PostgresPlatformUserDisablesV1;
 	readonly personalRelayKeys?: Pick<
@@ -381,6 +382,9 @@ export function assemblePlatformApi(
 		...(input.conversationReplayWindowMs === undefined
 			? {}
 			: { replayWindowMs: input.conversationReplayWindowMs }),
+		...(input.conversationEventWindow === undefined
+			? { eventWindow: 200 }
+			: { eventWindow: input.conversationEventWindow }),
 	});
 	// Commit wakeups shorten SSE waits; streams keep polling without them (#1561).
 	const conversationEventWake = new ConversationEventWakeHubV1();

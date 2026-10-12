@@ -477,6 +477,7 @@ export type ConversationDetailProjectionV2 = {
         title: string | null;
         updatedAt: string;
     };
+    eventWindow?: ConversationEventWindowV1;
     events: Array<PersistedConversationEventV2>;
     messages: Array<{
         answerVersion: number | null;
@@ -503,6 +504,11 @@ export type ConversationDetailProjectionV2 = {
     }>;
     schemaVersion: 2;
     sessionAvailability?: 'preparing' | 'ready' | 'unavailable' | 'updating';
+};
+
+export type ConversationEventWindowV1 = {
+    beforeCursor: string | null;
+    hasEarlier: boolean;
 };
 
 export type ConversationSseMessageV1 = PersistedConversationEventV1 | HeartbeatSignalV1 | TimelineReloadSignalV1 | AuthorizationRevokedSignalV1;
@@ -3164,7 +3170,9 @@ export type GetConversationV2Data = {
     path: {
         conversationId: string;
     };
-    query?: never;
+    query?: {
+        beforeCursor?: string;
+    };
     url: '/api/v2/conversations/{conversationId}';
 };
 
@@ -3203,7 +3211,7 @@ export type GetConversationV2Error = GetConversationV2Errors[keyof GetConversati
 
 export type GetConversationV2Responses = {
     /**
-     * Conversation messages and complete mixed-version event history
+     * Conversation messages and a bounded mixed-version event window
      */
     200: ConversationDetailProjectionV2;
 };

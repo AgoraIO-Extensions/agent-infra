@@ -596,6 +596,7 @@ describe("Conversation HTTP routes", () => {
 			{ actorId: "user-1", channelId: "web" },
 			"conversation-1",
 			expect.any(AbortSignal),
+			undefined,
 		);
 	});
 

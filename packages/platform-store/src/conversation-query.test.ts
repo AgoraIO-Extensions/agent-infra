@@ -861,6 +861,37 @@ describe("long Conversation reads (#1732)", () => {
 		expect(scans).toBeLessThanOrEqual(8);
 	});
 
+	it("bounds detail reads at complete Execution boundaries and pages earlier history", async () => {
+		const reader = new PostgresConversationQueryV1({
+			databaseUrl,
+			eventWindow: 100,
+		});
+		try {
+			const recent = await reader.get(longScope, "long-history");
+			expect(recent?.events).toHaveLength(eventsPerExecution);
+			expect(new Set(recent?.events.map((item) => item.executionId))).toEqual(
+				new Set(["long-2"]),
+			);
+			expect(recent?.eventWindow).toEqual({
+				hasEarlier: true,
+				beforeCursor: expect.any(String),
+			});
+			const earlier = await reader.get(longScope, "long-history", undefined, {
+				beforeCursor: recent?.eventWindow?.beforeCursor as string,
+			});
+			expect(earlier?.events).toHaveLength(eventsPerExecution);
+			expect(new Set(earlier?.events.map((item) => item.executionId))).toEqual(
+				new Set(["long-1"]),
+			);
+			expect(earlier?.eventWindow).toEqual({
+				hasEarlier: false,
+				beforeCursor: null,
+			});
+		} finally {
+			await reader.close();
+		}
+	});
+
 	it("looks up traces only for the Executions an incremental replay returns", async () => {
 		const replays = 20;
 		const { result: replay, scans } = await auditScansDuring(async (reader) => {
