@@ -176,6 +176,123 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 		);
 	});
 
+	it("reads the mounted Skill directory and one bounded resource", async () => {
+		const content = Buffer.from("# mounted skill\n", "utf8");
+		const { app } = await setup(
+			(driver) =>
+				Object.assign(driver, {
+					discoverNativeSkills: async (read: {
+						assertCurrent(): void;
+						revalidate(): Promise<unknown>;
+					}) => {
+						read.assertCurrent();
+						await read.revalidate();
+						return {
+							generationId: "a".repeat(64),
+							entries: [
+								{
+									schemaVersion: 1,
+									name: "workspace-summary",
+									version: "0.1.0",
+									packageDigest: "b".repeat(64),
+									manifestDigest: "c".repeat(64),
+									targetPath: ".agents/skills/workspace-summary",
+									readOnly: true,
+								},
+							],
+						};
+					},
+					readNativeSkill: async (
+						read: {
+							assertCurrent(): void;
+							revalidate(): Promise<unknown>;
+						},
+						name: string,
+						path: string,
+					) => {
+						read.assertCurrent();
+						await read.revalidate();
+						if (name !== "workspace-summary" || path !== "SKILL.md")
+							throw new Error("unexpected skill resource");
+						return Uint8Array.from(content);
+					},
+				}) as RuntimeDriver,
+		);
+		const body = submitBody();
+		const submittedResponse = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(body),
+		});
+		const submitted = (await submittedResponse.json()) as {
+			hostSessionRef: string;
+		};
+		const { input: _input, ...readableBody } = body;
+		const readBody = {
+			...readableBody,
+			requestId: "request-http-skills",
+			hostSessionRef: submitted.hostSessionRef,
+			grant: executionGrant(body, ["skills.read"], "grant-http-skills"),
+		};
+		const directory = await app.request("/internal/runtime/v1/skills", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(readBody),
+		});
+		expect(directory.status).toBe(200);
+		expect(await directory.json()).toMatchObject({
+			generationId: "a".repeat(64),
+			skills: [
+				{
+					name: "workspace-summary",
+					manifestSha256: "c".repeat(64),
+					packageDigest: "b".repeat(64),
+				},
+			],
+		});
+		const resource = await app.request(
+			"/internal/runtime/v1/skills/resources",
+			{
+				method: "POST",
+				headers: authorizedHeaders,
+				body: JSON.stringify({
+					...readBody,
+					skillName: "workspace-summary",
+					relativePath: "SKILL.md",
+				}),
+			},
+		);
+		expect(resource.status).toBe(200);
+		expect(await resource.json()).toMatchObject({
+			skillName: "workspace-summary",
+			sizeBytes: content.byteLength,
+			bytesBase64: content.toString("base64"),
+		});
+		const denied = await app.request("/internal/runtime/v1/skills", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({
+				...readBody,
+				grant: executionGrant(
+					body,
+					["capabilities.read"],
+					"grant-http-capabilities",
+				),
+			}),
+		});
+		expect(denied.status).toBe(403);
+		const escaped = await app.request("/internal/runtime/v1/skills/resources", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({
+				...readBody,
+				skillName: "workspace-summary",
+				relativePath: "../SKILL.md",
+			}),
+		});
+		expect(escaped.status).toBe(400);
+	});
+
 	it("adds a selection-required V2 Turn route without removing V1", async () => {
 		const { app } = await setup();
 		const legacy = await app.request("/internal/runtime/v1/turns", {

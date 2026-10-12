@@ -216,6 +216,56 @@ export const RuntimeCapabilitiesResponseV1Schema = z.strictObject({
 	capabilities: RuntimeCapabilitiesV1Schema,
 });
 
+const runtimeSkillName = z.string().min(1).max(128);
+const runtimeSkillRelativePath = z
+	.string()
+	.min(1)
+	.max(512)
+	.regex(/^(?!\/)(?!.*\\)(?!.*(?:^|\/)\.\.?(?:\/|$)).+$/);
+const runtimeSkillGenerationId = z.string().regex(/^[a-f0-9]{64}$/);
+
+/** Request for the deployment-owned, read-only mounted Skill directory. */
+export const RuntimeSkillDirectoryRequestV1Schema = z.strictObject({
+	...requestContext,
+	hostSessionRef: OpaqueIdV1Schema,
+});
+
+export const RuntimeSkillDirectoryEntryV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	name: runtimeSkillName,
+	version: z.string().min(1).max(128),
+	manifestSha256: z.string().regex(/^[a-f0-9]{64}$/),
+	packageDigest: z.string().regex(/^[a-f0-9]{64}$/),
+	readOnly: z.literal(true),
+});
+
+export const RuntimeSkillDirectoryResponseV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	hostSessionRef: OpaqueIdV1Schema,
+	generationId: runtimeSkillGenerationId,
+	skills: z.array(RuntimeSkillDirectoryEntryV1Schema).max(150),
+});
+
+/** Request for one bounded resource from the mounted Skill directory. */
+export const RuntimeSkillResourceReadRequestV1Schema = z.strictObject({
+	...RuntimeSkillDirectoryRequestV1Schema.shape,
+	skillName: runtimeSkillName,
+	relativePath: runtimeSkillRelativePath,
+});
+
+export const RuntimeSkillResourceReadResponseV1Schema = z.strictObject({
+	schemaVersion: SchemaVersionV1Schema,
+	hostSessionRef: OpaqueIdV1Schema,
+	skillName: runtimeSkillName,
+	relativePath: runtimeSkillRelativePath,
+	sizeBytes: z.number().int().nonnegative().max(1_048_576),
+	sha256: z.string().regex(/^[a-f0-9]{64}$/),
+	bytesBase64: z
+		.string()
+		.max(1_398_104)
+		.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+});
+
 export const RuntimeReplayResponseV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	events: z.array(RuntimeEventV1Schema),
@@ -277,6 +327,21 @@ export type RuntimeStatusResponseV2 = z.infer<
 >;
 export type RuntimeCapabilitiesResponseV1 = z.infer<
 	typeof RuntimeCapabilitiesResponseV1Schema
+>;
+export type RuntimeSkillDirectoryRequestV1 = z.infer<
+	typeof RuntimeSkillDirectoryRequestV1Schema
+>;
+export type RuntimeSkillDirectoryEntryV1 = z.infer<
+	typeof RuntimeSkillDirectoryEntryV1Schema
+>;
+export type RuntimeSkillDirectoryResponseV1 = z.infer<
+	typeof RuntimeSkillDirectoryResponseV1Schema
+>;
+export type RuntimeSkillResourceReadRequestV1 = z.infer<
+	typeof RuntimeSkillResourceReadRequestV1Schema
+>;
+export type RuntimeSkillResourceReadResponseV1 = z.infer<
+	typeof RuntimeSkillResourceReadResponseV1Schema
 >;
 export type RuntimeReplayResponseV1 = z.infer<
 	typeof RuntimeReplayResponseV1Schema

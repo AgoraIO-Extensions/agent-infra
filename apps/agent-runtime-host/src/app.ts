@@ -20,6 +20,8 @@ import {
 	RuntimeGenerationCancelRequestV3Schema,
 	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeReplayRequestV1Schema,
+	RuntimeSkillDirectoryRequestV1Schema,
+	RuntimeSkillResourceReadRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
 	RuntimeStatusRequestV3Schema,
@@ -293,6 +295,32 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			await options.host.capabilities(
 				request,
 				await options.verifyGrant(request.grant),
+			),
+		);
+	});
+	app.post("/internal/runtime/v1/skills", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeSkillDirectoryRequestV1Schema,
+		);
+		return context.json(
+			await options.host.skillDirectory(
+				request,
+				await options.verifyGrant(request.grant),
+				context.req.raw.signal,
+			),
+		);
+	});
+	app.post("/internal/runtime/v1/skills/resources", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeSkillResourceReadRequestV1Schema,
+		);
+		return context.json(
+			await options.host.readSkillResource(
+				request,
+				await options.verifyGrant(request.grant),
+				context.req.raw.signal,
 			),
 		);
 	});
