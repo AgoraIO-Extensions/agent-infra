@@ -13,6 +13,7 @@ import {
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
 	createWorkloadReadinessVerifierV1,
+	discoverRuntimeBrowserCapabilityV1,
 	FakeRuntimeDriver,
 	FileRuntimeStore,
 	openOpenCodeRuntime,
@@ -336,6 +337,15 @@ export async function assembleRuntimeHost(
 	let openedStore: FileRuntimeStore | undefined;
 	let oauth: RuntimeOAuthAssembly | undefined;
 	let browserCapabilityAssembly: RuntimeBrowserCapabilityAssemblyV1 | undefined;
+	const verifiedBrowserCapability = () => {
+		const result = discoverRuntimeBrowserCapabilityV1(
+			{},
+			browserCapabilityAssembly,
+		);
+		return "operations" in result && result.status === "available"
+			? result
+			: undefined;
+	};
 	const close = async () => {
 		if (oauth?.status === "available") await oauth.client.close();
 		try {
@@ -445,6 +455,7 @@ export async function assembleRuntimeHost(
 				? binding === "acp"
 					? await openOpenCodeRuntime({
 							...messagesConfiguration,
+							browserCapability: verifiedBrowserCapability,
 							...(skillDirectory ? { skillDirectory } : {}),
 							modelOptions: messagesRuntimeOptions ?? [],
 							...(messagesConfiguration.schemaVersion === 4
@@ -466,6 +477,7 @@ export async function assembleRuntimeHost(
 					: binding === "pi"
 						? await openPiRuntime({
 								...messagesConfiguration,
+								browserCapability: verifiedBrowserCapability,
 								...(skillDirectory ? { skillDirectory } : {}),
 								modelOptions: messagesRuntimeOptions ?? [],
 								...(messagesConfiguration.schemaVersion === 4

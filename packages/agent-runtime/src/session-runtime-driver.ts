@@ -115,8 +115,12 @@ export interface NativeSessionOptions {
 	nativeId?: string;
 	history?: { checkpoint: string; complete: boolean };
 	selection: RuntimeSelectionV1;
+	/** Request-local execution identity for Browser adapters; never persisted here. */
+	readonly executionId?: string;
 	admit: () => Promise<void>;
 	resolveModelCredential?: RuntimeModelCredentialResolver;
+	/** Request-local Browser context; never persisted or selected by native input. */
+	readonly browser?: import("./driver.js").RuntimeBrowserExecutionContextV1;
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	update: (event?: Pick<RuntimeEventV1, "type" | "payload">) => Promise<void>;
 }
@@ -135,6 +139,8 @@ export interface NativeSession {
 	): Promise<{ stopReason: string; checkpoint?: string }>;
 	reusable?(): boolean;
 	startTurn?(options: NativeSessionOptions): void;
+	/** Whether this native Session can be reused for the next request-local context. */
+	reuseFor?(next: Pick<NativeSessionOptions, "browser">): boolean;
 	checkpoint?(): Promise<string>;
 	recover?(
 		checkpoint: string,
@@ -741,7 +747,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					return result(command, binding.ref, unknownResult);
 			}
 			if (command.kind === "submit-turn")
-				return this.submit(file, command, context?.fileBridge);
+				return this.submit(
+					file,
+					command,
+					context?.fileBridge,
+					context?.browser,
+				);
 			if (command.kind === "supplement")
 				return this.resolve(file, command, { outcome: "busy" });
 			const turn = file
@@ -882,6 +893,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		file: DurableJsonFile<Session>,
 		command: Submit,
 		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
+		browser?: import("./driver.js").RuntimeBrowserExecutionContextV1,
 	) {
 		const before = file.read();
 		const ref = before.binding.ref;
@@ -947,6 +959,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const reuse =
 			previousHandle?.native.startTurn &&
 			previousHandle.native.reusable?.() &&
+			(previousHandle.native.reuseFor?.({ browser }) ?? true) &&
 			JSON.stringify(previousHandle.selection) === JSON.stringify(selection)
 				? previousHandle
 				: undefined;
@@ -982,6 +995,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		try {
 			const sessionOptions: NativeSessionOptions = {
 				directory,
+				executionId: command.executionId,
 				selection,
 				admit: async () => {
 					if (!dispatched || this.closed)
@@ -994,6 +1008,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					admitted();
 				},
 				...(resolveModelCredential ? { resolveModelCredential } : {}),
+				...(browser ? { browser } : {}),
 				cwd: workspace,
 				nativeId: before.nativeId,
 				skillDirectory: this.options.skillDirectory,
