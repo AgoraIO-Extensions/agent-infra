@@ -74,6 +74,7 @@ export const GenericAcpRuntimeDriver = {
 			// readiness reports that negotiated fact per peer, and each request
 			// enforces it before reading bytes.
 			supportsAttachments: true,
+			supportsResultFiles: true,
 			attachmentsNegotiated: () => negotiatedImageInput === true,
 			cursorPrefix: "acp",
 			retireSession: retireAcpProcess,
