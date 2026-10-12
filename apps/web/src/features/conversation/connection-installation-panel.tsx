@@ -40,11 +40,14 @@ export function ConnectionInstallationPanel({
 	const [state, setState] = useState<ConnectionInstallationState>({
 		kind: "idle",
 	});
-	const [authorizationId, setAuthorizationId] = useState<string>();
+	const [authorizationId, setAuthorizationId] = useState<string | undefined>(
+		undefined,
+	);
 	const [polls, setPolls] = useState(0);
-	const [openedUrl, setOpenedUrl] = useState<string>();
-	const [error, setError] = useState<string>();
+	const [openedUrl, setOpenedUrl] = useState<string | undefined>(undefined);
+	const [error, setError] = useState<string | undefined>(undefined);
 	const [refreshing, setRefreshing] = useState(false);
+	const beginKey = useRef<string | undefined>(undefined);
 	const request = useRef<AbortController | undefined>(undefined);
 
 	useEffect(() => () => request.current?.abort(), []);
@@ -63,6 +66,7 @@ export function ConnectionInstallationPanel({
 		request.current?.abort();
 		const controller = new AbortController();
 		request.current = controller;
+		beginKey.current ??= crypto.randomUUID();
 		setError(undefined);
 		setOpenedUrl(undefined);
 		setPolls(0);
@@ -71,6 +75,7 @@ export function ConnectionInstallationPanel({
 			const next = await beginConnectionInstallation({
 				client,
 				executionId,
+				idempotencyKey: beginKey.current,
 				signal: controller.signal,
 			});
 			if (controller.signal.aborted) return;
@@ -81,10 +86,14 @@ export function ConnectionInstallationPanel({
 			) {
 				setError("授权入口不可用，平台已拒绝继续安装。");
 				setState({ kind: "unavailable", retryable: false });
+				beginKey.current = undefined;
 				return;
 			}
 			if (next.kind === "awaiting_confirmation")
-				openAuthorization(next.projection.authorizationUrl);
+				setOpenedUrl(
+					safeConnectionAuthorizationUrl(next.projection.authorizationUrl),
+				);
+			if (next.kind !== "unavailable") beginKey.current = undefined;
 			if (next.kind === "awaiting_confirmation" || next.kind === "confirmed")
 				setAuthorizationId(next.projection.authorizationId);
 		} catch {
@@ -192,7 +201,7 @@ export function ConnectionInstallationPanel({
 								onClick={() => openAuthorization(openedUrl)}
 							>
 								<ExternalLink aria-hidden="true" data-icon="inline-start" />
-								重新打开授权页
+								打开授权页
 							</Button>
 						)}
 					</div>

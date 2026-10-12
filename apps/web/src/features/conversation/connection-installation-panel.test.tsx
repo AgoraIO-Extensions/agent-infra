@@ -45,7 +45,9 @@ it("opens a validated authorization URL and shows awaiting status", async () => 
 	fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
 	await screen.findByText("等待 Connection 确认");
 	expect(screen.queryByRole("button", { name: "开始安装" })).toBeNull();
-	expect(screen.getByRole("button", { name: "查询状态" })).toBeTruthy();
+	expect(screen.getByRole("button", { name: "打开授权页" })).toBeTruthy();
+	expect(window.open).not.toHaveBeenCalled();
+	fireEvent.click(screen.getByRole("button", { name: "打开授权页" }));
 	expect(window.open).toHaveBeenCalledWith(
 		"https://connector.test/authorize?state=x",
 		"_blank",

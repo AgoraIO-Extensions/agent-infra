@@ -81,6 +81,7 @@ function retryable(status: number | undefined) {
 export async function beginConnectionInstallation(options: {
 	client?: Client;
 	executionId: string;
+	idempotencyKey?: string;
 	signal?: AbortSignal;
 }): Promise<ConnectionInstallationState> {
 	const result = await beginPlatformConnectionInstallationV1({
@@ -88,7 +89,9 @@ export async function beginConnectionInstallation(options: {
 		signal: options.signal,
 		responseStyle: "fields",
 		throwOnError: false,
-		headers: connectionRequestHeaders(crypto.randomUUID()),
+		headers: connectionRequestHeaders(
+			options.idempotencyKey ?? crypto.randomUUID(),
+		),
 		body: { schemaVersion: 1, executionId: options.executionId },
 	});
 	if (result.response?.status !== 202 || !result.data)
