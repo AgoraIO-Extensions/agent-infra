@@ -580,8 +580,9 @@ it("dispatches an authorized image as native Pi prompt content", async () => {
 			).toBe("completed"),
 		);
 		expect(bridge.readInput).toHaveBeenCalledWith("file-1");
-		// Authority is re-checked after transfer and again at native dispatch.
-		expect(bridge.revalidate).toHaveBeenCalledTimes(2);
+		// Authority is re-checked after transfer, before Turn admission and again
+		// at the native boundary.
+		expect(bridge.revalidate).toHaveBeenCalledTimes(3);
 		expect((await f.driver.getCapabilities()).attachments).toBe(true);
 		const user = (await nativeMessages(f.path, result.nativeSessionRef)).find(
 			(message) => message?.role === "user",

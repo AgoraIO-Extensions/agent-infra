@@ -51,8 +51,17 @@ export interface GenericAcpRuntimeDriverOptions {
 export type GenericAcpRuntimeDriver = SessionRuntimeDriver;
 export const GenericAcpRuntimeDriver = {
 	async open(options: GenericAcpRuntimeDriverOptions) {
+		// The ACP handshake that decides image input happens before a Session is
+		// created, so the last negotiated answer gates attachment input before any
+		// bridge read or Session side effect. An unknown answer fails closed.
+		let negotiatedImageInput: boolean | undefined;
 		const driver = await SessionRuntimeDriver.open({
 			...options,
+			// The Driver consumes attachments when the peer negotiated image input;
+			// readiness reports that negotiated fact per peer, and each request
+			// enforces it before reading bytes.
+			supportsAttachments: true,
+			attachmentsNegotiated: () => negotiatedImageInput === true,
 			cursorPrefix: "acp",
 			retireSession: retireAcpProcess,
 			completionStatus: (reason): RuntimeStatusV1 =>
@@ -130,6 +139,7 @@ export const GenericAcpRuntimeDriver = {
 						} else await callbacks.update();
 					},
 				});
+				negotiatedImageInput = native.supportsImagePrompt;
 				return options.reuseNativeSession
 					? {
 							...native,
@@ -149,8 +159,13 @@ export const GenericAcpRuntimeDriver = {
 			 * Probe only the ACP handshake and Session creation. A readiness probe
 			 * must not submit a prompt or otherwise consume a model/Connection.
 			 */
-			probeReadiness: (signal: AbortSignal): Promise<RuntimeCapabilitiesV1> =>
-				probeAcpReadiness(options, signal),
+			probeReadiness: async (
+				signal: AbortSignal,
+			): Promise<RuntimeCapabilitiesV1> => {
+				const capabilities = await probeAcpReadiness(options, signal);
+				negotiatedImageInput = capabilities.attachments;
+				return capabilities;
+			},
 		});
 	},
 };
@@ -183,7 +198,9 @@ async function probeAcpReadiness(
 				modelSelection:
 					selectionState.models.length > 0 &&
 					selectionState.currentModel !== null,
-				attachments: false,
+				// ACP image input is optional; advertise attachments only when the
+				// peer negotiated it during initialization.
+				attachments: session.supportsImagePrompt,
 				resultFiles: false,
 				connection: false,
 				supplementaryInstruction: false,

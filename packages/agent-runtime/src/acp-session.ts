@@ -3,6 +3,7 @@
 
 import { Readable, Writable } from "node:stream";
 import {
+	type ContentBlock,
 	client,
 	PROTOCOL_VERSION,
 	type SessionConfigOption,
@@ -180,6 +181,11 @@ export async function openAcpSession(options: {
 			!initialized.agentCapabilities?.loadSession
 		)
 			throw new Error();
+		// ACP image input is optional. Successful initialization and Session
+		// creation do not establish support, so only the negotiated capability
+		// may enable Driver media.
+		const supportsImagePrompt =
+			initialized.agentCapabilities?.promptCapabilities?.image === true;
 		const session = options.nativeId
 			? await connection.agent.request("session/load", {
 					sessionId: options.nativeId,
@@ -204,6 +210,7 @@ export async function openAcpSession(options: {
 		}
 		return {
 			nativeId,
+			supportsImagePrompt,
 			reusable: () =>
 				!processExited &&
 				child.exitCode === null &&
@@ -269,19 +276,33 @@ export async function openAcpSession(options: {
 					clearTimeout(deadline);
 				}
 			},
-			async prompt(prompt: NativePromptV1) {
-				// ACP content blocks are not consumed yet: only the string form that
-				// this driver advertises is rendered, never a structured prompt.
-				if (typeof prompt !== "string")
-					throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
-				const text = prompt;
+			async prompt(
+				prompt: NativePromptV1,
+			): Promise<{ stopReason: string; checkpoint?: string }> {
 				tools.clear();
+				const content: ContentBlock[] =
+					typeof prompt === "string"
+						? [{ type: "text", text: prompt }]
+						: prompt.map((block) =>
+								block.type === "text"
+									? { type: "text" as const, text: block.text }
+									: {
+											type: "image" as const,
+											data: block.data,
+											mimeType: block.mimeType,
+										},
+							);
+				if (
+					!supportsImagePrompt &&
+					content.some((block) => block.type === "image")
+				)
+					throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
 				const response = await connection.agent.request("session/prompt", {
 					sessionId: nativeId,
-					prompt: [{ type: "text", text }],
+					prompt: content,
 				});
 				await updates;
-				return response;
+				return response as { stopReason: string; checkpoint?: string };
 			},
 			async discoverCommands(input: {
 				readonly signal: AbortSignal;

@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 
-import { StandardTemplateReleaseApplyResponseV1Schema } from "./pilot/template-release.ts";
+import {
+	StandardTemplateReleaseApplyAllResponseV2Schema,
+	StandardTemplateReleaseApplyResponseV1Schema,
+} from "./pilot/template-release.ts";
 
 const generatorPath = fileURLToPath(new URL("./generate.mjs", import.meta.url));
 const schemaNames = [
@@ -96,6 +99,39 @@ describe("standard contract artifacts", () => {
 			expect(validate(response), JSON.stringify(changedFields)).toBe(accepted);
 		}
 	}, 30_000);
+
+	it("publishes the additive V2 fan-out response contract", () => {
+		const artifacts = JSON.parse(generate());
+		const operation =
+			artifacts.standardTemplateReleaseOpenapiV2.paths[
+				"/internal/ops/standard-template-releases/{releaseId}/apply-all"
+			].post;
+		expect(operation.operationId).toBe("applyStandardTemplateReleaseV2");
+		const response = {
+			schemaVersion: 2,
+			releaseId: "release_01",
+			templateId: "template_01",
+			status: "partial",
+			targets: [
+				{
+					agentId: "agent_01",
+					status: "failed",
+					configurationRevision: null,
+					errorCode: "stale_revision",
+				},
+			],
+		};
+		expect(
+			StandardTemplateReleaseApplyAllResponseV2Schema.safeParse(response)
+				.success,
+		).toBe(true);
+		expect(
+			StandardTemplateReleaseApplyAllResponseV2Schema.safeParse({
+				...response,
+				targets: [{ ...response.targets[0], configurationRevision: 0 }],
+			}).success,
+		).toBe(false);
+	});
 
 	it("generates deterministic OpenAPI 3.1 and JSON Schema 2020-12", () => {
 		const first = generate();
