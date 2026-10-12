@@ -147,6 +147,17 @@ describe("Browser handoff controller", () => {
 				workloadRevision: runtime.workloadRevision + 1,
 			}),
 		).toThrow("BROWSER_HANDOFF_SESSION_BINDING_STALE");
+		const imageStale = createBrowserHandoffControllerV1({
+			binding,
+			capability,
+			now: () => now,
+		});
+		expect(() =>
+			imageStale.request("login", {
+				...runtime,
+				imageDigest: `sha256:${"b".repeat(64)}`,
+			}),
+		).toThrow("BROWSER_HANDOFF_IMAGE_BINDING_STALE");
 
 		const crashed = createBrowserHandoffControllerV1({
 			binding,
@@ -168,5 +179,42 @@ describe("Browser handoff controller", () => {
 		expect(() => crashed.assertAgentAccess()).toThrow(
 			"BROWSER_HANDOFF_BROWSER_CRASHED",
 		);
+	});
+
+	it("rejects workload and image drift during takeover and return", () => {
+		const controller = createBrowserHandoffControllerV1({
+			binding,
+			capability,
+			now: () => 1_700_000_000_000,
+		});
+		const requested = controller.request("mfa", runtime);
+		expect(() =>
+			controller.takeOver({
+				handoffId: requested.handoffId,
+				operatorId: binding.subjectId,
+				subjectId: binding.subjectId,
+				runtime: {
+					...runtime,
+					imageDigest: `sha256:${"c".repeat(64)}`,
+				},
+			}),
+		).toThrow("BROWSER_HANDOFF_IMAGE_BINDING_STALE");
+		controller.takeOver({
+			handoffId: requested.handoffId,
+			operatorId: binding.subjectId,
+			subjectId: binding.subjectId,
+			runtime,
+		});
+		expect(() =>
+			controller.returnToAgent({
+				handoffId: requested.handoffId,
+				operatorId: binding.subjectId,
+				runtime: {
+					...runtime,
+					workloadRevision: runtime.workloadRevision + 1,
+				},
+			}),
+		).toThrow("BROWSER_HANDOFF_SESSION_BINDING_STALE");
+		expect(controller.snapshot()).toMatchObject({ status: "unknown" });
 	});
 });
