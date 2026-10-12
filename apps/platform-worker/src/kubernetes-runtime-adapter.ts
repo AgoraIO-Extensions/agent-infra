@@ -63,6 +63,21 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-comparison.js";
 import { createKubernetesWorkloadPolicyHelpersV1 } from "./kubernetes-runtime-policy.js";
+
+const selectorNamePattern = /^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
+const selectorValuePattern =
+	/^(?:[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$/;
+
+function validPodSelector(value: Readonly<Record<string, string>> | undefined) {
+	return (
+		value !== undefined &&
+		Object.keys(value).length > 0 &&
+		Object.entries(value).every(
+			([key, label]) =>
+				selectorNamePattern.test(key) && selectorValuePattern.test(label),
+		)
+	);
+}
 import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
@@ -114,6 +129,8 @@ export interface KubernetesWorkloadPolicyV1 extends WorkloadEgressPolicyV1 {
 	readonly storageClassName?: string;
 	readonly imageRepository: string;
 	readonly workerSelector: Readonly<Record<string, string>>;
+	/** Optional deployment-owned Platform API selector for platform-auth routes. */
+	readonly platformApiSelector?: Readonly<Record<string, string>>;
 	readonly routeNamespace: string;
 	readonly routeSelector: Readonly<Record<string, string>>;
 	readonly ingressClassName: string;
@@ -182,6 +199,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 		client.namespace !== policy.namespace ||
 		!Object.keys(policy.workerSelector).length ||
 		!Object.keys(policy.routeSelector).length ||
+		(policy.platformApiSelector !== undefined &&
+			!validPodSelector(policy.platformApiSelector)) ||
 		Object.keys(policy.platformAuthAnnotations).some((key) =>
 			key.startsWith(controllerAnnotationPrefix),
 		)

@@ -2,6 +2,7 @@ import { SkillWorkloadProjectionV1Schema } from "@agent-infra/contracts";
 import { runtimeSkillHubBindingEnvironmentNameV1 } from "@agent-infra/contracts/runtime";
 import type {
 	V1Ingress,
+	V1NetworkPolicy,
 	V1PersistentVolumeClaim,
 	V1Pod,
 	V1Secret,
@@ -20,6 +21,51 @@ import {
 } from "./kubernetes-runtime-adapter.js";
 
 describe("GA Kubernetes Workload adapter", () => {
+	it("allows the Platform API selector only for platform-auth routes", async () => {
+		const platformAuthFixture = fixture();
+		const platformAuth = workloadDesiredFixture(1, "agent-a", "platform-auth");
+		const identity = await platformAuthFixture.adapter().apply(platformAuth);
+		if (!identity || identity === "pending") throw new Error();
+		const network = await platformAuthFixture.client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			platformAuth.service.name,
+		);
+		expect(
+			network?.spec?.ingress?.some((rule) =>
+				rule._from?.some(
+					(peer) => peer.podSelector?.matchLabels?.component === "platform-api",
+				),
+			),
+		).toBe(true);
+
+		const selfManagedFixture = fixture();
+		const selfManaged = workloadDesiredFixture(1, "agent-a", "self-managed");
+		const selfIdentity = await selfManagedFixture.adapter().apply(selfManaged);
+		if (!selfIdentity || selfIdentity === "pending") throw new Error();
+		const selfNetwork = await selfManagedFixture.client.read<V1NetworkPolicy>(
+			"NetworkPolicy",
+			selfManaged.service.name,
+		);
+		expect(
+			selfNetwork?.spec?.ingress?.some((rule) =>
+				rule._from?.some(
+					(peer) => peer.podSelector?.matchLabels?.component === "platform-api",
+				),
+			),
+		).toBe(false);
+	});
+	it.each([{}, { "bad key!": "value" }] as unknown as Readonly<
+		Record<string, string>
+	>[])("rejects an unsafe Platform API selector %j", (platformApiSelector) => {
+		const f = fixture();
+		expect(() =>
+			createKubernetesRuntimeAdapterV1({
+				client: f.client,
+				policy: { ...workloadTestPolicy, platformApiSelector },
+				probe: f.probe,
+			}),
+		).toThrow("Kubernetes Workload operation failed");
+	});
 	const skillProjection = SkillWorkloadProjectionV1Schema.parse({
 		schemaVersion: 1,
 		agentId: "agent-a",
