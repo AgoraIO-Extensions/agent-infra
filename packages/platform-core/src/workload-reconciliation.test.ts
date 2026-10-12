@@ -456,6 +456,98 @@ describe("durable Workload reconciliation", () => {
 			expect(f.state).toMatchObject({ phase: "closing", revision: 3 });
 		},
 	);
+	describe("serving probes that do not complete (#2046)", () => {
+		it("keeps a ready route open until the third incomplete probe in a row", async () => {
+			const f = fixture();
+			await f.tick(7);
+			expect(f.state?.phase).toBe("ready");
+			vi.mocked(f.runtime.closeRoute).mockClear();
+			vi.mocked(f.runtime.promote).mockClear();
+
+			vi.mocked(f.runtime.observe).mockResolvedValueOnce("unreachable");
+			await f.tick();
+			expect(f.state).toMatchObject({ phase: "ready", attempts: 1 });
+			// A completed probe ends the run.
+			await f.tick();
+			expect(f.state).toMatchObject({ phase: "ready", attempts: 0 });
+			expect(f.runtime.promote).toHaveBeenCalledOnce();
+
+			vi.mocked(f.runtime.observe)
+				.mockResolvedValueOnce("unreachable")
+				.mockResolvedValueOnce("unreachable");
+			await f.tick(2);
+			expect(f.state).toMatchObject({ phase: "ready", attempts: 2 });
+			expect(f.runtime.closeRoute).not.toHaveBeenCalled();
+
+			vi.mocked(f.runtime.observe).mockResolvedValueOnce("unreachable");
+			await f.tick();
+			expect(f.runtime.closeRoute).toHaveBeenCalledOnce();
+			expect(f.state).toMatchObject({
+				phase: "observing",
+				attempts: 0,
+				revision: 1,
+			});
+		});
+		it.each([
+			["unhealthy", "observing", 1],
+			["pending", "observing", 1],
+			["drifted", "applying", 2],
+		] as const)(
+			"still closes a ready route at once on a %s probe",
+			async (health, phase, revision) => {
+				const f = fixture();
+				await f.tick(7);
+				vi.mocked(f.runtime.closeRoute).mockClear();
+				vi.mocked(f.runtime.observe).mockResolvedValueOnce(health);
+				await f.tick();
+				expect(f.runtime.closeRoute).toHaveBeenCalledOnce();
+				expect(f.state).toMatchObject({ phase, revision });
+			},
+		);
+		it("tolerates the same run while a rejected candidate keeps the verified route", async () => {
+			const f = fixture();
+			await f.tick(7);
+			f.upgrade("image-b");
+			vi.mocked(f.runtime.preflight).mockRejectedValueOnce(
+				new WorkloadPreflightRejectedErrorV1(),
+			);
+			await f.tick(2);
+			expect(f.state?.phase).toBe("rejected");
+			vi.mocked(f.runtime.closeRoute).mockClear();
+			vi.mocked(f.runtime.observe)
+				.mockResolvedValueOnce("unreachable")
+				.mockResolvedValueOnce("unreachable")
+				.mockResolvedValueOnce("unreachable");
+			await f.tick(2);
+			expect(f.state).toMatchObject({ phase: "rejected", attempts: 2 });
+			expect(f.runtime.closeRoute).not.toHaveBeenCalled();
+			await f.tick();
+			expect(f.runtime.closeRoute).toHaveBeenCalledOnce();
+			expect(f.state?.phase).toBe("closing");
+		});
+		it("still fails a candidate whose verification probe does not complete", async () => {
+			const f = fixture();
+			vi.mocked(f.runtime.observe).mockResolvedValue("unreachable");
+			await f.tick(5);
+			expect(f.state).toMatchObject({
+				phase: "cleaning",
+				failureCode: "health_check_failed",
+			});
+		});
+		it.each([0, 1.5, 101])(
+			"rejects a probe failure threshold of %s",
+			(value) => {
+				const f = fixture();
+				expect(() =>
+					createWorkloadReconciliationV1({
+						store: { runNext: async () => "idle" },
+						runtime: f.runtime,
+						probeFailureThreshold: value,
+					}),
+				).toThrow("Invalid Workload probe failure threshold");
+			},
+		);
+	});
 	it("keeps retrying rejected route closure in cleanup after the attempt budget expires", async () => {
 		const f = fixture();
 		await f.tick(7);
