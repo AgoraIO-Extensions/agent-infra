@@ -182,14 +182,13 @@ export function createConversationDispatchUseCaseV1(
 			...(claim.runtimeCursor ? { afterCursor: claim.runtimeCursor } : {}),
 			runtimeGrant: authority.runtimeGrant,
 		};
-		const eventHeartbeat = heartbeat(
-			dependencies.store,
-			claim,
-			leaseDurationMs,
+		// Renews the business authority while the original Turn runs. A refusal
+		// is resolved by the drain below rather than failing the Turn.
+		const renewBusinessAuthority =
 			!claim.metadataRecovery &&
-				!authority.controlOnly &&
-				dependencies.runtimeHost.renewAuthorization
-				? async (signal) => {
+			!authority.controlOnly &&
+			dependencies.runtimeHost.renewAuthorization
+				? async (signal: AbortSignal) => {
 						if (terminalCommitPossible || renewalRefused) return;
 						try {
 							await dependencies.runtimeHost.renewAuthorization?.(
@@ -210,7 +209,12 @@ export function createConversationDispatchUseCaseV1(
 							renewalRefused = true;
 						}
 					}
-				: undefined,
+				: undefined;
+		const eventHeartbeat = heartbeat(
+			dependencies.store,
+			claim,
+			leaseDurationMs,
+			renewBusinessAuthority,
 		);
 		// Positive Host proof that the original Turn finished. It is persisted
 		// under the live lease like a terminal status response, so the Worker
@@ -301,6 +305,36 @@ export function createConversationDispatchUseCaseV1(
 			);
 		};
 		try {
+			// A drain resumed for an accepted Turn follows a gap, such as an
+			// interrupted heartbeat, that may have outlived the Host's 30 s business
+			// authority. Renew it before the first event request, so an expired
+			// lease is not reported as a refusal that fails the Turn (#1888). A
+			// refusal here is resolved like one seen while draining: drain under
+			// the control Grant once the finish is proven, otherwise re-claim
+			// (HLD §8.2). A fresh submit has just established its authority.
+			try {
+				if (
+					claim.executionStatus === "processing" ||
+					claim.executionStatus === "unknown"
+				)
+					await renewBusinessAuthority?.(eventHeartbeat.signal);
+			} catch (error) {
+				// Business authority is no longer current, for example after a
+				// stop or revocation: the drain continues under its control Grant.
+				// Any other failure is like a failed heartbeat renewal; it never
+				// fails the Turn, and the same outbox item re-claims the drain.
+				if (
+					!(error instanceof ConversationRuntimeHostError) ||
+					error.code !== "AUTHORIZATION_REVOKED"
+				)
+					return retryInterruptedDrain();
+			}
+			if (
+				renewalRefused &&
+				!terminalCommitPossible &&
+				(await confirmFinished()) === "interrupted"
+			)
+				return retryInterruptedDrain();
 			// Recover a committed event whose acknowledgement was lost, including
 			// the last metadata event when the remaining stream is empty.
 			if (claim.runtimeCursor)

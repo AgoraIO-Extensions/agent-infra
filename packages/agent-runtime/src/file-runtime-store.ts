@@ -1304,7 +1304,7 @@ export class FileRuntimeStore {
 		const state = this.file.read();
 		assertStoreState(state);
 		if (!claims.hostSessionRef)
-			runtimeAuthorizationDenied("host-session-ref-missing");
+			runtimeAuthorizationDenied("request-host-session-ref-missing");
 		const session = sessionFor(
 			state,
 			claims.hostSessionRef,
@@ -1453,7 +1453,7 @@ export class FileRuntimeStore {
 			(state) => {
 				const currentNow = typeof now === "function" ? now() : now;
 				if (!claims.hostSessionRef)
-					runtimeAuthorizationDenied("host-session-ref-missing");
+					runtimeAuthorizationDenied("event-host-session-ref-missing");
 				const session = sessionFor(
 					state,
 					claims.hostSessionRef,
@@ -1502,7 +1502,7 @@ export class FileRuntimeStore {
 		return this.file.update((state) => {
 			const currentNow = typeof now === "function" ? now() : now;
 			if (!claims.hostSessionRef)
-				runtimeAuthorizationDenied("host-session-ref-missing");
+				runtimeAuthorizationDenied("ack-host-session-ref-missing");
 			const session = sessionFor(
 				state,
 				claims.hostSessionRef,

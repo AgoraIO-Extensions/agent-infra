@@ -1455,6 +1455,118 @@ describe("Conversation Worker dispatch", () => {
 		});
 	});
 
+	describe("drain after the business authority lapsed (#1888)", () => {
+		const expired = () =>
+			new ConversationRuntimeHostError("RUNTIME_GRANT_INVALID", false);
+		function harness(renew: () => void) {
+			const inner = new FakeConversationRuntimeHostV1();
+			const calls: string[] = [];
+			let reads = 0;
+			// The Host's business authority lapses while the first drain is
+			// interrupted for longer than its 30 s lease.
+			let lapsed = false;
+			const runtimeHost: ConversationRuntimeHostPortV1 = {
+				dispatch: (request) => inner.dispatch(request),
+				recoverStatus: (request) => inner.recoverStatus(request),
+				async recoverOriginalStatus() {
+					calls.push("recover");
+					return {
+						schemaVersion: 2,
+						hostSessionRef: "host-session-conversation-1",
+						executionId: "execution-1",
+						outcome: "found",
+						status: "running",
+					};
+				},
+				async renewAuthorization() {
+					calls.push("renew");
+					renew();
+					lapsed = false;
+				},
+				async *events() {
+					calls.push("events");
+					reads++;
+					if (reads === 1) {
+						lapsed = true;
+						throw new ConversationRuntimeHostError(
+							"RUNTIME_WORKLOAD_UNAVAILABLE",
+							true,
+						);
+					}
+					if (lapsed) throw expired();
+					yield runtimeEvent(1, "running");
+					yield runtimeEvent(2);
+				},
+				async acknowledge(request) {
+					calls.push(`ack:${request.confirmedCursor}`);
+					if (lapsed) throw expired();
+				},
+			};
+			const store = new MemoryDispatchStore();
+			const events = new MemoryEvents(store);
+			const useCase = createConversationDispatchUseCaseV1(
+				{ store, authorization: authorization(), runtimeHost, events },
+				{ retryDelayMs: 0 },
+			);
+			return { store, events, useCase, calls };
+		}
+
+		async function interruptedFirstDrain(h: ReturnType<typeof harness>) {
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			// The fresh submit has just established its authority; the failed
+			// read leaves the Turn's outcome unknown until it is re-claimed.
+			expect(h.calls).toEqual(["events"]);
+			expect(h.store.current.executionStatus).toBe("unknown");
+		}
+
+		it("renews the running Turn's authority before the re-claimed drain's first event request", async () => {
+			const h = harness(() => {});
+			await interruptedFirstDrain(h);
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "accepted",
+			});
+			// The re-claim first recovers the unknown outcome, then renews before reading.
+			expect(h.calls.slice(1, 4)).toEqual(["recover", "renew", "events"]);
+			expect(h.store.outboxStatus).toBe("succeeded");
+			expect(h.store.current.executionStatus).toBe("completed");
+			expect(h.events.persisted.map((event) => event.runtimeCursor)).toEqual([
+				"cursor-1",
+				"cursor-2",
+			]);
+		});
+
+		it("re-claims instead of failing when that renewal cannot be sent", async () => {
+			const h = harness(() => {
+				throw new ConversationRuntimeHostError("RUNTIME_ROUTE_STALE", true);
+			});
+			await interruptedFirstDrain(h);
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(h.calls).toEqual(["events", "recover", "renew"]);
+			expect(h.store.outboxStatus).toBe("retry_scheduled");
+			expect(h.store.errorCode).toBe("RUNTIME_HEARTBEAT_INTERRUPTED");
+			// The re-claim recovered the running Turn; it is not failed.
+			expect(h.store.current.executionStatus).toBe("processing");
+		});
+
+		it("re-claims instead of failing when the renewal is refused but the finish is unproven", async () => {
+			const h = harness(() => {
+				throw expired();
+			});
+			await interruptedFirstDrain(h);
+			await expect(dispatch(h.useCase)).resolves.toMatchObject({
+				outcome: "retry",
+			});
+			expect(h.calls).toEqual(["events", "recover", "renew", "recover"]);
+			expect(h.store.errorCode).toBe("RUNTIME_HEARTBEAT_INTERRUPTED");
+			expect(h.store.current.executionStatus).toBe("processing");
+			expect(h.events.persisted).toEqual([]);
+		});
+	});
+
 	it("does not release an active execution when current authority is denied", async () => {
 		const store = new MemoryDispatchStore(
 			claim({

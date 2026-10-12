@@ -43,7 +43,7 @@ export function createRuntimeExecutionGrantVerifierV2(
 			if (parts.length !== 3) runtimeAuthorizationDenied("grant-v2-format");
 			const [headerPart, claimsPart, signaturePart] = parts;
 			if (!headerPart || !claimsPart || !signaturePart)
-				runtimeAuthorizationDenied("grant-v2-format");
+				runtimeAuthorizationDenied("grant-v2-segment-empty");
 			const header = JSON.parse(utf8.decode(decode(headerPart))) as {
 				alg?: unknown;
 				kid?: unknown;
