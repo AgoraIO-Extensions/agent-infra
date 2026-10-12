@@ -34,7 +34,7 @@
           <li><strong>已有 remote OAuth MCP 客户端：</strong>使用 Authorization Code + PKCE，由客户端 SDK 处理浏览器登录、回调和令牌生命周期。见第 5 步。</li>
           <li><strong>个人脚本或手工配置的客户端：</strong>用户在<a href="/connection/tokens" target="_blank" rel="noopener noreferrer">访问令牌</a>页签发 Connection PAT，保存到服务端 Secret。通用 PAT 使用 Portable PAT Consumer。</li>
         </ul>
-        <p>三种方式都访问 <code>__CONNECTION_ORIGIN__/mcp</code>，传输协议为 Streamable HTTP。令牌认证只证明“是谁、哪个客户端”；外部账号连接、公司审批和 Action 授权还需分别完成。</p>
+        <p>三种方式都访问 <code>__CONNECTION_ORIGIN__/mcp</code>，传输协议为 Streamable HTTP。令牌认证只证明“是谁、哪个客户端”；外部账号连接和 Action 授权还需分别完成；只有管理员开启审批的连接器要求公司审批，现有及新增连接器默认关闭审批。</p>
       </section>
 
       <section class="install" aria-labelledby="register-title">
@@ -77,14 +77,15 @@ Idempotency-Key: &lt;本次领取操作的另一个 UUID&gt;
       </section>
 
       <section class="install" aria-labelledby="authorize-title">
-        <h2 id="authorize-title">4. 用户申请连接账号，并授权给你的 Agent</h2>
+        <h2 id="authorize-title">4. 用户连接账号，并授权给你的 Agent</h2>
         <p>“确认并返回”只完成客户端令牌绑定；令牌可使用同一用户已授权给该 Consumer 的多个 Provider，不会自动取得其他账号或 Action。请引导用户打开<a href="/connection/connections" target="_blank" rel="noopener noreferrer">连接账号</a>页，按以下顺序操作：</p>
         <ol>
-          <li>选择所需 Provider，点击“申请连接”，填写用途、选择能力并确认免责声明，提交公司审批。审批策略由 Connection 管理员配置。</li>
-          <li>在<a href="/connection/connections" target="_blank" rel="noopener noreferrer">我的 Connection</a>中选择 Provider，查看连接申请状态；指定审批人在<a href="/connection/approvals" target="_blank" rel="noopener noreferrer">待我审批</a>页处理申请。用户不能自行批准，也不能靠签发 PAT 绕过审批。</li>
-          <li>获批后回到“连接账号”，选择已有账号或完成外部账号连接。重新申请、续期或新版能力审批也从该账号的操作入口发起。</li>
-          <li>选择该账号，点击“授权客户端”，选择你的 Agent，核对所需 Action 并确认。公司审批、外部账号连接和 Consumer 授权是不同步骤，缺一都可能导致调用不可用。</li>
+          <li>选择所需 Provider。连接器默认关闭公司审批，可直接连接自己的外部账号；仅管理员开启审批的连接器，先点击“申请连接”，填写用途、选择能力并确认免责声明，提交公司审批。</li>
+          <li>在<a href="/connection/connections" target="_blank" rel="noopener noreferrer">我的 Connection</a>中选择 Provider，查看连接或申请状态；开启审批时，指定审批人在<a href="/connection/approvals" target="_blank" rel="noopener noreferrer">待我审批</a>页处理申请。用户不能自行批准，也不能靠签发 PAT 绕过已开启的审批。</li>
+          <li>审批关闭时直接连接；审批开启时获批后再连接。回到“连接账号”，选择已有账号或完成外部账号连接；开启审批的服务需要重新申请、续期或新版能力审批时，也从该账号的操作入口发起。</li>
+          <li>选择该账号，点击“授权客户端”，选择你的 Agent，核对所需 Action 并确认。外部账号连接和 Consumer 授权是独立步骤；只有开启审批的连接器还需有效公司审批资格。审批关闭也不自动增加 Action 授权。</li>
         </ol>
+        <p>管理员开启审批后，无有效资格的已有直连账号也无法发起新调用；关闭审批不自动恢复已暂停或撤销的客户端授权。共享账号使用资格另行管理。</p>
         <p>如果你的 Agent 或 Action 不在选择列表中，请联系管理员检查 Agent 注册、启用状态与 Declaration；不要换成其他 Consumer 的令牌。用户可分别撤销客户端授权、撤销 PAT 或断开外部账号，影响范围不同。</p>
       </section>
 
@@ -118,9 +119,9 @@ Authorization: Bearer &lt;当前用户与实例的 Connection PAT&gt;</code></pr
   }
 }</code></pre>
         <ul>
-          <li><code>PROVIDER_NOT_CONNECTED</code>：提示用户前往<a href="/connection/connections" target="_blank" rel="noopener noreferrer">连接账号</a>，申请连接并在获批后连接账号。</li>
-          <li><code>PROVIDER_AUTHORIZATION_REQUIRED</code>：提示在“连接账号”中选择账号，再“授权客户端”；缺少公司批准时，先提交申请，并到<a href="/connection/connections" target="_blank" rel="noopener noreferrer">连接申请</a>选择对应 Provider 查看进度。</li>
-          <li><code>PROVIDER_REAUTHORIZATION_REQUIRED</code>：提示在“连接账号”查看当前账号状态，恢复审批或重新连接，必要时重新确认客户端授权。</li>
+          <li><code>PROVIDER_NOT_CONNECTED</code>：提示用户前往<a href="/connection/connections" target="_blank" rel="noopener noreferrer">连接账号</a>，按页面当前设置连接账号；仅开启审批的连接器需先申请并获批。</li>
+          <li><code>PROVIDER_AUTHORIZATION_REQUIRED</code>：提示在“连接账号”中选择账号，再“授权客户端”；仅当连接器开启审批且缺少公司资格时，先提交申请，并到<a href="/connection/connections" target="_blank" rel="noopener noreferrer">连接申请</a>选择对应 Provider 查看进度。</li>
+          <li><code>PROVIDER_REAUTHORIZATION_REQUIRED</code>：提示在“连接账号”查看当前账号状态，根据页面提示重新连接或重新确认客户端授权；连接器开启审批时，还需检查并恢复公司资格。</li>
           <li><code>PROVIDER_UNSUPPORTED</code> / <code>CONTACT_ADMIN</code>：联系 Connection 管理员申请接入该 Provider；不能把它解释为用户尚未授权。</li>
           <li><code>SEARCH_NO_RESULTS</code> / <code>REFINE_SEARCH</code>：改用更简短的查询；空搜索结果不一定是权限问题。</li>
           <li>HTTP 401 或令牌失效：重新完成客户端登录或 PAT Binding；手工 PAT 用户前往<a href="/connection/tokens" target="_blank" rel="noopener noreferrer">访问令牌</a>页检查有效期与撤销状态。</li>
