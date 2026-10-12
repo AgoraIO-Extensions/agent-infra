@@ -487,6 +487,7 @@ export function safeFullPath(value: unknown, absolute = false) {
 		)
 			invalid();
 		if (parts.at(-1) === "") parts.pop();
+		if (parts.length < 3) invalid();
 	}
 	if (
 		parts.some(

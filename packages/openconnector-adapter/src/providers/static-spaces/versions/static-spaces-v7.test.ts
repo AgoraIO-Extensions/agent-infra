@@ -733,3 +733,29 @@ test("normal first publication still requires creator membership and read verifi
 		),
 	);
 });
+
+test("all namespace roots are rejected before identity or ACL submission", async () => {
+	let calls = 0;
+	const adapter = new StaticSpacesAdapter(async () => {
+		calls++;
+		throw new Error("must not submit");
+	});
+	for (const prefix of [
+		"/spaces/",
+		"/spaces/users/",
+		"/spaces/shared/",
+		"/spaces/public/",
+	]) {
+		await assert.rejects(
+			adapter.execute(
+				invoke("admin_set_acl", { prefix, groups: [], enabled: true }),
+			),
+			{ providerStatus: 400 },
+		);
+		await assert.rejects(
+			adapter.execute(invoke("admin_list_acl", { prefix })),
+			{ providerStatus: 400 },
+		);
+	}
+	assert.equal(calls, 0);
+});

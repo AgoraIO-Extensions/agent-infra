@@ -1,2 +1,2 @@
 export const staticSpacesV7ExecutorDigest =
-	"sha256:4153929f5e9d16cdd2e42f1f16013b7ddc574fc475b42761f7ee6e783fafac2c";
+	"sha256:01dfdfbb968011c3750a0bc5dd7d10dad142dca3bc0259ed374d793775850660";
