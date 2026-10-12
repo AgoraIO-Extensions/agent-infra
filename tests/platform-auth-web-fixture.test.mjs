@@ -81,7 +81,9 @@ test("platform-auth fixture verifies context, rotation and request-time revocati
 		assert.match(await allowed.text(), /Authenticated platform Web for alice/);
 		assert.equal(fixture.sideEffects(), 1);
 
-		const tampered = `${valid.slice(0, -1)}${valid.endsWith("A") ? "B" : "A"}`;
+		const [headerPart, payloadPart, signaturePart] = valid.split(".");
+		const tamperedSignature = `${signaturePart.startsWith("A") ? "B" : "A"}${signaturePart.slice(1)}`;
+		const tampered = `${headerPart}.${payloadPart}.${tamperedSignature}`;
 		const rejected = await request(tampered);
 		assert.equal(rejected.status, 401);
 		assert.equal(await rejected.text(), "");
