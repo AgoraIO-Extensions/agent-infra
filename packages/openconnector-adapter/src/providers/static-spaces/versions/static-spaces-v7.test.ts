@@ -630,3 +630,106 @@ test("delete-space refuses a receipt for another shared portal application", asy
 	);
 	await assert.rejects(adapter.execute(invoke("delete_space", entry[1])));
 });
+
+test("admin publishing accepts precise content receipts without inventing creator membership", async () => {
+	const username = "other@example.invalid";
+	const content = "test";
+	const prefix = `/spaces/users/${username}/`;
+	const path = `${prefix}note.txt`;
+	const receipt = {
+		kind: "user",
+		slug: username,
+		path_prefix: prefix,
+		url_prefix: `https://static-spaces.sh3.agoralab.co${prefix}`,
+		group: {
+			created: true,
+			group: {
+				pk: "g",
+				name: `static-spaces-users-${username}-viewers`,
+				is_superuser: false,
+			},
+		},
+		acl: {
+			prefix,
+			groups: [`static-spaces-users-${username}-viewers`],
+			enabled: true,
+		},
+		files_written: [
+			{
+				kind: "user",
+				slug: username,
+				path,
+				url: `https://static-spaces.sh3.agoralab.co${path}`,
+				size: 4,
+				sha256: createHash("sha256").update(content).digest("hex"),
+			},
+		],
+		review_urls: {},
+		memberships: [],
+		verification: [],
+	};
+	const adapter = new StaticSpacesAdapter(async (url) =>
+		String(url).includes("/users/me/")
+			? Response.json(principal(true))
+			: Response.json(receipt),
+	);
+	const result = await adapter.execute(
+		invoke("publish_space", {
+			kind: "user",
+			username,
+			files: [{ relative_path: "note.txt", content }],
+		}),
+	);
+	assert.deepEqual(result.memberships, []);
+});
+test("normal first publication still requires creator membership and read verification", async () => {
+	const username = "owner@example.invalid";
+	const prefix = `/spaces/users/${username}/`;
+	const content = "test";
+	const path = `${prefix}note.txt`;
+	const receipt = {
+		kind: "user",
+		slug: username,
+		path_prefix: prefix,
+		url_prefix: `https://static-spaces.sh3.agoralab.co${prefix}`,
+		group: {
+			created: true,
+			group: {
+				pk: "g",
+				name: `static-spaces-users-${username}-viewers`,
+				is_superuser: false,
+			},
+		},
+		acl: {
+			prefix,
+			groups: [`static-spaces-users-${username}-viewers`],
+			enabled: true,
+		},
+		files_written: [
+			{
+				kind: "user",
+				slug: username,
+				path,
+				url: `https://static-spaces.sh3.agoralab.co${path}`,
+				size: 4,
+				sha256: createHash("sha256").update(content).digest("hex"),
+			},
+		],
+		review_urls: {},
+		memberships: [],
+		verification: [],
+	};
+	const adapter = new StaticSpacesAdapter(async (url) =>
+		String(url).includes("/users/me/")
+			? Response.json(principal())
+			: Response.json(receipt),
+	);
+	await assert.rejects(
+		adapter.execute(
+			invoke("publish_space", {
+				kind: "user",
+				files: [{ relative_path: "note.txt", content }],
+			}),
+		),
+	);
+});

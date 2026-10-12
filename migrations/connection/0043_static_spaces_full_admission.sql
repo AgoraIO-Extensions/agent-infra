@@ -14,7 +14,7 @@ BEGIN
     FROM connection_provider_releases WHERE id = release_id;
   IF NOT FOUND THEN RETURN false; END IF;
   RETURN release_status = 'PUBLISHED'
-    AND executor = 'sha256:63269a4c051cc57dd3f49278a63590260aaf67be33428a1373c2a7902ea89f97'
+    AND executor = 'sha256:4153929f5e9d16cdd2e42f1f16013b7ddc574fc475b42761f7ee6e783fafac2c'
     AND NOT deployment ? 'restrictedApproval' AND NOT deployment ? 'supervisedPilot'
     AND deployment->'standardApproval' = '{"approvalIssue":"1927","approvalReference":"https://github.com/AgoraIO-Extensions/agent-infra/issues/1927","lifecycle":"CONNECTION_UNRESOLVED_WRITE"}'::jsonb;
 END;

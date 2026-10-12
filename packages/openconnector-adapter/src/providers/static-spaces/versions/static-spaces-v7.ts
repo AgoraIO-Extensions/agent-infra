@@ -646,7 +646,14 @@ export class StaticSpacesAdapter
 				...payload,
 				comment_id: targetCommentId,
 			});
-		else validateResult(spec.name, result, payload, identity.username);
+		else
+			validateResult(
+				spec.name,
+				result,
+				payload,
+				identity.username,
+				identity.admin,
+			);
 		return result;
 	}
 
@@ -980,6 +987,7 @@ function validateResult(
 	result: Record<string, unknown>,
 	payload: Record<string, unknown>,
 	username: string,
+	admin = false,
 ) {
 	if (name === "get_markdown_review") {
 		const document = result.document as Record<string, unknown>;
@@ -996,7 +1004,8 @@ function validateResult(
 		result.slug !== (payload.kind === "user" ? payload.username : payload.slug)
 	)
 		throw new Error("StaticSpaces space target does not match");
-	if (name === "publish_space") validatePublication(result, payload, username);
+	if (name === "publish_space")
+		validatePublication(result, payload, username, admin);
 	if (name === "upload_html") {
 		const bytes = Buffer.from(String(payload.html), "utf8");
 		const kind = String(payload.kind);
@@ -1023,6 +1032,7 @@ function validatePublication(
 	result: Record<string, unknown>,
 	payload: Record<string, unknown>,
 	username: string,
+	admin = false,
 ) {
 	const slug = String(
 		payload.kind === "user" ? payload.username : payload.slug,
@@ -1122,7 +1132,10 @@ function validatePublication(
 			check.path === prefix &&
 			check.username === username,
 	);
-	if (!existingManagedUpdate) {
+	// Upstream admin publishing bypasses creator membership; do not invent a grant.
+	const adminWithoutCreatorGrant =
+		admin && memberships.length === 0 && checks.length === 0;
+	if (!existingManagedUpdate && !adminWithoutCreatorGrant) {
 		valid &&=
 			groupNames.every((group) =>
 				memberships.some(

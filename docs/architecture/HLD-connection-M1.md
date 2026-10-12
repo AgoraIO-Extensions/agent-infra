@@ -539,6 +539,8 @@ Owner 已于 2026-10-12 明确批准 [#1927](https://github.com/AgoraIO-Extensio
 成员/目录组授权、评论、删除/索引及管理员接口按明确 target、role 和 Effect 分别声明。
 管理员业务允许活跃个人 superuser Token，服务端读取稳定账号与真实角色，每次 admin 提交前
 验证；最终上游仍执行角色权限检查，不向非管理员授予管理员能力，不使用共享超级凭证。
+管理员 publish 路径按上游合同可能不自动添加 creator membership；该空回执仅对已验证
+superuser 接受，不记为成员授权或网页读取通过，普通首次发布仍须 membership/read 验证。
 遗留内部账号接口仅允许无密码操作；不创建 LDAP 用户、不生成/重设/回传密码。
 浏览器状态/订阅登记与内部维护不伪装成 Bearer Agent Action。
 
