@@ -1,5 +1,5 @@
 import { mkdir, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	type BrowserCapabilityAvailableV1,
@@ -28,6 +28,28 @@ export interface PiRuntimeOptions {
 		authentication: "api-key" | "bearer";
 	}[];
 	skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
+}
+
+/** Build explicit native Skill arguments from the trusted mounted projection. */
+export function piNativeSkillArguments(
+	skillDirectory: RuntimeFilesystemSkillDirectoryV1 | undefined,
+) {
+	const paths = skillDirectory?.nativeSkillPaths?.() ?? [];
+	if (
+		paths.some(
+			(path) =>
+				typeof path !== "string" ||
+				!isAbsolute(path) ||
+				path.includes("\0") ||
+				path.includes("\\"),
+		)
+	)
+		throw new Error("RUNTIME_SKILL_DIRECTORY_UNAVAILABLE");
+	if (paths.length === 0) return ["--no-skills"] as const;
+	return [
+		...paths.flatMap((path) => ["--skill", path] as const),
+		"--no-skills",
+	];
 }
 
 export async function openPiRuntime(options: PiRuntimeOptions) {
@@ -70,6 +92,10 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 				(option) => option.modelOptionId === selection.modelOptionId,
 			);
 			if (!option) throw new Error("RUNTIME_CONFIGURATION_INVALID");
+			const nativeSkillArguments = piNativeSkillArguments(
+				options.skillDirectory,
+			);
+			const nativeSkillEnabled = nativeSkillArguments[0] === "--skill";
 			const transport = await openRuntimeMessagesTransport({
 				...option,
 				effort: selection.reasoningLevel,
@@ -109,7 +135,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 					compaction: { enabled: false },
 					retry: { enabled: false },
 					packages: [],
-					enableSkillCommands: false,
+					enableSkillCommands: nativeSkillEnabled,
 				});
 				await write("models.json", {
 					providers: {
@@ -155,7 +181,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 						installed.cli,
 						"--no-approve",
 						"--no-extensions",
-						"--no-skills",
+						...nativeSkillArguments,
 						"--no-prompt-templates",
 						"--no-themes",
 						"--no-context-files",

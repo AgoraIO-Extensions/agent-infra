@@ -1,6 +1,12 @@
+import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SkillWorkloadProjectionV1Schema } from "@agent-infra/contracts";
 import { expect, it } from "vitest";
 import {
+	createFilesystemRuntimeSkillDirectoryV1,
 	createRuntimeSkillDirectoryV1,
 	RuntimeSkillDirectoryErrorV1,
 } from "./skill-hub-directory.js";
@@ -119,4 +125,44 @@ it("rejects an oversized resource returned by the adapter", async () => {
 			async () => new Uint8Array(5),
 		),
 	).rejects.toThrow(RuntimeSkillDirectoryErrorV1);
+});
+
+it("derives fixed native Skill entry paths from the verified filesystem root", async () => {
+	const root = await mkdtemp(join(tmpdir(), "native-skill-root-"));
+	const bytes = new TextEncoder().encode("summary");
+	try {
+		await mkdir(join(root, ".agents/skills/workspace-summary"), {
+			recursive: true,
+		});
+		await writeFile(
+			join(root, ".agents/skills/workspace-summary/SKILL.md"),
+			bytes,
+		);
+		const nativeProjection = SkillWorkloadProjectionV1Schema.parse({
+			...projection,
+			manifest: {
+				...projection.manifest,
+				files: [
+					{
+						path: "SKILL.md",
+						sizeBytes: bytes.byteLength,
+						sha256: createHash("sha256").update(bytes).digest("hex"),
+					},
+				],
+			},
+		});
+		const directory = createFilesystemRuntimeSkillDirectoryV1({
+			root,
+			agentId: "agent-a",
+			agentVersion: "version-a",
+			generationId: "e".repeat(64),
+			projections: [nativeProjection],
+		});
+		expect(directory.nativeRoot).toBe(root);
+		expect(directory.nativeSkillPaths?.()).toEqual([
+			join(realpathSync(root), ".agents/skills/workspace-summary/SKILL.md"),
+		]);
+	} finally {
+		await rm(root, { recursive: true });
+	}
 });
