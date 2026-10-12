@@ -1193,6 +1193,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 					const seed = await seedStandardWorkloadHostV1(
 						database.databaseUrl,
 						imageA,
+						`custom-kind-${identityResponsibility}-agent`,
 					);
 					const customSource = {
 						kind: "custom" as const,
