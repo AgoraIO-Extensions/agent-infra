@@ -75,7 +75,16 @@ export async function verifyCustomAgentPlatformAuth(input: ProbeInput) {
 	}[] = [
 		{ name: "anonymous", expectation: "denied", headers: {} },
 		{
-			name: "forged-identity-header",
+			name: "forged-identity-without-credential",
+			expectation: "denied",
+			headers: {
+				"x-user-id": "forged-user",
+				"x-agent-id": "forged-agent",
+				"x-agent-infra-platform-context": "forged-context",
+			},
+		},
+		{
+			name: "forged-identity-header-with-credential",
 			expectation: "allowed",
 			headers: {
 				cookie: allowed,
@@ -139,6 +148,7 @@ export async function verifyCustomAgentPlatformAuth(input: ProbeInput) {
 		declaredSourceSha: input.sourceSha,
 		declaredImageDigest: input.imageDigest,
 		declaredConfigurationRevision: input.configurationRevision,
+		declaredContentSha256: input.contentSha256,
 		results,
 		pass: results.every((result) => result.pass),
 		lifecycleVerified: false,

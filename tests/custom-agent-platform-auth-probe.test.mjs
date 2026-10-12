@@ -90,7 +90,9 @@ test("detects leaking and permissive platform-auth HTTPS services", async () => 
 		}
 		const success = await run();
 		assert.equal(success.code, 0, success.stderr);
-		assert.equal(JSON.parse(success.stdout).results.length, 5);
+		const evidence = JSON.parse(success.stdout);
+		assert.equal(evidence.results.length, 6);
+		assert.equal(evidence.declaredContentSha256, input.contentSha256);
 		contentType = "text/html-invalid";
 		assert.equal((await run()).code, 1);
 		contentType = "text/html";
