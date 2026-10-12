@@ -478,6 +478,19 @@ export function canReclaimIdleSessionSandboxV1(
 	);
 }
 
+/** Existing management lifecycles continue preparing; idle reclaim waits for a message. */
+export function shouldContinueSessionSandboxPreparationV1(
+	lifecycle: Pick<
+		SessionSandboxLifecycleV1,
+		"authority" | "reason" | "resumeRequested"
+	>,
+) {
+	return (
+		lifecycle.authority.targetDesiredState === "running" &&
+		(lifecycle.reason !== "idle_reclaim" || lifecycle.resumeRequested === true)
+	);
+}
+
 /** A persisted source-stop proof permits preparation, never business execution. */
 export function canPrepareSessionSandboxReplacementV1(input: {
 	readonly sandbox: SessionSandboxBindingV1;

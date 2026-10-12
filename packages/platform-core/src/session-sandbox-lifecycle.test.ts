@@ -9,6 +9,7 @@ import {
 	planSessionSandboxUpgradeTransitionV1,
 	type SessionSandboxLifecycleV1,
 	type SessionSandboxStopReceiptV1,
+	shouldContinueSessionSandboxPreparationV1,
 } from "./session-sandbox-lifecycle.js";
 import {
 	decideSessionSandboxObservationV1,
@@ -764,5 +765,37 @@ describe("idle Sandbox upgrade plan (ADR 0023)", () => {
 					executionStatuses: [status],
 				}),
 			).toBeNull();
+	});
+
+	it("keeps existing management lifecycles preparing while idle reclaim waits for resume", () => {
+		const fixtureLifecycle = fixture().lifecycle;
+		const lifecycle = {
+			...fixtureLifecycle,
+			authority: {
+				...fixtureLifecycle.authority,
+				targetDesiredState: "running" as const,
+			},
+		};
+		expect(shouldContinueSessionSandboxPreparationV1(lifecycle)).toBe(true);
+		expect(
+			shouldContinueSessionSandboxPreparationV1({
+				...lifecycle,
+				reason: "upgrade",
+			}),
+		).toBe(true);
+		expect(
+			shouldContinueSessionSandboxPreparationV1({
+				...lifecycle,
+				reason: "idle_reclaim",
+				resumeRequested: false,
+			}),
+		).toBe(false);
+		expect(
+			shouldContinueSessionSandboxPreparationV1({
+				...lifecycle,
+				reason: "idle_reclaim",
+				resumeRequested: true,
+			}),
+		).toBe(true);
 	});
 });

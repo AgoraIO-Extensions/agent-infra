@@ -8,6 +8,7 @@ import { createAgentManagementV1 } from "@agent-infra/platform-core";
 import {
 	openPostgresWorkloadReconciliationStoreV1,
 	PostgresAgentManagementTransactionV1,
+	requestSessionSandboxResume,
 } from "@agent-infra/platform-store";
 import { KubeConfig, type V1Pod } from "@kubernetes/client-node";
 import postgres from "postgres";
@@ -508,6 +509,90 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 					"-e",
 					`fetch('http://${target}.${namespace}.svc:8080/healthz',{signal:AbortSignal.timeout(2500)}).then(async r=>{const body=await r.json();if(r.status!==200||body.marker!=='retained')process.exit(2)}).catch(()=>process.exit(3))`,
 				);
+			// Idle reclaim uses the same production Workload write-back and the
+			// packaged Conversation Worker drain. The one-millisecond threshold
+			// keeps this fixed kind receipt bounded.
+			const pvcBeforeIdle = new Map(
+				upgradedRows.map((row) => [
+					row.sandbox_id as string,
+					identity(row, "PersistentVolumeClaim"),
+				]),
+			);
+			await sql`update platform.conversations
+				set updated_at = clock_timestamp() - interval '1 minute'
+				where id in ('session-kind-a', 'session-kind-b')`;
+			await sql`update platform.workload_reconciliations
+				set next_attempt_at = clock_timestamp() where agent_id = 'agent-kind'`;
+			const idleWorkloadStore = openPostgresWorkloadReconciliationStoreV1({
+				databaseUrl: database.databaseUrl,
+				retryDelayMs: 0,
+				monitorDelayMs: 300_000,
+				idleSandboxReclaimAfterMs: 1,
+			});
+			try {
+				expect(
+					await idleWorkloadStore.runNext("kind-idle-worker", async (input) => {
+						assert(input.state);
+						return input.state;
+					}),
+				).toBe("advanced");
+			} finally {
+				await idleWorkloadStore.close();
+			}
+			const reclaimedRows = await eventually(
+				async () =>
+					sql`select sandbox_id, resource_name, resource_fence::int as resource_fence, status, resource_observation from platform.session_sandbox_allocations where conversation_id in ('session-kind-a', 'session-kind-b') order by conversation_id`,
+				(rows) =>
+					rows.length === 2 &&
+					rows.every(
+						(row) => row.status === "stopped" && row.resource_fence === 3,
+					),
+			);
+			for (const row of reclaimedRows) {
+				expect(
+					await client.read("Pod", row.resource_name as string),
+				).toBeNull();
+				expect(
+					await client.read("Service", row.resource_name as string),
+				).toBeNull();
+				expect(
+					await client.read("ServiceAccount", row.resource_name as string),
+				).toBeNull();
+				expect(
+					await client.read("NetworkPolicy", row.resource_name as string),
+				).toBeNull();
+				expect(
+					await client.read("Secret", row.resource_name as string),
+				).toBeNull();
+				expect(identity(row, "PersistentVolumeClaim")).toBe(
+					pvcBeforeIdle.get(row.sandbox_id as string),
+				);
+			}
+			await sql.begin(async (connection) => {
+				for (const [index] of reclaimedRows.entries())
+					await requestSessionSandboxResume(
+						connection,
+						index === 0 ? "session-kind-a" : "session-kind-b",
+						new Date(),
+					);
+			});
+			const resumedRows = await eventually(
+				async () =>
+					sql`select sandbox_id, resource_name, resource_fence::int as resource_fence, status, resource_observation from platform.session_sandbox_allocations where conversation_id in ('session-kind-a', 'session-kind-b') order by conversation_id`,
+				(rows) =>
+					rows.length === 2 &&
+					rows.every(
+						(row) => row.status === "ready" && row.resource_fence === 4,
+					),
+			);
+			for (const row of resumedRows) {
+				expect(identity(row, "PersistentVolumeClaim")).toBe(
+					pvcBeforeIdle.get(row.sandbox_id as string),
+				);
+				expect(
+					await client.read("Pod", row.resource_name as string),
+				).not.toBeNull();
+			}
 			const managementTransaction = new PostgresAgentManagementTransactionV1({
 				databaseUrl: database.databaseUrl,
 			});

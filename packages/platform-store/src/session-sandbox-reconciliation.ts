@@ -23,6 +23,7 @@ import {
 	type SessionSandboxPolicyV1,
 	type SessionSandboxReconciliationClaimV1,
 	type SessionSandboxVerifiedPolicyV1,
+	shouldContinueSessionSandboxPreparationV1,
 	type TaskApiChannelV1,
 	type TaskAuthorizationBoundaryV1,
 	type TaskUserDirectoryV1,
@@ -597,9 +598,8 @@ export async function recordSandboxObservation(
 	const continuePreparation =
 		decision.finished &&
 		context.purpose === "drain" &&
-		context.lifecycle?.authority.targetDesiredState === "running" &&
-		(context.lifecycle.reason === "upgrade" ||
-			context.lifecycle.resumeRequested === true);
+		!!context.lifecycle &&
+		shouldContinueSessionSandboxPreparationV1(context.lifecycle);
 	const stopReceipt = "stopReceipt" in decision ? decision.stopReceipt : null;
 	let nextLifecycle: SessionSandboxLifecycleV1 | undefined;
 	if (context.lifecycle && context.purpose === "drain") {

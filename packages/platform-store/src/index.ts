@@ -161,6 +161,7 @@ export {
 	PostgresSecretKeyRotationStoreV1,
 	SecretKeyRotationStoreError,
 } from "./secret-key-rotation.ts";
+export { requestSessionSandboxResume } from "./session-sandbox.js";
 export { PostgresSkillHubLifecycleV1 } from "./skill-hub.js";
 export {
 	PostgresSkillHubAgentBindingAdmissionV1,
