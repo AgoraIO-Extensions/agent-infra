@@ -19,9 +19,15 @@ fetch。没有新增 WRITE 或 OAuth code 重试。
 公司固定 Jenkins internal route 只允许现有静态 origin，不新增任意私网目标。现有 HTTP Provider
 例外的传输机密性仍需独立评审，IP pinning 不等于 TLS。
 
-新的 pinned runtime 拒绝配置未证明连接级 pinning 的 GitHub forward proxy；它不会通过删除
-配置自动改为直连。需要代理的环境必须先评审并实现绑定目标 IP、保留原 TLS hostname 的 CONNECT
-transport。既有 GitHub 代理例外、区域选择和审批不能据此隐式扩大。
+GitHub 配置固定 `GITHUB_EGRESS_PROXY_URL` 时使用 pinned CONNECT：先校验目标及代理的全部
+DNS/IP 答案，只向代理发送已校验目标 IP 的 CONNECT authority。GitHub hostname 保留为 TLS
+SNI、证书校验及 HTTP Host。代理端不重新解析 GitHub hostname；其他 Provider 不使用此代理。
+
+代理 TCP 失败、CONNECT 超时或 CONNECT 502/503/504 时，尚未向 Provider 提交 HTTP 请求，
+可以在 connector 内回退一次同样受控的直连。CONNECT 成功后的 TLS 失败、业务响应或响应丢失
+不触发回退；配置、DNS/IP、代理策略及证书错误失败关闭。所有 method 共用该规则，不新增提交后
+WRITE、OAuth code 或 refresh 重试。代理模式不池化回退连接，下一次请求重新优先尝试代理。
+完整决策见[区域 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md#上海分阶段迁移)。
 
 ## 网络策略工件
 

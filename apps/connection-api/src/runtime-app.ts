@@ -64,9 +64,9 @@ import {
 	manhattanLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/providers/manhattan";
 import {
-	RehoboamV11Adapter as RehoboamAdapter,
-	rehoboamV11ConnectionCatalog as rehoboamConnectionCatalog,
-	rehoboamV11LegacyProviderReleaseIds as rehoboamLegacyProviderReleaseIds,
+	RehoboamV12Adapter as RehoboamAdapter,
+	rehoboamV12ConnectionCatalog as rehoboamConnectionCatalog,
+	rehoboamV12LegacyProviderReleaseIds as rehoboamLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/providers/rehoboam";
 import {
 	StaticSpacesAdapter,
@@ -164,9 +164,9 @@ export async function createConnectionRuntime(
 	environment: Record<string, string | undefined> = process.env,
 ) {
 	const config = fullConnectionRuntimeConfig(environment);
-	if (config.githubEgressProxyUrl || config.githubReadFallbackProxyUrl) {
+	if (config.githubReadFallbackProxyUrl) {
 		throw new Error(
-			"Provider forward proxies require a reviewed pinned CONNECT transport",
+			"GITHUB_READ_FALLBACK_PROXY_URL is retired; use the proxy-first GitHub transport",
 		);
 	}
 	const oauthRepository = new PostgresConnectionOAuthRepository(
@@ -248,8 +248,13 @@ export async function createConnectionRuntime(
 	const providerFetch = (
 		origins: readonly string[],
 		privateOrigins: readonly string[] = [],
+		proxyUrl?: string,
 	) => {
-		const transport = createPinnedProviderFetch({ origins, privateOrigins });
+		const transport = createPinnedProviderFetch({
+			origins,
+			privateOrigins,
+			proxyUrl,
+		});
 		transports.push(transport);
 		return transport.fetch;
 	};
@@ -261,10 +266,11 @@ export async function createConnectionRuntime(
 	};
 	const githubFetch = observeProviderFetch(
 		"github",
-		providerFetch([
-			originFor("github"),
-			config.github.tokenUrl ?? githubOAuthTokenUrl,
-		]),
+		providerFetch(
+			[originFor("github"), config.github.tokenUrl ?? githubOAuthTokenUrl],
+			[],
+			config.githubEgressProxyUrl,
+		),
 	);
 	const github = new OpenConnectorGitHubAdapter(githubFetch);
 	const githubOAuth = createPreSubmitGithubOAuthAdapter(
