@@ -400,6 +400,8 @@ export async function openPiSession(
 		}
 		return {
 			nativeId,
+			// Pi RPC accepts string prompts only; structured image input is refused.
+			supportsImagePrompt: false,
 			async discoverCommands(input: {
 				readonly signal: AbortSignal;
 				readonly expiresAt: number;

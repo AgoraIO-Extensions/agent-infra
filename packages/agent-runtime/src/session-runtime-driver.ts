@@ -79,6 +79,11 @@ export interface NativeSessionOptions {
 }
 export interface NativeSession {
 	nativeId: string;
+	/**
+	 * Negotiated native image input support. Absent means the native session
+	 * cannot accept structured image content.
+	 */
+	supportsImagePrompt?: boolean;
 	select(model: string, effort: string): Promise<void>;
 	prompt(prompt: NativePromptV1): Promise<{
 		stopReason: string;
@@ -762,6 +767,60 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		});
 		return record;
 	}
+	/**
+	 * Read request-scoped bridge attachments into native prompt content. Callers
+	 * confirm native image support first, so unsupported input never reaches the
+	 * bridge and never consumes file authority.
+	 */
+	private async materializeAttachmentInput(
+		text: string,
+		attachments: readonly string[],
+		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
+	): Promise<readonly NativePromptContentV1[]> {
+		if (!fileBridge) unavailable();
+		const content: NativePromptContentV1[] = [{ type: "text", text }];
+		for (const fileId of attachments) {
+			const file = await fileBridge.readInput(fileId);
+			if (
+				file.fileId !== fileId ||
+				!file.descriptor.mediaType.startsWith("image/") ||
+				file.descriptor.sizeBytes > 50 * 1024 * 1024
+			)
+				unavailable();
+			const reader = file.body.getReader();
+			const chunks: Uint8Array[] = [];
+			let size = 0;
+			try {
+				while (true) {
+					const next = await reader.read();
+					if (next.done) break;
+					if (!(next.value instanceof Uint8Array)) unavailable();
+					size += next.value.byteLength;
+					if (size > 50 * 1024 * 1024) unavailable();
+					chunks.push(next.value);
+				}
+			} finally {
+				reader.releaseLock();
+			}
+			const bytes = Buffer.concat(chunks);
+			if (
+				size !== file.descriptor.sizeBytes ||
+				createHash("sha256").update(bytes).digest("hex") !==
+					file.descriptor.sha256
+			)
+				unavailable();
+			content.push({
+				type: "image",
+				data: bytes.toString("base64"),
+				mimeType: file.descriptor.mediaType,
+			});
+		}
+		// Authority that already lapsed while the bytes were acquired must not
+		// carry them into the remaining Session setup.
+		fileBridge.revalidate();
+		return content;
+	}
+
 	private async submit(
 		file: DurableJsonFile<Session>,
 		command: Submit,
@@ -804,54 +863,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			conflict();
 		if (!("text" in command.input)) unavailable();
 		const hasAttachments = command.input.attachments.length > 0;
-		let input: NativePromptV1 = command.input.text;
-		if (hasAttachments) {
-			if (!fileBridge) unavailable();
-			const content: NativePromptContentV1[] = [
-				{ type: "text", text: command.input.text },
-			];
-			for (const fileId of command.input.attachments) {
-				const file = await fileBridge.readInput(fileId);
-				if (
-					file.fileId !== fileId ||
-					!file.descriptor.mediaType.startsWith("image/") ||
-					file.descriptor.sizeBytes > 50 * 1024 * 1024
-				)
-					unavailable();
-				const reader = file.body.getReader();
-				const chunks: Uint8Array[] = [];
-				let size = 0;
-				try {
-					while (true) {
-						const next = await reader.read();
-						if (next.done) break;
-						if (!(next.value instanceof Uint8Array)) unavailable();
-						size += next.value.byteLength;
-						if (size > 50 * 1024 * 1024) unavailable();
-						chunks.push(next.value);
-					}
-				} finally {
-					reader.releaseLock();
-				}
-				const bytes = Buffer.concat(chunks);
-				if (
-					size !== file.descriptor.sizeBytes ||
-					createHash("sha256").update(bytes).digest("hex") !==
-						file.descriptor.sha256
-				)
-					unavailable();
-				content.push({
-					type: "image",
-					data: bytes.toString("base64"),
-					mimeType: file.descriptor.mediaType,
-				});
-			}
-			input = content;
-			// Authority that already lapsed while the bytes were acquired must not
-			// carry them into the remaining Session setup.
-			fileBridge.revalidate();
-		}
-		const inputText = input;
+		const text = command.input.text;
 		const previousHandle = this.handles.get(ref);
 		const reuse =
 			previousHandle?.native.startTurn &&
@@ -937,6 +949,24 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			activeNativeSessionRef = native.nativeId;
 		} catch {
 			unavailable();
+		}
+		// Unsupported attachment input must be rejected before bridge bytes are
+		// read, before model selection and before any durable Turn record. ACP
+		// negotiates image input during the handshake, so the opened Session
+		// holds the earliest authoritative capability.
+		let inputText: NativePromptV1 = text;
+		if (hasAttachments) {
+			try {
+				if (native.supportsImagePrompt !== true) unavailable();
+				inputText = await this.materializeAttachmentInput(
+					text,
+					command.input.attachments,
+					fileBridge,
+				);
+			} catch (error) {
+				if (!reuse) await native.close().catch(() => {});
+				throw error;
+			}
 		}
 		try {
 			await file.update((state) => {

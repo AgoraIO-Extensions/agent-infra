@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -443,6 +443,78 @@ it("advertises attachments only for an ACP peer that negotiates image input", as
 			connection: false,
 			supplementaryInstruction: false,
 		});
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("rejects bridge attachments before reading bytes when image input is not negotiated", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-attachment-unsupported-"));
+	const readInput = vi.fn();
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "grouped-models" },
+		}),
+	});
+	try {
+		await expect(
+			driver.execute(
+				{
+					schemaVersion: 2 as const,
+					kind: "submit-turn" as const,
+					agentId: "agent-a",
+					conversationId: "conversation-a",
+					sessionGeneration: 1,
+					executionId: "execution-a",
+					turnId: "turn-a",
+					operationId: "operation-a",
+					input: { text: "inspect", attachments: ["file-1"] },
+					selection: {
+						schemaVersion: 1 as const,
+						modelOptionId: "primary",
+						reasoningLevel: "high",
+					},
+				},
+				{
+					fileBridge: {
+						readInput,
+						revalidate: () => {},
+						writeResult: async () => {
+							throw new Error("unused");
+						},
+					},
+				},
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(readInput).not.toHaveBeenCalled();
+		// The peer opened its Session but never received a prompt.
+		const [session] = (await readdir(path, { withFileTypes: true })).filter(
+			(entry) => entry.isDirectory(),
+		);
+		expect(session).toBeDefined();
+		const state = JSON.parse(
+			await readFile(
+				join(path, session?.name ?? "", "workspace/session.json"),
+				"utf8",
+			),
+		);
+		expect(state).toMatchObject({ count: 0 });
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
