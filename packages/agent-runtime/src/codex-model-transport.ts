@@ -21,6 +21,8 @@ const maximumStreamBytes = 16 * 1024 * 1024;
 const maximumStreamEvents = 8_192;
 const maximumConversationAccessEntries = 1_024;
 const requestTimeoutMs = 120_000;
+/** The provider may stream indefinitely while each body read stays active. */
+const streamIdleTimeoutMs = requestTimeoutMs;
 const sanitizedFailureBody = JSON.stringify({
 	error: { message: "Model request failed" },
 });
@@ -889,6 +891,7 @@ async function forwardValidatedStream(
 	credentialMatcher: ReturnType<typeof createCredentialMatcher>,
 	recordOutcome: (outcome: CodexModelRequestOutcome) => Promise<void>,
 	modelOnly: boolean,
+	idleTimeoutMs: number,
 	allowsClientTool?: CodexModelRequestJournal["allowsClientTool"],
 ) {
 	const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -975,8 +978,26 @@ async function forwardValidatedStream(
 		},
 	});
 
+	const reader = body.getReader();
+	const readChunk = async () => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const idle = new Promise<never>((_, reject) => {
+			timer = setTimeout(
+				() => reject(new Error("MODEL_STREAM_IDLE_TIMEOUT")),
+				idleTimeoutMs,
+			);
+		});
+		try {
+			return await Promise.race([reader.read(), idle]);
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+		}
+	};
 	try {
-		for await (const chunk of body) {
+		while (true) {
+			const { done, value } = await readChunk();
+			if (done) break;
+			const chunk = value;
 			if (controller.signal.aborted) throw new Error();
 			totalBytes += chunk.byteLength;
 			if (totalBytes > maximumStreamBytes) failed = true;
@@ -1006,14 +1027,16 @@ async function forwardValidatedStream(
 	if (failed || !terminal || !hasTerminatingBlankLine(ending)) {
 		const interrupted = controller.signal.aborted;
 		controller.abort();
-		await body.cancel().catch(() => {});
+		await reader.cancel().catch(() => {});
 		await recordOutcome({
 			phase: failure.code === "provider_error" ? "failed" : "unknown",
 			failureCode: interrupted ? "interrupted" : failure.code,
 		});
 		await failStream(response);
+		reader.releaseLock();
 		return;
 	}
+	reader.releaseLock();
 	await recordOutcome({ phase: "succeeded", ...(usage ? { usage } : {}) });
 	if (!response.headersSent) {
 		response.writeHead(200, { "content-type": "text/event-stream" });
@@ -1132,8 +1155,24 @@ function onlyClientToolDeclarations(value: unknown, depth = 0): boolean {
 export async function openCodexModelTransport(
 	input: readonly CodexModelRoute[],
 	observer: CodexModelTransportObserver,
+	options: {
+		readonly responseHeaderTimeoutMs?: number;
+		readonly streamIdleTimeoutMs?: number;
+	} = {},
 ) {
 	if (!observer || typeof observer.beforeRequest !== "function")
+		throw new Error("RUNTIME_CONFIGURATION_INVALID");
+	const idleTimeout = options.streamIdleTimeoutMs ?? streamIdleTimeoutMs;
+	const responseHeaderTimeout =
+		options.responseHeaderTimeoutMs ?? requestTimeoutMs;
+	if (
+		!Number.isSafeInteger(idleTimeout) ||
+		idleTimeout < 1 ||
+		idleTimeout > 2_147_483_647 ||
+		!Number.isSafeInteger(responseHeaderTimeout) ||
+		responseHeaderTimeout < 1 ||
+		responseHeaderTimeout > 2_147_483_647
+	)
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	const modelOnly = observer.modelOnly === true;
 	const routes = validatedRoutes(input);
@@ -1579,6 +1618,11 @@ export async function openCodexModelTransport(
 				return;
 			}
 			startedAt = performance.now();
+			const upstreamAbort = new AbortController();
+			const headerTimer = setTimeout(
+				() => upstreamAbort.abort(),
+				responseHeaderTimeout,
+			);
 			upstreamResult = fetch(routed.route.target, {
 				method: "POST",
 				headers: {
@@ -1588,15 +1632,13 @@ export async function openCodexModelTransport(
 				},
 				body: routed.body,
 				redirect: "manual",
-				signal: AbortSignal.any([
-					controller.signal,
-					AbortSignal.timeout(requestTimeoutMs),
-				]),
+				signal: AbortSignal.any([controller.signal, upstreamAbort.signal]),
 			}).then(
 				(value) => ({ value }),
 				() => ({ value: undefined }),
 			);
 			const upstream = (await upstreamResult).value;
+			clearTimeout(headerTimer);
 			if (!upstream) {
 				settleModelRequestWaiters(turnKey, false);
 				throw new Error();
@@ -1636,6 +1678,7 @@ export async function openCodexModelTransport(
 				credentialMatcher,
 				recordOutcome,
 				modelOnly,
+				idleTimeout,
 				journal.allowsClientTool,
 			);
 		} catch {
