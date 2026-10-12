@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type BrowserHandoffRuntimeSnapshotV1,
 	createBrowserHandoffControllerV1,
+	executeBrowserHandoffOperationV1,
 } from "./browser-handoff.ts";
 
 const capability = {
@@ -152,5 +153,58 @@ describe("Browser handoff controller", () => {
 		expect(() => crashed.assertAgentAccess()).toThrow(
 			"BROWSER_HANDOFF_BROWSER_CRASHED",
 		);
+	});
+
+	it("dispatches every request-local operation through the existing controller", () => {
+		const controller = createBrowserHandoffControllerV1({
+			binding,
+			capability,
+			now: () => 1_700_000_000_000,
+		});
+		const requested = executeBrowserHandoffOperationV1(
+			controller,
+			{ kind: "request", reason: "login" },
+			runtime,
+		);
+		expect(requested).toMatchObject({ status: "requested" });
+		const active = executeBrowserHandoffOperationV1(
+			controller,
+			{
+				kind: "take_over",
+				handoffId: requested?.handoffId ?? "",
+				operatorId: binding.subjectId,
+				subjectId: binding.subjectId,
+			},
+			runtime,
+		);
+		expect(active).toMatchObject({ status: "active" });
+		expect(
+			executeBrowserHandoffOperationV1(
+				controller,
+				{
+					kind: "return_to_agent",
+					handoffId: active?.handoffId ?? "",
+					operatorId: binding.subjectId,
+				},
+				runtime,
+			),
+		).toMatchObject({ status: "completed" });
+
+		const revoked = createBrowserHandoffControllerV1({
+			binding,
+			capability,
+			now: () => 1_700_000_000_000,
+		});
+		executeBrowserHandoffOperationV1(
+			revoked,
+			{ kind: "request", reason: "captcha" },
+			runtime,
+		);
+		expect(
+			executeBrowserHandoffOperationV1(revoked, { kind: "revoke" }, runtime),
+		).toMatchObject({
+			status: "revoked",
+			terminalReason: "BROWSER_HANDOFF_REVOKED",
+		});
 	});
 });

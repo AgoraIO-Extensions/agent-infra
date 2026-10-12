@@ -29,6 +29,7 @@ import {
 import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
 	type: "json",
 };
+import { executeBrowserHandoffOperationV1 } from "./browser-handoff.js";
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CODEX_MODEL_ONLY_CONFIG,
@@ -107,6 +108,8 @@ import {
 	codexSkillLaunch,
 } from "./codex-skill-launch.internal.js";
 import type {
+	BrowserHandoffOperationV1,
+	BrowserHandoffRecordV1,
 	RuntimeBrowserToolExecutionRequestV1,
 	RuntimeBrowserToolExecutionResultV1,
 	RuntimeDriver,
@@ -5173,6 +5176,46 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				this.inFlightOperations.delete(key);
 			}
 		}
+	}
+
+	/**
+	 * Execute one request-local Browser handoff operation. The handoff
+	 * controller remains deployment-owned; this Driver only provides the
+	 * request-local port and never persists handoff state.
+	 */
+	async executeBrowserHandoff(
+		executionId: string,
+		operation: BrowserHandoffOperationV1,
+		context: RuntimeDriverExecutionContextV1,
+		signal: AbortSignal = new AbortController().signal,
+	): Promise<BrowserHandoffRecordV1 | undefined> {
+		signal.throwIfAborted();
+		const handoff = context.browser?.handoff;
+		if (!handoff) unavailable();
+		const browser = context.browser;
+		if (
+			!browser ||
+			!nonEmptyString(executionId) ||
+			handoff.controller.binding.executionId !== executionId ||
+			handoff.controller.binding.agentId !== browser.binding.agentId ||
+			handoff.controller.binding.conversationId !==
+				browser.binding.conversationId ||
+			handoff.controller.binding.sessionGeneration !==
+				browser.binding.sessionGeneration ||
+			handoff.controller.binding.resourceFence !==
+				browser.binding.resourceFence ||
+			handoff.controller.binding.capabilityVersion !==
+				browser.capabilityVersion ||
+			handoff.controller.binding.pageRevision !== handoff.runtime.pageRevision
+		)
+			unavailable();
+		const result = executeBrowserHandoffOperationV1(
+			handoff.controller,
+			operation,
+			handoff.runtime,
+		);
+		signal.throwIfAborted();
+		return result;
 	}
 
 	/**

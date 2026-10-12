@@ -51,6 +51,64 @@ export type BrowserHandoffRecordV1 = Readonly<{
 	terminalReason?: string;
 }>;
 
+export interface BrowserHandoffControllerV1 {
+	readonly binding: BrowserHandoffBindingV1;
+	snapshot(): BrowserHandoffRecordV1 | undefined;
+	request(
+		reason: BrowserHandoffReasonV1,
+		runtime: BrowserHandoffRuntimeSnapshotV1,
+	): BrowserHandoffRecordV1;
+	takeOver(input: {
+		readonly handoffId: string;
+		readonly operatorId: string;
+		readonly subjectId: string;
+		readonly runtime: BrowserHandoffRuntimeSnapshotV1;
+	}): BrowserHandoffRecordV1;
+	returnToAgent(input: {
+		readonly handoffId: string;
+		readonly operatorId: string;
+		readonly runtime: BrowserHandoffRuntimeSnapshotV1;
+	}): BrowserHandoffRecordV1;
+	revoke(
+		reason?:
+			| "BROWSER_HANDOFF_REVOKED"
+			| "BROWSER_HANDOFF_AUTHORIZATION_REVOKED"
+			| "BROWSER_HANDOFF_OPERATOR_CHANGED",
+	): BrowserHandoffRecordV1 | undefined;
+	markBrowserCrashed(): BrowserHandoffRecordV1 | undefined;
+	isAgentPaused(): boolean;
+	assertAgentAccess(): void;
+	agentObservation():
+		| { readonly status: "available" }
+		| {
+				readonly status: "paused";
+				readonly reasonCode: "BROWSER_HANDOFF_AGENT_OBSERVATION_PAUSED";
+		  }
+		| { readonly status: "blocked"; readonly reasonCode: string };
+}
+
+export type BrowserHandoffOperationV1 =
+	| { readonly kind: "request"; readonly reason: BrowserHandoffReasonV1 }
+	| {
+			readonly kind: "take_over";
+			readonly handoffId: string;
+			readonly operatorId: string;
+			readonly subjectId: string;
+	  }
+	| {
+			readonly kind: "return_to_agent";
+			readonly handoffId: string;
+			readonly operatorId: string;
+	  }
+	| {
+			readonly kind: "revoke";
+			readonly reason?:
+				| "BROWSER_HANDOFF_REVOKED"
+				| "BROWSER_HANDOFF_AUTHORIZATION_REVOKED"
+				| "BROWSER_HANDOFF_OPERATOR_CHANGED";
+	  }
+	| { readonly kind: "browser_crashed" };
+
 type Capability = Pick<
 	BrowserCapabilityAvailableV1,
 	"capabilityVersion" | "operations" | "policy"
@@ -99,8 +157,11 @@ export function createBrowserHandoffControllerV1(input: {
 	readonly capability: Capability | (() => Capability);
 	readonly now?: () => number;
 	readonly timeoutMs?: number;
-}) {
+}): BrowserHandoffControllerV1 {
 	assertBinding(input.binding);
+	const binding: BrowserHandoffBindingV1 = Object.freeze({
+		...input.binding,
+	});
 	const now = input.now ?? Date.now;
 	const timeoutMs = input.timeoutMs ?? 5 * 60_000;
 	if (
@@ -121,7 +182,7 @@ export function createBrowserHandoffControllerV1(input: {
 		const capability = readCapability();
 		if (!capability.operations.includes("handoff"))
 			throw new Error("BROWSER_HANDOFF_UNAVAILABLE");
-		if (capability.capabilityVersion !== input.binding.capabilityVersion)
+		if (capability.capabilityVersion !== binding.capabilityVersion)
 			throw new Error("BROWSER_HANDOFF_CAPABILITY_STALE");
 		return capability;
 	}
@@ -132,20 +193,20 @@ export function createBrowserHandoffControllerV1(input: {
 		if (!snapshot.browserAlive)
 			throw new Error("BROWSER_HANDOFF_BROWSER_UNAVAILABLE");
 		if (
-			snapshot.subjectId !== input.binding.subjectId ||
-			snapshot.agentId !== input.binding.agentId ||
-			snapshot.conversationId !== input.binding.conversationId ||
-			snapshot.executionId !== input.binding.executionId
+			snapshot.subjectId !== binding.subjectId ||
+			snapshot.agentId !== binding.agentId ||
+			snapshot.conversationId !== binding.conversationId ||
+			snapshot.executionId !== binding.executionId
 		)
 			throw new Error("BROWSER_HANDOFF_IDENTITY_BINDING_STALE");
 		if (
-			snapshot.sessionGeneration !== input.binding.sessionGeneration ||
-			snapshot.resourceFence !== input.binding.resourceFence
+			snapshot.sessionGeneration !== binding.sessionGeneration ||
+			snapshot.resourceFence !== binding.resourceFence
 		)
 			throw new Error("BROWSER_HANDOFF_SESSION_BINDING_STALE");
-		if (snapshot.capabilityVersion !== input.binding.capabilityVersion)
+		if (snapshot.capabilityVersion !== binding.capabilityVersion)
 			throw new Error("BROWSER_HANDOFF_CAPABILITY_STALE");
-		if (snapshot.pageRevision !== input.binding.pageRevision)
+		if (snapshot.pageRevision !== binding.pageRevision)
 			throw new Error("BROWSER_HANDOFF_PAGE_REVISION_STALE");
 	}
 
@@ -206,8 +267,8 @@ export function createBrowserHandoffControllerV1(input: {
 		if (
 			typeof input_.operatorId !== "string" ||
 			input_.operatorId.length === 0 ||
-			input_.subjectId !== input.binding.subjectId ||
-			input_.operatorId !== input.binding.subjectId
+			input_.subjectId !== binding.subjectId ||
+			input_.operatorId !== binding.subjectId
 		)
 			throw new Error("BROWSER_HANDOFF_OPERATOR_DENIED");
 		requireCurrent(input_.runtime);
@@ -319,6 +380,7 @@ export function createBrowserHandoffControllerV1(input: {
 	}
 
 	return {
+		binding,
 		snapshot,
 		request,
 		takeOver,
@@ -329,4 +391,24 @@ export function createBrowserHandoffControllerV1(input: {
 		assertAgentAccess,
 		agentObservation,
 	};
+}
+
+/** Execute one request-local handoff operation against the existing controller. */
+export function executeBrowserHandoffOperationV1(
+	controller: BrowserHandoffControllerV1,
+	operation: BrowserHandoffOperationV1,
+	runtime: BrowserHandoffRuntimeSnapshotV1,
+): BrowserHandoffRecordV1 | undefined {
+	switch (operation.kind) {
+		case "request":
+			return controller.request(operation.reason, runtime);
+		case "take_over":
+			return controller.takeOver({ ...operation, runtime });
+		case "return_to_agent":
+			return controller.returnToAgent({ ...operation, runtime });
+		case "revoke":
+			return controller.revoke(operation.reason);
+		case "browser_crashed":
+			return controller.markBrowserCrashed();
+	}
 }

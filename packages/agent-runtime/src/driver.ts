@@ -9,9 +9,20 @@ import type {
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
 import type {
+	BrowserHandoffControllerV1,
+	BrowserHandoffOperationV1,
+	BrowserHandoffRecordV1,
+	BrowserHandoffRuntimeSnapshotV1,
+} from "./browser-handoff.js";
+import type {
 	RuntimeFileBridgePortV1,
 	RuntimeFileResultReceiptV1,
 } from "./runtime-file-bridge.js";
+
+export type {
+	BrowserHandoffOperationV1,
+	BrowserHandoffRecordV1,
+} from "./browser-handoff.js";
 
 /** Verified Browser binding supplied only for one Runtime execution. */
 export interface RuntimeBrowserExecutionContextV1 {
@@ -28,6 +39,14 @@ export interface RuntimeBrowserExecutionContextV1 {
 		request: RuntimeBrowserToolExecutionRequestV1,
 		signal: AbortSignal,
 	) => Promise<RuntimeBrowserToolExecutionResultV1>;
+	/** Existing handoff authority bound to this request only. */
+	readonly handoff?: RuntimeBrowserHandoffContextV1;
+}
+
+export interface RuntimeBrowserHandoffContextV1 {
+	readonly controller: BrowserHandoffControllerV1;
+	/** Fresh, server-resolved binding facts for the current request. */
+	readonly runtime: BrowserHandoffRuntimeSnapshotV1;
 }
 
 export interface RuntimeBrowserToolExecutionRequestV1 {
@@ -146,6 +165,12 @@ export interface RuntimeOriginalEvidenceReadContext {
 }
 
 export interface RuntimeDriver {
+	executeBrowserHandoff?(
+		executionId: string,
+		operation: BrowserHandoffOperationV1,
+		context: RuntimeDriverExecutionContextV1,
+		signal?: AbortSignal,
+	): Promise<BrowserHandoffRecordV1 | undefined>;
 	executeBrowserTool?(
 		nativeSessionRef: string,
 		executionId: string,
