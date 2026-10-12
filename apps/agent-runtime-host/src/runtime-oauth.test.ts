@@ -1427,6 +1427,144 @@ it("prepares the actual private TLS/config boundary and rejects foreign or incom
 	expect(await prepareRuntimeOAuth(options)).toEqual({ status: "unavailable" });
 });
 
+it("rejects OAuth endpoints that do not match Connection's published route contract", async () => {
+	const f = await fixture();
+	const options = await deployment(f);
+	const file = options.environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE;
+	const origin = new URL(f.configuration.issuer).origin;
+	const invalidEndpoints = [
+		["authorizationEndpoint", `${origin}/oauth/token`],
+		["authorizationEndpoint", `${origin}/oauth/authorize?unexpected=1`],
+		["tokenEndpoint", `${origin}/oauth/authorize`],
+		["tokenEndpoint", `${origin}/oauth/token#unexpected`],
+		["revocationEndpoint", `${origin}/oauth/token`],
+		["revocationEndpoint", `${origin}/oauth/revoke?unexpected=1`],
+	] as const;
+	for (const [field, value] of invalidEndpoints) {
+		await writeFile(
+			file,
+			JSON.stringify({ ...f.configuration, [field]: value }),
+		);
+		expect(await prepareRuntimeOAuth(options)).toEqual({
+			status: "unavailable",
+		});
+	}
+	expect(protection.secretReads).toBe(0);
+});
+
+it("keeps a Connection PAT binding scoped to the original Agent", async () => {
+	const f = await fixture();
+	const configuration = {
+		...f.configuration,
+		patBinding: {
+			consumerId: "platform",
+			bindingEndpoint: `${new URL(f.configuration.issuer).origin}/api/v1/connection/pat-bindings`,
+		},
+	};
+	const requests: { url: string; body: Record<string, unknown> }[] = [];
+	const patFetch = async (url: string | URL, init?: RequestInit) => {
+		const body = JSON.parse(String(init?.body ?? "{}")) as Record<
+			string,
+			unknown
+		>;
+		requests.push({ url: String(url), body });
+		if (String(url).endsWith("/pat-bindings"))
+			return new Response(
+				JSON.stringify({
+					authorizationUrl: `${new URL(f.configuration.issuer).origin}/connection/pat-bindings/pat-binding-1`,
+					bindingId: "pat-binding-1",
+					expiresAt: new Date(Date.now() + 300_000).toISOString(),
+				}),
+				{ status: 201 },
+			);
+		return new Response(
+			JSON.stringify({
+				issued: {
+					account: { id: "alice", email: "alice@example.invalid" },
+					consumerId: "platform",
+					expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+					token: "conn_pat_agent_a",
+					tokenId: "pat-1",
+				},
+			}),
+			{ status: 200 },
+		);
+	};
+	const client = await createProtectedRuntimeOAuthClient({
+		dataDirectory: f.directory,
+		store: f.store,
+		configuration,
+		target: f.target,
+		principal: f.principal,
+		scope: f.scope,
+		verifyGrant: f.verifyGrant,
+		patBindingSecret: "binding-service-secret",
+		fetch: patFetch,
+	});
+	closes.push(client.close);
+	const begun = await client.authorized(f.signed("begin"));
+	expect(begun.phase).toBe("awaiting_callback");
+	expect(begun.authorizationUrl).toContain(
+		"/connection/pat-bindings/pat-binding-1",
+	);
+	expect(begun.callbackStateHash).toMatch(/^[a-f0-9]{64}$/);
+	const callback = await client.callback({
+		schemaVersion: 1,
+		issuer: configuration.issuer,
+		bindingId: "pat-binding-1",
+	});
+	expect(callback.phase).toBe("awaiting_confirmation");
+	const confirmed = await client.authorized(f.signed("confirm"));
+	expect(confirmed.phase).toBe("awaiting_verification");
+	expect(confirmed).not.toHaveProperty("token");
+	expect(requests.map(({ url }) => url)).toEqual([
+		`${configuration.patBinding.bindingEndpoint}`,
+		`${configuration.patBinding.bindingEndpoint}/pat-binding-1/claim`,
+	]);
+	expect(requests[0]?.body).toMatchObject({
+		consumerId: "platform",
+		name: "Agent agent-a",
+	});
+	expect(requests[0]?.body).not.toHaveProperty("principalHint");
+});
+
+it("requires the PAT binding service secret as protected Host input", async () => {
+	const f = await fixture();
+	const options = await deployment(f);
+	const file = options.environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE;
+	const secretFile = join(f.root, "tls", "pat-binding.auth");
+	const configuration = {
+		...f.configuration,
+		patBinding: {
+			consumerId: "platform",
+			bindingEndpoint: `${new URL(f.configuration.issuer).origin}/api/v1/connection/pat-bindings`,
+		},
+	};
+	await writeFile(file, JSON.stringify(configuration));
+	await writeFile(secretFile, "binding-service-secret", { mode: 0o400 });
+	const prepared = await prepareRuntimeOAuth({
+		...options,
+		environment: {
+			...options.environment,
+			AGENT_INFRA_RUNTIME_CONNECTION_PAT_BINDING_SECRET_FILE: secretFile,
+		},
+	});
+	expect(prepared?.status).toBe("available");
+	if (prepared?.status === "available") closes.push(prepared.client.close);
+	await rm(secretFile);
+	expect(
+		(
+			await prepareRuntimeOAuth({
+				...options,
+				environment: {
+					...options.environment,
+					AGENT_INFRA_RUNTIME_CONNECTION_PAT_BINDING_SECRET_FILE: secretFile,
+				},
+			})
+		)?.status,
+	).toBe("unavailable");
+});
+
 it("rechecks protection after the real token response before publishing any material", async () => {
 	const f = await fixture();
 	await f.callback();

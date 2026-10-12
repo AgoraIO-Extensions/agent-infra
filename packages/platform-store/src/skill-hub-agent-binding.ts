@@ -1,4 +1,6 @@
 import {
+	type SkillHubAppliedReceiptV1,
+	SkillHubAppliedReceiptV1Schema,
 	type SkillHubSyncBindingV1,
 	SkillHubSyncBindingV1Schema,
 	SkillVersionRefV1Schema,
@@ -29,6 +31,22 @@ export class SkillHubAgentBindingAdmissionErrorV1 extends Error {
 	constructor() {
 		super("Skill Hub binding admission unavailable");
 		this.name = "SkillHubAgentBindingAdmissionErrorV1";
+	}
+}
+
+export class SkillHubAppliedReceiptErrorV1 extends Error {
+	readonly code:
+		| "invalid_receipt"
+		| "not_found"
+		| "stale_revision"
+		| "mismatch"
+		| "invalid_state"
+		| "persistence_failed";
+
+	constructor(code: SkillHubAppliedReceiptErrorV1["code"]) {
+		super("Skill Hub Applied receipt rejected");
+		this.name = "SkillHubAppliedReceiptErrorV1";
+		this.code = code;
 	}
 }
 
@@ -70,6 +88,108 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 
 	async close(): Promise<void> {
 		await this.#client.end();
+	}
+
+	/** Atomically records one verified Worker materialization receipt. */
+	async recordAppliedReceipt(
+		input: unknown,
+	): Promise<SkillHubAppliedReceiptV1> {
+		let receipt: SkillHubAppliedReceiptV1;
+		try {
+			receipt = SkillHubAppliedReceiptV1Schema.parse(input);
+		} catch {
+			throw new SkillHubAppliedReceiptErrorV1("invalid_receipt");
+		}
+		try {
+			return await this.#database.transaction(async (transaction) => {
+				const [row] = await transaction
+					.select({
+						binding: skillHubAgentBindings,
+						version: skillHubVersions,
+						name: skillHubSkills.name,
+						currentConfigurationRevision: agents.currentConfigurationRevision,
+					})
+					.from(skillHubAgentBindings)
+					.innerJoin(
+						skillHubVersions,
+						eq(skillHubVersions.id, skillHubAgentBindings.skillVersionId),
+					)
+					.innerJoin(
+						skillHubSkills,
+						eq(skillHubSkills.id, skillHubVersions.skillId),
+					)
+					.innerJoin(agents, eq(agents.id, skillHubAgentBindings.agentId))
+					.where(
+						and(
+							eq(skillHubAgentBindings.agentId, receipt.agentId),
+							eq(skillHubAgentBindings.agentVersion, receipt.agentVersion),
+							eq(
+								skillHubAgentBindings.configurationRevision,
+								receipt.configurationRevision,
+							),
+							eq(skillHubAgentBindings.skillVersionId, receipt.skillVersionId),
+						),
+					)
+					.for("update")
+					.limit(1);
+				if (!row) throw new SkillHubAppliedReceiptErrorV1("not_found");
+
+				if (
+					Number(row.currentConfigurationRevision) !==
+					receipt.configurationRevision
+				)
+					throw new SkillHubAppliedReceiptErrorV1("stale_revision");
+				if (row.binding.syncRevision !== receipt.syncRevision)
+					throw new SkillHubAppliedReceiptErrorV1("stale_revision");
+
+				if (row.binding.state === "synced") {
+					let existing: SkillHubAppliedReceiptV1;
+					try {
+						existing = SkillHubAppliedReceiptV1Schema.parse(
+							row.binding.appliedReceipt,
+						);
+					} catch {
+						throw new SkillHubAppliedReceiptErrorV1("invalid_state");
+					}
+					if (sameAppliedReceipt(existing, receipt)) return existing;
+					throw new SkillHubAppliedReceiptErrorV1("mismatch");
+				}
+				if (row.binding.state !== "pending_sync")
+					throw new SkillHubAppliedReceiptErrorV1("invalid_state");
+				if (
+					receipt.skillName !== row.name ||
+					receipt.packageDigest !== row.version.packageDigest ||
+					receipt.manifestDigest !== row.version.manifestDigest ||
+					receipt.targetPath !== `.agents/skills/${row.name}`
+				)
+					throw new SkillHubAppliedReceiptErrorV1("mismatch");
+
+				await transaction
+					.update(skillHubAgentBindings)
+					.set({
+						state: "synced",
+						failureReason: null,
+						appliedReceipt: receipt,
+						updatedAt: new Date(),
+					})
+					.where(
+						and(
+							eq(skillHubAgentBindings.agentId, receipt.agentId),
+							eq(skillHubAgentBindings.agentVersion, receipt.agentVersion),
+							eq(
+								skillHubAgentBindings.configurationRevision,
+								receipt.configurationRevision,
+							),
+							eq(skillHubAgentBindings.skillVersionId, receipt.skillVersionId),
+							eq(skillHubAgentBindings.syncRevision, receipt.syncRevision),
+						),
+					);
+				return receipt;
+			});
+		} catch (error) {
+			if (error instanceof SkillHubAppliedReceiptErrorV1) throw error;
+			throw new SkillHubAppliedReceiptErrorV1("persistence_failed");
+		}
 	}
 
 	/** Resolve the current binding facts for Worker materialization. */
@@ -218,10 +338,13 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 					!admitted.has(row.binding.skillVersionId) ||
 					!installed.has(row.binding.skillVersionId) ||
 					boundaryGrant === undefined ||
-					!isSkillHubGrantWithinBoundaryV1(persistedGrant, boundaryGrant) ||
-					row.binding.state === "synced"
+					!isSkillHubGrantWithinBoundaryV1(persistedGrant, boundaryGrant)
 				)
 					throw new SkillHubAgentBindingAdmissionErrorV1();
+				const appliedReceipt =
+					row.binding.state === "synced"
+						? SkillHubAppliedReceiptV1Schema.parse(row.binding.appliedReceipt)
+						: null;
 				return SkillHubSyncBindingV1Schema.parse({
 					schemaVersion: 1,
 					agentId: row.binding.agentId,
@@ -243,7 +366,7 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 					syncRevision: row.binding.syncRevision,
 					state: row.binding.state,
 					failureReason: row.binding.failureReason,
-					appliedReceipt: null,
+					appliedReceipt,
 				});
 			});
 		} catch (error) {
@@ -434,4 +557,24 @@ export class PostgresSkillHubAgentBindingAdmissionV1
 			throw new SkillHubAgentBindingAdmissionErrorV1();
 		}
 	}
+}
+
+function sameAppliedReceipt(
+	left: SkillHubAppliedReceiptV1,
+	right: SkillHubAppliedReceiptV1,
+): boolean {
+	return (
+		left.schemaVersion === right.schemaVersion &&
+		left.agentId === right.agentId &&
+		left.agentVersion === right.agentVersion &&
+		left.skillName === right.skillName &&
+		left.configurationRevision === right.configurationRevision &&
+		left.syncRevision === right.syncRevision &&
+		left.skillVersionId === right.skillVersionId &&
+		left.generationId === right.generationId &&
+		left.packageDigest === right.packageDigest &&
+		left.manifestDigest === right.manifestDigest &&
+		left.targetPath === right.targetPath &&
+		left.readOnly === right.readOnly
+	);
 }

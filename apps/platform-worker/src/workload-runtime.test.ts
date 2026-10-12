@@ -83,6 +83,8 @@ import {
 	sessionSandboxModelProjectionFixture,
 	sessionSandboxTemplateBindingFixture,
 } from "./test-support/session-sandbox-v4.js";
+import { WorkloadDeploymentErrorV1 } from "./workload-deployment.js";
+import { WorkloadProbeIncompleteErrorV1 } from "./workload-probe-failure.js";
 import {
 	createWorkloadRuntimeV1,
 	isWorkloadExecutionCapacityCurrentV1,
@@ -2826,10 +2828,7 @@ describe("assembled Workload Runtime contracts", () => {
 			"Runtime capabilities are unavailable",
 		);
 	});
-	it.each([
-		new Error("network unavailable"),
-		new DOMException("probe timed out", "TimeoutError"),
-	])("closes a ready route when its health probe throws: %s", async (error) => {
+	it("closes a ready route when its health probe throws an unrecognised error", async () => {
 		const fetcher = vi.fn(async () => new Response("ok"));
 		const f = fixture({ fetch: fetcher });
 		await f.tick(8);
@@ -2838,7 +2837,7 @@ describe("assembled Workload Runtime contracts", () => {
 		const serviceName = validateAgentWorkloadDesiredV1(
 			ready.candidate.deployment,
 		).service.name;
-		fetcher.mockRejectedValueOnce(error);
+		fetcher.mockRejectedValueOnce(new Error("network unavailable"));
 
 		await f.tick(1);
 
@@ -2847,6 +2846,108 @@ describe("assembled Workload Runtime contracts", () => {
 			(await f.client.read<V1Service>("Service", serviceName))?.spec
 				?.selector?.["agent-infra.agora.io/revision"],
 		).toBe("closed");
+	});
+	it.each([
+		[
+			"timeout",
+			"health",
+			() => ({ health: new DOMException("probe timed out", "TimeoutError") }),
+		],
+		[
+			"connection",
+			"health",
+			() => ({
+				health: new TypeError("fetch failed", {
+					cause: Object.assign(new Error("connect"), { code: "ECONNREFUSED" }),
+				}),
+			}),
+		],
+		[
+			"timeout",
+			"readiness",
+			() => ({
+				readiness: new WorkloadDeploymentErrorV1(
+					"WORKER_RUNTIME_PROBE_FAILED",
+					{ cause: new WorkloadProbeIncompleteErrorV1("readiness", "timeout") },
+				),
+			}),
+		],
+	] as const)(
+		"keeps a ready route open through incomplete probes until the third in a row (%s, %s, #2046)",
+		async (reason, stage, failure) => {
+			const fetcher = vi.fn(async () => new Response("ok"));
+			let readinessFailure: unknown;
+			const failures: unknown[] = [];
+			const f = fixture({
+				fetch: fetcher,
+				probeRuntime: async () => {
+					if (readinessFailure) throw readinessFailure;
+					return { core: "passed", capabilities: {} };
+				},
+				onProbeFailure: (event) => failures.push(event),
+			});
+			await f.tick(8);
+			const ready = f.state;
+			if (ready?.phase !== "ready") throw new Error();
+			const serviceName = validateAgentWorkloadDesiredV1(
+				ready.candidate.deployment,
+			).service.name;
+			const routeRevision = async () =>
+				(await f.client.read<V1Service>("Service", serviceName))?.spec
+					?.selector?.["agent-infra.agora.io/revision"];
+			const open = await routeRevision();
+			expect(open).not.toBe("closed");
+			const failOnce = () => {
+				const next = failure();
+				if ("health" in next) fetcher.mockRejectedValueOnce(next.health);
+				else readinessFailure = next.readiness;
+			};
+
+			// One incomplete probe, then a completed one, starts the run over.
+			failOnce();
+			await f.tick(1);
+			readinessFailure = undefined;
+			expect(f.state).toMatchObject({ phase: "ready", attempts: 1 });
+			await f.tick(1);
+			expect(f.state).toMatchObject({ phase: "ready", attempts: 0 });
+
+			failOnce();
+			await f.tick(1);
+			failOnce();
+			await f.tick(1);
+			expect(f.state).toMatchObject({ phase: "ready", attempts: 2 });
+			expect(await routeRevision()).toBe(open);
+
+			failOnce();
+			await f.tick(1);
+			expect(f.state?.phase).toBe("observing");
+			expect(await routeRevision()).toBe("closed");
+			expect(failures).toHaveLength(4);
+			expect(failures[0]).toEqual({
+				agentId: "agent-a",
+				workloadRevision: ready.revision,
+				stage,
+				reason,
+			});
+		},
+	);
+	it("closes a ready route at once when the probe answers unhealthy (#2046)", async () => {
+		const fetcher = vi.fn(async () => new Response("ok"));
+		const failures: unknown[] = [];
+		const f = fixture({
+			fetch: fetcher,
+			onProbeFailure: (event) => failures.push(event),
+		});
+		await f.tick(8);
+		if (f.state?.phase !== "ready") throw new Error();
+		fetcher.mockResolvedValueOnce(new Response("down", { status: 503 }));
+
+		await f.tick(1);
+
+		expect(f.state).toMatchObject({ phase: "observing", attempts: 0 });
+		expect(failures).toEqual([
+			expect.objectContaining({ stage: "health", reason: "response" }),
+		]);
 	});
 	it("keeps a core-compatible candidate available when optional capability probing has no valid result", async () => {
 		const f = fixture({

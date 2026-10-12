@@ -1,7 +1,10 @@
 import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
+import {
+	type BrowserCapabilityAvailableV1,
+	RuntimeModelConfigurationV3Schema,
+} from "@agent-infra/contracts/runtime";
 import { DurableJsonFile } from "./durable-json.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyPiInstallation } from "./pi-installation.js";
@@ -9,6 +12,9 @@ import { PiRuntimeDriver } from "./pi-runtime-driver.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 export interface PiRuntimeOptions {
+	readonly browserCapability?:
+		| BrowserCapabilityAvailableV1
+		| (() => BrowserCapabilityAvailableV1 | undefined);
 	path: string;
 	configVersion: string;
 	defaultModelOptionId: string;

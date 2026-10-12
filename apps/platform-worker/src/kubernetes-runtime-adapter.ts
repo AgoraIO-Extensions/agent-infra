@@ -95,6 +95,7 @@ import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
 } from "./workload-network.js";
+import { WorkloadProbeIncompleteErrorV1 } from "./workload-probe-failure.js";
 import {
 	validateWorkloadRuntimeAuthV1,
 	type WorkloadRuntimeAuthV1,
@@ -389,7 +390,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			readonly workloadRevision: number;
 			readonly fence: number;
 		},
-	): Promise<"pending" | "healthy" | "unhealthy" | "drifted"> {
+	): Promise<"pending" | "healthy" | "unhealthy" | "unreachable" | "drifted"> {
 		const value = desired(input);
 		if (
 			!options.connectionConsumerControl &&
@@ -611,8 +612,11 @@ export function createKubernetesRuntimeAdapterV1(options: {
 			}))
 				? "healthy"
 				: "unhealthy";
-		} catch {
-			return "unhealthy";
+		} catch (error) {
+			// A probe that never answered differs from an unhealthy answer (#2046).
+			return error instanceof WorkloadProbeIncompleteErrorV1
+				? "unreachable"
+				: "unhealthy";
 		}
 	}
 	async function assertStandardTemplateSelector(input: unknown) {

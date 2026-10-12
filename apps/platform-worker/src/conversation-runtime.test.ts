@@ -1348,6 +1348,16 @@ describe("Trusted conversation Runtime adapter", () => {
 						}),
 					);
 				}
+				// A resumed drain first renews the running Turn's business
+				// authority (#1888); that renewal precedes any stop below.
+				if (String(url).endsWith("/authorizations/renew"))
+					return new Response(
+						JSON.stringify({
+							schemaVersion: 3,
+							executionId: "execution",
+							expiresAt: Date.now() + 30_000,
+						}),
+					);
 				if (!String(url).endsWith("/events/stream"))
 					throw new Error("No new business operation may be dispatched");
 				if (body.afterCursor === null) {
@@ -1441,12 +1451,13 @@ describe("Trusted conversation Runtime adapter", () => {
 					expect.objectContaining({ transition: {} }),
 				);
 				expect(Date.now()).toBe(now + 10_000);
+				// One renewal before the drain; the heartbeat then finds the stop.
 				if (pause === "lost lease") {
-					expect(renewAuthorization).not.toHaveBeenCalled();
+					expect(renewAuthorization).toHaveBeenCalledTimes(1);
 					expect(status).toBe("processing");
 					return;
 				}
-				expect(renewAuthorization).toHaveBeenCalledTimes(1);
+				expect(renewAuthorization).toHaveBeenCalledTimes(2);
 				expect(status).toBe("retry_scheduled");
 				expect(leaseExpiresAt).toBeNull();
 				expect(h.state.runtimeCursor).toBe(
@@ -1471,13 +1482,21 @@ describe("Trusted conversation Runtime adapter", () => {
 					url: String(call[0]),
 					body: JSON.parse(call[1]?.body as string),
 				}));
+				// Only the first claim's pre-drain renewal, sent while the Turn was
+				// still running, renews business authority; nothing is resubmitted.
 				expect(
-					calls.every(
-						(call) =>
-							!call.url.endsWith("/authorizations/renew") &&
-							!call.url.endsWith("/turns"),
-					),
-				).toBe(true);
+					calls
+						.map((call) => call.url)
+						.filter(
+							(url) =>
+								url.endsWith("/authorizations/renew") || url.endsWith("/turns"),
+						),
+				).toEqual([expect.stringMatching(/\/authorizations\/renew$/)]);
+				expect(
+					calls.findIndex((call) => call.url.endsWith("/authorizations/renew")),
+				).toBeLessThan(
+					calls.findIndex((call) => call.url.endsWith("/events/stream")),
+				);
 				for (const { body } of calls
 					.filter((call) => call.url.endsWith("/events/stream"))
 					.slice(1)) {

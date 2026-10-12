@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
 	type RuntimeOAuthCallbackRequestV1,
 	RuntimeOAuthCallbackRequestV1Schema,
+	type RuntimeOAuthConfigurationV1,
 } from "@agent-infra/contracts/runtime";
 import type {
 	ConnectionInstallationCallbackClaimV1,
@@ -19,6 +20,7 @@ export interface ConnectionInstallationCallbackRouteDependenciesV1 {
 	readonly publicOrigin: string;
 	readonly callbackUrl: string;
 	readonly issuer: string;
+	readonly configuration?: RuntimeOAuthConfigurationV1;
 	readonly installation: Installation;
 	/** Deployment-owned protected forwarder. It must use callback-only auth and no retry. */
 	readonly forward: (input: {
@@ -33,8 +35,33 @@ function stateHash(state: string) {
 	return createHash("sha256").update(state).digest("hex");
 }
 
-function callbackRequest(request: Request, issuer: string) {
+function callbackRequest(
+	request: Request,
+	issuer: string,
+	patBinding: boolean,
+) {
 	const url = new URL(request.url);
+	if (patBinding) {
+		if (
+			[...url.searchParams.keys()].sort().join(",") !== "binding_id" ||
+			url.searchParams.getAll("binding_id").length !== 1
+		)
+			throw new HttpProtocolError(
+				"INVALID_REQUEST",
+				requestMetadata(request).traceId,
+			);
+		const bindingId = url.searchParams.get("binding_id");
+		if (!bindingId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(bindingId))
+			throw new HttpProtocolError(
+				"INVALID_REQUEST",
+				requestMetadata(request).traceId,
+			);
+		return RuntimeOAuthCallbackRequestV1Schema.parse({
+			schemaVersion: 1,
+			issuer,
+			bindingId,
+		});
+	}
 	const keys = [...url.searchParams.keys()].sort().join(",");
 	if (keys !== "error,iss,state" && keys !== "code,iss,state") {
 		throw new HttpProtocolError(
@@ -112,8 +139,12 @@ export function registerConnectionInstallationCallbackRoutesV1(
 		let claimed: ConnectionInstallationCallbackClaimV1 | null = null;
 		let hash: string | undefined;
 		try {
-			const parsed = callbackRequest(request, dependencies.issuer);
-			hash = stateHash(parsed.state);
+			const parsed = callbackRequest(
+				request,
+				dependencies.issuer,
+				dependencies.configuration?.patBinding !== undefined,
+			);
+			hash = stateHash("bindingId" in parsed ? parsed.bindingId : parsed.state);
 			claimed = await dependencies.installation.callback.claim({
 				stateHash: hash,
 				now: Date.now(),

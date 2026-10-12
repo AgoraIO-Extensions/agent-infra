@@ -65,7 +65,10 @@ import {
 	type CodexSkillLaunchProvenance,
 	codexSkillLaunch,
 } from "./codex-skill-launch.internal.js";
-import type { RuntimeBrowserToolExecutionRequestV1 } from "./driver.js";
+import type {
+	RuntimeBrowserToolExecutionRequestV1,
+	RuntimeBrowserToolExecutionResultV1,
+} from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
@@ -73,7 +76,11 @@ import {
 	ingressVerifiedRuntimeHost,
 	runtimeGrantFixture,
 } from "./grant-fixture.test-support.js";
-import { createRuntimeFileBridgeV1 } from "./runtime-file-bridge.js";
+import {
+	createRuntimeFileBridgeV1,
+	createRuntimeFileResultReceiptV1,
+	type RuntimeFileBridgePortV1,
+} from "./runtime-file-bridge.js";
 import { RuntimeHost } from "./runtime-host.js";
 
 type CancelTurnTestHook = (
@@ -1169,6 +1176,25 @@ class TestCodexBridge {
 					turnId: this.nativeTurnId,
 					completedAtMs: 1,
 					item: { type: "agentMessage", id: itemId, text },
+				},
+			});
+		});
+	}
+
+	emitFileChangeCompleted(path: string) {
+		return new Promise<void>((resolve) => {
+			this.notificationRead = resolve;
+			this.push({
+				method: "item/completed",
+				params: {
+					threadId: this.nativeThreadId,
+					turnId: this.nativeTurnId,
+					item: {
+						type: "fileChange",
+						id: "codex-native-file-change-private",
+						changes: [{ path, kind: "update", diff: "@@" }],
+						status: "completed",
+					},
 				},
 			});
 		});
@@ -3374,7 +3400,7 @@ describe("Codex Runtime Driver", () => {
 			expect(await readdir(root)).toEqual([]);
 		},
 	);
-	it("keeps Codex attachment capability fail-closed without a bridge", async () => {
+	it("keeps Codex attachment execution fail-closed without a bridge", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
@@ -3387,12 +3413,123 @@ describe("Codex Runtime Driver", () => {
 			),
 		).rejects.toThrow();
 		expect(await driver.getCapabilities()).toMatchObject({
-			attachments: false,
-			resultFiles: false,
+			attachments: true,
+			resultFiles: true,
 		});
 		expect(bridge.requests.some(({ method }) => method === "turn/start")).toBe(
 			false,
 		);
+	});
+
+	it("persists one execution-bound result for a native fileChange", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const conversationKey = codexConversationKey({
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			sessionGeneration: command.sessionGeneration,
+		});
+		const workspace = join(
+			`${path}.native`,
+			"conversations",
+			conversationKey,
+			"workspace",
+		);
+		await mkdir(workspace, { recursive: true, mode: 0o700 });
+		const nativePath = join(workspace, "answer.txt");
+		await writeFile(nativePath, "native answer", { mode: 0o600 });
+		const writeResult = vi.fn(
+			async (
+				descriptor: Parameters<RuntimeFileBridgePortV1["writeResult"]>[0],
+			) =>
+				createRuntimeFileResultReceiptV1(
+					{
+						actorId: "actor-codex",
+						channelId: "web",
+						agentId: command.agentId,
+						conversationId: command.conversationId,
+						executionId: command.executionId,
+						sessionGeneration: command.sessionGeneration,
+						grantId: "grant-codex",
+						expiresAt: Date.now() + 60_000,
+						inputFileIds: [],
+					},
+					{
+						schemaVersion: 1 as const,
+						fileId: "result-file-codex-native",
+						kind: "result" as const,
+						descriptor,
+						status: "available" as const,
+						createdAt: new Date().toISOString(),
+						expiresAt: new Date(Date.now() + 60_000).toISOString(),
+					},
+				),
+		);
+		const accepted = await driver.execute(command, {
+			fileBridge: {
+				readInput: async () => {
+					throw new Error("unused");
+				},
+				writeResult,
+				revalidate: () => {},
+			},
+		});
+		await bridge.emitFileChangeCompleted(nativePath);
+		await bridge.emitFileChangeCompleted(nativePath);
+		await bridge.emitTurnCompleted("completed");
+		const events = await driver.replayEvents(
+			accepted.nativeSessionRef,
+			command.executionId,
+		);
+		expect(writeResult).toHaveBeenCalledOnce();
+		expect(writeResult.mock.calls[0]?.[0]).toMatchObject({
+			name: "answer.txt",
+			mediaType: "text/plain",
+			sizeBytes: Buffer.byteLength("native answer"),
+		});
+		expect(events.filter((event) => event.type === "file")).toHaveLength(1);
+		await bridge.emitFileChangeCompleted(nativePath);
+		expect(writeResult).toHaveBeenCalledOnce();
+	});
+
+	it("rejects a native fileChange outside the Conversation workspace", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openDriver(path, bridge);
+		drivers.push(driver);
+		const command = submitCommand();
+		const conversationKey = codexConversationKey({
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			sessionGeneration: command.sessionGeneration,
+		});
+		await mkdir(
+			join(`${path}.native`, "conversations", conversationKey, "workspace"),
+			{ recursive: true, mode: 0o700 },
+		);
+		const outside = join(directory, "outside.txt");
+		await writeFile(outside, "private", { mode: 0o600 });
+		const writeResult = vi.fn<RuntimeFileBridgePortV1["writeResult"]>();
+		const accepted = await driver.execute(command, {
+			fileBridge: {
+				readInput: async () => {
+					throw new Error("unused");
+				},
+				writeResult,
+				revalidate: () => {},
+			},
+		});
+		await bridge.emitFileChangeCompleted(outside);
+		await bridge.emitTurnCompleted("completed");
+		expect(writeResult).not.toHaveBeenCalled();
+		await expect(
+			driver.replayEvents(accepted.nativeSessionRef, command.executionId),
+		).resolves.not.toContainEqual(expect.objectContaining({ type: "file" }));
 	});
 
 	it("journals a Browser tool through the request-local execution port", async () => {
@@ -3803,6 +3940,121 @@ describe("Codex Runtime Driver", () => {
 				)
 				.map((event) => event.payload.phase),
 		).toEqual(["intent", "started", "unknown"]);
+	});
+
+	it.each([
+		["completed with success false", "completed", false],
+		["failed with success true", "failed", true],
+		["unknown with success true", "unknown", true],
+	] as const)(
+		"records an unknown result for a semantically incoherent Browser response: %s",
+		async (_name, phase, success) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await openCodexRuntimeDriverForTest(
+				{
+					...driverOptions(join(directory, "driver.json")),
+					authorizeExternalAction: async () => ({ revalidate: () => {} }),
+				},
+				async () => bridge,
+			);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			const browser = {
+				capabilityVersion: 3,
+				binding: {
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					sessionGeneration: command.sessionGeneration,
+					resourceFence: 7,
+					workloadRevision: 4,
+					imageDigest: `sha256:${"a".repeat(64)}`,
+				},
+				executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) =>
+					({
+						actionId: request.actionId,
+						operationRef: request.operationRef,
+						attemptRef: request.attemptRef,
+						binding: request.binding,
+						phase,
+						contentItems: [],
+						success,
+					}) as RuntimeBrowserToolExecutionResultV1,
+			};
+			await expect(
+				driver.executeBrowserTool(
+					accepted.nativeSessionRef,
+					command.executionId,
+					{ tool: "browser_observe", arguments: {}, pageRevision: 1 },
+					{ browser },
+				),
+			).resolves.toMatchObject({
+				phase: "unknown",
+				success: false,
+				failureCode: "recovery_unconfirmed",
+			});
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(
+				events
+					.filter(
+						(event): event is RuntimeEventV2 =>
+							event.type === "operation" && event.payload.kind === "tool",
+					)
+					.map((event) => event.payload.phase),
+			).toEqual(["intent", "started", "unknown"]);
+		},
+	);
+
+	it("records an unknown result for an invalid Browser content projection", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(join(directory, "driver.json")),
+				authorizeExternalAction: async () => ({ revalidate: () => {} }),
+			},
+			async () => bridge,
+		);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const browser = {
+			capabilityVersion: 3,
+			binding: {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) =>
+				({
+					actionId: request.actionId,
+					operationRef: request.operationRef,
+					attemptRef: request.attemptRef,
+					binding: request.binding,
+					phase: "completed",
+					contentItems: [{ type: "toolResult", text: "unexpected" }],
+					success: true,
+				}) as unknown as RuntimeBrowserToolExecutionResultV1,
+		};
+		await expect(
+			driver.executeBrowserTool(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{ tool: "browser_observe", arguments: {}, pageRevision: 1 },
+				{ browser },
+			),
+		).resolves.toMatchObject({
+			phase: "unknown",
+			success: false,
+			failureCode: "recovery_unconfirmed",
+		});
 	});
 
 	it("does not complete a Browser action after cancellation", async () => {

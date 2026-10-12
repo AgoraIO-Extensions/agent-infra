@@ -89,6 +89,10 @@ import {
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV4Schema,
 	RuntimeReplayRequestV1Schema,
+	RuntimeSkillDirectoryRequestV1Schema,
+	RuntimeSkillDirectoryResponseV1Schema,
+	RuntimeSkillResourceReadRequestV1Schema,
+	RuntimeSkillResourceReadResponseV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
 	RuntimeStatusResponseV1Schema,
@@ -446,6 +450,22 @@ function buildArtifacts() {
 					"readRuntimeCapabilitiesV1",
 					RuntimeCapabilitiesRequestV1Schema,
 					RuntimeCapabilitiesResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/skills": {
+				post: postOperation(
+					"readRuntimeSkillDirectoryV1",
+					RuntimeSkillDirectoryRequestV1Schema,
+					RuntimeSkillDirectoryResponseV1Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v1/skills/resources": {
+				post: postOperation(
+					"readRuntimeSkillResourceV1",
+					RuntimeSkillResourceReadRequestV1Schema,
+					RuntimeSkillResourceReadResponseV1Schema,
 					"application/json",
 				),
 			},

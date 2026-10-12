@@ -47,7 +47,7 @@ const capability: BrowserCapabilityAvailableV1 = {
 };
 
 it.each([undefined, capability])(
-	"exposes only admitted Browser descriptors without launching the native peer (%s)",
+	"fails closed without a pinned Pi Browser transport seam (%s)",
 	async (browserCapability) => {
 		const path = await mkdtemp(join(tmpdir(), "pi-browser-tools-"));
 		const launch = vi.fn(async () => {
@@ -70,9 +70,7 @@ it.each([undefined, capability])(
 		});
 		try {
 			const tools = driver.getBrowserToolDescriptors();
-			expect(tools.map((tool) => tool.name)).toEqual(
-				browserCapability ? ["browser_navigate", "browser_observe"] : [],
-			);
+			expect(tools).toEqual([]);
 			for (const tool of tools) {
 				expect(tool.capabilityVersion).toBe(1);
 				expect(tool.inputSchema).toMatchObject({

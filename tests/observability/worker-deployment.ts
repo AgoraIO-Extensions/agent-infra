@@ -25,7 +25,8 @@ export async function createPlatformConversationWorkerOptionsV2(
 	return {
 		sandboxPolicy: {
 			namespace: "workload-test",
-			resourceConfigurationHash: "controlled-observability-sandbox-policy",
+			resourceConfigurationHash:
+				"4d414ec733809d97d4464c0bb4694e4a615b09fa50c337bd2a3f2e7d448172a4",
 		},
 		receiveSandbox: async (
 			_claim: SessionSandboxReconciliationClaimV1,
@@ -66,7 +67,7 @@ const keys = generateKeyPairSync('ed25519');
 export async function createPlatformConversationWorkerOptionsV2(signal) {
   signal.throwIfAborted();
   return {
-    sandboxPolicy: { namespace: 'workload-test', resourceConfigurationHash: 'controlled-observability-sandbox-policy' },
+    sandboxPolicy: { namespace: 'workload-test', resourceConfigurationHash: '4d414ec733809d97d4464c0bb4694e4a615b09fa50c337bd2a3f2e7d448172a4' },
     receiveSandbox: async (_claim, sandboxSignal) => { sandboxSignal.throwIfAborted(); return { status: 'unknown', resources: [] }; },
     databaseUrl: ${JSON.stringify(input.databaseUrl)},
     pollIntervalMs: 30_000,

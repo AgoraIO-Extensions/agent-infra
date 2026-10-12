@@ -30,6 +30,7 @@
 		"zod": "catalog:"
 	},
 	"devDependencies": {
+		"@agent-infra/agent-runtime": "workspace:*",
 		"@agent-infra/config": "workspace:*",
 		"@types/node": "catalog:",
 		"postgres": "catalog:",

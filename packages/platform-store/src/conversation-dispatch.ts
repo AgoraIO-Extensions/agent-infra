@@ -900,11 +900,21 @@ export class PostgresConversationDispatchStoreV1
 		readonly errorCode: string;
 	}): Promise<boolean> {
 		requireClaim(input.claim);
-		const original = input.claim.executionStatus;
+		const recoveringUnacceptedTurn =
+			input.claim.executionStatus === "unknown" &&
+			!input.claim.metadataRecovery &&
+			isTurn(input.claim.operation);
+		const original = recoveringUnacceptedTurn
+			? input.claim.taskWaitOrder === undefined
+				? "submitted"
+				: "waiting"
+			: input.claim.executionStatus;
 		if (
 			input.claim.metadataRecovery ||
 			!isTurn(input.claim.operation) ||
-			(original !== "submitted" && original !== "waiting") ||
+			(!recoveringUnacceptedTurn &&
+				input.claim.executionStatus !== "submitted" &&
+				input.claim.executionStatus !== "waiting") ||
 			!Number.isSafeInteger(input.retryDelayMs) ||
 			input.retryDelayMs < 0 ||
 			input.retryDelayMs > 86_400_000 ||

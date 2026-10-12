@@ -15,6 +15,7 @@ import {
 import type {
 	WorkloadBrowserCapabilityProjectionV1,
 	WorkloadReconciliationStateV1,
+	WorkloadSkillCapabilityV1,
 } from "./workload-reconciliation.js";
 
 export interface AgentRuntimePresentationExpectationV1 {
@@ -29,6 +30,7 @@ export type AgentRuntimePresentationDecisionV1 =
 			readonly capabilities:
 				| (Readonly<Record<string, boolean>> & {
 						readonly browser?: WorkloadBrowserCapabilityProjectionV1;
+						readonly skills?: readonly WorkloadSkillCapabilityV1[];
 				  })
 				| null;
 			readonly interactionUrl: string | null;
@@ -227,8 +229,12 @@ export function decideAgentRuntimePresentationV1(input: {
 					...(browserDeclared && state.capabilities.browser
 						? { browser: state.capabilities.browser }
 						: {}),
+					...(state.capabilities.skills
+						? { skills: state.capabilities.skills }
+						: {}),
 				} as Readonly<Record<string, boolean>> & {
 					browser?: WorkloadBrowserCapabilityProjectionV1;
+					skills?: readonly WorkloadSkillCapabilityV1[];
 				})
 			: null,
 		interactionUrl,

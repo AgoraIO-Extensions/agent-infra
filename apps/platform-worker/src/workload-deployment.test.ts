@@ -30,8 +30,10 @@ import {
 	createWorkloadReadinessAuthorizationV1,
 	createWorkloadRuntimeProbeV1,
 	type ProductionWorkloadWorkerInputV1,
+	WorkloadDeploymentErrorV1,
 	type WorkloadRuntimeProbeAuthorizationV1,
 } from "./workload-deployment.js";
+import { workloadProbeIncompleteReasonV1 } from "./workload-probe-failure.js";
 import {
 	validateWorkloadRuntimeAuthV1,
 	workloadRuntimeAuthEnvironmentV1,
@@ -731,6 +733,27 @@ describe("authenticated Workload Runtime probe", () => {
 		);
 		if (failure.endsWith("stall")) setTimeout(() => abort.abort(), 10);
 		await expectation;
+		// Only an expired bound counts as a probe that did not complete (#2046).
+		expect(
+			workloadProbeIncompleteReasonV1(await pending.catch((error) => error)),
+		).toBe(failure.endsWith("stall") ? "timeout" : undefined);
+	});
+	it("marks a readiness transport that never connected as incomplete (#2046)", async () => {
+		const probe = createWorkloadRuntimeProbeV1({
+			namespace: workloadTestPolicy.namespace,
+			workerId: "worker-a",
+			authorization: authorize(),
+			fetch: async () => {
+				throw new TypeError("fetch failed", {
+					cause: Object.assign(new Error("connect"), {
+						code: "UND_ERR_CONNECT_TIMEOUT",
+					}),
+				});
+			},
+		});
+		const error = await probe(probeInput()).catch((caught) => caught);
+		expect(error).toBeInstanceOf(WorkloadDeploymentErrorV1);
+		expect(workloadProbeIncompleteReasonV1(error)).toBe("timeout");
 	});
 });
 

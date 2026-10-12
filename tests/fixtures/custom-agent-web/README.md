@@ -23,3 +23,11 @@ docker run --rm --publish 8080:8080 \
 ```
 
 这是 fixture 和脚本契约测试；它不能证明获准 Registry Digest、Kubernetes/Ingress/TLS、Gateway、真实身份目录或浏览器环境已经可用。
+
+## Platform identity verifier fixture
+
+`platform-auth-server.mjs` 是独立的应用端 verifier fixture。它消费
+`x-agent-infra-platform-context` 的 `platform-entry-jws` token，校验 issuer、audience、Agent、
+key version、期限和主体授权 revision；授权文件每次请求回读，因此撤权和显式 key rotation
+可以在 Node 测试中复验。它只证明应用端合同语义，不提供 Gateway、LDAP、Kubernetes route/TLS
+或浏览器实现。

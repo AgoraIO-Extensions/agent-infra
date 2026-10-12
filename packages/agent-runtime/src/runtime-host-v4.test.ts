@@ -32,7 +32,10 @@ import {
 } from "./grant-v2-fixture.test-support.js";
 import { createRuntimeExecutionGrantValidatorV4 } from "./grant-v4.js";
 import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
-import { RuntimeHost } from "./runtime-host.js";
+import {
+	type RuntimeBrowserExecutionContextFactoryInputV1,
+	RuntimeHost,
+} from "./runtime-host.js";
 
 // These exercise the real Host/Store and signature validators with a controlled
 // Driver. They do not attest PostgreSQL, HTTP assembly or official native ACs.
@@ -168,7 +171,7 @@ function delivery<T extends RuntimeBusinessRequestV4>(request: T) {
 async function setup(
 	fileBridge?: RuntimeFileBridgePortV1,
 	createBrowserExecutionContext?: (
-		input: RuntimeBrowserExecutionContextV1,
+		input: RuntimeBrowserExecutionContextFactoryInputV1,
 	) => RuntimeBrowserExecutionContextV1 | undefined,
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-consumer-"));
@@ -362,7 +365,7 @@ it("passes the request-scoped file bridge only through the Driver execution cont
 });
 
 it("injects the deployment-owned Browser controller only after Host binding admission", async () => {
-	const factoryCalls: RuntimeBrowserExecutionContextV1[] = [];
+	const factoryCalls: RuntimeBrowserExecutionContextFactoryInputV1[] = [];
 	const f = await setup(undefined, (input) => {
 		factoryCalls.push(input);
 		return {
@@ -406,10 +409,111 @@ it("injects the deployment-owned Browser controller only after Host binding admi
 	expect(factoryCalls[0]).toMatchObject({
 		binding: browser.binding,
 		capabilityVersion: 3,
+		executionId: "execution-1",
+		pageRevision: 1,
 		principal: { kind: "user", id: "alice" },
 	});
 	expect(contexts).toHaveLength(1);
 	expect(contexts[0]?.executeTool).toEqual(expect.any(Function));
+	expect(Object.isFrozen(contexts[0])).toBe(true);
+	expect(Object.isFrozen(contexts[0]?.binding)).toBe(true);
+	expect(Object.isFrozen(contexts[0]?.principal)).toBe(true);
+	// The factory input is a runtime snapshot too, and the admitted context
+	// cannot swap its principal after validation.
+	expect(Object.isFrozen(factoryCalls[0]?.principal)).toBe(true);
+	expect(() => {
+		(
+			contexts[0] as {
+				principal?: RuntimeBrowserExecutionContextV1["principal"];
+			}
+		).principal = { kind: "user", id: "mallory" };
+	}).toThrow(TypeError);
+	expect(contexts[0]?.principal).toMatchObject({ id: "alice" });
+});
+
+it("strips a preconfigured principal when no Browser factory is installed", async () => {
+	const f = await setup();
+	(
+		f.host as unknown as {
+			browserExecutionContext?: RuntimeBrowserExecutionContextV1;
+		}
+	).browserExecutionContext = {
+		capabilityVersion: 3,
+		principal: { kind: "user", id: "stale-principal" },
+		binding: {
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			sessionGeneration: 1,
+			resourceFence: 1,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+	};
+	const execute = f.driver.execute.bind(f.driver);
+	const contexts: RuntimeBrowserExecutionContextV1[] = [];
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command, context) => {
+		if (context?.browser) contexts.push(context.browser);
+		return execute(command, context);
+	});
+	await f.host.submitTurnV4(f.transport);
+	expect(contexts).toHaveLength(1);
+	expect(contexts[0]?.principal).toBeUndefined();
+});
+
+it("withholds an unadmitted Browser principal from the factory for a control operation", async () => {
+	const factoryCalls: RuntimeBrowserExecutionContextFactoryInputV1[] = [];
+	const f = await setup(undefined, (input) => {
+		factoryCalls.push(input);
+		return input;
+	});
+	(
+		f.host as unknown as {
+			browserExecutionContext?: RuntimeBrowserExecutionContextV1;
+		}
+	).browserExecutionContext = {
+		capabilityVersion: 3,
+		principal: { kind: "user", id: "stale-principal" },
+		binding: {
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			sessionGeneration: 1,
+			resourceFence: 1,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+	};
+	const accepted = await f.host.submitTurnV4(f.transport);
+	expect(factoryCalls[0]?.principal).toMatchObject({ id: "alice" });
+	// A control operation owns no pinned execution authority, so the readiness
+	// snapshot's preconfigured principal must never reach the factory.
+	factoryCalls.length = 0;
+	const {
+		input: _input,
+		selection: _selection,
+		executionSource: _source,
+		keyBinding: _binding,
+		grant: _grant,
+		...base
+	} = submission();
+	const stop = signV3Fixture(
+		{
+			...base,
+			schemaVersion: 3,
+			requestId: "stop-1",
+			hostSessionRef: accepted.hostSessionRef,
+			operation: {
+				kind: "stop",
+				id: "stop-1",
+				deliveryFence: 1,
+				executionDeliveryFence: 1,
+			},
+		},
+		"turn.stop",
+		{ now, purpose: "control", reason: "stop" },
+	);
+	await f.host.stopV3(stop, verifyRuntimeV2Fixture(stop.grant));
+	expect(factoryCalls.length).toBeGreaterThan(0);
+	expect(factoryCalls.every((call) => call.principal === undefined)).toBe(true);
 });
 
 it("drops a Browser controller factory result whose binding drifts", async () => {

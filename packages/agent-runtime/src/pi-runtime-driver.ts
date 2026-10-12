@@ -20,7 +20,9 @@ import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js
 
 export interface PiRuntimeDriverOptions {
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
-	readonly browserCapability?: BrowserCapabilityAvailableV1;
+	readonly browserCapability?:
+		| BrowserCapabilityAvailableV1
+		| (() => BrowserCapabilityAvailableV1 | undefined);
 	path: string;
 	configVersion: string;
 	defaultModelOptionId: string;
@@ -43,6 +45,9 @@ export const PiRuntimeDriver = {
 	open(options: PiRuntimeDriverOptions) {
 		return SessionRuntimeDriver.open({
 			...options,
+			// The pinned Pi adapter has no verified Browser transport seam; keep the
+			// descriptor surface empty until an extension/ACP callback is available.
+			browserCapability: undefined,
 			supportsAttachments: true,
 			cursorPrefix: "pi",
 			retireSession: (directory) =>
@@ -56,6 +61,11 @@ export const PiRuntimeDriver = {
 							? "failed"
 							: "unknown",
 			openSession: async (session) => {
+				// Pi 0.86 has no MCP session configuration or trusted extension
+				// injection point in the pinned launch. Never expose Browser tools
+				// through a prompt-only or synthetic descriptor path.
+				if (session.browser)
+					throw new Error("RUNTIME_BROWSER_EXECUTION_UNAVAILABLE");
 				const callbacks = {
 					admit: session.admit,
 					update: session.update,

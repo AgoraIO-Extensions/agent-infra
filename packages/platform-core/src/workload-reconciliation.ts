@@ -117,6 +117,65 @@ export interface WorkloadCapabilitiesV1 {
 		| undefined;
 }
 
+/** Decode persisted, credential-free Runtime capability facts strictly. */
+export function parseWorkloadCapabilitiesV1(
+	input: unknown,
+): WorkloadCapabilitiesV1 {
+	if (!input || typeof input !== "object" || Array.isArray(input))
+		throw new TypeError("Workload capabilities are invalid");
+	const value = input as Record<string, unknown>;
+	const capabilities: Record<string, unknown> = {};
+	for (const [name, item] of Object.entries(value)) {
+		if (name === "skills") {
+			if (!Array.isArray(item) || item.length > 150)
+				throw new TypeError("Workload Skill capabilities are invalid");
+			const skills = item.map((skill) => {
+				if (!skill || typeof skill !== "object" || Array.isArray(skill))
+					throw new TypeError("Workload Skill capability is invalid");
+				const entry = skill as Record<string, unknown>;
+				const keys = Object.keys(entry).sort();
+				if (
+					keys.join(",") !==
+						"manifestSha256,name,packageDigest,readOnly,schemaVersion,version" ||
+					entry.schemaVersion !== 1 ||
+					typeof entry.name !== "string" ||
+					entry.name.length < 1 ||
+					entry.name.length > 128 ||
+					typeof entry.version !== "string" ||
+					entry.version.length < 1 ||
+					entry.version.length > 128 ||
+					typeof entry.manifestSha256 !== "string" ||
+					!/^[a-f0-9]{64}$/.test(entry.manifestSha256) ||
+					typeof entry.packageDigest !== "string" ||
+					!/^[a-f0-9]{64}$/.test(entry.packageDigest) ||
+					entry.readOnly !== true
+				)
+					throw new TypeError("Workload Skill capability is invalid");
+				return entry as unknown as WorkloadSkillCapabilityV1;
+			});
+			if (new Set(skills.map((skill) => skill.name)).size !== skills.length)
+				throw new TypeError("Workload Skill capabilities are duplicated");
+			capabilities.skills = skills;
+			continue;
+		}
+		if (name === "browser") {
+			if (
+				!item ||
+				typeof item !== "object" ||
+				Array.isArray(item) ||
+				typeof (item as Record<string, unknown>).status !== "string"
+			)
+				throw new TypeError("Workload Browser capability is invalid");
+			capabilities.browser = item;
+			continue;
+		}
+		if (typeof item !== "boolean")
+			throw new TypeError("Workload capabilities are invalid");
+		capabilities[name] = item;
+	}
+	return capabilities as WorkloadCapabilitiesV1;
+}
+
 /** Opaque, server-validated Browser projection retained by Workload state. */
 export interface WorkloadBrowserCapabilityProjectionV1 {
 	readonly status: string;
@@ -209,7 +268,7 @@ export interface WorkloadRuntimePortV1 {
 	): Promise<WorkloadIdentityV1 | WorkloadPreparationV1 | "pending" | null>;
 	observe(
 		state: WorkloadReconciliationStateV1,
-	): Promise<"pending" | "healthy" | "unhealthy" | "drifted">;
+	): Promise<"pending" | "healthy" | "unhealthy" | "unreachable" | "drifted">;
 	activateSecrets(
 		state: WorkloadReconciliationStateV1,
 		input: WorkloadReconciliationInputV1,
@@ -248,10 +307,32 @@ export function createWorkloadReconciliationV1(dependencies: {
 	readonly store: WorkloadReconciliationStorePortV1;
 	readonly runtime: WorkloadRuntimePortV1;
 	readonly maximumAttempts?: number;
+	/**
+	 * Consecutive monitor probes of a serving Workload that may fail to
+	 * complete before its route closes (#2046). An unhealthy answer, drift or a
+	 * changed Pod still closes it at once.
+	 */
+	readonly probeFailureThreshold?: number;
 }) {
 	const maximumAttempts = dependencies.maximumAttempts ?? 60;
 	if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1)
 		throw new TypeError("Invalid Workload retry limit");
+	const probeFailureThreshold = dependencies.probeFailureThreshold ?? 3;
+	if (
+		!Number.isSafeInteger(probeFailureThreshold) ||
+		probeFailureThreshold < 1 ||
+		probeFailureThreshold > 100
+	)
+		throw new TypeError("Invalid Workload probe failure threshold");
+	// In a serving phase `attempts` counts consecutive monitor probes that did
+	// not complete; the route stays as it was until the run reaches the
+	// threshold (#2046). Any other unhealthy result closes it at once.
+	const servingProbeTolerated = (
+		state: WorkloadReconciliationStateV1,
+		health: Awaited<ReturnType<WorkloadRuntimePortV1["observe"]>>,
+	) => health === "unreachable" && state.attempts + 1 < probeFailureThreshold;
+	const servingProbeCompleted = (state: WorkloadReconciliationStateV1) =>
+		state.attempts === 0 ? state : { ...state, attempts: 0 };
 	const runtime = dependencies.runtime;
 	return {
 		async tick(workerId: string): Promise<"idle" | "advanced"> {
@@ -396,6 +477,8 @@ export function createWorkloadReconciliationV1(dependencies: {
 								await runtime.closeRoute(state);
 								return advance("applying");
 							}
+							// A probe that did not complete is retried like a Pod not yet
+							// ready, within the same budget; only an answer fails it (#2046).
 							if (
 								health === "unhealthy" ||
 								state.attempts + 1 >= maximumAttempts
@@ -413,26 +496,34 @@ export function createWorkloadReconciliationV1(dependencies: {
 								return failed("reconciliation_failed");
 							return { ...state, attempts: state.attempts + 1 };
 						}
-						case "promoting":
+						case "promoting": {
 							// Re-establish a closed route before rechecking a partially published candidate.
 							await runtime.closeRoute(state);
-							if ((await runtime.observe(state)) !== "healthy")
+							const health = await runtime.observe(state);
+							if (health !== "healthy") {
+								if (
+									health === "unreachable" &&
+									state.attempts + 1 < maximumAttempts
+								)
+									return { ...state, attempts: state.attempts + 1 };
 								return failed("health_check_failed");
-							{
-								const capabilities = await runtime.capabilities(state);
-								await runtime.promote(state);
-								return advance("ready", {
-									verified: state.candidate,
-									verifiedRevision: state.revision,
-									capabilities,
-								});
 							}
+							const capabilities = await runtime.capabilities(state);
+							await runtime.promote(state);
+							return advance("ready", {
+								verified: state.candidate,
+								verifiedRevision: state.revision,
+								capabilities,
+							});
+						}
 						case "ready": {
 							const health = await runtime.observe(state);
 							if (health === "healthy") {
 								await runtime.promote(state);
-								return state;
+								return servingProbeCompleted(state);
 							}
+							if (servingProbeTolerated(state, health))
+								return { ...state, attempts: state.attempts + 1 };
 							await runtime.closeRoute(state);
 							return health === "drifted"
 								? advance("applying", {
@@ -440,15 +531,19 @@ export function createWorkloadReconciliationV1(dependencies: {
 									})
 								: advance("observing");
 						}
-						case "rejected":
-							if ((await runtime.observe(state)) === "healthy") {
+						case "rejected": {
+							const health = await runtime.observe(state);
+							if (health === "healthy") {
 								await runtime.promote(state);
-								return state;
+								return servingProbeCompleted(state);
 							}
+							if (servingProbeTolerated(state, health))
+								return { ...state, attempts: state.attempts + 1 };
 							await runtime.closeRoute(state);
 							return advance("closing", {
 								revision: nextRevision(state.revision),
 							});
+						}
 						case "cleaning": {
 							await runtime.closeRoute(state);
 							const preservesResources =

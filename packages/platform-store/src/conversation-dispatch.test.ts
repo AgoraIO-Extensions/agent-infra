@@ -455,6 +455,85 @@ async function dispatchState(work: { itemId: string; executionId: string }) {
 }
 
 describe("PostgreSQL Conversation dispatch Store", () => {
+	it("wakes a still-starting Session Sandbox without the fixed retry delay", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		const [workload] =
+			await client`select state from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+		if (!workload) throw new Error("Expected verified Workload fixture");
+		await client`insert into platform.agent_owners (agent_id, owner_id, created_at)
+			values ('agent-dispatch', 'actor-dispatch', now())`;
+		await client`update platform.session_sandbox_allocations
+			set resource_policy = jsonb_set(resource_policy, '{namespace}', to_jsonb(${workloadTestPolicy.namespace}::text))
+			where conversation_id = ${work.conversationId}`;
+		await client`update platform.session_sandbox_allocations
+			set resource_observation = jsonb_set(resource_observation, '{resources}',
+				coalesce((select jsonb_agg(jsonb_set(resource, '{namespace}', to_jsonb(${workloadTestPolicy.namespace}::text)))
+					from jsonb_array_elements(resource_observation->'resources') as resource), '[]'::jsonb))
+			where conversation_id = ${work.conversationId}`;
+		const itemId = `conversation:sandbox:${work.conversationId}:1`;
+		await client`insert into platform.outbox_items
+			(id, scope_type, scope_id, operation, payload, trace_id, request_id,
+			 status, available_at, created_at, updated_at)
+			values (${itemId}, 'conversation', ${work.conversationId},
+			 'conversation.sandbox.reconcile.v1', ${client.json({
+					schemaVersion: 1,
+					conversationId: work.conversationId,
+					sessionGeneration: 1,
+					deployment: workload.state.verified.deployment,
+					modelProjection: null,
+				})}, 'trace-sandbox-wakeup', 'request-sandbox-wakeup',
+			 'pending', now(), now(), now())`;
+		const store = new PostgresConversationDispatchStoreV1({
+			databaseUrl,
+			sandboxPolicy: {
+				namespace: workloadTestPolicy.namespace,
+				resourceConfigurationHash:
+					workloadResourceConfigurationHashV1(workloadTestPolicy),
+			},
+			userDirectory: {
+				async resolveUser(userId) {
+					return {
+						schemaVersion: 1,
+						userId,
+						accountStatus: "active",
+						organizationIds: [],
+						authorizationRevision: "sandbox-wakeup",
+					};
+				},
+			},
+		});
+		try {
+			const claim = await store.claimSandboxReconciliation({
+				schemaVersion: 1,
+				itemId,
+				workerId: "sandbox-wakeup-worker",
+				leaseDurationMs: 30_000,
+			});
+			if (!claim) throw new Error("Expected Sandbox claim");
+			const resources = claim.previousObservation?.resources ?? [];
+			expect(resources).toHaveLength(6);
+			expect(
+				await store.recordSandboxObservation({
+					claim,
+					observation: { status: "observed", resources },
+				}),
+			).toBe("committed");
+			const [retry] = await client<{ status: string; delay_ms: number }[]>`
+				select status,
+					extract(epoch from (available_at - clock_timestamp())) * 1000 as delay_ms
+				from platform.outbox_items where id = ${itemId}`;
+			expect(retry?.status).toBe("retry_scheduled");
+			// The receiver performs a bounded in-lease wait first; an unready Pod
+			// that remains unready returns to the paced retry and must not hot-loop.
+			expect(Number(retry?.delay_ms)).toBeGreaterThan(750);
+			expect(Number(retry?.delay_ms)).toBeLessThan(1_500);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("persists an expired stop as unknown and keeps the stop open until a terminal response", async () => {
 		const work = await seed("conversation.turn.stop.v1", {
 			executionStatus: "processing",
@@ -2288,14 +2367,14 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		},
 	);
 
-	it("rejects releasing a Turn that was claimed for recovery (#1522)", async () => {
+	it("rejects releasing a processing Turn that was claimed for recovery (#1522)", async () => {
 		const work = await seed();
 		const claimed = await claim(work.itemId);
 		try {
 			if (claimed.decision.outcome !== "claimed")
 				throw new Error("Expected claim");
 			const before = await dispatchState(work);
-			for (const executionStatus of ["unknown", "processing"] as const)
+			for (const executionStatus of ["processing"] as const)
 				await expect(
 					claimed.store.releaseUnsentDispatch({
 						claim: { ...claimed.decision.claim, executionStatus },
@@ -2304,6 +2383,37 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					}),
 				).rejects.toThrow("Conversation dispatch release is invalid");
 			expect(await dispatchState(work)).toEqual(before);
+		} finally {
+			await claimed.store.close();
+		}
+	});
+
+	it("releases an unknown Turn after recovery proves the submit was never found", async () => {
+		const work = await seed();
+		const claimed = await claim(work.itemId);
+		try {
+			if (claimed.decision.outcome !== "claimed")
+				throw new Error("Expected claim");
+			const original = claimed.decision.claim;
+			expect(
+				await claimed.store.prepareRuntimeDispatch({
+					claim: original,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			const prepared = {
+				...original,
+				executionStatus: "unknown" as const,
+			};
+			expect(
+				await claimed.store.releaseUnsentDispatch({
+					claim: prepared,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_ACCEPTANCE_NOT_SENT",
+				}),
+			).toBe(true);
+			const restored = await dispatchState(work);
+			expect(restored?.execution_status).toBe("submitted");
 		} finally {
 			await claimed.store.close();
 		}

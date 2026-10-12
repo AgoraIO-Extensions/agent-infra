@@ -118,6 +118,13 @@ describe("standard contract artifacts", () => {
 					status: "failed",
 					configurationRevision: null,
 					errorCode: "stale_revision",
+					compatibility: {
+						status: "unknown",
+						agentId: "agent_01",
+						configurationRevision: 7,
+						targetImageDigest: `sha256:${"b".repeat(64)}`,
+						reasonCode: "projection_missing",
+					},
 				},
 			],
 		};
@@ -373,6 +380,8 @@ describe("standard contract artifacts", () => {
 			"/internal/runtime/v1/events/stream",
 			"/internal/runtime/v1/generations/cancel",
 			"/internal/runtime/v1/instructions",
+			"/internal/runtime/v1/skills",
+			"/internal/runtime/v1/skills/resources",
 			"/internal/runtime/v1/status",
 			"/internal/runtime/v1/stops",
 			"/internal/runtime/v1/turns",

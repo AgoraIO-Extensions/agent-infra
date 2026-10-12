@@ -12,6 +12,7 @@ import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	type ClaudeRuntimeDriverOptions,
 	type CodexRuntimeDriverOptions,
 	FakeRuntimeDriver,
 } from "@agent-infra/agent-runtime";
@@ -35,6 +36,7 @@ import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runt
 import { writeStandardMcpExport } from "./standard-mcp-installation.test-support.js";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
+	openClaudeRuntimeDriver: vi.fn(),
 	openCodexRuntimeDriver: vi.fn(),
 	openOpenCodeRuntime: vi.fn(),
 	openPiRuntime: vi.fn(),
@@ -62,11 +64,15 @@ vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("@agent-infra/agent-runtime")>();
 	class MockCodexRuntimeDriver extends actual.CodexRuntimeDriver {}
+	const MockClaudeRuntimeDriver = {
+		open: runtimeAssemblyMocks.openClaudeRuntimeDriver,
+	} as unknown as typeof actual.ClaudeRuntimeDriver;
 	Object.defineProperty(MockCodexRuntimeDriver, "open", {
 		value: runtimeAssemblyMocks.openCodexRuntimeDriver,
 	});
 	return {
 		...actual,
+		ClaudeRuntimeDriver: MockClaudeRuntimeDriver,
 		CodexRuntimeDriver: MockCodexRuntimeDriver,
 		openOpenCodeRuntime: runtimeAssemblyMocks.openOpenCodeRuntime,
 		openPiRuntime: runtimeAssemblyMocks.openPiRuntime,
@@ -83,6 +89,9 @@ runtimeAssemblyMocks.openOpenCodeRuntime.mockImplementation(
 );
 runtimeAssemblyMocks.openPiRuntime.mockImplementation(
 	actualMessageRuntimes.openPiRuntime,
+);
+runtimeAssemblyMocks.openClaudeRuntimeDriver.mockImplementation(
+	actualMessageRuntimes.ClaudeRuntimeDriver.open,
 );
 
 import {
@@ -115,8 +124,72 @@ async function environment() {
 	};
 }
 
+async function claudeAssemblyFixture(
+	installation: "available" | "absent" | "unavailable",
+) {
+	const values: NodeJS.ProcessEnv = await environment();
+	const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
+	if (!dataDirectory) throw new Error("Missing test data directory");
+	const fixture = await standardMcpFixture();
+	const profile = fixture.target.profile;
+	const approval = {
+		schemaVersion: 1 as const,
+		configFingerprint: fixture.target.configFingerprint,
+		source: fixture.target.source,
+		egressEnforced: true as const,
+	};
+	const profileFile = join(dataDirectory, "consumer.json");
+	await writeFile(profileFile, JSON.stringify({ profile, approval }));
+	Object.assign(values, {
+		AGENT_INFRA_RUNTIME_DRIVER: "claude",
+		AGENT_INFRA_RUNTIME_AGENT_ID: fixture.input.scope.agentId,
+		AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "synthetic-model-credential",
+		AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+			schemaVersion: 3,
+			configVersion: "claude-connection-mcp",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					protocol: "anthropic-messages-v1",
+					authentication: "bearer",
+					model: "claude-opus-5",
+					reasoningLevels: ["high"],
+					endpoint: "https://models.example.test",
+					credentialEnvironmentVariable:
+						"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+				},
+			],
+		}),
+		AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE: profileFile,
+		AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION: JSON.stringify([
+			approval.configFingerprint,
+			approval.source.ref,
+			approval.source.revision,
+		]),
+	});
+	if (installation === "available") {
+		const exportReceipt = await writeStandardMcpExport(
+			dataDirectory,
+			fixture.target,
+			[fixture.input],
+		);
+		values.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION =
+			exportReceipt.revision;
+	} else if (installation === "unavailable") {
+		values.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION =
+			JSON.stringify(["missing-supply", "r1"]);
+	}
+	return { values, dataDirectory, fixture, approval };
+}
+
 afterEach(async () => {
 	runtimeAssemblyMocks.assertRuntimeProcessProtection.mockReset();
+	runtimeAssemblyMocks.openClaudeRuntimeDriver.mockClear();
+	runtimeAssemblyMocks.openClaudeRuntimeDriver.mockImplementation(
+		actualMessageRuntimes.ClaudeRuntimeDriver.open,
+	);
 	runtimeAssemblyMocks.openCodexRuntimeDriver.mockReset();
 	runtimeAssemblyMocks.openOpenCodeRuntime.mockClear();
 	runtimeAssemblyMocks.openOpenCodeRuntime.mockImplementation(
@@ -203,6 +276,72 @@ describe("RuntimeHost environment assembly", () => {
 				expect(openedWith).not.toHaveProperty("standardConnectionClient");
 			} finally {
 				await runtime.close();
+			}
+		},
+	);
+
+	it("assembles the protected Connection MCP input for Claude", async () => {
+		const { values, dataDirectory, fixture, approval } =
+			await claudeAssemblyFixture("available");
+		let openedWith: ClaudeRuntimeDriverOptions | undefined;
+		runtimeAssemblyMocks.openClaudeRuntimeDriver.mockImplementation(
+			async (options: ClaudeRuntimeDriverOptions) => {
+				openedWith = options;
+				return FakeRuntimeDriver.open(
+					join(dataDirectory, "claude-driver.json"),
+				);
+			},
+		);
+		let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
+		try {
+			runtime = await assembleRuntimeHost(values);
+			expect(runtime.connectionConsumer).toMatchObject({
+				status: "available",
+				configFingerprint: approval.configFingerprint,
+			});
+			expect(openedWith?.standardConnectionClient?.target).toMatchObject({
+				status: "available",
+				profile: { consumerId: fixture.target.profile.consumerId },
+				url: fixture.target.url,
+			});
+			expect(openedWith?.standardConnectionClient?.resolveInput).toBeTypeOf(
+				"function",
+			);
+		} finally {
+			await runtime?.close();
+		}
+	});
+
+	it.each(["absent", "unavailable"] as const)(
+		"keeps Claude protected MCP fail-closed when installation is %s",
+		async (installation) => {
+			const { values, dataDirectory } =
+				await claudeAssemblyFixture(installation);
+			let openedWith: ClaudeRuntimeDriverOptions | undefined;
+			runtimeAssemblyMocks.openClaudeRuntimeDriver.mockImplementation(
+				async (options: ClaudeRuntimeDriverOptions) => {
+					openedWith = options;
+					return FakeRuntimeDriver.open(
+						join(dataDirectory, "claude-driver.json"),
+					);
+				},
+			);
+			let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
+			try {
+				runtime = await assembleRuntimeHost(values);
+				expect(openedWith).toBeDefined();
+				if (openedWith?.standardConnectionClient) {
+					await expect(
+						openedWith.standardConnectionClient.resolveInput(
+							reference,
+							new AbortController().signal,
+						),
+					).rejects.toMatchObject({
+						code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+					});
+				}
+			} finally {
+				await runtime?.close();
 			}
 		},
 	);

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
 	type BrowserCapabilityAvailableV1,
 	RuntimeCapabilitiesV1Schema,
@@ -10,6 +11,8 @@ import {
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 	type RuntimeEventV1,
 	RuntimeEventV1Schema,
+	type RuntimeOperationFactV2,
+	RuntimeOperationFactV2Schema,
 	type RuntimeSelectionV1,
 	RuntimeSelectionV1Schema,
 	type RuntimeStatusV1,
@@ -25,6 +28,7 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelCredentialResolver,
 	RuntimeModelDirectory,
+	RuntimeOperationFactInputV1,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -34,6 +38,7 @@ import {
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import { readRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
 import {
 	boundedRuntimeSkillRead,
 	type RuntimeFilesystemSkillDirectoryV1,
@@ -90,6 +95,8 @@ export interface SessionRuntimeDriverOptions {
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly SessionRuntimeModelOption[];
 	readonly supportsAttachments?: boolean;
+	/** Set only when the native adapter supplies a confirmed result-file callback. */
+	readonly supportsResultFiles?: boolean;
 	/**
 	 * Per-peer image input negotiation for Drivers whose native protocol decides
 	 * it before a Session exists (ACP): `false` rejects attachment input before
@@ -115,9 +122,17 @@ export interface NativeSessionOptions {
 	nativeId?: string;
 	history?: { checkpoint: string; complete: boolean };
 	selection: RuntimeSelectionV1;
+	/** Request-local execution identity for Browser adapters; never persisted here. */
+	readonly executionId?: string;
 	admit: () => Promise<void>;
 	resolveModelCredential?: RuntimeModelCredentialResolver;
+	/** Request-local Browser context; never persisted or selected by native input. */
+	readonly browser?: import("./driver.js").RuntimeBrowserExecutionContextV1;
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
+	readonly resultFile?: (input: {
+		readonly path: string;
+		readonly content: string;
+	}) => Promise<void>;
 	update: (event?: Pick<RuntimeEventV1, "type" | "payload">) => Promise<void>;
 }
 export interface NativeSession {
@@ -135,6 +150,8 @@ export interface NativeSession {
 	): Promise<{ stopReason: string; checkpoint?: string }>;
 	reusable?(): boolean;
 	startTurn?(options: NativeSessionOptions): void;
+	/** Whether this native Session can be reused for the next request-local context. */
+	reuseFor?(next: Pick<NativeSessionOptions, "browser">): boolean;
 	checkpoint?(): Promise<string>;
 	recover?(
 		checkpoint: string,
@@ -192,6 +209,8 @@ interface Turn {
 	nativeCheckpoint?: string;
 	nativeTerminalCheckpoint?: string;
 	events: RuntimeEventV1[];
+	/** Durable metadata-only facts emitted by shared non-Codex operation adapters. */
+	operationFacts?: RuntimeOperationFactV2[];
 	operationRef?: string;
 	attemptRef?: string;
 }
@@ -250,10 +269,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	async validateExternalAction(
 		action: import("./driver.js").RuntimeExternalActionAuthorization,
 	) {
-		if (
-			action.kind !== "model" ||
-			action.runtimeOperationId !== action.executionId
-		)
+		if (action.runtimeOperationId !== action.executionId)
 			runtimeAuthorizationDenied();
 		let binding: Binding | undefined;
 		let file: DurableJsonFile<Session> | undefined;
@@ -269,12 +285,96 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const turn = file
 			.read()
 			.turns.find((item) => item.executionId === action.executionId);
+		if (!turn) runtimeAuthorizationDenied();
 		if (
-			!turn ||
-			turn.operationRef !== action.operationRef ||
-			turn.attemptRef !== action.attemptRef
+			action.kind === "model" &&
+			(turn.operationRef !== action.operationRef ||
+				turn.attemptRef !== action.attemptRef)
 		)
 			runtimeAuthorizationDenied();
+		if (turn.operationFacts !== undefined) {
+			const fact = turn.operationFacts
+				.filter(
+					(value) =>
+						value.operationRef === action.operationRef &&
+						value.attemptRef === action.attemptRef &&
+						value.kind === action.kind,
+				)
+				.at(-1);
+			if (!fact || (fact.phase !== "intent" && fact.phase !== "started"))
+				runtimeAuthorizationDenied();
+		} else if (action.kind === "tool") {
+			runtimeAuthorizationDenied();
+		}
+	}
+
+	/** Append one durable operation fact and acknowledge its journal commit. */
+	async recordOperationFact(input: RuntimeOperationFactInputV1): Promise<void> {
+		if (this.closed) unavailable();
+		const binding = this.index
+			.read()
+			.sessions.find((entry) => entry.ref === input.nativeSessionRef);
+		if (!binding) unavailable();
+		const file = await this.file(binding);
+		await this.exclusive(binding.ref, () =>
+			this.recordFact(file, input.executionId, input.fact),
+		);
+	}
+
+	private async recordFact(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		input: RuntimeOperationFactV2,
+	): Promise<void> {
+		const fact = RuntimeOperationFactV2Schema.parse(input);
+		await file.update((state) => {
+			const turn = state.turns.find(
+				(entry) => entry.executionId === executionId,
+			);
+			if (!turn || terminal(turn.status))
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation fact is no longer current",
+					409,
+				);
+			turn.operationFacts ??= [];
+			const previous = turn.operationFacts
+				.filter(
+					(entry) =>
+						entry.operationRef === fact.operationRef &&
+						entry.attemptRef === fact.attemptRef,
+				)
+				.at(-1);
+			const duplicate =
+				previous &&
+				previous.kind === fact.kind &&
+				JSON.stringify(previous) === JSON.stringify(fact);
+			if (duplicate) return;
+			if (turn.operationFacts.length >= 256)
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation fact journal is full",
+					409,
+				);
+			if (!previous) {
+				if (fact.phase !== "intent")
+					throw new RuntimeHostError(
+						"RUNTIME_OPERATION_CONFLICT",
+						"Runtime operation must start with intent",
+						409,
+					);
+			} else if (
+				previous.kind !== fact.kind ||
+				(previous.phase !== "intent" && previous.phase !== "started") ||
+				fact.phase === "intent"
+			)
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation fact transition is invalid",
+					409,
+				);
+			turn.operationFacts.push(fact);
+		});
 	}
 	static async open(options: SessionRuntimeDriverOptions) {
 		if (
@@ -520,6 +620,25 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							if (event.payload.status !== turn.status) unavailable();
 						}
 					}
+					const operationFacts = turn.operationFacts ?? [];
+					if (!Array.isArray(operationFacts)) unavailable();
+					const factKeys = new Set<string>();
+					const latestFacts = new Map<string, RuntimeOperationFactV2>();
+					for (const rawFact of operationFacts) {
+						const fact = RuntimeOperationFactV2Schema.parse(rawFact);
+						const key = JSON.stringify([fact.operationRef, fact.attemptRef]);
+						if (factKeys.has(key)) {
+							const previous = latestFacts.get(key);
+							if (
+								!previous ||
+								(previous.phase !== "intent" && previous.phase !== "started") ||
+								(fact.phase === "intent" && previous.phase !== "intent")
+							)
+								unavailable();
+						} else if (fact.phase !== "intent") unavailable();
+						factKeys.add(key);
+						latestFacts.set(key, fact);
+					}
 					if (terminal(turn.status) !== completed) unavailable();
 					if (
 						completed &&
@@ -741,7 +860,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					return result(command, binding.ref, unknownResult);
 			}
 			if (command.kind === "submit-turn")
-				return this.submit(file, command, context?.fileBridge);
+				return this.submit(
+					file,
+					command,
+					context?.fileBridge,
+					context?.browser,
+				);
 			if (command.kind === "supplement")
 				return this.resolve(file, command, { outcome: "busy" });
 			const turn = file
@@ -882,6 +1006,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		file: DurableJsonFile<Session>,
 		command: Submit,
 		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
+		browser?: import("./driver.js").RuntimeBrowserExecutionContextV1,
 	) {
 		const before = file.read();
 		const ref = before.binding.ref;
@@ -947,6 +1072,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const reuse =
 			previousHandle?.native.startTurn &&
 			previousHandle.native.reusable?.() &&
+			(previousHandle.native.reuseFor?.({ browser }) ?? true) &&
 			JSON.stringify(previousHandle.selection) === JSON.stringify(selection)
 				? previousHandle
 				: undefined;
@@ -955,6 +1081,55 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const workspace = join(directory, "workspace");
 		await mkdir(workspace, { recursive: true, mode: 0o700 });
 		if ((await realpath(workspace)) !== workspace) unavailable();
+		let resultFileWritten = false;
+		let resultFileInFlight = false;
+		const resultFile = fileBridge
+			? async (input: { path: string; content: string }) => {
+					if (resultFileWritten || !isAbsolute(input.path)) return;
+					const root = await realpath(workspace).catch(() => undefined);
+					if (!root) return;
+					const candidate = isAbsolute(input.path)
+						? resolve(input.path)
+						: resolve(root, input.path);
+					const within = relative(root, candidate);
+					if (!within || within.startsWith("..") || isAbsolute(within)) return;
+					const bytes = Buffer.from(input.content, "utf8");
+					if (bytes.byteLength > 10 * 1024 * 1024) return;
+					const bindingRecord = await this.binding(command, false).catch(
+						() => undefined,
+					);
+					if (!bindingRecord) return;
+					const state = await this.file(bindingRecord)
+						.then((current) => current.read())
+						.catch(() => undefined);
+					const turn = state?.turns.find(
+						(candidate) => candidate.executionId === command.executionId,
+					);
+					if (!turn || terminal(turn.status)) return;
+					if (resultFileInFlight) return;
+					resultFileInFlight = true;
+					try {
+						const receipt = await fileBridge.writeResult(
+							{
+								name: basename(within),
+								mediaType: "text/plain",
+								sizeBytes: bytes.byteLength,
+								sha256: createHash("sha256").update(bytes).digest("hex"),
+							},
+							new ReadableStream<Uint8Array>({
+								start(controller) {
+									controller.enqueue(bytes);
+									controller.close();
+								},
+							}),
+						);
+						await this.recordResultFile(command, receipt);
+						resultFileWritten = true;
+					} finally {
+						resultFileInFlight = false;
+					}
+				}
+			: undefined;
 		let admitted: () => void = () => {};
 		const operationRef = randomUUID();
 		const attemptRef = randomUUID();
@@ -982,6 +1157,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		try {
 			const sessionOptions: NativeSessionOptions = {
 				directory,
+				executionId: command.executionId,
 				selection,
 				admit: async () => {
 					if (!dispatched || this.closed)
@@ -994,9 +1170,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					admitted();
 				},
 				...(resolveModelCredential ? { resolveModelCredential } : {}),
+				...(browser ? { browser } : {}),
 				cwd: workspace,
 				nativeId: before.nativeId,
 				skillDirectory: this.options.skillDirectory,
+				...(resultFile ? { resultFile } : {}),
 				history: before.turns.at(-1)?.nativeTerminalCheckpoint
 					? {
 							checkpoint:
@@ -1079,6 +1257,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					selection,
 					status: "unknown",
 					events: [],
+					operationFacts: [],
 					operationRef,
 					attemptRef,
 				});
@@ -1466,6 +1645,56 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		assertCurrent();
 		return bytes.slice();
 	}
+	async recordResultFile(
+		command: RuntimeDriverCommand,
+		result: import("./runtime-file-bridge.js").RuntimeFileResultReceiptV1,
+	) {
+		const { binding, projection } = readRuntimeFileResultReceiptV1(result);
+		if (
+			binding.agentId !== command.agentId ||
+			binding.conversationId !== command.conversationId ||
+			binding.executionId !== command.executionId ||
+			binding.sessionGeneration !== command.sessionGeneration
+		)
+			runtimeAuthorizationDenied();
+		const parsed = FileProjectionV1Schema.parse(projection);
+		if (parsed.kind !== "result" || parsed.status !== "available")
+			runtimeAuthorizationDenied();
+		const bindingRecord = await this.binding(command, false);
+		if (!bindingRecord) unavailable();
+		const file = await this.file(bindingRecord);
+		await file.update((state) => {
+			const turn = state.turns.find(
+				(candidate) => candidate.executionId === command.executionId,
+			);
+			if (!turn || terminal(turn.status)) runtimeAuthorizationDenied();
+			if (
+				turn.events.some(
+					(event) =>
+						event.type === "file" && event.payload.fileId === parsed.fileId,
+				)
+			)
+				return;
+			state.sequence++;
+			turn.events.push(
+				RuntimeEventV1Schema.parse({
+					schemaVersion: 1,
+					executionId: command.executionId,
+					adapterEventKey: randomUUID(),
+					cursor: `${this.options.cursorPrefix}-${state.sequence}`,
+					occurredAt: new Date().toISOString(),
+					type: "file",
+					payload: {
+						fileId: parsed.fileId,
+						name: parsed.descriptor.name,
+						mimeType: parsed.descriptor.mediaType,
+						sizeBytes: parsed.descriptor.sizeBytes,
+					},
+				}),
+			);
+		});
+		for (const wake of this.waiters.get(bindingRecord.ref) ?? []) wake();
+	}
 	async getCapabilities() {
 		const skills = this.options.skillDirectory?.findSkills().map((skill) => ({
 			schemaVersion: 1 as const,
@@ -1483,7 +1712,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const capabilities = {
 			modelSelection: true,
 			attachments: this.options.supportsAttachments === true,
-			resultFiles: false,
+			resultFiles: this.options.supportsResultFiles === true,
 			connection: false,
 			supplementaryInstruction: false,
 			...(skills && skills.length > 0 ? { skills } : {}),

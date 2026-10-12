@@ -39,6 +39,24 @@ function pageReference(value: Record<string, unknown>): BrowserPageReferenceV1 {
 	};
 }
 
+function sameExecutionBinding(
+	request: RuntimeBrowserToolExecutionRequestV1["binding"],
+	context: Pick<
+		RuntimeBrowserExecutionContextV1,
+		"binding" | "capabilityVersion"
+	>,
+) {
+	return (
+		request.agentId === context.binding.agentId &&
+		request.conversationId === context.binding.conversationId &&
+		request.sessionGeneration === context.binding.sessionGeneration &&
+		request.resourceFence === context.binding.resourceFence &&
+		request.workloadRevision === context.binding.workloadRevision &&
+		request.imageDigest === context.binding.imageDigest &&
+		request.capabilityVersion === context.capabilityVersion
+	);
+}
+
 function boundedText(value: unknown): string {
 	const text = typeof value === "string" ? value : JSON.stringify(value);
 	return text.length <= maxContentBytes
@@ -112,6 +130,16 @@ export function createBrowserSessionDriverContextV1(input: {
 		binding: structuredClone(input.binding),
 		...(input.handoff ? { handoff: { controller: input.handoff } } : {}),
 		executeTool: async (request, signal) => {
+			// The Driver binds executionId, while this request-local context binds
+			// Agent/Conversation/Session and capability identity. A foreign tuple
+			// must never reach the Session controller, even in a controlled adapter.
+			if (
+				!sameExecutionBinding(request.binding, {
+					binding: input.binding,
+					capabilityVersion: input.capability.capabilityVersion,
+				})
+			)
+				throw new Error("BROWSER_DRIVER_CONTEXT_BINDING_MISMATCH");
 			try {
 				signal.throwIfAborted();
 				const args = request.arguments;

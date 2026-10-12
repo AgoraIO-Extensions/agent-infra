@@ -17,6 +17,8 @@ export interface PlatformWorkloadWorkerOptionsV1
 	readonly workerId?: string;
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
+	/** Consecutive incomplete monitor probes a serving Workload tolerates (#2046). */
+	readonly probeFailureThreshold?: number;
 	readonly log?: (message: string) => void;
 }
 
@@ -33,7 +35,28 @@ export function createPlatformWorkloadWorkerV1(
 		pollIntervalMs > 300_000
 	)
 		throw new TypeError("Invalid Worker poll interval");
-	const runtime = createWorkloadRuntimeV1({ ...options, workerId });
+	const log = options.log ?? console.info;
+	function logSafely(message: string) {
+		try {
+			log(message);
+		} catch {
+			// Logging is observational and must not stop reconciliation.
+		}
+	}
+	const runtime = createWorkloadRuntimeV1({
+		...options,
+		workerId,
+		onProbeFailure(failure) {
+			options.onProbeFailure?.(failure);
+			logSafely(
+				JSON.stringify({
+					service: "platform-worker",
+					code: "WORKLOAD_PROBE_FAILED",
+					...failure,
+				}),
+			);
+		},
+	});
 	const store = openPostgresWorkloadReconciliationStoreV1({
 		databaseUrl: options.databaseUrl,
 		runtimeModelVersion: options.runtimeModelVersion,
@@ -53,6 +76,7 @@ export function createPlatformWorkloadWorkerV1(
 			store,
 			runtime,
 			maximumAttempts: options.maximumAttempts,
+			probeFailureThreshold: options.probeFailureThreshold,
 		});
 	} catch (error) {
 		void Promise.allSettled([store.close(), files?.close()]);
@@ -63,14 +87,6 @@ export function createPlatformWorkloadWorkerV1(
 	let running: Promise<void> | undefined;
 	let closing: Promise<void> | undefined;
 	let tickTail: Promise<void> = Promise.resolve();
-	const log = options.log ?? console.info;
-	function logSafely(message: string) {
-		try {
-			log(message);
-		} catch {
-			// Logging is observational and must not stop reconciliation.
-		}
-	}
 	function enqueueTick() {
 		const result = tickTail.then(async () => {
 			try {

@@ -27,6 +27,23 @@ export const StandardTemplateReleaseApplyAllResponseV2Schema = z.strictObject({
 				status: z.enum(["applied", "failed"]),
 				configurationRevision: z.number().int().min(1).nullable(),
 				errorCode: z.string().min(1).max(128).nullable(),
+				compatibility: z.strictObject({
+					status: z.enum(["compatible", "incompatible", "unknown"]),
+					agentId: OpaqueIdV1Schema,
+					configurationRevision: z.number().int().min(1),
+					targetImageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+					reasonCode: z.enum([
+						"projection_missing",
+						"projection_malformed",
+						"target_metadata_missing",
+						"agent_mismatch",
+						"template_mismatch",
+						"digest_mismatch",
+						"runtime_schema_mismatch",
+						"configuration_revision_mismatch",
+						"verified",
+					]),
+				}),
 			}),
 		)
 		.max(256),

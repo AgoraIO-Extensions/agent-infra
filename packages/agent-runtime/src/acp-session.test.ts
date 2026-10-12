@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,48 @@ it("discovers grouped native models, reads the current choice, and rejects choic
 		await expect(session.select("provider/model", "high")).rejects.toThrow(
 			"RUNTIME_MODEL_SELECTION_UNSUPPORTED",
 		);
+	} finally {
+		await session.close();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+it("passes trusted MCP servers through ACP session/new", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "acp-mcp-servers-"));
+	await mkdir(join(cwd, "workspace"));
+	const session = await openAcpSession({
+		directory: cwd,
+		cwd: join(cwd, "workspace"),
+		launch: {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "mcp-servers" },
+			mcpServers: [
+				{
+					type: "http",
+					name: "agent-infra-browser",
+					url: "http://127.0.0.1:12345/mcp",
+					headers: [{ name: "Authorization", value: "Bearer test" }],
+				},
+			],
+		},
+		update: async () => {},
+	});
+	try {
+		expect(
+			JSON.parse(
+				await readFile(join(cwd, "workspace", "session.json"), "utf8"),
+			),
+		).toMatchObject({
+			mcpServers: [
+				{
+					name: "agent-infra-browser",
+					url: "http://127.0.0.1:12345/mcp",
+				},
+			],
+		});
 	} finally {
 		await session.close();
 		await rm(cwd, { recursive: true, force: true });

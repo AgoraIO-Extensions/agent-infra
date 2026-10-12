@@ -2008,8 +2008,8 @@ describe("published Relay authority migration", () => {
 			tag: "0053_conversation_audit_execution_index",
 		});
 		expect(journal.entries.at(-1)).toMatchObject({
-			idx: 54,
-			tag: "0054_platform_execution_failure_events",
+			idx: 55,
+			tag: "0055_platform_execution_failure_events",
 		});
 		const sourceJournal = await readFile(
 			resolve(sourceFolder, "meta/_journal.json"),
@@ -2110,6 +2110,7 @@ describe("published Relay authority migration", () => {
 			const skillHubColumns = [
 				"skill_hub_agent_bindings:agent_id",
 				"skill_hub_agent_bindings:agent_version",
+				"skill_hub_agent_bindings:applied_receipt",
 				"skill_hub_agent_bindings:created_at",
 				"skill_hub_agent_bindings:failure_reason",
 				"skill_hub_agent_bindings:grant",
@@ -2153,6 +2154,7 @@ describe("published Relay authority migration", () => {
 			const skillHubChecks = [
 				"skill_hub_agent_bindings:skill_hub_agent_binding_configuration_revision_safe",
 				"skill_hub_agent_bindings:skill_hub_agent_binding_failure_binding",
+				"skill_hub_agent_bindings:skill_hub_agent_binding_receipt_binding",
 				"skill_hub_agent_bindings:skill_hub_agent_binding_state_valid",
 				"skill_hub_agent_bindings:skill_hub_agent_binding_sync_revision_safe",
 				"skill_hub_agent_bindings:skill_hub_agent_binding_version_non_empty",

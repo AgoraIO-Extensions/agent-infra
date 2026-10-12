@@ -121,12 +121,28 @@ export async function prepareRuntimeOAuth(options: {
 			configuration.resource !== target.url
 		)
 			unavailable();
-		for (const endpoint of [
+		requireConnectionOAuthEndpoint(
 			configuration.authorizationEndpoint,
+			issuer,
+			"/oauth/authorize",
+		);
+		requireConnectionOAuthEndpoint(
 			configuration.tokenEndpoint,
+			issuer,
+			"/oauth/token",
+		);
+		requireConnectionOAuthEndpoint(
 			configuration.revocationEndpoint,
-		])
-			if (new URL(endpoint).origin !== issuer.origin) unavailable();
+			issuer,
+			"/oauth/revoke",
+		);
+		if (configuration.patBinding) {
+			requireConnectionOAuthEndpoint(
+				configuration.patBinding.bindingEndpoint,
+				issuer,
+				"/api/v1/connection/pat-bindings",
+			);
+		}
 		const scope = RuntimeOAuthScopeV1Schema.parse({
 			agentId: options.agentId,
 			sandboxId: environment.AGENT_INFRA_RUNTIME_SANDBOX_ID,
@@ -155,6 +171,11 @@ export async function prepareRuntimeOAuth(options: {
 		const callbackServiceToken = validateStandardMcpToken(
 			await readProtectedStandardMcpBytes(tls, "callback.auth", 4096),
 		);
+		const patBindingSecretFile =
+			environment.AGENT_INFRA_RUNTIME_CONNECTION_PAT_BINDING_SECRET_FILE;
+		const patBindingSecret = configuration.patBinding
+			? await readProtectedRuntimeSecretFile(patBindingSecretFile)
+			: undefined;
 		assertStandardMcpProcessProtection();
 		if (!serviceToken || callbackServiceToken === serviceToken) unavailable();
 		const certificate = new X509Certificate(cert);
@@ -185,6 +206,7 @@ export async function prepareRuntimeOAuth(options: {
 				scope,
 				principal: { kind: "user", id: principal.id },
 			}),
+			...(patBindingSecret ? { patBindingSecret } : {}),
 		});
 		assertStandardMcpProcessProtection();
 		return {
@@ -199,6 +221,77 @@ export async function prepareRuntimeOAuth(options: {
 	} catch {
 		return { status: "unavailable" };
 	}
+}
+
+async function readProtectedRuntimeSecretFile(path: string | undefined) {
+	assertStandardMcpProcessProtection();
+	if (!path || !isAbsolute(path) || resolve(path) !== path) unavailable();
+	const descriptor = await open(
+		path,
+		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+	);
+	try {
+		const before = await descriptor.stat();
+		if (
+			!before.isFile() ||
+			before.uid !== process.getuid?.() ||
+			before.nlink !== 1 ||
+			![0o400, 0o600].includes(before.mode & 0o777) ||
+			before.size < 1 ||
+			before.size > 4096
+		)
+			unavailable();
+		const bytes = Buffer.alloc(before.size + 1);
+		let length = 0;
+		while (length < bytes.length) {
+			assertStandardMcpProcessProtection();
+			const { bytesRead } = await descriptor.read(
+				bytes,
+				length,
+				bytes.length - length,
+				length,
+			);
+			if (!bytesRead) break;
+			length += bytesRead;
+		}
+		const after = await descriptor.stat();
+		if (
+			length !== before.size ||
+			before.dev !== after.dev ||
+			before.ino !== after.ino ||
+			before.size !== after.size ||
+			before.mtimeMs !== after.mtimeMs ||
+			before.ctimeMs !== after.ctimeMs ||
+			after.uid !== before.uid ||
+			after.nlink !== 1 ||
+			after.mode !== before.mode
+		)
+			unavailable();
+		const value = new TextDecoder("utf-8", { fatal: true })
+			.decode(bytes.subarray(0, length))
+			.trim();
+		bytes.fill(0);
+		return value;
+	} finally {
+		await descriptor.close();
+	}
+}
+
+function requireConnectionOAuthEndpoint(
+	value: string,
+	issuer: URL,
+	pathname: string,
+) {
+	const endpoint = new URL(value);
+	if (
+		endpoint.origin !== issuer.origin ||
+		endpoint.pathname !== pathname ||
+		endpoint.search ||
+		endpoint.hash ||
+		endpoint.username ||
+		endpoint.password
+	)
+		unavailable();
 }
 
 async function boundedJson(request: Request) {

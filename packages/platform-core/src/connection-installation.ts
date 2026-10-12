@@ -181,6 +181,8 @@ export interface ConnectionInstallationCommandDrainStoreV1 {
 		status: "completed" | "unknown";
 		authorizationUrl?: string;
 		authorizationExpiresAt?: number;
+		/** PAT callback correlation hash; the opaque binding id never enters Platform DB. */
+		callbackStateHash?: string;
 	}): Promise<boolean>;
 }
 

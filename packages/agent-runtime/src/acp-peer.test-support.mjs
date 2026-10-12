@@ -55,11 +55,17 @@ const connection = new AgentSideConnection(
 								: {}),
 						},
 		}),
-		newSession: async () => {
+		newSession: async (params) => {
 			sessionId = randomUUID();
 			await writeFile(
 				join(process.cwd(), "session.json"),
-				JSON.stringify({ sessionId, count }),
+				JSON.stringify({
+					sessionId,
+					count,
+					...(process.env.ACP_TEST_MODE === "mcp-servers"
+						? { mcpServers: params.mcpServers }
+						: {}),
+				}),
 			);
 			if (process.env.ACP_TEST_MODE === "available-commands")
 				await connection.sessionUpdate({
@@ -143,6 +149,56 @@ const connection = new AgentSideConnection(
 					content: { type: "text", text: `synthetic result ${count}` },
 				},
 			});
+			if (process.env.ACP_TEST_MODE === "result-file") {
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "result-file-tool",
+						kind: "edit",
+						status: "completed",
+						content: [
+							{
+								type: "diff",
+								path: join(process.cwd(), "acp-result.txt"),
+								newText: "ACP result file",
+							},
+						],
+					},
+				});
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "result-file-tool",
+						kind: "edit",
+						status: "completed",
+						content: [
+							{
+								type: "diff",
+								path: join(process.cwd(), "acp-result.txt"),
+								newText: "ACP result file",
+							},
+						],
+					},
+				});
+				await connection.sessionUpdate({
+					sessionId,
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "result-file-tool",
+						kind: "edit",
+						status: "completed",
+						content: [
+							{
+								type: "diff",
+								path: join(process.cwd(), "acp-result.txt"),
+								newText: "ACP result file",
+							},
+						],
+					},
+				});
+			}
 			if (
 				["hold", "ignore-cancel", "delayed-cancel"].includes(
 					process.env.ACP_TEST_MODE,

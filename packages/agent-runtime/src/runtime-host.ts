@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import type {
@@ -21,8 +22,13 @@ import type {
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
 	RuntimePinnedExecutionKeyScopeV4,
+	RuntimePrincipalV1,
 	RuntimeReplayRequestV1,
 	RuntimeReplayResponseV1,
+	RuntimeSkillDirectoryRequestV1,
+	RuntimeSkillDirectoryResponseV1,
+	RuntimeSkillResourceReadRequestV1,
+	RuntimeSkillResourceReadResponseV1,
 	RuntimeStatusRequestV1,
 	RuntimeStatusRequestV2,
 	RuntimeStatusRequestV3,
@@ -58,6 +64,10 @@ import {
 	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeModelDirectoryResponseV1Schema,
 	RuntimeReplayRequestV1Schema,
+	RuntimeSkillDirectoryRequestV1Schema,
+	RuntimeSkillDirectoryResponseV1Schema,
+	RuntimeSkillResourceReadRequestV1Schema,
+	RuntimeSkillResourceReadResponseV1Schema,
 	RuntimeStatusRequestV1Schema,
 	RuntimeStatusRequestV2Schema,
 	RuntimeStatusV1Schema,
@@ -77,6 +87,9 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverExecutionContextV1,
 	RuntimeExternalActionAuthorization,
+	RuntimeNativeSkillReadContextV1,
+	RuntimeNativeSkillReaderV1,
+	RuntimeOperationFactInputV1,
 } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
 import {
@@ -114,13 +127,14 @@ export interface RuntimeHostOptions {
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
 	}>;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
-	/** Deployment-owned Browser controller factory; receives only verified readiness binding. */
+	/** Request-local Browser context plus the admitted Execution identity. */
 	createBrowserExecutionContext?: (
-		input: RuntimeBrowserExecutionContextV1,
+		input: RuntimeBrowserExecutionContextFactoryInputV1,
 	) =>
 		| RuntimeBrowserExecutionContextV1
 		| undefined
 		| Promise<RuntimeBrowserExecutionContextV1 | undefined>;
+	/** Deployment-owned Browser controller factory; receives only verified readiness binding. */
 	onBrowserCapabilityAssembly?: (
 		input:
 			| {
@@ -141,6 +155,14 @@ export interface RuntimeHostOptions {
 	afterDriverResult?: (operationId: string) => void | Promise<void>;
 	afterOperationResolved?: (operationId: string) => void | Promise<void>;
 }
+
+export type RuntimeBrowserExecutionContextFactoryInputV1 =
+	RuntimeBrowserExecutionContextV1 & {
+		/** Exact admitted Runtime Execution; never selected by caller input. */
+		readonly executionId: string;
+		/** Initial page revision for the newly assembled request-local context. */
+		readonly pageRevision: number;
+	};
 
 function invalidRequest(): never {
 	throw new RuntimeHostError(
@@ -236,18 +258,32 @@ export function runtimeBrowserExecutionContextForCommand(
 async function createBrowserExecutionContextForCommand(
 	factory: RuntimeHostOptions["createBrowserExecutionContext"],
 	browser: RuntimeBrowserExecutionContextV1 | undefined,
+	executionId: string,
 	principal: RuntimeBrowserExecutionContextV1["principal"] = undefined,
 ): Promise<RuntimeBrowserExecutionContextV1 | undefined> {
-	if (!browser || !factory) return browser;
+	if (!browser) return undefined;
 	const admittedVersion = browser.capabilityVersion;
 	const admittedBinding = structuredClone(browser.binding);
-	const admittedPrincipal = principal ? structuredClone(principal) : undefined;
-	const created = await factory({
+	const admittedPrincipal = principal
+		? Object.freeze(structuredClone(principal))
+		: undefined;
+	const admittedContext: RuntimeBrowserExecutionContextV1 = {
 		...browser,
 		binding: structuredClone(admittedBinding),
-		...(admittedPrincipal
-			? { principal: structuredClone(admittedPrincipal) }
-			: {}),
+		...(admittedPrincipal ? { principal: admittedPrincipal } : {}),
+	};
+	// The Driver only receives a principal through the deployment factory, and
+	// only the current operation scope may supply one. A readiness snapshot may
+	// still carry a principal from an earlier authority, so an unadmitted or
+	// factory-less context must never reach the factory or the Driver with one.
+	if (!factory || !admittedPrincipal)
+		delete (admittedContext as { principal?: RuntimePrincipalV1 }).principal;
+	if (!factory) return admittedContext;
+	const created = await factory({
+		...admittedContext,
+		binding: structuredClone(admittedBinding),
+		executionId,
+		pageRevision: 1,
 	});
 	if (
 		!created ||
@@ -256,7 +292,14 @@ async function createBrowserExecutionContextForCommand(
 		!isDeepStrictEqual(created.principal, admittedPrincipal)
 	)
 		return undefined;
-	return created;
+	return Object.freeze({
+		...created,
+		capabilityVersion: admittedVersion,
+		binding: Object.freeze(structuredClone(admittedBinding)),
+		...(admittedPrincipal
+			? { principal: Object.freeze(structuredClone(admittedPrincipal)) }
+			: {}),
+	});
 }
 
 type RuntimeOperationResponse =
@@ -324,6 +367,72 @@ async function callDriver<T>(work: () => Promise<T>) {
 	try {
 		return await work();
 	} catch (error) {
+		throwSessionRecoveryFailure(error);
+		driverInvalid();
+	}
+}
+
+function nativeSkillReadDenied(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_GRANT_INVALID",
+		"Runtime Skill read is no longer authorized",
+		403,
+	);
+}
+
+async function boundedNativeSkillRead<T>(input: {
+	readonly read: RuntimeNativeSkillReadContextV1;
+	readonly pending: Promise<T>;
+}): Promise<T> {
+	if (input.read.signal.aborted) {
+		void input.pending.catch(() => undefined);
+		nativeSkillReadDenied();
+	}
+	let onAbort: (() => void) | undefined;
+	try {
+		return await new Promise<T>((resolve, reject) => {
+			let settled = false;
+			const finish = (complete: () => void) => {
+				if (settled) return;
+				settled = true;
+				input.read.signal.removeEventListener("abort", onAbort as () => void);
+				complete();
+			};
+			onAbort = () => {
+				void input.pending.catch(() => undefined);
+				finish(() =>
+					reject(
+						new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Runtime Skill read is no longer authorized",
+							403,
+						),
+					),
+				);
+			};
+			input.read.signal.addEventListener("abort", onAbort, { once: true });
+			void input.pending.then(
+				(value) => finish(() => resolve(value)),
+				(error) => finish(() => reject(error)),
+			);
+		});
+	} finally {
+		if (onAbort) input.read.signal.removeEventListener("abort", onAbort);
+	}
+}
+
+async function callBoundedNativeSkillDriver<T>(input: {
+	readonly read: RuntimeNativeSkillReadContextV1;
+	readonly work: () => Promise<T>;
+}): Promise<T> {
+	try {
+		return await boundedNativeSkillRead({
+			read: input.read,
+			pending: input.work(),
+		});
+	} catch (error) {
+		if (error instanceof RuntimeHostError && error.httpStatus === 403)
+			throw error;
 		throwSessionRecoveryFailure(error);
 		driverInvalid();
 	}
@@ -834,6 +943,31 @@ export class RuntimeHost {
 			revalidate: () =>
 				this.assertCurrentModelKey(originalAction, delivery.relayKey),
 		};
+	}
+
+	/**
+	 * Persist one metadata-only operation fact after the caller has completed
+	 * the existing external-action authorization handshake.
+	 */
+	async recordOperationFact(input: RuntimeOperationFactInputV1): Promise<void> {
+		this.trustedHost();
+		if (!this.options.driver.recordOperationFact) runtimeAuthorizationDenied();
+		const action: RuntimeExternalActionAuthorization = {
+			nativeSessionRef: input.nativeSessionRef,
+			executionId: input.executionId,
+			runtimeOperationId: input.executionId,
+			operationRef: input.fact.operationRef,
+			attemptRef: input.fact.attemptRef,
+			kind: input.fact.kind,
+		};
+		if (input.fact.phase === "intent") {
+			await this.options.store.authorizeExternalAction(
+				action,
+				this.options.grantValidationV2?.now ?? Date.now,
+			);
+			this.trustedHost();
+		} else await this.authorizeExternalAction(action);
+		await this.options.driver.recordOperationFact(input);
 	}
 
 	private async currentExternalActionAuthorization(
@@ -1399,6 +1533,178 @@ export class RuntimeHost {
 		};
 	}
 
+	private nativeSkillReadContext(
+		request: RuntimeSkillDirectoryRequestV1 | RuntimeSkillResourceReadRequestV1,
+		verification: unknown,
+		signal: AbortSignal,
+		claims: ReturnType<typeof validateRuntimeExecutionGrant>,
+	) {
+		const now = () =>
+			Date.parse(
+				(
+					this.options.grantValidation.now ?? (() => new Date().toISOString())
+				)(),
+			);
+		const expiresAt = Math.min(Date.parse(claims.expiresAt), now() + 30_000);
+		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now())
+			runtimeAuthorizationDenied();
+		const nativeSessionRef =
+			this.options.store.getSessionForQuery(
+				request.hostSessionRef,
+				request,
+				request.deliveryFence,
+			).nativeSessionRef ?? nativeSessionRequired();
+		const deadline = new AbortController();
+		const readSignal = AbortSignal.any([signal, deadline.signal]);
+		const deadlineTimer = setTimeout(
+			() => deadline.abort(),
+			Math.max(0, expiresAt - now()),
+		);
+		const assertCurrent = () => {
+			if (readSignal.aborted || expiresAt <= now())
+				runtimeAuthorizationDenied();
+			this.requireLegacyHost();
+			this.options.store.getSessionForQuery(
+				request.hostSessionRef,
+				request,
+				request.deliveryFence,
+			);
+		};
+		return {
+			nativeSessionRef,
+			signal: readSignal,
+			expiresAt,
+			assertCurrent,
+			revalidate: async () => {
+				assertCurrent();
+				// The current Grant and durable session are checked again after every
+				// Driver await. This is a read-only context, never a business permit.
+				validateRuntimeExecutionGrant(
+					request,
+					"skills.read",
+					verification,
+					this.options.grantValidation,
+				);
+				assertCurrent();
+			},
+			close: () => {
+				clearTimeout(deadlineTimer);
+				deadline.abort();
+			},
+		};
+	}
+
+	async skillDirectory(
+		value: RuntimeSkillDirectoryRequestV1,
+		verification: unknown,
+		signal: AbortSignal = this.lifetime.signal,
+	): Promise<RuntimeSkillDirectoryResponseV1> {
+		this.requireLegacyHost();
+		const request = RuntimeSkillDirectoryRequestV1Schema.parse(value);
+		const claims = validateRuntimeExecutionGrant(
+			request,
+			"skills.read",
+			verification,
+			this.options.grantValidation,
+		);
+		const driver = (
+			this.options.driver as RuntimeDriver & Partial<RuntimeNativeSkillReaderV1>
+		).discoverNativeSkills;
+		if (!driver) driverInvalid();
+		const lease = this.nativeSkillReadContext(
+			request,
+			verification,
+			signal,
+			claims,
+		);
+		let raw: unknown;
+		try {
+			raw = await callBoundedNativeSkillDriver({
+				read: lease,
+				work: () => driver.call(this.options.driver, lease),
+			});
+			await lease.revalidate();
+		} finally {
+			lease.close();
+		}
+		if (
+			!raw ||
+			typeof raw !== "object" ||
+			!Array.isArray((raw as { entries?: unknown }).entries) ||
+			typeof (raw as { generationId?: unknown }).generationId !== "string"
+		)
+			driverInvalid();
+		const skills = (
+			raw as { entries: readonly Record<string, unknown>[] }
+		).entries.map((entry) => ({
+			schemaVersion: 1 as const,
+			name: entry.name,
+			version: entry.version,
+			manifestSha256: entry.manifestDigest,
+			packageDigest: entry.packageDigest,
+			readOnly: true as const,
+		}));
+		return RuntimeSkillDirectoryResponseV1Schema.parse({
+			schemaVersion: 1,
+			hostSessionRef: request.hostSessionRef,
+			generationId: (raw as { generationId: string }).generationId,
+			skills,
+		});
+	}
+
+	async readSkillResource(
+		value: RuntimeSkillResourceReadRequestV1,
+		verification: unknown,
+		signal: AbortSignal = this.lifetime.signal,
+	): Promise<RuntimeSkillResourceReadResponseV1> {
+		this.requireLegacyHost();
+		const request = RuntimeSkillResourceReadRequestV1Schema.parse(value);
+		const claims = validateRuntimeExecutionGrant(
+			request,
+			"skills.read",
+			verification,
+			this.options.grantValidation,
+		);
+		const driver = (
+			this.options.driver as RuntimeDriver & Partial<RuntimeNativeSkillReaderV1>
+		).readNativeSkill;
+		if (!driver) driverInvalid();
+		const lease = this.nativeSkillReadContext(
+			request,
+			verification,
+			signal,
+			claims,
+		);
+		let bytes: Uint8Array;
+		try {
+			bytes = await callBoundedNativeSkillDriver({
+				read: lease,
+				work: () =>
+					driver.call(
+						this.options.driver,
+						lease,
+						request.skillName,
+						request.relativePath,
+					),
+			});
+			await lease.revalidate();
+		} finally {
+			lease.close();
+		}
+		if (!(bytes instanceof Uint8Array) || bytes.byteLength > 1_048_576)
+			driverInvalid();
+		const encoded = Buffer.from(bytes);
+		return RuntimeSkillResourceReadResponseV1Schema.parse({
+			schemaVersion: 1,
+			hostSessionRef: request.hostSessionRef,
+			skillName: request.skillName,
+			relativePath: request.relativePath,
+			sizeBytes: encoded.byteLength,
+			sha256: createHash("sha256").update(encoded).digest("hex"),
+			bytesBase64: encoded.toString("base64"),
+		});
+	}
+
 	/** Read-only public model choices for an already-bound Host Session. */
 	async modelDirectory(
 		value: RuntimeModelDirectoryRequestV1,
@@ -1853,6 +2159,7 @@ export class RuntimeHost {
 			const browser = await createBrowserExecutionContextForCommand(
 				this.options.createBrowserExecutionContext,
 				admittedBrowser,
+				operation.command.executionId,
 				operation.keyScopeV4?.principal,
 			);
 			const executionContext = browser

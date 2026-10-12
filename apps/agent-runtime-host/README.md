@@ -47,6 +47,16 @@ callback 凭据只认证专用 HTTPS `/internal/runtime/oauth/v1/callback`；Wor
 [工程 Spec §13.5.6](../../docs/architecture/SPEC-agent-infra-M1-engineering-architecture.md#1356-标准-oauth-安装供应)
 实施，本说明不提供 Token 上传或 Consumer 登记接口。
 
+若批准配置包含 `patBinding`，Host 还必须设置
+`AGENT_INFRA_RUNTIME_CONNECTION_PAT_BINDING_SECRET_FILE`，指向同一受保护边界中的
+owner-only binding service secret。Host 只向固定的 Connection binding endpoint 发起
+create/claim，并在浏览器 callback 只接收不透明 `binding_id`；PAT 不进入 Platform DB、
+Worker、日志或响应。`binding_id` 在平台状态中只以 SHA-256 形式关联，claim 返回的
+Connection `account.id` 还必须等于当前 Runtime principal ID；`consumerId`、token 形式和
+expiry 不匹配时保持不可用。平台与 Connection 没有稳定主体 ID 映射时，该 profile 保持关闭。
+该路线没有 refresh-token fallback，
+过期后重新进行用户确认；显式撤销仍调用 Connection 的 revoke endpoint。
+
 ## MCP schema 版本
 
 工具输入和获准结果 schema 未声明 `$schema` 时，按 JSON Schema 2020-12 校验；显式

@@ -762,6 +762,56 @@ function isCustomAgentModelSelectionOpenApiAddition(previous, current) {
 
 // #1266 admits the GET side of the existing model-selection route and its
 // projection schema. The PUT route and all prior components remain exact.
+// #2028 adds the compatibility result to each standard-template fan-out target.
+function isStandardTemplateReleaseCompatibilityOpenApiAddition(
+	previous,
+	current,
+) {
+	const path = "/internal/ops/standard-template-releases/{releaseId}/apply-all";
+	const statuses = ["202", "207"];
+	const previousOperation = previous.paths?.[path]?.post;
+	const currentOperation = current.paths?.[path]?.post;
+	if (previousOperation === undefined || currentOperation === undefined)
+		return false;
+	const previousItems = statuses.map(
+		(status) =>
+			previousOperation.responses?.[status]?.content?.["application/json"]
+				?.schema?.properties?.targets?.items,
+	);
+	const currentItems = statuses.map(
+		(status) =>
+			currentOperation.responses?.[status]?.content?.["application/json"]
+				?.schema?.properties?.targets?.items,
+	);
+	if (
+		previousItems.some((item) => item === undefined) ||
+		currentItems.some((item) => item === undefined) ||
+		previousItems.some(
+			(item) => item.properties?.compatibility !== undefined,
+		) ||
+		currentItems.some((item) => item.properties?.compatibility === undefined) ||
+		!sameValue(
+			currentItems[0].properties.compatibility,
+			currentItems[1].properties.compatibility,
+		) ||
+		currentItems.some(
+			(item) =>
+				!item.required?.includes("compatibility") ||
+				item.required.filter((name) => name === "compatibility").length !== 1,
+		)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const status of statuses) {
+		const item =
+			normalized.paths[path].post.responses[status].content["application/json"]
+				.schema.properties.targets.items;
+		delete item.properties.compatibility;
+		item.required = item.required.filter((name) => name !== "compatibility");
+	}
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function isCustomAgentModelProjectionOpenApiAddition(previous, current) {
 	const path = "/api/v1/conversations/{conversationId}/model-selection";
 	const schema = "ConversationModelSelectionProjectionV1";
@@ -2704,6 +2754,83 @@ function isRuntimeSkillCapabilityOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2036 adds the RuntimeHost consumer for the mounted Skill directory. The
+// grant command, two read-only operations and their strict schemas are a
+// single versioned addition; removing them must reproduce the prior artifact.
+function isRuntimeSkillHostReadOpenApiAddition(previous, current) {
+	const commandSchema = "ExecutionGrantCommandV1";
+	const command = "skills.read";
+	const paths = [
+		"/internal/runtime/v1/skills",
+		"/internal/runtime/v1/skills/resources",
+	];
+	const schemas = [
+		"RuntimeSkillDirectoryRequestV1",
+		"RuntimeSkillDirectoryEntryV1",
+		"RuntimeSkillDirectoryResponseV1",
+		"RuntimeSkillResourceReadRequestV1",
+		"RuntimeSkillResourceReadResponseV1",
+	];
+	if (
+		previous.paths?.[paths[0]] !== undefined ||
+		previous.paths?.[paths[1]] !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const previousCommands = previous.components?.schemas?.[commandSchema]?.enum;
+	const currentCommands = current.components?.schemas?.[commandSchema]?.enum;
+	if (
+		!Array.isArray(previousCommands) ||
+		!Array.isArray(currentCommands) ||
+		currentCommands.length !== previousCommands.length + 1 ||
+		!currentCommands.includes(command) ||
+		currentCommands.filter((value) => value !== command).join("\n") !==
+			previousCommands.join("\n")
+	)
+		return false;
+	const addition = {
+		command,
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	const fingerprint = createHash("sha256")
+		.update(JSON.stringify(addition))
+		.digest("hex");
+	if (
+		fingerprint !==
+		"de287f89e1061b77f7ff91bcba16ce559d8748a97f261095eca9f82f8f069aac"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas[commandSchema].enum = previousCommands;
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
+function isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) {
+	const previousCommands =
+		previous.components?.schemas?.ExecutionGrantCommandV1?.enum;
+	const currentCommands =
+		current.components?.schemas?.ExecutionGrantCommandV1?.enum;
+	if (
+		!Array.isArray(previousCommands) ||
+		!Array.isArray(currentCommands) ||
+		currentCommands.length !== previousCommands.length + 1 ||
+		!currentCommands.includes("skills.read") ||
+		currentCommands.filter((value) => value !== "skills.read").join("\n") !==
+			previousCommands.join("\n")
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.components.schemas.ExecutionGrantCommandV1.enum = previousCommands;
+	return sameValue(previous, normalized);
+}
+
 // #1717 delivers the optional, signed Browser declaration/probe facts through
 // the existing readiness and Runtime capability contracts. The fields are
 // additive and remain optional when Browser is absent; no existing operation,
@@ -3190,6 +3317,8 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
+			!isRuntimeSkillHostReadOpenApiAddition(previous, current) &&
+			!isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserEvidenceOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
@@ -3235,7 +3364,8 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeFileExchangeOpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current) &&
 			!isCustomAgentModelSelectionOpenApiAddition(previous, current) &&
-			!isCustomAgentModelProjectionOpenApiAddition(previous, current)
+			!isCustomAgentModelProjectionOpenApiAddition(previous, current) &&
+			!isStandardTemplateReleaseCompatibilityOpenApiAddition(previous, current)
 		) {
 			changes.push("changed OpenAPI contract");
 		}

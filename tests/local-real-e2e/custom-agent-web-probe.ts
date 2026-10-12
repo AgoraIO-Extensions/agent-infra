@@ -59,7 +59,7 @@ export function parseInput(value: unknown): ProbeInput {
 	return parsed;
 }
 
-async function readAuthorization(file: string): Promise<string> {
+export async function readAuthorization(file: string): Promise<string> {
 	if (typeof constants.O_NOFOLLOW !== "number")
 		throw new Error("AUTHORIZATION_FILE_INVALID");
 	let handle: FileHandle | undefined;
@@ -90,7 +90,7 @@ async function readAuthorization(file: string): Promise<string> {
 	}
 }
 
-async function responseEvidence(response: Response, expected: string) {
+export async function responseEvidence(response: Response, expected: string) {
 	const reader = response.body?.getReader();
 	if (!reader) throw new Error("CONTENT_UNAVAILABLE");
 	const hash = createHash("sha256");
@@ -114,7 +114,7 @@ async function responseEvidence(response: Response, expected: string) {
 	}
 }
 
-function isHtmlContentType(value: string | null): boolean {
+export function isHtmlContentType(value: string | null): boolean {
 	return value?.split(";", 1)[0]?.trim().toLowerCase() === "text/html";
 }
 

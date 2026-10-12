@@ -5,6 +5,7 @@ import type {
 	RuntimeDriverSubmitTurnCommandV2,
 	RuntimeDriverSubmitTurnOperationRecordV2,
 	RuntimeEvent,
+	RuntimeOperationFactV2,
 	RuntimePrincipalV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
@@ -18,6 +19,25 @@ import type {
 	RuntimeFileBridgePortV1,
 	RuntimeFileResultReceiptV1,
 } from "./runtime-file-bridge.js";
+
+/** Request-local authority for a mounted Skill metadata/resource read. */
+export type RuntimeNativeSkillReadContextV1 = {
+	readonly nativeSessionRef: string;
+	readonly signal: AbortSignal;
+	readonly expiresAt: number;
+	assertCurrent(): void;
+	revalidate(): Promise<unknown>;
+};
+
+/** Optional RuntimeHost consumer seam implemented by Drivers with mounted Skills. */
+export interface RuntimeNativeSkillReaderV1 {
+	discoverNativeSkills(read: RuntimeNativeSkillReadContextV1): Promise<unknown>;
+	readNativeSkill(
+		read: RuntimeNativeSkillReadContextV1,
+		name: string,
+		relativePath: string,
+	): Promise<Uint8Array>;
+}
 
 /** Verified Browser binding supplied only for one Runtime execution. */
 export interface RuntimeBrowserExecutionContextV1 {
@@ -47,7 +67,12 @@ export interface RuntimeBrowserToolExecutionRequestV1 {
 	readonly attemptRef: string;
 	readonly binding: Pick<
 		RuntimeBrowserExecutionContextV1["binding"],
-		"agentId" | "conversationId" | "sessionGeneration" | "resourceFence"
+		| "agentId"
+		| "conversationId"
+		| "sessionGeneration"
+		| "resourceFence"
+		| "workloadRevision"
+		| "imageDigest"
 	> & {
 		readonly executionId: string;
 		readonly capabilityVersion: number;
@@ -131,6 +156,13 @@ export interface RuntimeDriverExecutionContextV1 {
 	/** Deployment-owned Browser context; absent means Browser execution is unavailable. */
 	readonly browser?: RuntimeBrowserExecutionContextV1;
 }
+
+/** Durable, metadata-only operation fact seam for non-Codex Drivers. */
+export type RuntimeOperationFactInputV1 = Readonly<{
+	readonly nativeSessionRef: string;
+	readonly executionId: string;
+	readonly fact: RuntimeOperationFactV2;
+}>;
 export type RuntimeDriverOperationRecord =
 	| RuntimeDriverOperationRecordV1
 	| RuntimeDriverSubmitTurnOperationRecordV2;
@@ -213,6 +245,8 @@ export interface RuntimeDriver {
 	validateExternalAction?(
 		action: RuntimeExternalActionAuthorization,
 	): Promise<void>;
+	/** Append one acknowledged model/tool operation fact to the Driver journal. */
+	recordOperationFact?(input: RuntimeOperationFactInputV1): Promise<void>;
 	recoverOriginalEvidence?(
 		reference: RuntimeOriginalEvidenceRecoveryRef,
 		read: RuntimeOriginalEvidenceReadContext,
