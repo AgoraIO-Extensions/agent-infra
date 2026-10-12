@@ -19,6 +19,8 @@ import {
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeGenerationCancelRequestV3Schema,
 	RuntimeModelDirectoryRequestV1Schema,
+	RuntimeNativeMetadataReadRequestV1Schema,
+	RuntimeNativeMetadataReadResponseV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeSkillDirectoryRequestV1Schema,
 	RuntimeSkillResourceReadRequestV1Schema,
@@ -76,6 +78,11 @@ interface RuntimeHostAppOptions {
 	 */
 	logDiagnostic?: (entry: Record<string, string>) => void;
 	serviceToken: string;
+	/** Deployment-owned native metadata proof verification and Driver read. */
+	nativeMetadataRead?: (
+		request: import("@agent-infra/contracts/runtime").RuntimeNativeMetadataReadRequestV1,
+		signal: AbortSignal,
+	) => Promise<unknown>;
 	verifyGrant: (
 		grant: ExecutionGrantV1,
 	) => VerifiedExecutionGrantV1 | Promise<VerifiedExecutionGrantV1>;
@@ -335,6 +342,23 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 				await options.verifyGrant(request.grant),
 			),
 		);
+	});
+	app.post("/internal/runtime/v1/native-metadata", async (context) => {
+		if (!options.nativeMetadataRead)
+			throw new RuntimeHostError(
+				"RUNTIME_NATIVE_METADATA_UNAVAILABLE",
+				"Runtime native metadata is not configured",
+				503,
+				true,
+			);
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeNativeMetadataReadRequestV1Schema,
+		);
+		const response = RuntimeNativeMetadataReadResponseV1Schema.parse(
+			await options.nativeMetadataRead(request, context.req.raw.signal),
+		);
+		return context.json(response);
 	});
 	app.post("/internal/runtime/v1/events/replay", async (context) => {
 		const request = await parseBody(
