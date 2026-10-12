@@ -115,7 +115,74 @@ export interface WorkloadRuntimeOptionsV1 {
 	}>;
 	/** Credential-free record of each failed Workload probe (#2046). */
 	readonly onProbeFailure?: (failure: WorkloadProbeFailureV1) => void;
+	/**
+	 * 同一 Worker 进程内 Workload 监测与会话路由共享的 readiness 记录（#1889）。
+	 * 未提供时每个实例使用自己的记录，只复用本实例最近一次完整探测的结果。
+	 */
+	readonly readinessLedger?: WorkloadReadinessLedgerV1;
 }
+
+/** 一次通过的签名 readiness 所绑定的实际 Workload（#1889）。 */
+export interface WorkloadReadinessBindingV1 {
+	readonly agentId: string;
+	readonly workloadUid: string;
+	readonly workloadGeneration: number;
+	readonly workloadRevision: number;
+	readonly fence: number;
+}
+
+export interface WorkloadReadinessPassV1 {
+	readonly podUid: string;
+	readonly passedAt: number;
+}
+
+/**
+ * 记录每个 Agent 最近一次通过的签名 readiness 及其 Pod。每个 Agent 只保留一条，
+ * Workload 绑定不一致即视为没有记录；任何一次未通过的观测都会清除该 Agent 的记录。
+ */
+export interface WorkloadReadinessLedgerV1 {
+	record(
+		binding: WorkloadReadinessBindingV1,
+		pass: WorkloadReadinessPassV1,
+	): void;
+	lookup(
+		binding: WorkloadReadinessBindingV1,
+	): WorkloadReadinessPassV1 | undefined;
+	forget(agentId: string): void;
+}
+
+export function createWorkloadReadinessLedgerV1(): WorkloadReadinessLedgerV1 {
+	const entries = new Map<
+		string,
+		{
+			readonly binding: WorkloadReadinessBindingV1;
+			readonly pass: WorkloadReadinessPassV1;
+		}
+	>();
+	return {
+		record(binding, pass) {
+			entries.set(binding.agentId, {
+				binding: { ...binding },
+				pass: { ...pass },
+			});
+		},
+		lookup(binding) {
+			const entry = entries.get(binding.agentId);
+			return entry && isDeepStrictEqual(entry.binding, binding)
+				? { ...entry.pass }
+				: undefined;
+		},
+		forget(agentId) {
+			entries.delete(agentId);
+		},
+	};
+}
+
+/**
+ * 排空复用 readiness 的有效期：不超过一个 Workload 监测周期，与 Store
+ * 默认 `monitorDelayMs`（30 s）一致。
+ */
+export const drainReadinessMaxAgeMs = 30_000;
 
 export interface WorkloadProbeFailureV1 {
 	readonly agentId: string;
@@ -425,9 +492,9 @@ export function createWorkloadRuntimeV1(
 	/**
 	 * 排空路径轻量路由复核：缓存命中时跳过签名 readiness，仅核对 Kubernetes
 	 * 实际路由、所有权/漂移与 Pod 就绪（保留 /healthz）。
-	 * 缓存来自同进程 Workload Monitor 最近一次通过的签名 readiness 结果，
+	 * 记录来自同进程 Workload 监测（或本实例）最近一次通过的签名 readiness，
 	 * 绑定 Pod UID、generation、Workload revision 和 fence，有效期不超过
-	 * monitorReadinessMaxAgeMs（默认 60 s）。任何绑定不匹配、超期、phase 非
+	 * drainReadinessMaxAgeMs（一个监测周期，30 s）。任何绑定不匹配、超期、phase 非
 	 * ready、attempts 非 0 或缺失记录时退回完整签名 readiness（fail-closed）。
 	 * 仅供 business purpose 排空命令（events.persist / events.ack /
 	 * execution.renew）使用；turn.submit / supplement / control 不得调用此方法。
@@ -447,34 +514,20 @@ export function createWorkloadRuntimeV1(
 		WorkloadReconciliationStateV1,
 		WorkloadCapabilitiesV1
 	>();
-
-	/**
-	 * 进程内 Monitor readiness 缓存。
-	 * key = "${agentId}:${uid}:${generation}:${revision}:${fence}"
-	 * 只记录 monitor（workload reconciliation）通过的最近一次签名 readiness 结果。
-	 * 同一 Worker 进程既跑 monitor 又跑排空，无需跨进程共享；
-	 * 多副本 Worker 各自维护独立缓存，缺失时退回完整探测（fail-closed）。
-	 */
-	interface MonitorReadinessCacheEntryV1 {
-		/** 该次 probe 通过的时间戳（ms，Date.now()）。 */
-		readonly passedAt: number;
-		/** 该次探测记录的 capabilities，供排空复用以保持投影一致性。 */
-		readonly capabilities: WorkloadCapabilitiesV1;
-	}
-	const monitorReadinessCache = new Map<string, MonitorReadinessCacheEntryV1>();
-
-	/**
-	 * 排空路径复用缓存的最大有效期（ms）。
-	 * 设为 60 s（不超过两个 30 s 监测周期），保证 Monitor 至少更新过一次缓存。
-	 */
-	const monitorReadinessMaxAgeMs = 60_000;
-
-	/** 生成缓存键；绑定 Pod UID、generation、Workload revision 和 fence。 */
-	function monitorReadinessCacheKey(
+	// 排空复用的签名 readiness 记录；部署装配时与 Workload 监测共享（#1889）。
+	const readinessLedger =
+		options.readinessLedger ?? createWorkloadReadinessLedgerV1();
+	function readinessBinding(
 		state: WorkloadReconciliationStateV1,
-	): string | null {
+	): WorkloadReadinessBindingV1 | null {
 		if (!state.identity) return null;
-		return `${state.agentId}:${state.identity.uid}:${state.identity.generation}:${state.revision}:${state.fence}`;
+		return {
+			agentId: state.agentId,
+			workloadUid: state.identity.uid,
+			workloadGeneration: state.identity.generation,
+			workloadRevision: state.revision,
+			fence: state.fence,
+		};
 	}
 	function candidateKeyless(
 		state: Pick<WorkloadReconciliationStateV1, "candidate">,
@@ -508,10 +561,13 @@ export function createWorkloadRuntimeV1(
 		connectionConsumerControl = false,
 		browserBinding?: BrowserCapabilityBindingV1,
 		/**
-		 * 排空路径专用：跳过签名 readiness，仅核对 /healthz。
-		 * 只有在缓存命中时才允许传 true，其他所有路径保持 false（默认）。
+		 * 签名 readiness 的复用与记录（#1889）：`reuse` 对本次观测到的 Pod 返回
+		 * true 时跳过签名 readiness；完整探测通过时以该 Pod 调用 `passed`。
 		 */
-		skipSignedReadiness = false,
+		readiness?: {
+			readonly reuse?: (podUid: string) => boolean;
+			readonly passed?: (podUid: string) => void;
+		},
 	) {
 		const modelProjection =
 			state?.candidate.configuration.source.kind === "standard"
@@ -550,7 +606,7 @@ export function createWorkloadRuntimeV1(
 			policy: options.policy,
 			modelProjection,
 			standardTemplateBinding,
-			async probe({ desired, serviceOrigin }) {
+			async probe({ desired, serviceOrigin, podUid }) {
 				const baseUrl = serviceOrigin;
 				const healthFetch =
 					desired.runtimeManifest.interactionMode === "self-managed"
@@ -601,10 +657,8 @@ export function createWorkloadRuntimeV1(
 					recordCapabilities(RuntimeCapabilitySetV1Schema.parse({}));
 					return true;
 				}
-				// 排空路径缓存命中：/healthz 通过即认为就绪，跳过签名 readiness
-				if (skipSignedReadiness) {
-					return true;
-				}
+				// 同一 Pod 在有效期内已通过签名 readiness：只保留上面的 /healthz。
+				if (podUid && readiness?.reuse?.(podUid)) return true;
 				const controller = new AbortController();
 				const resolvedBrowserBinding =
 					browserBinding ??
@@ -711,6 +765,7 @@ export function createWorkloadRuntimeV1(
 					...(browser ? { browser } : {}),
 				});
 				if (probe.core !== "passed") failed("readiness", "response");
+				else if (podUid) readiness?.passed?.(podUid);
 				return probe.core === "passed";
 			},
 		});
@@ -903,6 +958,7 @@ export function createWorkloadRuntimeV1(
 		if (state.phase === "ready" && candidateKeyless(state))
 			await revalidateCandidateCatalog(state, true);
 		let capabilities: WorkloadCapabilitiesV1 | undefined;
+		let passedPodUid: string | undefined;
 		const observation = createAdapter(
 			(value) => {
 				capabilities = value;
@@ -911,6 +967,11 @@ export function createWorkloadRuntimeV1(
 			"authorize",
 			false,
 			browserBinding,
+			{
+				passed(podUid) {
+					passedPodUid = podUid;
+				},
+			},
 		);
 		const health = await observation.observe(
 			desired(state),
@@ -920,69 +981,66 @@ export function createWorkloadRuntimeV1(
 		);
 		if (health === "healthy" && state.phase === "promoting" && capabilities)
 			observedCapabilities.set(state, capabilities);
-		// Monitor（workload reconciliation）在 ready 状态下周期性调用 observe；
-		// 探测通过时将结果写入进程内缓存，供排空路径复用以避免重复冷启动 probe。
-		if (health === "healthy" && state.phase === "ready" && capabilities) {
-			const key = monitorReadinessCacheKey(state);
-			if (key) {
-				monitorReadinessCache.set(key, {
-					passedAt: Date.now(),
-					capabilities,
-				});
-			}
-		}
+		// 只有 ready 阶段的完整观测（含签名 readiness）通过才记录；
+		// 任何未通过的完整观测都清除该 Agent 的记录，排空随即回到完整探测。
+		const binding = readinessBinding(state);
+		if (health !== "healthy") readinessLedger.forget(state.agentId);
+		else if (state.phase === "ready" && binding && passedPodUid && capabilities)
+			readinessLedger.record(binding, {
+				podUid: passedPodUid,
+				passedAt: Date.now(),
+			});
 		return health;
 	}
 
 	/**
-	 * 排空路径轻量路由复核。
-	 * 缓存命中（绑定一致 + 未超期 + phase=ready + attempts=0）时跳过签名 readiness，
-	 * 仅核对 Kubernetes 实际路由与 Pod 就绪（保留 /healthz）；
-	 * 任何条件不满足时退回完整签名 readiness（fail-closed）。
-	 * capabilities 投影复用缓存中的值，保持业务观察一致性。
+	 * 排空路径的路由复核（#1889）：Workload 为 ready、attempts 为 0，且同一
+	 * Pod UID/generation、Workload revision 与 fence 在一个监测周期内通过过签名
+	 * readiness 时，只做 Kubernetes 实际路由、漂移、Pod 就绪与 `/healthz` 核对，
+	 * 不再发签名 readiness；其余情况一律走完整观测。
 	 */
 	async function observeForDrain(
 		state: WorkloadReconciliationStateV1,
 		browserBinding?: BrowserCapabilityBindingV1,
 	) {
-		// fail-closed：phase 非 ready 或 attempts 非 0 时退回完整探测
-		if (state.phase !== "ready" || state.attempts !== 0) {
+		const binding = readinessBinding(state);
+		const pass =
+			binding && state.phase === "ready" && state.attempts === 0
+				? readinessLedger.lookup(binding)
+				: undefined;
+		const age = pass ? Date.now() - pass.passedAt : -1;
+		if (!binding || !pass || age < 0 || age >= drainReadinessMaxAgeMs)
 			return observe(state, browserBinding);
-		}
-		// identity 为空时 monitorReadinessCacheKey 返回 null，此处退回完整探测
-		if (!state.identity) return observe(state, browserBinding);
-		const key = monitorReadinessCacheKey(state);
-		if (!key) return observe(state, browserBinding);
-
-		const cached = monitorReadinessCache.get(key);
-		const age = cached
-			? Date.now() - cached.passedAt
-			: Number.POSITIVE_INFINITY;
-		// 超期或无记录时退回完整探测
-		if (!cached || age < 0 || age >= monitorReadinessMaxAgeMs) {
-			return observe(state, browserBinding);
-		}
-
-		// 缓存命中：只做 Kubernetes 路由观测，跳过 probeRuntime
 		observedCapabilities.delete(state);
-		// 排空路径不需要 revalidateCandidateCatalog（keyless model 校验由
-		// monitor 周期覆盖，排空只读事件不触发模型选择）。
-		const noProbeAdapter = createAdapter(
-			// 复用缓存的 capabilities，保持投影一致性
-			() => {},
+		let capabilities: WorkloadCapabilitiesV1 | undefined;
+		let passedPodUid: string | undefined;
+		// 观测到的 Pod 与记录不一致时，适配器在本次观测内执行完整签名 readiness。
+		const health = await createAdapter(
+			(value) => {
+				capabilities = value;
+			},
 			state,
 			"authorize",
 			false,
 			browserBinding,
-			// 标记跳过 probeRuntime
-			true,
-		);
-		const health = await noProbeAdapter.observe(
+			{
+				reuse: (podUid) => podUid === pass.podUid,
+				passed(podUid) {
+					passedPodUid = podUid;
+				},
+			},
+		).observe(
 			desired(state),
-			state.identity,
+			{ uid: binding.workloadUid, generation: binding.workloadGeneration },
 			routeSelectorMode(state),
 			"required",
 		);
+		if (health !== "healthy") readinessLedger.forget(state.agentId);
+		else if (passedPodUid && capabilities)
+			readinessLedger.record(binding, {
+				podUid: passedPodUid,
+				passedAt: Date.now(),
+			});
 		return health;
 	}
 	return {

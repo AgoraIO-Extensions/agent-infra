@@ -86,8 +86,10 @@ import {
 import { WorkloadDeploymentErrorV1 } from "./workload-deployment.js";
 import { WorkloadProbeIncompleteErrorV1 } from "./workload-probe-failure.js";
 import {
+	createWorkloadReadinessLedgerV1,
 	createWorkloadRuntimeV1,
 	drainCacheableCommands,
+	drainReadinessMaxAgeMs,
 	isWorkloadExecutionCapacityCurrentV1,
 	resolveWorkloadExecutionCapacityV1,
 	type WorkloadRuntimeOptionsV1,
@@ -4355,198 +4357,119 @@ it.each([
 	},
 );
 
-// ─── #1889 排空路径 Monitor Readiness 缓存测试 ───────────────────────────────
-
-describe("observeForDrain: 排空路径复用 Monitor readiness 缓存 (#1889)", () => {
-	/** 构造一个处于 ready 状态、有 identity 的 state */
-	async function makeReadyState(f: ReturnType<typeof fixture>) {
-		// 8 次 tick 让 Workload 进入 ready 状态
+// #1889：排空路由复核沿用同一进程内最近一次通过的签名 readiness。
+describe("observeForDrain (#1889)", () => {
+	async function ready(overrides: Partial<WorkloadRuntimeOptionsV1> = {}) {
+		const probeRuntime = vi.fn<WorkloadRuntimeOptionsV1["probeRuntime"]>(
+			async () => ({ core: "passed", capabilities: {} }),
+		);
+		const health = vi.fn(async () => new Response("ok"));
+		const f = fixture({ probeRuntime, fetch: health, ...overrides });
 		await f.tick(8);
 		const state = f.state;
 		if (state?.phase !== "ready" || !state.identity)
-			throw new Error("Fixture did not reach ready state");
-		return state as WorkloadReconciliationStateV1 & {
-			phase: "ready";
-			identity: NonNullable<WorkloadReconciliationStateV1["identity"]>;
-		};
+			throw new Error("Fixture did not reach ready");
+		const readinessLedger = createWorkloadReadinessLedgerV1();
+		// 监测与会话路由是两个实例，部署装配时共享同一份记录。
+		const monitor = createWorkloadRuntimeV1({ ...f.options, readinessLedger });
+		const drain = createWorkloadRuntimeV1({ ...f.options, readinessLedger });
+		probeRuntime.mockClear();
+		health.mockClear();
+		return { f, state, monitor, drain, probeRuntime, health };
+	}
+	function pod(f: Awaited<ReturnType<typeof ready>>["f"]) {
+		const found = [...f.resources.values()].find(
+			(resource) => resource.kind === "Pod",
+		);
+		if (!found?.metadata) throw new Error("Fixture Pod is missing");
+		return found.metadata;
 	}
 
-	it("排空命令在 Monitor 结果新鲜且绑定一致时不调用 probeRuntime，但仍执行 K8s 观测", async () => {
-		const probeRuntime = vi.fn(async () => ({
-			core: "passed" as const,
-			capabilities: {},
-		}));
-		const runtimeFetch = vi.fn(async () => new Response("ok"));
-		const f = fixture({ probeRuntime, fetch: runtimeFetch });
-		const state = await makeReadyState(f);
-
-		// 使用同一 runtime 实例触发完整 observe 写入缓存
-		const runtime = createWorkloadRuntimeV1(f.options);
-		await runtime.observe(state);
-		const probeBefore = probeRuntime.mock.calls.length;
-		const fetchBefore = runtimeFetch.mock.calls.length;
-
-		// 排空命令：应复用缓存，不额外调 probeRuntime
-		await expect(runtime.observeForDrain(state)).resolves.toBe("healthy");
-
-		// probeRuntime 没有新增调用（缓存命中）
-		expect(probeRuntime.mock.calls.length).toBe(probeBefore);
-		// 但 K8s fetch（healthz）仍应被调用（路由观测继续）
-		expect(runtimeFetch.mock.calls.length).toBeGreaterThan(fetchBefore);
+	it("reuses the monitor's passed readiness and still checks the route and health", async () => {
+		const { state, monitor, drain, probeRuntime, health } = await ready();
+		await expect(monitor.observe(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+		expect(health).toHaveBeenCalledTimes(3);
 	});
 
-	it("缓存超期时退回完整探测（fail-closed）：probe 失败则返回 unhealthy", async () => {
-		// 超期后 probe 返回 failed，应收到 unhealthy 而非 healthy（缓存命中才是 healthy）
-		let failProbe = false;
-		const probeRuntime = vi.fn(async () =>
-			failProbe
-				? { core: "failed" as const, capabilities: {} }
-				: { core: "passed" as const, capabilities: {} },
-		);
-		const f = fixture({ probeRuntime });
-		const state = await makeReadyState(f);
-		const runtime = createWorkloadRuntimeV1(f.options);
+	it("runs the full readiness without a passed record", async () => {
+		const { state, drain, probeRuntime } = await ready();
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+		// 完整探测通过后，本实例在有效期内沿用。
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+	});
 
-		// 先触发完整 observe 写入缓存
-		await runtime.observe(state);
-
-		// 超期后 probe 返回 failed
-		const now = Date.now;
-		Date.now = () => now() + 61_000;
-		failProbe = true;
+	it("runs the full readiness once the record is one monitor period old", async () => {
+		const { state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		const now = Date.now();
+		const clock = vi.spyOn(Date, "now");
 		try {
-			// 缓存超期，退回完整探测，probe 返回 failed → unhealthy
-			await expect(runtime.observeForDrain(state)).resolves.toBe("unhealthy");
+			clock.mockReturnValue(now + drainReadinessMaxAgeMs - 1);
+			await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+			expect(probeRuntime).toHaveBeenCalledTimes(1);
+			clock.mockReturnValue(now + drainReadinessMaxAgeMs);
+			await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+			expect(probeRuntime).toHaveBeenCalledTimes(2);
 		} finally {
-			Date.now = now;
+			clock.mockRestore();
 		}
 	});
 
-	it("Pod UID 变化时退回完整探测（缓存 key 不匹配，不走缓存）", async () => {
-		// 测试策略：缓存记录了原始 state 的 key；
-		// altState（不同 UID）缓存 miss → 退回完整探测
-		// K8s adapter 检测到 UID 不匹配时会 throw WorkloadKubernetesError（"conflict"），
-		// 或返回 drifted/unhealthy；无论哪种，结果都不是缓存命中的 "healthy"。
-		const probeRuntime = vi.fn(async () => ({
-			core: "passed" as const,
-			capabilities: {},
-		}));
-		const f = fixture({ probeRuntime });
-		const state = await makeReadyState(f);
-		const runtime = createWorkloadRuntimeV1(f.options);
-
-		// 先触发完整 observe 写入缓存（UID = 真实值）
-		await runtime.observe(state);
-
-		// altState UID 不同，缓存 key 不一致，退回完整探测
-		const altState = {
-			...state,
-			identity: { uid: "different-uid", generation: state.identity.generation },
-		} as WorkloadReconciliationStateV1;
-
-		// K8s UID 不匹配时 adapter throw，不走缓存（缓存命中会直接返回 healthy 而不 throw）
-		// 验证：observeForDrain 不走缓存，会实际执行 K8s 观测（导致 throw 或 drifted）
-		let threw = false;
-		let result: unknown;
-		try {
-			result = await runtime.observeForDrain(altState);
-		} catch {
-			threw = true;
-		}
-		// 无论 throw 还是返回非 healthy 值，都证明没有使用缓存（缓存命中会直接返回 healthy）
-		if (!threw) expect(result).not.toBe("healthy");
+	it("runs the full readiness when the Pod was replaced", async () => {
+		const { f, state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		pod(f).uid = "replacement-pod";
+		probeRuntime.mockResolvedValueOnce({ core: "failed", capabilities: {} });
+		await expect(drain.observeForDrain(state)).resolves.toBe("unhealthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+		// 未通过即清除记录，下一次仍做完整探测。
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(3);
 	});
 
-	it("fence 变化时退回完整探测（缓存 key 不匹配，probe 失败则 unhealthy）", async () => {
-		let failProbe = false;
-		const probeRuntime = vi.fn(async () =>
-			failProbe
-				? { core: "failed" as const, capabilities: {} }
-				: { core: "passed" as const, capabilities: {} },
+	it.each([
+		["a monitor probe is pending", { attempts: 1 }],
+		["the Workload is not ready", { phase: "observing" as const }],
+		["the Workload revision changed", "revision"],
+		["the fence changed", "fence"],
+	] as const)("does not reuse the record when %s", async (_name, change) => {
+		const { state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		const changed =
+			change === "revision"
+				? { ...state, revision: state.revision + 1 }
+				: change === "fence"
+					? { ...state, fence: state.fence + 1 }
+					: { ...state, ...change };
+		const result = await drain
+			.observeForDrain(changed)
+			.catch(() => "error" as const);
+		// 绑定不一致时要么由完整观测重新探测，要么在探测前就因漂移拒绝；不会沿用。
+		expect(probeRuntime.mock.calls.length === 2 || result !== "healthy").toBe(
+			true,
 		);
-		const f = fixture({ probeRuntime });
-		const state = await makeReadyState(f);
-		const runtime = createWorkloadRuntimeV1(f.options);
-
-		// 先触发完整 observe 写入缓存（原始 fence）
-		await runtime.observe(state);
-
-		// 之后 probe 返回 failed
-		failProbe = true;
-		const altState = { ...state, fence: state.fence + 9999 };
-		// 缓存 key 不一致（fence 变化），退回完整探测
-		const result = await runtime.observeForDrain(altState);
-		// 退回完整探测后，K8s 层检查 fence 不匹配可能返回 drifted，
-		// 或 probe 返回 failed 返回 unhealthy；无论如何不应该是 healthy
-		expect(result).not.toBe("healthy");
 	});
 
-	it("phase 非 ready 时退回完整探测（probe 失败则 unhealthy）", async () => {
-		let failProbe = false;
-		const probeRuntime = vi.fn(async () =>
-			failProbe
-				? { core: "failed" as const, capabilities: {} }
-				: { core: "passed" as const, capabilities: {} },
-		);
-		const f = fixture({ probeRuntime });
-		const state = await makeReadyState(f);
-		const runtime = createWorkloadRuntimeV1(f.options);
-
-		// 先触发完整 observe 写入缓存
-		await runtime.observe(state);
-
-		// 之后 probe 返回 failed
-		failProbe = true;
-		const promoting = { ...state, phase: "promoting" as const };
-		// promoting 不是 ready，退回完整探测
-		const result = await runtime.observeForDrain(promoting);
-		// 退回完整探测，probe 失败 → unhealthy（或因路由关闭等原因）；不走缓存所以非 healthy
-		expect(result).not.toBe("healthy");
+	it("forgets the record after a failed full observation", async () => {
+		const { state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		probeRuntime.mockResolvedValueOnce({ core: "failed", capabilities: {} });
+		await expect(monitor.observe(state)).resolves.toBe("unhealthy");
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(3);
 	});
 
-	it("attempts 非 0 时退回完整探测（probe 失败则 unhealthy）", async () => {
-		let failProbe = false;
-		const probeRuntime = vi.fn(async () =>
-			failProbe
-				? { core: "failed" as const, capabilities: {} }
-				: { core: "passed" as const, capabilities: {} },
-		);
-		const f = fixture({ probeRuntime });
-		const state = await makeReadyState(f);
-		const runtime = createWorkloadRuntimeV1(f.options);
-
-		// 先触发完整 observe 写入缓存
-		await runtime.observe(state);
-
-		// 之后 probe 返回 failed
-		failProbe = true;
-		const stateWithAttempts = { ...state, attempts: 1 };
-		const result = await runtime.observeForDrain(stateWithAttempts);
-		// 退回完整探测，probe 失败 → unhealthy
-		expect(result).not.toBe("healthy");
-	});
-
-	it("缓存为空时退回完整探测，probeRuntime 被调用", async () => {
-		const probeRuntime = vi.fn(async () => ({
-			core: "passed" as const,
-			capabilities: {},
-		}));
-		const f = fixture({ probeRuntime });
-		const state = await makeReadyState(f);
-
-		// 新建 runtime 实例（无缓存），直接调 observeForDrain
-		const freshRuntime = createWorkloadRuntimeV1(f.options);
-		const probeBefore = probeRuntime.mock.calls.length;
-		await expect(freshRuntime.observeForDrain(state)).resolves.toBe("healthy");
-		// 缓存为空，退回完整探测，probeRuntime 被调用
-		expect(probeRuntime.mock.calls.length).toBeGreaterThan(probeBefore);
-	});
-});
-
-describe("排空路径命令白名单：drainCacheableCommands (#1889)", () => {
-	it("包含且仅包含排空专有命令", () => {
-		expect([...drainCacheableCommands].sort()).toEqual(
-			["events.ack", "events.persist", "execution.renew"].sort(),
-		);
+	it("limits reuse to drain commands", () => {
+		expect([...drainCacheableCommands].sort()).toEqual([
+			"events.ack",
+			"events.persist",
+			"execution.renew",
+		]);
 	});
 });
