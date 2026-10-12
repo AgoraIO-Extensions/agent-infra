@@ -2,8 +2,29 @@ import { describe, expect, it } from "vitest";
 
 import {
 	RuntimeOriginalBindingResponseV3Schema,
+	RuntimeStatusResponseV3Schema,
 	runtimeRequestSigningPayloadV3,
 } from "./host-v3.ts";
+
+describe("Runtime V3 recovery outcome", () => {
+	it("preserves a durable busy result without accepting payload fields", () => {
+		const response = {
+			schemaVersion: 3,
+			hostSessionRef: "host-1",
+			executionId: "execution-1",
+			outcome: "found",
+			status: "unknown",
+			operationOutcome: "busy",
+		};
+		expect(RuntimeStatusResponseV3Schema.parse(response)).toEqual(response);
+		expect(
+			RuntimeStatusResponseV3Schema.safeParse({
+				...response,
+				operationOutcome: "unknown",
+			}).success,
+		).toBe(false);
+	});
+});
 
 describe("Runtime V3 original binding response", () => {
 	const response = {

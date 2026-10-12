@@ -2159,6 +2159,10 @@
                 "minLength": 1,
                 "type": "string"
               },
+              "operationOutcome": {
+                "const": "busy",
+                "type": "string"
+              },
               "outcome": {
                 "const": "found",
                 "type": "string"

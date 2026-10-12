@@ -1151,6 +1151,26 @@ export function createConversationDispatchUseCaseV1(
 							? { schemaVersion: 1, outcome: "already_completed" }
 							: { schemaVersion: 1, outcome: "stale" };
 					}
+					if (
+						recoveringOriginalTurn &&
+						status.outcome === "found" &&
+						status.operationOutcome === "busy"
+					) {
+						if (!(await dispatchHeartbeat.stop()))
+							return { schemaVersion: 1, outcome: "stale" };
+						const finished = await dependencies.store.finish({
+							claim,
+							status: "failed",
+							transition: {
+								executionStatus: "failed",
+								conversationStatus: "ready",
+							},
+							errorCode: "RUNTIME_BUSY",
+						});
+						return finished
+							? { schemaVersion: 1, outcome: "rejected" }
+							: { schemaVersion: 1, outcome: "stale" };
+					}
 					if (status.status === "unavailable") {
 						throw new ConversationRuntimeHostError("RUNTIME_UNAVAILABLE", true);
 					}

@@ -357,6 +357,8 @@ export type ConversationRuntimeStatusResponseV2 = {
 	| {
 			readonly outcome: "found";
 			readonly status: ConversationRuntimeStatusV1;
+			/** Durable Host result for a previously unknown operation. */
+			readonly operationOutcome?: "busy";
 	  }
 	| { readonly outcome: "not_found" }
 	| {

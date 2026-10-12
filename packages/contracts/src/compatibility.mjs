@@ -961,6 +961,24 @@ function isRuntimeStatusRecoveryOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2097 adds an optional durable busy outcome to the V3 recovery projection.
+function isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) {
+	const responseName = "RuntimeStatusResponseV3";
+	if (
+		previous.components?.schemas?.[responseName] === undefined ||
+		current.components?.schemas?.[responseName] === undefined
+	)
+		return false;
+	const normalized = structuredClone(current);
+	const response = normalized.components.schemas[responseName];
+	const found = response.oneOf?.find(
+		(option) => option?.properties?.outcome?.const === "found",
+	);
+	if (found?.properties?.operationOutcome === undefined) return false;
+	delete found.properties.operationOutcome;
+	return sameValue(previous, normalized);
+}
+
 // #504 adds versioned management routes. Preserve the published audit contract
 // exactly and admit only this immutable addition, as for Runtime recovery above.
 function withoutAgentOwnerScope(operation) {
@@ -3316,6 +3334,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isModelSelectionFallbackOpenApiAddition(previous, current) &&
 			!isAgentSummaryOpenApiAddition(previous, current) &&
 			!isRuntimeStatusRecoveryOpenApiAddition(previous, current) &&
+			!isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) &&
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeSkillHostReadOpenApiAddition(previous, current) &&
 			!isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) &&

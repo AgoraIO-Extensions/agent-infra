@@ -92,6 +92,7 @@ export const RuntimeStatusResponseV3Schema = z.discriminatedUnion("outcome", [
 		executionId: OpaqueIdV1Schema,
 		outcome: z.literal("found"),
 		status: RuntimeStatusV1Schema,
+		operationOutcome: z.literal("busy").optional(),
 	}),
 	z.strictObject({
 		schemaVersion: z.literal(3),

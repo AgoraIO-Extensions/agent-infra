@@ -1018,6 +1018,34 @@ describe("Conversation Worker dispatch", () => {
 		expect(f.store.released).toBe(0);
 		expect(f.store.current.executionStatus).toBe("unknown");
 	});
+	it("settles a persisted busy result during unknown Turn recovery", async () => {
+		const runtimeHost =
+			new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;
+		runtimeHost.recoverOriginalStatus = async (request) => ({
+			schemaVersion: 2,
+			hostSessionRef: request.hostSessionRef,
+			executionId: request.executionId,
+			outcome: "found" as const,
+			status: "unknown" as const,
+			operationOutcome: "busy" as const,
+		});
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", hostSessionRef: "host-original" }),
+		);
+		const f = setup({
+			store,
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+
+		expect(await dispatch(f.useCase)).toEqual({
+			schemaVersion: 1,
+			outcome: "rejected",
+		});
+		expect(store.current.executionStatus).toBe("failed");
+		expect(store.errorCode).toBe("RUNTIME_BUSY");
+		expect(store.outboxStatus).toBe("failed");
+	});
 	it.each(["found", "not_found"] as const)(
 		"recovers a historical control-only task with %s evidence without business dispatch or renewal",
 		async (outcome) => {
