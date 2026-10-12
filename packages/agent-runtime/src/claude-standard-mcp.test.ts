@@ -175,4 +175,77 @@ it("preserves nullable parameters and rejects unsupported constraints", () => {
 			}),
 		}),
 	).toThrow("Standard Connection client is unavailable");
+	expect(() =>
+		createClaudeStandardMcpServer({
+			client: {
+				...client,
+				toolDefinitions: [
+					{
+						name: "connection",
+						tools: [
+							{
+								name: "mcp_enum_constraints",
+								description: "unsupported enum combination",
+								inputSchema: {
+									type: "object",
+									properties: {
+										value: {
+											type: "string",
+											enum: ["a", "abcd"],
+											minLength: 3,
+										},
+									},
+								},
+							},
+						],
+					},
+				],
+			} as unknown as Parameters<
+				typeof createClaudeStandardMcpServer
+			>[0]["client"],
+			operation: () => ({
+				assertCurrent: async () => () => {},
+				block: () => {},
+				confirm: async () => {},
+				prepare: async () => {},
+				started: async () => {},
+			}),
+		}),
+	).toThrow("Standard Connection client is unavailable");
+	expect(() =>
+		createClaudeStandardMcpServer({
+			client: {
+				...client,
+				toolDefinitions: [
+					{
+						name: "connection",
+						tools: [
+							{
+								name: "mcp_nullable_constraints",
+								description: "unsupported nullable combination",
+								inputSchema: {
+									type: "object",
+									properties: {
+										value: {
+											type: "string",
+											anyOf: [{ type: "string" }, { type: "null" }],
+										},
+									},
+								},
+							},
+						],
+					},
+				],
+			} as unknown as Parameters<
+				typeof createClaudeStandardMcpServer
+			>[0]["client"],
+			operation: () => ({
+				assertCurrent: async () => () => {},
+				block: () => {},
+				confirm: async () => {},
+				prepare: async () => {},
+				started: async () => {},
+			}),
+		}),
+	).toThrow("Standard Connection client is unavailable");
 });

@@ -47,9 +47,9 @@ import { RuntimeHostError } from "./errors.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 import {
- 	boundedRuntimeSkillRead,
- 	type RuntimeFilesystemSkillDirectoryV1,
- 	RuntimeSkillDirectoryErrorV1,
+	boundedRuntimeSkillRead,
+	type RuntimeFilesystemSkillDirectoryV1,
+	RuntimeSkillDirectoryErrorV1,
 } from "./skill-hub-directory.js";
 import {
 	StandardMcpClient,
@@ -1355,6 +1355,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			if (index === -1) {
 				const first = initial;
 				if (!first) unavailable();
+				if (turn.connectionOperations.length >= 32) unavailable();
 				turn.connectionOperations.push(first);
 				return;
 			}

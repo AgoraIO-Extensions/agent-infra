@@ -74,6 +74,8 @@ function toZod(value: unknown): ZodTypeAny {
 	)
 		unavailable();
 	if (Array.isArray(input.anyOf)) {
+		const anyOfKeys = new Set([...annotations, "anyOf"]);
+		if (Object.keys(input).some((key) => !anyOfKeys.has(key))) unavailable();
 		const isNullSchema = (entry: unknown) =>
 			object(entry) &&
 			entry.type === "null" &&
@@ -85,6 +87,9 @@ function toZod(value: unknown): ZodTypeAny {
 		unavailable();
 	}
 	if (Array.isArray(input.enum)) {
+		const enumKeys = new Set([...annotations, "type", "enum"]);
+		if (Object.keys(input).some((key) => !enumKeys.has(key))) unavailable();
+		if (input.type !== undefined && input.type !== "string") unavailable();
 		if (
 			input.enum.length < 1 ||
 			input.enum.some((entry) => typeof entry !== "string")
