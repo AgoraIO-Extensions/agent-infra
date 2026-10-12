@@ -1433,6 +1433,20 @@ tbody tr:hover {
 	gap: 8px;
 }
 
+.agent-management-table th:nth-child(4),
+.agent-management-table td:nth-child(4) {
+	white-space: nowrap;
+}
+
+.agent-capability-editor {
+	margin-top: 20px;
+	padding: 18px;
+}
+
+.agent-capability-editor .section-heading {
+	padding: 0 0 16px;
+}
+
 .permission-option {
 	display: grid;
 	grid-template-columns: 20px minmax(0, 1fr);

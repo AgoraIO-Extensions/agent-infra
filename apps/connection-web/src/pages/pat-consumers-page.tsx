@@ -183,7 +183,7 @@ export function PatConsumersPage() {
 			<section className="data-section">
 				{consumers.data?.consumers.length ? (
 					<div className="table-scroll">
-						<table className="management-table">
+						<table className="management-table agent-management-table">
 							<thead>
 								<tr>
 									<th>Agent</th>
@@ -250,7 +250,10 @@ export function PatConsumersPage() {
 				) : null}
 			</section>
 			{declarationConsumerId && declarationOptions.data ? (
-				<section className="data-section content-stack" ref={declarationEditor}>
+				<section
+					className="data-section agent-capability-editor content-stack"
+					ref={declarationEditor}
+				>
 					<div className="section-heading">
 						<div>
 							<h2>配置 {declarationOptions.data.consumer.name} 能力</h2>
