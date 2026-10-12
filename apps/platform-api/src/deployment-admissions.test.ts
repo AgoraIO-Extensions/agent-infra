@@ -386,6 +386,27 @@ describe("production deployment admissions", () => {
 		).toMatchObject({ status: "rejected" });
 	});
 
+	it("rejects standard templates without validation evidence before registry admission", async () => {
+		const f = fixture();
+		const template = f.input.templates[0];
+		if (!template) throw new Error();
+		const { loadValidation, ...unverifiedTemplate } = template;
+		void loadValidation;
+		const admissions = createDeploymentAdmissionsV1({
+			...f.input,
+			templates: [unverifiedTemplate],
+		});
+
+		expect(
+			await admissions.imageAdmission.admitImage({
+				...request,
+				requested: { kind: "standard", templateId: "codex" },
+			}),
+		).toMatchObject({ status: "rejected" });
+		expect(f.fetch).not.toHaveBeenCalled();
+		expect(f.authorize).not.toHaveBeenCalled();
+	});
+
 	it("keeps simultaneous request identities isolated through real registry policy awaits", async () => {
 		const f = fixture();
 		const scope = createDeploymentIdentityScope({
