@@ -1217,7 +1217,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const revalidate = async () => {
 			assertCurrent();
 			try {
-				await read.revalidate();
+				await boundedRuntimeSkillRead({
+					pending: read.revalidate(),
+					signal: read.signal,
+					expiresAt: read.expiresAt,
+				});
 			} catch {
 				throw new RuntimeSkillDirectoryErrorV1();
 			}
@@ -1257,7 +1261,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		};
 		assertCurrent();
 		try {
-			await read.revalidate();
+			await boundedRuntimeSkillRead({
+				pending: read.revalidate(),
+				signal: read.signal,
+				expiresAt: read.expiresAt,
+			});
 		} catch {
 			throw new RuntimeSkillDirectoryErrorV1();
 		}

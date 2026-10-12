@@ -203,6 +203,29 @@ it("discovers and reads the bound Skill projection with generation revalidation"
 		).rejects.toMatchObject({
 			code: "RUNTIME_SKILL_DIRECTORY_UNAVAILABLE",
 		});
+		const held = Promise.withResolvers<void>();
+		await expect(
+			driver.discoverNativeSkills({
+				...read,
+				expiresAt: Date.now() + 10,
+				revalidate: () => held.promise,
+			}),
+		).rejects.toMatchObject({
+			code: "RUNTIME_SKILL_DIRECTORY_UNAVAILABLE",
+		});
+		held.resolve();
+		const cancelledController = new AbortController();
+		const cancelledGate = Promise.withResolvers<void>();
+		const cancelled = driver.discoverNativeSkills({
+			...read,
+			signal: cancelledController.signal,
+			revalidate: () => cancelledGate.promise,
+		});
+		cancelledController.abort();
+		await expect(cancelled).rejects.toMatchObject({
+			code: "RUNTIME_SKILL_DIRECTORY_UNAVAILABLE",
+		});
+		cancelledGate.resolve();
 		const pending = driver.readNativeSkill(read, entry.name, "SKILL.md");
 		await Promise.resolve();
 		generationId = "0".repeat(64);
@@ -246,7 +269,7 @@ it("keeps the Skill Hub directory unavailable when no binding is configured", as
 		},
 	});
 	try {
-		await driver.execute({
+		const accepted = await driver.execute({
 			schemaVersion: 2,
 			kind: "submit-turn",
 			agentId: "agent-a",
@@ -264,6 +287,17 @@ it("keeps the Skill Hub directory unavailable when no binding is configured", as
 		});
 		expect(observed).toHaveLength(1);
 		expect(observed[0]?.skillDirectory).toBeUndefined();
+		await expect(
+			driver.discoverNativeSkills({
+				nativeSessionRef: accepted.nativeSessionRef,
+				signal: new AbortController().signal,
+				expiresAt: Date.now() + 10_000,
+				assertCurrent: () => {},
+				revalidate: async () => {},
+			}),
+		).rejects.toMatchObject({
+			code: "RUNTIME_SKILL_DIRECTORY_UNAVAILABLE",
+		});
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
