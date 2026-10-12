@@ -1222,6 +1222,47 @@ describe("Connection application service", () => {
 		expect(repository.reconciliationJobs).toHaveLength(0);
 	});
 
+	it("keeps unrelated calls and recovered permissions usable after Provider denial", async () => {
+		const repository = new MemoryRepository();
+		let permissionDenied = true;
+		const service = new ConnectionApplicationService(repository, {
+			execute: async ({ action }) => {
+				if (action === "github.createPullRequest" && permissionDenied)
+					throw Object.assign(new Error("Insufficient Provider permission"), {
+						providerStatus: 403,
+						providerSubmissionOutcome: "rejected",
+					});
+				return { ok: true };
+			},
+		});
+		const input = {
+			base: "main",
+			head: "feature/permissions",
+			repository: "acme/widgets",
+			title: "Permission test",
+		};
+		await expect(
+			service.invokeDirect("direct", "github.createPullRequest", {
+				...input,
+				idempotencyKey: "denied",
+			}),
+		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		expect(repository.credentialPaused).toBe(false);
+		await expect(
+			service.invokeDirect("direct", "github.getRepository", {
+				repository: "acme/widgets",
+			}),
+		).resolves.toMatchObject({ status: "SUCCEEDED" });
+		permissionDenied = false;
+		await expect(
+			service.invokeDirect("direct", "github.createPullRequest", {
+				...input,
+				idempotencyKey: "recovered",
+			}),
+		).resolves.toMatchObject({ status: "SUCCEEDED" });
+		expect(repository.reconciliationJobs).toHaveLength(0);
+	});
+
 	it.each([
 		{ providerStatus: 451, expectedStatus: 451 },
 		{ providerStatus: 403, expectedStatus: 403 },

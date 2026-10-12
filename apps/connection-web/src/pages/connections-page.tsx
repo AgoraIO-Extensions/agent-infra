@@ -2377,6 +2377,9 @@ export function PreviewContent(props: {
 					{props.value.preview.targetConnection.externalAccount}
 				</p>
 			) : null}
+			<p className="muted">
+				这里确认客户端可使用的能力；实际操作权限由外部系统判断，外部权限不足不会取消已确认能力。
+			</p>
 			<fieldset
 				disabled={props.busy}
 				className="authorization-options content-stack"
@@ -2590,7 +2593,7 @@ function GrantPermissions(props: {
 			{added ? (
 				<p className="connection-capability-gap">
 					目录新增 {added}{" "}
-					项能力，默认未选。请在管理能力中查看选择；列表缺项时再更新账号权限。是否可授权仍取决于账号权限、客户端能力配置和审批要求。
+					项能力，默认未选。请在管理能力中查看选择；候选列表由客户端能力配置和审批要求决定，实际操作权限由外部系统判断。
 				</p>
 			) : null}
 		</>

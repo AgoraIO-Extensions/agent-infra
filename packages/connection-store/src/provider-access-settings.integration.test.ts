@@ -160,11 +160,40 @@ integrationTest(
 					consumerId,
 					connectionId,
 				});
-			expect(preview.actions.map((item) => item.id)).toEqual([action.id]);
+			expect(preview.actions.map((item) => item.id).sort()).toEqual(
+				catalog.actions.map((item) => item.id).sort(),
+			);
+			const selectedPreview =
+				await repository.createCurrentConsumerAuthorizationPreview({
+					principalId,
+					consumerId,
+					connectionId,
+					actionVersionIds: [action.id],
+				});
 			await repository.confirmCurrentConsumerAuthorization({
 				principalId,
-				previewId: preview.previewId,
-				confirmationToken: preview.confirmationToken,
+				previewId: selectedPreview.previewId,
+				confirmationToken: selectedPreview.confirmationToken,
+				idempotencyKey: randomUUID(),
+			});
+			const affectedConsumer = `${consumerId}-affected`;
+			await repository.publishConsumerDeclaration({
+				consumer: { id: affectedConsumer, name: "Affected client" },
+				providerReleaseId: catalog.providerReleaseId,
+				actionVersionIds: catalog.actions.map((item) => item.id),
+			});
+			await sql`INSERT INTO connection_consumer_instances(id,consumer_id,kind,auth_subject,status,principal_id) VALUES(${`${instanceId}-affected`},${affectedConsumer},'DEVICE',${`${instanceId}-affected`},'ACTIVE',${principalId})`;
+			const affected =
+				await repository.createCurrentConsumerAuthorizationPreview({
+					principalId,
+					connectionId,
+					consumerId: affectedConsumer,
+					actionVersionIds: [catalog.actions[1]!.id],
+				});
+			await repository.confirmCurrentConsumerAuthorization({
+				principalId,
+				previewId: affected.previewId,
+				confirmationToken: affected.confirmationToken,
 				idempotencyKey: randomUUID(),
 			});
 			const saved = await repository.getProviderCredentialForUpgrade({
@@ -223,39 +252,27 @@ integrationTest(
 				repository.verifyInvocation({ ...unchanged, action: "optional.admin" }),
 			).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-			const affectedConsumer = `${consumerId}-affected`;
-			await repository.publishConsumerDeclaration({
-				consumer: { id: affectedConsumer, name: "Affected client" },
-				providerReleaseId: catalog.providerReleaseId,
-				actionVersionIds: catalog.actions.map((item) => item.id),
-			});
-			await sql`INSERT INTO connection_consumer_instances(id,consumer_id,kind,auth_subject,status,principal_id) VALUES(${`${instanceId}-affected`},${affectedConsumer},'DEVICE',${`${instanceId}-affected`},'ACTIVE',${principalId})`;
-			const affected =
-				await repository.createCurrentConsumerAuthorizationPreview({
-					principalId,
-					connectionId,
-					consumerId: affectedConsumer,
-					actionVersionIds: [catalog.actions[1]!.id],
-				});
-			await repository.confirmCurrentConsumerAuthorization({
-				principalId,
-				previewId: affected.previewId,
-				confirmationToken: affected.confirmationToken,
-				idempotencyKey: randomUUID(),
-			});
 			await repository.storeProviderCredential(identity);
 			await repository.resolveDirectIdentity({
 				principalId,
 				consumerId,
 				instanceId,
 			});
-			await expect(
-				repository.resolveDirectIdentity({
-					principalId,
-					consumerId: affectedConsumer,
-					instanceId: `${instanceId}-affected`,
-				}),
-			).rejects.toMatchObject({ code: "FORBIDDEN" });
+			const retained = await repository.resolveDirectIdentity({
+				principalId,
+				consumerId: affectedConsumer,
+				instanceId: `${instanceId}-affected`,
+			});
+			await repository.verifyInvocation({
+				...retained,
+				action: "optional.admin",
+			});
+			const [retainedConsent] = await sql<{ consent_reused: boolean }[]>`
+				SELECT grant_version.consent_id = original.consent_id AS consent_reused
+				FROM connection_grants grant_version JOIN connection_authorization_previews preview ON preview.id = ${affected.previewId}
+				JOIN connection_grants original ON original.id = preview.confirmed_grant_id
+				WHERE grant_version.id = ${retained.grantId}`;
+			expect(retainedConsent?.consent_reused).toBe(true);
 			const reconfirm =
 				await repository.createCurrentConsumerAuthorizationPreview({
 					principalId,
@@ -344,7 +361,7 @@ integrationTest(
 					confirmationToken: preview.confirmationToken,
 					idempotencyKey: randomUUID(),
 				}),
-			).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
 			// Existing approval engine still grants and constrains an enabled Provider.
 			const accessRequestId = await seedApprovedConnectPermit(sql, {
 				principalId,
@@ -471,6 +488,7 @@ integrationTest(
 				nextAction: "REAUTHORIZE",
 				reason: "PROVIDER_REAUTHORIZATION_REQUIRED",
 			});
+			await repository.disconnectConnection({ principalId, connectionId });
 		} finally {
 			await sql`UPDATE connection_access_policy_versions SET status = 'SUPERSEDED', revision = revision + 1
 				WHERE provider_release_id = ${catalog.providerReleaseId} AND status = 'PUBLISHED'`;
@@ -576,6 +594,10 @@ integrationTest(
 					(connection) => connection.id === stored.connectionId,
 				),
 			).toBe(true);
+			await repository.disconnectConnection({
+				principalId: adminId,
+				connectionId: stored.connectionId,
+			});
 		} finally {
 			releasePrincipal?.();
 			await holder;

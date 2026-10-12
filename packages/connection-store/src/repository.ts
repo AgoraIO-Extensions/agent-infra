@@ -122,7 +122,6 @@ type AuthorizationTarget = {
 	connectionRevision: string;
 	credentialRevision: string;
 	credentialScopeDigest: string;
-	credentialScopes: string[];
 	credentialVersionId: string;
 	externalAccountFingerprint: string;
 	providerId: string;
@@ -154,11 +153,7 @@ function selectAuthorizationActions(
 		? [...requestedActionVersionIds]
 				.sort()
 				.map((actionVersionId) => actionsById.get(actionVersionId))
-		: target.actions.filter((action) =>
-				action.requiredScopes.every((scope) =>
-					target.credentialScopes.includes(scope),
-				),
-			);
+		: target.actions;
 	if (actions.some((action) => !action)) {
 		invalidAuthorizationPreview(
 			"Authorization action selection exceeds declared or approved capabilities",
@@ -167,16 +162,6 @@ function selectAuthorizationActions(
 	const selected = actions as ActionDefinition[];
 	if (selected.length === 0) {
 		invalidAuthorizationPreview("No declared Actions are available");
-	}
-	const requiredScopes = new Set(
-		selected.flatMap((action) => [...action.requiredScopes]),
-	);
-	if (
-		[...requiredScopes].some(
-			(scope) => !target.credentialScopes.includes(scope),
-		)
-	) {
-		forbidden();
 	}
 	return { ...target, actions: selected };
 }
@@ -2524,7 +2509,6 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			consumerRevision: subject.consumer_revision,
 			credentialRevision: subject.credential_revision,
 			credentialScopeDigest: canonicalHash(credentialScopes.sort()),
-			credentialScopes,
 			credentialVersionId: subject.credential_version_id,
 			externalAccountFingerprint: canonicalHash({
 				externalAccount: subject.external_account,
