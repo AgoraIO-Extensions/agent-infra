@@ -84,6 +84,22 @@ it("maps status reads and fails closed on invalid responses", async () => {
 	).rejects.toThrow("CONNECTION_INSTALLATION_INVALID_RESPONSE");
 });
 
+it("rejects response fields that could contain credential material", async () => {
+	api.readPlatformConnectionInstallationV1.mockResolvedValue({
+		response: { status: 200 },
+		data: {
+			schemaVersion: 1,
+			authorizationId: "authorization-1",
+			status: "confirmed",
+			expiresAt: Date.now() + 10_000,
+			token: "secret-material",
+		},
+	});
+	await expect(
+		readConnectionInstallation({ authorizationId: "authorization-1" }),
+	).rejects.toThrow("CONNECTION_INSTALLATION_INVALID_RESPONSE");
+});
+
 it("uses browser security headers for status reads without an idempotency key", () => {
 	const headers = connectionRequestHeaders();
 	expect(headers).toEqual({

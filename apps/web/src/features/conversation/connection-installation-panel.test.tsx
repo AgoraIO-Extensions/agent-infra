@@ -188,3 +188,38 @@ it("bounds polling attempts after status failures", async () => {
 		vi.useRealTimers();
 	}
 });
+
+it.each(["confirmed", "revoked", "expired", "unknown"] as const)(
+	"renders terminal installation state %s",
+	async (status) => {
+		api.beginPlatformConnectionInstallationV1.mockResolvedValue({
+			response: { status: 202 },
+			data: {
+				schemaVersion: 1,
+				authorizationId: "authorization-1",
+				status,
+				expiresAt: Date.now() + 60_000,
+			},
+		});
+		render(
+			<ConnectionInstallationPanel
+				conversationId="conversation-1"
+				executionId="execution-1"
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
+		await waitFor(() =>
+			expect(
+				screen.getByText(
+					status === "confirmed"
+						? "已确认"
+						: status === "revoked"
+							? "已撤销"
+							: status === "expired"
+								? "已过期"
+								: "状态待核实",
+				),
+			).toBeTruthy(),
+		);
+	},
+);
