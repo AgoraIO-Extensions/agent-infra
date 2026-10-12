@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath } from "node:fs/promises";
 import { basename, isAbsolute, join, relative } from "node:path";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
@@ -1219,16 +1219,21 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		let resultFileInFlight = false;
 		const onResultFile = async (output: ClaudeFileWriteOutput) => {
 			if (!fileBridge || resultFileWritten || resultFileInFlight) return;
-			if (!isAbsolute(output.filePath)) return;
-			const root = await realpath(workspace).catch(() => undefined);
-			const actual = await realpath(output.filePath).catch(() => undefined);
-			if (!root || !actual) return;
-			const within = relative(root, actual);
-			if (!within || within.startsWith("..") || isAbsolute(within)) return;
-			const bytes = Buffer.from(output.content, "utf8");
-			if (bytes.byteLength > 10 * 1024 * 1024) return;
 			resultFileInFlight = true;
 			try {
+				if (!isAbsolute(output.filePath)) return;
+				const root = await realpath(workspace).catch(() => undefined);
+				const actual = await realpath(output.filePath).catch(() => undefined);
+				if (!root || !actual) return;
+				const within = relative(root, actual);
+				if (!within || within.startsWith("..") || isAbsolute(within)) return;
+				const content =
+					typeof output.content === "string"
+						? output.content
+						: await readFile(actual, "utf8").catch(() => undefined);
+				if (content === undefined) return;
+				const bytes = Buffer.from(content, "utf8");
+				if (bytes.byteLength > 10 * 1024 * 1024) return;
 				const receipt = await fileBridge.writeResult(
 					{
 						name: basename(within),

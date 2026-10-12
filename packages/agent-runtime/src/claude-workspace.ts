@@ -2,9 +2,9 @@ import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { workspacePathAllowed } from "./workspace-path.js";
 
 export type ClaudeFileWriteOutput = Readonly<{
-	type: "create" | "update";
 	filePath: string;
-	content: string;
+	content?: string;
+	structuredPatch?: readonly unknown[];
 }>;
 
 /** Fixed core tools; Bash, subagents, MCP, network tools and arbitrary file roots remain unavailable. */
@@ -66,11 +66,14 @@ export function claudeWorkspaceTools(
 											["Write", "Edit"].includes(input.tool_name) &&
 											input.tool_response &&
 											typeof input.tool_response === "object" &&
-											(input.tool_response as { type?: unknown }).type &&
 											(input.tool_response as { filePath?: unknown })
 												.filePath &&
-											typeof (input.tool_response as { content?: unknown })
-												.content === "string"
+											(typeof (input.tool_response as { content?: unknown })
+												.content === "string" ||
+												Array.isArray(
+													(input.tool_response as { structuredPatch?: unknown })
+														.structuredPatch,
+												))
 										) {
 											await onResultFile(
 												input.tool_response as ClaudeFileWriteOutput,

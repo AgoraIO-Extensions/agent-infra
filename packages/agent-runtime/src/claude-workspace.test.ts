@@ -13,29 +13,59 @@ describe("Claude workspace result hook", () => {
 		if (!matcher) throw new Error("missing PostToolUse matcher");
 		const hook = matcher.hooks[0];
 		if (!hook) throw new Error("missing PostToolUse hook");
-		await hook({
-			hook_event_name: "PostToolUse",
-			tool_name: "Write",
-			tool_input: { file_path: "/private/runtime/workspace/out.txt" },
-			tool_response: {
-				type: "create",
-				filePath: "/private/runtime/workspace/out.txt",
-				content: "result",
-			},
-			tool_use_id: "tool-1",
-		} as never, "tool-1", { signal: new AbortController().signal });
-		await hook({
-			hook_event_name: "PostToolUse",
-			tool_name: "Read",
-			tool_input: { file_path: "/private/runtime/workspace/out.txt" },
-			tool_response: { type: "text", content: "result" },
-			tool_use_id: "tool-2",
-		} as never, "tool-2", { signal: new AbortController().signal });
-		expect(onResultFile).toHaveBeenCalledOnce();
-		expect(onResultFile).toHaveBeenCalledWith({
+		await hook(
+			{
+				hook_event_name: "PostToolUse",
+				tool_name: "Write",
+				tool_input: { file_path: "/private/runtime/workspace/out.txt" },
+				tool_response: {
+					type: "create",
+					filePath: "/private/runtime/workspace/out.txt",
+					content: "result",
+				},
+				tool_use_id: "tool-1",
+			} as never,
+			"tool-1",
+			{ signal: new AbortController().signal },
+		);
+		await hook(
+			{
+				hook_event_name: "PostToolUse",
+				tool_name: "Read",
+				tool_input: { file_path: "/private/runtime/workspace/out.txt" },
+				tool_response: { type: "text", content: "result" },
+				tool_use_id: "tool-2",
+			} as never,
+			"tool-2",
+			{ signal: new AbortController().signal },
+		);
+		await hook(
+			{
+				hook_event_name: "PostToolUse",
+				tool_name: "Edit",
+				tool_input: { file_path: "/private/runtime/workspace/out.txt" },
+				tool_response: {
+					filePath: "/private/runtime/workspace/out.txt",
+					oldString: "old",
+					newString: "new",
+					structuredPatch: [],
+				},
+				tool_use_id: "tool-3",
+			} as never,
+			"tool-3",
+			{ signal: new AbortController().signal },
+		);
+		expect(onResultFile).toHaveBeenCalledTimes(2);
+		expect(onResultFile).toHaveBeenNthCalledWith(1, {
 			type: "create",
 			filePath: "/private/runtime/workspace/out.txt",
 			content: "result",
+		});
+		expect(onResultFile).toHaveBeenNthCalledWith(2, {
+			filePath: "/private/runtime/workspace/out.txt",
+			oldString: "old",
+			newString: "new",
+			structuredPatch: [],
 		});
 	});
 });
