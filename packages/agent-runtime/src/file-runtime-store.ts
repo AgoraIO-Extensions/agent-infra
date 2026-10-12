@@ -413,6 +413,49 @@ function sessionFor(
 	return session;
 }
 
+/** Event read/ACK authority checks, each with its own fixed reason (#1888). */
+function assertEventAuthority(
+	session: StoredSession,
+	claims: RuntimeExecutionGrantClaimsV2,
+	currentNow: number,
+): RuntimeExecutionAuthority {
+	const authority = session.executionAuthorities?.[claims.executionId];
+	if (!authority) runtimeAuthorizationDenied("event-authority-missing");
+	if (claims.purpose === "business" && authority.expiresAt <= currentNow)
+		runtimeAuthorizationDenied("event-authority-expired");
+	if (claims.expiresAt <= currentNow)
+		runtimeAuthorizationDenied("event-grant-expired");
+	if (
+		authority.executionDeliveryFence !== claims.operation.executionDeliveryFence
+	)
+		runtimeAuthorizationDenied("event-authority-fence-mismatch");
+	if (authority.workerId !== claims.workerId)
+		runtimeAuthorizationDenied("event-authority-worker-mismatch");
+	if (
+		session.highestFences[`execution:${claims.executionId}`] !==
+		claims.operation.executionDeliveryFence
+	)
+		runtimeAuthorizationDenied("event-execution-fence-mismatch");
+	if (claims.purpose === "business") {
+		if (authority.stopped) runtimeAuthorizationDenied("event-business-stopped");
+		if (authority.control !== undefined)
+			runtimeAuthorizationDenied(
+				authority.control.reason === "recovery"
+					? "event-business-recovery-latched"
+					: "event-business-control-latched",
+			);
+		if (authority.authorizationRecordId !== claims.authorizationRecordId)
+			runtimeAuthorizationDenied("event-authorization-record-mismatch");
+	}
+	if (
+		claims.purpose === "control" &&
+		(authority.control?.controlRecordId !== claims.controlRecordId ||
+			authority.control.reason !== claims.reason)
+	)
+		runtimeAuthorizationDenied("event-control-record-mismatch");
+	return authority;
+}
+
 function assertExecutionBinding(
 	session: StoredSession,
 	binding: { executionId: string; turnId: string },
@@ -1170,7 +1213,8 @@ export class FileRuntimeStore {
 		const authorize = (state: RuntimeStoreState) => {
 			const currentNow = typeof now === "function" ? now() : now;
 			assertStoreState(state);
-			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
+			if (!claims.hostSessionRef)
+				runtimeAuthorizationDenied("host-session-ref-missing");
 			const session = sessionFor(
 				state,
 				claims.hostSessionRef,
@@ -1218,17 +1262,18 @@ export class FileRuntimeStore {
 									tombstoneId: claims.operation.id,
 								})))
 				)
-					runtimeAuthorizationDenied();
+					runtimeAuthorizationDenied("generation-cancel-scope-invalid");
 			} else if (session.highestFences[executionScope] !== executionFence)
-				runtimeAuthorizationDenied();
+				runtimeAuthorizationDenied("execution-fence-mismatch");
 			if (mode === "renew") {
 				const execution = session.operations[claims.executionId];
+				if (claims.purpose !== "business")
+					runtimeAuthorizationDenied("renew-not-business");
 				if (
-					claims.purpose !== "business" ||
 					execution?.result?.outcome !== "accepted" ||
 					!["running", "unknown"].includes(execution.result.status)
 				)
-					runtimeAuthorizationDenied();
+					runtimeAuthorizationDenied("renew-execution-not-running");
 			}
 			session.executionAuthorities ??= {};
 			const authority = applyRuntimeAuthority(
@@ -1258,7 +1303,8 @@ export class FileRuntimeStore {
 	checkRequestV3(claims: RuntimeExecutionGrantClaimsV2) {
 		const state = this.file.read();
 		assertStoreState(state);
-		if (!claims.hostSessionRef) runtimeAuthorizationDenied();
+		if (!claims.hostSessionRef)
+			runtimeAuthorizationDenied("host-session-ref-missing");
 		const session = sessionFor(
 			state,
 			claims.hostSessionRef,
@@ -1267,25 +1313,31 @@ export class FileRuntimeStore {
 		);
 		assertExecutionBinding(session, claims);
 		const authority = session.executionAuthorities?.[claims.executionId];
+		if (!authority) runtimeAuthorizationDenied("request-authority-missing");
+		if (authority.workerId !== claims.workerId)
+			runtimeAuthorizationDenied("request-authority-worker-mismatch");
 		if (
-			!authority ||
-			authority.workerId !== claims.workerId ||
 			session.highestFences[`execution:${claims.executionId}`] !==
-				claims.operation.executionDeliveryFence
+			claims.operation.executionDeliveryFence
 		)
-			runtimeAuthorizationDenied();
-		if (
-			claims.purpose === "business" &&
-			(authority.stopped ||
-				authority.control !== undefined ||
-				authority.authorizationRecordId !== claims.authorizationRecordId)
-		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("request-execution-fence-mismatch");
+		if (claims.purpose === "business") {
+			if (authority.stopped)
+				runtimeAuthorizationDenied("request-business-stopped");
+			if (authority.control !== undefined)
+				runtimeAuthorizationDenied(
+					authority.control.reason === "recovery"
+						? "request-business-recovery-latched"
+						: "request-business-control-latched",
+				);
+			if (authority.authorizationRecordId !== claims.authorizationRecordId)
+				runtimeAuthorizationDenied("request-authorization-record-mismatch");
+		}
 		if (
 			claims.purpose === "control" &&
 			authority.control?.controlRecordId !== claims.controlRecordId
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("request-control-record-mismatch");
 		return session;
 	}
 
@@ -1400,39 +1452,15 @@ export class FileRuntimeStore {
 		return this.file.update(
 			(state) => {
 				const currentNow = typeof now === "function" ? now() : now;
-				if (!claims.hostSessionRef) runtimeAuthorizationDenied();
+				if (!claims.hostSessionRef)
+					runtimeAuthorizationDenied("host-session-ref-missing");
 				const session = sessionFor(
 					state,
 					claims.hostSessionRef,
 					claims,
 					claims.purpose === "control",
 				);
-				const authority = session.executionAuthorities?.[claims.executionId];
-				if (
-					!authority ||
-					(claims.purpose === "business" &&
-						authority.expiresAt <= currentNow) ||
-					claims.expiresAt <= currentNow ||
-					authority.executionDeliveryFence !==
-						claims.operation.executionDeliveryFence ||
-					authority.workerId !== claims.workerId ||
-					session.highestFences[`execution:${claims.executionId}`] !==
-						claims.operation.executionDeliveryFence
-				)
-					runtimeAuthorizationDenied();
-				if (
-					claims.purpose === "business" &&
-					(authority.stopped ||
-						authority.control !== undefined ||
-						authority.authorizationRecordId !== claims.authorizationRecordId)
-				)
-					runtimeAuthorizationDenied();
-				if (
-					claims.purpose === "control" &&
-					(authority.control?.controlRecordId !== claims.controlRecordId ||
-						authority.control.reason !== claims.reason)
-				)
-					runtimeAuthorizationDenied();
+				const authority = assertEventAuthority(session, claims, currentNow);
 				for (const cursor of cursors) {
 					if (
 						!authority.deliveredCursors.includes(cursor) &&
@@ -1441,7 +1469,7 @@ export class FileRuntimeStore {
 					) {
 						// Over the bound, the whole page is refused and nothing is recorded.
 						if (authority.deliveredCursors.length >= maximumAcknowledgedCursors)
-							runtimeAuthorizationDenied();
+							runtimeAuthorizationDenied("delivered-cursor-bound");
 						authority.deliveredCursors.push(cursor);
 					}
 				}
@@ -1456,13 +1484,13 @@ export class FileRuntimeStore {
 	) {
 		const session = this.checkRequestV3(claims);
 		const authority = session.executionAuthorities?.[claims.executionId];
+		if (!authority) runtimeAuthorizationDenied("ack-authority-missing");
 		if (
-			!authority ||
-			(authority.confirmedCursor !== cursor &&
-				!authority.acknowledgedCursors?.includes(cursor) &&
-				!authority.deliveredCursors.includes(cursor))
+			authority.confirmedCursor !== cursor &&
+			!authority.acknowledgedCursors?.includes(cursor) &&
+			!authority.deliveredCursors.includes(cursor)
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("ack-cursor-unknown");
 		return session;
 	}
 
@@ -1473,45 +1501,22 @@ export class FileRuntimeStore {
 	) {
 		return this.file.update((state) => {
 			const currentNow = typeof now === "function" ? now() : now;
-			if (!claims.hostSessionRef) runtimeAuthorizationDenied();
+			if (!claims.hostSessionRef)
+				runtimeAuthorizationDenied("host-session-ref-missing");
 			const session = sessionFor(
 				state,
 				claims.hostSessionRef,
 				claims,
 				claims.purpose === "control",
 			);
-			const authority = session.executionAuthorities?.[claims.executionId];
-			if (
-				!authority ||
-				(claims.purpose === "business" && authority.expiresAt <= currentNow) ||
-				claims.expiresAt <= currentNow ||
-				authority.executionDeliveryFence !==
-					claims.operation.executionDeliveryFence ||
-				authority.workerId !== claims.workerId ||
-				session.highestFences[`execution:${claims.executionId}`] !==
-					claims.operation.executionDeliveryFence
-			)
-				runtimeAuthorizationDenied();
-			if (
-				claims.purpose === "business" &&
-				(authority.stopped ||
-					authority.control !== undefined ||
-					authority.authorizationRecordId !== claims.authorizationRecordId)
-			)
-				runtimeAuthorizationDenied();
-			if (
-				claims.purpose === "control" &&
-				(authority.control?.controlRecordId !== claims.controlRecordId ||
-					authority.control.reason !== claims.reason)
-			)
-				runtimeAuthorizationDenied();
+			const authority = assertEventAuthority(session, claims, currentNow);
 			if (
 				authority.confirmedCursor === cursor ||
 				authority.acknowledgedCursors?.includes(cursor)
 			)
 				return;
 			const index = authority.deliveredCursors.indexOf(cursor);
-			if (index < 0) runtimeAuthorizationDenied();
+			if (index < 0) runtimeAuthorizationDenied("ack-cursor-undelivered");
 			authority.confirmedCursor = cursor;
 			authority.acknowledgedCursors ??= [];
 			authority.acknowledgedCursors.push(

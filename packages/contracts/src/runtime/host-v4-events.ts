@@ -7,6 +7,7 @@ import {
 } from "../index.ts";
 import { RuntimeEventSchema } from "./events-v2.ts";
 import {
+	type RuntimeExecutionGrantClaimsV2,
 	RuntimeExecutionGrantV2Schema,
 	RuntimeOperationBindingV2Schema,
 	RuntimePrincipalV1Schema,
@@ -113,21 +114,51 @@ export async function validateRuntimeEventAccessV4(
 		trustedOperation: unknown;
 	},
 ): Promise<EventRequestV4> {
+	// Each failed check names a fixed reason in `cause` for Host diagnostics
+	// (#1888); no request, Grant or claim value is carried.
+	const fail = (reason: string): never => {
+		throw new TypeError("RuntimeHostV4 event access is invalid", {
+			cause: reason,
+		});
+	};
 	try {
-		const parsed = z
+		const parsedRequest = z
 			.union([RuntimeEventReadRequestV4Schema, RuntimeEventAckRequestV4Schema])
-			.parse(request);
-		const verified = VerifiedRuntimeExecutionGrantV2Schema.parse(verification);
-		const claims = validateVerifiedRuntimeExecutionGrantClaimsV2(
-			verified.claims,
-			context,
-		);
-		const original =
-			RuntimePinnedExecutionKeyScopeV4Schema.parse(pinnedExecution);
-		const trustedSession = OpaqueIdV1Schema.parse(trustedHostSessionRef);
-		const trustedOperation = RuntimeOperationBindingV2Schema.parse(
+			.safeParse(request);
+		if (!parsedRequest.success) fail("request-schema");
+		const parsed = parsedRequest.data as EventRequestV4;
+		const verifiedGrant =
+			VerifiedRuntimeExecutionGrantV2Schema.safeParse(verification);
+		if (!verifiedGrant.success) fail("verification-schema");
+		const verified = verifiedGrant.data as z.infer<
+			typeof VerifiedRuntimeExecutionGrantV2Schema
+		>;
+		let claims: RuntimeExecutionGrantClaimsV2;
+		try {
+			claims = validateVerifiedRuntimeExecutionGrantClaimsV2(
+				verified.claims,
+				context,
+			);
+		} catch (error) {
+			const cause = error instanceof Error ? error.cause : undefined;
+			return fail(`claims-${typeof cause === "string" ? cause : "invalid"}`);
+		}
+		const pinned =
+			RuntimePinnedExecutionKeyScopeV4Schema.safeParse(pinnedExecution);
+		if (!pinned.success) fail("original-scope-schema");
+		const original = pinned.data as z.infer<
+			typeof RuntimePinnedExecutionKeyScopeV4Schema
+		>;
+		const session = OpaqueIdV1Schema.safeParse(trustedHostSessionRef);
+		if (!session.success) fail("trusted-session-schema");
+		const trustedSession = session.data as string;
+		const operation = RuntimeOperationBindingV2Schema.safeParse(
 			context.trustedOperation,
 		);
+		if (!operation.success) fail("trusted-operation-schema");
+		const trustedOperation = operation.data as z.infer<
+			typeof RuntimeOperationBindingV2Schema
+		>;
 		const command = "afterCursor" in parsed ? "events.persist" : "events.ack";
 		const cursorMatches =
 			command === "events.persist"
@@ -137,14 +168,18 @@ export async function validateRuntimeEventAccessV4(
 				: claims.eventAccess?.command === "events.ack" &&
 					claims.eventAccess.confirmedCursor ===
 						("confirmedCursor" in parsed ? parsed.confirmedCursor : undefined);
+		if (verified.token !== parsed.grant.token) fail("token-mismatch");
+		if (claims.allowedCommands[0] !== command) fail("command-mismatch");
+		if (!cursorMatches) fail("cursor-mismatch");
+		if (claims.requestDigest !== (await runtimeEventRequestDigestV4(parsed)))
+			fail("request-digest-mismatch");
 		if (
-			verified.token !== parsed.grant.token ||
-			claims.allowedCommands[0] !== command ||
-			!cursorMatches ||
-			claims.requestDigest !== (await runtimeEventRequestDigestV4(parsed)) ||
 			parsed.hostSessionRef !== trustedSession ||
 			(original.hostSessionRef !== null &&
-				original.hostSessionRef !== trustedSession) ||
+				original.hostSessionRef !== trustedSession)
+		)
+			fail("host-session-mismatch");
+		if (
 			parsed.principal.kind !== original.principal.kind ||
 			parsed.principal.id !== original.principal.id ||
 			parsed.executionSource !== original.executionSource ||
@@ -153,11 +188,17 @@ export async function validateRuntimeEventAccessV4(
 			parsed.conversationId !== original.conversationId ||
 			parsed.executionId !== original.executionId ||
 			parsed.turnId !== original.turnId ||
-			parsed.sessionGeneration !== original.sessionGeneration ||
+			parsed.sessionGeneration !== original.sessionGeneration
+		)
+			fail("original-scope-mismatch");
+		if (
 			parsed.keyBinding.purpose !== original.keyBinding.purpose ||
 			parsed.keyBinding.subjectId !== original.keyBinding.subjectId ||
 			parsed.keyBinding.ciphertextRef !== original.keyBinding.ciphertextRef ||
-			parsed.keyBinding.version !== original.keyBinding.version ||
+			parsed.keyBinding.version !== original.keyBinding.version
+		)
+			fail("key-binding-mismatch");
+		if (
 			claims.traceId !== parsed.traceId ||
 			claims.principal.kind !== parsed.principal.kind ||
 			claims.principal.id !== parsed.principal.id ||
@@ -167,23 +208,31 @@ export async function validateRuntimeEventAccessV4(
 			claims.executionId !== parsed.executionId ||
 			claims.turnId !== parsed.turnId ||
 			claims.sessionGeneration !== parsed.sessionGeneration ||
-			claims.hostSessionRef !== parsed.hostSessionRef ||
+			claims.hostSessionRef !== parsed.hostSessionRef
+		)
+			fail("claims-scope-mismatch");
+		if (
 			claims.operation.kind !== parsed.operation.kind ||
 			claims.operation.id !== parsed.operation.id ||
 			claims.operation.deliveryFence !== parsed.operation.deliveryFence ||
 			claims.operation.executionDeliveryFence !==
-				parsed.operation.executionDeliveryFence ||
+				parsed.operation.executionDeliveryFence
+		)
+			fail("claims-operation-mismatch");
+		if (
 			trustedOperation.kind !== parsed.operation.kind ||
 			trustedOperation.id !== parsed.operation.id ||
 			trustedOperation.deliveryFence !== parsed.operation.deliveryFence ||
 			trustedOperation.executionDeliveryFence !==
 				parsed.operation.executionDeliveryFence
-		) {
-			throw new Error();
-		}
+		)
+			fail("trusted-operation-mismatch");
 		return parsed;
-	} catch {
-		throw new TypeError("RuntimeHostV4 event access is invalid");
+	} catch (error) {
+		const cause = error instanceof Error ? error.cause : undefined;
+		throw new TypeError("RuntimeHostV4 event access is invalid", {
+			cause: typeof cause === "string" ? cause : "invalid",
+		});
 	}
 }
 

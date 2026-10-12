@@ -372,3 +372,54 @@ it("preserves V1 and V2 operation facts in live and replay without widening V1",
 		);
 	}
 });
+
+it("names the failed event access check in a fixed cause (#1888)", async () => {
+	const readVerification = await verified(readRequest);
+	const cause = (
+		request: unknown,
+		verification: unknown,
+		context: Partial<typeof grantContext> = {},
+		session = "session-1",
+	) =>
+		validateRuntimeEventAccessV4(request, verification, pinned, session, {
+			...grantContext,
+			...context,
+		}).then(
+			() => "accepted",
+			(error: Error) => {
+				expect(error).toBeInstanceOf(TypeError);
+				expect(error.message).toBe("RuntimeHostV4 event access is invalid");
+				return error.cause;
+			},
+		);
+	expect(await cause(readRequest, readVerification, { now: 2 })).toBe(
+		"claims-expired",
+	);
+	expect(await cause(readRequest, readVerification, { now: 0 })).toBe(
+		"claims-issued-in-future",
+	);
+	expect(
+		await cause({ ...readRequest, afterCursor: "cursor-9" }, readVerification),
+	).toBe("cursor-mismatch");
+	expect(
+		await cause(
+			{ ...readRequest, grant: { ...readRequest.grant, token: "d.e.f" } },
+			readVerification,
+		),
+	).toBe("token-mismatch");
+	expect(await cause(readRequest, readVerification, {}, "session-2")).toBe(
+		"host-session-mismatch",
+	);
+	expect(
+		await cause(readRequest, readVerification, {
+			trustedOperation: {
+				...readRequest.operation,
+				deliveryFence: 3,
+				executionDeliveryFence: 3,
+			},
+		}),
+	).toBe("trusted-operation-mismatch");
+	expect(await cause({ schemaVersion: 4 }, readVerification)).toBe(
+		"request-schema",
+	);
+});

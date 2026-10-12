@@ -892,7 +892,23 @@ it("persists only delivered cursors and keeps ACK retryable after response loss"
 			RuntimeEventAckRequestV4Schema.parse(foreign.request),
 			foreign.verification,
 		),
-	).rejects.toThrow();
+	).rejects.toMatchObject({
+		code: "RUNTIME_GRANT_INVALID",
+		diagnostic: "ack-cursor-unknown",
+	});
+	// A read whose cursor differs from its Grant names the failed check (#1888).
+	await expect(
+		f.host.readEventsV4(
+			RuntimeEventReadRequestV4Schema.parse({
+				...read.request,
+				afterCursor: cursor,
+			}),
+			read.verification,
+		),
+	).rejects.toMatchObject({
+		code: "RUNTIME_GRANT_INVALID",
+		diagnostic: "v4-event-access:cursor-mismatch",
+	});
 	expect(await readFile(f.path)).toEqual(before);
 	const ack = await event(
 		f.transport.businessRequest,
