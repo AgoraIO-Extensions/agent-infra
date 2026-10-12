@@ -131,6 +131,8 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		deliveryFence?: number;
 		confirmedCursor?: string;
 		responseStatus?: number;
+		requestBody?: Record<string, unknown>;
+		bearer?: string;
 		/** True when the bearer is a Session Sandbox token, never the deployment one. */
 		sandboxToken?: boolean;
 	}[] = [];
@@ -494,6 +496,8 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				executionId: parsed.executionId,
 				deliveryFence: parsed.operation?.executionDeliveryFence,
 				confirmedCursor: parsed.confirmedCursor,
+				requestBody: parsed,
+				bearer,
 				sandboxToken: sandboxApp !== undefined,
 			};
 			requests.push(observedRequest);
@@ -861,6 +865,50 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					})
 				)?.status,
 			).toBe(401);
+		const firstTurn = requests.find(
+			(request) =>
+				request.path.endsWith("/turns") &&
+				request.sandboxToken &&
+				request.requestBody &&
+				request.bearer,
+		);
+		if (!firstTurn?.requestBody || !firstTurn.bearer)
+			throw Error("Missing Session Runtime turn receipt");
+		const replayHost = sandboxApps.get(firstTurn.bearer);
+		if (!replayHost) throw Error("Missing first Session Runtime Host");
+		const replay = structuredClone(firstTurn.requestBody);
+		const binding = (
+			replay.businessRequest &&
+			typeof replay.businessRequest === "object" &&
+			!Array.isArray(replay.businessRequest)
+				? replay.businessRequest
+				: replay
+		) as Record<string, unknown>;
+		if (
+			typeof binding !== "object" ||
+			Array.isArray(binding) ||
+			typeof binding.conversationId !== "string" ||
+			typeof binding.executionId !== "string"
+		)
+			throw Error("Runtime turn receipt has no execution binding");
+		binding.conversationId = second.conversationId;
+		binding.executionId = second.executionId;
+		const crossSession = await replayHost.request(
+			`http://runtime${firstTurn.path}`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${firstTurn.bearer}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify(replay),
+			},
+		);
+		// RuntimeHost may expose either unauthorized or dependency-unavailable for
+		// a substituted signed binding; both are fail-closed before Driver entry.
+		expect([401, 503]).toContain(crossSession.status);
+		await crossSession.body?.cancel();
+		expect(await driver.sideEffectCount()).toBe(1);
 		const [after] =
 			await sql`select delivery_fence::int as fence, host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
 		expect(after?.host_session_ref).toBe(before?.host_session_ref);
