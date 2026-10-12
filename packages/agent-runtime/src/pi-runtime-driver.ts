@@ -43,6 +43,7 @@ export const PiRuntimeDriver = {
 	open(options: PiRuntimeDriverOptions) {
 		return SessionRuntimeDriver.open({
 			...options,
+			supportsAttachments: true,
 			cursorPrefix: "pi",
 			retireSession: (directory) =>
 				retireNativeProcess(directory, "AGENT_INFRA_PI_OWNER"),
