@@ -1,7 +1,8 @@
-import { verify } from "node:crypto";
+import { createPublicKey, verify } from "node:crypto";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { createServer } from "node:http";
+import { pathToFileURL } from "node:url";
 
 const MAX_LIFETIME_MS = 60_000;
 const CONTEXT_HEADER = "x-agent-infra-platform-context";
@@ -135,6 +136,61 @@ async function readAuthorization(path) {
 	}
 }
 
+export function parsePublicKeyDocument(value) {
+	if (
+		!value ||
+		typeof value !== "object" ||
+		Array.isArray(value) ||
+		!exactKeys(value, ["keys"]) ||
+		!value.keys ||
+		typeof value.keys !== "object" ||
+		Array.isArray(value.keys)
+	)
+		throw invalid();
+	const publicKeys = new Map();
+	for (const [keyVersion, pem] of Object.entries(value.keys)) {
+		if (
+			!/^[A-Za-z0-9._:-]{1,128}$/.test(keyVersion) ||
+			typeof pem !== "string" ||
+			Buffer.byteLength(pem, "utf8") > 16 * 1024
+		)
+			throw invalid();
+		let key;
+		try {
+			key = createPublicKey(pem);
+		} catch {
+			throw invalid();
+		}
+		if (key.type !== "public" || key.asymmetricKeyType !== "ed25519")
+			throw invalid();
+		publicKeys.set(keyVersion, key);
+	}
+	if (publicKeys.size === 0) throw invalid();
+	return publicKeys;
+}
+
+async function readPublicKeys(path) {
+	if (!path?.startsWith("/") || typeof constants.O_NOFOLLOW !== "number")
+		throw invalid();
+	let handle;
+	try {
+		handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		const stat = await handle.stat();
+		if (
+			!stat.isFile() ||
+			(stat.mode & 0o077) !== 0 ||
+			(typeof process.getuid === "function" && stat.uid !== process.getuid())
+		)
+			throw invalid();
+		return parsePublicKeyDocument(JSON.parse(await handle.readFile("utf8")));
+	} catch (error) {
+		if (error?.message === "PLATFORM_ENTRY_CONTEXT_INVALID") throw error;
+		throw invalid();
+	} finally {
+		await handle?.close().catch(() => undefined);
+	}
+}
+
 function empty(response, status) {
 	response.writeHead(status, { "content-length": "0" });
 	response.end();
@@ -163,10 +219,27 @@ export function createPlatformAuthWebServer(options) {
 	let sideEffects = 0;
 	const server = createServer((request, response) => {
 		void (async () => {
-			if (
-				request.method !== "GET" ||
-				new URL(request.url ?? "/", "http://fixture").pathname !== "/"
-			) {
+			if (request.method !== "GET") {
+				empty(response, 404);
+				return;
+			}
+			const pathname = new URL(request.url ?? "/", "http://fixture").pathname;
+			if (pathname === "/healthz") {
+				response.writeHead(200, {
+					"content-type": "application/json; charset=utf-8",
+					"cache-control": "no-store",
+				});
+				response.end(
+					JSON.stringify({
+						status: "ready",
+						interactionMode: "self-managed",
+						identityResponsibility: "platform-managed",
+						version: options.version ?? "sample",
+					}),
+				);
+				return;
+			}
+			if (pathname !== "/") {
 				empty(response, 404);
 				return;
 			}
@@ -201,3 +274,52 @@ export function createPlatformAuthWebServer(options) {
 	});
 	return { server, sideEffects: () => sideEffects };
 }
+
+async function start() {
+	// biome-ignore lint/suspicious/noUndeclaredEnvVars: Fixture-only deployment inputs.
+	const publicKeysFile = process.env.PLATFORM_AUTH_PUBLIC_KEYS_FILE;
+	// biome-ignore lint/suspicious/noUndeclaredEnvVars: Fixture-only deployment inputs.
+	const authFile = process.env.PLATFORM_AUTH_AUTHORIZATION_FILE;
+	// biome-ignore lint/suspicious/noUndeclaredEnvVars: Fixture-only deployment inputs.
+	const issuer = process.env.PLATFORM_AUTH_ISSUER;
+	// biome-ignore lint/suspicious/noUndeclaredEnvVars: Fixture-only deployment inputs.
+	const agentId = process.env.PLATFORM_AUTH_AGENT_ID;
+	if (
+		typeof publicKeysFile !== "string" ||
+		typeof authFile !== "string" ||
+		typeof issuer !== "string" ||
+		typeof agentId !== "string"
+	) {
+		process.stderr.write("PLATFORM_AUTH_CONFIGURATION_REQUIRED\n");
+		process.exitCode = 1;
+		return;
+	}
+	try {
+		const publicKeys = await readPublicKeys(publicKeysFile);
+		await readAuthorization(authFile);
+		// biome-ignore lint/suspicious/noUndeclaredEnvVars: Fixture-only revision marker.
+		const version = process.env.PLATFORM_AUTH_VERSION ?? "sample";
+		// biome-ignore lint/suspicious/noUndeclaredEnvVars: PORT is the container fixture override.
+		const port = Number.parseInt(process.env.PORT ?? "8080", 10);
+		if (!Number.isInteger(port) || port < 1 || port > 65_535)
+			throw new Error("PLATFORM_AUTH_PORT_INVALID");
+		const { server } = createPlatformAuthWebServer({
+			publicKeys,
+			issuer,
+			agentId,
+			authFile,
+			version,
+		});
+		server.listen(port, "0.0.0.0", () => {
+			process.stdout.write(
+				`${JSON.stringify({ event: "listening", port, interactionMode: "self-managed", identityResponsibility: "platform-managed" })}\n`,
+			);
+		});
+	} catch {
+		process.stderr.write("PLATFORM_AUTH_CONFIGURATION_INVALID\n");
+		process.exitCode = 1;
+	}
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+	await start();

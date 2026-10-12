@@ -15,7 +15,10 @@ import {
 	createProductionWorkloadWorkerOptionsV1,
 	createWorkloadReadinessAuthorizationV1,
 } from "./workload-deployment.js";
-import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
+import {
+	createWorkloadReadinessLedgerV1,
+	workloadResourceConfigurationHashV1,
+} from "./workload-runtime.js";
 
 type DeploymentConfiguration = {
 	readonly workloadInput: Omit<
@@ -149,7 +152,7 @@ async function createPrepared(signal: AbortSignal) {
 		configured: workloadInput.skillMaterializer,
 		factory: createSkillMaterializer,
 	});
-	const workload = await createProductionWorkloadWorkerOptionsV1(
+	const productionWorkload = await createProductionWorkloadWorkerOptionsV1(
 		{
 			...workloadInput,
 			...(skillMaterializer ? { skillMaterializer } : {}),
@@ -167,6 +170,11 @@ async function createPrepared(signal: AbortSignal) {
 		},
 		signal,
 	);
+	// Workload 监测与会话路由共享同一份签名 readiness 记录，排空据此复用（#1889）。
+	const workload = {
+		...productionWorkload,
+		readinessLedger: createWorkloadReadinessLedgerV1(),
+	};
 	let relayKeyDecryptor: ConversationRuntimeOptionsV2["relayKeyDecryptor"];
 	if (workloadInput.runtimeModelVersion === 4) {
 		if (!relayKeyDecryptionKeys)

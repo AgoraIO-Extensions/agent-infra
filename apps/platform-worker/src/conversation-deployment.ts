@@ -33,6 +33,7 @@ import {
 } from "./session-workload-adapter.js";
 import {
 	createWorkloadRuntimeV1,
+	drainCacheableCommands,
 	isWorkloadExecutionCapacityCurrentV1,
 	type WorkloadRuntimeOptionsV1,
 	workloadResourceConfigurationHashV1,
@@ -257,11 +258,19 @@ export function createProductionConversationRuntimeResolverV2(options: {
 			}
 			// observe checks actual ownership, UID/generation, Pod/spec/Secret/network
 			// drift, health and signed Runtime readiness; it never changes resources.
+			// 排空路径（business purpose + events.persist/events.ack/execution.renew）
+			// 复用 Workload Monitor 最近一次通过的签名 readiness 结果，仅核对 K8s 路由与
+			// Pod 就绪；turn.submit / turn.supplement / control 始终做完整签名探测。
+			const isDrainPath =
+				input.purpose === "business" &&
+				(drainCacheableCommands as ReadonlySet<string>).has(input.command);
 			const health = await (input.purpose === "control"
 				? runtime.observeVerifiedControl(state)
-				: sessionBrowserBinding
-					? runtime.observeSession(state, sessionBrowserBinding)
-					: runtime.observe(state));
+				: isDrainPath
+					? runtime.observeForDrain(state, sessionBrowserBinding)
+					: sessionBrowserBinding
+						? runtime.observeSession(state, sessionBrowserBinding)
+						: runtime.observe(state));
 			if (health !== "healthy") throw new Error();
 			if (
 				input.purpose === "business" &&
