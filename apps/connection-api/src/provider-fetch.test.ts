@@ -1,8 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:https";
+import { connect } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Duplex } from "node:stream";
 import type { TLSSocket } from "node:tls";
 import { createPinnedProviderFetch } from "@agent-infra/openconnector-adapter/provider-fetch";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -56,6 +59,15 @@ describe("Provider connect-time IP pinning", () => {
 					servername: (request.socket as TLSSocket).servername || undefined,
 					...(body ? { body } : {}),
 				});
+				if (request.url === "/response-lost") {
+					request.socket.destroy();
+					return;
+				}
+				if (request.url === "/http-error") {
+					response.writeHead(503);
+					response.end();
+					return;
+				}
 				if (request.url === "/redirect") {
 					response.writeHead(302, {
 						location: "https://other-provider.test/api",
@@ -226,5 +238,303 @@ describe("Provider connect-time IP pinning", () => {
 			}
 		}
 		expect(requests).toHaveLength(0);
+	});
+	describe("proxy-first pinned CONNECT", () => {
+		let proxy: ReturnType<typeof createHttpServer>;
+		let proxyOrigin: string;
+		let authorities: string[];
+		let mode:
+			| "tunnel"
+			| "unavailable"
+			| "forbidden"
+			| "reset-tunnel"
+			| "stalled";
+		const sockets = new Set<Duplex>();
+		beforeAll(async () => {
+			proxy = createHttpServer();
+			proxy.on("connect", (request, client, head) => {
+				authorities.push(request.url ?? "");
+				sockets.add(client);
+				client.on("close", () => sockets.delete(client));
+				client.on("error", () => {});
+				if (mode === "stalled") return;
+				if (mode !== "tunnel") {
+					if (mode === "reset-tunnel") {
+						client.write("HTTP/1.1 200 Connection established\r\n\r\n");
+						client.destroy();
+					} else
+						client.end(
+							`HTTP/1.1 ${mode === "unavailable" ? 503 : 403} Unavailable\r\n\r\n`,
+						);
+					return;
+				}
+				const target = new URL(`http://${request.url}`);
+				const upstream = connect(Number(target.port), target.hostname, () => {
+					client.write("HTTP/1.1 200 Connection established\r\n\r\n");
+					if (head.length) upstream.write(head);
+					client.pipe(upstream).pipe(client);
+				});
+				sockets.add(upstream);
+				upstream.on("close", () => sockets.delete(upstream));
+				upstream.on("error", () => client.destroy());
+				client.on("close", () => upstream.destroy());
+			});
+			await new Promise<void>((resolve) => proxy.listen(0, "0.0.0.0", resolve));
+			const bound = proxy.address();
+			if (!bound || typeof bound === "string")
+				throw new Error("Missing proxy port");
+			proxyOrigin = `http://proxy.test:${bound.port}`;
+		});
+		afterAll(async () => {
+			for (const socket of sockets) socket.destroy();
+			await new Promise<void>((resolve) => proxy.close(() => resolve()));
+		});
+		const transportFor = (target = origin, trusted = true) => {
+			requests = [];
+			authorities = [];
+			return createPinnedProviderFetch({
+				origins: [target, proxyOrigin],
+				privateOrigins: [target, proxyOrigin],
+				lookup: async () => [{ address, family: 4 }],
+				...(trusted ? { ca } : {}),
+				proxyUrl: proxyOrigin,
+			});
+		};
+		it("tunnels to the validated IP with original TLS/Host and submits POST once", async () => {
+			mode = "tunnel";
+			const transport = transportFor();
+			try {
+				await (
+					await transport.fetch(origin, {
+						method: "POST",
+						body: "synthetic-code",
+					})
+				).text();
+				expect(authorities).toEqual([`${address}:${new URL(origin).port}`]);
+				expect(requests).toEqual([
+					{
+						host: new URL(origin).host,
+						servername: "provider.test",
+						body: "synthetic-code",
+					},
+				]);
+			} finally {
+				await transport.close();
+			}
+		});
+		it("falls back before submission when CONNECT returns 503, including OAuth POST", async () => {
+			mode = "unavailable";
+			const transport = transportFor();
+			try {
+				await (
+					await transport.fetch(origin, {
+						method: "POST",
+						body: "synthetic-code",
+					})
+				).text();
+				expect(authorities).toHaveLength(1);
+				expect(requests).toHaveLength(1);
+				expect(requests[0]?.body).toBe("synthetic-code");
+			} finally {
+				await transport.close();
+			}
+		});
+		it("tries the proxy again on the next request after a direct fallback", async () => {
+			mode = "unavailable";
+			const transport = transportFor();
+			try {
+				await (
+					await transport.fetch(origin, { method: "POST", body: "first" })
+				).text();
+				mode = "tunnel";
+				await (
+					await transport.fetch(origin, { method: "POST", body: "second" })
+				).text();
+				expect(authorities).toHaveLength(2);
+				expect(requests.map((request) => request.body)).toEqual([
+					"first",
+					"second",
+				]);
+			} finally {
+				await transport.close();
+			}
+		});
+		it("falls back once when the proxy TCP port refuses connections", async () => {
+			const closed = createHttpServer();
+			await new Promise<void>((resolve) =>
+				closed.listen(0, "0.0.0.0", resolve),
+			);
+			const bound = closed.address();
+			if (!bound || typeof bound === "string")
+				throw new Error("Missing closed port");
+			await new Promise<void>((resolve) => closed.close(() => resolve()));
+			const closedOrigin = `http://proxy.test:${bound.port}`;
+			requests = [];
+			const transport = createPinnedProviderFetch({
+				origins: [origin, closedOrigin],
+				privateOrigins: [origin, closedOrigin],
+				lookup: async () => [{ address, family: 4 }],
+				ca,
+				proxyUrl: closedOrigin,
+			});
+			try {
+				await (
+					await transport.fetch(origin, {
+						method: "PATCH",
+						body: "synthetic-write",
+					})
+				).text();
+				expect(requests).toHaveLength(1);
+				expect(requests[0]?.body).toBe("synthetic-write");
+			} finally {
+				await transport.close();
+			}
+		});
+		it("falls back before submission when CONNECT stalls until its deadline", async () => {
+			mode = "stalled";
+			const transport = transportFor();
+			try {
+				await (
+					await transport.fetch(origin, {
+						method: "POST",
+						body: "synthetic-code",
+					})
+				).text();
+				expect(authorities).toHaveLength(1);
+				expect(requests).toHaveLength(1);
+			} finally {
+				await transport.close();
+			}
+		}, 15_000);
+		it("does not bypass an HTTPS proxy with an invalid certificate", async () => {
+			const invalidProxy = createServer({
+				key: readFileSync(join(directory, "key.pem")),
+				cert: ca,
+			});
+			await new Promise<void>((resolve) =>
+				invalidProxy.listen(0, "0.0.0.0", resolve),
+			);
+			const bound = invalidProxy.address();
+			if (!bound || typeof bound === "string")
+				throw new Error("Missing TLS proxy port");
+			const invalidOrigin = `https://proxy.test:${bound.port}`;
+			requests = [];
+			const transport = createPinnedProviderFetch({
+				origins: [origin, invalidOrigin],
+				privateOrigins: [origin, invalidOrigin],
+				ca,
+				lookup: async () => [{ address, family: 4 }],
+				proxyUrl: invalidOrigin,
+			});
+			try {
+				await expect(transport.fetch(origin)).rejects.toThrow();
+				expect(requests).toHaveLength(0);
+			} finally {
+				await transport.close();
+				await new Promise<void>((resolve) =>
+					invalidProxy.close(() => resolve()),
+				);
+			}
+		});
+		it("rejects proxy policy errors without direct fallback", async () => {
+			mode = "forbidden";
+			const transport = transportFor();
+			try {
+				await expect(transport.fetch(origin)).rejects.toThrow();
+				expect(authorities).toHaveLength(1);
+				expect(requests).toHaveLength(0);
+			} finally {
+				await transport.close();
+			}
+		});
+		it("never retries after CONNECT succeeds but the TLS tunnel resets", async () => {
+			mode = "reset-tunnel";
+			const transport = transportFor();
+			try {
+				await expect(
+					transport.fetch(origin, { method: "POST", body: "synthetic-code" }),
+				).rejects.toThrow();
+				expect(authorities).toHaveLength(1);
+				expect(requests).toHaveLength(0);
+			} finally {
+				await transport.close();
+			}
+		});
+		it("does not fallback on TLS certificate/hostname failure", async () => {
+			mode = "tunnel";
+			for (const target of [
+				origin,
+				origin.replace("provider.test", "wrong.test"),
+			]) {
+				const transport = transportFor(target, target !== origin);
+				try {
+					await expect(transport.fetch(target)).rejects.toThrow();
+					expect(authorities).toHaveLength(1);
+					expect(requests).toHaveLength(0);
+				} finally {
+					await transport.close();
+				}
+			}
+		});
+		it("does not replay a write after the provider accepts its body and drops the response", async () => {
+			mode = "tunnel";
+			const transport = transportFor();
+			try {
+				await expect(
+					transport.fetch(`${origin}/response-lost`, {
+						method: "POST",
+						body: "synthetic-effect",
+					}),
+				).rejects.toThrow();
+				expect(authorities).toHaveLength(1);
+				expect(requests).toHaveLength(1);
+			} finally {
+				await transport.close();
+			}
+		});
+		it("returns provider 503 and redirect responses without changing routes", async () => {
+			mode = "tunnel";
+			const transport = transportFor();
+			try {
+				for (const [path, status] of [
+					["/http-error", 503],
+					["/redirect", 302],
+				] as const) {
+					const response = await transport.fetch(`${origin}${path}`);
+					expect(response.status).toBe(status);
+					await response.text();
+				}
+				expect(requests).toHaveLength(2);
+				expect(authorities).toHaveLength(2);
+			} finally {
+				await transport.close();
+			}
+		});
+		it("rejects forbidden target and proxy DNS before CONNECT", async () => {
+			mode = "tunnel";
+			for (const badHost of ["provider.test", "proxy.test"]) {
+				requests = [];
+				authorities = [];
+				const transport = createPinnedProviderFetch({
+					origins: [origin, proxyOrigin],
+					privateOrigins: [origin, proxyOrigin],
+					ca,
+					proxyUrl: proxyOrigin,
+					lookup: async (hostname) => [
+						{
+							address: hostname === badHost ? "127.0.0.1" : address,
+							family: 4,
+						},
+					],
+				});
+				try {
+					await expect(transport.fetch(origin)).rejects.toThrow();
+					expect(authorities).toHaveLength(0);
+					expect(requests).toHaveLength(0);
+				} finally {
+					await transport.close();
+				}
+			}
+		});
 	});
 });

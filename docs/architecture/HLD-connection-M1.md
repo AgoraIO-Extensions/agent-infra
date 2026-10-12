@@ -2619,7 +2619,7 @@ Audit 使用每 partition hash chain 或外部 append-only sink。保留策略�
 - TLS SNI、证书 hostname 校验和 HTTP `Host` 继续使用 Catalog 原始 hostname，不能使用或接受调用方提供的替代值。
 - 每次 redirect 和新连接都重新执行 scheme、host、DNS/IP、TLS 和 header 校验；默认禁止跨 origin。
 - 禁止 Consumer 控制 Host、Authorization、Cookie、Proxy-*、Forwarded 和 hop-by-hop headers。
-- Egress Proxy 是默认公网路径。GZ3 pilot 的首次 GitHub OAuth 直连回退按 ADR 接受实际 NetworkPolicy 未核实、直连 fetch 未证明 DNS/IP pinning 的风险；不得将应用目标白名单表述为网络层隔离。广泛生产仍要求核查 NetworkPolicy 并完成受控出口。
+- Egress Proxy 是默认公网路径。上海 GitHub 的 API、OAuth token/refresh/profile 使用绑定已校验目标 IP 的 CONNECT 代理优先路径；仅在代理明确不可用且 Provider HTTP 请求尚未提交时回退一次受控直连。CONNECT 成功后的失败、TLS 校验失败及业务响应不能触发换路重试。配置与验收见[区域 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md#上海分阶段迁移)。不得将应用目标白名单表述为网络层隔离；广泛生产仍要求核查 NetworkPolicy 并完成受控出口。
 
 ### 27.5 Secret 泄露防护
 

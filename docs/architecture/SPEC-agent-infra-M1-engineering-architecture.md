@@ -138,12 +138,12 @@ Connection control plane 与 connection database 已完成上海单主迁移，�
 [生产部署说明](connection-production.md) 为操作入口。分阶段迁移及上海 GitHub 直连/代理的
 配置选择、重启生效和验收边界见区域 ADR 的
 [上海迁移决策](../adr/ADR-connection-regional-control-plane-and-github-egress.md#上海分阶段迁移)。
-LA3 当前不部署 Connection 组件。GitHub 服务端流量在 GZ3 默认通过固定代理出口，首次 OAuth
-code exchange 在 GZ3 pilot 可按 ADR 的受控条件直连回退；国内 Provider 从当前单主地域直连。LA3 Provider
-Egress 仅作为满足 workload mTLS 门禁后的未来 TODO。区域职责与 WRITE
-`UNCERTAIN` 边界见
-[Connection 上海单主与 GitHub 出口 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md)。
-该 ADR 的[GitHub OAuth 出口回退决策](../adr/ADR-connection-regional-control-plane-and-github-egress.md#gz3-pilotgithub-oauth-出口回退)仅在 GZ3 pilot 生效，不免除广泛生产的 Security/SRE 评审。
+LA3 当前不部署 Connection 组件。上海 GitHub 服务端 API、OAuth token/refresh/profile 通过固定
+代理优先的 pinned CONNECT transport；仅代理在 Provider 请求提交前明确不可用时受控直连回退。
+浏览器 authorize 页面由浏览器访问，国内 Provider 从当前单主地域直连。LA3 Provider Egress
+仅作为满足 workload mTLS 门禁后的未来 TODO。完整出口决策和提交未知禁止重试的边界见
+[区域 ADR 的上海迁移决策](../adr/ADR-connection-regional-control-plane-and-github-egress.md#上海分阶段迁移)，
+不免除 NetworkPolicy、Security/SRE 和广泛生产门禁。
 
 ### 4.2 不拆分的部署单元
 
