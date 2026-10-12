@@ -18,6 +18,7 @@ import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { verifyClaudeInstallation } from "./claude-installation.js";
 import { claudeQuery } from "./claude-query.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
+import { createClaudeStandardMcpServer } from "./claude-standard-mcp.js";
 import { claudeWorkspaceTools } from "./claude-workspace.js";
 import {
 	validateModelAccess,
@@ -50,6 +51,11 @@ import {
 	type RuntimeFilesystemSkillDirectoryV1,
 	RuntimeSkillDirectoryErrorV1,
 } from "./skill-hub-directory.js";
+import {
+	StandardMcpClient,
+	type StandardMcpClientOptions,
+	type StandardMcpOperation,
+} from "./standard-mcp-client.js";
 
 export interface ClaudeRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -68,6 +74,8 @@ export interface ClaudeRuntimeDriverOptions {
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly ClaudeRuntimeModelOption[];
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
+	/** Deployment-owned protected standard MCP consumer input. */
+	readonly standardConnectionClient?: StandardMcpClientOptions;
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
@@ -98,6 +106,18 @@ interface Turn {
 	events: RuntimeEventV1[];
 	operationRef?: string;
 	attemptRef?: string;
+	connectionOperations?: ConnectionOperation[];
+}
+interface ConnectionOperation {
+	readonly callId: string;
+	readonly alias: string;
+	readonly name: string;
+	readonly phase: "prepared" | "started" | "completed" | "failed" | "unknown";
+	readonly rpcRequestId: string | number;
+	readonly requestDigest: string;
+	readonly consumerId: string;
+	readonly instanceRef: string;
+	readonly credentialRevision: string;
 }
 interface Session {
 	schemaVersion: 1;
@@ -112,6 +132,7 @@ interface Session {
 interface Handle {
 	native: ReturnType<typeof claudeQuery>;
 	transport: Awaited<ReturnType<typeof openRuntimeMessagesTransport>>;
+	standardMcp?: StandardMcpClient;
 	pump: Promise<void>;
 	retiring: boolean;
 }
@@ -580,6 +601,42 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								turn.modelResponse.state !== "completed"))
 					)
 						unavailable();
+					if (
+						turn.connectionOperations !== undefined &&
+						(!Array.isArray(turn.connectionOperations) ||
+							turn.connectionOperations.length > 32)
+					)
+						unavailable();
+					const connectionCallIds = new Set<string>();
+					for (const operation of turn.connectionOperations ?? []) {
+						if (
+							!uuid.test(operation.callId) ||
+							connectionCallIds.has(operation.callId) ||
+							!/^mcp_[A-Za-z0-9._:-]{1,127}$/.test(operation.alias) ||
+							!operation.name ||
+							operation.name.length > 128 ||
+							![
+								"prepared",
+								"started",
+								"completed",
+								"failed",
+								"unknown",
+							].includes(operation.phase) ||
+							(typeof operation.rpcRequestId !== "string" &&
+								typeof operation.rpcRequestId !== "number") ||
+							(typeof operation.rpcRequestId === "string" &&
+								(!operation.rpcRequestId ||
+									operation.rpcRequestId.length > 128)) ||
+							(typeof operation.rpcRequestId === "number" &&
+								!Number.isSafeInteger(operation.rpcRequestId)) ||
+							!/^[a-f0-9]{64}$/.test(operation.requestDigest) ||
+							!/^\w[\w.:-]{0,127}$/.test(operation.consumerId) ||
+							!/^\w[\w.:-]{0,127}$/.test(operation.instanceRef) ||
+							!/^\w[\w.:-]{0,127}$/.test(operation.credentialRevision)
+						)
+							unavailable();
+						connectionCallIds.add(operation.callId);
+					}
 					executions.add(turn.executionId);
 					turns.add(turn.turnId);
 					users.add(turn.userMessageId);
@@ -636,6 +693,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					if (!history.users.includes(turn.userMessageId) || !history.completed)
 						continue;
 					const recovered: Pick<RuntimeEventV1, "type" | "payload">[] = [];
+					const protectedCallIds = new Set(
+						(turn.connectionOperations ?? []).map(
+							(operation) => operation.callId,
+						),
+					);
 					const tools = new Map<string, string>();
 					for (const event of history.events) {
 						if (
@@ -648,12 +710,20 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							});
 						else if (
 							event.type === "tool" &&
+							event.payload.name?.startsWith("mcp_")
+						)
+							continue;
+						else if (
+							event.type === "tool" &&
 							typeof event.payload.id === "string"
 						) {
 							if (event.payload.phase === "started")
 								tools.set(
 									event.payload.id,
-									["Read", "Write", "Edit"].includes(event.payload.name ?? "")
+									["Read", "Write", "Edit"].includes(
+										event.payload.name ?? "",
+									) ||
+										(event.payload.name?.startsWith("mcp_") ?? false)
 										? (event.payload.name ?? unavailable())
 										: "unavailable",
 								);
@@ -673,7 +743,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					// Native blocks can contain many live deltas. Consume only the already durable prefix.
 					let offset = 0;
 					for (const event of turn.events.filter(
-						(event) => event.type === "text" || event.type === "tool",
+						(event) =>
+							event.type === "text" ||
+							(event.type === "tool" &&
+								!protectedCallIds.has(event.payload.toolCallId)),
 					)) {
 						const expected = recovered[offset];
 						if (
@@ -951,6 +1024,108 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			await transport.close();
 			unavailable();
 		}
+		let standardMcp: StandardMcpClient | undefined;
+		let standardMcpServer:
+			| ReturnType<typeof createClaudeStandardMcpServer>
+			| undefined;
+		let handle: Handle | undefined;
+		try {
+			if (this.options.standardConnectionClient) {
+				standardMcp = await StandardMcpClient.open(
+					this.options.standardConnectionClient,
+					{
+						agentId: command.agentId,
+						conversationId: command.conversationId,
+						executionId: command.executionId,
+						sessionGeneration: command.sessionGeneration,
+					},
+					AbortSignal.timeout(10_000),
+				);
+				standardMcpServer = createClaudeStandardMcpServer({
+					client: standardMcp,
+					operation: (alias): StandardMcpOperation => {
+						const callId = randomUUID();
+						const name = standardMcp?.toolName(alias) ?? alias;
+						const updatePhase = async (phase: ConnectionOperation["phase"]) => {
+							await this.connectionOperation(
+								file,
+								command.executionId,
+								callId,
+								(operation) => ({ ...operation, phase }),
+							);
+						};
+						const assertCurrent = () => {
+							if (this.closed || handle?.retiring) unavailable();
+							const turn = file
+								.read()
+								.turns.find(
+									(entry) => entry.executionId === command.executionId,
+								);
+							if (turn?.status !== "running") unavailable();
+						};
+						return {
+							assertCurrent: async () => {
+								assertCurrent();
+								await standardMcp?.assertCurrent();
+								return () => {
+									assertCurrent();
+								};
+							},
+							block: () => {
+								if (handle) handle.retiring = true;
+								void standardMcp?.close();
+							},
+							prepare: async ({ rpcRequestId, requestDigest }) => {
+								await this.connectionOperation(
+									file,
+									command.executionId,
+									callId,
+									(operation) => ({ ...operation, phase: "prepared" }),
+									{
+										callId,
+										alias,
+										name,
+										phase: "prepared",
+										rpcRequestId,
+										requestDigest,
+										consumerId: standardMcp?.consumerId ?? unavailable(),
+										instanceRef: standardMcp?.instanceRef ?? unavailable(),
+										credentialRevision:
+											standardMcp?.credentialRevision ?? unavailable(),
+									},
+								);
+							},
+							started: async () => {
+								await updatePhase("started");
+								await this.event(file, command.executionId, {
+									type: "tool",
+									payload: { toolCallId: callId, name, phase: "started" },
+								});
+							},
+							confirm: async (response) => {
+								await updatePhase(response.phase);
+								if (response.phase === "unknown") {
+									await this.status(file, command.executionId, "unknown");
+									return;
+								}
+								await this.event(file, command.executionId, {
+									type: "tool",
+									payload: {
+										toolCallId: callId,
+										name,
+										phase: response.phase,
+									},
+								});
+							},
+						};
+					},
+				});
+			}
+		} catch {
+			if (standardMcp) await standardMcp.close().catch(() => {});
+			await transport.close();
+			return result(command, ref, unknownResult);
+		}
 		let native: ReturnType<typeof claudeQuery>;
 		try {
 			native = claudeQuery(
@@ -972,7 +1147,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						join(directory, "memory"),
 					),
 					strictMcpConfig: true,
-					mcpServers: {},
+					mcpServers: standardMcpServer
+						? { connection: standardMcpServer }
+						: {},
 					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories. Read MEMORY.md there for saved user preferences when present.`,
 					model: option.model,
 					effort: selection.reasoningLevel as EffortLevel,
@@ -995,12 +1172,14 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				},
 			);
 		} catch {
+			if (standardMcp) await standardMcp.close().catch(() => {});
 			await transport.close();
 			return result(command, ref, unknownResult);
 		}
-		const handle: Handle = {
+		handle = {
 			native,
 			transport,
+			...(standardMcp ? { standardMcp } : {}),
 			pump: Promise.resolve(),
 			retiring: false,
 		};
@@ -1047,16 +1226,17 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							const name = tools.get(block.tool_use_id);
 							if (!name) unavailable();
 							tools.delete(block.tool_use_id);
-							await this.event(file, command.executionId, {
-								type: "tool",
-								payload: {
-									toolCallId: createHash("sha256")
-										.update(block.tool_use_id)
-										.digest("hex"),
-									name,
-									phase: block.is_error ? "failed" : "completed",
-								},
-							});
+							if (!name.startsWith("mcp_"))
+								await this.event(file, command.executionId, {
+									type: "tool",
+									payload: {
+										toolCallId: createHash("sha256")
+											.update(block.tool_use_id)
+											.digest("hex"),
+										name,
+										phase: block.is_error ? "failed" : "completed",
+									},
+								});
 						}
 					}
 					if (
@@ -1066,28 +1246,27 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						message.event.content_block.type === "tool_use"
 					) {
 						if (tools.has(message.event.content_block.id)) unavailable();
-						tools.set(
-							message.event.content_block.id,
-							["Read", "Write", "Edit"].includes(
-								message.event.content_block.name,
-							)
-								? message.event.content_block.name
-								: "unavailable",
-						);
-						await this.event(file, command.executionId, {
-							type: "tool",
-							payload: {
-								toolCallId: createHash("sha256")
-									.update(message.event.content_block.id)
-									.digest("hex"),
-								name: ["Read", "Write", "Edit"].includes(
-									message.event.content_block.name,
-								)
-									? message.event.content_block.name
-									: "unavailable",
-								phase: "started",
-							},
-						});
+						const nativeToolName = message.event.content_block.name;
+						const name = nativeToolName.startsWith("mcp__connection__")
+							? nativeToolName.slice("mcp__connection__".length)
+							: nativeToolName;
+						if (
+							!["Read", "Write", "Edit"].includes(name) &&
+							!name.startsWith("mcp_")
+						)
+							unavailable();
+						tools.set(message.event.content_block.id, name);
+						if (!name.startsWith("mcp_"))
+							await this.event(file, command.executionId, {
+								type: "tool",
+								payload: {
+									toolCallId: createHash("sha256")
+										.update(message.event.content_block.id)
+										.digest("hex"),
+									name,
+									phase: "started",
+								},
+							});
 					}
 					if (
 						message.type === "stream_event" &&
@@ -1186,6 +1365,34 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		});
 		for (const wake of this.waiters.get(file.read().binding.ref) ?? []) wake();
 	}
+	private async connectionOperation(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		callId: string,
+		change: (operation: ConnectionOperation) => ConnectionOperation,
+		initial?: ConnectionOperation,
+	) {
+		await file.update((state) => {
+			const turn = state.turns.find(
+				(entry) => entry.executionId === executionId,
+			);
+			if (!turn || terminal(turn.status)) return;
+			turn.connectionOperations ??= [];
+			const index = turn.connectionOperations.findIndex(
+				(operation) => operation.callId === callId,
+			);
+			if (index === -1) {
+				const first = initial;
+				if (!first) unavailable();
+				if (turn.connectionOperations.length >= 32) unavailable();
+				turn.connectionOperations.push(first);
+				return;
+			}
+			const current = turn.connectionOperations[index];
+			if (!current) unavailable();
+			turn.connectionOperations[index] = change(current);
+		});
+	}
 	private async status(
 		file: DurableJsonFile<Session>,
 		executionId: string,
@@ -1215,6 +1422,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const handle = this.handles.get(ref);
 		if (!handle) return;
 		handle.retiring = true;
+		if (handle.standardMcp) await handle.standardMcp.close();
 		await handle.transport.close();
 		await handle.native.close();
 		await handle.pump;
@@ -1381,7 +1589,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			modelSelection: true,
 			attachments: false,
 			resultFiles: false,
-			connection: false,
+			connection: this.options.standardConnectionClient !== undefined,
 			supplementaryInstruction: false,
 		};
 	}
