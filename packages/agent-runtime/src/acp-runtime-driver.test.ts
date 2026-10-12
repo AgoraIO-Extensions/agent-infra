@@ -483,6 +483,9 @@ it("probes ACP initialization and Session creation without prompting", async () 
 		}),
 	});
 	try {
+		expect(await driver.getCapabilities()).toMatchObject({
+			connection: false,
+		});
 		await expect(
 			driver.probeReadiness?.(new AbortController().signal),
 		).resolves.toMatchObject({
