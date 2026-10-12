@@ -695,9 +695,6 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				}),
 			).toBe(true);
 		}
-		const first = await admit(firstPrepared);
-		const second = await admit(secondPrepared);
-
 		// A database failure must not acknowledge a Runtime event that did not commit.
 		await sql.unsafe("create sequence platform.test_event_attempts");
 		await sql.unsafe(
@@ -706,6 +703,8 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		await sql.unsafe(
 			"create trigger test_event_failure before insert on platform.conversation_events for each row execute function platform.test_event_failure()",
 		);
+		const first = await admit(firstPrepared);
+		const second = await admit(secondPrepared);
 		await waitUntil(
 			async () => (await driver.sideEffectCount()) === 1,
 			"single effective first dispatch",
