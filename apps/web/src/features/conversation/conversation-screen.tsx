@@ -20,6 +20,7 @@ import {
 	agentServiceAvailabilityLabel,
 } from "../agent-management-status.js";
 import { ActiveConversation } from "./active-conversation.js";
+import { ConversationCapabilityPickerPanel } from "./conversation-capability-picker-panel.js";
 import { NewConversation, PersonalHistory } from "./conversation-navigation.js";
 import { ConversationReadError, responseFailure } from "./execution-detail.js";
 import { RecentConversationHistory } from "./recent-conversation-history.js";
@@ -176,6 +177,15 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	const selfManaged =
 		agent.source.kind === "custom" &&
 		agent.source.interactionMode === "self-managed";
+	const conversationCapabilities = (agent.capabilities.skills ?? []).map(
+		(skill) => ({
+			kind: "skill" as const,
+			name: skill.name,
+			description: "已安装 Skill",
+			source: "Skill Hub",
+			version: skill.version,
+		}),
+	);
 	return (
 		<section className="chat-layout">
 			<div className="conversation-columns" data-history-open={historyExpanded}>
@@ -273,14 +283,21 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 					{selfManaged ? (
 						<p>此 Agent 使用自有交互入口，请从 Agent 详情进入。</p>
 					) : conversationId ? (
-						<ActiveConversation
-							key={conversationId}
-							{...props}
-							agent={agent}
-							available={available}
-							onDenied={deny}
-							refreshAgent={() => void agentQuery.refetch()}
-						/>
+						<>
+							<ConversationCapabilityPickerPanel
+								capabilities={conversationCapabilities}
+								scopeKey={`${identityKey}:${agentId}:${conversationId}`}
+								disabled={!available || selfManaged}
+							/>
+							<ActiveConversation
+								key={conversationId}
+								{...props}
+								agent={agent}
+								available={available}
+								onDenied={deny}
+								refreshAgent={() => void agentQuery.refetch()}
+							/>
+						</>
 					) : (
 						<NewConversation
 							agentId={agentId}
