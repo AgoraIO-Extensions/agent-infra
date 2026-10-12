@@ -11,8 +11,15 @@ import {
 const selector = z.enum(["status", "commands", "skills"]);
 const positiveSafeInteger = z.number().int().positive().safe();
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
+const boundedIdentity = z
+	.string()
+	.min(1)
+	.max(256)
+	.refine((value) => !value.includes("\0"));
 const metadataName = z.string().min(1).max(256);
 const metadataVersion = z.string().min(1).max(128);
+
+export const RuntimeNativeMetadataProofMaximumLifetimeMsV1 = 30_000;
 
 function validateReadLifetime(
 	value: { readStartedAt: number; expiresAt: number },
@@ -20,7 +27,8 @@ function validateReadLifetime(
 ) {
 	if (
 		value.readStartedAt > value.expiresAt ||
-		value.expiresAt - value.readStartedAt > 30_000
+		value.expiresAt - value.readStartedAt >
+			RuntimeNativeMetadataProofMaximumLifetimeMsV1
 	)
 		context.addIssue({
 			code: z.ZodIssueCode.custom,
@@ -212,6 +220,46 @@ export type RuntimeNativeMetadataBindingResponseV1 = z.infer<
 	typeof RuntimeNativeMetadataBindingResponseV1Schema
 >;
 
+const runtimeNativeMetadataProofClaimsShape = {
+	...readIdentity,
+	purpose: z.literal("native_metadata_read"),
+	issuedAt: z.number().int().nonnegative().safe().meta({ minimum: 0 }),
+	issuer: boundedIdentity,
+	audience: z.literal("runtime_host.native_metadata_read"),
+	workerId: boundedIdentity,
+	keyVersion: boundedIdentity,
+	originalHostScopeRef: boundedIdentity,
+	requestDigest: digest,
+};
+
+/**
+ * Signed payload claims for one native metadata read.
+ *
+ * The `purpose` and `audience` literals are intentional discriminators: this
+ * proof can never be interpreted as a Runtime Execution Grant or another
+ * metadata operation.  The request identity and object scope are repeated in
+ * the signed payload so a verifier can compare every field without casts.
+ */
+export const RuntimeNativeMetadataProofClaimsV1Schema = z
+	.strictObject(runtimeNativeMetadataProofClaimsShape)
+	.superRefine((value, context) => {
+		if (
+			value.readStartedAt > value.issuedAt ||
+			value.issuedAt >= value.expiresAt ||
+			value.expiresAt - value.readStartedAt >
+				RuntimeNativeMetadataProofMaximumLifetimeMsV1
+		) {
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["issuedAt"],
+				message: "Native metadata proof lifetime is invalid",
+			});
+		}
+	});
+export type RuntimeNativeMetadataProofClaimsV1 = z.infer<
+	typeof RuntimeNativeMetadataProofClaimsV1Schema
+>;
+
 export const RuntimeNativeMetadataProofV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	format: z.literal("native-metadata-jws"),
@@ -265,6 +313,115 @@ export type RuntimeNativeMetadataReadResponseV1 = z.infer<
 	typeof RuntimeNativeMetadataReadResponseV1Schema
 >;
 
+export interface RuntimeNativeMetadataProofClaimsValidationContextV1 {
+	readonly request: RuntimeNativeMetadataBindingResponseV1;
+	readonly expectedIssuer: string;
+	readonly expectedWorkerId: string;
+	readonly expectedRequestDigest: string;
+	readonly now: number;
+}
+
+/**
+ * Validate a parsed proof payload against the exact request it authorizes.
+ *
+ * Signature and deployment-key verification remain the RuntimeHost's job.
+ * This helper owns the shared, non-cryptographic claim checks so consumers
+ * receive the typed claims only after purpose, lifetime, identity, scope and
+ * digest equality have all passed.
+ */
+export function validateRuntimeNativeMetadataProofClaimsV1(
+	input: unknown,
+	context: RuntimeNativeMetadataProofClaimsValidationContextV1,
+): RuntimeNativeMetadataProofClaimsV1 {
+	const claims = RuntimeNativeMetadataProofClaimsV1Schema.parse(input);
+	const request = RuntimeNativeMetadataBindingResponseV1Schema.parse(
+		context.request,
+	);
+	if (
+		!Number.isSafeInteger(context.now) ||
+		claims.issuer !== context.expectedIssuer ||
+		claims.workerId !== context.expectedWorkerId ||
+		claims.readStartedAt !== request.readStartedAt ||
+		claims.issuedAt > context.now ||
+		claims.expiresAt <= context.now ||
+		claims.expiresAt !== request.expiresAt ||
+		claims.readId !== request.readId ||
+		claims.selector !== request.selector ||
+		claims.requestId !== request.requestId ||
+		claims.traceId !== request.traceId ||
+		claims.originalHostScopeRef !== request.originalHostScopeRef ||
+		claims.scope.schemaVersion !== request.scope.schemaVersion ||
+		claims.scope.principal.kind !== request.scope.principal.kind ||
+		claims.scope.principal.id !== request.scope.principal.id ||
+		claims.scope.agentId !== request.scope.agentId ||
+		claims.scope.channelId !== request.scope.channelId ||
+		claims.scope.conversationId !== request.scope.conversationId ||
+		claims.scope.executionId !== request.scope.executionId ||
+		claims.scope.sessionGeneration !== request.scope.sessionGeneration ||
+		claims.scope.authorizationRevision !==
+			request.scope.authorizationRevision ||
+		claims.requestDigest !== context.expectedRequestDigest
+	) {
+		throw new Error("Native metadata proof claims are inconsistent");
+	}
+	return claims;
+}
+
+/** Fixed canonical field order for the digest input; proof is excluded. */
+export function runtimeNativeMetadataRequestSigningPayloadV1(
+	value: RuntimeNativeMetadataBindingResponseV1,
+): string {
+	const request = RuntimeNativeMetadataBindingResponseV1Schema.parse(value);
+	const scope = request.scope;
+	return JSON.stringify({
+		schemaVersion: request.schemaVersion,
+		readId: request.readId,
+		selector: request.selector,
+		scope: {
+			schemaVersion: scope.schemaVersion,
+			principal: { kind: scope.principal.kind, id: scope.principal.id },
+			agentId: scope.agentId,
+			channelId: scope.channelId,
+			conversationId: scope.conversationId,
+			executionId: scope.executionId,
+			sessionGeneration: scope.sessionGeneration,
+			authorizationRevision: scope.authorizationRevision,
+		},
+		readStartedAt: request.readStartedAt,
+		expiresAt: request.expiresAt,
+		requestId: request.requestId,
+		traceId: request.traceId,
+		originalHostScopeRef: request.originalHostScopeRef,
+	});
+}
+
+/** Fixed canonical field order for the complete signed claims payload. */
+export function runtimeNativeMetadataProofSigningPayloadV1(
+	value: RuntimeNativeMetadataProofClaimsV1,
+): string {
+	const claims = RuntimeNativeMetadataProofClaimsV1Schema.parse(value);
+	const {
+		purpose,
+		issuedAt,
+		issuer,
+		audience,
+		workerId,
+		keyVersion,
+		requestDigest,
+		...binding
+	} = claims;
+	return JSON.stringify({
+		...JSON.parse(runtimeNativeMetadataRequestSigningPayloadV1(binding)),
+		purpose,
+		issuedAt,
+		issuer,
+		audience,
+		workerId,
+		keyVersion,
+		requestDigest,
+	});
+}
+
 export const RuntimeNativeMetadataV1SchemaDefinitions = {
 	NativeMetadataSelectorV1: NativeMetadataSelectorV1Schema,
 	NativeMetadataObjectScopeV1: NativeMetadataObjectScopeV1Schema,
@@ -280,6 +437,7 @@ export const RuntimeNativeMetadataV1SchemaDefinitions = {
 		RuntimeNativeMetadataBindingRequestV1Schema,
 	RuntimeNativeMetadataBindingResponseV1:
 		RuntimeNativeMetadataBindingResponseV1Schema,
+	RuntimeNativeMetadataProofClaimsV1: RuntimeNativeMetadataProofClaimsV1Schema,
 	RuntimeNativeMetadataProofV1: RuntimeNativeMetadataProofV1Schema,
 	RuntimeNativeMetadataReadRequestV1: RuntimeNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataReadResponseV1:

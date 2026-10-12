@@ -1427,6 +1427,167 @@
       ],
       "type": "object"
     },
+    "RuntimeNativeMetadataProofClaimsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "const": "runtime_host.native_metadata_read",
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "issuedAt": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issuer": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "keyVersion": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "originalHostScopeRef": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "purpose": {
+          "const": "native_metadata_read",
+          "type": "string"
+        },
+        "readId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "readStartedAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "requestDigest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "authorizationRevision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "channelId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "principal",
+            "agentId",
+            "channelId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration",
+            "authorizationRevision"
+          ],
+          "type": "object"
+        },
+        "selector": {
+          "enum": [
+            "status",
+            "commands",
+            "skills"
+          ],
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workerId": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "readId",
+        "selector",
+        "scope",
+        "readStartedAt",
+        "expiresAt",
+        "requestId",
+        "traceId",
+        "purpose",
+        "issuedAt",
+        "issuer",
+        "audience",
+        "workerId",
+        "keyVersion",
+        "originalHostScopeRef",
+        "requestDigest"
+      ],
+      "type": "object"
+    },
     "RuntimeNativeMetadataProofV1": {
       "additionalProperties": false,
       "properties": {

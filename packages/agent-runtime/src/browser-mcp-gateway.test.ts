@@ -164,7 +164,7 @@ it("serves verified Browser tools and forwards calls to the request-local execut
 	]);
 	const result = await client.callTool({
 		name: "browser_navigate",
-		arguments: { url: "https://example.test/" },
+		arguments: { url: "https://example.test/", pageRevision: 99 },
 	});
 	expect(result).toMatchObject({
 		isError: false,
@@ -178,6 +178,7 @@ it("serves verified Browser tools and forwards calls to the request-local execut
 			conversationId: "conversation-1",
 			executionId,
 			capabilityVersion: 1,
+			pageRevision: 1,
 		},
 	});
 	await client.close();
