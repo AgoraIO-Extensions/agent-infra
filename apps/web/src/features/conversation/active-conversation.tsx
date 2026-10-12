@@ -13,6 +13,7 @@ import {
 } from "../../components/ui/select.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
+import { BrowserOperationStatus } from "./browser-operation-status.js";
 import { CommandNotice } from "./conversation-command-notice.js";
 import type { ConversationCommandResult } from "./conversation-commands.js";
 import {
@@ -515,6 +516,10 @@ export function ActiveConversation({
 						{visibleNotice}
 					</p>
 				)}
+				<BrowserOperationStatus
+					events={timeline.events}
+					executionId={latestExecution}
+				/>
 				<CommandNotice
 					result={command.result}
 					pending={command.isPending}
