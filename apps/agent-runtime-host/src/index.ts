@@ -2,7 +2,10 @@ import { createPublicKey, type KeyObject } from "node:crypto";
 import { createServer as createHttpsServer } from "node:https";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { RuntimeBrowserCapabilityAssemblyV1 } from "@agent-infra/agent-runtime";
+import type {
+	RuntimeBrowserCapabilityAssemblyV1,
+	RuntimeHostOptions,
+} from "@agent-infra/agent-runtime";
 import {
 	ClaudeRuntimeDriver,
 	CodexRuntimeDriver,
@@ -96,6 +99,11 @@ interface StartOptions {
 	port?: number;
 	configVersion?: string;
 }
+
+export type RuntimeHostAssemblyOptionsV1 = Pick<
+	RuntimeHostOptions,
+	"createBrowserExecutionContext"
+>;
 
 function runtimePort(value: string | undefined, fallback: number) {
 	const port = Number(value ?? fallback);
@@ -199,6 +207,7 @@ export function startRuntimeHost(options: StartOptions) {
 export async function assembleRuntimeHost(
 	environment: NodeJS.ProcessEnv,
 	filesystem?: RuntimeLegacyMigrationFilesystem,
+	options: RuntimeHostAssemblyOptionsV1 = {},
 ) {
 	const required = (name: string) => requiredEnvironment(environment, name);
 	const binding = required("AGENT_INFRA_RUNTIME_DRIVER");
@@ -510,6 +519,12 @@ export async function assembleRuntimeHost(
 				}
 			: undefined;
 		const host = await RuntimeHost.open({
+			...(options.createBrowserExecutionContext
+				? {
+						createBrowserExecutionContext:
+							options.createBrowserExecutionContext,
+					}
+				: {}),
 			onBrowserCapabilityAssembly: (input) => {
 				browserCapabilityAssembly = input;
 			},
