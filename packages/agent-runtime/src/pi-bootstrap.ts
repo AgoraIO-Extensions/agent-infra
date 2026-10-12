@@ -33,7 +33,7 @@ export interface PiRuntimeOptions {
 /** Build explicit native Skill arguments from the trusted mounted projection. */
 export function piNativeSkillArguments(
 	skillDirectory: RuntimeFilesystemSkillDirectoryV1 | undefined,
-) {
+): readonly string[] {
 	const paths = skillDirectory?.nativeSkillPaths?.() ?? [];
 	if (
 		paths.some(
