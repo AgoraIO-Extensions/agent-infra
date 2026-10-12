@@ -31,11 +31,12 @@ function command(attachments: readonly string[]): RuntimeDriverCommand {
 	};
 }
 
-function fileBridge(): {
+function fileBridge(onRevalidate?: (call: number) => void): {
 	port: RuntimeFileBridgePortV1;
 	readInput: ReturnType<typeof vi.fn>;
 	revalidate: ReturnType<typeof vi.fn>;
 } {
+	let revocations = 0;
 	const readInput = vi.fn(async (fileId: string) => ({
 		fileId,
 		descriptor: {
@@ -51,7 +52,10 @@ function fileBridge(): {
 			},
 		}),
 	}));
-	const revalidate = vi.fn();
+	const revalidate = vi.fn(() => {
+		revocations += 1;
+		onRevalidate?.(revocations);
+	});
 	return {
 		readInput,
 		revalidate,
@@ -142,8 +146,8 @@ it("reads and revalidates bridge bytes for a native session that supports image 
 		});
 		expect(record.result).toMatchObject({ outcome: "accepted" });
 		expect(readInput).toHaveBeenCalledWith("file-1");
-		// Once while the bytes are acquired and again at the native boundary.
-		expect(revalidate).toHaveBeenCalledTimes(2);
+		// After acquisition, before Turn admission, and at the native boundary.
+		expect(revalidate).toHaveBeenCalledTimes(3);
 		expect(select).toHaveBeenCalledWith("configured/model", "high");
 		expect(prompt).toHaveBeenCalledWith([
 			{ type: "text", text: "describe this image" },
@@ -158,6 +162,66 @@ it("reads and revalidates bridge bytes for a native session that supports image 
 		await rm(path, { recursive: true, force: true });
 	}
 });
+
+it.each([
+	{
+		label: "after the bytes are acquired",
+		revokeAt: 1,
+		selected: false,
+		rejects: true,
+		state: "missing",
+	},
+	{
+		label: "before Turn admission",
+		revokeAt: 2,
+		selected: true,
+		rejects: true,
+		state: "missing",
+	},
+	{
+		label: "at the native boundary",
+		revokeAt: 3,
+		selected: true,
+		rejects: false,
+		state: "unknown",
+	},
+])(
+	"keeps an attachment Turn undispatched when authority lapses $label",
+	async ({ revokeAt, selected, rejects, state }) => {
+		const path = await mkdtemp(join(tmpdir(), "session-attachment-authority-"));
+		const { port, readInput } = fileBridge((call) => {
+			if (call === revokeAt) throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+		});
+		const select = vi.fn(async () => {});
+		const prompt = vi.fn(async () => ({ stopReason: "completed" }));
+		const runtime = await driver(path, async () => ({
+			nativeId: "native-a",
+			supportsImagePrompt: true,
+			select,
+			prompt,
+			cancel: async () => {},
+			close: async () => {},
+		}));
+		try {
+			const execution = runtime.execute(command(["file-1"]), {
+				fileBridge: port,
+			});
+			if (rejects)
+				await expect(execution).rejects.toThrow("RUNTIME_AUTHORIZATION_DENIED");
+			else
+				expect((await execution).result).toMatchObject({ outcome: "unknown" });
+			expect(readInput).toHaveBeenCalledTimes(1);
+			expect(prompt).not.toHaveBeenCalled();
+			expect(select.mock.calls.length > 0).toBe(selected);
+			expect(await runtime.lookupOperation(command(["file-1"]))).toEqual({
+				state,
+			});
+		} finally {
+			await runtime.close();
+			await rm(path, { recursive: true, force: true });
+		}
+	},
+);
 
 it("keeps text-only turns working without a file bridge", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-attachment-text-"));

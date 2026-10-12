@@ -817,7 +817,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		}
 		// Authority that already lapsed while the bytes were acquired must not
 		// carry them into the remaining Session setup.
-		fileBridge.revalidate();
 		return content;
 	}
 
@@ -963,6 +962,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					command.input.attachments,
 					fileBridge,
 				);
+				// The bytes must not carry authority that lapsed while they were
+				// acquired into the durable Session state and model selection.
+				fileBridge?.revalidate();
 			} catch (error) {
 				if (!reuse) await native.close().catch(() => {});
 				throw error;
@@ -993,6 +995,16 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			await native.close();
 			unavailable();
 		}
+		if (hasAttachments) {
+			try {
+				// A stale authority must not admit a durable Turn that no native
+				// prompt will ever be dispatched for.
+				fileBridge?.revalidate();
+			} catch (error) {
+				if (!reuse) await native.close().catch(() => {});
+				throw error;
+			}
+		}
 		try {
 			const nativeCheckpoint = await native.checkpoint?.();
 			await file.update((state) => {
@@ -1018,7 +1030,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			this.handles.delete(ref);
 			unavailable();
 		}
-		dispatched = true;
 		const handle: Handle = { native, selection, pump: Promise.resolve() };
 		this.handles.set(ref, handle);
 		handle.pump = (async () => {
@@ -1026,6 +1037,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				// Materialized bytes must never reach the native session under
 				// authority that lapsed during Session setup or model selection.
 				if (hasAttachments) fileBridge?.revalidate();
+				// Only a Turn that passed the native boundary counts as dispatched.
+				dispatched = true;
 				const response = await native.prompt(inputText);
 				await this.resolve(file, command, {
 					outcome: "accepted",
