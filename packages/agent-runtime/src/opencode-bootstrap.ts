@@ -1,6 +1,9 @@
 import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
+import {
+	type BrowserCapabilityAvailableV1,
+	RuntimeModelConfigurationV3Schema,
+} from "@agent-infra/contracts/runtime";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
 import {
 	validateModelAccess,
@@ -15,6 +18,9 @@ import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { workspacePathAllowed } from "./workspace-path.js";
 
 export interface OpenCodeRuntimeOptions {
+	readonly browserCapability?:
+		| BrowserCapabilityAvailableV1
+		| (() => BrowserCapabilityAvailableV1 | undefined);
 	path: string;
 	executable: string;
 	configVersion: string;

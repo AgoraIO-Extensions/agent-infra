@@ -5,6 +5,7 @@ import { Readable, Writable } from "node:stream";
 import {
 	type ContentBlock,
 	client,
+	type McpServer,
 	PROTOCOL_VERSION,
 	type SessionConfigOption,
 	type SessionNotification,
@@ -31,6 +32,8 @@ export interface AcpLaunch {
 	authorize?: (
 		tool: Pick<ToolCall, "toolCallId" | "kind" | "rawInput">,
 	) => Promise<boolean>;
+	/** Session-scoped MCP servers assembled by the trusted Runtime adapter. */
+	mcpServers?: readonly McpServer[];
 }
 
 export async function openAcpSession(options: {
@@ -190,11 +193,11 @@ export async function openAcpSession(options: {
 			? await connection.agent.request("session/load", {
 					sessionId: options.nativeId,
 					cwd: options.cwd,
-					mcpServers: [],
+					mcpServers: [...(options.launch.mcpServers ?? [])],
 				})
 			: await connection.agent.request("session/new", {
 					cwd: options.cwd,
-					mcpServers: [],
+					mcpServers: [...(options.launch.mcpServers ?? [])],
 				});
 		const nativeId =
 			options.nativeId ??

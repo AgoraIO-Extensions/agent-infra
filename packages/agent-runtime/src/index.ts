@@ -5,6 +5,7 @@ export * from "./browser-driver-context.js";
 export * from "./browser-handoff.js";
 export * from "./browser-installation.js";
 export * from "./browser-launch-probe.js";
+export * from "./browser-mcp-gateway.js";
 export * from "./browser-observe.js";
 export * from "./browser-session.js";
 export {

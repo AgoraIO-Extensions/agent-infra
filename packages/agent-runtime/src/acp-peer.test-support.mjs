@@ -55,11 +55,17 @@ const connection = new AgentSideConnection(
 								: {}),
 						},
 		}),
-		newSession: async () => {
+		newSession: async (params) => {
 			sessionId = randomUUID();
 			await writeFile(
 				join(process.cwd(), "session.json"),
-				JSON.stringify({ sessionId, count }),
+				JSON.stringify({
+					sessionId,
+					count,
+					...(process.env.ACP_TEST_MODE === "mcp-servers"
+						? { mcpServers: params.mcpServers }
+						: {}),
+				}),
 			);
 			if (process.env.ACP_TEST_MODE === "available-commands")
 				await connection.sessionUpdate({
