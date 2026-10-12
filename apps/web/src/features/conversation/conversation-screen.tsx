@@ -181,8 +181,8 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 		(skill) => ({
 			kind: "skill" as const,
 			name: skill.name,
-			description: `已安装 Skill · ${skill.manifestSha256.slice(0, 12)}`,
-			source: "skillhub",
+			description: "已安装 Skill；描述不可用",
+			source: "来源不可用",
 			version: skill.version,
 		}),
 	);

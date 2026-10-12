@@ -142,8 +142,16 @@ export function markConversationCapabilityConfirmed(
 export function resetConversationCapabilityScope(
 	state: ConversationCapabilityPickerStateV1,
 	scopeKey: string,
+	invalidated = false,
 ) {
-	return state.scopeKey === scopeKey
+	if (state.scopeKey !== scopeKey)
+		return createConversationCapabilityPickerState(scopeKey);
+	if (!invalidated) return state;
+	return state.selected === undefined &&
+		state.query === "" &&
+		state.selectedIndex === 0 &&
+		state.parameterText === "" &&
+		!state.confirmed
 		? state
 		: createConversationCapabilityPickerState(scopeKey);
 }

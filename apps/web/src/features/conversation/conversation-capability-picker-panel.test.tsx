@@ -104,4 +104,41 @@ describe("ConversationCapabilityPickerPanel", () => {
 		fireEvent.keyDown(search, { key: "Enter", isComposing: true });
 		expect(screen.queryByRole("textbox", { name: "能力参数" })).toBeNull();
 	});
+
+	it("clears draft state while unavailable and after availability returns", () => {
+		const { rerender } = render(
+			<ConversationCapabilityPickerPanel
+				capabilities={capabilities}
+				scopeKey="alice:agent-a:conversation-a"
+				disabled={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "打开" }));
+		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
+		fireEvent.change(screen.getByRole("textbox", { name: "能力参数" }), {
+			target: { value: "README.md" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
+		rerender(
+			<ConversationCapabilityPickerPanel
+				capabilities={capabilities}
+				scopeKey="alice:agent-a:conversation-a"
+				disabled
+			/>,
+		);
+		expect(screen.queryByRole("textbox", { name: "能力参数" })).toBeNull();
+		expect(
+			screen.queryByText(
+				"选择已保存在当前草稿中；执行接缝尚未接入，未提交请求。",
+			),
+		).toBeNull();
+		rerender(
+			<ConversationCapabilityPickerPanel
+				capabilities={capabilities}
+				scopeKey="alice:agent-a:conversation-a"
+				disabled={false}
+			/>,
+		);
+		expect(screen.queryByRole("textbox", { name: "能力参数" })).toBeNull();
+	});
 });

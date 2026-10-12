@@ -33,7 +33,7 @@ export function ConversationCapabilityPickerPanel({
 		createConversationCapabilityPickerState(scopeKey),
 	);
 	const scopedState = reconcileConversationCapabilitySelection(
-		resetConversationCapabilityScope(state, scopeKey),
+		resetConversationCapabilityScope(state, scopeKey, disabled),
 		capabilities,
 	);
 	useEffect(() => {
