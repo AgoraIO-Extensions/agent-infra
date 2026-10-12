@@ -594,6 +594,54 @@ describe("functional conversation screen", () => {
 		).toBeGreaterThan(1);
 	});
 
+	it("keeps sending available while a loaded conversation refreshes after a reply ends (#2136)", async () => {
+		let completed = false;
+		let releaseRefresh: (() => void) | undefined;
+		const terminal = {
+			...event(2),
+			schemaVersion: 1 as const,
+			type: "execution.status" as const,
+			payload: { status: "completed" as const },
+		};
+		const projection = () =>
+			Response.json({
+				...history("conversation-1", completed ? [terminal] : []),
+				conversation: {
+					...history().conversation,
+					status: completed ? "ready" : "active",
+				},
+				messages: [userMessage()],
+			});
+		const { streams, requests } = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (request.method === "POST") return receipt();
+			if (path !== "/api/v2/conversations/conversation-1") return undefined;
+			if (!completed) return projection();
+			// 终态之后的投影刷新被慢查询拖住，模拟长会话或高负载。
+			return new Promise<Response>((resolve) => {
+				releaseRefresh = () => resolve(projection());
+			});
+		});
+		const input = await composer();
+		completed = true;
+		act(() => streams.at(-1)?.send(terminal));
+		await waitFor(() => expect(releaseRefresh).toBeDefined());
+		fireEvent.change(input, { target: { value: "Next question" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		await waitFor(() =>
+			expect(
+				requests.filter((request) => request.method === "POST"),
+			).toHaveLength(1),
+		);
+		expect(await requests.find((r) => r.method === "POST")?.json()).toEqual({
+			schemaVersion: 1,
+			text: "Next question",
+		});
+		act(() => releaseRefresh?.());
+		// 受理后清空草稿。
+		await waitFor(() => expect(input.value).toBe(""));
+	});
+
 	it("does not claim a stop receipt is cancellation and retains the original execution target", async () => {
 		const { requests } = setup((request) => {
 			const path = new URL(request.url).pathname;

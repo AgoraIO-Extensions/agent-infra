@@ -249,6 +249,8 @@ export function ActiveConversation({
 		conversation?.selectedReasoningLevel ??
 		agent.configuration.defaultReasoningLevel ??
 		"";
+	// 已有投影时的刷新（例如回复结束后的重读）不锁住发送；服务端仍做准入校验（#2136）。
+	const refreshing = timeline.status === "loading" && Boolean(timeline.history);
 	const blocked =
 		!available ||
 		!timeline.history ||
@@ -256,7 +258,9 @@ export function ActiveConversation({
 		runtimeSelectionUnavailable ||
 		conversation?.status === "unavailable" ||
 		// A stream reconnecting on its own keeps the composer usable (#1606).
-		(timeline.status !== "ready" && timeline.status !== "reconnecting");
+		(timeline.status !== "ready" &&
+			timeline.status !== "reconnecting" &&
+			!refreshing);
 	const commandLocked = command.isPending || command.result?.kind === "unknown";
 	// Keep the local draft editable while an Agent or its Session is becoming
 	// ready. Sending stays blocked by `blocked`/`preparing`; only an authorization
