@@ -694,3 +694,6 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 		process.exitCode = 1;
 	}
 }
+
+export type { SessionBrowserExecutionBindingV1 } from "./browser-session-provider.js";
+export { createSessionBrowserExecutionContextV1 } from "./browser-session-provider.js";
