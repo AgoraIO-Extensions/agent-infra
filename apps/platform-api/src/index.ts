@@ -297,6 +297,7 @@ export {
 	type RuntimeNativeMetadataProofIssuerV1,
 	type RuntimeNativeMetadataTransportV1,
 } from "./runtime-native-metadata-reader.js";
+export { createRuntimeNativeMetadataScopeResolverV1 } from "./runtime-native-metadata-scope-resolver.js";
 export {
 	createPendingSecretRecordAttachmentResolverV1,
 	type PreparedSecretPlaintextV1,
