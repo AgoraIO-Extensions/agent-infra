@@ -6,6 +6,7 @@ import {
 } from "@agent-infra/contracts/workload";
 import {
 	type AgentManagementStateV1,
+	parseWorkloadCapabilitiesV1,
 	parseWorkloadExecutionCapacityV1,
 	parseWorkloadSecretRecoveriesV1,
 	type WorkloadReconciliationInputV1,
@@ -161,18 +162,12 @@ export function decodePersistedWorkloadStateV1(
 		)
 			throw new Error();
 	}
-	if (
-		Object.hasOwn(value, "capabilities") &&
-		(!value.capabilities ||
-			typeof value.capabilities !== "object" ||
-			Array.isArray(value.capabilities) ||
-			Object.values(value.capabilities).some(
-				(item) => typeof item !== "boolean",
-			))
-	)
-		throw new Error();
+	const capabilities = Object.hasOwn(value, "capabilities")
+		? parseWorkloadCapabilitiesV1(value.capabilities)
+		: undefined;
 	const normalized = {
 		...value,
+		...(capabilities ? { capabilities } : {}),
 		candidate: persistedWorkloadVersion(value.candidate, agentId),
 		verified:
 			value.verified === null

@@ -252,6 +252,24 @@ it("passes the verified Browser projection through the API presentation", async 
 					resultFiles: false,
 					connection: false,
 					supplementaryInstruction: false,
+					skills: [
+						{
+							schemaVersion: 1,
+							name: "workspace-summary",
+							version: "0.1.0",
+							manifestSha256: "a".repeat(64),
+							packageDigest: "b".repeat(64),
+							readOnly: true,
+						},
+						{
+							schemaVersion: 1,
+							name: "release-notes",
+							version: "1.0.0",
+							manifestSha256: "c".repeat(64),
+							packageDigest: "d".repeat(64),
+							readOnly: true,
+						},
+					],
 					browser,
 				},
 				interactionUrl: null,
@@ -274,11 +292,81 @@ it("passes the verified Browser projection through the API presentation", async 
 		configuration: {
 			agentId: "agent-a",
 			revision: 1,
-			source: { kind: "standard", templateId: "codex" },
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				connectionEnabled: false,
+			},
 			modelOptions: [],
 			channelKinds: [],
 		} as never,
 		management: {} as never,
 	});
 	expect(result.capabilities.browser).toEqual(browser);
+	expect(result.capabilities.skills).toEqual([
+		{
+			schemaVersion: 1,
+			name: "workspace-summary",
+			version: "0.1.0",
+			manifestSha256: "a".repeat(64),
+			packageDigest: "b".repeat(64),
+			readOnly: true,
+		},
+		{
+			schemaVersion: 1,
+			name: "release-notes",
+			version: "1.0.0",
+			manifestSha256: "c".repeat(64),
+			packageDigest: "d".repeat(64),
+			readOnly: true,
+		},
+	]);
+});
+
+it("preserves an explicitly empty Skill capability list", async () => {
+	const presentation = createDeploymentPresentation({
+		identityScope: {
+			currentRequest: () => new Request("https://api.example.test"),
+			currentIdentity: async () => identity,
+		} as never,
+		configurationQuery: {
+			readRuntimePresentation: async () => ({
+				outcome: "found" as const,
+				sourceReference: `sha256:${"a".repeat(64)}`,
+				capabilities: {
+					modelSelection: true,
+					attachments: false,
+					resultFiles: false,
+					connection: false,
+					supplementaryInstruction: false,
+					skills: [],
+				},
+				interactionUrl: null,
+			}),
+		} as never,
+		resourceProfile: {
+			profileId: "standard-medium",
+			displayName: "Standard medium",
+			estimatedResources: {
+				cpuMillicores: 2000,
+				memoryMiB: 4096,
+				storageGiB: 20,
+			},
+		},
+		imageRepository: "registry.example.test/agent",
+	});
+	const result = await presentation({
+		agentId: "agent-a",
+		configuration: {
+			...configuration,
+			agentId: "agent-a",
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				connectionEnabled: false,
+			},
+		},
+		management: {} as never,
+	});
+	expect(result.capabilities.skills).toEqual([]);
 });
