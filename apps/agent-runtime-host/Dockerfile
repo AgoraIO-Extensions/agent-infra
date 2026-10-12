@@ -104,7 +104,7 @@ RUN mkdir -p /etc/agent-infra/legacy-migration \
     && chown root:root /etc/agent-infra /etc/agent-infra/legacy-migration \
     && chmod 0555 /etc/agent-infra /etc/agent-infra/legacy-migration
 VOLUME ["/var/lib/agent-runtime"]
-USER node
+USER 1000:1000
 CMD ["/bin/sh", "./start-runtime-host.sh"]
 
 # Test tools and source stay outside the default production image. The fixed
@@ -115,7 +115,7 @@ LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL org.agora.agent-infra.runtime-stage=installed-skill-test
 COPY --from=runtime /opt/codex/ /opt/codex/
 ENV AGENT_INFRA_RUNTIME_INSTALLED_SKILL=workspace-summary-v1
-USER node
+USER 1000:1000
 
 # Template images share the verified RuntimeHost installation. Registry/Worker
 # supplies the required Driver; these artifact labels do not select a Driver.
