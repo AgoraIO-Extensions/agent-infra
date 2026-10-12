@@ -3581,6 +3581,44 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("publishes one Platform failure event when Worker finishes an Execution failure", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "host-session-existing",
+		});
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			await expect(
+				store.finish({
+					claim: decision.claim,
+					status: "failed",
+					transition: {
+						executionStatus: "failed",
+						conversationStatus: "ready",
+					},
+					errorCode: "RUNTIME_GRANT_INVALID",
+				}),
+			).resolves.toBe(true);
+			const events = await client`
+				select source, runtime_cursor, event_type, event_payload
+				from platform.conversation_events
+				where execution_id = ${work.executionId}
+				order by sequence
+			`;
+			expect(events).toEqual([
+				expect.objectContaining({
+					source: "platform",
+					runtime_cursor: null,
+					event_type: "execution.status",
+					event_payload: { type: "execution.status", status: "failed" },
+				}),
+			]);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it.each([
 		["stale generation", { sessionGeneration: 2 }],
 		["selection mismatch", { modelOptionId: "other-model-option" }],
