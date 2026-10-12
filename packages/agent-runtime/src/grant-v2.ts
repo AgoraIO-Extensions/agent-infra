@@ -11,7 +11,11 @@ import {
 	validateVerifiedRuntimeExecutionGrantClaimsV2,
 } from "@agent-infra/contracts/runtime";
 
-import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import {
+	isRuntimeAuthorizationDenial,
+	runtimeAccessDenialCause,
+	runtimeAuthorizationDenied,
+} from "./runtime-authorization.js";
 
 export interface RuntimeGrantValidationOptionsV2 {
 	expectedIssuer: string;
@@ -21,9 +25,11 @@ export interface RuntimeGrantValidationOptionsV2 {
 
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 function decode(segment: string) {
-	if (!/^[A-Za-z0-9_-]+$/.test(segment)) runtimeAuthorizationDenied();
+	if (!/^[A-Za-z0-9_-]+$/.test(segment))
+		runtimeAuthorizationDenied("grant-v2-segment-alphabet");
 	const decoded = Buffer.from(segment, "base64url");
-	if (decoded.toString("base64url") !== segment) runtimeAuthorizationDenied();
+	if (decoded.toString("base64url") !== segment)
+		runtimeAuthorizationDenied("grant-v2-segment-encoding");
 	return decoded;
 }
 
@@ -34,10 +40,10 @@ export function createRuntimeExecutionGrantVerifierV2(
 		try {
 			const grant = RuntimeExecutionGrantV2Schema.parse(value);
 			const parts = grant.token.split(".");
-			if (parts.length !== 3) runtimeAuthorizationDenied();
+			if (parts.length !== 3) runtimeAuthorizationDenied("grant-v2-format");
 			const [headerPart, claimsPart, signaturePart] = parts;
 			if (!headerPart || !claimsPart || !signaturePart)
-				runtimeAuthorizationDenied();
+				runtimeAuthorizationDenied("grant-v2-format");
 			const header = JSON.parse(utf8.decode(decode(headerPart))) as {
 				alg?: unknown;
 				kid?: unknown;
@@ -50,7 +56,7 @@ export function createRuntimeExecutionGrantVerifierV2(
 				header.typ !== "runtime-execution+jws" ||
 				typeof header.kid !== "string"
 			)
-				runtimeAuthorizationDenied();
+				runtimeAuthorizationDenied("grant-v2-header");
 			const key = publicKeys.get(header.kid);
 			if (
 				key?.asymmetricKeyType !== "ed25519" ||
@@ -61,13 +67,17 @@ export function createRuntimeExecutionGrantVerifierV2(
 					decode(signaturePart),
 				)
 			)
-				runtimeAuthorizationDenied();
-			return VerifiedRuntimeExecutionGrantV2Schema.parse({
+				runtimeAuthorizationDenied("grant-v2-signature");
+			const verified = VerifiedRuntimeExecutionGrantV2Schema.safeParse({
 				token: grant.token,
 				claims: JSON.parse(utf8.decode(decode(claimsPart))),
 			});
-		} catch {
-			runtimeAuthorizationDenied();
+			if (!verified.success)
+				runtimeAuthorizationDenied("grant-v2-claims-schema");
+			return verified.data;
+		} catch (error) {
+			if (isRuntimeAuthorizationDenial(error)) throw error;
+			runtimeAuthorizationDenied("grant-v2-malformed");
 		}
 	};
 }
@@ -89,15 +99,22 @@ export function validateRuntimeExecutionGrantV2(
 		const verification =
 			VerifiedRuntimeExecutionGrantV2Schema.parse(verificationInput);
 		if (verification.token !== request.grant.token)
-			runtimeAuthorizationDenied();
-		const claims = validateVerifiedRuntimeExecutionGrantClaimsV2(
-			verification.claims,
-			{
-				expectedIssuer: options.expectedIssuer,
-				expectedWorkerId: options.expectedWorkerId,
-				now: (options.now ?? Date.now)(),
-			},
-		);
+			runtimeAuthorizationDenied("v3-token-mismatch");
+		let claims: RuntimeExecutionGrantClaimsV2;
+		try {
+			claims = validateVerifiedRuntimeExecutionGrantClaimsV2(
+				verification.claims,
+				{
+					expectedIssuer: options.expectedIssuer,
+					expectedWorkerId: options.expectedWorkerId,
+					now: (options.now ?? Date.now)(),
+				},
+			);
+		} catch (error) {
+			return runtimeAuthorizationDenied(
+				`v3-claims-${runtimeAccessDenialCause(error)}`,
+			);
+		}
 		for (const key of [
 			"agentId",
 			"channelId",
@@ -108,7 +125,8 @@ export function validateRuntimeExecutionGrantV2(
 			"traceId",
 			"hostSessionRef",
 		] as const) {
-			if (claims[key] !== request[key]) runtimeAuthorizationDenied();
+			if (claims[key] !== request[key])
+				runtimeAuthorizationDenied("v3-scope-mismatch");
 		}
 		if (
 			claims.allowedCommands.length !== 1 ||
@@ -124,7 +142,7 @@ export function validateRuntimeExecutionGrantV2(
 					.update(runtimeRequestSigningPayloadV3(request))
 					.digest("hex")
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("v3-request-mismatch");
 		const expectedKind =
 			command === "turn.supplement"
 				? "message"
@@ -138,7 +156,7 @@ export function validateRuntimeExecutionGrantV2(
 			(expectedKind === "execution" &&
 				claims.operation.id !== claims.executionId)
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("v3-operation-kind");
 		if (command === "events.persist" || command === "events.ack") {
 			const access = claims.eventAccess;
 			if (
@@ -150,10 +168,10 @@ export function validateRuntimeExecutionGrantV2(
 				(access.command === "events.ack" &&
 					access.confirmedCursor !== request.confirmedCursor)
 			)
-				runtimeAuthorizationDenied();
+				runtimeAuthorizationDenied("v3-event-access");
 		}
 		if (claims.purpose === "control" && request.input !== undefined)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("v3-control-input");
 		if (claims.purpose === "business") {
 			const requestedAttachments = request.input?.attachments ?? [];
 			const requested = new Set(requestedAttachments);
@@ -162,10 +180,11 @@ export function validateRuntimeExecutionGrantV2(
 				claims.attachments.length !== requestedAttachments.length ||
 				claims.attachments.some((entry) => !requested.has(entry.attachmentId))
 			)
-				runtimeAuthorizationDenied();
+				runtimeAuthorizationDenied("v3-attachments");
 		}
 		return claims;
-	} catch {
-		runtimeAuthorizationDenied();
+	} catch (error) {
+		if (isRuntimeAuthorizationDenial(error)) throw error;
+		runtimeAuthorizationDenied("v3-grant-malformed");
 	}
 }

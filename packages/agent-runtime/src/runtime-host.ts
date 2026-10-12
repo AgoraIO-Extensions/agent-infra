@@ -93,6 +93,7 @@ import type { RuntimeGrantValidationOptionsV2 } from "./grant-v2.js";
 import type { createWorkloadReadinessVerifierV1 } from "./readiness.js";
 import {
 	type RuntimeOriginalExecutionRef,
+	runtimeAccessDenialCause,
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
 import {
@@ -641,19 +642,21 @@ export class RuntimeHost {
 		request: RuntimeEventReadRequestV4 | RuntimeEventAckRequestV4,
 		verification: unknown,
 	) {
-		if (this.closed || !this.v4 || !this.options.grantValidationV2)
-			runtimeAuthorizationDenied();
+		if (this.closed) runtimeAuthorizationDenied("host-closed");
+		if (!this.v4 || !this.options.grantValidationV2)
+			runtimeAuthorizationDenied("v4-unconfigured");
 		const original =
 			this.options.store.readOriginalExecutionKeyScopeV4(request);
 		const verified =
 			VerifiedRuntimeExecutionGrantV2Schema.safeParse(verification);
-		if (
-			!original?.scope ||
-			original.hostSessionRef !== request.hostSessionRef ||
-			original.operation.kind !== "submit-turn" ||
-			!verified.success
-		)
-			runtimeAuthorizationDenied();
+		if (!original?.scope)
+			runtimeAuthorizationDenied("v4-original-scope-missing");
+		if (original.hostSessionRef !== request.hostSessionRef)
+			runtimeAuthorizationDenied("v4-original-session-mismatch");
+		if (original.operation.kind !== "submit-turn")
+			runtimeAuthorizationDenied("v4-original-operation-kind");
+		if (!verified.success)
+			runtimeAuthorizationDenied("v4-verification-invalid");
 		try {
 			await validateRuntimeEventAccessV4(
 				request,
@@ -672,8 +675,10 @@ export class RuntimeHost {
 					},
 				},
 			);
-		} catch {
-			runtimeAuthorizationDenied();
+		} catch (error) {
+			runtimeAuthorizationDenied(
+				`v4-event-access:${runtimeAccessDenialCause(error)}`,
+			);
 		}
 		return verified.data.claims;
 	}
