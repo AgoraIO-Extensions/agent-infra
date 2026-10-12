@@ -162,6 +162,8 @@ export function createClaudeBrowserMcpServer(options: {
 						executionId: options.executionId,
 						sessionGeneration: context.binding.sessionGeneration,
 						resourceFence: context.binding.resourceFence,
+						workloadRevision: context.binding.workloadRevision,
+						imageDigest: context.binding.imageDigest,
 						capabilityVersion: context.capabilityVersion,
 						pageRevision: pageRevision(descriptor, input),
 					},

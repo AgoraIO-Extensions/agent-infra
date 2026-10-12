@@ -126,13 +126,14 @@ export interface RuntimeHostOptions {
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
 	}>;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
-	/** Deployment-owned Browser controller factory; receives only verified readiness binding. */
+	/** Request-local Browser context plus the admitted Execution identity. */
 	createBrowserExecutionContext?: (
-		input: RuntimeBrowserExecutionContextV1,
+		input: RuntimeBrowserExecutionContextFactoryInputV1,
 	) =>
 		| RuntimeBrowserExecutionContextV1
 		| undefined
 		| Promise<RuntimeBrowserExecutionContextV1 | undefined>;
+	/** Deployment-owned Browser controller factory; receives only verified readiness binding. */
 	onBrowserCapabilityAssembly?: (
 		input:
 			| {
@@ -153,6 +154,14 @@ export interface RuntimeHostOptions {
 	afterDriverResult?: (operationId: string) => void | Promise<void>;
 	afterOperationResolved?: (operationId: string) => void | Promise<void>;
 }
+
+export type RuntimeBrowserExecutionContextFactoryInputV1 =
+	RuntimeBrowserExecutionContextV1 & {
+		/** Exact admitted Runtime Execution; never selected by caller input. */
+		readonly executionId: string;
+		/** Initial page revision for the newly assembled request-local context. */
+		readonly pageRevision: number;
+	};
 
 function invalidRequest(): never {
 	throw new RuntimeHostError(
@@ -248,6 +257,7 @@ export function runtimeBrowserExecutionContextForCommand(
 async function createBrowserExecutionContextForCommand(
 	factory: RuntimeHostOptions["createBrowserExecutionContext"],
 	browser: RuntimeBrowserExecutionContextV1 | undefined,
+	executionId: string,
 	principal: RuntimeBrowserExecutionContextV1["principal"] = undefined,
 ): Promise<RuntimeBrowserExecutionContextV1 | undefined> {
 	if (!browser) return undefined;
@@ -271,6 +281,8 @@ async function createBrowserExecutionContextForCommand(
 	const created = await factory({
 		...admittedContext,
 		binding: structuredClone(admittedBinding),
+		executionId,
+		pageRevision: 1,
 	});
 	if (
 		!created ||
@@ -2121,6 +2133,7 @@ export class RuntimeHost {
 			const browser = await createBrowserExecutionContextForCommand(
 				this.options.createBrowserExecutionContext,
 				admittedBrowser,
+				operation.command.executionId,
 				operation.keyScopeV4?.principal,
 			);
 			const executionContext = browser
