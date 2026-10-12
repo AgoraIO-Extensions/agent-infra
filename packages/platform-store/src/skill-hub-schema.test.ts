@@ -37,6 +37,9 @@ describe("Skill Hub persistence schema", () => {
 		expect(binding.columns.map((column) => column.name)).toContain(
 			"configuration_revision",
 		);
+		expect(binding.columns.map((column) => column.name)).toContain(
+			"applied_receipt",
+		);
 		expect(binding.foreignKeys).toHaveLength(3);
 		expect(
 			binding.primaryKeys[0]?.columns.map((column) => column.name),
@@ -46,5 +49,8 @@ describe("Skill Hub persistence schema", () => {
 			"configuration_revision",
 			"skill_version_id",
 		]);
+		expect(binding.checks.map((check) => check.name)).toContain(
+			"skill_hub_agent_binding_receipt_binding",
+		);
 	});
 });
