@@ -4,7 +4,11 @@ import test from "node:test";
 test("provider entry points preserve executor identity and published action arrays", async () => {
 	for (const [provider, file, executor] of [
 		["github", "index.ts", "OpenConnectorGitHubAdapter"],
-		["bitbucket", "bitbucket-server.ts", "BitbucketServerAdapter"],
+		[
+			"bitbucket",
+			"providers/bitbucket/versions/bitbucket-v9.ts",
+			"BitbucketV9Adapter",
+		],
 		["confluence", "confluence-server.ts", "ConfluenceServerAdapter"],
 		["jira", "jira-server.ts", "JiraServerAdapter"],
 		["datalego", "datalego-v6.ts", "DataLegoV6Adapter"],

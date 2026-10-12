@@ -23,6 +23,7 @@ import { connectionProviderCatalogs } from "@agent-infra/openconnector-adapter/p
 import { createPinnedProviderFetch } from "@agent-infra/openconnector-adapter/provider-fetch";
 import {
 	BitbucketServerAdapter,
+	BitbucketV8Adapter,
 	bitbucketServerConnectionCatalog,
 	bitbucketServerLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/providers/bitbucket";
@@ -313,6 +314,7 @@ export async function createConnectionRuntime(
 		maxRedirects: 0,
 	});
 	const bitbucket = new BitbucketServerAdapter(bitbucketFetch);
+	const legacyBitbucket = new BitbucketV8Adapter(bitbucketFetch);
 	const jiraFetch = createGuardedFetch({
 		fetch: observeProviderFetch(
 			"atlassian",
@@ -478,7 +480,10 @@ export async function createConnectionRuntime(
 			: {}),
 		[bitbucketServerConnectionCatalog.providerReleaseId]: bitbucket,
 		...Object.fromEntries(
-			bitbucketServerLegacyProviderReleaseIds.map((id) => [id, bitbucket]),
+			bitbucketServerLegacyProviderReleaseIds.map((id) => [
+				id,
+				legacyBitbucket,
+			]),
 		),
 		[githubConnectionCatalog.providerReleaseId]: github,
 		[jiraServerConnectionCatalog.providerReleaseId]: jira,
