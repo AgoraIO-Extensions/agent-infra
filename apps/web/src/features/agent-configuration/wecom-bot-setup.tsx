@@ -317,8 +317,13 @@ export function WecomBotSetup({
 			await refresh();
 			return true;
 		} catch {
-			if (attempt === generation.current && session.current === id)
-				setError("取消结果未确认，正在继续查询配置状态。");
+			if (attempt === generation.current && session.current === id) {
+				clearTimeout(timer.current);
+				setBusy(true);
+				await poll(attempt);
+				if (attempt === generation.current && session.current === id)
+					setError("取消结果未确认，正在继续查询配置状态。");
+			}
 			return false;
 		}
 	}

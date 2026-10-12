@@ -218,18 +218,25 @@ it("keeps the pending configuration when cancellation is unconfirmed", async () 
 		expiresAt: new Date(Date.now() + 300000).toISOString(),
 		status: "verifying",
 	};
+	let setupReads = 0;
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (input: Request) => {
 			const path = new URL(input.url).pathname;
 			if (path.endsWith("/wecom-bot"))
 				return Response.json({ status: "not_configured" });
-			if (path.endsWith("/wecom-setup"))
+			if (
+				path.includes("/wecom-setup") &&
+				!path.endsWith("/cancel") &&
+				!path.endsWith("/credentials")
+			) {
+				setupReads++;
 				return Response.json({
 					...session,
 					state: "fixture",
 					qrAvailable: false,
 				});
+			}
 			if (path.endsWith("/cancel"))
 				return Response.json({ error: "unavailable" }, { status: 503 });
 			return Response.json(session);
@@ -258,6 +265,7 @@ it("keeps the pending configuration when cancellation is unconfirmed", async () 
 	await waitFor(() =>
 		expect(screen.getByRole("alert").textContent).toContain("取消结果未确认"),
 	);
+	await waitFor(() => expect(setupReads).toBeGreaterThan(2));
 	expect(screen.getByRole("button", { name: "取消配置" })).toBeTruthy();
 });
 it("ignores a late cancellation response after switching Agents", async () => {
