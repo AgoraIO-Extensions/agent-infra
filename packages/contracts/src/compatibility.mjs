@@ -1121,7 +1121,9 @@ function isApplicationMaterialGrantV2OpenApiAddition(previous, current) {
 
 // Browser operation binding is an additive optional field on existing operation facts.
 function stripRuntimeBrowserOperationFacts(value) {
-	const normalized = structuredClone(value);
+	const normalized = normalizeRuntimeConnectionAssociationOpenApiAddition(
+		structuredClone(value),
+	);
 	const visit = (node) => {
 		if (!node || typeof node !== "object") return;
 		if (Array.isArray(node)) {
@@ -2949,10 +2951,9 @@ function isPilotBrowserProjectionOpenApiAddition(previous, current) {
 
 // Runtime operation facts may add optional, non-secret Connection consumer
 // references without invalidating existing event readers.
-function isRuntimeConnectionAssociationOpenApiAddition(previous, current) {
+function normalizeRuntimeConnectionAssociationOpenApiAddition(current) {
 	const normalized = structuredClone(current);
 	const fields = ["consumerId", "instanceRef", "credentialRevision"];
-	let changed = false;
 	const visit = (value) => {
 		if (Array.isArray(value)) {
 			for (const item of value) visit(item);
@@ -2978,13 +2979,12 @@ function isRuntimeConnectionAssociationOpenApiAddition(previous, current) {
 				)
 					continue;
 				delete value.properties[field];
-				changed = true;
 			}
 		}
 		for (const child of Object.values(value)) visit(child);
 	};
 	visit(normalized);
-	return changed && findBreakingChanges(previous, normalized).length === 0;
+	return normalized;
 }
 function findBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
@@ -3009,6 +3009,7 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 	const changes = [];
 	if (previous.openapi !== undefined) {
+		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		if (isA2ParallelModelConfigurationOpenApiAddition(previous, current))
 			return changes;
 		if (
@@ -3027,7 +3028,6 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserEvidenceOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
-			!isRuntimeConnectionAssociationOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
