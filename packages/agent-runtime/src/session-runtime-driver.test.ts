@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { RuntimeDriverCommand } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
-import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
+import {
+	createRuntimeFileResultReceiptV1,
+	type RuntimeFileBridgePortV1,
+} from "./runtime-file-bridge.js";
 import {
 	type NativeSession,
 	type NativeSessionOptions,
@@ -70,6 +73,90 @@ function fileBridge(onRevalidate?: (call: number) => void): {
 		},
 	};
 }
+
+it("publishes one request-scoped native result file", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-result-file-"));
+	let publishAfterTerminal: (() => Promise<void>) | undefined;
+	const writeResult = vi.fn(
+		async (descriptor: Parameters<RuntimeFileBridgePortV1["writeResult"]>[0]) =>
+			createRuntimeFileResultReceiptV1(
+				{
+					actorId: "actor-a",
+					channelId: "web",
+					agentId: "agent-a",
+					conversationId: "conversation-a",
+					executionId: "execution-a",
+					sessionGeneration: 1,
+					grantId: "grant-a",
+					expiresAt: Date.now() + 60_000,
+					inputFileIds: [],
+				},
+				{
+					schemaVersion: 1,
+					fileId: "result-file-session",
+					kind: "result",
+					descriptor,
+					status: "available",
+					createdAt: new Date().toISOString(),
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+			),
+	);
+	const openSession = vi.fn(async (options: NativeSessionOptions) => ({
+		nativeId: "native-a",
+		select: async () => {},
+		prompt: async () => {
+			await options.resultFile?.({
+				path: join(tmpdir(), "outside-result.txt"),
+				content: "outside",
+			});
+			await options.resultFile?.({
+				path: join(options.cwd, "result.txt"),
+				content: "session result",
+			});
+			await options.resultFile?.({
+				path: join(options.cwd, "second-result.txt"),
+				content: "duplicate",
+			});
+			publishAfterTerminal = async () => {
+				await options.resultFile?.({
+					path: join(options.cwd, "late-result.txt"),
+					content: "late",
+				});
+			};
+			return { stopReason: "completed" };
+		},
+		cancel: async () => {},
+		close: async () => {},
+	}));
+	const runtime = await driver(path, openSession);
+	try {
+		const accepted = await runtime.execute(command([]), {
+			fileBridge: {
+				readInput: async () => {
+					throw new Error("unused");
+				},
+				writeResult,
+				revalidate: () => {},
+			},
+		});
+		await vi.waitFor(async () =>
+			expect(
+				await runtime.getStatus(accepted.nativeSessionRef, "execution-a"),
+			).toBe("completed"),
+		);
+		await publishAfterTerminal?.();
+		expect(writeResult).toHaveBeenCalledOnce();
+		expect(
+			(
+				await runtime.replayEvents(accepted.nativeSessionRef, "execution-a")
+			).some((event) => event.type === "file"),
+		).toBe(true);
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
 
 async function driver(
 	path: string,
