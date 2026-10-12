@@ -8,6 +8,7 @@ import {
 	ClaudeRuntimeDriver,
 	parseClaudeNativeCommands,
 } from "./claude-runtime-driver.js";
+import type { RuntimeExternalActionAuthorization } from "./driver.js";
 
 const commandRead = (
 	nativeSessionRef = "missing",
@@ -108,6 +109,31 @@ it("rejects discovery for a missing Claude native session", async () => {
 		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
 	} finally {
 		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("rejects a credential-free option without Host key delivery", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-driver-v4-invalid-"));
+	try {
+		await expect(
+			ClaudeRuntimeDriver.open({
+				path,
+				configVersion: "configuration-v4",
+				defaultModelOptionId: "primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "primary",
+						model: "claude-opus-5",
+						reasoningLevels: ["high"],
+						authentication: "bearer",
+						endpoint: "https://relay.example.test/v1",
+					},
+				],
+			}),
+		).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
+	} finally {
 		await rm(path, { recursive: true, force: true });
 	}
 });
@@ -292,6 +318,159 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 			}),
 		).rejects.toThrow("Runtime session could not be recovered");
 		expect(calls).toBe(2);
+	} finally {
+		await driver.close();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(path, { recursive: true, force: true });
+	}
+}, 30000);
+
+it("delivers a per-execution key for a credential-free Claude option", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-driver-v4-"));
+	const keys = new Map([
+		["execution-a", "execution-key-a-0123456789"],
+		["execution-b", "execution-key-b-0123456789"],
+	]);
+	const actions: RuntimeExternalActionAuthorization[] = [];
+	const authorizationHeaders: string[] = [];
+	let activeExecution = "";
+	let calls = 0;
+	const server = createServer((req, res) => {
+		let body = "";
+		req.on("data", (chunk) => {
+			body += chunk;
+		});
+		req.on("end", () => {
+			const value = JSON.parse(body);
+			expect(value.model).toBe("claude-opus-5");
+			authorizationHeaders.push(req.headers.authorization ?? "");
+			calls++;
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			for (const event of [
+				{
+					type: "message_start",
+					message: {
+						id: `msg_${calls}`,
+						type: "message",
+						role: "assistant",
+						model: value.model,
+						content: [],
+						stop_reason: null,
+						stop_sequence: null,
+						usage: { input_tokens: 10, output_tokens: 0 },
+					},
+				},
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "text", text: "" },
+				},
+				{
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "text_delta", text: `OK-${calls}` },
+				},
+				{ type: "content_block_stop", index: 0 },
+				{
+					type: "message_delta",
+					delta: { stop_reason: "end_turn", stop_sequence: null },
+					usage: { output_tokens: 2 },
+				},
+				{ type: "message_stop" },
+			])
+				res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+			res.end();
+		});
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error();
+	const driver = await ClaudeRuntimeDriver.open({
+		path,
+		configVersion: "configuration-v4",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				model: "claude-opus-5",
+				reasoningLevels: ["high"],
+				authentication: "bearer",
+				endpoint: `http://127.0.0.1:${address.port}`,
+			},
+		],
+		authorizeModelAction: async (action) => {
+			activeExecution = action.executionId;
+			actions.push(action);
+			return { relayKey: keys.get(action.executionId) };
+		},
+	});
+	try {
+		const command = {
+			schemaVersion: 2 as const,
+			kind: "submit-turn" as const,
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-a",
+			turnId: "turn-a",
+			operationId: "operation-a",
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+			input: { text: "Reply with OK.", attachments: [] },
+		};
+		const first = await driver.execute(command);
+		await vi.waitFor(
+			async () =>
+				expect(
+					await driver.getStatus(first.nativeSessionRef, command.executionId),
+				).toBe("completed"),
+			{ timeout: 10000 },
+		);
+		expect(activeExecution).toBe("execution-a");
+		expect(authorizationHeaders.length).toBeGreaterThan(0);
+		expect(new Set(authorizationHeaders)).toEqual(
+			new Set([`Bearer ${keys.get("execution-a")}`]),
+		);
+		expect(actions).toHaveLength(authorizationHeaders.length);
+		for (const action of actions) {
+			expect(action.kind).toBe("model");
+			expect(action.executionId).toBe("execution-a");
+			expect(action.runtimeOperationId).toBe("execution-a");
+			await driver.validateExternalAction?.(action);
+		}
+
+		const previousHeaders = authorizationHeaders.length;
+		const next = {
+			...command,
+			operationId: "operation-b",
+			executionId: "execution-b",
+			turnId: "turn-b",
+			nativeSessionRef: first.nativeSessionRef,
+		};
+		const second = await driver.execute(next);
+		await vi.waitFor(
+			async () =>
+				expect(
+					await driver.getStatus(second.nativeSessionRef, next.executionId),
+				).toBe("completed"),
+			{ timeout: 10000 },
+		);
+		expect(authorizationHeaders.slice(previousHeaders).length).toBeGreaterThan(
+			0,
+		);
+		expect(new Set(authorizationHeaders.slice(previousHeaders))).toEqual(
+			new Set([`Bearer ${keys.get("execution-b")}`]),
+		);
+		expect(
+			actions
+				.slice(previousHeaders)
+				.every((action) => action.executionId === "execution-b"),
+		).toBe(true);
 	} finally {
 		await driver.close();
 		server.closeAllConnections();
