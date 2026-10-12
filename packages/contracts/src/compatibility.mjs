@@ -1634,7 +1634,9 @@ function isSkillHubInstallationOpenApiAddition(previous, current) {
 	)
 		return false;
 	const addition = {
-		paths: Object.fromEntries(paths.map((path) => [path, current.paths?.[path]])),
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
 		schemas: Object.fromEntries(
 			schemas.map((name) => [name, current.components?.schemas?.[name]]),
 		),
