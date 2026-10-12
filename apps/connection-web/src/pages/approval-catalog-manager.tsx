@@ -563,13 +563,16 @@ export function ApprovalCatalogManager(props: {
 								</select>
 							</label>
 							{revisingProfile?.upgrade ? (
-								<section aria-label="能力包更新差异">
+								<section
+									className="approval-profile-update"
+									aria-label="能力包更新差异"
+								>
 									<p>{revisingProfile.upgrade.reason}</p>
 									{revisingProfile.upgrade.changes.length ? (
 										<ul>
 											{revisingProfile.upgrade.changes.map((change) => (
 												<li key={change.name}>
-													{change.name} ·{" "}
+													<strong>{change.name}</strong> ·{" "}
 													{change.kind === "ADDED"
 														? "新增，默认不选"
 														: change.kind === "REMOVED"
@@ -590,7 +593,7 @@ export function ApprovalCatalogManager(props: {
 												setUpgradeConfirmed(event.target.checked)
 											}
 										/>
-										已核对差异，确认发布所选能力及匹配审批策略
+										<span>已核对差异，确认发布所选能力及匹配审批策略</span>
 									</label>
 								</section>
 							) : null}
