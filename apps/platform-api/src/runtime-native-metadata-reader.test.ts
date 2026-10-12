@@ -68,7 +68,12 @@ describe("Runtime native metadata producer adapter", () => {
 	it("issues a request-local proof and projects a bound status response", async () => {
 		const fixture = reader();
 		await expect(
-			fixture.value.read(identity, binding.scope.conversationId, "status"),
+			fixture.value.read(
+				identity,
+				binding.scope.conversationId,
+				binding.scope.executionId,
+				"status",
+			),
 		).resolves.toEqual(response.projection);
 		expect(fixture.issue).toHaveBeenCalledWith(
 			expect.objectContaining({ request: binding }),
@@ -88,6 +93,7 @@ describe("Runtime native metadata producer adapter", () => {
 		},
 		{ scope: { ...binding.scope, conversationId: "foreign-conversation" } },
 		{ scope: { ...binding.scope, channelId: "api" } },
+		{ scope: { ...binding.scope, executionId: "foreign-execution" } },
 		{
 			scope: { ...binding.scope, authorizationRevision: "stale-revision" },
 		},
@@ -105,7 +111,12 @@ describe("Runtime native metadata producer adapter", () => {
 				transport: { read: fixture.transport },
 			});
 			await expect(
-				invalid.read(identity, binding.scope.conversationId, "status"),
+				invalid.read(
+					identity,
+					binding.scope.conversationId,
+					binding.scope.executionId,
+					"status",
+				),
 			).resolves.toBeNull();
 			expect(fixture.issue).not.toHaveBeenCalled();
 		},
@@ -119,7 +130,12 @@ describe("Runtime native metadata producer adapter", () => {
 			}),
 		);
 		await expect(
-			fixture.value.read(identity, binding.scope.conversationId, "status"),
+			fixture.value.read(
+				identity,
+				binding.scope.conversationId,
+				binding.scope.executionId,
+				"status",
+			),
 		).resolves.toBeNull();
 	});
 
@@ -132,7 +148,12 @@ describe("Runtime native metadata producer adapter", () => {
 			transport: { read: transport },
 		});
 		await expect(
-			value.read(identity, binding.scope.conversationId, "status"),
+			value.read(
+				identity,
+				binding.scope.conversationId,
+				binding.scope.executionId,
+				"status",
+			),
 		).resolves.toBeNull();
 		expect(transport).not.toHaveBeenCalled();
 	});

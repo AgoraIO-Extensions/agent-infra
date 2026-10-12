@@ -45,6 +45,7 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 	readonly resolveRequest: (input: {
 		readonly identity: IdentityContext;
 		readonly conversationId: string;
+		readonly executionId: string;
 		readonly selector: "status" | "commands" | "skills";
 		readonly signal: AbortSignal;
 	}) => Promise<RuntimeNativeMetadataBindingResponseV1 | null>;
@@ -61,6 +62,7 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 		async read(
 			identity: IdentityContext,
 			conversationId: string,
+			executionId: string,
 			selector: "status" | "commands" | "skills",
 		): Promise<NativeMetadataProjectionV1 | null> {
 			const controller = new AbortController();
@@ -68,6 +70,7 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 				const resolved = await options.resolveRequest({
 					identity,
 					conversationId,
+					executionId,
 					selector,
 					signal: controller.signal,
 				});
@@ -81,6 +84,7 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 					binding.scope.authorizationRevision !==
 						identity.authorizationRevision ||
 					binding.scope.conversationId !== conversationId ||
+					binding.scope.executionId !== executionId ||
 					binding.scope.channelId !== "web"
 				)
 					return null;
