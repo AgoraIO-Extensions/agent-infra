@@ -5,6 +5,7 @@ import type {
 	ExecutionDetailProjectionV2,
 	PersistedConversationEventV2,
 } from "../../pilot/generated-v2/types.gen.js";
+import { ConnectionInstallationPanel } from "./connection-installation-panel.js";
 import {
 	commandFailure,
 	executionStatusLabels,
@@ -12,12 +13,16 @@ import {
 
 export function ConversationExecutionDetails({
 	data,
+	conversationId,
+	client,
 	loading,
 	failed,
 	onRetry,
 	onClose,
 }: {
 	data?: ExecutionDetailProjectionV2;
+	conversationId: string;
+	client?: import("../../pilot/generated-v2/client/index.js").Client;
 	loading: boolean;
 	failed: boolean;
 	onRetry: () => void;
@@ -90,6 +95,12 @@ export function ConversationExecutionDetails({
 					)}
 					<h3 className="font-semibold">模型与工具调用事实</h3>
 					<OperationFacts events={data.events} />
+					<ConnectionInstallationPanel
+						key={`${conversationId}:${data.executionId}`}
+						conversationId={conversationId}
+						executionId={data.executionId}
+						client={client}
+					/>
 					<p className="text-muted-foreground text-sm">
 						未提供的耗时、用量或外部操作结果保持未知。Connection
 						关联引用不授予访问权限。
