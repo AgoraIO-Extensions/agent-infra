@@ -102,3 +102,16 @@ it("rejects an already expired setup session before opening a popup", async () =
 		}),
 	).rejects.toThrow("WECom_QR_EXPIRED");
 });
+
+it("settles promptly when the popup is closed", async () => {
+	const h = harness();
+	const popup = { closed: false, close: () => {} };
+	const promise = openWecomQrAuthorizationV1({
+		...base,
+		open: () => popup,
+		addEventListener: h.addEventListener,
+		removeEventListener: h.removeEventListener,
+	});
+	popup.closed = true;
+	await expect(promise).rejects.toThrow("WECom_QR_CANCELLED");
+});

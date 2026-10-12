@@ -1645,6 +1645,13 @@ function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 }
 
 // #440 adds bounded receipt management and Owner-scoped bot setup.
+// Keep both hashes: the first is the historical #440 shape before #1935's QR
+// branch, while the second is the exact current route set after that addition.
+const wecomReceiptOpenApiAdditionHashes = new Set([
+	"f5331d7d488eca753adaf413088b91f6050fc07def829902db17494ef7aa49f1",
+	"a0d685b8aa834f369ed1e561d2acc5660a644d8f7fb8c113a089670321ef6045",
+]);
+
 function isWecomReceiptOpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v1/wecom/receipts",
@@ -1661,8 +1668,9 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 		paths.map((path) => [path, current.paths?.[path]]),
 	);
 	if (
-		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"a0d685b8aa834f369ed1e561d2acc5660a644d8f7fb8c113a089670321ef6045"
+		!wecomReceiptOpenApiAdditionHashes.has(
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex"),
+		)
 	)
 		return false;
 	const normalized = structuredClone(current);
@@ -1694,6 +1702,11 @@ function isWecomApplicationOpenApiAddition(previous, current) {
 }
 
 // #1935 adds an optional deployment-approved QR branch to the existing bot setup response.
+const wecomLegacyAuthorizationBranchSha256 =
+	"b23fbc27698cf8cb1a1af39993346877a8f113a9c24a90c4b5738f1f6b5b2acd";
+const wecomQrAuthorizationBranchSha256 =
+	"da0cac344f9a9383e5851073f97bf9f6ca0fbf04128e50c5d6f7214e8d9c03eb";
+
 function isWecomQrAuthorizationOpenApiAddition(previous, current) {
 	const path = "/api/v1/agents/{agentId}/wecom-setup";
 	const previousSchema =
@@ -1704,7 +1717,21 @@ function isWecomQrAuthorizationOpenApiAddition(previous, current) {
 		current.paths?.[path]?.post?.responses?.["200"]?.content?.[
 			"application/json"
 		]?.schema;
-	if (!previousSchema || !currentSchema || !Array.isArray(currentSchema.oneOf))
+	if (
+		!previousSchema ||
+		!currentSchema ||
+		currentSchema.type !== "object" ||
+		!Array.isArray(currentSchema.oneOf) ||
+		currentSchema.oneOf.length !== 2 ||
+		createHash("sha256")
+			.update(JSON.stringify(previousSchema))
+			.digest("hex") !== wecomLegacyAuthorizationBranchSha256 ||
+		!isDeepStrictEqual(currentSchema.oneOf[0], previousSchema) ||
+		createHash("sha256")
+			.update(JSON.stringify(currentSchema.oneOf[1]))
+			.digest("hex") !== wecomQrAuthorizationBranchSha256 ||
+		!sameValue(Object.keys(currentSchema).sort(), ["oneOf", "type"])
+	)
 		return false;
 	const normalized = structuredClone(current);
 	normalized.paths[path].post.responses["200"].content[

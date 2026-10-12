@@ -38,6 +38,7 @@ export function WecomBotSetup({
 	const session = useRef<string | undefined>(undefined);
 	const generation = useRef(0);
 	const refreshSequence = useRef(0);
+	const qrAbort = useRef<AbortController | undefined>(undefined);
 	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	const connectionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
 		undefined,
@@ -86,6 +87,7 @@ export function WecomBotSetup({
 		void refresh();
 		return () => {
 			generation.current++;
+			qrAbort.current?.abort();
 			clearTimeout(timer.current);
 			clearTimeout(connectionTimer.current);
 		};
@@ -198,6 +200,9 @@ export function WecomBotSetup({
 		setError("");
 		setStatus("verifying");
 		const attempt = generation.current;
+		const reservedPopup = window.open("about:blank", "wecom-qr");
+		const qrController = new AbortController();
+		qrAbort.current = qrController;
 		try {
 			const started = await beginWecomSetup({
 				path: { agentId },
@@ -205,11 +210,16 @@ export function WecomBotSetup({
 				throwOnError: false,
 			});
 			if (attempt !== generation.current) return;
-			if (!started.data?.qrAvailable) throw new Error("WECom_QR_UNAVAILABLE");
+			if (!started.data?.qrAvailable) {
+				reservedPopup?.close();
+				throw new Error("WECom_QR_UNAVAILABLE");
+			}
 			session.current = started.data.sessionId;
 			const result = await openWecomQrAuthorizationV1({
 				...started.data.qr,
 				expiresAt: started.data.expiresAt,
+				popup: reservedPopup ?? undefined,
+				signal: qrController.signal,
 			});
 			try {
 				if (attempt !== generation.current) return;
@@ -245,10 +255,14 @@ export function WecomBotSetup({
 					: "扫码授权未完成，请重试或使用下方手动配置。",
 			);
 			return;
+		} finally {
+			if (qrAbort.current === qrController) qrAbort.current = undefined;
+			if (!session.current) reservedPopup?.close();
 		}
 		if (session.current) await poll(attempt);
 	}
 	async function cancel() {
+		qrAbort.current?.abort();
 		const id = session.current;
 		const attempt = generation.current;
 		if (!id) return;

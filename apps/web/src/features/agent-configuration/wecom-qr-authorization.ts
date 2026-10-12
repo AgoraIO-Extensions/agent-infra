@@ -6,6 +6,8 @@ export interface WecomQrAuthorizationResultV1 {
 
 interface PopupWindowV1 {
 	close(): void;
+	readonly closed?: boolean;
+	readonly location?: { href: string };
 }
 
 function parseResult(
@@ -45,6 +47,8 @@ export function openWecomQrAuthorizationV1(input: {
 	readonly source: string;
 	readonly state: string;
 	readonly expiresAt: string;
+	readonly popup?: PopupWindowV1;
+	readonly signal?: AbortSignal;
 	readonly timeoutMs?: number;
 	readonly open?: (url: string) => PopupWindowV1 | null;
 	readonly addEventListener?: (
@@ -74,10 +78,23 @@ export function openWecomQrAuthorizationV1(input: {
 	const remove =
 		input.removeEventListener ??
 		((name, listener) => window.removeEventListener(name, listener));
-	const popup = open(input.authorizationUrl);
+	const popup = input.popup ?? open(input.authorizationUrl);
 	if (!popup) return Promise.reject(new Error("WECom_QR_POPUP_UNAVAILABLE"));
+	if (popup.closed) return Promise.reject(new Error("WECom_QR_CANCELLED"));
+	if (input.popup) {
+		try {
+			if (!popup.location) throw new Error("WECom_QR_POPUP_UNAVAILABLE");
+			popup.location.href = input.authorizationUrl;
+		} catch {
+			popup.close();
+			return Promise.reject(new Error("WECom_QR_POPUP_UNAVAILABLE"));
+		}
+	}
 	return new Promise((resolve, reject) => {
 		let settled = false;
+		const closedTimer = setInterval(() => {
+			if (popup.closed) finish(new Error("WECom_QR_CANCELLED"));
+		}, 100);
 		const timer = setTimeout(
 			() => finish(new Error("WECom_QR_TIMEOUT")),
 			timeoutMs,
@@ -86,12 +103,15 @@ export function openWecomQrAuthorizationV1(input: {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
+			clearInterval(closedTimer);
 			remove("message", onMessage);
+			input.signal?.removeEventListener("abort", onAbort);
 			popup.close();
 			if (error) reject(error);
 			else if (result) resolve(result);
 			else reject(new Error("WECom_QR_RESULT_INVALID"));
 		};
+		const onAbort = () => finish(new Error("WECom_QR_CANCELLED"));
 		const onMessage = (event: MessageEvent<unknown>) => {
 			if (Date.now() >= expiresAt) return finish(new Error("WECom_QR_EXPIRED"));
 			if (event.source !== popup || event.origin !== input.authOrigin) return;
@@ -100,5 +120,7 @@ export function openWecomQrAuthorizationV1(input: {
 			finish(undefined, result);
 		};
 		add("message", onMessage);
+		if (input.signal?.aborted) onAbort();
+		else input.signal?.addEventListener("abort", onAbort, { once: true });
 	});
 }

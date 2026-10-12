@@ -10,9 +10,15 @@ import { afterEach, expect, it, vi } from "vitest";
 import { client } from "../../pilot/generated/client.gen.js";
 import { WecomBotSetup } from "./wecom-bot-setup.js";
 
+const nativeWindowOpen = window.open;
+
 afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
+	Object.defineProperty(window, "open", {
+		configurable: true,
+		value: nativeWindowOpen,
+	});
 });
 it("requires takeover acknowledgement and clears the Secret before submitting through the HTTP contract", async () => {
 	client.setConfig({ baseUrl: "https://platform.test" });
@@ -75,6 +81,10 @@ it("explains unavailable QR without fabricating a successful binding", async () 
 		"fetch",
 		vi.fn(async () => Response.json({ status: "not_configured" })),
 	);
+	Object.defineProperty(window, "open", {
+		configurable: true,
+		value: vi.fn(() => null),
+	});
 	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
 	fireEvent.click(screen.getByRole("checkbox"));
 	fireEvent.click(screen.getByRole("button", { name: "扫码授权" }));
@@ -88,9 +98,13 @@ it("explains unavailable QR without fabricating a successful binding", async () 
 it("submits configured QR credentials only after takeover confirmation", async () => {
 	client.setConfig({ baseUrl: "https://platform.test" });
 	const bodies: unknown[] = [];
-	const popup = { close: vi.fn() };
+	const popup = { close: vi.fn(), location: { href: "about:blank" } };
+	const openPopup = vi.fn(() => popup);
 	const expiresAt = new Date(Date.now() + 60_000).toISOString();
-	vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+	Object.defineProperty(window, "open", {
+		configurable: true,
+		value: openPopup,
+	});
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (input: Request) => {
@@ -123,7 +137,7 @@ it("submits configured QR credentials only after takeover confirmation", async (
 	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
 	fireEvent.click(screen.getByRole("checkbox"));
 	fireEvent.click(screen.getByRole("button", { name: "扫码授权" }));
-	await waitFor(() => expect(window.open).toHaveBeenCalled());
+	await waitFor(() => expect(openPopup).toHaveBeenCalled());
 	window.dispatchEvent(
 		new MessageEvent("message", {
 			origin: "https://auth.example.test",
