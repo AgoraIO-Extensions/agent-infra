@@ -12,7 +12,6 @@ import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	ClaudeRuntimeDriver,
 	type ClaudeRuntimeDriverOptions,
 	type CodexRuntimeDriverOptions,
 	FakeRuntimeDriver,
@@ -37,6 +36,7 @@ import { createWorkerRuntimeGrantSignerV4 } from "../../platform-worker/src/runt
 import { writeStandardMcpExport } from "./standard-mcp-installation.test-support.js";
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
+	openClaudeRuntimeDriver: vi.fn(),
 	openCodexRuntimeDriver: vi.fn(),
 	openOpenCodeRuntime: vi.fn(),
 	openPiRuntime: vi.fn(),
@@ -64,11 +64,15 @@ vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("@agent-infra/agent-runtime")>();
 	class MockCodexRuntimeDriver extends actual.CodexRuntimeDriver {}
+	const MockClaudeRuntimeDriver = {
+		open: runtimeAssemblyMocks.openClaudeRuntimeDriver,
+	} as unknown as typeof actual.ClaudeRuntimeDriver;
 	Object.defineProperty(MockCodexRuntimeDriver, "open", {
 		value: runtimeAssemblyMocks.openCodexRuntimeDriver,
 	});
 	return {
 		...actual,
+		ClaudeRuntimeDriver: MockClaudeRuntimeDriver,
 		CodexRuntimeDriver: MockCodexRuntimeDriver,
 		openOpenCodeRuntime: runtimeAssemblyMocks.openOpenCodeRuntime,
 		openPiRuntime: runtimeAssemblyMocks.openPiRuntime,
@@ -85,6 +89,9 @@ runtimeAssemblyMocks.openOpenCodeRuntime.mockImplementation(
 );
 runtimeAssemblyMocks.openPiRuntime.mockImplementation(
 	actualMessageRuntimes.openPiRuntime,
+);
+runtimeAssemblyMocks.openClaudeRuntimeDriver.mockImplementation(
+	actualMessageRuntimes.ClaudeRuntimeDriver.open,
 );
 
 import {
@@ -179,6 +186,10 @@ async function claudeAssemblyFixture(
 
 afterEach(async () => {
 	runtimeAssemblyMocks.assertRuntimeProcessProtection.mockReset();
+	runtimeAssemblyMocks.openClaudeRuntimeDriver.mockClear();
+	runtimeAssemblyMocks.openClaudeRuntimeDriver.mockImplementation(
+		actualMessageRuntimes.ClaudeRuntimeDriver.open,
+	);
 	runtimeAssemblyMocks.openCodexRuntimeDriver.mockReset();
 	runtimeAssemblyMocks.openOpenCodeRuntime.mockClear();
 	runtimeAssemblyMocks.openOpenCodeRuntime.mockImplementation(
@@ -273,14 +284,14 @@ describe("RuntimeHost environment assembly", () => {
 		const { values, dataDirectory, fixture, approval } =
 			await claudeAssemblyFixture("available");
 		let openedWith: ClaudeRuntimeDriverOptions | undefined;
-		const openSpy = vi
-			.spyOn(ClaudeRuntimeDriver, "open")
-			.mockImplementation(async (options: ClaudeRuntimeDriverOptions) => {
+		runtimeAssemblyMocks.openClaudeRuntimeDriver.mockImplementation(
+			async (options: ClaudeRuntimeDriverOptions) => {
 				openedWith = options;
-				return (await FakeRuntimeDriver.open(
+				return FakeRuntimeDriver.open(
 					join(dataDirectory, "claude-driver.json"),
-				)) as unknown as ClaudeRuntimeDriver;
-			});
+				);
+			},
+		);
 		let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
 		try {
 			runtime = await assembleRuntimeHost(values);
@@ -298,7 +309,6 @@ describe("RuntimeHost environment assembly", () => {
 			);
 		} finally {
 			await runtime?.close();
-			openSpy.mockRestore();
 		}
 	});
 
@@ -308,14 +318,14 @@ describe("RuntimeHost environment assembly", () => {
 			const { values, dataDirectory } =
 				await claudeAssemblyFixture(installation);
 			let openedWith: ClaudeRuntimeDriverOptions | undefined;
-			const openSpy = vi
-				.spyOn(ClaudeRuntimeDriver, "open")
-				.mockImplementation(async (options: ClaudeRuntimeDriverOptions) => {
+			runtimeAssemblyMocks.openClaudeRuntimeDriver.mockImplementation(
+				async (options: ClaudeRuntimeDriverOptions) => {
 					openedWith = options;
-					return (await FakeRuntimeDriver.open(
+					return FakeRuntimeDriver.open(
 						join(dataDirectory, "claude-driver.json"),
-					)) as unknown as ClaudeRuntimeDriver;
-				});
+					);
+				},
+			);
 			let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
 			try {
 				runtime = await assembleRuntimeHost(values);
@@ -330,7 +340,6 @@ describe("RuntimeHost environment assembly", () => {
 				});
 			} finally {
 				await runtime?.close();
-				openSpy.mockRestore();
 			}
 		},
 	);
