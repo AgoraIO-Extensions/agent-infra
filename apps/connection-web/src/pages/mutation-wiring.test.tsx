@@ -1576,7 +1576,11 @@ describe("Connection 管理 mutation wiring", () => {
 		renderPage(<ConnectionsPage />);
 		fireEvent.click(await screen.findByRole("button", { name: "Jira 未连接" }));
 		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
-		expect(screen.getByText("当前没有可申请的连接能力。")).toBeTruthy();
+		expect(
+			screen.getByText(
+				"管理员尚未开放当前版本的能力包申请，请等待管理员更新能力包及审批策略。",
+			),
+		).toBeTruthy();
 		expect(screen.queryByLabelText("Jira 密码")).toBeNull();
 	});
 
@@ -1653,7 +1657,11 @@ describe("Connection 管理 mutation wiring", () => {
 		expect(screen.getAllByText("329435106").length).toBeGreaterThanOrEqual(1);
 		expect(screen.queryByText("github.get_repository")).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
-		expect(await screen.findByText("当前没有可申请的连接能力。")).toBeTruthy();
+		expect(
+			await screen.findByText(
+				"管理员尚未开放当前版本的能力包申请，请等待管理员更新能力包及审批策略。",
+			),
+		).toBeTruthy();
 		expect(api.startGithubOAuth).not.toHaveBeenCalled();
 		expect(open).not.toHaveBeenCalled();
 

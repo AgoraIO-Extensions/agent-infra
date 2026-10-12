@@ -3225,7 +3225,8 @@
 										"CONNECTION_ACCESS_REQUEST",
 										"CONNECTION_ACCESS_AUTHORIZATION",
 										"CONNECTION_DISPATCH_FAILURE",
-										"PROVIDER_UPGRADE_TASK"
+										"PROVIDER_UPGRADE_TASK",
+										"CAPABILITY_PROFILE_UPDATE"
 									]
 								},
 								"actionType": { "type": "string" },
@@ -3280,7 +3281,8 @@
 										"CONNECTION_ACCESS_REQUEST",
 										"CONNECTION_ACCESS_AUTHORIZATION",
 										"CONNECTION_DISPATCH_FAILURE",
-										"PROVIDER_UPGRADE_TASK"
+										"PROVIDER_UPGRADE_TASK",
+										"CAPABILITY_PROFILE_UPDATE"
 									]
 								},
 								"providerId": { "type": "string" },
@@ -3882,6 +3884,59 @@
 								"id": { "type": "string" },
 								"providerReleaseId": { "type": "string" },
 								"name": { "type": "string" },
+								"providerId": { "type": "string" },
+								"upgrade": {
+									"type": "object",
+									"additionalProperties": false,
+									"required": [
+										"targetProviderReleaseId",
+										"compatible",
+										"selectedActionVersionIds",
+										"changes",
+										"reason"
+									],
+									"properties": {
+										"targetProviderReleaseId": {
+											"type": "string"
+										},
+										"compatible": {
+											"type": "boolean"
+										},
+										"reason": {
+											"type": "string"
+										},
+										"selectedActionVersionIds": {
+											"type": "array",
+											"items": {
+												"type": "string"
+											}
+										},
+										"changes": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"additionalProperties": false,
+												"required": ["name", "kind"],
+												"properties": {
+													"name": {
+														"type": "string"
+													},
+													"kind": {
+														"type": "string",
+														"enum": ["ADDED", "CHANGED", "REMOVED"]
+													},
+													"beforeEffect": {
+														"type": "string"
+													},
+													"afterEffect": {
+														"type": "string"
+													},
+													"detail": { "type": "string" }
+												}
+											}
+										}
+									}
+								},
 								"effectCeiling": {
 									"type": "string",
 									"enum": ["READ", "WRITE"]

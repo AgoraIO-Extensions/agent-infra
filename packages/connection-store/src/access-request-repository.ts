@@ -888,7 +888,8 @@ export class PostgresConnectionAccessRequestRepository
 						| "CONNECTION_ACCESS_AUTHORIZATION"
 						| "CONNECTION_ACCESS_REQUEST"
 						| "CONNECTION_DISPATCH_FAILURE"
-						| "PROVIDER_UPGRADE_TASK";
+						| "PROVIDER_UPGRADE_TASK"
+						| "CAPABILITY_PROFILE_UPDATE";
 					created_at: string;
 					event_type: string;
 					id: string;
@@ -907,8 +908,8 @@ export class PostgresConnectionAccessRequestRepository
 					ON receipt.notification_id = notification.id
 					AND receipt.recipient_principal_id = notification.recipient_principal_id
 				WHERE notification.recipient_principal_id = ${principalId}
-					AND notification.business_type IN ('CONNECTION_ACCESS_REQUEST', 'CONNECTION_ACCESS_AUTHORIZATION', 'CONNECTION_DISPATCH_FAILURE', 'PROVIDER_UPGRADE_TASK')
-					AND (notification.event_type NOT IN ('ROUTING_BLOCKED', 'DISPATCH_FAILED') OR EXISTS (
+					AND notification.business_type IN ('CONNECTION_ACCESS_REQUEST', 'CONNECTION_ACCESS_AUTHORIZATION', 'CONNECTION_DISPATCH_FAILURE', 'PROVIDER_UPGRADE_TASK', 'CAPABILITY_PROFILE_UPDATE')
+					AND (notification.event_type NOT IN ('ROUTING_BLOCKED', 'DISPATCH_FAILED', 'PROFILE_UPDATE_REQUIRED') OR EXISTS (
 						SELECT 1 FROM connection_principal_roles role_binding
 						WHERE role_binding.principal_id = ${principalId}
 							AND role_binding.role = 'CONNECTION_ADMIN'
@@ -931,7 +932,8 @@ export class PostgresConnectionAccessRequestRepository
 				(SELECT count(*)::int FROM connection_work_items
 				 WHERE recipient_principal_id = ${principalId}
 					AND ((business_type = 'CONNECTION_ACCESS_REQUEST' AND action_type = 'REROUTE')
-						OR (business_type = 'CONNECTION_DISPATCH_FAILURE' AND action_type = 'RETRY'))
+						OR (business_type = 'CONNECTION_DISPATCH_FAILURE' AND action_type = 'RETRY')
+							OR (business_type = 'CAPABILITY_PROFILE_UPDATE' AND action_type = 'UPDATE_PROFILE'))
 					AND status = 'OPEN'
 					AND EXISTS (
 						SELECT 1 FROM connection_principal_roles role_binding
@@ -955,8 +957,8 @@ export class PostgresConnectionAccessRequestRepository
 					 JOIN connection_notifications notification
 						ON notification.id = receipt.notification_id
 					 WHERE receipt.recipient_principal_id = ${principalId}
-						AND notification.business_type IN ('CONNECTION_ACCESS_REQUEST', 'CONNECTION_ACCESS_AUTHORIZATION', 'CONNECTION_DISPATCH_FAILURE', 'PROVIDER_UPGRADE_TASK')
-						AND (notification.event_type NOT IN ('ROUTING_BLOCKED', 'DISPATCH_FAILED') OR EXISTS (
+						AND notification.business_type IN ('CONNECTION_ACCESS_REQUEST', 'CONNECTION_ACCESS_AUTHORIZATION', 'CONNECTION_DISPATCH_FAILURE', 'PROVIDER_UPGRADE_TASK', 'CAPABILITY_PROFILE_UPDATE')
+						AND (notification.event_type NOT IN ('ROUTING_BLOCKED', 'DISPATCH_FAILED', 'PROFILE_UPDATE_REQUIRED') OR EXISTS (
 							SELECT 1 FROM connection_principal_roles role_binding
 							WHERE role_binding.principal_id = ${principalId}
 								AND role_binding.role = 'CONNECTION_ADMIN'
@@ -1016,9 +1018,9 @@ export class PostgresConnectionAccessRequestRepository
 				AND business_type IN (
 					'CONNECTION_ACCESS_REQUEST', 'CONNECTION_ACCESS_AUTHORIZATION',
 					'CONNECTION_DISPATCH_FAILURE',
-					'PROVIDER_UPGRADE_TASK'
+					'PROVIDER_UPGRADE_TASK', 'CAPABILITY_PROFILE_UPDATE'
 				)
-				AND (action_type NOT IN ('REROUTE', 'RETRY') OR EXISTS (
+				AND (action_type NOT IN ('REROUTE', 'RETRY', 'UPDATE_PROFILE') OR EXISTS (
 					SELECT 1 FROM connection_principal_roles role_binding
 					WHERE role_binding.principal_id = ${principalId}
 						AND role_binding.role = 'CONNECTION_ADMIN'
@@ -1061,9 +1063,9 @@ export class PostgresConnectionAccessRequestRepository
 					AND notification.business_type IN (
 						'CONNECTION_ACCESS_REQUEST', 'CONNECTION_ACCESS_AUTHORIZATION',
 						'CONNECTION_DISPATCH_FAILURE',
-						'PROVIDER_UPGRADE_TASK'
+						'PROVIDER_UPGRADE_TASK', 'CAPABILITY_PROFILE_UPDATE'
 					)
-					AND (notification.event_type NOT IN ('ROUTING_BLOCKED', 'DISPATCH_FAILED') OR EXISTS (
+					AND (notification.event_type NOT IN ('ROUTING_BLOCKED', 'DISPATCH_FAILED', 'PROFILE_UPDATE_REQUIRED') OR EXISTS (
 						SELECT 1 FROM connection_principal_roles role_binding
 						WHERE role_binding.principal_id = ${principalId}
 							AND role_binding.role = 'CONNECTION_ADMIN'

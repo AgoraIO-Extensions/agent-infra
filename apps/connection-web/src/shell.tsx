@@ -242,7 +242,7 @@ export function ConsoleShell(props: { children: ReactNode }) {
 									onClick={() => setNotificationsOpen(false)}
 									className="notification-tasks"
 								>
-									审批异常{" "}
+									管理待办{" "}
 									<strong>{notifications.data?.adminWorkItems ?? 0}</strong>
 								</Link>
 							) : null}
@@ -258,14 +258,16 @@ export function ConsoleShell(props: { children: ReactNode }) {
 														item.eventType === "REVIEW_REQUIRED"
 															? "/connection/approvals"
 															: item.eventType === "ROUTING_BLOCKED" ||
-																	item.eventType === "DISPATCH_FAILED"
+																	item.eventType === "DISPATCH_FAILED" ||
+																	item.eventType === "PROFILE_UPDATE_REQUIRED"
 																? "/connection/admin/approval"
 																: "/connection/connections"
 													}
 													search={
 														item.eventType === "REVIEW_REQUIRED" ||
 														item.eventType === "ROUTING_BLOCKED" ||
-														item.eventType === "DISPATCH_FAILED"
+														item.eventType === "DISPATCH_FAILED" ||
+														item.eventType === "PROFILE_UPDATE_REQUIRED"
 															? undefined
 															: { provider: item.providerId }
 													}
@@ -283,9 +285,11 @@ export function ConsoleShell(props: { children: ReactNode }) {
 														? "待审批"
 														: item.eventType === "ROUTING_BLOCKED"
 															? "待重新分配"
-															: item.eventType === "DISPATCH_FAILED"
-																? "投递失败"
-																: item.state}
+															: item.eventType === "PROFILE_UPDATE_REQUIRED"
+																? "待确认能力包更新"
+																: item.eventType === "DISPATCH_FAILED"
+																	? "投递失败"
+																	: item.state}
 												</Link>
 												<small>
 													{new Date(item.createdAt).toLocaleString()}

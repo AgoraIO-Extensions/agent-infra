@@ -6,6 +6,7 @@ const captured = vi.hoisted(() => ({
 	oauth: undefined as GitHubOAuthProvider | undefined,
 	requests: [] as string[],
 	origins: [] as string[][],
+	profileReconciliation: vi.fn(async () => {}),
 	proxies: [] as (string | undefined)[],
 }));
 
@@ -13,6 +14,7 @@ vi.mock("@agent-infra/connection-store", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("@agent-infra/connection-store")>();
 	class Repository {
+		reconcileCapabilityProfiles = captured.profileReconciliation;
 		async publishProviderCatalog() {}
 		async assertProviderRuntimeCoverage(releases: string[]) {
 			expect(releases).toContain("rehoboam-connection-v10");
@@ -125,6 +127,7 @@ afterEach(() => {
 	captured.oauth = undefined;
 	captured.requests = [];
 	captured.origins = [];
+	captured.profileReconciliation.mockClear();
 	captured.proxies = [];
 	vi.restoreAllMocks();
 });
@@ -142,6 +145,7 @@ describe("production GitHub OAuth transport wiring", () => {
 			});
 			try {
 				if (!captured.oauth) throw new Error("OAuth Adapter was not assembled");
+				expect(captured.profileReconciliation).toHaveBeenCalledOnce();
 				expect(captured.origins.flat()).toContain(
 					"https://publish-static-spaces.sh3.agoralab.co",
 				);

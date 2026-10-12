@@ -302,6 +302,20 @@
       "when": 1791723600002,
       "tag": "0042_static_spaces_standard_admission",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1791723600003,
+      "tag": "0043_capability_profile_system_audit",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1791723600004,
+      "tag": "0044_capability_profile_update_cancellation_audit",
+      "breakpoints": true
     }
   ]
 }

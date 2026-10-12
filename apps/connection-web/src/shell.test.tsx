@@ -320,7 +320,7 @@ describe("Connection 控制台 Session", () => {
 			await screen.findByRole("button", { name: /通知与待办 1 项/ }),
 		);
 		expect(
-			screen.getByRole("link", { name: "审批异常 1" }).getAttribute("href"),
+			screen.getByRole("link", { name: "管理待办 1" }).getAttribute("href"),
 		).toBe("/connection/admin/approval");
 		expect(
 			screen

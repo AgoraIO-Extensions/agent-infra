@@ -554,7 +554,8 @@ export function AccessRequestPanel(props: {
 							role="status"
 							aria-label="正在加载申请"
 						/>
-					) : providerOptions.length ? (
+					) : options.isError ||
+						props.requestsError ? null : providerOptions.length ? (
 						<div className="approval-option-list">
 							{providerOptions.map((item, index) => (
 								<button
@@ -572,7 +573,9 @@ export function AccessRequestPanel(props: {
 							))}
 						</div>
 					) : (
-						<p>当前没有可申请的连接能力。</p>
+						<p>
+							管理员尚未开放当前版本的能力包申请，请等待管理员更新能力包及审批策略。
+						</p>
 					)}
 				</>
 			)}
