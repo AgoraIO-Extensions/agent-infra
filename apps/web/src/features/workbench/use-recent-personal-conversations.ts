@@ -106,8 +106,12 @@ export function useRecentPersonalConversations({
 						conversations:
 							query.data?.pages.flatMap((page) =>
 								page.items.filter((item) => {
-									if (seen.has(item.conversationId)) return false;
-									seen.add(item.conversationId);
+									// Conversation IDs are only opaque within an Agent. Keep
+									// the producer order while retaining same-ID records from
+									// different Agents.
+									const key = `${item.agentId}\u0000${item.conversationId}`;
+									if (seen.has(key)) return false;
+									seen.add(key);
 									return true;
 								}),
 							) ?? [],
