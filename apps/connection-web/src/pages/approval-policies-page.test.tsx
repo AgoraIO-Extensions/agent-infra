@@ -1905,9 +1905,11 @@ it("shows default-off Provider switches and submits the selected revision", asyn
 	);
 	const section = await screen.findByRole("region", { name: "连接器审批开关" });
 	await waitFor(() =>
-		expect(within(section).getByRole("checkbox")).toBeTruthy(),
+		expect(within(section).getByRole("switch", { hidden: true })).toBeTruthy(),
 	);
-	const checkbox = within(section).getByRole("checkbox") as HTMLInputElement;
+	const checkbox = within(section).getByRole("switch", {
+		hidden: true,
+	}) as HTMLInputElement;
 	expect(checkbox.checked).toBe(false);
 	fireEvent.click(checkbox);
 	await waitFor(() =>
@@ -1916,6 +1918,55 @@ it("shows default-off Provider switches and submits the selected revision", asyn
 			expectedRevision: "1",
 		}),
 	);
+});
+
+it("keeps save failures visible outside collapsed settings and refreshes the revision", async () => {
+	api.listProviderAccessSettings
+		.mockResolvedValueOnce({
+			settings: [
+				{ providerId: "github", approvalRequired: false, revision: "1" },
+			],
+		})
+		.mockResolvedValueOnce({
+			settings: [
+				{ providerId: "github", approvalRequired: true, revision: "2" },
+			],
+		});
+	api.updateProviderAccessSettings.mockRejectedValueOnce(
+		new Error("审批设置已被修改，请重试"),
+	);
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({
+					defaultOptions: {
+						queries: { retry: false },
+						mutations: { retry: false },
+					},
+				})
+			}
+		>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	const section = await screen.findByRole("region", { name: "连接器审批开关" });
+	await waitFor(() =>
+		expect(within(section).getByRole("switch", { hidden: true })).toBeTruthy(),
+	);
+	fireEvent.click(within(section).getByRole("switch", { hidden: true }));
+	const error = await within(section).findByRole("alert");
+	expect(error.closest("details")).toBeNull();
+	expect(section.querySelector("details")?.hasAttribute("open")).toBe(false);
+	await waitFor(() =>
+		expect(
+			(
+				within(section).getByRole("switch", {
+					hidden: true,
+				}) as HTMLInputElement
+			).checked,
+		).toBe(true),
+	);
+	expect(api.listProviderAccessSettings).toHaveBeenCalledTimes(2);
 });
 
 it("shows a pending profile update, preserves unchanged choices and requires explicit confirmation", async () => {

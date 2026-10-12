@@ -25,6 +25,7 @@ import { ConsoleShell, PageError } from "../shell";
 import { PageHeader, providerLabel } from "../views";
 import { ApprovalCatalogManager } from "./approval-catalog-manager";
 import { ApprovalPolicySelection } from "./approval-policy-selection";
+import { ProviderApprovalSettings } from "./provider-approval-settings";
 import "./approval-policies-page.css";
 
 type StageDraft = AccessPolicyDraft["stages"][number];
@@ -453,32 +454,20 @@ export function ApprovalPoliciesPage() {
 	return (
 		<ConsoleShell>
 			<PageHeader title="连接审批管理" />
-			<section className="card" aria-label="连接器审批开关">
-				<h2>连接器审批开关</h2>
-				<p>
-					默认关闭，可直接连接账号。开启后，无有效审批资格的账号将无法发起新调用。
-				</p>
-				{accessSettings.isPending ? (
-					<p role="status">正在加载审批设置…</p>
-				) : null}
+			<section aria-label="连接器审批开关">
 				{accessSettings.isError ? (
 					<PageError error={accessSettings.error} />
 				) : null}
 				{updateAccessSettings.isError ? (
 					<PageError error={updateAccessSettings.error} />
 				) : null}
-				{accessSettings.data?.settings.map((setting) => (
-					<label key={setting.providerId} className="approval-setting">
-						<span>{providerLabel(setting.providerId)}</span>
-						<input
-							type="checkbox"
-							checked={setting.approvalRequired}
-							disabled={updateAccessSettings.isPending}
-							onChange={() => updateAccessSettings.mutate(setting)}
-						/>
-						需要审批
-					</label>
-				))}
+				<ProviderApprovalSettings
+					settings={accessSettings.data?.settings}
+					loading={accessSettings.isPending}
+					failed={accessSettings.isError}
+					busy={updateAccessSettings.isPending}
+					onChange={(setting) => updateAccessSettings.mutate(setting)}
+				/>
 			</section>
 			{catalog.isError ? <PageError error={catalog.error} /> : null}
 			{catalog.data?.profiles.some(
