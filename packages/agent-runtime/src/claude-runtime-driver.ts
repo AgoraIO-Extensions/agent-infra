@@ -30,6 +30,7 @@ import {
 import type {
 	RuntimeDriver,
 	RuntimeDriverCommand,
+	RuntimeDriverExecutionContextV1,
 	RuntimeDriverLookup,
 	RuntimeDriverOperationRecord,
 	RuntimeExternalActionAuthorization,
@@ -139,6 +140,13 @@ const maxNativeCommands = 150;
 const maxNativeCommandText = 4096;
 const maxNativeCommandArgumentHint = 512;
 const maxNativeCommandAliases = 32;
+const claudeAttachmentMaximumBytes = 50 * 1024 * 1024;
+const claudeAttachmentMediaTypes = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+]);
 
 export type ClaudeNativeCommandReadContext = Readonly<{
 	nativeSessionRef: string;
@@ -705,7 +713,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		this.locks.set(ref, task);
 		return task;
 	}
-	execute(value: RuntimeDriverCommand): Promise<RuntimeDriverOperationRecord> {
+	execute(
+		value: RuntimeDriverCommand,
+		context?: RuntimeDriverExecutionContextV1,
+	): Promise<RuntimeDriverOperationRecord> {
 		if (this.closed)
 			return Promise.reject(
 				new RuntimeHostError(
@@ -714,7 +725,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					503,
 				),
 			);
-		const operation = this.executeCommand(value);
+		const operation = this.executeCommand(value, context);
 		this.pending.add(operation);
 		void operation.then(
 			() => this.pending.delete(operation),
@@ -724,6 +735,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	}
 	private async executeCommand(
 		value: RuntimeDriverCommand,
+		context?: RuntimeDriverExecutionContextV1,
 	): Promise<RuntimeDriverOperationRecord> {
 		const command = (
 			value.schemaVersion === 2
@@ -745,7 +757,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				if (command.kind !== "stop" && command.kind !== "generation-cancel")
 					return result(command, binding.ref, unknownResult);
 			}
-			if (command.kind === "submit-turn") return this.submit(file, command);
+			if (command.kind === "submit-turn")
+				return this.submit(file, command, context?.fileBridge);
 			if (command.kind === "supplement")
 				return this.resolve(file, command, { outcome: "busy" });
 			const turn = file
@@ -796,7 +809,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		});
 		return record;
 	}
-	private async submit(file: DurableJsonFile<Session>, command: Submit) {
+	private async submit(
+		file: DurableJsonFile<Session>,
+		command: Submit,
+		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
+	) {
 		const before = file.read();
 		const ref = before.binding.ref;
 		if (before.cancelled) unavailable();
@@ -832,8 +849,58 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			)
 		)
 			conflict();
-		if (!("text" in command.input) || command.input.attachments.length)
-			unavailable();
+		if (!("text" in command.input)) unavailable();
+		const content: Exclude<
+			Parameters<typeof claudeQuery>[1]["message"]["content"],
+			string
+		> = [{ type: "text", text: command.input.text }];
+		for (const fileId of command.input.attachments) {
+			if (!fileBridge) unavailable();
+			const input = await fileBridge.readInput(fileId);
+			if (
+				input.fileId !== fileId ||
+				!claudeAttachmentMediaTypes.has(input.descriptor.mediaType) ||
+				input.descriptor.sizeBytes > claudeAttachmentMaximumBytes
+			)
+				unavailable();
+			const reader = input.body.getReader();
+			const chunks: Uint8Array[] = [];
+			let size = 0;
+			try {
+				while (true) {
+					const next = await reader.read();
+					if (next.done) break;
+					if (!(next.value instanceof Uint8Array)) unavailable();
+					size += next.value.byteLength;
+					if (size > claudeAttachmentMaximumBytes) unavailable();
+					chunks.push(next.value);
+				}
+			} catch (error) {
+				await reader.cancel().catch(() => undefined);
+				throw error;
+			} finally {
+				reader.releaseLock();
+			}
+			const bytes = Buffer.concat(chunks);
+			if (
+				size !== input.descriptor.sizeBytes ||
+				createHash("sha256").update(bytes).digest("hex") !==
+					input.descriptor.sha256
+			)
+				unavailable();
+			content.push({
+				type: "image",
+				source: {
+					type: "base64",
+					media_type: input.descriptor.mediaType,
+					data: bytes.toString("base64"),
+				},
+			} as Exclude<
+				Parameters<typeof claudeQuery>[1]["message"]["content"],
+				string
+			>[number]);
+		}
+		fileBridge?.revalidate();
 		// Paseo ensureQuery retirement order: detach old work, drain it, then resume the same native ID.
 		await this.retire(ref);
 		const directory = join(this.options.path, ref);
@@ -971,7 +1038,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					parent_tool_use_id: null,
 					message: {
 						role: "user",
-						content: [{ type: "text", text: command.input.text }],
+						content,
 					},
 				},
 			);
@@ -1285,7 +1352,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	async getCapabilities() {
 		return {
 			modelSelection: true,
-			attachments: false,
+			attachments: true,
 			resultFiles: false,
 			connection: false,
 			supplementaryInstruction: false,

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -9,6 +10,7 @@ import {
 	parseClaudeNativeCommands,
 } from "./claude-runtime-driver.js";
 import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
 
 const commandRead = (
 	nativeSessionRef = "missing",
@@ -318,6 +320,127 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 			}),
 		).rejects.toThrow("Runtime session could not be recovered");
 		expect(calls).toBe(2);
+	} finally {
+		await driver.close();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(path, { recursive: true, force: true });
+	}
+}, 30000);
+
+it("maps an authorized image attachment into Claude native content", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-driver-files-"));
+	const bytes = Buffer.from(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+		"base64",
+	);
+	const encoded = bytes.toString("base64");
+	let requestBody = "";
+	const server = createServer((req, res) => {
+		if (req.method !== "POST") {
+			res.writeHead(404).end();
+			return;
+		}
+		req.on("data", (chunk) => (requestBody += chunk));
+		req.on("end", () => {
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			for (const event of [
+				{
+					type: "message_start",
+					message: {
+						id: "msg-file",
+						model: "claude-opus-5",
+						content: [],
+						usage: { input_tokens: 1, output_tokens: 0 },
+					},
+				},
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "text", text: "" },
+				},
+				{
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "text_delta", text: "OK" },
+				},
+				{ type: "content_block_stop", index: 0 },
+				{
+					type: "message_delta",
+					delta: { stop_reason: "end_turn", stop_sequence: null },
+					usage: { output_tokens: 1 },
+				},
+				{ type: "message_stop" },
+			])
+				res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+			res.end();
+		});
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error();
+	const driver = await ClaudeRuntimeDriver.open({
+		path,
+		configVersion: "claude-files",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				model: "claude-opus-5",
+				reasoningLevels: ["high"],
+				authentication: "bearer",
+				endpoint: `http://127.0.0.1:${address.port}`,
+				credential: "synthetic-model-credential",
+			},
+		],
+	});
+	try {
+		const command = {
+			schemaVersion: 2 as const,
+			kind: "submit-turn" as const,
+			agentId: "agent-file",
+			conversationId: "conversation-file",
+			sessionGeneration: 1,
+			executionId: "execution-file",
+			turnId: "turn-file",
+			operationId: "operation-file",
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+			input: { text: "inspect", attachments: ["file-1"] },
+		};
+		const fileBridge: RuntimeFileBridgePortV1 = {
+			readInput: async () => ({
+				fileId: "file-1",
+				descriptor: {
+					name: "image.png",
+					mediaType: "image/png",
+					sizeBytes: bytes.byteLength,
+					sha256: createHash("sha256").update(bytes).digest("hex"),
+				},
+				body: new ReadableStream({
+					start(controller) {
+						controller.enqueue(bytes);
+						controller.close();
+					},
+				}),
+			}),
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+			revalidate: () => {},
+		};
+		const accepted = await driver.execute(command, { fileBridge });
+		expect(accepted.result).toEqual({ outcome: "accepted", status: "running" });
+		await vi.waitFor(() => expect(requestBody).toContain(encoded), {
+			timeout: 10000,
+		});
+		expect(requestBody).toContain(encoded);
+		expect(requestBody).toContain("image/png");
+		expect(await driver.getCapabilities()).toMatchObject({ attachments: true });
 	} finally {
 		await driver.close();
 		server.closeAllConnections();
