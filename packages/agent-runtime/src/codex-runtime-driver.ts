@@ -5191,14 +5191,17 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const execution = session
 			? ownRecordValue(session.executions, executionId)
 			: undefined;
+		const requiresActiveExecution =
+			request.kind !== "revoke" && request.kind !== "browser-crashed";
 		if (
 			!session ||
 			!execution ||
 			session.agentId !== browser.binding.agentId ||
 			session.conversationId !== browser.binding.conversationId ||
 			session.sessionGeneration !== browser.binding.sessionGeneration ||
-			session.activeExecutionId !== executionId ||
-			execution.status !== "running"
+			(requiresActiveExecution &&
+				(session.activeExecutionId !== executionId ||
+					execution.status !== "running"))
 		)
 			unavailable();
 		const runtime =
