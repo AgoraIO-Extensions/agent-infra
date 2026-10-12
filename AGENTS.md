@@ -41,6 +41,10 @@ Skills 使用 `needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-hum
 
 ## Repository Layout
 
+- Rehoboam v14 continuation READ returns confirmation/delivery steps, template-controlled numeric suffix replacement suggestions and downstream references. No version reservation, creation, notices or runs. Use existing replacement preview/confirm and explicitly select new upstream results. Completion comes from Rehoboam final-notice receipts, never Job success.
+
+- Rehoboam Provider v14 adds explicit `record_release_family_repair` for every family stage (Jobs, manual PR, tests/results, decisions and delivery). Rehoboam owns nonterminal-task checks, revision/template guards and audit. Generic resolved evidence needs a validation link; compile evidence retains PR/full commit/CI requirements. Records are operator-reported and never advance tasks, change Jobs, send messages or edit source. Diagnose first; source changes need explicit user direction, without requiring users to declare a local checkout. v13 implementation remains immutable.
+
 - `apps/`：Web、Platform API、Platform Worker 与 Connection API 的进程入口。
 - `packages/`：被多个真实调用方复用的配置、领域或 Adapter 模块。
 - Connection Provider 在 `packages/openconnector-adapter/src/providers/<名称>/` 维护 actions/definition/executors 入口；已发布源码及测试在 versions 中保持原字节。旧 src 文件只作兼容导出，源码位置校验使用 provider-source-layout.json。参见 [连接器目录](docs/connection/provider-layout.md)。

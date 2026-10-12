@@ -225,6 +225,18 @@ Rehoboam 渠道发布以新的 immutable `rehoboam-connection-v13` 增补 Publis
 仍不得接受任意身份、Header 或绕过审批的内部参数。
 详见 [渠道发布决策](../adr/ADR-rehoboam-channel-publishing.md)。
 
+发布族各环节的研发交接以 immutable `rehoboam-connection-v14` 增加
+`record_release_family_repair` WRITE，沿用 release WRITE scope 和固定 Rehoboam origin。
+新 Action 需要显式授权；v13 及旧 Action schema/effect/scopes 和实现字节保留。
+自动Job、人工PR、提测/结果确认、决策及交付均适用，终态须先恢复。resolved只要求处理结果链接，
+源码编译阶段保留完整PR/提交/编译证据要求。记录是操作人报告的证据，业务校验、CAS、模板签名及追加审计
+仍由 Rehoboam 负责；不获取本地源码、不发送人员消息、不推进阶段、不修改 Job 结果。
+编译通过不代替合并或制品构建；未知写结果先读取原任务核对，禁止盲重试。
+v14同时增加 `get_release_family_continuation` READ（release READ scope），只读取继续交付步骤、
+模板控制的数字尾缀版本建议和下游影响。建议不是预留；补发仍用原preview/confirm及replacement chain，
+不修改旧Job/申请、Native锚点或自动切换下游。最终交付完成由Rehoboam原通知成功回执投影，不能从Job成功推断。
+详见 [已发布 Native 后继续框架发版](../connection/rehoboam-published-native.md)。
+
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
 `apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；
@@ -2150,7 +2162,7 @@ Audit payload 使用 allowlist serializer；不允许把任意 request/response 
 
 - 所有契约有明确 version；未知字段默认拒绝写命令，读 response 遵循向后兼容规则。
 - 时间使用 RFC 3339 UTC，ID opaque，enum 未知值由 client fail closed。
-- HTTP mutation 要求 `Idempotency-Key`。每个 Direct MCP mutating Action 的 `get_action_guide` schema 必须包含 required `idempotencyKey`；客户端通过通用 `execute_action` 提交该字段，并在响应丢失、transport retry 和用户重试中保持不变。Connection 拒绝缺失键的调用，先按该键查找幂等记录，再剥离该控制字段后校验 Provider args。G-01 证明目标客户端版本能实际提供并保留此字段；不能假定私有字段或未验证的 request identity 存在。
+- HTTP mutation 要求 `Idempotency-Key`。每个 Direct MCP mutating Action 的 `get_action_guide` schema 必须包含 required `idempotencyKey`；客户端通过通用 `execute_action` 提交该字段，并在响应丢失、transport retry 和用户重试中保持不变。Connection 拒绝缺失键的调用，先按该键查找幂等记录。仅由 Connection 注入的控制字段不进入 Provider args；已批准的原始 Provider schema 若明确声明同名原生幂等字段，则校验并向 Executor 传递同一键，供固定原生接口派发使用，不改变 Connection 的去重与哈希边界。Rehoboam v13 的原生契约见 [已批准 ADR](../adr/ADR-rehoboam-channel-publishing.md)。G-01 证明目标客户端版本能实际提供并保留此字段；不能假定私有字段或未验证的 request identity 存在。
 - 目标 Direct MCP Client 版本无法提供稳定 request key 时，不得向该客户端发现或执行 mutating Action。Provider 原生幂等键或 natural key 只用于同一已持久化 LogicalEffect 的 dispatch retry，不能合并两个没有共同入站键的 `tools/call`，也不能替代 Consumer 业务幂等键。
 - Delegated assertion 必须签入同一 `Idempotency-Key` 的 hash；`jti` 防重放不能替代业务幂等，且完全相同的 `jti` 重放只可查询其原 Invocation。
 - payload size、string length、array count、schema depth 和 deadline 有服务端上限。
