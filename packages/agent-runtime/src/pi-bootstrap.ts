@@ -52,7 +52,10 @@ export function piNativeSkillArguments(
 	if (new Set(paths).size !== paths.length)
 		throw new Error("RUNTIME_SKILL_DIRECTORY_UNAVAILABLE");
 	if (paths.length === 0) return ["--no-skills"] as const;
-	return paths.flatMap((path) => ["--skill", path] as const);
+	return [
+		"--no-skills",
+		...paths.flatMap((path) => ["--skill", path] as const),
+	];
 }
 
 export async function openPiRuntime(options: PiRuntimeOptions) {
@@ -98,7 +101,7 @@ export async function openPiRuntime(options: PiRuntimeOptions) {
 			const nativeSkillArguments = piNativeSkillArguments(
 				options.skillDirectory,
 			);
-			const nativeSkillEnabled = nativeSkillArguments[0] === "--skill";
+			const nativeSkillEnabled = nativeSkillArguments.includes("--skill");
 			const transport = await openRuntimeMessagesTransport({
 				...option,
 				effort: selection.reasoningLevel,
