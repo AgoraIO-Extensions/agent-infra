@@ -32,6 +32,10 @@ export type ConversationTimelineState = {
 	history: ConversationDetailProjectionV2 | null;
 	events: readonly PersistedConversationEventV2[];
 	failure: ConversationReadFailure | null;
+	hasEarlier: boolean;
+	beforeCursor: string | null;
+	earlierLoading: boolean;
+	earlierFailure: ConversationReadFailure | null;
 };
 
 type ReadingSession = {
@@ -42,6 +46,7 @@ type ReadingSession = {
 	seenCursors: Set<string>;
 	needsHistory: boolean;
 	reloadCursor?: string;
+	earlierRequest?: AbortController;
 	/** Automatic reconnects since the stream last proved healthy (#1606). */
 	reconnectAttempts?: number;
 	reconnectTimer?: ReturnType<typeof setTimeout>;
@@ -62,6 +67,10 @@ function emptyState(): ConversationTimelineState {
 		history: null,
 		events: [],
 		failure: null,
+		hasEarlier: false,
+		beforeCursor: null,
+		earlierLoading: false,
+		earlierFailure: null,
 	};
 }
 
@@ -78,6 +87,19 @@ function reduceTimelineEvents(
 		return true;
 	});
 	return added.length === 0 ? current : [...current, ...added];
+}
+
+function prependTimelineEvents(
+	current: readonly PersistedConversationEventV2[],
+	incoming: readonly PersistedConversationEventV2[],
+): readonly PersistedConversationEventV2[] {
+	const seen = new Set(current.map((event) => event.eventId));
+	const added = incoming.filter((event) => {
+		if (seen.has(event.eventId)) return false;
+		seen.add(event.eventId);
+		return true;
+	});
+	return added.length === 0 ? current : [...added, ...current];
 }
 
 /** Read-only, per-page consumer. Abort on unmount or identity changes. A
@@ -127,6 +149,7 @@ export function createConversationTimeline({
 		cancelReconnect(previous);
 		previous?.historyRequest?.abort();
 		previous?.stream?.abort();
+		previous?.earlierRequest?.abort();
 	}
 
 	function fail(session: ReadingSession, failure: ConversationReadFailure) {
@@ -161,6 +184,8 @@ export function createConversationTimeline({
 		cancelReconnect(session);
 		session.stream?.abort();
 		session.historyRequest?.abort();
+		session.earlierRequest?.abort();
+		session.earlierRequest = undefined;
 		const request = new AbortController();
 		session.historyRequest = request;
 		session.needsHistory = true;
@@ -201,6 +226,7 @@ export function createConversationTimeline({
 			return;
 		}
 		const history = parsed.data;
+		const beforeCursor = history.eventWindow?.beforeCursor ?? null;
 		session.cursor =
 			history.conversation.lastConversationCursor ??
 			history.events.at(-1)?.conversationCursor ??
@@ -217,8 +243,92 @@ export function createConversationTimeline({
 			history,
 			events: reduceTimelineEvents([], history.events),
 			failure: null,
+			hasEarlier:
+				history.eventWindow?.hasEarlier === true && beforeCursor !== null,
+			beforeCursor,
+			earlierLoading: false,
+			earlierFailure: null,
 		});
 		void readStream(session);
+	}
+
+	async function loadEarlier(session: ReadingSession) {
+		if (
+			current !== session ||
+			state.earlierLoading ||
+			!state.hasEarlier ||
+			!state.beforeCursor
+		)
+			return;
+		const request = new AbortController();
+		session.earlierRequest?.abort();
+		session.earlierRequest = request;
+		const beforeCursor = state.beforeCursor;
+		publish({ ...state, earlierLoading: true, earlierFailure: null });
+		let result: Awaited<ReturnType<typeof getConversationV2>>;
+		try {
+			result = await getConversationV2({
+				client,
+				path: { conversationId: session.conversationId },
+				query: { beforeCursor },
+				signal: request.signal,
+				responseStyle: "fields",
+				throwOnError: false,
+			});
+		} catch (error) {
+			if (current !== session || request.signal.aborted) return;
+			session.earlierRequest = undefined;
+			const failure =
+				error instanceof ConversationReadError
+					? error.failure
+					: ({ kind: "network" } as const);
+			if (failure.kind === "authorization" || failure.kind === "invalid") {
+				fail(session, failure);
+				return;
+			}
+			publish({
+				...state,
+				earlierLoading: false,
+				earlierFailure: failure,
+			});
+			return;
+		}
+		if (current !== session || request.signal.aborted) return;
+		session.earlierRequest = undefined;
+		if (!result.data || result.response?.status !== 200) {
+			const failure = responseFailure(result.error, result.response?.status);
+			if (failure.kind === "authorization" || failure.kind === "invalid") {
+				fail(session, failure);
+				return;
+			}
+			publish({
+				...state,
+				earlierLoading: false,
+				earlierFailure: failure,
+			});
+			return;
+		}
+		const parsed = ConversationDetailProjectionV2Schema.safeParse(result.data);
+		if (
+			!parsed.success ||
+			parsed.data.conversation.conversationId !== session.conversationId ||
+			parsed.data.events.some(
+				(event) => event.conversationId !== session.conversationId,
+			)
+		) {
+			fail(session, { kind: "invalid" });
+			return;
+		}
+		const eventWindow = parsed.data.eventWindow;
+		const nextBeforeCursor = eventWindow?.beforeCursor ?? null;
+		publish({
+			...state,
+			events: prependTimelineEvents(state.events, parsed.data.events),
+			hasEarlier: eventWindow?.hasEarlier === true && nextBeforeCursor !== null,
+			beforeCursor: nextBeforeCursor,
+			earlierLoading: false,
+			earlierFailure: null,
+		});
 	}
 
 	async function readStream(session: ReadingSession) {
@@ -380,16 +490,22 @@ export function createConversationTimeline({
 				void readStream(session);
 			}
 		},
+		async loadEarlier() {
+			const session = current;
+			if (session) await loadEarlier(session);
+		},
 		disconnect() {
 			const session = current;
 			if (!session) return;
 			cancelReconnect(session);
 			session.historyRequest?.abort();
 			session.stream?.abort();
+			session.earlierRequest?.abort();
 			publish({
 				...state,
 				status: "disconnected",
 				failure: { kind: "network" },
+				earlierLoading: false,
 			});
 		},
 		rejectRead(failure: ConversationReadFailure) {

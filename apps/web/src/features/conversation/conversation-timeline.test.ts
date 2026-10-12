@@ -1,9 +1,11 @@
 import {
+	ConversationDetailProjectionV2Schema,
 	PersistedConversationEventV2Schema,
 	PilotProtocolErrorV1Schema,
 } from "@agent-infra/contracts/pilot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "../../pilot/generated-v2/client/index.js";
+import type { PersistedConversationEventV2 } from "../../pilot/generated-v2/types.gen.js";
 import {
 	deferred,
 	event,
@@ -46,11 +48,143 @@ function setup(
 	return { reader, requests, snapshots };
 }
 
+function windowedHistory(
+	conversationId: string,
+	events: PersistedConversationEventV2[],
+	eventWindow: { hasEarlier: boolean; beforeCursor: string | null },
+) {
+	return ConversationDetailProjectionV2Schema.parse({
+		...history(conversationId, events),
+		eventWindow,
+	});
+}
+
 afterEach(() => {
 	for (const reader of readers.splice(0)) reader.abort();
 });
 
 describe("Conversation generated-client data consumer", () => {
+	it("loads earlier event pages in order and advances the opaque cursor", async () => {
+		const stream = sse();
+		const recent = windowedHistory("conversation-1", [event(3), event(4)], {
+			hasEarlier: true,
+			beforeCursor: "before-cursor-2",
+		});
+		const earlier = windowedHistory("conversation-1", [event(1), event(2)], {
+			hasEarlier: false,
+			beforeCursor: null,
+		});
+		const { reader, requests } = setup((request) => {
+			if (route(request) === "stream") return stream.response;
+			return Response.json(
+				new URL(request.url).searchParams.has("beforeCursor")
+					? earlier
+					: recent,
+			);
+		});
+		await reader.open("conversation-1");
+		await vi.waitFor(() => expect(reader.getSnapshot().hasEarlier).toBe(true));
+		await reader.loadEarlier();
+		expect(reader.getSnapshot()).toMatchObject({
+			events: [event(1), event(2), event(3), event(4)],
+			hasEarlier: false,
+			beforeCursor: null,
+			earlierLoading: false,
+		});
+		const historyRequests = requests.filter(
+			(request) => route(request) === "history",
+		);
+		expect(
+			new URL(historyRequests[1].url).searchParams.get("beforeCursor"),
+		).toBe("before-cursor-2");
+	});
+
+	it("keeps live SSE events while an earlier page is pending", async () => {
+		const stream = sse();
+		const pending = deferred<Response>();
+		const recent = windowedHistory("conversation-1", [event(3), event(4)], {
+			hasEarlier: true,
+			beforeCursor: "before-cursor-2",
+		});
+		const earlier = windowedHistory("conversation-1", [event(1), event(2)], {
+			hasEarlier: false,
+			beforeCursor: null,
+		});
+		const { reader } = setup((request) => {
+			if (route(request) === "stream") return stream.response;
+			return new URL(request.url).searchParams.has("beforeCursor")
+				? pending.promise
+				: Response.json(recent);
+		});
+		await reader.open("conversation-1");
+		const loading = reader.loadEarlier();
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot().earlierLoading).toBe(true),
+		);
+		stream.send(event(5));
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot().events).toEqual([
+				event(3),
+				event(4),
+				event(5),
+			]),
+		);
+		pending.resolve(Response.json(earlier));
+		await loading;
+		expect(reader.getSnapshot().events).toEqual([
+			event(1),
+			event(2),
+			event(3),
+			event(4),
+			event(5),
+		]);
+	});
+
+	it("drops an earlier page that resolves after switching conversations", async () => {
+		const pending = deferred<Response>();
+		const { reader } = setup((request) => {
+			if (route(request) === "stream") return sse().response;
+			if (new URL(request.url).searchParams.has("beforeCursor"))
+				return pending.promise;
+			return Response.json(
+				windowedHistory(
+					request.url.includes("conversation-2")
+						? "conversation-2"
+						: "conversation-1",
+					[
+						event(
+							3,
+							request.url.includes("conversation-2")
+								? "conversation-2"
+								: "conversation-1",
+						),
+					],
+					{
+						hasEarlier: true,
+						beforeCursor: "before-cursor-2",
+					},
+				),
+			);
+		});
+		await reader.open("conversation-1");
+		const loading = reader.loadEarlier();
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot().earlierLoading).toBe(true),
+		);
+		await reader.open("conversation-2");
+		pending.resolve(
+			Response.json(
+				windowedHistory("conversation-1", [event(1), event(2)], {
+					hasEarlier: false,
+					beforeCursor: null,
+				}),
+			),
+		);
+		await loading;
+		expect(reader.getSnapshot().conversationId).toBe("conversation-2");
+		expect(reader.getSnapshot().events).toEqual([event(3, "conversation-2")]);
+	});
+
 	it("rejects a schema-valid history body from a non-200 response", async () => {
 		const { reader } = setup((request) =>
 			route(request) === "history"
