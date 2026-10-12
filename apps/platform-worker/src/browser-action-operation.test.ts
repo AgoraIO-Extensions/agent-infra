@@ -42,6 +42,8 @@ const binding = {
 	pageRevision: page.pageRevision,
 	sessionGeneration: 3,
 	resourceFence: 4,
+	workloadRevision: 2,
+	imageDigest: `sha256:${"a".repeat(64)}`,
 } as const;
 const attempt: ConversationBrowserActionAttemptV1 = {
 	operationRef: "operation-1",
@@ -218,6 +220,8 @@ function setup(
 		deliveryFence: binding.resourceFence,
 		controllerBinding: binding,
 		capabilityVersion: binding.capabilityVersion,
+		workloadRevision: binding.workloadRevision,
+		imageDigest: binding.imageDigest,
 		page,
 		actionId: "action-1",
 		attempt,
@@ -251,6 +255,8 @@ describe("Browser action operation adapter", () => {
 			pageRevision: pageReference.pageRevision,
 			sessionGeneration: 1,
 			resourceFence: 1,
+			workloadRevision: 2,
+			imageDigest: `sha256:${"a".repeat(64)}`,
 		} as const;
 		const events: ConversationEventUseCaseV1 = {
 			persist: async (command) => ({
@@ -270,6 +276,8 @@ describe("Browser action operation adapter", () => {
 			deliveryFence: binding.resourceFence,
 			controllerBinding: binding,
 			capabilityVersion: binding.capabilityVersion,
+			workloadRevision: binding.workloadRevision,
+			imageDigest: binding.imageDigest,
 			page: pageReference,
 			actionId: "component-action",
 			attempt: {
@@ -323,6 +331,8 @@ describe("Browser action operation adapter", () => {
 		["page", { pageRevision: 3 }],
 		["generation", { sessionGeneration: 4 }],
 		["fence", { resourceFence: 5 }],
+		["workload", { workloadRevision: 3 }],
+		["image", { imageDigest: `sha256:${"b".repeat(64)}` }],
 	] as const)(
 		"fails before browser I/O on a stale %s binding",
 		async (_kind, change) => {
@@ -349,6 +359,16 @@ describe("Browser action operation adapter", () => {
 		["page", { executionBinding: { ...binding, pageRevision: 3 } }],
 		["generation", { executionBinding: { ...binding, sessionGeneration: 2 } }],
 		["fence", { executionBinding: { ...binding, resourceFence: 2 } }],
+		["workload", { executionBinding: { ...binding, workloadRevision: 3 } }],
+		[
+			"image",
+			{
+				executionBinding: {
+					...binding,
+					imageDigest: `sha256:${"b".repeat(64)}`,
+				},
+			},
+		],
 		["operation", { operationRef: "other-operation" }],
 		["attempt", { attemptRef: "other-attempt" }],
 	] as const)(
@@ -440,6 +460,8 @@ describe("Browser action operation adapter", () => {
 								pageRevision: page.pageRevision,
 								sessionGeneration: binding.sessionGeneration,
 								resourceFence: binding.resourceFence,
+								workloadRevision: binding.workloadRevision,
+								imageDigest: binding.imageDigest,
 								sideEffect: true,
 							},
 						}),
