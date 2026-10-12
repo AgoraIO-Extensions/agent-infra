@@ -501,3 +501,53 @@ it("contains persistent receipt failures without an upstream retry or unhandled 
 		await transport.close();
 	}
 });
+
+it("refreshes the OpenCode execution key when a native ACP session is reused", async () => {
+	let admissions = 0;
+	let resolutions = 0;
+	const upstreamCredentials: string[] = [];
+	const transport = await openRuntimeMessagesTransport({
+		client: "opencode",
+		endpoint: "https://model.example.test",
+		authentication: "bearer",
+		model: "claude-opus-5",
+		effort: "high",
+		admit: async () => {
+			admissions++;
+		},
+		resolveCredential: async () => `synthetic-execution-key-${++resolutions}`,
+		fetch: async (_url, init) => {
+			upstreamCredentials.push(
+				new Headers(init?.headers).get("authorization") ?? "",
+			);
+			return new Response(messages(["ok"]), {
+				headers: { "content-type": "text/event-stream" },
+			});
+		},
+	});
+	const request = () =>
+		fetch(`${transport.modelAccess.endpoint}/v1/messages`, {
+			method: "POST",
+			headers: { "x-api-key": transport.modelAccess.credential },
+			body: JSON.stringify({
+				model: "claude-opus-5",
+				output_config: { effort: "high" },
+				thinking: { type: "adaptive" },
+				stream: true,
+				messages: [],
+			}),
+		});
+	try {
+		expect((await request()).ok).toBe(true);
+		transport.beginTurn();
+		expect((await request()).ok).toBe(true);
+		expect(admissions).toBe(2);
+		expect(resolutions).toBe(2);
+		expect(upstreamCredentials).toEqual([
+			"Bearer synthetic-execution-key-1",
+			"Bearer synthetic-execution-key-2",
+		]);
+	} finally {
+		await transport.close();
+	}
+});
