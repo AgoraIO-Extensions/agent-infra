@@ -1,15 +1,25 @@
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { constants as fsConstants } from "node:fs";
 import {
 	lstat,
 	mkdir,
 	mkdtemp,
+	open,
 	readFile,
+	realpath,
 	rm,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import {
+	basename,
+	dirname,
+	isAbsolute,
+	join,
+	relative,
+	resolve,
+} from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import type {
@@ -791,7 +801,7 @@ class TextDeltaFailure extends Error {
 const capabilities: RuntimeCapabilitiesV1 = {
 	modelSelection: true,
 	attachments: true,
-	resultFiles: false,
+	resultFiles: true,
 	connection: false,
 	supplementaryInstruction: false,
 };
@@ -864,6 +874,13 @@ type CodexSubmitTurnCommand = Extract<
 	RuntimeDriverCommand,
 	{ kind: "submit-turn" }
 >;
+
+interface NativeResultFileContext {
+	readonly command: CodexSubmitTurnCommand;
+	readonly bridge: RuntimeFileBridgePortV1;
+}
+
+const maximumNativeResultFileBytes = 10 * 1024 * 1024;
 
 type CodexNativeInputItem =
 	| { readonly type: "text"; readonly text: string }
@@ -3263,6 +3280,39 @@ function agentMessageCompletedNotification(frame: CodexAppServerFrame) {
 	};
 }
 
+function fileChangeCompletedNotification(frame: CodexAppServerFrame) {
+	if (frame.method !== "item/completed") return undefined;
+	const params = frame.params;
+	if (
+		!isPlainRecord(params) ||
+		!nonEmptyString(params.threadId) ||
+		!nonEmptyString(params.turnId) ||
+		!isPlainRecord(params.item)
+	)
+		protocolInvalid();
+	if (params.item.type !== "fileChange") return undefined;
+	if (
+		!nonEmptyString(params.item.id) ||
+		!Array.isArray(params.item.changes) ||
+		!params.item.changes.every(
+			(change: unknown) =>
+				isPlainRecord(change) &&
+				nonEmptyString(change.path) &&
+				typeof change.kind === "string" &&
+				typeof change.diff === "string",
+		) ||
+		(params.item.status !== undefined && typeof params.item.status !== "string")
+	)
+		protocolInvalid();
+	return {
+		threadId: params.threadId,
+		nativeTurnId: params.turnId,
+		nativeItemId: params.item.id,
+		paths: params.item.changes.map((change: { path: string }) => change.path),
+		status: params.item.status,
+	};
+}
+
 function turnCompletedNotification(frame: CodexAppServerFrame) {
 	if (frame.method !== "turn/completed") return undefined;
 	const params = frame.params;
@@ -3687,6 +3737,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private readonly pendingInputCleanups = new Map<string, string>();
 	/** Accepted native Turns own these directories until their terminal receipt. */
 	private readonly retainedInputDirectories = new Map<string, string>();
+	/** Request-local authority for one accepted Turn's native file changes. */
+	private readonly nativeResultFiles = new Map<
+		string,
+		NativeResultFileContext
+	>();
+	private readonly nativeResultFileAttempts = new Set<string>();
 
 	private retainPendingSourceTurn(turnKey: string, requestId: string): void {
 		const requests =
@@ -6014,6 +6070,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		if (command.operationId !== command.executionId) stateInvalid();
 		const text = "text" in command.input ? command.input.text : undefined;
 		if (!text) unavailable();
+		if (fileBridge)
+			this.nativeResultFiles.set(command.executionId, {
+				command,
+				bridge: fileBridge,
+			});
 		const key = operationKey(command);
 		const leaked = this.pendingInputCleanups.get(key);
 		if (leaked) {
@@ -6056,6 +6117,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				revalidateInput,
 				retainInputUntilTerminal,
 			);
+		} catch (error) {
+			this.nativeResultFiles.delete(command.executionId);
+			throw error;
 		} finally {
 			await materialized?.cleanup();
 		}
@@ -7286,6 +7350,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	private async shutdown() {
 		this.closed = true;
+		this.nativeResultFiles.clear();
+		this.nativeResultFileAttempts.clear();
 		this.initialModelStatusPending.clear();
 		await this.drainConnectionRecoveries();
 		for (const client of this.connectionClients.values()) client.close();
@@ -10006,6 +10072,139 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		});
 	}
 
+	private nativeWorkspace(conversationKey: string): string | undefined {
+		return this.recoveryDirectory
+			? join(
+					this.recoveryDirectory,
+					"conversations",
+					conversationKey,
+					"workspace",
+				)
+			: undefined;
+	}
+
+	private async nativeResultFile(
+		conversationKey: string,
+		filePath: string,
+	): Promise<{ name: string; bytes: Buffer } | undefined> {
+		if (!filePath || filePath.includes("\0")) return undefined;
+		const workspace = this.nativeWorkspace(conversationKey);
+		if (!workspace) return undefined;
+		const root = await realpath(workspace).catch(() => undefined);
+		if (!root) return undefined;
+		const candidate = isAbsolute(filePath) ? filePath : resolve(root, filePath);
+		const actual = await realpath(candidate).catch(() => undefined);
+		if (!actual) return undefined;
+		const within = relative(root, actual);
+		if (!within || within.startsWith("..") || isAbsolute(within))
+			return undefined;
+		const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+		const handle = await open(actual, fsConstants.O_RDONLY | noFollow).catch(
+			() => undefined,
+		);
+		if (!handle) return undefined;
+		try {
+			const openedPath = await realpath(actual).catch(() => undefined);
+			if (!openedPath) return undefined;
+			const openedWithin = relative(root, openedPath);
+			if (
+				!openedWithin ||
+				openedWithin.startsWith("..") ||
+				isAbsolute(openedWithin)
+			)
+				return undefined;
+			const metadata = await handle.stat();
+			if (!metadata.isFile()) return undefined;
+			const chunks: Buffer[] = [];
+			const buffer = Buffer.allocUnsafe(64 * 1024);
+			let total = 0;
+			let position = 0;
+			for (;;) {
+				const read = await handle.read(buffer, 0, buffer.length, position);
+				if (read.bytesRead === 0) break;
+				position += read.bytesRead;
+				total += read.bytesRead;
+				if (total > maximumNativeResultFileBytes) return undefined;
+				chunks.push(Buffer.from(buffer.subarray(0, read.bytesRead)));
+			}
+			const bytes = Buffer.concat(chunks, total);
+			try {
+				new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+			} catch {
+				return undefined;
+			}
+			return { name: basename(within), bytes };
+		} finally {
+			await handle.close().catch(() => {});
+		}
+	}
+
+	private async persistNativeFileChange(
+		frame: ReturnType<typeof fileChangeCompletedNotification>,
+		conversationKey: string | undefined,
+	) {
+		if (frame?.paths.length !== 1 || frame?.status === "failed") return;
+		const state = this.readState();
+		const resolved = this.resolveNotificationJournal(
+			state,
+			conversationKey,
+			frame.threadId,
+			frame.nativeTurnId,
+		);
+		if (!resolved?.execution) return;
+		const context = this.nativeResultFiles.get(resolved.execution.executionId);
+		if (
+			!context ||
+			context.command.conversationId !== resolved.session.conversationId
+		)
+			return;
+		const executionId = resolved.execution.executionId;
+		if (this.nativeResultFileAttempts.has(executionId)) return;
+		this.nativeResultFileAttempts.add(executionId);
+		const file = await this.nativeResultFile(
+			codexConversationKey(resolved.session),
+			frame.paths[0] as string,
+		);
+		if (!file) return;
+		const receipt = await context.bridge.writeResult(
+			{
+				name: file.name,
+				mediaType: "text/plain",
+				sizeBytes: file.bytes.byteLength,
+				sha256: createHash("sha256").update(file.bytes).digest("hex"),
+			},
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(file.bytes);
+					controller.close();
+				},
+			}),
+		);
+		const projection = FileProjectionV1Schema.parse(
+			readRuntimeFileResultReceiptV1(receipt).projection,
+		);
+		if (projection.kind !== "result" || projection.status !== "available")
+			return;
+		const streamKey = await this.update((next) => {
+			const target = this.resolveNotificationJournal(
+				next,
+				conversationKey,
+				frame.threadId,
+				frame.nativeTurnId,
+			);
+			if (!target?.execution || target.execution.executionId !== executionId)
+				return undefined;
+			if (target.journal.events.some((event) => event.type === "file"))
+				return undefined;
+			this.appendFileEvent(target.session, target.journal, projection);
+			return this.eventStreamKey(
+				target.nativeSessionRef,
+				target.execution.executionId,
+			);
+		});
+		if (streamKey) this.notifyEventStream(streamKey);
+	}
+
 	private appendOperationFact(
 		session: CodexSession,
 		journal: CodexEventJournal,
@@ -10186,7 +10385,19 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					threadId: completed.threadId,
 					turnId: completed.nativeTurnId,
 				});
+			if (resolvedCompleted?.execution) {
+				this.nativeResultFiles.delete(resolvedCompleted.execution.executionId);
+				this.nativeResultFileAttempts.delete(
+					resolvedCompleted.execution.executionId,
+				);
+			}
 			if (streamKey) this.notifyEventStream(streamKey);
+			return;
+		}
+
+		const fileChange = fileChangeCompletedNotification(frame);
+		if (fileChange) {
+			await this.persistNativeFileChange(fileChange, conversationKey);
 			return;
 		}
 
