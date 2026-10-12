@@ -16,6 +16,7 @@ import {
 	SessionRuntimeDriver,
 	type SessionRuntimeModelOption,
 } from "./session-runtime-driver.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 export interface PiRuntimeDriverOptions {
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
@@ -25,6 +26,7 @@ export interface PiRuntimeDriverOptions {
 	defaultModelOptionId: string;
 	defaultReasoningLevel: string;
 	modelOptions: readonly SessionRuntimeModelOption[];
+	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;

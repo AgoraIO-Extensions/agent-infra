@@ -6,6 +6,7 @@ import { DurableJsonFile } from "./durable-json.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyPiInstallation } from "./pi-installation.js";
 import { PiRuntimeDriver } from "./pi-runtime-driver.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 export interface PiRuntimeOptions {
 	path: string;
@@ -20,6 +21,7 @@ export interface PiRuntimeOptions {
 		credential?: string;
 		authentication: "api-key" | "bearer";
 	}[];
+	skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 }
 
 export async function openPiRuntime(options: PiRuntimeOptions) {
