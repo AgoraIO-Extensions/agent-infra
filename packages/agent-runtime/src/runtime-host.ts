@@ -1491,6 +1491,12 @@ export class RuntimeHost {
 		const expiresAt = Math.min(Date.parse(claims.expiresAt), now() + 30_000);
 		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now())
 			runtimeAuthorizationDenied();
+		const nativeSessionRef =
+			this.options.store.getSessionForQuery(
+				request.hostSessionRef,
+				request,
+				request.deliveryFence,
+			).nativeSessionRef ?? nativeSessionRequired();
 		const deadline = new AbortController();
 		const readSignal = AbortSignal.any([signal, deadline.signal]);
 		const deadlineTimer = setTimeout(
@@ -1508,12 +1514,7 @@ export class RuntimeHost {
 			);
 		};
 		return {
-			nativeSessionRef:
-				this.options.store.getSessionForQuery(
-					request.hostSessionRef,
-					request,
-					request.deliveryFence,
-				).nativeSessionRef ?? nativeSessionRequired(),
+			nativeSessionRef,
 			signal: readSignal,
 			expiresAt,
 			assertCurrent,
