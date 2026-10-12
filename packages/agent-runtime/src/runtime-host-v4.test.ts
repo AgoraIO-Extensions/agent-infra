@@ -410,6 +410,9 @@ it("injects the deployment-owned Browser controller only after Host binding admi
 	});
 	expect(contexts).toHaveLength(1);
 	expect(contexts[0]?.executeTool).toEqual(expect.any(Function));
+	expect(Object.isFrozen(contexts[0])).toBe(true);
+	expect(Object.isFrozen(contexts[0]?.binding)).toBe(true);
+	expect(Object.isFrozen(contexts[0]?.principal)).toBe(true);
 });
 
 it("strips a preconfigured principal when no Browser factory is installed", async () => {

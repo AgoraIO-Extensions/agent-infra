@@ -265,14 +265,14 @@ async function createBrowserExecutionContextForCommand(
 		!isDeepStrictEqual(created.principal, admittedPrincipal)
 	)
 		return undefined;
-	return {
+	return Object.freeze({
 		...created,
 		capabilityVersion: admittedVersion,
 		binding: Object.freeze(structuredClone(admittedBinding)),
 		...(admittedPrincipal
 			? { principal: Object.freeze(structuredClone(admittedPrincipal)) }
 			: {}),
-	};
+	});
 }
 
 type RuntimeOperationResponse =
