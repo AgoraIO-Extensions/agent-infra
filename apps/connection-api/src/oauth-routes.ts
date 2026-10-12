@@ -3129,6 +3129,40 @@ export function createConnectionOAuthApp(
 		);
 
 		app.post(
+			"/api/v1/connection/connections/:connectionId/refresh-permissions",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				if ((await context.req.text()).trim())
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"Permission refresh accepts no caller credential or identity fields",
+					);
+				const session = await currentBrowserApiAccount(context);
+				if (session instanceof Response) return session;
+				const connectionId = context.req.param("connectionId");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.account.refresh-permissions",
+							request: { connectionId },
+							subject: session.account.principalId,
+						},
+						() =>
+							management.service.refreshProviderPermissions(
+								session.account.principalId,
+								connectionId,
+							),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result);
+			},
+		);
+
+		app.post(
 			"/api/v1/connection/connections/:connectionId/upgrade",
 			async (context) => {
 				requireSameOrigin(context.req.raw.headers, options.issuer);

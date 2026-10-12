@@ -167,12 +167,37 @@ integrationTest(
 				confirmationToken: preview.confirmationToken,
 				idempotencyKey: randomUUID(),
 			});
-			// Explicitly resubmitting the same account refreshes scopes, but not the existing Grant.
+			const saved = await repository.getProviderCredentialForUpgrade({
+				principalId,
+				connectionId,
+				allowCurrentRelease: true,
+				refreshPermissions: true,
+			});
+			await expect(
+				repository.getProviderCredentialForUpgrade({
+					principalId: otherId,
+					connectionId,
+					allowCurrentRelease: true,
+					refreshPermissions: true,
+				}),
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
 			const refreshed = await repository.storeProviderCredential({
 				...identity,
 				grantedScopes: ["repo", "admin"],
+				refreshPermissions: true,
+				expectedConnectionId: connectionId,
+				expectedCredentialVersionId: saved.credentialVersionId,
 			});
 			expect(refreshed.connectionId).toBe(connectionId);
+			await expect(
+				repository.storeProviderCredential({
+					...identity,
+					grantedScopes: ["repo", "admin"],
+					refreshPermissions: true,
+					expectedConnectionId: connectionId,
+					expectedCredentialVersionId: saved.credentialVersionId,
+				}),
+			).rejects.toMatchObject({ code: "INVALID_REQUEST" });
 			const expandedPreview =
 				await repository.createCurrentConsumerAuthorizationPreview({
 					principalId,
@@ -184,20 +209,53 @@ integrationTest(
 			);
 			const grantMembers = await sql<
 				{ action_version_id: string }[]
-			>`SELECT member.action_version_id FROM connection_grant_actions member JOIN connection_grants stored_grant ON stored_grant.id=member.grant_id WHERE stored_grant.principal_id=${principalId} AND stored_grant.consumer_id=${consumerId}`;
+			>`SELECT member.action_version_id FROM connection_grant_actions member JOIN connection_authorization_roots root ON root.current_grant_id=member.grant_id WHERE root.principal_id=${principalId} AND root.consumer_id=${consumerId}`;
 			expect(grantMembers.map((item) => item.action_version_id)).toEqual([
 				action.id,
 			]);
+			const unchanged = await repository.resolveDirectIdentity({
+				principalId,
+				consumerId,
+				instanceId,
+			});
+			await repository.verifyInvocation({ ...unchanged, action: action.name });
+			await expect(
+				repository.verifyInvocation({ ...unchanged, action: "optional.admin" }),
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+			const affectedConsumer = `${consumerId}-affected`;
+			await repository.publishConsumerDeclaration({
+				consumer: { id: affectedConsumer, name: "Affected client" },
+				providerReleaseId: catalog.providerReleaseId,
+				actionVersionIds: catalog.actions.map((item) => item.id),
+			});
+			await sql`INSERT INTO connection_consumer_instances(id,consumer_id,kind,auth_subject,status,principal_id) VALUES(${`${instanceId}-affected`},${affectedConsumer},'DEVICE',${`${instanceId}-affected`},'ACTIVE',${principalId})`;
+			const affected =
+				await repository.createCurrentConsumerAuthorizationPreview({
+					principalId,
+					connectionId,
+					consumerId: affectedConsumer,
+					actionVersionIds: [catalog.actions[1]!.id],
+				});
+			await repository.confirmCurrentConsumerAuthorization({
+				principalId,
+				previewId: affected.previewId,
+				confirmationToken: affected.confirmationToken,
+				idempotencyKey: randomUUID(),
+			});
+			await repository.storeProviderCredential(identity);
+			await repository.resolveDirectIdentity({
+				principalId,
+				consumerId,
+				instanceId,
+			});
 			await expect(
 				repository.resolveDirectIdentity({
 					principalId,
-					consumerId,
-					instanceId,
+					consumerId: affectedConsumer,
+					instanceId: `${instanceId}-affected`,
 				}),
 			).rejects.toMatchObject({ code: "FORBIDDEN" });
-
-			// Restore the original fixture scopes before testing the approval switch below.
-			await repository.storeProviderCredential(identity);
 			const reconfirm =
 				await repository.createCurrentConsumerAuthorizationPreview({
 					principalId,
@@ -229,6 +287,28 @@ integrationTest(
 				approvalRequired: true,
 				expectedRevision: "0",
 			});
+			await expect(
+				repository.getProviderCredentialForUpgrade({
+					principalId,
+					connectionId,
+					allowCurrentRelease: true,
+					refreshPermissions: true,
+				}),
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
+			const currentCredential =
+				await repository.getProviderCredentialForUpgrade({
+					principalId,
+					connectionId,
+					allowCurrentRelease: true,
+				});
+			await expect(
+				repository.storeProviderCredential({
+					...identity,
+					refreshPermissions: true,
+					expectedConnectionId: connectionId,
+					expectedCredentialVersionId: currentCredential.credentialVersionId,
+				}),
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
 			await expect(
 				settings.updateProviderAccessSettings({
 					actorPrincipalId: adminId,
@@ -505,4 +585,120 @@ integrationTest(
 		}
 	},
 	15_000,
+);
+
+integrationTest(
+	"detects only new catalog names relative to Consent and stops prompting after fresh confirmation",
+	async () => {
+		if (!databaseUrl) return;
+		await migrateConnectionDatabase(
+			databaseUrl,
+			resolve(import.meta.dirname, "../../../migrations/connection"),
+		);
+		const sql = postgres(databaseUrl);
+		const repo = new PostgresConnectionRepository(
+			databaseUrl,
+			Buffer.alloc(32, 19),
+		);
+		const suffix = randomUUID();
+		const principalId = `delta-owner-${suffix}`;
+		const consumerId = `delta-consumer-${suffix}`;
+		const providerId = `delta-provider-${suffix}`;
+		const template = githubConnectionCatalog.actions[0];
+		if (!template) throw new Error("Missing Action fixture");
+		const oldActions = ["selected", "cancelled"].map((name) => ({
+			...template,
+			id: `${name}-${suffix}`,
+			name: `delta.${name}`,
+			requiredScopes: ["read"],
+		}));
+		const source = {
+			...githubConnectionCatalog,
+			provider: providerId,
+			providerReleaseId: `delta-source-${suffix}`,
+			actions: oldActions,
+		};
+		const added = {
+			...template,
+			id: `new-${suffix}`,
+			name: "delta.new",
+			requiredScopes: ["extra"],
+		};
+		const target = {
+			...source,
+			providerReleaseId: `delta-target-${suffix}`,
+			actions: [
+				...oldActions.map((a) => ({ ...a, id: `${a.id}-target` })),
+				added,
+			],
+		};
+		try {
+			await repo.publishProviderCatalog(source);
+			await sql`INSERT INTO connection_principals(id,display_name) VALUES(${principalId},'Delta owner')`;
+			const identity = {
+				principalId,
+				providerId,
+				providerReleaseId: source.providerReleaseId,
+				externalAccount: `delta-account-${suffix}`,
+				displayName: "Delta",
+				accessToken: "delta-fixture-only",
+				grantedScopes: ["read"],
+			};
+			const { connectionId } = await repo.storeProviderCredential(identity);
+			await repo.publishConsumerDeclaration({
+				consumer: { id: consumerId, name: "Delta client" },
+				providerReleaseId: source.providerReleaseId,
+				actionVersionIds: oldActions.map((a) => a.id),
+			});
+			await sql`INSERT INTO connection_consumer_instances(id,consumer_id,kind,auth_subject,status,principal_id) VALUES(${`delta-instance-${suffix}`},${consumerId},'DEVICE',${`delta-instance-${suffix}`},'ACTIVE',${principalId})`;
+			const preview = await repo.createCurrentConsumerAuthorizationPreview({
+				principalId,
+				connectionId,
+				consumerId,
+				actionVersionIds: [oldActions[0]!.id],
+			});
+			await repo.confirmCurrentConsumerAuthorization({
+				principalId,
+				previewId: preview.previewId,
+				confirmationToken: preview.confirmationToken,
+				idempotencyKey: randomUUID(),
+			});
+			await repo.publishProviderCatalog(target);
+			await repo.publishConsumerDeclaration({
+				consumer: { id: consumerId, name: "Delta client" },
+				providerReleaseId: target.providerReleaseId,
+				actionVersionIds: target.actions.map((a) => a.id),
+			});
+			await repo.storeProviderCredential({
+				...identity,
+				providerReleaseId: target.providerReleaseId,
+				grantedScopes: ["read", "extra"],
+			});
+			const before = await repo.getOverview(principalId);
+			expect(before.grants[0]?.newActionVersionIds).toEqual([added.id]);
+			const selection = await repo.createCurrentConsumerAuthorizationPreview({
+				principalId,
+				connectionId,
+				consumerId,
+				actionVersionIds: [target.actions[0]!.id],
+			});
+			await repo.confirmCurrentConsumerAuthorization({
+				principalId,
+				previewId: selection.previewId,
+				confirmationToken: selection.confirmationToken,
+				idempotencyKey: randomUUID(),
+			});
+			const after = await repo.getOverview(principalId);
+			expect(
+				after.grants.find((g) => g.status === "ACTIVE")?.newActionVersionIds,
+			).toEqual([]);
+			expect(
+				after.grants.find((g) => g.status === "ACTIVE")?.actionVersionIds,
+			).toEqual([target.actions[0]!.id]);
+			await repo.disconnectConnection({ principalId, connectionId });
+		} finally {
+			await repo.close();
+			await sql.end();
+		}
+	},
 );

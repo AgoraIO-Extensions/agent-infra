@@ -1219,7 +1219,7 @@ stateDiagram-v2
 ### 14.3 转换规则
 
 - `ACTIVE/DEGRADED -> DISCONNECTED` 在 Connection Account 事务中提升 execution fence、清 current Credential pointer、创建 revoke attempt并写 audit/outbox。引用 Grant 因 fence 不匹配立即不可执行；其 `PAUSED_CONNECTION` 展示状态由 outbox 消费者幂等更新。
-- 同账号 reauth 只能在 stable account proof、Credential scope 和原 Consent 的授权摘要均未变化时恢复；由于 execution fence 已提升，系统必须基于原 Consent 创建冻结 current revision/fence 的 replacement Grant，并将旧 Grant 标记为 `REPLACED`，不能原地恢复旧 Grant。
+- 同账号 reauth 的 Direct 授权兼容性按 [30.0](#300-provider-upgrade-campaign) 的已选能力规则判断；由于 execution fence 已提升，系统必须基于原 Consent 创建冻结 current revision/fence 的 replacement Grant，并将旧 Grant 标记为 `REPLACED`，不能原地恢复旧 Grant。
 - 不同账号不能改写原 Connection identity；创建或选择另一个 Connection，原 Grant 终结并要求新确认。
 - `DISABLED` 是否永久由 G-05 决定；批准前实现只能停用执行并保留可逆管理状态。
 - ProviderRelease/ActionVersion disable 不改变 Connection 状态，但 effective eligibility 立即为 false。
@@ -1568,8 +1568,8 @@ type ConnectionGrant = {
 Direct Grant 按 Principal + Consumer 查找，Delegated Grant 另按 Actor（如有）查找。Grant 是不可变
 确认版本。切换账号、Action 集变化或任一 frozen revision/fence 变化都创建新 Grant，并在同一事务
 把旧 current 标记为 `REPLACED`、切换 Root pointer、提升 fence、写 audit/outbox。同账号 reconnect
-仅在 stable account proof、Credential scope 和原 Consent 授权摘要均未变化时复用原 Consent 创建
-replacement Grant；否则必须重新 preview/consent。
+的 Direct 授权兼容性按 [30.0](#300-provider-upgrade-campaign) 判断，兼容时复用原 Consent 创建
+replacement Grant；否则必须重新 preview/consent。普通 reconnect 的账号 scope 上限仍按 16.7 与 30.0 执行。
 Grant 状态只允许保持不变，或从 `ACTIVE` 单向进入任一非活动状态；`PAUSED_*`、`REPLACED`、
 `REVOKED` 和 `TERMINATED` 都不能原地恢复为 `ACTIVE`。
 
@@ -2102,7 +2102,7 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 | `connection_access_authorization` | principal、connection、account fingerprint、profile、validity、state/revision | one current per personal Connection；dispatch fence source |
 | `disclaimer_version` / `policy_disclaimer_version` | locale、content digest、state、owner metadata | published immutable；production policy 必须绑定基础版本 |
 
-Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_grant(id, root_id)`，后者建立对应 UNIQUE constraint；`current_grant_id` 可为空。数据库在事务末尾强制 pointer 指向同一 Root 的 Grant，不能依赖应用层检查。ConsumerInstance 只存在于 OAuth session、Invocation、Call 和 audit，不进入 Root/Grant identity。Grant 不能原地恢复为 ACTIVE；同账号 reconnect 仅在 exact account proof、Credential scope 和 Consent 授权摘要未变化时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
+Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_grant(id, root_id)`，后者建立对应 UNIQUE constraint；`current_grant_id` 可为空。数据库在事务末尾强制 pointer 指向同一 Root 的 Grant，不能依赖应用层检查。ConsumerInstance 只存在于 OAuth session、Invocation、Call 和 audit，不进入 Root/Grant identity。Grant 不能原地恢复为 ACTIVE；同账号凭据更新与 reconnect 的 Direct 授权兼容性按 [30.0](#300-provider-upgrade-campaign) 判断，兼容时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
 
 ### 21.6 Invocation 与 Effect Ledger 表
 
@@ -2837,6 +2837,25 @@ attributes 使用低基数 enum/opaque ID；不记录 args、token、external ac
 ## 30. 迁移、升级与回滚
 
 ### 30.0 Provider Upgrade Campaign
+
+个人账号凭据更新与 Consumer 新能力授权分别判定。Direct 授权的原 Grant 同一主体、账号、ProviderRelease、
+共享资格及已选 Action 的精确定义、资源边界、输入约束和效果仍相同，且重新验证的凭据仍覆盖
+这些已选 Action 所需权限时，可创建仅含原已选集合的兼容 Grant，保留原 Consent。不因未选 scope
+增加或 Consumer declaration 增加其他能力要求重新确认；完整 scope 摘要继续用于新预览与执行
+快照绑定，历史 Consent 不改写。无法证明兼容、原所需权限收缩、撤销、账号或能力语义变化时
+只暂停受影响的授权，不把其他客户端的兼容授权一并暂停，也不自动恢复已暂停或撤销的 Grant。
+
+用户可主动要求重新验证已保存凭据。审批关闭的 ACTIVE 个人账号由服务端读取并在内部交给
+现有 Provider verifier，原始 Credential 不返回 Browser、Agent 或日志。写入使用同一 Principal、
+Connection、稳定外部账号、当前 ProviderRelease 与原 CredentialVersion CAS，事务重新核对
+审批配置；配置切换、跨主体、换号、失败或未知状态拒绝提交。只有这个明确操作允许扩大账号
+权限快照，普通兼容升级/重连继续保留原 scope 上限。扩展快照不新增 Consumer Action；凭据失效、
+需要 OAuth 或不支持保存凭据复验时，返回需要用户操作的指引，不能伪造复验成功。
+
+用户新增能力提示比较当前发布目录与原 Consent 预览中绑定的 ProviderRelease 目录，以稳定
+Action 名称识别真正新增项。历史目录和 Consent 必须可追溯；缺少可信基线不把所有未授权项
+称作新增。已取消的旧能力不生成新增提示；新增项默认不选，重新确认后以新的 Consent 基线
+收敛提示。此提示不证明凭据权限、Consumer declaration 或公司审批资格已满足。
 
 发布端必须使用与 runtime 相同的 Provider catalog 生成并校验发布快照。快照只包含 release、
 executor、认证/部署与 Action 授权边界的标识或摘要及可信兼容证据，不包含个人数据或 Credential。

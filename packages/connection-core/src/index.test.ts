@@ -630,16 +630,22 @@ describe("Connection application service", () => {
 		expect(decideReconnectAuthorization({ current, target })).toBe(
 			"REPLACE_GRANT",
 		);
+		expect(
+			decideReconnectAuthorization({
+				current: {
+					...current,
+					credentialScopeDigest: "old-scope-digest",
+					consumerDeclarationId: "previous-declaration",
+				},
+				target,
+			}),
+		).toBe("REPLACE_GRANT");
 		for (const changed of [
 			{ current: { ...current, actorKey: "agent-1" }, target },
 			{ current: { ...current, consentId: null }, target },
 			{ current: { ...current, rootStatus: "TERMINATED" }, target },
 			{
 				current: { ...current, providerReleaseId: "github-release-0" },
-				target,
-			},
-			{
-				current: { ...current, credentialScopeDigest: "old-scope-digest" },
 				target,
 			},
 			{
@@ -2571,3 +2577,109 @@ it("uses the scopes selected atomically when OAuth state is saved", async () => 
 		authorizationUrl: "https://github.example.invalid/authorize",
 	});
 });
+
+it("revalidates saved credentials internally and binds refreshed permissions to the same account and credential version", async () => {
+	const repository: ConnectionRepository = new MemoryRepository();
+	const current = {
+		accessToken: "saved-fixture-only",
+		credentialVersionId: "credential-old",
+		externalAccount: "account-1",
+		providerId: "rehoboam",
+		grantedScopes: ["old"],
+	};
+	let readInput: unknown;
+	let stored: unknown;
+	repository.getProviderCredentialForUpgrade = async (input) => {
+		readInput = input;
+		return current;
+	};
+	repository.storeProviderCredential = async (input) => {
+		stored = input;
+		return { connectionId: "connection-1" };
+	};
+	const service = new ConnectionApplicationService(
+		repository,
+		{ execute: async () => ({}) },
+		undefined,
+		{
+			rehoboam: {
+				providerId: "rehoboam",
+				providerReleaseId: "release-1",
+				validateCredential: async (token) => ({
+					accessToken: token,
+					providerId: "rehoboam",
+					providerReleaseId: "release-1",
+					externalAccount: "account-1",
+					displayName: "Account",
+					grantedScopes: ["old", "new"],
+				}),
+			},
+		},
+	);
+	await expect(
+		service.refreshProviderPermissions("alice", "connection-1"),
+	).resolves.toEqual({ connectionId: "connection-1" });
+	expect(readInput).toEqual({
+		principalId: "alice",
+		connectionId: "connection-1",
+		allowCurrentRelease: true,
+		refreshPermissions: true,
+	});
+	expect(stored).toMatchObject({
+		principalId: "alice",
+		expectedConnectionId: "connection-1",
+		expectedCredentialVersionId: "credential-old",
+		refreshPermissions: true,
+		grantedScopes: ["old", "new"],
+	});
+});
+
+it.each(["account", "token", "invalid", "oauth"])(
+	"does not commit permission refresh when %s proof fails",
+	async (failure) => {
+		const repository: ConnectionRepository = new MemoryRepository();
+		let stored = false;
+		repository.getProviderCredentialForUpgrade = async () => ({
+			accessToken: "saved-fixture-only",
+			credentialVersionId: "credential-old",
+			externalAccount: "account-1",
+			providerId: "rehoboam",
+			grantedScopes: ["old"],
+			...(failure === "oauth" ? { refreshToken: "oauth-fixture-only" } : {}),
+		});
+		repository.storeProviderCredential = async () => {
+			stored = true;
+			return { connectionId: "connection-1" };
+		};
+		const service = new ConnectionApplicationService(
+			repository,
+			{ execute: async () => ({}) },
+			undefined,
+			{
+				rehoboam: {
+					providerId: "rehoboam",
+					providerReleaseId: "release-1",
+					validateCredential: async (token) => {
+						if (failure === "invalid")
+							throw Object.assign(new Error("Invalid fixture"), {
+								providerCredentialInvalid: true,
+							});
+						return {
+							accessToken: failure === "token" ? "changed-fixture" : token,
+							providerId: "rehoboam",
+							providerReleaseId: "release-1",
+							externalAccount:
+								failure === "account" ? "account-2" : "account-1",
+							displayName: "Account",
+							grantedScopes: ["old", "new"],
+						};
+					},
+				},
+			},
+		);
+		await expect(
+			service.refreshProviderPermissions("alice", "connection-1"),
+		).rejects.toBeInstanceOf(ConnectionError);
+		expect(stored).toBe(false);
+	},
+);

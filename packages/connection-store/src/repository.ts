@@ -1991,7 +1991,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				} catch (error) {
 					if (
 						!(error instanceof ConnectionError) ||
-						error.code !== "INVALID_REQUEST"
+						!["INVALID_REQUEST", "FORBIDDEN"].includes(error.code)
 					)
 						throw error;
 					target = undefined;
@@ -4124,6 +4124,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async storeProviderCredential(input: {
+		refreshPermissions?: boolean;
 		accessRequestId?: string;
 		accessToken: string;
 		displayName: string;
@@ -4253,6 +4254,16 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			const previousScopes = (replacementCredential ?? lastCredential)
 				?.scope_json;
 			if (
+				input.refreshPermissions &&
+				(approval.required ||
+					!input.expectedConnectionId ||
+					!input.expectedCredentialVersionId ||
+					existing?.status !== "ACTIVE" ||
+					existing.provider_release_id !== release.id)
+			)
+				forbidden();
+			if (
+				!input.refreshPermissions &&
 				!approval.required &&
 				input.expectedConnectionId &&
 				(!existing ||
@@ -4569,6 +4580,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 	}
 
 	async getProviderCredentialForUpgrade(input: {
+		refreshPermissions?: boolean;
 		allowCurrentRelease?: boolean;
 		connectionId: string;
 		principalId: string;
@@ -4604,6 +4616,18 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND account.status = 'ACTIVE'
 		`;
 		if (!row) forbidden();
+		if (input.refreshPermissions) {
+			const [approval] = await this.sql<
+				{ required: boolean }[]
+			>`SELECT connection_provider_requires_approval(${row.provider_id}) AS required`;
+			if (
+				!approval ||
+				approval.required ||
+				this.publishedProviderReleaseIds.get(row.provider_id) !==
+					row.provider_release_id
+			)
+				forbidden();
+		}
 		if (
 			!input.allowCurrentRelease &&
 			this.publishedProviderReleaseIds.get(row.provider_id) ===
@@ -4780,6 +4804,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				{
 					action_version_ids: unknown;
 					actions: unknown;
+					new_action_version_ids: unknown;
 					connection_id: string;
 					connection_display_name: string;
 					consumer_id: string;
@@ -4817,6 +4842,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 							) FILTER (WHERE action.id IS NOT NULL),
 							'[]'::jsonb
 						) AS actions
+						, COALESCE((SELECT jsonb_agg(current_action.id ORDER BY current_action.id)
+							FROM connection_action_versions current_action
+							WHERE current_action.provider_release_id=account.provider_release_id AND current_action.status='PUBLISHED'
+								AND EXISTS (SELECT 1 FROM connection_provider_releases baseline WHERE baseline.id=preview.source_revisions->>'providerReleaseId' AND baseline.catalog_checksum <> 'legacy:unrecorded' AND baseline.executor_digest <> 'legacy:unrecorded')
+								AND NOT EXISTS (SELECT 1 FROM connection_action_versions old_action WHERE old_action.provider_release_id=preview.source_revisions->>'providerReleaseId' AND old_action.name=current_action.name)), '[]'::jsonb) AS new_action_version_ids
 					FROM connection_grants stored_grant
 					JOIN connection_consumers consumer ON consumer.id = stored_grant.consumer_id
 					JOIN connection_accounts account ON account.id = stored_grant.connection_id
@@ -4830,8 +4860,8 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 						ON action.id = grant_action.action_version_id
 					WHERE stored_grant.principal_id = ${principalId}
 					GROUP BY stored_grant.id, consumer.display_name,
-						account.provider_id, account.display_name, account.external_account,
-						preview.root_fence, consent.confirmed_at
+						account.provider_id, account.provider_release_id, account.display_name, account.external_account,
+						preview.root_fence, preview.source_revisions, consent.confirmed_at
 					-- Root fences order authorization decisions, not random Grant IDs.
 					ORDER BY preview.root_fence DESC NULLS LAST,
 						consent.confirmed_at DESC NULLS LAST,
@@ -4953,6 +4983,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			})),
 			consumers,
 			grants: grants.map((grant) => ({
+				newActionVersionIds: Array.isArray(grant.new_action_version_ids)
+					? grant.new_action_version_ids.filter(
+							(value): value is string => typeof value === "string",
+						)
+					: [],
 				actions: Array.isArray(grant.actions)
 					? grant.actions.filter(
 							(

@@ -35,6 +35,9 @@ const api = vi.hoisted(() => ({
 			revision: "2",
 		}),
 	),
+	refreshProviderPermissions: vi.fn(async (_connectionId: string) => ({
+		connectionId: _connectionId,
+	})),
 	getProviderUpgradeReadiness: vi.fn(
 		async (connectionId: string): Promise<ProviderUpgradeReadiness> => ({
 			connectionId,
@@ -2412,6 +2415,9 @@ it.each(["ACTIVE", "PAUSED_CREDENTIAL"])(
 		];
 		grant.providerId = "rehoboam";
 		grant.status = status;
+		Object.assign(grant, {
+			newActionVersionIds: ["rehoboam.list_channel_publish_requests@v13"],
+		});
 		grant.actionVersionIds = ["rehoboam.get_current_user@v13"];
 		grant.actions = [
 			{
@@ -2429,7 +2435,7 @@ it.each(["ACTIVE", "PAUSED_CREDENTIAL"])(
 		vi.spyOn(window, "confirm").mockReturnValue(true);
 		renderPage(<ConnectionsPage />);
 		await screen.findByRole("button", { name: "更新账号权限" });
-		expect(screen.getByText(/目录另有 1 项未授权能力/)).toBeTruthy();
+		expect(screen.getByText(/目录新增 1 项能力/)).toBeTruthy();
 		expect(
 			(
 				screen.getByRole("button", {
@@ -2439,19 +2445,15 @@ it.each(["ACTIVE", "PAUSED_CREDENTIAL"])(
 		).toBe(false);
 		fireEvent.click(screen.getByRole("button", { name: "更新账号权限" }));
 		expect(window.confirm).toHaveBeenCalledWith(
-			expect.stringContaining("同一外部账号"),
+			expect.stringContaining("有效凭据无需重新输入"),
 		);
-		fireEvent.change(await screen.findByLabelText("Rehoboam PAT"), {
-			target: { value: "fixture-refresh-pat" },
-		});
-		fireEvent.click(screen.getByRole("button", { name: "连接" }));
 		await waitFor(() =>
-			expect(api.connectProviderCredential).toHaveBeenCalledWith({
-				providerId: "rehoboam",
-				accessToken: "fixture-refresh-pat",
-				accessRequestId: undefined,
-			}),
+			expect(api.refreshProviderPermissions).toHaveBeenCalledWith(
+				"connection-personal",
+			),
 		);
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
+		expect(screen.queryByLabelText("Rehoboam PAT")).toBeNull();
 		expect(api.reauthorizeProviderConnection).not.toHaveBeenCalled();
 		expect(api.confirmAuthorization).not.toHaveBeenCalled();
 		expect(api.submitConnectionAccessRequest).not.toHaveBeenCalled();
@@ -2507,3 +2509,56 @@ it("does not surface an older paused grant when a newer decision revoked it", as
 	await screen.findByRole("button", { name: /GitHub 已连接/ });
 	expect(screen.queryByRole("button", { name: "管理 Codex 能力" })).toBeNull();
 });
+
+it.each(["cancel", "invalid", "unavailable"])(
+	"only requests interactive credentials when saved permission refresh needs them: %s",
+	async (mode) => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=rehoboam",
+		);
+		const overview = await api.getConnections();
+		const account = overview.overview.connections[1];
+		if (!account) throw new Error("Missing account fixture");
+		account.providerId = "rehoboam";
+		account.requiresReconnect = false;
+		api.getConnections.mockResolvedValueOnce(overview);
+		api.listProviderAccessSettings.mockResolvedValueOnce({
+			settings: [
+				{ providerId: "rehoboam", approvalRequired: false, revision: "1" },
+			],
+		});
+		vi.spyOn(window, "confirm").mockReturnValue(mode !== "cancel");
+		if (mode !== "cancel")
+			api.refreshProviderPermissions.mockRejectedValueOnce(
+				new ConnectionApiError({
+					code:
+						mode === "invalid"
+							? "PROVIDER_REAUTHORIZATION_REQUIRED"
+							: "PROVIDER_UNAVAILABLE",
+					messageKey: "connection.error.provider_unavailable",
+					retryable: false,
+					traceId: "fixture-refresh",
+				}),
+			);
+		renderPage(<ConnectionsPage />);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "更新账号权限" }),
+		);
+		if (mode === "cancel") {
+			expect(api.refreshProviderPermissions).not.toHaveBeenCalled();
+		} else {
+			await waitFor(() =>
+				expect(api.refreshProviderPermissions).toHaveBeenCalledOnce(),
+			);
+			if (mode === "invalid")
+				expect(await screen.findByLabelText("Rehoboam PAT")).toBeTruthy();
+			else await screen.findByRole("alert");
+		}
+		if (mode !== "invalid")
+			expect(screen.queryByLabelText("Rehoboam PAT")).toBeNull();
+		expect(api.connectProviderCredential).not.toHaveBeenCalled();
+		expect(api.confirmAuthorization).not.toHaveBeenCalled();
+	},
+);
