@@ -189,7 +189,13 @@ export function createConversationTimeline({
 		const request = new AbortController();
 		session.historyRequest = request;
 		session.needsHistory = true;
-		publish({ ...state, status: "loading", failure: null });
+		publish({
+			...state,
+			status: "loading",
+			failure: null,
+			earlierLoading: false,
+			earlierFailure: null,
+		});
 		let result: Awaited<ReturnType<typeof getConversationV2>>;
 		try {
 			result = await getConversationV2({

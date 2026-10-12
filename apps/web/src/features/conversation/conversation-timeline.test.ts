@@ -185,6 +185,35 @@ describe("Conversation generated-client data consumer", () => {
 		expect(reader.getSnapshot().events).toEqual([event(3, "conversation-2")]);
 	});
 
+	it("clears earlier loading when a refresh cancels the page request", async () => {
+		const pending = deferred<Response>();
+		let historyReads = 0;
+		const recent = windowedHistory("conversation-1", [event(3)], {
+			hasEarlier: true,
+			beforeCursor: "before-cursor-2",
+		});
+		const { reader } = setup((request) => {
+			if (route(request) === "stream") return sse().response;
+			if (new URL(request.url).searchParams.has("beforeCursor"))
+				return pending.promise;
+			return ++historyReads === 1
+				? Response.json(recent)
+				: Response.json(recent, { status: 503 });
+		});
+		await reader.open("conversation-1");
+		const loading = reader.loadEarlier();
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot().earlierLoading).toBe(true),
+		);
+		await reader.refresh();
+		pending.resolve(Response.json(recent));
+		await loading;
+		expect(reader.getSnapshot()).toMatchObject({
+			status: "unavailable",
+			earlierLoading: false,
+		});
+	});
+
 	it("rejects a schema-valid history body from a non-200 response", async () => {
 		const { reader } = setup((request) =>
 			route(request) === "history"
