@@ -93,6 +93,7 @@ export function createCustomAgentAuthGatewayV1(options: {
 			const forwarded = new Request(target, {
 				method,
 				headers,
+				redirect: "error",
 				body:
 					method === "GET" || method === "HEAD"
 						? undefined
