@@ -141,9 +141,10 @@ test("RuntimeHost image normalizes post-install global directory timestamps", as
 		"apps/agent-runtime-host/Dockerfile",
 		"utf8",
 	);
-	const runtimeStage = /^FROM .* AS runtime\n([\s\S]*?)(?=^FROM |$(?![\s\S]))/m.exec(
-		dockerfile,
-	)?.[1];
+	const runtimeStage =
+		/^FROM .* AS runtime\n([\s\S]*?)(?=^FROM |$(?![\s\S]))/m.exec(
+			dockerfile,
+		)?.[1];
 	assert.ok(runtimeStage, "RuntimeHost production stage is missing");
 	assert.match(runtimeStage, /^ARG SOURCE_DATE_EPOCH=0$/m);
 	const normalizers = runtimeStage.match(
