@@ -525,9 +525,35 @@ describe("durable Workload reconciliation", () => {
 			expect(f.runtime.closeRoute).toHaveBeenCalledOnce();
 			expect(f.state?.phase).toBe("closing");
 		});
-		it("still fails a candidate whose verification probe does not complete", async () => {
+		it("retries a verification probe that does not complete within the attempt budget", async () => {
 			const f = fixture();
 			vi.mocked(f.runtime.observe).mockResolvedValue("unreachable");
+			await f.tick(6);
+			expect(f.state).toMatchObject({ phase: "observing", attempts: 2 });
+			await f.tick();
+			expect(f.state).toMatchObject({
+				phase: "cleaning",
+				failureCode: "health_check_failed",
+			});
+		});
+		it("verifies a candidate once its probe completes again", async () => {
+			const f = fixture();
+			vi.mocked(f.runtime.observe)
+				.mockResolvedValueOnce("unreachable")
+				.mockResolvedValueOnce("healthy")
+				.mockResolvedValueOnce("unreachable");
+			await f.tick(5);
+			expect(f.state).toMatchObject({ phase: "observing", attempts: 1 });
+			await f.tick(2);
+			expect(f.state).toMatchObject({ phase: "promoting", attempts: 0 });
+			await f.tick();
+			expect(f.state).toMatchObject({ phase: "promoting", attempts: 1 });
+			await f.tick();
+			expect(f.state).toMatchObject({ phase: "ready", attempts: 0 });
+		});
+		it("still fails a candidate whose probe answers unhealthy", async () => {
+			const f = fixture();
+			vi.mocked(f.runtime.observe).mockResolvedValue("unhealthy");
 			await f.tick(5);
 			expect(f.state).toMatchObject({
 				phase: "cleaning",

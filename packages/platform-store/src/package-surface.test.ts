@@ -86,6 +86,7 @@ describe("platform-store package surface", () => {
 			"SecretActivationStoreError",
 			"SecretKeyRotationStoreError",
 			"SkillHubAgentBindingAdmissionErrorV1",
+			"SkillHubAppliedReceiptErrorV1",
 			"TaskAuthorizationStoreError",
 			"TaskCurrentAuthorityUnavailableErrorV1",
 			"conversationEventWakeChannelV1",

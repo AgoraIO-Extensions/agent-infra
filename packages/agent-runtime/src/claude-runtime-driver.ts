@@ -16,6 +16,7 @@ import {
 	RuntimeStatusV1Schema,
 } from "@agent-infra/contracts/runtime";
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import { createClaudeBrowserMcpServer } from "./claude-browser-mcp.js";
 import { verifyClaudeInstallation } from "./claude-installation.js";
 import { claudeQuery } from "./claude-query.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
@@ -135,6 +136,7 @@ interface Handle {
 	native: ReturnType<typeof claudeQuery>;
 	transport: Awaited<ReturnType<typeof openRuntimeMessagesTransport>>;
 	standardMcp?: StandardMcpClient;
+	abortController: AbortController;
 	pump: Promise<void>;
 	retiring: boolean;
 }
@@ -851,7 +853,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					return result(command, binding.ref, unknownResult);
 			}
 			if (command.kind === "submit-turn")
-				return this.submit(file, command, context?.fileBridge);
+				return this.submit(
+					file,
+					command,
+					context?.fileBridge,
+					context?.browser,
+				);
 			if (command.kind === "supplement")
 				return this.resolve(file, command, { outcome: "busy" });
 			const turn = file
@@ -906,9 +913,17 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		file: DurableJsonFile<Session>,
 		command: Submit,
 		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
+		browser?: RuntimeDriverExecutionContextV1["browser"],
 	) {
 		const before = file.read();
 		const ref = before.binding.ref;
+		if (
+			browser &&
+			(browser.binding.agentId !== command.agentId ||
+				browser.binding.conversationId !== command.conversationId ||
+				browser.binding.sessionGeneration !== command.sessionGeneration)
+		)
+			unavailable();
 		if (before.cancelled) unavailable();
 		const selection =
 			command.schemaVersion === 2
@@ -1098,6 +1113,13 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		let standardMcpServer:
 			| ReturnType<typeof createClaudeStandardMcpServer>
 			| undefined;
+		const browserAbortController = new AbortController();
+		const browserMcpServer = createClaudeBrowserMcpServer({
+			capability: this.options.browserCapability,
+			context: browser,
+			executionId: command.executionId,
+			signal: browserAbortController.signal,
+		});
 		let handle: Handle | undefined;
 		try {
 			if (this.options.standardConnectionClient) {
@@ -1193,6 +1215,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			}
 		} catch {
 			if (standardMcp) await standardMcp.close().catch(() => {});
+			browserAbortController.abort();
 			await transport.close();
 			return result(command, ref, unknownResult);
 		}
@@ -1203,6 +1226,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			fileBridge?.revalidate();
 		} catch (error) {
 			if (standardMcp) await standardMcp.close().catch(() => {});
+			browserAbortController.abort();
 			await transport.close();
 			throw error;
 		}
@@ -1227,9 +1251,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						join(directory, "memory"),
 					),
 					strictMcpConfig: true,
-					mcpServers: standardMcpServer
-						? { connection: standardMcpServer }
-						: {},
+					mcpServers: {
+						...(standardMcpServer ? { connection: standardMcpServer } : {}),
+						...(browserMcpServer ? { browser: browserMcpServer } : {}),
+					},
 					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories. Read MEMORY.md there for saved user preferences when present.`,
 					model: option.model,
 					effort: selection.reasoningLevel as EffortLevel,
@@ -1253,6 +1278,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			);
 		} catch {
 			if (standardMcp) await standardMcp.close().catch(() => {});
+			browserAbortController.abort();
 			await transport.close();
 			return result(command, ref, unknownResult);
 		}
@@ -1260,6 +1286,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			native,
 			transport,
 			...(standardMcp ? { standardMcp } : {}),
+			abortController: browserAbortController,
 			pump: Promise.resolve(),
 			retiring: false,
 		};
@@ -1401,6 +1428,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						transport.failure() ?? "unknown",
 					);
 			} finally {
+				browserAbortController.abort();
 				await transport.close();
 				await native.close();
 			}
@@ -1502,6 +1530,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const handle = this.handles.get(ref);
 		if (!handle) return;
 		handle.retiring = true;
+		handle.abortController.abort();
 		if (handle.standardMcp) await handle.standardMcp.close();
 		await handle.transport.close();
 		await handle.native.close();
