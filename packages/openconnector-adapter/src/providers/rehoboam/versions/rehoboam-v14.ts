@@ -173,9 +173,25 @@ export class RehoboamV14Adapter {
 			});
 		let envelope: Record<string, unknown>;
 		try {
-			const raw = await response.text();
-			if (Buffer.byteLength(raw) > 65536) throw new Error("size");
-			envelope = JSON.parse(raw);
+			if (!response.body) throw new Error("empty body");
+			const reader = response.body.getReader();
+			const chunks: Uint8Array[] = [];
+			let size = 0;
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					size += value.byteLength;
+					if (size > 65536) {
+						await reader.cancel();
+						throw new Error("size");
+					}
+					chunks.push(value);
+				}
+			} finally {
+				reader.releaseLock();
+			}
+			envelope = JSON.parse(Buffer.concat(chunks, size).toString("utf8"));
 			if (!envelope || typeof envelope !== "object" || Array.isArray(envelope))
 				throw new Error("shape");
 		} catch {
@@ -189,7 +205,7 @@ export class RehoboamV14Adapter {
 			throw failure("Repair record was not confirmed", {
 				providerStatus: response.status,
 				providerCode: error?.code,
-				...(response.status < 500
+				...(response.status < 500 && response.status !== 408
 					? { providerSubmissionOutcome: "rejected" }
 					: { submissionUncertain: true }),
 				...(response.status === 401 ? { providerCredentialInvalid: true } : {}),

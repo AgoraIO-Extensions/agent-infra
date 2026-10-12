@@ -122,6 +122,7 @@ test("repair submission distinguishes conflicts from uncertain outcomes and neve
 			},
 		],
 		[500, { submissionUncertain: true }],
+		[408, { submissionUncertain: true }],
 	] as const) {
 		let calls = 0;
 		const adapter = new RehoboamV14Adapter(async () => {
@@ -144,4 +145,63 @@ test("repair submission distinguishes conflicts from uncertain outcomes and neve
 		adapter.execute({ action: repairAction.name, credential, input: data }),
 		{ submissionUncertain: true },
 	);
+});
+
+test("repair reads at most 64 KiB and cancels overflow before buffering the rest", async () => {
+	let pulled = 0;
+	let cancelled = false;
+	const stream = new ReadableStream<Uint8Array>(
+		{
+			pull(controller) {
+				pulled++;
+				controller.enqueue(new Uint8Array(pulled === 1 ? 32768 : 32769));
+			},
+			cancel() {
+				cancelled = true;
+			},
+		},
+		{ highWaterMark: 0 },
+	);
+	const response = new Response(stream);
+	response.text = async () => {
+		throw new Error("Unbounded text read forbidden");
+	};
+	const adapter = new RehoboamV14Adapter(async () => response, "gateway");
+	await assert.rejects(
+		adapter.execute({ action: repairAction.name, credential, input: data }),
+		{ submissionUncertain: true },
+	);
+	assert.equal(pulled, 2);
+	assert.equal(cancelled, true);
+	assert.equal(stream.locked, false);
+});
+
+test("repair accepts an exact 64 KiB JSON response with split UTF-8 chunks", async () => {
+	const base = JSON.stringify({ data: { note: "修复", padding: "" } });
+	const bytes = Buffer.from(
+		JSON.stringify({
+			data: {
+				note: "修复",
+				padding: "x".repeat(65536 - Buffer.byteLength(base)),
+			},
+		}),
+	);
+	assert.equal(bytes.byteLength, 65536);
+	const split = bytes.indexOf(Buffer.from("修")) + 1;
+	const response = new Response(
+		new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(bytes.subarray(0, split));
+				controller.enqueue(bytes.subarray(split));
+				controller.close();
+			},
+		}),
+	);
+	const adapter = new RehoboamV14Adapter(async () => response, "gateway");
+	const result = await adapter.execute({
+		action: repairAction.name,
+		credential,
+		input: data,
+	});
+	assert.equal(result.note, "修复");
 });

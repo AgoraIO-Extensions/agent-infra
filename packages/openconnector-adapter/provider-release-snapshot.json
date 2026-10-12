@@ -1334,7 +1334,7 @@
 		{
 			"provider": "rehoboam",
 			"providerReleaseId": "rehoboam-connection-v14",
-			"executorDigest": "sha256:4ab92277b589c5b2d79685287dcdfc044ec0f0ecba90b182ddf2b40bcbadd84d",
+			"executorDigest": "sha256:58720b6a6f2dd6854d893edf16178a2a9d04a4c0ef1bcaeab430dffb527ea5ae",
 			"sourceCommit": "connection-rehoboam-v14",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:d6e6d6e0f7399fc140d027982bcdd0dcd82bcf4447b01be20f26960ff498d844",
