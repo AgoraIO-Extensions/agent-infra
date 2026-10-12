@@ -103,7 +103,7 @@ describe("standard contract artifacts", () => {
 	it("publishes the additive V2 fan-out response contract", () => {
 		const artifacts = JSON.parse(generate());
 		const operation =
-			artifacts.standardTemplateReleaseOpenapi.paths[
+			artifacts.standardTemplateReleaseOpenapiV2.paths[
 				"/internal/ops/standard-template-releases/{releaseId}/apply-all"
 			].post;
 		expect(operation.operationId).toBe("applyStandardTemplateReleaseV2");

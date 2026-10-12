@@ -75,6 +75,9 @@ export const standardTemplateReleaseOpenApiPathsV1 = {
 			},
 		},
 	},
+};
+
+export const standardTemplateReleaseOpenApiPathsV2 = {
 	"/internal/ops/standard-template-releases/{releaseId}/apply-all": {
 		post: {
 			operationId: "applyStandardTemplateReleaseV2",

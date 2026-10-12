@@ -35,6 +35,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/openapi/runtime-host.v3.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-readiness.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/standard-template-release.v1.openapi.json",
+	"packages/contracts/artifacts/openapi/standard-template-release.v2.openapi.json",
 ];
 const gitArtifactMaxBufferBytes = 16 * 1024 * 1024;
 
