@@ -37,7 +37,8 @@ function jsonSchemaType(value: unknown): string {
 	return type;
 }
 
-function toZod(value: unknown): ZodTypeAny {
+/** Convert the bounded JSON Schema projections used by Claude MCP adapters. */
+export function toZod(value: unknown): ZodTypeAny {
 	const input = schema(value);
 	const annotations = new Set([
 		"$schema",
