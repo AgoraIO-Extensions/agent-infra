@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { openWecomQrAuthorizationV1 } from "./wecom-qr-authorization.js";
 
 function harness() {
@@ -28,6 +28,10 @@ const base = {
 	expiresAt: new Date(Date.now() + 60_000).toISOString(),
 	timeoutMs: 1_000,
 };
+
+afterEach(() => {
+	vi.useRealTimers();
+});
 
 it("accepts one exact popup source/origin/state result", async () => {
 	const h = harness();
@@ -114,4 +118,56 @@ it("settles promptly when the popup is closed", async () => {
 	});
 	popup.closed = true;
 	await expect(promise).rejects.toThrow("WECom_QR_CANCELLED");
+});
+
+it("rejects a queued result after the popup was closed", async () => {
+	const h = harness();
+	const popup = { closed: false, close: () => {} };
+	const promise = openWecomQrAuthorizationV1({
+		...base,
+		open: () => popup,
+		addEventListener: h.addEventListener,
+		removeEventListener: h.removeEventListener,
+	});
+	popup.closed = true;
+	h.post(
+		new MessageEvent("message", {
+			origin: base.authOrigin,
+			source: popup as unknown as MessageEventSource,
+			data: {
+				source: base.source,
+				state: base.state,
+				botId: "bot-closed",
+				secret: "secret-closed",
+			},
+		}),
+	);
+	await expect(promise).rejects.toThrow("WECom_QR_CANCELLED");
+});
+
+it("rejects a queued result after the popup wait deadline", async () => {
+	vi.useFakeTimers();
+	const h = harness();
+	const popup = { closed: false, close: () => {} };
+	const promise = openWecomQrAuthorizationV1({
+		...base,
+		timeoutMs: 1_000,
+		open: () => popup,
+		addEventListener: h.addEventListener,
+		removeEventListener: h.removeEventListener,
+	});
+	vi.setSystemTime(Date.now() + 1_001);
+	h.post(
+		new MessageEvent("message", {
+			origin: base.authOrigin,
+			source: popup as unknown as MessageEventSource,
+			data: {
+				source: base.source,
+				state: base.state,
+				botId: "bot-late",
+				secret: "secret-late",
+			},
+		}),
+	);
+	await expect(promise).rejects.toThrow("WECom_QR_TIMEOUT");
 });

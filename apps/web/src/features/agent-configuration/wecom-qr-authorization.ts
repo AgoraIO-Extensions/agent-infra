@@ -61,7 +61,8 @@ export function openWecomQrAuthorizationV1(input: {
 	) => void;
 }): Promise<WecomQrAuthorizationResultV1> {
 	const expiresAt = Date.parse(input.expiresAt);
-	const remainingMs = expiresAt - Date.now();
+	const startedAt = Date.now();
+	const remainingMs = expiresAt - startedAt;
 	if (!Number.isFinite(expiresAt) || remainingMs <= 0)
 		return Promise.reject(new Error("WECom_QR_EXPIRED"));
 	const timeoutMs = Math.min(input.timeoutMs ?? 120_000, remainingMs);
@@ -71,6 +72,7 @@ export function openWecomQrAuthorizationV1(input: {
 		timeoutMs > 600_000
 	)
 		return Promise.reject(new Error("WECom_QR_TIMEOUT_INVALID"));
+	const waitDeadline = startedAt + timeoutMs;
 	const open = input.open ?? ((url) => window.open(url, "wecom-qr"));
 	const add =
 		input.addEventListener ??
@@ -113,7 +115,10 @@ export function openWecomQrAuthorizationV1(input: {
 		};
 		const onAbort = () => finish(new Error("WECom_QR_CANCELLED"));
 		const onMessage = (event: MessageEvent<unknown>) => {
-			if (Date.now() >= expiresAt) return finish(new Error("WECom_QR_EXPIRED"));
+			const now = Date.now();
+			if (now >= expiresAt) return finish(new Error("WECom_QR_EXPIRED"));
+			if (now >= waitDeadline) return finish(new Error("WECom_QR_TIMEOUT"));
+			if (popup.closed) return finish(new Error("WECom_QR_CANCELLED"));
 			if (event.source !== popup || event.origin !== input.authOrigin) return;
 			const result = parseResult(event.data, input.source, input.state);
 			if (!result) return finish(new Error("WECom_QR_RESULT_INVALID"));
