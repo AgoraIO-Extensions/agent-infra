@@ -796,6 +796,937 @@
         },
         "summary": "Apply one deployment-bound standard template release"
       }
+    },
+    "/internal/ops/standard-template-releases/{releaseId}/apply-all": {
+      "post": {
+        "description": "Discovers all current Agents bound to the deployment-owned template and applies each with its own configuration CAS and idempotency record. A partial response identifies failed Agents for retry; it does not establish Workload readiness.",
+        "operationId": "applyStandardTemplateReleaseV2",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "releaseId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9._~-]{1,128}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "schemaVersion": {
+                    "const": 2,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "schemaVersion"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "releaseId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 2,
+                      "type": "number"
+                    },
+                    "status": {
+                      "enum": [
+                        "completed",
+                        "partial"
+                      ],
+                      "type": "string"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "configurationRevision": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "errorCode": {
+                            "anyOf": [
+                              {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "enum": [
+                              "applied",
+                              "failed"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "agentId",
+                          "status",
+                          "configurationRevision",
+                          "errorCode"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    },
+                    "templateId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "releaseId",
+                    "templateId",
+                    "status",
+                    "targets"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "All discovered Agent revisions accepted"
+          },
+          "207": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "releaseId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 2,
+                      "type": "number"
+                    },
+                    "status": {
+                      "enum": [
+                        "completed",
+                        "partial"
+                      ],
+                      "type": "string"
+                    },
+                    "targets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "agentId": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "configurationRevision": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "errorCode": {
+                            "anyOf": [
+                              {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "enum": [
+                              "applied",
+                              "failed"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "agentId",
+                          "status",
+                          "configurationRevision",
+                          "errorCode"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    },
+                    "templateId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "releaseId",
+                    "templateId",
+                    "status",
+                    "targets"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Some Agent revisions require retry"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Publication rejected or unavailable"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Publication rejected or unavailable"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Publication rejected or unavailable"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Publication rejected or unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Publication rejected or unavailable"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Publication rejected or unavailable"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "AGENT_BUSY",
+                            "AGENT_STARTING",
+                            "AGENT_UPDATING",
+                            "RUNTIME_UNAVAILABLE",
+                            "CONNECTION_UNAVAILABLE",
+                            "PROVIDER_RATE_LIMITED",
+                            "DEPENDENCY_UNAVAILABLE",
+                            "INTERNAL_ERROR"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "INVALID_REQUEST",
+                            "AUTHENTICATION_REQUIRED",
+                            "RESOURCE_UNAVAILABLE",
+                            "AUTHORIZATION_REVOKED",
+                            "CONVERSATION_UNAVAILABLE",
+                            "EXECUTION_FAILED",
+                            "MODEL_SELECTION_INVALID",
+                            "CONNECTION_AUTHORIZATION_REQUIRED",
+                            "ACTION_UNAVAILABLE",
+                            "PROVIDER_REJECTED",
+                            "DELEGATED_RESULT_REJECTED",
+                            "ORIGINAL_RESPONSE_NOT_STARTED",
+                            "ORIGINAL_RESPONSE_ALREADY_FINISHED"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "retryable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "traceId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "message",
+                        "traceId",
+                        "code",
+                        "retryable"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Publication rejected or unavailable"
+          }
+        },
+        "summary": "Apply a standard template release to associated Agents"
+      }
     }
   }
 }

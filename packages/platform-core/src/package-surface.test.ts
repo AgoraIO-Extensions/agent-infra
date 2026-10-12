@@ -129,6 +129,7 @@ describe("platform-core package surface", () => {
 			"decideSessionSandboxObservationV1",
 			"decodeAgentConfigurationRecordV3",
 			"executeConversationBrowserActionV1",
+			"fanOutStandardTemplateUpgradeV2",
 			"immutableSecretNameV1",
 			"installSkillHubVersionV1",
 			"isAdministratorAgentReadAllowedV1",

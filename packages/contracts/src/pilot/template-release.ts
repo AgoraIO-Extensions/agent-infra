@@ -12,6 +12,25 @@ export const StandardTemplateReleaseApplyResponseV1Schema = z.strictObject({
 	configurationRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 	changedFields: z.array(z.literal("source")).length(1),
 });
+export const StandardTemplateReleaseApplyAllRequestV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+});
+export const StandardTemplateReleaseApplyAllResponseV2Schema = z.strictObject({
+	schemaVersion: z.literal(2),
+	releaseId: OpaqueIdV1Schema,
+	templateId: OpaqueIdV1Schema,
+	status: z.enum(["completed", "partial"]),
+	targets: z
+		.array(
+			z.strictObject({
+				agentId: OpaqueIdV1Schema,
+				status: z.enum(["applied", "failed"]),
+				configurationRevision: z.number().int().min(1).nullable(),
+				errorCode: z.string().min(1).max(128).nullable(),
+			}),
+		)
+		.max(256),
+});
 export const standardTemplateReleaseOpenApiPathsV1 = {
 	"/internal/ops/standard-template-releases/{releaseId}/apply": {
 		post: {
@@ -39,6 +58,57 @@ export const standardTemplateReleaseOpenApiPathsV1 = {
 					content: {
 						"application/json": {
 							schema: StandardTemplateReleaseApplyResponseV1Schema,
+						},
+					},
+				},
+				...Object.fromEntries(
+					[400, 401, 403, 404, 409, 500, 503].map((status) => [
+						String(status),
+						{
+							description: "Publication rejected or unavailable",
+							content: {
+								"application/json": { schema: PilotProtocolErrorV1Schema },
+							},
+						},
+					]),
+				),
+			},
+		},
+	},
+	"/internal/ops/standard-template-releases/{releaseId}/apply-all": {
+		post: {
+			operationId: "applyStandardTemplateReleaseV2",
+			summary: "Apply a standard template release to associated Agents",
+			description:
+				"Discovers all current Agents bound to the deployment-owned template and applies each with its own configuration CAS and idempotency record. A partial response identifies failed Agents for retry; it does not establish Workload readiness.",
+			requestParams: {
+				path: z.object({
+					releaseId: z.string().regex(/^[A-Za-z0-9._~-]{1,128}$/),
+				}),
+				header: z.object({ "Idempotency-Key": IdempotencyKeyV1Schema }),
+			},
+			requestBody: {
+				required: true,
+				content: {
+					"application/json": {
+						schema: StandardTemplateReleaseApplyAllRequestV2Schema,
+					},
+				},
+			},
+			responses: {
+				"202": {
+					description: "All discovered Agent revisions accepted",
+					content: {
+						"application/json": {
+							schema: StandardTemplateReleaseApplyAllResponseV2Schema,
+						},
+					},
+				},
+				"207": {
+					description: "Some Agent revisions require retry",
+					content: {
+						"application/json": {
+							schema: StandardTemplateReleaseApplyAllResponseV2Schema,
 						},
 					},
 				},

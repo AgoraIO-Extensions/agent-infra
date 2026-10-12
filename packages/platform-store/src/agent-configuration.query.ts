@@ -11,6 +11,7 @@ import {
 	isAgentOwnerV1,
 	isAgentRuntimePresentationVisibleV1,
 	isPersonalApiAgentMetadataReadAllowedV1,
+	type StandardTemplateReleaseTargetV1,
 	snapshotAgentRuntimePresentationExpectationV1,
 } from "@agent-infra/platform-core";
 import { and, eq, isNull } from "drizzle-orm";
@@ -191,6 +192,76 @@ export class PostgresAgentConfigurationQueryV1 {
 				source: configuration.source,
 			};
 		} catch {
+			throw new AgentConfigurationStoreError();
+		}
+	}
+
+	/** Enumerates the current standard-template facts for a deployment fan-out.
+	 * The returned targets bind each Agent's current revision and old digest;
+	 * the caller must still perform the per-Agent CAS through Core/Transaction.
+	 */
+	async listStandardTemplateReleaseTargets(input: {
+		readonly releaseId: string;
+		readonly templateId: string;
+		readonly expectedImageDigest: string;
+		readonly targetImageDigest: string;
+	}): Promise<readonly StandardTemplateReleaseTargetV1[]> {
+		try {
+			if (
+				!validateText(input.releaseId) ||
+				!validateText(input.templateId) ||
+				!/^sha256:[a-f0-9]{64}$/.test(input.expectedImageDigest) ||
+				!/^sha256:[a-f0-9]{64}$/.test(input.targetImageDigest) ||
+				input.expectedImageDigest === input.targetImageDigest
+			)
+				throw new AgentConfigurationStoreError();
+			const rows = await this.#database
+				.select({
+					agentId: agents.id,
+					revision: agents.currentConfigurationRevision,
+					configuration: agentConfigurationRevisions.configuration,
+					sourceReference: agentConfigurationRevisions.sourceReference,
+				})
+				.from(agents)
+				.innerJoin(
+					agentConfigurationRevisions,
+					and(
+						eq(agentConfigurationRevisions.agentId, agents.id),
+						eq(
+							agentConfigurationRevisions.revision,
+							agents.currentConfigurationRevision,
+						),
+					),
+				)
+				.orderBy(agents.id);
+			const targets = [];
+			for (const row of rows) {
+				if (!row.configuration) continue;
+				const configuration = decodeVersionedAgentConfigurationRecord(
+					row.configuration,
+				);
+				if (
+					configuration.agentId !== row.agentId ||
+					configuration.revision !== row.revision ||
+					canonicalSourceReference(configuration) !== row.sourceReference ||
+					configuration.source.kind !== "standard" ||
+					configuration.source.templateId !== input.templateId ||
+					configuration.source.imageDigest !== input.expectedImageDigest
+				)
+					continue;
+				targets.push({
+					schemaVersion: 1 as const,
+					releaseId: input.releaseId,
+					agentId: row.agentId,
+					templateId: input.templateId,
+					expectedConfigurationRevision: row.revision,
+					expectedImageDigest: input.expectedImageDigest,
+					targetImageDigest: input.targetImageDigest,
+				});
+			}
+			return targets;
+		} catch (error) {
+			if (error instanceof AgentConfigurationStoreError) throw error;
 			throw new AgentConfigurationStoreError();
 		}
 	}
