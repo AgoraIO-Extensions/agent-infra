@@ -1237,6 +1237,20 @@ export function createConversationRuntimeV2(
 		recoverStatus: recover,
 		async renewAuthorization(request, signal) {
 			const active = combined(signal);
+			// A stopped or revoked Turn has no business authority left to renew.
+			// Latch the Host through a control status read, without asking for a
+			// renewal route, and refuse (#1888).
+			const context = contextFor(request);
+			const decision = await current(
+				context,
+				await stateFor(context, active),
+				"execution.renew",
+				active,
+			);
+			if (decision.authority.purpose === "control") {
+				await latch(await prepare(request, "session.status", active), active);
+				denied();
+			}
 			const prepared = await prepare(request, "execution.renew", active);
 			if (prepared.authority.purpose === "control") {
 				await latch(prepared, active);
