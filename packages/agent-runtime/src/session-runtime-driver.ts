@@ -10,6 +10,8 @@ import {
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 	type RuntimeEventV1,
 	RuntimeEventV1Schema,
+	type RuntimeOperationFactV2,
+	RuntimeOperationFactV2Schema,
 	type RuntimeSelectionV1,
 	RuntimeSelectionV1Schema,
 	type RuntimeStatusV1,
@@ -25,6 +27,7 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelCredentialResolver,
 	RuntimeModelDirectory,
+	RuntimeOperationFactInputV1,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -198,6 +201,8 @@ interface Turn {
 	nativeCheckpoint?: string;
 	nativeTerminalCheckpoint?: string;
 	events: RuntimeEventV1[];
+	/** Durable metadata-only facts emitted by shared non-Codex operation adapters. */
+	operationFacts?: RuntimeOperationFactV2[];
 	operationRef?: string;
 	attemptRef?: string;
 }
@@ -256,10 +261,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	async validateExternalAction(
 		action: import("./driver.js").RuntimeExternalActionAuthorization,
 	) {
-		if (
-			action.kind !== "model" ||
-			action.runtimeOperationId !== action.executionId
-		)
+		if (action.runtimeOperationId !== action.executionId)
 			runtimeAuthorizationDenied();
 		let binding: Binding | undefined;
 		let file: DurableJsonFile<Session> | undefined;
@@ -275,12 +277,96 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const turn = file
 			.read()
 			.turns.find((item) => item.executionId === action.executionId);
+		if (!turn) runtimeAuthorizationDenied();
 		if (
-			!turn ||
-			turn.operationRef !== action.operationRef ||
-			turn.attemptRef !== action.attemptRef
+			action.kind === "model" &&
+			(turn.operationRef !== action.operationRef ||
+				turn.attemptRef !== action.attemptRef)
 		)
 			runtimeAuthorizationDenied();
+		if (turn.operationFacts !== undefined) {
+			const fact = turn.operationFacts
+				.filter(
+					(value) =>
+						value.operationRef === action.operationRef &&
+						value.attemptRef === action.attemptRef &&
+						value.kind === action.kind,
+				)
+				.at(-1);
+			if (!fact || (fact.phase !== "intent" && fact.phase !== "started"))
+				runtimeAuthorizationDenied();
+		} else if (action.kind === "tool") {
+			runtimeAuthorizationDenied();
+		}
+	}
+
+	/** Append one durable operation fact and acknowledge its journal commit. */
+	async recordOperationFact(input: RuntimeOperationFactInputV1): Promise<void> {
+		if (this.closed) unavailable();
+		const binding = this.index
+			.read()
+			.sessions.find((entry) => entry.ref === input.nativeSessionRef);
+		if (!binding) unavailable();
+		const file = await this.file(binding);
+		await this.exclusive(binding.ref, () =>
+			this.recordFact(file, input.executionId, input.fact),
+		);
+	}
+
+	private async recordFact(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		input: RuntimeOperationFactV2,
+	): Promise<void> {
+		const fact = RuntimeOperationFactV2Schema.parse(input);
+		await file.update((state) => {
+			const turn = state.turns.find(
+				(entry) => entry.executionId === executionId,
+			);
+			if (!turn || terminal(turn.status))
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation fact is no longer current",
+					409,
+				);
+			turn.operationFacts ??= [];
+			const previous = turn.operationFacts
+				.filter(
+					(entry) =>
+						entry.operationRef === fact.operationRef &&
+						entry.attemptRef === fact.attemptRef,
+				)
+				.at(-1);
+			const duplicate =
+				previous &&
+				previous.kind === fact.kind &&
+				JSON.stringify(previous) === JSON.stringify(fact);
+			if (duplicate) return;
+			if (turn.operationFacts.length >= 256)
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation fact journal is full",
+					409,
+				);
+			if (!previous) {
+				if (fact.phase !== "intent")
+					throw new RuntimeHostError(
+						"RUNTIME_OPERATION_CONFLICT",
+						"Runtime operation must start with intent",
+						409,
+					);
+			} else if (
+				previous.kind !== fact.kind ||
+				(previous.phase !== "intent" && previous.phase !== "started") ||
+				fact.phase === "intent"
+			)
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation fact transition is invalid",
+					409,
+				);
+			turn.operationFacts.push(fact);
+		});
 	}
 	static async open(options: SessionRuntimeDriverOptions) {
 		if (
@@ -525,6 +611,25 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							completed = true;
 							if (event.payload.status !== turn.status) unavailable();
 						}
+					}
+					const operationFacts = turn.operationFacts ?? [];
+					if (!Array.isArray(operationFacts)) unavailable();
+					const factKeys = new Set<string>();
+					const latestFacts = new Map<string, RuntimeOperationFactV2>();
+					for (const rawFact of operationFacts) {
+						const fact = RuntimeOperationFactV2Schema.parse(rawFact);
+						const key = JSON.stringify([fact.operationRef, fact.attemptRef]);
+						if (factKeys.has(key)) {
+							const previous = latestFacts.get(key);
+							if (
+								!previous ||
+								(previous.phase !== "intent" && previous.phase !== "started") ||
+								(fact.phase === "intent" && previous.phase !== "intent")
+							)
+								unavailable();
+						} else if (fact.phase !== "intent") unavailable();
+						factKeys.add(key);
+						latestFacts.set(key, fact);
 					}
 					if (terminal(turn.status) !== completed) unavailable();
 					if (
@@ -1094,6 +1199,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					selection,
 					status: "unknown",
 					events: [],
+					operationFacts: [],
 					operationRef,
 					attemptRef,
 				});

@@ -89,6 +89,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeNativeSkillReadContextV1,
 	RuntimeNativeSkillReaderV1,
+	RuntimeOperationFactInputV1,
 } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
 import {
@@ -942,6 +943,31 @@ export class RuntimeHost {
 			revalidate: () =>
 				this.assertCurrentModelKey(originalAction, delivery.relayKey),
 		};
+	}
+
+	/**
+	 * Persist one metadata-only operation fact after the caller has completed
+	 * the existing external-action authorization handshake.
+	 */
+	async recordOperationFact(input: RuntimeOperationFactInputV1): Promise<void> {
+		this.trustedHost();
+		if (!this.options.driver.recordOperationFact) runtimeAuthorizationDenied();
+		const action: RuntimeExternalActionAuthorization = {
+			nativeSessionRef: input.nativeSessionRef,
+			executionId: input.executionId,
+			runtimeOperationId: input.executionId,
+			operationRef: input.fact.operationRef,
+			attemptRef: input.fact.attemptRef,
+			kind: input.fact.kind,
+		};
+		if (input.fact.phase === "intent") {
+			await this.options.store.authorizeExternalAction(
+				action,
+				this.options.grantValidationV2?.now ?? Date.now,
+			);
+			this.trustedHost();
+		} else await this.authorizeExternalAction(action);
+		await this.options.driver.recordOperationFact(input);
 	}
 
 	private async currentExternalActionAuthorization(
