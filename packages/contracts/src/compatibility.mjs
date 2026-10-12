@@ -2966,11 +2966,19 @@ function isRuntimeConnectionAssociationOpenApiAddition(previous, current) {
 			value.properties.verification
 		) {
 			for (const field of fields) {
-				if (value.properties[field] !== undefined) {
-					if (value.required?.includes(field)) return;
-					delete value.properties[field];
-					changed = true;
-				}
+				const schema = value.properties[field];
+				if (schema === undefined || value.required?.includes(field)) continue;
+				if (
+					schema === null ||
+					typeof schema !== "object" ||
+					Array.isArray(schema) ||
+					schema.type !== "string" ||
+					schema.pattern !== "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" ||
+					Object.keys(schema).some((key) => key !== "type" && key !== "pattern")
+				)
+					continue;
+				delete value.properties[field];
+				changed = true;
 			}
 		}
 		for (const child of Object.values(value)) visit(child);
