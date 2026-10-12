@@ -32,7 +32,7 @@ describe("ConversationCapabilityPickerPanel", () => {
 				target: { value: "workspace" },
 			},
 		);
-		fireEvent.click(screen.getByRole("option", { name: /workspace-summary/ }));
+		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
 		fireEvent.change(screen.getByRole("textbox", { name: "能力参数" }), {
 			target: { value: "README.md" },
 		});

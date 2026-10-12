@@ -107,8 +107,7 @@ export function ConversationCapabilityPickerPanel({
 								<Button
 									variant="ghost"
 									type="button"
-									role="option"
-									aria-selected={selected?.name === capability.name}
+									aria-pressed={selected?.name === capability.name}
 									key={`${capability.kind}:${capability.name}`}
 									className={`min-h-11 rounded-[10px] border px-3 py-2 text-left ${index === scopedState.selectedIndex ? "border-primary bg-muted" : "border-border"}`}
 									disabled={disabled}
