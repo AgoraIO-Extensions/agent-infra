@@ -106,6 +106,12 @@ export interface ConversationQuery {
 		conversationId: string,
 		signal?: AbortSignal,
 	): Promise<ConversationQueryDetailV1 | undefined>;
+	/** Read only the actor-scoped Conversation projection; never reads events. */
+	getProjection(
+		scope: ConversationQueryScopeV1,
+		conversationId: string,
+		signal?: AbortSignal,
+	): Promise<ConversationQueryProjectionV1 | undefined>;
 	getExecution(
 		scope: ConversationQueryScopeV1,
 		conversationId: string,
@@ -786,12 +792,12 @@ async function deniedCommand(
 		{ schemaVersion: 1, operation: "conversation.read", conversationId },
 		traceId,
 	);
-	const detail = await query(
-		() => dependencies.query.get(scope(identity), conversationId),
+	const projection = await query(
+		() => dependencies.query.getProjection(scope(identity), conversationId),
 		traceId,
 	);
 	return fail(
-		detail?.conversation.status === "unavailable"
+		projection?.status === "unavailable"
 			? "CONVERSATION_UNAVAILABLE"
 			: "RESOURCE_UNAVAILABLE",
 		traceId,
@@ -1103,17 +1109,19 @@ export function registerConversationRoutes(
 				return fail("RESOURCE_UNAVAILABLE", metadata.traceId);
 			if (decision.outcome === "conflict")
 				return fail("CONFLICT", metadata.traceId);
-			const [detail, effective] = await Promise.all([
+			const [conversation, effective] = await Promise.all([
 				query(
-					() => dependencies.query.get(scope(identity), conversationId),
+					() =>
+						dependencies.query.getProjection(scope(identity), conversationId),
 					metadata.traceId,
 				),
 				effectiveConversation(useCase, conversationId, metadata.traceId),
 			]);
-			if (!detail) return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
+			if (!conversation)
+				return fail("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 			return context.json(
 				project(
-					() => conversationProjection(detail.conversation, effective),
+					() => conversationProjection(conversation, effective),
 					metadata.traceId,
 				),
 			);

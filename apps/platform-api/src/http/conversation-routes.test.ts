@@ -143,6 +143,7 @@ function dependencies(
 				items: [conversation],
 				nextCursor: null,
 			}),
+			getProjection: vi.fn().mockResolvedValue(conversation),
 			get: vi.fn().mockResolvedValue({
 				conversation,
 				messages: [
@@ -372,6 +373,7 @@ describe("Conversation HTTP routes", () => {
 			selectedReasoningLevel: "medium",
 		});
 		expect(input.commands).toHaveBeenCalledTimes(5);
+		expect(input.query.getProjection).toHaveBeenCalledTimes(1);
 		const command = input.commands(identity);
 		expect(command.accept).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -665,15 +667,9 @@ describe("Conversation HTTP routes", () => {
 		input.commands(identity).accept = vi
 			.fn()
 			.mockResolvedValue({ outcome: "denied" });
-		const current = await input.query.get(
-			{ actorId: identity.userId, channelId: "web" },
-			"conversation-1",
-		);
-		if (!current) throw new Error("Expected Conversation fixture");
-		input.query.get = vi.fn().mockResolvedValue({
-			...current,
-			conversation: { ...conversation, status: "unavailable" },
-		});
+		input.query.getProjection = vi
+			.fn()
+			.mockResolvedValue({ ...conversation, status: "unavailable" });
 		const response = await testApp(input).app.request(
 			"/api/v1/conversations/conversation-1/messages",
 			{
@@ -688,6 +684,8 @@ describe("Conversation HTTP routes", () => {
 			code: "CONVERSATION_UNAVAILABLE",
 			retryable: false,
 		});
+		expect(input.query.getProjection).toHaveBeenCalled();
+		expect(input.query.get).not.toHaveBeenCalled();
 	});
 
 	it("does not inspect an actor-scoped row after Conversation access is revoked", async () => {

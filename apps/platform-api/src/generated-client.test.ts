@@ -309,6 +309,14 @@ function testApp() {
 			}),
 			query: {
 				list: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+				getProjection: vi.fn().mockResolvedValue({
+					conversationId: "conversation-1",
+					agentId: "agent-1",
+					status: "ready",
+					lastConversationCursor: null,
+					createdAt: new Date("2026-09-06T00:00:00.000Z"),
+					updatedAt: new Date("2026-09-06T00:00:00.000Z"),
+				}),
 				get: vi.fn().mockResolvedValue({
 					conversation: {
 						conversationId: "conversation-1",

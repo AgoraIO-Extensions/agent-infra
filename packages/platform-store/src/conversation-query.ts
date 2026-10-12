@@ -999,6 +999,34 @@ export class PostgresConversationQueryV1 {
 		}
 	}
 
+	/** Read only the actor-scoped Conversation projection; no messages or events. */
+	async getProjection(
+		inputScope: ConversationQueryScopeV1,
+		conversationIdInput: string,
+		signal?: AbortSignal,
+	): Promise<ConversationQueryProjectionV1 | undefined> {
+		const readScope = scope(inputScope);
+		const conversationId = requestText(conversationIdInput);
+		try {
+			return await repeatableRead(
+				this.#client,
+				async (transaction, run) => {
+					const row = await readConversation(
+						transaction,
+						readScope,
+						conversationId,
+						run,
+					);
+					return row ? projection(row) : undefined;
+				},
+				signal,
+			);
+		} catch (error) {
+			if (error instanceof ConversationQueryError) throw error;
+			return unavailable();
+		}
+	}
+
 	async getExecution(
 		inputScope: ConversationQueryScopeV1,
 		conversationIdInput: string,

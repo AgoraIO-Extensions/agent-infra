@@ -453,6 +453,19 @@ describe("PostgreSQL Conversation query", () => {
 		}
 	});
 
+	it("reads a projection without loading messages, executions or events", async () => {
+		const result = await query.getProjection(
+			{ actorId: "actor-1", channelId: "web" },
+			"conversation-1",
+		);
+		expect(result).toMatchObject({
+			conversationId: "conversation-1",
+			agentId: "agent-1",
+			status: "active",
+			lastConversationCursor: expect.any(String),
+		});
+	});
+
 	it("hides all query paths for a Session with an unbound persisted Execution", async () => {
 		const [original] =
 			await client`select sandbox_id from platform.conversation_executions
