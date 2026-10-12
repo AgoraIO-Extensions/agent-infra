@@ -2151,7 +2151,7 @@ Audit payload 使用 allowlist serializer；不允许把任意 request/response 
 
 - 所有契约有明确 version；未知字段默认拒绝写命令，读 response 遵循向后兼容规则。
 - 时间使用 RFC 3339 UTC，ID opaque，enum 未知值由 client fail closed。
-- HTTP mutation 要求 `Idempotency-Key`。每个 Direct MCP mutating Action 的 `get_action_guide` schema 必须包含 required `idempotencyKey`；客户端通过通用 `execute_action` 提交该字段，并在响应丢失、transport retry 和用户重试中保持不变。Connection 拒绝缺失键的调用，先按该键查找幂等记录，再剥离该控制字段后校验 Provider args。G-01 证明目标客户端版本能实际提供并保留此字段；不能假定私有字段或未验证的 request identity 存在。
+- HTTP mutation 要求 `Idempotency-Key`。每个 Direct MCP mutating Action 的 `get_action_guide` schema 必须包含 required `idempotencyKey`；客户端通过通用 `execute_action` 提交该字段，并在响应丢失、transport retry 和用户重试中保持不变。Connection 拒绝缺失键的调用，先按该键查找幂等记录。仅由 Connection 注入的控制字段不进入 Provider args；已批准的原始 Provider schema 若明确声明同名原生幂等字段，则校验并向 Executor 传递同一键，供固定原生接口派发使用，不改变 Connection 的去重与哈希边界。Rehoboam v13 的原生契约见 [已批准 ADR](../adr/ADR-rehoboam-channel-publishing.md)。G-01 证明目标客户端版本能实际提供并保留此字段；不能假定私有字段或未验证的 request identity 存在。
 - 目标 Direct MCP Client 版本无法提供稳定 request key 时，不得向该客户端发现或执行 mutating Action。Provider 原生幂等键或 natural key 只用于同一已持久化 LogicalEffect 的 dispatch retry，不能合并两个没有共同入站键的 `tools/call`，也不能替代 Consumer 业务幂等键。
 - Delegated assertion 必须签入同一 `Idempotency-Key` 的 hash；`jti` 防重放不能替代业务幂等，且完全相同的 `jti` 重放只可查询其原 Invocation。
 - payload size、string length、array count、schema depth 和 deadline 有服务端上限。

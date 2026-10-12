@@ -1,6 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+	channelPublishingActions,
+	RehoboamV13Adapter,
+} from "../../openconnector-adapter/src/providers/rehoboam/versions/rehoboam-v13.ts";
 
 import {
 	type ActionDefinition,
@@ -939,6 +943,98 @@ describe("Connection application service", () => {
 				title: "B",
 			}),
 		).rejects.toBeInstanceOf(ConnectionError);
+	});
+
+	it.each(["direct", "delegated"])(
+		"passes native publishing keys through the %s core and Adapter boundary exactly once",
+		async (mode) => {
+			for (const name of [
+				"create_channel_publish_request",
+				"approve_channel_publish_request",
+			]) {
+				const action = channelPublishingActions.find(
+					(item) => item.name === `rehoboam.${name}`,
+				);
+				if (!action) throw new Error("Missing publishing Action");
+				const repository = new MemoryRepository();
+				const invocation = {
+					...direct,
+					providerId: "rehoboam",
+					providerReleaseId: "rehoboam-connection-v13",
+				};
+				repository.directInvocation = invocation;
+				repository.resolveDelegatedWorkloads = async () => [
+					{ ...invocation, actorKey: delegated.actorKey },
+				];
+				repository.listAuthorizedActions = async () => [action];
+				const posts: RequestInit[] = [];
+				const revision = "a".repeat(64);
+				const adapter = new RehoboamV13Adapter(async (_url, init) => {
+					if (init?.method === "GET")
+						return Response.json({
+							release_system: "channel_publishing",
+							channel: "maven",
+							schema_revision: revision,
+							params_schema: {
+								type: "object",
+								additionalProperties: false,
+								properties: { REPO_NAME: { type: "string" } },
+							},
+						});
+					posts.push(init ?? {});
+					return Response.json({
+						release_system: "channel_publishing",
+						task_id: "a".repeat(24),
+						status: "WAITING_IN_APPROVEMENT",
+					});
+				}, "synthetic-gateway");
+				const service = new ConnectionApplicationService(
+					repository,
+					new ProviderExecutorRouter({ "rehoboam-connection-v13": adapter }),
+				);
+				const key = `publishing-${name}-${mode}`;
+				const input =
+					name === "create_channel_publish_request"
+						? {
+								releaseSystem: "channel_publishing",
+								channel: "maven",
+								schemaRevision: revision,
+								params: { REPO_NAME: "full-sdk" },
+							}
+						: {
+								releaseSystem: "channel_publishing",
+								taskId: "a".repeat(24),
+								comment: "checked",
+							};
+				const invoke = () =>
+					mode === "direct"
+						? service.invokeDirect("direct", action.name, {
+								...input,
+								idempotencyKey: key,
+							})
+						: service.invokeDelegated("workload", action.name, input, key);
+				const first = await invoke();
+				expect((await invoke()).callId).toBe(first.callId);
+				expect(posts).toHaveLength(1);
+				expect(new Headers(posts[0]?.headers).get("Idempotency-Key")).toBe(key);
+			}
+		},
+	);
+
+	it("does not send the injected Connection key to a Provider that does not declare it", async () => {
+		const service = new ConnectionApplicationService(new MemoryRepository(), {
+			execute: async ({ input }) => {
+				expect(input).not.toHaveProperty("idempotencyKey");
+				return {};
+			},
+		});
+		await service.invokeDirect("direct", "github.createPullRequest", {
+			base: "main",
+			head: "feature/test",
+			repository: "acme/widgets",
+			title: "Test",
+			idempotencyKey: "control-key-only",
+		});
 	});
 
 	it("validates the full action schema before admitting a write", async () => {
