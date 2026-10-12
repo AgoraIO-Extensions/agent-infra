@@ -7,6 +7,7 @@ const captured = vi.hoisted(() => ({
 	requests: [] as string[],
 	origins: [] as string[][],
 	profileReconciliation: vi.fn(async () => {}),
+	proxies: [] as (string | undefined)[],
 }));
 
 vi.mock("@agent-infra/connection-store", async (importOriginal) => {
@@ -56,8 +57,12 @@ vi.mock("@agent-infra/connection-core", async (importOriginal) => {
 
 // Exercise the actual startup composition; no LDAP, database or Provider traffic.
 vi.mock("@agent-infra/openconnector-adapter/provider-fetch", () => ({
-	createPinnedProviderFetch: (options: { origins: string[] }) => {
+	createPinnedProviderFetch: (options: {
+		origins: string[];
+		proxyUrl?: string;
+	}) => {
 		captured.origins.push(options.origins);
+		captured.proxies.push(options.proxyUrl);
 		return {
 			close: async () => {},
 			fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -98,6 +103,7 @@ const environment = {
 	LDAP_URL: "ldap://directory.invalid:389",
 	LDAP_USERNAME_ATTRIBUTE: "cn",
 	LDAP_USERS_BASE_DN: "dc=example",
+	GITHUB_EGRESS_PROXY_URL: "http://103.101.125.158:28062/",
 	GITHUB_OAUTH_CLIENT_ID: "synthetic-client",
 	GITHUB_OAUTH_CLIENT_SECRET: "synthetic-secret",
 	JIRA_TOKEN_CLIENT_ID: "synthetic-client",
@@ -122,6 +128,7 @@ afterEach(() => {
 	captured.requests = [];
 	captured.origins = [];
 	captured.profileReconciliation.mockClear();
+	captured.proxies = [];
 	vi.restoreAllMocks();
 });
 
@@ -151,7 +158,14 @@ describe("production GitHub OAuth transport wiring", () => {
 					redirectUri: "https://connection.example/oauth/callback",
 				});
 				expect(identity.externalAccount).toBe("42");
+				expect(captured.proxies.filter(Boolean)).toEqual([
+					environment.GITHUB_EGRESS_PROXY_URL,
+				]);
+				expect(captured.proxies[0]).toBe(environment.GITHUB_EGRESS_PROXY_URL);
+				await captured.oauth.refresh?.("synthetic-refresh");
 				expect(captured.requests).toEqual([
+					tokenUrl ?? "https://github.com/login/oauth/access_token",
+					"https://api.github.com/user",
 					tokenUrl ?? "https://github.com/login/oauth/access_token",
 					"https://api.github.com/user",
 				]);

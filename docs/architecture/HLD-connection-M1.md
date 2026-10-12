@@ -206,6 +206,13 @@ Rehoboam 管理能力以 immutable `rehoboam-connection-v11` 增加 28 个 Actio
 确认绑定 owner、token hash、期限与资源/引用快照，使用 CAS、资源 reservation 和原生完成回执。
 未完成效果不盲重发，回查为纯 READ。配置不运行 Job；申请修改的审批通知/调度副作用必须展示。
 v10→v11 要求重新审批及新增 Action 显式授权，发布前仍需 13.4 真实 Provider 验收。
+
+已发布 Native 的发布族接入以 immutable `rehoboam-connection-v12` 增加
+`get_release_family_native_anchor` READ，要求 release READ，仅返回 Rehoboam 校验后的套件、状态、
+沿用交付及 committed 发布族归属。已有创建、初始化、查询、上游和恢复 Actions 沿用原契约：
+Native 使用原版本 ID，初始化由 Rehoboam 判断是否沿用原交付；补发须显式恢复，不重写原版本。
+`inherited_delivery` 不表示运行了新 Job。旧版本源码和路由保留；v11→v12 需重新批准，
+新增 READ 不自动进入原 Grant，业务权限、CAS、通知和审计真值仍属于 Rehoboam。
 详情见 [管理指南](../connection/rehoboam-management.md)。
 
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
@@ -2621,7 +2628,7 @@ Audit 使用每 partition hash chain 或外部 append-only sink。保留策略�
 - TLS SNI、证书 hostname 校验和 HTTP `Host` 继续使用 Catalog 原始 hostname，不能使用或接受调用方提供的替代值。
 - 每次 redirect 和新连接都重新执行 scheme、host、DNS/IP、TLS 和 header 校验；默认禁止跨 origin。
 - 禁止 Consumer 控制 Host、Authorization、Cookie、Proxy-*、Forwarded 和 hop-by-hop headers。
-- Egress Proxy 是默认公网路径。GZ3 pilot 的首次 GitHub OAuth 直连回退按 ADR 接受实际 NetworkPolicy 未核实、直连 fetch 未证明 DNS/IP pinning 的风险；不得将应用目标白名单表述为网络层隔离。广泛生产仍要求核查 NetworkPolicy 并完成受控出口。
+- Egress Proxy 是默认公网路径。上海 GitHub 的 API、OAuth token/refresh/profile 使用绑定已校验目标 IP 的 CONNECT 代理优先路径；仅在代理明确不可用且 Provider HTTP 请求尚未提交时回退一次受控直连。CONNECT 成功后的失败、TLS 校验失败及业务响应不能触发换路重试。配置与验收见[区域 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md#上海分阶段迁移)。不得将应用目标白名单表述为网络层隔离；广泛生产仍要求核查 NetworkPolicy 并完成受控出口。
 
 ### 27.5 Secret 泄露防护
 

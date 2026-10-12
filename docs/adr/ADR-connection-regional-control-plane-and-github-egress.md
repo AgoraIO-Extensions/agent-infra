@@ -23,15 +23,20 @@ PostgreSQL 17，权威数据库保持唯一，不双写。旧库保留为备份�
 身份与凭证加密密钥、业务 IDs 和授权数据保持不变。DNS/TLS、新 issuer/resource、Provider OAuth
 回调及客户端重新登录须验收；namespace 不替代 RBAC、资源配额、出口隔离或 Secret 分发门禁。
 
-上海 GitHub 先使用直连，保留配置切换代理的能力：
+上海 GitHub 出口按 [Issue #1915](https://github.com/AgoraIO-Extensions/agent-infra/issues/1915)
+的明确执行范围改为代理优先，代理不可用时才受控直连：
 
-- 不配置 `GITHUB_EGRESS_PROXY_URL` 时使用直连；配置有效代理地址时使用代理。
-- 修改配置后重启 API 生效，不是热切换；新出口先验证连通性、TLS、真实 OAuth 和适用的
-  Provider 验收，不自动沿用 GZ3 pilot 的出口风险接受。
-- `GITHUB_READ_FALLBACK_PROXY_URL` 只能随主代理配置，用于既有只读回退契约，
-  不表示 WRITE 或 OAuth code 可以自动跨路径重试。
-- 无论直连或代理，已提交而响应未知的 WRITE 仍进入 `UNCERTAIN`；消费状态未知的 OAuth
-  code 不换路径重放。出口与凭据保护、审计及恢复门禁不变。
+- `GITHUB_EGRESS_PROXY_URL` 配置固定无凭证代理 `http://103.101.125.158:28062`；GitHub API、
+  OAuth code exchange、refresh 和 profile 共用连接级 transport。浏览器 authorize 页面仍由浏览器访问。
+- 每次新连接先受控解析并校验目标和代理地址，CONNECT authority 使用已校验目标 IP；
+  目标 TLS SNI、证书校验和 Host 保留 Catalog hostname，不能交给代理重新解析目标 hostname。
+- 只在代理 TCP 建连失败、CONNECT 超时或 CONNECT 返回 502/503/504，且尚未交付任何 Provider
+  HTTP 请求时回退一次受控直连。配置、DNS/IP、代理认证或 TLS 校验失败一律拒绝，不扩大访问边界。
+- CONNECT 成功后 TLS/连接失败、业务响应错误或响应丢失不自动换路径；WRITE 响应未知仍按
+  `UNCERTAIN` 处理，OAuth code/refresh 不盲重放。此策略适用于所有 GitHub HTTP method。
+- 无代理配置的环境使用受控直连；上海正式部署须显式配置上述固定代理并重启 API。
+  旧 `GITHUB_READ_FALLBACK_PROXY_URL` 不再提供第二代理回退，配置时明确拒绝，避免旧语义混用。
+- 本决策不关闭网络策略 enforcement、Security/SRE、稳定性或业务 WRITE 验收门禁。
 
 生产切换、Secret 传输、正式镜像发布和外部配置修改按独立执行授权办理。常规上海发布只修改
 已存在的 Deployment 镜像并保留数据库/CA/身份配置；旧 GZ3 命令拒绝部署，防止无意恢复旧控制面。
