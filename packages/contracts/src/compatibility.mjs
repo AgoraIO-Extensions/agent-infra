@@ -974,7 +974,13 @@ function isRuntimeStatusBusyOutcomeOpenApiAddition(previous, current) {
 	const found = response.oneOf?.find(
 		(option) => option?.properties?.outcome?.const === "found",
 	);
-	if (found?.properties?.operationOutcome === undefined) return false;
+	if (
+		!sameValue(found?.properties?.operationOutcome, {
+			const: "busy",
+			type: "string",
+		})
+	)
+		return false;
 	delete found.properties.operationOutcome;
 	return sameValue(previous, normalized);
 }
