@@ -705,6 +705,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							});
 						else if (
 							event.type === "tool" &&
+							event.payload.name?.startsWith("mcp_")
+						)
+							continue;
+						else if (
+							event.type === "tool" &&
 							typeof event.payload.id === "string"
 						) {
 							if (event.payload.phase === "started")
@@ -733,7 +738,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					// Native blocks can contain many live deltas. Consume only the already durable prefix.
 					let offset = 0;
 					for (const event of turn.events.filter(
-						(event) => event.type === "text" || event.type === "tool",
+						(event) =>
+							event.type === "text" ||
+							(event.type === "tool" && !event.payload.name.startsWith("mcp_")),
 					)) {
 						const expected = recovered[offset];
 						if (
@@ -1082,11 +1089,27 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 									},
 								);
 							},
-							started: async () => updatePhase("started"),
+							started: async () => {
+								await updatePhase("started");
+								await this.event(file, command.executionId, {
+									type: "tool",
+									payload: { toolCallId: callId, name, phase: "started" },
+								});
+							},
 							confirm: async (response) => {
 								await updatePhase(response.phase);
-								if (response.phase === "unknown")
+								if (response.phase === "unknown") {
 									await this.status(file, command.executionId, "unknown");
+									return;
+								}
+								await this.event(file, command.executionId, {
+									type: "tool",
+									payload: {
+										toolCallId: callId,
+										name,
+										phase: response.phase,
+									},
+								});
 							},
 						};
 					},

@@ -131,13 +131,16 @@ function toZod(value: unknown): ZodTypeAny {
 	if (type === "object") {
 		const properties = input.properties;
 		if (!object(properties)) unavailable();
-		const required = new Set(
-			Array.isArray(input.required)
-				? input.required.filter(
-						(entry): entry is string => typeof entry === "string",
-					)
-				: [],
-		);
+		if (input.required !== undefined && !Array.isArray(input.required))
+			unavailable();
+		const requiredEntries = input.required ?? [];
+		if (
+			requiredEntries.some((entry) => typeof entry !== "string") ||
+			new Set(requiredEntries).size !== requiredEntries.length ||
+			requiredEntries.some((entry) => !Object.hasOwn(properties, entry))
+		)
+			unavailable();
+		const required = new Set(requiredEntries as string[]);
 		const shape: Record<string, ZodTypeAny> = {};
 		for (const [name, property] of Object.entries(properties)) {
 			let parsed = toZod(property);
