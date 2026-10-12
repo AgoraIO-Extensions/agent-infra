@@ -93,12 +93,16 @@ export type RuntimeBrowserHandoffRequestV1 =
 	  }
 	| {
 			readonly kind: "revoke";
+			readonly runtime: BrowserHandoffRuntimeSnapshotV1;
 			readonly reason?:
 				| "BROWSER_HANDOFF_REVOKED"
 				| "BROWSER_HANDOFF_AUTHORIZATION_REVOKED"
 				| "BROWSER_HANDOFF_OPERATOR_CHANGED";
 	  }
-	| { readonly kind: "browser-crashed" };
+	| {
+			readonly kind: "browser-crashed";
+			readonly runtime: BrowserHandoffRuntimeSnapshotV1;
+	  };
 
 export interface RuntimeModelDirectoryOption {
 	readonly modelOptionId: string;

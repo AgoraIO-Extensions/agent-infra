@@ -5204,7 +5204,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const runtime =
 			request.kind === "request" ||
 			request.kind === "take-over" ||
-			request.kind === "return-to-agent"
+			request.kind === "return-to-agent" ||
+			request.kind === "revoke" ||
+			request.kind === "browser-crashed"
 				? request.runtime
 				: undefined;
 		if (
@@ -5234,8 +5236,10 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					runtime: request.runtime,
 				});
 			case "revoke":
+				handoff.assertBinding(request.runtime);
 				return handoff.revoke(request.reason);
 			case "browser-crashed":
+				handoff.assertBinding(request.runtime);
 				return handoff.markBrowserCrashed();
 		}
 	}

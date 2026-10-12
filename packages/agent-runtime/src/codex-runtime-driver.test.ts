@@ -3633,10 +3633,23 @@ describe("Codex Runtime Driver", () => {
 			driver.executeBrowserHandoff(
 				accepted.nativeSessionRef,
 				command.executionId,
-				{ kind: "revoke" },
+				{ kind: "revoke", runtime },
 				{
 					browser: { ...browser, handoff: undefined },
 				},
+			),
+		).rejects.toThrow();
+		const mismatchedRuntime = {
+			...runtime,
+			agentId: command.agentId,
+			subjectId: "subject-foreign",
+		};
+		await expect(
+			driver.executeBrowserHandoff(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{ kind: "browser-crashed", runtime: mismatchedRuntime },
+				{ browser },
 			),
 		).rejects.toThrow();
 	});

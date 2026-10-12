@@ -131,6 +131,12 @@ export function createBrowserHandoffControllerV1(input: {
 			throw new Error("BROWSER_HANDOFF_AUTHORIZATION_REVOKED");
 		if (!snapshot.browserAlive)
 			throw new Error("BROWSER_HANDOFF_BROWSER_UNAVAILABLE");
+		assertCurrentBinding(snapshot);
+	}
+
+	function assertCurrentBinding(
+		snapshot: BrowserHandoffRuntimeSnapshotV1,
+	): void {
 		if (
 			snapshot.subjectId !== input.binding.subjectId ||
 			snapshot.agentId !== input.binding.agentId ||
@@ -325,6 +331,7 @@ export function createBrowserHandoffControllerV1(input: {
 		returnToAgent,
 		revoke,
 		markBrowserCrashed,
+		assertBinding: assertCurrentBinding,
 		isAgentPaused,
 		assertAgentAccess,
 		agentObservation,
