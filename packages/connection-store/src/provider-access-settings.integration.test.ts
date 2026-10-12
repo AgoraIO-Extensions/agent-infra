@@ -97,6 +97,28 @@ integrationTest(
 				providerId,
 			});
 			expect(start.requiredScopes).toEqual(["admin", "repo"]);
+			const oauthState = randomUUID();
+			expect(
+				await repository.createOAuthTransaction({
+					principalId,
+					providerId,
+					state: oauthState,
+					codeVerifier: "test-only-verifier",
+					redirectUri: "https://callback.example.invalid/oauth",
+					accessRequestId: "expired-or-consumed-old-request",
+				}),
+			).toEqual(start);
+			expect(
+				(await repository.consumeOAuthTransaction(oauthState, providerId))
+					.accessRequestId,
+			).toBeUndefined();
+			expect(
+				await repository.validatePersonalConnectRequest({
+					principalId,
+					providerId,
+					requestId: "expired-or-consumed-old-request",
+				}),
+			).toEqual(start);
 			const identity = {
 				accessToken: `test-only-${suffix}`,
 				displayName: "Account",
@@ -106,8 +128,10 @@ integrationTest(
 				providerId,
 				providerReleaseId: catalog.providerReleaseId,
 			};
-			const { connectionId } =
-				await repository.storeProviderCredential(identity);
+			const { connectionId } = await repository.storeProviderCredential({
+				...identity,
+				accessRequestId: "expired-or-consumed-old-request",
+			});
 			expect(
 				await sql`SELECT id FROM connection_access_authorizations WHERE connection_id = ${connectionId}`,
 			).toHaveLength(0);

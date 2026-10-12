@@ -1375,7 +1375,7 @@ type CredentialVersion = {
 
 Provider 的前置审批由 Connection DB 中 `connection_provider_access_settings` 的 `approval_required` 和单调 revision 决定，按稳定 Provider ID 配置，跨 Release 保持；已有及新增 Provider 默认 `false`。管理员修改必须在事务内复核 ACTIVE Principal 与管理员权限、expected revision，并写 audit/outbox。缺失 Provider、未知 Provider 或读取失败不视为关闭；已发布 Provider 尚无显式设置时采用默认关闭。
 
-关闭时所有个人连接入口仍验证当前主体、Provider admission、已发布 Release 和真实外部身份，但不要求 Request/Permit，也不生成自动批准或伪造 Access Authorization。Consumer 预览与确认的上限为真实 Credential scopes、当前已发布 Action 和 Consumer declaration 的交集；旧选择不自动增加。开启时本节原审批、能力包、有效期和 Permit 规则全部生效。Invocation 与最终 dispatch admission 重新校验当前开关和资格；直接连接的账号无有效资格时拒绝新调用。
+关闭时所有个人连接入口仍验证当前主体、Provider admission、已发布 Release 和真实外部身份，但不要求 Request/Permit；调用方携带的旧申请 ID 不触发 Permit 校验、消费或资格创建，也不生成自动批准或伪造 Access Authorization。Consumer 预览与确认的上限为真实 Credential scopes、当前已发布 Action 和 Consumer declaration 的交集；旧选择不自动增加。开启时本节原审批、能力包、有效期和 Permit 规则全部生效。Invocation 与最终 dispatch admission 重新校验当前开关和资格；直接连接的账号无有效资格时拒绝新调用。
 
 切换保留历史 Request/Decision/Permit/Authorization，不改写原批准，不撤销或自动恢复 Consumer Grant、账号及 Credential。关闭时公司审批资格不作为准入门禁；账号停用、Grant 暂停/撤销、Provider/Action 停用及凭据失效继续阻断。重新开启恢复原资格检查，已过期、撤销或暂停资格不能被追认。OAuth start/callback、凭据保存、reconnect 与 invocation/dispatch 必须一致读取服务端规则；凭据写入与最终提交在同一事务锁定配置，配置切换与 admission 串行化，旧回调不能在开启后无 Permit 保存新账号。
 

@@ -749,7 +749,7 @@ export interface ConnectionRepository {
 	): Promise<OAuthTransaction>;
 	createOAuthTransaction(
 		input: OAuthTransaction & { state: string },
-	): Promise<void>;
+	): Promise<void | { requiredScopes: readonly string[] }>;
 	validatePersonalConnectRequest(input: {
 		principalId: string;
 		providerId: string;
@@ -1875,7 +1875,7 @@ export class ConnectionApplicationService {
 		const state = randomToken();
 		const codeVerifier = randomToken();
 		const codeChallenge = base64UrlHash(codeVerifier);
-		await this.repository.createOAuthTransaction({
+		const transaction = await this.repository.createOAuthTransaction({
 			...(upgradeBinding ? { upgradeBinding } : {}),
 			...(accessRequestId ? { accessRequestId } : {}),
 			...(reconnectConnectionId ? { reconnectConnectionId } : {}),
@@ -1885,6 +1885,7 @@ export class ConnectionApplicationService {
 			redirectUri,
 			state,
 		});
+		if (transaction) requestedScopes = transaction.requiredScopes;
 		return {
 			authorizationUrl: oauth.getAuthorizationUrl({
 				codeChallenge,

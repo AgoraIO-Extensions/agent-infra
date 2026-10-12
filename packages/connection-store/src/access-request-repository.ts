@@ -40,7 +40,7 @@ export type ConsumeConnectPermitInput = {
 };
 
 export async function lookupApprovedConnectPermit(
-	sql: Sql,
+	sql: Sql | postgres.TransactionSql,
 	principalId: string,
 	requestId: string,
 	runtime?: PendingConnectRuntime,

@@ -2534,3 +2534,36 @@ it("keeps healthy direct connections current while enforcing expired credentials
 		}).nextAction,
 	).toBe("UPGRADE");
 });
+
+it("uses the scopes selected atomically when OAuth state is saved", async () => {
+	const repository: ConnectionRepository = new MemoryRepository();
+	repository.validatePersonalConnectRequest = async () => ({
+		requiredScopes: ["repo", "workflow"],
+	});
+	const create = repository.createOAuthTransaction.bind(repository);
+	repository.createOAuthTransaction = async (input) => {
+		await create(input);
+		return { requiredScopes: ["repo"] };
+	};
+	const service = new ConnectionApplicationService(
+		repository,
+		{ execute: async () => ({}) },
+		{
+			exchangeCode: async () => {
+				throw new Error("unused");
+			},
+			refresh: async () => {
+				throw new Error("unused");
+			},
+			getAuthorizationUrl: (input) => {
+				expect(input.requestedScopes).toEqual(["repo"]);
+				return "https://github.example.invalid/authorize";
+			},
+		},
+	);
+	await expect(
+		service.startGithubOAuth("alice", "https://callback.example.invalid/oauth"),
+	).resolves.toMatchObject({
+		authorizationUrl: "https://github.example.invalid/authorize",
+	});
+});

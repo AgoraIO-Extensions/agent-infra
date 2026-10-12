@@ -3736,7 +3736,19 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				: input.codeVerifier,
 			`oauth:${stateHash}:${input.principalId}`,
 		);
-		await this.sql.begin(async (sql) => {
+		return this.sql.begin(async (sql) => {
+			await lockAccessAdmission(sql);
+			const connect =
+				!input.sharedScopeId &&
+				!input.reconnectConnectionId &&
+				!input.upgradeBinding
+					? await this.resolvePersonalConnectRequest(sql, {
+							principalId: input.principalId,
+							providerId: input.providerId,
+							requestId: input.accessRequestId,
+						})
+					: undefined;
+			const accessRequestId = connect?.accessRequestId;
 			if (input.sharedScopeId) {
 				await this.requireConnectionAdministrator(sql, input.principalId);
 				const [scope] = await sql<{ id: string }[]>`
@@ -3756,10 +3768,11 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					${stateHash}, ${input.principalId}, ${protectedVerifier.ciphertext},
 					${protectedVerifier.nonce}, ${protectedVerifier.tag},
 					${input.redirectUri}, ${input.providerId}, ${input.sharedScopeId ?? null},
-					${input.accessRequestId ?? null}, ${input.reconnectConnectionId ?? null},
+					${accessRequestId ?? null}, ${input.reconnectConnectionId ?? null},
 					now() + interval '10 minutes'
 				)
 			`;
+			return connect ? { requiredScopes: connect.requiredScopes } : undefined;
 		});
 	}
 
@@ -3768,6 +3781,21 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		providerId: string;
 		requestId?: string;
 	}) {
+		return this.sql.begin(async (sql) => {
+			await lockAccessAdmission(sql);
+			const connect = await this.resolvePersonalConnectRequest(sql, input);
+			return { requiredScopes: connect.requiredScopes };
+		});
+	}
+
+	private async resolvePersonalConnectRequest(
+		sql: postgres.TransactionSql,
+		input: {
+			principalId: string;
+			providerId: string;
+			requestId?: string;
+		},
+	): Promise<{ accessRequestId?: string; requiredScopes: readonly string[] }> {
 		const releaseId = this.publishedProviderReleaseIds.get(input.providerId);
 		if (
 			!releaseId ||
@@ -3777,13 +3805,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			}))
 		)
 			forbidden();
-		const [access] = await this.sql<{ required: boolean }[]>`
+		const [access] = await sql<{ required: boolean }[]>`
 			SELECT connection_provider_requires_approval(${input.providerId}) AS required
 			FROM connection_principals WHERE id = ${input.principalId} AND status = 'ACTIVE'
 		`;
 		if (!access) forbidden();
-		if (!access.required && !input.requestId) {
-			const scopes = await this.sql<{ scope: string }[]>`
+		if (!access.required) {
+			const scopes = await sql<{ scope: string }[]>`
 				SELECT DISTINCT jsonb_array_elements_text(action.required_scopes) AS scope
 				FROM connection_action_versions action JOIN connection_provider_releases release
 					ON release.id = action.provider_release_id AND release.status = 'PUBLISHED'
@@ -3794,7 +3822,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		}
 		if (!input.requestId) forbidden();
 		const permit = await lookupApprovedConnectPermit(
-			this.sql,
+			sql,
 			input.principalId,
 			input.requestId,
 			{
@@ -3811,7 +3839,10 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			}))
 		)
 			forbidden();
-		return { requiredScopes: permit.requiredScopes };
+		return {
+			accessRequestId: input.requestId,
+			requiredScopes: permit.requiredScopes,
+		};
 	}
 
 	async validatePersonalReconnect(input: {
@@ -4089,6 +4120,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			const [approval] = await sql<{ required: boolean }[]>`
 				SELECT connection_provider_requires_approval(${input.providerId}) AS required`;
 			if (!approval) forbidden();
+			const accessRequestId = approval.required
+				? input.accessRequestId
+				: undefined;
 			const [principal] = await sql<{ id: string }[]>`
 					SELECT id FROM connection_principals
 					WHERE id = ${input.principalId} AND status = 'ACTIVE'
@@ -4187,7 +4221,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			)
 				forbidden();
 
-			if (approval.required && !input.accessRequestId) {
+			if (approval.required && !accessRequestId) {
 				if (
 					existing &&
 					input.expectedCredentialVersionId &&
@@ -4262,7 +4296,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				if (!authorized) forbidden();
 				if (reconnecting) reconnectAuthorizationId = authorized.id;
 			}
-			if (existing && input.accessRequestId) {
+			if (existing && accessRequestId) {
 				await sql`
 					UPDATE connection_access_authorizations
 					SET state = 'REVOKED', revision = revision + 1, updated_at = now()
@@ -4339,13 +4373,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 					WHERE id = ${reconnectAuthorizationId} AND state = 'DISCONNECTED'
 				`;
 			}
-			if (input.accessRequestId) {
+			if (accessRequestId) {
 				await consumeConnectPermitInTransaction(sql, {
 					accessAuthorizationId: `access-authorization-${randomUUID()}`,
 					connectionId,
 					grantedScopes,
 					principalId: input.principalId,
-					requestId: input.accessRequestId,
+					requestId: accessRequestId,
 					authorizationCompatibility: this.authorizationCompatibility.get(
 						input.providerReleaseId,
 					),

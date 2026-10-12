@@ -962,6 +962,12 @@ describe("PostgreSQL Connection business authority", () => {
 					sharedScopeId: scope.sharedScopeId,
 				});
 				const manhattanState = `manhattan-state-${suffix}`;
+				await repository.publishProviderCatalog({
+					...catalog,
+					provider: "manhattan",
+					providerReleaseId: `manhattan-oauth-state-${suffix}`,
+					actions: [],
+				});
 				await repository.createOAuthTransaction({
 					codeVerifier: `manhattan-verifier-${suffix}`,
 					principalId: eligiblePrincipalA,
