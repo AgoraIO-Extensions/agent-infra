@@ -7,6 +7,7 @@ import {
 	AgentProjectionV2Schema,
 } from "@agent-infra/contracts/pilot";
 import { validatePlatformSecretRecordV1 } from "@agent-infra/contracts/workload";
+import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
 import { FakeObjectStorageV1 } from "@agent-infra/object-storage";
 import {
 	migratePlatformDatabase,
@@ -132,7 +133,11 @@ const applicationBody = {
 	schemaVersion: 2,
 	name: "Production assembly test",
 	description: "Synthetic persistent lifecycle",
-	source: { kind: "standard", templateId: "codex" },
+	source: {
+		kind: "standard",
+		templateId: "codex",
+		templateRevision: "",
+	},
 	coOwnerIds: [],
 	availability: [{ kind: "organization", organizationId: "org-a" }],
 	modelConfiguration: modelConfiguration(plaintext.model),
@@ -182,6 +187,45 @@ function deploymentInput(
 		layers: [],
 	});
 	const imageDigest = `sha256:${sha256(manifest)}`;
+	const modelBinding = {
+		templateId: "codex",
+		imageDigest,
+		driver: "codex" as const,
+		protocol: "openai-responses-v1" as const,
+	};
+	const validation = {
+		schemaVersion: 1 as const,
+		templateId: "codex",
+		imageDigest,
+		driver: "codex" as const,
+		configurationRevision: "configuration-a",
+		status: "passed" as const,
+		evidenceKind: "real-runtime-model" as const,
+		executionId: "fixture-execution",
+		modelId: "model-a",
+		validatedAt: Date.now() - 1_000,
+		validUntil: Date.now() + 60_000,
+	};
+	const readiness = standardTemplateReadinessV1({
+		templateId: "codex",
+		imageDigest,
+		binding: modelBinding,
+		configurationRevision: "configuration-a",
+		validation,
+		now: Date.now(),
+	});
+	if (readiness.state !== "ready") throw new Error("fixture readiness failed");
+	const templateRevision = `template-${sha256(
+		JSON.stringify({
+			registration: {
+				templateId: "codex",
+				imageDigest,
+				modelBinding,
+				configurationRevision: "configuration-a",
+			},
+			validation: readiness.revision,
+		}),
+	)}`;
 	const fetch = vi.fn<typeof globalThis.fetch>(async (request) => {
 		const url = new URL(
 			request instanceof Request ? request.url : request.toString(),
@@ -242,6 +286,9 @@ function deploymentInput(
 				allowedSecretKeys: ["BOT_TOKEN"],
 				platformManagedKeys: ["PORT"],
 				connectionEnabled: false,
+				modelBinding,
+				configurationRevision: "configuration-a",
+				loadValidation: async () => validation,
 			},
 		],
 		modelCatalog: {
@@ -294,7 +341,7 @@ function deploymentInput(
 			},
 		},
 	};
-	return { input, fetch, authorize, imageDigest };
+	return { input, fetch, authorize, imageDigest, templateRevision };
 }
 
 let database: PostgresTestDatabase;
@@ -361,6 +408,7 @@ beforeAll(async () => {
 	await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 	reader = connectDatabase(database.databaseUrl, { max: 1 });
 	fixture = deploymentInput(database.databaseUrl);
+	applicationBody.source.templateRevision = fixture.templateRevision;
 	await openApi();
 }, 60_000);
 afterAll(async () => {
@@ -1210,7 +1258,10 @@ const apiBody = {
 	schemaVersion: 3 as const,
 	name: "Production API Agent",
 	description: "Controlled production creation",
-	source: { kind: "standard" as const, templateId: "codex" },
+	source: {
+		kind: "standard" as const,
+		templateId: "codex",
+	},
 	coOwnerIds: [],
 	availability: [],
 	environment: [],
@@ -1238,6 +1289,7 @@ describe("production API creation with user and application Tokens", () => {
 			"truncate platform.agents,platform.platform_applications,platform.platform_api_credentials,platform.platform_user_disables,platform.relay_key_subjects,platform.relay_key_versions,platform.audit_events,platform.outbox_items,platform.idempotency_records cascade",
 		);
 		fixture = deploymentInput(database.databaseUrl);
+		applicationBody.source.templateRevision = fixture.templateRevision;
 		browserResolve
 			.mockReset()
 			.mockRejectedValue(

@@ -186,7 +186,10 @@ export function createProductionPlatformApiAssemblyInputV1(
 				authorize: input.registry.policy.authorize.bind(input.registry.policy),
 			},
 		},
-		templates: structuredClone(input.templates),
+		templates: input.templates.map(({ loadValidation, ...template }) => ({
+			...structuredClone(template),
+			...(loadValidation ? { loadValidation } : {}),
+		})),
 		modelCatalog: { ...input.modelCatalog },
 		channelPolicy: structuredClone(input.channelPolicy),
 	};

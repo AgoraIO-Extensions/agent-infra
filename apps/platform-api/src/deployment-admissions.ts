@@ -434,14 +434,19 @@ export function createDeploymentAdmissionsV1(
 						? templates.find((item) => item.templateId === selection.templateId)
 						: undefined;
 				if (selection.kind === "standard" && !template) return denied;
+				const readinessRequired =
+					selection.kind === "standard" &&
+					standardTemplateDefinitionsV1.some(
+						(standard) => standard.templateId === selection.templateId,
+					);
 				const readiness = template
 					? await readTemplateReadiness(template)
 					: undefined;
 				if (
-					selection.kind === "standard" &&
-					template?.loadValidation &&
+					readinessRequired &&
 					(readiness?.state !== "ready" ||
-						selection.templateRevision !== readiness.revision)
+						(selection.templateRevision !== undefined &&
+							selection.templateRevision !== readiness.revision))
 				)
 					return denied;
 				const imageReference =
@@ -474,7 +479,7 @@ export function createDeploymentAdmissionsV1(
 					if (!template) return denied;
 					const currentReadiness = await readTemplateReadiness(template);
 					if (
-						(template.loadValidation &&
+						(readinessRequired &&
 							(currentReadiness.state !== "ready" ||
 								currentReadiness.revision !== readiness?.revision)) ||
 						result.immutableDigest !== template.imageDigest ||
