@@ -14,6 +14,21 @@ const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const metadataName = z.string().min(1).max(256);
 const metadataVersion = z.string().min(1).max(128);
 
+function validateReadLifetime(
+	value: { readStartedAt: number; expiresAt: number },
+	context: z.RefinementCtx,
+) {
+	if (
+		value.readStartedAt > value.expiresAt ||
+		value.expiresAt - value.readStartedAt > 30_000
+	)
+		context.addIssue({
+			code: z.ZodIssueCode.custom,
+			path: ["expiresAt"],
+			message: "Native metadata read lifetime is invalid",
+		});
+}
+
 export const NativeMetadataSelectorV1Schema = selector;
 export type NativeMetadataSelectorV1 = z.infer<
 	typeof NativeMetadataSelectorV1Schema
@@ -49,17 +64,7 @@ const readIdentity = {
 
 export const NativeMetadataRequestIdentityV1Schema = z
 	.strictObject(readIdentity)
-	.superRefine((value, context) => {
-		if (
-			value.readStartedAt > value.expiresAt ||
-			value.expiresAt - value.readStartedAt > 30_000
-		)
-			context.addIssue({
-				code: z.ZodIssueCode.custom,
-				path: ["expiresAt"],
-				message: "Native metadata read lifetime is invalid",
-			});
-	});
+	.superRefine(validateReadLifetime);
 export type NativeMetadataRequestIdentityV1 = z.infer<
 	typeof NativeMetadataRequestIdentityV1Schema
 >;
@@ -70,7 +75,7 @@ export const NativeMetadataCommandCapabilityV1Schema = z.strictObject({
 	name: metadataName,
 	description: z.string().max(4096),
 	source: z.strictObject({ name: metadataName, version: metadataVersion }),
-	parameters: z.tuple([]),
+	parameters: z.array(z.never()).max(0),
 	effect: z.literal("read_only"),
 	availability: z.literal("available"),
 });
@@ -94,52 +99,58 @@ const uniqueCapabilityIds = <T extends { id: string }>(
 	values: readonly T[],
 ): boolean => new Set(values.map((value) => value.id)).size === values.length;
 
+const nativeMetadataStatusProjectionV1Schema = z.strictObject({
+	selector: z.literal("status"),
+	status: z.enum(["active", "idle", "not_loaded", "system_error"]),
+	readAt: Rfc3339TimestampV1Schema,
+});
+const nativeMetadataCommandsProjectionV1Schema = z
+	.strictObject({
+		selector: z.literal("commands"),
+		revision: digest,
+		capabilities: z.array(NativeMetadataCommandCapabilityV1Schema).max(128),
+	})
+	.superRefine((value, context) => {
+		if (!uniqueCapabilityIds(value.capabilities))
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["capabilities"],
+				message: "Capability ids must be unique",
+			});
+	});
+const nativeMetadataSkillsProjectionV1Schema = z
+	.strictObject({
+		selector: z.literal("skills"),
+		revision: digest,
+		capabilities: z.array(NativeMetadataSkillCapabilityV1Schema).max(128),
+	})
+	.superRefine((value, context) => {
+		if (!uniqueCapabilityIds(value.capabilities))
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["capabilities"],
+				message: "Capability ids must be unique",
+			});
+	});
+
 export const NativeMetadataProjectionV1Schema = z.discriminatedUnion(
 	"selector",
 	[
-		z.strictObject({
-			selector: z.literal("status"),
-			status: z.enum(["active", "idle", "not_loaded", "system_error"]),
-			readAt: Rfc3339TimestampV1Schema,
-		}),
-		z
-			.strictObject({
-				selector: z.literal("commands"),
-				revision: digest,
-				capabilities: z.array(NativeMetadataCommandCapabilityV1Schema).max(128),
-			})
-			.superRefine((value, context) => {
-				if (!uniqueCapabilityIds(value.capabilities))
-					context.addIssue({
-						code: z.ZodIssueCode.custom,
-						path: ["capabilities"],
-						message: "Capability ids must be unique",
-					});
-			}),
-		z
-			.strictObject({
-				selector: z.literal("skills"),
-				revision: digest,
-				capabilities: z.array(NativeMetadataSkillCapabilityV1Schema).max(128),
-			})
-			.superRefine((value, context) => {
-				if (!uniqueCapabilityIds(value.capabilities))
-					context.addIssue({
-						code: z.ZodIssueCode.custom,
-						path: ["capabilities"],
-						message: "Capability ids must be unique",
-					});
-			}),
+		nativeMetadataStatusProjectionV1Schema,
+		nativeMetadataCommandsProjectionV1Schema,
+		nativeMetadataSkillsProjectionV1Schema,
 	],
 );
 export type NativeMetadataProjectionV1 = z.infer<
 	typeof NativeMetadataProjectionV1Schema
 >;
 
-export const PlatformNativeMetadataReadRequestV1Schema = z.strictObject({
-	...readIdentity,
-	apiRequestSourceRef: OpaqueIdV1Schema,
-});
+export const PlatformNativeMetadataReadRequestV1Schema = z
+	.strictObject({
+		...readIdentity,
+		apiRequestSourceRef: OpaqueIdV1Schema,
+	})
+	.superRefine(validateReadLifetime);
 export type PlatformNativeMetadataReadRequestV1 = z.infer<
 	typeof PlatformNativeMetadataReadRequestV1Schema
 >;
@@ -147,16 +158,20 @@ export type PlatformNativeMetadataReadRequestV1 = z.infer<
 export const NativeMetadataCurrentRequestV1Schema = z.discriminatedUnion(
 	"phase",
 	[
-		z.strictObject({
-			...readIdentity,
-			phase: z.literal("resolve_original_binding"),
-			originalHostScopeRef: z.null(),
-		}),
-		z.strictObject({
-			...readIdentity,
-			phase: z.literal("read_metadata"),
-			originalHostScopeRef: OpaqueIdV1Schema,
-		}),
+		z
+			.strictObject({
+				...readIdentity,
+				phase: z.literal("resolve_original_binding"),
+				originalHostScopeRef: z.null(),
+			})
+			.superRefine(validateReadLifetime),
+		z
+			.strictObject({
+				...readIdentity,
+				phase: z.literal("read_metadata"),
+				originalHostScopeRef: OpaqueIdV1Schema,
+			})
+			.superRefine(validateReadLifetime),
 	],
 );
 export type NativeMetadataCurrentRequestV1 = z.infer<
@@ -178,17 +193,21 @@ export type NativeMetadataCurrentResponseV1 = z.infer<
 	typeof NativeMetadataCurrentResponseV1Schema
 >;
 
-export const RuntimeNativeMetadataBindingRequestV1Schema = z.strictObject({
-	...readIdentity,
-});
+export const RuntimeNativeMetadataBindingRequestV1Schema = z
+	.strictObject({
+		...readIdentity,
+	})
+	.superRefine(validateReadLifetime);
 export type RuntimeNativeMetadataBindingRequestV1 = z.infer<
 	typeof RuntimeNativeMetadataBindingRequestV1Schema
 >;
 
-export const RuntimeNativeMetadataBindingResponseV1Schema = z.strictObject({
-	...readIdentity,
-	originalHostScopeRef: OpaqueIdV1Schema,
-});
+export const RuntimeNativeMetadataBindingResponseV1Schema = z
+	.strictObject({
+		...readIdentity,
+		originalHostScopeRef: OpaqueIdV1Schema,
+	})
+	.superRefine(validateReadLifetime);
 export type RuntimeNativeMetadataBindingResponseV1 = z.infer<
 	typeof RuntimeNativeMetadataBindingResponseV1Schema
 >;
@@ -202,20 +221,46 @@ export type RuntimeNativeMetadataProofV1 = z.infer<
 	typeof RuntimeNativeMetadataProofV1Schema
 >;
 
-export const RuntimeNativeMetadataReadRequestV1Schema = z.strictObject({
-	...readIdentity,
-	originalHostScopeRef: OpaqueIdV1Schema,
-	proof: RuntimeNativeMetadataProofV1Schema,
-});
+export const RuntimeNativeMetadataReadRequestV1Schema = z
+	.strictObject({
+		...readIdentity,
+		originalHostScopeRef: OpaqueIdV1Schema,
+		proof: RuntimeNativeMetadataProofV1Schema,
+	})
+	.superRefine(validateReadLifetime);
 export type RuntimeNativeMetadataReadRequestV1 = z.infer<
 	typeof RuntimeNativeMetadataReadRequestV1Schema
 >;
 
-export const RuntimeNativeMetadataReadResponseV1Schema = z.strictObject({
-	...readIdentity,
-	originalHostScopeRef: OpaqueIdV1Schema,
-	projection: NativeMetadataProjectionV1Schema,
-});
+export const RuntimeNativeMetadataReadResponseV1Schema = z.discriminatedUnion(
+	"selector",
+	[
+		z
+			.strictObject({
+				...readIdentity,
+				selector: z.literal("status"),
+				originalHostScopeRef: OpaqueIdV1Schema,
+				projection: nativeMetadataStatusProjectionV1Schema,
+			})
+			.superRefine(validateReadLifetime),
+		z
+			.strictObject({
+				...readIdentity,
+				selector: z.literal("commands"),
+				originalHostScopeRef: OpaqueIdV1Schema,
+				projection: nativeMetadataCommandsProjectionV1Schema,
+			})
+			.superRefine(validateReadLifetime),
+		z
+			.strictObject({
+				...readIdentity,
+				selector: z.literal("skills"),
+				originalHostScopeRef: OpaqueIdV1Schema,
+				projection: nativeMetadataSkillsProjectionV1Schema,
+			})
+			.superRefine(validateReadLifetime),
+	],
+);
 export type RuntimeNativeMetadataReadResponseV1 = z.infer<
 	typeof RuntimeNativeMetadataReadResponseV1Schema
 >;

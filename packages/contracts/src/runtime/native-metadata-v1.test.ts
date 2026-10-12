@@ -1,9 +1,15 @@
+import { readFileSync } from "node:fs";
+
+import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import {
 	NativeMetadataCurrentRequestV1Schema,
 	NativeMetadataProjectionV1Schema,
 	NativeMetadataRequestIdentityV1Schema,
+	PlatformNativeMetadataReadRequestV1Schema,
+	RuntimeNativeMetadataBindingRequestV1Schema,
 	RuntimeNativeMetadataReadRequestV1Schema,
+	RuntimeNativeMetadataReadResponseV1Schema,
 } from "./native-metadata-v1.ts";
 
 const identity = {
@@ -130,5 +136,76 @@ describe("Native metadata V1 contracts", () => {
 				},
 			}).success,
 		).toBe(true);
+		expect(
+			RuntimeNativeMetadataReadResponseV1Schema.safeParse({
+				...identity,
+				originalHostScopeRef: "host-ref",
+				projection: {
+					selector: "skills",
+					revision: "a".repeat(64),
+					capabilities: [],
+				},
+			}).success,
+		).toBe(false);
+	});
+
+	it("applies the lifetime guard to every wire identity and generated JSON Schema", () => {
+		const invalid = { ...identity, expiresAt: 31_001 };
+		expect(
+			PlatformNativeMetadataReadRequestV1Schema.safeParse({
+				...invalid,
+				apiRequestSourceRef: "api-source",
+			}).success,
+		).toBe(false);
+		expect(
+			RuntimeNativeMetadataBindingRequestV1Schema.safeParse(invalid).success,
+		).toBe(false);
+		expect(
+			RuntimeNativeMetadataReadRequestV1Schema.safeParse({
+				...invalid,
+				originalHostScopeRef: "host-ref",
+				proof: {
+					schemaVersion: 1,
+					format: "native-metadata-jws",
+					token: "signed-token",
+				},
+			}).success,
+		).toBe(false);
+		const artifact = JSON.parse(
+			readFileSync(
+				new URL(
+					"../../artifacts/json-schema/runtime-native-metadata.v1.schema.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		);
+		const validate = new Ajv2020({
+			strict: true,
+			validateFormats: false,
+		}).compile({
+			$schema: artifact.$schema,
+			$defs: artifact.$defs,
+			...artifact.$defs.NativeMetadataProjectionV1,
+		});
+		const command = {
+			selector: "commands",
+			revision: "a".repeat(64),
+			capabilities: [
+				{
+					id: "b".repeat(64),
+					kind: "command",
+					name: "status",
+					description: "",
+					source: { name: "codex", version: "1" },
+					parameters: ["unexpected"],
+					effect: "read_only",
+					availability: "available",
+				},
+			],
+		};
+		const definition = artifact.$defs?.NativeMetadataProjectionV1;
+		expect(definition).toBeDefined();
+		expect(validate(command)).toBe(false);
 	});
 });
