@@ -590,6 +590,16 @@ export async function recordSandboxObservation(
 		context.purpose === "drain" &&
 		context.lifecycle?.authority.targetDesiredState === "running";
 	const stopReceipt = "stopReceipt" in decision ? decision.stopReceipt : null;
+	// A Pod that is still starting is expected transient work. Mark that retry
+	// immediately so the commit wakeup listener can claim it without adding a
+	// fixed one-second delay. Unknown/drifted resources retain a bounded delay;
+	// they must not hot-loop while preserving the existing fail-closed decision.
+	const retryDelayMs =
+		context.purpose === "prepare" &&
+		!decision.finished &&
+		decision.status === "observed"
+			? 0
+			: 1_000;
 	let nextLifecycle: SessionSandboxLifecycleV1 | undefined;
 	if (context.lifecycle && context.purpose === "drain") {
 		nextLifecycle = {
@@ -611,7 +621,7 @@ export async function recordSandboxObservation(
 	const recorded = await transaction`update platform.outbox_items
 		set payload = payload || ${transaction.json((nextLifecycle ? { lifecycle: nextLifecycle } : {}) as unknown as Parameters<typeof transaction.json>[0])},
 		status = ${decision.finished && !continuePreparation ? "succeeded" : "retry_scheduled"}, lease_owner = null, lease_expires_at = null,
-		available_at = clock_timestamp() + interval '1 second', updated_at = clock_timestamp()
+		available_at = clock_timestamp() + (${retryDelayMs}::bigint * interval '1 millisecond'), updated_at = clock_timestamp()
 		where id = ${claim.itemId} and status = 'processing'
 			and lease_owner = ${claim.leaseOwner}
 			and delivery_fence = ${claim.deliveryFence}
