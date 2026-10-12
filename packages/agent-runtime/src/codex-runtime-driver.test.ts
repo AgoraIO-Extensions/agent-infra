@@ -3528,6 +3528,93 @@ describe("Codex Runtime Driver", () => {
 				context,
 			),
 		).rejects.toThrow();
+
+		const terminalController = createBrowserHandoffControllerV1({
+			binding,
+			capability: {
+				capabilityVersion: 3,
+				operations: ["handoff"],
+				policy: {} as never,
+			},
+			now: () => 1_700_000_000_000,
+		});
+		const terminalContext = {
+			browser: {
+				...context.browser,
+				handoff: { controller: terminalController, runtime },
+			},
+		};
+		await driver.executeBrowserHandoff(
+			command.executionId,
+			{ kind: "request", reason: "captcha" },
+			terminalContext,
+		);
+		await expect(
+			driver.executeBrowserHandoff(
+				command.executionId,
+				{ kind: "revoke" },
+				{
+					browser: {
+						...terminalContext.browser,
+						handoff: {
+							controller: terminalController,
+							runtime: { ...runtime, subjectId: "foreign-subject" },
+						},
+					},
+				},
+			),
+		).rejects.toThrow("BROWSER_HANDOFF_IDENTITY_BINDING_STALE");
+		await expect(
+			driver.executeBrowserHandoff(
+				command.executionId,
+				{ kind: "revoke" },
+				{
+					browser: {
+						...terminalContext.browser,
+						handoff: {
+							controller: terminalController,
+							runtime: { ...runtime, authorized: false },
+						},
+					},
+				},
+			),
+		).resolves.toMatchObject({ status: "revoked" });
+
+		const crashedController = createBrowserHandoffControllerV1({
+			binding,
+			capability: {
+				capabilityVersion: 3,
+				operations: ["handoff"],
+				policy: {} as never,
+			},
+			now: () => 1_700_000_000_000,
+		});
+		const crashedContext = {
+			browser: {
+				...context.browser,
+				handoff: { controller: crashedController, runtime },
+			},
+		};
+		await driver.executeBrowserHandoff(
+			command.executionId,
+			{ kind: "request", reason: "human_judgment" },
+			crashedContext,
+		);
+		await expect(
+			driver.executeBrowserHandoff(
+				command.executionId,
+				{ kind: "browser_crashed" },
+				{
+					browser: {
+						...crashedContext.browser,
+						handoff: {
+							controller: crashedController,
+							runtime: { ...runtime, browserAlive: false },
+						},
+					},
+				},
+			),
+		).resolves.toMatchObject({ status: "crashed" });
 	});
 
 	it("does not execute a Browser action twice when an actionId is replayed", async () => {

@@ -5209,6 +5209,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			handoff.controller.binding.pageRevision !== handoff.runtime.pageRevision
 		)
 			unavailable();
+		handoff.controller.assertCurrentBinding(handoff.runtime);
 		const result = executeBrowserHandoffOperationV1(
 			handoff.controller,
 			operation,

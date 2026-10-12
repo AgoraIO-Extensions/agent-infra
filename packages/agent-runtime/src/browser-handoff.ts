@@ -76,6 +76,8 @@ export interface BrowserHandoffControllerV1 {
 			| "BROWSER_HANDOFF_OPERATOR_CHANGED",
 	): BrowserHandoffRecordV1 | undefined;
 	markBrowserCrashed(): BrowserHandoffRecordV1 | undefined;
+	/** Validate identity and resource binding while allowing terminal signals. */
+	assertCurrentBinding(runtime: BrowserHandoffRuntimeSnapshotV1): void;
 	isAgentPaused(): boolean;
 	assertAgentAccess(): void;
 	agentObservation():
@@ -187,11 +189,9 @@ export function createBrowserHandoffControllerV1(input: {
 		return capability;
 	}
 
-	function requireCurrent(snapshot: BrowserHandoffRuntimeSnapshotV1): void {
-		if (!snapshot.authorized)
-			throw new Error("BROWSER_HANDOFF_AUTHORIZATION_REVOKED");
-		if (!snapshot.browserAlive)
-			throw new Error("BROWSER_HANDOFF_BROWSER_UNAVAILABLE");
+	function assertCurrentBinding(
+		snapshot: BrowserHandoffRuntimeSnapshotV1,
+	): void {
 		if (
 			snapshot.subjectId !== binding.subjectId ||
 			snapshot.agentId !== binding.agentId ||
@@ -208,6 +208,14 @@ export function createBrowserHandoffControllerV1(input: {
 			throw new Error("BROWSER_HANDOFF_CAPABILITY_STALE");
 		if (snapshot.pageRevision !== binding.pageRevision)
 			throw new Error("BROWSER_HANDOFF_PAGE_REVISION_STALE");
+	}
+
+	function requireCurrent(snapshot: BrowserHandoffRuntimeSnapshotV1): void {
+		if (!snapshot.authorized)
+			throw new Error("BROWSER_HANDOFF_AUTHORIZATION_REVOKED");
+		if (!snapshot.browserAlive)
+			throw new Error("BROWSER_HANDOFF_BROWSER_UNAVAILABLE");
+		assertCurrentBinding(snapshot);
 	}
 
 	function expireIfNeeded(): void {
@@ -387,6 +395,7 @@ export function createBrowserHandoffControllerV1(input: {
 		returnToAgent,
 		revoke,
 		markBrowserCrashed,
+		assertCurrentBinding,
 		isAgentPaused,
 		assertAgentAccess,
 		agentObservation,
