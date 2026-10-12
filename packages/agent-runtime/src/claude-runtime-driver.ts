@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
+import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverCommandV1Schema,
@@ -20,7 +21,10 @@ import { verifyClaudeInstallation } from "./claude-installation.js";
 import { claudeQuery } from "./claude-query.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
 import { createClaudeStandardMcpServer } from "./claude-standard-mcp.js";
-import { claudeWorkspaceTools } from "./claude-workspace.js";
+import {
+	type ClaudeFileWriteOutput,
+	claudeWorkspaceTools,
+} from "./claude-workspace.js";
 import {
 	validateModelAccess,
 	validateModelEndpoint,
@@ -48,6 +52,10 @@ import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import {
+	type RuntimeFileBridgePortV1,
+	readRuntimeFileResultReceiptV1,
+} from "./runtime-file-bridge.js";
 import {
 	boundedRuntimeSkillRead,
 	type RuntimeFilesystemSkillDirectoryV1,
@@ -905,7 +913,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	private async submit(
 		file: DurableJsonFile<Session>,
 		command: Submit,
-		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
+		fileBridge?: RuntimeFileBridgePortV1,
 	) {
 		const before = file.read();
 		const ref = before.binding.ref;
@@ -999,6 +1007,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		// Paseo ensureQuery retirement order: detach old work, drain it, then resume the same native ID.
 		await this.retire(ref);
 		const directory = join(this.options.path, ref);
+		const workspace = join(directory, "workspace");
 		if (before.started) {
 			try {
 				const history = await readClaudeSessionHistory(
@@ -1206,6 +1215,42 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			await transport.close();
 			throw error;
 		}
+		let resultFileWritten = false;
+		let resultFileInFlight = false;
+		const onResultFile = async (output: ClaudeFileWriteOutput) => {
+			if (!fileBridge || resultFileWritten || resultFileInFlight) return;
+			if (!isAbsolute(output.filePath)) return;
+			const root = await realpath(workspace).catch(() => undefined);
+			const actual = await realpath(output.filePath).catch(() => undefined);
+			if (!root || !actual) return;
+			const within = relative(root, actual);
+			if (!within || within.startsWith("..") || isAbsolute(within)) return;
+			const bytes = Buffer.from(output.content, "utf8");
+			if (bytes.byteLength > 10 * 1024 * 1024) return;
+			resultFileInFlight = true;
+			try {
+				const receipt = await fileBridge.writeResult(
+					{
+						name: basename(within),
+						mediaType: "text/plain",
+						sizeBytes: bytes.byteLength,
+						sha256: createHash("sha256").update(bytes).digest("hex"),
+					},
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(bytes);
+							controller.close();
+						},
+					}),
+				);
+				await this.recordResultFile(command, receipt);
+				resultFileWritten = true;
+			} catch {
+				// Result publication is fail-closed and must not corrupt the native Turn.
+			} finally {
+				resultFileInFlight = false;
+			}
+		};
 		let native: ReturnType<typeof claudeQuery>;
 		try {
 			native = claudeQuery(
@@ -1223,8 +1268,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					},
 					settingSources: [],
 					...claudeWorkspaceTools(
-						join(directory, "workspace"),
+						workspace,
 						join(directory, "memory"),
+						onResultFile,
 					),
 					strictMcpConfig: true,
 					mcpServers: standardMcpServer
@@ -1664,6 +1710,57 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		return bytes.slice();
 	}
 
+	async recordResultFile(
+		command: RuntimeDriverCommand,
+		result: import("./runtime-file-bridge.js").RuntimeFileResultReceiptV1,
+	) {
+		const { binding, projection } = readRuntimeFileResultReceiptV1(result);
+		if (
+			binding.agentId !== command.agentId ||
+			binding.conversationId !== command.conversationId ||
+			binding.executionId !== command.executionId ||
+			binding.sessionGeneration !== command.sessionGeneration
+		)
+			runtimeAuthorizationDenied();
+		const parsed = FileProjectionV1Schema.parse(projection);
+		if (parsed.kind !== "result" || parsed.status !== "available")
+			runtimeAuthorizationDenied();
+		const session = await this.binding(command, false);
+		if (!session) unavailable();
+		const file = await this.file(session);
+		await file.update((state) => {
+			const turn = state.turns.find(
+				(candidate) => candidate.executionId === command.executionId,
+			);
+			if (!turn || terminal(turn.status)) runtimeAuthorizationDenied();
+			if (
+				turn.events.some(
+					(event) =>
+						event.type === "file" && event.payload.fileId === parsed.fileId,
+				)
+			)
+				return;
+			state.sequence++;
+			turn.events.push(
+				RuntimeEventV1Schema.parse({
+					schemaVersion: 1,
+					executionId: command.executionId,
+					adapterEventKey: randomUUID(),
+					cursor: `claude-${state.sequence}`,
+					occurredAt: new Date().toISOString(),
+					type: "file",
+					payload: {
+						fileId: parsed.fileId,
+						name: parsed.descriptor.name,
+						mimeType: parsed.descriptor.mediaType,
+						sizeBytes: parsed.descriptor.sizeBytes,
+					},
+				}),
+			);
+		});
+		for (const wake of this.waiters.get(session.ref) ?? []) wake();
+	}
+
 	async getCapabilities() {
 		const skills = this.options.skillDirectory?.findSkills().map((skill) => ({
 			schemaVersion: 1 as const,
@@ -1681,7 +1778,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const capabilities = {
 			modelSelection: true,
 			attachments: true,
-			resultFiles: false,
+			resultFiles: true,
 			connection: this.options.standardConnectionClient !== undefined,
 			supplementaryInstruction: false,
 			...(skills && skills.length > 0 ? { skills } : {}),
