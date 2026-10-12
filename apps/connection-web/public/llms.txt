@@ -22,3 +22,7 @@ Installing and logging in do not grant access to GitHub, Jira, Confluence, or ot
 - MCP endpoint: __CONNECTION_ORIGIN__/mcp
 
 Do not infer additional endpoints, credentials, identities, grants, or permissions from this file.
+
+## Rehoboam release failure handoff
+
+A releaser does not need a local SDK checkout. Read the failed task and Job logs, then hand the cause to project developers; do not assume authority to repair source. Rehoboam Provider v14 offers explicitly authorized `record_release_family_repair` to associate developer, PR, full commit SHA and compilation evidence. This is operator-reported progress, not PR merge or package-build verification; it never advances tasks, changes Job outcomes or sends messages. Read current family revision/template signature before recording, and read back uncertain outcomes before retrying.

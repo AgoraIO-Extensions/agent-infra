@@ -41,6 +41,8 @@ Skills 使用 `needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-hum
 
 ## Repository Layout
 
+- Rehoboam Provider v14 adds explicit `record_release_family_repair` for operator-reported developer/PR/commit/compile evidence. Rehoboam owns failed-task checks, revision/template guards and audit; no source edits, messages, stage advancement or Job result changes. v13 implementation remains immutable.
+
 - `apps/`：Web、Platform API、Platform Worker 与 Connection API 的进程入口。
 - `packages/`：被多个真实调用方复用的配置、领域或 Adapter 模块。
 - Connection Provider 在 `packages/openconnector-adapter/src/providers/<名称>/` 维护 actions/definition/executors 入口；已发布源码及测试在 versions 中保持原字节。旧 src 文件只作兼容导出，源码位置校验使用 provider-source-layout.json。参见 [连接器目录](docs/connection/provider-layout.md)。

@@ -113,3 +113,7 @@ Per-user PAT Binding remains Direct MCP access. A platform representing the curr
 [Developer integration guide](__CONNECTION_ORIGIN__/connection/agent/)
 
 Open guide/console links in new tabs. Do not infer undocumented endpoints, credentials, identities or grants from this file.
+
+## Rehoboam release failure handoff
+
+Do not assume a releaser has local SDK source or authorizes source repair. Read failed tasks/logs and hand them to project developers. With explicit Provider v14 Action authorization, `record_release_family_repair` records operator-reported developer/PR/full commit/compile evidence using current family revision and template signature. It does not advance, alter Job results, send messages, merge or build packages. Confirm business writes; read back uncertain outcomes before retrying. Compilation is separate from PR merge and package build.

@@ -225,6 +225,14 @@ Rehoboam 渠道发布以新的 immutable `rehoboam-connection-v13` 增补 Publis
 仍不得接受任意身份、Header 或绕过审批的内部参数。
 详见 [渠道发布决策](../adr/ADR-rehoboam-channel-publishing.md)。
 
+发布族失败后的研发交接以 immutable `rehoboam-connection-v14` 增加
+`record_release_family_repair` WRITE，沿用 release WRITE scope 和固定 Rehoboam origin。
+新 Action 需要显式授权；v13 及旧 Action schema/effect/scopes 和实现字节保留。
+记录的研发邮箱、PR、提交和编译链接是操作人报告的证据，业务校验、CAS、模板签名及追加审计
+仍由 Rehoboam 负责；不获取本地源码、不发送人员消息、不推进阶段、不修改 Job 结果。
+编译通过不代替合并或制品构建；未知写结果先读取原任务核对，禁止盲重试。
+详见 [已发布 Native 后继续框架发版](../connection/rehoboam-published-native.md)。
+
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
 `apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；
