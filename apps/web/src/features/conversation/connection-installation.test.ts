@@ -53,11 +53,11 @@ it("starts an installation with the current browser CSRF headers and projects no
 	expect(request).toMatchObject({
 		body: { schemaVersion: 1, executionId: "execution-1" },
 		headers: {
-			Origin: window.location.origin,
 			"X-Platform-CSRF": "1",
-			"Sec-Fetch-Site": "same-origin",
 		},
 	});
+	expect(request.headers.Origin).toBeUndefined();
+	expect(request.headers["Sec-Fetch-Site"]).toBeUndefined();
 	expect(request.headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
 	expect(JSON.stringify(result)).not.toContain("token");
 });
@@ -103,9 +103,7 @@ it("rejects response fields that could contain credential material", async () =>
 it("uses browser security headers for status reads without an idempotency key", () => {
 	const headers = connectionRequestHeaders();
 	expect(headers).toEqual({
-		Origin: window.location.origin,
 		"X-Platform-CSRF": "1",
-		"Sec-Fetch-Site": "same-origin",
 	});
 });
 

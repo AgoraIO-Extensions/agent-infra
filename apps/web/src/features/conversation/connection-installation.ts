@@ -34,10 +34,11 @@ export function connectionRequestHeaders(): ReadHeaders;
 export function connectionRequestHeaders(
 	idempotencyKey?: string,
 ): BeginHeaders | ReadHeaders {
+	// Browser Fetch supplies Origin and Sec-Fetch-Site for same-origin POSTs;
+	// JavaScript cannot set either forbidden header. Only send the CSRF marker
+	// and the command idempotency key explicitly.
 	return {
-		Origin: window.location.origin,
 		"X-Platform-CSRF": "1" as const,
-		"Sec-Fetch-Site": "same-origin" as const,
 		...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
 	} as BeginHeaders | ReadHeaders;
 }
