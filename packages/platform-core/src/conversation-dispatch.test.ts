@@ -361,6 +361,28 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		return true;
 	}
 
+	async redispatchUnacceptedTurn(input: {
+		claim: ConversationDispatchClaimV1;
+		retryDelayMs: number;
+		errorCode: string;
+	}) {
+		if (
+			!this.#owned(input.claim) ||
+			this.current.executionStatus !== "unknown" ||
+			this.current.stopPending
+		)
+			return false;
+		this.outboxStatus = "retry_scheduled";
+		this.errorCode = input.errorCode;
+		// 退回 submitted 状态，递增 executionDeliveryFence 模拟 delivery_fence + 1
+		this.current = {
+			...this.current,
+			executionStatus: "submitted",
+			executionDeliveryFence: this.current.executionDeliveryFence + 1,
+		};
+		return true;
+	}
+
 	setRuntimeCursor(cursor: string) {
 		this.current = { ...this.current, runtimeCursor: cursor };
 	}
@@ -476,6 +498,7 @@ function setup(
 		runtimeHost?: ConversationRuntimeHostPortV1;
 		authorization?: ConversationDispatchAuthorizationPortV1;
 		maxRecoveryAttempts?: number;
+		maxRedispatchAttempts?: number;
 	} = {},
 ) {
 	const store = options.store ?? new MemoryDispatchStore();
@@ -495,6 +518,9 @@ function setup(
 			...(options.maxRecoveryAttempts === undefined
 				? {}
 				: { maxRecoveryAttempts: options.maxRecoveryAttempts }),
+			...(options.maxRedispatchAttempts === undefined
+				? {}
+				: { maxRedispatchAttempts: options.maxRedispatchAttempts }),
 		},
 	);
 	return { store, runtimeHost, events, useCase };
@@ -564,6 +590,328 @@ describe("bounded unknown recovery", () => {
 		expect(store.outboxStatus).toBe("failed");
 		expect(store.errorCode).toBe("RUNTIME_METADATA_RECOVERY_TIMEOUT");
 		expect(store.current.executionStatus).toBe("completed");
+	});
+});
+
+describe("not_found absent-fence redispatch (#2108)", () => {
+	// AC-1：not_found 一次认领内退回等待，下次以同一 executionId、更高 fence 重新投递
+	it("returns Turn to waiting and re-dispatches with higher fence on not_found (AC-1)", async () => {
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Should not dispatch during recovery");
+			},
+			async recoverStatus() {
+				throw new Error("Only original recovery allowed");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					executionId: request.executionId,
+					hostSessionRef: "host-1",
+					outcome: "not_found",
+				};
+			},
+			async *events() {
+				yield* [];
+			},
+		};
+		// 第一次认领：executionStatus = unknown（恢复路径）
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", hostSessionRef: "host-1" }),
+		);
+		const h = setup({ store, runtimeHost, maxRedispatchAttempts: 3 });
+		const result = await dispatch(h.useCase);
+		// 退回等待并安排重投
+		expect(result).toMatchObject({ outcome: "retry", retryScheduled: true });
+		expect(store.current.executionStatus).toBe("submitted");
+		expect(store.outboxStatus).toBe("retry_scheduled");
+		expect(store.errorCode).toBe("RUNTIME_SUBMIT_NOT_ACCEPTED");
+		// delivery_fence 已递增（高于初始值），下次投递使用更高 fence
+		expect(store.current.executionDeliveryFence).toBeGreaterThan(1);
+		// executionId 不变
+		expect(store.current.executionId).toBe("execution-1");
+	});
+
+	it("re-dispatches the same executionId on subsequent claim after redispatch (AC-1 second claim)", async () => {
+		let dispatches = 0;
+		let recoveries = 0;
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				dispatches++;
+				return {
+					schemaVersion: 2,
+					hostSessionRef: "host-1",
+					operationId: "execution-1",
+					result: { outcome: "accepted", status: "running" },
+				};
+			},
+			async recoverStatus() {
+				throw new Error("Only original recovery allowed");
+			},
+			async recoverOriginalStatus(request) {
+				recoveries++;
+				return {
+					schemaVersion: 2,
+					executionId: request.executionId,
+					hostSessionRef: "host-1",
+					outcome: "not_found",
+				};
+			},
+			async *events() {
+				yield* [];
+			},
+		};
+		// 第一次认领：unknown 状态触发恢复
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", hostSessionRef: "host-1" }),
+		);
+		const h = setup({ store, runtimeHost, maxRedispatchAttempts: 3 });
+		const firstResult = await dispatch(h.useCase);
+		expect(firstResult).toMatchObject({
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		expect(recoveries).toBe(1);
+		expect(dispatches).toBe(0);
+		expect(store.current.executionStatus).toBe("submitted");
+		const newExecutionDeliveryFence = store.current.executionDeliveryFence;
+		expect(newExecutionDeliveryFence).toBeGreaterThan(1);
+
+		// 验证第二次认领以同一 executionId 投递（store 状态已是 submitted，模拟重新认领）
+		// 通过重新创建 store 为 submitted 状态，executionDeliveryFence = 更高值
+		const store2 = new MemoryDispatchStore(
+			claim({
+				executionStatus: "submitted",
+				hostSessionRef: "host-1",
+				executionDeliveryFence: newExecutionDeliveryFence,
+				executionId: "execution-1",
+			}),
+		);
+		const h2 = setup({ store: store2, runtimeHost, maxRedispatchAttempts: 3 });
+		await dispatch(h2.useCase);
+		expect(recoveries).toBe(1); // 不再触发恢复
+		expect(dispatches).toBe(1); // 实际投递
+		expect(store2.current.executionId).toBe("execution-1"); // 同一 executionId
+	});
+
+	// AC-2 负向：found/unknown、recovery_failed、stop 恢复、已终结 Turn 不受影响
+	it("does not redispatch when outcome is found/unknown (AC-2)", async () => {
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Should not dispatch");
+			},
+			async recoverStatus() {
+				throw new Error("Only original recovery allowed");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					executionId: request.executionId,
+					hostSessionRef: "host-1",
+					outcome: "found",
+					status: "unknown",
+				};
+			},
+			async *events() {
+				yield* [];
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "unknown",
+				hostSessionRef: "host-1",
+			}),
+		);
+		const h = setup({ store, runtimeHost, maxRedispatchAttempts: 3 });
+		const result = await dispatch(h.useCase);
+		// found/unknown 不触发 redispatch：走正常的 persistRuntimeEvents 路径
+		// 因为无事件且无 finalStatus，返回 RUNTIME_STREAM_INCOMPLETE retry（不是 RUNTIME_SUBMIT_NOT_ACCEPTED）
+		expect(result).not.toMatchObject({ outcome: "rejected" });
+		expect(store.current.executionStatus).not.toBe("submitted");
+		expect(store.errorCode).not.toBe("RUNTIME_SUBMIT_NOT_ACCEPTED");
+		expect(store.current.executionDeliveryFence).toBe(
+			store.current.executionDeliveryFence,
+		); // fence 不因 found/unknown 递增
+	});
+
+	it("does not redispatch when stop is pending - uses cancelUnaccepted (AC-2)", async () => {
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Stop needs a durable ref");
+			},
+			async recoverStatus() {
+				throw new Error("Only original recovery allowed");
+			},
+			async recoverOriginalStatus() {
+				return {
+					schemaVersion: 2,
+					outcome: "not_found",
+					hostSessionRef: null,
+					executionId: "execution-1",
+				};
+			},
+			events() {
+				throw new Error("Events forbidden");
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "unknown",
+				hostSessionRef: null,
+				stopPending: true,
+			}),
+		);
+		const h = setup({
+			store,
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+			maxRedispatchAttempts: 3,
+		});
+		const result = await dispatch(h.useCase);
+		// stop 恢复路径走 cancelUnaccepted，不走 redispatch
+		expect(result).toMatchObject({ outcome: "already_completed" });
+		expect(store.current.executionStatus).toBe("cancelled");
+	});
+
+	it("does not redispatch a recovery_failed outcome (AC-2)", async () => {
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Should not dispatch");
+			},
+			async recoverStatus() {
+				throw new Error("Only original recovery allowed");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					executionId: request.executionId,
+					hostSessionRef: "host-1",
+					outcome: "recovery_failed",
+					code: "RUNTIME_SESSION_RECOVERY_FAILED",
+				};
+			},
+			async *events() {
+				yield* [];
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", hostSessionRef: "host-1" }),
+		);
+		const h = setup({ store, runtimeHost, maxRedispatchAttempts: 3 });
+		const result = await dispatch(h.useCase);
+		// recovery_failed 不触发 redispatch，走 generation isolation 路径
+		expect(result).not.toMatchObject({
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		// executionStatus 不应变为 submitted
+		expect(store.current.executionStatus).not.toBe("submitted");
+	});
+
+	it("does not redispatch a Turn that is already terminal (AC-2)", async () => {
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Should not dispatch");
+			},
+			async recoverStatus() {
+				throw new Error("Only original recovery allowed");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					executionId: request.executionId,
+					hostSessionRef: "host-1",
+					outcome: "not_found",
+				};
+			},
+			async *events() {
+				yield* [];
+			},
+		};
+		// 已终结（completed）的 Turn 不参与恢复路径（executionStatus 不是 unknown/processing）
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "completed", hostSessionRef: "host-1" }),
+		);
+		const h = setup({ store, runtimeHost, maxRedispatchAttempts: 3 });
+		await dispatch(h.useCase);
+		// completed 的 Turn 不走 recoveringOriginalTurn 路径
+		expect(store.current.executionStatus).toBe("completed");
+		// 不应变为 submitted
+		expect(store.current.executionStatus).not.toBe("submitted");
+	});
+
+	// AC-3：达到重投上限后明确失败，错误码 RUNTIME_SUBMIT_NOT_ACCEPTED
+	it("fails with RUNTIME_SUBMIT_NOT_ACCEPTED after redispatch limit is reached (AC-3)", async () => {
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Should not dispatch");
+			},
+			async recoverStatus() {
+				throw new Error("Only original recovery allowed");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					executionId: request.executionId,
+					hostSessionRef: "host-1",
+					outcome: "not_found",
+				};
+			},
+			async *events() {
+				yield* [];
+			},
+		};
+		// attemptCount 已达上限（3）
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "unknown",
+				hostSessionRef: "host-1",
+				attemptCount: 3,
+			}),
+		);
+		const h = setup({ store, runtimeHost, maxRedispatchAttempts: 3 });
+		const result = await dispatch(h.useCase);
+		expect(result).toMatchObject({ outcome: "rejected" });
+		expect(store.outboxStatus).toBe("failed");
+		expect(store.errorCode).toBe("RUNTIME_SUBMIT_NOT_ACCEPTED");
+		// Conversation 释放
+		expect(store.current.executionStatus).toBe("failed");
+	});
+
+	it("does not fail on recovery_failed or unknown when maxRedispatchAttempts is reached (AC-3 negative)", async () => {
+		// recovery_failed 不受 redispatch 计数约束
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				throw new Error("Should not dispatch");
+			},
+			async recoverStatus() {
+				throw new Error("Only original recovery allowed");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					executionId: request.executionId,
+					hostSessionRef: "host-1",
+					outcome: "found",
+					status: "running",
+				};
+			},
+			async *events() {
+				yield* [];
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({
+				executionStatus: "unknown",
+				hostSessionRef: "host-1",
+				attemptCount: 3,
+			}),
+		);
+		const h = setup({ store, runtimeHost, maxRedispatchAttempts: 3 });
+		const result = await dispatch(h.useCase);
+		// found/running 正常处理，不受 redispatch 计数影响
+		expect(result).not.toMatchObject({ outcome: "rejected" });
+		expect(store.errorCode).not.toBe("RUNTIME_SUBMIT_NOT_ACCEPTED");
 	});
 });
 
@@ -846,13 +1194,13 @@ describe("Conversation Worker dispatch", () => {
 			"cursor-2",
 		]);
 	});
-	it("retains an occupied original execution when recovery finds no accepted Turn without resubmitting", async () => {
+	it("returns a not_found Turn to its waiting position for redispatch (AC-1)", async () => {
 		let dispatches = 0;
 		let recoveries = 0;
 		const runtimeHost: ConversationRuntimeHostPortV1 = {
 			async dispatch() {
 				dispatches++;
-				throw new Error("Unexpected submit");
+				throw new Error("Unexpected submit during recovery");
 			},
 			async recoverStatus() {
 				throw new Error("Unexpected legacy recovery");
@@ -874,12 +1222,20 @@ describe("Conversation Worker dispatch", () => {
 			claim({ executionStatus: "unknown", hostSessionRef: "host-original" }),
 		);
 		const f = setup({ store, runtimeHost });
-		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "unknown" });
+		// 第一次认领：not_found，退回 submitted 等待重投
+		expect(await dispatch(f.useCase)).toMatchObject({
+			outcome: "retry",
+			retryScheduled: true,
+		});
 		expect({ dispatches, recoveries }).toEqual({
 			dispatches: 0,
 			recoveries: 1,
 		});
-		expect(store.current.executionStatus).toBe("unknown");
+		expect(store.current.executionStatus).toBe("submitted");
+		expect(store.outboxStatus).toBe("retry_scheduled");
+		expect(store.errorCode).toBe("RUNTIME_SUBMIT_NOT_ACCEPTED");
+		// executionDeliveryFence 递增（高于初始值），下次认领以更高 fence 投递
+		expect(store.current.executionDeliveryFence).toBeGreaterThan(1);
 	});
 
 	it("rejects a found recovery that introduces a Runtime Host reference", async () => {

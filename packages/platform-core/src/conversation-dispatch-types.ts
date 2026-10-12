@@ -195,6 +195,17 @@ export interface ConversationDispatchStorePortV1 {
 		readonly retryDelayMs: number;
 		readonly errorCode: string;
 	}): Promise<boolean>;
+	/**
+	 * 状态恢复确认原提交未被 Host 接受（not_found + 已持久缺席栅栏）时，
+	 * 把 Execution 退回原等待位置并以更高 fence 安排重投（HLD §8.4）。
+	 * 同一事务内：清除原提交绑定、递增 execution delivery_fence、
+	 * 恢复 execution 状态为原等待状态，outbox 设为 retry_scheduled。
+	 */
+	redispatchUnacceptedTurn?(input: {
+		readonly claim: ConversationDispatchClaimV1;
+		readonly retryDelayMs: number;
+		readonly errorCode: string;
+	}): Promise<boolean>;
 	cancelUnaccepted(input: {
 		readonly claim: ConversationDispatchClaimV1;
 	}): Promise<boolean>;

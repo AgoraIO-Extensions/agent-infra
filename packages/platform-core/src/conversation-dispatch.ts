@@ -115,11 +115,15 @@ export function createConversationDispatchUseCaseV1(
 		readonly retryDelayMs?: number;
 		/** Maximum durable claims spent recovering an unknown Runtime execution. */
 		readonly maxRecoveryAttempts?: number;
+		/** 状态恢复确认 not_found 后，同一 executionId 自动重投的最大次数。 */
+		readonly maxRedispatchAttempts?: number;
 	} = {},
 ): ConversationDispatchUseCaseV1 {
 	const leaseDurationMs = options.leaseDurationMs ?? 30_000;
 	const retryDelayMs = options.retryDelayMs ?? 1_000;
 	const maxRecoveryAttempts = options.maxRecoveryAttempts ?? 120;
+	// 自动重投的上限，默认 3 次（超出后以 RUNTIME_SUBMIT_NOT_ACCEPTED 明确失败）
+	const maxRedispatchAttempts = options.maxRedispatchAttempts ?? 3;
 	if (
 		!Number.isSafeInteger(leaseDurationMs) ||
 		leaseDurationMs < 3 ||
@@ -129,10 +133,17 @@ export function createConversationDispatchUseCaseV1(
 		retryDelayMs > 86_400_000 ||
 		!Number.isSafeInteger(maxRecoveryAttempts) ||
 		maxRecoveryAttempts < 1 ||
-		maxRecoveryAttempts > 1_000_000
+		maxRecoveryAttempts > 1_000_000 ||
+		!Number.isSafeInteger(maxRedispatchAttempts) ||
+		maxRedispatchAttempts < 1 ||
+		maxRedispatchAttempts > 1_000_000
 	) {
 		throw new ConversationDispatchError("invalid_input");
 	}
+	// not_found + 缺席栅栏 = 确认未接受，超出重投上限则明确失败
+	const redispatchExhausted = (claim: ConversationDispatchClaimV1) =>
+		claim.attemptCount !== undefined &&
+		claim.attemptCount >= maxRedispatchAttempts;
 	const recoveryExhausted = (claim: ConversationDispatchClaimV1) =>
 		claim.attemptCount !== undefined &&
 		claim.attemptCount >= maxRecoveryAttempts &&
@@ -1135,7 +1146,51 @@ export function createConversationDispatchUseCaseV1(
 						if (!(await dispatchHeartbeat.stop())) {
 							return { schemaVersion: 1, outcome: "stale" };
 						}
-						if (!claim.stopPending)
+						if (!claim.stopPending) {
+							// not_found + Host 已持久缺席栅栏 = 确认原提交未被接受（HLD §8.4）
+							// stop 恢复路径走 cancelUnaccepted，非 stop 路径退回等待重投
+							// control-only 路径无法重投（缺少业务授权），保持原有 unknown retry
+							if (
+								!authority.controlOnly &&
+								dependencies.store.redispatchUnacceptedTurn &&
+								(claim.operation === "conversation.turn.submit.v1" ||
+									claim.operation === "conversation.turn.regenerate.v1")
+							) {
+								if (redispatchExhausted(claim)) {
+									// 达到重投上限，以固定错误码明确失败并释放 Conversation
+									const finished = await dependencies.store.finish({
+										claim,
+										status: "failed",
+										transition: rejectedTransition(claim),
+										errorCode: "RUNTIME_SUBMIT_NOT_ACCEPTED",
+									});
+									return finished
+										? { schemaVersion: 1, outcome: "rejected" }
+										: { schemaVersion: 1, outcome: "stale" };
+								}
+								try {
+									const redispatched =
+										await dependencies.store.redispatchUnacceptedTurn({
+											claim,
+											retryDelayMs,
+											errorCode: "RUNTIME_SUBMIT_NOT_ACCEPTED",
+										});
+									return redispatched
+										? {
+												schemaVersion: 1,
+												outcome: "retry",
+												retryScheduled: true,
+											}
+										: { schemaVersion: 1, outcome: "stale" };
+								} catch {
+									return {
+										schemaVersion: 1,
+										outcome: "retry",
+										retryScheduled: false,
+									};
+								}
+							}
+							// Store 未实现 redispatchUnacceptedTurn，降级为 retry
 							return retry(
 								dependencies.store,
 								claim,
@@ -1144,6 +1199,7 @@ export function createConversationDispatchUseCaseV1(
 								"unknown",
 								retryTransition(claim),
 							);
+						}
 						const cancelled = await dependencies.store.cancelUnaccepted({
 							claim,
 						});
