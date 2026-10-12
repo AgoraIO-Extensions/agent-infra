@@ -52,14 +52,9 @@ export interface RuntimeExecutionAuthority {
 }
 
 function authorizationSource() {
-	const frame = new Error().stack
-		?.split("\n")
-		.slice(1)
-		.find(
-			(line) =>
-				!line.includes("runtime-authorization.ts") &&
-				!line.includes("errors.ts"),
-		);
+	const error = new Error();
+	Error.captureStackTrace?.(error, runtimeAuthorizationDenied);
+	const frame = error.stack?.split("\n")[1];
 	return frame?.trim() ?? "unknown";
 }
 

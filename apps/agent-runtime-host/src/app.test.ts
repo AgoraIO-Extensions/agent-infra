@@ -302,6 +302,10 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 			traceId: "trace-diagnostic",
 		});
 		expect(typeof diagnostic.diagnosticSource).toBe("string");
+		expect(diagnostic.diagnosticSource).not.toContain("authorizationSource");
+		expect(diagnostic.diagnosticSource).not.toContain(
+			"runtimeAuthorizationSource",
+		);
 		expect(JSON.stringify(diagnostic)).not.toContain(body.grant.token);
 	});
 

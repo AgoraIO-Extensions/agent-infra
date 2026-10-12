@@ -160,7 +160,8 @@ export function startRuntimeHost(options: StartOptions) {
 		void options.oauth.client.close().catch(() => undefined);
 	const server = serve(
 		{
-			fetch: createRuntimeHostApp({ ...options, connectionConsumer }).fetch,
+			fetch: createRuntimeHostApp({ ...options, connectionConsumer, log })
+				.fetch,
 			port,
 		},
 		(info) =>

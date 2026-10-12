@@ -21,10 +21,9 @@ export interface RuntimeHostErrorDiagnostics {
 }
 
 function runtimeAuthorizationSource() {
-	const frame = new Error().stack
-		?.split("\n")
-		.slice(2)
-		.find((line) => !line.includes("errors.ts"));
+	const error = new Error();
+	Error.captureStackTrace?.(error, RuntimeHostError);
+	const frame = error.stack?.split("\n")[1];
 	return frame?.trim().replace(`${process.cwd()}/`, "") ?? "unknown";
 }
 
