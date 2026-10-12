@@ -334,6 +334,16 @@ function browserApiError(
 }
 
 function browserConnectionError(context: Context, error: ConnectionError) {
+	if (
+		error.code === "INVALID_REQUEST" &&
+		error.data?.reasonCode === "CONSUMER_DECLARATION_REQUIRED"
+	) {
+		return browserApiError(context, {
+			code: error.code,
+			messageKey: "connection.error.consumer_declaration_required",
+			status: 400,
+		});
+	}
 	const directoryGateUnavailable =
 		error.code === "PROVIDER_UNAVAILABLE" &&
 		error.message === "Employee directory approval gate is unavailable";
@@ -3216,6 +3226,11 @@ export function createConnectionOAuthApp(
 					throw new ConnectionError("RESOURCE_NOT_FOUND", "Resource not found");
 				}
 				context.header("cache-control", "no-store");
+				const declarations =
+					await management.service.listConsumerDeclarationsAsAdministrator(
+						session.account.principalId,
+						consumer.consumerId,
+					);
 				return context.json({
 					consumer: {
 						id: consumer.consumerId,
@@ -3228,6 +3243,10 @@ export function createConnectionOAuthApp(
 						)
 					).map((catalog) => ({
 						actions: catalog.actions,
+						declaredActionVersionIds:
+							declarations.find(
+								(item) => item.providerReleaseId === catalog.providerReleaseId,
+							)?.actionVersionIds ?? [],
 						providerId: catalog.provider,
 						providerReleaseId: catalog.providerReleaseId,
 					})),

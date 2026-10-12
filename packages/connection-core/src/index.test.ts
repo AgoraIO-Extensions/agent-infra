@@ -320,6 +320,10 @@ class MemoryRepository implements ConnectionRepository {
 			"Authorization preview is not used by this test repository",
 		);
 	}
+	async listConsumerDeclarations() {
+		return [];
+	}
+
 	async publishConsumerDeclaration() {
 		return { declarationId: "declaration-test" };
 	}

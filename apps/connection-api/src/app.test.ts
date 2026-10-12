@@ -173,6 +173,10 @@ class TestRepository implements ConnectionRepository {
 			"Authorization preview is not used by this test repository",
 		);
 	}
+	async listConsumerDeclarations() {
+		return [];
+	}
+
 	async publishConsumerDeclaration() {
 		return { declarationId: "declaration-test" };
 	}
@@ -2676,6 +2680,20 @@ describe("Connection API", () => {
 				if (
 					typeof value === "object" &&
 					value !== null &&
+					"consumerId" in value &&
+					value.consumerId === "consumer-unconfigured"
+				) {
+					throw new ConnectionError(
+						"INVALID_REQUEST",
+						"Consumer capability declaration is missing",
+						{
+							reasonCode: "CONSUMER_DECLARATION_REQUIRED",
+						},
+					);
+				}
+				if (
+					typeof value === "object" &&
+					value !== null &&
 					"connectionId" in value &&
 					value.connectionId === "connection-old"
 				) {
@@ -3066,6 +3084,29 @@ describe("Connection API", () => {
 		expect(apiResponses.map(({ status }) => status)).toEqual([
 			200, 201, 201, 201, 201, 201, 200, 201, 204, 204, 400,
 		]);
+		const unconfigured = await app.request(
+			"/api/v1/connection/authorization-previews",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					connectionId: "connection-github",
+					consumerId: "consumer-unconfigured",
+				}),
+				headers: {
+					"content-type": "application/json",
+					cookie,
+					origin: "https://connection.example",
+					"idempotency-key": "unconfigured-preview",
+				},
+			},
+		);
+		expect(unconfigured.status).toBe(400);
+		expect(await unconfigured.json()).toMatchObject({
+			error: {
+				messageKey: "connection.error.consumer_declaration_required",
+				retryable: false,
+			},
+		});
 		expect(await apiResponses[0]?.json()).toEqual({
 			authorizationUrl: "https://github.test/login/oauth/authorize",
 		});
@@ -3467,6 +3508,17 @@ describe("Connection API", () => {
 				expect(principalId).toBe("principal-admin");
 				return [];
 			},
+			listConsumerDeclarationsAsAdministrator: async (
+				actorPrincipalId: string,
+			) => {
+				expect(actorPrincipalId).toBe("principal-admin");
+				return [
+					{
+						providerReleaseId: "github-release-v7",
+						actionVersionIds: ["github.get_repository@v7"],
+					},
+				];
+			},
 			publishConsumerDeclarationAsAdministrator: async (
 				actorPrincipalId: string,
 				input: unknown,
@@ -3567,6 +3619,7 @@ describe("Connection API", () => {
 			providers: [
 				{
 					actions: [{ id: "github.get_repository@v7" }],
+					declaredActionVersionIds: ["github.get_repository@v7"],
 					providerId: "github",
 					providerReleaseId: "github-release-v7",
 				},
