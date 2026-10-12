@@ -2946,6 +2946,38 @@ function isPilotBrowserProjectionOpenApiAddition(previous, current) {
 	}
 	return changed && findBreakingChanges(previous, normalized).length === 0;
 }
+
+// Runtime operation facts may add optional, non-secret Connection consumer
+// references without invalidating existing event readers.
+function isRuntimeConnectionAssociationOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	const fields = ["consumerId", "instanceRef", "credentialRevision"];
+	let changed = false;
+	const visit = (value) => {
+		if (Array.isArray(value)) {
+			for (const item of value) visit(item);
+			return;
+		}
+		if (value === null || typeof value !== "object") return;
+		if (
+			value.properties &&
+			typeof value.properties === "object" &&
+			value.properties.serviceRef &&
+			value.properties.verification
+		) {
+			for (const field of fields) {
+				if (value.properties[field] !== undefined) {
+					if (value.required?.includes(field)) return;
+					delete value.properties[field];
+					changed = true;
+				}
+			}
+		}
+		for (const child of Object.values(value)) visit(child);
+	};
+	visit(normalized);
+	return changed && findBreakingChanges(previous, normalized).length === 0;
+}
 function findBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
 	let current = currentValue;
@@ -2987,6 +3019,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeSkillCapabilityOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserEvidenceOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
+			!isRuntimeConnectionAssociationOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&
