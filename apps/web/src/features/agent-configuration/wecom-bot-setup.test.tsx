@@ -70,15 +70,17 @@ it("requires takeover acknowledgement and clears the Secret before submitting th
 	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
 	expect(screen.queryByLabelText("智能机器人配置标识")).toBeNull();
 });
-it("explains unavailable QR without fabricating a successful binding", () => {
+it("explains unavailable QR without fabricating a successful binding", async () => {
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async () => Response.json({ status: "not_configured" })),
 	);
 	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
 	fireEvent.click(screen.getByRole("button", { name: "扫码授权" }));
-	expect(screen.getByRole("alert").textContent).toBe(
-		"扫码授权暂不可用，请使用下方手动配置。",
+	await waitFor(() =>
+		expect(screen.getByRole("alert").textContent).toBe(
+			"扫码授权暂不可用，请使用下方手动配置。",
+		),
 	);
 });
 

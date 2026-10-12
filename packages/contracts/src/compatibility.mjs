@@ -1662,7 +1662,7 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 	);
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"f5331d7d488eca753adaf413088b91f6050fc07def829902db17494ef7aa49f1"
+		"a0d685b8aa834f369ed1e561d2acc5660a644d8f7fb8c113a089670321ef6045"
 	)
 		return false;
 	const normalized = structuredClone(current);
@@ -1691,6 +1691,26 @@ function isWecomApplicationOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	for (const path of paths) delete normalized.paths[path];
 	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1935 adds an optional deployment-approved QR branch to the existing bot setup response.
+function isWecomQrAuthorizationOpenApiAddition(previous, current) {
+	const path = "/api/v1/agents/{agentId}/wecom-setup";
+	const previousSchema =
+		previous.paths?.[path]?.post?.responses?.["200"]?.content?.[
+			"application/json"
+		]?.schema;
+	const currentSchema =
+		current.paths?.[path]?.post?.responses?.["200"]?.content?.[
+			"application/json"
+		]?.schema;
+	if (!previousSchema || !currentSchema || !Array.isArray(currentSchema.oneOf))
+		return false;
+	const normalized = structuredClone(current);
+	normalized.paths[path].post.responses["200"].content[
+		"application/json"
+	].schema = previousSchema;
+	return sameValue(previous, normalized);
 }
 
 // The #481 creation producer already persists these actions. #1572 admits only
@@ -3058,6 +3078,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
+			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&

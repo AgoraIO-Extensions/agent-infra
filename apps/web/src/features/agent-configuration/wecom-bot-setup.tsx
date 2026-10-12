@@ -12,6 +12,7 @@ import {
 	submitWecomCredentials,
 } from "../../pilot/generated/sdk.gen.js";
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
+import { openWecomQrAuthorizationV1 } from "./wecom-qr-authorization.js";
 
 const labels = {
 	not_configured: "未配置",
@@ -187,6 +188,61 @@ export function WecomBotSetup({
 		}
 		if (session.current) await poll(attempt);
 	}
+	async function authorizeQr() {
+		if (busy) return;
+		setBusy(true);
+		setError("");
+		setStatus("verifying");
+		const attempt = generation.current;
+		try {
+			const started = await beginWecomSetup({
+				path: { agentId },
+				responseStyle: "fields",
+				throwOnError: false,
+			});
+			if (attempt !== generation.current) return;
+			if (!started.data?.qrAvailable) throw new Error("WECom_QR_UNAVAILABLE");
+			session.current = started.data.sessionId;
+			const result = await openWecomQrAuthorizationV1(started.data.qr);
+			if (attempt !== generation.current) return;
+			setBotId(result.botId);
+			let qrSecret = result.secret;
+			let submitted: Awaited<ReturnType<typeof submitWecomCredentials>>;
+			try {
+				submitted = await submitWecomCredentials({
+					path: { agentId, sessionId: started.data.sessionId },
+					body: {
+						state: started.data.state,
+						botId: result.botId,
+						secret: qrSecret,
+						takeoverConfirmed: true,
+					},
+					responseStyle: "fields",
+					throwOnError: false,
+				});
+			} finally {
+				qrSecret = "";
+			}
+			if (attempt !== generation.current) return;
+			if (!submitted.data) throw new Error("WECom_QR_SUBMIT_FAILED");
+		} catch (error) {
+			if (attempt !== generation.current) return;
+			if (
+				error instanceof Error &&
+				error.message === "WECom_QR_UNAVAILABLE" &&
+				session.current
+			)
+				await cancel();
+			setBusy(false);
+			setError(
+				error instanceof Error && error.message === "WECom_QR_UNAVAILABLE"
+					? "扫码授权暂不可用，请使用下方手动配置。"
+					: "扫码授权未完成，请重试或使用下方手动配置。",
+			);
+			return;
+		}
+		if (session.current) await poll(attempt);
+	}
 	async function cancel() {
 		const id = session.current;
 		const attempt = generation.current;
@@ -227,7 +283,7 @@ export function WecomBotSetup({
 				<Button
 					type="button"
 					variant="outline"
-					onClick={() => setError("扫码授权暂不可用，请使用下方手动配置。")}
+					onClick={() => void authorizeQr()}
 				>
 					扫码授权
 				</Button>

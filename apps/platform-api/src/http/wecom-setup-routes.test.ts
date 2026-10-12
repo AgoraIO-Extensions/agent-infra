@@ -266,3 +266,71 @@ it("keeps application setup on its own Owner route and withholds submitted secre
 	).toBe(200);
 	expect(cancellations).toBe(2);
 });
+
+it("returns only deployment-approved QR metadata and keeps manual fallback when absent", async () => {
+	const records = new Map<string, WecomSetupRecordV1>();
+	const setup = createWecomSetupV1({
+		authority: async (agentId) => ({
+			configuration: {
+				...agentConfigurationConformanceRecordV1,
+				agentId,
+				revision: 3,
+			},
+			authorizationRevision: "qr-revision",
+		}),
+		store: {
+			activeBinding: async () => false,
+			create: async (record) => void records.set(record.sessionId, record),
+			read: async (id) => records.get(id) ?? null,
+			consume: async () => true,
+			cancel: async () => false,
+		},
+		encrypt: async () => ({ cipher: true }),
+	});
+	const identity = {
+		resolve: async () => ({
+			schemaVersion: 1 as const,
+			userId: "owner",
+			displayName: "Owner",
+			accountStatus: "active" as const,
+			organizationIds: [],
+			roles: ["employee"],
+			authorizationRevision: "qr-revision",
+		}),
+		hydrateUsers: async () => [],
+	};
+	const app = testApp();
+	registerWecomSetupRoutesV1(app, {
+		setup,
+		identity,
+		botQr: {
+			source: "agent-infra",
+			authOrigin: "https://auth.example.test",
+			authorizationEndpoint: "https://auth.example.test/authorize",
+		},
+	});
+	const response = await app.request("/api/v1/agents/agent/wecom-setup", {
+		method: "POST",
+	});
+	expect(response.status).toBe(200);
+	const body = (await response.json()) as {
+		qrAvailable: boolean;
+		state: string;
+		qr?: {
+			authorizationUrl: string;
+			authOrigin: string;
+			source: string;
+			state: string;
+		};
+	};
+	expect(body.qrAvailable).toBe(true);
+	expect(body.qr).toMatchObject({
+		authOrigin: "https://auth.example.test",
+		source: "agent-infra",
+		state: body.state,
+	});
+	expect(body.qr?.authorizationUrl).toContain("source=agent-infra");
+	expect(body.qr?.authorizationUrl).toContain(
+		`state=${encodeURIComponent(body.state)}`,
+	);
+});

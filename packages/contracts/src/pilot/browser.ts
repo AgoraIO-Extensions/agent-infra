@@ -807,6 +807,24 @@ export const WecomSetupProjectionV1Schema = z.strictObject({
 	]),
 });
 const wecomSetupState = z.string().min(1).max(1024);
+export const WecomQrAuthorizationProjectionV1Schema = z.strictObject({
+	authorizationUrl: z.url(),
+	authOrigin: z.url(),
+	source: z.string().min(1).max(256),
+	state: wecomSetupState,
+});
+const wecomBotSetupBeginProjection = z.discriminatedUnion("qrAvailable", [
+	WecomSetupProjectionV1Schema.extend({
+		state: wecomSetupState,
+		qrAvailable: z.literal(false),
+		qrUnavailableReason: z.literal("authorization_correlation_unverified"),
+	}),
+	WecomSetupProjectionV1Schema.extend({
+		state: wecomSetupState,
+		qrAvailable: z.literal(true),
+		qr: WecomQrAuthorizationProjectionV1Schema,
+	}),
+]);
 export const WecomSetupCredentialsV1Schema = z.strictObject({
 	state: wecomSetupState,
 	botId: z.string().min(1).max(1024),
@@ -850,13 +868,7 @@ export const pilotBrowserHttpOpenApiPathsV1 = {
 			responses: {
 				"200": jsonResponse(
 					"Owner configuration session",
-					WecomSetupProjectionV1Schema.extend({
-						state: wecomSetupState,
-						qrAvailable: z.literal(false),
-						qrUnavailableReason: z.literal(
-							"authorization_correlation_unverified",
-						),
-					}),
+					wecomBotSetupBeginProjection,
 				),
 				...errorResponses,
 			},

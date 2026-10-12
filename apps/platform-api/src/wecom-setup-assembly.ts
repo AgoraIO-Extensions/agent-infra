@@ -13,6 +13,51 @@ import {
 	type IdentityAdapter,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
+
+export interface WecomBotQrConfigurationV1 {
+	readonly source: string;
+	readonly authOrigin: string;
+	readonly authorizationEndpoint: string;
+}
+
+function validateBotQrConfiguration(
+	value: WecomBotQrConfigurationV1 | undefined,
+): WecomBotQrConfigurationV1 | undefined {
+	if (!value) return undefined;
+	if (
+		typeof value.source !== "string" ||
+		!value.source ||
+		value.source.length > 256 ||
+		!/^[-a-zA-Z0-9._:/]+$/.test(value.source)
+	)
+		throw new Error("Invalid WeCom QR source");
+	let origin: URL;
+	let endpoint: URL;
+	try {
+		origin = new URL(value.authOrigin);
+		endpoint = new URL(value.authorizationEndpoint);
+	} catch {
+		throw new Error("Invalid WeCom QR origin");
+	}
+	if (
+		origin.protocol !== "https:" ||
+		origin.username ||
+		origin.password ||
+		origin.pathname !== "/" ||
+		origin.search ||
+		origin.hash ||
+		endpoint.protocol !== "https:" ||
+		endpoint.username ||
+		endpoint.password ||
+		endpoint.origin !== origin.origin
+	)
+		throw new Error("Invalid WeCom QR origin");
+	return {
+		source: value.source,
+		authOrigin: origin.origin,
+		authorizationEndpoint: endpoint.href,
+	};
+}
 export function assembleWecomSetupApiV1(options: {
 	readonly databaseUrl: string;
 	readonly identity: IdentityAdapter;
@@ -21,7 +66,9 @@ export function assembleWecomSetupApiV1(options: {
 		readonly publicOrigin: string;
 		readonly callbackKeys: WecomCallbackKeysV1;
 	};
+	readonly botQr?: WecomBotQrConfigurationV1;
 }) {
+	const botQr = validateBotQrConfiguration(options.botQr);
 	const callbackCipher = options.application
 		? createWecomCallbackCipherV1(options.application.callbackKeys)
 		: undefined;
@@ -115,6 +162,7 @@ export function assembleWecomSetupApiV1(options: {
 	});
 	return {
 		setup,
+		botQr,
 		acceptMessages: setup.acceptMessages,
 		async resolveBinding(
 			reference: string,
