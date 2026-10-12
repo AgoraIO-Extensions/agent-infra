@@ -80,6 +80,7 @@ function executionGrant(
 
 async function setup(
 	wrapDriver?: (driver: FakeRuntimeDriver) => RuntimeDriver,
+	log?: (message: string) => void,
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-http-"));
 	directories.push(directory);
@@ -103,6 +104,7 @@ async function setup(
 			verifyGrant: createExecutionGrantVerifier(
 				new Map([["key-http", publicKey]]),
 			),
+			...(log ? { log } : {}),
 		}),
 		driver,
 		host,
@@ -268,6 +270,39 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 		});
 		expect(JSON.stringify(driverFailureBody)).not.toContain("secret-value");
 		expect(await driver.sideEffectCount()).toBe(0);
+	});
+
+	it("logs a redacted diagnostic for every Grant rejection", async () => {
+		const diagnostics: string[] = [];
+		const { app } = await setup(undefined, (message) =>
+			diagnostics.push(message),
+		);
+		const body = submitBody();
+		const segments = body.grant.token.split(".");
+		segments[2] = "dGFtcGVyZWQ";
+		body.grant.token = segments.join(".");
+
+		const response = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: {
+				...authorizedHeaders,
+				"x-trace-id": "trace-diagnostic",
+			},
+			body: JSON.stringify(body),
+		});
+
+		expect(response.status).toBe(403);
+		expect(diagnostics).toHaveLength(1);
+		const diagnostic = JSON.parse(diagnostics[0] ?? "null");
+		expect(diagnostic).toMatchObject({
+			service: "agent-runtime-host",
+			code: "RUNTIME_GRANT_INVALID",
+			diagnosticReason: "authorization_denied",
+			path: "/internal/runtime/v1/turns",
+			traceId: "trace-diagnostic",
+		});
+		expect(typeof diagnostic.diagnosticSource).toBe("string");
+		expect(JSON.stringify(diagnostic)).not.toContain(body.grant.token);
 	});
 
 	it("keeps the HTTP stop response and Host record pending until Driver cancellation completes", async () => {

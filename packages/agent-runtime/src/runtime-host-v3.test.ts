@@ -18,6 +18,7 @@ import {
 } from "./grant-v2-fixture.test-support.js";
 import {
 	applyRuntimeAuthority,
+	assertSessionAuthority,
 	type RuntimeExecutionAuthority,
 	validStoredExecutionAuthority,
 } from "./runtime-authorization.js";
@@ -1997,6 +1998,36 @@ describe("Runtime V3 durable authorization", () => {
 		expect(() =>
 			applyRuntimeAuthority(authorities, business, "prepare"),
 		).not.toThrow();
+	});
+
+	it("keeps authorization rejection reasons internal and stable", () => {
+		expect(() =>
+			assertSessionAuthority(undefined, {
+				principal: { kind: "user", id: "user-fixture" },
+				channelId: "channel-fixture",
+			}),
+		).toThrowError(
+			expect.objectContaining({
+				code: "RUNTIME_GRANT_INVALID",
+				diagnosticReason: "session_authority_mismatch",
+			}),
+		);
+
+		const request = signV3Fixture(submitV3Fixture(), "turn.submit");
+		const claims = verifyRuntimeV2Fixture(request.grant).claims;
+		expect(() =>
+			applyRuntimeAuthority(
+				{},
+				{ ...claims, expiresAt: fixtureNow },
+				"prepare",
+				fixtureNow,
+			),
+		).toThrowError(
+			expect.objectContaining({
+				code: "RUNTIME_GRANT_INVALID",
+				diagnosticReason: "grant_expired",
+			}),
+		);
 	});
 
 	it("does not deliver a queued event after a persisted revocation", async () => {

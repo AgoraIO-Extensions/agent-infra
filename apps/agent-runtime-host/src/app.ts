@@ -71,6 +71,8 @@ interface RuntimeHostAppOptions {
 	verifyGrant: (
 		grant: ExecutionGrantV1,
 	) => VerifiedExecutionGrantV1 | Promise<VerifiedExecutionGrantV1>;
+	/** Internal structured diagnostics; never included in HTTP responses. */
+	log?: (message: string) => void;
 }
 
 interface Parser<T> {
@@ -537,13 +539,27 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 							500,
 							true,
 						);
+		const traceId = context.req.header("x-trace-id") ?? crypto.randomUUID();
+		if (runtimeError.code === "RUNTIME_GRANT_INVALID") {
+			options.log?.(
+				JSON.stringify({
+					service: runtimeHostService,
+					code: runtimeError.code,
+					diagnosticReason:
+						runtimeError.diagnosticReason ?? "authorization_denied",
+					diagnosticSource: runtimeError.diagnosticSource ?? "unknown",
+					path: context.req.path,
+					traceId,
+				}),
+			);
+		}
 		return context.json(
 			{
 				schemaVersion: 1,
 				code: runtimeError.code,
 				message: runtimeError.message,
 				retryable: runtimeError.retryable,
-				traceId: context.req.header("x-trace-id") ?? crypto.randomUUID(),
+				traceId,
 			},
 			runtimeError.httpStatus as ContentfulStatusCode,
 		);

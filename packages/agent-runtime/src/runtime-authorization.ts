@@ -4,7 +4,10 @@ import {
 	RuntimePrincipalV1Schema,
 } from "@agent-infra/contracts/runtime";
 
-import { RuntimeHostError } from "./errors.js";
+import {
+	type RuntimeAuthorizationDiagnosticReason,
+	RuntimeHostError,
+} from "./errors.js";
 
 const storedAuthorityTextPattern = /^[A-Za-z0-9._:-]{1,1024}$/;
 
@@ -48,11 +51,28 @@ export interface RuntimeExecutionAuthority {
 	evidenceQuery?: { requestId: string; issuedAt: number };
 }
 
-export function runtimeAuthorizationDenied(): never {
+function authorizationSource() {
+	const frame = new Error().stack
+		?.split("\n")
+		.slice(1)
+		.find(
+			(line) =>
+				!line.includes("runtime-authorization.ts") &&
+				!line.includes("errors.ts"),
+		);
+	return frame?.trim() ?? "unknown";
+}
+
+export function runtimeAuthorizationDenied(
+	reason: RuntimeAuthorizationDiagnosticReason = "authorization_denied",
+): never {
 	throw new RuntimeHostError(
 		"RUNTIME_GRANT_INVALID",
 		"Runtime authorization is unavailable or does not authorize this operation",
 		403,
+		false,
+		undefined,
+		{ diagnosticReason: reason, diagnosticSource: authorizationSource() },
 	);
 }
 
@@ -67,7 +87,7 @@ export function assertSessionAuthority(
 		authority.principal.id !== binding.principal.id ||
 		authority.channelId !== binding.channelId
 	)
-		runtimeAuthorizationDenied();
+		runtimeAuthorizationDenied("session_authority_mismatch");
 }
 
 export function validStoredAuthority(authority: RuntimeSessionAuthority) {
@@ -198,7 +218,7 @@ export function applyRuntimeAuthority(
 		claims.issuedAt > now ||
 		claims.expiresAt <= now
 	)
-		runtimeAuthorizationDenied();
+		runtimeAuthorizationDenied("grant_expired");
 	const current = authorities[claims.executionId];
 	if (
 		current &&
@@ -213,7 +233,7 @@ export function applyRuntimeAuthority(
 					(current.controlDeliveryFence ?? current.executionDeliveryFence) &&
 				current.control?.controlRecordId !== claims.controlRecordId))
 	)
-		runtimeAuthorizationDenied();
+		runtimeAuthorizationDenied("execution_authority_mismatch");
 	if (claims.purpose === "business") {
 		if (
 			(current?.stopped && claims.allowedCommands[0] !== "turn.stop") ||
@@ -222,20 +242,20 @@ export function applyRuntimeAuthority(
 					(current.authorizationRecordId === claims.authorizationRecordId &&
 						mode !== "renew")))
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("execution_stopped");
 		if (
 			current?.authorizationRecordId &&
 			current.authorizationRecordId !== claims.authorizationRecordId &&
 			current.control?.reason !== "recovery"
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("authorization_record_mismatch");
 		if (
 			mode === "renew" &&
 			(!current?.authorizationRecordId ||
 				claims.operation.executionDeliveryFence !==
 					current.executionDeliveryFence)
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("renewal_authority_mismatch");
 	}
 	const authority: RuntimeExecutionAuthority =
 		mode === "query" && current
@@ -254,7 +274,7 @@ export function applyRuntimeAuthority(
 			authority.control?.controlRecordId === claims.controlRecordId &&
 			authority.control.reason !== claims.reason
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("control_record_mismatch");
 		authority.control = {
 			controlRecordId: claims.controlRecordId,
 			reason: claims.reason,
@@ -284,7 +304,8 @@ export function applyRuntimeAuthority(
 		if (claims.allowedCommands[0] === "turn.stop") authority.stopped = true;
 		if (mode !== "query") {
 			delete authority.queryOnly;
-			if (claims.issuedAt < authority.issuedAt) runtimeAuthorizationDenied();
+			if (claims.issuedAt < authority.issuedAt)
+				runtimeAuthorizationDenied("grant_issued_before_authority");
 			authority.authorizationRecordId = claims.authorizationRecordId;
 			authority.issuedAt = claims.issuedAt;
 			authority.expiresAt = claims.expiresAt;
