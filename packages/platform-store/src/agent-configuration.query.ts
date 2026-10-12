@@ -12,6 +12,7 @@ import {
 	isAgentRuntimePresentationVisibleV1,
 	isPersonalApiAgentMetadataReadAllowedV1,
 	type StandardTemplateReleaseTargetV1,
+	type StandardTemplateUpgradeRuntimeFactsV1,
 	snapshotAgentRuntimePresentationExpectationV1,
 } from "@agent-infra/platform-core";
 import { and, eq, isNull } from "drizzle-orm";
@@ -260,6 +261,46 @@ export class PostgresAgentConfigurationQueryV1 {
 				});
 			}
 			return targets;
+		} catch (error) {
+			if (error instanceof AgentConfigurationStoreError) throw error;
+			throw new AgentConfigurationStoreError();
+		}
+	}
+
+	/** Read the existing verified Runtime projection for compatibility reporting.
+	 * This is observational only; it never creates or updates Workload state. */
+	async readStandardTemplateUpgradeRuntimeFacts(input: {
+		readonly agentId: string;
+	}): Promise<StandardTemplateUpgradeRuntimeFactsV1 | null> {
+		try {
+			if (!validateText(input.agentId))
+				throw new AgentConfigurationStoreError();
+			const [row] = await this.#database
+				.select({
+					revision: workloadReconciliations.revision,
+					state: workloadReconciliations.state,
+				})
+				.from(workloadReconciliations)
+				.where(eq(workloadReconciliations.agentId, input.agentId))
+				.limit(1);
+			if (!row) return null;
+			const persisted = decodePersistedWorkloadStateV1(
+				row.state,
+				input.agentId,
+			);
+			if (!persisted || persisted.legacy || !persisted.state.verified)
+				return {
+					agentId: input.agentId,
+					configurationRevision:
+						persisted?.state.sourceConfigurationRevision ?? row.revision,
+					modelProjection: null,
+				};
+			const verified = persisted.state.verified;
+			return {
+				agentId: input.agentId,
+				configurationRevision: verified.configuration.revision,
+				modelProjection: verified.modelProjection ?? null,
+			};
 		} catch (error) {
 			if (error instanceof AgentConfigurationStoreError) throw error;
 			throw new AgentConfigurationStoreError();

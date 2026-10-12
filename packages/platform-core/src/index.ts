@@ -140,10 +140,17 @@ export * from "./skill-package-publication.js";
 export * from "./skill-package-ref.js";
 export * from "./skill-provider-registry.js";
 export {
+	classifyStandardTemplateUpgradeCompatibilityV1,
 	fanOutStandardTemplateUpgradeV2,
 	type StandardTemplateUpgradeApplierV1,
 	type StandardTemplateUpgradeCommandV2,
+	type StandardTemplateUpgradeCompatibilityReasonV1,
+	type StandardTemplateUpgradeCompatibilityResolverV1,
+	type StandardTemplateUpgradeCompatibilityResultV1,
+	type StandardTemplateUpgradeCompatibilityStatusV1,
 	type StandardTemplateUpgradeResultV2,
+	type StandardTemplateUpgradeRuntimeFactsV1,
+	type StandardTemplateUpgradeTargetMetadataV1,
 	type StandardTemplateUpgradeTargetResolverV1,
 	type StandardTemplateUpgradeTargetResultV2,
 } from "./standard-template-upgrade.js";
