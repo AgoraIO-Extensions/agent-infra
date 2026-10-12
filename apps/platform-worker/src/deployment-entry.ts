@@ -6,6 +6,10 @@ import {
 } from "./connection-consumer-projection.js";
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
+import {
+	type DeploymentSkillMaterializerFactoryV1,
+	resolveDeploymentSkillMaterializerV1,
+} from "./skill-materializer-assembly.js";
 import { createWecomDeploymentCoordinatorV1 } from "./wecom-deployment.js";
 import {
 	createProductionWorkloadWorkerOptionsV1,
@@ -38,16 +42,7 @@ type DeploymentConfiguration = {
 		>["authorize"];
 	};
 	/** Deployment-owned object-storage/Store assembly for the existing Worker seam. */
-	readonly createSkillMaterializer?: (input: {
-		readonly databaseUrl: string;
-		readonly signal: AbortSignal;
-	}) =>
-		| NonNullable<DeploymentConfiguration["workloadInput"]["skillMaterializer"]>
-		| Promise<
-				NonNullable<
-					DeploymentConfiguration["workloadInput"]["skillMaterializer"]
-				>
-		  >;
+	readonly createSkillMaterializer?: DeploymentSkillMaterializerFactoryV1;
 };
 
 function resolveConnectionInstallation(
@@ -117,11 +112,6 @@ const connectionInstallation = resolveConnectionInstallation(
 const connectionConsumer = connectionConsumerSnapshot
 	? JSON.parse(connectionConsumerSnapshot)
 	: undefined;
-if (
-	createSkillMaterializer !== undefined &&
-	typeof createSkillMaterializer !== "function"
-)
-	throw new Error("SKILL_MATERIALIZER_CONFIGURATION_INVALID");
 
 const instanceId = randomUUID();
 let prepared: ReturnType<typeof createPrepared> | undefined;
@@ -153,9 +143,12 @@ async function createPrepared(signal: AbortSignal) {
 		throw new Error(
 			"PLATFORM_WORKER_NAMESPACE must match the workload policy namespace",
 		);
-	const skillMaterializer = createSkillMaterializer
-		? await createSkillMaterializer({ databaseUrl, signal })
-		: workloadInput.skillMaterializer;
+	const skillMaterializer = await resolveDeploymentSkillMaterializerV1({
+		databaseUrl,
+		signal,
+		configured: workloadInput.skillMaterializer,
+		factory: createSkillMaterializer,
+	});
 	const workload = await createProductionWorkloadWorkerOptionsV1(
 		{
 			...workloadInput,
