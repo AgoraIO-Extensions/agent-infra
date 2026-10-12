@@ -20,8 +20,8 @@ const postgres = createRequire(
 export async function seedStandardWorkloadHostV1(
 	databaseUrl: string,
 	imageDigest: string,
+	agentId = "selector-host-agent",
 ) {
-	const agentId = "selector-host-agent";
 	const ownerId = "selector-host-owner";
 	const secretId = "selector-host-model-credential";
 	const templateId = "selector-host-pi";
