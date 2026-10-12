@@ -33,6 +33,7 @@ export const workloadTestPolicy: KubernetesWorkloadPolicyV1 = {
 	storageSize: "64Mi",
 	imageRepository: "registry.example.test/agent",
 	workerSelector: { component: "worker" },
+	platformApiSelector: { component: "platform-api" },
 	routeNamespace: "routes",
 	routeSelector: { component: "gateway" },
 	ingressClassName: "test",

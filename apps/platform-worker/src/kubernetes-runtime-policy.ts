@@ -616,7 +616,21 @@ export function createKubernetesWorkloadPolicyHelpersV1(dependencies: {
 						? []
 						: [
 								{
-									_from: [peer(policy.routeNamespace, policy.routeSelector)],
+									_from: [
+										peer(policy.routeNamespace, policy.routeSelector),
+										...(value.route.exposure === "platform-auth" &&
+										policy.platformApiSelector
+											? [
+													{
+														podSelector: {
+															matchLabels: {
+																...policy.platformApiSelector,
+															},
+														},
+													},
+												]
+											: []),
+									],
 									ports: [{ protocol: "TCP", port: value.service.port }],
 								},
 							]),
