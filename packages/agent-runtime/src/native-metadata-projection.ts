@@ -232,6 +232,11 @@ function skillCapability(value: unknown) {
 	if (!digestPattern.test(packageDigest) || !digestPattern.test(manifestDigest))
 		invalid();
 	const targetPath = boundedText(entry.targetPath, 4096);
+	if (
+		!/^\.agents\/skills\/[a-z0-9][a-z0-9._-]{0,62}$/.test(targetPath) ||
+		targetPath !== `.agents/skills/${name}`
+	)
+		invalid();
 	return { name, version, packageDigest, manifestDigest, targetPath };
 }
 
