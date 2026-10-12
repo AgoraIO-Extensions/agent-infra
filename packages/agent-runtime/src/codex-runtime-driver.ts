@@ -10102,6 +10102,15 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		);
 		if (!handle) return undefined;
 		try {
+			const openedPath = await realpath(actual).catch(() => undefined);
+			if (!openedPath) return undefined;
+			const openedWithin = relative(root, openedPath);
+			if (
+				!openedWithin ||
+				openedWithin.startsWith("..") ||
+				isAbsolute(openedWithin)
+			)
+				return undefined;
 			const metadata = await handle.stat();
 			if (!metadata.isFile()) return undefined;
 			const chunks: Buffer[] = [];
