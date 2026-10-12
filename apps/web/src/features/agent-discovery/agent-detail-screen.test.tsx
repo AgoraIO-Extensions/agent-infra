@@ -208,7 +208,7 @@ describe("AgentDetailScreen", () => {
 		expect(screen.getByText(/Primary model.*medium、high/)).toBeTruthy();
 	});
 
-	it("omits a direct access entry when Platform owns self-managed identity", async () => {
+	it("renders a verified platform-auth access entry when Platform owns self-managed identity", async () => {
 		const agent = AgentProjectionV2Schema.parse({
 			...startingAgent,
 			interactionUrl: "https://agent.example.test",
@@ -224,11 +224,11 @@ describe("AgentDetailScreen", () => {
 			<AgentDetailScreen state={{ kind: "ready", agent }} />,
 		);
 
-		expect(screen.queryByRole("link", { name: "打开 Agent" })).toBeNull();
-		expect(screen.getByText("由平台校验")).toBeTruthy();
 		expect(
-			screen.getByText("平台身份入口需经过 Auth Gateway；当前未提供直接入口。"),
-		).toBeTruthy();
+			screen.getByRole("link", { name: "打开 Agent" }).getAttribute("href"),
+		).toBe("https://agent.example.test/");
+		expect(screen.getByText("由平台校验")).toBeTruthy();
+		expect(screen.getByText("平台身份入口已就绪。")).toBeTruthy();
 	});
 
 	it("renders one opaque unavailable state for a missing or forbidden Agent", async () => {
