@@ -86,14 +86,24 @@ describe("native metadata API → Worker → RuntimeHost transport", () => {
 	it("reads a bound status projection through the authenticated internal route", async () => {
 		const { reader } = setup();
 		await expect(
-			reader.read(identity, binding.scope.conversationId, "status"),
+			reader.read(
+				identity,
+				binding.scope.conversationId,
+				binding.scope.executionId,
+				"status",
+			),
 		).resolves.toEqual(response.projection);
 	});
 
 	it("fails closed on a wrong Worker service proof", async () => {
 		const { reader } = setup({ clientServiceToken: "wrong-service" });
 		await expect(
-			reader.read(identity, binding.scope.conversationId, "status"),
+			reader.read(
+				identity,
+				binding.scope.conversationId,
+				binding.scope.executionId,
+				"status",
+			),
 		).resolves.toBeNull();
 	});
 
@@ -105,7 +115,12 @@ describe("native metadata API → Worker → RuntimeHost transport", () => {
 			},
 		});
 		await expect(
-			reader.read(identity, binding.scope.conversationId, "status"),
+			reader.read(
+				identity,
+				binding.scope.conversationId,
+				binding.scope.executionId,
+				"status",
+			),
 		).resolves.toBeNull();
 	});
 
@@ -120,7 +135,12 @@ describe("native metadata API → Worker → RuntimeHost transport", () => {
 			},
 		});
 		await expect(
-			reader.read(identity, binding.scope.conversationId, "status"),
+			reader.read(
+				identity,
+				binding.scope.conversationId,
+				binding.scope.executionId,
+				"status",
+			),
 		).resolves.toBeNull();
 	});
 });

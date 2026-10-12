@@ -61,6 +61,10 @@ import {
 	registerFileRoutesV1,
 } from "./http/file-routes.js";
 import {
+	type NativeMetadataRoutesDependenciesV1,
+	registerNativeMetadataRoutes,
+} from "./http/native-metadata-routes.js";
+import {
 	type PersonalApiCredentialRouteDependencies,
 	registerPersonalApiCredentialRoutes,
 } from "./http/personal-api-credential-routes.js";
@@ -141,6 +145,7 @@ export interface PlatformAppDependencies {
 	readonly configuration: ConfigurationRoutesDependencies;
 	readonly deploymentConfiguration?: DeploymentConfigurationRoutesDependencies;
 	readonly conversation: ConversationRoutesDependencies;
+	readonly nativeMetadata?: NativeMetadataRoutesDependenciesV1;
 	readonly tasks?: TaskRoutesDependencies;
 	readonly unknownStopOperations?: UnknownStopOperationsRouteDependencies;
 	readonly management: ManagementRouteDependencies;
@@ -271,6 +276,8 @@ export function createPlatformApp(
 		...dependencies.conversation,
 		files: dependencies.files,
 	});
+	if (dependencies.nativeMetadata)
+		registerNativeMetadataRoutes(app, dependencies.nativeMetadata);
 	if (dependencies.tasks) registerTaskRoutes(app, dependencies.tasks);
 	if (dependencies.unknownStopOperations)
 		registerUnknownStopOperationsRoutes(

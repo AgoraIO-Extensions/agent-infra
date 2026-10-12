@@ -278,6 +278,11 @@ export {
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";
 export {
+	type NativeMetadataRoutesDependenciesV1,
+	type RuntimeNativeMetadataPublicReaderV1,
+	registerNativeMetadataRoutes,
+} from "./http/native-metadata-routes.js";
+export {
 	createLdapBrowserAdapter,
 	type LdapBrowserInput,
 	type LdapSessionStore,
