@@ -842,14 +842,29 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 			uploaded.get("second"),
 			"second file",
 		);
-		const firstRead = requireFixtureValue(
-			readAccess.get("first"),
-			"first read",
-		);
-		const secondRead = requireFixtureValue(
-			readAccess.get("second"),
-			"second read",
-		);
+		const freshReadAccess = async (name: keyof typeof sessions) => {
+			const session = sessions[name];
+			const file = requireFixtureValue(uploaded.get(name), `${name} file`);
+			const response = await post(
+				session,
+				`/api/v1/conversations/${session.conversationId}/files/${file.fileId}/access`,
+				{ schemaVersion: 1, operation: "read" },
+				{ "Idempotency-Key": `${name}-isolation-read-access` },
+			);
+			expect(response.status).toBe(200);
+			const access = FileAccessResponseV1Schema.parse(await response.json());
+			const control = await fetch(origin + access.path, {
+				headers: {
+					"test-user": session.actorId,
+					"X-Platform-File-Grant": access.grant.token,
+				},
+			});
+			expect(control.status).toBe(200);
+			expect(Buffer.from(await control.arrayBuffer())).toEqual(bytes[name]);
+			return access;
+		};
+		const firstRead = await freshReadAccess("first");
+		const secondRead = await freshReadAccess("second");
 		const firstReadPath = origin + firstRead.path;
 		const secondReadPath = origin + secondRead.path;
 		for (const deniedResponse of [
