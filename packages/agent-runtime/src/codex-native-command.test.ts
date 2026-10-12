@@ -884,13 +884,22 @@ describe("Codex metadata RPC local failure boundaries (scripted unit fixture)", 
 
 describe("Codex native metadata command (scripted unit fixture)", () => {
 	it.each(["commands", "skills"] as const)(
-		"rejects native metadata selector %s before contacting native",
+		"projects native metadata selector %s through the existing directory reader",
 		async (selector) => {
 			const f = await fixture();
+			const directory = {
+				revision: "a".repeat(64),
+				capabilities: [],
+			};
+			if (selector === "commands")
+				vi.spyOn(f.driver, "discoverNativeCommands").mockResolvedValue(
+					directory,
+				);
+			else
+				vi.spyOn(f.driver, "discoverNativeSkills").mockResolvedValue(directory);
 			await expect(
 				f.driver.readNativeMetadataV1(selector, f.read),
-			).rejects.toMatchObject({ code: "RUNTIME_CODEX_UNAVAILABLE" });
-			expect(f.transport.requests).toEqual([]);
+			).resolves.toEqual({ selector, ...directory });
 		},
 	);
 

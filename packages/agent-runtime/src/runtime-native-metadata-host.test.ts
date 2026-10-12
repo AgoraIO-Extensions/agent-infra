@@ -114,13 +114,41 @@ describe("RuntimeHost native metadata V1 receiver", () => {
 		await f.host.close();
 	});
 
+	it.each(["commands", "skills"] as const)(
+		"passes the %s selector through the same Host authorization context",
+		async (selector) => {
+			const f = await fixture();
+			const value = { ...f.request, selector };
+			const projection =
+				selector === "commands"
+					? {
+							selector,
+							revision: "a".repeat(64),
+							capabilities: [],
+						}
+					: {
+							selector,
+							revision: "a".repeat(64),
+							capabilities: [],
+						};
+			const readNativeMetadataV1 = vi.fn().mockResolvedValue(projection);
+			Object.assign(f.driver, { readNativeMetadataV1 });
+			const response = await f.host.readNativeMetadataV1(value, context(value));
+			expect(response.projection).toEqual(projection);
+			expect(readNativeMetadataV1).toHaveBeenCalledWith(
+				selector,
+				expect.anything(),
+			);
+			await f.host.close();
+		},
+	);
+
 	it.each([
 		"cross-scope",
 		"authorization-revision",
 		"stale",
 		"expired",
 		"aborted",
-		"selector-mismatch",
 		"proof-denied",
 	] as const)("rejects %s before Driver I/O", async (failure) => {
 		const f = await fixture();
@@ -154,8 +182,6 @@ describe("RuntimeHost native metadata V1 receiver", () => {
 			});
 		} else if (failure === "aborted") {
 			controller.abort();
-		} else if (failure === "selector-mismatch") {
-			value = { ...value, selector: "commands" };
 		} else {
 			Object.assign(read, {
 				verifyProof: vi.fn().mockRejectedValue(new Error("private proof")),

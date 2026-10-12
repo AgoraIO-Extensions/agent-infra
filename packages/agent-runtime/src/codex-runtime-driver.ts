@@ -5814,9 +5814,20 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		selector: NativeMetadataSelectorV1,
 		read: CodexNativeCommandReadContext,
 	): Promise<NativeMetadataProjectionV1> {
-		// Commands and Skills are separate receiving slices; never widen this
-		// receiver by silently treating their selectors as status.
-		if (selector !== "status") unavailable();
+		if (selector === "commands") {
+			const directory = await this.discoverNativeCommands(read);
+			return NativeMetadataProjectionV1Schema.parse({
+				selector,
+				...directory,
+			});
+		}
+		if (selector === "skills") {
+			const directory = await this.discoverNativeSkills(read);
+			return NativeMetadataProjectionV1Schema.parse({
+				selector,
+				...directory,
+			});
+		}
 		const binding = this.nativeCommandBinding(read);
 		const metadataRead = this.nativeMetadataRead(read, binding);
 		const status = await this.readBoundNativeStatus(
