@@ -19,29 +19,30 @@ import {
 	FileRuntimeStore,
 	RuntimeHost,
 } from "@agent-infra/agent-runtime";
+import { connectionConsumerProfileFingerprintV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import { createConversationExecutionUseCaseV1 } from "@agent-infra/platform-core";
 import {
 	PostgresConversationExecutionTransactionV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
-import { KubeConfig, type V1Service } from "@kubernetes/client-node";
+import { KubeConfig } from "@kubernetes/client-node";
 import postgres from "postgres";
 import { expect, it } from "vitest";
 import { migratePlatformDatabase } from "../../../packages/platform-store/src/migrate.js";
 import { startPostgresTestDatabase } from "../../../packages/platform-store/src/postgres-test.js";
-import { markSessionSandboxReadyFixture } from "../../../packages/platform-store/src/session-sandbox.fixture.js";
 import { createRuntimeHostApp } from "../../agent-runtime-host/src/app.js";
+import { createRuntimeConnectionConsumerSnapshotV1 } from "./connection-consumer-projection.js";
 import {
 	fakeKubernetesApi,
 	workloadDesiredFixture,
 	workloadTestPolicy,
 } from "./kubernetes.fixture.js";
 import { createKubernetesRuntimeAdapterV1 } from "./kubernetes-runtime-adapter.js";
+import { sessionSandboxServiceTokenV1 } from "./session-workload-adapter.js";
 import {
-	sessionSandboxIdentityAnnotationsV1,
-	sessionSandboxLabelsV1,
-	sessionSandboxServiceTokenV1,
-} from "./session-workload-adapter.js";
+	sessionSandboxModelProjectionFixture,
+	sessionSandboxTemplateBindingFixture,
+} from "./test-support/session-sandbox-v4.js";
 import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 
 const execFile = promisify(execFileCallback);
@@ -140,8 +141,47 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		issuer: "worker-platform",
 		keyId: "worker-key",
 	};
+	const connectionConsumerProfile = {
+		schemaVersion: 1 as const,
+		publicOrigin: "https://connection.example.test",
+		mcpPath: "/mcp/v1",
+		consumerId: "platform-worker",
+		audience: "connection-api",
+		egressProfile: { ref: "egress-platform", revision: "r1" },
+	};
+	const connectionConsumerApproval = {
+		schemaVersion: 1 as const,
+		configFingerprint: connectionConsumerProfileFingerprintV1(
+			connectionConsumerProfile,
+		),
+		egressEnforced: true,
+		source: { ref: "platform-deployment", revision: "r1" },
+	};
+	const connectionConsumerTarget = {
+		status: "available" as const,
+		schemaVersion: 1 as const,
+		profile: connectionConsumerProfile,
+		configFingerprint: connectionConsumerApproval.configFingerprint,
+		source: connectionConsumerApproval.source,
+		url: `${connectionConsumerProfile.publicOrigin}${connectionConsumerProfile.mcpPath}`,
+	};
+	const connectionConsumerSnapshot = createRuntimeConnectionConsumerSnapshotV1(
+		connectionConsumerProfile,
+		connectionConsumerApproval,
+	);
+	if (!connectionConsumerSnapshot) throw Error("Missing Connection fixture");
+	const connectionInstallationSupply = {
+		ref: "approved-session-export",
+		revision: "r7",
+	};
+	const connectionInstallationRevision = JSON.stringify([
+		connectionInstallationSupply.ref,
+		connectionInstallationSupply.revision,
+	]);
 	const policy = {
 		...workloadTestPolicy,
+		connectionConsumerSnapshot,
+		connectionInstallationRevision,
 		runtimeAuth: {
 			workerId: signing.workerId,
 			grantIssuer: signing.issuer,
@@ -152,6 +192,11 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			serviceTokenSecret: { name: "runtime-transport", key: "token" },
 		},
 	};
+	const {
+		connectionConsumerSnapshot: _connectionConsumerSnapshot,
+		connectionInstallationRevision: _connectionInstallationRevision,
+		...deploymentPolicy
+	} = policy;
 	const fake = fakeKubernetesApi();
 	const kinds: Record<string, string> = {
 		pods: "Pod",
@@ -168,6 +213,79 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		const url = new URL(request.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/");
 		const marker = parts.indexOf("namespaces");
+		const requestBody =
+			request.method === "GET" || request.method === "DELETE"
+				? undefined
+				: JSON.parse(
+						(
+							await new Promise<Buffer>((resolve) => {
+								const chunks: Buffer[] = [];
+								request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+								request.on("end", () => resolve(Buffer.concat(chunks)));
+							})
+						).toString("utf8") || "{}",
+					);
+		let writeResult: unknown;
+		if (
+			marker >= 0 &&
+			["POST", "PUT", "DELETE"].includes(request.method ?? "")
+		) {
+			const kind = kinds[parts[marker + 2] ?? ""];
+			const name = parts[marker + 3];
+			if (!kind || (request.method !== "POST" && !name)) {
+				response.writeHead(404);
+				response.end();
+				return;
+			}
+			if (request.method === "POST")
+				writeResult = await fake.client.create(
+					requestBody as Parameters<typeof fake.client.create>[0],
+				);
+			else if (request.method === "PUT")
+				writeResult = await fake.client.replace(
+					requestBody as Parameters<typeof fake.client.replace>[0],
+				);
+			else {
+				if (!name) {
+					response.writeHead(404);
+					response.end();
+					return;
+				}
+				const current = await fake.client.read(
+					kind as Parameters<typeof fake.client.read>[0],
+					name,
+				);
+				if (!current) {
+					response.writeHead(404);
+					response.end();
+					return;
+				}
+				await fake.client.delete(current);
+				writeResult = current;
+			}
+			if (kind === "Pod" && writeResult) {
+				const pod = fake.resources.get(
+					`Pod/${(writeResult as { metadata: { name: string } }).metadata.name}`,
+				) as { status?: unknown } | undefined;
+				if (pod) {
+					pod.status = {
+						phase: "Running",
+						podIP: "10.244.0.10",
+						conditions: [{ type: "Ready", status: "True" }],
+					};
+					writeResult = pod;
+				}
+			}
+			const sandboxId = (
+				writeResult as { metadata?: { labels?: Record<string, string> } }
+			).metadata?.labels?.["agent-infra.agora.io/sandbox-id"];
+			if (kind === "Service" && sandboxId) registerSandboxHost(sandboxId);
+			response.writeHead(request.method === "POST" ? 201 : 200, {
+				"content-type": "application/json",
+			});
+			response.end(JSON.stringify(writeResult));
+			return;
+		}
 		let body: unknown;
 		if (marker < 0)
 			body = {
@@ -194,17 +312,28 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 						),
 					};
 		}
+		if (
+			body &&
+			typeof body === "object" &&
+			(body as { kind?: string }).kind === "NetworkPolicy"
+		) {
+			const network = structuredClone(body) as {
+				spec?: { ingress?: Array<Record<string, unknown>> };
+			};
+			if (network.spec?.ingress) {
+				network.spec.ingress = network.spec.ingress.map((rule) => ({
+					...rule,
+					from: rule.from ?? rule._from,
+					_from: rule._from ?? rule.from,
+				}));
+			}
+			body = network;
+		}
 		response.writeHead(body ? 200 : 404, {
 			"content-type": "application/json",
 		});
 		response.end(
-			JSON.stringify(
-				body ?? { kind: "Status", code: 404, reason: "NotFound" },
-				(key, value) =>
-					key === "ingress" && Array.isArray(value)
-						? value.map(({ _from, ...rule }) => ({ ...rule, from: _from }))
-						: value,
-			),
+			JSON.stringify(body ?? { kind: "Status", code: 404, reason: "NotFound" }),
 		);
 	});
 	let host: RuntimeHost | undefined;
@@ -222,6 +351,11 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 	try {
 		await migratePlatformDatabase({ databaseUrl: database.databaseUrl });
 		const desired = workloadDesiredFixture(1, "agent-cli", "internal-only");
+		const modelProjection = sessionSandboxModelProjectionFixture({
+			agentId: desired.agentId,
+			configurationRevision: 1,
+			imageDigest: desired.imageDigest,
+		});
 		const adapter = createKubernetesRuntimeAdapterV1({
 			client: fake.client,
 			policy,
@@ -260,6 +394,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			configuration,
 			deployment: desired,
 			executionCapacity: capacity,
+			modelProjection,
 		};
 		const state = {
 			schemaVersion: 1,
@@ -317,6 +452,7 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 			runtimeWorkerId: signing.workerId,
 			readinessWorkerId: signing.workerId,
 			serviceToken: "synthetic-runtime-token",
+			connectionConsumer: connectionConsumerTarget,
 			verifyGrant: () => {
 				throw Error("V1 disabled");
 			},
@@ -445,10 +581,13 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 export const signing = { ...${JSON.stringify(signing)}, privateKey: createPrivateKey(await readFile(${JSON.stringify(join(directory, "signing.pem"))})) };
 export const serviceToken = 'synthetic-runtime-token';
 export const directory = { async resolveUser(userId) { if (userId !== 'user-cli') return null; return { schemaVersion: 1, userId, accountStatus:'active',organizationIds:[],authorizationRevision:'identity-1'}; } };
-export const workloadInput = { policy: ${JSON.stringify(policy)},
+export const connectionConsumerProfile = ${JSON.stringify(connectionConsumerProfile)};
+export const connectionConsumerApproval = ${JSON.stringify(connectionConsumerApproval)};
+export const connectionInstallationSupply = ${JSON.stringify(connectionInstallationSupply)};
+export const workloadInput = { policy: ${JSON.stringify(deploymentPolicy)},
 kubernetes: { mode:'kubeconfig', path:${JSON.stringify(kubePath)}, context:'test', expectedServer:${JSON.stringify(kubeUrl)} },
 registry: { endpoint:'https://registry.example.test', imageReferencePrefix:'registry.example.test', policy:{authorize:async()=>({status:'rejected'})} },
-admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:[], executionCapacityProfiles:[${JSON.stringify(capacity)}],
+admissionPolicyRef:'policy',registrySubjectRef:'worker', templateModelBindings:[${JSON.stringify(sessionSandboxTemplateBindingFixture(desired.imageDigest))}], executionCapacityProfiles:[${JSON.stringify(capacity)}],
 keyring: { keys:[{keyVersion:'key',privateKeyPkcs8DerBase64:(await readFile(${JSON.stringify(join(directory, "wrapping.der"))})).toString('base64')}] },
 modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stringify(runtimeUrl)} + new URL(url).pathname,init), pollIntervalMs:100 };
 `;
@@ -514,7 +653,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				},
 			},
 		});
-		const admit = async (id: string) => {
+		const createConversation = async (id: string) => {
 			const created = await api.createConversation({
 				schemaVersion: 1,
 				agentId: desired.agentId,
@@ -524,90 +663,13 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			});
 			if (created.outcome !== "accepted")
 				throw Error(`Create: ${created.outcome}`);
-			await markSessionSandboxReadyFixture(sql, created.result.conversationId);
-			const [sandbox] = await sql`
-				select sandbox_id, resource_name
-				from platform.session_sandbox_allocations
-				where conversation_id = ${created.result.conversationId}`;
-			if (!sandbox) throw Error("SessionSandbox allocation was not persisted");
-			registerSandboxHost(sandbox.sandbox_id);
-			const sandboxResources = [
-				"Pod",
-				"Service",
-				"ServiceAccount",
-				"PersistentVolumeClaim",
-				"NetworkPolicy",
-				"Secret",
-				"StatefulSet",
-			].map((kind) => ({
-				kind,
-				namespace: policy.namespace,
-				name: sandbox.resource_name,
-				uid: `${sandbox.sandbox_id}-${kind}`,
-				resourceVersion: "1",
-				...(kind === "Pod"
-					? { controllerUid: `${sandbox.sandbox_id}-StatefulSet` }
-					: {}),
-			}));
-			await sql`
-				update platform.session_sandbox_allocations
-				set resource_policy = ${sql.json({
-					namespace: policy.namespace,
-					imageDigest: desired.imageDigest,
-					configurationRevision: 1,
-					managementFence: 1,
-					workloadRevision: 1,
-					resourceConfigurationHash:
-						workloadResourceConfigurationHashV1(policy),
-				})},
-				resource_observation = ${sql.json({
-					status: "ready",
-					resources: sandboxResources,
-				})}
-				where conversation_id = ${created.result.conversationId}`;
-			const sessionLabels = {
-				...sessionSandboxLabelsV1({
-					agentId: desired.agentId,
-					sessionId: created.result.conversationId,
-					sandboxId: sandbox.sandbox_id,
-					generation: 1,
-				}),
-			};
-			const sessionIdentity = sessionSandboxIdentityAnnotationsV1({
-				agentId: desired.agentId,
-				sessionId: created.result.conversationId,
-			});
-			fake.resources.set(`Service/${sandbox.resource_name}`, {
-				apiVersion: "v1",
-				kind: "Service",
-				metadata: {
-					name: sandbox.resource_name,
-					namespace: policy.namespace,
-					uid: `${sandbox.sandbox_id}-Service`,
-					resourceVersion: "1",
-					labels: sessionLabels,
-					annotations: {
-						...sessionIdentity,
-						"agent-infra.agora.io/managed": "session-sandbox-v1",
-						"agent-infra.agora.io/fence": "1",
-					},
-				},
-				spec: {
-					type: "ClusterIP",
-					selector: sessionLabels,
-					ports: [
-						{
-							name: "runtime",
-							port: desired.service.port,
-							targetPort: desired.service.port,
-						},
-					],
-				},
-			} as V1Service);
+			return created.result.conversationId;
+		};
+		const accept = async (id: string, conversationId: string) => {
 			const accepted = await api.accept({
 				schemaVersion: 1,
 				command: "message",
-				conversationId: created.result.conversationId,
+				conversationId,
 				text: "controlled dispatch",
 				idempotencyKey: id,
 				requestId: id,
@@ -617,15 +679,15 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 				throw Error(`Accept: ${accepted.outcome}`);
 			admissions.push({
 				executionId: accepted.result.executionId,
-				conversationId: created.result.conversationId,
+				conversationId,
 			});
 			return {
 				...accepted.result,
-				conversationId: created.result.conversationId,
+				conversationId,
 			};
 		};
-		const first = await admit("first");
-		const second = await admit("second");
+		const firstConversationId = await createConversation("first");
+		const secondConversationId = await createConversation("second");
 
 		// A database failure must not acknowledge a Runtime event that did not commit.
 		await sql.unsafe("create sequence platform.test_event_attempts");
@@ -637,6 +699,19 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		);
 		start();
 		start();
+		await waitUntil(
+			async () =>
+				(
+					await sql`
+						select count(*)::int as count
+						from platform.session_sandbox_allocations
+						where conversation_id in (${firstConversationId}, ${secondConversationId})
+							and status = 'ready' and resource_observation is not null`
+				)[0]?.count === 2,
+			"production Session Sandbox receipts",
+		);
+		const first = await accept("first", firstConversationId);
+		const second = await accept("second", secondConversationId);
 		await waitUntil(
 			async () => (await driver.sideEffectCount()) === 1,
 			"single effective first dispatch",
@@ -866,6 +941,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			JSON.stringify({
 				dispatchSnapshots,
 				traces: traces.slice(-30),
+				output: output.slice(-30),
 				processes: children.map((child) => ({
 					exitCode: child.exitCode,
 					signalCode: child.signalCode,
@@ -874,6 +950,10 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					await sql`select event_type, payload->>'errorCode' as error_code from platform.persisted_events`,
 				execution:
 					await sql`select execution_id,status from platform.conversation_executions`,
+				sandbox:
+					await sql`select conversation_id, status, resource_policy, resource_observation from platform.session_sandbox_allocations`,
+				outbox:
+					await sql`select id, status, operation, attempt_count, lease_owner, lease_expires_at from platform.outbox_items where operation = 'conversation.sandbox.reconcile.v1'`,
 			}),
 			{ cause: error },
 		);
