@@ -92,3 +92,34 @@ it("uses browser security headers for status reads without an idempotency key", 
 		"Sec-Fetch-Site": "same-origin",
 	});
 });
+
+it("allows an ambiguous begin retry to reuse its idempotency key", async () => {
+	api.beginPlatformConnectionInstallationV1.mockResolvedValue({
+		response: { status: 500 },
+		data: undefined,
+	});
+	await beginConnectionInstallation({
+		executionId: "execution-1",
+		idempotencyKey: "begin-retry-key",
+	});
+	await beginConnectionInstallation({
+		executionId: "execution-1",
+		idempotencyKey: "begin-retry-key",
+	});
+	expect(api.beginPlatformConnectionInstallationV1).toHaveBeenNthCalledWith(
+		1,
+		expect.objectContaining({
+			headers: expect.objectContaining({
+				"Idempotency-Key": "begin-retry-key",
+			}),
+		}),
+	);
+	expect(api.beginPlatformConnectionInstallationV1).toHaveBeenNthCalledWith(
+		2,
+		expect.objectContaining({
+			headers: expect.objectContaining({
+				"Idempotency-Key": "begin-retry-key",
+			}),
+		}),
+	);
+});
