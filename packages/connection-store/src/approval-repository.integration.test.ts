@@ -8,7 +8,10 @@ import {
 	type ApprovalPolicyDraft,
 	PostgresConnectionApprovalRepository,
 } from "./approval-repository";
-import { seedApprovedConnectPermit } from "./approved-connect-fixture";
+import {
+	enableTestProviderApproval,
+	seedApprovedConnectPermit,
+} from "./approved-connect-fixture";
 import { migrateConnectionDatabase } from "./migrations";
 import { PostgresConnectionNotificationDispatcher } from "./notification-dispatcher";
 import { PostgresConnectionRepository } from "./repository";
@@ -64,6 +67,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 				 executor_digest, catalog_checksum, status)
 				VALUES (${releaseId}, ${`catalog-provider-${suffix}`}, ${suffix}, '{}'::jsonb, '{}'::jsonb,
 				${`sha256:${"a".repeat(64)}`}, ${`connection-json-v1:${"b".repeat(64)}`}, 'PUBLISHED')`;
+				await enableTestProviderApproval(sql, releaseId);
 				await sql`INSERT INTO connection_action_versions
 				(id, provider_release_id, name, description, effect, input_schema, required_scopes, status)
 				VALUES (${readId}, ${releaseId}, 'catalog.read', 'Read', 'READ', '{}'::jsonb, '[]'::jsonb, 'PUBLISHED'),
@@ -482,6 +486,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					(id, provider, source_commit, deployment_profile, auth_profile, executor_digest, catalog_checksum, status)
 					VALUES (${id}, ${provider}, ${suffix}, '{}'::jsonb, '{}'::jsonb,
 						${`sha256:${"a".repeat(64)}`}, ${`connection-json-v1:${"b".repeat(64)}`}, 'PUBLISHED')`;
+				await enableTestProviderApproval(sql, oldRelease);
 				for (const [id, release] of [
 					[oldAction, oldRelease],
 					[newAction, newRelease],
@@ -744,6 +749,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 					${`connection-json-v1:${"b".repeat(64)}`}, 'PUBLISHED'
 				)
 			`;
+				await enableTestProviderApproval(sql, releaseId);
 				await sql`
 				INSERT INTO connection_action_versions (
 					id, provider_release_id, name, description, effect,
@@ -1188,6 +1194,7 @@ describe("PostgreSQL Connection access approval catalog", () => {
 						},
 					],
 				});
+				await enableTestProviderApproval(sql, releaseId);
 				await repository.createCapabilityProfileDraft({
 					actionVersionIds: [actionId],
 					id: profileId,

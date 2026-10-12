@@ -4,6 +4,21 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
+export type ProviderAccessSetting = {
+    providerId: string;
+    approvalRequired: boolean;
+    revision: string;
+};
+
+export type ProviderAccessSettingsResponse = {
+    settings: Array<ProviderAccessSetting>;
+};
+
+export type ProviderAccessSettingsUpdate = {
+    approvalRequired: boolean;
+    expectedRevision: string;
+};
+
 export type AuditSummaryState = 'AVAILABLE' | 'REDACTED' | 'NO_PARAMETERS' | 'EMPTY_INPUT' | 'EMPTY_OUTPUT' | 'UNSUPPORTED' | 'NOT_RECORDED';
 
 export type CallDiagnostics = {
@@ -838,6 +853,77 @@ export type PrincipalId = string;
 export type SharedScopeId = string;
 
 export type TokenId = string;
+
+export type ListProviderAccessSettingsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/connection/provider-access-settings';
+};
+
+export type ListProviderAccessSettingsErrors = {
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+};
+
+export type ListProviderAccessSettingsError = ListProviderAccessSettingsErrors[keyof ListProviderAccessSettingsErrors];
+
+export type ListProviderAccessSettingsResponses = {
+    /**
+     * Current Provider approval requirements
+     */
+    200: ProviderAccessSettingsResponse;
+};
+
+export type ListProviderAccessSettingsResponse = ListProviderAccessSettingsResponses[keyof ListProviderAccessSettingsResponses];
+
+export type UpdateProviderAccessSettingsData = {
+    body: ProviderAccessSettingsUpdate;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        providerId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/admin/provider-access-settings/{providerId}';
+};
+
+export type UpdateProviderAccessSettingsErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+};
+
+export type UpdateProviderAccessSettingsError = UpdateProviderAccessSettingsErrors[keyof UpdateProviderAccessSettingsErrors];
+
+export type UpdateProviderAccessSettingsResponses = {
+    /**
+     * Provider approval requirement updated
+     */
+    200: ProviderAccessSetting;
+};
+
+export type UpdateProviderAccessSettingsResponse = UpdateProviderAccessSettingsResponses[keyof UpdateProviderAccessSettingsResponses];
 
 export type ListAuditCallsData = {
     body?: never;

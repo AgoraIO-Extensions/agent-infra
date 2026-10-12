@@ -302,6 +302,13 @@
       "when": 1791723600002,
       "tag": "0042_static_spaces_standard_admission",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1791763200000,
+      "tag": "0043_provider_access_approval_settings",
+      "breakpoints": true
     }
   ]
 }

@@ -15,6 +15,7 @@ import {
 	canonicalHashMatches,
 	canonicalJson,
 	canonicalJsonVersions,
+	decideDirectProviderUpgrade,
 	decideReconnectAuthorization,
 	deriveConnectionIdentitySubjectHash,
 	type GitHubExecutor,
@@ -2501,4 +2502,35 @@ describe("Connection application service", () => {
 		);
 		expect(resolvedActor).toBe(delegated.actorKey);
 	});
+});
+
+it("keeps healthy direct connections current while enforcing expired credentials and Provider reauthorization on upgrade", () => {
+	const current = {
+		credentialActive: true,
+		credentialExpired: false,
+		currentReleaseId: "v1",
+		targetReleaseId: "v1",
+		reauthorizationRequired: true,
+	};
+	expect(decideDirectProviderUpgrade(current)).toEqual({
+		nextAction: "NONE",
+		reason: "ALREADY_CURRENT",
+	});
+	expect(
+		decideDirectProviderUpgrade({ ...current, credentialExpired: true })
+			.nextAction,
+	).toBe("REAUTHORIZE");
+	expect(
+		decideDirectProviderUpgrade({ ...current, targetReleaseId: "v2" }),
+	).toEqual({
+		nextAction: "REAUTHORIZE",
+		reason: "PROVIDER_REAUTHORIZATION_REQUIRED",
+	});
+	expect(
+		decideDirectProviderUpgrade({
+			...current,
+			targetReleaseId: "v2",
+			reauthorizationRequired: false,
+		}).nextAction,
+	).toBe("UPGRADE");
 });

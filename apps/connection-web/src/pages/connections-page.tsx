@@ -63,6 +63,12 @@ const accessStateLabels: Record<string, string> = {
 
 export function ConnectionsPage() {
 	const queryClient = useQueryClient();
+	const accessSettings = useQuery({
+		queryKey: ["provider-access-settings"],
+		queryFn: connectionApi.listProviderAccessSettings,
+		refetchInterval: 30_000,
+	});
+
 	const recoveryHandled = useRef(false);
 	const [authorization, setAuthorization] = useState<{
 		connectionId: string;
@@ -371,7 +377,12 @@ export function ConnectionsPage() {
 				connectionId: targetId,
 				body,
 			});
-		const requestId = approvedAccessRequestId;
+		const requestId = accessSettings.data?.settings.some(
+			(setting) =>
+				setting.providerId === body.providerId && !setting.approvalRequired,
+		)
+			? undefined
+			: approvedAccessRequestId;
 		const result = await connectionApi.connectProviderCredential({
 			...body,
 			accessRequestId: requestId,
@@ -541,11 +552,26 @@ export function ConnectionsPage() {
 			queryClient.invalidateQueries({ queryKey: ["connections"] }),
 	});
 
-	const beginOAuth = () => oauth.begin(undefined, approvedAccessRequestId);
+	const beginOAuth = () =>
+		oauth.begin(
+			undefined,
+			accessSettings.data?.settings.some(
+				(setting) =>
+					setting.providerId === "github" && !setting.approvalRequired,
+			)
+				? undefined
+				: approvedAccessRequestId,
+		);
 	const openProviderCredential = (
 		providerId: ConnectorProviderId,
 		targetId: string | null = null,
 	) => {
+		const requestId = accessSettings.data?.settings.some(
+			(setting) =>
+				setting.providerId === providerId && !setting.approvalRequired,
+		)
+			? undefined
+			: approvedAccessRequestId;
 		if (providerId === "bitbucket") setBitbucketOpen(true);
 		else if (providerId === "rehoboam") setRehoboamOpen(true);
 		else if (providerId === "static-spaces") setStaticSpacesOpen(true);
@@ -553,13 +579,13 @@ export function ConnectionsPage() {
 			manhattanOAuth.mutate(
 				targetId
 					? { reconnectConnectionId: targetId }
-					: { accessRequestId: approvedAccessRequestId },
+					: { accessRequestId: requestId },
 			);
 		else if (providerId === "datalego")
 			datalegoOAuth.mutate(
 				targetId
 					? { reconnectConnectionId: targetId }
-					: { accessRequestId: approvedAccessRequestId },
+					: { accessRequestId: requestId },
 			);
 		else if (providerId === "jira") setJiraOpen(true);
 		else if (providerId === "confluence") setConfluenceOpen(true);
@@ -572,6 +598,16 @@ export function ConnectionsPage() {
 	};
 	const connectProvider = (providerId: ConnectorProviderId) => {
 		setUpgradeTargetReleaseId("");
+		if (
+			accessSettings.data?.settings.some(
+				(setting) =>
+					setting.providerId === providerId && !setting.approvalRequired,
+			)
+		) {
+			setReconnectTargetId(null);
+			openProviderCredential(providerId);
+			return;
+		}
 		if (!approvedAccessRequestId || approvedProvider !== providerId) {
 			setRenewalTarget(null);
 			setRenewalProviderId("");
@@ -914,8 +950,12 @@ export function ConnectionsPage() {
 					{upgradeNotice}
 				</p>
 			) : null}
+			{accessSettings.isError ? (
+				<PageError error={accessSettings.error} />
+			) : null}
 			{!data && !overview.isPending ? (
 				<ConnectorManagementWorkspace
+					accessSettings={accessSettings.data?.settings ?? []}
 					accessRequests={accessRequests.data?.requests ?? []}
 					accessRequestsError={accessRequests.error}
 					accessRequestsPending={accessRequests.isPending}
@@ -1048,6 +1088,7 @@ export function ConnectionsPage() {
 						</section>
 					) : null}
 					<ConnectorManagementWorkspace
+						accessSettings={accessSettings.data?.settings ?? []}
 						accessRequests={accessRequests.data?.requests ?? []}
 						accessRequestsError={accessRequests.error}
 						accessRequestsPending={accessRequests.isPending}
@@ -1095,10 +1136,16 @@ export function ConnectionsPage() {
 								disconnect.mutate(connectionId);
 						}}
 						onReconnect={(connection) => {
+							const approvalRequired =
+								accessSettings.data?.settings.find(
+									(setting) => setting.providerId === connection.providerId,
+								)?.approvalRequired ?? true;
 							if (
 								connection.status === "DISCONNECTED" &&
-								connection.accessAuthorization?.state === "DISCONNECTED" &&
-								(!connection.accessAuthorization.validUntil ||
+								(!approvalRequired ||
+									connection.accessAuthorization?.state === "DISCONNECTED") &&
+								(!approvalRequired ||
+									!connection.accessAuthorization?.validUntil ||
 									Date.parse(connection.accessAuthorization.validUntil) >
 										Date.now())
 							) {
@@ -1643,6 +1690,7 @@ function actionVersions(connection: Connection) {
 }
 
 function ConnectorManagementWorkspace(props: {
+	accessSettings: readonly { providerId: string; approvalRequired: boolean }[];
 	accessRequests: AccessRequestsResponse["requests"];
 	accessRequestsError: unknown;
 	accessRequestsPending: boolean;
@@ -1702,10 +1750,13 @@ function ConnectorManagementWorkspace(props: {
 	const connector =
 		connectorDefinitions.find((item) => item.providerId === providerId) ??
 		connectorDefinitions[0];
-	const currentRequest = latestProviderRequest(
-		props.accessRequests,
-		connector?.providerId,
-	);
+	const approvalRequired =
+		props.accessSettings.find(
+			(setting) => setting.providerId === connector?.providerId,
+		)?.approvalRequired ?? true;
+	const currentRequest = approvalRequired
+		? latestProviderRequest(props.accessRequests, connector?.providerId)
+		: null;
 	const outdatedRequest =
 		currentRequest?.connectReadiness?.status === "REAPPLY_REQUIRED";
 	const canReapply =
@@ -1716,8 +1767,10 @@ function ConnectorManagementWorkspace(props: {
 			(connection) =>
 				connection.status === "ACTIVE" ||
 				(connection.status === "DISCONNECTED" &&
-					connection.accessAuthorization?.state === "DISCONNECTED" &&
-					(!connection.accessAuthorization.validUntil ||
+					(!approvalRequired ||
+						connection.accessAuthorization?.state === "DISCONNECTED") &&
+					(!approvalRequired ||
+						!connection.accessAuthorization?.validUntil ||
 						Date.parse(connection.accessAuthorization.validUntil) >
 							Date.now())),
 		)
@@ -1732,7 +1785,8 @@ function ConnectorManagementWorkspace(props: {
 	const authorizationAvailable =
 		selected?.status === "ACTIVE" &&
 		!selected.requiresReconnect &&
-		(!selected.accessAuthorization ||
+		(!approvalRequired ||
+			!selected.accessAuthorization ||
 			(["ACTIVE", "REAPPROVAL_REQUIRED"].includes(
 				selected.accessAuthorization.state,
 			) &&
@@ -1823,11 +1877,13 @@ function ConnectorManagementWorkspace(props: {
 								? "重新申请"
 								: currentRequest
 									? "申请其他能力"
-									: "申请连接"}
+									: approvalRequired
+										? "申请连接"
+										: "连接账号"}
 						</Button>
 					)}
 				</header>
-				{connector ? (
+				{connector && approvalRequired ? (
 					<AccessRequestPanel
 						key={connector.providerId}
 						onSubmitted={props.onRequestSubmitted}
@@ -1895,7 +1951,7 @@ function ConnectorManagementWorkspace(props: {
 									<h2 className="sr-only">客户端授权</h2>
 									<h3>{selected.displayName}</h3>
 									<p>{selected.externalAccount}</p>
-									{selected.accessAuthorization ? (
+									{approvalRequired && selected.accessAuthorization ? (
 										<p className="connection-access-validity">
 											{selected.accessAuthorization.state === "ACTIVE"
 												? selected.accessAuthorization.validityKind ===
@@ -1981,7 +2037,8 @@ function ConnectorManagementWorkspace(props: {
 								)}
 							</div>
 							<div className="connection-account-actions">
-								{!currentRequest &&
+								{approvalRequired &&
+								!currentRequest &&
 								selected.status === "ACTIVE" &&
 								!selected.requiresReconnect &&
 								["REAPPROVAL_REQUIRED", "SUSPENDED"].includes(
@@ -1998,7 +2055,8 @@ function ConnectorManagementWorkspace(props: {
 										申请重审
 									</Button>
 								) : null}
-								{selected.status === "ACTIVE" &&
+								{approvalRequired &&
+								selected.status === "ACTIVE" &&
 								!selected.requiresReconnect &&
 								selected.accessAuthorization?.state === "EXPIRED" ? (
 									<Button
@@ -2012,7 +2070,8 @@ function ConnectorManagementWorkspace(props: {
 										重新申请
 									</Button>
 								) : null}
-								{!currentRequest &&
+								{approvalRequired &&
+								!currentRequest &&
 								selected.status === "ACTIVE" &&
 								!selected.requiresReconnect &&
 								selected.accessAuthorization?.validityKind === "FINITE" &&
@@ -2029,8 +2088,10 @@ function ConnectorManagementWorkspace(props: {
 								) : null}
 								{selected.requiresReconnect ? (
 									selected.status === "DISCONNECTED" &&
-									selected.accessAuthorization?.state === "DISCONNECTED" &&
-									(!selected.accessAuthorization.validUntil ||
+									(!approvalRequired ||
+										selected.accessAuthorization?.state === "DISCONNECTED") &&
+									(!approvalRequired ||
+										!selected.accessAuthorization?.validUntil ||
 										Date.parse(selected.accessAuthorization.validUntil) >
 											Date.now()) ? (
 										<Button

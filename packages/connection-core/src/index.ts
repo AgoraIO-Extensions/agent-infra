@@ -564,6 +564,28 @@ export function authorizationSnapshotMatches(
 	);
 }
 
+export function decideDirectProviderUpgrade(input: {
+	credentialActive: boolean;
+	credentialExpired: boolean;
+	currentReleaseId: string;
+	targetReleaseId: string;
+	reauthorizationRequired: boolean;
+}): Pick<ProviderUpgradeReadiness, "nextAction" | "reason"> {
+	if (!input.credentialActive || input.credentialExpired)
+		return {
+			nextAction: "REAUTHORIZE",
+			reason: "CREDENTIAL_REAUTHORIZATION_REQUIRED",
+		};
+	if (input.currentReleaseId === input.targetReleaseId)
+		return { nextAction: "NONE", reason: "ALREADY_CURRENT" };
+	if (input.reauthorizationRequired)
+		return {
+			nextAction: "REAUTHORIZE",
+			reason: "PROVIDER_REAUTHORIZATION_REQUIRED",
+		};
+	return { nextAction: "UPGRADE", reason: "APPROVAL_NOT_REQUIRED" };
+}
+
 export function decideReconnectAuthorization(input: {
 	current: {
 		actionVersionIds: unknown;

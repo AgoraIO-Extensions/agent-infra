@@ -22,7 +22,7 @@ import {
 	DialogTitle,
 } from "../components/ui/dialog";
 import { ConsoleShell, PageError } from "../shell";
-import { PageHeader } from "../views";
+import { PageHeader, providerLabel } from "../views";
 import { ApprovalCatalogManager } from "./approval-catalog-manager";
 import { ApprovalPolicySelection } from "./approval-policy-selection";
 import "./approval-policies-page.css";
@@ -41,6 +41,31 @@ export function ApprovalPoliciesPage() {
 	const catalog = useQuery({
 		queryKey: ["approval-catalog"],
 		queryFn: connectionApi.listApprovalPolicyCatalog,
+	});
+	const accessSettings = useQuery({
+		queryKey: ["provider-access-settings"],
+		queryFn: connectionApi.listProviderAccessSettings,
+	});
+	const updateAccessSettings = useMutation({
+		mutationFn: (setting: {
+			providerId: string;
+			approvalRequired: boolean;
+			revision: string;
+		}) =>
+			connectionApi.updateProviderAccessSettings(setting.providerId, {
+				approvalRequired: !setting.approvalRequired,
+				expectedRevision: setting.revision,
+			}),
+		onSuccess: async () => {
+			await client.invalidateQueries({
+				queryKey: ["provider-access-settings"],
+			});
+		},
+		onError: async () => {
+			await client.invalidateQueries({
+				queryKey: ["provider-access-settings"],
+			});
+		},
 	});
 	const [providerReleaseId, setProviderReleaseId] = useState("");
 	const [profileId, setProfileId] = useState("");
@@ -428,6 +453,33 @@ export function ApprovalPoliciesPage() {
 	return (
 		<ConsoleShell>
 			<PageHeader title="连接审批管理" />
+			<section className="card" aria-label="连接器审批开关">
+				<h2>连接器审批开关</h2>
+				<p>
+					默认关闭，可直接连接账号。开启后，无有效审批资格的账号将无法发起新调用。
+				</p>
+				{accessSettings.isPending ? (
+					<p role="status">正在加载审批设置…</p>
+				) : null}
+				{accessSettings.isError ? (
+					<PageError error={accessSettings.error} />
+				) : null}
+				{updateAccessSettings.isError ? (
+					<PageError error={updateAccessSettings.error} />
+				) : null}
+				{accessSettings.data?.settings.map((setting) => (
+					<label key={setting.providerId} className="approval-setting">
+						<span>{providerLabel(setting.providerId)}</span>
+						<input
+							type="checkbox"
+							checked={setting.approvalRequired}
+							disabled={updateAccessSettings.isPending}
+							onChange={() => updateAccessSettings.mutate(setting)}
+						/>
+						需要审批
+					</label>
+				))}
+			</section>
 			{catalog.isError ? <PageError error={catalog.error} /> : null}
 			{error ? <PageError error={error} /> : null}
 			{notice ? (

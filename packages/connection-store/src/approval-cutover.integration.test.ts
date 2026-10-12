@@ -128,6 +128,8 @@ describe("personal Connection approval cutover", () => {
 					${`cutover-provider-${suffix}`}, 'existing-account', 'Existing', 'ACTIVE'
 				)
 			`;
+				await sql`INSERT INTO connection_provider_access_settings (provider_id, approval_required)
+					VALUES (${`cutover-provider-${suffix}`}, true) ON CONFLICT (provider_id) DO UPDATE SET approval_required = true`;
 				await expect(
 					connections.validatePersonalConnectRequest({
 						principalId,

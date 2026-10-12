@@ -138,6 +138,96 @@ export class PostgresConnectionApprovalRepository {
 		return this.sql.end();
 	}
 
+	async listProviderAccessSettings(providerIds: readonly string[]) {
+		const rows = await this.sql<
+			{ provider_id: string; approval_required: boolean; revision: string }[]
+		>`
+			SELECT release.provider AS provider_id,
+				COALESCE(settings.approval_required, false) AS approval_required,
+				COALESCE(settings.revision, 0)::text AS revision
+			FROM (SELECT DISTINCT provider FROM connection_provider_releases
+				WHERE status = 'PUBLISHED' AND provider = ANY(${[...providerIds]})) release
+			LEFT JOIN connection_provider_access_settings settings ON settings.provider_id = release.provider
+			ORDER BY release.provider
+		`;
+		return rows.map((row) => ({
+			providerId: row.provider_id,
+			approvalRequired: row.approval_required,
+			revision: row.revision,
+		}));
+	}
+
+	async updateProviderAccessSettings(input: {
+		actorPrincipalId: string;
+		providerId: string;
+		approvalRequired: boolean;
+		expectedRevision: string;
+	}) {
+		return this.sql.begin(async (sql) => {
+			const [actor] = await sql<{ id: string }[]>`
+				SELECT principal.id FROM connection_principals principal
+				JOIN connection_principal_roles role_binding ON role_binding.principal_id = principal.id
+				WHERE principal.id = ${input.actorPrincipalId} AND principal.status = 'ACTIVE'
+					AND role_binding.role = 'CONNECTION_ADMIN' AND role_binding.status = 'ACTIVE'
+				FOR SHARE OF principal, role_binding
+			`;
+			if (!actor)
+				throw new ConnectionError(
+					"FORBIDDEN",
+					"Provider approval settings are unavailable",
+				);
+			// ponytail: global admission lock; per-Provider locks if switch contention matters.
+			await sql`SELECT id FROM connection_access_enforcement WHERE id = 'personal' FOR UPDATE`;
+			const [provider] = await sql`SELECT id FROM connection_provider_releases
+				WHERE provider = ${input.providerId} AND status = 'PUBLISHED' LIMIT 1`;
+			if (!provider)
+				throw new ConnectionError(
+					"FORBIDDEN",
+					"Provider approval settings are unavailable",
+				);
+			const [inserted] =
+				await sql`INSERT INTO connection_provider_access_settings (provider_id, revision)
+				VALUES (${input.providerId}, 1) ON CONFLICT DO NOTHING RETURNING provider_id`;
+			const [current] = await sql<
+				{ revision: string; approval_required: boolean }[]
+			>`
+				SELECT revision::text, approval_required FROM connection_provider_access_settings
+				WHERE provider_id = ${input.providerId} FOR UPDATE`;
+			if (
+				!current ||
+				(current.revision !== input.expectedRevision &&
+					!(input.expectedRevision === "0" && Boolean(inserted)))
+			)
+				throw new ConnectionError(
+					"IDEMPOTENCY_CONFLICT",
+					"Provider approval settings changed",
+				);
+			const [updated] = await sql<{ revision: string }[]>`
+				UPDATE connection_provider_access_settings SET approval_required = ${input.approvalRequired},
+					revision = revision + 1, updated_at = now(), updated_by_principal_id = ${input.actorPrincipalId}
+				WHERE provider_id = ${input.providerId} RETURNING revision::text`;
+			if (!updated) throw new Error("Provider approval settings update failed");
+			const detail = {
+				providerId: input.providerId,
+				approvalRequired: input.approvalRequired,
+				previousApprovalRequired: current.approval_required,
+				revision: updated.revision,
+				aggregateId: input.providerId,
+				aggregateRevision: updated.revision,
+			};
+			await sql`INSERT INTO connection_audit_records (principal_id, event, detail)
+				VALUES (${input.actorPrincipalId}, 'connection.provider-access-settings.changed', ${sql.json(detail)})`;
+			await sql`INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+				VALUES (${`outbox-${randomUUID()}`}, 'connection.provider-access-settings.changed',
+					${`${input.providerId}:${updated.revision}`}, ${sql.json(detail)})`;
+			return {
+				providerId: input.providerId,
+				approvalRequired: input.approvalRequired,
+				revision: updated.revision,
+			};
+		});
+	}
+
 	async activatePreLaunchBaseline(actorPrincipalId: string) {
 		return this.sql.begin(async (sql) => {
 			const [actor] = await sql<{ id: string }[]>`

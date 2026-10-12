@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { Sql } from "postgres";
 
+export async function enableTestProviderApproval(
+	sql: Sql,
+	providerReleaseId: string,
+) {
+	await sql`INSERT INTO connection_provider_access_settings (provider_id, approval_required)
+		SELECT provider, true FROM connection_provider_releases WHERE id = ${providerReleaseId}
+		ON CONFLICT (provider_id) DO UPDATE SET approval_required = true,
+			revision = connection_provider_access_settings.revision + 1`;
+}
+
 // Integration-only seed for tests whose subject is downstream Connection behavior.
 export async function seedApprovedConnectPermit(
 	sql: Sql,
@@ -12,6 +22,7 @@ export async function seedApprovedConnectPermit(
 		scopes: readonly string[];
 	},
 ) {
+	await enableTestProviderApproval(sql, input.providerReleaseId);
 	const suffix = randomUUID();
 	const profileId = `fixture-profile-${suffix}`;
 	const policyId = `fixture-policy-${suffix}`;
