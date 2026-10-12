@@ -83,6 +83,17 @@ async function fixture(mode = "normal", withExecutionKeys = false) {
 	};
 }
 
+it("keeps protected Connection MCP unavailable", async () => {
+	const value = await fixture();
+	try {
+		expect(await value.driver.getCapabilities()).toMatchObject({
+			connection: false,
+		});
+	} finally {
+		await value.close();
+	}
+});
+
 const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const imageCommand = {
 	...command,
