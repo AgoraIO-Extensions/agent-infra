@@ -86,6 +86,7 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverExecutionContextV1,
 	RuntimeExternalActionAuthorization,
+	RuntimeNativeSkillReadContextV1,
 	RuntimeNativeSkillReaderV1,
 } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
@@ -334,6 +335,72 @@ async function callDriver<T>(work: () => Promise<T>) {
 	try {
 		return await work();
 	} catch (error) {
+		throwSessionRecoveryFailure(error);
+		driverInvalid();
+	}
+}
+
+function nativeSkillReadDenied(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_GRANT_INVALID",
+		"Runtime Skill read is no longer authorized",
+		403,
+	);
+}
+
+async function boundedNativeSkillRead<T>(input: {
+	readonly read: RuntimeNativeSkillReadContextV1;
+	readonly pending: Promise<T>;
+}): Promise<T> {
+	if (input.read.signal.aborted) {
+		void input.pending.catch(() => undefined);
+		nativeSkillReadDenied();
+	}
+	let onAbort: (() => void) | undefined;
+	try {
+		return await new Promise<T>((resolve, reject) => {
+			let settled = false;
+			const finish = (complete: () => void) => {
+				if (settled) return;
+				settled = true;
+				input.read.signal.removeEventListener("abort", onAbort as () => void);
+				complete();
+			};
+			onAbort = () => {
+				void input.pending.catch(() => undefined);
+				finish(() =>
+					reject(
+						new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Runtime Skill read is no longer authorized",
+							403,
+						),
+					),
+				);
+			};
+			input.read.signal.addEventListener("abort", onAbort, { once: true });
+			void input.pending.then(
+				(value) => finish(() => resolve(value)),
+				(error) => finish(() => reject(error)),
+			);
+		});
+	} finally {
+		if (onAbort) input.read.signal.removeEventListener("abort", onAbort);
+	}
+}
+
+async function callBoundedNativeSkillDriver<T>(input: {
+	readonly read: RuntimeNativeSkillReadContextV1;
+	readonly work: () => Promise<T>;
+}): Promise<T> {
+	try {
+		return await boundedNativeSkillRead({
+			read: input.read,
+			pending: input.work(),
+		});
+	} catch (error) {
+		if (error instanceof RuntimeHostError && error.httpStatus === 403)
+			throw error;
 		throwSessionRecoveryFailure(error);
 		driverInvalid();
 	}
@@ -1424,8 +1491,15 @@ export class RuntimeHost {
 		const expiresAt = Math.min(Date.parse(claims.expiresAt), now() + 30_000);
 		if (!Number.isSafeInteger(expiresAt) || expiresAt <= now())
 			runtimeAuthorizationDenied();
+		const deadline = new AbortController();
+		const readSignal = AbortSignal.any([signal, deadline.signal]);
+		const deadlineTimer = setTimeout(
+			() => deadline.abort(),
+			Math.max(0, expiresAt - now()),
+		);
 		const assertCurrent = () => {
-			if (signal.aborted || expiresAt <= now()) runtimeAuthorizationDenied();
+			if (readSignal.aborted || expiresAt <= now())
+				runtimeAuthorizationDenied();
 			this.requireLegacyHost();
 			this.options.store.getSessionForQuery(
 				request.hostSessionRef,
@@ -1440,7 +1514,7 @@ export class RuntimeHost {
 					request,
 					request.deliveryFence,
 				).nativeSessionRef ?? nativeSessionRequired(),
-			signal,
+			signal: readSignal,
 			expiresAt,
 			assertCurrent,
 			revalidate: async () => {
@@ -1454,6 +1528,10 @@ export class RuntimeHost {
 					this.options.grantValidation,
 				);
 				assertCurrent();
+			},
+			close: () => {
+				clearTimeout(deadlineTimer);
+				deadline.abort();
 			},
 		};
 	}
@@ -1475,13 +1553,22 @@ export class RuntimeHost {
 			this.options.driver as RuntimeDriver & Partial<RuntimeNativeSkillReaderV1>
 		).discoverNativeSkills;
 		if (!driver) driverInvalid();
-		const read = this.nativeSkillReadContext(
+		const lease = this.nativeSkillReadContext(
 			request,
 			verification,
 			signal,
 			claims,
 		);
-		const raw = await callDriver(() => driver.call(this.options.driver, read));
+		let raw: unknown;
+		try {
+			raw = await callBoundedNativeSkillDriver({
+				read: lease,
+				work: () => driver.call(this.options.driver, lease),
+			});
+			await lease.revalidate();
+		} finally {
+			lease.close();
+		}
 		if (
 			!raw ||
 			typeof raw !== "object" ||
@@ -1524,20 +1611,28 @@ export class RuntimeHost {
 			this.options.driver as RuntimeDriver & Partial<RuntimeNativeSkillReaderV1>
 		).readNativeSkill;
 		if (!driver) driverInvalid();
-		const read = this.nativeSkillReadContext(
+		const lease = this.nativeSkillReadContext(
 			request,
 			verification,
 			signal,
 			claims,
 		);
-		const bytes = await callDriver(() =>
-			driver.call(
-				this.options.driver,
-				read,
-				request.skillName,
-				request.relativePath,
-			),
-		);
+		let bytes: Uint8Array;
+		try {
+			bytes = await callBoundedNativeSkillDriver({
+				read: lease,
+				work: () =>
+					driver.call(
+						this.options.driver,
+						lease,
+						request.skillName,
+						request.relativePath,
+					),
+			});
+			await lease.revalidate();
+		} finally {
+			lease.close();
+		}
 		if (!(bytes instanceof Uint8Array) || bytes.byteLength > 1_048_576)
 			driverInvalid();
 		const encoded = Buffer.from(bytes);

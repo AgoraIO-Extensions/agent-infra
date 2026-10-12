@@ -293,6 +293,55 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 		expect(escaped.status).toBe(400);
 	});
 
+	it("revalidates authorization after the Driver Skill read", async () => {
+		const { app } = await setup(
+			(driver) =>
+				Object.assign(driver, {
+					discoverNativeSkills: async (read: {
+						revalidate(): Promise<unknown>;
+					}) => {
+						let calls = 0;
+						const original = read.revalidate;
+						read.revalidate = async () => {
+							calls += 1;
+							if (calls > 1)
+								throw new RuntimeHostError(
+									"RUNTIME_GRANT_INVALID",
+									"Runtime Skill read is no longer authorized",
+									403,
+								);
+							return original();
+						};
+						await read.revalidate();
+						return { generationId: "a".repeat(64), entries: [] };
+					},
+				}) as RuntimeDriver,
+		);
+		const body = submitBody();
+		const submitted = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(body),
+		});
+		const session = (await submitted.json()) as { hostSessionRef: string };
+		const { input: _input, ...readableBody } = body;
+		const response = await app.request("/internal/runtime/v1/skills", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify({
+				...readableBody,
+				requestId: "request-http-skills-revalidate",
+				hostSessionRef: session.hostSessionRef,
+				grant: executionGrant(
+					body,
+					["skills.read"],
+					"grant-http-skills-revalidate",
+				),
+			}),
+		});
+		expect(response.status).toBe(403);
+	});
+
 	it("adds a selection-required V2 Turn route without removing V1", async () => {
 		const { app } = await setup();
 		const legacy = await app.request("/internal/runtime/v1/turns", {
