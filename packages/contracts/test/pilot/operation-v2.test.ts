@@ -140,6 +140,9 @@ describe("Pilot mixed-version operation contracts", () => {
 					serviceRef: "connection-local",
 					verification: "verified",
 					callRef: "call-1",
+					consumerId: "consumer-platform",
+					instanceRef: "instance-agent-a",
+					credentialRevision: "revision-1",
 				},
 			},
 		} as const;
@@ -161,7 +164,6 @@ describe("Pilot mixed-version operation contracts", () => {
 			{ ...tool.payload.connection, requestDigest: "a".repeat(64) },
 			{ ...tool.payload.connection, principal: { type: "user", key: "alice" } },
 			{ ...tool.payload.connection, actor: { type: "agent", key: "agent-1" } },
-			{ ...tool.payload.connection, credentialRevision: "revision-1" },
 			{ ...tool.payload.connection, status: "succeeded" },
 			{
 				...tool.payload.connection,

@@ -45,6 +45,7 @@ import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 export interface ClaudeRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -62,6 +63,7 @@ export interface ClaudeRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly ClaudeRuntimeModelOption[];
+	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;

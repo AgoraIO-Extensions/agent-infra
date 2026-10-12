@@ -805,10 +805,16 @@ export type ScopedPlatformAuditProjectionV1 = {
             };
             connection?: {
                 callRef: string;
+                consumerId?: string;
+                credentialRevision?: string;
+                instanceRef?: string;
                 serviceRef: string;
                 verification: 'verified';
             } | {
                 callRef?: string;
+                consumerId?: string;
+                credentialRevision?: string;
+                instanceRef?: string;
                 reason: 'receipt_missing' | 'record_unavailable' | 'authorization_unavailable' | 'binding_mismatch' | 'response_unconfirmed';
                 serviceRef: string;
                 verification: 'unverified';
@@ -917,10 +923,16 @@ export type TaskProjectionV1 = {
             };
             connection?: {
                 callRef: string;
+                consumerId?: string;
+                credentialRevision?: string;
+                instanceRef?: string;
                 serviceRef: string;
                 verification: 'verified';
             } | {
                 callRef?: string;
+                consumerId?: string;
+                credentialRevision?: string;
+                instanceRef?: string;
                 reason: 'receipt_missing' | 'record_unavailable' | 'authorization_unavailable' | 'binding_mismatch' | 'response_unconfirmed';
                 serviceRef: string;
                 verification: 'unverified';
@@ -986,10 +998,16 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
         };
         connection?: {
             callRef: string;
+            consumerId?: string;
+            credentialRevision?: string;
+            instanceRef?: string;
             serviceRef: string;
             verification: 'verified';
         } | {
             callRef?: string;
+            consumerId?: string;
+            credentialRevision?: string;
+            instanceRef?: string;
             reason: 'receipt_missing' | 'record_unavailable' | 'authorization_unavailable' | 'binding_mismatch' | 'response_unconfirmed';
             serviceRef: string;
             verification: 'unverified';
