@@ -477,6 +477,10 @@ export function ActiveConversation({
 						}}
 						onDownloadFile={files.download}
 						downloadingFileId={files.downloading}
+						hasEarlier={timeline.hasEarlier}
+						earlierLoading={timeline.earlierLoading}
+						earlierFailure={timeline.earlierFailure !== null}
+						onLoadEarlier={() => void reader.loadEarlier()}
 					/>
 				)}
 				{uncertainExecution && (

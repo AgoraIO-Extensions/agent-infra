@@ -136,12 +136,20 @@ export function useConversationTimeline({
 		}
 		await session.reader.reconnect();
 	}, [session]);
+	const loadEarlier = useCallback(async () => {
+		if (!navigator.onLine) {
+			session.reader.disconnect();
+			return;
+		}
+		await session.reader.loadEarlier();
+	}, [session]);
 
 	return {
 		timeline,
 		execution,
 		refresh,
 		reconnect,
+		loadEarlier,
 		abort: session.reader.abort,
 	};
 }

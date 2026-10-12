@@ -35,6 +35,10 @@ export function ConversationMessages({
 	onResend,
 	onDownloadFile,
 	downloadingFileId,
+	hasEarlier,
+	earlierLoading,
+	earlierFailure,
+	onLoadEarlier,
 }: {
 	agentName: string;
 	history: ConversationDetailProjectionV2;
@@ -45,6 +49,10 @@ export function ConversationMessages({
 	onResend: (text: string) => void;
 	onDownloadFile?: (file: ResultFile) => Promise<boolean>;
 	downloadingFileId?: string;
+	hasEarlier: boolean;
+	earlierLoading: boolean;
+	earlierFailure: boolean;
+	onLoadEarlier: () => void;
 }) {
 	const [versions, setVersions] = useState<Record<string, string>>({});
 	const userMessages = history.messages.filter((item) => item.role === "user");
@@ -59,6 +67,22 @@ export function ConversationMessages({
 	];
 	return (
 		<section className="timeline min-h-48 space-y-8" aria-label="会话时间线">
+			{hasEarlier && (
+				<div className="flex flex-wrap items-center gap-3">
+					<Button
+						variant="outline"
+						disabled={earlierLoading}
+						onClick={onLoadEarlier}
+					>
+						{earlierLoading ? "正在加载更早内容…" : "加载更早内容"}
+					</Button>
+					{earlierFailure && (
+						<p role="status" className="text-destructive text-sm">
+							加载失败，请重试。
+						</p>
+					)}
+				</div>
+			)}
 			{!userMessages.length && !events.length && (
 				<Empty className="chat-welcome space-y-3 py-8">
 					<Bot className="mx-auto size-8 text-primary" aria-hidden="true" />
