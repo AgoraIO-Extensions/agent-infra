@@ -693,6 +693,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					if (!history.users.includes(turn.userMessageId) || !history.completed)
 						continue;
 					const recovered: Pick<RuntimeEventV1, "type" | "payload">[] = [];
+					const protectedCallIds = new Set(
+						(turn.connectionOperations ?? []).map(
+							(operation) => operation.callId,
+						),
+					);
 					const tools = new Map<string, string>();
 					for (const event of history.events) {
 						if (
@@ -740,7 +745,8 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					for (const event of turn.events.filter(
 						(event) =>
 							event.type === "text" ||
-							(event.type === "tool" && !event.payload.name.startsWith("mcp_")),
+							(event.type === "tool" &&
+								!protectedCallIds.has(event.payload.toolCallId)),
 					)) {
 						const expected = recovered[offset];
 						if (
