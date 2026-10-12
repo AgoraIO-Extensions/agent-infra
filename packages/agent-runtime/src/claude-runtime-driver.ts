@@ -3,6 +3,8 @@ import { lstat, mkdir, readdir, readFile, realpath } from "node:fs/promises";
 import { basename, isAbsolute, join, relative } from "node:path";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
+	type NativeMetadataProjectionV1,
+	type NativeMetadataSelectorV1,
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
@@ -18,7 +20,10 @@ import {
 } from "@agent-infra/contracts/runtime";
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { createClaudeBrowserMcpServer } from "./claude-browser-mcp.js";
-import { verifyClaudeInstallation } from "./claude-installation.js";
+import {
+	CLAUDE_NATIVE_PROVENANCE,
+	verifyClaudeInstallation,
+} from "./claude-installation.js";
 import { claudeQuery } from "./claude-query.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
 import { createClaudeStandardMcpServer } from "./claude-standard-mcp.js";
@@ -43,6 +48,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelDirectory,
+	RuntimeNativeMetadataReadContextV1,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -52,6 +58,10 @@ import {
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
+import {
+	projectNativeMetadataCommandsV1,
+	projectNativeMetadataSkillsV1,
+} from "./native-metadata-projection.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 import {
 	type RuntimeFileBridgePortV1,
@@ -156,6 +166,15 @@ function unavailable(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
 		"Runtime session could not be recovered",
+		503,
+		false,
+		"unavailable",
+	);
+}
+function nativeMetadataUnsupported(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_NATIVE_METADATA_UNSUPPORTED",
+		"Native metadata selector is unavailable for this runtime",
 		503,
 		false,
 		"unavailable",
@@ -1634,6 +1653,49 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		)
 			unavailable();
 		return turn.status;
+	}
+
+	/** Read bounded non-Codex metadata without opening a native Turn. */
+	async readNativeMetadataV1(
+		selector: NativeMetadataSelectorV1,
+		read: RuntimeNativeMetadataReadContextV1,
+	): Promise<NativeMetadataProjectionV1> {
+		read.assertCurrent();
+		const nativeRead: ClaudeNativeCommandReadContext = {
+			nativeSessionRef: read.nativeSessionRef,
+			signal: read.signal,
+			expiresAt: read.expiresAt,
+			assertCurrent: () => {
+				read.assertCurrent();
+			},
+			revalidate: async () => {
+				await read.revalidate();
+			},
+		};
+		if (selector === "commands") {
+			const directory = await this.discoverNativeCommands(nativeRead);
+			return projectNativeMetadataCommandsV1({
+				nativeSessionRef: read.nativeSessionRef,
+				configVersion: this.options.configVersion,
+				source: {
+					name: "Claude",
+					version: CLAUDE_NATIVE_PROVENANCE.nativeVersion,
+				},
+				directory,
+				assertCurrent: () => read.assertCurrent(),
+			});
+		}
+		if (selector === "skills") {
+			const directory = await this.discoverNativeSkills(nativeRead);
+			return projectNativeMetadataSkillsV1({
+				nativeSessionRef: read.nativeSessionRef,
+				configVersion: this.options.configVersion,
+				sourceName: "agent-infra-skill-hub",
+				directory,
+				assertCurrent: () => read.assertCurrent(),
+			});
+		}
+		nativeMetadataUnsupported();
 	}
 
 	async discoverNativeCommands(
