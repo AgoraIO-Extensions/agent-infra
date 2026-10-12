@@ -176,6 +176,40 @@ function fileProjection(status: "pending" | "available" = "available") {
 }
 
 describe("functional conversation screen", () => {
+	it("shows the current Agent Skill metadata without submitting a request", async () => {
+		const { requests } = setup((request) => {
+			if (new URL(request.url).pathname === "/api/v2/agents/agent-1")
+				return Response.json({
+					...agent,
+					capabilities: {
+						...agent.capabilities,
+						skills: [
+							{
+								schemaVersion: 1,
+								name: "workspace-summary",
+								version: "1.0.0",
+								manifestSha256: "a".repeat(64),
+								packageDigest: "b".repeat(64),
+								readOnly: true,
+							},
+						],
+					},
+				});
+		});
+		fireEvent.click(await screen.findByRole("button", { name: "打开" }));
+		expect(screen.getByText("workspace-summary")).toBeTruthy();
+		expect(screen.getByText(/Skill Hub/)).toBeTruthy();
+		expect(screen.getByText(/1\.0\.0/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
+		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
+		expect(
+			screen.getByText(
+				"选择已保存在当前草稿中；执行接缝尚未接入，未提交请求。",
+			),
+		).toBeTruthy();
+		expect(requests.some((request) => request.method === "POST")).toBe(false);
+	});
+
 	it("rejects unsupported and oversized files before creating an upload", async () => {
 		const { requests } = setup();
 		const input = await screen.findByLabelText("添加附件");
