@@ -1285,12 +1285,26 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		return bytes.slice();
 	}
 	async getCapabilities() {
+		const skills = this.options.skillDirectory?.findSkills().map((skill) => ({
+			schemaVersion: 1 as const,
+			name: skill.name,
+			version: skill.version,
+			manifestSha256: skill.manifestDigest,
+			packageDigest: skill.packageDigest,
+			readOnly: true as const,
+		}));
+		if (
+			skills &&
+			new Set(skills.map((skill) => skill.name)).size !== skills.length
+		)
+			throw new RuntimeSkillDirectoryErrorV1();
 		return {
 			modelSelection: true,
 			attachments: false,
 			resultFiles: false,
 			connection: false,
 			supplementaryInstruction: false,
+			...(skills && skills.length > 0 ? { skills } : {}),
 		};
 	}
 	async getModelDirectory(ref: string): Promise<RuntimeModelDirectory> {

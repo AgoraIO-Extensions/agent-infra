@@ -242,6 +242,91 @@ it("discovers and reads the bound Skill projection with generation revalidation"
 	}
 });
 
+it("advertises verified Skill metadata and rejects duplicate projections", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-skill-capabilities-"));
+	const entry = {
+		schemaVersion: 1 as const,
+		name: "workspace-summary",
+		version: "1.0.0",
+		packageDigest: "e".repeat(64),
+		manifestDigest: "f".repeat(64),
+		targetPath: ".agents/skills/workspace-summary",
+		readOnly: true as const,
+	};
+	const directory: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "d".repeat(64),
+		findSkills: () => [entry],
+		readSkill: async () => new Uint8Array(),
+	};
+	const driver = await SessionRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "configured/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		cursorPrefix: "test",
+		skillDirectory: directory,
+		retireSession: async () => {},
+		completionStatus: () => "completed",
+		openSession: async () => ({
+			nativeId: "native-a",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			cancel: async () => {},
+			close: async () => {},
+		}),
+	});
+	try {
+		expect(await driver.getCapabilities()).toMatchObject({
+			skills: [
+				{
+					name: entry.name,
+					manifestSha256: entry.manifestDigest,
+					packageDigest: entry.packageDigest,
+				},
+			],
+		});
+		const duplicate = { ...directory, findSkills: () => [entry, entry] };
+		const duplicateDriver = await SessionRuntimeDriver.open({
+			path: await mkdtemp(join(tmpdir(), "session-skill-capabilities-dup-")),
+			configVersion: "configuration-a",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					nativeModelId: "configured/model",
+					reasoningLevels: ["high"],
+				},
+			],
+			cursorPrefix: "test",
+			skillDirectory: duplicate,
+			retireSession: async () => {},
+			completionStatus: () => "completed",
+			openSession: async () => ({
+				nativeId: "native-a",
+				select: async () => {},
+				prompt: async () => ({ stopReason: "completed" }),
+				cancel: async () => {},
+				close: async () => {},
+			}),
+		});
+		await expect(duplicateDriver.getCapabilities()).rejects.toMatchObject({
+			code: "RUNTIME_SKILL_DIRECTORY_UNAVAILABLE",
+		});
+		await duplicateDriver.close();
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("observes an already-started expired Skill read without an unhandled rejection", async () => {
 	const pending = Promise.reject(new Error("late read failure"));
 	await expect(
@@ -303,6 +388,7 @@ it("keeps the Skill Hub directory unavailable when no binding is configured", as
 		});
 		expect(observed).toHaveLength(1);
 		expect(observed[0]?.skillDirectory).toBeUndefined();
+		expect((await driver.getCapabilities()).skills).toBeUndefined();
 		await expect(
 			driver.discoverNativeSkills({
 				nativeSessionRef: accepted.nativeSessionRef,
