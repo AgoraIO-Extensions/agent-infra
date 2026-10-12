@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
 	type AgentConfigurationAuthorityContextV1,
 	type AgentConfigurationUseCaseDependenciesV1,
+	type AgentManagementActorContextV1,
 	type ApiPrincipalV1,
 	type ConversationTaskAdmissionPolicyV1,
 	createAgentApiCreationV1,
@@ -154,7 +155,10 @@ export interface PlatformApiAssemblyInput {
 	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
-	readonly customAgentGateway?: PlatformAppDependencies["customAgentGateway"];
+	readonly customAgentGateway?: Omit<
+		NonNullable<PlatformAppDependencies["customAgentGateway"]>,
+		"identity" | "authorizeAgent"
+	>;
 }
 
 export interface PlatformApiAssembly {
@@ -442,6 +446,36 @@ export function assemblePlatformApi(
 		...channelAdmission,
 	});
 	const management = createAgentManagementV1(managementTransaction);
+	const customAgentGateway = input.customAgentGateway
+		? {
+				...input.customAgentGateway,
+				identity: input.identity,
+				authorizeAgent: async ({
+					identity,
+					agentId,
+				}: {
+					readonly identity: import("./http/identity.js").IdentityContext;
+					readonly agentId: string;
+				}) => {
+					const actor: AgentManagementActorContextV1 = {
+						schemaVersion: 1,
+						userId: identity.userId,
+						organizationIds: identity.organizationIds,
+						accountStatus: identity.accountStatus,
+						isAdministrator: identity.roles.includes("system_admin"),
+					};
+					try {
+						const decision = await management.resolveAgentAccess(
+							{ schemaVersion: 1, agentId, intent: "use" },
+							actor,
+						);
+						return decision.outcome === "allowed" && decision.serviceReady;
+					} catch {
+						return false;
+					}
+				},
+			}
+		: undefined;
 	const configuration = createAgentConfigurationUseCaseV1({
 		transaction: configurationTransaction,
 		...admissions,
@@ -772,9 +806,7 @@ export function assemblePlatformApi(
 				? { connectionCapability: input.connectionCapability }
 				: {}),
 		},
-		...(input.customAgentGateway
-			? { customAgentGateway: input.customAgentGateway }
-			: {}),
+		...(customAgentGateway ? { customAgentGateway } : {}),
 		scopedAudit: { identity: input.identity, audit: scopedAuditQuery },
 		skillHubRead: skillHubRead.dependencies,
 		skillHubInstallations: skillHubRead.installationDependencies,
