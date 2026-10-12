@@ -2752,7 +2752,7 @@ function isRuntimeSkillHostReadOpenApiAddition(previous, current) {
 		.digest("hex");
 	if (
 		fingerprint !==
-		"c778d5afd006c935aae5aba918d53ba80e5d4897dd143c9f1779839168723386"
+		"de287f89e1061b77f7ff91bcba16ce559d8748a97f261095eca9f82f8f069aac"
 	)
 		return false;
 	const normalized = structuredClone(current);
