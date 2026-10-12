@@ -110,6 +110,33 @@ export interface ProductionPlatformApiInputV1
 	>[0]["resolveCustomAgentInteractionUrl"];
 }
 
+/** Merge explicit mounted deployment ports without allowing duplicate authorities. */
+export function mergeProductionPlatformApiDeploymentPortsV1(input: {
+	readonly apiInput: ProductionPlatformApiInputV1;
+	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
+	readonly modelSelection?: ConversationModelSelectionReaderV1;
+}): ProductionPlatformApiInputV1 {
+	if (
+		input.customAgentGateway !== undefined &&
+		input.apiInput.customAgentGateway !== undefined
+	)
+		throw new Error("PLATFORM_CUSTOM_AGENT_GATEWAY_DUPLICATE");
+	if (
+		input.modelSelection !== undefined &&
+		input.apiInput.modelSelection !== undefined
+	)
+		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
+	return {
+		...input.apiInput,
+		...(input.customAgentGateway !== undefined
+			? { customAgentGateway: input.customAgentGateway }
+			: {}),
+		...(input.modelSelection !== undefined
+			? { modelSelection: input.modelSelection }
+			: {}),
+	};
+}
+
 export function createProductionPlatformApiAssemblyInputV1(
 	input: ProductionPlatformApiInputV1,
 ): PlatformApiAssemblyInput {
