@@ -945,6 +945,29 @@ export type SkillHubDirectoryPageV1 = {
     nextCursor: string | null;
 };
 
+export type SkillHubInstallationCommandV1 = {
+    principalId: string;
+    principalType: 'user' | 'organization';
+    skillVersionId: string;
+};
+
+export type SkillHubInstallationResponseV1 = {
+    installation: SkillHubInstallationV1;
+    replayed: boolean;
+};
+
+export type SkillHubInstallationV1 = {
+    installationId: string;
+    installedAt: string;
+    needUpgrade: boolean;
+    principalId: string;
+    principalType: 'user' | 'organization';
+    schemaVersion: 1;
+    skillVersionId: string;
+    state: 'installed' | 'uninstalled' | 'failed';
+    updatedAt: string;
+};
+
 export type SkillHubVersionMetadataV1 = {
     manifestDigest: string;
     name: string;
@@ -3846,6 +3869,108 @@ export type ListSkillHubVersionsV1Responses = {
 };
 
 export type ListSkillHubVersionsV1Response = ListSkillHubVersionsV1Responses[keyof ListSkillHubVersionsV1Responses];
+
+export type InstallSkillHubVersionV1Data = {
+    body: SkillHubInstallationCommandV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/skills/installations';
+};
+
+export type InstallSkillHubVersionV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type InstallSkillHubVersionV1Error = InstallSkillHubVersionV1Errors[keyof InstallSkillHubVersionV1Errors];
+
+export type InstallSkillHubVersionV1Responses = {
+    /**
+     * Replayed installation
+     */
+    200: SkillHubInstallationResponseV1;
+    /**
+     * Installation accepted
+     */
+    201: SkillHubInstallationResponseV1;
+};
+
+export type InstallSkillHubVersionV1Response = InstallSkillHubVersionV1Responses[keyof InstallSkillHubVersionV1Responses];
+
+export type UninstallSkillHubInstallationV1Data = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        installationId: string;
+    };
+    query?: never;
+    url: '/api/v2/skills/installations/{installationId}';
+};
+
+export type UninstallSkillHubInstallationV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type UninstallSkillHubInstallationV1Error = UninstallSkillHubInstallationV1Errors[keyof UninstallSkillHubInstallationV1Errors];
+
+export type UninstallSkillHubInstallationV1Responses = {
+    /**
+     * Installation removed
+     */
+    200: SkillHubInstallationResponseV1;
+};
+
+export type UninstallSkillHubInstallationV1Response = UninstallSkillHubInstallationV1Responses[keyof UninstallSkillHubInstallationV1Responses];
 
 export type ReadSkillHubVersionV1Data = {
     body?: never;
