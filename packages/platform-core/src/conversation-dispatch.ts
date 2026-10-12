@@ -1280,13 +1280,15 @@ export function createConversationDispatchUseCaseV1(
 			}
 
 			if (response.result.outcome === "busy") {
-				return retry(
-					dependencies.store,
+				const finished = await dependencies.store.finish({
 					claim,
-					retryDelayMs,
-					"RUNTIME_BUSY",
-					"busy",
-				);
+					status: "failed",
+					transition: rejectedTransition(claim),
+					errorCode: "RUNTIME_BUSY",
+				});
+				return finished
+					? { schemaVersion: 1, outcome: "rejected" }
+					: { schemaVersion: 1, outcome: "stale" };
 			}
 			if (response.result.outcome === "unknown") {
 				return retry(
