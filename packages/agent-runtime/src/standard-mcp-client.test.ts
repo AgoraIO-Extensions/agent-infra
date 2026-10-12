@@ -315,41 +315,48 @@ it.each(["completed", "unknown"] as const)(
 	},
 );
 
-it("denies installation drift and native argument overrides before sending tools", async () => {
-	const fixture = await standardMcpFixture();
-	let current = fixture.input;
-	const client = await StandardMcpClient.open(
-		{
-			target: fixture.target,
-			resolveInput: async () => current,
-			fetch: fixture.fetch,
-		},
-		reference,
-		new AbortController().signal,
-	);
-	closes.push(() => client.close());
-	const alias = client.toolDefinitions[0]?.tools[0]?.name ?? "";
-	expect(
-		client.validateArguments(alias, { text: "fixture", principal: "user-b" }),
-	).toBe(false);
-	current = { ...current, credentialRevision: "r2" };
-	const result = await client.call(
-		alias,
-		{ text: "fixture" },
-		{
-			block: () => {},
-			confirm: async () => {},
-			assertCurrent: async () => () => {},
-			prepare: async () => {},
-			started: async () => {},
-		},
-		new AbortController().signal,
-	);
-	expect(result.phase).toBe("failed");
-	expect(
-		fixture.trace.filter((item) => item.method === "tools/call"),
-	).toHaveLength(0);
-});
+it.each([
+	["consumerId", "other-consumer"],
+	["instanceRef", "other-instance"],
+	["credentialRevision", "r2"],
+] as const)(
+	"denies %s installation drift and native argument overrides before sending tools",
+	async (field, value) => {
+		const fixture = await standardMcpFixture();
+		let current = fixture.input;
+		const client = await StandardMcpClient.open(
+			{
+				target: fixture.target,
+				resolveInput: async () => current,
+				fetch: fixture.fetch,
+			},
+			reference,
+			new AbortController().signal,
+		);
+		closes.push(() => client.close());
+		const alias = client.toolDefinitions[0]?.tools[0]?.name ?? "";
+		expect(
+			client.validateArguments(alias, { text: "fixture", principal: "user-b" }),
+		).toBe(false);
+		current = { ...current, [field]: value };
+		const result = await client.call(
+			alias,
+			{ text: "fixture" },
+			{
+				block: () => {},
+				confirm: async () => {},
+				assertCurrent: async () => () => {},
+				prepare: async () => {},
+				started: async () => {},
+			},
+			new AbortController().signal,
+		);
+		expect(result.phase).toBe("failed");
+		expect(
+			fixture.trace.filter((item) => item.method === "tools/call"),
+		).toHaveLength(0);
+	},
+);
 
 it("rejects redirects without copying the token to another target", async () => {
 	const fixture = await standardMcpFixture();
