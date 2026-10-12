@@ -216,6 +216,7 @@ test("production startup uses the formal runtime without fixture invocation", as
 			"GITHUB_OAUTH_CLIENT_ID",
 			"GITHUB_OAUTH_CLIENT_SECRET",
 			"GITHUB_OAUTH_AUTHORIZATION_URL",
+			"GITHUB_EGRESS_PROXY_URL",
 			"GITHUB_OAUTH_TOKEN_URL",
 			"DATALEGO_OAUTH_CLIENT_ID",
 			"DATALEGO_OAUTH_CLIENT_SECRET",

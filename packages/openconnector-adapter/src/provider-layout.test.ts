@@ -9,7 +9,11 @@ test("provider entry points preserve executor identity and published action arra
 		["jira", "jira-server.ts", "JiraServerAdapter"],
 		["datalego", "datalego-v6.ts", "DataLegoV6Adapter"],
 		["manhattan", "manhattan.ts", "ManhattanAdapter"],
-		["rehoboam", "rehoboam-v11.ts", "RehoboamV11Adapter"],
+		[
+			"rehoboam",
+			"providers/rehoboam/versions/rehoboam-v12.ts",
+			"RehoboamV12Adapter",
+		],
 		[
 			"static-spaces",
 			"providers/static-spaces/versions/static-spaces-v7.ts",

@@ -1,0 +1,26 @@
+# 已发布 Native 后继续框架发版
+
+使用 Rehoboam Provider v12，并明确批准所需 Actions。已有账号和 Grant 不自动升级或扩权。
+业务状态、权限、模板、执行和审计由 Rehoboam 判断。
+
+1. 用 `list_releases` 找到原 Native 的版本 ID，再调用
+   `get_release_family_native_anchor`，只传 `releaseId`。
+   返回 `existing_family_id` 时进入原发布族，不创建重复发布族。
+2. 尚无发布族时，调用 `preview_release_family`，Native 成员使用
+   `{framework: "native", release_id: "原版本ID"}`；扩展平台可以关联已有版本或新建。
+   核对套件、Jira、API 判断、成员和通知范围后显式确认。
+   预览保存草案，声明 WRITE；确认准备 durable operation，不运行 Job。
+3. 轮询本人 `get_release_family_operation` 回执，再预览和确认缺失计划初始化。
+   原 Native `status=completed` 时，Rehoboam 沿用原交付，不产生 Native 待执行任务，
+   扩展平台正常开始。查询中的 `inherited_delivery` 记录原版本来源，
+   `external_completed` 不表示新 Job 执行成功。
+4. 扩展平台先查询任务及上游结果；引用原 Native 编译/CDN 等结果，保持 result hash，
+   由 Rehoboam 重新核对并组合完整参数。核对缺失字段和逐 Job 执行权限后确认运行或提交审批。
+5. Native 需要补发时，先 `preview_restore_release_family_task`，再使用相同 revision
+   和模板签名显式恢复所选任务。原 Job、申请、产物和交付记录保留；恢复本身不运行 Job。
+
+原模板须已加入对应发布套件。未完成 Native 仍按正常流程初始化，
+不因有旧产物或模型推测而视为已发布。失效确认应重新预览，未知通知或执行副作用不得盲重试。
+
+Rehoboam 网页和企微 Agent 使用相同业务服务；Agent 的初始化、恢复、执行、处置、
+PR 核验及通知都通过持久化确认卡片执行，确认工具不向模型直接开放。
