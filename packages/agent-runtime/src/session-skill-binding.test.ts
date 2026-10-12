@@ -120,6 +120,102 @@ it("forwards the deployment Skill Hub directory through Pi and ACP driver seams"
 	}
 });
 
+it("discovers and reads the bound Skill projection with generation revalidation", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-skill-reader-"));
+	let generationId = "d".repeat(64);
+	const entry = {
+		schemaVersion: 1 as const,
+		name: "workspace-summary",
+		version: "1.0.0",
+		packageDigest: "e".repeat(64),
+		manifestDigest: "f".repeat(64),
+		targetPath: ".agents/skills/workspace-summary",
+		readOnly: true as const,
+	};
+	const readGate = Promise.withResolvers<void>();
+	const directory: RuntimeFilesystemSkillDirectoryV1 = {
+		get generationId() {
+			return generationId;
+		},
+		findSkills: () => [entry],
+		readSkill: async () => {
+			await readGate.promise;
+			return new Uint8Array([7, 8, 9]);
+		},
+	};
+	const driver = await SessionRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "configured/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		cursorPrefix: "test",
+		skillDirectory: directory,
+		retireSession: async () => {},
+		completionStatus: () => "completed",
+		openSession: async () => ({
+			nativeId: "native-a",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			cancel: async () => {},
+			close: async () => {},
+		}),
+	});
+	try {
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-a",
+			turnId: "turn-a",
+			operationId: "operation-a",
+			input: { text: "hello", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		const read = {
+			nativeSessionRef: accepted.nativeSessionRef,
+			signal: new AbortController().signal,
+			expiresAt: Date.now() + 10_000,
+			assertCurrent: () => {},
+			revalidate: async () => {},
+		};
+		expect(await driver.discoverNativeSkills(read)).toEqual({
+			generationId,
+			entries: [entry],
+		});
+		await expect(
+			driver.discoverNativeSkills({
+				...read,
+				expiresAt: Date.now() - 1,
+			}),
+		).rejects.toMatchObject({
+			code: "RUNTIME_SKILL_DIRECTORY_UNAVAILABLE",
+		});
+		const pending = driver.readNativeSkill(read, entry.name, "SKILL.md");
+		await Promise.resolve();
+		generationId = "0".repeat(64);
+		readGate.resolve();
+		await expect(pending).rejects.toMatchObject({
+			code: "RUNTIME_SKILL_DIRECTORY_UNAVAILABLE",
+		});
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("keeps the Skill Hub directory unavailable when no binding is configured", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-skill-binding-absent-"));
 	const observed: { skillDirectory?: RuntimeFilesystemSkillDirectoryV1 }[] = [];

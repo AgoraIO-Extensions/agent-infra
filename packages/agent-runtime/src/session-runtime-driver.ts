@@ -33,7 +33,11 @@ import {
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
-import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+import {
+	boundedRuntimeSkillRead,
+	type RuntimeFilesystemSkillDirectoryV1,
+	RuntimeSkillDirectoryErrorV1,
+} from "./skill-hub-directory.js";
 
 export interface SessionRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -1187,6 +1191,90 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		}
 		assertCurrent();
 		return result;
+	}
+	/** Return the deployment-owned Hub projection without consulting native state. */
+	async discoverNativeSkills(read: SessionNativeCommandReadContext) {
+		const handle = this.handles.get(read.nativeSessionRef);
+		const directory = this.options.skillDirectory;
+		if (!handle || !directory) throw new RuntimeSkillDirectoryErrorV1();
+		const generationId = directory.generationId;
+		const projectionSnapshot = JSON.stringify(directory.findSkills());
+		const assertCurrent = () => {
+			if (
+				read.signal.aborted ||
+				read.expiresAt <= Date.now() ||
+				this.closed ||
+				this.handles.get(read.nativeSessionRef) !== handle
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			if (
+				directory.generationId !== generationId ||
+				JSON.stringify(directory.findSkills()) !== projectionSnapshot
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			read.assertCurrent();
+		};
+		const revalidate = async () => {
+			assertCurrent();
+			try {
+				await read.revalidate();
+			} catch {
+				throw new RuntimeSkillDirectoryErrorV1();
+			}
+			assertCurrent();
+		};
+		await revalidate();
+		const entries = directory.findSkills().map((entry) => ({ ...entry }));
+		await revalidate();
+		return { generationId, entries };
+	}
+
+	/** Read one deployment-owned Hub resource without creating a native Turn. */
+	async readNativeSkill(
+		read: SessionNativeCommandReadContext,
+		name: string,
+		relativePath: string,
+	): Promise<Uint8Array> {
+		const handle = this.handles.get(read.nativeSessionRef);
+		const directory = this.options.skillDirectory;
+		if (!handle || !directory) throw new RuntimeSkillDirectoryErrorV1();
+		const generationId = directory.generationId;
+		const projectionSnapshot = JSON.stringify(directory.findSkills());
+		const assertCurrent = () => {
+			if (
+				read.signal.aborted ||
+				read.expiresAt <= Date.now() ||
+				this.closed ||
+				this.handles.get(read.nativeSessionRef) !== handle
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			if (
+				directory.generationId !== generationId ||
+				JSON.stringify(directory.findSkills()) !== projectionSnapshot
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			read.assertCurrent();
+		};
+		assertCurrent();
+		try {
+			await read.revalidate();
+		} catch {
+			throw new RuntimeSkillDirectoryErrorV1();
+		}
+		assertCurrent();
+		const bytes = await boundedRuntimeSkillRead({
+			pending: directory.readSkill(name, relativePath),
+			signal: read.signal,
+			expiresAt: read.expiresAt,
+		});
+		assertCurrent();
+		try {
+			await read.revalidate();
+		} catch {
+			throw new RuntimeSkillDirectoryErrorV1();
+		}
+		assertCurrent();
+		return bytes.slice();
 	}
 	async getCapabilities() {
 		return {

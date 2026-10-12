@@ -9,6 +9,7 @@ import {
 	parseClaudeNativeCommands,
 } from "./claude-runtime-driver.js";
 import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 const commandRead = (
 	nativeSessionRef = "missing",
@@ -191,6 +192,21 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error();
+	const skillDirectory: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "a".repeat(64),
+		findSkills: () => [
+			{
+				schemaVersion: 1,
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "b".repeat(64),
+				manifestDigest: "c".repeat(64),
+				targetPath: ".agents/skills/workspace-summary",
+				readOnly: true,
+			},
+		],
+		readSkill: async () => new Uint8Array([1, 2, 3]),
+	};
 	const options = {
 		path,
 		configVersion: "configuration-a",
@@ -206,6 +222,7 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 				credential: "synthetic-model-credential",
 			},
 		],
+		skillDirectory,
 	};
 	let driver = await ClaudeRuntimeDriver.open(options);
 	try {
@@ -241,6 +258,19 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 			commandRead(accepted.nativeSessionRef),
 		);
 		expect(commands).toEqual([]);
+		expect(
+			await driver.discoverNativeSkills(commandRead(accepted.nativeSessionRef)),
+		).toEqual({
+			generationId: skillDirectory.generationId,
+			entries: skillDirectory.findSkills(),
+		});
+		expect(
+			await driver.readNativeSkill(
+				commandRead(accepted.nativeSessionRef),
+				"workspace-summary",
+				"SKILL.md",
+			),
+		).toEqual(new Uint8Array([1, 2, 3]));
 		await expect(
 			driver.discoverNativeCommands({
 				...commandRead(accepted.nativeSessionRef),
