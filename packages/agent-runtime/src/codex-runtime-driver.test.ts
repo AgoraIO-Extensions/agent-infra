@@ -3479,6 +3479,7 @@ describe("Codex Runtime Driver", () => {
 			},
 		});
 		await bridge.emitFileChangeCompleted(nativePath);
+		await bridge.emitFileChangeCompleted(nativePath);
 		await bridge.emitTurnCompleted("completed");
 		const events = await driver.replayEvents(
 			accepted.nativeSessionRef,
@@ -3491,6 +3492,8 @@ describe("Codex Runtime Driver", () => {
 			sizeBytes: Buffer.byteLength("native answer"),
 		});
 		expect(events.filter((event) => event.type === "file")).toHaveLength(1);
+		await bridge.emitFileChangeCompleted(nativePath);
+		expect(writeResult).toHaveBeenCalledOnce();
 	});
 
 	it("rejects a native fileChange outside the Conversation workspace", async () => {

@@ -3742,6 +3742,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		string,
 		NativeResultFileContext
 	>();
+	private readonly nativeResultFileAttempts = new Set<string>();
 
 	private retainPendingSourceTurn(turnKey: string, requestId: string): void {
 		const requests =
@@ -7348,6 +7349,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 	private async shutdown() {
 		this.closed = true;
 		this.nativeResultFiles.clear();
+		this.nativeResultFileAttempts.clear();
 		this.initialModelStatusPending.clear();
 		await this.drainConnectionRecoveries();
 		for (const client of this.connectionClients.values()) client.close();
@@ -10114,7 +10116,13 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				if (total > maximumNativeResultFileBytes) return undefined;
 				chunks.push(Buffer.from(buffer.subarray(0, read.bytesRead)));
 			}
-			return { name: basename(within), bytes: Buffer.concat(chunks, total) };
+			const bytes = Buffer.concat(chunks, total);
+			try {
+				new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+			} catch {
+				return undefined;
+			}
+			return { name: basename(within), bytes };
 		} finally {
 			await handle.close().catch(() => {});
 		}
@@ -10139,6 +10147,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			context.command.conversationId !== resolved.session.conversationId
 		)
 			return;
+		const executionId = resolved.execution.executionId;
+		if (this.nativeResultFileAttempts.has(executionId)) return;
+		this.nativeResultFileAttempts.add(executionId);
 		const file = await this.nativeResultFile(
 			codexConversationKey(resolved.session),
 			frame.paths[0] as string,
@@ -10170,10 +10181,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				frame.threadId,
 				frame.nativeTurnId,
 			);
-			if (
-				!target?.execution ||
-				target.execution.executionId !== resolved.execution?.executionId
-			)
+			if (!target?.execution || target.execution.executionId !== executionId)
 				return undefined;
 			if (target.journal.events.some((event) => event.type === "file"))
 				return undefined;
@@ -10366,8 +10374,12 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					threadId: completed.threadId,
 					turnId: completed.nativeTurnId,
 				});
-			if (resolvedCompleted?.execution)
+			if (resolvedCompleted?.execution) {
 				this.nativeResultFiles.delete(resolvedCompleted.execution.executionId);
+				this.nativeResultFileAttempts.delete(
+					resolvedCompleted.execution.executionId,
+				);
+			}
 			if (streamKey) this.notifyEventStream(streamKey);
 			return;
 		}
