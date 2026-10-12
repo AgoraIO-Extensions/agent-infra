@@ -1484,6 +1484,33 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 			schemas.map((name) => [name, current.components?.schemas?.[name]]),
 		),
 	});
+	// The bounded event window is a later additive field on this V2 detail;
+	// keep the original #508 publication digest stable when checking the
+	// historical operation-read addition.
+	const detailAddition = addition.schemas.ConversationDetailProjectionV2;
+	if (detailAddition?.properties?.eventWindow !== undefined) {
+		const properties = { ...detailAddition.properties };
+		delete properties.eventWindow;
+		addition.schemas.ConversationDetailProjectionV2 = {
+			...detailAddition,
+			properties,
+		};
+	}
+	const detailPath = addition.paths["/api/v2/conversations/{conversationId}"];
+	if (detailPath?.get?.parameters) {
+		detailPath.get.parameters = detailPath.get.parameters.filter(
+			(parameter) =>
+				!(parameter.in === "query" && parameter.name === "beforeCursor"),
+		);
+	}
+	const detailResponse = detailPath?.get?.responses?.["200"];
+	if (
+		detailResponse?.description ===
+		"Conversation messages and a bounded mixed-version event window"
+	) {
+		detailResponse.description =
+			"Conversation messages and complete mixed-version event history";
+	}
 	// #1534 later added the optional Session availability; the pinned digest
 	// covers the original publication. #1523 later added "updating".
 	const detail = addition.schemas.ConversationDetailProjectionV2;
@@ -1501,13 +1528,66 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	)
 		return false;
 	const normalized = stripRuntimeBrowserOperationFacts(current);
+	const normalizedDetailPath =
+		normalized.paths["/api/v2/conversations/{conversationId}"];
+	if (
+		normalizedDetailPath?.get?.responses?.["200"]?.description ===
+		"Conversation messages and a bounded mixed-version event window"
+	)
+		normalizedDetailPath.get.responses["200"].description =
+			"Conversation messages and complete mixed-version event history";
 	for (const path of paths) delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
+	delete normalized.components.schemas.ConversationEventWindowV1;
 	const normalizedPrevious = stripRuntimeBrowserOperationFacts(previous);
+	delete normalizedPrevious.components.schemas.ConversationEventWindowV1;
 	return (
 		sameValue(normalizedPrevious, normalized) ||
 		isAgentLifecycleV2OpenApiAddition(normalizedPrevious, normalized)
 	);
+}
+
+// #1812 adds only the optional bounded V2 detail window and its backward cursor.
+function isConversationEventWindowOpenApiAddition(previous, current) {
+	const path = "/api/v2/conversations/{conversationId}";
+	const name = "ConversationDetailProjectionV2";
+	const previousDetail = previous.components?.schemas?.[name];
+	const currentDetail = current.components?.schemas?.[name];
+	const previousParameters = previous.paths?.[path]?.get?.parameters ?? [];
+	const currentParameters = current.paths?.[path]?.get?.parameters ?? [];
+	const beforeCursor = currentParameters.find(
+		(parameter) =>
+			parameter.in === "query" && parameter.name === "beforeCursor",
+	);
+	if (
+		previousDetail?.properties?.eventWindow !== undefined ||
+		previous.components?.schemas?.ConversationEventWindowV1 !== undefined ||
+		previousParameters.some(
+			(parameter) =>
+				parameter.in === "query" && parameter.name === "beforeCursor",
+		) ||
+		!currentDetail?.properties?.eventWindow ||
+		currentDetail.required?.includes("eventWindow") ||
+		!current.components?.schemas?.ConversationEventWindowV1 ||
+		!beforeCursor
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas.ConversationEventWindowV1;
+	delete normalized.components.schemas[name].properties.eventWindow;
+	if (
+		normalized.paths[path].get.responses?.["200"]?.description ===
+		"Conversation messages and a bounded mixed-version event window"
+	)
+		normalized.paths[path].get.responses["200"].description =
+			"Conversation messages and complete mixed-version event history";
+	normalized.paths[path].get.parameters = normalized.paths[
+		path
+	].get.parameters.filter(
+		(parameter) =>
+			!(parameter.in === "query" && parameter.name === "beforeCursor"),
+	);
+	return sameValue(previous, normalized);
 }
 
 // #1010 publishes the existing resource-unavailable error for V2 SSE reads.
@@ -3052,6 +3132,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isTaskHttpV1SseOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
+			!isConversationEventWindowOpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
 			!isConversationSessionAvailabilityOpenApiAddition(previous, current) &&
 			!isConversationSessionUpdatingOpenApiAddition(previous, current) &&
