@@ -10,6 +10,10 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import { retireAcpProcess } from "./acp-process.js";
 import { type AcpLaunch, openAcpSession } from "./acp-session.js";
+import {
+	type BrowserMcpGatewayV1,
+	createBrowserMcpGatewayV1,
+} from "./browser-mcp-gateway.js";
 import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeExternalActionAuthorizationResult,
@@ -27,7 +31,9 @@ export interface AcpRuntimeModelOption {
 }
 export interface GenericAcpRuntimeDriverOptions {
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
-	readonly browserCapability?: BrowserCapabilityAvailableV1;
+	readonly browserCapability?:
+		| BrowserCapabilityAvailableV1
+		| (() => BrowserCapabilityAvailableV1 | undefined);
 	readonly path: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
@@ -51,12 +57,19 @@ export interface GenericAcpRuntimeDriverOptions {
 export type GenericAcpRuntimeDriver = SessionRuntimeDriver;
 export const GenericAcpRuntimeDriver = {
 	async open(options: GenericAcpRuntimeDriverOptions) {
+		const browserCapability =
+			typeof options.browserCapability === "function"
+				? options.browserCapability()
+				: options.browserCapability;
 		// The ACP handshake that decides image input happens before a Session is
 		// created, so the last negotiated answer gates attachment input before any
 		// bridge read or Session side effect. An unknown answer fails closed.
 		let negotiatedImageInput: boolean | undefined;
 		const driver = await SessionRuntimeDriver.open({
 			...options,
+			...(browserCapability
+				? { browserCapability }
+				: { browserCapability: undefined }),
 			// The Driver consumes attachments when the peer negotiated image input;
 			// readiness reports that negotiated fact per peer, and each request
 			// enforces it before reading bytes.
@@ -95,9 +108,42 @@ export const GenericAcpRuntimeDriver = {
 					() => callbacks.admit(),
 					resolveModelCredential,
 				);
+				const executionBrowser = session.browser;
+				const executionCapability =
+					typeof options.browserCapability === "function"
+						? options.browserCapability()
+						: options.browserCapability;
+				let gateway: BrowserMcpGatewayV1 | undefined;
+				try {
+					if (executionBrowser) {
+						if (!executionCapability || !session.executionId)
+							throw new Error("RUNTIME_BROWSER_EXECUTION_UNAVAILABLE");
+						gateway = await createBrowserMcpGatewayV1({
+							capability: executionCapability,
+							context: executionBrowser,
+							executionId: session.executionId,
+						});
+					}
+				} catch (error) {
+					await launch.close?.().catch(() => {});
+					throw error;
+				}
+				const launchWithBrowser = gateway
+					? {
+							...launch,
+							mcpServers: [gateway.server],
+							close: async () => {
+								try {
+									await launch.close?.();
+								} finally {
+									await gateway.close();
+								}
+							},
+						}
+					: launch;
 				const native = await openAcpSession({
 					...session,
-					launch,
+					launch: launchWithBrowser,
 					update: async ({ update: event }) => {
 						if (
 							event.sessionUpdate === "agent_message_chunk" &&
@@ -140,7 +186,19 @@ export const GenericAcpRuntimeDriver = {
 					},
 				});
 				negotiatedImageInput = native.supportsImagePrompt;
-				return options.reuseNativeSession
+				if (gateway) {
+					return {
+						...native,
+						cancel: async () => {
+							try {
+								await native.cancel();
+							} finally {
+								await gateway.close();
+							}
+						},
+					};
+				}
+				return options.reuseNativeSession && !session.browser
 					? {
 							...native,
 							startTurn: (next: NativeSessionOptions) => {
@@ -150,6 +208,7 @@ export const GenericAcpRuntimeDriver = {
 								phases.clear();
 								launch.beginTurn?.();
 							},
+							reuseFor: ({ browser }) => browser === undefined,
 						}
 					: native;
 			},
