@@ -920,3 +920,12 @@ Owner 已批准普通范围及该 ADR 所列残余风险；新版本未部署/�
 connector、Direct/Delegated 授权交集和受控 egress；升级必须重新公司审批及显式 Consent/Grant。
 未知 WRITE 的持久冻结按受影响 Connection 隔离，跨重连、Grant 和版本升级保留；不能以
 解除测试限制为理由放宽身份、归档、Credential、签名、迁移或 UNKNOWN 不重放保护。
+
+## StaticSpaces 完整 Skill 工作流批准
+
+统一能力包扩展与个人管理员身份准入按
+[HLD 4.3.4](HLD-connection-M1.md#434-staticspaces-完整-skill-工作流批准) 和
+[Accepted ADR](../adr/ADR-connection-static-spaces-full-workflows.md) 实施。
+仅新 v7 采用获批 24 项范围，历史版本与授权不变；稳定账号/角色由服务端验证，管理员接口
+每次提交前检查当前上游身份。使用现有个人 Credential、授权交集、受控 egress、持久执行及
+追加迁移；升级要求重新公司审批/Consent，不改变凭证归属、未知冻结或上海部署保护。
