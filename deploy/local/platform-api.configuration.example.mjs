@@ -34,6 +34,11 @@ export const publicOrigin = requiredEnv("PLATFORM_PUBLIC_ORIGIN");
 // Supply reviewed deployment values explicitly; fixture values are not defaults.
 export const apiInput = missing("apiInput");
 
+// Optional deployment-owned one-time application credential delivery. When set,
+// this must be a trusted in-process recipient for the intended application
+// principal; it must never expose credential material through HTTP or logs.
+export const applicationCredentialDelivery = undefined;
+
 // Search must resolve current, canonical directory records for the Web
 // application pickers. It must throw on dependency failure.
 export const directorySearch = missing("directorySearch");

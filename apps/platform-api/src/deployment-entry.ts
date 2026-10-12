@@ -26,6 +26,7 @@ const {
 	connectionConsumerProfileApproval,
 	connectionInstallationConfiguration,
 	connectionInstallationCallback,
+	applicationCredentialDelivery,
 	apiInput,
 	directorySearch,
 } = await import(configurationModule);
@@ -106,6 +107,9 @@ export function createPlatformApiAssemblyInput() {
 			: {}),
 		...(callbackForwarder
 			? { connectionInstallationCallback: callbackForwarder }
+			: {}),
+		...(applicationCredentialDelivery
+			? { applicationCredentialDelivery }
 			: {}),
 		databaseUrl,
 		identity: browser.identity,
