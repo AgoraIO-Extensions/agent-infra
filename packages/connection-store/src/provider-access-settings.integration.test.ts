@@ -167,6 +167,50 @@ integrationTest(
 				confirmationToken: preview.confirmationToken,
 				idempotencyKey: randomUUID(),
 			});
+			// Explicitly resubmitting the same account refreshes scopes, but not the existing Grant.
+			const refreshed = await repository.storeProviderCredential({
+				...identity,
+				grantedScopes: ["repo", "admin"],
+			});
+			expect(refreshed.connectionId).toBe(connectionId);
+			const expandedPreview =
+				await repository.createCurrentConsumerAuthorizationPreview({
+					principalId,
+					consumerId,
+					connectionId,
+				});
+			expect(expandedPreview.actions.map((item) => item.id).sort()).toEqual(
+				catalog.actions.map((item) => item.id).sort(),
+			);
+			const grantMembers = await sql<
+				{ action_version_id: string }[]
+			>`SELECT member.action_version_id FROM connection_grant_actions member JOIN connection_grants stored_grant ON stored_grant.id=member.grant_id WHERE stored_grant.principal_id=${principalId} AND stored_grant.consumer_id=${consumerId}`;
+			expect(grantMembers.map((item) => item.action_version_id)).toEqual([
+				action.id,
+			]);
+			await expect(
+				repository.resolveDirectIdentity({
+					principalId,
+					consumerId,
+					instanceId,
+				}),
+			).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+			// Restore the original fixture scopes before testing the approval switch below.
+			await repository.storeProviderCredential(identity);
+			const reconfirm =
+				await repository.createCurrentConsumerAuthorizationPreview({
+					principalId,
+					consumerId,
+					connectionId,
+					actionVersionIds: [action.id],
+				});
+			await repository.confirmCurrentConsumerAuthorization({
+				principalId,
+				previewId: reconfirm.previewId,
+				confirmationToken: reconfirm.confirmationToken,
+				idempotencyKey: randomUUID(),
+			});
 			const invocation = await repository.resolveDirectIdentity({
 				principalId,
 				consumerId,

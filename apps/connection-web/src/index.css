@@ -1709,3 +1709,11 @@ tbody tr:hover {
 		min-width: 0;
 	}
 }
+
+.connection-capability-gap {
+	margin: 6px 0 0;
+	max-width: 360px;
+	color: var(--text-muted);
+	font-size: 12px;
+	line-height: 1.6;
+}

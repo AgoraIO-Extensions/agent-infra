@@ -2391,3 +2391,119 @@ it("opens credential connection directly when Provider approval is off", async (
 		screen.queryByRole("heading", { name: "申请连接 Bitbucket" }),
 	).toBeNull();
 });
+
+it.each(["ACTIVE", "PAUSED_CREDENTIAL"])(
+	"refreshes a direct account without changing grants in state %s",
+	async (status) => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=rehoboam",
+		);
+		const overview = await api.getConnections();
+		const account = overview.overview.connections[1];
+		const grant = overview.overview.grants[0];
+		if (!account || !grant) throw new Error("Missing account fixture");
+		account.providerId = "rehoboam";
+		account.requiresReconnect = false;
+		account.actionVersionIds = [
+			"rehoboam.get_current_user@v13",
+			"rehoboam.list_channel_publish_requests@v13",
+		];
+		grant.providerId = "rehoboam";
+		grant.status = status;
+		grant.actionVersionIds = ["rehoboam.get_current_user@v13"];
+		grant.actions = [
+			{
+				id: "rehoboam.get_current_user@v13",
+				name: "rehoboam.get_current_user",
+				effect: "READ",
+			},
+		];
+		api.getConnections.mockResolvedValueOnce(overview);
+		api.listProviderAccessSettings.mockResolvedValueOnce({
+			settings: [
+				{ providerId: "rehoboam", approvalRequired: false, revision: "1" },
+			],
+		});
+		vi.spyOn(window, "confirm").mockReturnValue(true);
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("button", { name: "更新账号权限" });
+		expect(screen.getByText(/目录另有 1 项未授权能力/)).toBeTruthy();
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "管理 Codex 能力",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
+		fireEvent.click(screen.getByRole("button", { name: "更新账号权限" }));
+		expect(window.confirm).toHaveBeenCalledWith(
+			expect.stringContaining("同一外部账号"),
+		);
+		fireEvent.change(await screen.findByLabelText("Rehoboam PAT"), {
+			target: { value: "fixture-refresh-pat" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "连接" }));
+		await waitFor(() =>
+			expect(api.connectProviderCredential).toHaveBeenCalledWith({
+				providerId: "rehoboam",
+				accessToken: "fixture-refresh-pat",
+				accessRequestId: undefined,
+			}),
+		);
+		expect(api.reauthorizeProviderConnection).not.toHaveBeenCalled();
+		expect(api.confirmAuthorization).not.toHaveBeenCalled();
+		expect(api.submitConnectionAccessRequest).not.toHaveBeenCalled();
+	},
+);
+
+it.each(["approval", "shared"])(
+	"does not offer direct capability refresh for %s accounts",
+	async (kind) => {
+		window.history.replaceState(
+			{},
+			"",
+			"/connection/connections?provider=github",
+		);
+		const overview = await api.getConnections();
+		if (kind === "shared")
+			for (const account of overview.overview.connections)
+				if (account.status === "ACTIVE")
+					Object.assign(account, { ownerType: "SHARED" });
+		api.getConnections.mockResolvedValueOnce(overview);
+		api.listProviderAccessSettings.mockResolvedValueOnce({
+			settings: [
+				{
+					providerId: "github",
+					approvalRequired: kind === "approval",
+					revision: "1",
+				},
+			],
+		});
+		renderPage(<ConnectionsPage />);
+		await screen.findByRole("button", { name: /GitHub 已连接/ });
+		expect(screen.queryByRole("button", { name: "更新账号权限" })).toBeNull();
+	},
+);
+
+it("does not surface an older paused grant when a newer decision revoked it", async () => {
+	window.history.replaceState(
+		{},
+		"",
+		"/connection/connections?provider=github",
+	);
+	const overview = await api.getConnections();
+	const prior = overview.overview.grants[0];
+	if (!prior) throw new Error("Missing grant fixture");
+	prior.status = "PAUSED_CREDENTIAL";
+	overview.overview.grants.unshift({
+		...prior,
+		id: "newer-revoked",
+		status: "REVOKED",
+	});
+	api.getConnections.mockResolvedValueOnce(overview);
+	renderPage(<ConnectionsPage />);
+	await screen.findByRole("button", { name: /GitHub 已连接/ });
+	expect(screen.queryByRole("button", { name: "管理 Codex 能力" })).toBeNull();
+});

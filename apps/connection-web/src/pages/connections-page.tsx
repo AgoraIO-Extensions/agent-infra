@@ -713,7 +713,16 @@ export function ConnectionsPage() {
 	const visibleGrants = data
 		? showHistory
 			? data.grants
-			: data.grants.filter((grant) => grant.status === "ACTIVE")
+			: data.grants.filter(
+					(grant) =>
+						grant.status === "ACTIVE" ||
+						(grant.status === "PAUSED_CREDENTIAL" &&
+							data.grants.find(
+								(entry) =>
+									entry.consumerId === grant.consumerId &&
+									entry.providerId === grant.providerId,
+							)?.id === grant.id),
+				)
 		: [];
 	const bulkUpgradeConnectionIds = data
 		? [
@@ -2005,14 +2014,23 @@ function ConnectorManagementWorkspace(props: {
 											</span>
 											<div>
 												<strong>{grant.consumerName}</strong>
-												<GrantPermissions grant={grant} />
+												<GrantPermissions
+													grant={grant}
+													catalogActionVersionIds={
+														selected.requiresReconnect
+															? []
+															: selected.actionVersionIds
+													}
+												/>
 											</div>
 											<Status value={grant.status} />
 											<Button
 												variant="secondary"
 												size="icon"
 												disabled={
-													grant.status !== "ACTIVE" || !authorizationAvailable
+													!["ACTIVE", "PAUSED_CREDENTIAL"].includes(
+														grant.status,
+													) || !authorizationAvailable
 												}
 												onClick={() =>
 													props.onAuthorize(selected.id, grant.consumerId)
@@ -2045,6 +2063,25 @@ function ConnectorManagementWorkspace(props: {
 								)}
 							</div>
 							<div className="connection-account-actions">
+								{!approvalRequired &&
+								selected.ownerType === "PERSONAL" &&
+								selected.status === "ACTIVE" ? (
+									<Button
+										variant="secondary"
+										onClick={() => {
+											if (
+												window.confirm(
+													`更新 ${selected.displayName} 的账号权限：请在接下来的表单填写同一外部账号的凭据。系统会重新验证权限；其他账号将作为新连接保存，不继承原授权。账号权限变化时，旧客户端授权可能暂停，需要重新确认；新增 Action 不会自动授权。`,
+												)
+											)
+												props.onConnect(
+													selected.providerId as ConnectorProviderId,
+												);
+										}}
+									>
+										更新账号权限
+									</Button>
+								) : null}
 								{approvalRequired &&
 								!currentRequest &&
 								selected.status === "ACTIVE" &&
@@ -2481,7 +2518,9 @@ function authorizationFacts(value: AuthorizationPreviewResponse) {
 }
 
 function GrantPermissions(props: {
+	catalogActionVersionIds?: readonly string[];
 	grant: {
+		status?: string;
 		actions: Array<{ effect: "READ" | "WRITE"; id: string; name: string }>;
 		actionVersionIds: string[];
 	};
@@ -2490,11 +2529,26 @@ function GrantPermissions(props: {
 	const read = actions.filter((action) => action.effect === "READ");
 	const write = actions.filter((action) => action.effect === "WRITE");
 	const total = actions.length || props.grant.actionVersionIds?.length || 0;
+	const ungranted = ["ACTIVE", "PAUSED_CREDENTIAL"].includes(
+		props.grant.status ?? "",
+	)
+		? (props.catalogActionVersionIds ?? []).filter(
+				(id) => !props.grant.actionVersionIds.includes(id),
+			).length
+		: 0;
 	return (
-		<div className="permission-summary">
-			<strong>{total} 项</strong>
-			<span>{read.length} 读</span>
-			<span>{write.length} 写</span>
-		</div>
+		<>
+			<div className="permission-summary">
+				<strong>{total} 项</strong>
+				<span>{read.length} 读</span>
+				<span>{write.length} 写</span>
+			</div>
+			{ungranted ? (
+				<p className="connection-capability-gap">
+					目录另有 {ungranted}{" "}
+					项未授权能力。是否可授权仍取决于账号权限、客户端能力配置及当前审批要求；授权列表缺项时请检查这些条件。
+				</p>
+			) : null}
+		</>
 	);
 }
