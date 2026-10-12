@@ -121,4 +121,19 @@ describe("non-Codex native metadata projection", () => {
 			}),
 		).toThrow("Native metadata projection is unavailable");
 	});
+
+	it("rejects absolute, traversal, empty-segment and oversized target paths", () => {
+		for (const targetPath of [
+			"/var/run/agent-infra/skill",
+			".agents/skills/../outside",
+			".agents//skills/workspace-summary",
+			`.agents/skills/workspace-summary/${"x".repeat(4096)}`,
+		])
+			expect(() =>
+				projectSkills({
+					generationId: "c".repeat(64),
+					entries: [{ ...skillEntry, targetPath }],
+				}),
+			).toThrow("Native metadata projection is unavailable");
+	});
 });
