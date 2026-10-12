@@ -1,5 +1,9 @@
 import { Buffer } from "node:buffer";
 import { types } from "node:util";
+import {
+	type NativeMetadataObjectScopeV1,
+	NativeMetadataObjectScopeV1Schema,
+} from "@agent-infra/contracts/runtime";
 import type { RecentPersonalConversationsQueryV1 } from "@agent-infra/platform-core";
 import {
 	isSessionSandboxReadyV1,
@@ -99,6 +103,23 @@ export interface ConversationQueryReadOptionsV1 {
 	readonly beforeCursor?: string;
 }
 
+/**
+ * The only Store input needed to resolve the original native metadata scope.
+ *
+ * The query deliberately carries the Conversation and Execution identities
+ * separately: the database must prove that they belong to the same persisted
+ * principal/Agent/channel tuple before returning the Execution's own
+ * generation and authorization revision.
+ */
+export interface NativeMetadataObjectScopeRequestV1 {
+	readonly scope: ConversationQueryScopeV1;
+	readonly conversationId: string;
+	readonly executionId: string;
+	readonly signal?: AbortSignal;
+}
+
+export type NativeMetadataObjectScopeResponseV1 = NativeMetadataObjectScopeV1;
+
 export interface ConversationExecutionDetailV1 {
 	readonly execution: ConversationQueryExecutionV1;
 	readonly events: readonly ConversationQueryEventV1[];
@@ -186,6 +207,22 @@ interface EventRow {
 	readonly event_payload: unknown;
 	readonly occurred_at: Date;
 	readonly trace_id: string | null;
+}
+
+interface NativeMetadataObjectScopeRow {
+	readonly conversation_id: string;
+	readonly conversation_agent: string;
+	readonly conversation_actor: string;
+	readonly conversation_channel: string;
+	readonly conversation_principal_type: string;
+	readonly execution_id: string;
+	readonly execution_conversation: string;
+	readonly execution_agent: string;
+	readonly execution_actor: string;
+	readonly execution_channel: string;
+	readonly execution_principal_type: string;
+	readonly session_generation: string | number;
+	readonly authorization_revision: string;
 }
 
 interface EventIdentityRow {
@@ -964,6 +1001,117 @@ export class PostgresConversationQueryV1 {
 
 	readRecentPersonalConversations(input: RecentPersonalConversationsQueryV1) {
 		return readRecentPersonalConversations(this.#client, input, projection);
+	}
+
+	async readNativeMetadataObjectScopeV1(
+		inputScope: ConversationQueryScopeV1,
+		conversationIdInput: string,
+		executionIdInput: string,
+		signal?: AbortSignal,
+	): Promise<NativeMetadataObjectScopeResponseV1 | undefined>;
+	async readNativeMetadataObjectScopeV1(
+		request: NativeMetadataObjectScopeRequestV1,
+	): Promise<NativeMetadataObjectScopeResponseV1 | undefined>;
+	async readNativeMetadataObjectScopeV1(
+		inputOrRequest:
+			| ConversationQueryScopeV1
+			| NativeMetadataObjectScopeRequestV1,
+		conversationIdInput?: string,
+		executionIdInput?: string,
+		signal?: AbortSignal,
+	): Promise<NativeMetadataObjectScopeResponseV1 | undefined> {
+		const request =
+			"scope" in inputOrRequest
+				? inputOrRequest
+				: {
+						scope: inputOrRequest,
+						conversationId: conversationIdInput,
+						executionId: executionIdInput,
+						signal,
+					};
+		const readScope = scope(request.scope);
+		const conversationId = requestText(request.conversationId);
+		const executionId = requestText(request.executionId);
+		// API/application metadata reads remain closed until their current
+		// credential contract is connected. Web uses the original-user policy.
+		if (readScope.channelId !== "web") return undefined;
+		try {
+			return await repeatableRead(
+				this.#client,
+				async (transaction, run) => {
+					const rows = await run(
+						transaction<NativeMetadataObjectScopeRow[]>`
+							/* native_metadata_read.original_execution */
+							select
+								c.id as conversation_id,
+								c.agent_id as conversation_agent,
+								c.actor_id as conversation_actor,
+								c.channel_id as conversation_channel,
+								c.principal_type as conversation_principal_type,
+								e.execution_id,
+								e.conversation_id as execution_conversation,
+								e.agent_id as execution_agent,
+								e.actor_id as execution_actor,
+								e.channel_id as execution_channel,
+								e.principal_type as execution_principal_type,
+								e.session_generation::text,
+								e.authorization_revision
+							from platform.conversations c
+							join platform.conversation_executions e
+								on e.conversation_id = c.id
+								and e.agent_id = c.agent_id
+								and e.actor_id = c.actor_id
+								and e.channel_id = c.channel_id
+								and e.principal_type = c.principal_type
+								and e.execution_id = ${executionId}
+							where c.id = ${conversationId}
+								and c.actor_id = ${readScope.actorId}
+								and c.channel_id = ${readScope.channelId}
+								and c.principal_type = ${readScope.principal?.kind ?? "user"}
+							limit 2
+						`,
+					);
+					if (rows.length === 0) return undefined;
+					const row = rows[0];
+					if (
+						rows.length !== 1 ||
+						!row ||
+						row.conversation_id !== conversationId ||
+						row.execution_id !== executionId ||
+						row.execution_conversation !== row.conversation_id ||
+						row.conversation_agent !== row.execution_agent ||
+						row.conversation_actor !== row.execution_actor ||
+						row.conversation_channel !== row.execution_channel ||
+						row.conversation_principal_type !== row.execution_principal_type ||
+						(row.execution_principal_type !== "user" &&
+							row.execution_principal_type !== "application") ||
+						row.execution_actor !== readScope.actorId ||
+						row.execution_channel !== readScope.channelId
+					)
+						return unavailable();
+					return NativeMetadataObjectScopeV1Schema.parse({
+						schemaVersion: 1,
+						principal: {
+							kind:
+								row.execution_principal_type === "application"
+									? "application"
+									: "user",
+							id: row.execution_actor,
+						},
+						agentId: row.execution_agent,
+						channelId: row.execution_channel,
+						conversationId: row.execution_conversation,
+						executionId: row.execution_id,
+						sessionGeneration: safeInteger(row.session_generation, 1),
+						authorizationRevision: row.authorization_revision,
+					});
+				},
+				request.signal,
+			);
+		} catch (error) {
+			if (error instanceof ConversationQueryError) throw error;
+			return unavailable();
+		}
 	}
 
 	async getAuthorizationTarget(

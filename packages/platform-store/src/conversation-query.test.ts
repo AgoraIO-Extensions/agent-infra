@@ -680,6 +680,151 @@ describe("PostgreSQL Conversation query", () => {
 	});
 });
 
+describe("PostgreSQL original native metadata scope", () => {
+	const read = (
+		inputScope: ConversationQueryScopeV1 = actorOne,
+		conversationId = "conversation-1",
+		executionId = "execution-conversation-1",
+	) =>
+		query.readNativeMetadataObjectScopeV1({
+			scope: inputScope,
+			conversationId,
+			executionId,
+			signal: new AbortController().signal,
+		});
+
+	it("projects the terminal Execution's persisted generation and revision", async () => {
+		await client`
+			update platform.conversations
+			set session_generation = 2,
+				authorization_revision = 'current-revision',
+				host_session_ref = 'current-host'
+			where id = 'conversation-1'
+		`;
+		try {
+			expect(await read()).toEqual({
+				schemaVersion: 1,
+				principal: { kind: "user", id: "actor-1" },
+				agentId: "agent-1",
+				channelId: "web",
+				conversationId: "conversation-1",
+				executionId: "execution-conversation-1",
+				sessionGeneration: 1,
+				authorizationRevision: "authorization-1",
+			});
+		} finally {
+			await client`
+				update platform.conversations
+				set session_generation = 1,
+					authorization_revision = 'authorization-1',
+					host_session_ref = null
+				where id = 'conversation-1'
+			`;
+		}
+	});
+
+	it.each([
+		[
+			{ actorId: "actor-2", channelId: "web" },
+			"conversation-1",
+			"execution-conversation-1",
+		],
+		[
+			{ actorId: "actor-1", channelId: "wecom" },
+			"conversation-1",
+			"execution-conversation-1",
+		],
+		[
+			{
+				actorId: "shared-principal",
+				channelId: "api",
+				principal: { kind: "application" as const, id: "shared-principal" },
+			},
+			"typed-application-1",
+			"execution-typed-application-1",
+		],
+		[actorOne, "conversation-1", "execution-conversation-2"],
+		[actorOne, "conversation-missing", "execution-conversation-1"],
+		[actorOne, "conversation-1", "execution-missing"],
+	] as const)(
+		"hides missing or cross-object/principal scope %j / %s / %s",
+		async (inputScope, conversationId, executionId) => {
+			await expect(
+				read(inputScope, conversationId, executionId),
+			).resolves.toBeUndefined();
+		},
+	);
+
+	it("reads only the metadata projection and leaves all persisted rows unchanged", async () => {
+		const snapshot = async () => {
+			const rows = [];
+			for (const table of [
+				"conversations",
+				"conversation_executions",
+				"conversation_messages",
+				"conversation_events",
+				"outbox_items",
+				"conversation_audit_events",
+			] as const) {
+				rows.push([
+					table,
+					await client.unsafe(
+						`select to_jsonb(r)::text as bytes, xmin::text as xmin from platform.${table} r order by 1, 2`,
+					),
+				]);
+			}
+			return JSON.stringify(rows);
+		};
+		const before = await snapshot();
+		const role = `native_metadata_query_${process.pid}_${Date.now()}`;
+		const roleUrl = new URL(databaseUrl);
+		try {
+			await client.unsafe(`create role ${role} nologin`);
+			await client.unsafe(`grant usage on schema platform to ${role}`);
+			await client.unsafe(
+				`grant select (id, agent_id, actor_id, channel_id, principal_type) on platform.conversations to ${role}`,
+			);
+			await client.unsafe(
+				`grant select (execution_id, conversation_id, agent_id, actor_id, channel_id, principal_type, session_generation, authorization_revision) on platform.conversation_executions to ${role}`,
+			);
+			roleUrl.searchParams.set("options", `-c role=${role}`);
+			const limited = new PostgresConversationQueryV1({
+				databaseUrl: roleUrl.href,
+			});
+			const denied = postgres(roleUrl.href, { max: 1 });
+			try {
+				for (const queryText of [
+					"select text from platform.conversation_messages",
+					"select event_payload from platform.conversation_events",
+					"select payload from platform.outbox_items",
+					"select details from platform.conversation_audit_events",
+				]) {
+					await expect(denied.unsafe(queryText)).rejects.toMatchObject({
+						code: "42501",
+					});
+				}
+				expect(
+					await limited.readNativeMetadataObjectScopeV1({
+						scope: actorOne,
+						conversationId: "conversation-1",
+						executionId: "execution-conversation-1",
+					}),
+				).toMatchObject({
+					executionId: "execution-conversation-1",
+					sessionGeneration: 1,
+				});
+			} finally {
+				await limited.close();
+				await denied.end();
+			}
+		} finally {
+			await client.unsafe(`drop owned by ${role}`);
+			await client.unsafe(`drop role ${role}`);
+		}
+		expect(await snapshot()).toBe(before);
+	});
+});
+
 it("preserves unallocated history and replay without treating missing or corrupt bindings as readiness", async () => {
 	const scope = { actorId: "legacy-user", channelId: "web" };
 	await client`insert into platform.conversations
