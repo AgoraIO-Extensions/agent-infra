@@ -266,6 +266,7 @@ export function ActiveConversation({
 		denied ||
 		commandLocked ||
 		!timeline.history ||
+		conversation?.status === "unavailable" ||
 		timeline.status === "disconnected" ||
 		timeline.status === "unavailable" ||
 		(!available && !agentTransitioning);
