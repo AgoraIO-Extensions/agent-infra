@@ -22,6 +22,7 @@ import type {
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
 	RuntimePinnedExecutionKeyScopeV4,
+	RuntimePrincipalV1,
 	RuntimeReplayRequestV1,
 	RuntimeReplayResponseV1,
 	RuntimeSkillDirectoryRequestV1,
@@ -249,16 +250,27 @@ async function createBrowserExecutionContextForCommand(
 	browser: RuntimeBrowserExecutionContextV1 | undefined,
 	principal: RuntimeBrowserExecutionContextV1["principal"] = undefined,
 ): Promise<RuntimeBrowserExecutionContextV1 | undefined> {
-	if (!browser || !factory) return browser;
+	if (!browser) return undefined;
 	const admittedVersion = browser.capabilityVersion;
 	const admittedBinding = structuredClone(browser.binding);
-	const admittedPrincipal = principal ? structuredClone(principal) : undefined;
-	const created = await factory({
+	const admittedPrincipal = principal
+		? Object.freeze(structuredClone(principal))
+		: undefined;
+	const admittedContext: RuntimeBrowserExecutionContextV1 = {
 		...browser,
 		binding: structuredClone(admittedBinding),
-		...(admittedPrincipal
-			? { principal: structuredClone(admittedPrincipal) }
-			: {}),
+		...(admittedPrincipal ? { principal: admittedPrincipal } : {}),
+	};
+	// The Driver only receives a principal through the deployment factory, and
+	// only the current operation scope may supply one. A readiness snapshot may
+	// still carry a principal from an earlier authority, so an unadmitted or
+	// factory-less context must never reach the factory or the Driver with one.
+	if (!factory || !admittedPrincipal)
+		delete (admittedContext as { principal?: RuntimePrincipalV1 }).principal;
+	if (!factory) return admittedContext;
+	const created = await factory({
+		...admittedContext,
+		binding: structuredClone(admittedBinding),
 	});
 	if (
 		!created ||
@@ -267,7 +279,14 @@ async function createBrowserExecutionContextForCommand(
 		!isDeepStrictEqual(created.principal, admittedPrincipal)
 	)
 		return undefined;
-	return created;
+	return Object.freeze({
+		...created,
+		capabilityVersion: admittedVersion,
+		binding: Object.freeze(structuredClone(admittedBinding)),
+		...(admittedPrincipal
+			? { principal: Object.freeze(structuredClone(admittedPrincipal)) }
+			: {}),
+	});
 }
 
 type RuntimeOperationResponse =
