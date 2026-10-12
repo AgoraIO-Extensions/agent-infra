@@ -93,6 +93,7 @@ export {
 	type ConversationQueryMessageV1,
 	type ConversationQueryPageV1,
 	type ConversationQueryProjectionV1,
+	type ConversationQueryReadOptionsV1,
 	type ConversationQueryScopeV1,
 	type ConversationReplayResultV1,
 	type PlatformQueueResourceSnapshot,
