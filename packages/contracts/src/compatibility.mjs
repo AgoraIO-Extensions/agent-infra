@@ -762,6 +762,50 @@ function isCustomAgentModelSelectionOpenApiAddition(previous, current) {
 
 // #1266 admits the GET side of the existing model-selection route and its
 // projection schema. The PUT route and all prior components remain exact.
+// #2028 adds the compatibility result to each standard-template fan-out target.
+function isStandardTemplateReleaseCompatibilityOpenApiAddition(previous, current) {
+	const path = "/internal/ops/standard-template-releases/{releaseId}/apply-all";
+	const statuses = ["202", "207"];
+	const previousOperation = previous.paths?.[path]?.post;
+	const currentOperation = current.paths?.[path]?.post;
+	if (previousOperation === undefined || currentOperation === undefined) return false;
+	const previousItems = statuses.map(
+		(status) =>
+			previousOperation.responses?.[status]?.content?.["application/json"]
+				?.schema?.properties?.targets?.items,
+	);
+	const currentItems = statuses.map(
+		(status) =>
+			currentOperation.responses?.[status]?.content?.["application/json"]
+				?.schema?.properties?.targets?.items,
+	);
+	if (
+		previousItems.some((item) => item === undefined) ||
+		currentItems.some((item) => item === undefined) ||
+		previousItems.some((item) => item.properties?.compatibility !== undefined) ||
+		currentItems.some((item) => item.properties?.compatibility === undefined) ||
+		!sameValue(
+			currentItems[0].properties.compatibility,
+			currentItems[1].properties.compatibility,
+		) ||
+		currentItems.some(
+			(item) =>
+				!item.required?.includes("compatibility") ||
+				item.required.filter((name) => name === "compatibility").length !== 1,
+		)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const status of statuses) {
+		const item =
+			normalized.paths[path].post.responses[status].content["application/json"]
+				.schema.properties.targets.items;
+		delete item.properties.compatibility;
+		item.required = item.required.filter((name) => name !== "compatibility");
+	}
+	return findBreakingChanges(previous, normalized).length === 0;
+}
+
 function isCustomAgentModelProjectionOpenApiAddition(previous, current) {
 	const path = "/api/v1/conversations/{conversationId}/model-selection";
 	const schema = "ConversationModelSelectionProjectionV1";
@@ -3236,6 +3280,11 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isFileAuthorityOpenApiAddition(previous, current) &&
 			!isCustomAgentModelSelectionOpenApiAddition(previous, current) &&
 			!isCustomAgentModelProjectionOpenApiAddition(previous, current)
+			&&
+				!isStandardTemplateReleaseCompatibilityOpenApiAddition(
+					previous,
+					current,
+				)
 		) {
 			changes.push("changed OpenAPI contract");
 		}
