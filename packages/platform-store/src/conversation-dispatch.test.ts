@@ -2412,7 +2412,8 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					errorCode: "RUNTIME_ACCEPTANCE_NOT_SENT",
 				}),
 			).toBe(true);
-			expect((await dispatchState(work)).execution_status).toBe("submitted");
+			const restored = await dispatchState(work);
+			expect(restored?.execution_status).toBe("submitted");
 		} finally {
 			await claimed.store.close();
 		}
