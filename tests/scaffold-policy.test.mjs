@@ -136,6 +136,19 @@ test("injected Platform runtime images discard compile-time metadata", async () 
 	}
 });
 
+test("RuntimeHost image normalizes post-install global directory timestamps", async () => {
+	const dockerfile = await readFile(
+		"apps/agent-runtime-host/Dockerfile",
+		"utf8",
+	);
+	const runtimeStage = /^FROM .* AS runtime\n([\s\S]*?)(?=^FROM )/m.exec(
+		dockerfile,
+	)?.[1];
+	assert.ok(runtimeStage, "RuntimeHost production stage is missing");
+	assert.match(runtimeStage, /^ARG SOURCE_DATE_EPOCH=0$/m);
+	assert.match(runtimeStage, /utimesSync\("\/usr\/local", epoch, epoch\)/);
+});
+
 test("Compose runs every deployment image with a read-only root filesystem", async () => {
 	const compose = parse(await readFile("docker-compose.yml", "utf8"));
 
