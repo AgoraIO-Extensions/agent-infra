@@ -585,7 +585,13 @@ it("actual Driver waits for original intent and result ACKs and sends MCP only o
 	expect(JSON.stringify(env.native.sent)).not.toContain(token);
 	expect(await readFile(env.path, "utf8")).not.toContain(token);
 	expect(final.payload).toMatchObject({
-		connection: { verification: "unverified", reason: "record_unavailable" },
+		connection: {
+			verification: "unverified",
+			reason: "record_unavailable",
+			consumerId: "platform",
+			instanceRef: "instance-a",
+			credentialRevision: "r1",
+		},
 	});
 });
 
