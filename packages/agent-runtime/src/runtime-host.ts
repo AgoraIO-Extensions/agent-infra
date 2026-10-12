@@ -21,6 +21,7 @@ import type {
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
 	RuntimePinnedExecutionKeyScopeV4,
+	RuntimePrincipalV1,
 	RuntimeReplayRequestV1,
 	RuntimeReplayResponseV1,
 	RuntimeStatusRequestV1,
@@ -238,16 +239,24 @@ async function createBrowserExecutionContextForCommand(
 	browser: RuntimeBrowserExecutionContextV1 | undefined,
 	principal: RuntimeBrowserExecutionContextV1["principal"] = undefined,
 ): Promise<RuntimeBrowserExecutionContextV1 | undefined> {
-	if (!browser || !factory) return browser;
+	if (!browser) return undefined;
 	const admittedVersion = browser.capabilityVersion;
 	const admittedBinding = structuredClone(browser.binding);
-	const admittedPrincipal = principal ? structuredClone(principal) : undefined;
-	const created = await factory({
+	const admittedPrincipal = principal
+		? Object.freeze(structuredClone(principal))
+		: undefined;
+	const admittedContext: RuntimeBrowserExecutionContextV1 = {
 		...browser,
 		binding: structuredClone(admittedBinding),
-		...(admittedPrincipal
-			? { principal: structuredClone(admittedPrincipal) }
-			: {}),
+		...(admittedPrincipal ? { principal: admittedPrincipal } : {}),
+	};
+	if (!factory) {
+		delete (admittedContext as { principal?: RuntimePrincipalV1 }).principal;
+		return admittedContext;
+	}
+	const created = await factory({
+		...admittedContext,
+		binding: structuredClone(admittedBinding),
 	});
 	if (
 		!created ||
@@ -256,7 +265,14 @@ async function createBrowserExecutionContextForCommand(
 		!isDeepStrictEqual(created.principal, admittedPrincipal)
 	)
 		return undefined;
-	return created;
+	return {
+		...created,
+		capabilityVersion: admittedVersion,
+		binding: Object.freeze(structuredClone(admittedBinding)),
+		...(admittedPrincipal
+			? { principal: Object.freeze(structuredClone(admittedPrincipal)) }
+			: {}),
+	};
 }
 
 type RuntimeOperationResponse =

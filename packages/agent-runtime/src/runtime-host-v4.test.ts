@@ -412,6 +412,35 @@ it("injects the deployment-owned Browser controller only after Host binding admi
 	expect(contexts[0]?.executeTool).toEqual(expect.any(Function));
 });
 
+it("strips a preconfigured principal when no Browser factory is installed", async () => {
+	const f = await setup();
+	(
+		f.host as unknown as {
+			browserExecutionContext?: RuntimeBrowserExecutionContextV1;
+		}
+	).browserExecutionContext = {
+		capabilityVersion: 3,
+		principal: { kind: "user", id: "stale-principal" },
+		binding: {
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			sessionGeneration: 1,
+			resourceFence: 1,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+	};
+	const execute = f.driver.execute.bind(f.driver);
+	const contexts: RuntimeBrowserExecutionContextV1[] = [];
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command, context) => {
+		if (context?.browser) contexts.push(context.browser);
+		return execute(command, context);
+	});
+	await f.host.submitTurnV4(f.transport);
+	expect(contexts).toHaveLength(1);
+	expect(contexts[0]?.principal).toBeUndefined();
+});
+
 it("drops a Browser controller factory result whose binding drifts", async () => {
 	const f = await setup(undefined, (input) => ({
 		...input,
