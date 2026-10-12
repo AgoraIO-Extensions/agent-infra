@@ -401,6 +401,17 @@ function bindingsFor(
 	];
 }
 
+/**
+ * 排空路径可复用 Monitor readiness 缓存的命令白名单。
+ * 这些命令在同一 Execution 排空中反复执行，签名 readiness 是性能瓶颈；
+ * turn.submit / turn.supplement / session.status / control 用途始终做完整探测。
+ */
+export const drainCacheableCommands = new Set([
+	"events.persist",
+	"events.ack",
+	"execution.renew",
+] as const);
+
 export function createWorkloadRuntimeV1(
 	options: WorkloadRuntimeOptionsV1,
 ): WorkloadRuntimePortV1 & {
@@ -410,6 +421,20 @@ export function createWorkloadRuntimeV1(
 	observeSession(
 		state: WorkloadReconciliationStateV1,
 		browserBinding: BrowserCapabilityBindingV1,
+	): ReturnType<WorkloadRuntimePortV1["observe"]>;
+	/**
+	 * 排空路径轻量路由复核：缓存命中时跳过签名 readiness，仅核对 Kubernetes
+	 * 实际路由、所有权/漂移与 Pod 就绪（保留 /healthz）。
+	 * 缓存来自同进程 Workload Monitor 最近一次通过的签名 readiness 结果，
+	 * 绑定 Pod UID、generation、Workload revision 和 fence，有效期不超过
+	 * monitorReadinessMaxAgeMs（默认 60 s）。任何绑定不匹配、超期、phase 非
+	 * ready、attempts 非 0 或缺失记录时退回完整签名 readiness（fail-closed）。
+	 * 仅供 business purpose 排空命令（events.persist / events.ack /
+	 * execution.renew）使用；turn.submit / supplement / control 不得调用此方法。
+	 */
+	observeForDrain(
+		state: WorkloadReconciliationStateV1,
+		browserBinding?: BrowserCapabilityBindingV1,
 	): ReturnType<WorkloadRuntimePortV1["observe"]>;
 } {
 	if (!Array.isArray(options.templateModelBindings))
@@ -422,6 +447,35 @@ export function createWorkloadRuntimeV1(
 		WorkloadReconciliationStateV1,
 		WorkloadCapabilitiesV1
 	>();
+
+	/**
+	 * 进程内 Monitor readiness 缓存。
+	 * key = "${agentId}:${uid}:${generation}:${revision}:${fence}"
+	 * 只记录 monitor（workload reconciliation）通过的最近一次签名 readiness 结果。
+	 * 同一 Worker 进程既跑 monitor 又跑排空，无需跨进程共享；
+	 * 多副本 Worker 各自维护独立缓存，缺失时退回完整探测（fail-closed）。
+	 */
+	interface MonitorReadinessCacheEntryV1 {
+		/** 该次 probe 通过的时间戳（ms，Date.now()）。 */
+		readonly passedAt: number;
+		/** 该次探测记录的 capabilities，供排空复用以保持投影一致性。 */
+		readonly capabilities: WorkloadCapabilitiesV1;
+	}
+	const monitorReadinessCache = new Map<string, MonitorReadinessCacheEntryV1>();
+
+	/**
+	 * 排空路径复用缓存的最大有效期（ms）。
+	 * 设为 60 s（不超过两个 30 s 监测周期），保证 Monitor 至少更新过一次缓存。
+	 */
+	const monitorReadinessMaxAgeMs = 60_000;
+
+	/** 生成缓存键；绑定 Pod UID、generation、Workload revision 和 fence。 */
+	function monitorReadinessCacheKey(
+		state: WorkloadReconciliationStateV1,
+	): string | null {
+		if (!state.identity) return null;
+		return `${state.agentId}:${state.identity.uid}:${state.identity.generation}:${state.revision}:${state.fence}`;
+	}
 	function candidateKeyless(
 		state: Pick<WorkloadReconciliationStateV1, "candidate">,
 	): boolean {
@@ -453,6 +507,11 @@ export function createWorkloadRuntimeV1(
 		purpose: "authorize" | "cleanup" = "authorize",
 		connectionConsumerControl = false,
 		browserBinding?: BrowserCapabilityBindingV1,
+		/**
+		 * 排空路径专用：跳过签名 readiness，仅核对 /healthz。
+		 * 只有在缓存命中时才允许传 true，其他所有路径保持 false（默认）。
+		 */
+		skipSignedReadiness = false,
 	) {
 		const modelProjection =
 			state?.candidate.configuration.source.kind === "standard"
@@ -540,6 +599,10 @@ export function createWorkloadRuntimeV1(
 				}
 				if (desired.runtimeManifest.interactionMode === "self-managed") {
 					recordCapabilities(RuntimeCapabilitySetV1Schema.parse({}));
+					return true;
+				}
+				// 排空路径缓存命中：/healthz 通过即认为就绪，跳过签名 readiness
+				if (skipSignedReadiness) {
 					return true;
 				}
 				const controller = new AbortController();
@@ -857,6 +920,69 @@ export function createWorkloadRuntimeV1(
 		);
 		if (health === "healthy" && state.phase === "promoting" && capabilities)
 			observedCapabilities.set(state, capabilities);
+		// Monitor（workload reconciliation）在 ready 状态下周期性调用 observe；
+		// 探测通过时将结果写入进程内缓存，供排空路径复用以避免重复冷启动 probe。
+		if (health === "healthy" && state.phase === "ready" && capabilities) {
+			const key = monitorReadinessCacheKey(state);
+			if (key) {
+				monitorReadinessCache.set(key, {
+					passedAt: Date.now(),
+					capabilities,
+				});
+			}
+		}
+		return health;
+	}
+
+	/**
+	 * 排空路径轻量路由复核。
+	 * 缓存命中（绑定一致 + 未超期 + phase=ready + attempts=0）时跳过签名 readiness，
+	 * 仅核对 Kubernetes 实际路由与 Pod 就绪（保留 /healthz）；
+	 * 任何条件不满足时退回完整签名 readiness（fail-closed）。
+	 * capabilities 投影复用缓存中的值，保持业务观察一致性。
+	 */
+	async function observeForDrain(
+		state: WorkloadReconciliationStateV1,
+		browserBinding?: BrowserCapabilityBindingV1,
+	) {
+		// fail-closed：phase 非 ready 或 attempts 非 0 时退回完整探测
+		if (state.phase !== "ready" || state.attempts !== 0) {
+			return observe(state, browserBinding);
+		}
+		// identity 为空时 monitorReadinessCacheKey 返回 null，此处退回完整探测
+		if (!state.identity) return observe(state, browserBinding);
+		const key = monitorReadinessCacheKey(state);
+		if (!key) return observe(state, browserBinding);
+
+		const cached = monitorReadinessCache.get(key);
+		const age = cached
+			? Date.now() - cached.passedAt
+			: Number.POSITIVE_INFINITY;
+		// 超期或无记录时退回完整探测
+		if (!cached || age < 0 || age >= monitorReadinessMaxAgeMs) {
+			return observe(state, browserBinding);
+		}
+
+		// 缓存命中：只做 Kubernetes 路由观测，跳过 probeRuntime
+		observedCapabilities.delete(state);
+		// 排空路径不需要 revalidateCandidateCatalog（keyless model 校验由
+		// monitor 周期覆盖，排空只读事件不触发模型选择）。
+		const noProbeAdapter = createAdapter(
+			// 复用缓存的 capabilities，保持投影一致性
+			() => {},
+			state,
+			"authorize",
+			false,
+			browserBinding,
+			// 标记跳过 probeRuntime
+			true,
+		);
+		const health = await noProbeAdapter.observe(
+			desired(state),
+			state.identity,
+			routeSelectorMode(state),
+			"required",
+		);
 		return health;
 	}
 	return {
@@ -1285,6 +1411,9 @@ export function createWorkloadRuntimeV1(
 		},
 		async observe(state) {
 			return observe(state);
+		},
+		async observeForDrain(state, browserBinding) {
+			return observeForDrain(state, browserBinding);
 		},
 		async activateSecrets(state, input) {
 			assertCandidateMaterializationAllowed(state);
