@@ -22,6 +22,8 @@ import type {
 } from "./driver.js";
 
 const maximumBodyBytes = 1_048_576;
+const maximumContentBytes = 16_384;
+const maximumContentItems = 64;
 
 export interface BrowserMcpGatewayInputV1 {
 	readonly capability: BrowserCapabilityAvailableV1;
@@ -75,13 +77,44 @@ function mcpTool(descriptor: CodexBrowserToolDescriptorV1): Tool {
 	};
 }
 
+function boundedContentItems(
+	items: RuntimeBrowserToolExecutionResultV1["contentItems"],
+) {
+	const content: { type: "text"; text: string }[] = [];
+	let remainingBytes = maximumContentBytes;
+	for (const item of items) {
+		if (remainingBytes === 0 || content.length >= maximumContentItems) break;
+		if (item.type !== "inputText") continue;
+		let text = "";
+		for (const character of item.text) {
+			const bytes = Buffer.byteLength(character, "utf8");
+			if (bytes > remainingBytes) {
+				remainingBytes = 0;
+				break;
+			}
+			text += character;
+			remainingBytes -= bytes;
+		}
+		if (text.length > 0) content.push({ type: "text", text });
+	}
+	return content;
+}
+
 function content(result: RuntimeBrowserToolExecutionResultV1): CallToolResult {
+	const completed = result.phase === "completed" && result.success;
 	return {
-		content: result.contentItems.map((item) => ({
-			type: "text",
-			text: item.text,
-		})),
-		isError: result.phase !== "completed" || !result.success,
+		content: completed
+			? boundedContentItems(result.contentItems)
+			: [
+					{
+						type: "text",
+						text:
+							result.phase === "unknown"
+								? "BROWSER_EXECUTION_UNKNOWN"
+								: "BROWSER_EXECUTION_FAILED",
+					},
+				],
+		isError: !completed,
 	};
 }
 
