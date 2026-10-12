@@ -371,19 +371,9 @@ export async function fanOutStandardTemplateUpgradeV2(
 				}),
 			);
 		} catch (error) {
-			let compatibilityResult:
-				| StandardTemplateUpgradeCompatibilityResultV1
-				| undefined;
-			if (compatibility) {
-				try {
-					compatibilityResult = await compatibility.evaluate({
-						target,
-						configurationRevision: null,
-					});
-				} catch {
-					compatibilityResult = compatibilityResultForUnknown(target);
-				}
-			} else compatibilityResult = compatibilityResultForUnknown(target);
+			// A failed CAS/apply has no new configuration revision. Report unknown
+			// rather than evaluating stale Runtime facts as if the target applied.
+			const compatibilityResult = compatibilityResultForUnknown(target);
 			targets.push(
 				targetResult({
 					agentId: target.agentId,
