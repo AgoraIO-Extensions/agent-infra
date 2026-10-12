@@ -9,9 +9,23 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { workspacePathAllowed } from "./workspace-path.js";
 
+export type PiFileDispatchOperationV1 = "read" | "write" | "access" | "mkdir";
+
+export interface PiFileDispatchV1 {
+	readonly operation: PiFileDispatchOperationV1;
+	readonly path: string;
+}
+
+export interface PiWorkspaceToolOptionsV1 {
+	readonly onFileDispatch?: (event: PiFileDispatchV1) => void | Promise<void>;
+}
+
 /** Keep Pi's own argument parsing, mutation queue and text handling. Enforce the
  * boundary in its supported filesystem operations, after all path transformations. */
-export function createPiWorkspaceTools(workspace: string): {
+export function createPiWorkspaceTools(
+	workspace: string,
+	options: PiWorkspaceToolOptionsV1 = {},
+): {
 	read: ReturnType<typeof createReadToolDefinition>;
 	write: ReturnType<typeof createWriteToolDefinition>;
 	edit: ReturnType<typeof createEditToolDefinition>;
@@ -21,16 +35,21 @@ export function createPiWorkspaceTools(workspace: string): {
 		if (!(await workspacePathAllowed(workspace, memory, path)))
 			throw new Error("RUNTIME_WORKSPACE_ACCESS_DENIED");
 	};
+	const dispatch = async (operation: PiFileDispatchOperationV1, path: string) =>
+		options.onFileDispatch?.({ operation, path });
 	const read = async (path: string) => {
 		await guard(path);
+		await dispatch("read", path);
 		return readFile(path);
 	};
 	const write = async (path: string, content: string) => {
 		await guard(path);
+		await dispatch("write", path);
 		await writeFile(path, content, "utf8");
 	};
 	const check = async (path: string) => {
 		await guard(path);
+		await dispatch("access", path);
 		await access(path, constants.R_OK);
 	};
 	return {
@@ -41,7 +60,9 @@ export function createPiWorkspaceTools(workspace: string): {
 			operations: {
 				writeFile: write,
 				mkdir: async (directory) => {
-					await guard(join(directory, ".pi-directory-access"));
+					const marker = join(directory, ".pi-directory-access");
+					await guard(marker);
+					await dispatch("mkdir", directory);
 					await mkdir(directory, { recursive: true });
 				},
 			},
