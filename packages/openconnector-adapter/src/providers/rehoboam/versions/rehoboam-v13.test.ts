@@ -54,7 +54,8 @@ test("v13 preserves old contracts and isolates all new scopes and systems", () =
 	}
 	for (const action of channelPublishingActions) {
 		assert.ok(action.description.includes("不属于 Pipeline Center"));
-		assert.ok(action.description.includes("歧义时先澄清"));
+		assert.ok(action.description.includes("先 READ list_releases"));
+		assert.ok(action.description.includes("不自动回退"));
 		if (action.effect === "WRITE")
 			assert.ok(action.inputSchema.required.includes("idempotencyKey"));
 	}

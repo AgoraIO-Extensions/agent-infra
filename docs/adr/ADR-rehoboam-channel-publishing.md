@@ -20,8 +20,12 @@ Rehoboam 的 Publishing 与 Pipeline Center 是两套发布系统；后者也可
   真值属于 Rehoboam。不得接受 URL、Header、凭证、申请人或审批人选择器。
 - 新 Actions 返回 `release_system=channel_publishing`；v13 中旧业务 Action 描述明确
   `pipeline_center`。任务 ID 不跨系统复用；写操作必须有明确系统、目标和参数。
-- 用户意图不明确时先澄清；有明确双系统查询意图时可分别查询并标明来源。
-  不能仅凭 Maven/CDN 渠道名猜测，也不能按两个系统同时执行写操作。
+- 未明确关联关系时，先按完整版本号只读查询真实版本及对应任务，再围绕具体对象询问
+  使用已有版本任务还是独立渠道申请。渠道发布不要求版本记录，版本流程必须定位记录或先创建。
+  找到版本不自动选择版本流程；未找到时询问独立申请还是先创建版本，不能自动回退。
+  查询权限不足、超时、分页未查完和未定位渠道任务不能宣称版本不存在。
+  澄清不要求用户理解系统名称，也不按已有包/源码或模糊的完整流程进行推断。
+  有明确双系统查询意图时可分别查询并标明来源；不能同时执行两套系统的写操作。
 - PAT 新增独立 `publishing:read`、`publishing:write`、`publishing:approve`，
   分别映射 `rehoboam.publishing.read/write/approve`。审批权限不由旧 release WRITE 隐含获得。
   Rehoboam 实时验证 PAT owner 角色及当前渠道配置中的审批资格；approve 隐含本系统读取。

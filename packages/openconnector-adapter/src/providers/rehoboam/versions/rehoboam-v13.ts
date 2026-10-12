@@ -67,7 +67,7 @@ function action(
 	return {
 		name: `rehoboam.${name}`,
 		id: `rehoboam.${name}@v13`,
-		description: `渠道发布 / Publishing（channel_publishing）；不属于 Pipeline Center。${description} Maven/CDN 名称本身不能确定系统，歧义时先澄清。`,
+		description: `渠道发布 / Publishing（channel_publishing）；不属于 Pipeline Center。${description} 渠道发布不依赖版本记录，版本号只是参数；版本流程必须定位存在的版本记录及其任务，或先创建。未明确关联关系时，先 READ list_releases 查询完整版本号，再 get_release/list_release_pipelines 定位真实任务；问是否使用具体已有版本任务，还是独立渠道申请。未找到时询问独立申请还是先建版本，不自动回退；权限/超时/不完整查询不能称为版本不存在。不要让用户仅选择陌生系统名称，也不要仅凭有包链接或是否完整流程判断。`,
 		effect,
 		requiredScopes: [`rehoboam.publishing.${scope}`],
 		inputSchema: {
