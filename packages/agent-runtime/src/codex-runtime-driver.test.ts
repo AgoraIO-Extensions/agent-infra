@@ -3644,6 +3644,8 @@ describe("Codex Runtime Driver", () => {
 			executionId: command.executionId,
 			sessionGeneration: command.sessionGeneration,
 			resourceFence: 7,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
 			capabilityVersion: 3,
 			pageRevision: 2,
 		};
@@ -3683,6 +3685,8 @@ describe("Codex Runtime Driver", () => {
 			executionId: binding.executionId,
 			sessionGeneration: binding.sessionGeneration,
 			resourceFence: binding.resourceFence,
+			workloadRevision: binding.workloadRevision,
+			imageDigest: binding.imageDigest,
 			capabilityVersion: binding.capabilityVersion,
 			pageRevision: binding.pageRevision,
 		};
@@ -3761,6 +3765,8 @@ describe("Codex Runtime Driver", () => {
 				executionId: command.executionId,
 				sessionGeneration: command.sessionGeneration,
 				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
 				capabilityVersion: 3,
 				pageRevision: 1,
 			},
@@ -3791,6 +3797,8 @@ describe("Codex Runtime Driver", () => {
 			executionId: command.executionId,
 			sessionGeneration: command.sessionGeneration,
 			resourceFence: 7,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
 			capabilityVersion: 3,
 			pageRevision: 1,
 		};
