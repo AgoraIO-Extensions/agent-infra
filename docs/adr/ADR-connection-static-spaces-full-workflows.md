@@ -57,7 +57,7 @@ Accepted。Connection Owner 于 2026-10-12 明确批准 #1927 的 24 项 Action�
 | `admin_list_acl` | READ | GET `/v1/acl` | 当前上游管理员；明确 prefix |
 | `admin_ensure_group` | WRITE | POST `/v1/groups` | 当前上游管理员；明确组名 |
 | `admin_manage_membership` | WRITE | POST `/v1/memberships` | 当前上游管理员；明确目标用户名/组/add/remove |
-| `admin_set_acl` | WRITE | POST `/v1/acl` | 当前上游管理员；精确空间/内容 prefix，禁止根路径扩大 |
+| `admin_set_acl` | WRITE | POST `/v1/acl` | 当前上游管理员；明确空间/子目录 prefix，禁止根路径扩大 |
 | `admin_check_access` | READ | POST `/v1/check-access` | 当前上游管理员；只读判断，不改变权限 |
 | `admin_ensure_internal_user` | WRITE | POST `/v1/users` | 显式管理员遗留内部账号操作；无密码路径 |
 

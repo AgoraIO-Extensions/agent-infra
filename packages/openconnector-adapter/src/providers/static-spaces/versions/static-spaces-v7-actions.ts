@@ -303,7 +303,7 @@ export const extraSpecs: ActionSpec[] = [
 		"/v1/acl",
 		{ prefix: path, groups: strings, enabled: boolean },
 		["prefix", "groups", "enabled"],
-		"仅管理员修改精确空间/内容 ACL；groups=[] 意味所有登录用户可读，禁止根路径规则。",
+		"仅管理员修改明确空间/子目录 ACL，prefix 必须以 / 结尾；上游不支持文件级 ACL。groups=[] 意味所有登录用户可读，禁止根路径规则。",
 	),
 	spec(
 		"admin_check_access",
@@ -510,8 +510,7 @@ export function extraPayload(
 			safeFullPath(payload[field], spec.name === "admin_check_access");
 	if ("prefix" in payload) {
 		safeFullPath(payload.prefix, true);
-		if (!String(payload.prefix).endsWith("/"))
-			payload.prefix = `${payload.prefix}/`;
+		if (!String(payload.prefix).endsWith("/")) invalid();
 	}
 	if (spec.name.startsWith("manage_shared_") && payload.kind !== "shared")
 		invalid();

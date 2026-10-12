@@ -1692,7 +1692,7 @@
 		{
 			"provider": "static-spaces",
 			"providerReleaseId": "static-spaces-connection-v7-full",
-			"executorDigest": "sha256:01dfdfbb968011c3750a0bc5dd7d10dad142dca3bc0259ed374d793775850660",
+			"executorDigest": "sha256:f01744f1ea535a2d1a310dee365a77b0d1397eea2c39993828d1eb9cc7642ebe",
 			"sourceCommit": "4b9afc47750ae2a8e73f01345745dbe3262d9e1e",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:1d906d6d213d93609954aa900327df81ae626c25c5b3c39e4dc60d639d8a2345",
@@ -1736,7 +1736,7 @@
 				{
 					"id": "static-spaces.admin_set_acl@v7",
 					"name": "static-spaces.admin_set_acl",
-					"authorizationDigest": "sha256:39be32a8d7b0041248ae07640800d0f8b1de4b44af575c2f1c1f222b8620a13a"
+					"authorizationDigest": "sha256:cade0deff3eefbd2e59a7ddbae40c48e913ecce8c66ff7e77c63e3ce02ae4c2c"
 				},
 				{
 					"id": "static-spaces.create_markdown_comment@v7",

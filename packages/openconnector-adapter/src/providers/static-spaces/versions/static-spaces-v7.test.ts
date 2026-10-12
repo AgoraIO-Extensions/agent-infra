@@ -759,3 +759,22 @@ test("all namespace roots are rejected before identity or ACL submission", async
 	}
 	assert.equal(calls, 0);
 });
+
+test("file-level ACL is rejected rather than silently changed to a directory", async () => {
+	let calls = 0;
+	const adapter = new StaticSpacesAdapter(async () => {
+		calls++;
+		throw new Error("must not submit");
+	});
+	await assert.rejects(
+		adapter.execute(
+			invoke("admin_set_acl", {
+				prefix: "/spaces/shared/team/note.md",
+				groups: [],
+				enabled: true,
+			}),
+		),
+		{ providerStatus: 400 },
+	);
+	assert.equal(calls, 0);
+});

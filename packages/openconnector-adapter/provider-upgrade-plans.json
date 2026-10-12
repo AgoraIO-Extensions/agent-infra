@@ -87,7 +87,7 @@
 			"fromReleaseId": "static-spaces-connection-v6-standard",
 			"toReleaseId": "static-spaces-connection-v7-full",
 			"fromExecutorDigest": "sha256:54450461a0fb2e2937deb5df4481130cf9c32e898053c0eabdedd4950e2b5a6a",
-			"toExecutorDigest": "sha256:01dfdfbb968011c3750a0bc5dd7d10dad142dca3bc0259ed374d793775850660",
+			"toExecutorDigest": "sha256:f01744f1ea535a2d1a310dee365a77b0d1397eea2c39993828d1eb9cc7642ebe",
 			"strategy": "REAPPROVAL_REQUIRED",
 			"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/1927"
 		}
