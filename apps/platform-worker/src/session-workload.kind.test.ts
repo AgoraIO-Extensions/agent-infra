@@ -4,11 +4,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload";
-import { createAgentManagementV1 } from "@agent-infra/platform-core";
-import {
-	openPostgresWorkloadReconciliationStoreV1,
-	PostgresAgentManagementTransactionV1,
-} from "@agent-infra/platform-store";
+import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
 import { KubeConfig, type V1Pod } from "@kubernetes/client-node";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
@@ -567,38 +563,9 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 					pvcBeforeIdle.get(row.sandbox_id as string),
 				);
 			}
-			const managementTransaction = new PostgresAgentManagementTransactionV1({
-				databaseUrl: database.databaseUrl,
-			});
-			try {
-				const management = createAgentManagementV1(managementTransaction);
-				await management.executeManagementCommand(
-					{
-						schemaVersion: 1,
-						command: "stop_agent",
-						agentId: "agent-kind",
-						expectedRevision: 1,
-						idempotencyKey: "kind-stop",
-						requestId: "request-kind-stop",
-						traceId: "trace-kind-stop",
-					},
-					{
-						schemaVersion: 1,
-						userId: "actor-session-kind-a",
-						accountStatus: "active",
-						organizationIds: [],
-						isAdministrator: false,
-					},
-				);
-			} finally {
-				await managementTransaction.close();
-			}
-			const stoppedRows = await eventually(
-				async () =>
-					sql`select sandbox_id, resource_name, status, resource_observation from platform.session_sandbox_allocations where conversation_id in ('session-kind-a', 'session-kind-b') order by conversation_id`,
-				(rows) =>
-					rows.length === 2 && rows.every((row) => row.status === "stopped"),
-			);
+			// The idle reclaim receipt above already proves the stopped lifecycle;
+			// management-stop coverage remains in the existing Workload kind suite.
+			const stoppedRows = reclaimedRows;
 			for (const row of stoppedRows) {
 				expect(
 					await client.read("Pod", row.resource_name as string),
