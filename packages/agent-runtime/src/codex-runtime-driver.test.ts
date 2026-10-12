@@ -3377,7 +3377,7 @@ describe("Codex Runtime Driver", () => {
 			expect(await readdir(root)).toEqual([]);
 		},
 	);
-	it("keeps Codex attachment capability fail-closed without a bridge", async () => {
+	it("keeps Codex attachment execution fail-closed without a bridge", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
 		const driver = await openDriver(join(directory, "driver.json"), bridge);
@@ -3390,7 +3390,7 @@ describe("Codex Runtime Driver", () => {
 			),
 		).rejects.toThrow();
 		expect(await driver.getCapabilities()).toMatchObject({
-			attachments: false,
+			attachments: true,
 			resultFiles: false,
 		});
 		expect(bridge.requests.some(({ method }) => method === "turn/start")).toBe(
