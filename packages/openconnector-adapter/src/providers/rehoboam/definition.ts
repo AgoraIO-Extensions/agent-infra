@@ -16,6 +16,10 @@ export {
 } from "./versions/rehoboam-v13.ts";
 export {
 	rehoboamV14ConnectionCatalog,
-	rehoboamV14ConnectionCatalog as providerDefinition,
 	rehoboamV14LegacyProviderReleaseIds,
 } from "./versions/rehoboam-v14.ts";
+export {
+	rehoboamV15ConnectionCatalog,
+	rehoboamV15ConnectionCatalog as providerDefinition,
+	rehoboamV15LegacyProviderReleaseIds,
+} from "./versions/rehoboam-v15.ts";

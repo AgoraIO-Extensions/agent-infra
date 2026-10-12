@@ -5,6 +5,10 @@ import {
 	channelPublishingActions,
 	RehoboamV13Adapter,
 } from "../../openconnector-adapter/src/providers/rehoboam/versions/rehoboam-v13.ts";
+import {
+	cancelChannelPublishAction,
+	RehoboamV15Adapter,
+} from "../../openconnector-adapter/src/providers/rehoboam/versions/rehoboam-v15.ts";
 
 import {
 	type ActionDefinition,
@@ -957,16 +961,22 @@ describe("Connection application service", () => {
 			for (const name of [
 				"create_channel_publish_request",
 				"approve_channel_publish_request",
+				"cancel_channel_publish_request",
 			]) {
-				const action = channelPublishingActions.find(
-					(item) => item.name === `rehoboam.${name}`,
-				);
+				const cancelling = name === "cancel_channel_publish_request";
+				const action = cancelling
+					? cancelChannelPublishAction
+					: channelPublishingActions.find(
+							(item) => item.name === `rehoboam.${name}`,
+						);
 				if (!action) throw new Error("Missing publishing Action");
 				const repository = new MemoryRepository();
 				const invocation = {
 					...direct,
 					providerId: "rehoboam",
-					providerReleaseId: "rehoboam-connection-v13",
+					providerReleaseId: cancelling
+						? "rehoboam-connection-v15"
+						: "rehoboam-connection-v13",
 				};
 				repository.directInvocation = invocation;
 				repository.resolveDelegatedWorkloads = async () => [
@@ -975,7 +985,8 @@ describe("Connection application service", () => {
 				repository.listAuthorizedActions = async () => [action];
 				const posts: RequestInit[] = [];
 				const revision = "a".repeat(64);
-				const adapter = new RehoboamV13Adapter(async (_url, init) => {
+				const Adapter = cancelling ? RehoboamV15Adapter : RehoboamV13Adapter;
+				const adapter = new Adapter(async (_url, init) => {
 					if (init?.method === "GET")
 						return Response.json({
 							release_system: "channel_publishing",
@@ -991,12 +1002,15 @@ describe("Connection application service", () => {
 					return Response.json({
 						release_system: "channel_publishing",
 						task_id: "a".repeat(24),
-						status: "WAITING_IN_APPROVEMENT",
+						status: cancelling ? "CANCELLED" : "WAITING_IN_APPROVEMENT",
+						cancellation: { actor: "alice", at: 123, comment: "checked" },
 					});
 				}, "synthetic-gateway");
 				const service = new ConnectionApplicationService(
 					repository,
-					new ProviderExecutorRouter({ "rehoboam-connection-v13": adapter }),
+					new ProviderExecutorRouter({
+						[invocation.providerReleaseId]: adapter,
+					}),
 				);
 				const key = `publishing-${name}-${mode}`;
 				const input =
