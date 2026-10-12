@@ -33,6 +33,7 @@ import {
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 export interface SessionRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -47,6 +48,8 @@ export interface SessionRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly SessionRuntimeModelOption[];
+	/** Deployment-owned verified Skill Hub generation; never selected by a wire command. */
+	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly cursorPrefix: string;
 	readonly openSession: (
 		options: NativeSessionOptions,
@@ -65,6 +68,7 @@ export interface NativeSessionOptions {
 	selection: RuntimeSelectionV1;
 	admit: () => Promise<void>;
 	resolveModelCredential?: RuntimeModelCredentialResolver;
+	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	update: (event?: Pick<RuntimeEventV1, "type" | "payload">) => Promise<void>;
 }
 export interface NativeSession {
@@ -517,6 +521,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							: undefined,
 						selection,
 						admit: async () => unavailable(),
+						skillDirectory: this.options.skillDirectory,
 						update: async () => {},
 					});
 					try {
@@ -835,6 +840,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				...(resolveModelCredential ? { resolveModelCredential } : {}),
 				cwd: workspace,
 				nativeId: before.nativeId,
+				skillDirectory: this.options.skillDirectory,
 				history: before.turns.at(-1)?.nativeTerminalCheckpoint
 					? {
 							checkpoint:
@@ -1195,16 +1201,27 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const handle = this.handles.get(ref);
 		if (!handle?.native.modelSelection) unavailable();
 		const selection = handle.native.modelSelection();
-		const options = this.options.modelOptions.map((option) => ({
-			modelOptionId: option.modelOptionId,
-			modelId: option.nativeModelId,
-			displayName: option.nativeModelId,
-			reasoningLevels: [...option.reasoningLevels],
-		}));
+		const availableModels = new Set(selection.models);
+		const availableReasoningLevels = new Set(selection.reasoningLevels);
+		const options = this.options.modelOptions.flatMap((option) => {
+			if (!availableModels.has(option.nativeModelId)) return [];
+			const reasoningLevels = option.reasoningLevels.filter((level) =>
+				availableReasoningLevels.has(level),
+			);
+			if (reasoningLevels.length === 0) return [];
+			return [
+				{
+					modelOptionId: option.modelOptionId,
+					modelId: option.nativeModelId,
+					displayName: option.nativeModelId,
+					reasoningLevels,
+				},
+			];
+		});
 		const currentModel = selection.currentModel;
 		const currentReasoning = selection.currentReasoning;
-		const currentOption = this.options.modelOptions.find(
-			(option) => option.nativeModelId === currentModel,
+		const currentOption = options.find(
+			(option) => option.modelId === currentModel,
 		);
 		if (
 			!currentOption ||

@@ -879,10 +879,16 @@ export type PlatformUserDisableStatusV1 = {
 
 export type RuntimeConnectionAssociationV1 = {
     callRef: string;
+    consumerId?: string;
+    credentialRevision?: string;
+    instanceRef?: string;
     serviceRef: string;
     verification: 'verified';
 } | {
     callRef?: string;
+    consumerId?: string;
+    credentialRevision?: string;
+    instanceRef?: string;
     reason: 'receipt_missing' | 'record_unavailable' | 'authorization_unavailable' | 'binding_mismatch' | 'response_unconfirmed';
     serviceRef: string;
     verification: 'unverified';
