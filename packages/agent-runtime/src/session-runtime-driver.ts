@@ -277,10 +277,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		const turn = file
 			.read()
 			.turns.find((item) => item.executionId === action.executionId);
+		if (!turn) runtimeAuthorizationDenied();
 		if (
-			!turn ||
-			turn.operationRef !== action.operationRef ||
-			turn.attemptRef !== action.attemptRef
+			action.kind === "model" &&
+			(turn.operationRef !== action.operationRef ||
+				turn.attemptRef !== action.attemptRef)
 		)
 			runtimeAuthorizationDenied();
 		if (turn.operationFacts !== undefined) {
@@ -294,6 +295,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				.at(-1);
 			if (!fact || (fact.phase !== "intent" && fact.phase !== "started"))
 				runtimeAuthorizationDenied();
+		} else if (action.kind === "tool") {
+			runtimeAuthorizationDenied();
 		}
 	}
 
@@ -1206,28 +1209,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			this.handles.delete(ref);
 			unavailable();
 		}
-		try {
-			await this.recordFact(file, command.executionId, {
-				kind: "model",
-				operationRef,
-				attemptRef,
-				phase: "intent",
-				model: {
-					configVersion: this.options.configVersion,
-					modelOptionId: option.modelOptionId,
-					modelId: option.modelOptionId,
-					reasoningLevel: selection.reasoningLevel,
-				},
-			});
-		} catch {
-			await native.close();
-			this.handles.delete(ref);
-			unavailable();
-		}
 		const handle: Handle = { native, selection, pump: Promise.resolve() };
 		this.handles.set(ref, handle);
 		let preDispatchFailure = false;
-		let startedAt: number | undefined;
 		handle.pump = (async () => {
 			if (hasAttachments) {
 				try {
@@ -1250,36 +1234,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			try {
 				// Only a Turn that passed the native boundary counts as dispatched.
 				dispatched = true;
-				startedAt = Date.now();
-				await this.recordFact(file, command.executionId, {
-					kind: "model",
-					operationRef,
-					attemptRef,
-					phase: "started",
-					startedAt: new Date(startedAt).toISOString(),
-					model: {
-						configVersion: this.options.configVersion,
-						modelOptionId: option.modelOptionId,
-						modelId: option.modelOptionId,
-						reasoningLevel: selection.reasoningLevel,
-					},
-				});
 				const response = await native.prompt(input);
-				const finishedAt = Date.now();
-				await this.recordFact(file, command.executionId, {
-					kind: "model",
-					operationRef,
-					attemptRef,
-					phase: "completed",
-					finishedAt: new Date(finishedAt).toISOString(),
-					durationMs: Math.max(0, finishedAt - (startedAt ?? finishedAt)),
-					model: {
-						configVersion: this.options.configVersion,
-						modelOptionId: option.modelOptionId,
-						modelId: option.modelOptionId,
-						reasoningLevel: selection.reasoningLevel,
-					},
-				});
 				await this.resolve(file, command, {
 					outcome: "accepted",
 					status: "running",
@@ -1293,22 +1248,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				);
 				admitted();
 			} catch {
-				const finishedAt = Date.now();
-				await this.recordFact(file, command.executionId, {
-					kind: "model",
-					operationRef,
-					attemptRef,
-					phase: "unknown",
-					finishedAt: new Date(finishedAt).toISOString(),
-					durationMs: Math.max(0, finishedAt - (startedAt ?? finishedAt)),
-					failureCode: "operation_failed",
-					model: {
-						configVersion: this.options.configVersion,
-						modelOptionId: option.modelOptionId,
-						modelId: option.modelOptionId,
-						reasoningLevel: selection.reasoningLevel,
-					},
-				}).catch(() => {});
 				await this.status(file, command.executionId, "unknown");
 			}
 		})();

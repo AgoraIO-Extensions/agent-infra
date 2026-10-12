@@ -377,9 +377,6 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 		expect(state.turns[0]?.operationFacts?.map((fact) => fact.phase)).toEqual([
 			"intent",
 			"started",
-			"intent",
-			"started",
-			"completed",
 		]);
 	} finally {
 		releasePrompt?.();

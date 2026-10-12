@@ -940,6 +940,21 @@ export class RuntimeHost {
 	async recordOperationFact(input: RuntimeOperationFactInputV1): Promise<void> {
 		this.trustedHost();
 		if (!this.options.driver.recordOperationFact) runtimeAuthorizationDenied();
+		const action: RuntimeExternalActionAuthorization = {
+			nativeSessionRef: input.nativeSessionRef,
+			executionId: input.executionId,
+			runtimeOperationId: input.executionId,
+			operationRef: input.fact.operationRef,
+			attemptRef: input.fact.attemptRef,
+			kind: input.fact.kind,
+		};
+		if (input.fact.phase === "intent") {
+			await this.options.store.authorizeExternalAction(
+				action,
+				this.options.grantValidationV2?.now ?? Date.now,
+			);
+			this.trustedHost();
+		} else await this.authorizeExternalAction(action);
 		await this.options.driver.recordOperationFact(input);
 	}
 
