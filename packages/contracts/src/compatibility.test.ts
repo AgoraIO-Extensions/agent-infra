@@ -2526,6 +2526,8 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/me/api-credentials" &&
 				path !== "/api/v2/me/api-credentials/{credentialId}" &&
 				path !== "/api/v2/skills" &&
+				path !== "/api/v2/skills/installations" &&
+				path !== "/api/v2/skills/installations/{installationId}" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}" &&
 				path !== "/api/v2/applications/{applicationId}/credentials" &&
 				path !== "/api/v2/applications/{applicationId}/material-grant" &&
@@ -2536,6 +2538,9 @@ describe("contract compatibility command", () => {
 				delete previous.paths[path];
 		}
 		for (const name of [
+			"SkillHubInstallationCommandV1",
+			"SkillHubInstallationResponseV1",
+			"SkillHubInstallationV1",
 			"AgentApplicationCreateRequestV2",
 			"AgentApplicationProjectionV2",
 			"AgentApplicationUpdateRequestV2",
