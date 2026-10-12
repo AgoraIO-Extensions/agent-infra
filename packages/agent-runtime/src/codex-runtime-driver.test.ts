@@ -3573,7 +3573,7 @@ describe("Codex Runtime Driver", () => {
 						...terminalContext.browser,
 						handoff: {
 							controller: terminalController,
-							runtime: { ...runtime, authorized: false },
+							runtime: { ...runtime, authorized: false, pageRevision: 99 },
 						},
 					},
 				},

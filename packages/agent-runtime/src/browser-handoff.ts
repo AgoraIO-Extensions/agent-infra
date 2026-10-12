@@ -77,7 +77,10 @@ export interface BrowserHandoffControllerV1 {
 	): BrowserHandoffRecordV1 | undefined;
 	markBrowserCrashed(): BrowserHandoffRecordV1 | undefined;
 	/** Validate identity and resource binding while allowing terminal signals. */
-	assertCurrentBinding(runtime: BrowserHandoffRuntimeSnapshotV1): void;
+	assertCurrentBinding(
+		runtime: BrowserHandoffRuntimeSnapshotV1,
+		options?: { readonly allowPageRevisionDrift?: boolean },
+	): void;
 	isAgentPaused(): boolean;
 	assertAgentAccess(): void;
 	agentObservation():
@@ -191,6 +194,7 @@ export function createBrowserHandoffControllerV1(input: {
 
 	function assertCurrentBinding(
 		snapshot: BrowserHandoffRuntimeSnapshotV1,
+		options?: { readonly allowPageRevisionDrift?: boolean },
 	): void {
 		if (
 			snapshot.subjectId !== binding.subjectId ||
@@ -206,7 +210,10 @@ export function createBrowserHandoffControllerV1(input: {
 			throw new Error("BROWSER_HANDOFF_SESSION_BINDING_STALE");
 		if (snapshot.capabilityVersion !== binding.capabilityVersion)
 			throw new Error("BROWSER_HANDOFF_CAPABILITY_STALE");
-		if (snapshot.pageRevision !== binding.pageRevision)
+		if (
+			!options?.allowPageRevisionDrift &&
+			snapshot.pageRevision !== binding.pageRevision
+		)
 			throw new Error("BROWSER_HANDOFF_PAGE_REVISION_STALE");
 	}
 

@@ -5206,10 +5206,16 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 				browser.binding.resourceFence ||
 			handoff.controller.binding.capabilityVersion !==
 				browser.capabilityVersion ||
-			handoff.controller.binding.pageRevision !== handoff.runtime.pageRevision
+			(operation.kind !== "revoke" &&
+				operation.kind !== "browser_crashed" &&
+				handoff.controller.binding.pageRevision !==
+					handoff.runtime.pageRevision)
 		)
 			unavailable();
-		handoff.controller.assertCurrentBinding(handoff.runtime);
+		handoff.controller.assertCurrentBinding(handoff.runtime, {
+			allowPageRevisionDrift:
+				operation.kind === "revoke" || operation.kind === "browser_crashed",
+		});
 		const result = executeBrowserHandoffOperationV1(
 			handoff.controller,
 			operation,
