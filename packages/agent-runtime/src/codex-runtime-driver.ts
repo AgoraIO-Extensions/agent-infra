@@ -1852,6 +1852,9 @@ function runtimeBrowserResultIdentityMatches(
 	request: RuntimeBrowserToolExecutionRequestV1,
 ): result is RuntimeBrowserToolExecutionResultV1 {
 	if (!isPlainRecord(result)) return false;
+	const phase = result.phase;
+	const success = result.success;
+	const contentItems = result.contentItems;
 	return (
 		result.actionId === request.actionId &&
 		result.operationRef === request.operationRef &&
@@ -1861,9 +1864,16 @@ function runtimeBrowserResultIdentityMatches(
 			result.binding as RuntimeBrowserExecutionBinding,
 			request.binding,
 		) &&
-		(result.phase === "completed" ||
-			result.phase === "failed" ||
-			result.phase === "unknown")
+		Array.isArray(contentItems) &&
+		contentItems.every(
+			(item) =>
+				isPlainRecord(item) &&
+				item.type === "inputText" &&
+				typeof item.text === "string",
+		) &&
+		((phase === "completed" && success === true) ||
+			((phase === "failed" || phase === "unknown") && success === false)) &&
+		(result.failureCode === undefined || typeof result.failureCode === "string")
 	);
 }
 

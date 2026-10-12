@@ -65,7 +65,10 @@ import {
 	type CodexSkillLaunchProvenance,
 	codexSkillLaunch,
 } from "./codex-skill-launch.internal.js";
-import type { RuntimeBrowserToolExecutionRequestV1 } from "./driver.js";
+import type {
+	RuntimeBrowserToolExecutionRequestV1,
+	RuntimeBrowserToolExecutionResultV1,
+} from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
@@ -3803,6 +3806,121 @@ describe("Codex Runtime Driver", () => {
 				)
 				.map((event) => event.payload.phase),
 		).toEqual(["intent", "started", "unknown"]);
+	});
+
+	it.each([
+		["completed with success false", "completed", false],
+		["failed with success true", "failed", true],
+		["unknown with success true", "unknown", true],
+	] as const)(
+		"records an unknown result for a semantically incoherent Browser response: %s",
+		async (_name, phase, success) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await openCodexRuntimeDriverForTest(
+				{
+					...driverOptions(join(directory, "driver.json")),
+					authorizeExternalAction: async () => ({ revalidate: () => {} }),
+				},
+				async () => bridge,
+			);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			const browser = {
+				capabilityVersion: 3,
+				binding: {
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					sessionGeneration: command.sessionGeneration,
+					resourceFence: 7,
+					workloadRevision: 4,
+					imageDigest: `sha256:${"a".repeat(64)}`,
+				},
+				executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) =>
+					({
+						actionId: request.actionId,
+						operationRef: request.operationRef,
+						attemptRef: request.attemptRef,
+						binding: request.binding,
+						phase,
+						contentItems: [],
+						success,
+					}) as RuntimeBrowserToolExecutionResultV1,
+			};
+			await expect(
+				driver.executeBrowserTool(
+					accepted.nativeSessionRef,
+					command.executionId,
+					{ tool: "browser_observe", arguments: {}, pageRevision: 1 },
+					{ browser },
+				),
+			).resolves.toMatchObject({
+				phase: "unknown",
+				success: false,
+				failureCode: "recovery_unconfirmed",
+			});
+			const events = await driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(
+				events
+					.filter(
+						(event): event is RuntimeEventV2 =>
+							event.type === "operation" && event.payload.kind === "tool",
+					)
+					.map((event) => event.payload.phase),
+			).toEqual(["intent", "started", "unknown"]);
+		},
+	);
+
+	it("records an unknown result for an invalid Browser content projection", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const driver = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(join(directory, "driver.json")),
+				authorizeExternalAction: async () => ({ revalidate: () => {} }),
+			},
+			async () => bridge,
+		);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const browser = {
+			capabilityVersion: 3,
+			binding: {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) =>
+				({
+					actionId: request.actionId,
+					operationRef: request.operationRef,
+					attemptRef: request.attemptRef,
+					binding: request.binding,
+					phase: "completed",
+					contentItems: [{ type: "toolResult", text: "unexpected" }],
+					success: true,
+				}) as unknown as RuntimeBrowserToolExecutionResultV1,
+		};
+		await expect(
+			driver.executeBrowserTool(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{ tool: "browser_observe", arguments: {}, pageRevision: 1 },
+				{ browser },
+			),
+		).resolves.toMatchObject({
+			phase: "unknown",
+			success: false,
+			failureCode: "recovery_unconfirmed",
+		});
 	});
 
 	it("does not complete a Browser action after cancellation", async () => {
