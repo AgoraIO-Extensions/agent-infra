@@ -226,3 +226,195 @@ test("READ result polling and business conflict remain distinct from credential 
 		"RUNNING",
 	);
 });
+
+const createInput = {
+	releaseSystem: "channel_publishing",
+	channel: "cdn",
+	idempotencyKey: "create-1",
+	schemaRevision: "f".repeat(64),
+	params: { NEW_JOB_OPTION: 3 },
+};
+const liveSchema = {
+	type: "object",
+	additionalProperties: false,
+	required: ["NEW_JOB_OPTION"],
+	properties: { NEW_JOB_OPTION: { type: "integer", minimum: 1, maximum: 5 } },
+};
+const schemaRevision = "f".repeat(64);
+
+test("new job fields and types are discovered from Rehoboam without an adapter field list", async () => {
+	const sent: { url: string; init?: RequestInit }[] = [];
+	const adapter = new RehoboamV13Adapter(async (url, init) => {
+		sent.push({ url: String(url), init });
+		return init?.method === "GET"
+			? Response.json({
+					release_system: "channel_publishing",
+					channel: "cdn",
+					params_schema: liveSchema,
+					schema_revision: schemaRevision,
+				})
+			: Response.json({ release_system: "channel_publishing", task_id: task });
+	}, "gateway");
+	await adapter.execute({
+		action: "rehoboam.create_channel_publish_request",
+		credential,
+		input: createInput,
+	});
+	assert.equal(
+		sent[0]?.url,
+		"https://justinia.gz3.agoralab.co/api/v1/channel-publishing/options/cdn",
+	);
+	assert.equal(
+		sent[1]?.url,
+		"https://justinia.gz3.agoralab.co/api/v1/channel-publishing/requests",
+	);
+	const body = JSON.parse(String(sent[1]?.init?.body));
+	assert.deepEqual(body.params, { NEW_JOB_OPTION: 3 });
+	assert.equal(body.schema_revision, schemaRevision);
+	assert.equal(
+		new Headers(sent[1]?.init?.headers).get("Idempotency-Key"),
+		"create-1",
+	);
+	assert.equal(
+		new Headers(sent[0]?.init?.headers).get("authorization"),
+		"Bearer stored-pat",
+	);
+});
+
+test("current required/type/range rules and unapproved fields are rejected before POST", async () => {
+	for (const params of [
+		{},
+		{ NEW_JOB_OPTION: "3" },
+		{ NEW_JOB_OPTION: 9 },
+		{ NEW_JOB_OPTION: 3, extra_args: "unsafe" },
+	]) {
+		const methods: (string | undefined)[] = [];
+		const adapter = new RehoboamV13Adapter(async (_url, init) => {
+			methods.push(init?.method);
+			return Response.json({
+				release_system: "channel_publishing",
+				channel: "cdn",
+				params_schema: liveSchema,
+				schema_revision: schemaRevision,
+			});
+		}, "gateway");
+		await assert.rejects(
+			adapter.execute({
+				action: "rehoboam.create_channel_publish_request",
+				credential,
+				input: { ...createInput, params },
+			}),
+			(error: unknown) =>
+				error instanceof Error &&
+				"providerSubmissionOutcome" in error &&
+				error.providerSubmissionOutcome === "rejected",
+		);
+		assert.deepEqual(methods, ["GET"]);
+	}
+});
+
+test("schema read failures and invalid schemas never submit or become uncertain business writes", async () => {
+	for (const response of [
+		null,
+		Response.json({ error: { code: "UNAVAILABLE" } }, { status: 503 }),
+		Response.json({
+			release_system: "pipeline_center",
+			channel: "cdn",
+			params_schema: liveSchema,
+			schema_revision: schemaRevision,
+		}),
+		Response.json({
+			release_system: "channel_publishing",
+			channel: "maven",
+			params_schema: liveSchema,
+			schema_revision: schemaRevision,
+		}),
+		Response.json({
+			release_system: "channel_publishing",
+			channel: "cdn",
+			params_schema: { type: "object", additionalProperties: true },
+			schema_revision: schemaRevision,
+		}),
+	]) {
+		let posts = 0;
+		const adapter = new RehoboamV13Adapter(async (_url, init) => {
+			if (init?.method === "POST") posts++;
+			if (!response) throw new Error("timeout with secret");
+			return response;
+		}, "gateway");
+		await assert.rejects(
+			adapter.execute({
+				action: "rehoboam.create_channel_publish_request",
+				credential,
+				input: createInput,
+			}),
+			(error: unknown) =>
+				error instanceof Error &&
+				"providerSubmissionOutcome" in error &&
+				error.providerSubmissionOutcome === "rejected" &&
+				!("submissionUncertain" in error),
+		);
+		assert.equal(posts, 0);
+	}
+});
+
+test("each creation re-reads current schema and preserves server schema-change rejection", async () => {
+	let reads = 0;
+	let posts = 0;
+	const adapter = new RehoboamV13Adapter(async (_url, init) => {
+		if (init?.method === "GET") {
+			reads++;
+			return Response.json({
+				release_system: "channel_publishing",
+				channel: "cdn",
+				params_schema: liveSchema,
+				schema_revision: schemaRevision,
+			});
+		}
+		posts++;
+		return Response.json(
+			{ error: { code: "PARAMETER_SCHEMA_CHANGED" } },
+			{ status: 409 },
+		);
+	}, "gateway");
+	for (let index = 0; index < 2; index++) {
+		await assert.rejects(
+			adapter.execute({
+				action: "rehoboam.create_channel_publish_request",
+				credential,
+				input: { ...createInput, idempotencyKey: `create-${index}` },
+			}),
+			(error: unknown) =>
+				error instanceof Error &&
+				"providerCode" in error &&
+				error.providerCode === "PARAMETER_SCHEMA_CHANGED",
+		);
+	}
+	assert.equal(reads, 2);
+	assert.equal(posts, 2);
+});
+
+test("schema changes after client discovery are rejected before POST", async () => {
+	let posts = 0;
+	const adapter = new RehoboamV13Adapter(async (_url, init) => {
+		if (init?.method === "POST") posts++;
+		return Response.json({
+			release_system: "channel_publishing",
+			channel: "cdn",
+			params_schema: liveSchema,
+			schema_revision: "a".repeat(64),
+		});
+	}, "gateway");
+	await assert.rejects(
+		adapter.execute({
+			action: "rehoboam.create_channel_publish_request",
+			credential,
+			input: createInput,
+		}),
+		(error: unknown) =>
+			error instanceof Error &&
+			"providerCode" in error &&
+			error.providerCode === "PARAMETER_SCHEMA_CHANGED",
+	);
+	assert.equal(posts, 0);
+});

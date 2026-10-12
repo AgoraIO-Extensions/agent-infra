@@ -1325,7 +1325,7 @@
 		{
 			"provider": "rehoboam",
 			"providerReleaseId": "rehoboam-connection-v13",
-			"executorDigest": "sha256:79d95e24926a6f075c130e923277e0fbaf8990cc54dae30a41989d8942a533c3",
+			"executorDigest": "sha256:b1ecd6d634d8162a4a1ff5e93e4e8e6dac6322a8f25351eca03951be8bb87dd3",
 			"sourceCommit": "connection-rehoboam-v13",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:d6e6d6e0f7399fc140d027982bcdd0dcd82bcf4447b01be20f26960ff498d844",
@@ -1369,7 +1369,7 @@
 				{
 					"id": "rehoboam.create_channel_publish_request@v13",
 					"name": "rehoboam.create_channel_publish_request",
-					"authorizationDigest": "sha256:c6cbfb6e2dd522fc8f00f98bb53abf47264e9f02fe6fdd4bfc1241cf1f3c789b"
+					"authorizationDigest": "sha256:1549f5db64e959522c45fa5f0a04e04e29325e6b34d2ceab782ff368706f6407"
 				},
 				{
 					"id": "rehoboam.create_pipeline@v13",
@@ -1394,7 +1394,7 @@
 				{
 					"id": "rehoboam.get_channel_publish_options@v13",
 					"name": "rehoboam.get_channel_publish_options",
-					"authorizationDigest": "sha256:8f4ebda1690e9b394f23a3f9a30b934528ffa9bddf77f5e5d19254989b73bb45"
+					"authorizationDigest": "sha256:22a4d32730cbca780cc1ed57d9d64dc2ba16afec1e5491583453f846b277014b"
 				},
 				{
 					"id": "rehoboam.get_channel_publish_request@v13",

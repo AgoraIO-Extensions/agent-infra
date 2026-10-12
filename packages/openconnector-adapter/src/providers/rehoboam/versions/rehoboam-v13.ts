@@ -26,35 +26,6 @@ const key = {
 	maxLength: 128,
 	pattern: "^[!-~]+$",
 };
-const fields = [
-	"FILE_LINK",
-	"FILE_NAME",
-	"TYPE",
-	"artifact_version",
-	"jobType",
-	"AGORA_SDK_VERSION",
-	"RTC_SDK_URL",
-	"SO_LIST",
-	"COMMON_RELEASE_TYPE",
-	"REPO_NAME",
-	"RELEASE_MODE",
-	"IS_IRIS_NATIVE_NEEDED",
-	"ENVIRONMENT",
-	"IS_SUBSPEC",
-	"PRODUCT",
-	"IS_NEED_UPLOAD",
-	"IS_XCFRAMEWORK_PUBLISHED",
-	"NEED_RELEASE",
-	"PART_RELEASE_LIST",
-	"REPO_ADDRESS",
-	"BRANCH",
-	"FOLDER",
-	"TAG",
-	"package_name",
-	"version",
-	"company",
-	"ass_jira_id",
-];
 
 function action(
 	name: string,
@@ -130,7 +101,7 @@ export const channelPublishingActions = [
 	),
 	action(
 		"get_channel_publish_options",
-		"读取五渠道页面的表单选项和允许参数；填写申请前先查询。",
+		"读取 Rehoboam 当前 params_schema（字段、类型、必填、默认值和条件约束）、schema_revision 与表单选项。参数定义由 Rehoboam 拥有，填写申请前必须查询，不使用旧的固定参数列表。",
 		"READ",
 		"read",
 		{ channel },
@@ -138,27 +109,20 @@ export const channelPublishingActions = [
 	),
 	action(
 		"create_channel_publish_request",
-		"申请 CDN/Maven/CocoaPods/SwiftPM/NPM 发布。params 使用表单对应的允许字段；CDN 每文件独立调用、使用独立幂等键，并报告部分成功。沿用原审批规则，当前审批人本人申请可能直接获批并由原调度器继续发版；needNotification 控制发布结果订阅。",
+		"申请 CDN/Maven/CocoaPods/SwiftPM/NPM 发布。先查询 get_channel_publish_options，按当前 params_schema 填写 params，并提供查询所得的 schemaRevision；执行时重新读取并校验服务端 schema，定义变化需重新预览。CDN 每文件独立调用、使用独立幂等键，并报告部分成功。沿用原审批规则，当前审批人本人申请可能直接获批并由原调度器继续发版；needNotification 控制发布结果订阅。",
 		"WRITE",
 		"write",
 		{
 			channel,
+			schemaRevision: { type: "string", pattern: "^[0-9a-f]{64}$" },
 			params: {
 				type: "object",
-				maxProperties: 20,
-				additionalProperties: false,
-				properties: Object.fromEntries(
-					fields.map((field) => [
-						field,
-						field === "IS_NEED_UPLOAD"
-							? { type: "boolean" }
-							: { type: "string", maxLength: 8192 },
-					]),
-				),
+				maxProperties: 100,
+				additionalProperties: true,
 			},
 			needNotification: { type: "boolean" },
 		},
-		["channel", "params"],
+		["channel", "params", "schemaRevision"],
 	),
 	action(
 		"approve_channel_publish_request",
@@ -276,6 +240,60 @@ export class RehoboamV13Adapter
 				providerSubmissionOutcome: "rejected",
 			});
 		const data = input.input;
+		let schemaRevision: string | undefined;
+		if (found.name === "rehoboam.create_channel_publish_request") {
+			try {
+				const options = await this.request(
+					`${prefix}/options/${data.channel}`,
+					input.credential.accessToken,
+					{ method: "GET" },
+					false,
+				);
+				const schema = options.params_schema;
+				if (
+					options.release_system !== "channel_publishing" ||
+					options.channel !== data.channel ||
+					!schema ||
+					typeof schema !== "object" ||
+					Array.isArray(schema) ||
+					!("type" in schema) ||
+					schema.type !== "object" ||
+					!("additionalProperties" in schema) ||
+					schema.additionalProperties !== false ||
+					typeof options.schema_revision !== "string" ||
+					!/^[0-9a-f]{64}$/.test(options.schema_revision)
+				) {
+					throw new Error("Invalid parameter schema");
+				}
+				if (options.schema_revision !== data.schemaRevision)
+					throw failure("Parameter schema changed after discovery", {
+						providerStatus: 409,
+						providerCode: "PARAMETER_SCHEMA_CHANGED",
+					});
+				if (
+					!new Validator(schema as Schema, "2020-12", false).validate(
+						data.params,
+					).valid
+				)
+					throw new Error("Parameters do not match current schema");
+				schemaRevision = options.schema_revision;
+			} catch (error) {
+				throw failure(
+					"Rehoboam parameter schema could not be loaded or parameters were rejected; no request was submitted",
+					{
+						providerSubmissionOutcome: "rejected",
+						providerStatus:
+							error && typeof error === "object" && "providerStatus" in error
+								? error.providerStatus
+								: 400,
+						providerCode:
+							error && typeof error === "object" && "providerCode" in error
+								? error.providerCode
+								: undefined,
+					},
+				);
+			}
+		}
 		let path: string;
 		let init: RequestInit = { method: "GET" };
 		const write = found.effect === "WRITE";
@@ -307,6 +325,7 @@ export class RehoboamV13Adapter
 							channel: data.channel,
 							params: data.params,
 							need_notification: data.needNotification ?? true,
+							schema_revision: schemaRevision,
 						}
 					: {
 							release_system: data.releaseSystem,

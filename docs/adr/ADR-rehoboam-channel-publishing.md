@@ -29,6 +29,11 @@ Rehoboam 的 Publishing 与 Pipeline Center 是两套发布系统；后者也可
 - PAT 新增独立 `publishing:read`、`publishing:write`、`publishing:approve`，
   分别映射 `rehoboam.publishing.read/write/approve`。审批权限不由旧 release WRITE 隐含获得。
   Rehoboam 实时验证 PAT owner 角色及当前渠道配置中的审批资格；approve 隐含本系统读取。
+- Rehoboam 提供每个渠道的当前 `params_schema`（类型、必填、默认值、枚举、条件约束）及 revision。
+  REST 与本机 Agent 共用该定义；Connection 仅固定外层接口契约和大小边界，不复制具体 Job 字段。
+  Connection 在每次创建前读取 schema 并校验，附带服务端 revision；Rehoboam 在业务提交前复核。
+  Agent 预览冻结 revision，定义变化后须重新核对。未知字段仍由服务端 schema 拒绝。
+  普通参数定义更新不要求修改 Connection；身份、权限或副作用扩展不通过动态 schema 隐式授权。
 - 所有 WRITE 必需 `idempotencyKey`；申请唯一索引复用原任务机制。
   审批在原任务文档中以待审批状态 CAS 同时写入真实审批人、时间、意见、决策和幂等回执。
   相同请求回读原结果；相同键不同参数或已经被其他请求处理返回冲突。

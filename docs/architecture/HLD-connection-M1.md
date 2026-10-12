@@ -220,6 +220,9 @@ Rehoboam 渠道发布以新的 immutable `rehoboam-connection-v13` 增补 Publis
 业务身份、审批资格和 CAS 回执属于 Rehoboam；读取、申请和审批使用独立 publishing PAT scope，
 旧 release WRITE 不隐含获得审批权限。固定 API 路径和原有 origin；WRITE 必需幂等键，
 未知提交结果先查询任务，不自动重发。v12 及旧 Grant 保留，升级与新增授权需显式批准。
+参数 schema 由 Rehoboam 提供和校验；Connection 不枚举具体 Job 字段，创建前动态读取并校验，
+提交 revision 由 Rehoboam 在业务写入前复核。新增字段不隐式扩大身份、权限或副作用，
+仍不得接受任意身份、Header 或绕过审批的内部参数。
 详见 [渠道发布决策](../adr/ADR-rehoboam-channel-publishing.md)。
 
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
