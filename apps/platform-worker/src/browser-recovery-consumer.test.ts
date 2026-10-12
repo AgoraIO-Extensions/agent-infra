@@ -13,6 +13,8 @@ const binding: BrowserRecoveryBindingV1 = {
 	pageRevision: 2,
 	sessionGeneration: 3,
 	resourceFence: 4,
+	workloadRevision: 2,
+	imageDigest: `sha256:${"a".repeat(64)}`,
 };
 
 const record: BrowserActionRecordV1 = {
@@ -76,6 +78,22 @@ describe("Browser recovery consumer", () => {
 			consumer.read({
 				actionId: record.actionId,
 				binding: { ...binding, resourceFence: 0 },
+			}),
+		).toThrow("BROWSER_ACTION_RECOVERY_BINDING_INVALID");
+		expect(readAction).not.toHaveBeenCalled();
+	});
+
+	it("rejects a legacy binding without workload identity before readback", () => {
+		const { consumer, readAction } = setup();
+		const {
+			workloadRevision: _revision,
+			imageDigest: _digest,
+			...legacy
+		} = binding;
+		expect(() =>
+			consumer.read({
+				actionId: record.actionId,
+				binding: legacy as never,
 			}),
 		).toThrow("BROWSER_ACTION_RECOVERY_BINDING_INVALID");
 		expect(readAction).not.toHaveBeenCalled();

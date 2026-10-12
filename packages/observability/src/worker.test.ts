@@ -447,6 +447,8 @@ it("classifies Browser operation outcomes separately from ordinary tools", async
 			pageRevision: 2,
 			sessionGeneration: 3,
 			resourceFence: 4,
+			workloadRevision: 2,
+			imageDigest: `sha256:${"a".repeat(64)}`,
 			sideEffect: true,
 		},
 	};
