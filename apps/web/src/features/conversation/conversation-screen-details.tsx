@@ -96,6 +96,7 @@ export function ConversationExecutionDetails({
 					<h3 className="font-semibold">模型与工具调用事实</h3>
 					<OperationFacts events={data.events} />
 					<ConnectionInstallationPanel
+						key={`${conversationId}:${data.executionId}`}
 						conversationId={conversationId}
 						executionId={data.executionId}
 						client={client}

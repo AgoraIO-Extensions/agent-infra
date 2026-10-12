@@ -102,7 +102,6 @@ export function ConnectionInstallationPanel({
 		request.current = controller;
 		setError(undefined);
 		setRefreshing(true);
-		setPolls((value) => value + 1);
 		try {
 			const next = await readConnectionInstallation({
 				client,
@@ -118,7 +117,10 @@ export function ConnectionInstallationPanel({
 		} catch {
 			if (!controller.signal.aborted) setError("暂时无法读取安装状态。");
 		} finally {
-			if (!controller.signal.aborted) setRefreshing(false);
+			if (!controller.signal.aborted) {
+				setRefreshing(false);
+				setPolls((value) => value + 1);
+			}
 		}
 	}, [authorizationId, client]);
 
@@ -126,6 +128,7 @@ export function ConnectionInstallationPanel({
 		if (
 			!authorizationId ||
 			state.kind !== "awaiting_confirmation" ||
+			refreshing ||
 			polls >= maximumPolls
 		)
 			return;
@@ -135,7 +138,7 @@ export function ConnectionInstallationPanel({
 		return () => {
 			window.clearTimeout(timer);
 		};
-	}, [authorizationId, polls, refreshStatus, state.kind]);
+	}, [authorizationId, polls, refreshStatus, refreshing, state.kind]);
 
 	const terminal = ["confirmed", "revoked", "expired", "unknown"].includes(
 		state.kind,
