@@ -157,9 +157,9 @@ function proxyFirstConnector(
 				!connection.hostname.startsWith("[")
 					? `[${connection.hostname}]`
 					: connection.hostname;
-			const origin = new URL(
-				`${connection.protocol}//${hostname}:${connection.port}`,
-			).origin;
+			const port = connection.port || "443";
+			const origin = new URL(`${connection.protocol}//${hostname}:${port}`)
+				.origin;
 			if (!options.origins.has(origin))
 				throw new Error("Provider origin is not allowed");
 			// Validate both DNS answer sets before sending even CONNECT to the proxy.
@@ -175,7 +175,7 @@ function proxyFirstConnector(
 			const proxyTarget = (await resolve(proxy.origin)).addresses[0];
 			if (!target || !proxyTarget)
 				throw new Error("Provider proxy DNS has no allowed address");
-			const authority = `${target.family === 6 ? `[${target.address}]` : target.address}:${connection.port}`;
+			const authority = `${target.family === 6 ? `[${target.address}]` : target.address}:${port}`;
 			let tunnel: Socket;
 			try {
 				tunnel = await new Promise<Socket>((resolveTunnel, reject) => {

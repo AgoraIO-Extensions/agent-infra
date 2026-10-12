@@ -94,7 +94,10 @@ export async function createConnectionRuntimeApp(
 }
 
 async function startupPhase<T>(
-	phase: "provider_catalog" | "consumer_declaration",
+	phase:
+		| "provider_catalog"
+		| "consumer_declaration"
+		| "capability_profile_updates",
 	provider: string,
 	operation: () => Promise<T>,
 ) {
@@ -215,6 +218,24 @@ export async function createConnectionRuntime(
 	);
 	const approvalCatalog = new PostgresConnectionApprovalRepository(
 		config.databaseUrl,
+		{
+			providerReleases: new Map(
+				catalogs.map((catalog) => [
+					catalog.provider,
+					catalog.providerReleaseId,
+				]),
+			),
+			authorizationCompatibility: new Map(
+				catalogs.map((catalog) => [
+					catalog.providerReleaseId,
+					"authorizationCompatibility" in catalog
+						? catalog.authorizationCompatibility
+						: [],
+				]),
+			),
+			approvalDirectoryEnabled: config.approvalDirectoryEnabled,
+			verifyPrincipal: (id) => oauth.ensureActiveEmployeePrincipal(id),
+		},
 	);
 
 	// Reconciliation writes shared upgrade tasks across Providers; keep catalog transactions serial.
@@ -246,6 +267,9 @@ export async function createConnectionRuntime(
 		repository: oauthRepository,
 		resource: config.resourceUrl,
 	});
+	await startupPhase("capability_profile_updates", "catalog", () =>
+		approvalCatalog.reconcileCapabilityProfiles(),
+	);
 	const transports: ReturnType<typeof createPinnedProviderFetch>[] = [];
 	const providerFetch = (
 		origins: readonly string[],

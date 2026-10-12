@@ -507,10 +507,10 @@ it("moves an old published package to the current same-Provider release only aft
 	const release = screen.getByRole("combobox", {
 		name: "Provider",
 	}) as HTMLSelectElement;
-	expect(release.disabled).toBe(false);
-	expect(release.value).toBe("manhattan-connection-v4");
+	expect(release.disabled).toBe(true);
+	expect(release.value).toBe("manhattan-connection-v5");
 	expect(screen.getByText(/旧版来源含 2 项能力/)).toBeTruthy();
-	expect(screen.getByText("已选 0 / 0")).toBeTruthy();
+	expect(screen.getByText("已选 0 / 2")).toBeTruthy();
 	expect(
 		(screen.getByRole("button", { name: "保存并发布" }) as HTMLButtonElement)
 			.disabled,
@@ -591,7 +591,7 @@ it("creates an exact capability draft from the independent catalog without publi
 		(screen.getByRole("button", { name: "全选" }) as HTMLButtonElement)
 			.disabled,
 	).toBe(true);
-	await screen.findByRole("option", { name: /github · github-release/ });
+	await screen.findByRole("option", { name: /github（当前版本）/ });
 	fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
 		target: { value: "github-release" },
 	});
@@ -1872,4 +1872,100 @@ it("publishes a material disclaimer reapproval campaign with a chosen deadline",
 		triggerVersionId: "disclaimer-material-1",
 		reason: "重大数据用途变更",
 	});
+});
+
+it("shows a pending profile update, preserves unchanged choices and requires explicit confirmation", async () => {
+	const catalog: ApprovalPolicyCatalog = {
+		approvalDirectoryEnabled: true,
+		profiles: [
+			{
+				id: "profile-1",
+				providerId: "jira",
+				providerReleaseId: "jira-release-old",
+				name: "Jira Read",
+				effectCeiling: "READ",
+				revision: "2",
+				status: "PUBLISHED",
+				upgrade: {
+					targetProviderReleaseId: "jira-release-2",
+					compatible: false,
+					selectedActionVersionIds: ["jira.read@v2"],
+					reason: "权限变化需要确认",
+					changes: [
+						{ name: "jira.write", kind: "ADDED", afterEffect: "WRITE" },
+					],
+				},
+			},
+			{
+				id: "profile-history",
+				providerReleaseId: "jira-release-old",
+				name: "Historical package",
+				effectCeiling: "READ",
+				revision: "3",
+				status: "SUPERSEDED",
+			},
+		],
+		policies: [],
+		disclaimers: [],
+		providers: [
+			{
+				provider: "jira",
+				providerReleaseId: "jira-release-2",
+				actions: [
+					{ id: "jira.read@v2", name: "jira.read", effect: "READ" },
+					{ id: "jira.write@v2", name: "jira.write", effect: "WRITE" },
+				],
+			},
+		],
+	};
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<ApprovalCatalogManager
+				catalog={catalog}
+				onRefresh={vi.fn(async () => undefined)}
+			/>
+		</QueryClientProvider>,
+	);
+	expect(screen.queryByText("Historical package")).toBeNull();
+	await waitFor(() =>
+		expect(
+			(screen.getByRole("button", { name: "确认更新" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(false),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "确认更新" }));
+	expect(
+		(screen.getByRole("combobox", { name: "Provider" }) as HTMLSelectElement)
+			.value,
+	).toBe("jira-release-2");
+	expect(
+		(screen.getByRole("checkbox", { name: /jira.read/ }) as HTMLInputElement)
+			.checked,
+	).toBe(true);
+	expect(
+		(screen.getByRole("checkbox", { name: /jira.write/ }) as HTMLInputElement)
+			.checked,
+	).toBe(false);
+	expect(screen.getByText(/新增，默认不选/)).toBeTruthy();
+	expect(
+		(screen.getByRole("button", { name: "保存并发布" }) as HTMLButtonElement)
+			.disabled,
+	).toBe(true);
+	fireEvent.click(screen.getByRole("checkbox", { name: /已核对差异/ }));
+	fireEvent.click(screen.getByRole("button", { name: "保存并发布" }));
+	await waitFor(() =>
+		expect(api.revisePublishedApprovalCapabilityProfile).toHaveBeenCalledWith({
+			profileId: "profile-1",
+			revision: "2",
+			body: {
+				name: "Jira Read",
+				providerReleaseId: "jira-release-2",
+				actionVersionIds: ["jira.read@v2"],
+			},
+		}),
+	);
 });

@@ -269,11 +269,17 @@ describe("Provider connect-time IP pinning", () => {
 					return;
 				}
 				const target = new URL(`http://${request.url}`);
-				const upstream = connect(Number(target.port), target.hostname, () => {
-					client.write("HTTP/1.1 200 Connection established\r\n\r\n");
-					if (head.length) upstream.write(head);
-					client.pipe(upstream).pipe(client);
-				});
+				const upstream = connect(
+					target.port === "443"
+						? Number(new URL(origin).port)
+						: Number(target.port),
+					target.hostname,
+					() => {
+						client.write("HTTP/1.1 200 Connection established\r\n\r\n");
+						if (head.length) upstream.write(head);
+						client.pipe(upstream).pipe(client);
+					},
+				);
 				sockets.add(upstream);
 				upstream.on("close", () => sockets.delete(upstream));
 				upstream.on("error", () => client.destroy());
@@ -314,6 +320,29 @@ describe("Provider connect-time IP pinning", () => {
 				expect(requests).toEqual([
 					{
 						host: new URL(origin).host,
+						servername: "provider.test",
+						body: "synthetic-code",
+					},
+				]);
+			} finally {
+				await transport.close();
+			}
+		});
+		it("uses port 443 for default HTTPS URLs without falling back to direct", async () => {
+			mode = "tunnel";
+			const defaultOrigin = "https://provider.test";
+			const transport = transportFor(defaultOrigin);
+			try {
+				await (
+					await transport.fetch(defaultOrigin, {
+						method: "POST",
+						body: "synthetic-code",
+					})
+				).text();
+				expect(authorities).toEqual([`${address}:443`]);
+				expect(requests).toEqual([
+					{
+						host: "provider.test",
 						servername: "provider.test",
 						body: "synthetic-code",
 					},

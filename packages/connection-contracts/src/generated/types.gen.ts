@@ -356,7 +356,7 @@ export type ConnectionWorkItemsResponse = {
     items: Array<{
         id: string;
         businessId: string;
-        businessType: 'CONNECTION_ACCESS_REQUEST' | 'CONNECTION_ACCESS_AUTHORIZATION' | 'CONNECTION_DISPATCH_FAILURE' | 'PROVIDER_UPGRADE_TASK';
+        businessType: 'CONNECTION_ACCESS_REQUEST' | 'CONNECTION_ACCESS_AUTHORIZATION' | 'CONNECTION_DISPATCH_FAILURE' | 'PROVIDER_UPGRADE_TASK' | 'CAPABILITY_PROFILE_UPDATE';
         actionType: string;
         status: string;
         revision: string;
@@ -374,7 +374,7 @@ export type ApprovalNotificationsResponse = {
     items: Array<{
         id: string;
         businessId: string;
-        businessType: 'CONNECTION_ACCESS_REQUEST' | 'CONNECTION_ACCESS_AUTHORIZATION' | 'CONNECTION_DISPATCH_FAILURE' | 'PROVIDER_UPGRADE_TASK';
+        businessType: 'CONNECTION_ACCESS_REQUEST' | 'CONNECTION_ACCESS_AUTHORIZATION' | 'CONNECTION_DISPATCH_FAILURE' | 'PROVIDER_UPGRADE_TASK' | 'CAPABILITY_PROFILE_UPDATE';
         providerId: string;
         state: string;
         eventType: string;
@@ -636,6 +636,20 @@ export type ApprovalPolicyCatalog = {
         id: string;
         providerReleaseId: string;
         name: string;
+        providerId?: string;
+        upgrade?: {
+            targetProviderReleaseId: string;
+            compatible: boolean;
+            reason: string;
+            selectedActionVersionIds: Array<string>;
+            changes: Array<{
+                name: string;
+                kind: 'ADDED' | 'CHANGED' | 'REMOVED';
+                beforeEffect?: string;
+                afterEffect?: string;
+                detail?: string;
+            }>;
+        };
         effectCeiling: 'READ' | 'WRITE';
         revision: string;
         status: string;

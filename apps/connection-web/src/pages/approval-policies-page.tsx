@@ -429,6 +429,16 @@ export function ApprovalPoliciesPage() {
 		<ConsoleShell>
 			<PageHeader title="连接审批管理" />
 			{catalog.isError ? <PageError error={catalog.error} /> : null}
+			{catalog.data?.profiles.some(
+				(item) => item.status === "PUBLISHED" && item.upgrade,
+			) ? (
+				<div className="approval-notice" role="status">
+					有能力包更新待确认，请核对权限变化及审批配置。
+					<Button variant="secondary" onClick={() => setArea("catalog")}>
+						查看能力包更新
+					</Button>
+				</div>
+			) : null}
 			{error ? <PageError error={error} /> : null}
 			{notice ? (
 				<p role="status" className="approval-notice">
