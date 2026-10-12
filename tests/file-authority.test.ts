@@ -890,6 +890,16 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 			expect(deniedResponse.status).toBe(404);
 			await deniedResponse.body?.cancel();
 		}
+		const isolationControl = await fetch(firstReadPath, {
+			headers: {
+				"test-user": sessions.first.actorId,
+				"X-Platform-File-Grant": firstRead.grant.token,
+			},
+		});
+		expect(isolationControl.status).toBe(200);
+		expect(Buffer.from(await isolationControl.arrayBuffer())).toEqual(
+			bytes.first,
+		);
 		const firstBinding = bindingFor("first");
 		const deniedMutations: Array<
 			[string, Partial<RuntimeFileBridgeBindingV1>]
