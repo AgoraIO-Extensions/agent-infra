@@ -322,7 +322,7 @@ export function createFilesystemRuntimeSkillDirectoryV1(input: {
 		parsed.map((projection) => [projection.manifest.name, projection]),
 	);
 	const directory = createRuntimeSkillDirectoryV1(input);
-	const nativeRoot = realpathSync(resolve(input.root));
+	const nativeRoot = resolve(input.root);
 	return {
 		generationId: directory.generationId,
 		nativeRoot,
