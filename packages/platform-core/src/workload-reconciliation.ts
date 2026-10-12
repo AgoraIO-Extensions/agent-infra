@@ -209,7 +209,7 @@ export interface WorkloadRuntimePortV1 {
 	): Promise<WorkloadIdentityV1 | WorkloadPreparationV1 | "pending" | null>;
 	observe(
 		state: WorkloadReconciliationStateV1,
-	): Promise<"pending" | "healthy" | "unhealthy" | "drifted">;
+	): Promise<"pending" | "healthy" | "unhealthy" | "unreachable" | "drifted">;
 	activateSecrets(
 		state: WorkloadReconciliationStateV1,
 		input: WorkloadReconciliationInputV1,
@@ -248,10 +248,32 @@ export function createWorkloadReconciliationV1(dependencies: {
 	readonly store: WorkloadReconciliationStorePortV1;
 	readonly runtime: WorkloadRuntimePortV1;
 	readonly maximumAttempts?: number;
+	/**
+	 * Consecutive monitor probes of a serving Workload that may fail to
+	 * complete before its route closes (#2046). An unhealthy answer, drift or a
+	 * changed Pod still closes it at once.
+	 */
+	readonly probeFailureThreshold?: number;
 }) {
 	const maximumAttempts = dependencies.maximumAttempts ?? 60;
 	if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1)
 		throw new TypeError("Invalid Workload retry limit");
+	const probeFailureThreshold = dependencies.probeFailureThreshold ?? 3;
+	if (
+		!Number.isSafeInteger(probeFailureThreshold) ||
+		probeFailureThreshold < 1 ||
+		probeFailureThreshold > 100
+	)
+		throw new TypeError("Invalid Workload probe failure threshold");
+	// In a serving phase `attempts` counts consecutive monitor probes that did
+	// not complete; the route stays as it was until the run reaches the
+	// threshold (#2046). Any other unhealthy result closes it at once.
+	const servingProbeTolerated = (
+		state: WorkloadReconciliationStateV1,
+		health: Awaited<ReturnType<WorkloadRuntimePortV1["observe"]>>,
+	) => health === "unreachable" && state.attempts + 1 < probeFailureThreshold;
+	const servingProbeCompleted = (state: WorkloadReconciliationStateV1) =>
+		state.attempts === 0 ? state : { ...state, attempts: 0 };
 	const runtime = dependencies.runtime;
 	return {
 		async tick(workerId: string): Promise<"idle" | "advanced"> {
@@ -398,6 +420,7 @@ export function createWorkloadReconciliationV1(dependencies: {
 							}
 							if (
 								health === "unhealthy" ||
+								health === "unreachable" ||
 								state.attempts + 1 >= maximumAttempts
 							)
 								return failed("health_check_failed");
@@ -431,8 +454,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 							const health = await runtime.observe(state);
 							if (health === "healthy") {
 								await runtime.promote(state);
-								return state;
+								return servingProbeCompleted(state);
 							}
+							if (servingProbeTolerated(state, health))
+								return { ...state, attempts: state.attempts + 1 };
 							await runtime.closeRoute(state);
 							return health === "drifted"
 								? advance("applying", {
@@ -440,15 +465,19 @@ export function createWorkloadReconciliationV1(dependencies: {
 									})
 								: advance("observing");
 						}
-						case "rejected":
-							if ((await runtime.observe(state)) === "healthy") {
+						case "rejected": {
+							const health = await runtime.observe(state);
+							if (health === "healthy") {
 								await runtime.promote(state);
-								return state;
+								return servingProbeCompleted(state);
 							}
+							if (servingProbeTolerated(state, health))
+								return { ...state, attempts: state.attempts + 1 };
 							await runtime.closeRoute(state);
 							return advance("closing", {
 								revision: nextRevision(state.revision),
 							});
+						}
 						case "cleaning": {
 							await runtime.closeRoute(state);
 							const preservesResources =

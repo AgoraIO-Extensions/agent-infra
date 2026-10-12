@@ -28,6 +28,10 @@ import {
 	workloadResourceNameV1,
 } from "./kubernetes-runtime-adapter.js";
 import { runtimeFetch as inClusterRuntimeFetch } from "./runtime-transport.js";
+import {
+	WorkloadProbeIncompleteErrorV1,
+	workloadProbeIncompleteReasonV1,
+} from "./workload-probe-failure.js";
 import type { WorkloadBrowserBindingResolverV1 } from "./workload-runtime.js";
 import type { PlatformWorkloadWorkerOptionsV1 } from "./workload-worker.js";
 
@@ -82,6 +86,7 @@ export interface ProductionWorkloadWorkerInputV1 {
 	readonly runtimeFetch?: typeof fetch;
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
+	readonly probeFailureThreshold?: number;
 	readonly log?: (message: string) => void;
 }
 
@@ -93,8 +98,9 @@ export class WorkloadDeploymentErrorV1 extends Error {
 			| "WORKER_REGISTRY_CONFIGURATION_INVALID"
 			| "WORKER_SECRET_KEYRING_INVALID"
 			| "WORKER_RUNTIME_PROBE_FAILED",
+		options?: ErrorOptions,
 	) {
-		super(code);
+		super(code, options);
 	}
 }
 
@@ -234,6 +240,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			...(input.browserBinding ? { browserBinding: input.browserBinding } : {}),
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,
+			probeFailureThreshold: input.probeFailureThreshold,
 			log: input.log,
 		};
 	} catch {
@@ -391,8 +398,18 @@ export function createWorkloadRuntimeProbeV1(options: {
 					}
 				})(),
 			]);
-		} catch {
-			throw new WorkloadDeploymentErrorV1("WORKER_RUNTIME_PROBE_FAILED");
+		} catch (error) {
+			// An expired bound or a transport that never answered is incomplete;
+			// any answer that fails validation stays a probe failure (#2046).
+			const reason = signal.aborted
+				? "timeout"
+				: workloadProbeIncompleteReasonV1(error);
+			throw new WorkloadDeploymentErrorV1(
+				"WORKER_RUNTIME_PROBE_FAILED",
+				reason
+					? { cause: new WorkloadProbeIncompleteErrorV1("readiness", reason) }
+					: undefined,
+			);
 		} finally {
 			signal.removeEventListener("abort", abort);
 		}

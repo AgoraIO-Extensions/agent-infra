@@ -59,6 +59,10 @@ import {
 	type WorkloadSkillMaterializationResultV1,
 	type WorkloadSkillMaterializerV1,
 } from "./skill-materialization.js";
+import {
+	WorkloadProbeIncompleteErrorV1,
+	workloadProbeIncompleteReasonV1,
+} from "./workload-probe-failure.js";
 
 export type WorkloadBrowserBindingResolverV1 = (input: {
 	readonly agentId: string;
@@ -109,6 +113,16 @@ export interface WorkloadRuntimeOptionsV1 {
 		readonly core: "passed" | "failed";
 		readonly capabilities: unknown;
 	}>;
+	/** Credential-free record of each failed Workload probe (#2046). */
+	readonly onProbeFailure?: (failure: WorkloadProbeFailureV1) => void;
+}
+
+export interface WorkloadProbeFailureV1 {
+	readonly agentId: string;
+	readonly workloadRevision: number;
+	readonly stage: "health" | "readiness";
+	/** `timeout`/`connection` never answered; `response` answered unhealthy. */
+	readonly reason: "timeout" | "connection" | "response";
 }
 
 export function workloadResourceConfigurationHashV1(
@@ -483,12 +497,47 @@ export function createWorkloadRuntimeV1(
 					desired.runtimeManifest.interactionMode === "self-managed"
 						? fetcher
 						: (options.fetch ?? runtimeFetch);
-				const response = await healthFetch(`${baseUrl}${desired.health.path}`, {
-					redirect: "error",
-					signal: AbortSignal.timeout(desired.health.timeoutSeconds * 1000),
-				});
-				await response.body?.cancel();
-				if (!response.ok) return false;
+				const failed = (
+					stage: WorkloadProbeFailureV1["stage"],
+					reason: WorkloadProbeFailureV1["reason"],
+				) => {
+					try {
+						options.onProbeFailure?.({
+							agentId: desired.agentId,
+							workloadRevision: desired.workloadRevision,
+							stage,
+							reason,
+						});
+					} catch {
+						// Recording a failure is observational and never changes it.
+					}
+				};
+				// Only a probe that never answered is incomplete; every answer
+				// that fails validation stays an unhealthy result (#2046).
+				const rethrown = (
+					stage: WorkloadProbeFailureV1["stage"],
+					error: unknown,
+				) => {
+					const reason = workloadProbeIncompleteReasonV1(error);
+					failed(stage, reason ?? "response");
+					return reason
+						? new WorkloadProbeIncompleteErrorV1(stage, reason)
+						: error;
+				};
+				let response: Response;
+				try {
+					response = await healthFetch(`${baseUrl}${desired.health.path}`, {
+						redirect: "error",
+						signal: AbortSignal.timeout(desired.health.timeoutSeconds * 1000),
+					});
+					await response.body?.cancel();
+				} catch (error) {
+					throw rethrown("health", error);
+				}
+				if (!response.ok) {
+					failed("health", "response");
+					return false;
+				}
 				if (desired.runtimeManifest.interactionMode === "self-managed") {
 					recordCapabilities(RuntimeCapabilitySetV1Schema.parse({}));
 					return true;
@@ -527,11 +576,16 @@ export function createWorkloadRuntimeV1(
 						new Promise<never>((_resolve, reject) =>
 							controller.signal.addEventListener(
 								"abort",
-								() => reject(new Error("Runtime probe timed out")),
+								() =>
+									reject(
+										new WorkloadProbeIncompleteErrorV1("readiness", "timeout"),
+									),
 								{ once: true },
 							),
 						),
 					]);
+				} catch (error) {
+					throw rethrown("readiness", error);
 				} finally {
 					clearTimeout(timer);
 				}
@@ -593,6 +647,7 @@ export function createWorkloadRuntimeV1(
 						: {}),
 					...(browser ? { browser } : {}),
 				});
+				if (probe.core !== "passed") failed("readiness", "response");
 				return probe.core === "passed";
 			},
 		});
