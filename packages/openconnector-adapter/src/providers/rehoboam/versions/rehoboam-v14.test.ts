@@ -176,6 +176,33 @@ test("repair reads at most 64 KiB and cancels overflow before buffering the rest
 	assert.equal(stream.locked, false);
 });
 
+test("all-stage non-code resolution accepts validation without inventing a PR or commit", async () => {
+	let submitted: Record<string, unknown> | undefined;
+	const adapter = new RehoboamV14Adapter(async (_url, init) => {
+		submitted = JSON.parse(String(init?.body));
+		return Response.json({ data: { id: "family-1" } });
+	}, "gateway");
+	const { prUrl: _pr, sourceCommit: _commit, ...generic } = data;
+	await adapter.execute({
+		action: repairAction.name,
+		credential,
+		input: { ...generic, stage: "resolved" },
+	});
+	assert.deepEqual(submitted?.repair_progress, {
+		stage: "resolved",
+		validation_url: data.validationUrl,
+	});
+	const { validationUrl: _url, ...missing } = generic;
+	await assert.rejects(
+		adapter.execute({
+			action: repairAction.name,
+			credential,
+			input: { ...missing, stage: "resolved" },
+		}),
+		{ providerSubmissionOutcome: "rejected" },
+	);
+});
+
 test("repair accepts an exact 64 KiB JSON response with split UTF-8 chunks", async () => {
 	const base = JSON.stringify({ data: { note: "修复", padding: "" } });
 	const bytes = Buffer.from(

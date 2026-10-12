@@ -17,7 +17,7 @@ export const repairAction = {
 	name: "rehoboam.record_release_family_repair",
 	id: "rehoboam.record_release_family_repair@v14",
 	description:
-		"为发布族失败的自动任务记录研发交接/修复进度。发版人不需要本地仓库；默认交给项目研发，不默认代改 SDK。先 READ get_release_family 获取当前 revision/template_signature/失败任务，明确确认后记录。关联研发邮箱、修复 PR、完整提交及编译链接；这些是操作人提供的证据，不是系统 PR/制品核验。不推进、不改原 Job/申请、不通知人员、不合并、不运行。编译通过不等于合并或制品构建；使用原任务入口重新执行。结果不确定先 READ 核对，不盲重试。",
+		"为发布族每个环节记录研发交接/处理进度，包括自动 Job、人工合并 PR、提测/结果确认、决策及交付。先通过授权工具诊断；需要改源码时默认交给项目研发，除非用户明确要求代改，不要求用户声明是否有本地仓库。先 READ get_release_family 获取当前 revision/template_signature/任务，明确确认后记录；已结束任务需先恢复。resolved表示研发处理完成待用户确认，只需处理结果链接；源码编译阶段关联PR、完整提交及编译链接。这些是操作人提供的证据，不是系统PR/制品核验。不推进、不改原Job/申请、不通知、不合并、不运行。编译通过不等于合并或制品构建；仍由用户决定后续操作。结果不确定先READ核对，不盲重试。",
 	effect: "WRITE",
 	requiredScopes: ["rehoboam.release.write"],
 	inputSchema: {
@@ -25,6 +25,10 @@ export const repairAction = {
 		additionalProperties: false,
 		anyOf: [
 			{ properties: { stage: { enum: ["awaiting_developer", "fixing"] } } },
+			{
+				properties: { stage: { const: "resolved" } },
+				required: ["validationUrl"],
+			},
 			{ required: ["prUrl", "validationUrl", "sourceCommit"] },
 		],
 		required: [
@@ -48,6 +52,7 @@ export const repairAction = {
 				enum: [
 					"awaiting_developer",
 					"fixing",
+					"resolved",
 					"compile_passed",
 					"waiting_merge",
 					"ready_to_retry",
@@ -78,7 +83,7 @@ export const rehoboamV14ConnectionCatalog = {
 			id: old.id.replace(/@v13$/, "@v14"),
 			description:
 				old.name === "rehoboam.get_release_family"
-					? `${old.description} Job 失败时默认交给项目研发，发版人无需本地仓库；用 record_release_family_repair 记录独立修复进度，不默认代改代码，不将编译通过视为合并或制品构建。`
+					? `${old.description} 发布族每个环节都支持研发交接，包括Job、人工PR、提测、结果确认和交付。先诊断，需要改源码时默认交给项目研发，不要求用户声明本地仓库；用record_release_family_repair记录独立处理进度，不默认代改代码，不将编译通过视为合并或制品构建。Job处于ready_for_verification时展示结果，说明剩余确认/交付步骤并询问是否继续，不能闷着停留，也不自动完成或发通知。`
 					: old.description,
 		})),
 		repairAction,
