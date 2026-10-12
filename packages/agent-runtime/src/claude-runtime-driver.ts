@@ -46,7 +46,11 @@ import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
-import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+import {
+ 	boundedRuntimeSkillRead,
+ 	type RuntimeFilesystemSkillDirectoryV1,
+ 	RuntimeSkillDirectoryErrorV1,
+} from "./skill-hub-directory.js";
 import {
 	StandardMcpClient,
 	type StandardMcpClientOptions,
@@ -302,6 +306,19 @@ async function boundedNativeCommandRead<T>(
 		if (timer !== undefined) clearTimeout(timer);
 		if (onAbort) read.signal.removeEventListener("abort", onAbort);
 	}
+}
+
+async function revalidateClaudeSkillRead(
+	read: ClaudeNativeCommandReadContext,
+	assertCurrent: () => void,
+) {
+	assertCurrent();
+	try {
+		await boundedNativeCommandRead(read.revalidate(), read);
+	} catch {
+		throw new RuntimeSkillDirectoryErrorV1();
+	}
+	assertCurrent();
 }
 
 export class ClaudeRuntimeDriver implements RuntimeDriver {
@@ -1460,6 +1477,81 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		);
 		await revalidate();
 		return parseClaudeNativeCommands(commands);
+	}
+	/** Return the deployment-owned Hub projection without consulting Claude. */
+	async discoverNativeSkills(read: ClaudeNativeCommandReadContext) {
+		const handle = this.handles.get(read.nativeSessionRef);
+		const directory = this.options.skillDirectory;
+		if (!handle || handle.retiring || !directory)
+			throw new RuntimeSkillDirectoryErrorV1();
+		const generationId = directory.generationId;
+		const projectionSnapshot = JSON.stringify(directory.findSkills());
+		const assertCurrent = () => {
+			if (
+				read.signal.aborted ||
+				read.expiresAt <= Date.now() ||
+				handle.retiring ||
+				this.handles.get(read.nativeSessionRef) !== handle
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			if (
+				directory.generationId !== generationId ||
+				JSON.stringify(directory.findSkills()) !== projectionSnapshot
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			read.assertCurrent();
+		};
+		const revalidate = async () => {
+			assertCurrent();
+			try {
+				await boundedNativeCommandRead(read.revalidate(), read);
+			} catch {
+				throw new RuntimeSkillDirectoryErrorV1();
+			}
+			assertCurrent();
+		};
+		await revalidate();
+		const entries = directory.findSkills().map((entry) => ({ ...entry }));
+		await revalidate();
+		return { generationId, entries };
+	}
+
+	/** Read one deployment-owned Hub resource without creating a native Turn. */
+	async readNativeSkill(
+		read: ClaudeNativeCommandReadContext,
+		name: string,
+		relativePath: string,
+	): Promise<Uint8Array> {
+		const handle = this.handles.get(read.nativeSessionRef);
+		const directory = this.options.skillDirectory;
+		if (!handle || handle.retiring || !directory)
+			throw new RuntimeSkillDirectoryErrorV1();
+		const generationId = directory.generationId;
+		const projectionSnapshot = JSON.stringify(directory.findSkills());
+		const assertCurrent = () => {
+			if (
+				read.signal.aborted ||
+				read.expiresAt <= Date.now() ||
+				handle.retiring ||
+				this.handles.get(read.nativeSessionRef) !== handle
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			if (
+				directory.generationId !== generationId ||
+				JSON.stringify(directory.findSkills()) !== projectionSnapshot
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			read.assertCurrent();
+		};
+		await revalidateClaudeSkillRead(read, assertCurrent);
+		const bytes = await boundedRuntimeSkillRead({
+			pending: directory.readSkill(name, relativePath),
+			signal: read.signal,
+			expiresAt: read.expiresAt,
+		});
+		assertCurrent();
+		await revalidateClaudeSkillRead(read, assertCurrent);
+		return bytes.slice();
 	}
 
 	async getCapabilities() {

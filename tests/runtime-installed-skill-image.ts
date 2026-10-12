@@ -41,7 +41,7 @@ const inspect = (id: string) => {
 		value.Config.Labels["org.opencontainers.image.revision"],
 		sourceRevision,
 	);
-	assert.equal(value.Config.User, "node");
+	assert.equal(value.Config.User, "1000:1000");
 	return value;
 };
 const inspection = inspect(imageId);
