@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
+import { mergeProductionPlatformApiDeploymentPortsV1 } from "./deployment.js";
 import {
 	createDirectoryOrganizationAuthorityResolverV1,
 	createDirectoryOrganizationIdsResolverV1,
@@ -27,10 +28,13 @@ const {
 	connectionInstallationConfiguration,
 	connectionInstallationCallback,
 	apiInput,
+	customAgentGateway,
+	modelSelection,
 	directorySearch,
 } = await import(configurationModule);
 const databaseUrl = process.env.PLATFORM_DATABASE_URL;
 if (!databaseUrl) throw new Error("PLATFORM_DATABASE_URL is required");
+const configuredDatabaseUrl = databaseUrl;
 if (typeof ldap?.verifyCurrentStatus !== "function") {
 	throw new Error("LDAP current account authority is required");
 }
@@ -90,8 +94,13 @@ const callbackForwarder =
 
 export const browserAuth = browser.browserAuth;
 export function createPlatformApiAssemblyInput() {
+	const configuredApiInput = mergeProductionPlatformApiDeploymentPortsV1({
+		apiInput,
+		...(customAgentGateway !== undefined ? { customAgentGateway } : {}),
+		...(modelSelection !== undefined ? { modelSelection } : {}),
+	});
 	return createProductionPlatformApiAssemblyInputV1({
-		...apiInput,
+		...configuredApiInput,
 		userGovernance,
 		directory: { identity: browser.identity, search: directorySearch },
 		connectionConsumerProfile,
@@ -107,7 +116,7 @@ export function createPlatformApiAssemblyInput() {
 		...(callbackForwarder
 			? { connectionInstallationCallback: callbackForwarder }
 			: {}),
-		databaseUrl,
+		databaseUrl: configuredDatabaseUrl,
 		identity: browser.identity,
 	});
 }
