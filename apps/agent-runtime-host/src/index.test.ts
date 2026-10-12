@@ -117,6 +117,66 @@ async function environment() {
 	};
 }
 
+async function claudeAssemblyFixture(
+	installation: "available" | "absent" | "unavailable",
+) {
+	const values: NodeJS.ProcessEnv = await environment();
+	const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
+	if (!dataDirectory) throw new Error("Missing test data directory");
+	const fixture = await standardMcpFixture();
+	const profile = fixture.target.profile;
+	const approval = {
+		schemaVersion: 1 as const,
+		configFingerprint: fixture.target.configFingerprint,
+		source: fixture.target.source,
+		egressEnforced: true as const,
+	};
+	const profileFile = join(dataDirectory, "consumer.json");
+	await writeFile(profileFile, JSON.stringify({ profile, approval }));
+	Object.assign(values, {
+		AGENT_INFRA_RUNTIME_DRIVER: "claude",
+		AGENT_INFRA_RUNTIME_AGENT_ID: fixture.input.scope.agentId,
+		AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY: "synthetic-model-credential",
+		AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+			schemaVersion: 3,
+			configVersion: "claude-connection-mcp",
+			defaultModelOptionId: "primary",
+			defaultReasoningLevel: "high",
+			modelOptions: [
+				{
+					modelOptionId: "primary",
+					protocol: "anthropic-messages-v1",
+					authentication: "bearer",
+					model: "claude-opus-5",
+					reasoningLevels: ["high"],
+					endpoint: "https://models.example.test",
+					credentialEnvironmentVariable:
+						"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+				},
+			],
+		}),
+		AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE: profileFile,
+		AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION: JSON.stringify([
+			approval.configFingerprint,
+			approval.source.ref,
+			approval.source.revision,
+		]),
+	});
+	if (installation === "available") {
+		const exportReceipt = await writeStandardMcpExport(
+			dataDirectory,
+			fixture.target,
+			[fixture.input],
+		);
+		values.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION =
+			exportReceipt.revision;
+	} else if (installation === "unavailable") {
+		values.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION =
+			JSON.stringify(["missing-supply", "r1"]);
+	}
+	return { values, dataDirectory, fixture, approval };
+}
+
 afterEach(async () => {
 	runtimeAssemblyMocks.assertRuntimeProcessProtection.mockReset();
 	runtimeAssemblyMocks.openCodexRuntimeDriver.mockReset();
@@ -210,56 +270,8 @@ describe("RuntimeHost environment assembly", () => {
 	);
 
 	it("assembles the protected Connection MCP input for Claude", async () => {
-		const values: NodeJS.ProcessEnv = await environment();
-		const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
-		if (!dataDirectory) throw new Error("Missing test data directory");
-		const fixture = await standardMcpFixture();
-		const profile = fixture.target.profile;
-		const approval = {
-			schemaVersion: 1 as const,
-			configFingerprint: fixture.target.configFingerprint,
-			source: fixture.target.source,
-			egressEnforced: true as const,
-		};
-		const profileFile = join(dataDirectory, "consumer.json");
-		await writeFile(profileFile, JSON.stringify({ profile, approval }));
-		const exportReceipt = await writeStandardMcpExport(
-			dataDirectory,
-			fixture.target,
-			[fixture.input],
-		);
-		Object.assign(values, {
-			AGENT_INFRA_RUNTIME_DRIVER: "claude",
-			AGENT_INFRA_RUNTIME_AGENT_ID: fixture.input.scope.agentId,
-			AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY:
-				"synthetic-model-credential",
-			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
-				schemaVersion: 3,
-				configVersion: "claude-connection-mcp",
-				defaultModelOptionId: "primary",
-				defaultReasoningLevel: "high",
-				modelOptions: [
-					{
-						modelOptionId: "primary",
-						protocol: "anthropic-messages-v1",
-						authentication: "bearer",
-						model: "claude-opus-5",
-						reasoningLevels: ["high"],
-						endpoint: "https://models.example.test",
-						credentialEnvironmentVariable:
-							"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
-					},
-				],
-			}),
-			AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE: profileFile,
-			AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION: JSON.stringify([
-				approval.configFingerprint,
-				approval.source.ref,
-				approval.source.revision,
-			]),
-			AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION:
-				exportReceipt.revision,
-		});
+		const { values, dataDirectory, fixture, approval } =
+			await claudeAssemblyFixture("available");
 		let openedWith: ClaudeRuntimeDriverOptions | undefined;
 		const openSpy = vi
 			.spyOn(ClaudeRuntimeDriver, "open")
@@ -289,6 +301,39 @@ describe("RuntimeHost environment assembly", () => {
 			openSpy.mockRestore();
 		}
 	});
+
+	it.each(["absent", "unavailable"] as const)(
+		"keeps Claude protected MCP fail-closed when installation is %s",
+		async (installation) => {
+			const { values, dataDirectory } =
+				await claudeAssemblyFixture(installation);
+			let openedWith: ClaudeRuntimeDriverOptions | undefined;
+			const openSpy = vi
+				.spyOn(ClaudeRuntimeDriver, "open")
+				.mockImplementation(async (options: ClaudeRuntimeDriverOptions) => {
+					openedWith = options;
+					return (await FakeRuntimeDriver.open(
+						join(dataDirectory, "claude-driver.json"),
+					)) as unknown as ClaudeRuntimeDriver;
+				});
+			let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
+			try {
+				runtime = await assembleRuntimeHost(values);
+				expect(openedWith?.standardConnectionClient).toBeDefined();
+				await expect(
+					openedWith?.standardConnectionClient?.resolveInput(
+						reference,
+						new AbortController().signal,
+					),
+				).rejects.toMatchObject({
+					code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+				});
+			} finally {
+				await runtime?.close();
+				openSpy.mockRestore();
+			}
+		},
+	);
 
 	it("passes an explicitly injected Browser context factory to RuntimeHost", async () => {
 		const env = await environment();
