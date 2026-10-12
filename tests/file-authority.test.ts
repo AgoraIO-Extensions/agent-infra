@@ -869,7 +869,10 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 		const secondReadPath = origin + secondRead.path;
 		for (const deniedResponse of [
 			await fetch(secondReadPath, {
-				headers: { "X-Platform-File-Grant": firstRead.grant.token },
+				headers: {
+					"test-user": sessions.second.actorId,
+					"X-Platform-File-Grant": firstRead.grant.token,
+				},
 			}),
 			await fetch(
 				firstReadPath.replace(
@@ -877,7 +880,10 @@ it("keeps Runtime File Bridge data and grants isolated across two real sessions"
 					sessions.second.conversationId,
 				),
 				{
-					headers: { "X-Platform-File-Grant": firstRead.grant.token },
+					headers: {
+						"test-user": sessions.second.actorId,
+						"X-Platform-File-Grant": firstRead.grant.token,
+					},
 				},
 			),
 		]) {
