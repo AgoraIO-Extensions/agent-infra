@@ -4,6 +4,8 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import {
 	type BrowserCapabilityAvailableV1,
+	type NativeMetadataProjectionV1,
+	type NativeMetadataSelectorV1,
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
@@ -28,6 +30,7 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelCredentialResolver,
 	RuntimeModelDirectory,
+	RuntimeNativeMetadataReadContextV1,
 	RuntimeOperationFactInputV1,
 } from "./driver.js";
 import {
@@ -37,6 +40,10 @@ import {
 } from "./driver-operation.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
+import {
+	projectNativeMetadataCommandsV1,
+	projectNativeMetadataSkillsV1,
+} from "./native-metadata-projection.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 import { readRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
 import {
@@ -236,6 +243,15 @@ function unavailable(): never {
 	throw new RuntimeHostError(
 		"RUNTIME_NATIVE_SESSION_UNAVAILABLE",
 		"Runtime session could not be recovered",
+		503,
+		false,
+		"unavailable",
+	);
+}
+function nativeMetadataUnsupported(): never {
+	throw new RuntimeHostError(
+		"RUNTIME_NATIVE_METADATA_UNSUPPORTED",
+		"Native metadata selector is unavailable for this runtime",
 		503,
 		false,
 		"unavailable",
@@ -1516,6 +1532,46 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.turns.find((turn) => turn.executionId === executionId);
 		if (!turn) unavailable();
 		return turn.status;
+	}
+
+	/** Read bounded non-Codex metadata without opening a native Turn. */
+	async readNativeMetadataV1(
+		selector: NativeMetadataSelectorV1,
+		read: RuntimeNativeMetadataReadContextV1,
+	): Promise<NativeMetadataProjectionV1> {
+		read.assertCurrent();
+		const nativeRead: SessionNativeCommandReadContext = {
+			nativeSessionRef: read.nativeSessionRef,
+			signal: read.signal,
+			expiresAt: read.expiresAt,
+			assertCurrent: () => {
+				read.assertCurrent();
+			},
+			revalidate: async () => {
+				await read.revalidate();
+			},
+		};
+		if (selector === "commands") {
+			const directory = await this.discoverNativeCommands(nativeRead);
+			return projectNativeMetadataCommandsV1({
+				nativeSessionRef: read.nativeSessionRef,
+				configVersion: this.options.configVersion,
+				source: { name: this.options.cursorPrefix, version: "1" },
+				directory,
+				assertCurrent: () => read.assertCurrent(),
+			});
+		}
+		if (selector === "skills") {
+			const directory = await this.discoverNativeSkills(nativeRead);
+			return projectNativeMetadataSkillsV1({
+				nativeSessionRef: read.nativeSessionRef,
+				configVersion: this.options.configVersion,
+				sourceName: "agent-infra-skill-hub",
+				directory,
+				assertCurrent: () => read.assertCurrent(),
+			});
+		}
+		nativeMetadataUnsupported();
 	}
 
 	async discoverNativeCommands(read: SessionNativeCommandReadContext) {
