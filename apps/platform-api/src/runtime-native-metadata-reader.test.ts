@@ -88,6 +88,9 @@ describe("Runtime native metadata producer adapter", () => {
 		},
 		{ scope: { ...binding.scope, conversationId: "foreign-conversation" } },
 		{ scope: { ...binding.scope, channelId: "api" } },
+		{
+			scope: { ...binding.scope, authorizationRevision: "stale-revision" },
+		},
 	])(
 		"rejects a resolver binding outside the current request: %j",
 		async (patch) => {

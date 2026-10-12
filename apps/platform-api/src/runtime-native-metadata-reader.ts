@@ -78,6 +78,8 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 					binding.selector !== selector ||
 					binding.scope.principal.kind !== "user" ||
 					binding.scope.principal.id !== identity.userId ||
+					binding.scope.authorizationRevision !==
+						identity.authorizationRevision ||
 					binding.scope.conversationId !== conversationId ||
 					binding.scope.channelId !== "web"
 				)
