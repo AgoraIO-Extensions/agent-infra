@@ -14,6 +14,8 @@ export type BrowserHandoffBindingV1 = Readonly<{
 	executionId: string;
 	sessionGeneration: number;
 	resourceFence: number;
+	workloadRevision: number;
+	imageDigest: string;
 	capabilityVersion: number;
 	pageRevision: number;
 }>;
@@ -27,6 +29,8 @@ export type BrowserHandoffRuntimeSnapshotV1 = Readonly<{
 	executionId: string;
 	sessionGeneration: number;
 	resourceFence: number;
+	workloadRevision: number;
+	imageDigest: string;
 	capabilityVersion: number;
 	pageRevision: number;
 }>;
@@ -75,12 +79,14 @@ function assertBinding(binding: BrowserHandoffBindingV1): void {
 		![
 			"sessionGeneration",
 			"resourceFence",
+			"workloadRevision",
 			"capabilityVersion",
 			"pageRevision",
 		].every((key) => {
 			const value = binding[key as keyof BrowserHandoffBindingV1];
 			return Number.isSafeInteger(value) && (value as number) >= 1;
-		})
+		}) ||
+		!/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(binding.imageDigest)
 	)
 		throw new Error("BROWSER_HANDOFF_BINDING_INVALID");
 }
@@ -146,9 +152,12 @@ export function createBrowserHandoffControllerV1(input: {
 			throw new Error("BROWSER_HANDOFF_IDENTITY_BINDING_STALE");
 		if (
 			snapshot.sessionGeneration !== input.binding.sessionGeneration ||
-			snapshot.resourceFence !== input.binding.resourceFence
+			snapshot.resourceFence !== input.binding.resourceFence ||
+			snapshot.workloadRevision !== input.binding.workloadRevision
 		)
 			throw new Error("BROWSER_HANDOFF_SESSION_BINDING_STALE");
+		if (snapshot.imageDigest !== input.binding.imageDigest)
+			throw new Error("BROWSER_HANDOFF_IMAGE_BINDING_STALE");
 		if (snapshot.capabilityVersion !== input.binding.capabilityVersion)
 			throw new Error("BROWSER_HANDOFF_CAPABILITY_STALE");
 		if (snapshot.pageRevision !== input.binding.pageRevision)

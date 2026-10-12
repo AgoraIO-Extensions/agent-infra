@@ -15,6 +15,8 @@ const binding: BrowserHandoffBindingV1 = {
 	executionId: "execution-1",
 	sessionGeneration: 2,
 	resourceFence: 7,
+	workloadRevision: 4,
+	imageDigest: `sha256:${"a".repeat(64)}`,
 	capabilityVersion: 1,
 	capabilityRevision: 1,
 	pageRevision: 4,

@@ -23,6 +23,8 @@ export type BrowserHandoffBindingV1 = Readonly<{
 	executionId: string;
 	sessionGeneration: number;
 	resourceFence: number;
+	workloadRevision: number;
+	imageDigest: string;
 	capabilityVersion: number;
 	capabilityRevision: number;
 	pageRevision: number;
@@ -117,10 +119,12 @@ function validBinding(binding: BrowserHandoffBindingV1): boolean {
 		[
 			binding.sessionGeneration,
 			binding.resourceFence,
+			binding.workloadRevision,
 			binding.capabilityVersion,
 			binding.capabilityRevision,
 			binding.pageRevision,
-		].every((value) => Number.isSafeInteger(value) && value >= 1)
+		].every((value) => Number.isSafeInteger(value) && value >= 1) &&
+		/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(binding.imageDigest)
 	);
 }
 
@@ -135,6 +139,8 @@ function sameBinding(
 		left.executionId === right.executionId &&
 		left.sessionGeneration === right.sessionGeneration &&
 		left.resourceFence === right.resourceFence &&
+		left.workloadRevision === right.workloadRevision &&
+		left.imageDigest === right.imageDigest &&
 		left.capabilityVersion === right.capabilityVersion &&
 		left.capabilityRevision === right.capabilityRevision &&
 		left.pageRevision === right.pageRevision

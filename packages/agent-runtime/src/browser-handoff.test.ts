@@ -17,6 +17,8 @@ const binding = {
 	executionId: "execution-1",
 	sessionGeneration: 2,
 	resourceFence: 7,
+	workloadRevision: 4,
+	imageDigest: `sha256:${"a".repeat(64)}`,
 	capabilityVersion: 1,
 	pageRevision: 4,
 } as const;
@@ -30,6 +32,8 @@ const runtime: BrowserHandoffRuntimeSnapshotV1 = {
 	executionId: binding.executionId,
 	sessionGeneration: binding.sessionGeneration,
 	resourceFence: binding.resourceFence,
+	workloadRevision: binding.workloadRevision,
+	imageDigest: binding.imageDigest,
 	capabilityVersion: binding.capabilityVersion,
 	pageRevision: binding.pageRevision,
 };
@@ -131,6 +135,18 @@ describe("Browser handoff controller", () => {
 		expect(() => stale.assertAgentAccess()).toThrow(
 			"BROWSER_HANDOFF_PAGE_REVISION_STALE",
 		);
+
+		const workloadStale = createBrowserHandoffControllerV1({
+			binding,
+			capability,
+			now: () => now,
+		});
+		expect(() =>
+			workloadStale.request("login", {
+				...runtime,
+				workloadRevision: runtime.workloadRevision + 1,
+			}),
+		).toThrow("BROWSER_HANDOFF_SESSION_BINDING_STALE");
 
 		const crashed = createBrowserHandoffControllerV1({
 			binding,
