@@ -71,10 +71,33 @@ describe("ConversationCapabilityPickerPanel", () => {
 			<ConversationCapabilityPickerPanel
 				capabilities={capabilities.map((capability) => ({
 					...capability,
-					version: "2.0.0",
+					identity: "replaced-package",
 				}))}
 				scopeKey="scope-b"
 				disabled={false}
+			/>,
+		);
+		expect(screen.queryByText(/选择已保存/)).toBeNull();
+		expect(screen.queryByText(/workspace-summary 参数/)).toBeNull();
+	});
+
+	it("clears the draft when the Agent becomes unavailable", () => {
+		const { rerender } = render(
+			<ConversationCapabilityPickerPanel
+				capabilities={capabilities}
+				scopeKey="scope"
+				disabled={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "打开" }));
+		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
+		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
+		expect(screen.getByText(/选择已保存/)).toBeTruthy();
+		rerender(
+			<ConversationCapabilityPickerPanel
+				capabilities={capabilities}
+				scopeKey="scope"
+				disabled
 			/>,
 		);
 		expect(screen.queryByText(/选择已保存/)).toBeNull();

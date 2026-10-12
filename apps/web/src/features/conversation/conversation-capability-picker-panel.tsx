@@ -26,7 +26,8 @@ function sameCapability(
 		left.kind === right.kind &&
 		left.name === right.name &&
 		left.source === right.source &&
-		left.version === right.version
+		left.version === right.version &&
+		left.identity === right.identity
 	);
 }
 
@@ -34,8 +35,16 @@ function reconcileState(
 	state: ConversationCapabilityPickerStateV1,
 	scopeKey: string,
 	capabilities: readonly ConversationCapabilityV1[],
+	disabled: boolean,
 ) {
 	const scoped = resetConversationCapabilityScope(state, scopeKey);
+	if (disabled)
+		return {
+			...scoped,
+			selected: undefined,
+			parameterText: "",
+			confirmed: false,
+		};
 	if (
 		!scoped.selected ||
 		capabilities.some((capability) =>
@@ -65,12 +74,14 @@ export function ConversationCapabilityPickerPanel({
 		createConversationCapabilityPickerState(scopeKey),
 	);
 	const scopedState = useMemo(
-		() => reconcileState(state, scopeKey, capabilities),
-		[state, scopeKey, capabilities],
+		() => reconcileState(state, scopeKey, capabilities, disabled),
+		[state, scopeKey, capabilities, disabled],
 	);
 	useEffect(() => {
-		setState((current) => reconcileState(current, scopeKey, capabilities));
-	}, [scopeKey, capabilities]);
+		setState((current) =>
+			reconcileState(current, scopeKey, capabilities, disabled),
+		);
+	}, [scopeKey, capabilities, disabled]);
 	const filtered = useMemo(
 		() => filterConversationCapabilities(capabilities, scopedState.query),
 		[capabilities, scopedState.query],

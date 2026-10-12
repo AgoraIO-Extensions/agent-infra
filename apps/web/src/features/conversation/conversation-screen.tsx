@@ -184,6 +184,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 			description: "已安装 Skill",
 			source: "Skill Hub",
 			version: skill.version,
+			identity: `${skill.manifestSha256}:${skill.packageDigest}`,
 		}),
 	);
 	return (

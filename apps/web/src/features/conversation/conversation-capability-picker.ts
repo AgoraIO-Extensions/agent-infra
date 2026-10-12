@@ -4,6 +4,8 @@ export type ConversationCapabilityV1 = Readonly<{
 	description: string;
 	source: string;
 	version?: string;
+	/** Stable service-provided identity used to invalidate replaced metadata. */
+	identity?: string;
 	parameterHint?: string;
 }>;
 
