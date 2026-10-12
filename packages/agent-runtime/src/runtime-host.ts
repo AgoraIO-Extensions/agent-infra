@@ -1672,7 +1672,6 @@ export class RuntimeHost {
 		const parsed = RuntimeNativeMetadataReadRequestV1Schema.safeParse(value);
 		if (!parsed.success) invalidRequest();
 		const request = parsed.data;
-		if (request.selector !== "status") nativeMetadataReadDenied();
 		if (
 			!context ||
 			typeof context !== "object" ||
@@ -1759,7 +1758,7 @@ export class RuntimeHost {
 			NativeMetadataProjectionV1Schema.safeParse(projection);
 		if (
 			!parsedProjection.success ||
-			parsedProjection.data.selector !== "status"
+			parsedProjection.data.selector !== request.selector
 		)
 			driverInvalid();
 
