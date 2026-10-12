@@ -379,6 +379,13 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 					status: "applied",
 					configurationRevision: 8,
 					errorCode: null,
+					compatibility: {
+						status: "unknown",
+						agentId: target.agentId,
+						configurationRevision: 8,
+						targetImageDigest: target.targetImageDigest,
+						reasonCode: "target_metadata_missing",
+					},
 				},
 			],
 		});

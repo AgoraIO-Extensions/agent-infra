@@ -6,6 +6,7 @@ import {
 } from "@agent-infra/contracts/pilot";
 import {
 	type AgentConfigurationAuthorityContextV1,
+	classifyStandardTemplateUpgradeCompatibilityV1,
 	createAgentConfigurationUseCaseV1,
 	fanOutStandardTemplateUpgradeV2,
 	parseStandardTemplateReleaseTargetV1,
@@ -71,6 +72,8 @@ export interface ProductionTemplateUpgradeInputV2 {
 	readonly templateId: string;
 	readonly expectedImageDigest: string;
 	readonly targetImageDigest: string;
+	/** Runtime model configuration schema published by this target image. */
+	readonly targetRuntimeSchemaVersion?: 1 | 4;
 	readonly loadReleaseBinding: () => Promise<StandardTemplateUpgradeDeploymentBindingV2>;
 }
 
@@ -194,6 +197,9 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 					) ||
 					input.templateUpgrade.expectedImageDigest ===
 						input.templateUpgrade.targetImageDigest ||
+					(input.templateUpgrade.targetRuntimeSchemaVersion !== undefined &&
+						input.templateUpgrade.targetRuntimeSchemaVersion !== 1 &&
+						input.templateUpgrade.targetRuntimeSchemaVersion !== 4) ||
 					typeof input.templateUpgrade.loadReleaseBinding !== "function" ||
 					input.templates.filter(
 						(template) =>
@@ -371,6 +377,26 @@ export function createProductionSingleAgentTemplateReleaseAppV1(
 								});
 							},
 						}),
+						{
+							evaluate: async ({ target, configurationRevision }) =>
+								classifyStandardTemplateUpgradeCompatibilityV1({
+									target,
+									targetMetadata:
+										upgrade.targetRuntimeSchemaVersion === undefined
+											? null
+											: {
+													templateId: upgrade.templateId,
+													targetImageDigest: upgrade.targetImageDigest,
+													runtimeSchemaVersion:
+														upgrade.targetRuntimeSchemaVersion,
+												},
+									runtimeFacts:
+										await query.readStandardTemplateUpgradeRuntimeFacts({
+											agentId: target.agentId,
+										}),
+									resultingConfigurationRevision: configurationRevision,
+								}),
+						},
 					);
 					return context.json(
 						StandardTemplateReleaseApplyAllResponseV2Schema.parse(result),

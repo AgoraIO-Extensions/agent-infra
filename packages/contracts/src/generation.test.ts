@@ -118,6 +118,13 @@ describe("standard contract artifacts", () => {
 					status: "failed",
 					configurationRevision: null,
 					errorCode: "stale_revision",
+					compatibility: {
+						status: "unknown",
+						agentId: "agent_01",
+						configurationRevision: 7,
+						targetImageDigest: `sha256:${"b".repeat(64)}`,
+						reasonCode: "projection_missing",
+					},
 				},
 			],
 		};
