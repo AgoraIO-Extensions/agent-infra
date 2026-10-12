@@ -2645,9 +2645,6 @@ describe("contract compatibility command", () => {
 				delete previous.paths[path];
 		}
 		for (const name of [
-			"SkillHubInstallationCommandV1",
-			"SkillHubInstallationResponseV1",
-			"SkillHubInstallationV1",
 			"AgentApplicationCreateRequestV2",
 			"AgentApplicationProjectionV2",
 			"AgentApplicationUpdateRequestV2",
