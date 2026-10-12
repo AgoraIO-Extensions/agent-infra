@@ -292,7 +292,11 @@ it("passes the verified Browser projection through the API presentation", async 
 		configuration: {
 			agentId: "agent-a",
 			revision: 1,
-			source: { kind: "standard", templateId: "codex" },
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				connectionEnabled: false,
+			},
 			modelOptions: [],
 			channelKinds: [],
 		} as never,
