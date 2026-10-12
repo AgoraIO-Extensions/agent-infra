@@ -439,7 +439,7 @@ execution/turn/digest 不匹配时整次拒绝。映射由部署提供受保护�
 - 准入与取消、超时、撤权在同一锁定/条件更新边界互斥。取消先完成且确认没有在途投递时，直接终结等待任务；投递先发生则沿原 stopRequestId/fence 查询并停止。API 断线或单个凭证失效不取消已受理任务；系统取消按第 9 节执行。Runtime 已自然完成时保留实际终态，不能以迟到取消覆盖成功或失败。
 - 首次运行取消在原 stopRequestId 的事务中保存平台规定的停止确认期限，重复取消与 Worker 重启不重置期限。期限到达仍未确认停止时，持久标记非终态的“待核实：停止确认超时”，保留原请求、Session、fence 和占用；Worker 沿原操作查询并恢复停止，确认无剩余副作用后才终结。自动恢复无法收敛时暴露受控运维处置原因与原执行引用，按 7.3 的隔离/恢复流程处理；人工操作也不能跳过屏障确认、直接释放占用或新建 Session。该期限约束停止确认，不限制原任务的正常执行时长。
 - Host 接受结果 unknown 必须恢复查询；已持久 busy/rejected 是该原操作的明确结果，平台将已受理任务收敛为明确失败，不能换 executionId 重投。模型选择沿原受理绑定传递；当前 active 配置不再支持该选择时明确失败，不重新选择默认模型掩盖差异。
-- 状态恢复返回 `not_found` 且 Host 已持久本次认领 fence 的缺席栅栏，等同确认原提交未被接受且以后也不可能被接受（Host 先写请求记录再调用 Driver）。平台把 Turn 退回原等待位置，以同一 executionId、更高 fence 重新投递，不换 executionId；原提交绑定（`originalOperationDigest` 等）同时清除以允许重新绑定。自动重投次数有界，达到上限后以固定错误码 `RUNTIME_SUBMIT_NOT_ACCEPTED` 明确失败并释放 Conversation。stop 恢复仍走 `cancelUnaccepted`，不受此规则影响。
+- 原 Turn 的状态恢复返回 `not_found` 时，Host 已持久本次认领 fence 的缺席栅栏，且 Host 先写请求记录再调用 Driver，因此等同确认原提交未被接受、以后也不会被接受。没有待处理停止时，平台按“确认未发送”把 Turn 退回原等待位置，保留原提交绑定，由下一次认领以同一 executionId、更高 fence 重投同一操作；自动重投受认领次数上限约束，达到上限即以 `RUNTIME_SUBMIT_NOT_ACCEPTED` 明确失败并释放 Conversation。有待处理停止时仍直接终结未受理的任务。
 - API、Web 和渠道共用 Conversation 的准入与恢复规则；API 等待不会关闭当前 Turn 的合法补充指令能力。会话恢复最终失败时按 7.3 先确认代次屏障，再终结受影响任务；其他 Conversation 可在经验证容量内继续运行。
 
 ### 8.5 实际模型/工具事实与必要审计

@@ -979,10 +979,9 @@ export class PostgresConversationDispatchStoreV1
 
 	/**
 	 * 状态恢复确认原提交未被 Host 接受（not_found + 已持久缺席栅栏）时，
-	 * 退回原等待位置并以更高 fence 安排重投（HLD §8.4）。
-	 * 同一事务内：清除原提交绑定、递增 execution delivery_fence、
-	 * 恢复 execution 状态为 submitted、outbox 设为 retry_scheduled。
-	 * 只有 Execution 为 unknown、无 cursor、stop 未提交时才允许执行。
+	 * 把 Turn 退回原等待位置（HLD §8.4）。与 releaseUnsentDispatch 相同，原提交
+	 * 绑定保持不变，下一次认领照常把 fence 推进到高于缺席栅栏的新值后重投。
+	 * 只有 Execution 仍为 unknown、无 Runtime cursor 且没有 stop 时才执行。
 	 */
 	async redispatchUnacceptedTurn(input: {
 		readonly claim: ConversationDispatchClaimV1;
@@ -1003,32 +1002,24 @@ export class PostgresConversationDispatchStoreV1
 		)
 			throw new TypeError("Conversation dispatch redispatch is invalid");
 		return transactionResult(this.#client, async (transaction) => {
-			// ownedState 通过 claim.stopPending=false 隐式校验 stop 未提交
 			const state = await ownedState(transaction, input.claim);
 			if (
 				state?.execution.status !== "unknown" ||
-				state.execution.last_runtime_cursor !== null
+				state.execution.last_runtime_cursor !== null ||
+				state.conversation.host_session_ref !== input.claim.hostSessionRef ||
+				(await readStop(transaction, input.claim.executionId))
 			)
 				throw new StaleDispatchLease();
-			// 清除原提交绑定（runtime_submit_protocol 等），递增 delivery_fence，
-			// 退回 submitted 状态，以允许重新绑定并以新 fence 投递
-			const rows = await transaction<
-				{ execution_id: string; new_fence: string }[]
-			>`
+			const rows = await transaction<{ execution_id: string }[]>`
 				update platform.conversation_executions
-				set status = 'submitted',
-					delivery_fence = delivery_fence + 1,
-					runtime_submit_protocol = null,
-					original_operation_digest = null,
-					original_submit_host_session_ref = null,
-					updated_at = clock_timestamp()
+				set status = 'submitted', updated_at = clock_timestamp()
 				where execution_id = ${input.claim.executionId}
 					and conversation_id = ${input.claim.conversationId}
 					and session_generation = ${input.claim.sessionGeneration}
 					and delivery_fence = ${input.claim.executionDeliveryFence}
 					and status = 'unknown'
 					and last_runtime_cursor is null
-				returning execution_id, delivery_fence::text as new_fence
+				returning execution_id
 			`;
 			if (rows.length !== 1) throw new StaleDispatchLease();
 			state.execution.status = "submitted";

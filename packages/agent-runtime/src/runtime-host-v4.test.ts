@@ -32,7 +32,10 @@ import {
 } from "./grant-v2-fixture.test-support.js";
 import { createRuntimeExecutionGrantValidatorV4 } from "./grant-v4.js";
 import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
-import { RuntimeHost } from "./runtime-host.js";
+import {
+	type RuntimeBrowserExecutionContextFactoryInputV1,
+	RuntimeHost,
+} from "./runtime-host.js";
 
 // These exercise the real Host/Store and signature validators with a controlled
 // Driver. They do not attest PostgreSQL, HTTP assembly or official native ACs.
@@ -168,7 +171,7 @@ function delivery<T extends RuntimeBusinessRequestV4>(request: T) {
 async function setup(
 	fileBridge?: RuntimeFileBridgePortV1,
 	createBrowserExecutionContext?: (
-		input: RuntimeBrowserExecutionContextV1,
+		input: RuntimeBrowserExecutionContextFactoryInputV1,
 	) => RuntimeBrowserExecutionContextV1 | undefined,
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-consumer-"));
@@ -362,7 +365,7 @@ it("passes the request-scoped file bridge only through the Driver execution cont
 });
 
 it("injects the deployment-owned Browser controller only after Host binding admission", async () => {
-	const factoryCalls: RuntimeBrowserExecutionContextV1[] = [];
+	const factoryCalls: RuntimeBrowserExecutionContextFactoryInputV1[] = [];
 	const f = await setup(undefined, (input) => {
 		factoryCalls.push(input);
 		return {
@@ -406,6 +409,8 @@ it("injects the deployment-owned Browser controller only after Host binding admi
 	expect(factoryCalls[0]).toMatchObject({
 		binding: browser.binding,
 		capabilityVersion: 3,
+		executionId: "execution-1",
+		pageRevision: 1,
 		principal: { kind: "user", id: "alice" },
 	});
 	expect(contexts).toHaveLength(1);
@@ -456,7 +461,7 @@ it("strips a preconfigured principal when no Browser factory is installed", asyn
 });
 
 it("withholds an unadmitted Browser principal from the factory for a control operation", async () => {
-	const factoryCalls: RuntimeBrowserExecutionContextV1[] = [];
+	const factoryCalls: RuntimeBrowserExecutionContextFactoryInputV1[] = [];
 	const f = await setup(undefined, (input) => {
 		factoryCalls.push(input);
 		return input;

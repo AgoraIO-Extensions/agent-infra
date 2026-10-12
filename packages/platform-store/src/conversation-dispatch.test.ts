@@ -2388,75 +2388,133 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
-	it("退回等待位置并递增 delivery_fence，清除原提交绑定（redispatchUnacceptedTurn）", async () => {
-		// 初始化：executionStatus=submitted，触发 prepareRuntimeDispatch 变为 unknown
+	it("returns a Turn whose recovery proved it unaccepted to its waiting position (#2108)", async () => {
 		const work = await seed("conversation.turn.submit.v1", {
 			executionStatus: "submitted",
 			hostSessionRef: "host-original",
 		});
-		const claimed = await claim(work.itemId);
+		const first = await claim(work.itemId);
+		let recovery: Awaited<ReturnType<typeof claim>> | undefined;
+		let next: Awaited<ReturnType<typeof claim>> | undefined;
 		try {
-			if (claimed.decision.outcome !== "claimed")
+			if (first.decision.outcome !== "claimed")
 				throw new Error("Expected claim");
-			const original = claimed.decision.claim;
-			// prepareRuntimeDispatch 把 status 改为 unknown 并写入原提交绑定
+			const original = first.decision.claim;
 			expect(
-				await claimed.store.prepareRuntimeDispatch({
+				await first.store.prepareRuntimeDispatch({
 					claim: original,
 					leaseDurationMs: 30_000,
 				}),
 			).toBe(true);
-			// 确认原提交绑定已写入
-			const [pinned] = await client<
-				{
-					runtime_submit_protocol: string;
-					original_operation_digest: string;
-					delivery_fence: number;
-				}[]
-			>`select runtime_submit_protocol, original_operation_digest, delivery_fence::int
-				from platform.conversation_executions where execution_id = ${work.executionId}`;
-			expect(pinned?.runtime_submit_protocol).toBeDefined();
-			expect(pinned?.original_operation_digest).toBeDefined();
-			const originalFence = pinned?.delivery_fence ?? 0;
-			// 执行 redispatchUnacceptedTurn：退回等待并递增 fence
+			// 投递结果不确定：Execution 保持 unknown 后重新排队。
 			await expect(
-				claimed.store.redispatchUnacceptedTurn({
+				first.store.retry({
 					claim: original,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_UNAVAILABLE",
+					transition: {},
+				}),
+			).resolves.toBe(true);
+			const [pinned] = await client<
+				{ runtime_submit_protocol: string; original_operation_digest: string }[]
+			>`select runtime_submit_protocol, original_operation_digest from platform.conversation_executions where execution_id = ${work.executionId}`;
+			recovery = await claim(work.itemId);
+			if (recovery.decision.outcome !== "claimed")
+				throw new Error("Expected recovery claim");
+			const recovering = recovery.decision.claim;
+			expect(recovering.executionStatus).toBe("unknown");
+			await expect(
+				recovery.store.redispatchUnacceptedTurn({
+					claim: recovering,
 					retryDelayMs: 0,
 					errorCode: "RUNTIME_SUBMIT_NOT_ACCEPTED",
 				}),
 			).resolves.toBe(true);
-			const after = await dispatchState(work);
-			expect(after).toMatchObject({
+			expect(await dispatchState(work)).toMatchObject({
 				status: "retry_scheduled",
 				execution_status: "submitted",
 			});
-			// delivery_fence 已递增
-			expect(after?.execution_fence).toBeGreaterThan(originalFence);
-			// 原提交绑定已清除
-			const [cleared] = await client<
-				{
-					runtime_submit_protocol: string | null;
-					original_operation_digest: string | null;
-				}[]
-			>`select runtime_submit_protocol, original_operation_digest
-				from platform.conversation_executions where execution_id = ${work.executionId}`;
-			expect(cleared?.runtime_submit_protocol).toBeNull();
-			expect(cleared?.original_operation_digest).toBeNull();
-			// 同一 claim 不能二次 redispatch
+			// 同一认领不能再次退回。
 			await expect(
-				claimed.store.redispatchUnacceptedTurn({
-					claim: original,
+				recovery.store.redispatchUnacceptedTurn({
+					claim: recovering,
 					retryDelayMs: 0,
 					errorCode: "RUNTIME_SUBMIT_NOT_ACCEPTED",
 				}),
 			).resolves.toBe(false);
+			next = await claim(work.itemId);
+			if (next.decision.outcome !== "claimed")
+				throw new Error("Expected re-dispatch claim");
+			const redispatched = next.decision.claim;
+			expect(redispatched).toMatchObject({
+				executionId: recovering.executionId,
+				executionStatus: "submitted",
+			});
+			// 新认领的 fence 高于恢复时 Host 持久化的缺席栅栏。
+			expect(redispatched.executionDeliveryFence).toBeGreaterThan(
+				recovering.executionDeliveryFence ?? Number.POSITIVE_INFINITY,
+			);
+			// 原提交绑定保持权威，重投发送同一操作。
+			expect(
+				await client`select runtime_submit_protocol, original_operation_digest from platform.conversation_executions where execution_id = ${work.executionId}`,
+			).toEqual([pinned]);
+			await expect(
+				next.store.prepareRuntimeDispatch({
+					claim: redispatched,
+					leaseDurationMs: 30_000,
+				}),
+			).resolves.toBe(true);
 		} finally {
-			await claimed.store.close();
+			await Promise.all([
+				first.store.close(),
+				recovery?.store.close(),
+				next?.store.close(),
+			]);
 		}
 	});
 
+	it.each(["stop-submitted", "foreign-lease", "not-unknown"] as const)(
+		"refuses to return an unaccepted Turn when the claim is not current (%s) (#2108)",
+		async (mode) => {
+			const work = await seed("conversation.turn.submit.v1", {
+				executionStatus: "submitted",
+				hostSessionRef: "host-original",
+			});
+			const claimed = await claim(work.itemId);
+			try {
+				if (claimed.decision.outcome !== "claimed")
+					throw new Error("Expected claim");
+				const original = claimed.decision.claim;
+				if (mode !== "not-unknown")
+					expect(
+						await claimed.store.prepareRuntimeDispatch({
+							claim: original,
+							leaseDurationMs: 30_000,
+						}),
+					).toBe(true);
+				if (mode === "stop-submitted")
+					await client`insert into platform.conversation_stops (execution_id, stop_request_id, status, created_at, updated_at) values (${work.executionId}, ${work.stopRequestId}, 'submitted', now(), now())`;
+				const before = await dispatchState(work);
+				await expect(
+					claimed.store.redispatchUnacceptedTurn({
+						claim:
+							mode === "foreign-lease"
+								? { ...original, leaseOwner: "worker-other" }
+								: original,
+						retryDelayMs: 0,
+						errorCode: "RUNTIME_SUBMIT_NOT_ACCEPTED",
+					}),
+				).resolves.toBe(false);
+				expect(await dispatchState(work)).toEqual(before);
+			} finally {
+				await claimed.store.close();
+			}
+		},
+	);
+
 	it("rejects a persisted Sandbox swap after claim without releasing either Session", async () => {
+		const first = await seed();
+		const other = await seed();
 		const claimed = await claim(first.itemId);
 		try {
 			if (claimed.decision.outcome !== "claimed")

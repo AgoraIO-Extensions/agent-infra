@@ -115,15 +115,19 @@ export function createConversationDispatchUseCaseV1(
 		readonly retryDelayMs?: number;
 		/** Maximum durable claims spent recovering an unknown Runtime execution. */
 		readonly maxRecoveryAttempts?: number;
-		/** 状态恢复确认 not_found 后，同一 executionId 自动重投的最大次数。 */
+		/**
+		 * 状态恢复确认 not_found 后允许自动重投的认领上限：outbox 认领次数达到
+		 * 该值时不再退回等待，而以 RUNTIME_SUBMIT_NOT_ACCEPTED 明确失败。
+		 */
 		readonly maxRedispatchAttempts?: number;
 	} = {},
 ): ConversationDispatchUseCaseV1 {
 	const leaseDurationMs = options.leaseDurationMs ?? 30_000;
 	const retryDelayMs = options.retryDelayMs ?? 1_000;
 	const maxRecoveryAttempts = options.maxRecoveryAttempts ?? 120;
-	// 自动重投的上限，默认 3 次（超出后以 RUNTIME_SUBMIT_NOT_ACCEPTED 明确失败）
-	const maxRedispatchAttempts = options.maxRedispatchAttempts ?? 3;
+	// 每轮重投至少消耗提交与恢复两次认领；默认 10 次认领约允许 4 轮重投，
+	// 远低于 maxRecoveryAttempts，会话不会被占用到恢复超时。
+	const maxRedispatchAttempts = options.maxRedispatchAttempts ?? 10;
 	if (
 		!Number.isSafeInteger(leaseDurationMs) ||
 		leaseDurationMs < 3 ||
