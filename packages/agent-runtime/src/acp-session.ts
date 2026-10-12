@@ -16,6 +16,7 @@ import {
 import { spawnAcpProcess } from "./acp-process.js";
 
 import { acpStream } from "./acp-stream.js";
+import type { NativePromptV1 } from "./session-runtime-driver.js";
 
 export interface AcpLaunch {
 	command: string;
@@ -255,7 +256,12 @@ export async function openAcpSession(options: {
 					clearTimeout(deadline);
 				}
 			},
-			async prompt(text: string) {
+			async prompt(prompt: NativePromptV1) {
+				// ACP content blocks are not consumed yet: only the string form that
+				// this driver advertises is rendered, never a structured prompt.
+				if (typeof prompt !== "string")
+					throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
+				const text = prompt;
 				tools.clear();
 				const response = await connection.agent.request("session/prompt", {
 					sessionId: nativeId,

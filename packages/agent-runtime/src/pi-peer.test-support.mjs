@@ -149,6 +149,7 @@ for await (const line of createInterface({ input: process.stdin })) {
 					type: "text",
 					text: mode === "wrong-user" ? "unrelated input" : command.message,
 				},
+				...(Array.isArray(command.images) ? command.images : []),
 			],
 		});
 		if (mode === "wrong-response") {
