@@ -622,6 +622,7 @@ export function ActiveConversation({
 			{selectedExecution && (
 				<ConversationExecutionDetails
 					data={reader.execution.data}
+					conversationId={conversationId}
 					loading={reader.execution.isFetching}
 					failed={reader.execution.isError || timeline.failure?.kind === "http"}
 					onRetry={() => {

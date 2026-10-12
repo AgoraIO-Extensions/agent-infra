@@ -1,0 +1,131 @@
+import { ConnectionInstallationProjectionV1Schema } from "@agent-infra/contracts/runtime";
+import type { Client } from "../../pilot/generated-v2/client/index.js";
+import {
+	beginPlatformConnectionInstallationV1,
+	readPlatformConnectionInstallationV1,
+} from "../../pilot/generated-v2/sdk.gen.js";
+
+export type ConnectionInstallationProjectionV1 = {
+	schemaVersion: 1;
+	authorizationId: string;
+	status:
+		| "awaiting_confirmation"
+		| "confirmed"
+		| "revoked"
+		| "expired"
+		| "unknown";
+	expiresAt: number;
+	authorizationUrl?: string;
+};
+
+export type ConnectionInstallationState =
+	| { kind: "idle" }
+	| { kind: "loading" }
+	| {
+			kind: "awaiting_confirmation";
+			projection: ConnectionInstallationProjectionV1;
+	  }
+	| { kind: "confirmed"; projection: ConnectionInstallationProjectionV1 }
+	| { kind: "revoked"; projection: ConnectionInstallationProjectionV1 }
+	| { kind: "expired"; projection: ConnectionInstallationProjectionV1 }
+	| { kind: "unknown"; projection: ConnectionInstallationProjectionV1 }
+	| { kind: "unavailable"; retryable: boolean };
+
+export function connectionRequestHeaders(idempotencyKey: string): {
+	Origin: string;
+	"X-Platform-CSRF": "1";
+	"Sec-Fetch-Site": "same-origin";
+	"Idempotency-Key": string;
+};
+export function connectionRequestHeaders(): {
+	Origin: string;
+	"X-Platform-CSRF": "1";
+	"Sec-Fetch-Site": "same-origin";
+	"Idempotency-Key"?: never;
+};
+export function connectionRequestHeaders(idempotencyKey?: string) {
+	return {
+		Origin: window.location.origin,
+		"X-Platform-CSRF": "1" as const,
+		"Sec-Fetch-Site": "same-origin" as const,
+		...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+	};
+}
+
+export function safeConnectionAuthorizationUrl(
+	value: unknown,
+): string | undefined {
+	if (typeof value !== "string") return undefined;
+	try {
+		const url = new URL(value);
+		return url.protocol === "https:" &&
+			!url.username &&
+			!url.password &&
+			!url.hash
+			? url.toString()
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function projection(value: unknown): ConnectionInstallationProjectionV1 {
+	const parsed = ConnectionInstallationProjectionV1Schema.safeParse(value);
+	if (!parsed.success)
+		throw new Error("CONNECTION_INSTALLATION_INVALID_RESPONSE");
+	return parsed.data;
+}
+
+function stateFromProjection(
+	value: ConnectionInstallationProjectionV1,
+): ConnectionInstallationState {
+	return { kind: value.status, projection: value };
+}
+
+function retryable(status: number | undefined) {
+	return (
+		status === undefined || status >= 500 || status === 408 || status === 429
+	);
+}
+
+export async function beginConnectionInstallation(options: {
+	client?: Client;
+	executionId: string;
+	signal?: AbortSignal;
+}): Promise<ConnectionInstallationState> {
+	const result = await beginPlatformConnectionInstallationV1({
+		client: options.client,
+		signal: options.signal,
+		responseStyle: "fields",
+		throwOnError: false,
+		headers: connectionRequestHeaders(crypto.randomUUID()),
+		body: { schemaVersion: 1, executionId: options.executionId },
+	});
+	if (result.response?.status !== 202 || !result.data)
+		return {
+			kind: "unavailable",
+			retryable: retryable(result.response?.status),
+		};
+	return stateFromProjection(projection(result.data));
+}
+
+export async function readConnectionInstallation(options: {
+	client?: Client;
+	authorizationId: string;
+	signal?: AbortSignal;
+}): Promise<ConnectionInstallationState> {
+	const result = await readPlatformConnectionInstallationV1({
+		client: options.client,
+		signal: options.signal,
+		responseStyle: "fields",
+		throwOnError: false,
+		headers: connectionRequestHeaders(),
+		path: { authorizationId: options.authorizationId },
+	});
+	if (result.response?.status !== 200 || !result.data)
+		return {
+			kind: "unavailable",
+			retryable: retryable(result.response?.status),
+		};
+	return stateFromProjection(projection(result.data));
+}
