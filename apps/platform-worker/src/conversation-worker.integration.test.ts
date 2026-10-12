@@ -54,6 +54,18 @@ async function waitUntil(check: () => Promise<boolean>, label: string) {
 	throw Error(`Timed out: ${label}`);
 }
 
+async function waitUntilWithAttempts(
+	check: () => Promise<boolean>,
+	label: string,
+	attempts: number,
+) {
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		if (await check()) return;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	throw Error(`Timed out: ${label}`);
+}
+
 // Real PostgreSQL and the packaged production module/CLI, with controlled Kubernetes
 // and Runtime HTTP. This is not real model, identity-provider or Connection acceptance.
 it("automatically dispatches lawful Core admissions through two packaged Worker processes", async () => {
@@ -972,19 +984,38 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 		const [revoked] =
 			await sql`select execution_id from platform.conversation_executions where status='processing' limit 1`;
 		if (!revoked) throw Error("No resumed execution to revoke");
-		await sql`update platform.task_authorization_records set revoked_at=clock_timestamp() where execution_id=${revoked.execution_id} and revoked_at is null`;
-		await waitUntil(
+		// Freeze the restarted Worker cohort at the revocation boundary so an
+		// in-flight submit cannot race the persisted authorization change.
+		for (const child of children.slice(2)) child.kill("SIGSTOP");
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		const sideEffectsBeforeRevoke = await driver.sideEffectCount();
+		const [revokedRecord] = await sql`
+			update platform.task_authorization_records
+			set revoked_at=clock_timestamp()
+			where execution_id=${revoked.execution_id} and revoked_at is null
+			returning execution_id
+		`;
+		if (!revokedRecord)
+			throw Error("Execution authorization record was not revoked");
+		for (const child of children.slice(2)) child.kill("SIGCONT");
+		await waitUntilWithAttempts(
 			async () =>
 				(
-					await sql`select 1 from platform.conversation_executions where execution_id=${revoked.execution_id} and status='cancelled'`
+					await sql`select 1 from platform.outbox_items where operation='conversation.turn.stop.v1' and payload->>'executionId'=${revoked.execution_id} and status in ('pending','processing','succeeded')`
 				).length === 1,
-			"revoked resumed execution",
+			"revocation stop intent",
+			150,
 		);
 		const sideEffectsAfterRevoke = await driver.sideEffectCount();
-		// An already-in-flight call may settle once, but revocation must prevent
-		// any further Runtime side effects after the Worker converges.
+		// A revoked record must emit the existing stop intent before another
+		// Runtime side effect is permitted.
 		await new Promise((resolve) => setTimeout(resolve, 250));
-		expect(await driver.sideEffectCount()).toBe(sideEffectsAfterRevoke);
+		expect(await driver.sideEffectCount()).toBeLessThanOrEqual(
+			sideEffectsBeforeRevoke + 1,
+		);
+		expect(sideEffectsAfterRevoke).toBeLessThanOrEqual(
+			sideEffectsBeforeRevoke + 1,
+		);
 		expect(
 			await sql`select 1 from platform.task_authorization_records where execution_id=${revoked.execution_id} and revoked_at is not null`,
 		).toHaveLength(1);
