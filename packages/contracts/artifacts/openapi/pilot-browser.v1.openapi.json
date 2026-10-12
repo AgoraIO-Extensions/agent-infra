@@ -4609,6 +4609,18 @@
                                     "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                     "type": "string"
                                   },
+                                  "consumerId": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "credentialRevision": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "instanceRef": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
                                   "serviceRef": {
                                     "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                     "type": "string"
@@ -4629,6 +4641,18 @@
                                 "additionalProperties": false,
                                 "properties": {
                                   "callRef": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "consumerId": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "credentialRevision": {
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "instanceRef": {
                                     "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                     "type": "string"
                                   },
@@ -5245,6 +5269,18 @@
                                           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                           "type": "string"
                                         },
+                                        "consumerId": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "credentialRevision": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "instanceRef": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
                                         "serviceRef": {
                                           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                           "type": "string"
@@ -5265,6 +5301,18 @@
                                       "additionalProperties": false,
                                       "properties": {
                                         "callRef": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "consumerId": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "credentialRevision": {
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                          "type": "string"
+                                        },
+                                        "instanceRef": {
                                           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                           "type": "string"
                                         },
@@ -5651,6 +5699,18 @@
                                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                         "type": "string"
                                       },
+                                      "consumerId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "credentialRevision": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "instanceRef": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
                                       "serviceRef": {
                                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                         "type": "string"
@@ -5671,6 +5731,18 @@
                                     "additionalProperties": false,
                                     "properties": {
                                       "callRef": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "consumerId": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "credentialRevision": {
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                                        "type": "string"
+                                      },
+                                      "instanceRef": {
                                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
                                         "type": "string"
                                       },

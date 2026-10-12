@@ -18,11 +18,17 @@ export const RuntimeConnectionAssociationV1Schema = z.discriminatedUnion(
 			serviceRef: metadataId,
 			verification: z.literal("verified"),
 			callRef: metadataId,
+			consumerId: metadataId.optional(),
+			instanceRef: metadataId.optional(),
+			credentialRevision: metadataId.optional(),
 		}),
 		z.strictObject({
 			serviceRef: metadataId,
 			verification: z.literal("unverified"),
 			callRef: metadataId.optional(),
+			consumerId: metadataId.optional(),
+			instanceRef: metadataId.optional(),
+			credentialRevision: metadataId.optional(),
 			reason: z.enum([
 				"receipt_missing",
 				"record_unavailable",
