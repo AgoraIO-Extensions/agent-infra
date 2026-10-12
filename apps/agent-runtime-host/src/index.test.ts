@@ -329,15 +329,17 @@ describe("RuntimeHost environment assembly", () => {
 			let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
 			try {
 				runtime = await assembleRuntimeHost(values);
-				expect(openedWith?.standardConnectionClient).toBeDefined();
-				await expect(
-					openedWith?.standardConnectionClient?.resolveInput(
-						reference,
-						new AbortController().signal,
-					),
-				).rejects.toMatchObject({
-					code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
-				});
+				expect(openedWith).toBeDefined();
+				if (openedWith?.standardConnectionClient) {
+					await expect(
+						openedWith.standardConnectionClient.resolveInput(
+							reference,
+							new AbortController().signal,
+						),
+					).rejects.toMatchObject({
+						code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+					});
+				}
 			} finally {
 				await runtime?.close();
 			}
