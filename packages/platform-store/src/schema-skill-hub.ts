@@ -177,12 +177,12 @@ export const skillHubAgentBindings = platformSchema.table(
 			.notNull(),
 		state: varchar("state", { length: 16 }).notNull(),
 		failureReason: text("failure_reason"),
-		appliedReceipt: jsonb("applied_receipt"),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 		configurationRevision: bigint("configuration_revision", {
 			mode: "number",
 		}).notNull(),
+		appliedReceipt: jsonb("applied_receipt"),
 	},
 	(table) => [
 		primaryKey({
