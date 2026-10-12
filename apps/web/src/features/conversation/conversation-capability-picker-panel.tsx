@@ -97,95 +97,104 @@ export function ConversationCapabilityPickerPanel({
 					{open ? "收起" : "打开"}
 				</Button>
 			</div>
-			{open && (
-				<div className="mt-4 space-y-3">
-					<Input
-						value={scopedState.query}
-						aria-label="搜索命令或 Skill"
-						placeholder="输入名称、说明或来源"
-						disabled={disabled}
-						onChange={(event) => onQuery(event.target.value)}
-						onKeyDown={onKeyDown}
-					/>
-					<div className="grid gap-2">
-						{filtered.length === 0 ? (
-							<p className="text-muted-foreground text-sm">没有匹配的能力。</p>
-						) : (
-							filtered.map((capability, index) => (
-								<Button
-									variant="ghost"
-									type="button"
-									aria-pressed={selected?.name === capability.name}
-									key={`${capability.kind}:${capability.name}`}
-									className={`min-h-11 rounded-[10px] border px-3 py-2 text-left ${index === scopedState.selectedIndex ? "border-primary bg-muted" : "border-border"}`}
+			{open &&
+				(disabled ? (
+					<Alert className="mt-4">
+						<AlertDescription>
+							Agent 当前不可用，能力目录已隐藏。
+						</AlertDescription>
+					</Alert>
+				) : (
+					<div className="mt-4 space-y-3">
+						<Input
+							value={scopedState.query}
+							aria-label="搜索命令或 Skill"
+							placeholder="输入名称、说明或来源"
+							disabled={disabled}
+							onChange={(event) => onQuery(event.target.value)}
+							onKeyDown={onKeyDown}
+						/>
+						<div className="grid gap-2">
+							{filtered.length === 0 ? (
+								<p className="text-muted-foreground text-sm">
+									没有匹配的能力。
+								</p>
+							) : (
+								filtered.map((capability, index) => (
+									<Button
+										variant="ghost"
+										type="button"
+										aria-pressed={selected?.name === capability.name}
+										key={`${capability.kind}:${capability.name}`}
+										className={`min-h-11 rounded-[10px] border px-3 py-2 text-left ${index === scopedState.selectedIndex ? "border-primary bg-muted" : "border-border"}`}
+										disabled={disabled}
+										onClick={() =>
+											update(
+												selectConversationCapability(scopedState, capability),
+											)
+										}
+									>
+										<span className="flex items-center justify-between gap-2">
+											<strong className="break-all">{capability.name}</strong>
+											<Badge variant="secondary">{capability.kind}</Badge>
+										</span>
+										<span className="mt-1 block text-muted-foreground text-sm">
+											{capability.description}
+										</span>
+										<span className="mt-1 block text-muted-foreground text-xs">
+											{capability.source}
+											{capability.version ? ` · ${capability.version}` : ""}
+										</span>
+									</Button>
+								))
+							)}
+						</div>
+						{selected && (
+							<div className="space-y-3 rounded-[10px] border border-dashed p-3">
+								<p className="font-medium">{selected.name} 参数</p>
+								<Input
+									value={scopedState.parameterText}
+									aria-label="能力参数"
+									placeholder={selected.parameterHint ?? "可选参数"}
 									disabled={disabled}
-									onClick={() =>
+									onChange={(event) =>
 										update(
-											selectConversationCapability(scopedState, capability),
+											updateConversationCapabilityParameter(
+												scopedState,
+												event.target.value,
+											),
 										)
 									}
-								>
-									<span className="flex items-center justify-between gap-2">
-										<strong className="break-all">{capability.name}</strong>
-										<Badge variant="secondary">{capability.kind}</Badge>
-									</span>
-									<span className="mt-1 block text-muted-foreground text-sm">
-										{capability.description}
-									</span>
-									<span className="mt-1 block text-muted-foreground text-xs">
-										{capability.source}
-										{capability.version ? ` · ${capability.version}` : ""}
-									</span>
-								</Button>
-							))
+								/>
+								<div className="flex flex-wrap gap-2">
+									<Button
+										type="button"
+										disabled={
+											disabled ||
+											confirmConversationCapability(scopedState) === undefined
+										}
+										onClick={() =>
+											update(markConversationCapabilityConfirmed(scopedState))
+										}
+									>
+										确认选择
+									</Button>
+									<Button type="button" variant="ghost" onClick={reset}>
+										<RotateCcw aria-hidden="true" />
+										清除
+									</Button>
+								</div>
+							</div>
+						)}
+						{confirmed && (
+							<Alert>
+								<AlertDescription>
+									选择已保存在当前草稿中；执行接缝尚未接入，未提交请求。
+								</AlertDescription>
+							</Alert>
 						)}
 					</div>
-					{selected && (
-						<div className="space-y-3 rounded-[10px] border border-dashed p-3">
-							<p className="font-medium">{selected.name} 参数</p>
-							<Input
-								value={scopedState.parameterText}
-								aria-label="能力参数"
-								placeholder={selected.parameterHint ?? "可选参数"}
-								disabled={disabled}
-								onChange={(event) =>
-									update(
-										updateConversationCapabilityParameter(
-											scopedState,
-											event.target.value,
-										),
-									)
-								}
-							/>
-							<div className="flex flex-wrap gap-2">
-								<Button
-									type="button"
-									disabled={
-										disabled ||
-										confirmConversationCapability(scopedState) === undefined
-									}
-									onClick={() =>
-										update(markConversationCapabilityConfirmed(scopedState))
-									}
-								>
-									确认选择
-								</Button>
-								<Button type="button" variant="ghost" onClick={reset}>
-									<RotateCcw aria-hidden="true" />
-									清除
-								</Button>
-							</div>
-						</div>
-					)}
-					{confirmed && (
-						<Alert>
-							<AlertDescription>
-								选择已保存在当前草稿中；执行接缝尚未接入，未提交请求。
-							</AlertDescription>
-						</Alert>
-					)}
-				</div>
-			)}
+				))}
 		</section>
 	);
 }

@@ -195,5 +195,5 @@ export function reconcileConversationCapabilitySelection(
 			confirmed: false,
 		};
 	}
-	return state;
+	return indexedState;
 }

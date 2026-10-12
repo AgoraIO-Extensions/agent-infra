@@ -142,6 +142,9 @@ describe("ConversationCapabilityPickerPanel", () => {
 				"选择已保存在当前草稿中；执行接缝尚未接入，未提交请求。",
 			),
 		).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /workspace-summary/ }),
+		).toBeNull();
 		rerender(
 			<ConversationCapabilityPickerPanel
 				capabilities={capabilities}
