@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -492,6 +493,198 @@ it("probes ACP initialization and Session creation without prompting", async () 
 			supplementaryInstruction: false,
 		});
 		expect(launches).toBe(1);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("advertises attachments only for an ACP peer that negotiates image input", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-readiness-image-"));
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "image-prompt" },
+		}),
+	});
+	try {
+		await expect(
+			driver.probeReadiness?.(new AbortController().signal),
+		).resolves.toMatchObject({
+			modelSelection: true,
+			attachments: true,
+			resultFiles: false,
+			connection: false,
+			supplementaryInstruction: false,
+		});
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("rejects bridge attachments before reading bytes when image input is not negotiated", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-attachment-unsupported-"));
+	const readInput = vi.fn();
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "grouped-models" },
+		}),
+	});
+	try {
+		await expect(
+			driver.execute(
+				{
+					schemaVersion: 2 as const,
+					kind: "submit-turn" as const,
+					agentId: "agent-a",
+					conversationId: "conversation-a",
+					sessionGeneration: 1,
+					executionId: "execution-a",
+					turnId: "turn-a",
+					operationId: "operation-a",
+					input: { text: "inspect", attachments: ["file-1"] },
+					selection: {
+						schemaVersion: 1 as const,
+						modelOptionId: "primary",
+						reasoningLevel: "high",
+					},
+				},
+				{
+					fileBridge: {
+						readInput,
+						revalidate: () => {},
+						writeResult: async () => {
+							throw new Error("unused");
+						},
+					},
+				},
+			),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(readInput).not.toHaveBeenCalled();
+		// The peer never ran session/new, so rejecting left no native side effect.
+		const created = (await readdir(path, { recursive: true })).filter((entry) =>
+			entry.endsWith("session.json"),
+		);
+		expect(created).toEqual([]);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("reads bridge attachments once the peer negotiated image input", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-attachment-negotiated-"));
+	const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+	const readInput = vi.fn(async (fileId: string) => ({
+		fileId,
+		descriptor: {
+			name: "screen.png",
+			mediaType: "image/png",
+			sizeBytes: bytes.byteLength,
+			sha256: createHash("sha256").update(bytes).digest("hex"),
+		},
+		body: new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(bytes);
+				controller.close();
+			},
+		}),
+	}));
+	const revalidate = vi.fn();
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "image-prompt" },
+		}),
+	});
+	try {
+		// Initialization negotiates image input before any Session exists, and the
+		// probe records that answer for the following attachment request.
+		await expect(
+			driver.probeReadiness?.(new AbortController().signal),
+		).resolves.toMatchObject({ attachments: true });
+		const accepted = await driver.execute(
+			{
+				schemaVersion: 2 as const,
+				kind: "submit-turn" as const,
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-a",
+				turnId: "turn-a",
+				operationId: "operation-a",
+				input: { text: "inspect", attachments: ["file-1"] },
+				selection: {
+					schemaVersion: 1 as const,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			},
+			{
+				fileBridge: {
+					readInput,
+					revalidate,
+					writeResult: async () => {
+						throw new Error("unused");
+					},
+				},
+			},
+		);
+		expect(accepted.result).toMatchObject({ outcome: "accepted" });
+		expect(readInput).toHaveBeenCalledWith("file-1");
+		expect(revalidate).toHaveBeenCalled();
+		// The image prompt reached the Session that was created for this request.
+		const sessions = (await readdir(path, { recursive: true })).filter(
+			(entry) => entry.endsWith("session.json"),
+		);
+		expect(sessions).toHaveLength(1);
+		expect(
+			JSON.parse(await readFile(join(path, sessions[0] ?? ""), "utf8")),
+		).toMatchObject({ count: 1 });
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });

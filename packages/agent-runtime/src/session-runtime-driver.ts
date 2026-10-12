@@ -90,6 +90,13 @@ export interface SessionRuntimeDriverOptions {
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly SessionRuntimeModelOption[];
 	readonly supportsAttachments?: boolean;
+	/**
+	 * Per-peer image input negotiation for Drivers whose native protocol decides
+	 * it before a Session exists (ACP): `false` rejects attachment input before
+	 * any bridge read or Session side effect. Drivers without per-peer
+	 * negotiation leave this unset and rely on `supportsAttachments`.
+	 */
+	readonly attachmentsNegotiated?: () => boolean;
 	/** Deployment-owned verified Skill Hub generation; never selected by a wire command. */
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly cursorPrefix: string;
@@ -115,6 +122,13 @@ export interface NativeSessionOptions {
 }
 export interface NativeSession {
 	nativeId: string;
+	/**
+	 * Negotiated image input support for this Session. `false` means the native
+	 * Session explicitly refused structured image content, for example an ACP
+	 * peer that did not negotiate `promptCapabilities.image`; absent leaves the
+	 * decision to the Driver's `supportsAttachments` declaration.
+	 */
+	supportsImagePrompt?: boolean;
 	select(model: string, effort: string): Promise<void>;
 	prompt(
 		prompt: NativePromptV1,
@@ -797,6 +811,73 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		});
 		return record;
 	}
+	/**
+	 * Read request-scoped bridge attachments into native prompt content. Callers
+	 * confirm native image support first, so unsupported input never reaches the
+	 * bridge and never consumes file authority.
+	 */
+	private async materializeAttachmentInput(
+		text: string,
+		attachments: readonly string[],
+		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
+	): Promise<readonly NativePromptContentV1[]> {
+		if (!fileBridge) unavailable();
+		const content: NativePromptContentV1[] = [{ type: "text", text }];
+		for (const fileId of attachments) {
+			const file = await fileBridge.readInput(fileId);
+			if (
+				file.fileId !== fileId ||
+				!nativePromptImageMediaTypes.has(file.descriptor.mediaType) ||
+				file.descriptor.sizeBytes > nativePromptMaximumImageBytes
+			) {
+				await cancelNativePromptReader(file.body.getReader());
+				unavailable();
+			}
+			const reader = file.body.getReader();
+			const chunks: Uint8Array[] = [];
+			let size = 0;
+			try {
+				while (true) {
+					const next = await reader.read();
+					if (next.done) break;
+					if (!(next.value instanceof Uint8Array)) unavailable();
+					size += next.value.byteLength;
+					if (size > nativePromptMaximumImageBytes) unavailable();
+					chunks.push(next.value);
+				}
+			} finally {
+				await cancelNativePromptReader(reader);
+			}
+			const bytes = Buffer.concat(chunks);
+			if (
+				size !== file.descriptor.sizeBytes ||
+				createHash("sha256").update(bytes).digest("hex") !==
+					file.descriptor.sha256
+			)
+				unavailable();
+			content.push({
+				type: "image",
+				data: bytes.toString("base64"),
+				mimeType: file.descriptor.mediaType,
+			});
+		}
+		return content;
+	}
+	/**
+	 * Roll back the durable Turn admitted for an attachment request whose File
+	 * Grant lapsed before the native boundary. Nothing was dispatched, so the
+	 * request must not stay recorded as an unknown Turn that may have run.
+	 */
+	private async discardTurn(file: DurableJsonFile<Session>, command: Submit) {
+		await file.update((state) => {
+			state.turns = state.turns.filter(
+				(turn) => turn.executionId !== command.executionId,
+			);
+			state.operations = state.operations.filter(
+				(entry) => entry.key !== operationKey(command),
+			);
+		});
+	}
 	private async submit(
 		file: DurableJsonFile<Session>,
 		command: Submit,
@@ -838,56 +919,28 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		)
 			conflict();
 		if (!("text" in command.input)) unavailable();
+		const hasAttachments = command.input.attachments.length > 0;
+		// Attachment input needs both a wired bridge and a Driver that consumes
+		// it; neither decision may wait for a Session or a bridge read.
+		if (hasAttachments && (!this.options.supportsAttachments || !fileBridge))
+			unavailable();
+		// A Driver whose native protocol negotiates image input per peer settles
+		// that before a Session exists, so unsupported input is rejected before
+		// the bridge is read and before any native Session side effect.
+		if (hasAttachments && this.options.attachmentsNegotiated?.() === false)
+			unavailable();
 		let input: NativePromptV1 = command.input.text;
 		// Attachment bytes were read under the File Grant of this request; they must
 		// not cross into a native Turn once that authority has lapsed.
 		const revalidateInput = () => {
-			if (command.input.attachments.length > 0) fileBridge?.revalidate();
+			if (hasAttachments) fileBridge?.revalidate();
 		};
-		if (command.input.attachments.length > 0) {
-			if (!this.options.supportsAttachments || !fileBridge) unavailable();
-			const content: NativePromptContentV1[] = [
-				{ type: "text", text: command.input.text },
-			];
-			for (const fileId of command.input.attachments) {
-				const file = await fileBridge.readInput(fileId);
-				if (
-					file.fileId !== fileId ||
-					!nativePromptImageMediaTypes.has(file.descriptor.mediaType) ||
-					file.descriptor.sizeBytes > nativePromptMaximumImageBytes
-				) {
-					await cancelNativePromptReader(file.body.getReader());
-					unavailable();
-				}
-				const reader = file.body.getReader();
-				const chunks: Uint8Array[] = [];
-				let size = 0;
-				try {
-					while (true) {
-						const next = await reader.read();
-						if (next.done) break;
-						if (!(next.value instanceof Uint8Array)) unavailable();
-						size += next.value.byteLength;
-						if (size > nativePromptMaximumImageBytes) unavailable();
-						chunks.push(next.value);
-					}
-				} finally {
-					await cancelNativePromptReader(reader);
-				}
-				const bytes = Buffer.concat(chunks);
-				if (
-					size !== file.descriptor.sizeBytes ||
-					createHash("sha256").update(bytes).digest("hex") !==
-						file.descriptor.sha256
-				)
-					unavailable();
-				content.push({
-					type: "image",
-					data: bytes.toString("base64"),
-					mimeType: file.descriptor.mediaType,
-				});
-			}
-			input = content;
+		if (hasAttachments) {
+			input = await this.materializeAttachmentInput(
+				command.input.text,
+				command.input.attachments,
+				fileBridge,
+			);
 			revalidateInput();
 		}
 		const previousHandle = this.handles.get(ref);
@@ -976,6 +1029,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		} catch {
 			unavailable();
 		}
+		// The opened Session has the last word on negotiated image input: a Session
+		// that refuses image content must never reach the native Turn.
+		if (hasAttachments && native.supportsImagePrompt === false) {
+			if (!reuse) await native.close().catch(() => {});
+			unavailable();
+		}
 		try {
 			await file.update((state) => {
 				state.nativeId = native.nativeId;
@@ -1029,11 +1088,31 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			this.handles.delete(ref);
 			unavailable();
 		}
-		dispatched = true;
 		const handle: Handle = { native, selection, pump: Promise.resolve() };
 		this.handles.set(ref, handle);
+		let preDispatchFailure = false;
 		handle.pump = (async () => {
+			if (hasAttachments) {
+				try {
+					// Materialized bytes must never reach the native session under
+					// authority that lapsed during Session setup or model selection.
+					revalidateInput();
+				} catch {
+					// Nothing reached the native Session, so the admitted Turn is
+					// rolled back rather than retained as an unknown Turn that may or
+					// may not have been accepted.
+					preDispatchFailure = true;
+					await this.discardTurn(file, command);
+					if (!reuse) {
+						await native.close().catch(() => {});
+						this.handles.delete(ref);
+					}
+					return;
+				}
+			}
 			try {
+				// Only a Turn that passed the native boundary counts as dispatched.
+				dispatched = true;
 				const response = await native.prompt(input);
 				await this.resolve(file, command, {
 					outcome: "accepted",
@@ -1063,6 +1142,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		} finally {
 			clearTimeout(timer);
 		}
+		if (preDispatchFailure) unavailable();
 		return (
 			file
 				.read()
