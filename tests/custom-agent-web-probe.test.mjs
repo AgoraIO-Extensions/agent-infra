@@ -94,7 +94,7 @@ test("detects permissive and leaking HTTPS custom-Web services", async () => {
 		assert.equal(success.code, 0, success.stderr);
 		assert.equal(JSON.parse(success.stdout).results.length, 5);
 		const linked = join(directory, "linked");
-		await symlink(input.allowedAuthorizationFile, linked);
+		await symlink(input.deniedAuthorizationFile, linked);
 		await writeFile(
 			config,
 			JSON.stringify({ ...input, deniedAuthorizationFile: linked }),

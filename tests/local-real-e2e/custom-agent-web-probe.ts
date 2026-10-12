@@ -64,7 +64,10 @@ async function readAuthorization(file: string): Promise<string> {
 		throw new Error("AUTHORIZATION_FILE_INVALID");
 	let handle: FileHandle | undefined;
 	try {
-		handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+		handle = await open(
+			file,
+			constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0),
+		);
 		const stat = await handle.stat();
 		if (
 			!stat.isFile() ||
@@ -73,7 +76,12 @@ async function readAuthorization(file: string): Promise<string> {
 			stat.size > 8192
 		)
 			throw new Error("AUTHORIZATION_FILE_INVALID");
-		const value = (await handle.readFile("utf8")).trim();
+		const buffer = Buffer.alloc(8193);
+		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+		if (bytesRead > 8192) throw new Error("AUTHORIZATION_FILE_INVALID");
+		const value = new TextDecoder("utf-8", { fatal: true })
+			.decode(buffer.subarray(0, bytesRead))
+			.trim();
 		if (!value || /[\r\n]/.test(value))
 			throw new Error("AUTHORIZATION_FILE_INVALID");
 		return value;
