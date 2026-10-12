@@ -54,4 +54,44 @@ describe("ConversationCapabilityPickerPanel", () => {
 		);
 		expect(container.firstChild).toBeNull();
 	});
+
+	it("clears the draft when the scope or authorized capability version changes", () => {
+		const { rerender } = render(
+			<ConversationCapabilityPickerPanel
+				capabilities={capabilities}
+				scopeKey="scope-a"
+				disabled={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "打开" }));
+		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
+		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
+		expect(screen.getByText(/选择已保存/)).toBeTruthy();
+		rerender(
+			<ConversationCapabilityPickerPanel
+				capabilities={capabilities.map((capability) => ({
+					...capability,
+					version: "2.0.0",
+				}))}
+				scopeKey="scope-b"
+				disabled={false}
+			/>,
+		);
+		expect(screen.queryByText(/选择已保存/)).toBeNull();
+		expect(screen.queryByText(/workspace-summary 参数/)).toBeNull();
+	});
+
+	it("leaves IME composition keys to the input method", () => {
+		render(
+			<ConversationCapabilityPickerPanel
+				capabilities={capabilities}
+				scopeKey="scope"
+				disabled={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "打开" }));
+		const input = screen.getByRole("textbox", { name: "搜索命令或 Skill" });
+		fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+		expect(screen.queryByText(/workspace-summary 参数/)).toBeNull();
+	});
 });

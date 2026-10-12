@@ -285,6 +285,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 					) : conversationId ? (
 						<>
 							<ConversationCapabilityPickerPanel
+								key={`${identityKey}:${agentId}:${conversationId}`}
 								capabilities={conversationCapabilities}
 								scopeKey={`${identityKey}:${agentId}:${conversationId}`}
 								disabled={!available || selfManaged}

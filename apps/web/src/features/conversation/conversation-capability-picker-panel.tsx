@@ -1,5 +1,5 @@
 import { ListFilter, RotateCcw } from "lucide-react";
-import { type KeyboardEvent, useMemo, useState } from "react";
+import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,39 @@ import {
 	updateConversationCapabilityQuery,
 } from "./conversation-capability-picker.js";
 
+function sameCapability(
+	left: ConversationCapabilityV1,
+	right: ConversationCapabilityV1,
+) {
+	return (
+		left.kind === right.kind &&
+		left.name === right.name &&
+		left.source === right.source &&
+		left.version === right.version
+	);
+}
+
+function reconcileState(
+	state: ConversationCapabilityPickerStateV1,
+	scopeKey: string,
+	capabilities: readonly ConversationCapabilityV1[],
+) {
+	const scoped = resetConversationCapabilityScope(state, scopeKey);
+	if (
+		!scoped.selected ||
+		capabilities.some((capability) =>
+			sameCapability(capability, scoped.selected as ConversationCapabilityV1),
+		)
+	)
+		return scoped;
+	return {
+		...scoped,
+		selected: undefined,
+		parameterText: "",
+		confirmed: false,
+	};
+}
+
 export function ConversationCapabilityPickerPanel({
 	capabilities,
 	scopeKey,
@@ -31,7 +64,13 @@ export function ConversationCapabilityPickerPanel({
 	const [state, setState] = useState<ConversationCapabilityPickerStateV1>(() =>
 		createConversationCapabilityPickerState(scopeKey),
 	);
-	const scopedState = resetConversationCapabilityScope(state, scopeKey);
+	const scopedState = useMemo(
+		() => reconcileState(state, scopeKey, capabilities),
+		[state, scopeKey, capabilities],
+	);
+	useEffect(() => {
+		setState((current) => reconcileState(current, scopeKey, capabilities));
+	}, [scopeKey, capabilities]);
 	const filtered = useMemo(
 		() => filterConversationCapabilities(capabilities, scopedState.query),
 		[capabilities, scopedState.query],
@@ -45,6 +84,7 @@ export function ConversationCapabilityPickerPanel({
 		update(updateConversationCapabilityQuery(scopedState, value));
 	}
 	function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+		if (event.nativeEvent.isComposing) return;
 		if (event.key === "ArrowDown" || event.key === "ArrowUp") {
 			event.preventDefault();
 			update(
