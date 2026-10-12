@@ -1304,14 +1304,15 @@ describe("PostgreSQL Conversation event transaction", () => {
 			eventType: string,
 			runtimeCursor: string | null,
 			payload: Record<string, string | null> = { type: eventType },
+			sequence = 1,
 		) => client`
 			insert into platform.conversation_events
 				(event_id, conversation_id, execution_id, adapter_event_key, sequence,
 				 conversation_cursor, event_type, event_payload, event_digest,
 				 runtime_cursor, occurred_at, source)
 			values
-				(${eventId}, ${conversationId}, ${executionId}, ${`adapter_${eventId}`}, 1,
-				 1, ${eventType}, ${client.json(payload)}, ${"0".repeat(64)},
+				(${eventId}, ${conversationId}, ${executionId}, ${`adapter_${eventId}`}, ${sequence},
+				 ${sequence}, ${eventType}, ${client.json(payload)}, ${"0".repeat(64)},
 				 ${runtimeCursor}, now(), ${source})
 		`;
 		await expect(
@@ -1339,9 +1340,9 @@ describe("PostgreSQL Conversation event transaction", () => {
 		).rejects.toMatchObject({
 			constraint_name: "conversation_event_source_binding",
 		});
-		// The Platform may record only its own cancellation, never a Runtime
-		// terminal such as completion or failure (HLD §8.1).
-		for (const status of ["completed", "failed", "processing"]) {
+		// The Platform may record its own cancellation or a failure/unknown
+		// transition observed before a Runtime terminal event arrives.
+		for (const status of ["completed", "processing"]) {
 			await expect(
 				insert(
 					`event_platform_status_${status}`,
@@ -1353,6 +1354,18 @@ describe("PostgreSQL Conversation event transaction", () => {
 			).rejects.toMatchObject({
 				constraint_name: "conversation_event_source_binding",
 			});
+		}
+		for (const [index, status] of ["failed", "unknown"].entries()) {
+			await expect(
+				insert(
+					`event_platform_status_${status}`,
+					"platform",
+					"execution.status",
+					null,
+					{ type: "execution.status", status },
+					index + 2,
+				),
+			).resolves.toEqual([]);
 		}
 		// A missing or JSON-null status must not slip through as SQL NULL.
 		for (const [eventId, payload] of [

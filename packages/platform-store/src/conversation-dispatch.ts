@@ -37,6 +37,7 @@ import {
 	applyTransition,
 	cancelStoppedTurn,
 	closeOutbox,
+	insertPlatformExecutionStatusForFailure,
 	isolationProjection,
 	ownedState,
 	readGenerationIsolation,
@@ -528,6 +529,13 @@ export class PostgresConversationDispatchStoreV1
         where conversation_id = ${claim.conversationId} and session_generation = ${claim.sessionGeneration}
           and status::text = any(${plan.executionStatusesToFail}) returning execution_id
       `;
+			for (const execution of failed)
+				await insertPlatformExecutionStatusForFailure(
+					transaction,
+					claim.conversationId,
+					execution.execution_id,
+					"failed",
+				);
 			await transaction`
         update platform.outbox_items set status = 'failed', lease_owner = null, lease_expires_at = null, updated_at = clock_timestamp()
         where scope_type = 'conversation' and scope_id = ${claim.conversationId} and id <> ${claim.itemId}

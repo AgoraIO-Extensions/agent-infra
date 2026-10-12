@@ -307,8 +307,18 @@ async function insertPlatformExecutionStatus(
 	transaction: Transaction,
 	conversationId: string,
 	executionId: string,
-	status: "cancelled",
+	status: "cancelled" | "failed" | "unknown",
 ) {
+	const [existing] = await transaction<{ event_id: string }[]>`
+		select event_id
+		from platform.conversation_events
+		where conversation_id = ${conversationId}
+			and execution_id = ${executionId}
+			and event_type = 'execution.status'
+			and event_payload->>'status' = ${status}
+		limit 1
+	`;
+	if (existing) return;
 	const [sequence] = await transaction<{ value: string }[]>`
 		update platform.conversation_executions
 		set last_event_sequence = last_event_sequence + 1
@@ -582,6 +592,16 @@ export async function applyTransition(
 		`;
 		if (rows.length !== 1) throw new StaleDispatchLease();
 		state.execution.status = effectiveTransition.executionStatus;
+		if (
+			effectiveTransition.executionStatus === "failed" ||
+			effectiveTransition.executionStatus === "unknown"
+		)
+			await insertPlatformExecutionStatus(
+				transaction,
+				claim.conversationId,
+				claim.executionId,
+				effectiveTransition.executionStatus,
+			);
 	}
 	if (effectiveTransition.conversationStatus !== undefined) {
 		const rows = await transaction<{ id: string }[]>`
@@ -639,6 +659,20 @@ export async function closeOutbox(
 	`;
 	if (rows.length !== 1) throw new StaleDispatchLease();
 	await insertAttemptEvent(transaction, state, status, errorCode);
+}
+
+export async function insertPlatformExecutionStatusForFailure(
+	transaction: Transaction,
+	conversationId: string,
+	executionId: string,
+	status: "failed" | "unknown",
+) {
+	await insertPlatformExecutionStatus(
+		transaction,
+		conversationId,
+		executionId,
+		status,
+	);
 }
 
 export async function retryOutbox(

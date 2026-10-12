@@ -3824,7 +3824,19 @@ describe("durable generation isolation in the existing dispatch loop", () => {
 				expect(watermark).toBe("last-cursor");
 				expect(attempts).toBe(failures + 1);
 				expect(drainCursors).toEqual([null, "last-cursor"]);
-				expect(await eventSnapshot()).toEqual(committed);
+				const confirmed = await eventSnapshot();
+				expect(confirmed).toMatchObject({
+					cursor: "last-cursor",
+					audits: committed.audits,
+					events: [
+						...committed.events,
+						expect.objectContaining({
+							source: "platform",
+							event_type: "execution.status",
+							event_payload: { type: "execution.status", status: "failed" },
+						}),
+					],
+				});
 				expect(await isolationState(work)).toMatchObject({
 					generation: 2,
 					isolation_status: "confirmed",
@@ -3921,9 +3933,13 @@ describe("durable generation isolation in the existing dispatch loop", () => {
 			expect(new Set(operations).size).toBe(1);
 			expect(submitted).toBe(0);
 			const saved =
-				await client`select adapter_event_key, event_payload from platform.conversation_events where execution_id = ${work.executionId}`;
-			expect(saved).toHaveLength(1);
+				await client`select adapter_event_key, event_payload from platform.conversation_events where execution_id = ${work.executionId} order by sequence`;
+			expect(saved).toHaveLength(2);
 			expect(saved[0]?.adapter_event_key).toBe("original-text");
+			expect(saved[1]?.event_payload).toEqual({
+				type: "execution.status",
+				status: "failed",
+			});
 			expect(
 				await events.persist({
 					schemaVersion: 1,
@@ -4105,7 +4121,7 @@ describe("durable generation isolation in the existing dispatch loop", () => {
 			});
 			expect(
 				await client`select * from platform.conversation_events where execution_id = ${work.executionId}`,
-			).toHaveLength(1);
+			).toHaveLength(2);
 		} finally {
 			await Promise.all([store.close(), transaction.close()]);
 		}
