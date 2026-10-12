@@ -360,7 +360,11 @@ it("preserves an explicitly empty Skill capability list", async () => {
 		configuration: {
 			...configuration,
 			agentId: "agent-a",
-			source: { kind: "standard", templateId: "codex" },
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				connectionEnabled: false,
+			},
 		},
 		management: {} as never,
 	});
