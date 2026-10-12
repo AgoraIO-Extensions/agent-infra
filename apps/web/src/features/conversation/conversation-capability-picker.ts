@@ -4,6 +4,8 @@ export type ConversationCapabilityV1 = Readonly<{
 	description?: string;
 	source?: string;
 	version?: string;
+	/** Stable service-provided identity used to invalidate replaced metadata. */
+	identity?: string;
 	parameterHint?: string;
 }>;
 
@@ -166,6 +168,7 @@ function sameCapability(
 		left.description === right.description &&
 		left.source === right.source &&
 		left.version === right.version &&
+		left.identity === right.identity &&
 		left.parameterHint === right.parameterHint
 	);
 }

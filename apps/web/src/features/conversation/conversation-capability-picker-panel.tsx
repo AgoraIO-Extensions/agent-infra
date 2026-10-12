@@ -32,13 +32,22 @@ export function ConversationCapabilityPickerPanel({
 	const [state, setState] = useState<ConversationCapabilityPickerStateV1>(() =>
 		createConversationCapabilityPickerState(scopeKey),
 	);
-	const scopedState = reconcileConversationCapabilitySelection(
-		resetConversationCapabilityScope(state, scopeKey, disabled),
-		capabilities,
+	const scopedState = useMemo(
+		() =>
+			reconcileConversationCapabilitySelection(
+				resetConversationCapabilityScope(state, scopeKey, disabled),
+				capabilities,
+			),
+		[state, scopeKey, capabilities, disabled],
 	);
 	useEffect(() => {
-		if (scopedState !== state) setState(scopedState);
-	}, [scopedState, state]);
+		setState((current) =>
+			reconcileConversationCapabilitySelection(
+				resetConversationCapabilityScope(current, scopeKey, disabled),
+				capabilities,
+			),
+		);
+	}, [scopeKey, capabilities, disabled]);
 	const filtered = useMemo(
 		() => filterConversationCapabilities(capabilities, scopedState.query),
 		[capabilities, scopedState.query],
@@ -138,18 +147,13 @@ export function ConversationCapabilityPickerPanel({
 											<strong className="break-all">{capability.name}</strong>
 											<Badge variant="secondary">{capability.kind}</Badge>
 										</span>
-										{capability.description && (
-											<span className="mt-1 block text-muted-foreground text-sm">
-												{capability.description}
-											</span>
-										)}
-										{(capability.source || capability.version) && (
-											<span className="mt-1 block text-muted-foreground text-xs">
-												{[capability.source, capability.version]
-													.filter(Boolean)
-													.join(" · ")}
-											</span>
-										)}
+										<span className="mt-1 block text-muted-foreground text-sm">
+											{capability.description}
+										</span>
+										<span className="mt-1 block text-muted-foreground text-xs">
+											{capability.source}
+											{capability.version ? ` · ${capability.version}` : ""}
+										</span>
 									</Button>
 								))
 							)}

@@ -39,6 +39,42 @@ export class RuntimeSkillDirectoryErrorV1 extends Error {
 	}
 }
 
+/** Bound an asynchronous mounted Skill read to the request's cancellation/deadline. */
+export async function boundedRuntimeSkillRead<T>(input: {
+	pending: Promise<T>;
+	signal: AbortSignal;
+	expiresAt: number;
+}): Promise<T> {
+	if (input.signal.aborted || input.expiresAt <= Date.now()) {
+		void input.pending.catch(() => {});
+		unavailable();
+	}
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let onAbort: (() => void) | undefined;
+	try {
+		return await new Promise<T>((resolve, reject) => {
+			const finish = (work: () => void) => {
+				if (timer !== undefined) clearTimeout(timer);
+				if (onAbort) input.signal.removeEventListener("abort", onAbort);
+				work();
+			};
+			onAbort = () => finish(() => reject(new RuntimeSkillDirectoryErrorV1()));
+			timer = setTimeout(
+				() => finish(() => reject(new RuntimeSkillDirectoryErrorV1())),
+				Math.max(0, input.expiresAt - Date.now()),
+			);
+			input.signal.addEventListener("abort", onAbort, { once: true });
+			void input.pending.then(
+				(value) => finish(() => resolve(value)),
+				(error) => finish(() => reject(error)),
+			);
+		});
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+		if (onAbort) input.signal.removeEventListener("abort", onAbort);
+	}
+}
+
 function unavailable(): never {
 	throw new RuntimeSkillDirectoryErrorV1();
 }

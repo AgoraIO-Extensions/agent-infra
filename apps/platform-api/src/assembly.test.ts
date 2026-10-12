@@ -156,18 +156,6 @@ describe("Platform API production assembly", () => {
 		};
 		const gateway = {
 			path: "/api/v1/custom-agent",
-			identity: {
-				resolve: vi.fn().mockResolvedValue(identity),
-				hydrateUsers: vi.fn().mockResolvedValue([]),
-				resolveUser: vi.fn().mockResolvedValue({
-					schemaVersion: 1,
-					userId: identity.userId,
-					accountStatus: "active",
-					organizationIds: identity.organizationIds,
-					authorizationRevision: "directory-1",
-				}),
-			},
-			authorizeAgent: vi.fn().mockResolvedValue(true),
 			resolveDeployment: vi.fn().mockResolvedValue({
 				agentId: "agent-1",
 				serviceOrigin: "https://agent.example/",
@@ -207,7 +195,16 @@ describe("Platform API production assembly", () => {
 			customAgentGateway: gateway,
 		});
 
-		expect(assembly.dependencies.customAgentGateway).toBe(gateway);
+		expect(assembly.dependencies.customAgentGateway).toMatchObject(gateway);
+		expect(assembly.dependencies.customAgentGateway?.identity).toBe(
+			assembly.dependencies.conversation.identity,
+		);
+		expect(
+			await assembly.dependencies.customAgentGateway?.authorizeAgent({
+				identity,
+				agentId: "agent-1",
+			}),
+		).toBe(false);
 		await assembly.close();
 	});
 

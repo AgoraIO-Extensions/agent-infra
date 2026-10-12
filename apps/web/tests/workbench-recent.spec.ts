@@ -808,7 +808,12 @@ for (const state of [
 			await expect(
 				page.getByText("受控历史正文 conversation-a", { exact: true }),
 			).toBeVisible();
-			await expect(page.getByLabel("消息", { exact: true })).toBeDisabled();
+			const messageInput = page.getByLabel("消息", { exact: true });
+			if (state.name === "starting" || state.name === "updating") {
+				await expect(messageInput).toBeEnabled();
+			} else {
+				await expect(messageInput).toBeDisabled();
+			}
 			await expect(
 				page.getByRole("button", { name: "发送", exact: true }),
 			).toBeDisabled();

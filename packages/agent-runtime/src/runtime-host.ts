@@ -113,6 +113,13 @@ export interface RuntimeHostOptions {
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
 	}>;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
+	/** Deployment-owned Browser controller factory; receives only verified readiness binding. */
+	createBrowserExecutionContext?: (
+		input: RuntimeBrowserExecutionContextV1,
+	) =>
+		| RuntimeBrowserExecutionContextV1
+		| undefined
+		| Promise<RuntimeBrowserExecutionContextV1 | undefined>;
 	onBrowserCapabilityAssembly?: (
 		input:
 			| {
@@ -223,6 +230,26 @@ export function runtimeBrowserExecutionContextForCommand(
 	)
 		return undefined;
 	return browser;
+}
+
+async function createBrowserExecutionContextForCommand(
+	factory: RuntimeHostOptions["createBrowserExecutionContext"],
+	browser: RuntimeBrowserExecutionContextV1 | undefined,
+): Promise<RuntimeBrowserExecutionContextV1 | undefined> {
+	if (!browser || !factory) return browser;
+	const admittedVersion = browser.capabilityVersion;
+	const admittedBinding = structuredClone(browser.binding);
+	const created = await factory({
+		...browser,
+		binding: structuredClone(admittedBinding),
+	});
+	if (
+		!created ||
+		created.capabilityVersion !== admittedVersion ||
+		!isDeepStrictEqual(created.binding, admittedBinding)
+	)
+		return undefined;
+	return created;
 }
 
 type RuntimeOperationResponse =
@@ -1808,9 +1835,13 @@ export class RuntimeHost {
 							},
 						}
 					: context;
-			const browser = runtimeBrowserExecutionContextForCommand(
+			const admittedBrowser = runtimeBrowserExecutionContextForCommand(
 				this.browserExecutionContext,
 				operation.command,
+			);
+			const browser = await createBrowserExecutionContextForCommand(
+				this.options.createBrowserExecutionContext,
+				admittedBrowser,
 			);
 			const executionContext = browser
 				? { ...(driverContext ?? {}), browser }

@@ -184,6 +184,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 			kind: "skill" as const,
 			name: skill.name,
 			version: skill.version,
+			identity: `${skill.manifestSha256}:${skill.packageDigest}`,
 		}),
 	);
 	return (
@@ -285,6 +286,7 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 					) : conversationId ? (
 						<>
 							<ConversationCapabilityPickerPanel
+								key={`${identityKey}:${agentId}:${conversationId}`}
 								capabilities={conversationCapabilities}
 								scopeKey={`${identityKey}:${agentId}:${conversationId}`}
 								disabled={!available || selfManaged}
