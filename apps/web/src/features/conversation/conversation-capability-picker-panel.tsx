@@ -1,5 +1,5 @@
 import { ListFilter, RotateCcw } from "lucide-react";
-import { type KeyboardEvent, useMemo, useState } from "react";
+import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import {
 	filterConversationCapabilities,
 	markConversationCapabilityConfirmed,
 	moveConversationCapabilitySelection,
+	reconcileConversationCapabilitySelection,
 	resetConversationCapabilityScope,
 	selectConversationCapability,
 	updateConversationCapabilityParameter,
@@ -31,7 +32,13 @@ export function ConversationCapabilityPickerPanel({
 	const [state, setState] = useState<ConversationCapabilityPickerStateV1>(() =>
 		createConversationCapabilityPickerState(scopeKey),
 	);
-	const scopedState = resetConversationCapabilityScope(state, scopeKey);
+	const scopedState = reconcileConversationCapabilitySelection(
+		resetConversationCapabilityScope(state, scopeKey),
+		capabilities,
+	);
+	useEffect(() => {
+		if (scopedState !== state) setState(scopedState);
+	}, [scopedState, state]);
 	const filtered = useMemo(
 		() => filterConversationCapabilities(capabilities, scopedState.query),
 		[capabilities, scopedState.query],
@@ -45,6 +52,7 @@ export function ConversationCapabilityPickerPanel({
 		update(updateConversationCapabilityQuery(scopedState, value));
 	}
 	function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+		if (event.nativeEvent.isComposing) return;
 		if (event.key === "ArrowDown" || event.key === "ArrowUp") {
 			event.preventDefault();
 			update(

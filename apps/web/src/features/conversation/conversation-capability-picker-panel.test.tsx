@@ -14,6 +14,13 @@ const capabilities: readonly ConversationCapabilityV1[] = [
 	},
 ];
 
+const replacementCapabilities: readonly ConversationCapabilityV1[] = [
+	{
+		...capabilities[0],
+		version: "2.0.0",
+	},
+];
+
 describe("ConversationCapabilityPickerPanel", () => {
 	afterEach(cleanup);
 
@@ -53,5 +60,48 @@ describe("ConversationCapabilityPickerPanel", () => {
 			/>,
 		);
 		expect(container.firstChild).toBeNull();
+	});
+
+	it("clears a selection when the capability directory replaces it", () => {
+		const { rerender } = render(
+			<ConversationCapabilityPickerPanel
+				capabilities={capabilities}
+				scopeKey="alice:agent-a:conversation-a"
+				disabled={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "打开" }));
+		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
+		fireEvent.change(screen.getByRole("textbox", { name: "能力参数" }), {
+			target: { value: "README.md" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
+		rerender(
+			<ConversationCapabilityPickerPanel
+				capabilities={replacementCapabilities}
+				scopeKey="alice:agent-a:conversation-a"
+				disabled={false}
+			/>,
+		);
+		expect(screen.queryByRole("textbox", { name: "能力参数" })).toBeNull();
+		expect(
+			screen.queryByText(
+				"选择已保存在当前草稿中；执行接缝尚未接入，未提交请求。",
+			),
+		).toBeNull();
+	});
+
+	it("does not consume keyboard shortcuts during IME composition", () => {
+		render(
+			<ConversationCapabilityPickerPanel
+				capabilities={capabilities}
+				scopeKey="alice:agent-a:conversation-a"
+				disabled={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "打开" }));
+		const search = screen.getByRole("textbox", { name: "搜索命令或 Skill" });
+		fireEvent.keyDown(search, { key: "Enter", isComposing: true });
+		expect(screen.queryByRole("textbox", { name: "能力参数" })).toBeNull();
 	});
 });

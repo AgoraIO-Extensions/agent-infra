@@ -147,3 +147,38 @@ export function resetConversationCapabilityScope(
 		? state
 		: createConversationCapabilityPickerState(scopeKey);
 }
+
+function sameCapability(
+	left: ConversationCapabilityV1,
+	right: ConversationCapabilityV1,
+) {
+	return (
+		left.kind === right.kind &&
+		left.name === right.name &&
+		left.description === right.description &&
+		left.source === right.source &&
+		left.version === right.version &&
+		left.parameterHint === right.parameterHint
+	);
+}
+
+/** Reconcile a draft selection with the latest capability directory. */
+export function reconcileConversationCapabilitySelection(
+	state: ConversationCapabilityPickerStateV1,
+	capabilities: readonly ConversationCapabilityV1[],
+) {
+	const selected = state.selected;
+	if (!selected) return state;
+	const current = capabilities.find((capability) =>
+		sameCapability(capability, selected),
+	);
+	if (!current) {
+		return {
+			...state,
+			selected: undefined,
+			parameterText: "",
+			confirmed: false,
+		};
+	}
+	return state;
+}
