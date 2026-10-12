@@ -1,8 +1,16 @@
+import { providerGuideChapters } from "./provider-guides";
+
 const docs =
 	"https://github.com/AgoraIO-Extensions/agent-infra/blob/connection/docs";
 
 // Only published pages and documented endpoints, never examples or credentials.
 const destinations: Record<string, string> = {
+	...Object.fromEntries(
+		Object.entries(providerGuideChapters).map(([providerId, chapter]) => [
+			`${chapter.title.replace(/ 接入$/, "")} 连接入口`,
+			`/connection/connections?provider=${encodeURIComponent(providerId)}`,
+		]),
+	),
 	"/connection/agent/llms.txt": "/connection/agent/llms.txt",
 	"/connection/agent/": "/connection/agent/",
 	"/connection/login": "/connection/login",
@@ -26,7 +34,7 @@ const destinations: Record<string, string> = {
 	"Connection 生产部署说明": `${docs}/architecture/connection-production.md`,
 };
 const pattern = new RegExp(
-	`(${Object.keys(destinations)
+	`(https?://[^\\s，。；、）]+|${Object.keys(destinations)
 		.sort((a, b) => b.length - a.length)
 		.map((text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
 		.join("|")})`,
@@ -39,6 +47,10 @@ export function guideLinkParts(text: string) {
 		.filter(Boolean)
 		.map((part) => ({
 			text: part,
-			href: Object.hasOwn(destinations, part) ? destinations[part] : undefined,
+			href: Object.hasOwn(destinations, part)
+				? destinations[part]
+				: /^https?:\/\//.test(part)
+					? part
+					: undefined,
 		}));
 }

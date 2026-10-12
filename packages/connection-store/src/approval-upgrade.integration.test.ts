@@ -20,6 +20,7 @@ import {
 	datalegoV5ConnectionCatalog as immutableDatalegoV5,
 } from "@agent-infra/openconnector-adapter/datalego-v5";
 import { DataLegoV6Adapter } from "@agent-infra/openconnector-adapter/datalego-v6";
+import { bitbucketV9ConnectionCatalog } from "@agent-infra/openconnector-adapter/providers/bitbucket";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
 import { PostgresConnectionAccessRequestRepository } from "./access-request-repository";
@@ -801,90 +802,117 @@ describe("compatible approval upgrade", () => {
 			}
 		},
 	);
-	(databaseUrl ? it : it.skip)(
-		"upgrades the pinned Bitbucket v7 account to v8 using reviewed repair evidence",
-		async () => {
-			if (!databaseUrl) return;
-			await migrateConnectionDatabase(
-				databaseUrl,
-				resolve(import.meta.dirname, "../../../migrations/connection"),
-			);
-			const sql = postgres(databaseUrl);
-			const repository = new PostgresConnectionRepository(
-				databaseUrl,
-				Buffer.alloc(32, 23),
-			);
-			const proof = bitbucketAuthorizationCompatibility[0];
-			const source = {
-				...bitbucketServerConnectionCatalog,
-				providerReleaseId: proof.fromReleaseId,
-				executorDigest: proof.fromExecutorDigest,
-				actions: bitbucketServerConnectionCatalog.actions.map((action) => ({
-					...action,
-					id: action.id.replace(/@v8$/, "@v7"),
-				})),
-			};
-			const principalId = `bitbucket-repair-${randomUUID()}`;
-			try {
-				await repository.publishProviderCatalog(source);
-				await sql`INSERT INTO connection_principals (id, display_name) VALUES (${principalId}, 'Repair test')`;
-				const requestId = await seedApprovedConnectPermit(sql, {
-					principalId,
-					providerReleaseId: source.providerReleaseId,
-					scopes: ["bitbucket.server.pat"],
-					actionVersionIds: source.actions.map((action) => action.id),
-				});
-				const identity = {
-					principalId,
-					providerId: source.provider,
-					externalAccount: "2588-test-fixture",
-					accessToken: "isolated-test-fixture",
-					displayName: "Repair account",
-					grantedScopes: ["bitbucket.server.pat"],
-					providerReleaseId: source.providerReleaseId,
+	for (const [fromVersion, toVersion, target] of [
+		[7, 8, bitbucketServerConnectionCatalog],
+		[8, 9, bitbucketV9ConnectionCatalog],
+	] as const)
+		(databaseUrl ? it : it.skip)(
+			`upgrades the pinned Bitbucket v${fromVersion} account to v${toVersion} using exact reviewed repair evidence`,
+			async () => {
+				if (!databaseUrl) return;
+				await migrateConnectionDatabase(
+					databaseUrl,
+					resolve(import.meta.dirname, "../../../migrations/connection"),
+				);
+				const sql = postgres(databaseUrl);
+				const repository = new PostgresConnectionRepository(
+					databaseUrl,
+					Buffer.alloc(32, 23),
+				);
+				const proof = bitbucketAuthorizationCompatibility.find(
+					(entry) =>
+						entry.fromReleaseId ===
+							target.providerReleaseId.replace(/-v\d+$/, `-v${fromVersion}`) &&
+						entry.toReleaseId === target.providerReleaseId,
+				);
+				expect(proof).toBeDefined();
+				if (!proof) throw new Error("Missing exact Bitbucket upgrade evidence");
+				const source = {
+					...target,
+					providerReleaseId: proof.fromReleaseId,
+					executorDigest: proof.fromExecutorDigest,
+					actions: target.actions.map((action) => ({
+						...action,
+						id: action.id.replace(
+							new RegExp(`@v${toVersion}$`),
+							`@v${fromVersion}`,
+						),
+					})),
 				};
-				const { connectionId } = await repository.storeProviderCredential({
-					...identity,
-					accessRequestId: requestId,
-				});
-				await repository.publishProviderCatalog(
-					bitbucketServerConnectionCatalog,
+				const principalId = `bitbucket-repair-${randomUUID()}`;
+				const selectedActions = source.actions.filter((action) =>
+					["bitbucket.get_current_user", "bitbucket.compare_refs"].includes(
+						action.name,
+					),
 				);
-				const credential = await repository.getProviderCredentialForUpgrade({
-					principalId,
-					connectionId,
-				});
-				const upgrade = {
-					...identity,
-					providerReleaseId: bitbucketServerConnectionCatalog.providerReleaseId,
-					expectedConnectionId: connectionId,
-					expectedCredentialVersionId: credential.credentialVersionId,
-				};
-				await expect(
-					repository.storeProviderCredential(upgrade),
-				).rejects.toMatchObject({ code: "FORBIDDEN" });
-				await repository.publishProviderCatalog({
-					...bitbucketServerConnectionCatalog,
-					authorizationCompatibility: bitbucketAuthorizationCompatibility,
-				});
-				await expect(
-					repository.storeProviderCredential(upgrade),
-				).resolves.toMatchObject({ connectionId });
-				const [access] =
-					await sql`SELECT * FROM connection_effective_access_authorizations WHERE connection_id = ${connectionId}`;
-				expect(access?.approved_provider_release_id).toBe(
-					source.providerReleaseId,
-				);
-				expect(access?.provider_release_id).toBe(
-					bitbucketServerConnectionCatalog.providerReleaseId,
-				);
-				expect(access?.source_request_id).toBe(requestId);
-			} finally {
-				await repository.close();
-				await sql.end();
-			}
-		},
-	);
+				try {
+					await repository.publishProviderCatalog(source);
+					await sql`INSERT INTO connection_principals (id, display_name) VALUES (${principalId}, 'Repair test')`;
+					const requestId = await seedApprovedConnectPermit(sql, {
+						principalId,
+						providerReleaseId: source.providerReleaseId,
+						scopes: ["bitbucket.server.pat"],
+						actionVersionIds: selectedActions.map((action) => action.id),
+					});
+					const identity = {
+						principalId,
+						providerId: source.provider,
+						externalAccount: "2588-test-fixture",
+						accessToken: "isolated-test-fixture",
+						displayName: "Repair account",
+						grantedScopes: ["bitbucket.server.pat"],
+						providerReleaseId: source.providerReleaseId,
+					};
+					const { connectionId } = await repository.storeProviderCredential({
+						...identity,
+						accessRequestId: requestId,
+					});
+					await repository.publishProviderCatalog(target);
+					const credential = await repository.getProviderCredentialForUpgrade({
+						principalId,
+						connectionId,
+					});
+					const upgrade = {
+						...identity,
+						providerReleaseId: target.providerReleaseId,
+						expectedConnectionId: connectionId,
+						expectedCredentialVersionId: credential.credentialVersionId,
+					};
+					await expect(
+						repository.storeProviderCredential(upgrade),
+					).rejects.toMatchObject({ code: "FORBIDDEN" });
+					await repository.publishProviderCatalog({
+						...target,
+						authorizationCompatibility: [proof],
+					});
+					await expect(
+						repository.storeProviderCredential(upgrade),
+					).resolves.toMatchObject({ connectionId });
+					const [access] =
+						await sql`SELECT * FROM connection_effective_access_authorizations WHERE connection_id = ${connectionId}`;
+					expect(access?.approved_provider_release_id).toBe(
+						source.providerReleaseId,
+					);
+					expect(access?.provider_release_id).toBe(target.providerReleaseId);
+					expect(access?.source_request_id).toBe(requestId);
+					const actions =
+						await sql`SELECT action_version_id FROM connection_capability_profile_actions WHERE capability_profile_id=${access?.capability_profile_id} ORDER BY action_version_id`;
+					expect(actions.map((row) => row.action_version_id)).toEqual(
+						selectedActions
+							.map((action) =>
+								action.id.replace(
+									new RegExp(`@v${fromVersion}$`),
+									`@v${toVersion}`,
+								),
+							)
+							.sort(),
+					);
+				} finally {
+					await repository.close();
+					await sql.end();
+				}
+			},
+		);
 	(databaseUrl ? it : it.skip).each([false, true])(
 		"maps only five approved Actions from ten to twelve, retaining validity and original revocation (reviewed repair: %s)",
 		async (reviewedRepair) => {

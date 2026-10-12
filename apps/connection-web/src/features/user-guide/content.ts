@@ -1,3 +1,5 @@
+import { providerGuideChapters } from "./provider-guides.ts";
+
 // One content source for the Connection page and exported Markdown manual.
 export type GuideSection = {
 	title: string;
@@ -30,7 +32,7 @@ export const guideChapters: GuideChapter[] = [
 				paragraphs: [],
 				steps: [
 					"打开团队提供的 Connection HTTPS 地址，登录控制台并确认公司身份。",
-					"在“我的 Connection”选择目标服务，检查是否需要先申请接入资格。",
+					"在“我的 Connection”选择目标服务。连接器默认关闭公司审批，可直接连接；仅管理员开启审批的服务需要先申请接入资格。",
 					"完成必要审批后，连接自己的外部账号并核对返回的账号名称。",
 					"选择客户端 Consumer 与当前账号，勾选所需 Action，阅读预览后确认授权。",
 					"按对应客户端的安装说明配置 Connection MCP，完成 OAuth 登录或引用获准 PAT。",
@@ -82,7 +84,7 @@ export const guideChapters: GuideChapter[] = [
 				paragraphs: [],
 				steps: [
 					"进入“我的 Connection”，选定服务及能力范围。",
-					"若显示申请或资格不足，先按下一章完成接入审批，不先提交外部 Credential。",
+					"审批关闭时直接连接自己的账号；审批开启且页面提示资格不足时，先按下一章完成接入审批，再提交外部 Credential。",
 					"使用页面实际提供的 OAuth、PAT/API Key 或账号密码表单。",
 					"OAuth 时核对目标服务和授权范围；手工凭证只填专用表单，不粘贴到聊天或 MCP 工具参数。",
 					"回到控制台检查外部账号标识、连接状态及能力范围，再授权 Consumer。",
@@ -99,17 +101,24 @@ export const guideChapters: GuideChapter[] = [
 	},
 	{
 		id: "04",
-		title: "前置接入审批与续期",
-		summary: "公司准入资格、Provider 鉴权和 Consumer 授权互不替代。",
+		title: "按连接器审批与续期",
+		summary: "默认直接连接；仅开启审批的连接器要求公司准入资格。",
 		sections: [
 			{
-				title: "申请前查看范围",
+				title: "先确认是否需要审批",
+				paragraphs: [
+					"现有及新增连接器默认关闭公司审批。关闭时可直接绑定自己的外部账号，不需要提交审批申请；Provider 身份验证和 Consumer/Action 授权仍须分别完成。共享账号的使用资格另行管理。",
+					"管理员在“审批管理”的连接器审批开关中按服务开启或关闭。开启后，已有直连账号若无有效审批资格也无法发起新调用；请按页面提示申请资格。关闭保留历史记录，旧审批资格到期不再单独阻止新调用；重新开启后，已过期资格不能继续使用。关闭不自动恢复已暂停或撤销的客户端授权，也不扩大账号权限或已选择的 Action。",
+				],
+			},
+			{
+				title: "开启审批后，申请前查看范围",
 				paragraphs: [
 					"管理员为 Provider 能力配置审批策略、能力包、顺序阶段、通过人数、有效期和免责声明。用户选择当前发布的能力范围并阅读说明；能力包修订不会将旧版批准自动扩张到新版本。",
 				],
 			},
 			{
-				title: "从申请到连接",
+				title: "开启审批后，从申请到连接",
 				paragraphs: [],
 				steps: [
 					"在服务的接入入口选择能力包并提交申请。",
@@ -122,7 +131,7 @@ export const guideChapters: GuideChapter[] = [
 			{
 				title: "资格到期与重新审批",
 				paragraphs: [
-					"有限期资格按页面提示在允许的续期窗口申请。续期待审期间原期限照常生效，过期后新调用停止；审批提前通过不损失原剩余时间。换号、能力范围变化、资格失效等按当前策略重新处理。",
+					"开启审批的连接器，其有限期资格按页面提示在允许的续期窗口申请。续期待审期间原期限照常生效，过期后新调用停止；审批提前通过不损失原剩余时间。换号、能力范围变化、资格失效等按当前策略重新处理。",
 					"管理员身份不自动产生审批通过权；员工不能自行审批自己的接入申请。审批通过不是外部账号身份验证，也不会建立 Consumer Grant。",
 				],
 			},
@@ -353,7 +362,7 @@ export const guideChapters: GuideChapter[] = [
 			{
 				title: "管理员职责",
 				paragraphs: [
-					"“审批管理”维护已发布的能力包、免责声明、审批策略和资格；“Agent 接入”管理获准 Consumer、实例、声明与固定回调；“共享 Connection”维护账号和员工资格；“管理员”管理角色。",
+					"“审批管理”顶部的“连接器审批设置”默认收起；展开后可搜索连接器、按审批状态筛选并分页查看，每页 15 条。该页面按连接器配置审批开关（默认关闭），并维护已发布的能力包、免责声明、审批策略和资格；“Agent 接入”管理获准 Consumer、实例、声明与固定回调；“共享 Connection”维护账号和员工资格；“管理员”管理角色。",
 					"管理员不凭角色取得其他用户账号或共享 Connection 使用资格，也不能替普通用户选择外部账号、授权或完成公司审批。",
 				],
 			},
@@ -378,7 +387,7 @@ export const guideChapters: GuideChapter[] = [
 					"无法登录：核对公司账号、公开 HTTPS 入口及认证服务提示。",
 					"服务不可用：核对发布状态、实际 Provider deployment 与目录提示。",
 					"不能连接：检查前置申请、资格有效期、能力包和 Provider 鉴权。",
-					"客户端没有能力：确认当前 Consumer、账号和 Action Grant，不把登录成功当作已授权。",
+					"客户端没有能力：确认当前 Consumer、账号和 Action Grant，不把登录成功当作已授权。若提示客户端尚未配置所需能力，请联系 Connection 管理员申请开通。管理员在“Agent 接入”注册后直接配置能力，也可点击“配置能力”查看和修改已保存的 Provider 与 Actions；该配置不会直接获得用户账号授权。",
 					"第二台设备重复登录失败：区分实例认证与 Provider 账号；不要拷贝 refresh token。",
 					"PAT 不可用：检查期限、撤销状态、对应 Consumer 和 Action 授权。",
 					"升级或重连失败：核对账号是否变化、scope、Credential 状态和任务要求。",
@@ -394,9 +403,13 @@ export const guideChapters: GuideChapter[] = [
 			},
 		],
 	},
+	...Object.values(providerGuideChapters),
 ];
 export function guideChapter(id: unknown) {
-	return guideChapters.find((item) => item.id === id) ?? guideChapters[0];
+	const chapterId = typeof id === "number" ? String(id).padStart(2, "0") : id;
+	return (
+		guideChapters.find((item) => item.id === chapterId) ?? guideChapters[0]
+	);
 }
 export function guideText(item: GuideChapter) {
 	return [
@@ -411,6 +424,8 @@ export function guideText(item: GuideChapter) {
 	].join(" ");
 }
 export function guideMarkdown() {
+	const markdownText = (text: string) =>
+		text.replace(/https?:\/\/[^\s，。；、）]+/g, (url) => `<${url}>`);
 	return (
 		"# Connection 使用说明书\n\n本说明与 Connection Web 共用一份内容，适用于 Connection 的当前产品流程。实际能力以部署发布目录及客户端验收为准。\n\n" +
 		guideChapters
@@ -421,9 +436,11 @@ export function guideMarkdown() {
 						.map(
 							(section) =>
 								`### ${section.title}\n\n` +
-								section.paragraphs.map((text) => text + "\n\n").join("") +
+								section.paragraphs
+									.map((text) => `${markdownText(text)}\n\n`)
+									.join("") +
 								(section.steps
-									?.map((text, i) => `${i + 1}. ${text}\n`)
+									?.map((text, i) => `${i + 1}. ${markdownText(text)}\n`)
 									.join("") ?? "") +
 								(section.steps ? "\n" : "") +
 								(section.code

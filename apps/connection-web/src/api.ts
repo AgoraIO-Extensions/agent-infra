@@ -158,6 +158,7 @@ export type PatConsumerProfile = {
 export type ConsumerDeclarationOptions = {
 	consumer: { id: string; name: string };
 	providers: Array<{
+		declaredActionVersionIds: string[];
 		actions: Array<{
 			description: string;
 			effect: "READ" | "WRITE";
@@ -246,6 +247,8 @@ const errorMessages: Record<string, string> = {
 	"connection.error.provider_reauthorization_required":
 		"外部账号需要重新授权，请重新连接后重试。",
 	"connection.error.resource_not_found": "无法访问该资源",
+	"connection.error.consumer_declaration_required":
+		"该客户端尚未配置所需能力，请联系管理员申请开通。",
 	"connection.error.result_uncertain": "请求结果暂时无法确认，请勿重复操作",
 	"connection.error.server_error": "Connection 服务暂时不可用",
 };

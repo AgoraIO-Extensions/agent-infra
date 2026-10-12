@@ -50,5 +50,11 @@ ProviderRelease、executor digest、Action schema 或权限，因此不会制造
 新版本仍使用的旧模块不能仅因旧运行版本下线就删除，清理规则见
 [版本生命周期](provider-release-lifecycle.md)。
 
+Bitbucket 当前入口选择 v9。`compare_refs` 的 `baseRef` 是基线、`targetRef` 是新版本：
+文件列表按 Bitbucket `compare/changes` 的 `from=target`、`to=base` 获取，正文按
+`diff` 的 `since=base`、`until=target` 输出。v9 修复旧版在线性历史上误报空列表的问题，
+不改变 Action schema、权限或调用参数；v8 及旧版本路由保留原实现。升级以 v8→v9 的精确
+兼容证据为准，历史空结果不能作为 API 未变化的可靠依据。
+
 `openconnector-kernel` 继续保存经审核的上游执行闭包。Connection 的账号、凭据、授权、数据库和审计
 仍由 Connection 自己管理；此目录调整不引入上游 Runtime Server 或动态 Provider Loader。

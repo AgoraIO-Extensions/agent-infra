@@ -3,145 +3,154 @@
 	"providers": [
 		{
 			"provider": "bitbucket",
-			"providerReleaseId": "bitbucket-server-6.7.2-openconnector-0618e8cdaeaaaa77e2eb23938ac639867d4f03d7-connection-v8",
-			"executorDigest": "sha256:36e421531152628f993691b6e61e4966dc84af4ad4fced71ab4b84f44b025b67",
+			"providerReleaseId": "bitbucket-server-6.7.2-openconnector-0618e8cdaeaaaa77e2eb23938ac639867d4f03d7-connection-v9",
+			"executorDigest": "sha256:eac2d28cad283ff9eeb2dd4788d58a9856006fcddd26b61b70d89a922b570a1b",
 			"sourceCommit": "0618e8cdaeaaaa77e2eb23938ac639867d4f03d7",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:9deee6f44245d17f8f2032f77d3f95051876c9659fcdfd6a0dfd935023e25f37",
 			"deploymentDigest": "sha256:b5d38d02634d6a373f46770153d328e317eddbab02cd675333af11eefd60a303",
 			"actions": [
 				{
-					"id": "bitbucket.approve_pull_request@v8",
+					"id": "bitbucket.approve_pull_request@v9",
 					"name": "bitbucket.approve_pull_request",
 					"authorizationDigest": "sha256:48a8bb8f3013ebb6b9ddcab9d0fd52c2e8b6f6e28010d7c26f30c1f8b827c880"
 				},
 				{
-					"id": "bitbucket.compare_refs@v8",
+					"id": "bitbucket.compare_refs@v9",
 					"name": "bitbucket.compare_refs",
 					"authorizationDigest": "sha256:05e750b7c0323f960504b26c854dfff1ca72c14868f2df8ab6cf4686d867ba70"
 				},
 				{
-					"id": "bitbucket.create_pull_request@v8",
+					"id": "bitbucket.create_pull_request@v9",
 					"name": "bitbucket.create_pull_request",
 					"authorizationDigest": "sha256:e76e76ece2802d0b1874975e8d2c902b6669e8e81f175c4e4676f461d692d60a"
 				},
 				{
-					"id": "bitbucket.create_pull_request_comment@v8",
+					"id": "bitbucket.create_pull_request_comment@v9",
 					"name": "bitbucket.create_pull_request_comment",
 					"authorizationDigest": "sha256:0649fbf55a2d100cd91c24fc1b23001d84ddbced72a0ff55f43a010c4ed1d4d7"
 				},
 				{
-					"id": "bitbucket.create_repository@v8",
+					"id": "bitbucket.create_repository@v9",
 					"name": "bitbucket.create_repository",
 					"authorizationDigest": "sha256:5c1430f3bee19c24df15c8c9a7a54aae071307ab844e7b411dc084e2673dbdda"
 				},
 				{
-					"id": "bitbucket.decline_pull_request@v8",
+					"id": "bitbucket.decline_pull_request@v9",
 					"name": "bitbucket.decline_pull_request",
 					"authorizationDigest": "sha256:36363cf540819bfd126039d70535834e9d7ccafae44f6cdc90d74a21b38baee8"
 				},
 				{
-					"id": "bitbucket.delete_pull_request_comment@v8",
+					"id": "bitbucket.delete_pull_request_comment@v9",
 					"name": "bitbucket.delete_pull_request_comment",
 					"authorizationDigest": "sha256:5091bce3f374fb9b614c40702d8de229b0ec22ceab7098feb64db7d96567702b"
 				},
 				{
-					"id": "bitbucket.get_commit@v8",
+					"id": "bitbucket.get_commit@v9",
 					"name": "bitbucket.get_commit",
 					"authorizationDigest": "sha256:41df8ed0cbfad7919c6b5126304d8a1459373b47424def1d403045d678b01025"
 				},
 				{
-					"id": "bitbucket.get_commit_build_status@v8",
+					"id": "bitbucket.get_commit_build_status@v9",
 					"name": "bitbucket.get_commit_build_status",
 					"authorizationDigest": "sha256:fdadd8edb9efb01757f807bf580ef5e83d2ea4e69f1778af51d35c295ff16452"
 				},
 				{
-					"id": "bitbucket.get_current_user@v8",
+					"id": "bitbucket.get_current_user@v9",
 					"name": "bitbucket.get_current_user",
 					"authorizationDigest": "sha256:29f763d8a8087116fbdd1329edc09cce13ab27c56a58d43165d4366673a9fda6"
 				},
 				{
-					"id": "bitbucket.get_project@v8",
+					"id": "bitbucket.get_project@v9",
 					"name": "bitbucket.get_project",
 					"authorizationDigest": "sha256:75af99cd151a8a756b19a2017f7a3bdcb461f00992d6a871ca327a3667dd68c2"
 				},
 				{
-					"id": "bitbucket.get_pull_request@v8",
+					"id": "bitbucket.get_pull_request@v9",
 					"name": "bitbucket.get_pull_request",
 					"authorizationDigest": "sha256:20bf3235f0777db0dad0ecd1f0c0bf4eebad2a9e67da01a020575b6f56458267"
 				},
 				{
-					"id": "bitbucket.get_pull_request_build_status@v8",
+					"id": "bitbucket.get_pull_request_build_status@v9",
 					"name": "bitbucket.get_pull_request_build_status",
 					"authorizationDigest": "sha256:e2bd231f87bf95ad9cbab651f01ac3df2629a432d1e553f0a327a7f10d0f80bd"
 				},
 				{
-					"id": "bitbucket.get_pull_request_comment@v8",
+					"id": "bitbucket.get_pull_request_comment@v9",
 					"name": "bitbucket.get_pull_request_comment",
 					"authorizationDigest": "sha256:0d0bd808458074ec522877dd425eeac5caa6db574accbf3b6ed8a4fbe74e0d58"
 				},
 				{
-					"id": "bitbucket.get_pull_request_diff@v8",
+					"id": "bitbucket.get_pull_request_diff@v9",
 					"name": "bitbucket.get_pull_request_diff",
 					"authorizationDigest": "sha256:1870e3b51084538ca2d8ad5a2c25ca887df84a45913029314ffacded738abefe"
 				},
 				{
-					"id": "bitbucket.get_repository@v8",
+					"id": "bitbucket.get_repository@v9",
 					"name": "bitbucket.get_repository",
 					"authorizationDigest": "sha256:3c765fa5de5892b21f6fb19920090acfe00f5c3884cfc279fa0acb25abd6f5af"
 				},
 				{
-					"id": "bitbucket.list_branches@v8",
+					"id": "bitbucket.list_branches@v9",
 					"name": "bitbucket.list_branches",
 					"authorizationDigest": "sha256:6727e44b037b704e4baeac8f8e94d3202c6f521af384f268b7d67db8bd55f607"
 				},
 				{
-					"id": "bitbucket.list_commits@v8",
+					"id": "bitbucket.list_commits@v9",
 					"name": "bitbucket.list_commits",
 					"authorizationDigest": "sha256:ed24284e7004d1a5c9d934dd2d510ce10ef4f123450e4dffcbf7b0ee3a3da77e"
 				},
 				{
-					"id": "bitbucket.list_projects@v8",
+					"id": "bitbucket.list_projects@v9",
 					"name": "bitbucket.list_projects",
 					"authorizationDigest": "sha256:965744cbab7b2becaf6a5ff1f07ecf265316e45be7c333196e94ad6499f655fd"
 				},
 				{
-					"id": "bitbucket.list_pull_request_comments@v8",
+					"id": "bitbucket.list_pull_request_comments@v9",
 					"name": "bitbucket.list_pull_request_comments",
 					"authorizationDigest": "sha256:6993c89cbfa46cc7789f758941e69d41db9898e004eab8b82a73c45dcf3ac5c4"
 				},
 				{
-					"id": "bitbucket.list_pull_requests@v8",
+					"id": "bitbucket.list_pull_requests@v9",
 					"name": "bitbucket.list_pull_requests",
 					"authorizationDigest": "sha256:9eb5d97d044ef5c4a7b7bfd024167ca077a81972de225942aae28c7e512d341a"
 				},
 				{
-					"id": "bitbucket.list_repositories@v8",
+					"id": "bitbucket.list_repositories@v9",
 					"name": "bitbucket.list_repositories",
 					"authorizationDigest": "sha256:e4541363511432b34aae93de05d0ce467b9e525a5369aa3b2794f37dcd90146e"
 				},
 				{
-					"id": "bitbucket.merge_pull_request@v8",
+					"id": "bitbucket.merge_pull_request@v9",
 					"name": "bitbucket.merge_pull_request",
 					"authorizationDigest": "sha256:550846cda3932e93503e387d5e8e7a49f761868db2eda639ec82ba124233433f"
 				},
 				{
-					"id": "bitbucket.reply_pull_request_comment@v8",
+					"id": "bitbucket.reply_pull_request_comment@v9",
 					"name": "bitbucket.reply_pull_request_comment",
 					"authorizationDigest": "sha256:a3a2dd8abaedd3c6a981a6528d756bdaca0c58ba2854a6ce6fc95d572f107e0b"
 				},
 				{
-					"id": "bitbucket.unapprove_pull_request@v8",
+					"id": "bitbucket.unapprove_pull_request@v9",
 					"name": "bitbucket.unapprove_pull_request",
 					"authorizationDigest": "sha256:431fe1f6a57955b7f238ede8c413b4f3d4ed163ace5fa6cb2f37716612fe9f42"
 				},
 				{
-					"id": "bitbucket.update_pull_request_comment@v8",
+					"id": "bitbucket.update_pull_request_comment@v9",
 					"name": "bitbucket.update_pull_request_comment",
 					"authorizationDigest": "sha256:4798ae9a13a44b86a2ba5ec4964e02186085be3ce1fd3df8ddedae7ae4d1b180"
 				}
 			],
 			"compatibility": [
+				{
+					"provider": "bitbucket",
+					"fromReleaseId": "bitbucket-server-6.7.2-openconnector-0618e8cdaeaaaa77e2eb23938ac639867d4f03d7-connection-v8",
+					"toReleaseId": "bitbucket-server-6.7.2-openconnector-0618e8cdaeaaaa77e2eb23938ac639867d4f03d7-connection-v9",
+					"fromExecutorDigest": "sha256:36e421531152628f993691b6e61e4966dc84af4ad4fced71ab4b84f44b025b67",
+					"toExecutorDigest": "sha256:eac2d28cad283ff9eeb2dd4788d58a9856006fcddd26b61b70d89a922b570a1b",
+					"rationale": "v9 corrects compare/changes from/to direction only; schemas, effects, scopes, endpoints, credential validation and account identity remain unchanged.",
+					"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/2008"
+				},
 				{
 					"provider": "bitbucket",
 					"fromReleaseId": "bitbucket-server-6.7.2-openconnector-0618e8cdaeaaaa77e2eb23938ac639867d4f03d7-connection-v7",

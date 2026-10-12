@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, Copy, PowerOff, SlidersHorizontal } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { connectionApi } from "../api";
 import { ConsoleShell, PageError } from "../shell";
@@ -8,6 +8,7 @@ import { EmptyState, PageHeader } from "../views";
 
 export function PatConsumersPage() {
 	const queryClient = useQueryClient();
+	const declarationEditor = useRef<HTMLElement>(null);
 	const [consumerId, setConsumerId] = useState("");
 	const [consumerName, setConsumerName] = useState("");
 	const [callbackUrl, setCallbackUrl] = useState("");
@@ -34,8 +35,9 @@ export function PatConsumersPage() {
 	});
 	const register = useMutation({
 		mutationFn: connectionApi.registerPatConsumer,
-		onSuccess: async ({ issued }) => {
+		onSuccess: async ({ issued }, input) => {
 			setIssuedSecret(issued.secret);
+			resetDeclarationEditor(input.consumerId);
 			await queryClient.invalidateQueries({ queryKey: ["pat-consumers"] });
 		},
 	});
@@ -65,14 +67,27 @@ export function PatConsumersPage() {
 				.find((item) => item.providerReleaseId === nextProviderReleaseId)
 				?.actions.map((action) => action.id) ?? [],
 		);
-		setSelectedActions((current) => {
-			const retained = [...current].filter((id) => availableIds.has(id));
-			return retained.length === current.size ? current : new Set(retained);
-		});
+		setSelectedActions(
+			new Set(
+				(
+					providers.find(
+						(item) => item.providerReleaseId === nextProviderReleaseId,
+					)?.declaredActionVersionIds ?? []
+				).filter((id) => availableIds.has(id)),
+			),
+		);
 	}, [declarationOptions.data, providerReleaseId]);
 	const provider = declarationOptions.data?.providers.find(
 		(item) => item.providerReleaseId === providerReleaseId,
 	);
+	useEffect(() => {
+		if (declarationConsumerId && declarationOptions.data) {
+			declarationEditor.current?.scrollIntoView?.({
+				block: "start",
+				behavior: "smooth",
+			});
+		}
+	}, [declarationConsumerId, declarationOptions.data]);
 	const visibleActions = useMemo(() => {
 		const query = actionQuery.trim().toLowerCase();
 		return (provider?.actions ?? []).filter(
@@ -89,7 +104,11 @@ export function PatConsumersPage() {
 				actionVersionIds: [...selectedActions].sort(),
 				providerReleaseId,
 			}),
-		onSuccess: () => resetDeclarationEditor(),
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({
+				queryKey: ["consumer-declaration-options", declarationConsumerId],
+			});
+		},
 	});
 
 	return (
@@ -103,6 +122,10 @@ export function PatConsumersPage() {
 			) : null}
 			{publish.isError ? <PageError error={publish.error} /> : null}
 			<section className="toolbar-section">
+				<p>
+					先注册
+					Agent，再配置它可以向用户申请的能力。配置不会直接授予用户账号权限。
+				</p>
 				<form
 					className="form-stack"
 					onSubmit={(event) => {
@@ -144,6 +167,7 @@ export function PatConsumersPage() {
 				{issuedSecret ? (
 					<div className="secret-callout" role="status">
 						<strong>服务凭据仅显示一次</strong>
+						<p>Agent 已注册，请继续在下方配置能力，完成后用户才能授权。</p>
 						<code>{issuedSecret}</code>
 						<button
 							className="button button-secondary"
@@ -159,13 +183,14 @@ export function PatConsumersPage() {
 			<section className="data-section">
 				{consumers.data?.consumers.length ? (
 					<div className="table-scroll">
-						<table className="management-table">
+						<table className="management-table agent-management-table">
 							<thead>
 								<tr>
 									<th>Agent</th>
 									<th>Consumer ID</th>
 									<th>Callback</th>
 									<th>状态</th>
+									<th>能力配置</th>
 									<th className="table-action">操作</th>
 								</tr>
 							</thead>
@@ -178,6 +203,15 @@ export function PatConsumersPage() {
 										</td>
 										<td>{consumer.callbackUrl}</td>
 										<td>{consumer.status === "ACTIVE" ? "启用" : "停用"}</td>
+										<td>
+											{consumer.status === "ACTIVE" ? (
+												<ConsumerCapabilitySummary
+													consumerId={consumer.consumerId}
+												/>
+											) : (
+												"—"
+											)}
+										</td>
 										<td className="table-action">
 											{consumer.status === "ACTIVE" ? (
 												<div className="row-actions">
@@ -216,11 +250,16 @@ export function PatConsumersPage() {
 				) : null}
 			</section>
 			{declarationConsumerId && declarationOptions.data ? (
-				<section className="data-section content-stack">
+				<section
+					className="data-section agent-capability-editor content-stack"
+					ref={declarationEditor}
+				>
 					<div className="section-heading">
 						<div>
 							<h2>配置 {declarationOptions.data.consumer.name} 能力</h2>
-							<p>Declaration 是可申请上限，不会直接授权外部账号。</p>
+							<p>
+								已保存的能力会自动勾选；这里配置可申请上限，不会直接授权用户账号。
+							</p>
 						</div>
 						<button
 							className="button button-secondary"
@@ -230,6 +269,11 @@ export function PatConsumersPage() {
 							关闭
 						</button>
 					</div>
+					<p role="status">
+						{provider?.declaredActionVersionIds.length
+							? `当前 Provider 已配置 ${provider.declaredActionVersionIds.length} 项能力。`
+							: "当前 Provider 未配置能力，用户暂时无法授权，请勾选后保存。"}
+					</p>
 					<div className="permission-controls">
 						<select
 							aria-label="Provider"
@@ -321,10 +365,34 @@ export function PatConsumersPage() {
 						disabled={selectedActions.size === 0 || publish.isPending}
 						onClick={() => publish.mutate()}
 					>
-						{publish.isPending ? "正在发布" : "发布 Declaration"}
+						{publish.isPending ? "正在保存" : "保存能力配置"}
 					</button>
 				</section>
 			) : null}
 		</ConsoleShell>
+	);
+}
+
+function ConsumerCapabilitySummary({ consumerId }: { consumerId: string }) {
+	const options = useQuery({
+		queryKey: ["consumer-declaration-options", consumerId],
+		queryFn: () => connectionApi.getConsumerDeclarationOptions(consumerId),
+	});
+	if (options.isPending) return <span>加载中…</span>;
+	if (options.isError) return <span>加载失败，请点击配置能力重试</span>;
+	const configured = options.data.providers.filter(
+		(provider) => provider.declaredActionVersionIds.length > 0,
+	);
+	return configured.length ? (
+		<span>
+			{configured
+				.map(
+					(provider) =>
+						`${provider.providerId} · ${provider.declaredActionVersionIds.length} 项`,
+				)
+				.join("；")}
+		</span>
+	) : (
+		<span>未配置能力，用户暂时无法授权</span>
 	);
 }

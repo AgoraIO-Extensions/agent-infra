@@ -92,6 +92,24 @@ Skills 使用 `needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-hum
 - 不提交聊天记录、调研过程、临时方案、个人路径或机器状态。
 - `archive/` 和 `research/` 保持本地且不进入 Git 历史。
 
+## Connection 用户文档同步
+
+Connection 用户可见功能发生变化时，同一 Issue/PR 必须检查并同步对应教程、帮助和 Agent 接入说明，
+包括操作步骤、默认值、权限与审批条件、错误恢复和实际页面入口。文案以当前 PRD/HLD 为准，
+不能把条件流程写成所有用户必经步骤。
+
+- 帮助页内容源：`apps/connection-web/src/features/user-guide/content.ts`；修改后运行
+  `pnpm --filter @agent-infra/connection-web guide:generate`，同步生成的
+  [用户手册](docs/guides/connection-user-manual.md)，并检查帮助页中的链接。
+- Codex 安装入口：`apps/connection-web/public/connection/index.html` 与
+  `apps/connection-web/public/llms.txt`。
+- 通用 Agent 接入入口：`apps/connection-web/public/connection/agent/index.html` 与
+  `apps/connection-web/public/connection/agent/llms.txt`；人读页面和机器说明都需核对。
+- 检查 README 导航及相关页面引导；变更路径时同步链接。适用的生成产物必须通过一致性校验。
+
+PR 描述列出已更新的文档入口；无需修改的入口说明原因。提交文档、生成产物和部署后的在线内容
+是不同结果，不得将本地修改描述为线上教程已更新。
+
 ## Current Validation Commands
 
 修改仓库内容后，从仓库根目录按顺序执行：

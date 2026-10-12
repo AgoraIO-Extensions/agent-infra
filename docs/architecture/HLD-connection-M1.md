@@ -1064,6 +1064,9 @@ type ConsumerActionDeclaration = {
 
 发布时验证所有 ActionVersion 当前存在、属于同一 ProviderRelease、Schema 可生成 MCP/OpenAPI、Consumer 类型允许对应 effect class。声明只限制 Consumer 可以请求的最大集合，不授予任何 Principal 的账号。
 管理员只能为当前 ACTIVE Consumer 发布 declaration；管理界面按 ProviderRelease 展示可声明 Action，提交时服务端重新校验非空、无重复、同一 ProviderRelease、状态为 `PUBLISHED`，不能接受浏览器提供的 effect、scope 或 digest。声明发布、替换和撤回都写 audit/outbox，并提升 `consumerRevision`。
+Agent 注册后直接接续能力配置；管理页展示各 Provider 的配置数量，编辑时回显当前已发布声明。
+合法授权预览在实例、账号资格、客户端状态及准入校验通过后，缺少匹配声明时明确提示联系管理员申请开通；
+非法或跨主体请求仍返回不可枚举的通用拒绝。客户端列表不因此隐藏条目。
 每个 `(consumerId, providerId)` 独立维护一个 current declaration；发布 GitHub declaration 不得替换
 Bitbucket declaration，反之亦然。`PUBLISHED` 只用于该 Provider 的 current declaration；它被同 Provider
 新 declaration 替换后变为 `SUPERSEDED`。`SUPERSEDED` 仅当被
