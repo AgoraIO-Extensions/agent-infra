@@ -5,6 +5,111 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
+import { createRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
+
+it("persists the first ACP Diff as a confirmed result file event", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-result-file-"));
+	const writeResult = vi.fn(
+		async (descriptor: {
+			name: string;
+			mediaType: string;
+			sizeBytes: number;
+			sha256: string;
+		}) =>
+			createRuntimeFileResultReceiptV1(
+				{
+					actorId: "actor-a",
+					channelId: "web",
+					agentId: "agent-a",
+					conversationId: "conversation-a",
+					executionId: "execution-a",
+					sessionGeneration: 1,
+					grantId: "grant-a",
+					expiresAt: Date.now() + 60_000,
+					inputFileIds: [],
+				},
+				{
+					schemaVersion: 1,
+					fileId: "result-file-acp",
+					kind: "result",
+					descriptor,
+					status: "available",
+					createdAt: new Date().toISOString(),
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+			),
+	);
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "result-file" },
+		}),
+	});
+	try {
+		const accepted = await driver.execute(
+			{
+				schemaVersion: 2,
+				kind: "submit-turn",
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-a",
+				turnId: "turn-a",
+				operationId: "operation-a",
+				input: { text: "synthetic input", attachments: [] },
+				selection: {
+					schemaVersion: 1,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			},
+			{
+				fileBridge: {
+					readInput: async () => {
+						throw new Error("unused");
+					},
+					writeResult,
+					revalidate: () => {},
+				},
+			},
+		);
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
+			).toBe("completed"),
+		);
+		expect(writeResult).toHaveBeenCalledOnce();
+		expect(
+			(await driver.replayEvents(accepted.nativeSessionRef, "execution-a"))
+				.filter((event) => event.type === "file")
+				.map((event) => event.payload),
+		).toEqual([
+			{
+				fileId: "result-file-acp",
+				name: "acp-result.txt",
+				mimeType: "text/plain",
+				sizeBytes: "ACP result file".length,
+			},
+		]);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
 
 it("persists a confirmed ACP result and events, then resumes the same session without resubmitting", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-driver-"));
@@ -491,7 +596,7 @@ it("probes ACP initialization and Session creation without prompting", async () 
 		).resolves.toMatchObject({
 			modelSelection: true,
 			attachments: false,
-			resultFiles: false,
+			resultFiles: true,
 			connection: false,
 			supplementaryInstruction: false,
 		});
@@ -530,7 +635,7 @@ it("advertises attachments only for an ACP peer that negotiates image input", as
 		).resolves.toMatchObject({
 			modelSelection: true,
 			attachments: true,
-			resultFiles: false,
+			resultFiles: true,
 			connection: false,
 			supplementaryInstruction: false,
 		});
@@ -754,7 +859,7 @@ it("does not advertise model selection from a current value without selectable v
 		).resolves.toMatchObject({
 			modelSelection: false,
 			attachments: false,
-			resultFiles: false,
+			resultFiles: true,
 			connection: false,
 			supplementaryInstruction: false,
 		});

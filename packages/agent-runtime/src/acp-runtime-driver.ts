@@ -74,6 +74,7 @@ export const GenericAcpRuntimeDriver = {
 			// readiness reports that negotiated fact per peer, and each request
 			// enforces it before reading bytes.
 			supportsAttachments: true,
+			supportsResultFiles: true,
 			attachmentsNegotiated: () => negotiatedImageInput === true,
 			cursorPrefix: "acp",
 			retireSession: retireAcpProcess,
@@ -158,6 +159,15 @@ export const GenericAcpRuntimeDriver = {
 							event.sessionUpdate === "tool_call" ||
 							event.sessionUpdate === "tool_call_update"
 						) {
+							if (event.status !== "failed") {
+								for (const content of event.content ?? []) {
+									if (content.type !== "diff") continue;
+									await session.resultFile?.({
+										path: content.path,
+										content: content.newText,
+									});
+								}
+							}
 							const phase =
 								event.status === "completed"
 									? "completed"
@@ -260,7 +270,7 @@ async function probeAcpReadiness(
 				// ACP image input is optional; advertise attachments only when the
 				// peer negotiated it during initialization.
 				attachments: session.supportsImagePrompt,
-				resultFiles: false,
+				resultFiles: true,
 				connection: false,
 				supplementaryInstruction: false,
 			} satisfies RuntimeCapabilitiesV1;
