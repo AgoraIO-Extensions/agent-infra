@@ -31,3 +31,23 @@ docker run --rm --publish 8080:8080 \
 key version、期限和主体授权 revision；授权文件每次请求回读，因此撤权和显式 key rotation
 可以在 Node 测试中复验。它只证明应用端合同语义，不提供 Gateway、LDAP、Kubernetes route/TLS
 或浏览器实现。
+
+`Dockerfile.platform-auth` 是同一 verifier 的 platform-managed identity sample image。它仍使用
+`self-managed` interaction mode，因为应用负责 Web 页面和 Session；平台身份只由 Auth Gateway
+经 `x-agent-infra-platform-context` Header 注入。启动时需要以下部署挂载或环境变量：
+
+- `PLATFORM_AUTH_PUBLIC_KEYS_FILE`：`0600` 普通文件，内容为 `{"keys":{"k1":"<Ed25519 public PEM>"}}`。
+- `PLATFORM_AUTH_AUTHORIZATION_FILE`：`0600` 普通文件，内容为 `{"users":[{"userId":"alice","authorizationRevision":"r1"}]}`。
+- `PLATFORM_AUTH_ISSUER` 和 `PLATFORM_AUTH_AGENT_ID`：与 Gateway 签发上下文一致。
+- 可选 `PLATFORM_AUTH_VERSION` 和 `PORT`（默认 `8080`）。
+
+构建时只使用本目录作为 Docker context：
+
+```bash
+docker build --build-arg SAMPLE_VERSION=sample-platform-auth \
+  --file tests/fixtures/custom-agent-web/Dockerfile.platform-auth \
+  --tag custom-agent-platform-auth:local tests/fixtures/custom-agent-web
+```
+
+这仍是 verifier fixture 和 image contract；固定 Digest、Gateway、LDAP、Kubernetes/TLS、真实
+浏览器和 key rotation 的生产验收需要独立证据。

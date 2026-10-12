@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { createPlatformAuthWebServer } from "./fixtures/custom-agent-web/platform-auth-server.mjs";
+import { fileURLToPath } from "node:url";
+import {
+	createPlatformAuthWebServer,
+	parsePublicKeyDocument,
+} from "./fixtures/custom-agent-web/platform-auth-server.mjs";
+
+const fixtureDirectory = dirname(fileURLToPath(import.meta.url));
 
 const encode = (value) =>
 	Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -76,6 +83,14 @@ test("platform-auth fixture verifies context, rotation and request-time revocati
 		});
 	try {
 		const valid = token(oldPair.privateKey, "k1", claims("k1", now));
+		const health = await fetch(`${origin}/healthz`, { redirect: "error" });
+		assert.equal(health.status, 200);
+		assert.deepEqual(await health.json(), {
+			status: "ready",
+			interactionMode: "self-managed",
+			identityResponsibility: "platform-managed",
+			version: "fixture-b",
+		});
 		const allowed = await request(valid, { "x-user-id": "forged" });
 		assert.equal(allowed.status, 200);
 		assert.match(await allowed.text(), /Authenticated platform Web for alice/);
@@ -128,4 +143,74 @@ test("platform-auth fixture verifies context, rotation and request-time revocati
 		);
 		await rm(directory, { recursive: true, force: true });
 	}
+});
+
+test("platform-auth sample image keeps the platform identity verifier contract explicit", async () => {
+	const dockerfile = await readFile(
+		join(
+			fixtureDirectory,
+			"fixtures/custom-agent-web/Dockerfile.platform-auth",
+		),
+		"utf8",
+	);
+	assert.match(dockerfile, /^FROM node@sha256:[a-f0-9]{64}$/m);
+	assert.match(
+		dockerfile,
+		/LABEL io\.agora\.agent\.runtime\.manifest='([^']+)'/,
+	);
+	const manifest = JSON.parse(
+		dockerfile.match(
+			/LABEL io\.agora\.agent\.runtime\.manifest='([^']+)'/,
+		)?.[1],
+	);
+	assert.deepEqual(manifest, {
+		schemaVersion: 1,
+		interactionMode: "self-managed",
+		service: { port: 8080 },
+		health: { path: "/healthz" },
+	});
+	assert.match(dockerfile, /COPY --chown=node:node platform-auth-server\.mjs/);
+	assert.match(
+		dockerfile,
+		/ENTRYPOINT \["node", "\/app\/platform-auth-server\.mjs"\]/,
+	);
+	assert.doesNotMatch(dockerfile, /custom-base-image|workload\/server/);
+	const pair = generateKeyPairSync("ed25519");
+	const publicKey = pair.publicKey.export({ type: "spki", format: "pem" });
+	assert.equal(
+		parsePublicKeyDocument({ keys: { k1: publicKey } }).get("k1")
+			.asymmetricKeyType,
+		"ed25519",
+	);
+	assert.throws(() =>
+		parsePublicKeyDocument({ keys: { k1: publicKey }, extra: true }),
+	);
+	assert.throws(() => parsePublicKeyDocument({ keys: { k1: "invalid" } }));
+
+	const entrypoint = join(
+		fixtureDirectory,
+		"fixtures/custom-agent-web/platform-auth-server.mjs",
+	);
+	const child = spawn(process.execPath, [entrypoint], {
+		env: Object.fromEntries(
+			Object.entries(process.env).filter(
+				([key]) =>
+					![
+						"PLATFORM_AUTH_PUBLIC_KEYS_FILE",
+						"PLATFORM_AUTH_AUTHORIZATION_FILE",
+						"PLATFORM_AUTH_ISSUER",
+						"PLATFORM_AUTH_AGENT_ID",
+					].includes(key),
+			),
+		),
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	let stderr = "";
+	child.stderr.on("data", (chunk) => (stderr += chunk));
+	const exitCode = await new Promise((resolve, reject) => {
+		child.once("error", reject);
+		child.once("close", resolve);
+	});
+	assert.equal(exitCode, 1);
+	assert.equal(stderr, "PLATFORM_AUTH_CONFIGURATION_REQUIRED\n");
 });
