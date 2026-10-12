@@ -180,6 +180,33 @@ describe("Execution-bound V4 in the production conversation adapter", () => {
 		}
 	});
 
+	it("requires signed readiness only on the last route resolution before submit (#2134)", async () => {
+		const h = runtimeV4Harness();
+		try {
+			const reference = await h.authorize();
+			const before = h.resolveRuntimeHost.mock.calls.length;
+			await h.runtime.runtimeHost.dispatch(h.request(reference));
+			const calls = h.resolveRuntimeHost.mock.calls
+				.slice(before)
+				.map(([input]) => input);
+			// 准备阶段三次解析加发送前一次复核，只有准备阶段最后一次要求完整签名 readiness。
+			expect(calls.map((input) => input.command)).toEqual([
+				"turn.submit",
+				"turn.submit",
+				"turn.submit",
+				"turn.submit",
+			]);
+			expect(calls.map((input) => input.reuseSignedReadiness)).toEqual([
+				true,
+				true,
+				undefined,
+				true,
+			]);
+		} finally {
+			h.runtime.close();
+		}
+	});
+
 	it.each([
 		"principal",
 		"source",
