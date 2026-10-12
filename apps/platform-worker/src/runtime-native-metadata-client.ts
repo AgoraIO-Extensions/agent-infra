@@ -3,6 +3,7 @@ import {
 	type RuntimeNativeMetadataReadRequestV1,
 	RuntimeNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataReadResponseV1Schema,
+	runtimeNativeMetadataRequestSigningPayloadV1,
 } from "@agent-infra/contracts/runtime";
 
 const maximumResponseBytes = 1_048_576;
@@ -94,11 +95,11 @@ export function createWorkerRuntimeNativeMetadataClientV1(options: {
 				const result = RuntimeNativeMetadataReadResponseV1Schema.parse(
 					JSON.parse(await responseText(response)),
 				);
+				const { projection: _projection, ...responseBinding } = result;
+				const { proof: _proof, ...requestBinding } = request;
 				if (
-					result.readId !== request.readId ||
-					result.selector !== request.selector ||
-					result.scope.executionId !== request.scope.executionId ||
-					result.originalHostScopeRef !== request.originalHostScopeRef
+					runtimeNativeMetadataRequestSigningPayloadV1(responseBinding) !==
+					runtimeNativeMetadataRequestSigningPayloadV1(requestBinding)
 				)
 					throw new Error("RUNTIME_NATIVE_METADATA_BINDING_INVALID");
 				return result;

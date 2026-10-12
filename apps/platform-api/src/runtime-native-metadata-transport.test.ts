@@ -108,4 +108,19 @@ describe("native metadata API → Worker → RuntimeHost transport", () => {
 			reader.read(identity, binding.scope.conversationId, "status"),
 		).resolves.toBeNull();
 	});
+
+	it("fails closed when RuntimeHost response crosses the principal binding", async () => {
+		const { reader } = setup({
+			response: {
+				...response,
+				scope: {
+					...response.scope,
+					principal: { kind: "user", id: "foreign-user" },
+				},
+			},
+		});
+		await expect(
+			reader.read(identity, binding.scope.conversationId, "status"),
+		).resolves.toBeNull();
+	});
 });
