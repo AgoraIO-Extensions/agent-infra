@@ -89,6 +89,7 @@ import type {
 	RuntimeExternalActionAuthorization,
 	RuntimeNativeSkillReadContextV1,
 	RuntimeNativeSkillReaderV1,
+	RuntimeOperationFactInputV1,
 } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
 import {
@@ -930,6 +931,16 @@ export class RuntimeHost {
 			revalidate: () =>
 				this.assertCurrentModelKey(originalAction, delivery.relayKey),
 		};
+	}
+
+	/**
+	 * Persist one metadata-only operation fact after the caller has completed
+	 * the existing external-action authorization handshake.
+	 */
+	async recordOperationFact(input: RuntimeOperationFactInputV1): Promise<void> {
+		this.trustedHost();
+		if (!this.options.driver.recordOperationFact) runtimeAuthorizationDenied();
+		await this.options.driver.recordOperationFact(input);
 	}
 
 	private async currentExternalActionAuthorization(
