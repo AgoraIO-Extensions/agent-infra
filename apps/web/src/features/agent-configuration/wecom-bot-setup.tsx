@@ -274,12 +274,9 @@ export function WecomBotSetup({
 				["WECom_QR_UNAVAILABLE", "WECom_QR_POPUP_UNAVAILABLE"].includes(
 					error.message,
 				);
+			if (qrUnavailable && session.current) await cancel(false);
 			if (submittedCredentials && session.current) {
 				// A lost response may follow a committed submission. Read the original session.
-				await poll(attempt);
-				return;
-			}
-			if (session.current && !(await cancel(false))) {
 				await poll(attempt);
 				return;
 			}
