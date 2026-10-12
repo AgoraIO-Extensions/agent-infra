@@ -1,0 +1,270 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { rehoboamV13ConnectionCatalog } from "./rehoboam-v13.ts";
+import {
+	continuationAction,
+	RehoboamV14Adapter,
+	rehoboamV14ConnectionCatalog,
+	repairAction,
+} from "./rehoboam-v14.ts";
+import { rehoboamV14ExecutorDigest } from "./rehoboam-v14-integrity.ts";
+
+const data = {
+	familyId: "family-1",
+	memberId: "member-1",
+	taskId: "update_dependency",
+	expectedRevision: 8,
+	templateSignature: "sha256:plan",
+	stage: "waiting_merge",
+	note: "Managed compilation passed; package not built",
+	prUrl: "https://github.com/example/sdk/pull/1",
+	validationUrl: "https://github.com/example/sdk/actions/runs/123",
+	sourceCommit: "a".repeat(40),
+	idempotencyKey: "repair-1",
+};
+const credential = { accessToken: "stored-pat" };
+
+test("v14 adds only explicit repair recording and keeps old action contracts", () => {
+	const hash = createHash("sha256");
+	for (const file of [
+		"rehoboam.ts",
+		"rehoboam-management.ts",
+		"rehoboam-v11.ts",
+		"rehoboam-v12.ts",
+		"rehoboam-v13.ts",
+		"rehoboam-v14.ts",
+	])
+		hash
+			.update(file)
+			.update("\0")
+			.update(readFileSync(new URL(file, import.meta.url)))
+			.update("\0");
+	assert.equal(rehoboamV14ExecutorDigest, `sha256:${hash.digest("hex")}`);
+	assert.equal(
+		rehoboamV14ConnectionCatalog.actions.length,
+		rehoboamV13ConnectionCatalog.actions.length + 2,
+	);
+	for (const old of rehoboamV13ConnectionCatalog.actions) {
+		const current = rehoboamV14ConnectionCatalog.actions.find(
+			(item) => item.name === old.name,
+		);
+		assert.ok(current);
+		assert.deepEqual(current.inputSchema, old.inputSchema);
+		assert.equal(current.effect, old.effect);
+		assert.deepEqual(current.requiredScopes, old.requiredScopes);
+	}
+});
+
+test("repair writes a fixed path with credential identity and leaves original task execution alone", async () => {
+	const sent: { url: string; init?: RequestInit }[] = [];
+	const adapter = new RehoboamV14Adapter(async (url, init) => {
+		sent.push({ url: String(url), init });
+		return Response.json({ data: { id: "family-1", revision: 9 } });
+	}, "gateway");
+	assert.equal(
+		(
+			await adapter.execute({
+				action: repairAction.name,
+				credential,
+				input: data,
+			})
+		).revision,
+		9,
+	);
+	assert.equal(sent.length, 1);
+	assert.equal(
+		sent[0]?.url,
+		"https://justinia.gz3.agoralab.co/mcp/v1/release-families/family-1/members/member-1/tasks/update_dependency/record",
+	);
+	const init = sent[0]?.init;
+	assert.equal(init?.redirect, "manual");
+	assert.equal(
+		new Headers(init?.headers).get("authorization"),
+		"Bearer stored-pat",
+	);
+	assert.equal(new Headers(init?.headers).get("Idempotency-Key"), "repair-1");
+	assert.deepEqual(JSON.parse(String(init?.body)), {
+		expected_revision: 8,
+		template_signature: "sha256:plan",
+		disposition: "repair_progress",
+		note: data.note,
+		repair_progress: {
+			stage: data.stage,
+			pr_url: data.prUrl,
+			validation_url: data.validationUrl,
+			source_commit: data.sourceCommit,
+		},
+	});
+	for (const invalid of [
+		{ ...data, actor: "someone-else" },
+		{ ...data, familyId: ".." },
+		{ ...data, expectedRevision: -1 },
+	])
+		await assert.rejects(
+			adapter.execute({
+				action: repairAction.name,
+				credential,
+				input: invalid,
+			}),
+			{ providerSubmissionOutcome: "rejected" },
+		);
+	assert.equal(sent.length, 1);
+});
+
+test("repair submission distinguishes conflicts from uncertain outcomes and never retries", async () => {
+	for (const [status, expected] of [
+		[
+			409,
+			{
+				providerSubmissionOutcome: "rejected",
+				providerCode: "family_revision_conflict",
+			},
+		],
+		[500, { submissionUncertain: true }],
+		[408, { submissionUncertain: true }],
+	] as const) {
+		let calls = 0;
+		const adapter = new RehoboamV14Adapter(async () => {
+			calls++;
+			return Response.json(
+				{ error: { code: "family_revision_conflict" } },
+				{ status },
+			);
+		}, "gateway");
+		await assert.rejects(
+			adapter.execute({ action: repairAction.name, credential, input: data }),
+			expected,
+		);
+		assert.equal(calls, 1);
+	}
+	const adapter = new RehoboamV14Adapter(async () => {
+		throw new Error("transport");
+	}, "gateway");
+	await assert.rejects(
+		adapter.execute({ action: repairAction.name, credential, input: data }),
+		{ submissionUncertain: true },
+	);
+});
+
+test("repair reads at most 64 KiB and cancels overflow before buffering the rest", async () => {
+	let pulled = 0;
+	let cancelled = false;
+	const stream = new ReadableStream<Uint8Array>(
+		{
+			pull(controller) {
+				pulled++;
+				controller.enqueue(new Uint8Array(pulled === 1 ? 32768 : 32769));
+			},
+			cancel() {
+				cancelled = true;
+			},
+		},
+		{ highWaterMark: 0 },
+	);
+	const response = new Response(stream);
+	response.text = async () => {
+		throw new Error("Unbounded text read forbidden");
+	};
+	const adapter = new RehoboamV14Adapter(async () => response, "gateway");
+	await assert.rejects(
+		adapter.execute({ action: repairAction.name, credential, input: data }),
+		{ submissionUncertain: true },
+	);
+	assert.equal(pulled, 2);
+	assert.equal(cancelled, true);
+	assert.equal(stream.locked, false);
+});
+
+test("all-stage non-code resolution accepts validation without inventing a PR or commit", async () => {
+	let submitted: Record<string, unknown> | undefined;
+	const adapter = new RehoboamV14Adapter(async (_url, init) => {
+		submitted = JSON.parse(String(init?.body));
+		return Response.json({ data: { id: "family-1" } });
+	}, "gateway");
+	const { prUrl: _pr, sourceCommit: _commit, ...generic } = data;
+	await adapter.execute({
+		action: repairAction.name,
+		credential,
+		input: { ...generic, stage: "resolved" },
+	});
+	assert.deepEqual(submitted?.repair_progress, {
+		stage: "resolved",
+		validation_url: data.validationUrl,
+	});
+	const { validationUrl: _url, ...missing } = generic;
+	await assert.rejects(
+		adapter.execute({
+			action: repairAction.name,
+			credential,
+			input: { ...missing, stage: "resolved" },
+		}),
+		{ providerSubmissionOutcome: "rejected" },
+	);
+});
+
+test("continuation is a bounded credential-authenticated READ with no request body or write key", async () => {
+	let sent: RequestInit | undefined;
+	let path: string | undefined;
+	const adapter = new RehoboamV14Adapter(async (url, init) => {
+		path = String(url);
+		sent = init;
+		return Response.json({
+			data: { replacement: { suggested_version: "4.5.3.6-build.8" } },
+		});
+	}, "gateway");
+	const result = await adapter.execute({
+		action: continuationAction.name,
+		credential,
+		input: { familyId: "family-1", memberId: "iris-1" },
+	});
+	assert.ok(result.replacement);
+	assert.equal(
+		path,
+		"https://justinia.gz3.agoralab.co/mcp/v1/release-families/family-1/members/iris-1/continuation",
+	);
+	assert.equal(sent?.method, "GET");
+	assert.equal(sent?.body, undefined);
+	assert.equal(new Headers(sent?.headers).get("Idempotency-Key"), null);
+	assert.deepEqual(continuationAction.requiredScopes, [
+		"rehoboam.release.read",
+	]);
+	await assert.rejects(
+		adapter.execute({
+			action: continuationAction.name,
+			credential,
+			input: { familyId: "..", memberId: "iris-1" },
+		}),
+	);
+});
+
+test("repair accepts an exact 64 KiB JSON response with split UTF-8 chunks", async () => {
+	const base = JSON.stringify({ data: { note: "修复", padding: "" } });
+	const bytes = Buffer.from(
+		JSON.stringify({
+			data: {
+				note: "修复",
+				padding: "x".repeat(65536 - Buffer.byteLength(base)),
+			},
+		}),
+	);
+	assert.equal(bytes.byteLength, 65536);
+	const split = bytes.indexOf(Buffer.from("修")) + 1;
+	const response = new Response(
+		new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(bytes.subarray(0, split));
+				controller.enqueue(bytes.subarray(split));
+				controller.close();
+			},
+		}),
+	);
+	const adapter = new RehoboamV14Adapter(async () => response, "gateway");
+	const result = await adapter.execute({
+		action: repairAction.name,
+		credential,
+		input: data,
+	});
+	assert.equal(result.note, "修复");
+});

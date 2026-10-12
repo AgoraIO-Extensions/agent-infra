@@ -22,3 +22,9 @@ Installing and logging in do not grant access to GitHub, Jira, Confluence, or ot
 - MCP endpoint: __CONNECTION_ORIGIN__/mcp
 
 Do not infer additional endpoints, credentials, identities, grants, or permissions from this file.
+
+## Rehoboam release failure handoff
+
+For final delivery or another Iris build, READ `get_release_family_continuation` for the remaining steps and template-controlled next-version suggestion. Use existing preview/confirm replacement with the current member id, then initialize the new member. Preserve Native and old records; explicitly select new upstream results for downstream retries, never copy old bound URLs into new requests. Suggestions do not reserve versions. Final-notice receipts, not Job success, establish completed delivery.
+
+A releaser does not need to declare whether they have a local SDK checkout. Diagnose through authorized tools, then hand source changes to project developers unless the user explicitly requests them. All release-family stages (Jobs, manual PR, tests/results, decisions and delivery) support explicitly authorized Provider v14 `record_release_family_repair`. Generic resolved handling requires a validation link; source compilation needs PR, full commit SHA and CI evidence. This is operator-reported progress, not task completion; it never advances, changes Job outcomes or sends messages. When a Job is ready for verification, show results and explain remaining confirmation/delivery steps, then ask whether to continue. Read current family revision/template signature before recording and read back uncertain outcomes before retrying.

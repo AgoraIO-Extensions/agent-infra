@@ -113,3 +113,9 @@ Per-user PAT Binding remains Direct MCP access. A platform representing the curr
 [Developer integration guide](__CONNECTION_ORIGIN__/connection/agent/)
 
 Open guide/console links in new tabs. Do not infer undocumented endpoints, credentials, identities or grants from this file.
+
+## Rehoboam release failure handoff
+
+Before final delivery or reissuing Iris, READ `get_release_family_continuation`. It returns remaining confirmation/delivery steps, a version suggestion from the live template separator/step and affected downstream tasks. Use existing preview/confirm replacement and initialize the new member; preserve Native, old versions and requests. Explicitly select new upstream results, not old bound URLs. A suggestion is not a reservation; final delivery requires the existing confirmed notice flow and receipt readback.
+
+Do not require users to declare a local checkout or assume source repair authority. Diagnose first, hand source changes to project developers unless explicitly requested. All release-family stages (Jobs, manual PR, tests/results, decisions and delivery) support explicitly authorized Provider v14 `record_release_family_repair` with current revision/template signature. Generic resolved handling requires validation evidence; compilation still needs PR/full commit/CI. This is operator-reported progress, not task completion. Show ready-for-verification Job results and remaining confirmation/delivery steps and ask whether to continue. Do not advance, change Job outcomes, send messages, merge or build packages through handoff recording. Confirm business writes; read back uncertain outcomes before retrying.
