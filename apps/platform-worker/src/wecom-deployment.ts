@@ -30,6 +30,12 @@ function requireWecomConfiguration(value: unknown): WecomConfiguration {
 			typeof configuration.setup.directory?.resolveUser !== "function"
 		)
 			throw new Error();
+		if (
+			configuration.mediaResolver !== undefined &&
+			(!configuration.mediaResolver ||
+				typeof configuration.mediaResolver.resolve !== "function")
+		)
+			throw new Error();
 		return configuration;
 	} catch {
 		throw new Error("WeCom Worker deployment dependencies are unavailable");
