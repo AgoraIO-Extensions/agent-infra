@@ -59,6 +59,17 @@ describe("Provider connect-time IP pinning", () => {
 					servername: (request.socket as TLSSocket).servername || undefined,
 					...(body ? { body } : {}),
 				});
+				if (request.url === "/content-length") {
+					response.setHeader("content-type", "application/json");
+					response.end(
+						JSON.stringify({
+							length: request.headers["content-length"] ?? null,
+							transfer: request.headers["transfer-encoding"] ?? null,
+							body,
+						}),
+					);
+					return;
+				}
 				if (request.url === "/response-lost") {
 					request.socket.destroy();
 					return;
@@ -111,6 +122,30 @@ describe("Provider connect-time IP pinning", () => {
 			expect(requests).toEqual([
 				{ host: new URL(origin).host, servername: "provider.test" },
 			]);
+		} finally {
+			await transport.close();
+		}
+	});
+
+	it("preserves the byte length of serialized JSON for length-bounded Provider APIs", async () => {
+		const transport = createPinnedProviderFetch({
+			origins: [origin],
+			privateOrigins: [origin],
+			lookup: async () => [{ address, family: 4 }],
+			ca,
+		});
+		const body = JSON.stringify({ comment: "测试申请", version: "test" });
+		try {
+			const response = await transport.fetch(`${origin}/content-length`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body,
+			});
+			expect(await response.json()).toEqual({
+				length: String(Buffer.byteLength(body)),
+				transfer: null,
+				body,
+			});
 		} finally {
 			await transport.close();
 		}

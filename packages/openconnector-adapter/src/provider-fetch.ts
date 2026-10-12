@@ -115,7 +115,8 @@ export function createPinnedProviderFetch(options: {
 		return undiciFetch(request.url, {
 			method: request.method,
 			headers,
-			body: request.body,
+			// Keep serialized JSON sized; converting it to a stream loses Content-Length.
+			body: typeof init?.body === "string" ? init.body : request.body,
 			duplex: "half",
 			signal: request.signal,
 			dispatcher,
