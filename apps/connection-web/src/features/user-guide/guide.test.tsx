@@ -8,9 +8,11 @@ import {
 } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guideChapter, guideText } from "./content";
+import snapshot from "../../../../../packages/openconnector-adapter/provider-release-snapshot.json";
+import { guideChapter, guideMarkdown, guideText } from "./content";
 import { ConnectionGuide } from "./guide";
 import { guideLinkParts } from "./links";
+import { providerGuideChapters, providerGuideHref } from "./provider-guides";
 
 beforeEach(() => {
 	Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -27,6 +29,30 @@ function Guide({ initial = "01" }: { initial?: string }) {
 	return <ConnectionGuide chapter={chapter} onChapterChange={setChapter} />;
 }
 describe("Connection manual", () => {
+	it("covers every released provider and opens credential entry links in a new tab", () => {
+		expect(Object.keys(providerGuideChapters).sort()).toEqual(
+			snapshot.providers.map((item) => item.provider).sort(),
+		);
+		for (const chapter of Object.values(providerGuideChapters)) {
+			expect(guideChapter(chapter.id)).toBe(chapter);
+			expect(guideMarkdown()).toContain(chapter.title);
+		}
+		expect(providerGuideHref("static-spaces")).toBe(
+			"/connection/help?chapter=24",
+		);
+		expect(guideChapter(24).id).toBe("24");
+		render(<Guide initial="24" />);
+		const article = screen.getByRole("article");
+		const settings = within(article).getByRole("link", {
+			name: "https://auth-static-spaces.sh3.agoralab.co/if/user/#/settings",
+		});
+		expect(settings.getAttribute("href")).toBe(
+			"https://auth-static-spaces.sh3.agoralab.co/if/user/#/settings",
+		);
+		expect(settings.getAttribute("target")).toBe("_blank");
+		expect(settings.getAttribute("rel")).toBe("noopener noreferrer");
+		expect(guideText(guideChapter("24"))).toContain("public 不代表匿名公开");
+	});
 	it("links page references and machine guides into separate tabs", () => {
 		render(<Guide initial="10" />);
 		const article = screen.getByRole("article");

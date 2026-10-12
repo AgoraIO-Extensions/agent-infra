@@ -41,6 +41,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../components/ui/dialog";
+import { providerGuideHref } from "../features/user-guide/provider-guides";
 import { useGithubOAuth } from "../github-oauth";
 import { ConsoleShell, PageError } from "../shell";
 import {
@@ -1847,6 +1848,13 @@ function ConnectorManagementWorkspace(props: {
 						<span>{connector?.category}</span>
 						<h2>{connector?.name}</h2>
 						<p>{connector?.description}</p>
+						<a
+							href={providerGuideHref(providerId)}
+							target="_blank"
+							rel="noopener noreferrer"
+						>
+							{connector?.name} 接入指南：凭据获取、授权与排障
+						</a>
 					</div>
 					{outdatedRequest ? (
 						<Button

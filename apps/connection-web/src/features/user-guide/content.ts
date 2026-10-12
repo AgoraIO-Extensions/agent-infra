@@ -1,3 +1,5 @@
+import { providerGuideChapters } from "./provider-guides.ts";
+
 // One content source for the Connection page and exported Markdown manual.
 export type GuideSection = {
 	title: string;
@@ -394,9 +396,13 @@ export const guideChapters: GuideChapter[] = [
 			},
 		],
 	},
+	...Object.values(providerGuideChapters),
 ];
 export function guideChapter(id: unknown) {
-	return guideChapters.find((item) => item.id === id) ?? guideChapters[0];
+	const chapterId = typeof id === "number" ? String(id).padStart(2, "0") : id;
+	return (
+		guideChapters.find((item) => item.id === chapterId) ?? guideChapters[0]
+	);
 }
 export function guideText(item: GuideChapter) {
 	return [
@@ -411,6 +417,8 @@ export function guideText(item: GuideChapter) {
 	].join(" ");
 }
 export function guideMarkdown() {
+	const markdownText = (text: string) =>
+		text.replace(/https?:\/\/[^\s，。；、）]+/g, (url) => `<${url}>`);
 	return (
 		"# Connection 使用说明书\n\n本说明与 Connection Web 共用一份内容，适用于 Connection 的当前产品流程。实际能力以部署发布目录及客户端验收为准。\n\n" +
 		guideChapters
@@ -421,9 +429,11 @@ export function guideMarkdown() {
 						.map(
 							(section) =>
 								`### ${section.title}\n\n` +
-								section.paragraphs.map((text) => text + "\n\n").join("") +
+								section.paragraphs
+									.map((text) => `${markdownText(text)}\n\n`)
+									.join("") +
 								(section.steps
-									?.map((text, i) => `${i + 1}. ${text}\n`)
+									?.map((text, i) => `${i + 1}. ${markdownText(text)}\n`)
 									.join("") ?? "") +
 								(section.steps ? "\n" : "") +
 								(section.code
