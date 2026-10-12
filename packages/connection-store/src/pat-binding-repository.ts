@@ -137,7 +137,7 @@ export class PostgresConnectionPatBindingRepository
 		expiresAt: Date;
 		instanceId: string;
 		name: string;
-		principalHintHash: string;
+		principalHintHash: string | null;
 		stateHash: string;
 	}) {
 		await this.sql.begin(async (sql) => {
@@ -223,6 +223,7 @@ export class PostgresConnectionPatBindingRepository
 
 	async confirmPersonalAccessTokenBinding(input: {
 		browserSessionHash: string;
+		expectedPrincipalId?: string;
 		protectedToken: string;
 		stateHash: string;
 		tokenHash: string;
@@ -242,7 +243,7 @@ export class PostgresConnectionPatBindingRepository
 					consumer_name: string;
 					instance_id: string;
 					name: string;
-					principal_hint_hash: string;
+					principal_hint_hash: string | null;
 				}[]
 			>`
 				SELECT
@@ -268,6 +269,17 @@ export class PostgresConnectionPatBindingRepository
 					404,
 				);
 			}
+			if (
+				(input.expectedPrincipalId !== undefined &&
+					input.expectedPrincipalId !== browserSession.principal_id) ||
+				(binding.principal_hint_hash === null && !input.expectedPrincipalId)
+			) {
+				throw new OAuthProtocolError(
+					"access_denied",
+					"Connection account changed; reopen the authorization page",
+					403,
+				);
+			}
 			const currentPrincipalHintHash = createHash("sha256")
 				.update(
 					String(browserSession.email ?? "")
@@ -276,7 +288,10 @@ export class PostgresConnectionPatBindingRepository
 					"utf8",
 				)
 				.digest("hex");
-			if (currentPrincipalHintHash !== binding.principal_hint_hash) {
+			if (
+				binding.principal_hint_hash !== null &&
+				currentPrincipalHintHash !== binding.principal_hint_hash
+			) {
 				throw new OAuthProtocolError(
 					"access_denied",
 					"PAT binding belongs to another account",
@@ -352,6 +367,9 @@ export class PostgresConnectionPatBindingRepository
 		return this.sql.begin(async (sql) => {
 			const [binding] = await sql<
 				{
+					principal_id: string;
+					email: string | null;
+					display_name: string;
 					consumer_id: string;
 					expires_at: Date;
 					name: string;
@@ -360,6 +378,7 @@ export class PostgresConnectionPatBindingRepository
 				}[]
 			>`
 				SELECT
+					principal.id AS principal_id, principal.email, principal.display_name,
 					binding.consumer_id,
 					token.expires_at,
 					token.name,
@@ -368,13 +387,29 @@ export class PostgresConnectionPatBindingRepository
 				FROM connection_pat_binding_sessions binding
 				JOIN connection_personal_access_tokens token
 					ON token.id = binding.token_id
+					AND token.consumer_id = binding.consumer_id
+					AND token.instance_id = binding.instance_id
+				JOIN connection_principals principal ON principal.id = token.principal_id
+					AND principal.status = 'ACTIVE'
+				JOIN connection_consumer_instances instance ON instance.id = token.instance_id
+					AND instance.principal_id = principal.id AND instance.consumer_id = binding.consumer_id
+					AND instance.kind = 'TOKEN' AND instance.status = 'ACTIVE'
+				JOIN connection_consumers consumer ON consumer.id = binding.consumer_id
+					AND consumer.status = 'ACTIVE'
+				JOIN connection_pat_consumer_profiles profile ON profile.consumer_id = consumer.id
+					AND profile.status = 'ACTIVE'
+				CROSS JOIN connection_recovery_control recovery
 				WHERE binding.id = ${input.bindingId}
 					AND binding.consumer_id = ${input.consumerId}
 					AND binding.status = 'ISSUED'
 					AND binding.expires_at > now()
 					AND token.revoked_at IS NULL
 					AND token.expires_at > now()
+					AND token.recovery_generation = recovery.generation
+					AND EXISTS (SELECT 1 FROM connection_principal_identities identity
+						WHERE identity.principal_id = principal.id AND identity.status = 'ACTIVE')
 				FOR UPDATE OF binding
+				FOR SHARE OF token, principal, instance, consumer, profile, recovery
 			`;
 			if (!binding) {
 				throw new OAuthProtocolError(
@@ -388,6 +423,11 @@ export class PostgresConnectionPatBindingRepository
 				WHERE id = ${input.bindingId}
 			`;
 			return {
+				account: {
+					id: binding.principal_id,
+					email: binding.email,
+					displayName: binding.display_name,
+				},
 				consumerId: binding.consumer_id,
 				expiresAt: binding.expires_at,
 				name: binding.name,

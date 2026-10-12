@@ -258,6 +258,7 @@ export const guideChapters: GuideChapter[] = [
 				title: "通用与具名 PAT",
 				paragraphs: [
 					"通用 PAT 使用内建 Portable PAT Consumer；获准的具名 MCP Consumer 可以通过固定回调和单次领取流程绑定自己的 PAT。调用方自报产品名称或 Consumer ID 不会改变身份。",
+					"具名客户端可不提供预期邮箱，由用户登录 Connection 后确认关联当前账号；若客户端提供预期邮箱，则必须一致。确认页展示账号及将交付客户端后端的用户标识、邮箱和显示名，Token 只交付后端。业务系统必须隔离各用户的 Token，已有连接无需重新绑定。",
 					"同一枚 PAT 可以部署到多个消费端，但它们共享同一个撤销和审计边界；需要逐端独立撤销或追溯时分别签发命名 PAT。PAT 不包含外部账号原始 Credential。",
 				],
 			},

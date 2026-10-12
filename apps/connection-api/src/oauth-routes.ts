@@ -238,6 +238,7 @@ ${
 }
 
 function patBindingPage(input: {
+	account: { displayName: string; email?: string | null; principalId: string };
 	consumerName: string;
 	expiresAt: Date;
 	name: string;
@@ -264,11 +265,14 @@ button:hover { background: #14532d; }
 <body>
 <main>
 <h1>授权 ${html(input.consumerName)}</h1>
+<p>当前 Connection 账号：<strong>${html(input.account.displayName)}</strong>${input.account.email ? `（${html(input.account.email)}）` : ""}。</p>
+<p>请确认将此账号关联到 ${html(input.consumerName)}。客户端后端将获得该账号的稳定标识、邮箱和显示名。</p>
 <p>将为当前 Connection 账号签发独立访问令牌：<strong>${html(input.name)}</strong>。</p>
 <p>该令牌可以使用你已授权给 ${html(input.consumerName)} 的多个连接器；外部账号凭据不会交给客户端。</p>
 <p>本链接将在 ${html(input.expiresAt.toISOString())} 失效。</p>
 <form method="post" action="/connection/pat-bindings/confirm">
 <input type="hidden" name="state" value="${html(input.state)}">
+<input type="hidden" name="expectedPrincipalId" value="${html(input.account.principalId)}">
 <button type="submit">确认并返回 ${html(input.consumerName)}</button>
 </form>
 </main>
@@ -769,7 +773,10 @@ export function createConnectionOAuthApp(
 			) ||
 			typeof body.consumerId !== "string" ||
 			typeof body.name !== "string" ||
-			typeof body.principalHint !== "string"
+			("principalHint" in body &&
+				(typeof body.principalHint !== "string" ||
+					body.principalHint.trim().length < 3 ||
+					body.principalHint.trim().length > 320))
 		) {
 			throw new OAuthProtocolError("invalid_request", "Invalid JSON body");
 		}
@@ -785,7 +792,7 @@ export function createConnectionOAuthApp(
 				options.service.createPersonalAccessTokenBinding({
 					consumerId: body.consumerId as string,
 					name: body.name as string,
-					principalHint: body.principalHint as string,
+					principalHint: body.principalHint as string | undefined,
 					secret: bearerSecret(context),
 				}),
 		);
@@ -819,6 +826,7 @@ export function createConnectionOAuthApp(
 		});
 		return context.html(
 			patBindingPage({
+				account: session.account,
 				consumerName: binding.consumerName,
 				expiresAt: binding.expiresAt,
 				name: binding.name,
@@ -841,6 +849,7 @@ export function createConnectionOAuthApp(
 			return context.redirect(login.toString(), 302);
 		}
 		const confirmed = await options.service.confirmPersonalAccessTokenBinding({
+			expectedPrincipalId: formValue(form, "expectedPrincipalId") || undefined,
 			sessionToken: session.sessionToken,
 			state,
 		});

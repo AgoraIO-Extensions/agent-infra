@@ -330,6 +330,13 @@
       "when": 1791763200001,
       "tag": "0046_static_spaces_full_admission",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1791792000000,
+      "tag": "0047_optional_pat_binding_hint",
+      "breakpoints": true
     }
   ]
 }

@@ -51,7 +51,7 @@
 
       <section class="install" aria-labelledby="binding-title">
         <h2 id="binding-title">3. 实现“连接 Connection”与授权回跳</h2>
-        <p><strong>发起绑定：</strong>用户在你的产品登录后，后端从可信登录态取得当前用户的公司邮箱，用服务凭据发送以下请求。<code>principalHint</code> 必须匹配用户登录 Connection 后的账号邮箱（去除首尾空格并转小写）；它只是匹配提示，不能替代 Connection 的身份验证。</p>
+        <p><strong>发起绑定：</strong>用户在你的产品登录后，后端用服务凭据发送以下请求，并保存绑定与原发起用户、会话及实例的关联。<code>principalHint</code> 可省略；省略时由用户确认关联当前 Connection 账号，不要求两边账号属于同一人。如业务需要校验邮箱一致，可从可信登录态取得公司邮箱作为 <code>principalHint</code>；提供时必须匹配 Connection 账号邮箱（去除首尾空格并转小写），不能传空白、null 或非法类型。</p>
         <pre><code>POST __CONNECTION_ORIGIN__/api/v1/connection/pat-bindings
 Authorization: Bearer &lt;Agent 服务凭据&gt;
 Content-Type: application/json
@@ -59,11 +59,10 @@ Idempotency-Key: &lt;本次创建操作的 UUID&gt;
 
 {
   "consumerId": "my-agent",
-  "name": "my-agent-default",
-  "principalHint": "&lt;当前已登录用户的公司邮箱&gt;"
+  "name": "my-agent-default"
 }</code></pre>
         <p>成功返回 HTTP 201，包含 <code>bindingId</code>、<code>authorizationUrl</code> 和 <code>expiresAt</code>。后端保存 <code>bindingId → 当前产品用户/会话/实例</code> 的关联，再让用户在新 tab 打开返回的 <code>authorizationUrl</code>。不要自行拼授权 URL，也不要把浏览器提交的用户 ID 当作身份权威。</p>
-        <p><strong>用户确认：</strong>用户在 Connection 登录后会看到“授权 My Agent”页面，展示客户端名称、令牌名称和链接有效期。点击“确认并返回 My Agent”后，Connection 创建该用户、该 Consumer 的独立实例与 PAT，并以 HTTP 303 回到已注册地址：</p>
+        <p><strong>用户确认：</strong>用户在 Connection 登录后会看到“授权 My Agent”页面，展示当前 Connection 账号、客户端名称、令牌名称、链接有效期及将交付客户端后端的账号信息。点击“确认并返回 My Agent”后，Connection 创建该用户、该 Consumer 的独立实例与 PAT，并以 HTTP 303 回到已注册地址：</p>
         <pre><code>https://agent.example/connection/callback?binding_id=&lt;bindingId&gt;</code></pre>
         <p><strong>服务端领取：</strong>回调必须验证 <code>binding_id</code> 属于原来发起绑定的用户、会话和实例；不要接受任意 ID 后给当前用户绑定。后端使用同一 Consumer 的服务凭据领取：</p>
         <pre><code>POST __CONNECTION_ORIGIN__/api/v1/connection/pat-bindings/&lt;bindingId&gt;/claim
@@ -72,7 +71,7 @@ Content-Type: application/json
 Idempotency-Key: &lt;本次领取操作的另一个 UUID&gt;
 
 {"consumerId": "my-agent"}</code></pre>
-        <p>成功响应的 <code>issued</code> 对象包含 <code>consumerId</code>、<code>expiresAt</code>、<code>name</code>、<code>token</code> 和 <code>tokenId</code>。将 <code>issued.token</code> 加密保存在对应产品用户和实例的后端 Secret，记录 <code>tokenId</code> 与令牌 <code>expiresAt</code>，回调页面只显示连接状态。</p>
+        <p>成功响应的 <code>issued</code> 对象保留 <code>consumerId</code>、<code>expiresAt</code>、<code>name</code>、<code>token</code> 和 <code>tokenId</code>，并增加 <code>account</code>：<code>id</code> 是该 PAT 对应的稳定 Connection 用户标识，<code>email</code> 是当前邮箱（可能为 null），<code>displayName</code> 是显示名。将 Token 加密保存在原发起产品用户和实例的后端 Secret，逐用户隔离；页面可显示关联账号邮箱及显示名，但不得展示 Token。邮箱不能作为稳定身份键或两边同人的证明。旧客户端可继续传提示并使用原返回字段，无需重新绑定。</p>
         <p>绑定链接当前有效期为 10 分钟，确认与领取都必须在返回的有效期内完成；PAT 的有效期以 <code>issued.expiresAt</code> 为准。领取只能成功一次，回调 URL 不携带 PAT。创建和领取使用不同的 Idempotency-Key；同一操作保持原 key 和参数，但不能依赖重放重新取回一次性 Secret。过期、已领取或响应丢失时，不循环领取或换 key 猜测重试，向用户说明并重新发起绑定；已签发的旧令牌可在<a href="/connection/tokens" target="_blank" rel="noopener noreferrer">访问令牌</a>页撤销。</p>
       </section>
 

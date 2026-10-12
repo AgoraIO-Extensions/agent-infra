@@ -2229,6 +2229,11 @@ describe("Connection API", () => {
 			) => {
 				seen.push({ operation: "claim", ...input });
 				return {
+					account: {
+						id: "principal-alice",
+						email: "alice@example.invalid",
+						displayName: "Alice",
+					},
 					consumerId: "consumer-rehoboam-ai",
 					expiresAt: new Date("2026-12-01T00:00:00.000Z"),
 					name: "Alice / Agent A",
@@ -2297,6 +2302,45 @@ describe("Connection API", () => {
 		});
 		expect(created.status).toBe(201);
 		expect(JSON.stringify(await created.json())).not.toContain(pat);
+		const createdWithoutHint = await app.request(
+			"/api/v1/connection/pat-bindings",
+			{
+				method: "POST",
+				body: JSON.stringify({
+					consumerId: "consumer-rehoboam-ai",
+					name: "No email available",
+				}),
+				headers: {
+					authorization: "Bearer binding-secret",
+					"content-type": "application/json",
+					"idempotency-key": "create-binding-without-hint",
+				},
+			},
+		);
+		expect(createdWithoutHint.status).toBe(201);
+		expect(seen).toContainEqual({
+			operation: "create",
+			consumerId: "consumer-rehoboam-ai",
+			name: "No email available",
+			principalHint: undefined,
+			secret: "binding-secret",
+		});
+		for (const principalHint of [null, 123, "", "   ", "x".repeat(321)]) {
+			const invalid = await app.request("/api/v1/connection/pat-bindings", {
+				method: "POST",
+				body: JSON.stringify({
+					consumerId: "consumer-rehoboam-ai",
+					name: "Invalid hint",
+					principalHint,
+				}),
+				headers: {
+					authorization: "Bearer binding-secret",
+					"content-type": "application/json",
+					"idempotency-key": "invalid-hint",
+				},
+			});
+			expect(invalid.status).toBe(400);
+		}
 
 		const anonymous = await app.request(`/connection/pat-bindings/${state}`);
 		expect(anonymous.status).toBe(302);
@@ -2313,11 +2357,22 @@ describe("Connection API", () => {
 		);
 		const pageHtml = await page.text();
 		expect(pageHtml).toContain("Alice / Agent A");
+		expect(pageHtml).toContain("当前 Connection 账号");
+		expect(pageHtml).toContain("alice@example.invalid");
+		expect(pageHtml).toContain(
+			'name="expectedPrincipalId" value="principal-alice"',
+		);
+		expect(pageHtml).toContain(
+			"客户端后端将获得该账号的稳定标识、邮箱和显示名",
+		);
 		expect(pageHtml).toContain("确认并返回 Connection E2E Reviewer");
 		expect(pageHtml).not.toContain("确认并返回 RehoboamAI");
 
 		const confirmed = await app.request("/connection/pat-bindings/confirm", {
-			body: new URLSearchParams({ state }),
+			body: new URLSearchParams({
+				state,
+				expectedPrincipalId: "principal-alice",
+			}),
 			headers: {
 				"content-type": "application/x-www-form-urlencoded",
 				cookie: `connection_session=${sessionToken}`,
@@ -2345,7 +2400,15 @@ describe("Connection API", () => {
 		);
 		expect(claimed.status).toBe(200);
 		expect(await claimed.json()).toMatchObject({
-			issued: { consumerId: "consumer-rehoboam-ai", token: pat },
+			issued: {
+				consumerId: "consumer-rehoboam-ai",
+				token: pat,
+				account: {
+					id: "principal-alice",
+					email: "alice@example.invalid",
+					displayName: "Alice",
+				},
+			},
 		});
 		expect(seen).toEqual(
 			expect.arrayContaining([

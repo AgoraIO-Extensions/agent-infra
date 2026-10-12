@@ -158,6 +158,10 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 
 ### 6.4 Connection PAT
 
+- 具名客户端可由用户显式关联当前 Connection 账号，无需业务系统提前提供邮箱。
+  如业务系统提供预期邮箱，则关联时校验一致；关联不同账号不代表两边身份相同。
+  确认前展示当前账号和将交付客户端的账号信息，客户端按业务用户独立保存和使用访问令牌。
+
 - 用户先在 Connection 的 HTTPS 登录页完成公司 LDAP 登录，再从已认证控制台为 PAT 命名和签发；
   PAT 表单不再次收集 LDAP 密码。LDAP 密码不进入 PAT、Consumer 配置、日志或数据库。
 - 浏览器会话使用高熵 opaque Cookie，明文只存在于 HttpOnly Cookie，PostgreSQL 只保存 hash、
