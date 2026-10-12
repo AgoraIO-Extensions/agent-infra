@@ -2367,14 +2367,14 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		},
 	);
 
-	it("rejects releasing a Turn that was claimed for recovery (#1522)", async () => {
+	it("rejects releasing a processing Turn that was claimed for recovery (#1522)", async () => {
 		const work = await seed();
 		const claimed = await claim(work.itemId);
 		try {
 			if (claimed.decision.outcome !== "claimed")
 				throw new Error("Expected claim");
 			const before = await dispatchState(work);
-			for (const executionStatus of ["unknown", "processing"] as const)
+			for (const executionStatus of ["processing"] as const)
 				await expect(
 					claimed.store.releaseUnsentDispatch({
 						claim: { ...claimed.decision.claim, executionStatus },
@@ -2383,6 +2383,37 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 					}),
 				).rejects.toThrow("Conversation dispatch release is invalid");
 			expect(await dispatchState(work)).toEqual(before);
+		} finally {
+			await claimed.store.close();
+		}
+	});
+
+	it("releases an unknown Turn after recovery proves the submit was never found", async () => {
+		const work = await seed();
+		const claimed = await claim(work.itemId);
+		try {
+			if (claimed.decision.outcome !== "claimed")
+				throw new Error("Expected claim");
+			const original = claimed.decision.claim;
+			expect(
+				await claimed.store.prepareRuntimeDispatch({
+					claim: original,
+					leaseDurationMs: 30_000,
+				}),
+			).toBe(true);
+			const prepared = {
+				...original,
+				executionStatus: "unknown" as const,
+			};
+			expect(
+				await claimed.store.releaseUnsentDispatch({
+					claim: prepared,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_ACCEPTANCE_NOT_SENT",
+				}),
+			).toBe(true);
+			const restored = await dispatchState(work);
+			expect(restored?.execution_status).toBe("submitted");
 		} finally {
 			await claimed.store.close();
 		}

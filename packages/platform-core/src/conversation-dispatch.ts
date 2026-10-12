@@ -1135,6 +1135,38 @@ export function createConversationDispatchUseCaseV1(
 						if (!(await dispatchHeartbeat.stop())) {
 							return { schemaVersion: 1, outcome: "stale" };
 						}
+						if (
+							!claim.stopPending &&
+							!authority.controlOnly &&
+							!claim.metadataRecovery &&
+							(claim.operation === "conversation.turn.submit.v1" ||
+								claim.operation === "conversation.turn.regenerate.v1")
+						) {
+							if (!dependencies.store.releaseUnsentDispatch)
+								return retry(
+									dependencies.store,
+									claim,
+									retryDelayMs,
+									"RUNTIME_ACCEPTANCE_UNKNOWN",
+									"unknown",
+									retryTransition(claim),
+								);
+							try {
+								return (await dependencies.store.releaseUnsentDispatch({
+									claim,
+									retryDelayMs,
+									errorCode: "RUNTIME_ACCEPTANCE_NOT_SENT",
+								}))
+									? { schemaVersion: 1, outcome: "retry", retryScheduled: true }
+									: { schemaVersion: 1, outcome: "stale" };
+							} catch {
+								return {
+									schemaVersion: 1,
+									outcome: "retry",
+									retryScheduled: false,
+								};
+							}
+						}
 						if (!claim.stopPending)
 							return retry(
 								dependencies.store,
