@@ -599,6 +599,7 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 		status: "completed" | "unknown";
 		authorizationUrl?: string;
 		authorizationExpiresAt?: number;
+		callbackStateHash?: string;
 	}): Promise<boolean> {
 		try {
 			const result = await this.#database.transaction(async (tx) => {
@@ -638,18 +639,44 @@ export class PostgresConnectionInstallationAuthorizationTransactionV1
 					effectiveStatus === "completed" &&
 					command.command === "begin"
 				) {
-					const state = parseAuthorizationRedirect(
-						input.authorizationUrl,
-						this.#configuration,
-						input.authorizationExpiresAt,
-					);
+					let callbackStateHash: string;
+					if (this.#configuration.patBinding) {
+						if (
+							!input.callbackStateHash ||
+							!/^[a-f0-9]{64}$/.test(input.callbackStateHash)
+						)
+							throw new ConnectionInstallationErrorV1("invalid_input");
+						const authorizationUrl = new URL(input.authorizationUrl);
+						const issuer = new URL(this.#configuration.issuer);
+						if (
+							authorizationUrl.protocol !== "https:" ||
+							authorizationUrl.origin !== issuer.origin ||
+							authorizationUrl.username ||
+							authorizationUrl.password ||
+							authorizationUrl.hash ||
+							!authorizationUrl.pathname.startsWith("/connection/pat-bindings/")
+						)
+							throw new ConnectionInstallationErrorV1("invalid_input");
+						callbackStateHash = input.callbackStateHash;
+					} else {
+						const state = parseAuthorizationRedirect(
+							input.authorizationUrl,
+							this.#configuration,
+							input.authorizationExpiresAt,
+						);
+						if (input.callbackStateHash)
+							throw new ConnectionInstallationErrorV1("invalid_input");
+						callbackStateHash = createHash("sha256")
+							.update(state)
+							.digest("hex");
+					}
 					if (
 						input.authorizationExpiresAt >
 						new Date(command.expires_at as string).getTime()
 					)
 						throw new ConnectionInstallationErrorV1("invalid_input");
 					const callback = {
-						stateHash: createHash("sha256").update(state).digest("hex"),
+						stateHash: callbackStateHash,
 						runtimeOrigin: this.#configuration.runtimeOrigin,
 						expiresAt: input.authorizationExpiresAt,
 						status: "pending" as const,

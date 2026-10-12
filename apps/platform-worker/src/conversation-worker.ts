@@ -471,6 +471,9 @@ export function createPlatformConversationWorkerV2(
 					...(result?.expiresAt
 						? { authorizationExpiresAt: result.expiresAt }
 						: {}),
+					...(result?.callbackStateHash
+						? { callbackStateHash: result.callbackStateHash }
+						: {}),
 				});
 				drained++;
 			} catch {

@@ -220,6 +220,10 @@
                       "maxLength": 8192,
                       "type": "string"
                     },
+                    "callbackStateHash": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "expiresAt": {
                       "exclusiveMinimum": 0,
                       "maximum": 9007199254740991,
@@ -407,6 +411,30 @@
                       "error"
                     ],
                     "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "bindingId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "issuer": {
+                        "format": "uri",
+                        "maxLength": 2048,
+                        "type": "string"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "issuer",
+                      "bindingId"
+                    ],
+                    "type": "object"
                   }
                 ]
               }
@@ -428,6 +456,10 @@
                     "authorizationUrl": {
                       "format": "uri",
                       "maxLength": 8192,
+                      "type": "string"
+                    },
+                    "callbackStateHash": {
+                      "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
                     },
                     "expiresAt": {
@@ -709,6 +741,10 @@
                       "maxLength": 8192,
                       "type": "string"
                     },
+                    "callbackStateHash": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "expiresAt": {
                       "exclusiveMinimum": 0,
                       "maximum": 9007199254740991,
@@ -988,6 +1024,10 @@
                       "maxLength": 8192,
                       "type": "string"
                     },
+                    "callbackStateHash": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "expiresAt": {
                       "exclusiveMinimum": 0,
                       "maximum": 9007199254740991,
@@ -1265,6 +1305,10 @@
                     "authorizationUrl": {
                       "format": "uri",
                       "maxLength": 8192,
+                      "type": "string"
+                    },
+                    "callbackStateHash": {
+                      "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
                     },
                     "expiresAt": {
