@@ -139,6 +139,14 @@ export * from "./skill-hub-read.js";
 export * from "./skill-package-publication.js";
 export * from "./skill-package-ref.js";
 export * from "./skill-provider-registry.js";
+export {
+	fanOutStandardTemplateUpgradeV2,
+	type StandardTemplateUpgradeApplierV1,
+	type StandardTemplateUpgradeCommandV2,
+	type StandardTemplateUpgradeResultV2,
+	type StandardTemplateUpgradeTargetResolverV1,
+	type StandardTemplateUpgradeTargetResultV2,
+} from "./standard-template-upgrade.js";
 export * from "./task-api-audit.js";
 export * from "./task-authorization.js";
 export * from "./task-runtime-authorization.js";

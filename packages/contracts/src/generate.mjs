@@ -47,6 +47,7 @@ import {
 	skillHubReadOpenApiPathsV1,
 	skillHubReadSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
+	standardTemplateReleaseOpenApiPathsV2,
 } from "./pilot/index.ts";
 import { platformAuthOpenApiPathsV1 } from "./platform-auth.ts";
 import {
@@ -152,6 +153,10 @@ const artifactPaths = {
 	standardTemplateReleaseOpenapi: resolve(
 		artifactRoot,
 		"openapi/standard-template-release.v1.openapi.json",
+	),
+	standardTemplateReleaseOpenapiV2: resolve(
+		artifactRoot,
+		"openapi/standard-template-release.v2.openapi.json",
 	),
 	pilotSseJsonSchemaV2: resolve(
 		artifactRoot,
@@ -925,6 +930,11 @@ function buildArtifacts() {
 			openapi: "3.1.0",
 			info: { title: "Standard template deployment release", version: "1.0.0" },
 			paths: standardTemplateReleaseOpenApiPathsV1,
+		}),
+		standardTemplateReleaseOpenapiV2: createDocument({
+			openapi: "3.1.0",
+			info: { title: "Standard template deployment upgrade", version: "2.0.0" },
+			paths: standardTemplateReleaseOpenApiPathsV2,
 		}),
 		pilotBrowserOpenapiV2,
 		pilotDelegatedJsonSchema,
