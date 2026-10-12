@@ -78,6 +78,18 @@ function mcpTool(descriptor: CodexBrowserToolDescriptorV1): Tool {
 	};
 }
 
+function pageRevision(
+	descriptor: CodexBrowserToolDescriptorV1,
+	input: Record<string, unknown>,
+): number {
+	if (descriptor.operation === "navigate" || descriptor.operation === "handoff")
+		return 1;
+	const revision = input.pageRevision;
+	if (!Number.isSafeInteger(revision) || (revision as number) < 1)
+		throw new Error("BROWSER_PAGE_REFERENCE_INVALID");
+	return revision as number;
+}
+
 function boundedContentItems(
 	items: RuntimeBrowserToolExecutionResultV1["contentItems"],
 ) {
@@ -192,13 +204,8 @@ export async function createBrowserMcpGatewayV1(
 		);
 		const args = request.params.arguments;
 		if (!descriptor || !isRecord(args)) return invalidResult();
-		const pageRevision =
-			typeof args.pageRevision === "number" &&
-			Number.isSafeInteger(args.pageRevision) &&
-			args.pageRevision > 0
-				? args.pageRevision
-				: 1;
 		try {
+			const revision = pageRevision(descriptor, args);
 			const toolRequest = {
 				tool: name,
 				arguments: args,
@@ -209,7 +216,7 @@ export async function createBrowserMcpGatewayV1(
 					...input.context.binding,
 					executionId: input.executionId,
 					capabilityVersion: input.context.capabilityVersion,
-					pageRevision,
+					pageRevision: revision,
 				},
 			};
 			return await executeBrowserMcpToolV1({

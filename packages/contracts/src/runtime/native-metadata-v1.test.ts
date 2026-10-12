@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import Ajv2020 from "ajv/dist/2020.js";
@@ -8,8 +9,13 @@ import {
 	NativeMetadataRequestIdentityV1Schema,
 	PlatformNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataBindingRequestV1Schema,
+	RuntimeNativeMetadataBindingResponseV1Schema,
+	RuntimeNativeMetadataProofClaimsV1Schema,
 	RuntimeNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataReadResponseV1Schema,
+	runtimeNativeMetadataProofSigningPayloadV1,
+	runtimeNativeMetadataRequestSigningPayloadV1,
+	validateRuntimeNativeMetadataProofClaimsV1,
 } from "./native-metadata-v1.ts";
 
 const identity = {
@@ -149,6 +155,108 @@ describe("Native metadata V1 contracts", () => {
 		).toBe(false);
 	});
 
+	it("binds bounded proof claims to one request and rejects drift", () => {
+		const request = RuntimeNativeMetadataBindingResponseV1Schema.parse({
+			...identity,
+			originalHostScopeRef: "host-ref",
+		});
+		const requestDigest = createHash("sha256")
+			.update(runtimeNativeMetadataRequestSigningPayloadV1(request))
+			.digest("hex");
+		const claims = RuntimeNativeMetadataProofClaimsV1Schema.parse({
+			...request,
+			purpose: "native_metadata_read",
+			issuedAt: 2_000,
+			issuer: "platform-api",
+			audience: "runtime_host.native_metadata_read",
+			workerId: "worker-1",
+			keyVersion: "metadata-key-v1",
+			requestDigest,
+		});
+		const { purpose: _missingPurpose, ...missingPurpose } = claims;
+		expect(
+			RuntimeNativeMetadataProofClaimsV1Schema.safeParse(missingPurpose)
+				.success,
+		).toBe(false);
+
+		expect(
+			validateRuntimeNativeMetadataProofClaimsV1(claims, {
+				request,
+				expectedIssuer: "platform-api",
+				expectedWorkerId: "worker-1",
+				expectedRequestDigest: requestDigest,
+				now: 5_000,
+			}),
+		).toEqual(claims);
+		expect(runtimeNativeMetadataProofSigningPayloadV1(claims)).toContain(
+			'"purpose":"native_metadata_read"',
+		);
+
+		for (const invalid of [
+			{ ...claims, purpose: "runtime_execution" },
+			{ ...claims, audience: "runtime_host" },
+			{ ...claims, issuer: "i".repeat(257) },
+			{ ...claims, keyVersion: "" },
+			{ ...claims, issuedAt: 999 },
+			{ ...claims, expiresAt: 1_000 },
+		]) {
+			expect(
+				RuntimeNativeMetadataProofClaimsV1Schema.safeParse(invalid).success,
+			).toBe(false);
+		}
+		expect(() =>
+			validateRuntimeNativeMetadataProofClaimsV1(claims, {
+				request,
+				expectedIssuer: "other-issuer",
+				expectedWorkerId: "worker-1",
+				expectedRequestDigest: requestDigest,
+				now: 5_000,
+			}),
+		).toThrow();
+		expect(() =>
+			validateRuntimeNativeMetadataProofClaimsV1(
+				{ ...claims, scope: { ...claims.scope, agentId: "other-agent" } },
+				{
+					request,
+					expectedIssuer: "platform-api",
+					expectedWorkerId: "worker-1",
+					expectedRequestDigest: requestDigest,
+					now: 5_000,
+				},
+			),
+		).toThrow();
+		expect(() =>
+			validateRuntimeNativeMetadataProofClaimsV1(
+				{ ...claims, requestDigest: "0".repeat(64) },
+				{
+					request,
+					expectedIssuer: "platform-api",
+					expectedWorkerId: "worker-1",
+					expectedRequestDigest: requestDigest,
+					now: 5_000,
+				},
+			),
+		).toThrow();
+		expect(() =>
+			validateRuntimeNativeMetadataProofClaimsV1(claims, {
+				request,
+				expectedIssuer: "platform-api",
+				expectedWorkerId: "worker-1",
+				expectedRequestDigest: requestDigest,
+				now: 20_000,
+			}),
+		).toThrow();
+		expect(() =>
+			validateRuntimeNativeMetadataProofClaimsV1(claims, {
+				request,
+				expectedIssuer: "platform-api",
+				expectedWorkerId: "worker-1",
+				expectedRequestDigest: requestDigest,
+				now: 1_000,
+			}),
+		).toThrow();
+	});
+
 	it("applies the lifetime guard to every wire identity and generated JSON Schema", () => {
 		const invalid = { ...identity, expiresAt: 31_001 };
 		expect(
@@ -207,5 +315,35 @@ describe("Native metadata V1 contracts", () => {
 		const definition = artifact.$defs?.NativeMetadataProjectionV1;
 		expect(definition).toBeDefined();
 		expect(validate(command)).toBe(false);
+		const validateClaims = new Ajv2020({
+			strict: true,
+			validateFormats: false,
+		}).compile({
+			$schema: artifact.$schema,
+			$defs: artifact.$defs,
+			...artifact.$defs.RuntimeNativeMetadataProofClaimsV1,
+		});
+		expect(validateClaims(claimsFixture())).toBe(true);
+		expect(validateClaims({ ...claimsFixture(), issuedAt: -1 })).toBe(false);
 	});
 });
+
+function claimsFixture() {
+	const request = RuntimeNativeMetadataBindingResponseV1Schema.parse({
+		...identity,
+		originalHostScopeRef: "host-ref",
+	});
+	const requestDigest = createHash("sha256")
+		.update(runtimeNativeMetadataRequestSigningPayloadV1(request))
+		.digest("hex");
+	return {
+		...request,
+		purpose: "native_metadata_read",
+		issuedAt: 2_000,
+		issuer: "platform-api",
+		audience: "runtime_host.native_metadata_read",
+		workerId: "worker-1",
+		keyVersion: "metadata-key-v1",
+		requestDigest,
+	};
+}
