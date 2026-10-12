@@ -115,7 +115,74 @@ export interface WorkloadRuntimeOptionsV1 {
 	}>;
 	/** Credential-free record of each failed Workload probe (#2046). */
 	readonly onProbeFailure?: (failure: WorkloadProbeFailureV1) => void;
+	/**
+	 * 同一 Worker 进程内 Workload 监测与会话路由共享的 readiness 记录（#1889）。
+	 * 未提供时每个实例使用自己的记录，只复用本实例最近一次完整探测的结果。
+	 */
+	readonly readinessLedger?: WorkloadReadinessLedgerV1;
 }
+
+/** 一次通过的签名 readiness 所绑定的实际 Workload（#1889）。 */
+export interface WorkloadReadinessBindingV1 {
+	readonly agentId: string;
+	readonly workloadUid: string;
+	readonly workloadGeneration: number;
+	readonly workloadRevision: number;
+	readonly fence: number;
+}
+
+export interface WorkloadReadinessPassV1 {
+	readonly podUid: string;
+	readonly passedAt: number;
+}
+
+/**
+ * 记录每个 Agent 最近一次通过的签名 readiness 及其 Pod。每个 Agent 只保留一条，
+ * Workload 绑定不一致即视为没有记录；任何一次未通过的观测都会清除该 Agent 的记录。
+ */
+export interface WorkloadReadinessLedgerV1 {
+	record(
+		binding: WorkloadReadinessBindingV1,
+		pass: WorkloadReadinessPassV1,
+	): void;
+	lookup(
+		binding: WorkloadReadinessBindingV1,
+	): WorkloadReadinessPassV1 | undefined;
+	forget(agentId: string): void;
+}
+
+export function createWorkloadReadinessLedgerV1(): WorkloadReadinessLedgerV1 {
+	const entries = new Map<
+		string,
+		{
+			readonly binding: WorkloadReadinessBindingV1;
+			readonly pass: WorkloadReadinessPassV1;
+		}
+	>();
+	return {
+		record(binding, pass) {
+			entries.set(binding.agentId, {
+				binding: { ...binding },
+				pass: { ...pass },
+			});
+		},
+		lookup(binding) {
+			const entry = entries.get(binding.agentId);
+			return entry && isDeepStrictEqual(entry.binding, binding)
+				? { ...entry.pass }
+				: undefined;
+		},
+		forget(agentId) {
+			entries.delete(agentId);
+		},
+	};
+}
+
+/**
+ * 排空复用 readiness 的有效期：不超过一个 Workload 监测周期，与 Store
+ * 默认 `monitorDelayMs`（30 s）一致。
+ */
+export const drainReadinessMaxAgeMs = 30_000;
 
 export interface WorkloadProbeFailureV1 {
 	readonly agentId: string;
@@ -401,6 +468,17 @@ function bindingsFor(
 	];
 }
 
+/**
+ * 排空路径可复用 Monitor readiness 缓存的命令白名单。
+ * 这些命令在同一 Execution 排空中反复执行，签名 readiness 是性能瓶颈；
+ * turn.submit / turn.supplement / session.status / control 用途始终做完整探测。
+ */
+export const drainCacheableCommands = new Set([
+	"events.persist",
+	"events.ack",
+	"execution.renew",
+] as const);
+
 export function createWorkloadRuntimeV1(
 	options: WorkloadRuntimeOptionsV1,
 ): WorkloadRuntimePortV1 & {
@@ -410,6 +488,20 @@ export function createWorkloadRuntimeV1(
 	observeSession(
 		state: WorkloadReconciliationStateV1,
 		browserBinding: BrowserCapabilityBindingV1,
+	): ReturnType<WorkloadRuntimePortV1["observe"]>;
+	/**
+	 * 排空路径轻量路由复核：缓存命中时跳过签名 readiness，仅核对 Kubernetes
+	 * 实际路由、所有权/漂移与 Pod 就绪（保留 /healthz）。
+	 * 记录来自同进程 Workload 监测（或本实例）最近一次通过的签名 readiness，
+	 * 绑定 Pod UID、generation、Workload revision 和 fence，有效期不超过
+	 * drainReadinessMaxAgeMs（一个监测周期，30 s）。任何绑定不匹配、超期、phase 非
+	 * ready、attempts 非 0 或缺失记录时退回完整签名 readiness（fail-closed）。
+	 * 仅供 business purpose 排空命令（events.persist / events.ack /
+	 * execution.renew）使用；turn.submit / supplement / control 不得调用此方法。
+	 */
+	observeForDrain(
+		state: WorkloadReconciliationStateV1,
+		browserBinding?: BrowserCapabilityBindingV1,
 	): ReturnType<WorkloadRuntimePortV1["observe"]>;
 } {
 	if (!Array.isArray(options.templateModelBindings))
@@ -422,6 +514,21 @@ export function createWorkloadRuntimeV1(
 		WorkloadReconciliationStateV1,
 		WorkloadCapabilitiesV1
 	>();
+	// 排空复用的签名 readiness 记录；部署装配时与 Workload 监测共享（#1889）。
+	const readinessLedger =
+		options.readinessLedger ?? createWorkloadReadinessLedgerV1();
+	function readinessBinding(
+		state: WorkloadReconciliationStateV1,
+	): WorkloadReadinessBindingV1 | null {
+		if (!state.identity) return null;
+		return {
+			agentId: state.agentId,
+			workloadUid: state.identity.uid,
+			workloadGeneration: state.identity.generation,
+			workloadRevision: state.revision,
+			fence: state.fence,
+		};
+	}
 	function candidateKeyless(
 		state: Pick<WorkloadReconciliationStateV1, "candidate">,
 	): boolean {
@@ -453,6 +560,14 @@ export function createWorkloadRuntimeV1(
 		purpose: "authorize" | "cleanup" = "authorize",
 		connectionConsumerControl = false,
 		browserBinding?: BrowserCapabilityBindingV1,
+		/**
+		 * 签名 readiness 的复用与记录（#1889）：`reuse` 对本次观测到的 Pod 返回
+		 * true 时跳过签名 readiness；完整探测通过时以该 Pod 调用 `passed`。
+		 */
+		readiness?: {
+			readonly reuse?: (podUid: string) => boolean;
+			readonly passed?: (podUid: string) => void;
+		},
 	) {
 		const modelProjection =
 			state?.candidate.configuration.source.kind === "standard"
@@ -491,7 +606,7 @@ export function createWorkloadRuntimeV1(
 			policy: options.policy,
 			modelProjection,
 			standardTemplateBinding,
-			async probe({ desired, serviceOrigin }) {
+			async probe({ desired, serviceOrigin, podUid }) {
 				const baseUrl = serviceOrigin;
 				const healthFetch =
 					desired.runtimeManifest.interactionMode === "self-managed"
@@ -542,6 +657,8 @@ export function createWorkloadRuntimeV1(
 					recordCapabilities(RuntimeCapabilitySetV1Schema.parse({}));
 					return true;
 				}
+				// 同一 Pod 在有效期内已通过签名 readiness：只保留上面的 /healthz。
+				if (podUid && readiness?.reuse?.(podUid)) return true;
 				const controller = new AbortController();
 				const resolvedBrowserBinding =
 					browserBinding ??
@@ -648,6 +765,7 @@ export function createWorkloadRuntimeV1(
 					...(browser ? { browser } : {}),
 				});
 				if (probe.core !== "passed") failed("readiness", "response");
+				else if (podUid) readiness?.passed?.(podUid);
 				return probe.core === "passed";
 			},
 		});
@@ -840,6 +958,7 @@ export function createWorkloadRuntimeV1(
 		if (state.phase === "ready" && candidateKeyless(state))
 			await revalidateCandidateCatalog(state, true);
 		let capabilities: WorkloadCapabilitiesV1 | undefined;
+		let passedPodUid: string | undefined;
 		const observation = createAdapter(
 			(value) => {
 				capabilities = value;
@@ -848,6 +967,11 @@ export function createWorkloadRuntimeV1(
 			"authorize",
 			false,
 			browserBinding,
+			{
+				passed(podUid) {
+					passedPodUid = podUid;
+				},
+			},
 		);
 		const health = await observation.observe(
 			desired(state),
@@ -857,6 +981,66 @@ export function createWorkloadRuntimeV1(
 		);
 		if (health === "healthy" && state.phase === "promoting" && capabilities)
 			observedCapabilities.set(state, capabilities);
+		// 只有 ready 阶段的完整观测（含签名 readiness）通过才记录；
+		// 任何未通过的完整观测都清除该 Agent 的记录，排空随即回到完整探测。
+		const binding = readinessBinding(state);
+		if (health !== "healthy") readinessLedger.forget(state.agentId);
+		else if (state.phase === "ready" && binding && passedPodUid && capabilities)
+			readinessLedger.record(binding, {
+				podUid: passedPodUid,
+				passedAt: Date.now(),
+			});
+		return health;
+	}
+
+	/**
+	 * 排空路径的路由复核（#1889）：Workload 为 ready、attempts 为 0，且同一
+	 * Pod UID/generation、Workload revision 与 fence 在一个监测周期内通过过签名
+	 * readiness 时，只做 Kubernetes 实际路由、漂移、Pod 就绪与 `/healthz` 核对，
+	 * 不再发签名 readiness；其余情况一律走完整观测。
+	 */
+	async function observeForDrain(
+		state: WorkloadReconciliationStateV1,
+		browserBinding?: BrowserCapabilityBindingV1,
+	) {
+		const binding = readinessBinding(state);
+		const pass =
+			binding && state.phase === "ready" && state.attempts === 0
+				? readinessLedger.lookup(binding)
+				: undefined;
+		const age = pass ? Date.now() - pass.passedAt : -1;
+		if (!binding || !pass || age < 0 || age >= drainReadinessMaxAgeMs)
+			return observe(state, browserBinding);
+		observedCapabilities.delete(state);
+		let capabilities: WorkloadCapabilitiesV1 | undefined;
+		let passedPodUid: string | undefined;
+		// 观测到的 Pod 与记录不一致时，适配器在本次观测内执行完整签名 readiness。
+		const health = await createAdapter(
+			(value) => {
+				capabilities = value;
+			},
+			state,
+			"authorize",
+			false,
+			browserBinding,
+			{
+				reuse: (podUid) => podUid === pass.podUid,
+				passed(podUid) {
+					passedPodUid = podUid;
+				},
+			},
+		).observe(
+			desired(state),
+			{ uid: binding.workloadUid, generation: binding.workloadGeneration },
+			routeSelectorMode(state),
+			"required",
+		);
+		if (health !== "healthy") readinessLedger.forget(state.agentId);
+		else if (passedPodUid && capabilities)
+			readinessLedger.record(binding, {
+				podUid: passedPodUid,
+				passedAt: Date.now(),
+			});
 		return health;
 	}
 	return {
@@ -1285,6 +1469,9 @@ export function createWorkloadRuntimeV1(
 		},
 		async observe(state) {
 			return observe(state);
+		},
+		async observeForDrain(state, browserBinding) {
+			return observeForDrain(state, browserBinding);
 		},
 		async activateSecrets(state, input) {
 			assertCandidateMaterializationAllowed(state);

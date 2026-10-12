@@ -82,7 +82,8 @@ export const createProductionWorkloadWorkerOptionsV1 = async (input) => { global
 	);
 	await writeFile(
 		join(directory, "workload-runtime.js"),
-		`export const workloadResourceConfigurationHashV1 = () => 'synthetic-hash';`,
+		`export const workloadResourceConfigurationHashV1 = () => 'synthetic-hash';
+export const createWorkloadReadinessLedgerV1 = () => ({});`,
 	);
 	await writeFile(
 		join(directory, "conversation-deployment.js"),
