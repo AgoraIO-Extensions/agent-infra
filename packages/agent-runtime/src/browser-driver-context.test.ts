@@ -200,4 +200,34 @@ describe("createBrowserSessionDriverContextV1", () => {
 		);
 		expect(stale).toMatchObject({ phase: "failed", success: false });
 	});
+
+	it("rejects a foreign execution binding before Session I/O", async () => {
+		const browser = session();
+		const context = createBrowserSessionDriverContextV1({
+			session: browser,
+			capability,
+			binding,
+			subjectId: "user-1",
+		});
+		await expect(
+			context.executeTool?.(
+				{
+					tool: "browser_navigate",
+					arguments: { url: "https://example.test/" },
+					actionId: "foreign-action",
+					operationRef: "foreign-operation",
+					attemptRef: "foreign-attempt",
+					binding: {
+						...binding,
+						conversationId: "foreign-conversation",
+						executionId: "execution-1",
+						capabilityVersion: capability.capabilityVersion,
+						pageRevision: 1,
+					},
+				},
+				new AbortController().signal,
+			),
+		).rejects.toThrow("BROWSER_DRIVER_CONTEXT_BINDING_MISMATCH");
+		expect(browser.navigate).not.toHaveBeenCalled();
+	});
 });
