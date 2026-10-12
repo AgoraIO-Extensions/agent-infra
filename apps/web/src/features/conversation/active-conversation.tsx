@@ -26,7 +26,9 @@ import { useConversationCommands } from "./use-conversation-commands.js";
 import { useConversationModelSelection } from "./use-conversation-model-selection.js";
 import { useConversationTimeline } from "./use-conversation-timeline.js";
 
-const preparingRefreshMs = 2_000;
+// Readiness is still authoritative on the server; a short bounded poll keeps
+// the composer responsive while the Worker finishes the Session Sandbox.
+const preparingRefreshMs = 500;
 
 export function ActiveConversation({
 	agentId,
