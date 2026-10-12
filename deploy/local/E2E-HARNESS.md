@@ -28,6 +28,13 @@
 Docker context 的 kind control-plane。当前 branch 可以包含尚未推送但基于 upstream 的提交；
 如果 branch 落后 upstream，Harness 只做 fast-forward。
 
+Docker context 所在 VM 的系统时钟不能回拨：Worker 签发的 Runtime Grant 若晚于 Host 当前
+时间即被拒绝。Colima（Lima）VM 只保留 guest agent 与宿主机对时；VM 内 `systemd-timesyncd`
+同时对时会与它反复拉扯，使时钟每 20–30 秒回拨约 100 ms，长回复间歇失败于
+`RUNTIME_GRANT_INVALID`（#1888）。启动后执行
+`colima ssh -p <profile> -- sudo timedatectl set-ntp false` 关闭 VM 内 NTP；它已写入的内核
+频率校正保留到 VM 下次重启。
+
 外网不可用时可显式设置 `E2E_HARNESS_OFFLINE=true` 使用已经回读的本地 upstream ref；这
 不会刷新 remote，适合记录离线环境缺口，默认运行仍然强制 fetch。
 
