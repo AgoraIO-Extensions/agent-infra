@@ -95,6 +95,7 @@ it("registers only bounded Browser tools for a verified request-local context", 
 		executionId: "execution-a",
 		signal: new AbortController().signal,
 	});
+	expect(server).toBeDefined();
 	const tools = sdk.tool.mock.results.map((entry) => entry.value) as Array<{
 		name: string;
 		inputSchema: { _zod?: unknown };
@@ -214,4 +215,91 @@ it("does not turn failed, mismatched or cancelled Browser calls into success", a
 	expect(await tools[1]?.handler(input, {})).toMatchObject({ isError: true });
 	controller.abort();
 	expect(await tools[1]?.handler(input, {})).toMatchObject({ isError: true });
+});
+
+it("bounds Browser output by aggregate UTF-8 bytes and hides failure details", async () => {
+	const executeTool = vi.fn(async (request) => ({
+		actionId: request.actionId,
+		operationRef: request.operationRef,
+		attemptRef: request.attemptRef,
+		binding: request.binding,
+		phase: "completed" as const,
+		contentItems: Array.from({ length: 100 }, () => ({
+			type: "inputText" as const,
+			text: "敏感页面内容".repeat(10_000),
+		})),
+		success: true,
+	}));
+	const server = createClaudeBrowserMcpServer({
+		capability,
+		context: browser(executeTool),
+		executionId: "execution-a",
+		signal: new AbortController().signal,
+	});
+	expect(server).toBeDefined();
+	const tools = sdk.tool.mock.results.map((entry) => entry.value) as Array<{
+		handler: (
+			input: unknown,
+			extra: unknown,
+		) => Promise<{
+			content: readonly { text: string }[];
+		}>;
+	}>;
+	const projection = await tools[1]?.handler(
+		{ pageId: "page", pageRevision: 1 },
+		{},
+	);
+	expect(
+		Buffer.byteLength(
+			projection?.content.map((item) => item.text).join("") ?? "",
+			"utf8",
+		),
+	).toBeLessThanOrEqual(16_384);
+
+	executeTool.mockRejectedValueOnce(
+		new Error("https://secret.test/token=secret"),
+	);
+	const failed = await tools[1]?.handler(
+		{ pageId: "page", pageRevision: 1 },
+		{},
+	);
+	expect(failed).toEqual({
+		content: [{ type: "text", text: "BROWSER_EXECUTION_FAILED" }],
+		isError: true,
+	});
+});
+
+it("merges a single MCP request cancellation with the execution signal", async () => {
+	let entered: () => void = () => {};
+	const started = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	const executeTool = vi.fn(async (_request, signal) => {
+		entered();
+		await new Promise<void>((resolve) =>
+			signal.addEventListener("abort", () => resolve(), { once: true }),
+		);
+		throw new Error("private Browser detail");
+	});
+	const server = createClaudeBrowserMcpServer({
+		capability,
+		context: browser(executeTool),
+		executionId: "execution-a",
+		signal: new AbortController().signal,
+	});
+	expect(server).toBeDefined();
+	const tools = sdk.tool.mock.results.map((entry) => entry.value) as Array<{
+		handler: (input: unknown, extra: unknown) => Promise<unknown>;
+	}>;
+	const requestController = new AbortController();
+	const response = tools[1]?.handler(
+		{ pageId: "page", pageRevision: 1 },
+		{ signal: requestController.signal },
+	);
+	await started;
+	requestController.abort();
+	expect(await response).toEqual({
+		content: [{ type: "text", text: "BROWSER_EXECUTION_CANCELLED" }],
+		isError: true,
+	});
 });
