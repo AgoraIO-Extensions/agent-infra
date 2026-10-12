@@ -3,6 +3,10 @@ import type {
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
+import type {
+	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+} from "./driver.js";
 import {
 	type NativeProcessLaunch,
 	retireNativeProcess,
@@ -21,6 +25,9 @@ export interface PiRuntimeDriverOptions {
 	defaultModelOptionId: string;
 	defaultReasoningLevel: string;
 	modelOptions: readonly SessionRuntimeModelOption[];
+	readonly authorizeModelAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 	launch: (
 		directory: string,
 		selection: RuntimeSelectionV1,
@@ -46,7 +53,21 @@ export const PiRuntimeDriver = {
 							? "failed"
 							: "unknown",
 			openSession: async (session) => {
-				const callbacks = { admit: session.admit, update: session.update };
+				const callbacks = {
+					admit: session.admit,
+					update: session.update,
+					resolveModelCredential: session.resolveModelCredential,
+				};
+				// Pi keeps its native transport alive when a later Turn reuses the
+				// session. Resolve the current execution's Key through a stable
+				// closure whose callback is replaced by startTurn below.
+				const resolveModelCredential = session.resolveModelCredential
+					? async () => {
+							const resolver = callbacks.resolveModelCredential;
+							if (!resolver) throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+							return resolver();
+						}
+					: undefined;
 				const native = await openPiSession({
 					...session,
 					update: (event) => callbacks.update(event),
@@ -54,7 +75,7 @@ export const PiRuntimeDriver = {
 						session.directory,
 						session.selection,
 						() => callbacks.admit(),
-						session.resolveModelCredential,
+						resolveModelCredential,
 					),
 				});
 				return {
@@ -62,6 +83,7 @@ export const PiRuntimeDriver = {
 					startTurn: (next) => {
 						callbacks.admit = next.admit;
 						callbacks.update = next.update;
+						callbacks.resolveModelCredential = next.resolveModelCredential;
 					},
 				};
 			},
