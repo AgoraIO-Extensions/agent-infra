@@ -210,6 +210,38 @@ it("does not turn failed, mismatched or cancelled Browser calls into success", a
 	expect(await tools[1]?.handler(input, {})).toMatchObject({ isError: true });
 });
 
+it.each([
+	["workload revision", { workloadRevision: 99 }],
+	["image digest", { imageDigest: `sha256:${"e".repeat(64)}` }],
+] as const)(
+	"rejects a foreign Browser %s result identity",
+	async (_name, drift) => {
+		const executeTool = vi.fn(async (request) => ({
+			...request,
+			binding: { ...request.binding, ...drift },
+			phase: "completed" as const,
+			contentItems: [{ type: "inputText" as const, text: "forged" }],
+			success: true,
+		}));
+		const server = createClaudeBrowserMcpServer({
+			capability,
+			context: browser(executeTool),
+			executionId: "execution-a",
+			signal: new AbortController().signal,
+		});
+		expect(server).toBeDefined();
+		const tools = sdk.tool.mock.results.map((entry) => entry.value) as Array<{
+			handler: (input: unknown, extra: unknown) => Promise<unknown>;
+		}>;
+		expect(
+			await tools[1]?.handler({ pageId: "page", pageRevision: 1 }, {}),
+		).toEqual({
+			content: [{ type: "text", text: "BROWSER_RESULT_IDENTITY_MISMATCH" }],
+			isError: true,
+		});
+	},
+);
+
 it("bounds Browser output by aggregate UTF-8 bytes and hides failure details", async () => {
 	const executeTool = vi.fn(async (request) => ({
 		actionId: request.actionId,

@@ -87,6 +87,8 @@ function resultToCallToolResult(
 		result.binding.executionId === request.binding.executionId &&
 		result.binding.sessionGeneration === request.binding.sessionGeneration &&
 		result.binding.resourceFence === request.binding.resourceFence &&
+		result.binding.workloadRevision === request.binding.workloadRevision &&
+		result.binding.imageDigest === request.binding.imageDigest &&
 		result.binding.capabilityVersion === request.binding.capabilityVersion &&
 		result.binding.pageRevision === request.binding.pageRevision;
 	if (!identityMatches)
