@@ -250,10 +250,13 @@ async function createBrowserExecutionContextForCommand(
 		binding: structuredClone(admittedBinding),
 		...(admittedPrincipal ? { principal: admittedPrincipal } : {}),
 	};
-	if (!factory) {
+	// The Driver only receives a principal through the deployment factory, and
+	// only the current operation scope may supply one. A readiness snapshot may
+	// still carry a principal from an earlier authority, so an unadmitted or
+	// factory-less context must never reach the factory or the Driver with one.
+	if (!factory || !admittedPrincipal)
 		delete (admittedContext as { principal?: RuntimePrincipalV1 }).principal;
-		return admittedContext;
-	}
+	if (!factory) return admittedContext;
 	const created = await factory({
 		...admittedContext,
 		binding: structuredClone(admittedBinding),
