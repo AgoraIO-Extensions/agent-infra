@@ -988,6 +988,17 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					if (!within || within.startsWith("..") || isAbsolute(within)) return;
 					const bytes = Buffer.from(input.content, "utf8");
 					if (bytes.byteLength > 10 * 1024 * 1024) return;
+					const bindingRecord = await this.binding(command, false).catch(
+						() => undefined,
+					);
+					if (!bindingRecord) return;
+					const state = await this.file(bindingRecord)
+						.then((current) => current.read())
+						.catch(() => undefined);
+					const turn = state?.turns.find(
+						(candidate) => candidate.executionId === command.executionId,
+					);
+					if (!turn || terminal(turn.status)) return;
 					if (resultFileInFlight) return;
 					resultFileInFlight = true;
 					try {
