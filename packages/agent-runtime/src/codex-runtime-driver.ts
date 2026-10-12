@@ -29,6 +29,7 @@ import {
 import nativeBarrier from "../../../deploy/runtime/vendor/codex/native-barrier-v1.json" with {
 	type: "json",
 };
+import type { BrowserHandoffRecordV1 } from "./browser-handoff.js";
 import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CODEX_MODEL_ONLY_CONFIG,
@@ -107,6 +108,7 @@ import {
 	codexSkillLaunch,
 } from "./codex-skill-launch.internal.js";
 import type {
+	RuntimeBrowserHandoffRequestV1,
 	RuntimeBrowserToolExecutionRequestV1,
 	RuntimeBrowserToolExecutionResultV1,
 	RuntimeDriver,
@@ -5175,6 +5177,76 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		}
 	}
 
+	/** Execute one request-local Browser handoff transition through its existing controller. */
+	async executeBrowserHandoff(
+		nativeSessionRef: string,
+		executionId: string,
+		request: RuntimeBrowserHandoffRequestV1,
+		context: RuntimeDriverExecutionContextV1,
+	): Promise<BrowserHandoffRecordV1 | undefined> {
+		const browser = context.browser;
+		const handoff = browser?.handoff?.controller;
+		if (!browser || !handoff) unavailable();
+		const session = ownRecordValue(this.readState().sessions, nativeSessionRef);
+		const execution = session
+			? ownRecordValue(session.executions, executionId)
+			: undefined;
+		const requiresActiveExecution =
+			request.kind !== "revoke" && request.kind !== "browser-crashed";
+		if (
+			!session ||
+			!execution ||
+			session.agentId !== browser.binding.agentId ||
+			session.conversationId !== browser.binding.conversationId ||
+			session.sessionGeneration !== browser.binding.sessionGeneration ||
+			(requiresActiveExecution &&
+				(session.activeExecutionId !== executionId ||
+					execution.status !== "running"))
+		)
+			unavailable();
+		const runtime =
+			request.kind === "request" ||
+			request.kind === "take-over" ||
+			request.kind === "return-to-agent" ||
+			request.kind === "revoke" ||
+			request.kind === "browser-crashed"
+				? request.runtime
+				: undefined;
+		if (
+			runtime &&
+			(runtime.agentId !== browser.binding.agentId ||
+				runtime.conversationId !== browser.binding.conversationId ||
+				runtime.executionId !== executionId ||
+				runtime.sessionGeneration !== browser.binding.sessionGeneration ||
+				runtime.resourceFence !== browser.binding.resourceFence ||
+				runtime.capabilityVersion !== browser.capabilityVersion)
+		)
+			unavailable();
+		switch (request.kind) {
+			case "request":
+				return handoff.request(request.reason, request.runtime);
+			case "take-over":
+				return handoff.takeOver({
+					handoffId: request.handoffId,
+					operatorId: request.operatorId,
+					subjectId: request.subjectId,
+					runtime: request.runtime,
+				});
+			case "return-to-agent":
+				return handoff.returnToAgent({
+					handoffId: request.handoffId,
+					operatorId: request.operatorId,
+					runtime: request.runtime,
+				});
+			case "revoke":
+				handoff.assertBinding(request.runtime);
+				return handoff.revoke(request.reason);
+			case "browser-crashed":
+				handoff.assertBinding(request.runtime);
+				return handoff.markBrowserCrashed();
+		}
+	}
+
 	/**
 	 * Execute one admitted Browser tool through the existing Driver operation
 	 * journal. The controller is request-local; the Driver owns only operation
@@ -5193,6 +5265,7 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		signal: AbortSignal = new AbortController().signal,
 	): Promise<RuntimeBrowserToolExecutionResultV1> {
 		const browser = context.browser;
+		const handoff = browser?.handoff?.controller;
 		if (
 			!browser ||
 			typeof browser.executeTool !== "function" ||
@@ -5371,12 +5444,14 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 			// immediately before controller I/O so a cancelled action cannot start.
 			authorization.revalidate();
 			signal.throwIfAborted();
+			handoff?.assertAgentAccess();
 			dispatched = true;
 			const result = await browser.executeTool(browserRequest, signal);
 			// A response is only an outcome for this action after the same authority
 			// and cancellation boundary has been observed again.
 			authorization.revalidate();
 			signal.throwIfAborted();
+			handoff?.assertAgentAccess();
 			if (!runtimeBrowserResultIdentityMatches(result, browserRequest)) {
 				await persist("unknown", "recovery_unconfirmed");
 				return runtimeBrowserUnknownResult(browserRequest);
