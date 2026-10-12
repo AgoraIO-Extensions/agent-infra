@@ -444,7 +444,11 @@ export function sessionSandboxResourcesV1(
 							path: "/healthz",
 							port: allocation.containerPort,
 						},
-						periodSeconds: 5,
+						// A one-second probe bounds the kubelet readiness edge without
+						// weakening the health contract. Existing Pods with the former
+						// five-second period are accepted by podSpecMatches below and
+						// remain under the existing fenced lifecycle.
+						periodSeconds: 1,
 					},
 					securityContext: agentContainerSecurityContext(),
 				},
@@ -579,8 +583,10 @@ function podSpecMatches(current: KubernetesObject, expected: V1Pod) {
 			stableJson(expectedContainer.volumeMounts ?? []) &&
 		stableJson(currentContainer.securityContext ?? {}) ===
 			stableJson(expectedContainer.securityContext ?? {}) &&
-		stableJson(readinessProbeShape(currentContainer.readinessProbe)) ===
-			stableJson(readinessProbeShape(expectedContainer.readinessProbe)) &&
+		readinessProbeMatches(
+			currentContainer.readinessProbe,
+			expectedContainer.readinessProbe,
+		) &&
 		stableJson(currentSpec.volumes ?? []) ===
 			stableJson(expectedSpec.volumes ?? [])
 	);
@@ -603,6 +609,27 @@ function readinessProbeShape(probe: V1Container["readinessProbe"]) {
 				failureThreshold: probe.failureThreshold ?? 3,
 			}
 		: undefined;
+}
+
+/**
+ * The probe period changed from five to one second for newly-created Pods.
+ * Keep the previous exact shape valid during rollout so an already-owned Pod
+ * is not misclassified as drift or conflict merely because kubelet has not
+ * rebuilt it. All other probe fields remain exact and fail closed.
+ */
+function readinessProbeMatches(
+	current: V1Container["readinessProbe"],
+	expected: V1Container["readinessProbe"],
+) {
+	const actualShape = readinessProbeShape(current);
+	const expectedShape = readinessProbeShape(expected);
+	if (stableJson(actualShape) === stableJson(expectedShape)) return true;
+	if (expectedShape?.periodSeconds !== 1 || actualShape?.periodSeconds !== 5)
+		return false;
+	return (
+		stableJson({ ...actualShape, periodSeconds: 1 }) ===
+		stableJson(expectedShape)
+	);
 }
 
 function resourceSpecMatches(
