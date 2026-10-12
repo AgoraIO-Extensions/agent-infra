@@ -1192,7 +1192,7 @@ class TestCodexBridge {
 					item: {
 						type: "fileChange",
 						id: "codex-native-file-change-private",
-						changes: { [path]: {} },
+						changes: [{ path, kind: "update", diff: "@@" }],
 						status: "completed",
 					},
 				},

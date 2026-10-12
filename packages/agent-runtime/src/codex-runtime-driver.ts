@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { constants as fsConstants } from "node:fs";
 import {
 	lstat,
 	mkdir,
 	mkdtemp,
+	open,
 	readFile,
 	realpath,
 	rm,
@@ -3291,7 +3293,14 @@ function fileChangeCompletedNotification(frame: CodexAppServerFrame) {
 	if (params.item.type !== "fileChange") return undefined;
 	if (
 		!nonEmptyString(params.item.id) ||
-		!isPlainRecord(params.item.changes) ||
+		!Array.isArray(params.item.changes) ||
+		!params.item.changes.every(
+			(change: unknown) =>
+				isPlainRecord(change) &&
+				nonEmptyString(change.path) &&
+				typeof change.kind === "string" &&
+				typeof change.diff === "string",
+		) ||
 		(params.item.status !== undefined && typeof params.item.status !== "string")
 	)
 		protocolInvalid();
@@ -3299,7 +3308,7 @@ function fileChangeCompletedNotification(frame: CodexAppServerFrame) {
 		threadId: params.threadId,
 		nativeTurnId: params.turnId,
 		nativeItemId: params.item.id,
-		paths: Object.keys(params.item.changes),
+		paths: params.item.changes.map((change: { path: string }) => change.path),
 		status: params.item.status,
 	};
 }
@@ -10085,12 +10094,30 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		const within = relative(root, actual);
 		if (!within || within.startsWith("..") || isAbsolute(within))
 			return undefined;
-		const metadata = await lstat(actual).catch(() => undefined);
-		if (!metadata?.isFile() || metadata.isSymbolicLink()) return undefined;
-		const bytes = await readFile(actual).catch(() => undefined);
-		if (!bytes || bytes.byteLength > maximumNativeResultFileBytes)
-			return undefined;
-		return { name: basename(within), bytes };
+		const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+		const handle = await open(actual, fsConstants.O_RDONLY | noFollow).catch(
+			() => undefined,
+		);
+		if (!handle) return undefined;
+		try {
+			const metadata = await handle.stat();
+			if (!metadata.isFile()) return undefined;
+			const chunks: Buffer[] = [];
+			const buffer = Buffer.allocUnsafe(64 * 1024);
+			let total = 0;
+			let position = 0;
+			for (;;) {
+				const read = await handle.read(buffer, 0, buffer.length, position);
+				if (read.bytesRead === 0) break;
+				position += read.bytesRead;
+				total += read.bytesRead;
+				if (total > maximumNativeResultFileBytes) return undefined;
+				chunks.push(Buffer.from(buffer.subarray(0, read.bytesRead)));
+			}
+			return { name: basename(within), bytes: Buffer.concat(chunks, total) };
+		} finally {
+			await handle.close().catch(() => {});
+		}
 	}
 
 	private async persistNativeFileChange(
