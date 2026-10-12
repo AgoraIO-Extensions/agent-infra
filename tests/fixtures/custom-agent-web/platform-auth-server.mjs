@@ -303,7 +303,7 @@ async function start() {
 		const port = Number.parseInt(process.env.PORT ?? "8080", 10);
 		if (!Number.isInteger(port) || port < 1 || port > 65_535)
 			throw new Error("PLATFORM_AUTH_PORT_INVALID");
-		const server = createPlatformAuthWebServer({
+		const { server } = createPlatformAuthWebServer({
 			publicKeys,
 			issuer,
 			agentId,
