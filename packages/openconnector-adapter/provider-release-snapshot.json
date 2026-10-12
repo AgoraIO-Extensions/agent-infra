@@ -1691,47 +1691,132 @@
 		},
 		{
 			"provider": "static-spaces",
-			"providerReleaseId": "static-spaces-connection-v6-standard",
-			"executorDigest": "sha256:54450461a0fb2e2937deb5df4481130cf9c32e898053c0eabdedd4950e2b5a6a",
-			"sourceCommit": "4b9afc47750ae2a8e73f01345745dbe3262d9e1e",
+			"providerReleaseId": "static-spaces-connection-v7-full",
+			"executorDigest": "sha256:08ac0209380239bfb46a21f4d53460fb077396b2f12c84535a37a59f4400c0e4",
+			"sourceCommit": "3c8dc811dacf09887dfcc6edcb13567d164aaf22",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:1d906d6d213d93609954aa900327df81ae626c25c5b3c39e4dc60d639d8a2345",
-			"deploymentDigest": "sha256:49014f0706abf70738815c15d46422c6d75989fed72732e78a20ff5fe4b60b5f",
+			"deploymentDigest": "sha256:10678bf46c38052285cf40ca4daec26c8f5702162d0058b49c5eaf2dc2d79c67",
 			"actions": [
 				{
-					"id": "static-spaces.download_file@v6",
+					"id": "static-spaces.admin_check_access@v7",
+					"name": "static-spaces.admin_check_access",
+					"authorizationDigest": "sha256:81e5102bf7e93bf3147a4a43f32c1cca20d0be26e35575276571bcc09457b5ec"
+				},
+				{
+					"id": "static-spaces.admin_ensure_group@v7",
+					"name": "static-spaces.admin_ensure_group",
+					"authorizationDigest": "sha256:b099536bac643a40fbfa99ab44de6768e98fd7c8405d3ab3032f6b3d0856b74f"
+				},
+				{
+					"id": "static-spaces.admin_ensure_internal_user@v7",
+					"name": "static-spaces.admin_ensure_internal_user",
+					"authorizationDigest": "sha256:026b2d17d81c2bb03569f179bf0387600209f52775c2b31d0b00cf5bd7a2f654"
+				},
+				{
+					"id": "static-spaces.admin_find_groups@v7",
+					"name": "static-spaces.admin_find_groups",
+					"authorizationDigest": "sha256:7bde6600385e2d88b4fce12f19cf35fda4bf110bee2a9f944ee01f366f73aba9"
+				},
+				{
+					"id": "static-spaces.admin_find_users@v7",
+					"name": "static-spaces.admin_find_users",
+					"authorizationDigest": "sha256:1ab94af7e6e946bb8317962493458c246b0463a8a3150f3d57b961de261ab585"
+				},
+				{
+					"id": "static-spaces.admin_list_acl@v7",
+					"name": "static-spaces.admin_list_acl",
+					"authorizationDigest": "sha256:a55f6c1d888b7fda05a5c8f61a49a5ead22fb0a0d0c6436d12349d6419281dc2"
+				},
+				{
+					"id": "static-spaces.admin_manage_membership@v7",
+					"name": "static-spaces.admin_manage_membership",
+					"authorizationDigest": "sha256:2fb9888a12e38405b240a604592eca262c147a4ec48c3230ae876995057b35c7"
+				},
+				{
+					"id": "static-spaces.admin_set_acl@v7",
+					"name": "static-spaces.admin_set_acl",
+					"authorizationDigest": "sha256:cade0deff3eefbd2e59a7ddbae40c48e913ecce8c66ff7e77c63e3ce02ae4c2c"
+				},
+				{
+					"id": "static-spaces.create_markdown_comment@v7",
+					"name": "static-spaces.create_markdown_comment",
+					"authorizationDigest": "sha256:5870b9a58116cf158382e4a5b0a1b7014790b97ddc660f0ef53c15581fddebb6"
+				},
+				{
+					"id": "static-spaces.delete_file@v7",
+					"name": "static-spaces.delete_file",
+					"authorizationDigest": "sha256:9581c78b7e6ffd4036277ec1453677f5d62b01f07a2cdab81ba4a492e4ef8851"
+				},
+				{
+					"id": "static-spaces.delete_markdown_comment@v7",
+					"name": "static-spaces.delete_markdown_comment",
+					"authorizationDigest": "sha256:0e481145b5a7c56342c048cc973ed75d0f5c5ece0f23468f5700eef6424c0270"
+				},
+				{
+					"id": "static-spaces.delete_space@v7",
+					"name": "static-spaces.delete_space",
+					"authorizationDigest": "sha256:6c40f8f20c8c69c02d2fc9cdf699c8b71ed4bbb180553af5bc8cfa5e6c479c57"
+				},
+				{
+					"id": "static-spaces.download_file@v7",
 					"name": "static-spaces.download_file",
-					"authorizationDigest": "sha256:58471350d4341ece44071a856cc689a550d752f60e2429fc28401dee42908437"
+					"authorizationDigest": "sha256:5cd37ff0f4479a77e01f5bcb32c39f7e34d0d3e614a8ab3b4fb5671207753519"
 				},
 				{
-					"id": "static-spaces.get_current_user@v6",
+					"id": "static-spaces.edit_markdown_comment@v7",
+					"name": "static-spaces.edit_markdown_comment",
+					"authorizationDigest": "sha256:d2637e50605e47903bbe32e86d788fc57add1f57b97ed6e52be61403a9c11b72"
+				},
+				{
+					"id": "static-spaces.get_current_user@v7",
 					"name": "static-spaces.get_current_user",
-					"authorizationDigest": "sha256:53b6fd57cb754246e9a8214e5019aa111d4a3cf40ac13e68c11d132540a24289"
+					"authorizationDigest": "sha256:440417c1dabdb9bb61491e9eaf5f242ee3ab78c494c3cfc9fdf9b0a3f174c65e"
 				},
 				{
-					"id": "static-spaces.get_markdown_review@v6",
+					"id": "static-spaces.get_markdown_review@v7",
 					"name": "static-spaces.get_markdown_review",
-					"authorizationDigest": "sha256:974cae24aae27b5b60febf5aef88babbdc2c31281fc2dcc91bccada31cb3b02d"
+					"authorizationDigest": "sha256:19a86494a0eed985f8f59993bd8deec538ba4e1e12cf2e757a5091ab1b1fe445"
 				},
 				{
-					"id": "static-spaces.list_files@v6",
+					"id": "static-spaces.list_files@v7",
 					"name": "static-spaces.list_files",
-					"authorizationDigest": "sha256:b979686a4a7bae911bafc991dd3b50c3e8734cf3401a1d87501af53a231f762d"
+					"authorizationDigest": "sha256:8df0e90c0cbf05e5d0d4bb79ac27b9652334a171ee995e0441da2e9b2b664224"
 				},
 				{
-					"id": "static-spaces.publish_space@v6",
+					"id": "static-spaces.manage_shared_group_grant@v7",
+					"name": "static-spaces.manage_shared_group_grant",
+					"authorizationDigest": "sha256:87a516c375e47c7a8fb8a68bf95f4331d68247cc4322e487c1a2892b7da6ddf1"
+				},
+				{
+					"id": "static-spaces.manage_shared_membership@v7",
+					"name": "static-spaces.manage_shared_membership",
+					"authorizationDigest": "sha256:96baecce227658f42b38e974da14cff9feb4ca32b26b605bd45db9c77072f2cd"
+				},
+				{
+					"id": "static-spaces.publish_space@v7",
 					"name": "static-spaces.publish_space",
-					"authorizationDigest": "sha256:74f4b915cc6e0fbdd3c223edcc31bd5db008748db452bb94b97fb9d84945d918"
+					"authorizationDigest": "sha256:e4b337e34f69d4072a253149b2fbe5b40a75033105d84fec13aa28e5d9ff5d1b"
 				},
 				{
-					"id": "static-spaces.upload_html@v6",
+					"id": "static-spaces.render_index@v7",
+					"name": "static-spaces.render_index",
+					"authorizationDigest": "sha256:65d411d277f9666a3d8ec12409b5cd1a3317607fa197f63c51f0ecc37bf5bc8a"
+				},
+				{
+					"id": "static-spaces.search_directory_groups@v7",
+					"name": "static-spaces.search_directory_groups",
+					"authorizationDigest": "sha256:46ed35a5786191f97e2087211904858d0a5ca40a886d6f92d2780ecf28f95bdb"
+				},
+				{
+					"id": "static-spaces.upload_html@v7",
 					"name": "static-spaces.upload_html",
-					"authorizationDigest": "sha256:65b747b76184aeb0e79e14c833612201e84b0abcf5f8806d642b4f577e6fa5ef"
+					"authorizationDigest": "sha256:586dd627b7dfc7a4a7752c4ccf1597f6d4be7c1b2c48253537e22f21ad2411ff"
 				},
 				{
-					"id": "static-spaces.upload_static_package@v6",
+					"id": "static-spaces.upload_static_package@v7",
 					"name": "static-spaces.upload_static_package",
-					"authorizationDigest": "sha256:e870167f6578b2a67efd7cc3ff001595fa4c011a3112a31d04fab2ff27d71769"
+					"authorizationDigest": "sha256:f94256859750a2b23689d55f3ac3bcffa085b54ff612489a789e08bdfbe262b6"
 				}
 			],
 			"compatibility": []

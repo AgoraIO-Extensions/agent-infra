@@ -352,8 +352,9 @@ StaticSpaces 的受监督实现范围，不授权部署、生产发布或向现�
 Publish API 固定为 `https://publish-static-spaces.sh3.agoralab.co`，身份校验固定为
 `https://auth-static-spaces.sh3.agoralab.co/api/v3/core/users/me/`。个人 Authentik API Token
 仅通过 Connection Credential 表单提交；服务端以 Bearer header 注入，使用稳定 `pk` 绑定
-外部账号，以已验证 username 解析个人空间。拒绝非活跃或 superuser 身份，不接受 browser
-identity header、break-glass token、调用方 username、任意 endpoint 或管理员 Credential。
+外部账号，以已验证 username 解析个人空间。历史 v1–v6 拒绝非活跃或 superuser 身份；获批 v7 的活跃个人 superuser 准入与完整
+Action 边界按 [4.3.4](#434-staticspaces-完整-skill-工作流批准) 执行。不接受 browser
+identity header、break-glass token、调用方当前身份、任意 endpoint 或公司共享管理员 Credential。
 Token 的 expiry、revoke 与 rotation 由上游管理，不伪造 OAuth refresh。身份 endpoint 的
 401/403 按上游 Publish API 语义视为无效凭证，内容 API 的 403 仍表示空间权限不足。
 
@@ -536,6 +537,26 @@ G-03 用户文案为“写入结果未知；此 Connection 的新写入已暂停
 持久未决 Effect 跨客户端、Grant、重连及版本保留冻结；其他 Connection 与正常授权 READ
 可继续。普通参数/READ ACL 拒绝只影响请求，凭证故障只影响对应账号，不关闭整个普通版本。
 新 Capability Profile/Policy、公司审批及显式 Consent/Grant 必须完成，旧 Grant 不自动扩权。
+
+### 4.3.4 StaticSpaces 完整 Skill 工作流批准
+
+Owner 已于 2026-10-12 明确批准 [#1927](https://github.com/AgoraIO-Extensions/agent-infra/issues/1927)
+的 [完整工作流 ADR](../adr/ADR-connection-static-spaces-full-workflows.md)。仅新
+`static-spaces-connection-v7-full` 扩展至 ADR 所列 24 项 Action，统一 `StaticSpaces full`。
+成员/目录组授权、评论、删除/索引及管理员接口按明确 target、role 和 Effect 分别声明。
+管理员业务允许活跃个人 superuser Token，服务端读取稳定账号与真实角色，每次 admin 提交前
+验证；最终上游仍执行角色权限检查，不向非管理员授予管理员能力，不使用共享超级凭证。
+管理员 publish 路径按上游合同可能不自动添加 creator membership；该空回执仅对已验证
+superuser 接受，不记为成员授权或网页读取通过，普通首次发布仍须 membership/read 验证。
+遗留内部账号接口仅允许无密码操作；不创建 LDAP 用户、不生成/重设/回传密码。
+浏览器状态/订阅登记与内部维护不伪装成 Bearer Agent Action。
+Owner 另行批准 EEP-1834 的最小上游回执补充；目录组授权仅在新 group.pk/application
+pk/slug 合同部署后激活，必须核验 binding 的组、门户引用与请求空间。缺少引用不回退旧校验。
+
+此范围须新公司审批、Consumer 声明及显式 Consent；旧 v6 Grant 不自动扩权，v1–v6 原字节和
+审计保持。READ/WRITE 仍经授权交集、Credential fence、受控 egress；所有新 WRITE 保留
+持久执行及单 Connection 未知冻结，跨重连/升级不重放。#1672 原证据缺口不记为已验证；
+新增管理员/删除/评论范围的发布及真实验收由 #1927 单独跟踪，旧风险批准不替代新版本验收。
 
 ## 5. 方案比较与选型
 
