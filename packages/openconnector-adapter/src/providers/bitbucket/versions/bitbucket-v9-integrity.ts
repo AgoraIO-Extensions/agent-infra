@@ -1,0 +1,2 @@
+export const bitbucketV9ExecutorDigest =
+	"sha256:eac2d28cad283ff9eeb2dd4788d58a9856006fcddd26b61b70d89a922b570a1b";

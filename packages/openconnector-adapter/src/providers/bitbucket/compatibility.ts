@@ -1,8 +1,23 @@
-import { bitbucketServerConnectionCatalog as catalog } from "./versions/bitbucket-server.ts";
+import { bitbucketV9ConnectionCatalog as catalog } from "./versions/bitbucket-v9.ts";
+import { bitbucketV9ExecutorDigest } from "./versions/bitbucket-v9-integrity.ts";
 
 // Reviewed release evidence is separate from immutable hashed executors.
 // Exact literals intentionally prevent a later release inheriting this proof.
 export const bitbucketAuthorizationCompatibility = [
+	{
+		provider: "bitbucket",
+		fromReleaseId:
+			"bitbucket-server-6.7.2-openconnector-0618e8cdaeaaaa77e2eb23938ac639867d4f03d7-connection-v8",
+		toReleaseId:
+			"bitbucket-server-6.7.2-openconnector-0618e8cdaeaaaa77e2eb23938ac639867d4f03d7-connection-v9",
+		fromExecutorDigest:
+			"sha256:36e421531152628f993691b6e61e4966dc84af4ad4fced71ab4b84f44b025b67",
+		toExecutorDigest: bitbucketV9ExecutorDigest,
+		rationale:
+			"v9 corrects compare/changes from/to direction only; schemas, effects, scopes, endpoints, credential validation and account identity remain unchanged.",
+		reviewReference:
+			"https://github.com/AgoraIO-Extensions/agent-infra/issues/2008",
+	},
 	{
 		provider: "bitbucket",
 		fromReleaseId:
