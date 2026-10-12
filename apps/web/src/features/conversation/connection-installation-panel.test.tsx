@@ -223,3 +223,29 @@ it.each(["confirmed", "revoked", "expired", "unknown"] as const)(
 		);
 	},
 );
+
+it("does not render credential-shaped response fields", async () => {
+	api.beginPlatformConnectionInstallationV1.mockResolvedValue({
+		response: { status: 202 },
+		data: {
+			schemaVersion: 1,
+			authorizationId: "authorization-1",
+			status: "confirmed",
+			expiresAt: Date.now() + 60_000,
+			token: "secret-material",
+		},
+	});
+	render(
+		<ConnectionInstallationPanel
+			conversationId="conversation-1"
+			executionId="execution-1"
+		/>,
+	);
+	fireEvent.click(screen.getByRole("button", { name: "开始安装" }));
+	await waitFor(() =>
+		expect(
+			screen.getByText("暂时无法开始 Connection 安装，请稍后重试。"),
+		).toBeTruthy(),
+	);
+	expect(screen.queryByText("secret-material")).toBeNull();
+});
