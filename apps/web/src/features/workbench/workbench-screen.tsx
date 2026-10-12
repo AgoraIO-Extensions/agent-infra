@@ -203,7 +203,7 @@ export function WorkbenchScreen(props: WorkbenchScreenProps) {
 									return (
 										<article
 											className="workbench-card workbench-recent-row"
-											key={conversation.conversationId}
+											key={`${conversation.agentId}\u0000${conversation.conversationId}`}
 										>
 											<div className="workbench-recent-copy">
 												{conversation.status === "unavailable" ? (
