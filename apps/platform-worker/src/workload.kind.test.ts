@@ -1250,6 +1250,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						client,
 						workerId: `custom-kind-${identityResponsibility}`,
 						pollIntervalMs: 1,
+						maximumAttempts: 600,
 						policy: workloadPolicy,
 						registry,
 						fetch: fetchHealth,
