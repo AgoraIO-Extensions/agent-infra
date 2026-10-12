@@ -2,6 +2,14 @@ import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { RuntimeModelConfigurationV3Schema } from "@agent-infra/contracts/runtime";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
+import {
+	validateModelAccess,
+	validateModelEndpoint,
+} from "./codex-app-server-bridge.js";
+import type {
+	RuntimeExternalActionAuthorization,
+	RuntimeExternalActionAuthorizationResult,
+} from "./driver.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
 import { workspacePathAllowed } from "./workspace-path.js";
@@ -20,10 +28,31 @@ export interface OpenCodeRuntimeOptions {
 		credential?: string;
 		authentication: "api-key" | "bearer";
 	}[];
+	readonly authorizeModelAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
+}
+
+export function validateOpenCodeRuntimeOptions(
+	options: OpenCodeRuntimeOptions,
+) {
+	for (const option of options.modelOptions) {
+		if (option.credential === undefined) {
+			if (!options.authorizeModelAction)
+				throw new Error("RUNTIME_CONFIGURATION_INVALID");
+			validateModelEndpoint(option.endpoint);
+		} else {
+			validateModelAccess({
+				endpoint: option.endpoint,
+				credential: option.credential,
+			});
+		}
+	}
 }
 
 /** Static OpenCode bootstrap for the single Generic ACP driver. */
 export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
+	validateOpenCodeRuntimeOptions(options);
 	try {
 		RuntimeModelConfigurationV3Schema.parse({
 			configVersion: options.configVersion,
