@@ -356,6 +356,52 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 				);
 			const podA = await client.read<V1Pod>("Pod", a);
 			const podB = await client.read<V1Pod>("Pod", b);
+			const resourceSets = readyRows.map((row) => {
+				const resources = (
+					row.resource_observation as {
+						resources: Array<{ kind: string; name: string; uid: string }>;
+					}
+				).resources;
+				return {
+					names: new Set(resources.map((resource) => resource.name)),
+					uids: new Set(resources.map((resource) => resource.uid)),
+				};
+			});
+			const [resourcesA, resourcesB] = resourceSets;
+			assert(resourcesA && resourcesB);
+			expect([...resourcesA.uids].some((uid) => resourcesB.uids.has(uid))).toBe(
+				false,
+			);
+			const managedPodInputs = [
+				{ pod: podA, resources: resourcesA },
+				{ pod: podB, resources: resourcesB },
+			] as const;
+			for (const { pod, resources } of managedPodInputs) {
+				const spec = pod?.spec;
+				assert(spec);
+				expect(resources.names.has(spec.serviceAccountName ?? "")).toBe(true);
+				const workspace = spec.volumes?.find(
+					(volume) => volume.name === "workspace",
+				);
+				expect(workspace?.persistentVolumeClaim?.claimName).toBeTruthy();
+				expect(
+					resources.names.has(
+						workspace?.persistentVolumeClaim?.claimName ?? "",
+					),
+				).toBe(true);
+				const secretRefs = spec.containers?.flatMap(
+					(container) =>
+						container.env?.flatMap((env) =>
+							env.valueFrom?.secretKeyRef?.name
+								? [env.valueFrom.secretKeyRef.name]
+								: [],
+						) ?? [],
+				);
+				expect(secretRefs.length).toBeGreaterThan(0);
+				expect(secretRefs.every((name) => resources.names.has(name))).toBe(
+					true,
+				);
+			}
 			assert(podA?.status?.podIP && podB?.status?.podIP);
 			for (const [source, targetIp] of [
 				[a, podB.status.podIP],
