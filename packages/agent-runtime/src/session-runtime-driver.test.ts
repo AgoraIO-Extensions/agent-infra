@@ -76,6 +76,7 @@ function fileBridge(onRevalidate?: (call: number) => void): {
 
 it("publishes one request-scoped native result file", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-result-file-"));
+	let publishAfterTerminal: (() => Promise<void>) | undefined;
 	const writeResult = vi.fn(
 		async (descriptor: Parameters<RuntimeFileBridgePortV1["writeResult"]>[0]) =>
 			createRuntimeFileResultReceiptV1(
@@ -117,6 +118,12 @@ it("publishes one request-scoped native result file", async () => {
 				path: join(options.cwd, "second-result.txt"),
 				content: "duplicate",
 			});
+			publishAfterTerminal = async () => {
+				await options.resultFile?.({
+					path: join(options.cwd, "late-result.txt"),
+					content: "late",
+				});
+			};
 			return { stopReason: "completed" };
 		},
 		cancel: async () => {},
@@ -138,6 +145,7 @@ it("publishes one request-scoped native result file", async () => {
 				await runtime.getStatus(accepted.nativeSessionRef, "execution-a"),
 			).toBe("completed"),
 		);
+		await publishAfterTerminal?.();
 		expect(writeResult).toHaveBeenCalledOnce();
 		expect(
 			(
