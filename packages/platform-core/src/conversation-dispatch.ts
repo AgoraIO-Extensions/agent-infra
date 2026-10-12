@@ -1280,13 +1280,10 @@ export function createConversationDispatchUseCaseV1(
 			}
 
 			if (response.result.outcome === "busy") {
-				return retry(
-					dependencies.store,
-					claim,
-					retryDelayMs,
-					"RUNTIME_BUSY",
-					"busy",
-				);
+				// Runtime has durably recorded that this original operation cannot
+				// start. Treat it as a terminal product failure; sending it through
+				// unknown recovery would only replay the same busy result forever.
+				return reject(dependencies.store, claim, "RUNTIME_BUSY");
 			}
 			if (response.result.outcome === "unknown") {
 				return retry(

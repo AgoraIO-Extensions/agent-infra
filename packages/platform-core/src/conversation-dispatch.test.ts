@@ -1813,9 +1813,9 @@ describe("Conversation Worker dispatch", () => {
 	it.each([
 		[
 			{ outcome: "busy" as const },
-			{ schemaVersion: 1, outcome: "busy", retryScheduled: true },
+			{ schemaVersion: 1, outcome: "rejected" },
 			"RUNTIME_BUSY",
-			"retry_scheduled",
+			"failed",
 		],
 		[
 			{
