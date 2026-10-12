@@ -10,7 +10,7 @@ All Direct clients use Streamable HTTP at `__CONNECTION_ORIGIN__/mcp`.
 - Existing remote OAuth MCP client: use Authorization Code + PKCE and the SDK's browser login/token lifecycle. Discover configuration at `/.well-known/oauth-protected-resource/mcp` and `/.well-known/oauth-authorization-server`. Coordinate OAuth client registration with the Connection administrator; do not assume unrestricted dynamic registration. Validate state, redirect URI and resource according to the actual SDK/profile. OAuth is separate from PAT Binding's callback/claim protocol.
 - Personal/manual client: sign in at [Access tokens](__CONNECTION_ORIGIN__/connection/tokens), issue a Connection PAT and store it in backend Secret configuration. Generic PATs use the Portable PAT Consumer.
 
-Token authentication, company approval, external account connection and Consumer Action consent are separate requirements. A token alone does not grant external account access.
+Token authentication, external account connection and Consumer Action consent are separate requirements. Company approval is required only when enabled for that Provider; existing and new Providers default to approval off. A token alone does not grant external account access.
 
 ## Register an Agent Consumer and obtain its service credential
 
@@ -54,13 +54,15 @@ The response is `{"issued":{"consumerId":...,"expiresAt":...,"name":...,"token":
 
 The binding currently lasts 10 minutes; both confirmation and claim must finish before the returned binding expiry. PAT expiry is separately returned in `issued.expiresAt`. Claim succeeds once. Use separate create/claim idempotency keys, preserving a key and parameters for the same operation; do not rely on replay to retrieve a one-time secret. Expired, delivered or lost-response cases require an explicit new binding flow rather than blind claim retries. Users can revoke an already issued obsolete token at [Access tokens](__CONNECTION_ORIGIN__/connection/tokens).
 
-## Company approval, account connection and Consumer consent
+## Provider approval setting, account connection and Consumer consent
+
+Enabling approval also blocks new calls from existing directly connected accounts without valid company eligibility. Disabling approval preserves history, does not expand Credential scopes or selected Actions, and does not automatically restore suspended or revoked Consumer grants. Shared-account eligibility is managed separately.
 
 Binding confirmation issues a token that can use connections already granted to that Consumer; it does not create an account connection, company approval or Action grant.
 
-1. At [Connections](__CONNECTION_ORIGIN__/connection/connections), select a Provider and "Request connection". Supply purpose, select capabilities and acknowledge the disclaimer; submit the company approval request.
-2. At [My Connection](__CONNECTION_ORIGIN__/connection/connections), users select a Provider to inspect their connection requests. Assigned approvers use [Awaiting my approval](__CONNECTION_ORIGIN__/connection/approvals). Users cannot approve on their own behalf; PAT issuance does not bypass approval.
-3. After approval, return to Connections and select an existing account or connect an external account. Reapplication, renewal and new capability approval start from the account's available operations.
+1. At [Connections](__CONNECTION_ORIGIN__/connection/connections), select a Provider and follow its current approval setting. Approval is off by default: connect your own external account directly. Only when an administrator enables approval, select "Request connection", supply purpose, select capabilities and acknowledge the disclaimer before submitting a company approval request.
+2. At [My Connection](__CONNECTION_ORIGIN__/connection/connections), users select a Provider to inspect their connection requests. For Providers with approval enabled, assigned approvers use [Awaiting my approval](__CONNECTION_ORIGIN__/connection/approvals). Users cannot approve on their own behalf; PAT issuance does not bypass enabled approval.
+3. With approval off, connect directly. With approval on, obtain approval first. Return to Connections and select an existing account or connect an external account. Reapplication, renewal and new capability approval apply to Providers with approval enabled and start from the account's available operations.
 4. Select the account, choose "Authorize client", select the Agent Consumer and explicitly confirm the Actions.
 
 If the Agent/Action is not selectable, ask the administrator to check registration, enabled state and Declaration. Do not substitute another Consumer's token. A user PAT can use multiple Providers explicitly granted to that Consumer. Token revocation, grant revocation and disconnecting an account have different scopes.
@@ -91,9 +93,9 @@ Do not guess Action IDs or submit raw provider credentials or caller-supplied us
 
 For `list_connections`/`search_actions` empty results with `service`, inspect `result.structuredContent.guidance`: `message`, `messageKey`, `reasonCode`, `retryable`, `nextAction`. `nextAction.type=OPEN_CONNECTION_WEB` includes a URL such as `__CONNECTION_ORIGIN__/connection/connections?provider=jira&intent=authorize`.
 
-- `PROVIDER_NOT_CONNECTED`: open Connections to request approval and connect an account after approval.
-- `PROVIDER_AUTHORIZATION_REQUIRED`: select the account and authorize this client; complete missing company approval first and select the Provider in My Connection to inspect request progress.
-- `PROVIDER_REAUTHORIZATION_REQUIRED`: inspect the account's state, restore approval or reconnect, and reconfirm client consent if required.
+- `PROVIDER_NOT_CONNECTED`: open Connections and connect according to the current setting; request approval first only for a Provider with approval enabled.
+- `PROVIDER_AUTHORIZATION_REQUIRED`: select the account and authorize this client; complete missing company approval first only if that Provider has approval enabled and select the Provider in My Connection to inspect request progress.
+- `PROVIDER_REAUTHORIZATION_REQUIRED`: inspect the account's state and reconnect or reconfirm client consent as directed; check and restore company eligibility only if that Provider has approval enabled.
 - `PROVIDER_UNSUPPORTED` / `CONTACT_ADMIN`: ask the Connection administrator to admit the Provider; do not imply the user simply needs to grant it.
 - `SEARCH_NO_RESULTS` / `REFINE_SEARCH`: simplify the query; empty results do not necessarily mean missing permission.
 - HTTP 401/token expiry: repeat client login or PAT Binding; manual PAT users should inspect Access tokens for expiry/revocation.
