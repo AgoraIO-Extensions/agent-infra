@@ -47,6 +47,11 @@ function headerValue(
  * public Origin, the JavaScript-settable CSRF marker, and an optional
  * same-origin Sec-Fetch-Site. Chromium owns Origin and Sec-Fetch-Site for
  * same-origin POSTs; the panel may not rely on setting either of them.
+ *
+ * The Platform responses are synthetic fixtures, as in the other
+ * `apps/web/tests` journeys; only the browser-owned request headers are real
+ * Chromium behaviour, so a pass does not prove a deployed Connection
+ * authorization.
  */
 function browserGateAccepts(
 	headers: Record<string, string | string[] | undefined>,
