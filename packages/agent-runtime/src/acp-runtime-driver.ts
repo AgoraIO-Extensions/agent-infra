@@ -158,6 +158,19 @@ export const GenericAcpRuntimeDriver = {
 							event.sessionUpdate === "tool_call" ||
 							event.sessionUpdate === "tool_call_update"
 						) {
+							if (
+								event.sessionUpdate === "tool_call_update" &&
+								event.status !== "completed" &&
+								event.status !== "failed"
+							) {
+								for (const content of event.content ?? []) {
+									if (content.type !== "diff") continue;
+									await session.resultFile?.({
+										path: content.path,
+										content: content.newText,
+									});
+								}
+							}
 							const phase =
 								event.status === "completed"
 									? "completed"
@@ -260,7 +273,7 @@ async function probeAcpReadiness(
 				// ACP image input is optional; advertise attachments only when the
 				// peer negotiated it during initialization.
 				attachments: session.supportsImagePrompt,
-				resultFiles: false,
+				resultFiles: true,
 				connection: false,
 				supplementaryInstruction: false,
 			} satisfies RuntimeCapabilitiesV1;
