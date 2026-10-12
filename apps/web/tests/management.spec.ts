@@ -1285,6 +1285,11 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	});
 	await page.goto("/agents/agent-pilot-1");
 	await page.getByRole("link", { name: "配置与管理" }).click();
+	await page
+		.getByRole("checkbox", {
+			name: "我已知悉：连接此机器人可能断开它在其他服务中的现有连接。",
+		})
+		.check();
 	await page.getByRole("button", { name: "扫码授权" }).click();
 	await expect(
 		page.getByText("扫码授权暂不可用，请使用下方手动配置。"),
@@ -1292,11 +1297,6 @@ test("Owner manually configures a bot without exposing its Secret or an internal
 	await page.getByLabel("Bot ID", { exact: true }).fill("fixture-bot");
 	const secret = "synthetic-bot-secret";
 	await page.getByLabel("Secret", { exact: true }).fill(secret);
-	await page
-		.getByRole("checkbox", {
-			name: "我已知悉：连接此机器人可能断开它在其他服务中的现有连接。",
-		})
-		.check();
 	await page.getByLabel("Secret", { exact: true }).evaluate((element) => {
 		(element as HTMLInputElement).value = "";
 	});
