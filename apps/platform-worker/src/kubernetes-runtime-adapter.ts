@@ -169,6 +169,8 @@ export function createKubernetesRuntimeAdapterV1(options: {
 	readonly probe: (input: {
 		readonly desired: AgentWorkloadDesiredV1;
 		readonly serviceOrigin: string;
+		/** 本次观测到的唯一就绪 Pod，用于绑定签名 readiness 结果（#1889）。 */
+		readonly podUid?: string;
 	}) => Promise<boolean>;
 }) {
 	const { client, policy } = options;
@@ -609,6 +611,7 @@ export function createKubernetesRuntimeAdapterV1(options: {
 				desired: value,
 				// In-cluster plaintext (ADR-0020); authorization stays token + Grant.
 				serviceOrigin: `http://${workloadResourceNameV1(value.agentId)}-probe.${policy.namespace}.svc:${value.service.port}`,
+				...(pod.metadata?.uid ? { podUid: pod.metadata.uid } : {}),
 			}))
 				? "healthy"
 				: "unhealthy";

@@ -92,6 +92,8 @@ export function createBrowserRecoveryEventAdapterV1(input: {
 						pageRevision: request.binding.pageRevision,
 						sessionGeneration: request.binding.sessionGeneration,
 						resourceFence: request.binding.resourceFence,
+						workloadRevision: request.binding.workloadRevision,
+						imageDigest: request.binding.imageDigest,
 						sideEffect: record?.sideEffect ?? request.sideEffect,
 					},
 					...(request.startedAt ? { startedAt: request.startedAt } : {}),

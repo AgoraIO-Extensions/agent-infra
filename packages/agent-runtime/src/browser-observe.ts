@@ -85,6 +85,8 @@ export type BrowserActionExecutionBindingV1 = Readonly<{
 	pageRevision: number;
 	sessionGeneration: number;
 	resourceFence: number;
+	workloadRevision: number;
+	imageDigest: string;
 }>;
 
 export type BrowserActionRequestV1 = Readonly<{
@@ -193,7 +195,9 @@ function sameExecutionBinding(
 		left.capabilityVersion === right.capabilityVersion &&
 		left.pageRevision === right.pageRevision &&
 		left.sessionGeneration === right.sessionGeneration &&
-		left.resourceFence === right.resourceFence
+		left.resourceFence === right.resourceFence &&
+		left.workloadRevision === right.workloadRevision &&
+		left.imageDigest === right.imageDigest
 	);
 }
 
@@ -217,7 +221,9 @@ function validExecutionBinding(
 		positiveInteger(value.capabilityVersion) &&
 		positiveInteger(value.pageRevision) &&
 		positiveInteger(value.sessionGeneration) &&
-		positiveInteger(value.resourceFence)
+		positiveInteger(value.resourceFence) &&
+		positiveInteger(value.workloadRevision) &&
+		/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(value.imageDigest)
 	);
 }
 
@@ -735,6 +741,8 @@ export function createBrowserObserveControllerV1(input: {
 						pageRevision: supplied?.pageRevision,
 						sessionGeneration: supplied?.sessionGeneration,
 						resourceFence: supplied?.resourceFence,
+						workloadRevision: supplied?.workloadRevision,
+						imageDigest: supplied?.imageDigest,
 					});
 		if (
 			binding !== undefined &&

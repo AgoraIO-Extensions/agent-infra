@@ -57,6 +57,8 @@ export interface ConversationBrowserActionBindingV1 {
 	readonly pageRevision: number;
 	readonly sessionGeneration: number;
 	readonly resourceFence: number;
+	readonly workloadRevision: number;
+	readonly imageDigest: string;
 	readonly sideEffect: boolean;
 }
 
@@ -115,6 +117,15 @@ function metadata(input: unknown): string {
 	if (
 		typeof input !== "string" ||
 		!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(input)
+	)
+		invalid();
+	return input;
+}
+
+function imageDigest(input: unknown): string {
+	if (
+		typeof input !== "string" ||
+		!/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(input)
 	)
 		invalid();
 	return input;
@@ -201,6 +212,8 @@ function browserActionBinding(
 		"pageRevision",
 		"sessionGeneration",
 		"resourceFence",
+		"workloadRevision",
+		"imageDigest",
 		"sideEffect",
 	]);
 	if (
@@ -214,6 +227,8 @@ function browserActionBinding(
 		pageRevision: positiveCount(value.pageRevision),
 		sessionGeneration: positiveCount(value.sessionGeneration),
 		resourceFence: positiveCount(value.resourceFence),
+		workloadRevision: positiveCount(value.workloadRevision),
+		imageDigest: imageDigest(value.imageDigest),
 		sideEffect: value.sideEffect,
 	};
 }

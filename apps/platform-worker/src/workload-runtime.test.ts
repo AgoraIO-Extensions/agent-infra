@@ -86,7 +86,10 @@ import {
 import { WorkloadDeploymentErrorV1 } from "./workload-deployment.js";
 import { WorkloadProbeIncompleteErrorV1 } from "./workload-probe-failure.js";
 import {
+	createWorkloadReadinessLedgerV1,
 	createWorkloadRuntimeV1,
+	drainCacheableCommands,
+	drainReadinessMaxAgeMs,
 	isWorkloadExecutionCapacityCurrentV1,
 	resolveWorkloadExecutionCapacityV1,
 	type WorkloadRuntimeOptionsV1,
@@ -4353,3 +4356,120 @@ it.each([
 		expect(stored).toEqual(persisted);
 	},
 );
+
+// #1889：排空路由复核沿用同一进程内最近一次通过的签名 readiness。
+describe("observeForDrain (#1889)", () => {
+	async function ready(overrides: Partial<WorkloadRuntimeOptionsV1> = {}) {
+		const probeRuntime = vi.fn<WorkloadRuntimeOptionsV1["probeRuntime"]>(
+			async () => ({ core: "passed", capabilities: {} }),
+		);
+		const health = vi.fn(async () => new Response("ok"));
+		const f = fixture({ probeRuntime, fetch: health, ...overrides });
+		await f.tick(8);
+		const state = f.state;
+		if (state?.phase !== "ready" || !state.identity)
+			throw new Error("Fixture did not reach ready");
+		const readinessLedger = createWorkloadReadinessLedgerV1();
+		// 监测与会话路由是两个实例，部署装配时共享同一份记录。
+		const monitor = createWorkloadRuntimeV1({ ...f.options, readinessLedger });
+		const drain = createWorkloadRuntimeV1({ ...f.options, readinessLedger });
+		probeRuntime.mockClear();
+		health.mockClear();
+		return { f, state, monitor, drain, probeRuntime, health };
+	}
+	function pod(f: Awaited<ReturnType<typeof ready>>["f"]) {
+		const found = [...f.resources.values()].find(
+			(resource) => resource.kind === "Pod",
+		);
+		if (!found?.metadata) throw new Error("Fixture Pod is missing");
+		return found.metadata;
+	}
+
+	it("reuses the monitor's passed readiness and still checks the route and health", async () => {
+		const { state, monitor, drain, probeRuntime, health } = await ready();
+		await expect(monitor.observe(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+		expect(health).toHaveBeenCalledTimes(3);
+	});
+
+	it("runs the full readiness without a passed record", async () => {
+		const { state, drain, probeRuntime } = await ready();
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+		// 完整探测通过后，本实例在有效期内沿用。
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(1);
+	});
+
+	it("runs the full readiness once the record is one monitor period old", async () => {
+		const { state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		const now = Date.now();
+		const clock = vi.spyOn(Date, "now");
+		try {
+			clock.mockReturnValue(now + drainReadinessMaxAgeMs - 1);
+			await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+			expect(probeRuntime).toHaveBeenCalledTimes(1);
+			clock.mockReturnValue(now + drainReadinessMaxAgeMs);
+			await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+			expect(probeRuntime).toHaveBeenCalledTimes(2);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it("runs the full readiness when the Pod was replaced", async () => {
+		const { f, state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		pod(f).uid = "replacement-pod";
+		probeRuntime.mockResolvedValueOnce({ core: "failed", capabilities: {} });
+		await expect(drain.observeForDrain(state)).resolves.toBe("unhealthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(2);
+		// 未通过即清除记录，下一次仍做完整探测。
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(3);
+	});
+
+	it.each([
+		["a monitor probe is pending", { attempts: 1 }],
+		["the Workload is not ready", { phase: "observing" as const }],
+		["the Workload revision changed", "revision"],
+		["the fence changed", "fence"],
+	] as const)("does not reuse the record when %s", async (_name, change) => {
+		const { state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		const changed =
+			change === "revision"
+				? { ...state, revision: state.revision + 1 }
+				: change === "fence"
+					? { ...state, fence: state.fence + 1 }
+					: { ...state, ...change };
+		const result = await drain
+			.observeForDrain(changed)
+			.catch(() => "error" as const);
+		// 绑定不一致时要么由完整观测重新探测，要么在探测前就因漂移拒绝；不会沿用。
+		expect(probeRuntime.mock.calls.length === 2 || result !== "healthy").toBe(
+			true,
+		);
+	});
+
+	it("forgets the record after a failed full observation", async () => {
+		const { state, monitor, drain, probeRuntime } = await ready();
+		await monitor.observe(state);
+		probeRuntime.mockResolvedValueOnce({ core: "failed", capabilities: {} });
+		await expect(monitor.observe(state)).resolves.toBe("unhealthy");
+		await expect(drain.observeForDrain(state)).resolves.toBe("healthy");
+		expect(probeRuntime).toHaveBeenCalledTimes(3);
+	});
+
+	it("limits reuse to drain commands", () => {
+		expect([...drainCacheableCommands].sort()).toEqual([
+			"events.ack",
+			"events.persist",
+			"execution.renew",
+		]);
+	});
+});
