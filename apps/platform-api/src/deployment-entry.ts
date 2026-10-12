@@ -108,9 +108,7 @@ export function createPlatformApiAssemblyInput() {
 		...(callbackForwarder
 			? { connectionInstallationCallback: callbackForwarder }
 			: {}),
-		...(applicationCredentialDelivery
-			? { applicationCredentialDelivery }
-			: {}),
+		...(applicationCredentialDelivery ? { applicationCredentialDelivery } : {}),
 		databaseUrl,
 		identity: browser.identity,
 	});
