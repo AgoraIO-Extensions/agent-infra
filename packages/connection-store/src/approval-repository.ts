@@ -382,7 +382,7 @@ export class PostgresConnectionApprovalRepository {
 		>`
 				SELECT payload->'upgrade' AS upgrade FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required'
 				AND payload->>'sourceProfileId' = ${profileId} AND payload->>'targetProviderReleaseId' = ${targetId}
-				AND payload ? 'upgrade' ORDER BY created_at DESC LIMIT 1
+				AND payload ? 'upgrade' ORDER BY COALESCE((payload->>'generation')::bigint, 0) DESC, created_at DESC, id DESC LIMIT 1
 			`;
 		if (sourceId === targetId) return pending?.upgrade;
 		const proof = await compatibleApprovalProfile(sql, {
@@ -642,7 +642,30 @@ export class PostgresConnectionApprovalRepository {
 				{ id: string }[]
 			>`SELECT id FROM connection_capability_profiles WHERE id = ${source.id} AND status = 'PUBLISHED' AND revision::text = ${source.revision} FOR UPDATE`;
 			if (!profile) return;
-			const eventId = `profile-update-${canonicalHash({ sourceId: source.id, revision: source.revision, targetId: upgrade.targetProviderReleaseId })}`;
+			const [latest] = await sql<
+				{
+					id: string;
+					target_id: string;
+					source_revision: string | null;
+					generation: string;
+				}[]
+			>`
+ SELECT id, payload->>'targetProviderReleaseId' AS target_id,
+ payload->>'sourceRevision' AS source_revision,
+ COALESCE(payload->>'generation', '0') AS generation
+ FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required'
+ AND payload->>'sourceProfileId' = ${source.id}
+ ORDER BY COALESCE((payload->>'generation')::bigint, 0) DESC, created_at DESC, id DESC LIMIT 1
+ `;
+			const sameLifecycle =
+				latest?.target_id === upgrade.targetProviderReleaseId &&
+				latest.source_revision === source.revision;
+			const generation = sameLifecycle
+				? latest.generation
+				: String(BigInt(latest?.generation ?? "0") + 1n);
+			const eventId = sameLifecycle
+				? latest.id
+				: `profile-update-${canonicalHash({ sourceId: source.id, revision: source.revision, targetId: upgrade.targetProviderReleaseId, generation })}`;
 			const superseded = await sql<
 				{ aggregate_id: string }[]
 			>`SELECT aggregate_id FROM connection_outbox_events
@@ -658,7 +681,7 @@ export class PostgresConnectionApprovalRepository {
 			}
 			const inserted = await sql`
 				INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
-				VALUES (${eventId}, 'connection.capability-profile.update-required', ${eventId}, ${sql.json({ sourceProfileId: source.id, targetProviderReleaseId: upgrade.targetProviderReleaseId, providerId: source.provider_id, upgrade })}) ON CONFLICT DO NOTHING
+				VALUES (${eventId}, 'connection.capability-profile.update-required', ${eventId}, ${sql.json({ sourceProfileId: source.id, targetProviderReleaseId: upgrade.targetProviderReleaseId, providerId: source.provider_id, sourceRevision: source.revision, generation, upgrade })}) ON CONFLICT DO NOTHING
 			`;
 			if (!inserted.count)
 				await sql`UPDATE connection_outbox_events SET payload = jsonb_set(payload, '{upgrade,reason}', to_jsonb(${upgrade.reason}::text)) WHERE id = ${eventId}`;

@@ -186,7 +186,7 @@ export class PostgresConnectionNotificationDispatcher {
 							SELECT release.provider AS provider_id, profile.status,
 							EXISTS (SELECT 1 FROM connection_outbox_events newer
 							WHERE newer.topic = pending.topic AND newer.payload->>'sourceProfileId' = pending.payload->>'sourceProfileId'
-							AND (newer.created_at, newer.id) > (pending.created_at, pending.id)) AS obsolete
+							AND (COALESCE((newer.payload->>'generation')::bigint, 0), newer.created_at, newer.id) > (COALESCE((pending.payload->>'generation')::bigint, 0), pending.created_at, pending.id)) AS obsolete
 							FROM connection_outbox_events pending
 							JOIN connection_capability_profiles profile ON profile.id = pending.payload->>'sourceProfileId'
 							JOIN connection_provider_releases release ON release.id = profile.provider_release_id
@@ -202,6 +202,12 @@ export class PostgresConnectionNotificationDispatcher {
 								JOIN connection_principal_roles role_binding ON role_binding.principal_id = principal.id
 								WHERE principal.status = 'ACTIVE' AND role_binding.role = 'CONNECTION_ADMIN' AND role_binding.status = 'ACTIVE'
 								FOR SHARE OF principal, role_binding`;
+							if (!admins.length) {
+								await sql`UPDATE connection_outbox_events SET available_at = now() + interval '30 seconds'
+ WHERE id = ${event.id} AND status = 'PENDING'`;
+								return true;
+							}
+
 							for (const admin of admins) {
 								await sql`INSERT INTO connection_work_items (id, recipient_principal_id, business_type, business_id, business_revision, action_type, status)
 									VALUES (${`profile-update-work-${event.id}-${admin.id}`}, ${admin.id}, 'CAPABILITY_PROFILE_UPDATE', ${event.aggregate_id}, 1, 'UPDATE_PROFILE', 'OPEN') ON CONFLICT DO NOTHING`;

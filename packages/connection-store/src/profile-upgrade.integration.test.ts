@@ -27,6 +27,7 @@ describe("capability profile follows the current runtime", () => {
 		"auth",
 		"deployment",
 		"directory-disabled",
+		"no-admin",
 		"terms-unavailable",
 		"directory-denied",
 	] as const) {
@@ -78,7 +79,8 @@ describe("capability profile follows the current runtime", () => {
 				const runtime = {
 					providerReleases: new Map([[provider, targetId]]),
 					authorizationCompatibility: new Map([[targetId, evidence]]),
-					approvalDirectoryEnabled: scenario !== "directory-disabled",
+					approvalDirectoryEnabled:
+						scenario !== "directory-disabled" && scenario !== "no-admin",
 					verifyPrincipal: verify,
 				};
 				const catalog = new PostgresConnectionApprovalRepository(
@@ -237,6 +239,44 @@ describe("capability profile follows the current runtime", () => {
 						const pending =
 							await sql`SELECT id FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required' AND payload->>'sourceProfileId' = ${current?.id ?? ""}`;
 						expect(pending).toHaveLength(1);
+						if (scenario === "no-admin") {
+							const roles = await sql<
+								{ principal_id: string }[]
+							>`SELECT principal_id FROM connection_principal_roles WHERE role = 'CONNECTION_ADMIN' AND status = 'ACTIVE'`;
+							await sql`UPDATE connection_principal_roles SET status = 'REVOKED', revoked_at = now() WHERE role = 'CONNECTION_ADMIN' AND status = 'ACTIVE'`;
+							try {
+								while (await dispatcher.runOnce()) {
+									/* defer without a recipient */
+								}
+								const [event] =
+									await sql`SELECT status, attempt_count FROM connection_outbox_events WHERE id = ${pending[0]?.id ?? ""}`;
+								expect(event?.status).toBe("PENDING");
+								expect(event?.attempt_count).toBe(0);
+								const lateAdmin = `late-admin-${suffix}`;
+								await sql`INSERT INTO connection_principals (id, display_name) VALUES (${lateAdmin}, 'Late admin')`;
+								await sql`INSERT INTO connection_principal_roles (principal_id, role, status, grant_source) VALUES (${lateAdmin}, 'CONNECTION_ADMIN', 'ACTIVE', 'ADMIN')`;
+								await sql`UPDATE connection_outbox_events SET available_at = now() WHERE id = ${pending[0]?.id ?? ""}`;
+								while (await dispatcher.runOnce()) {
+									/* deliver after a role grant */
+								}
+								expect(
+									(await requests.listNotifications(lateAdmin)).items.some(
+										(item) => item.businessId === pending[0]?.id,
+									),
+								).toBe(true);
+								expect(
+									(await requests.listWorkItems(lateAdmin)).filter(
+										(item) =>
+											item.businessId === pending[0]?.id &&
+											item.status === "OPEN",
+									),
+								).toHaveLength(1);
+								expect(await snapshot()).toEqual(before);
+							} finally {
+								await sql`UPDATE connection_principal_roles SET status = 'ACTIVE', revoked_at = NULL WHERE role = 'CONNECTION_ADMIN' AND principal_id IN ${sql(roles.map((role) => role.principal_id))}`;
+							}
+							return;
+						}
 						while (await dispatcher.runOnce()) {
 							/* drain this isolated database */
 						}
@@ -319,6 +359,34 @@ describe("capability profile follows the current runtime", () => {
 									(item) => item.id === current.id,
 								)?.upgrade?.targetProviderReleaseId,
 							).toBe(manualTarget);
+						}
+						if (scenario === "directory-disabled") {
+							runtime.providerReleases.set(provider, targetId);
+							await Promise.all([
+								catalog.reconcileCapabilityProfiles(),
+								catalog.reconcileCapabilityProfiles(),
+							]);
+							while (await dispatcher.runOnce()) {
+								/* deliver the reactivated target */
+							}
+							const updates =
+								await sql`SELECT id FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required' AND payload->>'sourceProfileId' = ${current.id} AND payload->>'targetProviderReleaseId' = ${targetId}`;
+							expect(updates).toHaveLength(2);
+							const open = (await requests.listWorkItems(admin)).filter(
+								(item) =>
+									item.businessType === "CAPABILITY_PROFILE_UPDATE" &&
+									item.status === "OPEN" &&
+									updates.some((event) => event.id === item.businessId),
+							);
+							expect(open).toHaveLength(1);
+							expect(open[0]?.businessId).not.toBe(notice.businessId);
+							expect(
+								(await requests.listNotifications(admin)).items.some(
+									(item) => item.businessId === open[0]?.businessId,
+								),
+							).toBe(true);
+							manualTarget = targetId;
+							manualAction = newAction;
 						}
 						const revisionInput = {
 							id: "unused",
