@@ -340,6 +340,54 @@ describe("terminal task event recovery authority", () => {
 	);
 });
 
+describe("terminal event recovery reuses the Host-latched control record (#2152)", () => {
+	it.each(["stop", "authorization_revoked"] as const)(
+		"continues the drain with the %s control record",
+		async (latched) => {
+			const h = harness();
+			Object.assign(h.state, {
+				executionStatus: "cancelled",
+				stopPending: false,
+				latchedControlReason: latched,
+			});
+			const decision = await h.useCase.authorizeClaim(
+				{ ...h.claim, executionStatus: "cancelled" },
+				signal(),
+			);
+			if (decision.outcome !== "allowed")
+				throw new Error("Expected terminal event recovery");
+			for (const command of [
+				"session.status",
+				"events.persist",
+				"events.ack",
+			] as const)
+				expect(
+					(
+						await h.useCase.current(
+							decision.context,
+							h.state,
+							command,
+							signal(),
+						)
+					).authority,
+				).toEqual({
+					purpose: "control",
+					controlRecordId: `control-${latched}`,
+					reason: latched,
+				});
+			// 闩锁之后仍不能恢复业务调用。
+			for (const command of ["turn.submit", "execution.renew"] as const)
+				await expect(
+					h.useCase.current(decision.context, h.state, command, signal()),
+				).rejects.toMatchObject({ code: "TASK_AUTHORIZATION_CONTROL_ONLY" });
+			expect(h.ports.recordControl).not.toHaveBeenCalledWith(
+				expect.objectContaining({ reason: "recovery" }),
+				expect.anything(),
+			);
+		},
+	);
+});
+
 describe("explicit historical metadata recovery authority", () => {
 	it("archives a stopped, revoked terminal task without its old user or business permissions", async () => {
 		const h = harness();

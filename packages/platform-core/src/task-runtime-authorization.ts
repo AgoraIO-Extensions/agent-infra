@@ -31,6 +31,14 @@ export interface TaskRuntimeRecoveryStateV1 {
 	readonly originalOperationDigest: string;
 	readonly executionStatus: ConversationDispatchExecutionStatusV1;
 	readonly stopPending: boolean;
+	/**
+	 * 该执行最近一次签发的 stop/撤权控制记录用途。Host 已由它闩住，
+	 * 终态续读与确认必须沿用同一记录（#2152）；只由 Store 在原认领租约内提供。
+	 */
+	readonly latchedControlReason?: Extract<
+		TaskSystemControlReasonV1,
+		"stop" | "authorization_revoked"
+	>;
 }
 
 export interface TaskRuntimeAuthorizationRecordV1 {
@@ -380,7 +388,16 @@ export function createTaskRuntimeAuthorizationUseCaseV1(options: Options) {
 		if (terminalEventRecovery(context.claim, state)) {
 			if (!["session.status", "events.persist", "events.ack"].includes(command))
 				denied("TASK_AUTHORIZATION_CONTROL_ONLY");
-			return { authority: await control(context, "recovery", signal), record };
+			// Host 已被 stop/撤权控制记录闩住时沿用该记录；另建 recovery 记录会在相同
+			// fence 下被判为 control-fence-stale（HLD §8.1/§8.2，#2152）。
+			return {
+				authority: await control(
+					context,
+					state.latchedControlReason ?? "recovery",
+					signal,
+				),
+				record,
+			};
 		}
 		if (record.revokedAt)
 			return {
