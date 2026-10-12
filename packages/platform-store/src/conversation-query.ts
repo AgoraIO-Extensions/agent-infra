@@ -82,11 +82,21 @@ export interface ConversationQueryEventV1 {
 	readonly traceId: string | null;
 }
 
+export interface ConversationEventWindowV1 {
+	readonly hasEarlier: boolean;
+	readonly beforeCursor: string | null;
+}
+
 export interface ConversationQueryDetailV1 {
 	readonly conversation: ConversationQueryProjectionV1;
 	readonly messages: readonly ConversationQueryMessageV1[];
 	readonly executions: readonly ConversationQueryExecutionV1[];
 	readonly events: readonly ConversationQueryEventV1[];
+	readonly eventWindow?: ConversationEventWindowV1;
+}
+
+export interface ConversationQueryReadOptionsV1 {
+	readonly beforeCursor?: string;
 }
 
 export interface ConversationExecutionDetailV1 {
@@ -114,6 +124,8 @@ export interface PostgresConversationQueryOptionsV1 {
 	readonly databaseUrl: string;
 	readonly replayWindow?: number;
 	readonly replayWindowMs?: number;
+	/** Recent event window for detail reads; omitted keeps historical full reads. */
+	readonly eventWindow?: number;
 }
 
 export interface PlatformQueueResourceSnapshot {
@@ -186,6 +198,7 @@ interface EventWindowRow {
 
 interface EventReadOptions {
 	readonly afterCursor?: number;
+	readonly beforeCursor?: number;
 	readonly executionId?: string;
 	readonly limit?: number;
 }
@@ -611,6 +624,7 @@ async function readEvents(
 				and c.principal_type = x.principal_type and c.channel_id = x.channel_id
 			where e.conversation_id = ${conversationId}
 				and e.conversation_cursor > ${options.afterCursor ?? 0}
+				${options.beforeCursor === undefined ? database`` : database`and e.conversation_cursor < ${options.beforeCursor}`}
 				${options.executionId === undefined ? database`` : database`and e.execution_id = ${options.executionId}`}
 			order by e.conversation_cursor
 			${options.limit === undefined ? database`` : database`limit ${options.limit}`}
@@ -631,6 +645,75 @@ async function readEvents(
 		order by page.conversation_cursor
 	`);
 	return rows.map(event);
+}
+
+async function readEventPage(
+	database: Database,
+	conversationId: string,
+	options: { readonly beforeCursor?: number; readonly limit: number },
+	run: RunStatement = runStatement,
+): Promise<{
+	readonly events: readonly ConversationQueryEventV1[];
+	readonly eventWindow: ConversationEventWindowV1;
+}> {
+	const [boundary] = await run(database<
+		{ page_start: string | number | null }[]
+	>`
+		with boundary_event as (
+			select e.execution_id
+			from platform.conversation_events e
+			where e.conversation_id = ${conversationId}
+				${options.beforeCursor === undefined ? database`` : database`and e.conversation_cursor < ${options.beforeCursor}`}
+			order by e.conversation_cursor desc
+			offset ${Math.max(0, options.limit - 1)}
+			limit 1
+		), boundary as (
+			select min(e.conversation_cursor) as page_start
+			from platform.conversation_events e
+			join boundary_event b on b.execution_id = e.execution_id
+			where e.conversation_id = ${conversationId}
+		), first_event as (
+			select min(e.conversation_cursor) as page_start
+			from platform.conversation_events e
+			where e.conversation_id = ${conversationId}
+				${options.beforeCursor === undefined ? database`` : database`and e.conversation_cursor < ${options.beforeCursor}`}
+		)
+		select coalesce(boundary.page_start, first_event.page_start) as page_start
+		from boundary cross join first_event
+	`);
+	const pageStart =
+		boundary?.page_start === null || boundary?.page_start === undefined
+			? 0
+			: safeInteger(boundary.page_start, 1);
+	const events =
+		pageStart === 0
+			? []
+			: await readEvents(
+					database,
+					conversationId,
+					{
+						afterCursor: pageStart - 1,
+						limit: undefined,
+						...(options.beforeCursor === undefined
+							? {}
+							: { beforeCursor: options.beforeCursor }),
+					},
+					run,
+				);
+	const [earlier] = await run(database<{ cursor: string | number | null }[]>`
+		select max(e.conversation_cursor) as cursor
+		from platform.conversation_events e
+		where e.conversation_id = ${conversationId}
+			and e.conversation_cursor < ${pageStart}
+	`);
+	const beforeCursor =
+		earlier?.cursor === null || earlier?.cursor === undefined
+			? null
+			: conversationCursor(conversationId, pageStart);
+	return {
+		events,
+		eventWindow: { hasEarlier: beforeCursor !== null, beforeCursor },
+	};
 }
 
 async function isWithinReplayTimeWindow(
@@ -837,6 +920,7 @@ export class PostgresConversationQueryV1 {
 	readonly #client: ReturnType<typeof postgres>;
 	readonly #replayWindow: number;
 	readonly #replayWindowMs: number;
+	readonly #eventWindow: number | undefined;
 
 	constructor(options: PostgresConversationQueryOptionsV1) {
 		try {
@@ -849,7 +933,11 @@ export class PostgresConversationQueryV1 {
 				) ||
 				(options.replayWindowMs ?? defaultReplayWindowMs) < 1 ||
 				(options.replayWindowMs ?? defaultReplayWindowMs) >
-					maximumReplayWindowMs
+					maximumReplayWindowMs ||
+				(options.eventWindow !== undefined &&
+					(!Number.isSafeInteger(options.eventWindow) ||
+						options.eventWindow < 1 ||
+						options.eventWindow > 10_000))
 			) {
 				invalidRequest();
 			}
@@ -861,6 +949,7 @@ export class PostgresConversationQueryV1 {
 			);
 			this.#replayWindow = options.replayWindow ?? 100;
 			this.#replayWindowMs = options.replayWindowMs ?? defaultReplayWindowMs;
+			this.#eventWindow = options.eventWindow;
 		} catch (error) {
 			if (error instanceof ConversationQueryError) throw error;
 			unavailable();
@@ -965,9 +1054,19 @@ export class PostgresConversationQueryV1 {
 		inputScope: ConversationQueryScopeV1,
 		conversationIdInput: string,
 		signal?: AbortSignal,
+		readOptionsInput?: ConversationQueryReadOptionsV1,
 	): Promise<ConversationQueryDetailV1 | undefined> {
 		const readScope = scope(inputScope);
 		const conversationId = requestText(conversationIdInput);
+		let beforeCursor: number | undefined;
+		if (readOptionsInput?.beforeCursor !== undefined) {
+			const decoded = decodeCursor(
+				requestText(readOptionsInput.beforeCursor, 4096),
+			);
+			if (decoded[0] !== "conversation" || decoded[1] !== conversationId)
+				return invalidRequest();
+			beforeCursor = decoded[2];
+		}
 		try {
 			return await repeatableRead(
 				this.#client,
@@ -979,16 +1078,32 @@ export class PostgresConversationQueryV1 {
 						run,
 					);
 					if (!row) return undefined;
-					const [messages, executions, events] = await Promise.all([
+					const [messages, executions, page] = await Promise.all([
 						readMessages(transaction, conversationId, run),
 						readExecutions(transaction, conversationId, undefined, run),
-						readEvents(transaction, conversationId, {}, run),
+						this.#eventWindow === undefined && beforeCursor === undefined
+							? readEvents(transaction, conversationId, {}, run).then(
+									(events) => ({
+										events,
+										eventWindow: { hasEarlier: false, beforeCursor: null },
+									}),
+								)
+							: readEventPage(
+									transaction,
+									conversationId,
+									{
+										limit: this.#eventWindow ?? 200,
+										...(beforeCursor === undefined ? {} : { beforeCursor }),
+									},
+									run,
+								),
 					]);
 					return {
 						conversation: projection(row),
 						messages,
 						executions,
-						events,
+						events: page.events,
+						eventWindow: page.eventWindow,
 					};
 				},
 				signal,
