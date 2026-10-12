@@ -1231,16 +1231,16 @@ stateDiagram-v2
 ### 14.3 转换规则
 
 - `ACTIVE/DEGRADED -> DISCONNECTED` 在 Connection Account 事务中提升 execution fence、清 current Credential pointer、创建 revoke attempt并写 audit/outbox。引用 Grant 因 fence 不匹配立即不可执行；其 `PAUSED_CONNECTION` 展示状态由 outbox 消费者幂等更新。
-- 同账号 reauth 只能在 stable account proof、Credential scope 和原 Consent 的授权摘要均未变化时恢复；由于 execution fence 已提升，系统必须基于原 Consent 创建冻结 current revision/fence 的 replacement Grant，并将旧 Grant 标记为 `REPLACED`，不能原地恢复旧 Grant。
+- 同账号 reauth 的 Direct 授权兼容性按 [30.0](#300-provider-upgrade-campaign) 的已选能力规则判断；由于 execution fence 已提升，系统必须基于原 Consent 创建冻结 current revision/fence 的 replacement Grant，并将旧 Grant 标记为 `REPLACED`，不能原地恢复旧 Grant。
 - 不同账号不能改写原 Connection identity；创建或选择另一个 Connection，原 Grant 终结并要求新确认。
 - `DISABLED` 是否永久由 G-05 决定；批准前实现只能停用执行并保留可逆管理状态。
 - ProviderRelease/ActionVersion disable 不改变 Connection 状态，但 effective eligibility 立即为 false。
 - ProviderRelease 升级不等于 Credential 失效。auth profile 与 stable account proof
   兼容时，用户发起 Provider Connection Upgrade，服务端使用 current Credential 对新 Release 重新做
   identity proof，并以 expected Connection/CredentialVersion CAS 创建新 CredentialVersion；浏览器不接收
-  或重新提交 Secret。Provider 重验得到的 scope 是新 CredentialVersion 的权威能力集合，scope 扩缩仍触发
-  Campaign 与 Grant 兼容检查，但不单独触发 Credential Rotation；新增 Action 仍单独 preview/consent，
-  scope 缩减后的不兼容 Grant 保持暂停。只有凭证验证失败、auth profile 无法兼容、换号或用户主动轮换时
+  或重新提交 Secret。Provider 重验得到的 scope 保存为新 CredentialVersion 的外部权限元数据，scope 增减不暂停
+  Consumer Grant，也不单独触发 Credential Rotation；Grant 兼容性按 30.0 判断，新增 Action 仍单独
+  preview/consent。只有凭证验证失败、auth profile 无法兼容、换号或用户主动轮换时
   进入 Credential Rotation 并收集新 Credential。
 - Identity、Shared scope 或 Recovery evidence 不可用时返回暂时不可用，不猜测为永久 loss。
 
@@ -1315,8 +1315,8 @@ fingerprint = HMAC-SHA-256(
 
 | 情况 | 处理 |
 | --- | --- |
-| fingerprint 相同，scope 足够且原 Consent 授权摘要未变化 | 新 CredentialVersion，CAS current pointer；基于原 Consent 创建冻结 current revision/fence 的 replacement Grant，旧 Grant 标记为 `REPLACED` |
-| fingerprint 相同但 scope 缩小或原 Consent 授权摘要变化 | 新 CredentialVersion，受影响 Grant 保持暂停并要求重新确认 |
+| fingerprint 相同且原已选 Action 定义与授权边界未变化（外部 scope 增减不影响兼容性） | 新 CredentialVersion，CAS current pointer；基于原 Consent 创建冻结 current revision/fence 的 replacement Grant，旧 Grant 标记为 `REPLACED` |
+| fingerprint 相同但原已选 Action 定义或授权边界变化 | 新 CredentialVersion，受影响 Grant 保持暂停并要求重新确认 |
 | fingerprint 不同 | 新 Connection 或切换到已有账号，旧 Grant 终结 |
 | Provider 无 stable identity proof | ProviderRelease 不得发布为可授权账号 |
 | identity endpoint 暂时不可用 | 保持原状态并返回 retryable，不猜测同账号 |
@@ -1427,7 +1427,7 @@ type CredentialVersion = {
 ### 16.6 Scope 变化
 
 - scope 扩大只能通过用户重新授权并创建新 CredentialVersion。
-- scope 缩小立即使不再覆盖的 Grant Action 不可执行。
+- 外部 scope 是 Provider 权限元数据，不是 Consumer Grant 的有效性条件；变化不改变用户已确认集合。实际权限由 Provider 在每次操作时判断，拒绝只影响本次操作；凭据明确失效仍走凭据失效流程。
 - scope 比较使用 ProviderRelease 定义的 canonical scope set，不比较原始字符串顺序。
 - Consumer 声明的 scope 不能扩大 Provider 实际授予 scope。
 
@@ -1435,7 +1435,7 @@ type CredentialVersion = {
 
 Provider 的前置审批由 Connection DB 中 `connection_provider_access_settings` 的 `approval_required` 和单调 revision 决定，按稳定 Provider ID 配置，跨 Release 保持；已有及新增 Provider 默认 `false`。管理员修改必须在事务内复核 ACTIVE Principal 与管理员权限、expected revision，并写 audit/outbox。缺失 Provider、未知 Provider 或读取失败不视为关闭；已发布 Provider 尚无显式设置时采用默认关闭。
 
-关闭时所有个人连接入口仍验证当前主体、Provider admission、已发布 Release 和真实外部身份，但不要求 Request/Permit；调用方携带的旧申请 ID 不触发 Permit 校验、消费或资格创建，也不生成自动批准或伪造 Access Authorization。Consumer 预览与确认的上限为真实 Credential scopes、当前已发布 Action 和 Consumer declaration 的交集；旧选择不自动增加。开启时本节原审批、能力包、有效期和 Permit 规则全部生效。Invocation 与最终 dispatch admission 重新校验当前开关和资格；直接连接的账号无有效资格时拒绝新调用。
+关闭时所有个人连接入口仍验证当前主体、Provider admission、已发布 Release 和真实外部身份，但不要求 Request/Permit；调用方携带的旧申请 ID 不触发 Permit 校验、消费或资格创建，也不生成自动批准或伪造 Access Authorization。Consumer 预览与确认的上限为当前已发布 Action 和 Consumer declaration 的交集；开启审批时还受公司批准能力范围约束。外部 Credential scope 快照不隐藏候选或阻止确认，requiredScopes 仅说明外部要求，不证明权限已满足；旧选择不自动增加。开启时本节原审批、能力包、有效期和 Permit 规则全部生效。Invocation 与最终 dispatch admission 重新校验当前开关和资格；直接连接的账号无有效资格时拒绝新调用。
 
 切换保留历史 Request/Decision/Permit/Authorization，不改写原批准，不撤销或自动恢复 Consumer Grant、账号及 Credential。关闭时公司审批资格不作为准入门禁；账号停用、Grant 暂停/撤销、Provider/Action 停用及凭据失效继续阻断。重新开启恢复原资格检查，已过期、撤销或暂停资格不能被追认。OAuth start/callback、凭据保存、reconnect 与 invocation/dispatch 必须一致读取服务端规则；凭据写入与最终提交在同一事务锁定配置，配置切换与 admission 串行化，旧回调不能在开启后无 Permit 保存新账号。
 
@@ -1487,7 +1487,7 @@ Request 总有效期到达才进入 EXPIRED；阶段仍为 current PENDING 且 R
 
 有限期 Access Authorization 的 Renewal Request 是例外：仅在已发布 PolicyVersion 的续期窗口内，固定同一 Principal、外部账号、ProviderRelease 和 Capability Profile，且原资格尚未自然到期时发起。它复用顺序 Stage 和免责声明确认，但最终通过时不生成 Connect Permit、不收集 Provider Credential，而是在同一事务将原 `validUntil` 从 `GREATEST(validUntil, now())` 起延长所选有限时长，记录 Renewal 和 Authorization revision。待审不产生宽限；原期限先到时仍阻断调用并暂停 Grant，之后审批通过才恢复同一资格。`PERMANENT`、换号、扩权或不兼容 ProviderRelease 不进入续期路径。
 
-续期跨越原到期时间时，沿用 15 节同账号恢复的 replacement Grant 规则：只对仍为 current 且原 Consent、账号证明、scope 与 Action 集合一致的 Grant 创建冻结新 fence 的替代版本；旧 Grant 标记 REPLACED，禁止暂停版本原地恢复 ACTIVE。续期与替代 Grant 必须同事务提交，不恢复撤销、终结或需要重新同意的授权。
+续期跨越原到期时间时，沿用 15 节同账号恢复的 replacement Grant 规则：只对仍为 current 且原 Consent、账号证明、公司批准能力范围与 Action 集合一致的 Grant 创建冻结新 fence 的替代版本；旧 Grant 标记 REPLACED，禁止暂停版本原地恢复 ACTIVE。续期与替代 Grant 必须同事务提交，不恢复撤销、终结或需要重新同意的授权。
 
 开启审批的所有个人 Connection 入口必须解析同一批准事实，包括 OAuth start/callback、PAT/API Key、credential store 和 reconnect。调用方不能提交可信 Principal、Policy、Permit、scope、Connection 或账号 selector。Connect Permit、OAuth state 与 Credential 各自一次性且不能互相替代。
 
@@ -1580,8 +1580,8 @@ type ConnectionGrant = {
 Direct Grant 按 Principal + Consumer 查找，Delegated Grant 另按 Actor（如有）查找。Grant 是不可变
 确认版本。切换账号、Action 集变化或任一 frozen revision/fence 变化都创建新 Grant，并在同一事务
 把旧 current 标记为 `REPLACED`、切换 Root pointer、提升 fence、写 audit/outbox。同账号 reconnect
-仅在 stable account proof、Credential scope 和原 Consent 授权摘要均未变化时复用原 Consent 创建
-replacement Grant；否则必须重新 preview/consent。
+的 Direct 授权兼容性按 [30.0](#300-provider-upgrade-campaign) 判断，兼容时复用原 Consent 创建
+replacement Grant；否则必须重新 preview/consent。普通 reconnect 的账号 scope 上限仍按 16.7 与 30.0 执行。
 Grant 状态只允许保持不变，或从 `ACTIVE` 单向进入任一非活动状态；`PAUSED_*`、`REPLACED`、
 `REVOKED` 和 `TERMINATED` 都不能原地恢复为 `ACTIVE`。
 
@@ -1596,14 +1596,13 @@ ProviderRelease/ActionVersion；ActionVersion current executable state 为 `PUBL
 ∩ actor constraint
 ∩ Connection current ownership/shared eligibility
 ∩ `ActionVersion.providerReleaseId` 精确等于 ConnectionAccount 的 `providerReleaseId`
-∩ current Credential scopes
 ∩ Connection/Credential/Catalog/recovery fences
 ```
 
 工具“可发现”与“可执行”分开：
 
 - 可发现：ActionVersion 处于 `PUBLISHED` 或 `DEPRECATED` 可执行态、Consumer current declaration 包含该 exact version 且用户已授权；Connection 暂时需要 reauth 时仍可展示并提供下一步。`DEPRECATED` 不能进入新 declaration。
-- 可执行：除可发现条件外，所有实时身份、共享资格、Credential、scope、fence、limit 和 recovery gate 都通过。
+- 可执行：除可发现条件外，所有实时身份、共享资格、Credential、公司批准能力范围、fence、limit 和 recovery gate 都通过。外部权限由 Provider 判断，scope 快照不作为 Grant 可执行性门禁。
 
 新 declaration 只控制后续发现和新授权，不会因无关 Action 变更使引用旧 declaration 的 Grant 失效。若
 Consumer 要撤回已授权 Action，必须在同一事务明确终结包含该 ActionVersion 的 Grant 或将其收缩为 replacement
@@ -1631,7 +1630,7 @@ type AuthorizationPreview = {
 };
 ```
 
-创建 Preview 时，Browser 可以提交用户在当前 Consumer declaration 中选择的 `actionVersionIds` 非空子集；服务端只把这些 ID 当作选择器，必须重新读取 current declaration、账号、Catalog 和 Credential scope，拒绝重复、未知、跨 Provider、非 `PUBLISHED`、超出 declaration 或 scope 不足的集合，并冻结服务端计算的完整 Action 元数据与 digest。若 Browser 省略选择，服务端创建发现 preview，只包含 current declaration 中当前 Credential scope 可覆盖的 Action；该集合仍按普通 preview 冻结和确认，若为空则拒绝。Connection Web 使用发现 preview 展示候选能力，再为用户显式选择创建最终 preview。
+创建 Preview 时，Browser 可以提交用户在当前 Consumer declaration 中选择的 `actionVersionIds` 非空子集；服务端只把这些 ID 当作选择器，必须重新读取 current declaration、账号、Catalog 和 Credential scope，拒绝重复、未知、跨 Provider、非 `PUBLISHED`、超出 declaration 或公司批准能力范围的集合，并冻结服务端计算的完整 Action 元数据与 digest。若 Browser 省略选择，服务端创建发现 preview，包含 current declaration 中当前目录与公司审批允许的 Action，不按 Credential scope 快照过滤；该集合仍按普通 preview 冻结和确认，若为空则拒绝。Connection Web 使用发现 preview 展示候选能力，再为用户显式选择创建最终 preview。
 
 最终确认仍只提交 `previewId + opaque confirmation token + Idempotency-Key`，不能再次提交 Action 集、scope、actor、Connection 或 digest。这样确认内容只能等于用户看到且服务端冻结的集合。
 
@@ -1912,7 +1911,7 @@ Connection 不读取 Platform DB，也不要求 Platform GrantSlot、Conversatio
 - AuthorizationRoot current Grant、fence、actor key 和 Action set。
 - Connection owner/shared eligibility、revision 和 execution fence。
 - ProviderRelease/ActionVersion state、digest 和 endpoint policy。
-- exact frozen CredentialVersion ID/state revision、current pointer/fence、expiry 和 required scope；pointer 变化时拒绝，不能替换或回退版本。
+- exact frozen CredentialVersion ID/state revision、current pointer/fence、expiry 和冻结 Action 权限定义、公司批准能力范围（不检查外部 scope 快照覆盖）；pointer 变化时拒绝，不能替换或回退版本。
 - recovery generation、mutation gate、rate limit、deadline 和 breaker。
 
 最终校验和 dispatch 使用两次短事务，不跨网络持 DB lock：
@@ -2114,7 +2113,7 @@ Direct OAuth 另有 `oauth_authorization_session` 表，保存 state/authorizati
 | `connection_access_authorization` | principal、connection、account fingerprint、profile、validity、state/revision | one current per personal Connection；dispatch fence source |
 | `disclaimer_version` / `policy_disclaimer_version` | locale、content digest、state、owner metadata | published immutable；production policy 必须绑定基础版本 |
 
-Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_grant(id, root_id)`，后者建立对应 UNIQUE constraint；`current_grant_id` 可为空。数据库在事务末尾强制 pointer 指向同一 Root 的 Grant，不能依赖应用层检查。ConsumerInstance 只存在于 OAuth session、Invocation、Call 和 audit，不进入 Root/Grant identity。Grant 不能原地恢复为 ACTIVE；同账号 reconnect 仅在 exact account proof、Credential scope 和 Consent 授权摘要未变化时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
+Root 使用 `(current_grant_id, id)` 复合 DEFERRABLE FK 引用 `connection_grant(id, root_id)`，后者建立对应 UNIQUE constraint；`current_grant_id` 可为空。数据库在事务末尾强制 pointer 指向同一 Root 的 Grant，不能依赖应用层检查。ConsumerInstance 只存在于 OAuth session、Invocation、Call 和 audit，不进入 Root/Grant identity。Grant 不能原地恢复为 ACTIVE；同账号凭据更新与 reconnect 的 Direct 授权兼容性按 [30.0](#300-provider-upgrade-campaign) 判断，兼容时基于原 Consent 创建 replacement Grant，并冻结 current revision/fence。
 
 ### 21.6 Invocation 与 Effect Ledger 表
 
@@ -2567,7 +2566,7 @@ transport authentication
 | `ACTION_NOT_GRANTED` | 403/permission | 否 | 用户授权 |
 | `ACTION_DISABLED` | 409/precondition | 否 | 选择替代能力 |
 | `ACCOUNT_NOT_AVAILABLE` | 409/precondition | 视原因 | 重试或换号确认 |
-| `CREDENTIAL_SCOPE_INSUFFICIENT` | 409/precondition | 否 | 重新授权 scope |
+| Provider 外部权限不足 | Provider rejection/permission | 否 | 在外部系统处理权限；不暂停 Grant，不要求重复 Consumer 确认 |
 | `IDEMPOTENCY_CONFLICT` | 409/conflict | 否 | 使用新 key 或原参数 |
 | `RATE_LIMITED` | 429/rate | 是 | 按 retry-after |
 | `PROVIDER_UNAVAILABLE` | 503/provider | 是 | 稍后重试 |
@@ -2849,6 +2848,28 @@ attributes 使用低基数 enum/opaque ID；不记录 args、token、external ac
 ## 30. 迁移、升级与回滚
 
 ### 30.0 Provider Upgrade Campaign
+
+个人账号凭据更新与 Consumer 新能力授权分别判定。Direct 授权的原 Grant 同一主体、账号、ProviderRelease、
+共享资格及已选 Action 的精确定义、资源边界、输入约束和效果仍相同时，可创建仅含原已选集合
+的兼容 Grant，保留原 Consent。外部 scope 增减不改变 Consumer 授权，不因 Consumer declaration
+增加其他能力要求重新确认；完整 scope 摘要继续用于新预览与执行快照绑定，历史 Consent 不改写。
+外部权限不足由 Provider 拒绝本次操作，不暂停 Grant；权限恢复无需重复 Consumer 确认。
+凭据明确失效仍按凭据生命周期处理。无法证明兼容、撤销、账号或能力语义变化时
+只暂停受影响的授权，不把其他客户端的兼容授权一并暂停，也不自动恢复已暂停或撤销的 Grant。
+
+Web 正常账号不展示常驻的账号权限复验按钮，目录新增和 scope 快照变化不是账号更新条件；
+仅 overview 的 `requiresReconnect` 或升级任务判定需要处理时显示对应操作，并通过
+upgrade readiness 区分兼容升级、重新审批和重新连接。服务端仍支持显式请求重新验证已保存凭据。审批关闭的 ACTIVE 个人账号由服务端读取并在内部交给
+现有 Provider verifier，原始 Credential 不返回 Browser、Agent 或日志。写入使用同一 Principal、
+Connection、稳定外部账号、当前 ProviderRelease 与原 CredentialVersion CAS，事务重新核对
+审批配置；配置切换、跨主体、换号、失败或未知状态拒绝提交。只有这个明确操作允许扩大账号
+权限快照，普通兼容升级/重连继续保留原 scope 上限。扩展快照不新增 Consumer Action；凭据失效、
+需要 OAuth 或不支持保存凭据复验时，返回需要用户操作的指引，不能伪造复验成功。
+
+用户新增能力提示比较当前发布目录与原 Consent 预览中绑定的 ProviderRelease 目录，以稳定
+Action 名称识别真正新增项。历史目录和 Consent 必须可追溯；缺少可信基线不把所有未授权项
+称作新增。已取消的旧能力不生成新增提示；新增项默认不选，重新确认后以新的 Consent 基线
+收敛提示。此提示不证明凭据权限、Consumer declaration 或公司审批资格已满足。
 
 发布端必须使用与 runtime 相同的 Provider catalog 生成并校验发布快照。快照只包含 release、
 executor、认证/部署与 Action 授权边界的标识或摘要及可信兼容证据，不包含个人数据或 Credential。

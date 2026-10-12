@@ -108,6 +108,7 @@ Authorization: Bearer &lt;当前用户与实例的 Connection PAT&gt;</code></pr
 
       <section class="install" aria-labelledby="errors-title">
         <h2 id="errors-title">6. 无权限时，如何引导用户恢复</h2>
+        <p>连接器新增能力不会自动授予客户端；请在管理能力中选择并确认。候选列表由当前目录、客户端配置和公司审批范围决定，不按外部 scope 快照过滤。确认表示允许客户端使用，实际操作权限由外部系统判断；权限不足只影响本次操作，不取消已确认能力，外部权限恢复无需重复客户端确认。正常账号不显示“更新账号权限”按钮；只有系统判定需要处理时才显示升级或重连操作。兼容升级复用已有凭据，真正的凭据失效或需要 OAuth 时按提示更新凭据。账号或能力语义变化仍须重新处理授权；审批开启和共享账号遵循各自流程。不要让用户把凭据发到聊天中。</p>
         <p>客户端需要把返回的引导展示成用户可点击的提示。当前带 <code>service</code> 的 <code>list_connections</code> / <code>search_actions</code> 空结果可在 <code>result.structuredContent.guidance</code> 中返回 <code>message</code>、<code>messageKey</code>、<code>reasonCode</code>、<code>retryable</code> 与 <code>nextAction</code>。<code>OPEN_CONNECTION_WEB</code> 的 URL 会指向具体 Provider 的连接页：</p>
         <pre><code>{
   "reasonCode": "PROVIDER_AUTHORIZATION_REQUIRED",

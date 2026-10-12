@@ -214,6 +214,7 @@ export type Grant = {
     connectionDisplayName: string;
     externalAccount: string;
     status: string;
+    newActionVersionIds?: Array<string>;
     actionVersionIds: Array<string>;
     actions: Array<GrantAction>;
 };
@@ -1285,6 +1286,56 @@ export type DisconnectConnectionResponses = {
 };
 
 export type DisconnectConnectionResponse = DisconnectConnectionResponses[keyof DisconnectConnectionResponses];
+
+export type RefreshProviderPermissionsData = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        connectionId: string;
+    };
+    query?: never;
+    url: '/api/v1/connection/connections/{connectionId}/refresh-permissions';
+};
+
+export type RefreshProviderPermissionsErrors = {
+    /**
+     * Stable browser error
+     */
+    400: Error;
+    /**
+     * Stable browser error
+     */
+    401: Error;
+    /**
+     * Stable browser error
+     */
+    403: Error;
+    /**
+     * Stable browser error
+     */
+    404: Error;
+    /**
+     * Stable browser error
+     */
+    409: Error;
+    /**
+     * Stable browser error
+     */
+    503: Error;
+};
+
+export type RefreshProviderPermissionsError = RefreshProviderPermissionsErrors[keyof RefreshProviderPermissionsErrors];
+
+export type RefreshProviderPermissionsResponses = {
+    /**
+     * Connected provider account
+     */
+    200: ConnectionCreated;
+};
+
+export type RefreshProviderPermissionsResponse = RefreshProviderPermissionsResponses[keyof RefreshProviderPermissionsResponses];
 
 export type UpgradeProviderConnectionData = {
     body?: {

@@ -2928,6 +2928,18 @@ describe("Connection API", () => {
 				});
 				return { connectionId: "connection-bitbucket" };
 			},
+			refreshProviderPermissions: async (
+				principalId: string,
+				connectionId: string,
+			) => {
+				if (connectionId !== "connection-old")
+					throw new ConnectionError("FORBIDDEN", "Unavailable");
+				calls.push({
+					name: "refresh-permissions",
+					value: { principalId, connectionId },
+				});
+				return { connectionId };
+			},
 			getProviderUpgradeReadiness: async (
 				principalId: string,
 				connectionId: string,
@@ -3484,6 +3496,61 @@ describe("Connection API", () => {
 			);
 			expect(invalidUpgrade.status).toBe(400);
 		}
+		const refreshed = await app.request(
+			"/api/v1/connection/connections/connection-old/refresh-permissions",
+			{
+				method: "POST",
+				headers: {
+					cookie,
+					origin: "https://connection.example",
+					"idempotency-key": "refresh-permissions-test",
+				},
+			},
+		);
+		expect(refreshed.status).toBe(200);
+		expect(calls.at(-1)).toEqual({
+			name: "refresh-permissions",
+			value: { principalId: "principal-user", connectionId: "connection-old" },
+		});
+		for (const request of [
+			{
+				target: "connection-old",
+				headers: {
+					cookie,
+					origin: "https://other.invalid",
+					"idempotency-key": "refresh-cross-site",
+				},
+			},
+			{
+				target: "other-account",
+				headers: {
+					cookie,
+					origin: "https://connection.example",
+					"idempotency-key": "refresh-other-account",
+				},
+			},
+			{
+				target: "connection-old",
+				body: JSON.stringify({
+					principalId: "other",
+					refreshPermissions: true,
+				}),
+				headers: {
+					cookie,
+					origin: "https://connection.example",
+					"idempotency-key": "refresh-forged-fields",
+				},
+			},
+		]) {
+			const denied = await app.request(
+				`/api/v1/connection/connections/${request.target}/refresh-permissions`,
+				{ method: "POST", headers: request.headers, body: request.body },
+			);
+			expect(denied.status).toBeGreaterThanOrEqual(400);
+		}
+		expect(
+			calls.filter((call) => call.name === "refresh-permissions"),
+		).toHaveLength(1);
 	});
 
 	it("allows only Connection administrators to open the administrator console", async () => {

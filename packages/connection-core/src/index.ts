@@ -137,6 +137,7 @@ export type ConnectionOverview = {
 			id: string;
 			name: ActionName;
 		}>;
+		newActionVersionIds?: string[];
 		actionVersionIds: string[];
 		connectionId: string;
 		connectionDisplayName: string;
@@ -620,10 +621,8 @@ export function decideReconnectAuthorization(input: {
 		target !== undefined &&
 		current.providerId === target.providerId &&
 		current.providerReleaseId === target.providerReleaseId &&
-		current.consumerDeclarationId === target.consumerDeclarationId &&
 		current.externalAccountFingerprint === target.externalAccountFingerprint &&
 		current.sharedEligibilityPathHash === target.sharedEligibilityPathHash &&
-		current.credentialScopeDigest === target.credentialScopeDigest &&
 		current.confirmedActionSetDigest === canonicalHash(target.actions) &&
 		canonicalHash(current.actionVersionIds) ===
 			canonicalHash(target.actions.map((action) => action.id))
@@ -783,6 +782,7 @@ export interface ConnectionRepository {
 		refreshToken?: string;
 	}): Promise<{ connectionId: string }>;
 	storeProviderCredential(input: {
+		refreshPermissions?: boolean;
 		accessRequestId?: string;
 		accessToken: string;
 		displayName: string;
@@ -799,6 +799,7 @@ export interface ConnectionRepository {
 	}): Promise<{ connectionId: string }>;
 	getProviderCredentialForUpgrade(input: {
 		allowCurrentRelease?: boolean;
+		refreshPermissions?: boolean;
 		connectionId: string;
 		principalId: string;
 	}): Promise<
@@ -1359,6 +1360,55 @@ export class ConnectionApplicationService {
 			expectedConnectionId: connectionId,
 			expectedCredentialVersionId: current.credentialVersionId,
 			principalId,
+		});
+	}
+
+	async refreshProviderPermissions(principalId: string, connectionId: string) {
+		const current = await this.repository.getProviderCredentialForUpgrade({
+			principalId,
+			connectionId,
+			allowCurrentRelease: true,
+			refreshPermissions: true,
+		});
+		const connector = this.credentialConnectors[current.providerId];
+		if (
+			!connector ||
+			current.refreshToken ||
+			(current.expiresAt && Date.parse(current.expiresAt) <= Date.now())
+		)
+			throw new ConnectionError(
+				"PROVIDER_REAUTHORIZATION_REQUIRED",
+				"Provider requires interactive authorization",
+			);
+		let identity: ProviderCredentialIdentity;
+		try {
+			identity = await connector.validateCredential(current.accessToken);
+		} catch (error) {
+			throw new ConnectionError(
+				isProviderCredentialInvalid(error)
+					? "PROVIDER_REAUTHORIZATION_REQUIRED"
+					: "PROVIDER_UNAVAILABLE",
+				"Provider credential revalidation failed",
+			);
+		}
+		if (
+			identity.providerId !== current.providerId ||
+			identity.providerReleaseId !== connector.providerReleaseId ||
+			identity.externalAccount !== current.externalAccount ||
+			identity.accessToken !== current.accessToken ||
+			identity.refreshToken
+		)
+			throw new ConnectionError(
+				"PROVIDER_FAILED",
+				"Provider identity changed during permission refresh",
+			);
+		return this.repository.storeProviderCredential({
+			...identity,
+			principalId,
+			expectedConnectionId: connectionId,
+			expectedCredentialVersionId: current.credentialVersionId,
+			refreshPermissions: true,
+			expiresAt: identity.expiresAt ?? current.expiresAt,
 		});
 	}
 

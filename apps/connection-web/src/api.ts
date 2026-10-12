@@ -114,6 +114,7 @@ import {
 	readConnectionNotifications,
 	reapprovalCampaignDraftSchema,
 	reauthorizeProviderConnection,
+	refreshProviderPermissions,
 	renameSharedScope,
 	rerouteApprovalRequest,
 	retirePublishedApprovalCapabilityProfile,
@@ -823,6 +824,14 @@ export const connectionApi = {
 				path: { connectionId },
 			}),
 		),
+	refreshProviderPermissions: (connectionId: string) =>
+		unwrap<ConnectionCreated>(
+			refreshProviderPermissions({
+				headers: commandHeaders(),
+				path: { connectionId },
+			}),
+		),
+
 	upgradeProviderConnection: (connectionId: string) =>
 		unwrap<ConnectionCreated>(
 			upgradeProviderConnection({

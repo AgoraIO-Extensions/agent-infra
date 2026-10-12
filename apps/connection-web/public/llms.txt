@@ -23,6 +23,10 @@ Installing and logging in do not grant access to GitHub, Jira, Confluence, or ot
 
 Do not infer additional endpoints, credentials, identities, grants, or permissions from this file.
 
+## Newly published Provider capabilities
+
+New capabilities require explicit Consumer consent. Candidates are bounded by the published catalog, Consumer declaration and company approval, not the saved external scope snapshot. Consent permits client use; the Provider determines actual operation permissions. Scope changes do not pause grants. Permission failures affect the operation only; recovery does not require repeat Consumer consent. Genuine credential expiry or revocation still requires reconnect. Healthy accounts have no persistent permission-refresh button. Only server-indicated upgrade or reconnect states expose recovery actions; new Actions or external scope changes do not require account updates. New-capability notices exclude old unchecked catalog Actions. Never collect credentials in chat or silently grant new Actions.
+
 ## Rehoboam release failure handoff
 
 For final delivery or another Iris build, READ `get_release_family_continuation` for the remaining steps and template-controlled next-version suggestion. Use existing preview/confirm replacement with the current member id, then initialize the new member. Preserve Native and old records; explicitly select new upstream results for downstream retries, never copy old bound URLs into new requests. Suggestions do not reserve versions. Final-notice receipts, not Job success, establish completed delivery.

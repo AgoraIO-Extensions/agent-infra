@@ -361,6 +361,7 @@ export function ConnectionsPage() {
 			}),
 		]);
 	}
+
 	const approvedUpgrade = useMutation({
 		mutationFn: connectionApi.upgradeApprovedConnection,
 		onSuccess: async (_result, variables) => {
@@ -713,7 +714,16 @@ export function ConnectionsPage() {
 	const visibleGrants = data
 		? showHistory
 			? data.grants
-			: data.grants.filter((grant) => grant.status === "ACTIVE")
+			: data.grants.filter(
+					(grant) =>
+						grant.status === "ACTIVE" ||
+						(grant.status === "PAUSED_CREDENTIAL" &&
+							data.grants.find(
+								(entry) =>
+									entry.consumerId === grant.consumerId &&
+									entry.providerId === grant.providerId,
+							)?.id === grant.id),
+				)
 		: [];
 	const bulkUpgradeConnectionIds = data
 		? [
@@ -2005,14 +2015,23 @@ function ConnectorManagementWorkspace(props: {
 											</span>
 											<div>
 												<strong>{grant.consumerName}</strong>
-												<GrantPermissions grant={grant} />
+												<GrantPermissions
+													grant={grant}
+													newActionVersionIds={
+														selected.requiresReconnect
+															? []
+															: grant.newActionVersionIds
+													}
+												/>
 											</div>
 											<Status value={grant.status} />
 											<Button
 												variant="secondary"
 												size="icon"
 												disabled={
-													grant.status !== "ACTIVE" || !authorizationAvailable
+													!["ACTIVE", "PAUSED_CREDENTIAL"].includes(
+														grant.status,
+													) || !authorizationAvailable
 												}
 												onClick={() =>
 													props.onAuthorize(selected.id, grant.consumerId)
@@ -2296,6 +2315,9 @@ export function PreviewContent(props: {
 					{props.value.preview.targetConnection.externalAccount}
 				</p>
 			) : null}
+			<p className="muted">
+				这里确认客户端可使用的能力；实际操作权限由外部系统判断，外部权限不足不会取消已确认能力。
+			</p>
 			<fieldset
 				disabled={props.busy}
 				className="authorization-options content-stack"
@@ -2481,7 +2503,9 @@ function authorizationFacts(value: AuthorizationPreviewResponse) {
 }
 
 function GrantPermissions(props: {
+	newActionVersionIds?: readonly string[];
 	grant: {
+		status?: string;
 		actions: Array<{ effect: "READ" | "WRITE"; id: string; name: string }>;
 		actionVersionIds: string[];
 	};
@@ -2490,11 +2514,26 @@ function GrantPermissions(props: {
 	const read = actions.filter((action) => action.effect === "READ");
 	const write = actions.filter((action) => action.effect === "WRITE");
 	const total = actions.length || props.grant.actionVersionIds?.length || 0;
+	const added = ["ACTIVE", "PAUSED_CREDENTIAL"].includes(
+		props.grant.status ?? "",
+	)
+		? (props.newActionVersionIds ?? []).filter(
+				(id) => !props.grant.actionVersionIds.includes(id),
+			).length
+		: 0;
 	return (
-		<div className="permission-summary">
-			<strong>{total} 项</strong>
-			<span>{read.length} 读</span>
-			<span>{write.length} 写</span>
-		</div>
+		<>
+			<div className="permission-summary">
+				<strong>{total} 项</strong>
+				<span>{read.length} 读</span>
+				<span>{write.length} 写</span>
+			</div>
+			{added ? (
+				<p className="connection-capability-gap">
+					目录新增 {added}{" "}
+					项能力，默认未选。请在管理能力中查看选择；候选列表由客户端能力配置和审批要求决定，实际操作权限由外部系统判断。
+				</p>
+			) : null}
+		</>
 	);
 }

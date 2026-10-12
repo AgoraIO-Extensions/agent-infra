@@ -937,3 +937,7 @@ connector、Direct/Delegated 授权交集和受控 egress；升级必须重新�
 ## Connection 前置审批配置
 
 Connection 的公司准入由 Connection DB 按 Provider 保存审批开关，默认关闭；关闭时直接绑定真实外部账号，开启时执行前置审批及持续资格校验。此配置不改变身份传递、Credential 归属或 Consumer/Action 授权。配置权威、切换事务和调用门禁以 [Connection HLD 16.7](HLD-connection-M1.md#167-connection-access-approval) 为准。
+
+Connection 凭据权限快照更新、原已选能力兼容继承与真正新增能力提示遵循
+[HLD 30.0](HLD-connection-M1.md#300-provider-upgrade-campaign)；账号 scope 扩展不自动扩张
+Consumer Grant，复验仅由服务端使用现有 Provider verifier 和 CredentialVersion CAS 完成。

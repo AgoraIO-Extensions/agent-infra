@@ -217,6 +217,9 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 - 重连同一外部账号后，因连接中断暂停的授权可以恢复。
 - 重连为不同外部账号时，旧授权终止，用户必须重新选择和确认。
 - Provider 升级不改变账号、scope、Action 集合或外部效果时，Connection 可以静默迁移；无法证明授权语义等价时必须创建非静默升级活动。
+- 正常账号不展示常驻的权限更新入口，也不因新增目录能力或外部 scope 变化要求更新账号。仅系统明确判定需要升级或重连时显示对应操作；可兼容复验时复用已保存凭据，凭据失效或需要 OAuth 时才要求用户输入或登录。新增能力仍单独确认。
+- 同一账号外部权限变化不改变用户已确认的能力集合。原能力、资源范围和外部效果仍兼容时保留授权；外部权限不足由目标系统拒绝对应操作，不暂停其他调用，权限恢复不要求重复客户端确认。兼容性无法证明时只限制受影响授权，不自动恢复已暂停或撤销授权。
+- 新增能力提示比较当前目录与原授权确认时的目录；原目录中用户未选的能力不作为新增项反复提示，用户重新确认后按新的目录继续识别后续新增能力。
 - 开启前置审批的 Provider，升级是否需要重新进行公司审批，以该个人 Connection 已获批的能力范围为准，不以 Provider 目录的能力总数为准。新增但未获批的能力不得自动加入；兼容升级保留已获批能力及使用者对 Consumer 的既有选择，不延长原审批有效期。
 - 开启前置审批的 Provider 新增获批范围之外的能力、扩大 scope 或资源范围、改变既有能力的授权语义或外部效果，必须先重新审批，再由使用者明确确认。更换外部账号同样需要重新审批；无法证明兼容时不得自动继承原批准。
 - 非静默升级由 Connection 识别受影响的授权并向使用者展示站内待办；Connection 管理员可以查看按 ProviderRelease 聚合的总数、待处理数、完成数、失效数和截止时间，但不能查看 Credential 或无关外部账号信息。
@@ -272,8 +275,8 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 - Consumer declaration 定义可申请的 Action 上限；用户首次授权时可以搜索、筛选并选择其中的非空子集，默认不隐式全选写能力。
 - 用户可以查看、更新和撤销给每个 Consumer 的授权。
 - 用户调整已授权 Action 时沿用授权预览与确认流程；缩权确认后立即生效，扩权在新确认完成前不得生效。
-- 调整 Action 授权不要求重签 Consumer PAT；只有所选 Action 超出 Provider 当前实际 scope 时才要求重新授权 Provider Connection。
-- ProviderRelease 升级且原 Credential 仍能证明同一外部账号和相同 scope 时，用户确认升级即可复用已保存 Credential，不重新输入只展示一次的 Token；Token 失效、scope 或认证方式变化、换号和主动轮换才要求更新凭证。
+- 调整 Action 授权不要求重签 Consumer PAT。候选能力由当前目录、Consumer 声明及公司审批范围决定，不因外部 scope 快照缺项而隐藏；确认表示用户允许客户端使用这些能力，不保证目标系统已授予权限。外部权限不足按目标系统指引处理，凭据失效才要求重连。
+- ProviderRelease 升级且原 Credential 仍能证明同一外部账号且认证方式兼容时，用户确认升级即可复用已保存 Credential，不重新输入只展示一次的 Token；Token 失效、认证方式不兼容、换号和主动轮换才要求更新凭证；外部 scope 变化不要求重复客户端确认。
 - 撤销只影响目标 Consumer/Actor，不影响其他 Consumer 对同一 Connection 的独立授权。
 - Consumer 授权不设置独立期限；用户撤销、换号、账号禁用或共享资格失效时终止，Connection 或 Credential 暂时失效时暂停。
 
@@ -281,7 +284,7 @@ Consumer、组织、Grant、Connection、Credential、PostgreSQL、审计或恢�
 
 - Consumer 新增 Action 或 Action scope/effect 扩大时，已有授权只覆盖上次确认集合。
 - 用户确认前，Consumer 不能调用新增或扩大的能力。
-- Consumer 撤回已授权 Action、Provider/Action 停用或权限收缩立即生效，不需要用户确认；仅发布不含该 Action 的新 declaration 不会隐式撤回既有 Grant。
+- Consumer 撤回已授权 Action、Provider/Action 停用或 Connection 内授权范围收缩立即生效，不需要用户确认；仅发布不含该 Action 的新 declaration 不会隐式撤回既有 Grant。
 - 新 declaration 替换旧 declaration 后，旧 declaration 只能供其已绑定 Grant 继续执行，不能用于发现或新授权；显式撤回 declaration 或 Action 必须同时终结或收缩受影响 Grant。
 - 用户拒绝或关闭确认时，不执行该 Action，原授权范围不扩大。
 

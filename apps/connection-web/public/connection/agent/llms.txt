@@ -114,6 +114,10 @@ Per-user PAT Binding remains Direct MCP access. A platform representing the curr
 
 Open guide/console links in new tabs. Do not infer undocumented endpoints, credentials, identities or grants from this file.
 
+## Newly published capabilities
+
+New capabilities require explicit Consumer consent. Candidates are bounded by the published catalog, Consumer declaration and company approval, not the saved external scope snapshot. Consent permits client use; the Provider determines actual operation permissions. Scope changes do not pause grants. Permission failures affect the operation only; recovery does not require repeat Consumer consent. Genuine credential expiry or revocation still requires reconnect. Healthy accounts have no persistent permission-refresh button. Only server-indicated upgrade or reconnect states expose recovery actions; new Actions or external scope changes do not require account updates. New-capability notices exclude old unchecked catalog Actions. Never collect credentials in chat or silently grant new Actions.
+
 ## Rehoboam release failure handoff
 
 Before final delivery or reissuing Iris, READ `get_release_family_continuation`. It returns remaining confirmation/delivery steps, a version suggestion from the live template separator/step and affected downstream tasks. Use existing preview/confirm replacement and initialize the new member; preserve Native, old versions and requests. Explicitly select new upstream results, not old bound URLs. A suggestion is not a reservation; final delivery requires the existing confirmed notice flow and receipt readback.
