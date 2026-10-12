@@ -6,6 +6,8 @@
 
 受保护的 Connection MCP 只在已有安全的 Runtime 内部 transport 时开放。当前固定的 Pi 和 OpenCode/Generic ACP 上游都不满足这个条件，因此它们的 `connection` capability 保持 `false`，Host 也不会把 `standardConnectionClient` 或任何 token-bearing 配置传给原生进程。
 
+Claude 使用已审核的 SDK 内部 MCP bridge；Host 只把受保护的 client input 交给 Claude Driver，token 不进入 Claude 原生进程的环境、参数或配置。
+
 | Runtime | 固定上游 | 当前结论 |
 | --- | --- | --- |
 | Pi RPC | `@earendil-works/pi-coding-agent@0.86.0`，commit `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc` | RPC 没有 MCP transport；保持 `connection: false` |
