@@ -1,6 +1,6 @@
 export interface WecomQrAuthorizationResultV1 {
 	readonly botId: string;
-	readonly secret: string;
+	secret: string;
 	readonly state: string;
 }
 
@@ -44,6 +44,7 @@ export function openWecomQrAuthorizationV1(input: {
 	readonly authOrigin: string;
 	readonly source: string;
 	readonly state: string;
+	readonly expiresAt: string;
 	readonly timeoutMs?: number;
 	readonly open?: (url: string) => PopupWindowV1 | null;
 	readonly addEventListener?: (
@@ -55,7 +56,11 @@ export function openWecomQrAuthorizationV1(input: {
 		listener: (event: MessageEvent<unknown>) => void,
 	) => void;
 }): Promise<WecomQrAuthorizationResultV1> {
-	const timeoutMs = input.timeoutMs ?? 120_000;
+	const expiresAt = Date.parse(input.expiresAt);
+	const remainingMs = expiresAt - Date.now();
+	if (!Number.isFinite(expiresAt) || remainingMs <= 0)
+		return Promise.reject(new Error("WECom_QR_EXPIRED"));
+	const timeoutMs = Math.min(input.timeoutMs ?? 120_000, remainingMs);
 	if (
 		!Number.isSafeInteger(timeoutMs) ||
 		timeoutMs < 1_000 ||
@@ -88,6 +93,7 @@ export function openWecomQrAuthorizationV1(input: {
 			else reject(new Error("WECom_QR_RESULT_INVALID"));
 		};
 		const onMessage = (event: MessageEvent<unknown>) => {
+			if (Date.now() >= expiresAt) return finish(new Error("WECom_QR_EXPIRED"));
 			if (event.source !== popup || event.origin !== input.authOrigin) return;
 			const result = parseResult(event.data, input.source, input.state);
 			if (!result) return finish(new Error("WECom_QR_RESULT_INVALID"));

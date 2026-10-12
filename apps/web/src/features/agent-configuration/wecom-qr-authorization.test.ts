@@ -25,6 +25,7 @@ const base = {
 	authOrigin: "https://auth.example.test",
 	source: "agent-infra",
 	state: "state-1",
+	expiresAt: new Date(Date.now() + 60_000).toISOString(),
 	timeoutMs: 1_000,
 };
 
@@ -89,4 +90,15 @@ it("ignores foreign popup source/origin and rejects stale state", async () => {
 		}),
 	);
 	await expect(promise).rejects.toThrow("WECom_QR_RESULT_INVALID");
+});
+
+it("rejects an already expired setup session before opening a popup", async () => {
+	const h = harness();
+	await expect(
+		openWecomQrAuthorizationV1({
+			...base,
+			expiresAt: new Date(Date.now() - 1).toISOString(),
+			open: () => h.popup,
+		}),
+	).rejects.toThrow("WECom_QR_EXPIRED");
 });

@@ -190,6 +190,10 @@ export function WecomBotSetup({
 	}
 	async function authorizeQr() {
 		if (busy) return;
+		if (!confirmed) {
+			setError("请先确认连接影响。");
+			return;
+		}
 		setBusy(true);
 		setError("");
 		setStatus("verifying");
@@ -203,28 +207,29 @@ export function WecomBotSetup({
 			if (attempt !== generation.current) return;
 			if (!started.data?.qrAvailable) throw new Error("WECom_QR_UNAVAILABLE");
 			session.current = started.data.sessionId;
-			const result = await openWecomQrAuthorizationV1(started.data.qr);
-			if (attempt !== generation.current) return;
-			setBotId(result.botId);
-			let qrSecret = result.secret;
-			let submitted: Awaited<ReturnType<typeof submitWecomCredentials>>;
+			const result = await openWecomQrAuthorizationV1({
+				...started.data.qr,
+				expiresAt: started.data.expiresAt,
+			});
 			try {
-				submitted = await submitWecomCredentials({
+				if (attempt !== generation.current) return;
+				setBotId(result.botId);
+				const submitted = await submitWecomCredentials({
 					path: { agentId, sessionId: started.data.sessionId },
 					body: {
 						state: started.data.state,
 						botId: result.botId,
-						secret: qrSecret,
-						takeoverConfirmed: true,
+						secret: result.secret,
+						takeoverConfirmed: confirmed,
 					},
 					responseStyle: "fields",
 					throwOnError: false,
 				});
+				if (attempt !== generation.current) return;
+				if (!submitted.data) throw new Error("WECom_QR_SUBMIT_FAILED");
 			} finally {
-				qrSecret = "";
+				result.secret = "";
 			}
-			if (attempt !== generation.current) return;
-			if (!submitted.data) throw new Error("WECom_QR_SUBMIT_FAILED");
 		} catch (error) {
 			if (attempt !== generation.current) return;
 			if (

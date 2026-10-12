@@ -20,7 +20,7 @@ export interface WecomBotQrConfigurationV1 {
 	readonly authorizationEndpoint: string;
 }
 
-function validateBotQrConfiguration(
+export function validateWecomBotQrConfigurationV1(
 	value: WecomBotQrConfigurationV1 | undefined,
 ): WecomBotQrConfigurationV1 | undefined {
 	if (!value) return undefined;
@@ -68,7 +68,7 @@ export function assembleWecomSetupApiV1(options: {
 	};
 	readonly botQr?: WecomBotQrConfigurationV1;
 }) {
-	const botQr = validateBotQrConfiguration(options.botQr);
+	const botQr = validateWecomBotQrConfigurationV1(options.botQr);
 	const callbackCipher = options.application
 		? createWecomCallbackCipherV1(options.application.callbackKeys)
 		: undefined;
