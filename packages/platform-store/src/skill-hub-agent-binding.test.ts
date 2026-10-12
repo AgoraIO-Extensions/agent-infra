@@ -288,6 +288,40 @@ describe("Skill Hub Agent binding persistence", () => {
 		await client`
 			update platform.agents set current_configuration_revision = 8 where id = 'agent-1'
 		`;
+		await client`
+			insert into platform.skill_hub_skills
+			(id, name, owner_id, status, created_at, updated_at)
+			values ('skill-2', 'other-skill', 'owner-1', 'active', ${occurredAt}, ${occurredAt})
+		`;
+		await client`
+			insert into platform.skill_hub_versions
+			(id, skill_id, owner_id, version, provider, visibility, state,
+			 package_object_version, package_digest, manifest_digest, signature_digest,
+			 reviewed_by, created_at)
+			values ('skill-version-2', 'skill-2', 'owner-1', '1.0.0', 'my_library',
+			 'PRIVATE', 'published', 'object-2', ${"d".repeat(64)}, ${"e".repeat(64)},
+			 ${"f".repeat(64)}, 'owner-1', ${occurredAt})
+		`;
+		await client`
+			insert into platform.skill_hub_installations
+			(id, principal_type, principal_id, skill_version_id, state, installed_at, updated_at)
+			values ('installation-2', 'user', 'owner-1', 'skill-version-2', 'installed', ${occurredAt}, ${occurredAt})
+		`;
+		await client`
+			insert into platform.idempotency_records
+			(id, scope_type, scope_id, actor_id, command_type, idempotency_key,
+			 request_digest, status, result, created_at, updated_at)
+			values ('admission-2', 'skill_package', 'skill-version-2', 'owner-1',
+			 'skill.package.publish.v1', 'admission-2', ${"7".repeat(64)}, 'completed',
+			 ${client.json({ skillVersionId: "skill-version-2" })}, ${occurredAt}, ${occurredAt})
+		`;
+		await client`
+			insert into platform.skill_hub_agent_bindings
+			(agent_id, agent_version, skill_version_id, "grant", sync_revision, state,
+			 failure_reason, created_at, updated_at, configuration_revision)
+			values ('agent-1', 'agent-version-1', 'skill-version-2', ${client.json(grant as never)},
+			 1, 'pending_sync', null, ${occurredAt}, ${occurredAt}, 8)
+		`;
 
 		const receiptStore = new PostgresSkillHubAgentBindingAdmissionV1({
 			databaseUrl: database?.databaseUrl ?? "",
@@ -308,6 +342,15 @@ describe("Skill Hub Agent binding persistence", () => {
 			readOnly: true as const,
 		};
 		try {
+			await client`
+				update platform.agents set current_configuration_revision = 9 where id = 'agent-1'
+			`;
+			await expect(
+				receiptStore.recordAppliedReceipt(receipt),
+			).rejects.toMatchObject({ code: "stale_revision" });
+			await client`
+				update platform.agents set current_configuration_revision = 8 where id = 'agent-1'
+			`;
 			await expect(
 				receiptStore.recordAppliedReceipt({
 					...receipt,
@@ -318,8 +361,15 @@ describe("Skill Hub Agent binding persistence", () => {
 				await client`
 					select state, applied_receipt
 					from platform.skill_hub_agent_bindings
+					where skill_version_id = 'skill-version-1'
 				`,
 			).toEqual([{ state: "pending_sync", applied_receipt: null }]);
+			await expect(
+				receiptStore.recordAppliedReceipt({
+					...receipt,
+					skillVersionId: "skill-version-2",
+				}),
+			).rejects.toMatchObject({ code: "mismatch" });
 
 			expect(await receiptStore.recordAppliedReceipt(receipt)).toEqual(receipt);
 			expect(await receiptStore.recordAppliedReceipt(receipt)).toEqual(receipt);
@@ -346,30 +396,39 @@ describe("Skill Hub Agent binding persistence", () => {
 				resolveGrantBoundary: async ({ requested }) => requested,
 			});
 			try {
+				const resolved = await syncedResolver.resolveSyncBindings({
+					agentId: "agent-1",
+					agentVersion: "agent-version-1",
+					configurationRevision: 8,
+					actorId: "owner-1",
+					organizationIds: ["org-1"],
+					isAdministrator: false,
+				});
 				expect(
-					await syncedResolver.resolveSyncBindings({
-						agentId: "agent-1",
-						agentVersion: "agent-version-1",
-						configurationRevision: 8,
-						actorId: "owner-1",
-						organizationIds: ["org-1"],
-						isAdministrator: false,
-					}),
-				).toMatchObject([
-					{
-						state: "synced",
-						appliedReceipt: receipt,
-					},
-				]);
+					resolved.find(
+						(binding) =>
+							binding.skillVersion.skillVersionId === "skill-version-1",
+					),
+				).toMatchObject({ state: "synced", appliedReceipt: receipt });
 			} finally {
 				await syncedResolver.close();
 			}
+			await client`
+				update platform.skill_hub_agent_bindings
+				set state = 'revoked', applied_receipt = null, failure_reason = null
+				where agent_id = 'agent-1' and agent_version = 'agent-version-1'
+					and configuration_revision = 8 and skill_version_id = 'skill-version-1'
+			`;
+			await expect(
+				receiptStore.recordAppliedReceipt(receipt),
+			).rejects.toMatchObject({ code: "invalid_state" });
 			expect(
 				await client`
 					select state, applied_receipt
 					from platform.skill_hub_agent_bindings
+					where skill_version_id = 'skill-version-1'
 				`,
-			).toEqual([{ state: "synced", applied_receipt: receipt }]);
+			).toEqual([{ state: "revoked", applied_receipt: null }]);
 		} finally {
 			await receiptStore.close();
 		}
