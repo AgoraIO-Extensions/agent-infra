@@ -41,7 +41,7 @@ type CustomAgentGatewayRouteInput = NonNullable<
 /** Deployment-owned Gateway inputs; the production IdentityAdapter is bound by this module. */
 export type ProductionCustomAgentGatewayInputV1 = Omit<
 	CustomAgentGatewayRouteInput,
-	"identity"
+	"identity" | "authorizeAgent"
 >;
 
 export interface ProductionPlatformApiInputV1
@@ -159,8 +159,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 				!input.customAgentGateway.path.startsWith("/") ||
 				!input.customAgentGateway.path.includes("*") ||
 				/[?#\s]/.test(input.customAgentGateway.path) ||
-				typeof input.customAgentGateway.resolveDeployment !== "function" ||
-				typeof input.customAgentGateway.authorizeAgent !== "function"
+				typeof input.customAgentGateway.resolveDeployment !== "function"
 			)
 				throw new Error();
 		}
@@ -344,10 +343,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 		...(input.customAgentGateway
 			? {
-					customAgentGateway: {
-						...input.customAgentGateway,
-						identity: input.identity,
-					},
+					customAgentGateway: input.customAgentGateway,
 				}
 			: {}),
 		connectionCapability,

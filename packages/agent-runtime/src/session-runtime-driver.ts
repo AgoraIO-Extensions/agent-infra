@@ -3,6 +3,7 @@ import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import {
 	type BrowserCapabilityAvailableV1,
+	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
@@ -33,6 +34,11 @@ import {
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import {
+	boundedRuntimeSkillRead,
+	type RuntimeFilesystemSkillDirectoryV1,
+	RuntimeSkillDirectoryErrorV1,
+} from "./skill-hub-directory.js";
 
 export interface SessionRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -47,6 +53,8 @@ export interface SessionRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly SessionRuntimeModelOption[];
+	/** Deployment-owned verified Skill Hub generation; never selected by a wire command. */
+	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly cursorPrefix: string;
 	readonly openSession: (
 		options: NativeSessionOptions,
@@ -65,6 +73,7 @@ export interface NativeSessionOptions {
 	selection: RuntimeSelectionV1;
 	admit: () => Promise<void>;
 	resolveModelCredential?: RuntimeModelCredentialResolver;
+	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	update: (event?: Pick<RuntimeEventV1, "type" | "payload">) => Promise<void>;
 }
 export interface NativeSession {
@@ -517,6 +526,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							: undefined,
 						selection,
 						admit: async () => unavailable(),
+						skillDirectory: this.options.skillDirectory,
 						update: async () => {},
 					});
 					try {
@@ -835,6 +845,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				...(resolveModelCredential ? { resolveModelCredential } : {}),
 				cwd: workspace,
 				nativeId: before.nativeId,
+				skillDirectory: this.options.skillDirectory,
 				history: before.turns.at(-1)?.nativeTerminalCheckpoint
 					? {
 							checkpoint:
@@ -1182,14 +1193,123 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		assertCurrent();
 		return result;
 	}
+	/** Return the deployment-owned Hub projection without consulting native state. */
+	async discoverNativeSkills(read: SessionNativeCommandReadContext) {
+		const handle = this.handles.get(read.nativeSessionRef);
+		const directory = this.options.skillDirectory;
+		if (!handle || !directory) throw new RuntimeSkillDirectoryErrorV1();
+		const generationId = directory.generationId;
+		const projectionSnapshot = JSON.stringify(directory.findSkills());
+		const assertCurrent = () => {
+			if (
+				read.signal.aborted ||
+				read.expiresAt <= Date.now() ||
+				this.closed ||
+				this.handles.get(read.nativeSessionRef) !== handle
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			if (
+				directory.generationId !== generationId ||
+				JSON.stringify(directory.findSkills()) !== projectionSnapshot
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			read.assertCurrent();
+		};
+		const revalidate = async () => {
+			assertCurrent();
+			try {
+				await boundedRuntimeSkillRead({
+					pending: read.revalidate(),
+					signal: read.signal,
+					expiresAt: read.expiresAt,
+				});
+			} catch {
+				throw new RuntimeSkillDirectoryErrorV1();
+			}
+			assertCurrent();
+		};
+		await revalidate();
+		const entries = directory.findSkills().map((entry) => ({ ...entry }));
+		await revalidate();
+		return { generationId, entries };
+	}
+
+	/** Read one deployment-owned Hub resource without creating a native Turn. */
+	async readNativeSkill(
+		read: SessionNativeCommandReadContext,
+		name: string,
+		relativePath: string,
+	): Promise<Uint8Array> {
+		const handle = this.handles.get(read.nativeSessionRef);
+		const directory = this.options.skillDirectory;
+		if (!handle || !directory) throw new RuntimeSkillDirectoryErrorV1();
+		const generationId = directory.generationId;
+		const projectionSnapshot = JSON.stringify(directory.findSkills());
+		const assertCurrent = () => {
+			if (
+				read.signal.aborted ||
+				read.expiresAt <= Date.now() ||
+				this.closed ||
+				this.handles.get(read.nativeSessionRef) !== handle
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			if (
+				directory.generationId !== generationId ||
+				JSON.stringify(directory.findSkills()) !== projectionSnapshot
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			read.assertCurrent();
+		};
+		assertCurrent();
+		try {
+			await boundedRuntimeSkillRead({
+				pending: read.revalidate(),
+				signal: read.signal,
+				expiresAt: read.expiresAt,
+			});
+		} catch {
+			throw new RuntimeSkillDirectoryErrorV1();
+		}
+		assertCurrent();
+		const bytes = await boundedRuntimeSkillRead({
+			pending: directory.readSkill(name, relativePath),
+			signal: read.signal,
+			expiresAt: read.expiresAt,
+		});
+		assertCurrent();
+		try {
+			await read.revalidate();
+		} catch {
+			throw new RuntimeSkillDirectoryErrorV1();
+		}
+		assertCurrent();
+		return bytes.slice();
+	}
 	async getCapabilities() {
-		return {
+		const skills = this.options.skillDirectory?.findSkills().map((skill) => ({
+			schemaVersion: 1 as const,
+			name: skill.name,
+			version: skill.version,
+			manifestSha256: skill.manifestDigest,
+			packageDigest: skill.packageDigest,
+			readOnly: true as const,
+		}));
+		if (
+			skills &&
+			new Set(skills.map((skill) => skill.name)).size !== skills.length
+		)
+			throw new RuntimeSkillDirectoryErrorV1();
+		const capabilities = {
 			modelSelection: true,
 			attachments: false,
 			resultFiles: false,
 			connection: false,
 			supplementaryInstruction: false,
+			...(skills && skills.length > 0 ? { skills } : {}),
 		};
+		const parsed = RuntimeCapabilitiesV1Schema.safeParse(capabilities);
+		if (!parsed.success) throw new RuntimeSkillDirectoryErrorV1();
+		return parsed.data;
 	}
 	async getModelDirectory(ref: string): Promise<RuntimeModelDirectory> {
 		const handle = this.handles.get(ref);

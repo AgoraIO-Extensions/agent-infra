@@ -121,6 +121,32 @@ describe("Personal recent login and continuation lifetime", () => {
 		).toBe(true);
 	});
 
+	it("keeps same-ID conversations from different Agents in producer order", async () => {
+		const hook = setup(() =>
+			Response.json({
+				items: [
+					{
+						...history("shared-id").conversation,
+						agentId: "agent-a",
+					},
+					{
+						...history("shared-id").conversation,
+						agentId: "agent-b",
+					},
+				],
+				nextCursor: null,
+			}),
+		);
+		await waitFor(() => expect(hook.result.current.state.kind).toBe("ready"));
+		expect(hook.result.current.state).toMatchObject({
+			kind: "ready",
+			conversations: [
+				{ agentId: "agent-a", conversationId: "shared-id" },
+				{ agentId: "agent-b", conversationId: "shared-id" },
+			],
+		});
+	});
+
 	it("keeps valid history beyond 100 user-requested pages without clearing rows or blocking continuation", async () => {
 		const hook = setup((request) => {
 			const cursor = new URL(request.url).searchParams.get("cursor");

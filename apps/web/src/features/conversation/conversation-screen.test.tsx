@@ -176,6 +176,40 @@ function fileProjection(status: "pending" | "available" = "available") {
 }
 
 describe("functional conversation screen", () => {
+	it("shows the current Agent Skill metadata without submitting a request", async () => {
+		const { requests } = setup((request) => {
+			if (new URL(request.url).pathname === "/api/v2/agents/agent-1")
+				return Response.json({
+					...agent,
+					capabilities: {
+						...agent.capabilities,
+						skills: [
+							{
+								schemaVersion: 1,
+								name: "workspace-summary",
+								version: "1.0.0",
+								manifestSha256: "a".repeat(64),
+								packageDigest: "b".repeat(64),
+								readOnly: true,
+							},
+						],
+					},
+				});
+		});
+		fireEvent.click(await screen.findByRole("button", { name: "打开" }));
+		expect(screen.getByText("workspace-summary")).toBeTruthy();
+		expect(screen.getByText(/Skill Hub/)).toBeTruthy();
+		expect(screen.getByText(/1\.0\.0/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
+		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
+		expect(
+			screen.getByText(
+				"选择已保存在当前草稿中；执行接缝尚未接入，未提交请求。",
+			),
+		).toBeTruthy();
+		expect(requests.some((request) => request.method === "POST")).toBe(false);
+	});
+
 	it("rejects unsupported and oversized files before creating an upload", async () => {
 		const { requests } = setup();
 		const input = await screen.findByLabelText("添加附件");
@@ -649,13 +683,17 @@ describe("functional conversation screen", () => {
 				}
 			})();
 		});
+		const input = await composer();
 		await screen.findByText("会话准备中，完成后即可发送。草稿会保留。");
+		expect(input.disabled).toBe(false);
 		await waitFor(() => expect(reads).toBe(2), { timeout: 3_000 });
 		// A fixed interval would start, and abort, another read meanwhile.
 		await new Promise((resolve) => setTimeout(resolve, 2_800));
 		expect(reads).toBe(2);
 		expect(maxInFlight).toBe(1);
 		expect(aborted).toBe(0);
+		expect(input.disabled).toBe(false);
+		expect(screen.queryByText("正在读取会话…")).toBeNull();
 	}, 10_000);
 
 	it("shows an upgrading Session as updating with read-only history until it is ready (#1523)", async () => {
@@ -754,6 +792,33 @@ describe("functional conversation screen", () => {
 		expect(
 			screen.queryByText(
 				"当前登录或访问权限已失效，请重新登录或返回 Agent 列表。",
+			),
+		).toBeNull();
+	});
+
+	it("surfaces a runtime-unavailable refusal and keeps the draft (#1607)", async () => {
+		setup((request) =>
+			request.method === "POST"
+				? Response.json(
+						PilotProtocolErrorV1Schema.parse({
+							schemaVersion: 1,
+							code: "RUNTIME_UNAVAILABLE",
+							message: "The Agent runtime is temporarily unavailable.",
+							retryable: true,
+							traceId: "trace-runtime-unavailable",
+						}),
+						{ status: 503 },
+					)
+				: undefined,
+		);
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Keep this draft" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await screen.findByText("Agent 暂时不可用，请稍后重试或联系 Owner。");
+		expect(input.value).toBe("Keep this draft");
+		expect(
+			screen.queryByText(
+				"提交结果尚未确认。原请求可能已受理，请核实原请求，避免重复创建回复。",
 			),
 		).toBeNull();
 	});
@@ -1338,7 +1403,23 @@ describe("functional conversation screen", () => {
 					.getByRole("link", { name: "切换 Agent" })
 					.getAttribute("href"),
 			).toBe("/agents?mode=conversation");
-			expect((await composer()).disabled).toBe(true);
+			const input = await composer();
+			if (
+				serviceAvailability === "starting" ||
+				serviceAvailability === "updating"
+			)
+				fireEvent.change(input, {
+					target: { value: "Draft while transitioning" },
+				});
+			expect(input.disabled).toBe(
+				serviceAvailability !== "starting" &&
+					serviceAvailability !== "updating",
+			);
+			if (
+				serviceAvailability === "starting" ||
+				serviceAvailability === "updating"
+			)
+				expect(input.value).toBe("Draft while transitioning");
 		},
 	);
 
