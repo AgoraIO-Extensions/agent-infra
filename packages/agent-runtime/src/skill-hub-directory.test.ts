@@ -158,7 +158,7 @@ it("derives fixed native Skill entry paths from the verified filesystem root", a
 			generationId: "e".repeat(64),
 			projections: [nativeProjection],
 		});
-		expect(directory.nativeRoot).toBe(realpathSync(root));
+		expect(directory.nativeRoot).toBe(root);
 		expect(directory.nativeSkillPaths?.()).toEqual([
 			join(realpathSync(root), ".agents/skills/workspace-summary/SKILL.md"),
 		]);
