@@ -21,6 +21,16 @@ const replacementCapabilities: readonly ConversationCapabilityV1[] = [
 	},
 ];
 
+const twoCapabilities: readonly ConversationCapabilityV1[] = [
+	...capabilities,
+	{
+		kind: "command",
+		name: "workspace-list",
+		description: "List approved workspace files",
+		source: "platform",
+	},
+];
+
 describe("ConversationCapabilityPickerPanel", () => {
 	afterEach(cleanup);
 
@@ -140,5 +150,27 @@ describe("ConversationCapabilityPickerPanel", () => {
 			/>,
 		);
 		expect(screen.queryByRole("textbox", { name: "能力参数" })).toBeNull();
+	});
+
+	it("clamps the keyboard index when the directory shrinks", () => {
+		const { rerender } = render(
+			<ConversationCapabilityPickerPanel
+				capabilities={twoCapabilities}
+				scopeKey="alice:agent-a:conversation-a"
+				disabled={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "打开" }));
+		const search = screen.getByRole("textbox", { name: "搜索命令或 Skill" });
+		fireEvent.keyDown(search, { key: "ArrowDown" });
+		rerender(
+			<ConversationCapabilityPickerPanel
+				capabilities={capabilities}
+				scopeKey="alice:agent-a:conversation-a"
+				disabled={false}
+			/>,
+		);
+		fireEvent.keyDown(search, { key: "Enter" });
+		expect(screen.getByRole("textbox", { name: "能力参数" })).toBeTruthy();
 	});
 });

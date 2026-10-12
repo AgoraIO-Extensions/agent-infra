@@ -175,14 +175,21 @@ export function reconcileConversationCapabilitySelection(
 	state: ConversationCapabilityPickerStateV1,
 	capabilities: readonly ConversationCapabilityV1[],
 ) {
-	const selected = state.selected;
-	if (!selected) return state;
+	const filtered = filterConversationCapabilities(capabilities, state.query);
+	const selectedIndex =
+		filtered.length === 0
+			? 0
+			: Math.min(state.selectedIndex, filtered.length - 1);
+	const indexedState =
+		selectedIndex === state.selectedIndex ? state : { ...state, selectedIndex };
+	const selected = indexedState.selected;
+	if (!selected) return indexedState;
 	const current = capabilities.find((capability) =>
 		sameCapability(capability, selected),
 	);
 	if (!current) {
 		return {
-			...state,
+			...indexedState,
 			selected: undefined,
 			parameterText: "",
 			confirmed: false,
