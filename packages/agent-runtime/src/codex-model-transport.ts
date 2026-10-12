@@ -1168,8 +1168,10 @@ export async function openCodexModelTransport(
 	if (
 		!Number.isSafeInteger(idleTimeout) ||
 		idleTimeout < 1 ||
+		idleTimeout > 2_147_483_647 ||
 		!Number.isSafeInteger(responseHeaderTimeout) ||
-		responseHeaderTimeout < 1
+		responseHeaderTimeout < 1 ||
+		responseHeaderTimeout > 2_147_483_647
 	)
 		throw new Error("RUNTIME_CONFIGURATION_INVALID");
 	const modelOnly = observer.modelOnly === true;

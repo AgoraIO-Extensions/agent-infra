@@ -485,6 +485,26 @@ function observePersistenceDeadlines() {
 }
 
 describe("Codex model transport", () => {
+	it.each([0, 2_147_483_648])(
+		"rejects an idle timeout outside Node's timer range: %s",
+		async (timeout) => {
+			await expect(
+				openProductionModelTransport(
+					[
+						{
+							internalModel: selectedInternalModel,
+							model: "synthetic-selected",
+							endpoint: "http://127.0.0.1:1",
+							credential,
+						},
+					],
+					testObserver,
+					{ streamIdleTimeoutMs: timeout },
+				),
+			).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
+		},
+	);
+
 	it("allows a continuously active stream to outlive the idle threshold", async () => {
 		const target = await listen(
 			createServer(async (_request, response) => {
