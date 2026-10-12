@@ -102,6 +102,18 @@ interface Turn {
 	events: RuntimeEventV1[];
 	operationRef?: string;
 	attemptRef?: string;
+	connectionOperations?: ConnectionOperation[];
+}
+interface ConnectionOperation {
+	readonly callId: string;
+	readonly alias: string;
+	readonly name: string;
+	readonly phase: "prepared" | "started" | "completed" | "failed" | "unknown";
+	readonly rpcRequestId: string | number;
+	readonly requestDigest: string;
+	readonly consumerId: string;
+	readonly instanceRef: string;
+	readonly credentialRevision: string;
 }
 interface Session {
 	schemaVersion: 1;
@@ -572,6 +584,42 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								turn.modelResponse.state !== "completed"))
 					)
 						unavailable();
+					if (
+						turn.connectionOperations !== undefined &&
+						(!Array.isArray(turn.connectionOperations) ||
+							turn.connectionOperations.length > 32)
+					)
+						unavailable();
+					const connectionCallIds = new Set<string>();
+					for (const operation of turn.connectionOperations ?? []) {
+						if (
+							!uuid.test(operation.callId) ||
+							connectionCallIds.has(operation.callId) ||
+							!/^mcp_[A-Za-z0-9._:-]{1,127}$/.test(operation.alias) ||
+							!operation.name ||
+							operation.name.length > 128 ||
+							![
+								"prepared",
+								"started",
+								"completed",
+								"failed",
+								"unknown",
+							].includes(operation.phase) ||
+							(typeof operation.rpcRequestId !== "string" &&
+								typeof operation.rpcRequestId !== "number") ||
+							(typeof operation.rpcRequestId === "string" &&
+								(!operation.rpcRequestId ||
+									operation.rpcRequestId.length > 128)) ||
+							(typeof operation.rpcRequestId === "number" &&
+								!Number.isSafeInteger(operation.rpcRequestId)) ||
+							!/^[a-f0-9]{64}$/.test(operation.requestDigest) ||
+							!/^\w[\w.:-]{0,127}$/.test(operation.consumerId) ||
+							!/^\w[\w.:-]{0,127}$/.test(operation.instanceRef) ||
+							!/^\w[\w.:-]{0,127}$/.test(operation.credentialRevision)
+						)
+							unavailable();
+						connectionCallIds.add(operation.callId);
+					}
 					executions.add(turn.executionId);
 					turns.add(turn.turnId);
 					users.add(turn.userMessageId);
@@ -965,7 +1013,17 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				);
 				standardMcpServer = createClaudeStandardMcpServer({
 					client: standardMcp,
-					operation: (): StandardMcpOperation => {
+					operation: (alias): StandardMcpOperation => {
+						const callId = randomUUID();
+						const name = standardMcp?.toolName(alias) ?? alias;
+						const updatePhase = async (phase: ConnectionOperation["phase"]) => {
+							await this.connectionOperation(
+								file,
+								command.executionId,
+								callId,
+								(operation) => ({ ...operation, phase }),
+							);
+						};
 						const assertCurrent = () => {
 							if (this.closed || handle?.retiring) unavailable();
 							const turn = file
@@ -973,7 +1031,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								.turns.find(
 									(entry) => entry.executionId === command.executionId,
 								);
-							if (!turn || turn.status !== "running") unavailable();
+							if (turn?.status !== "running") unavailable();
 						};
 						return {
 							assertCurrent: async () => {
@@ -987,9 +1045,32 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 								if (handle) handle.retiring = true;
 								void standardMcp?.close();
 							},
-							prepare: async () => {},
-							started: async () => {},
-							confirm: async () => {},
+							prepare: async ({ rpcRequestId, requestDigest }) => {
+								await this.connectionOperation(
+									file,
+									command.executionId,
+									callId,
+									(operation) => ({ ...operation, phase: "prepared" }),
+									{
+										callId,
+										alias,
+										name,
+										phase: "prepared",
+										rpcRequestId,
+										requestDigest,
+										consumerId: standardMcp?.consumerId ?? unavailable(),
+										instanceRef: standardMcp?.instanceRef ?? unavailable(),
+										credentialRevision:
+											standardMcp?.credentialRevision ?? unavailable(),
+									},
+								);
+							},
+							started: async () => updatePhase("started"),
+							confirm: async (response) => {
+								await updatePhase(response.phase);
+								if (response.phase === "unknown")
+									await this.status(file, command.executionId, "unknown");
+							},
 						};
 					},
 				});
@@ -1099,16 +1180,17 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							const name = tools.get(block.tool_use_id);
 							if (!name) unavailable();
 							tools.delete(block.tool_use_id);
-							await this.event(file, command.executionId, {
-								type: "tool",
-								payload: {
-									toolCallId: createHash("sha256")
-										.update(block.tool_use_id)
-										.digest("hex"),
-									name,
-									phase: block.is_error ? "failed" : "completed",
-								},
-							});
+							if (!name.startsWith("mcp_"))
+								await this.event(file, command.executionId, {
+									type: "tool",
+									payload: {
+										toolCallId: createHash("sha256")
+											.update(block.tool_use_id)
+											.digest("hex"),
+										name,
+										phase: block.is_error ? "failed" : "completed",
+									},
+								});
 						}
 					}
 					if (
@@ -1128,16 +1210,17 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						)
 							unavailable();
 						tools.set(message.event.content_block.id, name);
-						await this.event(file, command.executionId, {
-							type: "tool",
-							payload: {
-								toolCallId: createHash("sha256")
-									.update(message.event.content_block.id)
-									.digest("hex"),
-								name,
-								phase: "started",
-							},
-						});
+						if (!name.startsWith("mcp_"))
+							await this.event(file, command.executionId, {
+								type: "tool",
+								payload: {
+									toolCallId: createHash("sha256")
+										.update(message.event.content_block.id)
+										.digest("hex"),
+									name,
+									phase: "started",
+								},
+							});
 					}
 					if (
 						message.type === "stream_event" &&
@@ -1235,6 +1318,33 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			);
 		});
 		for (const wake of this.waiters.get(file.read().binding.ref) ?? []) wake();
+	}
+	private async connectionOperation(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		callId: string,
+		change: (operation: ConnectionOperation) => ConnectionOperation,
+		initial?: ConnectionOperation,
+	) {
+		await file.update((state) => {
+			const turn = state.turns.find(
+				(entry) => entry.executionId === executionId,
+			);
+			if (!turn || terminal(turn.status)) return;
+			turn.connectionOperations ??= [];
+			const index = turn.connectionOperations.findIndex(
+				(operation) => operation.callId === callId,
+			);
+			if (index === -1) {
+				const first = initial;
+				if (!first) unavailable();
+				turn.connectionOperations.push(first);
+				return;
+			}
+			const current = turn.connectionOperations[index];
+			if (!current) unavailable();
+			turn.connectionOperations[index] = change(current);
+		});
 	}
 	private async status(
 		file: DurableJsonFile<Session>,
@@ -1357,7 +1467,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			modelSelection: true,
 			attachments: false,
 			resultFiles: false,
-			connection: false,
+			connection: this.options.standardConnectionClient !== undefined,
 			supplementaryInstruction: false,
 		};
 	}
