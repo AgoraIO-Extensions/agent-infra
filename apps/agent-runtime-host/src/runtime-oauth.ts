@@ -121,12 +121,21 @@ export async function prepareRuntimeOAuth(options: {
 			configuration.resource !== target.url
 		)
 			unavailable();
-		for (const endpoint of [
+		requireConnectionOAuthEndpoint(
 			configuration.authorizationEndpoint,
+			issuer,
+			"/oauth/authorize",
+		);
+		requireConnectionOAuthEndpoint(
 			configuration.tokenEndpoint,
+			issuer,
+			"/oauth/token",
+		);
+		requireConnectionOAuthEndpoint(
 			configuration.revocationEndpoint,
-		])
-			if (new URL(endpoint).origin !== issuer.origin) unavailable();
+			issuer,
+			"/oauth/revoke",
+		);
 		const scope = RuntimeOAuthScopeV1Schema.parse({
 			agentId: options.agentId,
 			sandboxId: environment.AGENT_INFRA_RUNTIME_SANDBOX_ID,
@@ -199,6 +208,23 @@ export async function prepareRuntimeOAuth(options: {
 	} catch {
 		return { status: "unavailable" };
 	}
+}
+
+function requireConnectionOAuthEndpoint(
+	value: string,
+	issuer: URL,
+	pathname: string,
+) {
+	const endpoint = new URL(value);
+	if (
+		endpoint.origin !== issuer.origin ||
+		endpoint.pathname !== pathname ||
+		endpoint.search ||
+		endpoint.hash ||
+		endpoint.username ||
+		endpoint.password
+	)
+		unavailable();
 }
 
 async function boundedJson(request: Request) {

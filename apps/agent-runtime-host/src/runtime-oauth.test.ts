@@ -1427,6 +1427,31 @@ it("prepares the actual private TLS/config boundary and rejects foreign or incom
 	expect(await prepareRuntimeOAuth(options)).toEqual({ status: "unavailable" });
 });
 
+it("rejects OAuth endpoints that do not match Connection's published route contract", async () => {
+	const f = await fixture();
+	const options = await deployment(f);
+	const file = options.environment.AGENT_INFRA_RUNTIME_CONNECTION_OAUTH_FILE;
+	const origin = new URL(f.configuration.issuer).origin;
+	const invalidEndpoints = [
+		["authorizationEndpoint", `${origin}/oauth/token`],
+		["authorizationEndpoint", `${origin}/oauth/authorize?unexpected=1`],
+		["tokenEndpoint", `${origin}/oauth/authorize`],
+		["tokenEndpoint", `${origin}/oauth/token#unexpected`],
+		["revocationEndpoint", `${origin}/oauth/token`],
+		["revocationEndpoint", `${origin}/oauth/revoke?unexpected=1`],
+	] as const;
+	for (const [field, value] of invalidEndpoints) {
+		await writeFile(
+			file,
+			JSON.stringify({ ...f.configuration, [field]: value }),
+		);
+		expect(await prepareRuntimeOAuth(options)).toEqual({
+			status: "unavailable",
+		});
+	}
+	expect(protection.secretReads).toBe(0);
+});
+
 it("rechecks protection after the real token response before publishing any material", async () => {
 	const f = await fixture();
 	await f.callback();
