@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { IdentityContext } from "./http/identity.js";
 import { createRuntimeNativeMetadataScopeResolverV1 } from "./runtime-native-metadata-scope-resolver.js";
 
 const identity = {
@@ -71,7 +72,7 @@ describe("native metadata Store scope resolver", () => {
 		});
 		await expect(
 			resolver({
-				identity: { ...identity, ...patch },
+				identity: { ...identity, ...patch } as unknown as IdentityContext,
 				conversationId: persistedScope.conversationId,
 				selector: "status",
 				signal: new AbortController().signal,

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
-	NativeMetadataObjectScopeResponseV1,
+	NativeMetadataObjectScopeV1,
 	RuntimeNativeMetadataBindingResponseV1,
 } from "@agent-infra/contracts/runtime";
 import { RuntimeNativeMetadataProofMaximumLifetimeMsV1 } from "@agent-infra/contracts/runtime";
@@ -62,7 +62,7 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 			if (input.identity.accountStatus !== "active") return null;
 			const execution = await options.execution.resolve(input);
 			if (!execution) return null;
-			const scope: NativeMetadataObjectScopeResponseV1 | undefined =
+			const scope: NativeMetadataObjectScopeV1 | undefined =
 				await options.query.readNativeMetadataObjectScopeV1({
 					scope: {
 						actorId: input.identity.userId,
@@ -73,7 +73,7 @@ export function createRuntimeNativeMetadataScopeResolverV1(options: {
 					executionId: execution.executionId,
 					signal: input.signal,
 				});
-			if (!scope || scope.channelId !== "web") return null;
+			if (scope?.channelId !== "web") return null;
 			const readStartedAt = (options.now ?? Date.now)();
 			if (!Number.isSafeInteger(readStartedAt) || readStartedAt < 1)
 				return null;
