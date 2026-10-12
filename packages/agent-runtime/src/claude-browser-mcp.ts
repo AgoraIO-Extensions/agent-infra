@@ -104,18 +104,15 @@ function resultToCallToolResult(
 			isError: false,
 		};
 	return {
-		content:
-			content.length > 0
-				? content
-				: [
-						{
-							type: "text" as const,
-							text:
-								result.phase === "unknown"
-									? "BROWSER_EXECUTION_UNKNOWN"
-									: "BROWSER_EXECUTION_FAILED",
-						},
-					],
+		content: [
+			{
+				type: "text" as const,
+				text:
+					result.phase === "unknown"
+						? "BROWSER_EXECUTION_UNKNOWN"
+						: "BROWSER_EXECUTION_FAILED",
+			},
+		],
 		isError: true,
 	};
 }

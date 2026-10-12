@@ -176,24 +176,15 @@ it("does not turn failed, mismatched or cancelled Browser calls into success", a
 			contentItems: [{ type: "inputText", text: "forged" }],
 			success: true,
 		})
-		.mockResolvedValueOnce({
-			actionId: "unused",
-			operationRef: "unused",
-			attemptRef: "unused",
-			binding: {
-				agentId: "agent-a",
-				conversationId: "conversation-a",
-				executionId: "execution-a",
-				sessionGeneration: 2,
-				resourceFence: 8,
-				capabilityVersion: 3,
-				pageRevision: 1,
-			},
-			phase: "failed",
-			contentItems: [],
+		.mockImplementationOnce(async (request) => ({
+			...request,
+			phase: "failed" as const,
+			contentItems: [
+				{ type: "inputText" as const, text: "private failed detail" },
+			],
 			success: false,
 			failureCode: "operation_failed",
-		});
+		}));
 	const controller = new AbortController();
 	const server = createClaudeBrowserMcpServer({
 		capability,
@@ -212,7 +203,10 @@ it("does not turn failed, mismatched or cancelled Browser calls into success", a
 	}>;
 	const input = { pageId: "page", pageRevision: 1 };
 	expect(await tools[1]?.handler(input, {})).toMatchObject({ isError: true });
-	expect(await tools[1]?.handler(input, {})).toMatchObject({ isError: true });
+	expect(await tools[1]?.handler(input, {})).toEqual({
+		content: [{ type: "text", text: "BROWSER_EXECUTION_FAILED" }],
+		isError: true,
+	});
 	controller.abort();
 	expect(await tools[1]?.handler(input, {})).toMatchObject({ isError: true });
 });
