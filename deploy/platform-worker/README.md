@@ -61,6 +61,11 @@ Workload、Conversation 和可选 WeCom 实例共同使用这一数据库绑定�
 以下只说明已有工厂参数的装配方式，具体 IdentityAdapter、Registry policy 和模型目录
 由部署代码实现，不定义新的身份服务或配置协议：
 
+`workloadInput.policy.platformApiSelector` 是可选的部署拥有 Pod selector。配置后，它只会
+加入 `platform-auth` Workload 的 NetworkPolicy ingress peer，让 Platform API Gateway 访问
+内部 route；`self-managed` 与 `internal-only` 路由不会获得该 peer。selector 不能来自 Agent
+请求、Runtime Manifest 或浏览器字段；它也不构成 Gateway 的 target、TLS/SNI 或权限授权。
+
 ```javascript
 import { createPrivateKey } from "node:crypto";
 import { readFile } from "node:fs/promises";
