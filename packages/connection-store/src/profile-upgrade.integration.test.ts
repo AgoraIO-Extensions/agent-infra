@@ -3,7 +3,10 @@ import { resolve } from "node:path";
 import { ConnectionError, canonicalHash } from "@agent-infra/connection-core";
 import postgres from "postgres";
 import { describe, expect, it, vi } from "vitest";
-import { PostgresConnectionAccessRequestRepository } from "./access-request-repository";
+import {
+	lockAccessAdmission,
+	PostgresConnectionAccessRequestRepository,
+} from "./access-request-repository";
 import { PostgresConnectionApprovalRepository } from "./approval-repository";
 import { migrateConnectionDatabase } from "./migrations";
 import { PostgresConnectionNotificationDispatcher } from "./notification-dispatcher";
@@ -173,6 +176,72 @@ describe("capability profile follows the current runtime", () => {
 					const before = await snapshot();
 					if (scenario === "terms-unavailable")
 						await sql`UPDATE connection_disclaimer_versions SET status = 'SUPERSEDED', revision = revision + 1 WHERE id = ${disclaimerId}`;
+					if (scenario === "compatible") {
+						let releaseProfile!: () => void;
+						let releaseVerification!: () => void;
+						let signalVerification!: () => void;
+						const verified = new Promise<void>((resolve) => {
+							signalVerification = resolve;
+						});
+						verify.mockImplementationOnce(async () => {
+							signalVerification();
+							await new Promise<void>((resolve) => {
+								releaseVerification = resolve;
+							});
+						});
+						const migration = catalog.reconcileCapabilityProfiles();
+						await verified;
+						let admission: Promise<unknown> | undefined;
+						let signalLocked!: () => void;
+						const locked = new Promise<void>((resolve) => {
+							signalLocked = resolve;
+						});
+						const holder = sql.begin(async (tx) => {
+							await tx`SELECT id FROM connection_capability_profiles WHERE id = ${profileId} FOR UPDATE`;
+							signalLocked();
+							await new Promise<void>((resolve) => {
+								releaseProfile = resolve;
+							});
+						});
+						await locked;
+						releaseVerification();
+						const waitForLocks = async (count: number, profileOnly = false) => {
+							const deadline = Date.now() + 5000;
+							while (Date.now() < deadline) {
+								const [waiting] = await sql<
+									{ count: string }[]
+								>`SELECT count(*)::text FROM pg_stat_activity
+									WHERE datname = current_database() AND state = 'active' AND wait_event_type = 'Lock'
+									AND (NOT ${profileOnly} OR query LIKE '%connection_capability_profiles WHERE id%')`;
+								if (Number(waiting?.count) >= count) return;
+								await new Promise((resolve) => setTimeout(resolve, 10));
+							}
+							throw new Error(
+								"Expected concurrent profile/admission lock waits",
+							);
+						};
+						try {
+							await waitForLocks(1, true);
+							// Same applicant/approver Principal and the lock sequence used by
+							// credential commit before Permit consumption, without storing a credential.
+							admission = sql.begin(async (tx) => {
+								await lockAccessAdmission(tx);
+								await tx`SELECT id FROM connection_principals WHERE id = ${admin} FOR UPDATE`;
+								await tx`SELECT id FROM connection_capability_profiles WHERE id = ${profileId} FOR SHARE`;
+							});
+							await waitForLocks(2);
+							releaseProfile();
+							await holder;
+							await Promise.all([migration, admission]);
+						} finally {
+							releaseProfile();
+							await holder;
+							await Promise.allSettled([
+								migration,
+								...(admission ? [admission] : []),
+							]);
+						}
+					}
 					// Two runtime starts must serialize on the source and never duplicate current packages or notices.
 					await Promise.all([
 						catalog.reconcileCapabilityProfiles(),

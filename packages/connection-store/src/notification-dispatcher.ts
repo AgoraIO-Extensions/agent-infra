@@ -10,6 +10,7 @@ const topics = [
 ] as const;
 
 const approvalTopics = [
+	"connection.provider-access-settings.changed",
 	"connection.access-authorization.created",
 	"connection.access-authorization.expired",
 	"connection.access-authorization.reapproval-required",

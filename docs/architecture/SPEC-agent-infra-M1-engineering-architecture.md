@@ -920,3 +920,7 @@ Owner 已批准普通范围及该 ADR 所列残余风险；新版本未部署/�
 connector、Direct/Delegated 授权交集和受控 egress；升级必须重新公司审批及显式 Consent/Grant。
 未知 WRITE 的持久冻结按受影响 Connection 隔离，跨重连、Grant 和版本升级保留；不能以
 解除测试限制为理由放宽身份、归档、Credential、签名、迁移或 UNKNOWN 不重放保护。
+
+## Connection 前置审批配置
+
+Connection 的公司准入由 Connection DB 按 Provider 保存审批开关，默认关闭；关闭时直接绑定真实外部账号，开启时执行前置审批及持续资格校验。此配置不改变身份传递、Credential 归属或 Consumer/Action 授权。配置权威、切换事务和调用门禁以 [Connection HLD 16.7](HLD-connection-M1.md#167-connection-access-approval) 为准。

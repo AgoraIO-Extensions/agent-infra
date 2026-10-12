@@ -22,6 +22,7 @@ import {
 	oauthTransactionRequestSchema,
 	outboxRetrySchema,
 	type ProviderCredentialRequest,
+	providerAccessSettingsUpdateSchema,
 	providerCredentialRequestSchema,
 	providerReconnectRequestSchema,
 	providerReleaseLifecycleSchema,
@@ -1118,6 +1119,67 @@ export function createConnectionOAuthApp(
 				(catalog): catalog is NonNullable<typeof catalog> => catalog !== null,
 			);
 		}
+
+		app.get("/api/v1/connection/provider-access-settings", async (context) => {
+			const session = await currentBrowserApiAccount(context);
+			if (session instanceof Response) return session;
+			const catalog = management.approvalCatalog;
+			if (!catalog)
+				throw new ConnectionError(
+					"PROVIDER_UNAVAILABLE",
+					"Approval catalog is unavailable",
+				);
+			const providers = await visibleCatalogs(session.account.principalId);
+			context.header("cache-control", "no-store");
+			return context.json({
+				settings: await catalog.listProviderAccessSettings(
+					providers.map((item) => item.provider),
+				),
+			});
+		});
+
+		app.post(
+			"/api/v1/connection/admin/provider-access-settings/:providerId",
+			async (context) => {
+				requireSameOrigin(context.req.raw.headers, options.issuer);
+				const session = await currentBrowserApiAdministrator(context);
+				if (session instanceof Response) return session;
+				const catalog = management.approvalCatalog;
+				if (!catalog)
+					throw new ConnectionError(
+						"PROVIDER_UNAVAILABLE",
+						"Approval catalog is unavailable",
+					);
+				const body = parseJsonBody(
+					providerAccessSettingsUpdateSchema,
+					await context.req.json().catch(() => undefined),
+				);
+				const providerId = context.req.param("providerId");
+				const providers = await visibleCatalogs(session.account.principalId);
+				if (!providers.some((item) => item.provider === providerId))
+					throw new ConnectionError("FORBIDDEN", "Provider is unavailable");
+				const result = await browserApiOperation(context, () =>
+					browserCommand(
+						options,
+						context,
+						{
+							operation: "connection.provider-access-settings.update",
+							request: { providerId, ...body },
+							subject: session.account.principalId,
+						},
+						() =>
+							catalog.updateProviderAccessSettings({
+								actorPrincipalId: session.account.principalId,
+								providerId,
+								...body,
+							}),
+					),
+				);
+				if (result instanceof Response) return result;
+				context.header("cache-control", "no-store");
+				return context.json(result);
+			},
+		);
 
 		app.get("/api/v1/connection/admin/access-policies", async (context) => {
 			const session = await currentBrowserApiAdministrator(context);

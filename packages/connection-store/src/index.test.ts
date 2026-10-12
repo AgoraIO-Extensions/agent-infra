@@ -81,6 +81,7 @@ describe("Connection store migrations", () => {
 			"0042_static_spaces_standard_admission",
 			"0043_capability_profile_system_audit",
 			"0044_capability_profile_update_cancellation_audit",
+			"0045_provider_access_approval_settings",
 		]);
 		for (const migration of journal.entries) {
 			await access(resolve(directory, `${migration.tag}.sql`));

@@ -564,6 +564,28 @@ export function authorizationSnapshotMatches(
 	);
 }
 
+export function decideDirectProviderUpgrade(input: {
+	credentialActive: boolean;
+	credentialExpired: boolean;
+	currentReleaseId: string;
+	targetReleaseId: string;
+	reauthorizationRequired: boolean;
+}): Pick<ProviderUpgradeReadiness, "nextAction" | "reason"> {
+	if (!input.credentialActive || input.credentialExpired)
+		return {
+			nextAction: "REAUTHORIZE",
+			reason: "CREDENTIAL_REAUTHORIZATION_REQUIRED",
+		};
+	if (input.currentReleaseId === input.targetReleaseId)
+		return { nextAction: "NONE", reason: "ALREADY_CURRENT" };
+	if (input.reauthorizationRequired)
+		return {
+			nextAction: "REAUTHORIZE",
+			reason: "PROVIDER_REAUTHORIZATION_REQUIRED",
+		};
+	return { nextAction: "UPGRADE", reason: "APPROVAL_NOT_REQUIRED" };
+}
+
 export function decideReconnectAuthorization(input: {
 	current: {
 		actionVersionIds: unknown;
@@ -727,7 +749,7 @@ export interface ConnectionRepository {
 	): Promise<OAuthTransaction>;
 	createOAuthTransaction(
 		input: OAuthTransaction & { state: string },
-	): Promise<void>;
+	): Promise<void | { requiredScopes: readonly string[] }>;
 	validatePersonalConnectRequest(input: {
 		principalId: string;
 		providerId: string;
@@ -1853,7 +1875,7 @@ export class ConnectionApplicationService {
 		const state = randomToken();
 		const codeVerifier = randomToken();
 		const codeChallenge = base64UrlHash(codeVerifier);
-		await this.repository.createOAuthTransaction({
+		const transaction = await this.repository.createOAuthTransaction({
 			...(upgradeBinding ? { upgradeBinding } : {}),
 			...(accessRequestId ? { accessRequestId } : {}),
 			...(reconnectConnectionId ? { reconnectConnectionId } : {}),
@@ -1863,6 +1885,7 @@ export class ConnectionApplicationService {
 			redirectUri,
 			state,
 		});
+		if (transaction) requestedScopes = transaction.requiredScopes;
 		return {
 			authorizationUrl: oauth.getAuthorizationUrl({
 				codeChallenge,

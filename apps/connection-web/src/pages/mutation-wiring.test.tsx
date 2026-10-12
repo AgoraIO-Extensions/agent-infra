@@ -21,6 +21,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectionApiError } from "../api";
 
 const api = vi.hoisted(() => ({
+	listProviderAccessSettings: vi.fn(async () => ({
+		settings: [] as {
+			providerId: string;
+			approvalRequired: boolean;
+			revision: string;
+		}[],
+	})),
+	updateProviderAccessSettings: vi.fn(
+		async (_providerId: string, _input: unknown) => ({
+			providerId: _providerId,
+			approvalRequired: true,
+			revision: "2",
+		}),
+	),
 	getProviderUpgradeReadiness: vi.fn(
 		async (connectionId: string): Promise<ProviderUpgradeReadiness> => ({
 			connectionId,
@@ -2356,4 +2370,24 @@ describe("Connection 管理 mutation wiring", () => {
 			"发布工程",
 		);
 	});
+});
+
+it("opens credential connection directly when Provider approval is off", async () => {
+	window.history.replaceState(
+		{},
+		"",
+		"/connection/connections?provider=bitbucket",
+	);
+	api.listProviderAccessSettings.mockResolvedValueOnce({
+		settings: [
+			{ providerId: "bitbucket", approvalRequired: false, revision: "1" },
+		],
+	});
+	renderPage(<ConnectionsPage />);
+	fireEvent.click(await screen.findByRole("button", { name: "连接账号" }));
+	expect(await screen.findByRole("dialog", { name: /Bitbucket/ })).toBeTruthy();
+	expect(api.submitConnectionAccessRequest).not.toHaveBeenCalled();
+	expect(
+		screen.queryByRole("heading", { name: "申请连接 Bitbucket" }),
+	).toBeNull();
 });

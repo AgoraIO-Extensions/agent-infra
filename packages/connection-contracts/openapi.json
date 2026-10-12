@@ -8,6 +8,81 @@
 	"servers": [{ "url": "/" }],
 	"security": [{ "browserSession": [] }],
 	"paths": {
+		"/api/v1/connection/provider-access-settings": {
+			"get": {
+				"operationId": "listProviderAccessSettings",
+				"responses": {
+					"200": {
+						"description": "Current Provider approval requirements",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ProviderAccessSettingsResponse"
+								}
+							}
+						}
+					},
+					"401": {
+						"$ref": "#/components/responses/Error"
+					},
+					"404": {
+						"$ref": "#/components/responses/Error"
+					}
+				}
+			}
+		},
+		"/api/v1/connection/admin/provider-access-settings/{providerId}": {
+			"post": {
+				"operationId": "updateProviderAccessSettings",
+				"parameters": [
+					{
+						"name": "providerId",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					},
+					{
+						"$ref": "#/components/parameters/IdempotencyKey"
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/ProviderAccessSettingsUpdate"
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Provider approval requirement updated",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ProviderAccessSetting"
+								}
+							}
+						}
+					},
+					"400": {
+						"$ref": "#/components/responses/Error"
+					},
+					"401": {
+						"$ref": "#/components/responses/Error"
+					},
+					"404": {
+						"$ref": "#/components/responses/Error"
+					},
+					"409": {
+						"$ref": "#/components/responses/Error"
+					}
+				}
+			}
+		},
 		"/api/v1/connection/admin/action-calls": {
 			"get": {
 				"operationId": "listAuditCalls",
@@ -2223,6 +2298,50 @@
 			}
 		},
 		"schemas": {
+			"ProviderAccessSetting": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["providerId", "approvalRequired", "revision"],
+				"properties": {
+					"providerId": {
+						"type": "string"
+					},
+					"approvalRequired": {
+						"type": "boolean"
+					},
+					"revision": {
+						"type": "string",
+						"pattern": "^[0-9]+$"
+					}
+				}
+			},
+			"ProviderAccessSettingsResponse": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["settings"],
+				"properties": {
+					"settings": {
+						"type": "array",
+						"items": {
+							"$ref": "#/components/schemas/ProviderAccessSetting"
+						}
+					}
+				}
+			},
+			"ProviderAccessSettingsUpdate": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["approvalRequired", "expectedRevision"],
+				"properties": {
+					"approvalRequired": {
+						"type": "boolean"
+					},
+					"expectedRevision": {
+						"type": "string",
+						"pattern": "^(0|[1-9][0-9]*)$"
+					}
+				}
+			},
 			"AuditSummaryState": {
 				"type": "string",
 				"enum": [

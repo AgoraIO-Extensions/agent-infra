@@ -16,11 +16,26 @@ import {
 	render,
 	screen,
 	waitFor,
+	within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
+	listProviderAccessSettings: vi.fn(async () => ({
+		settings: [] as {
+			providerId: string;
+			approvalRequired: boolean;
+			revision: string;
+		}[],
+	})),
+	updateProviderAccessSettings: vi.fn(
+		async (_providerId: string, _input: unknown) => ({
+			providerId: _providerId,
+			approvalRequired: true,
+			revision: "2",
+		}),
+	),
 	getApprovalPolicyStages: vi.fn(async () => ({ stages: [] })),
 	getConnectionAccessPolicyDraft: vi.fn(
 		async (): Promise<AccessPolicyDraftResponse> => ({
@@ -1872,6 +1887,35 @@ it("publishes a material disclaimer reapproval campaign with a chosen deadline",
 		triggerVersionId: "disclaimer-material-1",
 		reason: "重大数据用途变更",
 	});
+});
+
+it("shows default-off Provider switches and submits the selected revision", async () => {
+	api.listProviderAccessSettings.mockResolvedValueOnce({
+		settings: [
+			{ providerId: "github", approvalRequired: false, revision: "1" },
+		],
+	});
+	const client = new QueryClient({
+		defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+	});
+	render(
+		<QueryClientProvider client={client}>
+			<ApprovalPoliciesPage />
+		</QueryClientProvider>,
+	);
+	const section = await screen.findByRole("region", { name: "连接器审批开关" });
+	await waitFor(() =>
+		expect(within(section).getByRole("checkbox")).toBeTruthy(),
+	);
+	const checkbox = within(section).getByRole("checkbox") as HTMLInputElement;
+	expect(checkbox.checked).toBe(false);
+	fireEvent.click(checkbox);
+	await waitFor(() =>
+		expect(api.updateProviderAccessSettings).toHaveBeenCalledWith("github", {
+			approvalRequired: true,
+			expectedRevision: "1",
+		}),
+	);
 });
 
 it("shows a pending profile update, preserves unchanged choices and requires explicit confirmation", async () => {

@@ -316,6 +316,13 @@
       "when": 1791723600004,
       "tag": "0044_capability_profile_update_cancellation_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1791763200000,
+      "tag": "0045_provider_access_approval_settings",
+      "breakpoints": true
     }
   ]
 }

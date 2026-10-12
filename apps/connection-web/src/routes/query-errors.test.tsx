@@ -20,6 +20,7 @@ const failedQuery = vi.hoisted(() =>
 vi.mock("../api", () => ({
 	connectionApi: new Proxy(
 		{
+			listProviderAccessSettings: vi.fn(async () => ({ settings: [] })),
 			getConnectionAccessOptions: vi.fn(async () => ({ options: [] })),
 			getConnections: failedQuery,
 			listConnectionAccessRequests: vi.fn(async () => ({ requests: [] })),

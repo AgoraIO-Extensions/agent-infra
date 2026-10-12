@@ -44,6 +44,10 @@ _Avoid_: Consumer Declaration、Connection Grant
 Connection Access Policy 可引用的具名 Provider 能力上限，固定 ProviderRelease、ActionVersion 集合、外部效果和所需 scope。
 _Avoid_: Consumer Declaration、Provider OAuth Scope
 
+**Provider Access Approval（连接器前置审批）**:
+系统管理员为一个 Provider 选择是否要求公司准入审批的规则，独立于 Provider 身份验证和 Consumer/Action 授权。
+_Avoid_: 自动批准、Consumer Grant
+
 **Connection Access Request**:
 Principal 在提供 Provider Credential 前，为一个 Capability Profile 和有效期发起的公司审批申请。
 _Avoid_: Provider OAuth、Connection Grant、授权预览
