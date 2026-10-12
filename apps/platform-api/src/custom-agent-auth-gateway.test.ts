@@ -64,6 +64,7 @@ describe("custom Agent platform identity gateway", () => {
 			/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
 		);
 		expect(await forwarded?.text()).toBe("hello");
+		expect(forwarded?.redirect).toBe("error");
 	});
 
 	it("fails closed for unauthorized identity, unsafe origin and unavailable auth", async () => {
