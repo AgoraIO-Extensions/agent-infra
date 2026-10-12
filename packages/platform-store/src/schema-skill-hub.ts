@@ -177,6 +177,7 @@ export const skillHubAgentBindings = platformSchema.table(
 			.notNull(),
 		state: varchar("state", { length: 16 }).notNull(),
 		failureReason: text("failure_reason"),
+		appliedReceipt: jsonb("applied_receipt"),
 		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 		configurationRevision: bigint("configuration_revision", {
@@ -209,6 +210,10 @@ export const skillHubAgentBindings = platformSchema.table(
 		check(
 			"skill_hub_agent_binding_failure_binding",
 			sql`(${table.state} = 'failed') = (${table.failureReason} is not null)`,
+		),
+		check(
+			"skill_hub_agent_binding_receipt_binding",
+			sql`(${table.state} = 'synced') = (${table.appliedReceipt} is not null)`,
 		),
 		index("skill_hub_agent_binding_agent_idx").on(
 			table.agentId,

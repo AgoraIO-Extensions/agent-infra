@@ -285,5 +285,93 @@ describe("Skill Hub Agent binding persistence", () => {
 		} finally {
 			await stale.close();
 		}
+		await client`
+			update platform.agents set current_configuration_revision = 8 where id = 'agent-1'
+		`;
+
+		const receiptStore = new PostgresSkillHubAgentBindingAdmissionV1({
+			databaseUrl: database?.databaseUrl ?? "",
+			resolveGrantBoundary: async ({ requested }) => requested,
+		});
+		const receipt = {
+			schemaVersion: 1 as const,
+			agentId: "agent-1",
+			agentVersion: "agent-version-1",
+			skillName: "workspace-summary",
+			configurationRevision: 8,
+			syncRevision: 1,
+			skillVersionId: "skill-version-1",
+			generationId: "e".repeat(64),
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			targetPath: ".agents/skills/workspace-summary",
+			readOnly: true as const,
+		};
+		try {
+			await expect(
+				receiptStore.recordAppliedReceipt({
+					...receipt,
+					packageDigest: "f".repeat(64),
+				}),
+			).rejects.toMatchObject({ code: "mismatch" });
+			expect(
+				await client`
+					select state, applied_receipt
+					from platform.skill_hub_agent_bindings
+				`,
+			).toEqual([{ state: "pending_sync", applied_receipt: null }]);
+
+			expect(await receiptStore.recordAppliedReceipt(receipt)).toEqual(receipt);
+			expect(await receiptStore.recordAppliedReceipt(receipt)).toEqual(receipt);
+			await expect(
+				receiptStore.recordAppliedReceipt({
+					...receipt,
+					generationId: "d".repeat(64),
+				}),
+			).rejects.toMatchObject({ code: "mismatch" });
+			await expect(
+				receiptStore.recordAppliedReceipt({
+					...receipt,
+					syncRevision: 2,
+				}),
+			).rejects.toMatchObject({ code: "stale_revision" });
+			await expect(
+				receiptStore.recordAppliedReceipt({
+					...receipt,
+					agentId: "agent-2",
+				}),
+			).rejects.toMatchObject({ code: "not_found" });
+			const syncedResolver = new PostgresSkillHubAgentBindingAdmissionV1({
+				databaseUrl: database?.databaseUrl ?? "",
+				resolveGrantBoundary: async ({ requested }) => requested,
+			});
+			try {
+				expect(
+					await syncedResolver.resolveSyncBindings({
+						agentId: "agent-1",
+						agentVersion: "agent-version-1",
+						configurationRevision: 8,
+						actorId: "owner-1",
+						organizationIds: ["org-1"],
+						isAdministrator: false,
+					}),
+				).toMatchObject([
+					{
+						state: "synced",
+						appliedReceipt: receipt,
+					},
+				]);
+			} finally {
+				await syncedResolver.close();
+			}
+			expect(
+				await client`
+					select state, applied_receipt
+					from platform.skill_hub_agent_bindings
+				`,
+			).toEqual([{ state: "synced", applied_receipt: receipt }]);
+		} finally {
+			await receiptStore.close();
+		}
 	});
 });

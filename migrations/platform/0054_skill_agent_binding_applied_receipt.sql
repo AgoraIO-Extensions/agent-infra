@@ -1,0 +1,2 @@
+ALTER TABLE "platform"."skill_hub_agent_bindings" ADD COLUMN "applied_receipt" jsonb;--> statement-breakpoint
+ALTER TABLE "platform"."skill_hub_agent_bindings" ADD CONSTRAINT "skill_hub_agent_binding_receipt_binding" CHECK (("platform"."skill_hub_agent_bindings"."state" = 'synced') = ("platform"."skill_hub_agent_bindings"."applied_receipt" is not null));
