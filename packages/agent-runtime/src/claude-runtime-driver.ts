@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import {
+	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
@@ -1585,13 +1586,30 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 	}
 
 	async getCapabilities() {
-		return {
+		const skills = this.options.skillDirectory?.findSkills().map((skill) => ({
+			schemaVersion: 1 as const,
+			name: skill.name,
+			version: skill.version,
+			manifestSha256: skill.manifestDigest,
+			packageDigest: skill.packageDigest,
+			readOnly: true as const,
+		}));
+		if (
+			skills &&
+			new Set(skills.map((skill) => skill.name)).size !== skills.length
+		)
+			throw new RuntimeSkillDirectoryErrorV1();
+		const capabilities = {
 			modelSelection: true,
 			attachments: false,
 			resultFiles: false,
 			connection: this.options.standardConnectionClient !== undefined,
 			supplementaryInstruction: false,
+			...(skills && skills.length > 0 ? { skills } : {}),
 		};
+		const parsed = RuntimeCapabilitiesV1Schema.safeParse(capabilities);
+		if (!parsed.success) throw new RuntimeSkillDirectoryErrorV1();
+		return parsed.data;
 	}
 	async getModelDirectory(
 		_nativeSessionRef: string,

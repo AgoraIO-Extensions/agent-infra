@@ -271,6 +271,15 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 				"SKILL.md",
 			),
 		).toEqual(new Uint8Array([1, 2, 3]));
+		expect(await driver.getCapabilities()).toMatchObject({
+			skills: [
+				{
+					name: "workspace-summary",
+					manifestSha256: "c".repeat(64),
+					packageDigest: "b".repeat(64),
+				},
+			],
+		});
 		await expect(
 			driver.discoverNativeCommands({
 				...commandRead(accepted.nativeSessionRef),
