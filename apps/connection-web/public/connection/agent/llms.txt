@@ -113,3 +113,7 @@ Per-user PAT Binding remains Direct MCP access. A platform representing the curr
 [Developer integration guide](__CONNECTION_ORIGIN__/connection/agent/)
 
 Open guide/console links in new tabs. Do not infer undocumented endpoints, credentials, identities or grants from this file.
+
+## Newly published capabilities
+
+A published Provider Action is not automatically granted to a Consumer. If the authorization dialog also lacks the new Action although the Provider PAT has the required permissions, the account may still have an older saved scope snapshot. For a personal account with company approval off, ask the user to use "更新账号权限" in Connections and resubmit credentials for the same external account; scope changes may pause existing grants until explicit reconfirmation. Then manage the target Consumer capabilities, select the desired Actions and confirm the preview. For approval-enabled Providers or shared accounts, follow their approval or administrator-managed flow. Never collect credentials in chat, automatically submit consent, or infer permission from catalog presence.

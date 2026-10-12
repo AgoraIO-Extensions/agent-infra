@@ -22,3 +22,7 @@ Installing and logging in do not grant access to GitHub, Jira, Confluence, or ot
 - MCP endpoint: __CONNECTION_ORIGIN__/mcp
 
 Do not infer additional endpoints, credentials, identities, grants, or permissions from this file.
+
+## Newly published Provider capabilities
+
+New capabilities require explicit client consent. If a Provider PAT already has the required permissions but the console authorization list lacks the new Actions, follow the account permissions update instructions in Connection Help. Saved account scopes may need revalidation; changes can pause old grants until reconfirmation. Ask the user to update through the console, never collect credentials or silently grant new Actions.
