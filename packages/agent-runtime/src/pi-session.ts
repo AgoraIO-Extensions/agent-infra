@@ -7,7 +7,10 @@ import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import type { NativeProcessLaunch } from "./native-process.js";
 import { readPiNativeCommandsV1 } from "./pi-native-command.js";
 import { openPiRpc, type PiFrame, piRecord } from "./pi-rpc.js";
-import type { NativeSessionOptions } from "./session-runtime-driver.js";
+import type {
+	NativePromptV1,
+	NativeSessionOptions,
+} from "./session-runtime-driver.js";
 
 function historyCheckpoint(messages: unknown[]) {
 	return JSON.stringify({
@@ -442,7 +445,10 @@ export async function openPiSession(
 				)
 					throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
 			},
-			async prompt(text: string) {
+			async prompt(prompt: NativePromptV1) {
+				if (typeof prompt !== "string")
+					throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
+				const text = prompt;
 				if (active || exited) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 				if (!currentCheckpoint) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 				const checkpoint = currentCheckpoint;

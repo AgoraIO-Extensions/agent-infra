@@ -16,6 +16,7 @@ import {
 import { spawnAcpProcess } from "./acp-process.js";
 
 import { acpStream } from "./acp-stream.js";
+import type { NativePromptV1 } from "./session-runtime-driver.js";
 
 export interface AcpLaunch {
 	command: string;
@@ -255,14 +256,28 @@ export async function openAcpSession(options: {
 					clearTimeout(deadline);
 				}
 			},
-			async prompt(text: string) {
+			async prompt(
+				prompt: NativePromptV1,
+			): Promise<{ stopReason: string; checkpoint?: string }> {
 				tools.clear();
+				const content =
+					typeof prompt === "string"
+						? [{ type: "text", text: prompt }]
+						: prompt.map((block) =>
+								block.type === "text"
+									? { type: "text" as const, text: block.text }
+									: {
+											type: "image" as const,
+											data: block.data,
+											mimeType: block.mimeType,
+										},
+							);
 				const response = await connection.agent.request("session/prompt", {
 					sessionId: nativeId,
-					prompt: [{ type: "text", text }],
+					prompt: content,
 				});
 				await updates;
-				return response;
+				return response as { stopReason: string; checkpoint?: string };
 			},
 			async discoverCommands(input: {
 				readonly signal: AbortSignal;

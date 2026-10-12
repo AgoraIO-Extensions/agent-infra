@@ -141,7 +141,7 @@ async function probeAcpReadiness(
 				modelSelection:
 					selectionState.models.length > 0 &&
 					selectionState.currentModel !== null,
-				attachments: false,
+				attachments: true,
 				resultFiles: false,
 				connection: false,
 				supplementaryInstruction: false,
