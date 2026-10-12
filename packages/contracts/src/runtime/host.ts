@@ -224,6 +224,28 @@ const runtimeSkillRelativePath = z
 	.regex(/^(?!\/)(?!.*\\)(?!.*(?:^|\/)\.\.?(?:\/|$)).+$/);
 const runtimeSkillGenerationId = z.string().regex(/^[a-f0-9]{64}$/);
 
+function isCanonicalBase64(value: string): boolean {
+	if (value.length % 4 !== 0) return false;
+	let padding = 0;
+	for (let index = 0; index < value.length; index += 1) {
+		const code = value.charCodeAt(index);
+		if (code === 61) {
+			padding += 1;
+			if (padding > 2 || index < value.length - 2) return false;
+			continue;
+		}
+		if (padding > 0) return false;
+		const alphabet =
+			(code >= 0x30 && code <= 0x39) ||
+			(code >= 0x41 && code <= 0x5a) ||
+			(code >= 0x61 && code <= 0x7a) ||
+			code === 0x2b ||
+			code === 0x2f;
+		if (!alphabet) return false;
+	}
+	return true;
+}
+
 /** Request for the deployment-owned, read-only mounted Skill directory. */
 export const RuntimeSkillDirectoryRequestV1Schema = z.strictObject({
 	...requestContext,
@@ -263,7 +285,7 @@ export const RuntimeSkillResourceReadResponseV1Schema = z.strictObject({
 	bytesBase64: z
 		.string()
 		.max(1_398_104)
-		.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+		.refine(isCanonicalBase64, "Invalid base64 resource bytes"),
 });
 
 export const RuntimeReplayResponseV1Schema = z.strictObject({

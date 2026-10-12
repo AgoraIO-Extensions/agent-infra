@@ -177,7 +177,7 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 	});
 
 	it("reads the mounted Skill directory and one bounded resource", async () => {
-		const content = Buffer.from("# mounted skill\n", "utf8");
+		const content = Buffer.alloc(1_048_576, 0x61);
 		const { app } = await setup(
 			(driver) =>
 				Object.assign(driver, {
