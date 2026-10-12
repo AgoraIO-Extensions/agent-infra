@@ -39,10 +39,48 @@ function jsonSchemaType(value: unknown): string {
 
 function toZod(value: unknown): ZodTypeAny {
 	const input = schema(value);
+	const annotations = new Set([
+		"$schema",
+		"title",
+		"description",
+		"default",
+		"examples",
+		"deprecated",
+		"readOnly",
+		"writeOnly",
+	]);
+	const constraintsByType: Record<string, readonly string[]> = {
+		string: ["minLength", "maxLength", "pattern"],
+		number: ["minimum", "maximum"],
+		integer: ["minimum", "maximum"],
+		boolean: [],
+		null: [],
+		array: ["items", "minItems", "maxItems"],
+		object: ["properties", "required", "additionalProperties"],
+	};
+	const supported = new Set([
+		...annotations,
+		"type",
+		"enum",
+		"anyOf",
+		...(typeof input.type === "string"
+			? (constraintsByType[input.type] ?? [])
+			: []),
+	]);
+	if (Object.keys(input).some((key) => !supported.has(key))) unavailable();
+	if (
+		input.additionalProperties !== undefined &&
+		typeof input.additionalProperties !== "boolean"
+	)
+		unavailable();
 	if (Array.isArray(input.anyOf)) {
-		const nullable = input.anyOf.find((entry) => entry === null);
-		const alternatives = input.anyOf.filter((entry) => entry !== null);
-		if (nullable !== undefined && alternatives.length === 1)
+		const isNullSchema = (entry: unknown) =>
+			object(entry) &&
+			entry.type === "null" &&
+			Object.keys(entry).every((key) => key === "type");
+		const nullable = input.anyOf.some(isNullSchema);
+		const alternatives = input.anyOf.filter((entry) => !isNullSchema(entry));
+		if (nullable && alternatives.length === 1)
 			return toZod(alternatives[0]).nullable();
 		unavailable();
 	}

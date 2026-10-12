@@ -105,3 +105,72 @@ it("rejects unsupported JSON Schema instead of widening the model tool", () => {
 		}),
 	).toThrow("Standard Connection client is unavailable");
 });
+
+it("preserves nullable parameters and rejects unsupported constraints", () => {
+	const client = {
+		toolDefinitions: [
+			{
+				name: "connection",
+				tools: [
+					{
+						name: "mcp_nullable",
+						description: "nullable",
+						inputSchema: {
+							type: "object",
+							properties: {
+								value: {
+									anyOf: [{ type: "string" }, { type: "null" }],
+								},
+							},
+						},
+					},
+				],
+			},
+		],
+	} as unknown as Parameters<typeof createClaudeStandardMcpServer>[0]["client"];
+	const nullable = createClaudeStandardMcpServer({
+		client,
+		operation: () => ({
+			assertCurrent: async () => () => {},
+			block: () => {},
+			confirm: async () => {},
+			prepare: async () => {},
+			started: async () => {},
+		}),
+	});
+	expect(nullable).toMatchObject({ type: "sdk" });
+	expect(() =>
+		createClaudeStandardMcpServer({
+			client: {
+				...client,
+				toolDefinitions: [
+					{
+						type: "namespace",
+						name: "connection",
+						description: "Connection tools",
+						tools: [
+							{
+								type: "function",
+								name: "mcp_const",
+								description: "unsupported",
+								inputSchema: {
+									type: "object",
+									properties: { value: { type: "string", const: "x" } },
+								},
+							},
+						],
+					},
+				],
+			} as unknown as Parameters<
+				typeof createClaudeStandardMcpServer
+			>[0]["client"],
+			operation: () => ({
+				assertCurrent: async () => () => {},
+				block: () => {},
+				confirm: async () => {},
+				prepare: async () => {},
+				started: async () => {},
+			}),
+		}),
+	).toThrow("Standard Connection client is unavailable");
+});
