@@ -1889,15 +1889,9 @@ for (const identityResponsibility of [
 				0,
 			);
 			await expect(main.getByRole("link", { name: "个人历史" })).toHaveCount(0);
-			if (identityResponsibility === "self-managed") {
-				await expect(
-					main.getByRole("link", { name: "打开 Agent" }),
-				).toHaveAttribute("href", "https://agent.example.test/");
-			} else {
-				await expect(
-					main.getByRole("link", { name: "打开 Agent" }),
-				).toHaveCount(0);
-			}
+			await expect(
+				main.getByRole("link", { name: "打开 Agent" }),
+			).toHaveAttribute("href", "https://agent.example.test/");
 			await capture(
 				page,
 				info,
