@@ -9,6 +9,12 @@ import type {
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
 import type {
+	BrowserHandoffControllerV1,
+	BrowserHandoffReasonV1,
+	BrowserHandoffRecordV1,
+	BrowserHandoffRuntimeSnapshotV1,
+} from "./browser-handoff.js";
+import type {
 	RuntimeFileBridgePortV1,
 	RuntimeFileResultReceiptV1,
 } from "./runtime-file-bridge.js";
@@ -28,6 +34,7 @@ export interface RuntimeBrowserExecutionContextV1 {
 		request: RuntimeBrowserToolExecutionRequestV1,
 		signal: AbortSignal,
 	) => Promise<RuntimeBrowserToolExecutionResultV1>;
+	readonly handoff?: RuntimeBrowserHandoffContextV1;
 }
 
 export interface RuntimeBrowserToolExecutionRequestV1 {
@@ -60,6 +67,38 @@ export interface RuntimeBrowserToolExecutionResultV1 {
 	readonly success: boolean;
 	readonly failureCode?: string;
 }
+
+export interface RuntimeBrowserHandoffContextV1 {
+	readonly controller: BrowserHandoffControllerV1;
+}
+
+export type RuntimeBrowserHandoffRequestV1 =
+	| {
+			readonly kind: "request";
+			readonly reason: BrowserHandoffReasonV1;
+			readonly runtime: BrowserHandoffRuntimeSnapshotV1;
+	  }
+	| {
+			readonly kind: "take-over";
+			readonly handoffId: string;
+			readonly operatorId: string;
+			readonly subjectId: string;
+			readonly runtime: BrowserHandoffRuntimeSnapshotV1;
+	  }
+	| {
+			readonly kind: "return-to-agent";
+			readonly handoffId: string;
+			readonly operatorId: string;
+			readonly runtime: BrowserHandoffRuntimeSnapshotV1;
+	  }
+	| {
+			readonly kind: "revoke";
+			readonly reason?:
+				| "BROWSER_HANDOFF_REVOKED"
+				| "BROWSER_HANDOFF_AUTHORIZATION_REVOKED"
+				| "BROWSER_HANDOFF_OPERATOR_CHANGED";
+	  }
+	| { readonly kind: "browser-crashed" };
 
 export interface RuntimeModelDirectoryOption {
 	readonly modelOptionId: string;
@@ -146,6 +185,12 @@ export interface RuntimeOriginalEvidenceReadContext {
 }
 
 export interface RuntimeDriver {
+	executeBrowserHandoff?(
+		nativeSessionRef: string,
+		executionId: string,
+		request: RuntimeBrowserHandoffRequestV1,
+		context: RuntimeDriverExecutionContextV1,
+	): Promise<BrowserHandoffRecordV1 | undefined>;
 	executeBrowserTool?(
 		nativeSessionRef: string,
 		executionId: string,

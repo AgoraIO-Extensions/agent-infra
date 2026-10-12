@@ -330,3 +330,7 @@ export function createBrowserHandoffControllerV1(input: {
 		agentObservation,
 	};
 }
+
+export type BrowserHandoffControllerV1 = ReturnType<
+	typeof createBrowserHandoffControllerV1
+>;
