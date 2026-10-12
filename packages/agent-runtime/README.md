@@ -2,6 +2,17 @@
 
 本模块的 Driver 通过统一 Runtime 接口接入固定上游。下表只记录已实际验证的 Pi RPC 版本；具体产品验收仍以当前部署的镜像、授权和端到端运行结果为准。
 
+## Protected Connection MCP compatibility
+
+受保护的 Connection MCP 只在已有安全的 Runtime 内部 transport 时开放。当前固定的 Pi 和 OpenCode/Generic ACP 上游都不满足这个条件，因此它们的 `connection` capability 保持 `false`，Host 也不会把 `standardConnectionClient` 或任何 token-bearing 配置传给原生进程。
+
+| Runtime | 固定上游 | 当前结论 |
+| --- | --- | --- |
+| Pi RPC | `@earendil-works/pi-coding-agent@0.86.0`，commit `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc` | RPC 没有 MCP transport；保持 `connection: false` |
+| Generic ACP/OpenCode | OpenCode `1.18.30`，commit `3104c1428ec91f809e5ab86631300de41eb6952e`；ACP SDK `1.4.0` | 固定 OpenCode ACP service 未实现 MCP over ACP；保持 `connection: false` |
+
+只有上游提供受保护的 in-process/ACP transport，或另有获批的受保护 bridge 设计，才可以在显式 capability gate 后增加接入。
+
 ## Pi RPC 0.86.0
 
 | 项目 | 固定值与来源 |

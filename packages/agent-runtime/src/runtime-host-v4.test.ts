@@ -380,6 +380,7 @@ it("injects the deployment-owned Browser controller only after Host binding admi
 	});
 	const browser = {
 		capabilityVersion: 3,
+		principal: { kind: "user" as const, id: "alice" },
 		binding: {
 			agentId: "agent-1",
 			conversationId: "conversation-1",
@@ -405,6 +406,7 @@ it("injects the deployment-owned Browser controller only after Host binding admi
 	expect(factoryCalls[0]).toMatchObject({
 		binding: browser.binding,
 		capabilityVersion: 3,
+		principal: { kind: "user", id: "alice" },
 	});
 	expect(contexts).toHaveLength(1);
 	expect(contexts[0]?.executeTool).toEqual(expect.any(Function));

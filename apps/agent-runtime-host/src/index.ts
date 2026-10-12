@@ -366,7 +366,11 @@ export async function assembleRuntimeHost(
 			keyId,
 			issuer: expectedIssuer,
 		});
+		// Protected Standard MCP is currently assembled only for the Codex Host
+		// seam. Pi and Generic ACP deliberately never receive this client: their
+		// pinned native transports do not provide a safe in-process MCP boundary.
 		const standardConnectionClient =
+			binding === "codex" &&
 			configuration &&
 			agentId !== undefined &&
 			connectionConsumer?.status === "available"

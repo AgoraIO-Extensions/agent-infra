@@ -36,6 +36,8 @@ import { writeStandardMcpExport } from "./standard-mcp-installation.test-support
 
 const runtimeAssemblyMocks = vi.hoisted(() => ({
 	openCodexRuntimeDriver: vi.fn(),
+	openOpenCodeRuntime: vi.fn(),
+	openPiRuntime: vi.fn(),
 	verifyCodexPilotInstallation: vi.fn(),
 	assertRuntimeProcessProtection: vi.fn(),
 	readCodexInstalledSkillDeployment: vi.fn(),
@@ -66,10 +68,22 @@ vi.mock("@agent-infra/agent-runtime", async (importOriginal) => {
 	return {
 		...actual,
 		CodexRuntimeDriver: MockCodexRuntimeDriver,
+		openOpenCodeRuntime: runtimeAssemblyMocks.openOpenCodeRuntime,
+		openPiRuntime: runtimeAssemblyMocks.openPiRuntime,
 		verifyCodexPilotInstallation:
 			runtimeAssemblyMocks.verifyCodexPilotInstallation,
 	};
 });
+
+const actualMessageRuntimes = await vi.importActual<
+	typeof import("@agent-infra/agent-runtime")
+>("@agent-infra/agent-runtime");
+runtimeAssemblyMocks.openOpenCodeRuntime.mockImplementation(
+	actualMessageRuntimes.openOpenCodeRuntime,
+);
+runtimeAssemblyMocks.openPiRuntime.mockImplementation(
+	actualMessageRuntimes.openPiRuntime,
+);
 
 import {
 	assembleRuntimeHost,
@@ -104,6 +118,14 @@ async function environment() {
 afterEach(async () => {
 	runtimeAssemblyMocks.assertRuntimeProcessProtection.mockReset();
 	runtimeAssemblyMocks.openCodexRuntimeDriver.mockReset();
+	runtimeAssemblyMocks.openOpenCodeRuntime.mockClear();
+	runtimeAssemblyMocks.openOpenCodeRuntime.mockImplementation(
+		actualMessageRuntimes.openOpenCodeRuntime,
+	);
+	runtimeAssemblyMocks.openPiRuntime.mockClear();
+	runtimeAssemblyMocks.openPiRuntime.mockImplementation(
+		actualMessageRuntimes.openPiRuntime,
+	);
 	runtimeAssemblyMocks.verifyCodexPilotInstallation.mockReset();
 	runtimeAssemblyMocks.readCodexInstalledSkillDeployment.mockReset();
 	for (const directory of directories.splice(0)) {
@@ -113,6 +135,78 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it.each(["pi", "acp"] as const)(
+		"does not inject protected Connection MCP into the unsupported %s driver",
+		async (binding) => {
+			const values: NodeJS.ProcessEnv = await environment();
+			const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
+			if (!dataDirectory) throw new Error("Missing test data directory");
+			values.AGENT_INFRA_RUNTIME_DRIVER = binding;
+			values.AGENT_INFRA_RUNTIME_AGENT_ID = "agent-messages";
+			values.AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY =
+				"synthetic-model-credential";
+			values.AGENT_INFRA_RUNTIME_MODEL_CONFIG = JSON.stringify({
+				schemaVersion: 3,
+				configVersion: "messages-configuration",
+				defaultModelOptionId: "primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "primary",
+						protocol: "anthropic-messages-v1",
+						authentication: "bearer",
+						model: "messages-model",
+						reasoningLevels: ["high"],
+						endpoint: "https://models.example.test",
+						credentialEnvironmentVariable:
+							"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+					},
+				],
+			});
+			const profile = {
+				schemaVersion: 1 as const,
+				publicOrigin: "https://connection.example.test",
+				mcpPath: "/mcp",
+				consumerId: "platform",
+				audience: "fixture-resource",
+				egressProfile: { ref: "fixture-egress", revision: "r1" },
+			};
+			const approval = {
+				schemaVersion: 1 as const,
+				configFingerprint: connectionConsumerProfileFingerprintV1(profile),
+				source: { ref: "fixture-deployment", revision: "r1" },
+				egressEnforced: true as const,
+			};
+			const profileFile = join(dataDirectory, "consumer.json");
+			await writeFile(profileFile, JSON.stringify({ profile, approval }));
+			values.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE = profileFile;
+			values.AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION = JSON.stringify([
+				approval.configFingerprint,
+				approval.source.ref,
+				approval.source.revision,
+			]);
+			let openedWith: Record<string, unknown> | undefined;
+			const open =
+				binding === "pi"
+					? runtimeAssemblyMocks.openPiRuntime
+					: runtimeAssemblyMocks.openOpenCodeRuntime;
+			open.mockImplementation(async (options: Record<string, unknown>) => {
+				openedWith = options;
+				return FakeRuntimeDriver.open(
+					join(dataDirectory, `${binding}-driver.json`),
+				);
+			});
+
+			const runtime = await assembleRuntimeHost(values);
+			try {
+				expect(openedWith).toBeDefined();
+				expect(openedWith).not.toHaveProperty("standardConnectionClient");
+			} finally {
+				await runtime.close();
+			}
+		},
+	);
+
 	it("passes an explicitly injected Browser context factory to RuntimeHost", async () => {
 		const env = await environment();
 		const factory = vi.fn();
