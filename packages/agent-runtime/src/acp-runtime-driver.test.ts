@@ -399,7 +399,7 @@ it("probes ACP initialization and Session creation without prompting", async () 
 			driver.probeReadiness?.(new AbortController().signal),
 		).resolves.toMatchObject({
 			modelSelection: true,
-			attachments: false,
+			attachments: true,
 			resultFiles: false,
 			connection: false,
 			supplementaryInstruction: false,
@@ -470,7 +470,7 @@ it("does not advertise model selection from a current value without selectable v
 			driver.probeReadiness?.(new AbortController().signal),
 		).resolves.toMatchObject({
 			modelSelection: false,
-			attachments: false,
+			attachments: true,
 			resultFiles: false,
 			connection: false,
 			supplementaryInstruction: false,

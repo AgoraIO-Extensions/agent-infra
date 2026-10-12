@@ -106,7 +106,7 @@ export async function openMessagesRuntimeDriverConformanceFixture(
 	const commands: { command: RuntimeDriverCommand; ref: string }[] = [];
 	function decorate() {
 		const execute = raw.execute.bind(raw);
-		raw.execute = async (command) => {
+		raw.execute = async (command: RuntimeDriverCommand) => {
 			const previousCalls = calls;
 			const record = await execute(command);
 			if (

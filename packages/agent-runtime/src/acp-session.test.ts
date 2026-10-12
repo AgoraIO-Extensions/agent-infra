@@ -145,3 +145,31 @@ it("filters foreign-session text and tool notifications before the Driver callba
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
+
+it("accepts structured image content in an ACP prompt", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "acp-image-prompt-"));
+	await mkdir(join(cwd, "workspace"));
+	const session = await openAcpSession({
+		directory: cwd,
+		cwd: join(cwd, "workspace"),
+		launch: {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "image-prompt" },
+		},
+		update: async () => {},
+	});
+	try {
+		await expect(
+			session.prompt([
+				{ type: "text", text: "inspect" },
+				{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+			]),
+		).resolves.toMatchObject({ stopReason: "end_turn" });
+	} finally {
+		await session.close();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});

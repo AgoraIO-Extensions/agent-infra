@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import {
@@ -34,6 +34,12 @@ import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+
+export type NativePromptContentV1 = Readonly<
+	| { type: "text"; text: string }
+	| { type: "image"; data: string; mimeType: string }
+>;
+export type NativePromptV1 = string | readonly NativePromptContentV1[];
 
 export interface SessionRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -74,7 +80,10 @@ export interface NativeSessionOptions {
 export interface NativeSession {
 	nativeId: string;
 	select(model: string, effort: string): Promise<void>;
-	prompt(text: string): Promise<{ stopReason: string; checkpoint?: string }>;
+	prompt(prompt: NativePromptV1): Promise<{
+		stopReason: string;
+		checkpoint?: string;
+	}>;
 	reusable?(): boolean;
 	startTurn?(options: NativeSessionOptions): void;
 	checkpoint?(): Promise<string>;
@@ -629,7 +638,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		this.locks.set(ref, task);
 		return task;
 	}
-	execute(value: RuntimeDriverCommand): Promise<RuntimeDriverOperationRecord> {
+	execute(
+		value: RuntimeDriverCommand,
+		context?: import("./driver.js").RuntimeDriverExecutionContextV1,
+	): Promise<RuntimeDriverOperationRecord> {
 		if (this.closed)
 			return Promise.reject(
 				new RuntimeHostError(
@@ -638,7 +650,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					503,
 				),
 			);
-		const operation = this.executeCommand(value);
+		const operation = this.executeCommand(value, context);
 		this.pending.add(operation);
 		void operation.then(
 			() => this.pending.delete(operation),
@@ -648,6 +660,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	}
 	private async executeCommand(
 		value: RuntimeDriverCommand,
+		context?: import("./driver.js").RuntimeDriverExecutionContextV1,
 	): Promise<RuntimeDriverOperationRecord> {
 		const command = (
 			value.schemaVersion === 2
@@ -678,7 +691,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				if (command.kind !== "stop")
 					return result(command, binding.ref, unknownResult);
 			}
-			if (command.kind === "submit-turn") return this.submit(file, command);
+			if (command.kind === "submit-turn")
+				return this.submit(file, command, context?.fileBridge);
 			if (command.kind === "supplement")
 				return this.resolve(file, command, { outcome: "busy" });
 			const turn = file
@@ -748,7 +762,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		});
 		return record;
 	}
-	private async submit(file: DurableJsonFile<Session>, command: Submit) {
+	private async submit(
+		file: DurableJsonFile<Session>,
+		command: Submit,
+		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
+	) {
 		const before = file.read();
 		const ref = before.binding.ref;
 		if (before.cancelled || this.cancelled(ref)) unavailable();
@@ -784,9 +802,53 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			)
 		)
 			conflict();
-		if (!("text" in command.input) || command.input.attachments.length)
-			unavailable();
-		const inputText = command.input.text;
+		if (!("text" in command.input)) unavailable();
+		let input: NativePromptV1 = command.input.text;
+		if (command.input.attachments.length > 0) {
+			if (!fileBridge) unavailable();
+			const content: NativePromptContentV1[] = [
+				{ type: "text", text: command.input.text },
+			];
+			for (const fileId of command.input.attachments) {
+				const file = await fileBridge.readInput(fileId);
+				if (
+					file.fileId !== fileId ||
+					!file.descriptor.mediaType.startsWith("image/") ||
+					file.descriptor.sizeBytes > 50 * 1024 * 1024
+				)
+					unavailable();
+				const reader = file.body.getReader();
+				const chunks: Uint8Array[] = [];
+				let size = 0;
+				try {
+					while (true) {
+						const next = await reader.read();
+						if (next.done) break;
+						if (!(next.value instanceof Uint8Array)) unavailable();
+						size += next.value.byteLength;
+						if (size > 50 * 1024 * 1024) unavailable();
+						chunks.push(next.value);
+					}
+				} finally {
+					reader.releaseLock();
+				}
+				const bytes = Buffer.concat(chunks);
+				if (
+					size !== file.descriptor.sizeBytes ||
+					createHash("sha256").update(bytes).digest("hex") !==
+						file.descriptor.sha256
+				)
+					unavailable();
+				content.push({
+					type: "image",
+					data: bytes.toString("base64"),
+					mimeType: file.descriptor.mediaType,
+				});
+			}
+			input = content;
+			fileBridge.revalidate();
+		}
+		const inputText = input;
 		const previousHandle = this.handles.get(ref);
 		const reuse =
 			previousHandle?.native.startTurn &&
