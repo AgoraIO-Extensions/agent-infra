@@ -399,12 +399,50 @@ it("probes ACP initialization and Session creation without prompting", async () 
 			driver.probeReadiness?.(new AbortController().signal),
 		).resolves.toMatchObject({
 			modelSelection: true,
-			attachments: true,
+			attachments: false,
 			resultFiles: false,
 			connection: false,
 			supplementaryInstruction: false,
 		});
 		expect(launches).toBe(1);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("advertises attachments only for an ACP peer that negotiates image input", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-readiness-image-"));
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "image-prompt" },
+		}),
+	});
+	try {
+		await expect(
+			driver.probeReadiness?.(new AbortController().signal),
+		).resolves.toMatchObject({
+			modelSelection: true,
+			attachments: true,
+			resultFiles: false,
+			connection: false,
+			supplementaryInstruction: false,
+		});
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });
@@ -470,7 +508,7 @@ it("does not advertise model selection from a current value without selectable v
 			driver.probeReadiness?.(new AbortController().signal),
 		).resolves.toMatchObject({
 			modelSelection: false,
-			attachments: true,
+			attachments: false,
 			resultFiles: false,
 			connection: false,
 			supplementaryInstruction: false,

@@ -173,3 +173,35 @@ it("accepts structured image content in an ACP prompt", async () => {
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
+
+it("rejects structured image content when the ACP peer does not negotiate image input", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "acp-image-unsupported-"));
+	await mkdir(join(cwd, "workspace"));
+	const session = await openAcpSession({
+		directory: cwd,
+		cwd: join(cwd, "workspace"),
+		launch: {
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "grouped-models" },
+		},
+		update: async () => {},
+	});
+	try {
+		expect(session.supportsImagePrompt).toBe(false);
+		await expect(
+			session.prompt([
+				{ type: "text", text: "inspect" },
+				{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+			]),
+		).rejects.toThrow("RUNTIME_FILE_INPUT_UNAVAILABLE");
+		await expect(
+			session.prompt("plain text still works"),
+		).resolves.toMatchObject({ stopReason: "end_turn" });
+	} finally {
+		await session.close();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});

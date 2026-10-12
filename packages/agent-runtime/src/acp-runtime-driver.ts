@@ -143,7 +143,9 @@ async function probeAcpReadiness(
 				modelSelection:
 					selectionState.models.length > 0 &&
 					selectionState.currentModel !== null,
-				attachments: true,
+				// ACP image input is optional; advertise attachments only when the
+				// peer negotiated it during initialization.
+				attachments: session.supportsImagePrompt,
 				resultFiles: false,
 				connection: false,
 				supplementaryInstruction: false,

@@ -3,6 +3,7 @@
 
 import { Readable, Writable } from "node:stream";
 import {
+	type ContentBlock,
 	client,
 	PROTOCOL_VERSION,
 	type SessionConfigOption,
@@ -172,6 +173,11 @@ export async function openAcpSession(options: {
 			!initialized.agentCapabilities?.loadSession
 		)
 			throw new Error();
+		// ACP image input is optional. Successful initialization and Session
+		// creation do not establish support, so only the negotiated capability
+		// may enable Driver media.
+		const supportsImagePrompt =
+			initialized.agentCapabilities?.promptCapabilities?.image === true;
 		const session = options.nativeId
 			? await connection.agent.request("session/load", {
 					sessionId: options.nativeId,
@@ -196,6 +202,7 @@ export async function openAcpSession(options: {
 		}
 		return {
 			nativeId,
+			supportsImagePrompt,
 			modelSelection: () => {
 				const model = configOptions.find(
 					(option) => option.category === "model" || option.id === "model",
@@ -260,7 +267,7 @@ export async function openAcpSession(options: {
 				prompt: NativePromptV1,
 			): Promise<{ stopReason: string; checkpoint?: string }> {
 				tools.clear();
-				const content =
+				const content: ContentBlock[] =
 					typeof prompt === "string"
 						? [{ type: "text", text: prompt }]
 						: prompt.map((block) =>
@@ -272,6 +279,11 @@ export async function openAcpSession(options: {
 											mimeType: block.mimeType,
 										},
 							);
+				if (
+					!supportsImagePrompt &&
+					content.some((block) => block.type === "image")
+				)
+					throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
 				const response = await connection.agent.request("session/prompt", {
 					sessionId: nativeId,
 					prompt: content,

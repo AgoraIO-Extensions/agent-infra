@@ -48,7 +48,12 @@ const connection = new AgentSideConnection(
 			agentCapabilities:
 				process.env.ACP_TEST_MODE === "no-load-session"
 					? {}
-					: { loadSession: true },
+					: {
+							loadSession: true,
+							...(process.env.ACP_TEST_MODE === "image-prompt"
+								? { promptCapabilities: { image: true } }
+								: {}),
+						},
 		}),
 		newSession: async () => {
 			sessionId = randomUUID();
