@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import type {
 	BrowserCapabilityBindingV1,
 	BrowserCapabilityDeclarationV1,
+	NativeMetadataObjectScopeV1,
 	RuntimeAuthorizationRenewRequestV3,
 	RuntimeBrowserCapabilityProbeEvidenceV1,
 	RuntimeBusinessRequestV4,
@@ -19,6 +20,8 @@ import type {
 	RuntimeGenerationCancelRequestV3,
 	RuntimeModelDirectoryRequestV1,
 	RuntimeModelDirectoryResponseV1,
+	RuntimeNativeMetadataReadRequestV1,
+	RuntimeNativeMetadataReadResponseV1,
 	RuntimeOperationResponseV1,
 	RuntimeOperationResponseV2,
 	RuntimePinnedExecutionKeyScopeV4,
@@ -49,6 +52,7 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import {
 	maximumRuntimeEventReplayPageBytesV4,
+	NativeMetadataProjectionV1Schema,
 	RuntimeCapabilitiesRequestV1Schema,
 	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverLookupV1Schema,
@@ -63,6 +67,8 @@ import {
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeModelDirectoryResponseV1Schema,
+	RuntimeNativeMetadataReadRequestV1Schema,
+	RuntimeNativeMetadataReadResponseV1Schema,
 	RuntimeReplayRequestV1Schema,
 	RuntimeSkillDirectoryRequestV1Schema,
 	RuntimeSkillDirectoryResponseV1Schema,
@@ -87,6 +93,7 @@ import type {
 	RuntimeDriverCommand,
 	RuntimeDriverExecutionContextV1,
 	RuntimeExternalActionAuthorization,
+	RuntimeNativeMetadataReadContextV1,
 	RuntimeNativeSkillReadContextV1,
 	RuntimeNativeSkillReaderV1,
 	RuntimeOperationFactInputV1,
@@ -154,6 +161,20 @@ export interface RuntimeHostOptions {
 	afterOperationPrepared?: (operationId: string) => void | Promise<void>;
 	afterDriverResult?: (operationId: string) => void | Promise<void>;
 	afterOperationResolved?: (operationId: string) => void | Promise<void>;
+}
+
+/**
+ * Host-supplied current/proof authority for one native metadata read.
+ * The context is request-local and must never be serialized or reused.
+ */
+export interface RuntimeHostNativeMetadataReadContextV1
+	extends RuntimeNativeMetadataReadContextV1 {
+	readonly scope: NativeMetadataObjectScopeV1;
+	readonly originalHostScopeRef: string;
+	readonly verifyProof: (
+		request: RuntimeNativeMetadataReadRequestV1,
+	) => void | Promise<void>;
+	readonly now?: () => number;
 }
 
 export type RuntimeBrowserExecutionContextFactoryInputV1 =
@@ -435,6 +456,40 @@ async function callBoundedNativeSkillDriver<T>(input: {
 			throw error;
 		throwSessionRecoveryFailure(error);
 		driverInvalid();
+	}
+}
+
+function nativeMetadataReadDenied(): never {
+	runtimeAuthorizationDenied("native-metadata-read-invalid");
+}
+
+async function callBoundedNativeMetadataDriver<T>(input: {
+	readonly read: RuntimeNativeMetadataReadContextV1;
+	readonly work: () => Promise<T>;
+}): Promise<T> {
+	if (input.read.signal.aborted) nativeMetadataReadDenied();
+	let onAbort: (() => void) | undefined;
+	const aborted = new Promise<never>((_, reject) => {
+		onAbort = () =>
+			reject(
+				new RuntimeHostError(
+					"RUNTIME_GRANT_INVALID",
+					"Runtime authorization is unavailable or does not authorize this operation",
+					403,
+				),
+			);
+		input.read.signal.addEventListener("abort", onAbort, { once: true });
+		if (input.read.signal.aborted) onAbort();
+	});
+	if (input.read.signal.aborted) nativeMetadataReadDenied();
+	// The native request may outlive a cancelled caller; consume its rejection
+	// while the bounded authorization promise returns the denial.
+	const pending = Promise.resolve().then(input.work);
+	void pending.catch(() => undefined);
+	try {
+		return await Promise.race([pending, aborted]);
+	} finally {
+		if (onAbort) input.read.signal.removeEventListener("abort", onAbort);
 	}
 }
 
@@ -1592,6 +1647,107 @@ export class RuntimeHost {
 				deadline.abort();
 			},
 		};
+	}
+
+	/**
+	 * Receive one authenticated native metadata projection. The caller supplies
+	 * the current/proof context; this Host method owns the request and response
+	 * schema checks and never grants commands or Skill reads.
+	 */
+	async readNativeMetadataV1(
+		value: RuntimeNativeMetadataReadRequestV1,
+		context: RuntimeHostNativeMetadataReadContextV1,
+	): Promise<RuntimeNativeMetadataReadResponseV1> {
+		this.requireLegacyHost();
+		const parsed = RuntimeNativeMetadataReadRequestV1Schema.safeParse(value);
+		if (!parsed.success) invalidRequest();
+		const request = parsed.data;
+		if (request.selector !== "status") nativeMetadataReadDenied();
+		if (
+			!context ||
+			typeof context !== "object" ||
+			!context.signal ||
+			typeof context.assertCurrent !== "function" ||
+			typeof context.revalidate !== "function" ||
+			typeof context.verifyProof !== "function" ||
+			!Number.isSafeInteger(context.expiresAt) ||
+			typeof context.originalHostScopeRef !== "string" ||
+			(context.now !== undefined && typeof context.now !== "function")
+		)
+			nativeMetadataReadDenied();
+
+		const now = context.now ?? Date.now;
+		const assertContext = () => {
+			this.requireLegacyHost();
+			if (
+				context.signal.aborted ||
+				context.expiresAt !== request.expiresAt ||
+				request.readStartedAt > now() ||
+				request.expiresAt <= now() ||
+				context.originalHostScopeRef !== request.originalHostScopeRef ||
+				!isDeepStrictEqual(context.scope, request.scope)
+			)
+				nativeMetadataReadDenied();
+			context.assertCurrent();
+		};
+		const revalidateContext = async () => {
+			assertContext();
+			const authority = await context.revalidate();
+			if (
+				!isDeepStrictEqual(authority.principal, request.scope.principal) ||
+				!isDeepStrictEqual(authority.scope, {
+					agentId: request.scope.agentId,
+					conversationId: request.scope.conversationId,
+					executionId: request.scope.executionId,
+					sessionGeneration: request.scope.sessionGeneration,
+				})
+			)
+				nativeMetadataReadDenied();
+			assertContext();
+		};
+
+		try {
+			assertContext();
+			await context.verifyProof(request);
+			await revalidateContext();
+		} catch {
+			nativeMetadataReadDenied();
+		}
+
+		const reader = this.options.driver.readNativeMetadataV1;
+		if (!reader) driverInvalid();
+		let projection: unknown;
+		try {
+			projection = await callBoundedNativeMetadataDriver({
+				read: context,
+				work: () => reader.call(this.options.driver, request.selector, context),
+			});
+		} catch (error) {
+			if (error instanceof RuntimeHostError && error.httpStatus === 403)
+				nativeMetadataReadDenied();
+			throwSessionRecoveryFailure(error);
+			driverInvalid();
+		}
+		const parsedProjection =
+			NativeMetadataProjectionV1Schema.safeParse(projection);
+		if (
+			!parsedProjection.success ||
+			parsedProjection.data.selector !== "status"
+		)
+			driverInvalid();
+
+		try {
+			await revalidateContext();
+		} catch {
+			nativeMetadataReadDenied();
+		}
+		const { proof: _proof, ...identity } = request;
+		const response = RuntimeNativeMetadataReadResponseV1Schema.safeParse({
+			...identity,
+			projection: parsedProjection.data,
+		});
+		if (!response.success) driverInvalid();
+		return response.data;
 	}
 
 	async skillDirectory(
