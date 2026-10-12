@@ -444,6 +444,41 @@ it("drops a Browser controller factory result whose binding drifts", async () =>
 	expect(contexts).toEqual([undefined]);
 });
 
+it("isolates the admitted Browser binding from an in-place factory mutation", async () => {
+	let observed: RuntimeBrowserExecutionContextV1 | undefined;
+	const f = await setup(undefined, (input) => {
+		observed = input;
+		(input.binding as { resourceFence: number }).resourceFence += 1;
+		return input;
+	});
+	const browser = {
+		capabilityVersion: 3,
+		binding: {
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			sessionGeneration: 1,
+			resourceFence: 1,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+	} satisfies RuntimeBrowserExecutionContextV1;
+	(
+		f.host as unknown as {
+			browserExecutionContext?: RuntimeBrowserExecutionContextV1;
+		}
+	).browserExecutionContext = browser;
+	const execute = f.driver.execute.bind(f.driver);
+	const contexts: unknown[] = [];
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command, context) => {
+		contexts.push(context?.browser);
+		return execute(command, context);
+	});
+	await f.host.submitTurnV4(f.transport);
+	expect(observed?.binding.resourceFence).toBe(2);
+	expect(browser.binding.resourceFence).toBe(1);
+	expect(contexts).toEqual([undefined]);
+});
+
 it("does not invoke the Browser controller factory for a foreign readiness binding", async () => {
 	let calls = 0;
 	const f = await setup(undefined, (input) => {

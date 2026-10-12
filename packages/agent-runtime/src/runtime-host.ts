@@ -237,11 +237,16 @@ async function createBrowserExecutionContextForCommand(
 	browser: RuntimeBrowserExecutionContextV1 | undefined,
 ): Promise<RuntimeBrowserExecutionContextV1 | undefined> {
 	if (!browser || !factory) return browser;
-	const created = await factory(browser);
+	const admittedVersion = browser.capabilityVersion;
+	const admittedBinding = structuredClone(browser.binding);
+	const created = await factory({
+		...browser,
+		binding: structuredClone(admittedBinding),
+	});
 	if (
 		!created ||
-		created.capabilityVersion !== browser.capabilityVersion ||
-		!isDeepStrictEqual(created.binding, browser.binding)
+		created.capabilityVersion !== admittedVersion ||
+		!isDeepStrictEqual(created.binding, admittedBinding)
 	)
 		return undefined;
 	return created;
