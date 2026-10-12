@@ -46,7 +46,10 @@ export function piNativeSkillArguments(
 	)
 		throw new Error("RUNTIME_SKILL_DIRECTORY_UNAVAILABLE");
 	if (paths.length === 0) return ["--no-skills"] as const;
-	return paths.flatMap((path) => ["--skill", path] as const);
+	return [
+		...paths.flatMap((path) => ["--skill", path] as const),
+		"--no-skills",
+	];
 }
 
 export async function openPiRuntime(options: PiRuntimeOptions) {

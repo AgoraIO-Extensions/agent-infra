@@ -1,3 +1,8 @@
+import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SkillWorkloadProjectionV1Schema } from "@agent-infra/contracts";
 import { expect, it } from "vitest";
 import {
@@ -122,16 +127,42 @@ it("rejects an oversized resource returned by the adapter", async () => {
 	).rejects.toThrow(RuntimeSkillDirectoryErrorV1);
 });
 
-it("derives fixed native Skill entry paths from the verified filesystem root", () => {
-	const directory = createFilesystemRuntimeSkillDirectoryV1({
-		root: "/opt/agent-infra-skill-hub",
-		agentId: "agent-a",
-		agentVersion: "version-a",
-		generationId: "e".repeat(64),
-		projections: [projection],
-	});
-	expect(directory.nativeRoot).toBe("/opt/agent-infra-skill-hub");
-	expect(directory.nativeSkillPaths?.()).toEqual([
-		"/opt/agent-infra-skill-hub/.agents/skills/workspace-summary/SKILL.md",
-	]);
+it("derives fixed native Skill entry paths from the verified filesystem root", async () => {
+	const root = await mkdtemp(join(tmpdir(), "native-skill-root-"));
+	const bytes = new TextEncoder().encode("summary");
+	try {
+		await mkdir(join(root, ".agents/skills/workspace-summary"), {
+			recursive: true,
+		});
+		await writeFile(
+			join(root, ".agents/skills/workspace-summary/SKILL.md"),
+			bytes,
+		);
+		const nativeProjection = SkillWorkloadProjectionV1Schema.parse({
+			...projection,
+			manifest: {
+				...projection.manifest,
+				files: [
+					{
+						path: "SKILL.md",
+						sizeBytes: bytes.byteLength,
+						sha256: createHash("sha256").update(bytes).digest("hex"),
+					},
+				],
+			},
+		});
+		const directory = createFilesystemRuntimeSkillDirectoryV1({
+			root,
+			agentId: "agent-a",
+			agentVersion: "version-a",
+			generationId: "e".repeat(64),
+			projections: [nativeProjection],
+		});
+		expect(directory.nativeRoot).toBe(realpathSync(root));
+		expect(directory.nativeSkillPaths?.()).toEqual([
+			join(realpathSync(root), ".agents/skills/workspace-summary/SKILL.md"),
+		]);
+	} finally {
+		await rm(root, { recursive: true });
+	}
 });
