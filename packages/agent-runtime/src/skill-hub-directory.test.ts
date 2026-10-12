@@ -1,6 +1,7 @@
 import { SkillWorkloadProjectionV1Schema } from "@agent-infra/contracts";
 import { expect, it } from "vitest";
 import {
+	createFilesystemRuntimeSkillDirectoryV1,
 	createRuntimeSkillDirectoryV1,
 	RuntimeSkillDirectoryErrorV1,
 } from "./skill-hub-directory.js";
@@ -119,4 +120,18 @@ it("rejects an oversized resource returned by the adapter", async () => {
 			async () => new Uint8Array(5),
 		),
 	).rejects.toThrow(RuntimeSkillDirectoryErrorV1);
+});
+
+it("derives fixed native Skill entry paths from the verified filesystem root", () => {
+	const directory = createFilesystemRuntimeSkillDirectoryV1({
+		root: "/opt/agent-infra-skill-hub",
+		agentId: "agent-a",
+		agentVersion: "version-a",
+		generationId: "e".repeat(64),
+		projections: [projection],
+	});
+	expect(directory.nativeRoot).toBe("/opt/agent-infra-skill-hub");
+	expect(directory.nativeSkillPaths?.()).toEqual([
+		"/opt/agent-infra-skill-hub/.agents/skills/workspace-summary/SKILL.md",
+	]);
 });

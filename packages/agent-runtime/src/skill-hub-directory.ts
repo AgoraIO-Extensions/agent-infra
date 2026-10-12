@@ -26,7 +26,11 @@ export type RuntimeSkillDirectoryReadRequestV1 = Readonly<{
 
 export interface RuntimeFilesystemSkillDirectoryV1 {
 	readonly generationId: string;
+	/** Fixed deployment-owned root used only by native launch adapters. */
+	readonly nativeRoot?: string;
 	findSkills(): readonly RuntimeSkillDirectoryEntryV1[];
+	/** Absolute entry files derived from the verified projection, never caller input. */
+	nativeSkillPaths?(): readonly string[];
 	readSkill(name: string, relativePath: string): Promise<Uint8Array>;
 }
 
@@ -318,9 +322,24 @@ export function createFilesystemRuntimeSkillDirectoryV1(input: {
 		parsed.map((projection) => [projection.manifest.name, projection]),
 	);
 	const directory = createRuntimeSkillDirectoryV1(input);
+	const nativeRoot = resolve(input.root);
 	return {
 		generationId: directory.generationId,
+		nativeRoot,
 		findSkills: directory.findSkills,
+		nativeSkillPaths(): readonly string[] {
+			return directory.findSkills().map((entry) => {
+				const path = resolve(nativeRoot, entry.targetPath, "SKILL.md");
+				const relativePath = relative(nativeRoot, path);
+				if (
+					relativePath === "" ||
+					relativePath.startsWith("..") ||
+					isAbsolute(relativePath)
+				)
+					unavailable();
+				return path;
+			});
+		},
 		async readSkill(name: string, relativePath: string): Promise<Uint8Array> {
 			const projection = byName.get(name);
 			const file = projection?.manifest.files.find(
