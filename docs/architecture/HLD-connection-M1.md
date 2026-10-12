@@ -2845,7 +2845,9 @@ attributes 使用低基数 enum/opaque ID；不记录 args、token、external ac
 凭据明确失效仍按凭据生命周期处理。无法证明兼容、撤销、账号或能力语义变化时
 只暂停受影响的授权，不把其他客户端的兼容授权一并暂停，也不自动恢复已暂停或撤销的 Grant。
 
-用户可主动要求重新验证已保存凭据。审批关闭的 ACTIVE 个人账号由服务端读取并在内部交给
+Web 正常账号不展示常驻的账号权限复验按钮，目录新增和 scope 快照变化不是账号更新条件；
+仅 overview 的 `requiresReconnect` 或升级任务判定需要处理时显示对应操作，并通过
+upgrade readiness 区分兼容升级、重新审批和重新连接。服务端仍支持显式请求重新验证已保存凭据。审批关闭的 ACTIVE 个人账号由服务端读取并在内部交给
 现有 Provider verifier，原始 Credential 不返回 Browser、Agent 或日志。写入使用同一 Principal、
 Connection、稳定外部账号、当前 ProviderRelease 与原 CredentialVersion CAS，事务重新核对
 审批配置；配置切换、跨主体、换号、失败或未知状态拒绝提交。只有这个明确操作允许扩大账号

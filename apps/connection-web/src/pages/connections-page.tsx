@@ -361,26 +361,6 @@ export function ConnectionsPage() {
 			}),
 		]);
 	}
-	const refreshPermissions = useMutation({
-		mutationFn: (connection: Connection) =>
-			connectionApi.refreshProviderPermissions(connection.id),
-		onMutate: () => setUpgradeNotice(null),
-		onSuccess: async () => {
-			await queryClient.invalidateQueries({ queryKey: ["connections"] });
-			setUpgradeNotice(
-				"账号权限已重新验证，原兼容授权保持不变；需要新增能力时，请在管理能力中选择并确认。",
-			);
-		},
-		onError: (error, connection) => {
-			if (
-				error instanceof ConnectionApiError &&
-				error.detail.code === "PROVIDER_REAUTHORIZATION_REQUIRED"
-			) {
-				setUpgradeNotice("当前凭据需要更新或重新登录，请完成同一账号的验证。");
-				connectProvider(connection.providerId as ConnectorProviderId);
-			}
-		},
-	});
 
 	const approvedUpgrade = useMutation({
 		mutationFn: connectionApi.upgradeApprovedConnection,
@@ -892,9 +872,6 @@ export function ConnectionsPage() {
 			{disconnect.isError ? <PageError error={disconnect.error} /> : null}
 			{revokeGrant.isError ? <PageError error={revokeGrant.error} /> : null}
 			{upgrade.isError ? <PageError error={upgrade.error} /> : null}
-			{refreshPermissions.isError ? (
-				<PageError error={refreshPermissions.error} />
-			) : null}
 			<Dialog
 				open={
 					credentialReuseAvailable &&
@@ -997,14 +974,6 @@ export function ConnectionsPage() {
 					grants={[]}
 					hasGrantHistory={false}
 					onAuthorize={() => undefined}
-					refreshingConnectionId={
-						refreshPermissions.isPending
-							? refreshPermissions.variables?.id
-							: undefined
-					}
-					onRefreshPermissions={(connection) =>
-						refreshPermissions.mutate(connection)
-					}
 					onConnect={connectProvider}
 					onRenew={() => undefined}
 					onRequestSubmitted={() => undefined}
@@ -1146,14 +1115,6 @@ export function ConnectionsPage() {
 									consumerId ?? data.consumers[0]?.id ?? "",
 								),
 							})
-						}
-						refreshingConnectionId={
-							refreshPermissions.isPending
-								? refreshPermissions.variables?.id
-								: undefined
-						}
-						onRefreshPermissions={(connection) =>
-							refreshPermissions.mutate(connection)
 						}
 						onConnect={connectProvider}
 						onRenew={(connection) => {
@@ -1748,8 +1709,6 @@ function ConnectorManagementWorkspace(props: {
 	grants: Grant[];
 	hasGrantHistory: boolean;
 	onAuthorize: (connectionId: string, consumerId?: string) => void;
-	refreshingConnectionId?: string;
-	onRefreshPermissions: (connection: Connection) => void;
 	onConnect: (providerId: ConnectorProviderId) => void;
 	onRenew: (connection: Connection) => void;
 	onRequestSubmitted: () => void;
@@ -2105,27 +2064,6 @@ function ConnectorManagementWorkspace(props: {
 								)}
 							</div>
 							<div className="connection-account-actions">
-								{!approvalRequired &&
-								selected.ownerType === "PERSONAL" &&
-								selected.status === "ACTIVE" &&
-								!selected.requiresReconnect ? (
-									<Button
-										variant="secondary"
-										disabled={props.refreshingConnectionId === selected.id}
-										onClick={() => {
-											if (
-												window.confirm(
-													`重新验证 ${selected.displayName} 已保存的账号凭据与权限？有效凭据无需重新输入；原能力兼容时保留旧授权，新增能力仍需你另行选择确认。`,
-												)
-											)
-												props.onRefreshPermissions(selected);
-										}}
-									>
-										{props.refreshingConnectionId === selected.id
-											? "正在验证账号权限"
-											: "更新账号权限"}
-									</Button>
-								) : null}
 								{approvalRequired &&
 								!currentRequest &&
 								selected.status === "ACTIVE" &&

@@ -2396,7 +2396,7 @@ it("opens credential connection directly when Provider approval is off", async (
 });
 
 it.each(["ACTIVE", "PAUSED_CREDENTIAL"])(
-	"refreshes a direct account without changing grants in state %s",
+	"keeps new capabilities manageable without account refresh in grant state %s",
 	async (status) => {
 		window.history.replaceState(
 			{},
@@ -2434,7 +2434,7 @@ it.each(["ACTIVE", "PAUSED_CREDENTIAL"])(
 		});
 		vi.spyOn(window, "confirm").mockReturnValue(true);
 		renderPage(<ConnectionsPage />);
-		await screen.findByRole("button", { name: "更新账号权限" });
+		await screen.findByRole("button", { name: "管理 Codex 能力" });
 		expect(screen.getByText(/目录新增 1 项能力/)).toBeTruthy();
 		expect(
 			(
@@ -2443,15 +2443,10 @@ it.each(["ACTIVE", "PAUSED_CREDENTIAL"])(
 				}) as HTMLButtonElement
 			).disabled,
 		).toBe(false);
-		fireEvent.click(screen.getByRole("button", { name: "更新账号权限" }));
-		expect(window.confirm).toHaveBeenCalledWith(
-			expect.stringContaining("有效凭据无需重新输入"),
-		);
-		await waitFor(() =>
-			expect(api.refreshProviderPermissions).toHaveBeenCalledWith(
-				"connection-personal",
-			),
-		);
+		expect(screen.queryByRole("button", { name: "更新账号权限" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "升级连接" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "重新连接" })).toBeNull();
+		expect(api.refreshProviderPermissions).not.toHaveBeenCalled();
 		expect(api.connectProviderCredential).not.toHaveBeenCalled();
 		expect(screen.queryByLabelText("Rehoboam PAT")).toBeNull();
 		expect(api.reauthorizeProviderConnection).not.toHaveBeenCalled();
@@ -2509,56 +2504,3 @@ it("does not surface an older paused grant when a newer decision revoked it", as
 	await screen.findByRole("button", { name: /GitHub 已连接/ });
 	expect(screen.queryByRole("button", { name: "管理 Codex 能力" })).toBeNull();
 });
-
-it.each(["cancel", "invalid", "unavailable"])(
-	"only requests interactive credentials when saved permission refresh needs them: %s",
-	async (mode) => {
-		window.history.replaceState(
-			{},
-			"",
-			"/connection/connections?provider=rehoboam",
-		);
-		const overview = await api.getConnections();
-		const account = overview.overview.connections[1];
-		if (!account) throw new Error("Missing account fixture");
-		account.providerId = "rehoboam";
-		account.requiresReconnect = false;
-		api.getConnections.mockResolvedValueOnce(overview);
-		api.listProviderAccessSettings.mockResolvedValueOnce({
-			settings: [
-				{ providerId: "rehoboam", approvalRequired: false, revision: "1" },
-			],
-		});
-		vi.spyOn(window, "confirm").mockReturnValue(mode !== "cancel");
-		if (mode !== "cancel")
-			api.refreshProviderPermissions.mockRejectedValueOnce(
-				new ConnectionApiError({
-					code:
-						mode === "invalid"
-							? "PROVIDER_REAUTHORIZATION_REQUIRED"
-							: "PROVIDER_UNAVAILABLE",
-					messageKey: "connection.error.provider_unavailable",
-					retryable: false,
-					traceId: "fixture-refresh",
-				}),
-			);
-		renderPage(<ConnectionsPage />);
-		fireEvent.click(
-			await screen.findByRole("button", { name: "更新账号权限" }),
-		);
-		if (mode === "cancel") {
-			expect(api.refreshProviderPermissions).not.toHaveBeenCalled();
-		} else {
-			await waitFor(() =>
-				expect(api.refreshProviderPermissions).toHaveBeenCalledOnce(),
-			);
-			if (mode === "invalid")
-				expect(await screen.findByLabelText("Rehoboam PAT")).toBeTruthy();
-			else await screen.findByRole("alert");
-		}
-		if (mode !== "invalid")
-			expect(screen.queryByLabelText("Rehoboam PAT")).toBeNull();
-		expect(api.connectProviderCredential).not.toHaveBeenCalled();
-		expect(api.confirmAuthorization).not.toHaveBeenCalled();
-	},
-);
