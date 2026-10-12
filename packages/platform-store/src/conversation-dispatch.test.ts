@@ -39,6 +39,7 @@ import {
 import {
 	readSessionSandboxRuntimeState,
 	readSessionSandboxUpgrading,
+	requestSessionSandboxResume,
 } from "./session-sandbox.ts";
 import { persistSessionSandboxUpgradeIntents } from "./session-sandbox-upgrade.ts";
 import { openPostgresWorkloadReconciliationStoreV1 } from "./workload-reconciliation.ts";
@@ -181,7 +182,12 @@ async function seed(
 		| "conversation.turn.supplement.v1"
 		| "conversation.turn.stop.v1" = "conversation.turn.submit.v1",
 	options: {
-		executionStatus?: "submitted" | "processing" | "unknown" | "completed";
+		executionStatus?:
+			| "waiting"
+			| "submitted"
+			| "processing"
+			| "unknown"
+			| "completed";
 		executionFence?: number;
 		hostSessionRef?: string | null;
 		legacySelection?: boolean;
@@ -209,6 +215,9 @@ async function seed(
 					: `conversation:turn:${executionId}`;
 	const executionStatus = options.executionStatus ?? "submitted";
 	const executionFence = options.executionFence ?? 0;
+	const taskWaitOrder = executionStatus === "waiting" ? suffix : null;
+	const taskWaitDeadline =
+		taskWaitOrder === null ? null : new Date(Date.now() + 60_000);
 	await client`
 		insert into platform.conversations
 			(id, agent_id, actor_id, principal_type, channel_id, status, session_generation,
@@ -223,12 +232,14 @@ async function seed(
 	await client`
 		insert into platform.conversation_executions
 			(execution_id, conversation_id, agent_id, actor_id, principal_type, channel_id, turn_id,
-			 status, session_generation, delivery_fence, authorization_revision,
+			 status, task_wait_order, task_wait_deadline, session_generation, delivery_fence, authorization_revision,
 			 model_configuration_revision, model_option_id, reasoning_level,
 			 created_at, updated_at)
 		values
 			(${executionId}, ${conversationId}, ${agentId}, 'actor-dispatch', ${principalKind},
-			 ${channel}, ${turnId}, ${executionStatus}, 1, ${executionFence},
+			 ${channel}, ${turnId}, ${executionStatus}, ${taskWaitOrder},
+			${taskWaitDeadline},
+			 1, ${executionFence},
 			 'authorization-dispatch', ${options.legacySelection ? null : 4},
 			 ${options.legacySelection ? null : "model-option-dispatch"},
 			 ${options.legacySelection ? null : "medium"},
@@ -5778,7 +5789,7 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 			where agent_id = 'agent-dispatch'`;
 	}
 
-	function upgrade() {
+	function upgrade(idleSandboxReclaimAfterMs?: number) {
 		return client.begin(async (transaction) => {
 			// The Workload write-back already holds this Agent row lock.
 			await transaction`select id from platform.agents where id = 'agent-dispatch' for update`;
@@ -5787,6 +5798,9 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 				workerId: "workload-worker",
 				traceId: "upgrade-trace",
 				requestId: "upgrade-request",
+				...(idleSandboxReclaimAfterMs === undefined
+					? {}
+					: { idleSandboxReclaimAfterMs }),
 			});
 		});
 	}
@@ -5889,6 +5903,56 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 		expect(await sandboxState(unknown.conversationId)).toMatchObject({
 			desired_state: "running",
 			intent_status: "succeeded",
+		});
+	});
+
+	it("stops a terminal idle Sandbox and only resumes it when a new message arrives", async () => {
+		const reclaimed = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		const waiting = await seed("conversation.turn.submit.v1", {
+			executionStatus: "waiting",
+		});
+		const unknown = await seed("conversation.turn.submit.v1", {
+			executionStatus: "unknown",
+		});
+		await prepared(reclaimed);
+		await prepared(waiting);
+		await prepared(unknown);
+		await client`
+			update platform.conversations
+			set updated_at = clock_timestamp() - interval '31 minutes'
+			where id in (${reclaimed.conversationId}, ${waiting.conversationId}, ${unknown.conversationId})`;
+
+		await expect(upgrade(30 * 60 * 1000)).resolves.toBe(1);
+		expect(await sandboxState(reclaimed.conversationId)).toMatchObject({
+			desired_state: "stopped",
+			status: "unavailable",
+			intent_status: "pending",
+			payload: {
+				lifecycle: { reason: "idle_reclaim", resumeRequested: false },
+			},
+		});
+		for (const protectedConversation of [waiting, unknown])
+			expect(
+				await sandboxState(protectedConversation.conversationId),
+			).toMatchObject({
+				desired_state: "running",
+				status: "ready",
+				intent_status: "succeeded",
+			});
+
+		await client.begin((transaction) =>
+			requestSessionSandboxResume(
+				transaction,
+				reclaimed.conversationId,
+				new Date(),
+			),
+		);
+		expect(await sandboxState(reclaimed.conversationId)).toMatchObject({
+			desired_state: "stopped",
+			intent_status: "pending",
+			payload: { lifecycle: { reason: "idle_reclaim", resumeRequested: true } },
 		});
 	});
 

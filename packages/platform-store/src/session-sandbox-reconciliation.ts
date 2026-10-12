@@ -424,6 +424,15 @@ async function ownedContext(
 		policy,
 		directory,
 	);
+	const lifecycleMatchesClaim =
+		isDeepStrictEqual(context?.lifecycle, claim.lifecycle) ||
+		(context?.lifecycle?.resumeRequested !== claim.lifecycle?.resumeRequested &&
+			context?.lifecycle &&
+			claim.lifecycle &&
+			isDeepStrictEqual(
+				{ ...context.lifecycle, resumeRequested: undefined },
+				{ ...claim.lifecycle, resumeRequested: undefined },
+			));
 	if (
 		context?.outbox.status !== "processing" ||
 		context.outbox.lease_owner !== claim.leaseOwner ||
@@ -440,7 +449,7 @@ async function ownedContext(
 		!isDeepStrictEqual(context.sandbox, claim.sandbox) ||
 		context.purpose !== claim.purpose ||
 		context.drainComputeAllowed !== claim.drainComputeAllowed ||
-		!isDeepStrictEqual(context.lifecycle, claim.lifecycle) ||
+		!lifecycleMatchesClaim ||
 		!isDeepStrictEqual(context.authorization, claim.authorization) ||
 		!isDeepStrictEqual(context.policy, claim.policy) ||
 		!isDeepStrictEqual(context.deployment, claim.deployment) ||
@@ -588,7 +597,9 @@ export async function recordSandboxObservation(
 	const continuePreparation =
 		decision.finished &&
 		context.purpose === "drain" &&
-		context.lifecycle?.authority.targetDesiredState === "running";
+		context.lifecycle?.authority.targetDesiredState === "running" &&
+		(context.lifecycle.reason === "upgrade" ||
+			context.lifecycle.resumeRequested === true);
 	const stopReceipt = "stopReceipt" in decision ? decision.stopReceipt : null;
 	let nextLifecycle: SessionSandboxLifecycleV1 | undefined;
 	if (context.lifecycle && context.purpose === "drain") {

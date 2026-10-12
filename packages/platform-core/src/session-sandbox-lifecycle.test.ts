@@ -3,7 +3,9 @@ import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	canDrainSessionSandboxComputeV1,
 	canPrepareSessionSandboxReplacementV1,
+	canReclaimIdleSessionSandboxV1,
 	decideSessionSandboxDrainObservationV1,
+	planSessionSandboxIdleReclaimTransitionV1,
 	planSessionSandboxUpgradeTransitionV1,
 	type SessionSandboxLifecycleV1,
 	type SessionSandboxStopReceiptV1,
@@ -735,6 +737,32 @@ describe("idle Sandbox upgrade plan (ADR 0023)", () => {
 		])
 			expect(
 				planSessionSandboxUpgradeTransitionV1({ ...input, management }),
+			).toBeNull();
+	});
+
+	it("reclaims only a current Sandbox whose executions are all terminal", () => {
+		const input = {
+			...upgradeFixture(),
+			policyCurrent: true,
+			executionStatuses: ["completed", "failed", "cancelled"],
+		};
+		expect(canReclaimIdleSessionSandboxV1(input.executionStatuses)).toBe(true);
+		expect(planSessionSandboxIdleReclaimTransitionV1(input)).toMatchObject({
+			resourceFence: 4,
+			status: "unavailable",
+			desiredState: "stopped",
+			lifecycle: {
+				reason: "idle_reclaim",
+				resumeRequested: false,
+				stopReceipt: null,
+			},
+		});
+		for (const status of ["submitted", "waiting", "processing", "unknown"])
+			expect(
+				planSessionSandboxIdleReclaimTransitionV1({
+					...input,
+					executionStatuses: [status],
+				}),
 			).toBeNull();
 	});
 });

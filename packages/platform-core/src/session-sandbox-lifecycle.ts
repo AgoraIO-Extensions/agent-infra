@@ -52,7 +52,7 @@ export interface SessionSandboxLifecycleV1 {
 	readonly schemaVersion: 1;
 	/** Set only for an upgrade to the Agent's current verified deployment
 	 * (ADR 0023); audit and "updating" display only, never an authorization. */
-	readonly reason?: "upgrade";
+	readonly reason?: "upgrade" | "idle_reclaim";
 	readonly authority: {
 		readonly kind: "management";
 		readonly applicationId: string;
@@ -65,6 +65,8 @@ export interface SessionSandboxLifecycleV1 {
 	/** Original outbox proved no resource preparation was ever authorized. */
 	readonly sourceState?: "never-prepared";
 	readonly stopReceipt: SessionSandboxStopReceiptV1 | null;
+	/** Set by a new message while an idle reclaim is draining or stopped. */
+	readonly resumeRequested?: boolean;
 	/** Per-resource cleanup intent/progress survives a lost response or restart. */
 	readonly deletionProgress?: readonly SessionSandboxDeletionProgressV1[];
 	/** Set atomically before any replacement mutation can be authorized. */
@@ -398,6 +400,84 @@ export function planSessionSandboxUpgradeTransitionV1(input: {
 	};
 }
 
+/**
+ * Plans a compute-only reclaim for a settled, current Session Sandbox.
+ * The lifecycle keeps the target authority as running so the existing
+ * drain/reprepare path can be resumed by a later message, but the absence of
+ * `resumeRequested` deliberately leaves the Sandbox stopped after the drain.
+ */
+export function planSessionSandboxIdleReclaimTransitionV1(input: {
+	readonly management: Pick<
+		AgentManagementStateV1,
+		| "applicationId"
+		| "agentId"
+		| "status"
+		| "revision"
+		| "fence"
+		| "workloadRevision"
+		| "desiredState"
+	>;
+	readonly current: SessionSandboxSourceV1;
+	readonly allocation: {
+		readonly status: string;
+		readonly desiredState: string;
+	};
+	readonly intent: { readonly status: string } | null;
+	readonly policyCurrent: boolean;
+	readonly executionStatuses: readonly string[];
+	readonly generationBarrierPending: boolean;
+}) {
+	const { management, current } = input;
+	if (
+		!input.policyCurrent ||
+		management.agentId !== current.sandbox.agentId ||
+		management.status !== "available" ||
+		management.desiredState !== "running" ||
+		input.allocation.status !== "ready" ||
+		input.allocation.desiredState !== "running" ||
+		input.intent?.status !== "succeeded" ||
+		!Number.isSafeInteger(current.resourceFence) ||
+		current.resourceFence < 1 ||
+		current.resourceFence >= Number.MAX_SAFE_INTEGER ||
+		!current.policy ||
+		current.observation?.status !== "ready" ||
+		current.deployment === null ||
+		typeof current.deployment !== "object" ||
+		input.generationBarrierPending ||
+		!canReclaimIdleSessionSandboxV1(input.executionStatuses)
+	)
+		return null;
+	return {
+		resourceFence: current.resourceFence + 1,
+		status: "unavailable" as const,
+		desiredState: "stopped" as const,
+		lifecycle: {
+			schemaVersion: 1,
+			reason: "idle_reclaim" as const,
+			authority: {
+				kind: "management" as const,
+				applicationId: management.applicationId,
+				managementRevision: management.revision,
+				managementFence: management.fence,
+				workloadRevision: management.workloadRevision,
+				targetDesiredState: "running" as const,
+			},
+			source: current,
+			stopReceipt: null,
+			resumeRequested: false,
+		} satisfies SessionSandboxLifecycleV1,
+	};
+}
+
+/** Idle reclaim is stricter than upgrade: waiting/submitted work must stay warm. */
+export function canReclaimIdleSessionSandboxV1(
+	executionStatuses: readonly string[],
+) {
+	return executionStatuses.every((status) =>
+		["completed", "failed", "cancelled"].includes(status),
+	);
+}
+
 /** A persisted source-stop proof permits preparation, never business execution. */
 export function canPrepareSessionSandboxReplacementV1(input: {
 	readonly sandbox: SessionSandboxBindingV1;
@@ -410,6 +490,8 @@ export function canPrepareSessionSandboxReplacementV1(input: {
 	const { sandbox, resourceFence, lifecycle, observation } = input;
 	const receipt = lifecycle.stopReceipt;
 	if (
+		(lifecycle.reason === "idle_reclaim" &&
+			lifecycle.resumeRequested !== true) ||
 		(lifecycle.preparation &&
 			(lifecycle.preparation.generation !== sandbox.generation ||
 				lifecycle.preparation.resourceFence !== resourceFence)) ||
