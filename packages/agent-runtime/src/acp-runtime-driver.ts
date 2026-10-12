@@ -158,11 +158,7 @@ export const GenericAcpRuntimeDriver = {
 							event.sessionUpdate === "tool_call" ||
 							event.sessionUpdate === "tool_call_update"
 						) {
-							if (
-								event.sessionUpdate === "tool_call_update" &&
-								event.status !== "completed" &&
-								event.status !== "failed"
-							) {
+							if (event.status !== "failed") {
 								for (const content of event.content ?? []) {
 									if (content.type !== "diff") continue;
 									await session.resultFile?.({

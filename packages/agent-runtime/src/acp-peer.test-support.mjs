@@ -156,7 +156,7 @@ const connection = new AgentSideConnection(
 						sessionUpdate: "tool_call_update",
 						toolCallId: "result-file-tool",
 						kind: "edit",
-						status: "in_progress",
+						status: "completed",
 						content: [
 							{
 								type: "diff",
@@ -172,7 +172,7 @@ const connection = new AgentSideConnection(
 						sessionUpdate: "tool_call_update",
 						toolCallId: "result-file-tool",
 						kind: "edit",
-						status: "in_progress",
+						status: "completed",
 						content: [
 							{
 								type: "diff",
