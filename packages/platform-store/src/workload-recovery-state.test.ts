@@ -87,6 +87,7 @@ describe("persisted Workload recovery state", () => {
 			...fixture(),
 			capabilities: {
 				modelSelection: true,
+				browser: { status: "available" },
 				skills: [
 					{
 						schemaVersion: 1,

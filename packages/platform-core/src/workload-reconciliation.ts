@@ -158,6 +158,17 @@ export function parseWorkloadCapabilitiesV1(
 			capabilities.skills = skills;
 			continue;
 		}
+		if (name === "browser") {
+			if (
+				!item ||
+				typeof item !== "object" ||
+				Array.isArray(item) ||
+				typeof (item as Record<string, unknown>).status !== "string"
+			)
+				throw new TypeError("Workload Browser capability is invalid");
+			capabilities.browser = item;
+			continue;
+		}
 		if (typeof item !== "boolean")
 			throw new TypeError("Workload capabilities are invalid");
 		capabilities[name] = item;
