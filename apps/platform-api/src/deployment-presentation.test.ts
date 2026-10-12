@@ -302,3 +302,47 @@ it("passes the verified Browser projection through the API presentation", async 
 		},
 	]);
 });
+
+it("preserves an explicitly empty Skill capability list", async () => {
+	const presentation = createDeploymentPresentation({
+		identityScope: {
+			currentRequest: () => new Request("https://api.example.test"),
+			currentIdentity: async () => identity,
+		} as never,
+		configurationQuery: {
+			readRuntimePresentation: async () => ({
+				outcome: "found" as const,
+				sourceReference: `sha256:${"a".repeat(64)}`,
+				capabilities: {
+					modelSelection: true,
+					attachments: false,
+					resultFiles: false,
+					connection: false,
+					supplementaryInstruction: false,
+					skills: [],
+				},
+				interactionUrl: null,
+			}),
+		} as never,
+		resourceProfile: {
+			profileId: "standard-medium",
+			displayName: "Standard medium",
+			estimatedResources: {
+				cpuMillicores: 2000,
+				memoryMiB: 4096,
+				storageGiB: 20,
+			},
+		},
+		imageRepository: "registry.example.test/agent",
+	});
+	const result = await presentation({
+		agentId: "agent-a",
+		configuration: {
+			...configuration,
+			agentId: "agent-a",
+			source: { kind: "standard", templateId: "codex" },
+		},
+		management: {} as never,
+	});
+	expect(result.capabilities.skills).toEqual([]);
+});

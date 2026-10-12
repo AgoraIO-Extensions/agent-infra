@@ -75,6 +75,14 @@ describe("persisted Workload recovery state", () => {
 		).toEqual({ state, legacy: false });
 	});
 	it("round-trips verified Skill capabilities and rejects malformed entries", () => {
+		const secondSkill = {
+			schemaVersion: 1,
+			name: "release-notes",
+			version: "1.0.0",
+			manifestSha256: "c".repeat(64),
+			packageDigest: "d".repeat(64),
+			readOnly: true,
+		};
 		const state = {
 			...fixture(),
 			capabilities: {
@@ -88,6 +96,7 @@ describe("persisted Workload recovery state", () => {
 						packageDigest: "b".repeat(64),
 						readOnly: true,
 					},
+					secondSkill,
 				],
 			},
 		};
@@ -97,6 +106,16 @@ describe("persisted Workload recovery state", () => {
 				"agent_01",
 			),
 		).toMatchObject({ state: { capabilities: state.capabilities } });
+		const empty = {
+			...state,
+			capabilities: { modelSelection: true, skills: [] },
+		};
+		expect(
+			decodePersistedWorkloadStateV1(
+				JSON.parse(JSON.stringify(empty)),
+				"agent_01",
+			),
+		).toMatchObject({ state: { capabilities: { skills: [] } } });
 		const duplicate = {
 			...state,
 			capabilities: {

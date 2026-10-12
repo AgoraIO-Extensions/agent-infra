@@ -272,6 +272,14 @@ describe("Agent runtime presentation policy", () => {
 				packageDigest: "b".repeat(64),
 				readOnly: true as const,
 			},
+			{
+				schemaVersion: 1 as const,
+				name: "release-notes",
+				version: "1.0.0",
+				manifestSha256: "c".repeat(64),
+				packageDigest: "d".repeat(64),
+				readOnly: true as const,
+			},
 		];
 		const facts = {
 			...input.facts,
@@ -289,6 +297,19 @@ describe("Agent runtime presentation policy", () => {
 				capabilities: { skills },
 			},
 		);
+		const emptyFacts = {
+			...input.facts,
+			runtime: {
+				...runtime,
+				state: {
+					...runtime.state,
+					capabilities: { modelSelection: true, skills: [] },
+				},
+			},
+		};
+		expect(
+			decideAgentRuntimePresentationV1({ ...input, facts: emptyFacts }),
+		).toMatchObject({ capabilities: { skills: [] } });
 	});
 	it.each([false, true])(
 		"rejects another Agent's configuration before projecting source or capabilities (runtime present: %s)",
