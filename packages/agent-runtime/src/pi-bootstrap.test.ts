@@ -18,5 +18,6 @@ it("uses only projection-derived explicit Skill entry paths", () => {
 	expect(piNativeSkillArguments(directory)).toEqual([
 		"--skill",
 		"/opt/agent-infra-skill-hub/.agents/skills/workspace-summary/SKILL.md",
+		"--no-skills",
 	]);
 });

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { SkillWorkloadProjectionV1Schema } from "@agent-infra/contracts";
@@ -322,12 +322,13 @@ export function createFilesystemRuntimeSkillDirectoryV1(input: {
 		parsed.map((projection) => [projection.manifest.name, projection]),
 	);
 	const directory = createRuntimeSkillDirectoryV1(input);
-	const nativeRoot = resolve(input.root);
+	const nativeRoot = realpathSync(resolve(input.root));
 	return {
 		generationId: directory.generationId,
 		nativeRoot,
 		findSkills: directory.findSkills,
 		nativeSkillPaths(): readonly string[] {
+			const resolvedRoot = realpathSync(nativeRoot);
 			return directory.findSkills().map((entry) => {
 				const path = resolve(nativeRoot, entry.targetPath, "SKILL.md");
 				const relativePath = relative(nativeRoot, path);
@@ -337,7 +338,29 @@ export function createFilesystemRuntimeSkillDirectoryV1(input: {
 					isAbsolute(relativePath)
 				)
 					unavailable();
-				return path;
+				const projection = byName.get(entry.name);
+				const file = projection?.manifest.files.find(
+					(value) => value.path === projection.manifest.entryPath,
+				);
+				if (projection?.manifest.entryPath !== "SKILL.md" || !file)
+					unavailable();
+				const stat = lstatSync(path);
+				if (!stat.isFile() || stat.isSymbolicLink()) unavailable();
+				const actualPath = realpathSync(path);
+				const actualRelativePath = relative(resolvedRoot, actualPath);
+				if (
+					actualRelativePath === "" ||
+					actualRelativePath.startsWith("..") ||
+					isAbsolute(actualRelativePath)
+				)
+					unavailable();
+				const bytes = readFileSync(path);
+				if (
+					bytes.byteLength !== file.sizeBytes ||
+					createHash("sha256").update(bytes).digest("hex") !== file.sha256
+				)
+					unavailable();
+				return actualPath;
 			});
 		},
 		async readSkill(name: string, relativePath: string): Promise<Uint8Array> {
