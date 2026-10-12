@@ -7,6 +7,7 @@ import {
 	WecomSetupError,
 } from "@agent-infra/platform-core";
 import type { Hono } from "hono";
+import type { WecomBotQrConfigurationV1 } from "../wecom-setup-assembly.js";
 import { HttpProtocolError, parseJson, requestMetadata } from "./common.js";
 import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 export function registerWecomSetupRoutesV1(
@@ -16,6 +17,7 @@ export function registerWecomSetupRoutesV1(
 		readonly setup: ReturnType<typeof createWecomSetupV1>;
 		readonly application?: boolean;
 		readonly callbackUrl?: (sessionId: string) => string;
+		readonly botQr?: WecomBotQrConfigurationV1;
 	},
 ) {
 	if (dependencies.application && !dependencies.callbackUrl)
@@ -80,18 +82,36 @@ export function registerWecomSetupRoutesV1(
 						identity.userId,
 						dependencies.application ? "wecom_app" : "wecom_bot",
 					);
-					return context.json(
-						dependencies.application
-							? {
-									...session,
-									callbackUrl: dependencies.callbackUrl?.(session.sessionId),
-								}
-							: {
-									...session,
-									qrAvailable: false,
-									qrUnavailableReason: "authorization_correlation_unverified",
-								},
+					if (dependencies.application)
+						return context.json({
+							...session,
+							callbackUrl: dependencies.callbackUrl?.(session.sessionId),
+						});
+					if (!dependencies.botQr)
+						return context.json({
+							...session,
+							qrAvailable: false,
+							qrUnavailableReason:
+								"authorization_correlation_unverified" as const,
+						});
+					const authorizationUrl = new URL(
+						dependencies.botQr.authorizationEndpoint,
 					);
+					authorizationUrl.searchParams.set(
+						"source",
+						dependencies.botQr.source,
+					);
+					authorizationUrl.searchParams.set("state", session.state);
+					return context.json({
+						...session,
+						qrAvailable: true,
+						qr: {
+							authorizationUrl: authorizationUrl.href,
+							authOrigin: dependencies.botQr.authOrigin,
+							source: dependencies.botQr.source,
+							state: session.state,
+						},
+					});
 				}
 				if (!sessionId)
 					throw new HttpProtocolError("RESOURCE_UNAVAILABLE", metadata.traceId);

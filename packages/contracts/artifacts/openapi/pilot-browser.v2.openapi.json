@@ -2728,6 +2728,9 @@
             ],
             "type": "object"
           },
+          "eventWindow": {
+            "$ref": "#/components/schemas/ConversationEventWindowV1"
+          },
           "events": {
             "items": {
               "$ref": "#/components/schemas/PersistedConversationEventV2"
@@ -2942,6 +2945,30 @@
           "messages",
           "schemaVersion",
           "events"
+        ],
+        "type": "object"
+      },
+      "ConversationEventWindowV1": {
+        "additionalProperties": false,
+        "properties": {
+          "beforeCursor": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hasEarlier": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hasEarlier",
+          "beforeCursor"
         ],
         "type": "object"
       },
@@ -10719,6 +10746,14 @@
               "minLength": 1,
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "beforeCursor",
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10730,7 +10765,7 @@
                 }
               }
             },
-            "description": "Conversation messages and complete mixed-version event history"
+            "description": "Conversation messages and a bounded mixed-version event window"
           },
           "400": {
             "content": {

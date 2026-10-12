@@ -34,6 +34,12 @@ export const publicOrigin = requiredEnv("PLATFORM_PUBLIC_ORIGIN");
 // Supply reviewed deployment values explicitly; fixture values are not defaults.
 export const apiInput = missing("apiInput");
 
+// Optional explicit production ports. The entrypoint merges these into
+// apiInput and rejects duplicate definitions. Gateway and model-directory
+// implementations remain deployment-owned; do not use fixtures here.
+export const customAgentGateway = undefined;
+export const modelSelection = undefined;
+
 // Robot-token Agent management API (optional):
 //
 // apiInput.agentApiCreation = {

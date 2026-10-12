@@ -35,6 +35,7 @@ const artifactRelativePaths = [
 	"packages/contracts/artifacts/openapi/runtime-host.v3.openapi.json",
 	"packages/contracts/artifacts/openapi/runtime-readiness.v1.openapi.json",
 	"packages/contracts/artifacts/openapi/standard-template-release.v1.openapi.json",
+	"packages/contracts/artifacts/openapi/standard-template-release.v2.openapi.json",
 ];
 const gitArtifactMaxBufferBytes = 16 * 1024 * 1024;
 
@@ -1484,6 +1485,33 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 			schemas.map((name) => [name, current.components?.schemas?.[name]]),
 		),
 	});
+	// The bounded event window is a later additive field on this V2 detail;
+	// keep the original #508 publication digest stable when checking the
+	// historical operation-read addition.
+	const detailAddition = addition.schemas.ConversationDetailProjectionV2;
+	if (detailAddition?.properties?.eventWindow !== undefined) {
+		const properties = { ...detailAddition.properties };
+		delete properties.eventWindow;
+		addition.schemas.ConversationDetailProjectionV2 = {
+			...detailAddition,
+			properties,
+		};
+	}
+	const detailPath = addition.paths["/api/v2/conversations/{conversationId}"];
+	if (detailPath?.get?.parameters) {
+		detailPath.get.parameters = detailPath.get.parameters.filter(
+			(parameter) =>
+				!(parameter.in === "query" && parameter.name === "beforeCursor"),
+		);
+	}
+	const detailResponse = detailPath?.get?.responses?.["200"];
+	if (
+		detailResponse?.description ===
+		"Conversation messages and a bounded mixed-version event window"
+	) {
+		detailResponse.description =
+			"Conversation messages and complete mixed-version event history";
+	}
 	// #1534 later added the optional Session availability; the pinned digest
 	// covers the original publication. #1523 later added "updating".
 	const detail = addition.schemas.ConversationDetailProjectionV2;
@@ -1501,13 +1529,66 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	)
 		return false;
 	const normalized = stripRuntimeBrowserOperationFacts(current);
+	const normalizedDetailPath =
+		normalized.paths["/api/v2/conversations/{conversationId}"];
+	if (
+		normalizedDetailPath?.get?.responses?.["200"]?.description ===
+		"Conversation messages and a bounded mixed-version event window"
+	)
+		normalizedDetailPath.get.responses["200"].description =
+			"Conversation messages and complete mixed-version event history";
 	for (const path of paths) delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
+	delete normalized.components.schemas.ConversationEventWindowV1;
 	const normalizedPrevious = stripRuntimeBrowserOperationFacts(previous);
+	delete normalizedPrevious.components.schemas.ConversationEventWindowV1;
 	return (
 		sameValue(normalizedPrevious, normalized) ||
 		isAgentLifecycleV2OpenApiAddition(normalizedPrevious, normalized)
 	);
+}
+
+// #1812 adds only the optional bounded V2 detail window and its backward cursor.
+function isConversationEventWindowOpenApiAddition(previous, current) {
+	const path = "/api/v2/conversations/{conversationId}";
+	const name = "ConversationDetailProjectionV2";
+	const previousDetail = previous.components?.schemas?.[name];
+	const currentDetail = current.components?.schemas?.[name];
+	const previousParameters = previous.paths?.[path]?.get?.parameters ?? [];
+	const currentParameters = current.paths?.[path]?.get?.parameters ?? [];
+	const beforeCursor = currentParameters.find(
+		(parameter) =>
+			parameter.in === "query" && parameter.name === "beforeCursor",
+	);
+	if (
+		previousDetail?.properties?.eventWindow !== undefined ||
+		previous.components?.schemas?.ConversationEventWindowV1 !== undefined ||
+		previousParameters.some(
+			(parameter) =>
+				parameter.in === "query" && parameter.name === "beforeCursor",
+		) ||
+		!currentDetail?.properties?.eventWindow ||
+		currentDetail.required?.includes("eventWindow") ||
+		!current.components?.schemas?.ConversationEventWindowV1 ||
+		!beforeCursor
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.components.schemas.ConversationEventWindowV1;
+	delete normalized.components.schemas[name].properties.eventWindow;
+	if (
+		normalized.paths[path].get.responses?.["200"]?.description ===
+		"Conversation messages and a bounded mixed-version event window"
+	)
+		normalized.paths[path].get.responses["200"].description =
+			"Conversation messages and complete mixed-version event history";
+	normalized.paths[path].get.parameters = normalized.paths[
+		path
+	].get.parameters.filter(
+		(parameter) =>
+			!(parameter.in === "query" && parameter.name === "beforeCursor"),
+	);
+	return sameValue(previous, normalized);
 }
 
 // #1010 publishes the existing resource-unavailable error for V2 SSE reads.
@@ -1680,6 +1761,13 @@ function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 }
 
 // #440 adds bounded receipt management and Owner-scoped bot setup.
+// Keep both hashes: the first is the historical #440 shape before #1935's QR
+// branch, while the second is the exact current route set after that addition.
+const wecomReceiptOpenApiAdditionHashes = new Set([
+	"f5331d7d488eca753adaf413088b91f6050fc07def829902db17494ef7aa49f1",
+	"a0d685b8aa834f369ed1e561d2acc5660a644d8f7fb8c113a089670321ef6045",
+]);
+
 function isWecomReceiptOpenApiAddition(previous, current) {
 	const paths = [
 		"/api/v1/wecom/receipts",
@@ -1696,8 +1784,9 @@ function isWecomReceiptOpenApiAddition(previous, current) {
 		paths.map((path) => [path, current.paths?.[path]]),
 	);
 	if (
-		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
-		"f5331d7d488eca753adaf413088b91f6050fc07def829902db17494ef7aa49f1"
+		!wecomReceiptOpenApiAdditionHashes.has(
+			createHash("sha256").update(JSON.stringify(addition)).digest("hex"),
+		)
 	)
 		return false;
 	const normalized = structuredClone(current);
@@ -1726,6 +1815,45 @@ function isWecomApplicationOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	for (const path of paths) delete normalized.paths[path];
 	return findBreakingChanges(previous, normalized).length === 0;
+}
+
+// #1935 adds an optional deployment-approved QR branch to the existing bot setup response.
+const wecomLegacyAuthorizationBranchSha256 =
+	"b23fbc27698cf8cb1a1af39993346877a8f113a9c24a90c4b5738f1f6b5b2acd";
+const wecomQrAuthorizationBranchSha256 =
+	"da0cac344f9a9383e5851073f97bf9f6ca0fbf04128e50c5d6f7214e8d9c03eb";
+
+function isWecomQrAuthorizationOpenApiAddition(previous, current) {
+	const path = "/api/v1/agents/{agentId}/wecom-setup";
+	const previousSchema =
+		previous.paths?.[path]?.post?.responses?.["200"]?.content?.[
+			"application/json"
+		]?.schema;
+	const currentSchema =
+		current.paths?.[path]?.post?.responses?.["200"]?.content?.[
+			"application/json"
+		]?.schema;
+	if (
+		!previousSchema ||
+		!currentSchema ||
+		currentSchema.type !== "object" ||
+		!Array.isArray(currentSchema.oneOf) ||
+		currentSchema.oneOf.length !== 2 ||
+		createHash("sha256")
+			.update(JSON.stringify(previousSchema))
+			.digest("hex") !== wecomLegacyAuthorizationBranchSha256 ||
+		!isDeepStrictEqual(currentSchema.oneOf[0], previousSchema) ||
+		createHash("sha256")
+			.update(JSON.stringify(currentSchema.oneOf[1]))
+			.digest("hex") !== wecomQrAuthorizationBranchSha256 ||
+		!sameValue(Object.keys(currentSchema).sort(), ["oneOf", "type"])
+	)
+		return false;
+	const normalized = structuredClone(current);
+	normalized.paths[path].post.responses["200"].content[
+		"application/json"
+	].schema = previousSchema;
+	return sameValue(previous, normalized);
 }
 
 // The #481 creation producer already persists these actions. #1572 admits only
@@ -3087,6 +3215,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isTaskHttpV1OpenApiAddition(previous, current) &&
 			!isTaskHttpV1SseOpenApiAddition(previous, current) &&
 			!isConversationFactsV2OpenApiAddition(previous, current) &&
+			!isConversationEventWindowOpenApiAddition(previous, current) &&
 			!isConversationSseV2NotFoundAddition(previous, current) &&
 			!isConversationSessionAvailabilityOpenApiAddition(previous, current) &&
 			!isConversationSessionUpdatingOpenApiAddition(previous, current) &&
@@ -3094,6 +3223,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
+			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
 			!isScopedAuditOpenApiAddition(previous, current) &&
 			!isSkillHubAuditActionOpenApiAddition(previous, current) &&

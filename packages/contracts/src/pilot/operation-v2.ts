@@ -52,6 +52,11 @@ export const ConversationSseMessageV2Schema = z.union([
 	AuthorizationRevokedSignalV1Schema,
 ]);
 
+export const ConversationEventWindowV1Schema = z.strictObject({
+	hasEarlier: z.boolean(),
+	beforeCursor: OpaqueCursorV1Schema.nullable(),
+});
+
 export function framePilotSseMessageV2(input: unknown) {
 	const data = ConversationSseMessageV2Schema.parse(input);
 	return data.kind === "event" ? { id: data.eventId, data } : { data };
@@ -61,6 +66,8 @@ export const ConversationDetailProjectionV2Schema =
 	ConversationDetailProjectionV1Schema.extend({
 		schemaVersion: z.literal(2),
 		events: z.array(PersistedConversationEventV2Schema),
+		/** Present on current servers; omitted by older detail responses. */
+		eventWindow: ConversationEventWindowV1Schema.optional(),
 		/** Whether the Conversation's own Session Sandbox can take messages yet.
 		 * Absent from older servers, which the Web treats as "ready" (#1534);
 		 * "updating" while the Sandbox upgrades to a new deployment (ADR 0023). */
@@ -116,11 +123,17 @@ export const pilotOperationOpenApiPathsV2 = {
 		get: {
 			...conversationRead,
 			operationId: "getConversationV2",
+			requestParams: {
+				...conversationRead.requestParams,
+				query: z.strictObject({
+					beforeCursor: OpaqueCursorV1Schema.optional(),
+				}),
+			},
 			responses: {
 				...conversationRead.responses,
 				"200": {
 					description:
-						"Conversation messages and complete mixed-version event history",
+						"Conversation messages and a bounded mixed-version event window",
 					content: {
 						"application/json": {
 							schema: ConversationDetailProjectionV2Schema,
@@ -177,6 +190,7 @@ export const pilotOperationSseSchemasV2 = {
 
 export const pilotOperationSchemasV2 = {
 	...pilotOperationSseSchemasV2,
+	ConversationEventWindowV1: ConversationEventWindowV1Schema,
 	ConversationDetailProjectionV2: ConversationDetailProjectionV2Schema,
 	ExecutionDetailProjectionV2: ExecutionDetailProjectionV2Schema,
 };
@@ -189,4 +203,7 @@ export type PersistedConversationEventV2 = z.infer<
 >;
 export type ConversationSseMessageV2 = z.infer<
 	typeof ConversationSseMessageV2Schema
+>;
+export type ConversationEventWindowV1 = z.infer<
+	typeof ConversationEventWindowV1Schema
 >;

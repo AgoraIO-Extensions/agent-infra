@@ -100,6 +100,7 @@ export interface ProductionPlatformApiInputV1
 	>[0]["resourceProfile"];
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
+	readonly conversationEventWindow?: number;
 	readonly directory?: DirectoryRouteDependencies;
 	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
@@ -108,6 +109,33 @@ export interface ProductionPlatformApiInputV1
 	readonly resolveCustomAgentInteractionUrl?: Parameters<
 		typeof createDeploymentPresentation
 	>[0]["resolveCustomAgentInteractionUrl"];
+}
+
+/** Merge explicit mounted deployment ports without allowing duplicate authorities. */
+export function mergeProductionPlatformApiDeploymentPortsV1(input: {
+	readonly apiInput: ProductionPlatformApiInputV1;
+	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
+	readonly modelSelection?: ConversationModelSelectionReaderV1;
+}): ProductionPlatformApiInputV1 {
+	if (
+		input.customAgentGateway !== undefined &&
+		input.apiInput.customAgentGateway !== undefined
+	)
+		throw new Error("PLATFORM_CUSTOM_AGENT_GATEWAY_DUPLICATE");
+	if (
+		input.modelSelection !== undefined &&
+		input.apiInput.modelSelection !== undefined
+	)
+		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
+	return {
+		...input.apiInput,
+		...(input.customAgentGateway !== undefined
+			? { customAgentGateway: input.customAgentGateway }
+			: {}),
+		...(input.modelSelection !== undefined
+			? { modelSelection: input.modelSelection }
+			: {}),
+	};
 }
 
 export function createProductionPlatformApiAssemblyInputV1(
@@ -339,6 +367,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		requestScope: identityScope.requestScope,
 		conversationReplayWindow: input.conversationReplayWindow,
 		conversationReplayWindowMs: input.conversationReplayWindowMs,
+		conversationEventWindow: input.conversationEventWindow,
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 		...(input.customAgentGateway

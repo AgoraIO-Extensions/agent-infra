@@ -80,7 +80,10 @@ import {
 	assembleWecomReceiptApiV1,
 	type WecomApiDeploymentV1,
 } from "./wecom-assembly.js";
-import { assembleWecomSetupApiV1 } from "./wecom-setup-assembly.js";
+import {
+	assembleWecomSetupApiV1,
+	type WecomBotQrConfigurationV1,
+} from "./wecom-setup-assembly.js";
 
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
@@ -120,6 +123,7 @@ export interface PlatformApiAssemblyInput {
 	readonly taskAdmissionPolicy: ConversationTaskAdmissionPolicyV1;
 	readonly conversationReplayWindow?: number;
 	readonly conversationReplayWindowMs?: number;
+	readonly conversationEventWindow?: number;
 	readonly identity: IdentityAdapter;
 	readonly userGovernance?: PostgresPlatformUserDisablesV1;
 	readonly personalRelayKeys?: Pick<
@@ -151,6 +155,7 @@ export interface PlatformApiAssemblyInput {
 		readonly callbackKeys: WecomCallbackKeysV1;
 		readonly replyEncryptionPublicKeyPem: string;
 	};
+	readonly wecomBotQr?: WecomBotQrConfigurationV1;
 	readonly directory?: DirectoryRouteDependencies;
 	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
@@ -203,6 +208,7 @@ export function assemblePlatformApi(
 				...(input.wecomApplicationSetup
 					? { application: input.wecomApplicationSetup }
 					: {}),
+				...(input.wecomBotQr ? { botQr: input.wecomBotQr } : {}),
 			})
 		: undefined;
 	const wecomDeployment =
@@ -381,6 +387,9 @@ export function assemblePlatformApi(
 		...(input.conversationReplayWindowMs === undefined
 			? {}
 			: { replayWindowMs: input.conversationReplayWindowMs }),
+		...(input.conversationEventWindow === undefined
+			? { eventWindow: 200 }
+			: { eventWindow: input.conversationEventWindow }),
 	});
 	// Commit wakeups shorten SSE waits; streams keep polling without them (#1561).
 	const conversationEventWake = new ConversationEventWakeHubV1();
@@ -693,7 +702,11 @@ export function assemblePlatformApi(
 			: {}),
 		...(wecomSetup
 			? {
-					wecomSetup: { identity: input.identity, setup: wecomSetup.setup },
+					wecomSetup: {
+						identity: input.identity,
+						setup: wecomSetup.setup,
+						...(wecomSetup.botQr ? { botQr: wecomSetup.botQr } : {}),
+					},
 					...(input.wecomApplicationSetup
 						? {
 								wecomApplicationSetup: {

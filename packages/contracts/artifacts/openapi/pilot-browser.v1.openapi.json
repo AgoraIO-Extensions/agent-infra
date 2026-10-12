@@ -8781,61 +8781,151 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "agentId": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "configurationRevision": {
-                      "exclusiveMinimum": 0,
-                      "maximum": 9007199254740991,
-                      "type": "integer"
-                    },
-                    "expiresAt": {
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
-                      "type": "string"
-                    },
-                    "qrAvailable": {
-                      "const": false,
-                      "type": "boolean"
-                    },
-                    "qrUnavailableReason": {
-                      "const": "authorization_correlation_unverified",
-                      "type": "string"
-                    },
-                    "sessionId": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "state": {
-                      "maxLength": 1024,
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "status": {
-                      "enum": [
-                        "awaiting_input",
-                        "verifying",
-                        "active",
-                        "auth_failed",
-                        "conflict",
-                        "cancelled",
-                        "expired"
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "agentId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "configurationRevision": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "expiresAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                          "type": "string"
+                        },
+                        "qrAvailable": {
+                          "const": false,
+                          "type": "boolean"
+                        },
+                        "qrUnavailableReason": {
+                          "const": "authorization_correlation_unverified",
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "state": {
+                          "maxLength": 1024,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "awaiting_input",
+                            "verifying",
+                            "active",
+                            "auth_failed",
+                            "conflict",
+                            "cancelled",
+                            "expired"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sessionId",
+                        "agentId",
+                        "configurationRevision",
+                        "expiresAt",
+                        "status",
+                        "state",
+                        "qrAvailable",
+                        "qrUnavailableReason"
                       ],
-                      "type": "string"
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "agentId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "configurationRevision": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "expiresAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                          "type": "string"
+                        },
+                        "qr": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "authOrigin": {
+                              "format": "uri",
+                              "type": "string"
+                            },
+                            "authorizationUrl": {
+                              "format": "uri",
+                              "type": "string"
+                            },
+                            "source": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "state": {
+                              "maxLength": 1024,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "authorizationUrl",
+                            "authOrigin",
+                            "source",
+                            "state"
+                          ],
+                          "type": "object"
+                        },
+                        "qrAvailable": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "sessionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "state": {
+                          "maxLength": 1024,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "awaiting_input",
+                            "verifying",
+                            "active",
+                            "auth_failed",
+                            "conflict",
+                            "cancelled",
+                            "expired"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sessionId",
+                        "agentId",
+                        "configurationRevision",
+                        "expiresAt",
+                        "status",
+                        "state",
+                        "qrAvailable",
+                        "qr"
+                      ],
+                      "type": "object"
                     }
-                  },
-                  "required": [
-                    "sessionId",
-                    "agentId",
-                    "configurationRevision",
-                    "expiresAt",
-                    "status",
-                    "state",
-                    "qrAvailable",
-                    "qrUnavailableReason"
                   ],
                   "type": "object"
                 }

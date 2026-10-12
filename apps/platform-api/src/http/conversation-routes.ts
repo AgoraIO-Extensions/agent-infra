@@ -42,6 +42,7 @@ import type {
 	ConversationQueryEventV1,
 	ConversationQueryPageV1,
 	ConversationQueryProjectionV1,
+	ConversationQueryReadOptionsV1,
 	ConversationQueryScopeV1,
 	ConversationReplayResultV1,
 } from "@agent-infra/platform-store";
@@ -105,6 +106,7 @@ export interface ConversationQuery {
 		scope: ConversationQueryScopeV1,
 		conversationId: string,
 		signal?: AbortSignal,
+		readOptions?: ConversationQueryReadOptionsV1,
 	): Promise<ConversationQueryDetailV1 | undefined>;
 	getExecution(
 		scope: ConversationQueryScopeV1,
@@ -971,12 +973,14 @@ export function registerConversationRoutes(
 					conversationId,
 					metadata.traceId,
 				);
+				const beforeCursor = context.req.query("beforeCursor");
 				const detail = await query(
 					() =>
 						dependencies.query.get(
 							scope(identity),
 							conversationId,
 							context.req.raw.signal,
+							beforeCursor === undefined ? undefined : { beforeCursor },
 						),
 					metadata.traceId,
 				);
@@ -994,6 +998,9 @@ export function registerConversationRoutes(
 								conversation,
 								messages: messageProjections(detail),
 								events: detail.events.map(eventProjection),
+								...(detail.eventWindow === undefined
+									? {}
+									: { eventWindow: detail.eventWindow }),
 								// Same readiness fact as the Web message gate (#1534); an
 								// upgrading Sandbox is shown as updating (ADR 0023).
 								sessionAvailability:

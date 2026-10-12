@@ -294,7 +294,9 @@ export {
 export {
 	createProductionSingleAgentTemplateReleaseAppV1,
 	type ProductionSingleAgentTemplateReleaseInputV1,
+	type ProductionTemplateUpgradeInputV2,
 	type StandardTemplateReleaseDeploymentBindingV1,
+	type StandardTemplateUpgradeDeploymentBindingV2,
 } from "./template-release.js";
 export {
 	assemblePlatformApi,

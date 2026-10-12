@@ -18,9 +18,12 @@ import { migratePlatformDatabase } from "@agent-infra/platform-store";
 import {
 	KubeConfig,
 	type KubernetesObject,
+	type V1Ingress,
+	type V1NetworkPolicy,
 	type V1PersistentVolumeClaim,
 	type V1Pod,
 	type V1Secret,
+	type V1Service,
 	type V1StatefulSet,
 } from "@kubernetes/client-node";
 import postgres from "postgres";
@@ -1165,5 +1168,298 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 				await database.stop();
 			}
 		}, 900_000);
+
+		it.each(["self-managed", "platform-managed"] as const)(
+			"reconciles custom self-managed %s identity through one route and restores B after candidate failures",
+			async (identityResponsibility) => {
+				const imageA = process.env.WORKLOAD_KIND_IMAGE_A;
+				const imageB = process.env.WORKLOAD_KIND_IMAGE_B;
+				if (!imageA || !imageB)
+					throw new Error(
+						"WORKLOAD_KIND_IMAGE_A and WORKLOAD_KIND_IMAGE_B are required",
+					);
+				const imageC = imageA;
+				const database = await startPostgresTestDatabase(
+					`custom-kind-${identityResponsibility}`,
+				);
+				const sql = postgres(database.databaseUrl, {
+					onnotice: () => undefined,
+				});
+				let worker:
+					| ReturnType<typeof createPlatformWorkloadWorkerV1>
+					| undefined;
+				try {
+					await migratePlatformDatabase(database);
+					const seed = await seedStandardWorkloadHostV1(
+						database.databaseUrl,
+						imageA,
+					);
+					const customSource = {
+						kind: "custom" as const,
+						imageDigest: imageA,
+						admissionRevision: "custom-kind-a",
+						interactionMode: "self-managed" as const,
+						identityResponsibility,
+						connectionEnabled: false,
+					};
+					const customConfiguration = {
+						...seed.configuration,
+						source: customSource,
+						modelConfiguration: null,
+						secrets: [],
+					};
+					await sql`update platform.agent_configuration_revisions
+						set source_reference=${imageA}, configuration=${sql.json(customConfiguration)}
+						where agent_id=${seed.agentId} and revision=1`;
+					await sql`delete from platform.secret_records where agent_id=${seed.agentId}`;
+
+					const healthyManifest = {
+						schemaVersion: 1 as const,
+						interactionMode: "self-managed" as const,
+						service: { port: 8080 },
+						health: { path: "/healthz" },
+					};
+					const failedManifest = {
+						...healthyManifest,
+						health: { path: "/candidate-fail" },
+					};
+					let failNextAdmission = false;
+					const registry = workloadRegistryFixture(healthyManifest);
+					registry.admit = async (request, options) => {
+						const manifest = failNextAdmission
+							? failedManifest
+							: healthyManifest;
+						failNextAdmission = false;
+						return workloadRegistryFixture(manifest).admit(request, options);
+					};
+					const fetchHealth = async (input: unknown) => {
+						const url =
+							typeof input === "string"
+								? input
+								: input instanceof URL
+									? input.href
+									: (input as { url: string }).url;
+						return new Response(null, {
+							status: new URL(url).pathname === "/candidate-fail" ? 503 : 200,
+						});
+					};
+					worker = createPlatformWorkloadWorkerV1({
+						...seed.workerOptions,
+						databaseUrl: database.databaseUrl,
+						client,
+						workerId: `custom-kind-${identityResponsibility}`,
+						pollIntervalMs: 1,
+						policy: workloadPolicy,
+						registry,
+						fetch: fetchHealth,
+						probeRuntime: async () => ({ core: "passed", capabilities: {} }),
+					});
+
+					async function tickUntil(
+						predicate: (state: WorkloadReconciliationStateV1) => boolean,
+						guard?: () => Promise<void>,
+					) {
+						for (let attempt = 0; attempt < 300; attempt++) {
+							await worker?.tick();
+							await guard?.();
+							const [row] = await sql<
+								{ state: WorkloadReconciliationStateV1 }[]
+							>`select state from platform.workload_reconciliations where agent_id=${seed.agentId}`;
+							if (row?.state && predicate(row.state)) return row.state;
+							await setTimeout(100);
+						}
+						const [row] = await sql<
+							{ state: WorkloadReconciliationStateV1 }[]
+						>`select state from platform.workload_reconciliations where agent_id=${seed.agentId}`;
+						throw new Error(
+							`Custom Agent lifecycle did not converge: ${JSON.stringify(row?.state)}`,
+						);
+					}
+					async function wake() {
+						await sql`update platform.workload_reconciliations
+							set next_attempt_at=clock_timestamp() where agent_id=${seed.agentId}`;
+					}
+					async function upgrade(
+						revision: number,
+						configuration: Record<string, unknown>,
+					) {
+						await sql`insert into platform.agent_configuration_revisions
+							(agent_id, revision, source_reference, configuration, created_at)
+							values (${seed.agentId}, ${revision}, ${String((configuration.source as { imageDigest: string }).imageDigest)}, ${sql.json(configuration as unknown as postgres.JSONValue)}, now())`;
+						await sql`update platform.agents set current_configuration_revision=${revision}
+							where id=${seed.agentId}`;
+						await wake();
+					}
+					function routeExposure() {
+						return identityResponsibility === "platform-managed"
+							? "platform-auth"
+							: "self-managed";
+					}
+					async function assertSingleRoute(expectedImage: string) {
+						const [stateRow] = await sql<
+							{ state: WorkloadReconciliationStateV1 }[]
+						>`select state from platform.workload_reconciliations where agent_id=${seed.agentId}`;
+						const state = stateRow?.state;
+						if (!state?.verified)
+							throw new Error("Verified custom Agent is missing");
+						const verifiedDeployment = validateAgentWorkloadDesiredV1(
+							state.verified.deployment,
+						);
+						expect(state.verified.configuration.source).toMatchObject({
+							kind: "custom",
+							imageDigest: expectedImage,
+							interactionMode: "self-managed",
+							identityResponsibility,
+						});
+						expect(verifiedDeployment.route.exposure).toBe(routeExposure());
+						const routes = await client.list<V1Ingress>(
+							"Ingress",
+							`agent-infra.agora.io/agent=${workloadResourceNameV1(seed.agentId)}`,
+						);
+						expect(routes).toHaveLength(1);
+						const route = routes[0];
+						if (!route) throw new Error("Custom Agent route is missing");
+						if (identityResponsibility === "platform-managed")
+							expect(route.metadata?.annotations).toMatchObject(
+								workloadPolicy.platformAuthAnnotations,
+							);
+						else
+							expect(
+								route.metadata?.annotations?.[
+									"nginx.ingress.kubernetes.io/auth-url"
+								],
+							).toBeUndefined();
+						const service = await client.read<V1Service>(
+							"Service",
+							workloadResourceNameV1(seed.agentId),
+						);
+						expect(service?.spec?.type).toBe("ClusterIP");
+						const network = await client.read<V1NetworkPolicy>(
+							"NetworkPolicy",
+							workloadResourceNameV1(seed.agentId),
+						);
+						const platformPeer = network?.spec?.ingress?.some((rule) =>
+							rule._from?.some(
+								(peer) =>
+									peer.podSelector?.matchLabels?.component === "platform-api",
+							),
+						);
+						expect(platformPeer).toBe(
+							identityResponsibility === "platform-managed",
+						);
+						const routeVersion = expectedImage === imageA ? "A" : "B";
+						expect(
+							await waitForRoute(
+								`http://${verifiedDeployment.service.name}:${verifiedDeployment.service.port}`,
+								routeVersion,
+							),
+						).toMatchObject({ version: routeVersion });
+					}
+					async function assertNoCandidateRoute(expectedRevision: number) {
+						const name = workloadResourceNameV1(seed.agentId);
+						const service = await client.read<V1Service>("Service", name);
+						if (!service) return;
+						const selectedRevision =
+							service.spec?.selector?.["agent-infra.agora.io/revision"];
+						expect(["closed", String(expectedRevision)]).toContain(
+							selectedRevision,
+						);
+						if (selectedRevision === "closed") return;
+						const routedPods = (
+							await client.list<V1Pod>(
+								"Pod",
+								`agent-infra.agora.io/agent=${name}`,
+							)
+						).filter(
+							(pod) =>
+								pod.metadata?.labels?.["agent-infra.agora.io/revision"] ===
+								selectedRevision,
+						);
+						expect(
+							routedPods.every(
+								(pod) =>
+									pod.spec?.containers[0]?.image ===
+									`${workloadPolicy.imageRepository}@${imageB}`,
+							),
+						).toBe(true);
+					}
+
+					await tickUntil((state) => state.phase === "ready");
+					await assertSingleRoute(imageA);
+
+					const sourceB = {
+						...customSource,
+						imageDigest: imageB,
+						admissionRevision: "custom-kind-b",
+					};
+					await upgrade(2, {
+						...customConfiguration,
+						revision: 2,
+						source: sourceB,
+					});
+					const readyB = await tickUntil(
+						(state) =>
+							state.phase === "ready" &&
+							state.verified?.configuration.source.imageDigest === imageB,
+					);
+					const verifiedB = readyB.verified;
+					if (!verifiedB) throw new Error("Verified B deployment is missing");
+					const verifiedBDeployment = validateAgentWorkloadDesiredV1(
+						verifiedB.deployment,
+					);
+					const verifiedBRevision = verifiedBDeployment.workloadRevision;
+					await assertSingleRoute(imageB);
+
+					const mismatchSource = {
+						kind: "custom" as const,
+						imageDigest: imageC,
+						admissionRevision: "custom-kind-mismatch",
+						interactionMode: "platform-adapter" as const,
+						connectionEnabled: false,
+					};
+					await upgrade(3, {
+						...customConfiguration,
+						revision: 3,
+						source: mismatchSource,
+					});
+					const rejected = await tickUntil(
+						(state) => state.phase === "rejected",
+						() => assertNoCandidateRoute(verifiedBRevision),
+					);
+					expect(rejected.verified?.configuration.source.imageDigest).toBe(
+						imageB,
+					);
+					await assertSingleRoute(imageB);
+
+					const sourceC = {
+						...sourceB,
+						imageDigest: imageC,
+						admissionRevision: "custom-kind-c",
+					};
+					failNextAdmission = true;
+					await upgrade(4, {
+						...customConfiguration,
+						revision: 4,
+						source: sourceC,
+					});
+					const rolledBack = await tickUntil(
+						(state) =>
+							state.phase === "ready" &&
+							state.failureCode === "health_check_failed" &&
+							state.rollback === true,
+						() => assertNoCandidateRoute(verifiedBRevision),
+					);
+					expect(rolledBack.verified?.configuration.source.imageDigest).toBe(
+						imageB,
+					);
+					await assertSingleRoute(imageB);
+				} finally {
+					await worker?.stop();
+					await sql.end();
+					await database.stop();
+				}
+			},
+			900_000,
+		);
 	},
 );

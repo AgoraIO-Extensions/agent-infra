@@ -1,4 +1,5 @@
 import type { KeyObject } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
 import type {
@@ -58,6 +59,23 @@ export type ConversationRuntimeStateV2 = TaskRuntimeRecoveryStateV1 & {
 	readonly originalSubmitHostSessionRef?: string | null;
 };
 
+export type ConversationDrainStageOutcomeV1 =
+	| "completed"
+	| "failed"
+	| "unknown";
+
+export interface ConversationDrainStageObservationV1 {
+	readonly operationRef:
+		| "drain.prepare"
+		| "drain.route"
+		| "drain.host_read"
+		| "drain.ack";
+	readonly outcome: ConversationDrainStageOutcomeV1;
+	readonly durationMs: number;
+	readonly conversationId: string;
+	readonly executionId: string;
+}
+
 export interface ConversationTaskAuthorizationStoreV2 {
 	readExecution(
 		executionId: string,
@@ -82,6 +100,10 @@ export interface ConversationLegacyControlStoreV2 {
 }
 
 export interface ConversationRuntimeOptionsV2 {
+	/** Bounded drain timing; identifiers and durations only. */
+	readonly recordDrainStage?: (
+		observation: ConversationDrainStageObservationV1,
+	) => void;
 	readonly connectionInstallation?: WorkerConnectionInstallationOptions;
 	readonly channelAuthorizationCurrent?: (
 		record: TaskRuntimeAuthorizationRecordV1,
@@ -231,6 +253,41 @@ export function createConversationRuntimeV2(
 		: undefined;
 	const combined = (signal?: AbortSignal) =>
 		signal ? AbortSignal.any([lifetime, signal]) : lifetime;
+	function recordDrainStage(
+		request: Pick<Request, "conversationId" | "executionId">,
+		operationRef: ConversationDrainStageObservationV1["operationRef"],
+		startedAt: number,
+		outcome: ConversationDrainStageOutcomeV1,
+	) {
+		try {
+			options.recordDrainStage?.({
+				operationRef,
+				outcome,
+				durationMs: performance.now() - startedAt,
+				conversationId: request.conversationId,
+				executionId: request.executionId,
+			});
+		} catch {
+			// Timing is observational; it never changes Runtime authorization or I/O.
+		}
+	}
+	async function observeDrainStage<T>(
+		request: Pick<Request, "conversationId" | "executionId">,
+		operationRef: ConversationDrainStageObservationV1["operationRef"],
+		signal: AbortSignal,
+		task: () => Promise<T>,
+	): Promise<T> {
+		const startedAt = performance.now();
+		let outcome: ConversationDrainStageOutcomeV1 = "completed";
+		try {
+			return await task();
+		} catch (error) {
+			outcome = signal.aborted ? "unknown" : "failed";
+			throw error;
+		} finally {
+			recordDrainStage(request, operationRef, startedAt, outcome);
+		}
+	}
 
 	const keyDependencies = new Set<Promise<unknown>>();
 	function trackKeyDependency<T>(work: () => Promise<T>): Promise<T> {
@@ -350,6 +407,15 @@ export function createConversationRuntimeV2(
 		return context;
 	}
 	async function prepare(
+		request: Request,
+		command: Command,
+		signal: AbortSignal,
+	) {
+		return observeDrainStage(request, "drain.prepare", signal, () =>
+			prepareCore(request, command, signal),
+		);
+	}
+	async function prepareCore(
 		request: Request,
 		command: Command,
 		signal: AbortSignal,
@@ -585,6 +651,18 @@ export function createConversationRuntimeV2(
 		command: Command,
 		signal: AbortSignal,
 	) {
+		return observeDrainStage(
+			prepared.context.claim,
+			"drain.route",
+			signal,
+			() => assertCurrentPreparedCore(prepared, command, signal),
+		);
+	}
+	async function assertCurrentPreparedCore(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		command: Command,
+		signal: AbortSignal,
+	) {
 		const state = await stateFor(prepared.context, signal);
 		const decision = await current(prepared.context, state, command, signal);
 		if (!isDeepStrictEqual(decision.authority, prepared.authority))
@@ -765,6 +843,26 @@ export function createConversationRuntimeV2(
 		prepared: Awaited<ReturnType<typeof prepare>>,
 		signal: AbortSignal,
 	) {
+		const startedAt = performance.now();
+		let outcome: ConversationDrainStageOutcomeV1 = "completed";
+		try {
+			yield* readPreparedEventsCore(prepared, signal);
+		} catch (error) {
+			outcome = signal.aborted ? "unknown" : "failed";
+			throw error;
+		} finally {
+			recordDrainStage(
+				prepared.context.claim,
+				"drain.host_read",
+				startedAt,
+				outcome,
+			);
+		}
+	}
+	async function* readPreparedEventsCore(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		signal: AbortSignal,
+	) {
 		const { state, authority, client, base } = prepared;
 		if (!state.hostSessionRef) unavailable("RUNTIME_ACCEPTANCE_UNKNOWN");
 		const body = {
@@ -800,6 +898,28 @@ export function createConversationRuntimeV2(
 		yield* replay.events;
 	}
 	async function acknowledgePrepared(
+		prepared: Awaited<ReturnType<typeof prepare>>,
+		confirmedCursor: string,
+		signal: AbortSignal,
+		assertCurrent?: () => Promise<void>,
+	) {
+		const startedAt = performance.now();
+		let outcome: ConversationDrainStageOutcomeV1 = "completed";
+		try {
+			await acknowledgePreparedCore(
+				prepared,
+				confirmedCursor,
+				signal,
+				assertCurrent,
+			);
+		} catch (error) {
+			outcome = signal.aborted ? "unknown" : "failed";
+			throw error;
+		} finally {
+			recordDrainStage(prepared.context.claim, "drain.ack", startedAt, outcome);
+		}
+	}
+	async function acknowledgePreparedCore(
 		prepared: Awaited<ReturnType<typeof prepare>>,
 		confirmedCursor: string,
 		signal: AbortSignal,

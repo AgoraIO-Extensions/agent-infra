@@ -195,6 +195,21 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 				target: bindingTarget,
 				operatorIds: operators,
 			}),
+			templateUpgrade: {
+				releaseId: target.releaseId,
+				templateId: target.templateId,
+				expectedImageDigest: target.expectedImageDigest,
+				targetImageDigest: target.targetImageDigest,
+				loadReleaseBinding: async () => ({
+					schemaVersion: 2,
+					revision: "deployment_1",
+					releaseId: target.releaseId,
+					templateId: target.templateId,
+					expectedImageDigest: target.expectedImageDigest,
+					targetImageDigest: target.targetImageDigest,
+					operatorIds: operators,
+				}),
+			},
 			loadAuthorityContext: async () => ({
 				schemaVersion: 1,
 				users: [],
@@ -339,6 +354,35 @@ describe("production single-Agent template release over real HTTP and PostgreSQL
 		operators = [];
 		expect((await apply()).status).toBe(404);
 		expect(await snapshot()).toEqual(result);
+	});
+	it("exposes additive V2 fan-out results while preserving the V1 route", async () => {
+		const response = await fetch(
+			`${origin}/internal/ops/standard-template-releases/${target.releaseId}/apply-all`,
+			{
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"Idempotency-Key": "upgrade_all_key",
+				},
+				body: JSON.stringify({ schemaVersion: 2 }),
+			},
+		);
+		expect(response.status).toBe(202);
+		expect(await response.json()).toEqual({
+			schemaVersion: 2,
+			releaseId: target.releaseId,
+			templateId: target.templateId,
+			status: "completed",
+			targets: [
+				{
+					agentId: target.agentId,
+					status: "applied",
+					configurationRevision: 8,
+					errorCode: null,
+				},
+			],
+		});
+		expect((await apply()).status).toBe(409);
 	});
 	it.each(["anonymous", "disabled", "employee", "owner", "unbound_admin"])(
 		"rejects %s before writing",

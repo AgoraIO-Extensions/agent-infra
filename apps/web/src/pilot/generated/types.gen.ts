@@ -2402,6 +2402,20 @@ export type BeginWecomSetupResponses = {
         sessionId: string;
         state: string;
         status: 'awaiting_input' | 'verifying' | 'active' | 'auth_failed' | 'conflict' | 'cancelled' | 'expired';
+    } | {
+        agentId: string;
+        configurationRevision: number;
+        expiresAt: string;
+        qr: {
+            authOrigin: string;
+            authorizationUrl: string;
+            source: string;
+            state: string;
+        };
+        qrAvailable: true;
+        sessionId: string;
+        state: string;
+        status: 'awaiting_input' | 'verifying' | 'active' | 'auth_failed' | 'conflict' | 'cancelled' | 'expired';
     };
 };
 
