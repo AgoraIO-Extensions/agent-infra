@@ -83,6 +83,50 @@ async function submit(host: RuntimeHost) {
 	return host.submitTurnV3(request, verifyRuntimeV2Fixture(request.grant));
 }
 
+it("reports a durable busy result during V3 recovery", async () => {
+	const env = await setup();
+	try {
+		const accepted = await submit(env.host);
+		const second = signV3Fixture(
+			{
+				...submitV3Fixture(),
+				hostSessionRef: accepted.hostSessionRef,
+				executionId: "second-execution",
+				turnId: "second-turn",
+				operation: {
+					...submitV3Fixture().operation,
+					id: "second-execution",
+				},
+			},
+			"turn.submit",
+		);
+		await expect(
+			env.host.submitTurnV3(second, verifyRuntimeV2Fixture(second.grant)),
+		).resolves.toMatchObject({ result: { outcome: "busy" } });
+		const { input: _input, selection: _selection, ...recoveryContext } = second;
+		const recovery = signV3Fixture(
+			{
+				...recoveryContext,
+				originalOperationDigest: originalDigest(second),
+			},
+			"session.status",
+			{ purpose: "control", reason: "recovery" },
+		);
+		await expect(
+			env.host.recoverStatusV3(
+				recovery,
+				verifyRuntimeV2Fixture(recovery.grant),
+			),
+		).resolves.toMatchObject({
+			outcome: "found",
+			status: "unknown",
+			operationOutcome: "busy",
+		});
+	} finally {
+		await env.host.close();
+	}
+});
+
 function generationCancelFixture(
 	hostSessionRef: string,
 	fence: number,

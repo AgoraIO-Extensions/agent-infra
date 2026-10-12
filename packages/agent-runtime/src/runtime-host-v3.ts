@@ -620,6 +620,9 @@ export class RuntimeHostV3 {
 			executionId: request.executionId,
 			outcome: "found",
 			status,
+			...(response.result.outcome === "busy"
+				? { operationOutcome: "busy" as const }
+				: {}),
 		};
 	}
 

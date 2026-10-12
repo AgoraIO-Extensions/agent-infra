@@ -1081,6 +1081,89 @@ describe("Conversation Worker dispatch", () => {
 		expect(f.store.released).toBe(0);
 		expect(f.store.current.executionStatus).toBe("unknown");
 	});
+	it("settles a persisted busy result during unknown Turn recovery", async () => {
+		const runtimeHost =
+			new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;
+		runtimeHost.recoverOriginalStatus = async (request) => ({
+			schemaVersion: 2,
+			hostSessionRef: request.hostSessionRef,
+			executionId: request.executionId,
+			outcome: "found" as const,
+			status: "unknown" as const,
+			operationOutcome: "busy" as const,
+		});
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", hostSessionRef: "host-original" }),
+		);
+		const f = setup({
+			store,
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+
+		expect(await dispatch(f.useCase)).toEqual({
+			schemaVersion: 1,
+			outcome: "rejected",
+		});
+		expect(store.current.executionStatus).toBe("failed");
+		expect(store.errorCode).toBe("RUNTIME_BUSY");
+		expect(store.outboxStatus).toBe("failed");
+	});
+	it("rejects a busy result bound to another execution without settling this Turn", async () => {
+		const runtimeHost =
+			new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;
+		runtimeHost.recoverOriginalStatus = async (request) => ({
+			schemaVersion: 2,
+			hostSessionRef: request.hostSessionRef,
+			executionId: "foreign-execution",
+			outcome: "found" as const,
+			status: "unknown" as const,
+			operationOutcome: "busy" as const,
+		});
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", hostSessionRef: "host-original" }),
+		);
+		const f = setup({
+			store,
+			runtimeHost,
+			authorization: authorization({ controlOnly: true }),
+		});
+
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "retry" });
+		expect(store.current.executionStatus).toBe("unknown");
+		expect(store.errorCode).toBe("RUNTIME_UNAVAILABLE");
+		expect(store.outboxStatus).toBe("retry_scheduled");
+	});
+	it("keeps a stop recovery on its existing unknown path when Host reports busy", async () => {
+		const runtimeHost =
+			new FakeConversationRuntimeHostV1() as unknown as ConversationRuntimeHostPortV1;
+		runtimeHost.recoverOriginalStatus = async (request) => ({
+			schemaVersion: 2,
+			hostSessionRef: request.hostSessionRef,
+			executionId: request.executionId,
+			outcome: "found" as const,
+			status: "unknown" as const,
+			operationOutcome: "busy" as const,
+		});
+		const store = new MemoryDispatchStore(
+			claim({
+				operation: "conversation.turn.stop.v1",
+				messageId: null,
+				stopRequestId: "stop-original",
+				input: null,
+				executionStatus: "processing",
+				stopPending: true,
+				stopConfirmationTimedOut: true,
+				hostSessionRef: "host-original",
+			}),
+		);
+		const f = setup({ store, runtimeHost });
+
+		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "unknown" });
+		expect(store.current.executionStatus).toBe("processing");
+		expect(store.errorCode).toBe("RUNTIME_ACCEPTANCE_UNKNOWN");
+		expect(store.outboxStatus).toBe("retry_scheduled");
+	});
 	it.each(["found", "not_found"] as const)(
 		"recovers a historical control-only task with %s evidence without business dispatch or renewal",
 		async (outcome) => {

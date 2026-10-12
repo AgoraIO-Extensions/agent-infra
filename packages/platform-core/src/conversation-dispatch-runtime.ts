@@ -211,7 +211,7 @@ export function parseRuntimeStatusResponse(
 	const input = exactObject(
 		value,
 		["schemaVersion", "hostSessionRef", "executionId", "outcome"],
-		["status", "code"],
+		["status", "code", "operationOutcome"],
 	);
 	if (
 		input.schemaVersion !== 2 ||
@@ -268,6 +268,11 @@ export function parseRuntimeStatusResponse(
 		executionId: claim.executionId,
 		outcome: "found",
 		status: runtimeStatus(input.status),
+		...(input.operationOutcome === "busy"
+			? { operationOutcome: "busy" as const }
+			: input.operationOutcome === undefined
+				? {}
+				: unavailable()),
 	};
 }
 
