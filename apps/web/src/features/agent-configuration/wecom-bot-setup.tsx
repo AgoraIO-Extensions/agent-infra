@@ -269,6 +269,11 @@ export function WecomBotSetup({
 			}
 		} catch (error) {
 			if (attempt !== generation.current || controller.signal.aborted) return;
+			const qrUnavailable =
+				error instanceof Error &&
+				["WECom_QR_UNAVAILABLE", "WECom_QR_POPUP_UNAVAILABLE"].includes(
+					error.message,
+				);
 			if (submittedCredentials && session.current) {
 				// A lost response may follow a committed submission. Read the original session.
 				await poll(attempt);
@@ -281,7 +286,7 @@ export function WecomBotSetup({
 			if (attempt !== generation.current) return;
 			setBusy(false);
 			setError(
-				error instanceof Error && error.message === "WECom_QR_UNAVAILABLE"
+				qrUnavailable
 					? "扫码授权暂不可用，请使用下方手动配置。"
 					: "扫码授权未完成，请重试或使用下方手动配置。",
 			);
