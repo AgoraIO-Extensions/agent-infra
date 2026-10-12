@@ -90,6 +90,13 @@ export interface SessionRuntimeDriverOptions {
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly SessionRuntimeModelOption[];
 	readonly supportsAttachments?: boolean;
+	/**
+	 * Per-peer image input negotiation for Drivers whose native protocol decides
+	 * it before a Session exists (ACP): `false` rejects attachment input before
+	 * any bridge read or Session side effect. Drivers without per-peer
+	 * negotiation leave this unset and rely on `supportsAttachments`.
+	 */
+	readonly attachmentsNegotiated?: () => boolean;
 	/** Deployment-owned verified Skill Hub generation; never selected by a wire command. */
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly cursorPrefix: string;
@@ -913,16 +920,29 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			conflict();
 		if (!("text" in command.input)) unavailable();
 		const hasAttachments = command.input.attachments.length > 0;
-		const text = command.input.text;
 		// Attachment input needs both a wired bridge and a Driver that consumes
 		// it; neither decision may wait for a Session or a bridge read.
 		if (hasAttachments && (!this.options.supportsAttachments || !fileBridge))
 			unavailable();
+		// A Driver whose native protocol negotiates image input per peer settles
+		// that before a Session exists, so unsupported input is rejected before
+		// the bridge is read and before any native Session side effect.
+		if (hasAttachments && this.options.attachmentsNegotiated?.() === false)
+			unavailable();
+		let input: NativePromptV1 = command.input.text;
 		// Attachment bytes were read under the File Grant of this request; they must
 		// not cross into a native Turn once that authority has lapsed.
 		const revalidateInput = () => {
 			if (hasAttachments) fileBridge?.revalidate();
 		};
+		if (hasAttachments) {
+			input = await this.materializeAttachmentInput(
+				command.input.text,
+				command.input.attachments,
+				fileBridge,
+			);
+			revalidateInput();
+		}
 		const previousHandle = this.handles.get(ref);
 		const reuse =
 			previousHandle?.native.startTurn &&
@@ -1009,26 +1029,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		} catch {
 			unavailable();
 		}
-		// Unsupported attachment input must be rejected before bridge bytes are
-		// read, before model selection and before any durable Turn record. ACP
-		// negotiates image input during the handshake, so the opened Session
-		// holds the earliest authoritative capability.
-		let input: NativePromptV1 = text;
-		if (hasAttachments) {
-			try {
-				if (native.supportsImagePrompt === false) unavailable();
-				input = await this.materializeAttachmentInput(
-					text,
-					command.input.attachments,
-					fileBridge,
-				);
-				// The bytes must not carry authority that lapsed while they were
-				// acquired into the durable Session state and model selection.
-				revalidateInput();
-			} catch {
-				if (!reuse) await native.close().catch(() => {});
-				unavailable();
-			}
+		// The opened Session has the last word on negotiated image input: a Session
+		// that refuses image content must never reach the native Turn.
+		if (hasAttachments && native.supportsImagePrompt === false) {
+			if (!reuse) await native.close().catch(() => {});
+			unavailable();
 		}
 		try {
 			await file.update((state) => {

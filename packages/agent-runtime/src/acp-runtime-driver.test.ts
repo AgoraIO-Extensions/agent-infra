@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -590,18 +591,100 @@ it("rejects bridge attachments before reading bytes when image input is not nego
 			),
 		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
 		expect(readInput).not.toHaveBeenCalled();
-		// The peer opened its Session but never received a prompt.
-		const [session] = (await readdir(path, { withFileTypes: true })).filter(
-			(entry) => entry.isDirectory(),
+		// The peer never ran session/new, so rejecting left no native side effect.
+		const created = (await readdir(path, { recursive: true })).filter((entry) =>
+			entry.endsWith("session.json"),
 		);
-		expect(session).toBeDefined();
-		const state = JSON.parse(
-			await readFile(
-				join(path, session?.name ?? "", "workspace/session.json"),
-				"utf8",
-			),
+		expect(created).toEqual([]);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("reads bridge attachments once the peer negotiated image input", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-attachment-negotiated-"));
+	const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+	const readInput = vi.fn(async (fileId: string) => ({
+		fileId,
+		descriptor: {
+			name: "screen.png",
+			mediaType: "image/png",
+			sizeBytes: bytes.byteLength,
+			sha256: createHash("sha256").update(bytes).digest("hex"),
+		},
+		body: new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(bytes);
+				controller.close();
+			},
+		}),
+	}));
+	const revalidate = vi.fn();
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "image-prompt" },
+		}),
+	});
+	try {
+		// Initialization negotiates image input before any Session exists, and the
+		// probe records that answer for the following attachment request.
+		await expect(
+			driver.probeReadiness?.(new AbortController().signal),
+		).resolves.toMatchObject({ attachments: true });
+		const accepted = await driver.execute(
+			{
+				schemaVersion: 2 as const,
+				kind: "submit-turn" as const,
+				agentId: "agent-a",
+				conversationId: "conversation-a",
+				sessionGeneration: 1,
+				executionId: "execution-a",
+				turnId: "turn-a",
+				operationId: "operation-a",
+				input: { text: "inspect", attachments: ["file-1"] },
+				selection: {
+					schemaVersion: 1 as const,
+					modelOptionId: "primary",
+					reasoningLevel: "high",
+				},
+			},
+			{
+				fileBridge: {
+					readInput,
+					revalidate,
+					writeResult: async () => {
+						throw new Error("unused");
+					},
+				},
+			},
 		);
-		expect(state).toMatchObject({ count: 0 });
+		expect(accepted.result).toMatchObject({ outcome: "accepted" });
+		expect(readInput).toHaveBeenCalledWith("file-1");
+		expect(revalidate).toHaveBeenCalled();
+		// The image prompt reached the Session that was created for this request.
+		const sessions = (await readdir(path, { recursive: true })).filter(
+			(entry) => entry.endsWith("session.json"),
+		);
+		expect(sessions).toHaveLength(1);
+		expect(
+			JSON.parse(await readFile(join(path, sessions[0] ?? ""), "utf8")),
+		).toMatchObject({ count: 1 });
 	} finally {
 		await driver.close();
 		await rm(path, { recursive: true, force: true });

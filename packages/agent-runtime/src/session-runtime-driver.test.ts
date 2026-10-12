@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { RuntimeDriverCommand } from "./driver.js";
+import { RuntimeHostError } from "./errors.js";
 import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
 import {
 	type NativeSession,
@@ -72,7 +73,10 @@ function fileBridge(onRevalidate?: (call: number) => void): {
 async function driver(
 	path: string,
 	openSession: () => Promise<NativeSession>,
-	supportsAttachments = true,
+	options: {
+		supportsAttachments?: boolean;
+		attachmentsNegotiated?: () => boolean;
+	} = {},
 ): Promise<SessionRuntimeDriver> {
 	return SessionRuntimeDriver.open({
 		path,
@@ -86,7 +90,10 @@ async function driver(
 				reasoningLevels: ["high"],
 			},
 		],
-		supportsAttachments,
+		supportsAttachments: options.supportsAttachments ?? true,
+		...(options.attachmentsNegotiated
+			? { attachmentsNegotiated: options.attachmentsNegotiated }
+			: {}),
 		cursorPrefix: "test",
 		retireSession: async () => {},
 		completionStatus: () => "completed",
@@ -104,7 +111,9 @@ it("rejects attachments before opening a Session the Driver does not declare sup
 		cancel: async () => {},
 		close: async () => {},
 	}));
-	const runtime = await driver(path, openSession, false);
+	const runtime = await driver(path, openSession, {
+		supportsAttachments: false,
+	});
 	try {
 		await expect(
 			runtime.execute(command(["file-1"]), { fileBridge: port }),
@@ -118,8 +127,34 @@ it("rejects attachments before opening a Session the Driver does not declare sup
 	}
 });
 
-it("rejects attachments before any bridge read or model selection when the Session refuses image input", async () => {
+it("rejects attachments before any bridge read or Session side effect when the peer did not negotiate image input", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-attachment-gate-"));
+	const { port, readInput, revalidate } = fileBridge();
+	const openSession = vi.fn(async () => ({
+		nativeId: "native-a",
+		select: async () => {},
+		prompt: async () => ({ stopReason: "completed" }),
+		cancel: async () => {},
+		close: async () => {},
+	}));
+	const runtime = await driver(path, openSession, {
+		attachmentsNegotiated: () => false,
+	});
+	try {
+		await expect(
+			runtime.execute(command(["file-1"]), { fileBridge: port }),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(readInput).not.toHaveBeenCalled();
+		expect(revalidate).not.toHaveBeenCalled();
+		expect(openSession).not.toHaveBeenCalled();
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("rejects attachments before model selection when the opened Session refuses image input", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-attachment-refused-"));
 	const { port, readInput, revalidate } = fileBridge();
 	const select = vi.fn(async () => {});
 	const close = vi.fn(async () => {});
@@ -136,8 +171,8 @@ it("rejects attachments before any bridge read or model selection when the Sessi
 		await expect(
 			runtime.execute(command(["file-1"]), { fileBridge: port }),
 		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
-		expect(readInput).not.toHaveBeenCalled();
-		expect(revalidate).not.toHaveBeenCalled();
+		expect(readInput).toHaveBeenCalledWith("file-1");
+		expect(revalidate).toHaveBeenCalledTimes(1);
 		expect(select).not.toHaveBeenCalled();
 		expect(prompt).not.toHaveBeenCalled();
 		expect(close).toHaveBeenCalledTimes(1);
@@ -184,19 +219,43 @@ it("reads and revalidates bridge bytes for a native session that supports image 
 });
 
 it.each([
-	{ label: "after the bytes are acquired", revokeAt: 1, selected: false },
-	{ label: "before Turn admission", revokeAt: 2, selected: true },
-	{ label: "at the native boundary", revokeAt: 3, selected: true },
+	{
+		label: "after the bytes are acquired",
+		revokeAt: 1,
+		selected: false,
+		opened: false,
+		code: "RUNTIME_AUTHORIZATION_DENIED",
+	},
+	{
+		label: "before Turn admission",
+		revokeAt: 2,
+		selected: true,
+		opened: true,
+		code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+	},
+	{
+		label: "at the native boundary",
+		revokeAt: 3,
+		selected: true,
+		opened: true,
+		code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+	},
 ])(
 	"keeps an attachment Turn undispatched when authority lapses $label",
-	async ({ revokeAt, selected }) => {
+	async ({ revokeAt, selected, opened, code }) => {
 		const path = await mkdtemp(join(tmpdir(), "session-attachment-authority-"));
 		const { port, readInput } = fileBridge((call) => {
-			if (call === revokeAt) throw new Error("RUNTIME_AUTHORIZATION_DENIED");
+			if (call === revokeAt)
+				throw new RuntimeHostError(
+					"RUNTIME_AUTHORIZATION_DENIED",
+					"Runtime authorization was denied",
+					403,
+					false,
+				);
 		});
 		const select = vi.fn(async () => {});
 		const prompt = vi.fn(async () => ({ stopReason: "completed" }));
-		const runtime = await driver(path, async () => ({
+		const openSession = vi.fn(async () => ({
 			nativeId: "native-a",
 			supportsImagePrompt: true,
 			select,
@@ -204,16 +263,16 @@ it.each([
 			cancel: async () => {},
 			close: async () => {},
 		}));
+		const runtime = await driver(path, openSession);
 		try {
 			const execution = runtime.execute(command(["file-1"]), {
 				fileBridge: port,
 			});
 			// A pre-dispatch authorization failure is definite: no prompt ran, so
 			// the request must not be retained as a possibly accepted Turn.
-			await expect(execution).rejects.toMatchObject({
-				code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE",
-			});
+			await expect(execution).rejects.toMatchObject({ code });
 			expect(readInput).toHaveBeenCalledTimes(1);
+			expect(openSession.mock.calls.length > 0).toBe(opened);
 			expect(prompt).not.toHaveBeenCalled();
 			expect(select.mock.calls.length > 0).toBe(selected);
 			expect(await runtime.lookupOperation(command(["file-1"]))).toEqual({
