@@ -477,9 +477,10 @@ export function createWorkloadReconciliationV1(dependencies: {
 								await runtime.closeRoute(state);
 								return advance("applying");
 							}
+							// A probe that did not complete is retried like a Pod not yet
+							// ready, within the same budget; only an answer fails it (#2046).
 							if (
 								health === "unhealthy" ||
-								health === "unreachable" ||
 								state.attempts + 1 >= maximumAttempts
 							)
 								return failed("health_check_failed");
@@ -495,20 +496,26 @@ export function createWorkloadReconciliationV1(dependencies: {
 								return failed("reconciliation_failed");
 							return { ...state, attempts: state.attempts + 1 };
 						}
-						case "promoting":
+						case "promoting": {
 							// Re-establish a closed route before rechecking a partially published candidate.
 							await runtime.closeRoute(state);
-							if ((await runtime.observe(state)) !== "healthy")
+							const health = await runtime.observe(state);
+							if (health !== "healthy") {
+								if (
+									health === "unreachable" &&
+									state.attempts + 1 < maximumAttempts
+								)
+									return { ...state, attempts: state.attempts + 1 };
 								return failed("health_check_failed");
-							{
-								const capabilities = await runtime.capabilities(state);
-								await runtime.promote(state);
-								return advance("ready", {
-									verified: state.candidate,
-									verifiedRevision: state.revision,
-									capabilities,
-								});
 							}
+							const capabilities = await runtime.capabilities(state);
+							await runtime.promote(state);
+							return advance("ready", {
+								verified: state.candidate,
+								verifiedRevision: state.revision,
+								capabilities,
+							});
+						}
 						case "ready": {
 							const health = await runtime.observe(state);
 							if (health === "healthy") {
