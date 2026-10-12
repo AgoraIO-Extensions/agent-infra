@@ -80,7 +80,10 @@ import {
 	assembleWecomReceiptApiV1,
 	type WecomApiDeploymentV1,
 } from "./wecom-assembly.js";
-import { assembleWecomSetupApiV1 } from "./wecom-setup-assembly.js";
+import {
+	assembleWecomSetupApiV1,
+	type WecomBotQrConfigurationV1,
+} from "./wecom-setup-assembly.js";
 
 type Admissions = Omit<AgentConfigurationUseCaseDependenciesV1, "transaction">;
 
@@ -151,6 +154,7 @@ export interface PlatformApiAssemblyInput {
 		readonly callbackKeys: WecomCallbackKeysV1;
 		readonly replyEncryptionPublicKeyPem: string;
 	};
+	readonly wecomBotQr?: WecomBotQrConfigurationV1;
 	readonly directory?: DirectoryRouteDependencies;
 	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
@@ -203,6 +207,7 @@ export function assemblePlatformApi(
 				...(input.wecomApplicationSetup
 					? { application: input.wecomApplicationSetup }
 					: {}),
+				...(input.wecomBotQr ? { botQr: input.wecomBotQr } : {}),
 			})
 		: undefined;
 	const wecomDeployment =
@@ -693,7 +698,11 @@ export function assemblePlatformApi(
 			: {}),
 		...(wecomSetup
 			? {
-					wecomSetup: { identity: input.identity, setup: wecomSetup.setup },
+					wecomSetup: {
+						identity: input.identity,
+						setup: wecomSetup.setup,
+						...(wecomSetup.botQr ? { botQr: wecomSetup.botQr } : {}),
+					},
 					...(input.wecomApplicationSetup
 						? {
 								wecomApplicationSetup: {

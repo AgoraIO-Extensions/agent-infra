@@ -2512,6 +2512,42 @@ describe("Codex Runtime Driver", () => {
 		]);
 	});
 
+	it("consumes the V4 bearer authentication field without routing it to native", async () => {
+		const directory = await runtimeDirectory();
+		const bridge = new TestCodexBridge();
+		const opened = await openCodexRuntimeDriverForTest(
+			{
+				path: join(directory, "driver.json"),
+				configVersion: "synthetic-config-1",
+				defaultModelOptionId: "model-option-primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "model-option-primary",
+						model: "gpt-5.3-codex",
+						reasoningLevels: ["high"],
+						endpoint: "https://model.invalid/v1",
+						authentication: "bearer",
+					},
+				],
+			},
+			async (options) => {
+				if (!options.modelAccess) throw new Error("missing loopback access");
+				bridge.setConfigReadResult(
+					modelAccessConfigReadResult(options.modelAccess),
+				);
+				return bridge;
+			},
+		);
+		drivers.push(opened);
+		await opened.execute(submitCommandV2());
+		expect(
+			bridge.requests.find(({ method }) => method === "turn/start")?.params,
+		).toMatchObject({
+			model: internalModel("model-option-primary", "gpt-5.3-codex"),
+		});
+	});
+
 	it.each([undefined, null, 123])(
 		"redacts an invalid deployment path %s before launch",
 		async (path) => {

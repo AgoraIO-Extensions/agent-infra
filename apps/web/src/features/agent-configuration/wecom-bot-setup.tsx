@@ -12,6 +12,7 @@ import {
 	submitWecomCredentials,
 } from "../../pilot/generated/sdk.gen.js";
 import type { AgentConfigurationUpdateRequestV2Writable } from "../../pilot/generated-v2/types.gen.js";
+import { openWecomQrAuthorizationV1 } from "./wecom-qr-authorization.js";
 
 const labels = {
 	not_configured: "未配置",
@@ -37,6 +38,7 @@ export function WecomBotSetup({
 	const session = useRef<string | undefined>(undefined);
 	const generation = useRef(0);
 	const refreshSequence = useRef(0);
+	const qrAbort = useRef<AbortController | undefined>(undefined);
 	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	const connectionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
 		undefined,
@@ -85,6 +87,7 @@ export function WecomBotSetup({
 		void refresh();
 		return () => {
 			generation.current++;
+			qrAbort.current?.abort();
 			clearTimeout(timer.current);
 			clearTimeout(connectionTimer.current);
 		};
@@ -187,28 +190,141 @@ export function WecomBotSetup({
 		}
 		if (session.current) await poll(attempt);
 	}
-	async function cancel() {
+	async function authorizeQr() {
+		if (busy || qrAbort.current) return;
+		if (!confirmed) {
+			setError("请先确认连接影响。");
+			return;
+		}
+		// Reserve the window while the click still has browser user activation.
+		const popup = window.open("about:blank", "_blank");
+		const controller = new AbortController();
+		const closePopup = () => popup?.close();
+		controller.signal.addEventListener("abort", closePopup, { once: true });
+		qrAbort.current = controller;
+		setBusy(true);
+		setError("");
+		refreshSequence.current++;
+		clearTimeout(connectionTimer.current);
+		const attempt = generation.current;
+		let submittedCredentials = false;
+		try {
+			const started = await beginWecomSetup({
+				path: { agentId },
+				signal: controller.signal,
+				responseStyle: "fields",
+				throwOnError: false,
+			});
+			if (attempt !== generation.current || controller.signal.aborted) return;
+			if (!started.data) throw new Error("WECom_QR_UNAVAILABLE");
+			session.current = started.data.sessionId;
+			if (!started.data.qrAvailable) throw new Error("WECom_QR_UNAVAILABLE");
+			if (!popup) throw new Error("WECom_QR_POPUP_UNAVAILABLE");
+			const result = await openWecomQrAuthorizationV1({
+				...started.data.qr,
+				expiresAt: started.data.expiresAt,
+				popup,
+				signal: controller.signal,
+			});
+			try {
+				if (attempt !== generation.current || controller.signal.aborted) return;
+				setBotId(result.botId);
+				setStatus("verifying");
+				const body = {
+					state: started.data.state,
+					botId: result.botId,
+					secret: result.secret,
+					takeoverConfirmed: confirmed,
+				};
+				result.secret = "";
+				submittedCredentials = true;
+				try {
+					const submitted = await submitWecomCredentials({
+						path: { agentId, sessionId: started.data.sessionId },
+						body,
+						responseStyle: "fields",
+						throwOnError: false,
+					});
+					if (attempt !== generation.current) return;
+					const statusCode = submitted.response?.status;
+					if (
+						!submitted.data &&
+						statusCode !== undefined &&
+						statusCode >= 400 &&
+						statusCode < 500 &&
+						statusCode !== 408 &&
+						statusCode !== 429
+					) {
+						session.current = undefined;
+						setBusy(false);
+						setStatus(undefined);
+						setError("凭证提交被拒绝，请检查输入并重试。");
+						return;
+					}
+				} finally {
+					body.secret = "";
+				}
+			} finally {
+				result.secret = "";
+			}
+		} catch (error) {
+			if (attempt !== generation.current || controller.signal.aborted) return;
+			const qrUnavailable =
+				error instanceof Error &&
+				["WECom_QR_UNAVAILABLE", "WECom_QR_POPUP_UNAVAILABLE"].includes(
+					error.message,
+				);
+			if (qrUnavailable && session.current) await cancel(false);
+			if (submittedCredentials && session.current) {
+				// A lost response may follow a committed submission. Read the original session.
+				await poll(attempt);
+				return;
+			}
+			if (attempt !== generation.current) return;
+			setBusy(false);
+			setError(
+				qrUnavailable
+					? "扫码授权暂不可用，请使用下方手动配置。"
+					: "扫码授权未完成，请重试或使用下方手动配置。",
+			);
+		} finally {
+			controller.signal.removeEventListener("abort", closePopup);
+			closePopup();
+			if (qrAbort.current === controller) qrAbort.current = undefined;
+		}
+		if (session.current) await poll(attempt);
+	}
+	async function cancel(invalidate = true) {
+		qrAbort.current?.abort();
 		const id = session.current;
 		const attempt = generation.current;
-		if (!id) return;
+		if (!id) return false;
 		try {
 			const result = await cancelWecomSetup({
 				path: { agentId, sessionId: id },
 				responseStyle: "fields",
 				throwOnError: false,
 			});
-			if (attempt !== generation.current || session.current !== id) return;
+			if (attempt !== generation.current || session.current !== id)
+				return false;
 			if (result.data?.status !== "cancelled") throw new Error();
-			generation.current++;
+			if (invalidate) generation.current++;
 			clearTimeout(timer.current);
 			session.current = undefined;
 			setBusy(false);
 			setSecret("");
 			setError("");
 			await refresh();
+			return true;
 		} catch {
-			if (attempt === generation.current && session.current === id)
-				setError("取消结果未确认，正在继续查询配置状态。");
+			if (attempt === generation.current && session.current === id) {
+				clearTimeout(timer.current);
+				setBusy(true);
+				await poll(attempt);
+				if (attempt === generation.current && session.current === id)
+					setError("取消结果未确认，正在继续查询配置状态。");
+			}
+			return false;
 		}
 	}
 
@@ -227,7 +343,7 @@ export function WecomBotSetup({
 				<Button
 					type="button"
 					variant="outline"
-					onClick={() => setError("扫码授权暂不可用，请使用下方手动配置。")}
+					onClick={() => void authorizeQr()}
 				>
 					扫码授权
 				</Button>

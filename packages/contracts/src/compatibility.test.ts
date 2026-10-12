@@ -2211,6 +2211,25 @@ describe("contract compatibility command", () => {
 			await writeFile(previousPath, JSON.stringify(previous));
 			await writeFile(currentPath, JSON.stringify(current));
 			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+
+			// The pre-QR #440 receipt artifact remains a valid historical
+			// compatibility pair after the current route hash changed.
+			const legacyCurrent = structuredClone(current);
+			const setupSchema =
+				legacyCurrent.paths["/api/v1/agents/{agentId}/wecom-setup"].post
+					.responses["200"].content["application/json"].schema;
+			legacyCurrent.paths[
+				"/api/v1/agents/{agentId}/wecom-setup"
+			].post.responses["200"].content["application/json"].schema =
+				structuredClone(setupSchema.oneOf[0]);
+			const legacyPrevious = structuredClone(legacyCurrent);
+			for (const path of paths.slice(0, 8)) delete legacyPrevious.paths[path];
+			await writeFile(previousPath, JSON.stringify(legacyPrevious));
+			await writeFile(currentPath, JSON.stringify(legacyCurrent));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
 			const mutations = [
 				(document: typeof current) => {
 					delete document.paths[paths[0]];
@@ -2236,6 +2255,94 @@ describe("contract compatibility command", () => {
 				mutate(changed);
 				await writeFile(currentPath, JSON.stringify(changed));
 				expect(comparePaths(currentPath, previousPath).status).toBe(1);
+			}
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("admits only the exact QR response branch and preserves the legacy branch", async () => {
+		const current = JSON.parse(
+			await readFile(pilotBrowserArtifactPath, "utf8"),
+		);
+		const path = "/api/v1/agents/{agentId}/wecom-setup";
+		const schema =
+			current.paths[path].post.responses["200"].content["application/json"]
+				.schema;
+		const previous = structuredClone(current);
+		previous.paths[path].post.responses["200"].content[
+			"application/json"
+		].schema = structuredClone(schema.oneOf[0]);
+		const directory = await mkdtemp(
+			resolve(tmpdir(), "agent-infra-wecom-qr-compatibility-"),
+		);
+		const previousPath = resolve(directory, "previous.json");
+		const currentPath = resolve(directory, "current.json");
+		try {
+			await writeFile(previousPath, JSON.stringify(previous));
+			await writeFile(currentPath, JSON.stringify(current));
+			expect(comparePaths(currentPath, previousPath).status).toBe(0);
+
+			const mutations: Array<[string, (document: typeof current) => void]> = [
+				[
+					"removed legacy branch",
+					(document) =>
+						document.paths[path].post.responses["200"].content[
+							"application/json"
+						].schema.oneOf.splice(0, 1),
+				],
+				[
+					"changed legacy required fields",
+					(document) => {
+						const required =
+							document.paths[path].post.responses["200"].content[
+								"application/json"
+							].schema.oneOf[0].required;
+						required.splice(required.indexOf("sessionId"), 1);
+					},
+				],
+				[
+					"changed QR field",
+					(document) => {
+						document.paths[path].post.responses["200"].content[
+							"application/json"
+						].schema.oneOf[1].properties.qr.properties.authorizationUrl.format =
+							"uri-reference";
+					},
+				],
+				[
+					"added secret field",
+					(document) => {
+						document.paths[path].post.responses["200"].content[
+							"application/json"
+						].schema.oneOf[1].properties.secret = { type: "string" };
+					},
+				],
+				[
+					"added unapproved branch",
+					(document) => {
+						document.paths[path].post.responses["200"].content[
+							"application/json"
+						].schema.oneOf.push({
+							type: "object",
+							additionalProperties: false,
+							properties: { unauthorized: { const: true } },
+							required: ["unauthorized"],
+						});
+					},
+				],
+				[
+					"changed route security",
+					(document) => {
+						document.paths[path].post.security = [{ PlatformSession: [] }];
+					},
+				],
+			];
+			for (const [name, mutate] of mutations) {
+				const changed = structuredClone(current);
+				mutate(changed);
+				await writeFile(currentPath, JSON.stringify(changed));
+				expect(comparePaths(currentPath, previousPath).status, name).toBe(1);
 			}
 		} finally {
 			await rm(directory, { recursive: true, force: true });

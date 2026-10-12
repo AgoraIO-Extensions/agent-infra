@@ -108,6 +108,93 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 	}
 });
 
+it("refreshes the V4 authorization resolver on a reused ACP session", async () => {
+	const path = await mkdtemp(join(tmpdir(), "acp-reuse-"));
+	let launches = 0;
+	let begins = 0;
+	let resolveCredential: (() => Promise<string>) | undefined;
+	const actions: string[] = [];
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-v4",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		reuseNativeSession: true,
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		authorizeModelAction: async (action) => {
+			actions.push(action.executionId);
+			return { relayKey: `synthetic-key-${action.executionId}` };
+		},
+		launch: async (_directory, _selection, _admit, resolver) => {
+			launches++;
+			resolveCredential = resolver;
+			return {
+				command: process.execPath,
+				args: [
+					fileURLToPath(
+						new URL("./acp-peer.test-support.mjs", import.meta.url),
+					),
+				],
+				env: {},
+				beginTurn: () => {
+					begins++;
+				},
+				reusable: () => true,
+			};
+		},
+	});
+	try {
+		const command = {
+			schemaVersion: 2 as const,
+			kind: "submit-turn" as const,
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			sessionGeneration: 1,
+			executionId: "execution-a",
+			turnId: "turn-a",
+			operationId: "operation-a",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1 as const,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		};
+		const first = await driver.execute(command);
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(first.nativeSessionRef, "execution-a"),
+			).toBe("completed"),
+		);
+		const next = await driver.execute({
+			...command,
+			nativeSessionRef: first.nativeSessionRef,
+			executionId: "execution-b",
+			turnId: "turn-b",
+			operationId: "operation-b",
+		});
+		await vi.waitFor(async () =>
+			expect(await driver.getStatus(next.nativeSessionRef, "execution-b")).toBe(
+				"completed",
+			),
+		);
+		expect(launches).toBe(1);
+		expect(begins).toBe(1);
+		expect(resolveCredential).toBeDefined();
+		expect(await resolveCredential?.()).toBe("synthetic-key-execution-b");
+		expect(actions).toEqual(["execution-b"]);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 it("keeps a lost active turn unknown after restart and blocks another turn without quarantining its session", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-unknown-"));
 	const options = {

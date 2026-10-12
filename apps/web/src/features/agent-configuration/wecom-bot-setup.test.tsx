@@ -10,9 +10,15 @@ import { afterEach, expect, it, vi } from "vitest";
 import { client } from "../../pilot/generated/client.gen.js";
 import { WecomBotSetup } from "./wecom-bot-setup.js";
 
+const nativeWindowOpen = window.open;
+
 afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
+	Object.defineProperty(window, "open", {
+		configurable: true,
+		value: nativeWindowOpen,
+	});
 });
 it("requires takeover acknowledgement and clears the Secret before submitting through the HTTP contract", async () => {
 	client.setConfig({ baseUrl: "https://platform.test" });
@@ -70,15 +76,89 @@ it("requires takeover acknowledgement and clears the Secret before submitting th
 	await waitFor(() => expect(screen.getByText("已连接")).toBeTruthy());
 	expect(screen.queryByLabelText("智能机器人配置标识")).toBeNull();
 });
-it("explains unavailable QR without fabricating a successful binding", () => {
+it("explains unavailable QR without fabricating a successful binding", async () => {
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async () => Response.json({ status: "not_configured" })),
 	);
+	Object.defineProperty(window, "open", {
+		configurable: true,
+		value: vi.fn(() => null),
+	});
 	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
+	fireEvent.click(screen.getByRole("checkbox"));
 	fireEvent.click(screen.getByRole("button", { name: "扫码授权" }));
-	expect(screen.getByRole("alert").textContent).toBe(
-		"扫码授权暂不可用，请使用下方手动配置。",
+	await waitFor(() =>
+		expect(screen.getByRole("alert").textContent).toBe(
+			"扫码授权暂不可用，请使用下方手动配置。",
+		),
+	);
+});
+
+it("submits configured QR credentials only after takeover confirmation", async () => {
+	client.setConfig({ baseUrl: "https://platform.test" });
+	const bodies: unknown[] = [];
+	const popup = { close: vi.fn(), location: { href: "about:blank" } };
+	const openPopup = vi.fn(() => popup);
+	const expiresAt = new Date(Date.now() + 60_000).toISOString();
+	Object.defineProperty(window, "open", {
+		configurable: true,
+		value: openPopup,
+	});
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: Request) => {
+			const url = new URL(input.url);
+			if (url.pathname.endsWith("/wecom-bot"))
+				return Response.json({ status: "not_configured" });
+			if (url.pathname.endsWith("/wecom-setup") && input.method === "POST")
+				return Response.json({
+					sessionId: "setup-qr",
+					agentId: "agent",
+					configurationRevision: 1,
+					expiresAt,
+					status: "awaiting_input",
+					state: "qr-state",
+					qrAvailable: true,
+					qr: {
+						authorizationUrl: "https://auth.example.test/authorize",
+						authOrigin: "https://auth.example.test",
+						source: "agent-infra",
+						state: "qr-state",
+					},
+				});
+			if (url.pathname.endsWith("/credentials")) {
+				bodies.push(await input.json());
+				return Response.json({ status: "verifying" });
+			}
+			return Response.json({ status: "active" });
+		}),
+	);
+	render(<WecomBotSetup agentId="agent" onUnbind={vi.fn()} />);
+	fireEvent.click(screen.getByRole("checkbox"));
+	fireEvent.click(screen.getByRole("button", { name: "扫码授权" }));
+	await waitFor(() => expect(openPopup).toHaveBeenCalled());
+	window.dispatchEvent(
+		new MessageEvent("message", {
+			origin: "https://auth.example.test",
+			source: popup as unknown as MessageEventSource,
+			data: {
+				source: "agent-infra",
+				state: "qr-state",
+				botId: "qr-bot",
+				secret: "qr-secret",
+			},
+		}),
+	);
+	await waitFor(() =>
+		expect(bodies).toEqual([
+			{
+				state: "qr-state",
+				botId: "qr-bot",
+				secret: "qr-secret",
+				takeoverConfirmed: true,
+			},
+		]),
 	);
 });
 
@@ -138,18 +218,25 @@ it("keeps the pending configuration when cancellation is unconfirmed", async () 
 		expiresAt: new Date(Date.now() + 300000).toISOString(),
 		status: "verifying",
 	};
+	let setupReads = 0;
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (input: Request) => {
 			const path = new URL(input.url).pathname;
 			if (path.endsWith("/wecom-bot"))
 				return Response.json({ status: "not_configured" });
-			if (path.endsWith("/wecom-setup"))
+			if (
+				path.includes("/wecom-setup") &&
+				!path.endsWith("/cancel") &&
+				!path.endsWith("/credentials")
+			) {
+				setupReads++;
 				return Response.json({
 					...session,
 					state: "fixture",
 					qrAvailable: false,
 				});
+			}
 			if (path.endsWith("/cancel"))
 				return Response.json({ error: "unavailable" }, { status: 503 });
 			return Response.json(session);
@@ -178,6 +265,7 @@ it("keeps the pending configuration when cancellation is unconfirmed", async () 
 	await waitFor(() =>
 		expect(screen.getByRole("alert").textContent).toContain("取消结果未确认"),
 	);
+	await waitFor(() => expect(setupReads).toBeGreaterThan(2));
 	expect(screen.getByRole("button", { name: "取消配置" })).toBeTruthy();
 });
 it("ignores a late cancellation response after switching Agents", async () => {

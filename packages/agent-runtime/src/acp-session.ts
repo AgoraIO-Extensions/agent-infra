@@ -24,6 +24,10 @@ export interface AcpLaunch {
 	args: string[];
 	env: NodeJS.ProcessEnv;
 	close?: () => Promise<void>;
+	/** Reset per-execution transport state before reusing this native session. */
+	beginTurn?: () => void;
+	/** A launch can retire reuse after a transport or process failure. */
+	reusable?: () => boolean;
 	authorize?: (
 		tool: Pick<ToolCall, "toolCallId" | "kind" | "rawInput">,
 	) => Promise<boolean>;
@@ -43,6 +47,10 @@ export async function openAcpSession(options: {
 	).catch(async () => {
 		await options.launch.close?.();
 		throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
+	});
+	let processExited = false;
+	void native.exited.then(() => {
+		processExited = true;
 	});
 	const { child, exited } = native;
 	let updates = Promise.resolve();
@@ -203,6 +211,11 @@ export async function openAcpSession(options: {
 		return {
 			nativeId,
 			supportsImagePrompt,
+			reusable: () =>
+				!processExited &&
+				child.exitCode === null &&
+				child.signalCode === null &&
+				(options.launch.reusable?.() ?? true),
 			modelSelection: () => {
 				const model = configOptions.find(
 					(option) => option.category === "model" || option.id === "model",

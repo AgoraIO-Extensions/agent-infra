@@ -3021,9 +3021,16 @@ function configuredModelOptions(options: CodexRuntimeDriverOptions) {
 		const expectedKeys = ["modelOptionId", "model", "reasoningLevels"];
 		if (routed) expectedKeys.push("endpoint");
 		if (routed && !keyed) expectedKeys.push("credential");
+		// V4 keyless configuration carries the protocol authentication mode.
+		// Codex Responses only admits bearer auth; it is deployment metadata and
+		// never becomes part of the route or native input.
+		if (routed && isPlainRecord(value) && value.authentication !== undefined)
+			expectedKeys.push("authentication");
 		if (
 			!isPlainRecord(value) ||
 			!hasOnlyKeys(value, expectedKeys) ||
+			(value.authentication !== undefined &&
+				value.authentication !== "bearer") ||
 			!nonEmptyString(value.modelOptionId) ||
 			typeof value.model !== "string" ||
 			!codexModelPattern.test(value.model) ||

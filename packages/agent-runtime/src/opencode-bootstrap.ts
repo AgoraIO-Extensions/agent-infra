@@ -74,6 +74,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 	await verifyOpenCodeInstallation(options.executable);
 	return GenericAcpRuntimeDriver.open({
 		...options,
+		reuseNativeSession: true,
 		modelOptions: options.modelOptions.map((option) => ({
 			modelOptionId: option.modelOptionId,
 			nativeModelId: `anthropic/${option.model}`,
@@ -183,6 +184,8 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 							tool.rawInput.filePath,
 						);
 					},
+					beginTurn: transport.beginTurn,
+					reusable: () => transport.failure() === undefined,
 					close: () => transport.close(),
 				};
 			} catch {
