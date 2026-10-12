@@ -463,33 +463,43 @@ function nativeMetadataReadDenied(): never {
 	runtimeAuthorizationDenied("native-metadata-read-invalid");
 }
 
+function nativeMetadataReadDeniedError() {
+	return new RuntimeHostError(
+		"RUNTIME_GRANT_INVALID",
+		"Runtime authorization is unavailable or does not authorize this operation",
+		403,
+	);
+}
+
 async function callBoundedNativeMetadataDriver<T>(input: {
 	readonly read: RuntimeNativeMetadataReadContextV1;
 	readonly work: () => Promise<T>;
 }): Promise<T> {
 	if (input.read.signal.aborted) nativeMetadataReadDenied();
 	let onAbort: (() => void) | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	const aborted = new Promise<never>((_, reject) => {
-		onAbort = () =>
-			reject(
-				new RuntimeHostError(
-					"RUNTIME_GRANT_INVALID",
-					"Runtime authorization is unavailable or does not authorize this operation",
-					403,
-				),
-			);
+		onAbort = () => reject(nativeMetadataReadDeniedError());
 		input.read.signal.addEventListener("abort", onAbort, { once: true });
 		if (input.read.signal.aborted) onAbort();
 	});
 	if (input.read.signal.aborted) nativeMetadataReadDenied();
+	const deadline = new Promise<never>((_, reject) => {
+		timer = setTimeout(
+			() => reject(nativeMetadataReadDeniedError()),
+			Math.max(0, input.read.expiresAt - Date.now()),
+		);
+		timer.unref?.();
+	});
 	// The native request may outlive a cancelled caller; consume its rejection
 	// while the bounded authorization promise returns the denial.
 	const pending = Promise.resolve().then(input.work);
 	void pending.catch(() => undefined);
 	try {
-		return await Promise.race([pending, aborted]);
+		return await Promise.race([pending, aborted, deadline]);
 	} finally {
 		if (onAbort) input.read.signal.removeEventListener("abort", onAbort);
+		if (timer !== undefined) clearTimeout(timer);
 	}
 }
 
@@ -1685,6 +1695,8 @@ export class RuntimeHost {
 				request.readStartedAt > now() ||
 				request.expiresAt <= now() ||
 				context.originalHostScopeRef !== request.originalHostScopeRef ||
+				// The Host caller's proof/current context owns the exact
+				// authorizationRevision; compare the complete scope before I/O.
 				!isDeepStrictEqual(context.scope, request.scope)
 			)
 				nativeMetadataReadDenied();

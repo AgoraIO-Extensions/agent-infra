@@ -116,6 +116,7 @@ describe("RuntimeHost native metadata V1 receiver", () => {
 
 	it.each([
 		"cross-scope",
+		"authorization-revision",
 		"stale",
 		"expired",
 		"aborted",
@@ -134,6 +135,11 @@ describe("RuntimeHost native metadata V1 receiver", () => {
 		const read = context(value, { now: () => Date.now(), controller });
 		if (failure === "cross-scope") {
 			value = { ...value, scope: { ...value.scope, agentId: "other-agent" } };
+		} else if (failure === "authorization-revision") {
+			value = {
+				...value,
+				scope: { ...value.scope, authorizationRevision: "other-revision" },
+			};
 		} else if (failure === "stale") {
 			Object.assign(read, {
 				assertCurrent: () => {
@@ -161,6 +167,23 @@ describe("RuntimeHost native metadata V1 receiver", () => {
 			code: "RUNTIME_GRANT_INVALID",
 		});
 		expect(readNativeMetadataV1).not.toHaveBeenCalled();
+		await f.host.close();
+	});
+
+	it("bounds a hanging optional reader at the request deadline", async () => {
+		const f = await fixture();
+		const now = Date.now();
+		const value = {
+			...f.request,
+			readStartedAt: now - 1,
+			expiresAt: now + 20,
+		};
+		const readNativeMetadataV1 = vi.fn(() => new Promise<never>(() => {}));
+		Object.assign(f.driver, { readNativeMetadataV1 });
+		await expect(
+			f.host.readNativeMetadataV1(value, context(value)),
+		).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+		expect(readNativeMetadataV1).toHaveBeenCalledTimes(1);
 		await f.host.close();
 	});
 
