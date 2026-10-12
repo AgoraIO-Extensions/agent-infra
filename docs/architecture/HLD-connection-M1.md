@@ -215,6 +215,16 @@ Native 使用原版本 ID，初始化由 Rehoboam 判断是否沿用原交付；
 新增 READ 不自动进入原 Grant，业务权限、CAS、通知和审计真值仍属于 Rehoboam。
 详情见 [管理指南](../connection/rehoboam-management.md)。
 
+Rehoboam 渠道发布以新的 immutable `rehoboam-connection-v13` 增补 Publishing 的五渠道申请、
+查询、批准和驳回；它与 Pipeline Center/发布族独立，不能用 Maven/CDN 名称确定系统。
+业务身份、审批资格和 CAS 回执属于 Rehoboam；读取、申请和审批使用独立 publishing PAT scope，
+旧 release WRITE 不隐含获得审批权限。固定 API 路径和原有 origin；WRITE 必需幂等键，
+未知提交结果先查询任务，不自动重发。v12 及旧 Grant 保留，升级与新增授权需显式批准。
+参数 schema 由 Rehoboam 提供和校验；Connection 不枚举具体 Job 字段，创建前动态读取并校验，
+提交 revision 由 Rehoboam 在业务写入前复核。新增字段不隐式扩大身份、权限或副作用，
+仍不得接受任意身份、Header 或绕过审批的内部参数。
+详见 [渠道发布决策](../adr/ADR-rehoboam-channel-publishing.md)。
+
 Manhattan 的首个 **[设计决策]** Provider profile 固定为
 `https://manhattan-api.agoralab.co`。Kong `key-auth` 只挂载到独立的 `/api/connection` Ingress，使用部署级
 `apiKey` 证明 Connection 机器身份，不改变既有 webhook、上传与状态同步入口；

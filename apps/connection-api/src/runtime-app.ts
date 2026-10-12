@@ -65,9 +65,9 @@ import {
 	manhattanLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/providers/manhattan";
 import {
-	RehoboamV12Adapter as RehoboamAdapter,
-	rehoboamV12ConnectionCatalog as rehoboamConnectionCatalog,
-	rehoboamV12LegacyProviderReleaseIds as rehoboamLegacyProviderReleaseIds,
+	RehoboamV13Adapter as RehoboamAdapter,
+	rehoboamV13ConnectionCatalog as rehoboamConnectionCatalog,
+	rehoboamV13LegacyProviderReleaseIds as rehoboamLegacyProviderReleaseIds,
 } from "@agent-infra/openconnector-adapter/providers/rehoboam";
 import {
 	StaticSpacesAdapter,

@@ -9,7 +9,7 @@ import {
 } from "./providers/jenkins/definition.ts";
 import { jiraServerConnectionCatalog } from "./providers/jira/definition.ts";
 import { manhattanConnectionCatalog } from "./providers/manhattan/definition.ts";
-import { rehoboamV12ConnectionCatalog as rehoboamConnectionCatalog } from "./providers/rehoboam/definition.ts";
+import { rehoboamV13ConnectionCatalog as rehoboamConnectionCatalog } from "./providers/rehoboam/definition.ts";
 
 import { staticSpacesConnectionCatalog } from "./providers/static-spaces/definition.ts";
 
