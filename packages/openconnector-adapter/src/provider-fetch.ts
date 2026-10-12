@@ -1,7 +1,7 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
-import type { Socket } from "node:net";
+import { isIP, type Socket } from "node:net";
 import {
 	type GuardedFetchDnsLookup,
 	resolveGuardedEgressTarget,
@@ -146,6 +146,7 @@ function proxyFirstConnector(
 		proxy.hash
 	)
 		throw new Error("Provider proxy must be a credential-free HTTP origin");
+	const proxyHostname = proxy.hostname.replace(/^\[|\]$/g, "");
 	const tunnelConnect = buildConnector({ timeout: 10_000, ca: options.ca });
 	return (connection, callback) => {
 		void (async () => {
@@ -181,7 +182,10 @@ function proxyFirstConnector(
 					const request = (
 						proxy.protocol === "https:" ? httpsRequest : httpRequest
 					)({
-						hostname: proxy.hostname.replace(/^\[|\]$/g, ""),
+						hostname: proxyHostname,
+						// CONNECT Host names the target IP; it must not select the proxy TLS identity.
+						servername: isIP(proxyHostname) ? "" : proxyHostname,
+						ca: options.ca,
 						port: proxy.port || (proxy.protocol === "https:" ? 443 : 80),
 						method: "CONNECT",
 						path: authority,

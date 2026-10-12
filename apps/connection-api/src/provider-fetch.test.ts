@@ -41,7 +41,7 @@ describe("Provider connect-time IP pinning", () => {
 				"-subj",
 				"/CN=provider.test",
 				"-addext",
-				"subjectAltName=DNS:provider.test",
+				"subjectAltName=DNS:provider.test,DNS:proxy.test",
 				"-days",
 				"1",
 			],
@@ -406,6 +406,69 @@ describe("Provider connect-time IP pinning", () => {
 				await transport.close();
 			}
 		}, 15_000);
+		it("uses the HTTPS proxy hostname for proxy SNI and the provider hostname inside CONNECT", async () => {
+			const secureProxy = createServer({
+				key: readFileSync(join(directory, "key.pem")),
+				cert: ca,
+			});
+			const proxyServernames: string[] = [];
+			const connected: string[] = [];
+			secureProxy.on("secureConnection", (socket) =>
+				proxyServernames.push(socket.servername || ""),
+			);
+			secureProxy.on("connect", (request, client) => {
+				connected.push(request.url ?? "");
+				sockets.add(client);
+				client.on("close", () => sockets.delete(client));
+				client.on("error", () => {});
+				const target = new URL(`http://${request.url}`);
+				const upstream = connect(Number(target.port), target.hostname, () => {
+					client.write("HTTP/1.1 200 Connection established\r\n\r\n");
+					client.pipe(upstream).pipe(client);
+				});
+				sockets.add(upstream);
+				upstream.on("close", () => sockets.delete(upstream));
+				upstream.on("error", () => client.destroy());
+				client.on("close", () => upstream.destroy());
+			});
+			await new Promise<void>((resolve) =>
+				secureProxy.listen(0, "0.0.0.0", resolve),
+			);
+			const bound = secureProxy.address();
+			if (!bound || typeof bound === "string")
+				throw new Error("Missing HTTPS proxy port");
+			const secureOrigin = `https://proxy.test:${bound.port}`;
+			requests = [];
+			const transport = createPinnedProviderFetch({
+				origins: [origin, secureOrigin],
+				privateOrigins: [origin, secureOrigin],
+				ca,
+				lookup: async () => [{ address, family: 4 }],
+				proxyUrl: secureOrigin,
+			});
+			try {
+				await (
+					await transport.fetch(origin, {
+						method: "POST",
+						body: "synthetic-code",
+					})
+				).text();
+				expect(proxyServernames).toEqual(["proxy.test"]);
+				expect(connected).toEqual([`${address}:${new URL(origin).port}`]);
+				expect(requests).toEqual([
+					{
+						host: new URL(origin).host,
+						servername: "provider.test",
+						body: "synthetic-code",
+					},
+				]);
+			} finally {
+				await transport.close();
+				await new Promise<void>((resolve) =>
+					secureProxy.close(() => resolve()),
+				);
+			}
+		});
 		it("does not bypass an HTTPS proxy with an invalid certificate", async () => {
 			const invalidProxy = createServer({
 				key: readFileSync(join(directory, "key.pem")),
@@ -417,7 +480,7 @@ describe("Provider connect-time IP pinning", () => {
 			const bound = invalidProxy.address();
 			if (!bound || typeof bound === "string")
 				throw new Error("Missing TLS proxy port");
-			const invalidOrigin = `https://proxy.test:${bound.port}`;
+			const invalidOrigin = `https://wrong-proxy.test:${bound.port}`;
 			requests = [];
 			const transport = createPinnedProviderFetch({
 				origins: [origin, invalidOrigin],
