@@ -412,6 +412,7 @@
 .approval-catalog-editor .approval-action-list label:hover {
 	background: var(--surface-muted);
 }
+.approval-setting input[type="checkbox"],
 .approval-action-list input[type="checkbox"],
 .approval-catalog-editor .approval-disclaimer input[type="checkbox"],
 .approval-catalog-editor .approval-toggle input[type="checkbox"] {
@@ -1174,4 +1175,11 @@
 .employee-picker-dropdown span {
 	min-width: 0;
 	overflow-wrap: anywhere;
+}
+
+.approval-setting {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.75rem;
 }

@@ -40,7 +40,7 @@ export type ConsumeConnectPermitInput = {
 };
 
 export async function lookupApprovedConnectPermit(
-	sql: Sql,
+	sql: Sql | postgres.TransactionSql,
 	principalId: string,
 	requestId: string,
 	runtime?: PendingConnectRuntime,
@@ -186,6 +186,13 @@ function quorumSatisfied(
 	if (type === "ANY") return approvals >= 1;
 	if (type === "ALL") return approvals >= candidates;
 	return configuredCount !== null && approvals >= configuredCount;
+}
+
+// Admission transactions take this lock before Principal/account/Grant row locks.
+export async function lockAccessAdmission(sql: postgres.TransactionSql) {
+	const [authority] =
+		await sql`SELECT id FROM connection_access_enforcement WHERE id = 'personal' FOR SHARE`;
+	if (!authority) forbidden();
 }
 
 export class PostgresConnectionAccessRequestRepository
@@ -1097,6 +1104,7 @@ export class PostgresConnectionAccessRequestRepository
 		const candidates = await this.sql<{ connection_id: string; id: string }[]>`
 			SELECT id, connection_id FROM connection_effective_access_authorizations
 			WHERE state IN ('ACTIVE', 'REAPPROVAL_REQUIRED', 'DISCONNECTED')
+				AND connection_provider_requires_approval((SELECT provider FROM connection_provider_releases WHERE id = provider_release_id))
 				AND (valid_until <= now() OR (
 					state = 'REAPPROVAL_REQUIRED' AND reapproval_deadline_at <= now()
 				))
@@ -1110,6 +1118,7 @@ export class PostgresConnectionAccessRequestRepository
 				>`
 					SELECT id, owner_principal_id, provider_id FROM connection_accounts
 					WHERE id = ${candidate.connection_id} AND owner_type = 'PERSONAL'
+						AND connection_provider_requires_approval(provider_id)
 					FOR UPDATE
 				`;
 				if (!account) return false;
@@ -1949,6 +1958,7 @@ export class PostgresConnectionAccessRequestRepository
 
 	async decide(input: ApprovalDecisionInput) {
 		return this.sql.begin(async (sql) => {
+			await lockAccessAdmission(sql);
 			const [replay] = await sql<
 				{
 					actor_principal_id: string;

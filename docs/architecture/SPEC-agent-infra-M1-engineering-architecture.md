@@ -929,3 +929,7 @@ connector、Direct/Delegated 授权交集和受控 egress；升级必须重新�
 仅新 v7 采用获批 24 项范围，历史版本与授权不变；稳定账号/角色由服务端验证，管理员接口
 每次提交前检查当前上游身份。使用现有个人 Credential、授权交集、受控 egress、持久执行及
 追加迁移；升级要求重新公司审批/Consent，不改变凭证归属、未知冻结或上海部署保护。
+
+## Connection 前置审批配置
+
+Connection 的公司准入由 Connection DB 按 Provider 保存审批开关，默认关闭；关闭时直接绑定真实外部账号，开启时执行前置审批及持续资格校验。此配置不改变身份传递、Credential 归属或 Consumer/Action 授权。配置权威、切换事务和调用门禁以 [Connection HLD 16.7](HLD-connection-M1.md#167-connection-access-approval) 为准。

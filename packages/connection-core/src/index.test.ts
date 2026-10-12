@@ -15,6 +15,7 @@ import {
 	canonicalHashMatches,
 	canonicalJson,
 	canonicalJsonVersions,
+	decideDirectProviderUpgrade,
 	decideReconnectAuthorization,
 	deriveConnectionIdentitySubjectHash,
 	type GitHubExecutor,
@@ -2500,5 +2501,69 @@ describe("Connection application service", () => {
 			{ repository: "acme/widgets" },
 		);
 		expect(resolvedActor).toBe(delegated.actorKey);
+	});
+});
+
+it("keeps healthy direct connections current while enforcing expired credentials and Provider reauthorization on upgrade", () => {
+	const current = {
+		credentialActive: true,
+		credentialExpired: false,
+		currentReleaseId: "v1",
+		targetReleaseId: "v1",
+		reauthorizationRequired: true,
+	};
+	expect(decideDirectProviderUpgrade(current)).toEqual({
+		nextAction: "NONE",
+		reason: "ALREADY_CURRENT",
+	});
+	expect(
+		decideDirectProviderUpgrade({ ...current, credentialExpired: true })
+			.nextAction,
+	).toBe("REAUTHORIZE");
+	expect(
+		decideDirectProviderUpgrade({ ...current, targetReleaseId: "v2" }),
+	).toEqual({
+		nextAction: "REAUTHORIZE",
+		reason: "PROVIDER_REAUTHORIZATION_REQUIRED",
+	});
+	expect(
+		decideDirectProviderUpgrade({
+			...current,
+			targetReleaseId: "v2",
+			reauthorizationRequired: false,
+		}).nextAction,
+	).toBe("UPGRADE");
+});
+
+it("uses the scopes selected atomically when OAuth state is saved", async () => {
+	const repository: ConnectionRepository = new MemoryRepository();
+	repository.validatePersonalConnectRequest = async () => ({
+		requiredScopes: ["repo", "workflow"],
+	});
+	const create = repository.createOAuthTransaction.bind(repository);
+	repository.createOAuthTransaction = async (input) => {
+		await create(input);
+		return { requiredScopes: ["repo"] };
+	};
+	const service = new ConnectionApplicationService(
+		repository,
+		{ execute: async () => ({}) },
+		{
+			exchangeCode: async () => {
+				throw new Error("unused");
+			},
+			refresh: async () => {
+				throw new Error("unused");
+			},
+			getAuthorizationUrl: (input) => {
+				expect(input.requestedScopes).toEqual(["repo"]);
+				return "https://github.example.invalid/authorize";
+			},
+		},
+	);
+	await expect(
+		service.startGithubOAuth("alice", "https://callback.example.invalid/oauth"),
+	).resolves.toMatchObject({
+		authorizationUrl: "https://github.example.invalid/authorize",
 	});
 });

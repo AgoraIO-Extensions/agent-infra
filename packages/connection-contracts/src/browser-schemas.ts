@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+export const providerAccessSettingsUpdateSchema = z.strictObject({
+	approvalRequired: z.boolean(),
+	expectedRevision: z.string().regex(/^(0|[1-9][0-9]*)$/u),
+});
+
 const opaqueId = z.string().min(1).max(512);
 
 export const providerReleaseLifecycleSchema = z.discriminatedUnion(

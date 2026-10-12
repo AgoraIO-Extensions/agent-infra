@@ -85,6 +85,7 @@ import {
 	listConnectionNotifications,
 	listConnectionOutboxFailures,
 	listConnectionWorkItems,
+	listProviderAccessSettings,
 	listProviderUpgradeCampaigns,
 	listTokens,
 	login,
@@ -94,11 +95,15 @@ import {
 	type OAuthTransaction,
 	type OutboxFailuresResponse,
 	oauthTransactionRequestSchema,
+	type ProviderAccessSetting,
+	type ProviderAccessSettingsResponse,
+	type ProviderAccessSettingsUpdate,
 	type ProviderCredentialRequest,
 	type ProviderReconnectRequest,
 	type ProviderUpgradeCampaignsResponse,
 	type ProviderUpgradeReadiness,
 	prepareConnectionAccess,
+	providerAccessSettingsUpdateSchema,
 	providerCredentialRequestSchema,
 	providerReconnectRequestSchema,
 	providerUpgradeReadinessSchema,
@@ -137,6 +142,7 @@ import {
 	updateApprovalCapabilityProfileDraft,
 	updateApprovalDisclaimerDraft,
 	updateConnectionAccessPolicy,
+	updateProviderAccessSettings,
 	upgradeProviderConnection,
 } from "@agent-infra/connection-contracts";
 
@@ -402,6 +408,19 @@ export const connectionApi = {
 				body: input.body,
 				headers: commandHeaders(),
 				path: { requestId: input.requestId },
+			}),
+		),
+	listProviderAccessSettings: () =>
+		unwrap<ProviderAccessSettingsResponse>(listProviderAccessSettings()),
+	updateProviderAccessSettings: (
+		providerId: string,
+		input: ProviderAccessSettingsUpdate,
+	) =>
+		unwrap<ProviderAccessSetting>(
+			updateProviderAccessSettings({
+				path: { providerId },
+				body: providerAccessSettingsUpdateSchema.parse(input),
+				headers: commandHeaders(),
 			}),
 		),
 	listApprovalPolicyCatalog: () =>

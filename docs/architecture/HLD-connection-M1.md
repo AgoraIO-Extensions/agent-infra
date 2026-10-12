@@ -1401,6 +1401,14 @@ type CredentialVersion = {
 
 ### 16.7 Connection Access Approval
 
+Provider 的前置审批由 Connection DB 中 `connection_provider_access_settings` 的 `approval_required` 和单调 revision 决定，按稳定 Provider ID 配置，跨 Release 保持；已有及新增 Provider 默认 `false`。管理员修改必须在事务内复核 ACTIVE Principal 与管理员权限、expected revision，并写 audit/outbox。缺失 Provider、未知 Provider 或读取失败不视为关闭；已发布 Provider 尚无显式设置时采用默认关闭。
+
+关闭时所有个人连接入口仍验证当前主体、Provider admission、已发布 Release 和真实外部身份，但不要求 Request/Permit；调用方携带的旧申请 ID 不触发 Permit 校验、消费或资格创建，也不生成自动批准或伪造 Access Authorization。Consumer 预览与确认的上限为真实 Credential scopes、当前已发布 Action 和 Consumer declaration 的交集；旧选择不自动增加。开启时本节原审批、能力包、有效期和 Permit 规则全部生效。Invocation 与最终 dispatch admission 重新校验当前开关和资格；直接连接的账号无有效资格时拒绝新调用。
+
+切换保留历史 Request/Decision/Permit/Authorization，不改写原批准，不撤销或自动恢复 Consumer Grant、账号及 Credential。关闭时公司审批资格不作为准入门禁；账号停用、Grant 暂停/撤销、Provider/Action 停用及凭据失效继续阻断。重新开启恢复原资格检查，已过期、撤销或暂停资格不能被追认。OAuth start/callback、凭据保存、reconnect 与 invocation/dispatch 必须一致读取服务端规则；凭据写入与最终提交在同一事务锁定配置，配置切换与 admission 串行化，旧回调不能在开启后无 Permit 保存新账号。
+
+实现复用 `connection_access_enforcement` 的共享/排他锁串行化配置切换与 admission；所有可能复核准入的事务先锁 enforcement，再锁 Principal、account 和 Grant，配置事务同样先锁 enforcement 再复核管理员，禁止反向锁顺序；自动能力包迁移在锁定 Profile 与审批人前取得 enforcement 排他锁，避免与凭据 admission 的 Principal/Profile 锁形成环；cutoff 和历史 baseline 保留，但只约束开启审批的 Provider，不能作为关闭 Provider 的强制 Permit 条件。新增及部署此规则不修改旧 migration 或以环境变量绕过门禁。本文其他章节的公司审批和重新审批条件同样仅在该 Provider 开启前置审批时生效；独立的 Provider admission、受限接入批准和显式 Consent/Grant 不受此开关影响。后台资格到期任务在关闭期间不暂停 Grant 或提升账号 fence；重新开启后按数据库时间立即拒绝过期资格。
+
 个人 Provider Connection 在 Credential 流程之前增加独立公司审批权威。它不复用 Consumer Grant、Provider OAuth transaction 或 ProviderUpgradeTask；完整决策原因见 [Connection Access Approval Authority ADR](../adr/ADR-connection-access-approval-authority.md)。
 
 `ConnectionAccessPolicyVersion` 固定 exact ProviderRelease、Capability Profile、离散时长、Disclaimer version bundle 和 1–10 个严格顺序 ApprovalStage。每阶段固定 LDAP Principal 候选集合与 `ANY | ALL | AT_LEAST_N` quorum；PUBLISHED 后不可修改。同一最高优先级匹配多条、没有匹配或任何安全输入缺失时拒绝申请。
@@ -1449,7 +1457,7 @@ Request 总有效期到达才进入 EXPIRED；阶段仍为 current PENDING 且 R
 
 续期跨越原到期时间时，沿用 15 节同账号恢复的 replacement Grant 规则：只对仍为 current 且原 Consent、账号证明、scope 与 Action 集合一致的 Grant 创建冻结新 fence 的替代版本；旧 Grant 标记 REPLACED，禁止暂停版本原地恢复 ACTIVE。续期与替代 Grant 必须同事务提交，不恢复撤销、终结或需要重新同意的授权。
 
-所有个人 Connection 入口必须解析同一批准事实，包括 OAuth start/callback、PAT/API Key、credential store 和 reconnect。调用方不能提交可信 Principal、Policy、Permit、scope、Connection 或账号 selector。Connect Permit、OAuth state 与 Credential 各自一次性且不能互相替代。
+开启审批的所有个人 Connection 入口必须解析同一批准事实，包括 OAuth start/callback、PAT/API Key、credential store 和 reconnect。调用方不能提交可信 Principal、Policy、Permit、scope、Connection 或账号 selector。Connect Permit、OAuth state 与 Credential 各自一次性且不能互相替代。
 
 已批准但尚未连接的 Request 增加服务端派生的连接可用性投影，与审批 state 分离。检查使用受信 runtime 的当前 ProviderRelease 目录，不以数据库中仍保留的旧 PUBLISHED Release 推断当前 Adapter 可用；新申请选项和提交也绑定当前 runtime 版本（固定来源的续期除外）。OAuth start、callback 与凭据存储重新检查同一条件，不能只在页面检查。原版本与当前版本不一致时，仅在下述 exact compatibility 证明成立后允许继续连接；第一次绑定的外部身份仍须由 Provider 证明，并在消费 Permit 的事务内复核身份、scope、批准及数据库时间。使用原 Request 的来源复合外键建立 Access Authorization，通过已有 upgraded 字段记录目标能力包、逐项映射及审计，不改写原 Request、Decision 或 Policy，不延长 Permit/申请有效期，也不扩大 Consumer Grant。
 
@@ -1479,7 +1487,7 @@ WorkItem、Notification 和 NotificationReceipt 只提供站内投影与已读�
 
 模块部署与 Policy 发布独立：DRAFT 可暂缺 Disclaimer bundle 和 Stage approvers，但仍验证已提供数据的结构、数量上限与重复项；审批目录门禁未启用时，可保存已通过上述身份映射的员工候选，不能接受调用方伪造身份。PUBLISHED 的完整性校验与目录门禁保持不变。未配置时不开放新申请，既有连接仍遵守 pre-launch 与 cutoff 规则；此分阶段部署不豁免迁移、人工验证或 cutoff 的安全要求。
 
-审批 migration 记录不可变 pre-launch 账号清单时间；此后新个人 Connection 即使尚未执行 cutoff，也必须先获得 Permit。清单内尚无 Authorization 的旧连接可在 cutoff 前继续按旧 Grant 使用，但一旦产生 Authorization 不再回退到旧权限。enforcement 启用时记录不可变 cutoff，只按清单内 exact 已有账号、scope 和 active Grant ActionVersion 并集生成 `PRE_LAUNCH_BASELINE` Authorization；已按审批创建有效 Authorization 的连接保持原资格，不重复生成 baseline。cutoff 后全部新个人 Connection 强制 Permit。发现真实生产 legacy 或不明数据时禁止使用该简化 baseline。
+审批 migration 记录不可变 pre-launch 账号清单时间；此后开启审批的 Provider 新个人 Connection 即使尚未执行 cutoff，也必须先获得 Permit。清单内尚无 Authorization 的旧连接可在 cutoff 前继续按旧 Grant 使用，但一旦产生 Authorization 不再回退到旧权限。enforcement 启用时记录不可变 cutoff，只按清单内 exact 已有账号、scope 和 active Grant ActionVersion 并集生成 `PRE_LAUNCH_BASELINE` Authorization；已按审批创建有效 Authorization 的连接保持原资格，不重复生成 baseline。cutoff 后开启审批的全部新个人 Connection 强制 Permit。发现真实生产 legacy 或不明数据时禁止使用该简化 baseline。
 
 ## 17. Consumer Grant 与授权交集
 
