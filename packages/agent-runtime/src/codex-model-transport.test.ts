@@ -36,8 +36,9 @@ const testObserver: CodexModelTransportObserver = {
 async function openCodexModelTransport(
 	input: Parameters<typeof openProductionModelTransport>[0],
 	observer: CodexModelTransportObserver = testObserver,
+	options?: Parameters<typeof openProductionModelTransport>[2],
 ) {
-	const value = await openProductionModelTransport(input, observer);
+	const value = await openProductionModelTransport(input, observer, options);
 	const modelAccess = value.modelAccessFor(testConversationKey);
 	value.bindThread(testConversationKey, "thread-synthetic");
 	return {
@@ -357,6 +358,7 @@ async function transport(
 	endpoint: string,
 	registerDefaultTurn = true,
 	observer?: CodexModelTransportObserver,
+	options?: Parameters<typeof openProductionModelTransport>[2],
 ) {
 	const value = await openCodexModelTransport(
 		[
@@ -368,6 +370,7 @@ async function transport(
 			},
 		],
 		observer,
+		options,
 	);
 	if (registerDefaultTurn) admitTurn(value, defaultNativeTurn);
 	close.push(value.close);
@@ -482,6 +485,95 @@ function observePersistenceDeadlines() {
 }
 
 describe("Codex model transport", () => {
+	it.each([0, 2_147_483_648])(
+		"rejects an idle timeout outside Node's timer range: %s",
+		async (timeout) => {
+			await expect(
+				openProductionModelTransport(
+					[
+						{
+							internalModel: selectedInternalModel,
+							model: "synthetic-selected",
+							endpoint: "http://127.0.0.1:1",
+							credential,
+						},
+					],
+					testObserver,
+					{ streamIdleTimeoutMs: timeout },
+				),
+			).rejects.toThrow("RUNTIME_CONFIGURATION_INVALID");
+		},
+	);
+
+	it("allows a continuously active stream to outlive the idle threshold", async () => {
+		const target = await listen(
+			createServer(async (_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write(event({ type: "response.created", response: {} }));
+				await delay(20);
+				response.write(
+					event({ type: "response.output_text.delta", delta: "long-lived" }),
+				);
+				await delay(20);
+				response.end(completedEvent());
+			}),
+		);
+		const value = await transport(target, true, undefined, {
+			streamIdleTimeoutMs: 30,
+		});
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain("long-lived");
+		expect(body).toContain("response.completed");
+	});
+
+	it("fails an upstream stream after the idle threshold", async () => {
+		const finish = vi.fn(async (_outcome: CodexModelRequestOutcome) => {});
+		const target = await listen(
+			createServer(async (_request, response) => {
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.write(event({ type: "response.created", response: {} }));
+				await delay(40);
+				response.end(completedEvent());
+			}),
+		);
+		const value = await transport(
+			target,
+			true,
+			{ beforeRequest: async () => ({ started: async () => {}, finish }) },
+			{ streamIdleTimeoutMs: 15 },
+		);
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain("Model request failed");
+		expect(finish).toHaveBeenCalledWith(
+			expect.objectContaining({
+				phase: "unknown",
+				failureCode: "transport_error",
+			}),
+		);
+	});
+
+	it("keeps the response-header timeout separate from the stream idle timeout", async () => {
+		const target = await listen(
+			createServer(async (_request, response) => {
+				await delay(40);
+				response.writeHead(200, { "content-type": "text/event-stream" });
+				response.end(completedEvent());
+			}),
+		);
+		const value = await transport(target, true, undefined, {
+			responseHeaderTimeoutMs: 15,
+			streamIdleTimeoutMs: 1_000,
+		});
+		const response = await request(value.modelAccess);
+		expect(response.status).toBe(502);
+		expect(await response.text()).toBe(
+			'{"error":{"message":"Model request failed"}}',
+		);
+	});
+
 	it.each(["cancel", "close"] as const)(
 		"retains a late intent after both persistence deadlines and bounded %s",
 		async (stop) => {

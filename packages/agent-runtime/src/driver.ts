@@ -22,6 +22,8 @@ import type {
 /** Verified Browser binding supplied only for one Runtime execution. */
 export interface RuntimeBrowserExecutionContextV1 {
 	readonly capabilityVersion: number;
+	/** Verified Runtime principal for this request; never durable Browser state. */
+	readonly principal?: RuntimePrincipalV1;
 	readonly binding: {
 		readonly agentId: string;
 		readonly conversationId: string;

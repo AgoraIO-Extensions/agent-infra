@@ -752,6 +752,26 @@ describe("session sandbox workload adapter", () => {
 			before,
 		);
 	});
+	it("accepts the previous five-second readiness probe during rollout", async () => {
+		const client = api();
+		const adapter = createSessionSandboxWorkloadAdapterV1({ client });
+		await adapter.apply(allocation);
+		const pod = await client.read<V1Pod>("Pod", allocation.podName);
+		if (!pod?.spec?.containers[0]?.readinessProbe)
+			throw new Error("Missing Session Pod readiness probe");
+		// Existing Pods are allowed to finish under the fenced lifecycle. The
+		// compatibility is limited to the exact former period; other probe drift
+		// remains unknown/conflict.
+		pod.spec.containers[0].readinessProbe.periodSeconds = 5;
+		expect((await adapter.observe(allocation)).status).toBe("observed");
+		await expect(adapter.apply(allocation)).resolves.toMatchObject({
+			sandboxId: allocation.sandboxId,
+			generation: allocation.generation,
+			resourceFence: allocation.resourceFence,
+		});
+		pod.spec.containers[0].readinessProbe.timeoutSeconds = 2;
+		expect((await adapter.observe(allocation)).status).toBe("unknown");
+	});
 
 	it("records each resource identity and blocks UID drift before any mutation", async () => {
 		const client = api();

@@ -76,6 +76,7 @@ describe("platform-core package surface", () => {
 			"capturePersonalApiTaskAuthorizationBoundaryV1",
 			"captureTaskApplicationAuthorizationBoundaryV1",
 			"captureTaskAuthorizationBoundaryV1",
+			"classifyStandardTemplateUpgradeCompatibilityV1",
 			"cleanupUnactivatedSecretCandidateV1",
 			"conversationBrowserActionFactV1",
 			"conversationExecutionKeySubjectV1",

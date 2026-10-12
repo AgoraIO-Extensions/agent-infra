@@ -236,18 +236,24 @@ export function runtimeBrowserExecutionContextForCommand(
 async function createBrowserExecutionContextForCommand(
 	factory: RuntimeHostOptions["createBrowserExecutionContext"],
 	browser: RuntimeBrowserExecutionContextV1 | undefined,
+	principal: RuntimeBrowserExecutionContextV1["principal"] = undefined,
 ): Promise<RuntimeBrowserExecutionContextV1 | undefined> {
 	if (!browser || !factory) return browser;
 	const admittedVersion = browser.capabilityVersion;
 	const admittedBinding = structuredClone(browser.binding);
+	const admittedPrincipal = principal ? structuredClone(principal) : undefined;
 	const created = await factory({
 		...browser,
 		binding: structuredClone(admittedBinding),
+		...(admittedPrincipal
+			? { principal: structuredClone(admittedPrincipal) }
+			: {}),
 	});
 	if (
 		!created ||
 		created.capabilityVersion !== admittedVersion ||
-		!isDeepStrictEqual(created.binding, admittedBinding)
+		!isDeepStrictEqual(created.binding, admittedBinding) ||
+		!isDeepStrictEqual(created.principal, admittedPrincipal)
 	)
 		return undefined;
 	return created;
@@ -1847,6 +1853,7 @@ export class RuntimeHost {
 			const browser = await createBrowserExecutionContextForCommand(
 				this.options.createBrowserExecutionContext,
 				admittedBrowser,
+				operation.keyScopeV4?.principal,
 			);
 			const executionContext = browser
 				? { ...(driverContext ?? {}), browser }

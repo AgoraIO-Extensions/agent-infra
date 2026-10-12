@@ -81,6 +81,54 @@
                             "minLength": 1,
                             "type": "string"
                           },
+                          "compatibility": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "agentId": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "configurationRevision": {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              "reasonCode": {
+                                "enum": [
+                                  "projection_missing",
+                                  "projection_malformed",
+                                  "target_metadata_missing",
+                                  "agent_mismatch",
+                                  "template_mismatch",
+                                  "digest_mismatch",
+                                  "runtime_schema_mismatch",
+                                  "configuration_revision_mismatch",
+                                  "verified"
+                                ],
+                                "type": "string"
+                              },
+                              "status": {
+                                "enum": [
+                                  "compatible",
+                                  "incompatible",
+                                  "unknown"
+                                ],
+                                "type": "string"
+                              },
+                              "targetImageDigest": {
+                                "pattern": "^sha256:[a-f0-9]{64}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "agentId",
+                              "configurationRevision",
+                              "targetImageDigest",
+                              "reasonCode"
+                            ],
+                            "type": "object"
+                          },
                           "configurationRevision": {
                             "anyOf": [
                               {
@@ -117,7 +165,8 @@
                           "agentId",
                           "status",
                           "configurationRevision",
-                          "errorCode"
+                          "errorCode",
+                          "compatibility"
                         ],
                         "type": "object"
                       },
@@ -171,6 +220,54 @@
                             "minLength": 1,
                             "type": "string"
                           },
+                          "compatibility": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "agentId": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "configurationRevision": {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              "reasonCode": {
+                                "enum": [
+                                  "projection_missing",
+                                  "projection_malformed",
+                                  "target_metadata_missing",
+                                  "agent_mismatch",
+                                  "template_mismatch",
+                                  "digest_mismatch",
+                                  "runtime_schema_mismatch",
+                                  "configuration_revision_mismatch",
+                                  "verified"
+                                ],
+                                "type": "string"
+                              },
+                              "status": {
+                                "enum": [
+                                  "compatible",
+                                  "incompatible",
+                                  "unknown"
+                                ],
+                                "type": "string"
+                              },
+                              "targetImageDigest": {
+                                "pattern": "^sha256:[a-f0-9]{64}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "agentId",
+                              "configurationRevision",
+                              "targetImageDigest",
+                              "reasonCode"
+                            ],
+                            "type": "object"
+                          },
                           "configurationRevision": {
                             "anyOf": [
                               {
@@ -207,7 +304,8 @@
                           "agentId",
                           "status",
                           "configurationRevision",
-                          "errorCode"
+                          "errorCode",
+                          "compatibility"
                         ],
                         "type": "object"
                       },

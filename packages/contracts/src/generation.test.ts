@@ -118,6 +118,13 @@ describe("standard contract artifacts", () => {
 					status: "failed",
 					configurationRevision: null,
 					errorCode: "stale_revision",
+					compatibility: {
+						status: "unknown",
+						agentId: "agent_01",
+						configurationRevision: 7,
+						targetImageDigest: `sha256:${"b".repeat(64)}`,
+						reasonCode: "projection_missing",
+					},
 				},
 			],
 		};
@@ -248,6 +255,8 @@ describe("standard contract artifacts", () => {
 			"/api/v2/me/conversations/recent",
 			"/api/v2/me/relay-key",
 			"/api/v2/skills",
+			"/api/v2/skills/installations",
+			"/api/v2/skills/installations/{installationId}",
 			"/api/v2/skills/versions/{skillVersionId}",
 		]);
 		for (const path of [

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	AgentConfigurationError,
+	classifyStandardTemplateUpgradeCompatibilityV1,
 	fanOutStandardTemplateUpgradeV2,
 	type StandardTemplateReleaseTargetV1,
 } from "./index.js";
@@ -31,6 +32,66 @@ const command = {
 };
 
 describe("standard template upgrade fan-out", () => {
+	it("classifies verified Runtime projection against the target digest", () => {
+		const result = classifyStandardTemplateUpgradeCompatibilityV1({
+			target: target("agent_01", 7),
+			targetMetadata: {
+				templateId: "template_01",
+				targetImageDigest: newDigest,
+				runtimeSchemaVersion: 4,
+			},
+			runtimeFacts: {
+				agentId: "agent_01",
+				configurationRevision: 8,
+				modelProjection: {
+					schemaVersion: 4,
+					agentId: "agent_01",
+					configurationRevision: 8,
+					standardTemplateBinding: {
+						templateId: "template_01",
+						imageDigest: newDigest,
+						driver: "codex",
+						protocol: "openai-responses-v1",
+					},
+				},
+			},
+			resultingConfigurationRevision: 8,
+		});
+		expect(result).toMatchObject({
+			status: "compatible",
+			agentId: "agent_01",
+			configurationRevision: 8,
+			targetImageDigest: newDigest,
+			reasonCode: "verified",
+		});
+	});
+
+	it("fails closed when projection or target metadata is unavailable", () => {
+		const unknown = classifyStandardTemplateUpgradeCompatibilityV1({
+			target: target("agent_01", 7),
+			targetMetadata: null,
+			runtimeFacts: null,
+		});
+		expect(unknown.status).toBe("unknown");
+		expect(unknown.reasonCode).toBe("target_metadata_missing");
+		const incompatible = classifyStandardTemplateUpgradeCompatibilityV1({
+			target: target("agent_01", 7),
+			targetMetadata: {
+				templateId: "template_01",
+				targetImageDigest: newDigest,
+				runtimeSchemaVersion: 1,
+			},
+			runtimeFacts: {
+				agentId: "agent_01",
+				configurationRevision: 7,
+				modelProjection: { schemaVersion: 4 },
+			},
+			resultingConfigurationRevision: 8,
+		});
+		expect(incompatible.status).toBe("incompatible");
+		expect(incompatible.reasonCode).toBe("runtime_schema_mismatch");
+	});
+
 	it("enumerates targets and applies each with a bounded per-Agent key", async () => {
 		const applied: string[] = [];
 		const resolver = {
@@ -65,12 +126,26 @@ describe("standard template upgrade fan-out", () => {
 					status: "applied",
 					configurationRevision: 10,
 					errorCode: null,
+					compatibility: {
+						status: "unknown",
+						agentId: "agent_02",
+						configurationRevision: 10,
+						targetImageDigest: newDigest,
+						reasonCode: "target_metadata_missing",
+					},
 				},
 				{
 					agentId: "agent_01",
 					status: "applied",
 					configurationRevision: 8,
 					errorCode: null,
+					compatibility: {
+						status: "unknown",
+						agentId: "agent_01",
+						configurationRevision: 8,
+						targetImageDigest: newDigest,
+						reasonCode: "target_metadata_missing",
+					},
 				},
 			],
 		});
@@ -103,12 +178,26 @@ describe("standard template upgrade fan-out", () => {
 				status: "failed",
 				configurationRevision: null,
 				errorCode: "stale_revision",
+				compatibility: {
+					status: "unknown",
+					agentId: "agent_01",
+					configurationRevision: 7,
+					targetImageDigest: newDigest,
+					reasonCode: "target_metadata_missing",
+				},
 			},
 			{
 				agentId: "agent_02",
 				status: "applied",
 				configurationRevision: 10,
 				errorCode: null,
+				compatibility: {
+					status: "unknown",
+					agentId: "agent_02",
+					configurationRevision: 10,
+					targetImageDigest: newDigest,
+					reasonCode: "target_metadata_missing",
+				},
 			},
 		]);
 	});

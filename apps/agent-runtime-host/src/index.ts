@@ -272,9 +272,12 @@ export async function assembleRuntimeHost(
 		runtimeConfigurationInvalid();
 	const installationRevision =
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION;
+	const supportsProtectedStandardMcp =
+		binding === "codex" || binding === "claude";
 	if (
 		installationRevision !== undefined &&
-		(!configuration || connectionConsumer?.status !== "available")
+		(!supportsProtectedStandardMcp ||
+			connectionConsumer?.status !== "available")
 	)
 		connectionConsumer = {
 			status: "unavailable",
@@ -366,8 +369,11 @@ export async function assembleRuntimeHost(
 			keyId,
 			issuer: expectedIssuer,
 		});
+		// Protected Standard MCP is assembled only for the Codex and Claude Host
+		// seams. Pi and Generic ACP deliberately never receive this client: their
+		// pinned native transports do not provide a safe in-process MCP boundary.
 		const standardConnectionClient =
-			configuration &&
+			supportsProtectedStandardMcp &&
 			agentId !== undefined &&
 			connectionConsumer?.status === "available"
 				? await createProtectedStandardMcpInput({
@@ -478,6 +484,9 @@ export async function assembleRuntimeHost(
 						: await ClaudeRuntimeDriver.open({
 								...messagesConfiguration,
 								...(skillDirectory ? { skillDirectory } : {}),
+								...(standardConnectionClient
+									? { standardConnectionClient }
+									: {}),
 								modelOptions: messagesRuntimeOptions ?? [],
 								...(messagesConfiguration.schemaVersion === 4
 									? {
@@ -690,3 +699,6 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 		process.exitCode = 1;
 	}
 }
+
+export type { SessionBrowserExecutionBindingV1 } from "./browser-session-provider.js";
+export { createSessionBrowserExecutionContextV1 } from "./browser-session-provider.js";

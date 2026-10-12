@@ -724,6 +724,19 @@ export function createProductionSessionSandboxReceiverV1(
 		}
 		await adapter.apply(allocation, previousForApply);
 		signal.throwIfAborted();
-		return adapter.observe(allocation, previous);
+		let observed = await adapter.observe(allocation, previous);
+		// Keep the lease while a just-created Pod crosses the kubelet readiness
+		// edge. If it remains unready, return to the paced outbox retry instead of
+		// releasing the lease into a commit-wakeup hot loop.
+		if (observed.status === "observed") {
+			const deadline = Date.now() + 750;
+			while (Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				signal.throwIfAborted();
+				observed = await adapter.observe(allocation, observed.resources);
+				if (observed.status !== "observed") break;
+			}
+		}
+		return observed;
 	};
 }
