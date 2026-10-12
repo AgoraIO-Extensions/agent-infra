@@ -1,4 +1,6 @@
 import type {
+	NativeMetadataProjectionV1,
+	NativeMetadataSelectorV1,
 	RuntimeCapabilitiesV1,
 	RuntimeDriverCommandV1,
 	RuntimeDriverOperationRecordV1,
@@ -37,6 +39,24 @@ export interface RuntimeNativeSkillReaderV1 {
 		name: string,
 		relativePath: string,
 	): Promise<Uint8Array>;
+}
+
+/** Request-local authority for one authenticated native metadata read. */
+export interface RuntimeNativeMetadataReadContextV1 {
+	readonly nativeSessionRef: string;
+	readonly signal: AbortSignal;
+	readonly expiresAt: number;
+	assertCurrent(): RuntimeOriginalEvidenceBinding;
+	/** Reconfirm the Host current/proof binding after each Driver await. */
+	revalidate(): Promise<RuntimeOriginalEvidenceBinding>;
+}
+
+/** Optional RuntimeHost consumer seam for the authenticated native metadata V1 read. */
+export interface RuntimeNativeMetadataReaderV1 {
+	readNativeMetadataV1(
+		selector: NativeMetadataSelectorV1,
+		read: RuntimeNativeMetadataReadContextV1,
+	): Promise<NativeMetadataProjectionV1>;
 }
 
 /** Verified Browser binding supplied only for one Runtime execution. */
@@ -223,6 +243,11 @@ export interface RuntimeOriginalEvidenceReadContext {
 }
 
 export interface RuntimeDriver {
+	/** Read one request-local native metadata projection; no business activity. */
+	readNativeMetadataV1?(
+		selector: NativeMetadataSelectorV1,
+		read: RuntimeNativeMetadataReadContextV1,
+	): Promise<NativeMetadataProjectionV1>;
 	executeBrowserHandoff?(
 		nativeSessionRef: string,
 		executionId: string,
