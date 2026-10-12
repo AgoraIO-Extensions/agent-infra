@@ -969,6 +969,25 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			"deferred conversation after capacity release",
 		);
 		expect(ackCount).toBeGreaterThan(0);
+		const [revoked] =
+			await sql`select execution_id from platform.conversation_executions where status='processing' limit 1`;
+		if (!revoked) throw Error("No resumed execution to revoke");
+		await sql`update platform.task_authorization_records set revoked_at=clock_timestamp() where execution_id=${revoked.execution_id} and revoked_at is null`;
+		await waitUntil(
+			async () =>
+				(
+					await sql`select 1 from platform.conversation_executions where execution_id=${revoked.execution_id} and status='cancelled'`
+				).length === 1,
+			"revoked resumed execution",
+		);
+		const sideEffectsAfterRevoke = await driver.sideEffectCount();
+		// An already-in-flight call may settle once, but revocation must prevent
+		// any further Runtime side effects after the Worker converges.
+		await new Promise((resolve) => setTimeout(resolve, 250));
+		expect(await driver.sideEffectCount()).toBe(sideEffectsAfterRevoke);
+		expect(
+			await sql`select 1 from platform.task_authorization_records where execution_id=${revoked.execution_id} and revoked_at is not null`,
+		).toHaveLength(1);
 		for (const child of children.slice(2)) child.kill("SIGTERM");
 		await Promise.all(
 			children.map((child) =>
