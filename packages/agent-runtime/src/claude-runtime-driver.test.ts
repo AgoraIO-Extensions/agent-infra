@@ -9,7 +9,10 @@ import {
 	ClaudeRuntimeDriver,
 	parseClaudeNativeCommands,
 } from "./claude-runtime-driver.js";
-import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import type {
+	RuntimeExternalActionAuthorization,
+	RuntimeNativeMetadataReadContextV1,
+} from "./driver.js";
 import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
@@ -21,6 +24,32 @@ const commandRead = (
 	expiresAt: Date.now() + 10_000,
 	assertCurrent: () => {},
 	revalidate: async () => {},
+});
+
+const metadataRead = (
+	nativeSessionRef: string,
+): RuntimeNativeMetadataReadContextV1 => ({
+	nativeSessionRef,
+	signal: new AbortController().signal,
+	expiresAt: Date.now() + 10_000,
+	assertCurrent: () => ({
+		principal: { kind: "user", id: "reader-1" },
+		scope: {
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			executionId: "execution-a",
+			sessionGeneration: 1,
+		},
+	}),
+	revalidate: async () => ({
+		principal: { kind: "user", id: "reader-1" },
+		scope: {
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			executionId: "execution-a",
+			sessionGeneration: 1,
+		},
+	}),
 });
 
 const attachmentCommand = {
@@ -321,6 +350,21 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 		).toEqual({
 			generationId: skillDirectory.generationId,
 			entries: skillDirectory.findSkills(),
+		});
+		expect(
+			await driver.readNativeMetadataV1(
+				"commands",
+				metadataRead(accepted.nativeSessionRef),
+			),
+		).toMatchObject({ selector: "commands", capabilities: [] });
+		expect(
+			await driver.readNativeMetadataV1(
+				"skills",
+				metadataRead(accepted.nativeSessionRef),
+			),
+		).toMatchObject({
+			selector: "skills",
+			capabilities: [{ name: "workspace-summary" }],
 		});
 		expect(
 			await driver.readNativeSkill(
