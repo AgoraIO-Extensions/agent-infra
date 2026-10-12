@@ -36,6 +36,7 @@ import {
 import postgres from "postgres";
 import {
 	consumeConnectPermitInTransaction,
+	lockAccessAdmission,
 	lookupApprovedConnectPermit,
 } from "./access-request-repository";
 import {
@@ -587,6 +588,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			throw new Error("Provider executor digest is invalid");
 		}
 		await this.sql.begin(async (sql) => {
+			await lockAccessAdmission(sql);
 			const readRelease = () => sql<
 				{
 					auth_profile: unknown;
@@ -1335,6 +1337,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		principalId: string,
 	): Promise<ProviderUpgradeCampaignSummary[]> {
 		return this.sql.begin(async (sql) => {
+			await lockAccessAdmission(sql);
 			await this.requireConnectionAdministrator(sql, principalId);
 			await this.reconcileProviderUpgradeTasks(sql);
 			await this.expireProviderUpgradeTasks(sql);
@@ -1750,6 +1753,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		const grantedScopes = [...new Set(input.grantedScopes)].sort();
 		if (grantedScopes.length === 0) forbidden();
 		return this.sql.begin(async (sql) => {
+			await lockAccessAdmission(sql);
 			await this.requireConnectionAdministrator(sql, input.actorPrincipalId);
 			const [scope] = await sql<{ id: string }[]>`
 				SELECT id FROM connection_shared_scopes
@@ -2535,6 +2539,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			invalidAuthorizationPreview("Authorization preview input is incomplete");
 		}
 		return this.sql.begin(async (sql) => {
+			await lockAccessAdmission(sql);
 			const [principal] = await sql<{ id: string }[]>`
 				SELECT id FROM connection_principals
 				WHERE id = ${input.principalId} AND status = 'ACTIVE'
@@ -2682,6 +2687,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			invalidAuthorizationPreview("Authorization confirmation is incomplete");
 		}
 		return this.sql.begin(async (sql) => {
+			await lockAccessAdmission(sql);
 			const [previewIdentity] = await sql<{ root_id: string }[]>`
 				SELECT preview.root_id
 				FROM connection_authorization_previews preview
@@ -3439,6 +3445,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		const expiresAt = identity.expiresAt;
 		const refreshToken = identity.refreshToken;
 		await this.sql.begin(async (sql) => {
+			await lockAccessAdmission(sql);
 			const [attempt] = await sql<{ id: string }[]>`
 				SELECT id FROM connection_credential_refresh_attempts
 				WHERE id = ${claim.attemptId}
@@ -4078,11 +4085,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 			forbidden();
 		}
 		return this.sql.begin(async (sql) => {
-			const [enforcement] = await sql<{ state: string }[]>`
-				SELECT state FROM connection_access_enforcement
-				WHERE id = 'personal' FOR SHARE
-			`;
-			if (!enforcement) forbidden();
+			await lockAccessAdmission(sql);
 			const [approval] = await sql<{ required: boolean }[]>`
 				SELECT connection_provider_requires_approval(${input.providerId}) AS required`;
 			if (!approval) forbidden();
@@ -4573,6 +4576,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		options: { includeActivity?: boolean } = {},
 	): Promise<ConnectionOverview> {
 		await this.sql.begin(async (sql) => {
+			await lockAccessAdmission(sql);
 			await this.reconcileProviderUpgradeTasks(sql, principalId);
 			await this.expireProviderUpgradeTasks(sql, principalId);
 		});

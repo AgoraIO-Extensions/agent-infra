@@ -334,3 +334,107 @@ integrationTest(
 	},
 	30_000,
 );
+
+integrationTest(
+	"serializes a settings change and credential save for the same administrator without deadlock",
+	async () => {
+		if (!databaseUrl) return;
+		await migrateConnectionDatabase(
+			databaseUrl,
+			resolve(import.meta.dirname, "../../../migrations/connection"),
+		);
+		const sql = postgres(databaseUrl);
+		const repository = new PostgresConnectionRepository(
+			databaseUrl,
+			Buffer.alloc(32, 20),
+		);
+		const settings = new PostgresConnectionApprovalRepository(databaseUrl);
+		const suffix = randomUUID();
+		const providerId = `lock-provider-${suffix}`;
+		const adminId = `lock-admin-${suffix}`;
+		const baseAction = githubConnectionCatalog.actions[0];
+		if (!baseAction) throw new Error("Missing Action fixture");
+		const catalog = {
+			...githubConnectionCatalog,
+			provider: providerId,
+			providerReleaseId: `lock-release-${suffix}`,
+			actions: [
+				{
+					...baseAction,
+					id: `lock-action-${suffix}`,
+					requiredScopes: ["repo"],
+				},
+			],
+		};
+		let releasePrincipal: (() => void) | undefined;
+		let holder: Promise<unknown> | undefined;
+		try {
+			await repository.publishProviderCatalog(catalog);
+			await sql`INSERT INTO connection_principals (id, display_name) VALUES (${adminId}, 'Admin')`;
+			await sql`INSERT INTO connection_principal_roles (principal_id, role, status, grant_source) VALUES (${adminId}, 'CONNECTION_ADMIN', 'ACTIVE', 'ADMIN')`;
+			let signalLocked!: () => void;
+			const locked = new Promise<void>((resolve) => {
+				signalLocked = resolve;
+			});
+			holder = sql.begin(async (tx) => {
+				await tx`SELECT id FROM connection_principals WHERE id = ${adminId} FOR UPDATE`;
+				signalLocked();
+				await new Promise<void>((resolve) => {
+					releasePrincipal = resolve;
+				});
+			});
+			await locked;
+			const switchAttempt = settings.updateProviderAccessSettings({
+				actorPrincipalId: adminId,
+				providerId,
+				approvalRequired: false,
+				expectedRevision: "0",
+			});
+			// Observe real lock waits rather than assuming timer order. With the old order,
+			// the setting owns Principal SHARE once released, while the save owns enforcement SHARE.
+			const waitForLocks = async (count: number, actorOnly = false) => {
+				const deadline = Date.now() + 5000;
+				while (Date.now() < deadline) {
+					const [waiting] = await sql<
+						{ count: string }[]
+					>`SELECT count(*)::text FROM pg_stat_activity
+          WHERE datname = current_database() AND state = 'active' AND wait_event_type = 'Lock'
+            AND (NOT ${actorOnly} OR query LIKE '%JOIN connection_principal_roles role_binding%')`;
+					if (Number(waiting?.count) >= count) return;
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+				throw new Error("Expected concurrent database lock waits");
+			};
+			await waitForLocks(1, true);
+			const credentialAttempt = repository.storeProviderCredential({
+				accessToken: `test-only-lock-${suffix}`,
+				displayName: "Admin account",
+				externalAccount: suffix,
+				grantedScopes: ["repo"],
+				principalId: adminId,
+				providerId,
+				providerReleaseId: catalog.providerReleaseId,
+			});
+			await waitForLocks(2);
+			releasePrincipal?.();
+			await holder;
+			const [updated, stored] = await Promise.all([
+				switchAttempt,
+				credentialAttempt,
+			]);
+			expect(updated.approvalRequired).toBe(false);
+			expect(
+				(await repository.getOverview(adminId)).connections.some(
+					(connection) => connection.id === stored.connectionId,
+				),
+			).toBe(true);
+		} finally {
+			releasePrincipal?.();
+			await holder;
+			await settings.close();
+			await repository.close();
+			await sql.end();
+		}
+	},
+	15_000,
+);

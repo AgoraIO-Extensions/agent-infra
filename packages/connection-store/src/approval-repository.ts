@@ -164,6 +164,8 @@ export class PostgresConnectionApprovalRepository {
 		expectedRevision: string;
 	}) {
 		return this.sql.begin(async (sql) => {
+			// ponytail: global admission lock; per-Provider locks if switch contention matters.
+			await sql`SELECT id FROM connection_access_enforcement WHERE id = 'personal' FOR UPDATE`;
 			const [actor] = await sql<{ id: string }[]>`
 				SELECT principal.id FROM connection_principals principal
 				JOIN connection_principal_roles role_binding ON role_binding.principal_id = principal.id
@@ -176,8 +178,6 @@ export class PostgresConnectionApprovalRepository {
 					"FORBIDDEN",
 					"Provider approval settings are unavailable",
 				);
-			// ponytail: global admission lock; per-Provider locks if switch contention matters.
-			await sql`SELECT id FROM connection_access_enforcement WHERE id = 'personal' FOR UPDATE`;
 			const [provider] = await sql`SELECT id FROM connection_provider_releases
 				WHERE provider = ${input.providerId} AND status = 'PUBLISHED' LIMIT 1`;
 			if (!provider)
@@ -230,6 +230,10 @@ export class PostgresConnectionApprovalRepository {
 
 	async activatePreLaunchBaseline(actorPrincipalId: string) {
 		return this.sql.begin(async (sql) => {
+			const [enforcement] = await sql<{ state: string }[]>`
+				SELECT state FROM connection_access_enforcement
+				WHERE id = 'personal' FOR UPDATE
+			`;
 			const [actor] = await sql<{ id: string }[]>`
 				SELECT principal.id FROM connection_principals principal
 				JOIN connection_principal_roles role_binding
@@ -242,10 +246,6 @@ export class PostgresConnectionApprovalRepository {
 			`;
 			if (!actor)
 				invalid("Cutover actor is not an active Connection administrator");
-			const [enforcement] = await sql<{ state: string }[]>`
-				SELECT state FROM connection_access_enforcement
-				WHERE id = 'personal' FOR UPDATE
-			`;
 			if (enforcement?.state === "ENFORCED") {
 				const [baseline] = await sql<{ count: number }[]>`
 					SELECT count(*)::int AS count FROM connection_effective_access_authorizations

@@ -188,6 +188,13 @@ function quorumSatisfied(
 	return configuredCount !== null && approvals >= configuredCount;
 }
 
+// Admission transactions take this lock before Principal/account/Grant row locks.
+export async function lockAccessAdmission(sql: postgres.TransactionSql) {
+	const [authority] =
+		await sql`SELECT id FROM connection_access_enforcement WHERE id = 'personal' FOR SHARE`;
+	if (!authority) forbidden();
+}
+
 export class PostgresConnectionAccessRequestRepository
 	implements ConnectionAccessApprovalRepository
 {
@@ -1949,6 +1956,7 @@ export class PostgresConnectionAccessRequestRepository
 
 	async decide(input: ApprovalDecisionInput) {
 		return this.sql.begin(async (sql) => {
+			await lockAccessAdmission(sql);
 			const [replay] = await sql<
 				{
 					actor_principal_id: string;

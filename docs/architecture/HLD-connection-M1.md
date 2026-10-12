@@ -1379,7 +1379,7 @@ Provider 的前置审批由 Connection DB 中 `connection_provider_access_settin
 
 切换保留历史 Request/Decision/Permit/Authorization，不改写原批准，不撤销或自动恢复 Consumer Grant、账号及 Credential。关闭时公司审批资格不作为准入门禁；账号停用、Grant 暂停/撤销、Provider/Action 停用及凭据失效继续阻断。重新开启恢复原资格检查，已过期、撤销或暂停资格不能被追认。OAuth start/callback、凭据保存、reconnect 与 invocation/dispatch 必须一致读取服务端规则；凭据写入与最终提交在同一事务锁定配置，配置切换与 admission 串行化，旧回调不能在开启后无 Permit 保存新账号。
 
-实现复用 `connection_access_enforcement` 的共享/排他锁串行化配置切换与 admission；cutoff 和历史 baseline 保留，但只约束开启审批的 Provider，不能作为关闭 Provider 的强制 Permit 条件。新增及部署此规则不修改旧 migration 或以环境变量绕过门禁。本文其他章节的公司审批和重新审批条件同样仅在该 Provider 开启前置审批时生效；独立的 Provider admission、受限接入批准和显式 Consent/Grant 不受此开关影响。后台资格到期任务在关闭期间不暂停 Grant 或提升账号 fence；重新开启后按数据库时间立即拒绝过期资格。
+实现复用 `connection_access_enforcement` 的共享/排他锁串行化配置切换与 admission；所有可能复核准入的事务先锁 enforcement，再锁 Principal、account 和 Grant，配置事务同样先锁 enforcement 再复核管理员，禁止反向锁顺序；cutoff 和历史 baseline 保留，但只约束开启审批的 Provider，不能作为关闭 Provider 的强制 Permit 条件。新增及部署此规则不修改旧 migration 或以环境变量绕过门禁。本文其他章节的公司审批和重新审批条件同样仅在该 Provider 开启前置审批时生效；独立的 Provider admission、受限接入批准和显式 Consent/Grant 不受此开关影响。后台资格到期任务在关闭期间不暂停 Grant 或提升账号 fence；重新开启后按数据库时间立即拒绝过期资格。
 
 个人 Provider Connection 在 Credential 流程之前增加独立公司审批权威。它不复用 Consumer Grant、Provider OAuth transaction 或 ProviderUpgradeTask；完整决策原因见 [Connection Access Approval Authority ADR](../adr/ADR-connection-access-approval-authority.md)。
 
