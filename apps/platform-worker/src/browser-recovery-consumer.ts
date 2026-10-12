@@ -30,7 +30,9 @@ function sameBinding(
 		left.capabilityVersion === right.capabilityVersion &&
 		left.pageRevision === right.pageRevision &&
 		left.sessionGeneration === right.sessionGeneration &&
-		left.resourceFence === right.resourceFence
+		left.resourceFence === right.resourceFence &&
+		left.workloadRevision === right.workloadRevision &&
+		left.imageDigest === right.imageDigest
 	);
 }
 
@@ -44,10 +46,12 @@ function assertBinding(binding: BrowserRecoveryBindingV1): void {
 			"pageRevision",
 			"sessionGeneration",
 			"resourceFence",
+			"workloadRevision",
 		].every((key) => {
 			const value = binding[key as keyof BrowserRecoveryBindingV1];
 			return Number.isSafeInteger(value) && (value as number) >= 1;
-		})
+		}) ||
+		!/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(binding.imageDigest)
 	)
 		throw new Error("BROWSER_ACTION_RECOVERY_BINDING_INVALID");
 }

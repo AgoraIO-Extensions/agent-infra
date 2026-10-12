@@ -129,6 +129,29 @@ function sessionNotification(value: unknown) {
 		"toolCallId" in update &&
 		typeof update.toolCallId === "string"
 	) {
+		const content =
+			"content" in update && Array.isArray(update.content)
+				? update.content.flatMap((entry) => {
+						if (
+							!entry ||
+							typeof entry !== "object" ||
+							!("type" in entry) ||
+							entry.type !== "diff" ||
+							!("path" in entry) ||
+							!("newText" in entry) ||
+							typeof entry.path !== "string" ||
+							typeof entry.newText !== "string"
+						)
+							return [];
+						return [
+							{
+								type: "diff" as const,
+								path: entry.path,
+								newText: entry.newText,
+							},
+						];
+					})
+				: undefined;
 		const kind =
 			"kind" in update &&
 			[
@@ -160,6 +183,7 @@ function sessionNotification(value: unknown) {
 				title: "Runtime tool",
 				...(kind ? { kind } : {}),
 				...(status ? { status } : {}),
+				...(content && content.length > 0 ? { content } : {}),
 				...("rawInput" in update ? { rawInput: update.rawInput } : {}),
 			},
 		};

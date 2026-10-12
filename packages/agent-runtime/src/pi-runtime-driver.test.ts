@@ -88,6 +88,7 @@ it("keeps protected Connection MCP unavailable", async () => {
 	try {
 		expect(await value.driver.getCapabilities()).toMatchObject({
 			connection: false,
+			resultFiles: false,
 		});
 	} finally {
 		await value.close();

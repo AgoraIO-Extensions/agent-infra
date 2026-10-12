@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { RuntimeDriverCommand } from "./driver.js";
 import { RuntimeHostError } from "./errors.js";
-import type { RuntimeFileBridgePortV1 } from "./runtime-file-bridge.js";
+import {
+	createRuntimeFileResultReceiptV1,
+	type RuntimeFileBridgePortV1,
+} from "./runtime-file-bridge.js";
 import {
 	type NativeSession,
+	type NativeSessionOptions,
 	SessionRuntimeDriver,
 } from "./session-runtime-driver.js";
 
@@ -70,9 +74,93 @@ function fileBridge(onRevalidate?: (call: number) => void): {
 	};
 }
 
+it("publishes one request-scoped native result file", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-result-file-"));
+	let publishAfterTerminal: (() => Promise<void>) | undefined;
+	const writeResult = vi.fn(
+		async (descriptor: Parameters<RuntimeFileBridgePortV1["writeResult"]>[0]) =>
+			createRuntimeFileResultReceiptV1(
+				{
+					actorId: "actor-a",
+					channelId: "web",
+					agentId: "agent-a",
+					conversationId: "conversation-a",
+					executionId: "execution-a",
+					sessionGeneration: 1,
+					grantId: "grant-a",
+					expiresAt: Date.now() + 60_000,
+					inputFileIds: [],
+				},
+				{
+					schemaVersion: 1,
+					fileId: "result-file-session",
+					kind: "result",
+					descriptor,
+					status: "available",
+					createdAt: new Date().toISOString(),
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+			),
+	);
+	const openSession = vi.fn(async (options: NativeSessionOptions) => ({
+		nativeId: "native-a",
+		select: async () => {},
+		prompt: async () => {
+			await options.resultFile?.({
+				path: join(tmpdir(), "outside-result.txt"),
+				content: "outside",
+			});
+			await options.resultFile?.({
+				path: join(options.cwd, "result.txt"),
+				content: "session result",
+			});
+			await options.resultFile?.({
+				path: join(options.cwd, "second-result.txt"),
+				content: "duplicate",
+			});
+			publishAfterTerminal = async () => {
+				await options.resultFile?.({
+					path: join(options.cwd, "late-result.txt"),
+					content: "late",
+				});
+			};
+			return { stopReason: "completed" };
+		},
+		cancel: async () => {},
+		close: async () => {},
+	}));
+	const runtime = await driver(path, openSession);
+	try {
+		const accepted = await runtime.execute(command([]), {
+			fileBridge: {
+				readInput: async () => {
+					throw new Error("unused");
+				},
+				writeResult,
+				revalidate: () => {},
+			},
+		});
+		await vi.waitFor(async () =>
+			expect(
+				await runtime.getStatus(accepted.nativeSessionRef, "execution-a"),
+			).toBe("completed"),
+		);
+		await publishAfterTerminal?.();
+		expect(writeResult).toHaveBeenCalledOnce();
+		expect(
+			(
+				await runtime.replayEvents(accepted.nativeSessionRef, "execution-a")
+			).some((event) => event.type === "file"),
+		).toBe(true);
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
 async function driver(
 	path: string,
-	openSession: () => Promise<NativeSession>,
+	openSession: (options: NativeSessionOptions) => Promise<NativeSession>,
 	options: {
 		supportsAttachments?: boolean;
 		attachmentsNegotiated?: () => boolean;
@@ -301,6 +389,84 @@ it("keeps text-only turns working without a file bridge", async () => {
 		expect(record.result).toMatchObject({ outcome: "accepted" });
 		expect(prompt).toHaveBeenCalledWith("describe this image");
 	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("durably acknowledges non-Codex operation facts with ordered phase transitions", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-operation-facts-"));
+	let sessionOptions: NativeSessionOptions | undefined;
+	let releasePrompt!: () => void;
+	const runtime = await driver(path, async (options) => {
+		sessionOptions = options;
+		return {
+			nativeId: "native-a",
+			select: async () => {},
+			prompt: async () => {
+				await options.admit();
+				await new Promise<void>((resolve) => {
+					releasePrompt = resolve;
+				});
+				return { stopReason: "completed" };
+			},
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	const execution = runtime.execute(command([]));
+	try {
+		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
+		const record = await execution;
+		const input = {
+			nativeSessionRef: record.nativeSessionRef,
+			executionId: "execution-a",
+		};
+		await runtime.recordOperationFact({
+			...input,
+			fact: {
+				kind: "tool",
+				operationRef: "11111111-1111-4111-8111-111111111111",
+				attemptRef: "22222222-2222-4222-8222-222222222222",
+				phase: "intent",
+				toolId: "filesystem.read",
+			},
+		});
+		await runtime.recordOperationFact({
+			...input,
+			fact: {
+				kind: "tool",
+				operationRef: "11111111-1111-4111-8111-111111111111",
+				attemptRef: "22222222-2222-4222-8222-222222222222",
+				phase: "started",
+				startedAt: new Date().toISOString(),
+				toolId: "filesystem.read",
+			},
+		});
+		await expect(
+			runtime.recordOperationFact({
+				...input,
+				fact: {
+					kind: "tool",
+					operationRef: "33333333-3333-4333-8333-333333333333",
+					attemptRef: "44444444-4444-4444-8444-444444444444",
+					phase: "started",
+					startedAt: new Date().toISOString(),
+					toolId: "filesystem.write",
+				},
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+		releasePrompt();
+		await runtime.close();
+		const state = JSON.parse(
+			await readFile(join(path, record.nativeSessionRef, "state.json"), "utf8"),
+		) as { turns: { operationFacts?: { phase: string }[] }[] };
+		expect(state.turns[0]?.operationFacts?.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+		]);
+	} finally {
+		releasePrompt?.();
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });
 	}

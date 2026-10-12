@@ -111,6 +111,8 @@ function executionBinding(pageRevision: number) {
 		pageRevision,
 		sessionGeneration: 2,
 		resourceFence: 7,
+		workloadRevision: 4,
+		imageDigest: `sha256:${"a".repeat(64)}`,
 	} as const;
 }
 
@@ -326,6 +328,8 @@ describe("Browser action cancellation barrier", () => {
 			pageRevision: reference.pageRevision,
 			sessionGeneration: 2,
 			resourceFence: 3,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
 		} as const;
 		const request = {
 			actionId: "cancelled-action",
@@ -434,6 +438,8 @@ describe("Browser action outcome readback", () => {
 			pageRevision: 1,
 			sessionGeneration: 2,
 			resourceFence: 3,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
 		} as const;
 		const result = await controller.executeAction({
 			actionId: "bound-action",
@@ -576,6 +582,17 @@ describe("Browser action outcome readback", () => {
 					...binding,
 					pageRevision: reference.pageRevision + 1,
 				},
+			}),
+		).rejects.toThrow("BROWSER_ACTION_BINDING_INVALID");
+		await expect(
+			controller.executeAction({
+				actionId: "missing-workload-identity",
+				kind: "click",
+				page: reference,
+				executionBinding: {
+					...binding,
+					workloadRevision: undefined,
+				} as never,
 			}),
 		).rejects.toThrow("BROWSER_ACTION_BINDING_INVALID");
 		expect(

@@ -238,6 +238,9 @@ importers:
         specifier: 'catalog:'
         version: 4.4.3
     devDependencies:
+      '@agent-infra/agent-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agent-runtime
       '@agent-infra/config':
         specifier: workspace:*
         version: link:../../packages/config

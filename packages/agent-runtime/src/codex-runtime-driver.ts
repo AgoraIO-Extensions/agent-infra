@@ -1860,7 +1860,9 @@ function sameRuntimeBrowserExecutionBinding(
 		left.capabilityVersion === right.capabilityVersion &&
 		left.pageRevision === right.pageRevision &&
 		left.sessionGeneration === right.sessionGeneration &&
-		left.resourceFence === right.resourceFence
+		left.resourceFence === right.resourceFence &&
+		left.workloadRevision === right.workloadRevision &&
+		left.imageDigest === right.imageDigest
 	);
 }
 

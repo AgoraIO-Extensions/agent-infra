@@ -29,6 +29,8 @@ export type BrowserActionOperationInputV1 = Readonly<{
 	controllerBinding: BrowserActionExecutionBindingV1;
 	agentId: string;
 	capabilityVersion: number;
+	workloadRevision: number;
+	imageDigest: string;
 	page: Readonly<{ pageId: string; pageRevision: number }>;
 	actionId: string;
 	attempt: ConversationBrowserActionAttemptV1;
@@ -66,7 +68,12 @@ function assertBinding(input: BrowserActionOperationInputV1): void {
 		input.controllerBinding.capabilityVersion !== input.capabilityVersion ||
 		input.controllerBinding.pageRevision !== input.page.pageRevision ||
 		input.controllerBinding.sessionGeneration !== input.sessionGeneration ||
-		input.controllerBinding.resourceFence !== input.deliveryFence
+		input.controllerBinding.resourceFence !== input.deliveryFence ||
+		input.controllerBinding.workloadRevision !== input.workloadRevision ||
+		input.controllerBinding.imageDigest !== input.imageDigest ||
+		!Number.isSafeInteger(input.workloadRevision) ||
+		input.workloadRevision < 1 ||
+		!/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(input.imageDigest)
 	) {
 		throw new Error("BROWSER_ACTION_CONTROLLER_BINDING_MISMATCH");
 	}
@@ -89,7 +96,9 @@ function sameBinding(
 		left.capabilityVersion === right.capabilityVersion &&
 		left.pageRevision === right.pageRevision &&
 		left.sessionGeneration === right.sessionGeneration &&
-		left.resourceFence === right.resourceFence
+		left.resourceFence === right.resourceFence &&
+		left.workloadRevision === right.workloadRevision &&
+		left.imageDigest === right.imageDigest
 	);
 }
 
@@ -143,6 +152,8 @@ export function createBrowserActionOperationAdapterV1(input: {
 					pageRevision: request.page.pageRevision,
 					sessionGeneration: request.sessionGeneration,
 					resourceFence: request.deliveryFence,
+					workloadRevision: request.controllerBinding.workloadRevision,
+					imageDigest: request.controllerBinding.imageDigest,
 					sideEffect: request.action.sideEffect === true,
 				},
 				adapterEventKeyPrefix: request.adapterEventKeyPrefix,

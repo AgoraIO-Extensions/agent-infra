@@ -344,10 +344,20 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		retryDelayMs: number;
 		errorCode: string;
 	}) {
+		const recoveringUnacceptedTurn =
+			input.claim.executionStatus === "unknown" &&
+			(input.claim.operation === "conversation.turn.submit.v1" ||
+				input.claim.operation === "conversation.turn.regenerate.v1");
+		const restoredStatus = recoveringUnacceptedTurn
+			? input.claim.taskWaitOrder === undefined
+				? "submitted"
+				: "waiting"
+			: input.claim.executionStatus;
 		if (
 			!this.#owned(input.claim) ||
 			this.current.executionStatus !== "unknown" ||
-			(input.claim.executionStatus !== "submitted" &&
+			(!recoveringUnacceptedTurn &&
+				input.claim.executionStatus !== "submitted" &&
 				input.claim.executionStatus !== "waiting")
 		)
 			return false;
@@ -356,7 +366,7 @@ class MemoryDispatchStore implements ConversationDispatchStorePortV1 {
 		this.errorCode = input.errorCode;
 		this.current = {
 			...this.current,
-			executionStatus: input.claim.executionStatus,
+			executionStatus: restoredStatus,
 		};
 		return true;
 	}
@@ -846,7 +856,7 @@ describe("Conversation Worker dispatch", () => {
 			"cursor-2",
 		]);
 	});
-	it("retains an occupied original execution when recovery finds no accepted Turn without resubmitting", async () => {
+	it("releases an original execution when recovery finds no accepted Turn", async () => {
 		let dispatches = 0;
 		let recoveries = 0;
 		const runtimeHost: ConversationRuntimeHostPortV1 = {
@@ -874,12 +884,65 @@ describe("Conversation Worker dispatch", () => {
 			claim({ executionStatus: "unknown", hostSessionRef: "host-original" }),
 		);
 		const f = setup({ store, runtimeHost });
-		expect(await dispatch(f.useCase)).toMatchObject({ outcome: "unknown" });
+		expect(await dispatch(f.useCase)).toMatchObject({
+			outcome: "retry",
+			retryScheduled: true,
+		});
 		expect({ dispatches, recoveries }).toEqual({
 			dispatches: 0,
 			recoveries: 1,
 		});
-		expect(store.current.executionStatus).toBe("unknown");
+		expect(store.current.executionStatus).toBe("submitted");
+	});
+
+	it("releases an unaccepted Turn after recovery proves it was never found", async () => {
+		let dispatches = 0;
+		const runtimeHost: ConversationRuntimeHostPortV1 = {
+			async dispatch() {
+				dispatches++;
+				return {
+					schemaVersion: 2,
+					hostSessionRef: "host-retry",
+					operationId: "execution-1",
+					result: { outcome: "accepted", status: "running" },
+				};
+			},
+			async recoverStatus() {
+				throw new Error("Unexpected legacy recovery");
+			},
+			async recoverOriginalStatus(request) {
+				return {
+					schemaVersion: 2,
+					executionId: request.executionId,
+					hostSessionRef: null,
+					outcome: "not_found" as const,
+				};
+			},
+			async *events() {
+				yield runtimeEvent(1);
+			},
+		};
+		const store = new MemoryDispatchStore(
+			claim({ executionStatus: "unknown", taskWaitOrder: 3 }),
+		);
+		const h = setup({ store, runtimeHost });
+		expect(await dispatch(h.useCase)).toEqual({
+			schemaVersion: 1,
+			outcome: "retry",
+			retryScheduled: true,
+		});
+		expect(store.current.executionStatus).toBe("waiting");
+		expect(store.released).toBe(1);
+
+		// The retry keeps the same execution and claims a higher delivery fence.
+		store.outboxStatus = "retry_scheduled";
+		const second = await dispatch(h.useCase);
+		expect(second).toMatchObject({
+			schemaVersion: 1,
+			outcome: "accepted",
+		});
+		expect(dispatches).toBe(1);
+		expect(store.current.executionId).toBe("execution-1");
 	});
 
 	it("rejects a found recovery that introduces a Runtime Host reference", async () => {
