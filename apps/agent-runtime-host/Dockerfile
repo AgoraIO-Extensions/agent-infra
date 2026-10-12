@@ -53,7 +53,12 @@ LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"pla
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates util-linux \
 	&& rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache \
 	&& npm install --global npm@11.19.1 --logs-max=0 \
-	&& rm -rf /root/.npm /tmp/node-compile-cache
+	&& rm -rf /root/.npm /tmp/node-compile-cache \
+	&& SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" node --input-type=module -e '\
+  const epoch = Number(process.env.SOURCE_DATE_EPOCH); \
+  if (!Number.isSafeInteger(epoch) || epoch < 0) throw new Error("RUNTIME_IMAGE_TIMESTAMP_INVALID"); \
+  const {utimesSync} = await import("node:fs"); \
+  utimesSync("/usr/local", epoch, epoch);'
 ENV NODE_ENV=production
 ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime
 ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin

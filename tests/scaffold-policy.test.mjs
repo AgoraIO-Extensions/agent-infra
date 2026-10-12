@@ -141,12 +141,18 @@ test("RuntimeHost image normalizes post-install global directory timestamps", as
 		"apps/agent-runtime-host/Dockerfile",
 		"utf8",
 	);
-	const runtimeStage = /^FROM .* AS runtime\n([\s\S]*?)(?=^FROM )/m.exec(
+	const runtimeStage = /^FROM .* AS runtime\n([\s\S]*?)(?=^FROM |$(?![\s\S]))/m.exec(
 		dockerfile,
 	)?.[1];
 	assert.ok(runtimeStage, "RuntimeHost production stage is missing");
 	assert.match(runtimeStage, /^ARG SOURCE_DATE_EPOCH=0$/m);
-	assert.match(runtimeStage, /utimesSync\("\/usr\/local", epoch, epoch\)/);
+	const normalizers = runtimeStage.match(
+		/utimesSync\("\/usr\/local", epoch, epoch\)/g,
+	);
+	assert.ok(
+		normalizers && normalizers.length >= 2,
+		"RuntimeHost must normalize /usr/local in the producing layer and at the final boundary",
+	);
 });
 
 test("Compose runs every deployment image with a read-only root filesystem", async () => {
