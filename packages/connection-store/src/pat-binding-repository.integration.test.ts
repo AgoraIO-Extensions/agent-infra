@@ -134,7 +134,166 @@ describe("PostgreSQL PAT binding", () => {
 					(await service.verifyAccessToken(`Bearer ${guardedClaim.token}`))
 						.principalId,
 				).toBe(aliceLogin.account.principalId);
+				expect(guardedClaim.account).toEqual({
+					id: aliceLogin.account.principalId,
+					email: "alice-link-owner@example.invalid",
+					displayName: "alice-link-owner",
+				});
 
+				const otherClient = await service.registerPatBindingConsumer({
+					callbackUrl: "https://other-agent.example/callback",
+					consumerId: `other-client-${randomUUID()}`,
+					consumerName: "Other client",
+				});
+				const unhinted = await service.createPersonalAccessTokenBinding({
+					consumerId: "consumer-rehoboam-ai",
+					name: `unhinted / ${randomUUID()}`,
+					secret,
+				});
+				const unhintedState =
+					new URL(unhinted.authorizationUrl).pathname.split("/").at(-1) ?? "";
+				const [unhintedRow] =
+					await sql`SELECT principal_hint_hash FROM connection_pat_binding_sessions WHERE id = ${unhinted.bindingId}`;
+				expect(unhintedRow?.principal_hint_hash).toBeNull();
+				await expect(
+					service.claimPersonalAccessTokenBinding({
+						bindingId: unhinted.bindingId,
+						consumerId: "consumer-rehoboam-ai",
+						secret,
+					}),
+				).rejects.toMatchObject({ error: "invalid_grant" });
+				for (const expectedPrincipalId of [
+					undefined,
+					aliceLogin.account.principalId,
+				]) {
+					await expect(
+						service.confirmPersonalAccessTokenBinding({
+							expectedPrincipalId,
+							sessionToken: bobLogin.sessionToken,
+							state: unhintedState,
+						}),
+					).rejects.toMatchObject({ error: "access_denied" });
+				}
+				const unhintedConfirmed =
+					await service.confirmPersonalAccessTokenBinding({
+						expectedPrincipalId: bobLogin.account.principalId,
+						sessionToken: bobLogin.sessionToken,
+						state: unhintedState,
+					});
+				expect(new URL(unhintedConfirmed.callbackUrl).searchParams.size).toBe(
+					1,
+				);
+				await expect(
+					service.claimPersonalAccessTokenBinding({
+						bindingId: unhinted.bindingId,
+						consumerId: otherClient.consumerId,
+						secret: otherClient.secret,
+					}),
+				).rejects.toMatchObject({ error: "invalid_grant" });
+				const unhintedClaim = await service.claimPersonalAccessTokenBinding({
+					bindingId: unhinted.bindingId,
+					consumerId: "consumer-rehoboam-ai",
+					secret,
+				});
+				expect(unhintedClaim.account).toEqual({
+					id: bobLogin.account.principalId,
+					email: "bob-link-recipient@example.invalid",
+					displayName: "bob-link-recipient",
+				});
+				expect(
+					(await service.verifyAccessToken(`Bearer ${unhintedClaim.token}`))
+						.principalId,
+				).toBe(unhintedClaim.account.id);
+				await expect(
+					service.claimPersonalAccessTokenBinding({
+						bindingId: unhinted.bindingId,
+						consumerId: "consumer-rehoboam-ai",
+						secret,
+					}),
+				).rejects.toMatchObject({ error: "invalid_grant" });
+				for (const principalHint of ["", "  ", null, 42, "x".repeat(321)]) {
+					await expect(
+						service.createPersonalAccessTokenBinding({
+							consumerId: "consumer-rehoboam-ai",
+							name: "invalid hint",
+							secret,
+							principalHint: principalHint as unknown as string,
+						}),
+					).rejects.toMatchObject({ error: "invalid_request" });
+				}
+
+				for (const denial of [
+					"expired",
+					"revoked",
+					"principal",
+					"instance",
+					"identity",
+					"recovery",
+				] as const) {
+					const login = await service.loginBrowserSession({
+						password: "integration-password",
+						username: `binding-${denial}-${randomUUID()}`,
+					});
+					const pending = await service.createPersonalAccessTokenBinding({
+						consumerId: "consumer-rehoboam-ai",
+						name: `denied-${denial}`,
+						secret,
+					});
+					await service.confirmPersonalAccessTokenBinding({
+						expectedPrincipalId: login.account.principalId,
+						sessionToken: login.sessionToken,
+						state:
+							new URL(pending.authorizationUrl).pathname.split("/").at(-1) ??
+							"",
+					});
+					const [issued] =
+						await sql`SELECT token_id, instance_id FROM connection_pat_binding_sessions WHERE id = ${pending.bindingId}`;
+					if (denial === "expired")
+						await sql`UPDATE connection_pat_binding_sessions SET expires_at = now() - interval '1 minute' WHERE id = ${pending.bindingId}`;
+					if (denial === "revoked")
+						await sql`UPDATE connection_personal_access_tokens SET revoked_at = now() WHERE id = ${issued?.token_id}`;
+					if (denial === "principal")
+						await sql`UPDATE connection_principals SET status = 'DISABLED' WHERE id = ${login.account.principalId}`;
+					if (denial === "instance")
+						await sql`UPDATE connection_consumer_instances SET status = 'REVOKED' WHERE id = ${issued?.instance_id}`;
+					if (denial === "identity")
+						await sql`UPDATE connection_principal_identities SET status = 'DISABLED' WHERE principal_id = ${login.account.principalId}`;
+					if (denial === "recovery")
+						await sql`UPDATE connection_personal_access_tokens SET recovery_generation = (recovery_generation::bigint + 1)::text WHERE id = ${issued?.token_id}`;
+					await expect(
+						service.claimPersonalAccessTokenBinding({
+							bindingId: pending.bindingId,
+							consumerId: "consumer-rehoboam-ai",
+							secret,
+						}),
+					).rejects.toMatchObject({ error: "invalid_grant" });
+				}
+
+				const noEmailLogin = await service.loginBrowserSession({
+					password: "integration-password",
+					username: `no-email-${randomUUID()}`,
+				});
+				await sql`UPDATE connection_principals SET email = NULL WHERE id = ${noEmailLogin.account.principalId}`;
+				const noEmailBinding = await service.createPersonalAccessTokenBinding({
+					consumerId: "consumer-rehoboam-ai",
+					name: "No email",
+					secret,
+				});
+				await service.confirmPersonalAccessTokenBinding({
+					expectedPrincipalId: noEmailLogin.account.principalId,
+					sessionToken: noEmailLogin.sessionToken,
+					state:
+						new URL(noEmailBinding.authorizationUrl).pathname
+							.split("/")
+							.at(-1) ?? "",
+				});
+				const noEmailClaim = await service.claimPersonalAccessTokenBinding({
+					bindingId: noEmailBinding.bindingId,
+					consumerId: "consumer-rehoboam-ai",
+					secret,
+				});
+				expect(noEmailClaim.account.email).toBeNull();
+				expect(noEmailClaim.account.id).toBe(noEmailLogin.account.principalId);
 				const aliceAgentA = await bind("alice", "agent-a");
 				const aliceAgentB = await bind("alice", "agent-b");
 				const bobAgentA = await bind("bob", "agent-a");

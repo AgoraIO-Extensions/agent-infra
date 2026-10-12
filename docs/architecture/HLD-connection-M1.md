@@ -1348,9 +1348,16 @@ profile 使用独立短期 transaction：Consumer 后端认证后创建 opaque s
 browser session 确认，Connection 原子创建 PAT hash 与 TOKEN ConsumerInstance，明文只保留到固定
 Consumer callback 的单次领取完成。callback 失败时 transaction 保持可安全重试的待领取状态，但同一
 PAT 不能成功领取两次；不得通过定时轮询或任意 redirect 传递 PAT。
-Consumer 创建 binding 时还要提交由其服务身份认证的当前登录名提示；Connection 只持久化规范化
-hash，并在用户确认时与当前 browser Principal 的 profile 投影比较。该提示只阻止其他 Connection
-账号误确认被转发的链接，不创建 Principal，也不能替代 LDAP subject 或 browser session。
+Consumer 创建 binding 时可提交由其服务身份认证的当前登录名提示；提供时 Connection 只持久化
+规范化 hash，并在用户确认时与当前 browser Principal 的邮箱投影比较。省略提示时允许显式关联
+当前 Connection 账号，不证明两边属于同一员工；空白、null 或非法类型不能视为省略。
+两种方式均在确认页展示当前账号、目标 Consumer 及后端将获得的账号信息，由用户显式确认。
+确认页记录其展示的账号标识，无提示绑定在确认事务中仅将该标识与认证会话比较；
+标识缺失或登录已切换则拒绝并要求重新打开确认页，不能据该字段选择 Principal。
+单次 claim 只向对应获准 Consumer 返回 PAT 及其关联 Principal 的稳定标识、当前邮箱和显示名，
+不提供邮箱反查，不放入回调 URL、审计或日志；领取时重新检查主体、实例、客户端和 Token 有效性。
+Consumer 后端负责将 bindingId 关联原发起用户/会话并隔离各业务用户的 PAT。
+提示不创建 Principal，也不能替代 LDAP subject 或 browser session；已有含提示绑定及已签发 PAT 保持有效。
 
 ### 16.3 Envelope Encryption
 

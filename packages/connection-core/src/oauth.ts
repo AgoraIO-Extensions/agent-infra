@@ -101,6 +101,7 @@ export interface ConnectionPatBindingRepository {
 		bindingId: string;
 		consumerId: string;
 	}): Promise<{
+		account: { id: string; email: string | null; displayName: string };
 		consumerId: string;
 		expiresAt: Date;
 		name: string;
@@ -109,6 +110,7 @@ export interface ConnectionPatBindingRepository {
 	}>;
 	confirmPersonalAccessTokenBinding(input: {
 		browserSessionHash: string;
+		expectedPrincipalId?: string;
 		protectedToken: string;
 		stateHash: string;
 		tokenHash: string;
@@ -122,7 +124,7 @@ export interface ConnectionPatBindingRepository {
 		expiresAt: Date;
 		instanceId: string;
 		name: string;
-		principalHintHash: string;
+		principalHintHash: string | null;
 		stateHash: string;
 	}): Promise<void>;
 	findPersonalAccessTokenBinding(
@@ -907,7 +909,7 @@ export class ConnectionOAuthService {
 	async createPersonalAccessTokenBinding(input: {
 		consumerId: string;
 		name: string;
-		principalHint: string;
+		principalHint?: string;
 		secret: string;
 	}) {
 		const profile = await this.requirePatBindingProfile(
@@ -921,8 +923,20 @@ export class ConnectionOAuthService {
 				"Token name must contain between 1 and 100 characters",
 			);
 		}
-		const principalHint = input.principalHint.trim().toLowerCase();
-		if (principalHint.length < 3 || principalHint.length > 320) {
+		if (
+			input.principalHint !== undefined &&
+			typeof input.principalHint !== "string"
+		) {
+			throw new OAuthProtocolError(
+				"invalid_request",
+				"Invalid Principal binding",
+			);
+		}
+		const principalHint = input.principalHint?.trim().toLowerCase();
+		if (
+			principalHint !== undefined &&
+			(principalHint.length < 3 || principalHint.length > 320)
+		) {
 			throw new OAuthProtocolError(
 				"invalid_request",
 				"Invalid Principal binding",
@@ -940,7 +954,8 @@ export class ConnectionOAuthService {
 			expiresAt,
 			instanceId: `instance-${randomUUID()}`,
 			name,
-			principalHintHash: tokenHash(principalHint),
+			principalHintHash:
+				principalHint === undefined ? null : tokenHash(principalHint),
 			stateHash: tokenHash(state),
 		});
 		return {
@@ -967,6 +982,7 @@ export class ConnectionOAuthService {
 	}
 
 	async confirmPersonalAccessTokenBinding(input: {
+		expectedPrincipalId?: string;
 		sessionToken: string | undefined;
 		state: string;
 	}) {
@@ -983,6 +999,7 @@ export class ConnectionOAuthService {
 			await this.options.patBinding.repository.confirmPersonalAccessTokenBinding(
 				{
 					browserSessionHash: this.browserSessionHash(input.sessionToken),
+					expectedPrincipalId: input.expectedPrincipalId,
 					protectedToken: this.protector.protect({
 						issuer: "connection-pat-binding",
 						subject: token,
@@ -1021,6 +1038,7 @@ export class ConnectionOAuthService {
 			throw new OAuthProtocolError("invalid_token", "Invalid PAT binding", 401);
 		}
 		return {
+			account: claimed.account,
 			consumerId: claimed.consumerId,
 			expiresAt: claimed.expiresAt,
 			name: claimed.name,

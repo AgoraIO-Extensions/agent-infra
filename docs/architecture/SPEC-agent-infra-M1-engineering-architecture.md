@@ -344,6 +344,10 @@ M1 不引入 tRPC/oRPC/ConnectRPC。这样可以让自定义 Agent、未来其�
 - 获准的具名 MCP Consumer 可以创建短期 PAT binding session。Connection 只接受该 Consumer 已注册
   的固定 callback 和服务领取凭据；浏览器确认后，PAT 通过后端到后端的单次领取交付，opaque state、
   callback URL、日志、审计和浏览器响应都不能包含 PAT。binding session 过期或消费后拒绝重放。
+  登录名提示可选：提供时校验邮箱一致；省略时由用户确认关联当前 Connection 账号，不断言业务
+  账号与 Connection 账号属于同一员工。单次 claim 向对应 Consumer 后端交付已确认 PAT 的
+  稳定账号标识和当前 profile；客户端负责发起会话关联及业务用户之间的 Token 隔离，见
+  [PAT Binding ADR](../adr/ADR-connection-agent-pat-binding.md)。
 - Consumer 注册由 Connection 管理员在独立 Connection Web 完成，callback、服务凭据 hash、状态和
   轮换生命周期以 Connection DB 为准；不得为 RehoboamAI 或其他 Agent 增加专属环境变量。
 - LDAP egress 使用部署批准的固定 transport profile。当前 Agora 目录因不提供可用 TLS，批准仅在

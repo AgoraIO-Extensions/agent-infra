@@ -24,7 +24,7 @@ Registration continues directly into capability configuration. The administrator
 
 ## Implement per-user PAT Binding
 
-1. Authenticate the user in your product. Derive `principalHint` from the trusted current user's company email; it must match the Connection browser account email after trimming and lowercasing. The hint is not identity authority; Connection derives the Principal from its own browser session.
+1. Authenticate the user in your product and associate each binding with the initiating user/session/instance in your backend. `principalHint` is optional: when available, derive it from that trusted user's company email; it must match the Connection browser account after trimming and lowercasing. When omitted, the user explicitly links the current Connection account, which may differ from the product account. Null, blank or invalid hints are rejected. Connection derives the Principal only from its own authenticated browser session.
 2. From your backend, send:
 
 ```http
@@ -33,12 +33,12 @@ Authorization: Bearer <Agent service credential>
 Content-Type: application/json
 Idempotency-Key: <UUID for this create operation>
 
-{"consumerId":"my-agent","name":"my-agent-default","principalHint":"<current authenticated company email>"}
+{"consumerId":"my-agent","name":"my-agent-default"}
 ```
 
 The HTTP 201 response contains `bindingId`, `authorizationUrl`, `expiresAt`. Persist the binding ID association to the initiating product user/session/instance. Open the returned authorization URL in a new tab; do not construct it or trust caller-supplied identities.
 
-3. The user signs in to Connection and sees "Authorize <Agent name>", the token name and expiry. Clicking "Confirm and return <Agent name>" creates an independent user/Consumer instance and PAT, then redirects with HTTP 303 to the registered callback, adding `binding_id=<bindingId>`. The callback URL never carries the PAT.
+3. The user signs in to Connection and sees the current Connection account, "Authorize <Agent name>", the token name and expiry, and the account information shared with the backend. Explicit confirmation creates an independent user/Consumer instance and PAT, then redirects with HTTP 303 to the registered callback, adding `binding_id=<bindingId>`. The callback URL never carries the PAT or account profile.
 4. In your backend callback, verify the binding ID belongs to the initiating user/session/instance before claiming or attaching it. Do not attach an arbitrary callback ID to the currently logged-in user. Claim with the same Consumer's service credential:
 
 ```http
@@ -50,7 +50,7 @@ Idempotency-Key: <different UUID for this claim operation>
 {"consumerId":"my-agent"}
 ```
 
-The response is `{"issued":{"consumerId":...,"expiresAt":...,"name":...,"token":...,"tokenId":...}}`. Encrypt/store `issued.token` for the exact product user/instance in backend Secret configuration and record the token ID/expiry. Return only connection status to the frontend.
+The response is `{"issued":{"account":{"id":...,"email":...,"displayName":...},"consumerId":...,"expiresAt":...,"name":...,"token":...,"tokenId":...}}`. `account.id` is the stable Connection Principal identifier of this PAT; email is the current Connection profile email or null, not a stable identity key or evidence that product and Connection accounts belong to the same person. Encrypt/store `issued.token` for the initiating product user/instance in backend Secret configuration and record the token ID/expiry. The UI may show the linked account email/name; never expose the token to the frontend or models. Existing clients may continue providing principalHint and reading the original issued fields.
 
 The binding currently lasts 10 minutes; both confirmation and claim must finish before the returned binding expiry. PAT expiry is separately returned in `issued.expiresAt`. Claim succeeds once. Use separate create/claim idempotency keys, preserving a key and parameters for the same operation; do not rely on replay to retrieve a one-time secret. Expired, delivered or lost-response cases require an explicit new binding flow rather than blind claim retries. Users can revoke an already issued obsolete token at [Access tokens](__CONNECTION_ORIGIN__/connection/tokens).
 
