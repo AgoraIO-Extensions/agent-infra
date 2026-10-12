@@ -47,12 +47,18 @@ RUN cd /prod/agent-runtime-host && node --input-type=module -e 'import {verifyOp
 
 FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
 ARG SOURCE_COMMIT=unknown
+ARG SOURCE_DATE_EPOCH=0
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 LABEL io.agora.agent.runtime.manifest='{"schemaVersion":1,"interactionMode":"platform-adapter","protocol":"acp","service":{"port":3003},"health":{"path":"/healthz"}}'
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates util-linux \
 	&& rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache \
 	&& npm install --global npm@11.19.1 --logs-max=0 \
-	&& rm -rf /root/.npm /tmp/node-compile-cache
+	&& rm -rf /root/.npm /tmp/node-compile-cache \
+	&& SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" node --input-type=module -e '\
+  const epoch = Number(process.env.SOURCE_DATE_EPOCH); \
+  if (!Number.isSafeInteger(epoch) || epoch < 0) throw new Error("RUNTIME_IMAGE_TIMESTAMP_INVALID"); \
+  const {utimesSync} = await import("node:fs"); \
+  utimesSync("/usr/local", epoch, epoch);'
 ENV NODE_ENV=production
 ENV AGENT_INFRA_RUNTIME_DATA_DIR=/var/lib/agent-runtime
 ENV PATH=/opt/codex/bin:/usr/local/bin:/usr/bin:/bin
@@ -103,6 +109,14 @@ RUN mkdir -p /var/lib/agent-runtime && chown node:node /var/lib/agent-runtime
 RUN mkdir -p /etc/agent-infra/legacy-migration \
     && chown root:root /etc/agent-infra /etc/agent-infra/legacy-migration \
     && chmod 0555 /etc/agent-infra /etc/agent-infra/legacy-migration
+# npm's global install updates this directory after the base image timestamp is
+# fixed. Reapply the build epoch after all runtime-stage writes so two OCI
+# reproducibility passes cannot diverge on the directory metadata alone.
+RUN SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" node --input-type=module -e '\
+  const epoch = Number(process.env.SOURCE_DATE_EPOCH); \
+  if (!Number.isSafeInteger(epoch) || epoch < 0) throw new Error("RUNTIME_IMAGE_TIMESTAMP_INVALID"); \
+  const {utimesSync} = await import("node:fs"); \
+  utimesSync("/usr/local", epoch, epoch);'
 VOLUME ["/var/lib/agent-runtime"]
 USER 1000:1000
 CMD ["/bin/sh", "./start-runtime-host.sh"]
