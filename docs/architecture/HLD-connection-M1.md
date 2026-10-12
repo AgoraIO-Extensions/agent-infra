@@ -1386,7 +1386,7 @@ Provider 的前置审批由 Connection DB 中 `connection_provider_access_settin
 
 切换保留历史 Request/Decision/Permit/Authorization，不改写原批准，不撤销或自动恢复 Consumer Grant、账号及 Credential。关闭时公司审批资格不作为准入门禁；账号停用、Grant 暂停/撤销、Provider/Action 停用及凭据失效继续阻断。重新开启恢复原资格检查，已过期、撤销或暂停资格不能被追认。OAuth start/callback、凭据保存、reconnect 与 invocation/dispatch 必须一致读取服务端规则；凭据写入与最终提交在同一事务锁定配置，配置切换与 admission 串行化，旧回调不能在开启后无 Permit 保存新账号。
 
-实现复用 `connection_access_enforcement` 的共享/排他锁串行化配置切换与 admission；所有可能复核准入的事务先锁 enforcement，再锁 Principal、account 和 Grant，配置事务同样先锁 enforcement 再复核管理员，禁止反向锁顺序；cutoff 和历史 baseline 保留，但只约束开启审批的 Provider，不能作为关闭 Provider 的强制 Permit 条件。新增及部署此规则不修改旧 migration 或以环境变量绕过门禁。本文其他章节的公司审批和重新审批条件同样仅在该 Provider 开启前置审批时生效；独立的 Provider admission、受限接入批准和显式 Consent/Grant 不受此开关影响。后台资格到期任务在关闭期间不暂停 Grant 或提升账号 fence；重新开启后按数据库时间立即拒绝过期资格。
+实现复用 `connection_access_enforcement` 的共享/排他锁串行化配置切换与 admission；所有可能复核准入的事务先锁 enforcement，再锁 Principal、account 和 Grant，配置事务同样先锁 enforcement 再复核管理员，禁止反向锁顺序；自动能力包迁移在锁定 Profile 与审批人前取得 enforcement 排他锁，避免与凭据 admission 的 Principal/Profile 锁形成环；cutoff 和历史 baseline 保留，但只约束开启审批的 Provider，不能作为关闭 Provider 的强制 Permit 条件。新增及部署此规则不修改旧 migration 或以环境变量绕过门禁。本文其他章节的公司审批和重新审批条件同样仅在该 Provider 开启前置审批时生效；独立的 Provider admission、受限接入批准和显式 Consent/Grant 不受此开关影响。后台资格到期任务在关闭期间不暂停 Grant 或提升账号 fence；重新开启后按数据库时间立即拒绝过期资格。
 
 个人 Provider Connection 在 Credential 流程之前增加独立公司审批权威。它不复用 Consumer Grant、Provider OAuth transaction 或 ProviderUpgradeTask；完整决策原因见 [Connection Access Approval Authority ADR](../adr/ADR-connection-access-approval-authority.md)。
 
@@ -1394,7 +1394,9 @@ Provider 的前置审批由 Connection DB 中 `connection_provider_access_settin
 
 目录管理员对已发布 Capability Profile 或 Disclaimer 的“编辑”在单个事务中创建新的不可变发布版本，并把引用旧版的 current PUBLISHED Policy 复制成绑定新版的替代版本；原 Profile、Disclaimer 和 Policy 仅转为 SUPERSEDED。替代 Policy 保留原审批阶段、期限、优先级及其余条款，新申请只看到新版；旧 Request、Permit、Authorization 和 Grant 仍绑定原版，不自动扩权或重写确认。管理员“删除”仅把目标及引用它的 current Policy 转为 SUPERSEDED，从新申请目录撤下，不硬删除或撤销既有资格。所有操作校验管理员身份、目标 revision 和并发引用，审计/outbox 与状态更新同事务；重大免责声明变更仍遵循下文的重审门禁，不能通过快捷修订绕过。
 
-当被编辑的 Profile 绑定的旧 ProviderRelease 不在当前运行 Catalog 时，管理页必须展示旧 release 来源并要求管理员显式选择当前同一 Provider 的可执行 release；切换时清空旧 ActionVersion 选择，不按名称、效果或序号自动映射。修订事务验证来源/目标 Provider 一致、目标 release 仍 PUBLISHED 且由当前执行器提供、所选 ActionVersion 全属目标 release，并将受影响的 current Policy 同时替换为目标 release/Profile 的新版本。旧 Policy、Request、Authorization、Credential 和 Grant 保留原 release 与批准范围；跨 Provider、旧执行器不可用、条款作用域不匹配或并发变更时拒绝修订。
+Provider Catalog 在受信运行时启动时发布后，能力包对账只使用当前装配的同一 Provider 目标 Release。复用下述 exact compatibility 证明，权限兼容、审批目录门禁开启且原策略审批人通过正式目录复核时，在单个事务生成新的不可变 Profile、逐项目标 ActionVersion 映射和匹配替代 Policy，原版仅 SUPERSEDED；系统审计使用受限的 SYSTEM actor_kind 和空 Principal，并保存精确来源、目标、映射及证明，替代策略保留原创建来源。源 Profile revision、current Policy 集合、目标发布状态及执行器绑定均复核；重复启动幂等，未证明兼容不自动发布。
+
+新版本额外增加的 Action 不自动纳入能力包。兼容对账先保留原获批集合完成跟随，并为新增能力生成可选的管理员确认事项；效果、scope、输入定义或描述变化、移除、认证/部署变化、证明缺失及审批门禁失败时保留旧发布来源并生成待确认事项。确认事项和脱敏审计/outbox 同事务写入，在同一来源 revision 的当前目标生命周期内去重；目标切走后再次成为当前目标时，在来源锁内递增生命周期序号并创建新的审计/outbox 事项，旧通知及待办保持终结。当前目标回到来源版本且没有可选能力更新时，同事务取消其他目标的事项、归档通知并写入系统取消审计/outbox；延迟到达的投影不得重新打开已失效事项。投影没有有效管理员接收者时保留 PENDING 并延后重试，不增加失败次数或伪造 DELIVERED；只给当前有效管理员创建站内通知与待办，失去管理员角色后不可读取或操作。管理员页面展示变化，保留逐项定义相同的能力选择，新增或改变能力默认不选；明确确认后复用已发布 Profile 修订事务，复制匹配策略并终结待办。修订验证同一 Provider、当前可执行目标、成员发布状态、目录、策略与免责声明条款；旧版手工修订也优先选择服务端指定的当前目标。历史 Request、Decision、Permit、Authorization、Credential、Grant、有效期和既有 Consent 不改写，不自动扩权；当前申请选项尚未开放时明确提示等待管理员处理。
 
 管理员对 current PUBLISHED Policy 的快捷“编辑”同样在一个事务中发布冻结所有字段的新 Policy Version，并将原版本转为 SUPERSEDED；可改变阶段、候选人、时长和已发布能力包/非重大条款，但只影响新申请。既有 Request、Permit、Authorization 和 Grant 继续按原 Policy 冻结值执行，不因快捷编辑触发重审或自动扩权。快捷“移除”仅将 current Policy 转为 SUPERSEDED，停止该策略的新申请，不终止待审或已批准资格；界面必须与紧急撤销明显区分。两者均以管理员身份和 current revision 做事务内 CAS，快捷编辑还须重新验证目录、候选人、Provider/Profile/Disclaimer 发布状态、阶段 quorum 和依赖完整性；新增重大 Disclaimer 仍须使用显式 material 发布与重审流程。
 

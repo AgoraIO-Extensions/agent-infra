@@ -145,7 +145,8 @@ export type ApprovalNotification = {
 		| "CONNECTION_ACCESS_AUTHORIZATION"
 		| "CONNECTION_ACCESS_REQUEST"
 		| "CONNECTION_DISPATCH_FAILURE"
-		| "PROVIDER_UPGRADE_TASK";
+		| "PROVIDER_UPGRADE_TASK"
+		| "CAPABILITY_PROFILE_UPDATE";
 	createdAt: string;
 	eventType: string;
 	id: string;
@@ -170,7 +171,8 @@ export type ConnectionWorkItem = {
 		| "CONNECTION_ACCESS_REQUEST"
 		| "CONNECTION_ACCESS_AUTHORIZATION"
 		| "CONNECTION_DISPATCH_FAILURE"
-		| "PROVIDER_UPGRADE_TASK";
+		| "PROVIDER_UPGRADE_TASK"
+		| "CAPABILITY_PROFILE_UPDATE";
 	createdAt: string;
 	dueAt: string | null;
 	id: string;

@@ -5,6 +5,10 @@ import {
 	PostgresConnectionAccessRequestRepository,
 	syncApprovalProjections,
 } from "./access-request-repository";
+import {
+	type AuthorizationCompatibility,
+	compatibleApprovalProfile,
+} from "./approval-upgrade";
 
 export type CapabilityProfileDraft = {
 	actionVersionIds: readonly string[];
@@ -127,10 +131,23 @@ export function validateApprovalPolicyDraft(input: ApprovalPolicyDraft) {
 	}
 }
 
+export type ProfileUpgradeRuntime = {
+	providerReleases: ReadonlyMap<string, string>;
+	authorizationCompatibility: ReadonlyMap<
+		string,
+		readonly AuthorizationCompatibility[]
+	>;
+	approvalDirectoryEnabled: boolean;
+	verifyPrincipal: (principalId: string) => Promise<unknown>;
+};
+
 export class PostgresConnectionApprovalRepository {
 	private readonly sql: Sql;
 
-	constructor(databaseUrl: string) {
+	constructor(
+		databaseUrl: string,
+		private readonly runtime?: ProfileUpgradeRuntime,
+	) {
 		this.sql = postgres(databaseUrl, { max: 10 });
 	}
 
@@ -428,6 +445,386 @@ export class PostgresConnectionApprovalRepository {
 		});
 	}
 
+	private async profileUpgrade(
+		sql: postgres.Sql | postgres.TransactionSql,
+		profileId: string,
+		sourceId: string,
+		providerId: string,
+	) {
+		const targetId = this.runtime?.providerReleases.get(providerId);
+		if (!targetId) return undefined;
+		const [pending] = await sql<
+			{
+				upgrade: {
+					targetProviderReleaseId: string;
+					compatible: boolean;
+					selectedActionVersionIds: string[];
+					changes: {
+						name: string;
+						kind: "ADDED" | "CHANGED" | "REMOVED";
+						beforeEffect?: string;
+						afterEffect?: string;
+						detail?: string;
+					}[];
+					reason: string;
+				};
+			}[]
+		>`
+				SELECT payload->'upgrade' AS upgrade FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required'
+				AND payload->>'sourceProfileId' = ${profileId} AND payload->>'targetProviderReleaseId' = ${targetId}
+				AND payload ? 'upgrade' ORDER BY COALESCE((payload->>'generation')::bigint, 0) DESC, created_at DESC, id DESC LIMIT 1
+			`;
+		if (sourceId === targetId) return pending?.upgrade;
+		const proof = await compatibleApprovalProfile(sql, {
+			capabilityProfileId: profileId,
+			fromReleaseId: sourceId,
+			toReleaseId: targetId,
+			authorizationCompatibility:
+				this.runtime?.authorizationCompatibility.get(targetId),
+		});
+		const source = await sql<
+			{
+				id: string;
+				name: string;
+				effect: string;
+				description: string;
+				input_schema: postgres.JSONValue;
+				required_scopes: postgres.JSONValue;
+			}[]
+		>`
+			SELECT action.* FROM connection_action_versions action JOIN connection_capability_profile_actions member
+			ON member.action_version_id = action.id AND member.provider_release_id = action.provider_release_id
+			WHERE member.capability_profile_id = ${profileId} ORDER BY action.name
+		`;
+		const sourceCatalog = await sql<
+			{ name: string }[]
+		>`SELECT name FROM connection_action_versions WHERE provider_release_id = ${sourceId}`;
+		const target = await sql<
+			{
+				id: string;
+				name: string;
+				effect: string;
+				description: string;
+				input_schema: postgres.JSONValue;
+				required_scopes: postgres.JSONValue;
+			}[]
+		>`
+			SELECT * FROM connection_action_versions WHERE provider_release_id = ${targetId} AND status = 'PUBLISHED' ORDER BY name
+		`;
+		const same = (a: (typeof source)[number], b: (typeof source)[number]) =>
+			canonicalHash({
+				name: a.name,
+				effect: a.effect,
+				description: a.description,
+				inputSchema: a.input_schema,
+				scopes: a.required_scopes,
+			}) ===
+			canonicalHash({
+				name: b.name,
+				effect: b.effect,
+				description: b.description,
+				inputSchema: b.input_schema,
+				scopes: b.required_scopes,
+			});
+		return {
+			targetProviderReleaseId: targetId,
+			compatible: Boolean(proof),
+			selectedActionVersionIds: source.flatMap((a) => {
+				const matches = target.filter((b) => same(a, b));
+				return matches.length === 1 && matches[0] ? [matches[0].id] : [];
+			}),
+			changes: [
+				...source.flatMap((a) => {
+					const matches = target.filter((b) => b.name === a.name);
+					return matches.length === 1 && matches[0] && same(a, matches[0])
+						? []
+						: [
+								{
+									name: a.name,
+									kind: matches.length
+										? ("CHANGED" as const)
+										: ("REMOVED" as const),
+									beforeEffect: a.effect,
+									afterEffect: matches[0]?.effect,
+									detail: matches[0]
+										? [
+												a.effect !== matches[0].effect
+													? `效果：${a.effect} → ${matches[0].effect}`
+													: "",
+												canonicalHash(a.required_scopes) !==
+												canonicalHash(matches[0].required_scopes)
+													? `权限范围：${JSON.stringify(a.required_scopes)} → ${JSON.stringify(matches[0].required_scopes)}`
+													: "",
+												canonicalHash(a.input_schema) !==
+												canonicalHash(matches[0].input_schema)
+													? "参数定义已变化"
+													: "",
+												a.description !== matches[0].description
+													? `说明：${a.description} → ${matches[0].description}`
+													: "",
+											]
+												.filter(Boolean)
+												.join("；")
+										: "新版不再提供该能力",
+								},
+							];
+				}),
+				...target
+					.filter((b) => !sourceCatalog.some((a) => a.name === b.name))
+					.map((b) => ({
+						name: b.name,
+						kind: "ADDED" as const,
+						afterEffect: b.effect,
+					})),
+			],
+			reason:
+				pending?.upgrade.reason ??
+				(proof ? "审批配置仍需验证" : "权限或兼容证明发生变化，需要管理员确认"),
+		};
+	}
+
+	async reconcileCapabilityProfiles() {
+		if (!this.runtime) return;
+		const candidates = await this.sql<
+			{
+				id: string;
+				provider_release_id: string;
+				provider_id: string;
+				revision: string;
+				name: string;
+			}[]
+		>`
+			SELECT profile.id, profile.provider_release_id, release.provider AS provider_id, profile.revision::text, profile.name
+			FROM connection_capability_profiles profile JOIN connection_provider_releases release ON release.id = profile.provider_release_id
+			WHERE profile.status = 'PUBLISHED' AND profile.id NOT LIKE 'upgrade-profile-%' ORDER BY profile.id
+		`;
+		for (const source of candidates) {
+			const upgrade = await this.profileUpgrade(
+				this.sql,
+				source.id,
+				source.provider_release_id,
+				source.provider_id,
+			);
+			if (!upgrade) {
+				if (
+					this.runtime.providerReleases.get(source.provider_id) ===
+					source.provider_release_id
+				)
+					await this.cancelObsoleteProfileUpdates(source);
+				continue;
+			}
+			let failureReason = !this.runtime.approvalDirectoryEnabled
+				? "审批目录门禁未启用，请管理员配置并启用员工目录"
+				: upgrade.reason;
+			let verifyingDirectory = true;
+			const automatic =
+				upgrade.compatible &&
+				source.provider_release_id !== upgrade.targetProviderReleaseId &&
+				this.runtime.approvalDirectoryEnabled;
+			const policies = await this.sql<
+				{ id: string }[]
+			>`SELECT id FROM connection_access_policy_versions WHERE capability_profile_id = ${source.id} AND status = 'PUBLISHED'`;
+			if (automatic) {
+				try {
+					for (const policy of policies)
+						for (const id of await this.listPolicyApproverPrincipalIds(
+							policy.id,
+						))
+							await this.runtime.verifyPrincipal(id);
+					verifyingDirectory = false;
+					await this.sql.begin(async (sql) => {
+						// Automatic policy replacement locks profiles and approvers; serialize it
+						// against credential admission before taking either business-row lock.
+						await sql`SELECT id FROM connection_access_enforcement WHERE id = 'personal' FOR UPDATE`;
+						const [locked] = await sql<
+							{ id: string }[]
+						>`SELECT id FROM connection_capability_profiles WHERE id = ${source.id} AND status = 'PUBLISHED' AND revision::text = ${source.revision} FOR UPDATE`;
+						if (!locked) invalid("Published capability profile changed");
+						const currentPolicies = await this.currentPolicyIds(sql, {
+							profileId: source.id,
+						});
+						if (
+							canonicalHash([...currentPolicies].sort()) !==
+							canonicalHash(policies.map((policy) => policy.id).sort())
+						)
+							invalid("Current policy set changed");
+						const proof = await compatibleApprovalProfile(sql, {
+							capabilityProfileId: source.id,
+							fromReleaseId: source.provider_release_id,
+							toReleaseId: upgrade.targetProviderReleaseId,
+							authorizationCompatibility:
+								this.runtime?.authorizationCompatibility.get(
+									upgrade.targetProviderReleaseId,
+								),
+						});
+						if (!proof) invalid("Compatibility proof changed");
+						const created = await this.reviseProfile(sql, {
+							id: source.id,
+							sourceId: source.id,
+							name: source.name,
+							expectedRevision: source.revision,
+							actorPrincipalId: null,
+							providerReleaseId: upgrade.targetProviderReleaseId,
+							actionVersionIds: proof.mapping.map((item) => item.target_id),
+						});
+						await sql`INSERT INTO connection_audit_records (actor_kind, event, detail) VALUES ('SYSTEM', 'connection.capability-profile.compatible-upgrade', ${sql.json({ aggregateId: created.capabilityProfileId, sourceProfileId: source.id, sourceReleaseId: source.provider_release_id, targetReleaseId: upgrade.targetProviderReleaseId, mapping: proof.mapping, compatibility: proof.evidence ?? null, fromExecutorDigest: proof.release.from_executor_digest, toExecutorDigest: proof.release.to_executor_digest })})`;
+
+						if (upgrade.changes.some((change) => change.kind === "ADDED")) {
+							const [next] = await sql<
+								{ revision: string }[]
+							>`SELECT revision::text FROM connection_capability_profiles WHERE id = ${created.capabilityProfileId}`;
+							if (next)
+								await this.recordProfileUpdate(
+									{
+										...source,
+										id: created.capabilityProfileId,
+										revision: next.revision,
+									},
+									{
+										...upgrade,
+										compatible: false,
+										reason:
+											"兼容升级已完成，新增能力默认未选，请确认是否纳入能力包",
+									},
+									sql,
+								);
+						}
+					});
+					continue;
+				} catch (error) {
+					// Database/network errors remain operational failures; only known validation gates become pending updates.
+					if (!(error instanceof ConnectionError)) throw error;
+					const reasons: Record<string, string> = {
+						"Approval policy has no approvers": "审批策略未配置审批人",
+						"Capability profile actions are unavailable":
+							"目标版本包含未发布或不可用的能力",
+						"Published policy changed": "审批策略已发生并发变更，请刷新后处理",
+						"Approval policy disclaimers are unavailable":
+							"审批策略引用的免责声明未发布或已停用",
+						"Approval policy approvers are inactive":
+							"审批策略包含已停用的审批人",
+						"Policy disclaimers cannot be carried to the target release":
+							"免责声明作用域不允许沿用到目标版本",
+						"Current capability profile name already exists":
+							"当前版本已有同名能力包，请管理员处理名称冲突",
+						"Current policy set changed": "审批策略已发生并发变更，请重新检查",
+						"Published capability profile changed":
+							"能力包已发生并发变更，请刷新后处理",
+						"Compatibility proof changed": "兼容性证明已发生变化，无法自动发布",
+					};
+					failureReason =
+						reasons[error.message] ??
+						(verifyingDirectory
+							? error.code === "PROVIDER_UNAVAILABLE"
+								? "员工目录服务不可用，审批人目录复核失败"
+								: "审批人目录复核失败，请检查审批人的身份映射"
+							: "审批配置验证失败，请检查当前策略及目标版本发布状态");
+				}
+			}
+			await this.recordProfileUpdate(source, {
+				...upgrade,
+				reason: failureReason,
+			});
+		}
+	}
+
+	private async cancelObsoleteProfileUpdates(source: {
+		id: string;
+		revision: string;
+		provider_release_id: string;
+	}) {
+		await this.sql.begin(async (sql) => {
+			const [profile] = await sql<
+				{ id: string }[]
+			>`SELECT id FROM connection_capability_profiles
+ WHERE id = ${source.id} AND status = 'PUBLISHED' AND revision::text = ${source.revision} FOR UPDATE`;
+			if (!profile) return;
+			const events = await sql<{ id: string }[]>`UPDATE connection_outbox_events
+ SET payload = jsonb_set(payload, '{inactive}', 'true'::jsonb)
+ WHERE topic = 'connection.capability-profile.update-required' AND payload->>'sourceProfileId' = ${source.id}
+ AND payload->>'targetProviderReleaseId' <> ${source.provider_release_id}
+ AND COALESCE(payload->>'inactive', 'false') <> 'true' RETURNING id`;
+			for (const event of events) {
+				await sql`UPDATE connection_work_items SET status = 'CANCELED', completed_at = now(), updated_at = now()
+ WHERE business_type = 'CAPABILITY_PROFILE_UPDATE' AND business_id = ${event.id} AND status = 'OPEN'`;
+				await sql`UPDATE connection_notification_receipts receipt SET archived_at = now()
+ FROM connection_notifications notice WHERE notice.id = receipt.notification_id
+ AND notice.business_type = 'CAPABILITY_PROFILE_UPDATE' AND notice.business_id = ${event.id} AND receipt.archived_at IS NULL`;
+				await this.auditAndEnqueue(sql, {
+					actorPrincipalId: null,
+					aggregateId: `${event.id}:canceled`,
+					event: "connection.capability-profile.update-canceled",
+				});
+			}
+		});
+	}
+
+	private async recordProfileUpdate(
+		source: { id: string; revision: string; provider_id: string },
+		upgrade: NonNullable<
+			Awaited<
+				ReturnType<PostgresConnectionApprovalRepository["profileUpgrade"]>
+			>
+		>,
+		transaction?: postgres.TransactionSql,
+	) {
+		const save = async (sql: postgres.TransactionSql) => {
+			const [profile] = await sql<
+				{ id: string }[]
+			>`SELECT id FROM connection_capability_profiles WHERE id = ${source.id} AND status = 'PUBLISHED' AND revision::text = ${source.revision} FOR UPDATE`;
+			if (!profile) return;
+			const [latest] = await sql<
+				{
+					id: string;
+					target_id: string;
+					source_revision: string | null;
+					generation: string;
+					inactive: boolean;
+				}[]
+			>`
+ SELECT id, payload->>'targetProviderReleaseId' AS target_id,
+ payload->>'sourceRevision' AS source_revision,
+ COALESCE(payload->>'generation', '0') AS generation, COALESCE(payload->>'inactive', 'false') = 'true' AS inactive
+ FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required'
+ AND payload->>'sourceProfileId' = ${source.id}
+ ORDER BY COALESCE((payload->>'generation')::bigint, 0) DESC, created_at DESC, id DESC LIMIT 1
+ `;
+			const sameLifecycle =
+				latest?.target_id === upgrade.targetProviderReleaseId &&
+				latest.source_revision === source.revision &&
+				!latest.inactive;
+			const generation = sameLifecycle
+				? latest.generation
+				: String(BigInt(latest?.generation ?? "0") + 1n);
+			const eventId = sameLifecycle
+				? latest.id
+				: `profile-update-${canonicalHash({ sourceId: source.id, revision: source.revision, targetId: upgrade.targetProviderReleaseId, generation })}`;
+			const superseded = await sql<
+				{ aggregate_id: string }[]
+			>`SELECT aggregate_id FROM connection_outbox_events
+				WHERE topic = 'connection.capability-profile.update-required' AND payload->>'sourceProfileId' = ${source.id}
+				AND aggregate_id <> ${eventId}`;
+			const supersededIds = superseded.map((item) => item.aggregate_id);
+			if (supersededIds.length) {
+				await sql`UPDATE connection_work_items SET status = 'CANCELED', completed_at = now(), updated_at = now()
+					WHERE business_type = 'CAPABILITY_PROFILE_UPDATE' AND business_id IN ${sql(supersededIds)} AND status = 'OPEN'`;
+				await sql`UPDATE connection_notification_receipts receipt SET archived_at = now()
+					FROM connection_notifications notice WHERE notice.id = receipt.notification_id
+					AND notice.business_type = 'CAPABILITY_PROFILE_UPDATE' AND notice.business_id IN ${sql(supersededIds)} AND receipt.archived_at IS NULL`;
+			}
+			const inserted = await sql`
+				INSERT INTO connection_outbox_events (id, topic, aggregate_id, payload)
+				VALUES (${eventId}, 'connection.capability-profile.update-required', ${eventId}, ${sql.json({ sourceProfileId: source.id, targetProviderReleaseId: upgrade.targetProviderReleaseId, providerId: source.provider_id, sourceRevision: source.revision, generation, upgrade })}) ON CONFLICT DO NOTHING
+			`;
+			if (!inserted.count)
+				await sql`UPDATE connection_outbox_events SET payload = jsonb_set(payload, '{upgrade,reason}', to_jsonb(${upgrade.reason}::text)) WHERE id = ${eventId}`;
+			if (inserted.count)
+				await sql`INSERT INTO connection_audit_records (actor_kind, event, detail) VALUES ('SYSTEM', 'connection.capability-profile.update-required', ${sql.json({ aggregateId: eventId, sourceProfileId: source.id, targetProviderReleaseId: upgrade.targetProviderReleaseId, supersededIds })})`;
+		};
+		if (transaction) return save(transaction);
+		return this.sql.begin(save);
+	}
+
 	async listCatalog() {
 		const [profiles, policies, disclaimers] = await Promise.all([
 			this.sql<
@@ -436,12 +833,15 @@ export class PostgresConnectionApprovalRepository {
 					id: string;
 					name: string;
 					provider_release_id: string;
+					provider_id: string;
 					revision: string;
 					status: string;
 				}[]
 			>`
-				SELECT id, provider_release_id, name, effect_ceiling, revision::text, status
-				FROM connection_capability_profiles ORDER BY name, created_at DESC
+				SELECT profile.id, profile.provider_release_id, profile.name, profile.effect_ceiling,
+					profile.revision::text, profile.status, release.provider AS provider_id
+					FROM connection_capability_profiles profile JOIN connection_provider_releases release
+					ON release.id = profile.provider_release_id ORDER BY profile.name, profile.created_at DESC
 			`,
 			this.sql<
 				{
@@ -479,14 +879,27 @@ export class PostgresConnectionApprovalRepository {
 			`,
 		]);
 		return {
-			profiles: profiles.map((profile) => ({
-				effectCeiling: profile.effect_ceiling,
-				id: profile.id,
-				name: profile.name,
-				providerReleaseId: profile.provider_release_id,
-				revision: profile.revision,
-				status: profile.status,
-			})),
+			profiles: await Promise.all(
+				profiles.map(async (profile) => ({
+					effectCeiling: profile.effect_ceiling,
+					providerId: profile.provider_id,
+					...(profile.status === "PUBLISHED"
+						? {
+								upgrade: await this.profileUpgrade(
+									this.sql,
+									profile.id,
+									profile.provider_release_id,
+									profile.provider_id,
+								),
+							}
+						: {}),
+					id: profile.id,
+					name: profile.name,
+					providerReleaseId: profile.provider_release_id,
+					revision: profile.revision,
+					status: profile.status,
+				})),
+			),
 			policies: policies.map((policy) => ({
 				capabilityProfileId: policy.capability_profile_id,
 				id: policy.id,
@@ -701,7 +1114,7 @@ export class PostgresConnectionApprovalRepository {
 	private async replaceCurrentPolicy(
 		sql: postgres.TransactionSql,
 		input: {
-			actorPrincipalId: string;
+			actorPrincipalId: string | null;
 			policyId: string;
 			profileId?: string;
 			providerReleaseId?: string;
@@ -718,6 +1131,28 @@ export class PostgresConnectionApprovalRepository {
 		`;
 		if (!approvers.length || approvers.some((item) => item.status !== "ACTIVE"))
 			invalid("Approval policy approvers are inactive");
+		const termsState = await sql<
+			{ id: string; status: string }[]
+		>`SELECT disclaimer.id, disclaimer.status FROM connection_access_policy_disclaimers link JOIN connection_disclaimer_versions disclaimer ON disclaimer.id = link.disclaimer_version_id WHERE link.policy_version_id = ${input.policyId} FOR SHARE OF disclaimer`;
+		if (
+			!termsState.length ||
+			termsState.some(
+				(term) =>
+					term.status !== "PUBLISHED" &&
+					!(
+						term.id === input.oldDisclaimerId &&
+						term.status === "SUPERSEDED" &&
+						input.newDisclaimerId
+					),
+			)
+		)
+			invalid("Approval policy disclaimers are unavailable");
+		if (input.newDisclaimerId) {
+			const [replacement] = await sql<
+				{ id: string }[]
+			>`SELECT id FROM connection_disclaimer_versions WHERE id = ${input.newDisclaimerId} AND status = 'PUBLISHED' FOR SHARE`;
+			if (!replacement) invalid("Approval policy disclaimers are unavailable");
+		}
 		if (input.providerReleaseId) {
 			const [sourcePolicy] = await sql<{ provider_release_id: string }[]>`
 				SELECT provider_release_id FROM connection_access_policy_versions WHERE id = ${input.policyId}
@@ -761,7 +1196,7 @@ export class PostgresConnectionApprovalRepository {
 				${input.profileId ? sql`${input.profileId}` : sql`capability_profile_id`},
 				priority, default_duration_days, allow_permanent, request_ttl_seconds,
 				connect_ttl_seconds, renewal_lead_seconds, false,
-				'DRAFT', ${input.actorPrincipalId}, NULL
+				'DRAFT', COALESCE(${input.actorPrincipalId}, created_by_principal_id), NULL
 			FROM connection_access_policy_versions WHERE id = ${input.policyId}
 		`;
 		const durations = await sql<
@@ -837,59 +1272,81 @@ export class PostgresConnectionApprovalRepository {
 			invalid("Revision is invalid");
 		return this.sql.begin(async (sql) => {
 			await this.requireCatalogAdministrator(sql, input.actorPrincipalId);
-			const [source] = await sql<
-				{ provider_release_id: string; provider_id: string }[]
-			>`
+			return this.reviseProfile(sql, input);
+		});
+	}
+
+	private async reviseProfile(
+		sql: postgres.TransactionSql,
+		input: CapabilityProfileDraft & {
+			actorPrincipalId: string | null;
+			expectedRevision: string;
+			sourceId: string;
+		},
+	) {
+		const [source] = await sql<
+			{ provider_release_id: string; provider_id: string }[]
+		>`
 				SELECT profile.provider_release_id, release.provider AS provider_id
 				FROM connection_capability_profiles profile
 				JOIN connection_provider_releases release ON release.id = profile.provider_release_id
 				WHERE profile.id = ${input.sourceId} AND profile.status = 'PUBLISHED'
 					AND profile.revision::text = ${input.expectedRevision} FOR UPDATE OF profile
 			`;
-			if (!source) invalid("Published capability profile changed");
-			const [release] = await sql<{ id: string; provider: string }[]>`
+		if (!source) invalid("Published capability profile changed");
+		const [release] = await sql<{ id: string; provider: string }[]>`
 				SELECT id, provider FROM connection_provider_releases
 				WHERE id = ${input.providerReleaseId} AND status = 'PUBLISHED' FOR SHARE
 			`;
-			if (!release || release.provider !== source.provider_id)
-				invalid("Target release must belong to the same Provider");
-			const policies = await this.currentPolicyIds(sql, {
-				profileId: input.sourceId,
-			});
-			const actions = await sql<
-				{
-					effect: "READ" | "WRITE";
-					id: string;
-					required_scopes: unknown;
-					status: string;
-				}[]
-			>`
+		if (
+			!release ||
+			release.provider !== source.provider_id ||
+			(this.runtime &&
+				this.runtime.providerReleases.get(release.provider) !== release.id)
+		)
+			invalid("Target release must belong to the same Provider");
+		const [collision] = await sql<{ id: string }[]>`
+			SELECT id FROM connection_capability_profiles WHERE provider_release_id = ${input.providerReleaseId}
+			AND name = ${input.name} AND status = 'PUBLISHED' AND id <> ${input.sourceId} FOR UPDATE
+		`;
+		if (collision) invalid("Current capability profile name already exists");
+		const policies = await this.currentPolicyIds(sql, {
+			profileId: input.sourceId,
+		});
+		const actions = await sql<
+			{
+				effect: "READ" | "WRITE";
+				id: string;
+				required_scopes: unknown;
+				status: string;
+			}[]
+		>`
 				SELECT id, effect, required_scopes, status FROM connection_action_versions
 				WHERE id IN ${sql(input.actionVersionIds)}
 					AND provider_release_id = ${input.providerReleaseId}
 				FOR SHARE
 			`;
-			if (
-				actions.length !== input.actionVersionIds.length ||
-				actions.some(
-					(action) =>
-						action.status !== "PUBLISHED" ||
-						!Array.isArray(action.required_scopes) ||
-						action.required_scopes.some((scope) => typeof scope !== "string"),
-				)
+		if (
+			actions.length !== input.actionVersionIds.length ||
+			actions.some(
+				(action) =>
+					action.status !== "PUBLISHED" ||
+					!Array.isArray(action.required_scopes) ||
+					action.required_scopes.some((scope) => typeof scope !== "string"),
 			)
-				invalid("Capability profile actions are unavailable");
-			const scopes = [
-				...new Set(
-					actions.flatMap((action) => action.required_scopes as string[]),
-				),
-			].sort();
-			const id = `capability-profile-${randomUUID()}`;
-			await sql`
+		)
+			invalid("Capability profile actions are unavailable");
+		const scopes = [
+			...new Set(
+				actions.flatMap((action) => action.required_scopes as string[]),
+			),
+		].sort();
+		const id = `capability-profile-${randomUUID()}`;
+		await sql`
 				UPDATE connection_capability_profiles SET status = 'SUPERSEDED', revision = revision + 1
 				WHERE id = ${input.sourceId} AND status = 'PUBLISHED'
 			`;
-			await sql`
+		await sql`
 				INSERT INTO connection_capability_profiles
 					(id, provider_release_id, name, effect_ceiling, required_scopes, authorization_digest, status)
 				VALUES (${id}, ${input.providerReleaseId}, ${input.name},
@@ -903,31 +1360,45 @@ export class PostgresConnectionApprovalRepository {
 						requiredScopes: scopes,
 					})}, 'DRAFT')
 			`;
-			for (const actionVersionId of input.actionVersionIds)
-				await sql`
+		for (const actionVersionId of input.actionVersionIds)
+			await sql`
 				INSERT INTO connection_capability_profile_actions
 					(capability_profile_id, provider_release_id, action_version_id)
 				VALUES (${id}, ${input.providerReleaseId}, ${actionVersionId})
 			`;
-			await sql`
+		await sql`
 				UPDATE connection_capability_profiles
 				SET status = 'PUBLISHED', revision = revision + 1
 				WHERE id = ${id} AND status = 'DRAFT'
 			`;
-			for (const policyId of policies)
-				await this.replaceCurrentPolicy(sql, {
-					actorPrincipalId: input.actorPrincipalId,
-					policyId,
-					profileId: id,
-					providerReleaseId: input.providerReleaseId,
-				});
-			await this.auditAndEnqueue(sql, {
+		for (const policyId of policies)
+			await this.replaceCurrentPolicy(sql, {
 				actorPrincipalId: input.actorPrincipalId,
-				aggregateId: id,
-				event: "connection.capability-profile.published",
+				policyId,
+				profileId: id,
+				providerReleaseId: input.providerReleaseId,
 			});
-			return { capabilityProfileId: id, affectedPolicies: policies.length };
+		await this.auditAndEnqueue(sql, {
+			actorPrincipalId: input.actorPrincipalId,
+			aggregateId: id,
+			event: "connection.capability-profile.published",
 		});
+		await sql`UPDATE connection_work_items SET status = 'COMPLETED', completed_at = now(), updated_at = now()
+			WHERE business_type = 'CAPABILITY_PROFILE_UPDATE' AND status = 'OPEN'
+			AND business_id IN (SELECT aggregate_id FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required' AND payload->>'sourceProfileId' = ${input.sourceId})`;
+		await this.archiveProfileUpdateNotifications(sql, input.sourceId);
+		return { capabilityProfileId: id, affectedPolicies: policies.length };
+	}
+
+	private async archiveProfileUpdateNotifications(
+		sql: postgres.TransactionSql,
+		sourceId: string,
+	) {
+		await sql`UPDATE connection_notification_receipts receipt SET archived_at = now()
+ FROM connection_notifications notice WHERE notice.id = receipt.notification_id
+ AND notice.business_type = 'CAPABILITY_PROFILE_UPDATE'
+ AND notice.business_id IN (SELECT aggregate_id FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required' AND payload->>'sourceProfileId' = ${sourceId})
+ AND receipt.archived_at IS NULL`;
 	}
 
 	async retirePublishedCapabilityProfile(input: {
@@ -964,6 +1435,10 @@ export class PostgresConnectionApprovalRepository {
 				aggregateId: input.sourceId,
 				event: "connection.capability-profile.retired",
 			});
+			await sql`UPDATE connection_work_items SET status = 'CANCELED', completed_at = now(), updated_at = now()
+				WHERE business_type = 'CAPABILITY_PROFILE_UPDATE' AND status = 'OPEN'
+				AND business_id IN (SELECT aggregate_id FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required' AND payload->>'sourceProfileId' = ${input.sourceId})`;
+			await this.archiveProfileUpdateNotifications(sql, input.sourceId);
 			return { affectedPolicies: policies.length };
 		});
 	}
@@ -2035,7 +2510,7 @@ export class PostgresConnectionApprovalRepository {
 	private async auditAndEnqueue(
 		sql: postgres.TransactionSql,
 		input: {
-			actorPrincipalId: string;
+			actorPrincipalId: string | null;
 			aggregateId: string;
 			aggregateRevision?: string;
 			event: string;
@@ -2046,9 +2521,9 @@ export class PostgresConnectionApprovalRepository {
 			? `${input.aggregateId}:${input.aggregateRevision}`
 			: input.aggregateId;
 		await sql`
-			INSERT INTO connection_audit_records (principal_id, event, detail)
+			INSERT INTO connection_audit_records (principal_id, actor_kind, event, detail)
 			VALUES (
-				${input.actorPrincipalId}, ${input.event},
+				${input.actorPrincipalId}, ${input.actorPrincipalId === null ? "SYSTEM" : "PRINCIPAL"}, ${input.event},
 				${sql.json({ aggregateId: input.aggregateId, ...(input.aggregateRevision ? { aggregateRevision: input.aggregateRevision } : {}), ...(input.reason ? { reason: input.reason } : {}) })}
 			)
 		`;

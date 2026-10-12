@@ -65,13 +65,16 @@ export function ApprovalCatalogManager(props: {
 	const [disclaimerContent, setDisclaimerContent] = useState("");
 	const [materialChange, setMaterialChange] = useState(false);
 	const [notice, setNotice] = useState("");
+	const [showHistory, setShowHistory] = useState(false);
+	const [upgradeConfirmed, setUpgradeConfirmed] = useState(false);
 	const profile = props.catalog?.profiles.find((item) => item.id === profileId);
 	const disclaimer = props.catalog?.disclaimers.find(
 		(item) => item.id === disclaimerId,
 	);
 	const visibleProfiles =
 		props.catalog?.profiles.filter(
-			(item) => item.status === "PUBLISHED" || item.status === "DRAFT",
+			(item) =>
+				item.status === "PUBLISHED" || item.status === "DRAFT" || showHistory,
 		) ?? [];
 	const visibleDisclaimers =
 		props.catalog?.disclaimers.filter(
@@ -122,11 +125,13 @@ export function ApprovalCatalogManager(props: {
 		if (
 			!profileId ||
 			props.catalog?.profiles.some(
-				(item) => item.id === profileId && !active(item.status),
+				(item) => item.id === profileId && !showHistory && !active(item.status),
 			)
 		)
 			setProfileId(
-				props.catalog?.profiles.find((item) => active(item.status))?.id ?? "",
+				props.catalog?.profiles.find(
+					(item) => showHistory || active(item.status),
+				)?.id ?? "",
 			);
 		if (
 			!disclaimerId ||
@@ -138,7 +143,7 @@ export function ApprovalCatalogManager(props: {
 				props.catalog?.disclaimers.find((item) => active(item.status))?.id ??
 					"",
 			);
-	}, [props.catalog, profileId, disclaimerId]);
+	}, [props.catalog, profileId, disclaimerId, showHistory]);
 
 	const saveProfile = useMutation({
 		mutationFn: (body: {
@@ -327,12 +332,24 @@ export function ApprovalCatalogManager(props: {
 		editProfileDraft(source, sourceDetail);
 		setEditingProfile(null);
 		setRevisingProfile(source);
+		setUpgradeConfirmed(false);
+		if (source.upgrade) {
+			setProviderReleaseId(source.upgrade.targetProviderReleaseId);
+			setActionIds(source.upgrade.selectedActionVersionIds);
+			setProviderLocked(true);
+			return;
+		}
 		if (
 			!props.catalog?.providers.some(
 				(item) => item.providerReleaseId === source.providerReleaseId,
 			)
 		) {
-			setProviderLocked(false);
+			setProviderLocked(true);
+			setProviderReleaseId(
+				props.catalog?.providers.find(
+					(item) => item.provider === sourceDetail.profile.providerId,
+				)?.providerReleaseId ?? "",
+			);
 			setActionIds([]);
 		}
 	}
@@ -378,6 +395,21 @@ export function ApprovalCatalogManager(props: {
 
 	return (
 		<section className="approval-directory" aria-label="目录管理">
+			{props.catalog?.profiles.some(
+				(item) => item.status === "PUBLISHED" && item.upgrade,
+			) ? (
+				<p role="status" className="approval-notice">
+					有能力包待确认更新。未变化的能力保持选中，新增或权限变化的能力需要明确确认。
+				</p>
+			) : null}
+			<label className="approval-toggle">
+				<input
+					type="checkbox"
+					checked={showHistory}
+					onChange={(event) => setShowHistory(event.target.checked)}
+				/>
+				显示历史能力包
+			</label>
 			{notice ? (
 				<p role="status" className="approval-notice">
 					{notice}
@@ -430,13 +462,18 @@ export function ApprovalCatalogManager(props: {
 										setEditor(null);
 									}}
 								>
-									<strong>{item.name}</strong>
+									<strong>
+										{item.name}
+										{item.upgrade ? " · 待确认更新" : ""}
+									</strong>
 									<span>
 										{item.status} ·{" "}
 										{props.catalog?.providers.find(
 											(provider) =>
 												provider.providerReleaseId === item.providerReleaseId,
-										)?.provider ?? item.providerReleaseId}
+										)?.provider ??
+											item.providerId ??
+											item.providerReleaseId}
 									</span>
 								</button>
 							))
@@ -520,16 +557,48 @@ export function ApprovalCatalogManager(props: {
 												key={item.providerReleaseId}
 												value={item.providerReleaseId}
 											>
-												{item.provider} · {item.providerReleaseId}
+												{item.provider}（当前版本）
 											</option>
 										))}
 								</select>
 							</label>
-							{historicalSource ? (
+							{revisingProfile?.upgrade ? (
+								<section aria-label="能力包更新差异">
+									<p>{revisingProfile.upgrade.reason}</p>
+									{revisingProfile.upgrade.changes.length ? (
+										<ul>
+											{revisingProfile.upgrade.changes.map((change) => (
+												<li key={change.name}>
+													{change.name} ·{" "}
+													{change.kind === "ADDED"
+														? "新增，默认不选"
+														: change.kind === "REMOVED"
+															? "已移除"
+															: `权限或定义变化 ${change.beforeEffect ?? ""} → ${change.afterEffect ?? ""}`}
+													{change.detail ? <p>{change.detail}</p> : null}
+												</li>
+											))}
+										</ul>
+									) : (
+										<p>能力清单未变化，但审批配置或兼容证明需要确认。</p>
+									)}
+									<label className="approval-toggle">
+										<input
+											type="checkbox"
+											checked={upgradeConfirmed}
+											onChange={(event) =>
+												setUpgradeConfirmed(event.target.checked)
+											}
+										/>
+										已核对差异，确认发布所选能力及匹配审批策略
+									</label>
+								</section>
+							) : null}
+							{historicalSource && !revisingProfile?.upgrade ? (
 								<p role="status">
-									{providerLocked
+									{providerLocked && !revisingProfile
 										? "旧版草稿不能原地更换连接器，请复制为新能力包。"
-										: `旧版来源含 ${sourceRelease?.actionCount ?? 0} 项能力。请选择当前连接器版本，并重新勾选需要发布的能力；旧版授权不变。`}
+										: `旧版来源含 ${sourceRelease?.actionCount ?? 0} 项能力。已选择当前连接器，请勾选需要发布的能力；旧版授权不变。`}
 								</p>
 							) : null}
 							<div className="approval-action-toolbar">
@@ -631,6 +700,7 @@ export function ApprovalCatalogManager(props: {
 								</Button>
 								<Button
 									disabled={
+										(!upgradeConfirmed && Boolean(revisingProfile?.upgrade)) ||
 										busy ||
 										!profileName.trim() ||
 										!provider ||
@@ -828,7 +898,7 @@ export function ApprovalCatalogManager(props: {
 										}
 									>
 										<Pencil size={15} />
-										编辑
+										{profile.upgrade ? "确认更新" : "编辑"}
 									</Button>
 									<Button
 										variant="danger"

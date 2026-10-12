@@ -66,7 +66,11 @@ describe("Connection 查询失败状态", () => {
 		expect(screen.getByRole("searchbox", { name: "搜索连接器" })).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Bitbucket 未连接" }));
 		fireEvent.click(screen.getByRole("button", { name: "申请连接" }));
-		expect(screen.getByText("当前没有可申请的连接能力。")).toBeTruthy();
+		expect(
+			screen.getByText(
+				"管理员尚未开放当前版本的能力包申请，请等待管理员更新能力包及审批策略。",
+			),
+		).toBeTruthy();
 	});
 
 	it.each([
