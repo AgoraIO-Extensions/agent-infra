@@ -414,6 +414,7 @@
 }
 .approval-setting input[type="checkbox"],
 .approval-action-list input[type="checkbox"],
+.approval-directory .approval-toggle input[type="checkbox"],
 .approval-catalog-editor .approval-disclaimer input[type="checkbox"],
 .approval-catalog-editor .approval-toggle input[type="checkbox"] {
 	width: 16px;
@@ -588,6 +589,55 @@
 	display: flex;
 	align-items: center;
 	gap: 8px;
+}
+.approval-directory .approval-toggle {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 0;
+	line-height: 1.6;
+	cursor: pointer;
+}
+.approval-directory .approval-toggle input[type="checkbox"] {
+	margin-top: 2px;
+}
+.approval-directory .approval-toggle span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.approval-profile-update {
+	display: grid;
+	gap: 12px;
+	min-width: 0;
+	font-size: 13px;
+	line-height: 1.6;
+}
+.approval-profile-update > p {
+	margin: 0;
+	color: var(--text-muted);
+}
+.approval-profile-update ul {
+	display: grid;
+	gap: 8px;
+	max-height: 320px;
+	margin: 0;
+	padding: 0;
+	overflow-y: auto;
+	list-style: none;
+	overscroll-behavior: contain;
+}
+.approval-profile-update li {
+	min-width: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface-raised);
+	overflow-wrap: anywhere;
+}
+.approval-profile-update li p {
+	margin: 6px 0 0;
+	color: var(--text-muted);
+	font-size: 12px;
 }
 .approval-directory-form .approval-action-list label {
 	display: grid;
