@@ -576,6 +576,8 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 						new Date(),
 					);
 			});
+			if (!worker) throw new Error("Session Worker unavailable");
+			await worker.tick();
 			const resumedRows = await eventually(
 				async () =>
 					sql`select sandbox_id, resource_name, resource_fence::int as resource_fence, status, resource_observation from platform.session_sandbox_allocations where conversation_id in ('session-kind-a', 'session-kind-b') order by conversation_id`,
