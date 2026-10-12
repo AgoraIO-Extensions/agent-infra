@@ -44,6 +44,7 @@
 		"./json-schema/secret-lifecycle.v1": "./artifacts/json-schema/secret-lifecycle.v1.schema.json",
 		"./json-schema/worker-result.v1": "./artifacts/json-schema/worker-result.v1.schema.json",
 		"./json-schema/runtime.v1": "./artifacts/json-schema/runtime.v1.schema.json",
+		"./json-schema/runtime-native-metadata.v1": "./artifacts/json-schema/runtime-native-metadata.v1.schema.json",
 		"./json-schema/runtime.v3": "./artifacts/json-schema/runtime.v3.schema.json",
 		"./openapi/runtime-host.v3": "./artifacts/openapi/runtime-host.v3.openapi.json",
 		"./openapi/runtime-host.v4": "./artifacts/openapi/runtime-host.v4.openapi.json",
