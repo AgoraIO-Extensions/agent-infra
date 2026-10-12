@@ -300,7 +300,6 @@ export async function assembleRuntimeHost(
 		? required("AGENT_INFRA_RUNTIME_AGENT_ID")
 		: undefined;
 	const skillHubBinding = readRuntimeSkillHubBindingV1(environment);
-	if (skillHubBinding && binding !== "codex") runtimeConfigurationInvalid();
 	const skillDirectory = skillHubBinding
 		? createRuntimeSkillHubDirectoryV1(skillHubBinding)
 		: undefined;
@@ -431,6 +430,7 @@ export async function assembleRuntimeHost(
 				? binding === "acp"
 					? await openOpenCodeRuntime({
 							...messagesConfiguration,
+							...(skillDirectory ? { skillDirectory } : {}),
 							modelOptions: messagesRuntimeOptions ?? [],
 							...(messagesConfiguration.schemaVersion === 4
 								? {
@@ -451,6 +451,7 @@ export async function assembleRuntimeHost(
 					: binding === "pi"
 						? await openPiRuntime({
 								...messagesConfiguration,
+								...(skillDirectory ? { skillDirectory } : {}),
 								modelOptions: messagesRuntimeOptions ?? [],
 								...(messagesConfiguration.schemaVersion === 4
 									? {
@@ -467,6 +468,7 @@ export async function assembleRuntimeHost(
 							})
 						: await ClaudeRuntimeDriver.open({
 								...messagesConfiguration,
+								...(skillDirectory ? { skillDirectory } : {}),
 								modelOptions: messagesRuntimeOptions ?? [],
 								...(messagesConfiguration.schemaVersion === 4
 									? {
