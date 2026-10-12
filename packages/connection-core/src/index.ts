@@ -1101,6 +1101,18 @@ function delegatedRequestInput(input: Record<string, unknown>) {
 	return args;
 }
 
+function providerRequestInput(
+	action: ActionDefinition,
+	input: Record<string, unknown>,
+) {
+	const properties = action.inputSchema.properties;
+	return properties &&
+		typeof properties === "object" &&
+		Object.hasOwn(properties, "idempotencyKey")
+		? { ...input }
+		: delegatedRequestInput(input);
+}
+
 function actionService(actionVersionId: string) {
 	return actionVersionId.split(".", 1)[0]?.toLowerCase() ?? "";
 }
@@ -2189,7 +2201,7 @@ export class ConnectionApplicationService {
 					action,
 					actionVersionId: actionDefinition.id,
 					credential,
-					input: delegatedRequestInput(input),
+					input: providerRequestInput(actionDefinition, input),
 					providerId: invocation.providerId,
 					providerReleaseId: invocation.providerReleaseId,
 				}),
