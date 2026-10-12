@@ -32,8 +32,23 @@ beforeAll(async () => {
 		format: "esm",
 		target: "node24",
 	});
+	const materializerAssembly = await transform(
+		await readFile(
+			new URL("./skill-materializer-assembly.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
 	await writeFile(join(directory, "package.json"), '{"type":"module"}');
 	await writeFile(join(directory, "deployment.mjs"), code);
+	await writeFile(
+		join(directory, "skill-materializer-assembly.js"),
+		materializerAssembly.code,
+	);
 	await build({
 		entryPoints: [
 			new URL("./connection-consumer-projection.ts", import.meta.url).pathname,
