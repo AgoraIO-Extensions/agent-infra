@@ -642,6 +642,41 @@ describe("functional conversation screen", () => {
 		await waitFor(() => expect(input.value).toBe(""));
 	});
 
+	it("keeps sending blocked while the first projection is still loading (#2136)", async () => {
+		let release: (() => void) | undefined;
+		const { requests } = setup((request) => {
+			if (request.method === "POST") return receipt();
+			if (
+				new URL(request.url).pathname !== "/api/v2/conversations/conversation-1"
+			)
+				return undefined;
+			// 首次读取尚未返回：没有投影时仍不能发送。
+			return new Promise<Response>((resolve) => {
+				release = () =>
+					resolve(
+						Response.json({
+							...history("conversation-1", []),
+							conversation: { ...history().conversation, status: "ready" },
+						}),
+					);
+			});
+		});
+		await waitFor(() => expect(release).toBeDefined());
+		const input = screen.queryByRole("textbox", {
+			name: "消息",
+		}) as HTMLTextAreaElement | null;
+		if (input) {
+			fireEvent.change(input, { target: { value: "Too early" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+		}
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(
+			requests.filter((request) => request.method === "POST"),
+		).toHaveLength(0);
+		act(() => release?.());
+		await composer();
+	});
+
 	it("does not claim a stop receipt is cancellation and retains the original execution target", async () => {
 		const { requests } = setup((request) => {
 			const path = new URL(request.url).pathname;
