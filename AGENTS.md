@@ -142,6 +142,9 @@ volume。本地省略 Docker 不替代当前 PR head 的 CI 镜像构建和正�
 
 ## Security
 
+- Rehoboam 渠道取消 v15 仅取消本人的未获批申请；原生权限、状态 CAS 和回执真值在 Rehoboam，
+  不能用 Pipeline Center 撤回或审批驳回代替。边界见已批准的渠道取消 ADR。
+
 - 不提交 Token、API Key、OAuth Secret、真实凭证或包含它们的示例。
 - `.env` 只保留本地；需要说明配置时提交脱敏的 `.env.example`。
 - 日志、错误、测试 fixture 和文档不得包含外部账号凭证或普通用户会话正文。

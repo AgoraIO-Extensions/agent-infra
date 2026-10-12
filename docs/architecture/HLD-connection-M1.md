@@ -225,6 +225,12 @@ Rehoboam 渠道发布以新的 immutable `rehoboam-connection-v13` 增补 Publis
 仍不得接受任意身份、Header 或绕过审批的内部参数。
 详见 [渠道发布决策](../adr/ADR-rehoboam-channel-publishing.md)。
 
+渠道申请取消以 immutable `rehoboam-connection-v15` 增加 `cancel_channel_publish_request` WRITE，
+复用 `publishing:write`，仅本人 `NEW/WAITING_IN_APPROVEMENT` 申请可取消。
+状态与取消审计由 Rehoboam CAS 原子提交，取消与审批/NEW 调度竞争不能恢复或触发已取消任务。
+不删除申请，不中止已获批、排队或运行的 Job；旧版本实现保留，新增 Action 不自动进入旧 Grant。
+权限、幂等和共享服务的完整边界见[已批准取消决策](../adr/0001-rehoboam-channel-publishing-cancellation.md)。
+
 发布族各环节的研发交接以 immutable `rehoboam-connection-v14` 增加
 `record_release_family_repair` WRITE，沿用 release WRITE scope 和固定 Rehoboam origin。
 新 Action 需要显式授权；v13 及旧 Action schema/effect/scopes 和实现字节保留。
