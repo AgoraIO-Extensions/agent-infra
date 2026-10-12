@@ -102,6 +102,7 @@ export function createDeploymentPresentation(input: {
 			connection: verified?.connection === true,
 			supplementaryInstruction: verified?.supplementaryInstruction === true,
 			...(verified?.browser ? { browser: verified.browser } : {}),
+			...(verified?.skills ? { skills: verified.skills } : {}),
 		});
 		let interactionUrl = runtime.interactionUrl;
 		if (

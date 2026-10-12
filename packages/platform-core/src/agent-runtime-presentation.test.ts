@@ -259,6 +259,37 @@ describe("Agent runtime presentation policy", () => {
 			},
 		);
 	});
+	it("preserves verified Skill capability metadata for Agent presentation", () => {
+		const input = fixture();
+		const runtime = input.facts.runtime;
+		if (!runtime) throw new Error();
+		const skills = [
+			{
+				schemaVersion: 1 as const,
+				name: "workspace-summary",
+				version: "0.1.0",
+				manifestSha256: "a".repeat(64),
+				packageDigest: "b".repeat(64),
+				readOnly: true as const,
+			},
+		];
+		const facts = {
+			...input.facts,
+			runtime: {
+				...runtime,
+				state: {
+					...runtime.state,
+					capabilities: { modelSelection: true, skills },
+				},
+			},
+		};
+		expect(decideAgentRuntimePresentationV1({ ...input, facts })).toMatchObject(
+			{
+				outcome: "found",
+				capabilities: { skills },
+			},
+		);
+	});
 	it.each([false, true])(
 		"rejects another Agent's configuration before projecting source or capabilities (runtime present: %s)",
 		(hasRuntime) => {

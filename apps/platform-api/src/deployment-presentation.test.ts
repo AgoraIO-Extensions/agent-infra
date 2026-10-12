@@ -252,6 +252,16 @@ it("passes the verified Browser projection through the API presentation", async 
 					resultFiles: false,
 					connection: false,
 					supplementaryInstruction: false,
+					skills: [
+						{
+							schemaVersion: 1,
+							name: "workspace-summary",
+							version: "0.1.0",
+							manifestSha256: "a".repeat(64),
+							packageDigest: "b".repeat(64),
+							readOnly: true,
+						},
+					],
 					browser,
 				},
 				interactionUrl: null,
@@ -281,4 +291,14 @@ it("passes the verified Browser projection through the API presentation", async 
 		management: {} as never,
 	});
 	expect(result.capabilities.browser).toEqual(browser);
+	expect(result.capabilities.skills).toEqual([
+		{
+			schemaVersion: 1,
+			name: "workspace-summary",
+			version: "0.1.0",
+			manifestSha256: "a".repeat(64),
+			packageDigest: "b".repeat(64),
+			readOnly: true,
+		},
+	]);
 });

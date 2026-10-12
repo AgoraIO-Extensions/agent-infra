@@ -195,6 +195,7 @@ describe("platform-core package surface", () => {
 			"parseTaskAuthorizationBoundaryV1",
 			"parseTaskPrincipalV1",
 			"parseTimedOutUnknownStopResolutionInputV1",
+			"parseWorkloadCapabilitiesV1",
 			"parseWorkloadExecutionCapacityV1",
 			"parseWorkloadSecretRecoveriesV1",
 			"persistConversationBrowserActionV1",

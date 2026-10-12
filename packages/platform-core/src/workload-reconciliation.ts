@@ -117,6 +117,54 @@ export interface WorkloadCapabilitiesV1 {
 		| undefined;
 }
 
+/** Decode persisted, credential-free Runtime capability facts strictly. */
+export function parseWorkloadCapabilitiesV1(
+	input: unknown,
+): WorkloadCapabilitiesV1 {
+	if (!input || typeof input !== "object" || Array.isArray(input))
+		throw new TypeError("Workload capabilities are invalid");
+	const value = input as Record<string, unknown>;
+	const capabilities: Record<string, unknown> = {};
+	for (const [name, item] of Object.entries(value)) {
+		if (name === "skills") {
+			if (!Array.isArray(item) || item.length > 150)
+				throw new TypeError("Workload Skill capabilities are invalid");
+			const skills = item.map((skill) => {
+				if (!skill || typeof skill !== "object" || Array.isArray(skill))
+					throw new TypeError("Workload Skill capability is invalid");
+				const entry = skill as Record<string, unknown>;
+				const keys = Object.keys(entry).sort();
+				if (
+					keys.join(",") !==
+						"manifestSha256,name,packageDigest,readOnly,schemaVersion,version" ||
+					entry.schemaVersion !== 1 ||
+					typeof entry.name !== "string" ||
+					entry.name.length < 1 ||
+					entry.name.length > 128 ||
+					typeof entry.version !== "string" ||
+					entry.version.length < 1 ||
+					entry.version.length > 128 ||
+					typeof entry.manifestSha256 !== "string" ||
+					!/^[a-f0-9]{64}$/.test(entry.manifestSha256) ||
+					typeof entry.packageDigest !== "string" ||
+					!/^[a-f0-9]{64}$/.test(entry.packageDigest) ||
+					entry.readOnly !== true
+				)
+					throw new TypeError("Workload Skill capability is invalid");
+				return entry as unknown as WorkloadSkillCapabilityV1;
+			});
+			if (new Set(skills.map((skill) => skill.name)).size !== skills.length)
+				throw new TypeError("Workload Skill capabilities are duplicated");
+			capabilities.skills = skills;
+			continue;
+		}
+		if (typeof item !== "boolean")
+			throw new TypeError("Workload capabilities are invalid");
+		capabilities[name] = item;
+	}
+	return capabilities as WorkloadCapabilitiesV1;
+}
+
 /** Opaque, server-validated Browser projection retained by Workload state. */
 export interface WorkloadBrowserCapabilityProjectionV1 {
 	readonly status: string;

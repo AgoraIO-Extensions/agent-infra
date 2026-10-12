@@ -74,6 +74,46 @@ describe("persisted Workload recovery state", () => {
 			),
 		).toEqual({ state, legacy: false });
 	});
+	it("round-trips verified Skill capabilities and rejects malformed entries", () => {
+		const state = {
+			...fixture(),
+			capabilities: {
+				modelSelection: true,
+				skills: [
+					{
+						schemaVersion: 1,
+						name: "workspace-summary",
+						version: "0.1.0",
+						manifestSha256: "a".repeat(64),
+						packageDigest: "b".repeat(64),
+						readOnly: true,
+					},
+				],
+			},
+		};
+		expect(
+			decodePersistedWorkloadStateV1(
+				JSON.parse(JSON.stringify(state)),
+				"agent_01",
+			),
+		).toMatchObject({ state: { capabilities: state.capabilities } });
+		const duplicate = {
+			...state,
+			capabilities: {
+				...state.capabilities,
+				skills: [
+					...(state.capabilities.skills ?? []),
+					...(state.capabilities.skills ?? []),
+				],
+			},
+		};
+		expect(() =>
+			decodePersistedWorkloadStateV1(
+				JSON.parse(JSON.stringify(duplicate)),
+				"agent_01",
+			),
+		).toThrow();
+	});
 	it("round-trips an intention before Secret or Workload creation without inventing a UID", () => {
 		const original = fixture();
 		const { secretRecoveries: _, ...verified } = original.verified;
