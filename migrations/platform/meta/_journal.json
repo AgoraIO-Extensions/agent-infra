@@ -351,6 +351,13 @@
       "when": 1791691921476,
       "tag": "0053_conversation_audit_execution_index",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1791815724512,
+      "tag": "0054_skill_agent_binding_applied_receipt",
+      "breakpoints": true
     }
   ]
 }

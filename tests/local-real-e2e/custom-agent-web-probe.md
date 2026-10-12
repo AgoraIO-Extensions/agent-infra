@@ -22,3 +22,7 @@ fields are claims that must be compared with Registry/Kubernetes receipts separa
 This probe does not prove LDAP, Registry admission, Kubernetes isolation, browser lifecycle,
 revocation, key rotation, stop/restart, upgrade or failed-candidate recovery. Those remain
 separate B6 evidence and must use the same deployment tuple and authorized principals.
+
+The separate `custom-agent-platform-auth-probe.ts` uses private Cookie/header files to probe a
+platform-auth public boundary. It verifies the same bounded HTTPS/content rules and intentionally
+does not claim Gateway, LDAP, browser, revocation or key-rotation deployment evidence.
