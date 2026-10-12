@@ -315,7 +315,12 @@ it.each([false, true])(
 			expect(
 				screen.getByRole("button", { name: /新版只读能力包/ }),
 			).toBeTruthy();
-		else expect(screen.getByText("当前没有可申请的连接能力。")).toBeTruthy();
+		else
+			expect(
+				screen.getByText(
+					"管理员尚未开放当前版本的能力包申请，请等待管理员更新能力包及审批策略。",
+				),
+			).toBeTruthy();
 		client.clear();
 	},
 );
@@ -383,7 +388,11 @@ it.each(["CONSUMED", "IN_REVIEW", "APPROVED_PENDING_CONNECTION"] as const)(
 			expect(details?.open).toBe(false);
 			fireEvent.click(screen.getByRole("button", { name: /重新申请/ }));
 			await waitFor(() =>
-				expect(screen.getByText("当前没有可申请的连接能力。")).toBeTruthy(),
+				expect(
+					screen.getByText(
+						"管理员尚未开放当前版本的能力包申请，请等待管理员更新能力包及审批策略。",
+					),
+				).toBeTruthy(),
 			);
 		} else {
 			expect(

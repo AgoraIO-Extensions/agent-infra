@@ -33,6 +33,7 @@ const approvalTopics = [
 	"connection.approval-delegation.created",
 	"connection.approval-delegation.revoked",
 	"connection.capability-profile.published",
+	"connection.capability-profile.update-required",
 	"connection.capability-profile.retired",
 	"connection.disclaimer.published",
 	"connection.disclaimer.retired",
@@ -178,6 +179,39 @@ export class PostgresConnectionNotificationDispatcher {
 						LIMIT 1
 					`;
 					if (!audit) throw new Error("Approval outbox audit fact is missing");
+					if (event.topic === "connection.capability-profile.update-required") {
+						const [update] = await sql<
+							{ provider_id: string; status: string; obsolete: boolean }[]
+						>`
+							SELECT release.provider AS provider_id, profile.status,
+							EXISTS (SELECT 1 FROM connection_outbox_events newer
+							WHERE newer.topic = pending.topic AND newer.payload->>'sourceProfileId' = pending.payload->>'sourceProfileId'
+							AND (newer.created_at, newer.id) > (pending.created_at, pending.id)) AS obsolete
+							FROM connection_outbox_events pending
+							JOIN connection_capability_profiles profile ON profile.id = pending.payload->>'sourceProfileId'
+							JOIN connection_provider_releases release ON release.id = profile.provider_release_id
+							WHERE pending.id = ${event.id}
+							FOR SHARE OF profile
+						`;
+						if (!update)
+							throw new Error("Capability profile update source is missing");
+						if (update.status === "PUBLISHED" && !update.obsolete) {
+							const admins = await sql<
+								{ id: string }[]
+							>`SELECT principal.id FROM connection_principals principal
+								JOIN connection_principal_roles role_binding ON role_binding.principal_id = principal.id
+								WHERE principal.status = 'ACTIVE' AND role_binding.role = 'CONNECTION_ADMIN' AND role_binding.status = 'ACTIVE'
+								FOR SHARE OF principal, role_binding`;
+							for (const admin of admins) {
+								await sql`INSERT INTO connection_work_items (id, recipient_principal_id, business_type, business_id, business_revision, action_type, status)
+									VALUES (${`profile-update-work-${event.id}-${admin.id}`}, ${admin.id}, 'CAPABILITY_PROFILE_UPDATE', ${event.aggregate_id}, 1, 'UPDATE_PROFILE', 'OPEN') ON CONFLICT DO NOTHING`;
+								await sql`WITH created AS (
+									INSERT INTO connection_notifications (id, recipient_principal_id, business_type, business_id, business_revision, event_type, summary)
+									VALUES (${`profile-update-notice-${event.id}-${admin.id}`}, ${admin.id}, 'CAPABILITY_PROFILE_UPDATE', ${event.aggregate_id}, 1, 'PROFILE_UPDATE_REQUIRED', ${sql.json({ providerId: update.provider_id, state: "待确认能力包更新" })}) ON CONFLICT DO NOTHING RETURNING id, recipient_principal_id)
+									INSERT INTO connection_notification_receipts (notification_id, recipient_principal_id) SELECT id, recipient_principal_id FROM created`;
+							}
+						}
+					}
 					await sql`
 						UPDATE connection_outbox_events
 						SET status = 'DELIVERED', delivered_at = now(),
