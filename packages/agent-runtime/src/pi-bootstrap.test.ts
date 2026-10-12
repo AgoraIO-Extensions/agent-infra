@@ -18,6 +18,31 @@ it("uses only projection-derived explicit Skill entry paths", () => {
 	expect(piNativeSkillArguments(directory)).toEqual([
 		"--skill",
 		"/opt/agent-infra-skill-hub/.agents/skills/workspace-summary/SKILL.md",
-		"--no-skills",
 	]);
+});
+
+it("fails closed for duplicate or caller-shaped native Skill paths", () => {
+	for (const path of [
+		"/tmp/skill.md",
+		"/opt/.agents/skills/../outside/SKILL.md",
+	])
+		expect(() =>
+			piNativeSkillArguments({
+				generationId: "a".repeat(64),
+				findSkills: () => [],
+				nativeSkillPaths: () => [path],
+				readSkill: async () => new Uint8Array(),
+			}),
+		).toThrow("RUNTIME_SKILL_DIRECTORY_UNAVAILABLE");
+	expect(() =>
+		piNativeSkillArguments({
+			generationId: "a".repeat(64),
+			findSkills: () => [],
+			nativeSkillPaths: () => [
+				"/opt/.agents/skills/a/SKILL.md",
+				"/opt/.agents/skills/a/SKILL.md",
+			],
+			readSkill: async () => new Uint8Array(),
+		}),
+	).toThrow("RUNTIME_SKILL_DIRECTORY_UNAVAILABLE");
 });

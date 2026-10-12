@@ -1,5 +1,5 @@
 import { mkdir, realpath } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	type BrowserCapabilityAvailableV1,
@@ -40,16 +40,19 @@ export function piNativeSkillArguments(
 			(path) =>
 				typeof path !== "string" ||
 				!isAbsolute(path) ||
+				path !== resolve(path) ||
 				path.includes("\0") ||
-				path.includes("\\"),
+				path.includes("\\") ||
+				!/(^|\/)\.agents\/skills\/[a-z0-9][a-z0-9._-]{0,62}\/SKILL\.md$/.test(
+					path,
+				),
 		)
 	)
 		throw new Error("RUNTIME_SKILL_DIRECTORY_UNAVAILABLE");
+	if (new Set(paths).size !== paths.length)
+		throw new Error("RUNTIME_SKILL_DIRECTORY_UNAVAILABLE");
 	if (paths.length === 0) return ["--no-skills"] as const;
-	return [
-		...paths.flatMap((path) => ["--skill", path] as const),
-		"--no-skills",
-	];
+	return paths.flatMap((path) => ["--skill", path] as const);
 }
 
 export async function openPiRuntime(options: PiRuntimeOptions) {
