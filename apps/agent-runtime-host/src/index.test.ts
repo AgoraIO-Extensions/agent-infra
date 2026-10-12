@@ -12,6 +12,8 @@ import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	ClaudeRuntimeDriver,
+	type ClaudeRuntimeDriverOptions,
 	type CodexRuntimeDriverOptions,
 	FakeRuntimeDriver,
 } from "@agent-infra/agent-runtime";
@@ -206,6 +208,87 @@ describe("RuntimeHost environment assembly", () => {
 			}
 		},
 	);
+
+	it("assembles the protected Connection MCP input for Claude", async () => {
+		const values: NodeJS.ProcessEnv = await environment();
+		const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
+		if (!dataDirectory) throw new Error("Missing test data directory");
+		const fixture = await standardMcpFixture();
+		const profile = fixture.target.profile;
+		const approval = {
+			schemaVersion: 1 as const,
+			configFingerprint: fixture.target.configFingerprint,
+			source: fixture.target.source,
+			egressEnforced: true as const,
+		};
+		const profileFile = join(dataDirectory, "consumer.json");
+		await writeFile(profileFile, JSON.stringify({ profile, approval }));
+		const exportReceipt = await writeStandardMcpExport(
+			dataDirectory,
+			fixture.target,
+			[fixture.input],
+		);
+		Object.assign(values, {
+			AGENT_INFRA_RUNTIME_DRIVER: "claude",
+			AGENT_INFRA_RUNTIME_AGENT_ID: fixture.input.scope.agentId,
+			AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY:
+				"synthetic-model-credential",
+			AGENT_INFRA_RUNTIME_MODEL_CONFIG: JSON.stringify({
+				schemaVersion: 3,
+				configVersion: "claude-connection-mcp",
+				defaultModelOptionId: "primary",
+				defaultReasoningLevel: "high",
+				modelOptions: [
+					{
+						modelOptionId: "primary",
+						protocol: "anthropic-messages-v1",
+						authentication: "bearer",
+						model: "claude-opus-5",
+						reasoningLevels: ["high"],
+						endpoint: "https://models.example.test",
+						credentialEnvironmentVariable:
+							"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY",
+					},
+				],
+			}),
+			AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_FILE: profileFile,
+			AGENT_INFRA_RUNTIME_CONNECTION_CONSUMER_REVISION: JSON.stringify([
+				approval.configFingerprint,
+				approval.source.ref,
+				approval.source.revision,
+			]),
+			AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION:
+				exportReceipt.revision,
+		});
+		let openedWith: ClaudeRuntimeDriverOptions | undefined;
+		const openSpy = vi
+			.spyOn(ClaudeRuntimeDriver, "open")
+			.mockImplementation(async (options: ClaudeRuntimeDriverOptions) => {
+				openedWith = options;
+				return (await FakeRuntimeDriver.open(
+					join(dataDirectory, "claude-driver.json"),
+				)) as unknown as ClaudeRuntimeDriver;
+			});
+		let runtime: Awaited<ReturnType<typeof assembleRuntimeHost>> | undefined;
+		try {
+			runtime = await assembleRuntimeHost(values);
+			expect(runtime.connectionConsumer).toMatchObject({
+				status: "available",
+				configFingerprint: approval.configFingerprint,
+			});
+			expect(openedWith?.standardConnectionClient?.target).toMatchObject({
+				status: "available",
+				profile: { consumerId: fixture.target.profile.consumerId },
+				url: fixture.target.url,
+			});
+			expect(openedWith?.standardConnectionClient?.resolveInput).toBeTypeOf(
+				"function",
+			);
+		} finally {
+			await runtime?.close();
+			openSpy.mockRestore();
+		}
+	});
 
 	it("passes an explicitly injected Browser context factory to RuntimeHost", async () => {
 		const env = await environment();
