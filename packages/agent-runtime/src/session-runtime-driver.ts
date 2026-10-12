@@ -803,8 +803,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		)
 			conflict();
 		if (!("text" in command.input)) unavailable();
+		const hasAttachments = command.input.attachments.length > 0;
 		let input: NativePromptV1 = command.input.text;
-		if (command.input.attachments.length > 0) {
+		if (hasAttachments) {
 			if (!fileBridge) unavailable();
 			const content: NativePromptContentV1[] = [
 				{ type: "text", text: command.input.text },
@@ -846,6 +847,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				});
 			}
 			input = content;
+			// Authority that already lapsed while the bytes were acquired must not
+			// carry them into the remaining Session setup.
 			fileBridge.revalidate();
 		}
 		const inputText = input;
@@ -990,6 +993,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		this.handles.set(ref, handle);
 		handle.pump = (async () => {
 			try {
+				// Materialized bytes must never reach the native session under
+				// authority that lapsed during Session setup or model selection.
+				if (hasAttachments) fileBridge?.revalidate();
 				const response = await native.prompt(inputText);
 				await this.resolve(file, command, {
 					outcome: "accepted",
