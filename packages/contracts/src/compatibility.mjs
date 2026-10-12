@@ -1121,7 +1121,9 @@ function isApplicationMaterialGrantV2OpenApiAddition(previous, current) {
 
 // Browser operation binding is an additive optional field on existing operation facts.
 function stripRuntimeBrowserOperationFacts(value) {
-	const normalized = structuredClone(value);
+	const normalized = normalizeRuntimeConnectionAssociationOpenApiAddition(
+		structuredClone(value),
+	);
 	const visit = (node) => {
 		if (!node || typeof node !== "object") return;
 		if (Array.isArray(node)) {
@@ -2946,6 +2948,44 @@ function isPilotBrowserProjectionOpenApiAddition(previous, current) {
 	}
 	return changed && findBreakingChanges(previous, normalized).length === 0;
 }
+
+// Runtime operation facts may add optional, non-secret Connection consumer
+// references without invalidating existing event readers.
+function normalizeRuntimeConnectionAssociationOpenApiAddition(current) {
+	const normalized = structuredClone(current);
+	const fields = ["consumerId", "instanceRef", "credentialRevision"];
+	const visit = (value) => {
+		if (Array.isArray(value)) {
+			for (const item of value) visit(item);
+			return;
+		}
+		if (value === null || typeof value !== "object") return;
+		if (
+			value.properties &&
+			typeof value.properties === "object" &&
+			value.properties.serviceRef &&
+			value.properties.verification
+		) {
+			for (const field of fields) {
+				const schema = value.properties[field];
+				if (schema === undefined || value.required?.includes(field)) continue;
+				if (
+					schema === null ||
+					typeof schema !== "object" ||
+					Array.isArray(schema) ||
+					schema.type !== "string" ||
+					schema.pattern !== "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" ||
+					Object.keys(schema).some((key) => key !== "type" && key !== "pattern")
+				)
+					continue;
+				delete value.properties[field];
+			}
+		}
+		for (const child of Object.values(value)) visit(child);
+	};
+	visit(normalized);
+	return normalized;
+}
 function findBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
 	let current = currentValue;
@@ -2969,6 +3009,8 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 	const changes = [];
 	if (previous.openapi !== undefined) {
+		previous = normalizeRuntimeConnectionAssociationOpenApiAddition(previous);
+		current = normalizeRuntimeConnectionAssociationOpenApiAddition(current);
 		if (isA2ParallelModelConfigurationOpenApiAddition(previous, current))
 			return changes;
 		if (

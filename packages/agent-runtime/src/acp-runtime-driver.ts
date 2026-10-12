@@ -11,6 +11,7 @@ import type {
 import { retireAcpProcess } from "./acp-process.js";
 import { type AcpLaunch, openAcpSession } from "./acp-session.js";
 import { SessionRuntimeDriver } from "./session-runtime-driver.js";
+import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
 
 export interface AcpRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -25,6 +26,7 @@ export interface GenericAcpRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly AcpRuntimeModelOption[];
+	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly launch: (
 		directory: string,
 		selection: RuntimeSelectionV1,
