@@ -232,6 +232,9 @@ Rehoboam 渠道发布以新的 immutable `rehoboam-connection-v13` 增补 Publis
 源码编译阶段保留完整PR/提交/编译证据要求。记录是操作人报告的证据，业务校验、CAS、模板签名及追加审计
 仍由 Rehoboam 负责；不获取本地源码、不发送人员消息、不推进阶段、不修改 Job 结果。
 编译通过不代替合并或制品构建；未知写结果先读取原任务核对，禁止盲重试。
+v14同时增加 `get_release_family_continuation` READ（release READ scope），只读取继续交付步骤、
+模板控制的数字尾缀版本建议和下游影响。建议不是预留；补发仍用原preview/confirm及replacement chain，
+不修改旧Job/申请、Native锚点或自动切换下游。最终交付完成由Rehoboam原通知成功回执投影，不能从Job成功推断。
 详见 [已发布 Native 后继续框架发版](../connection/rehoboam-published-native.md)。
 
 Manhattan 的首个 **[设计决策]** Provider profile 固定为

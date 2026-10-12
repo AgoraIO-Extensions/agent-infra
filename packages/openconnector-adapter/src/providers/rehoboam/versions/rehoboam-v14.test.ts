@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { rehoboamV13ConnectionCatalog } from "./rehoboam-v13.ts";
 import {
+	continuationAction,
 	RehoboamV14Adapter,
 	rehoboamV14ConnectionCatalog,
 	repairAction,
@@ -43,7 +44,7 @@ test("v14 adds only explicit repair recording and keeps old action contracts", (
 	assert.equal(rehoboamV14ExecutorDigest, `sha256:${hash.digest("hex")}`);
 	assert.equal(
 		rehoboamV14ConnectionCatalog.actions.length,
-		rehoboamV13ConnectionCatalog.actions.length + 1,
+		rehoboamV13ConnectionCatalog.actions.length + 2,
 	);
 	for (const old of rehoboamV13ConnectionCatalog.actions) {
 		const current = rehoboamV14ConnectionCatalog.actions.find(
@@ -200,6 +201,41 @@ test("all-stage non-code resolution accepts validation without inventing a PR or
 			input: { ...missing, stage: "resolved" },
 		}),
 		{ providerSubmissionOutcome: "rejected" },
+	);
+});
+
+test("continuation is a bounded credential-authenticated READ with no request body or write key", async () => {
+	let sent: RequestInit | undefined;
+	let path: string | undefined;
+	const adapter = new RehoboamV14Adapter(async (url, init) => {
+		path = String(url);
+		sent = init;
+		return Response.json({
+			data: { replacement: { suggested_version: "4.5.3.6-build.8" } },
+		});
+	}, "gateway");
+	const result = await adapter.execute({
+		action: continuationAction.name,
+		credential,
+		input: { familyId: "family-1", memberId: "iris-1" },
+	});
+	assert.ok(result.replacement);
+	assert.equal(
+		path,
+		"https://justinia.gz3.agoralab.co/mcp/v1/release-families/family-1/members/iris-1/continuation",
+	);
+	assert.equal(sent?.method, "GET");
+	assert.equal(sent?.body, undefined);
+	assert.equal(new Headers(sent?.headers).get("Idempotency-Key"), null);
+	assert.deepEqual(continuationAction.requiredScopes, [
+		"rehoboam.release.read",
+	]);
+	await assert.rejects(
+		adapter.execute({
+			action: continuationAction.name,
+			credential,
+			input: { familyId: "..", memberId: "iris-1" },
+		}),
 	);
 });
 

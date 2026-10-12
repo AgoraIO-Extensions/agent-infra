@@ -68,6 +68,21 @@ export const repairAction = {
 	},
 } as const;
 
+export const continuationAction = {
+	name: "rehoboam.get_release_family_continuation",
+	id: "rehoboam.get_release_family_continuation@v14",
+	description:
+		"只读获取成员的剩余确认/最终交付步骤、按当前模板计数分隔符和步长生成的补发版本建议及受影响下游。Iris包完成后应明确引导核对结果、确认推进并预览最终交付，完成通知后再读取核对完结。需要新一轮Iris时用建议填入原preview_release_family，提供replacesMemberId并确认；旧成员/申请/Job保留，Unity等下游明确选择新产物后重新预览，不自动改旧参数或重跑。建议不占用版本号，未配置或查询不完整不猜测；Native锚点不可替换。不创建、不通知、不推进、不运行。",
+	effect: "READ",
+	requiredScopes: ["rehoboam.release.read"],
+	inputSchema: {
+		type: "object",
+		additionalProperties: false,
+		required: ["familyId", "memberId"],
+		properties: { familyId: resourceId, memberId: resourceId },
+	},
+} as const;
+
 export const rehoboamV14LegacyProviderReleaseIds = [
 	"rehoboam-connection-v13",
 	...rehoboamV13LegacyProviderReleaseIds,
@@ -87,6 +102,7 @@ export const rehoboamV14ConnectionCatalog = {
 					: old.description,
 		})),
 		repairAction,
+		continuationAction,
 	],
 } as const;
 
@@ -115,11 +131,15 @@ export class RehoboamV14Adapter {
 		credential: CredentialForExecution;
 		input: Record<string, unknown>;
 	}): Promise<Record<string, unknown>> {
-		if (input.action !== repairAction.name) return this.previous.execute(input);
+		const readOnly = input.action === continuationAction.name;
+		if (!readOnly && input.action !== repairAction.name)
+			return this.previous.execute(input);
 		const data = input.input;
 		if (
 			!new Validator(
-				repairAction.inputSchema as unknown as Schema,
+				(readOnly
+					? continuationAction.inputSchema
+					: repairAction.inputSchema) as unknown as Schema,
 				"2020-12",
 				false,
 			).validate(data).valid
@@ -133,7 +153,9 @@ export class RehoboamV14Adapter {
 				providerCredentialInvalid: true,
 				providerSubmissionOutcome: "rejected",
 			});
-		const path = `/mcp/v1/release-families/${data.familyId}/members/${data.memberId}/tasks/${data.taskId}/record`;
+		const path =
+			`/mcp/v1/release-families/${data.familyId}/members/${data.memberId}/` +
+			(readOnly ? "continuation" : `tasks/${data.taskId}/record`);
 		const body = {
 			expected_revision: data.expectedRevision,
 			template_signature: data.templateSignature,
@@ -152,22 +174,24 @@ export class RehoboamV14Adapter {
 			response = await this.fetcher(
 				new URL(path, rehoboamV14ConnectionCatalog.deploymentProfile.apiOrigin),
 				{
-					method: "POST",
+					method: readOnly ? "GET" : "POST",
 					redirect: "manual",
 					headers: {
 						accept: "application/json",
 						"content-type": "application/json",
 						apiKey: this.gatewayApiKey,
 						authorization: `Bearer ${input.credential.accessToken}`,
-						"Idempotency-Key": String(data.idempotencyKey),
+						...(readOnly
+							? {}
+							: { "Idempotency-Key": String(data.idempotencyKey) }),
 					},
-					body: JSON.stringify(body),
+					...(readOnly ? {} : { body: JSON.stringify(body) }),
 				},
 			);
 		} catch {
 			throw failure(
 				"Repair submission outcome unknown; read the family before retrying",
-				{ submissionUncertain: true },
+				readOnly ? {} : { submissionUncertain: true },
 			);
 		}
 		if (response.status >= 300 && response.status < 400)
@@ -202,7 +226,7 @@ export class RehoboamV14Adapter {
 		} catch {
 			throw failure(
 				"Repair response invalid; read the family before retrying",
-				{ submissionUncertain: true },
+				readOnly ? {} : { submissionUncertain: true },
 			);
 		}
 		if (!response.ok) {
@@ -210,9 +234,11 @@ export class RehoboamV14Adapter {
 			throw failure("Repair record was not confirmed", {
 				providerStatus: response.status,
 				providerCode: error?.code,
-				...(response.status < 500 && response.status !== 408
-					? { providerSubmissionOutcome: "rejected" }
-					: { submissionUncertain: true }),
+				...(readOnly
+					? {}
+					: response.status < 500 && response.status !== 408
+						? { providerSubmissionOutcome: "rejected" }
+						: { submissionUncertain: true }),
 				...(response.status === 401 ? { providerCredentialInvalid: true } : {}),
 			});
 		}
@@ -222,7 +248,7 @@ export class RehoboamV14Adapter {
 			Array.isArray(envelope.data)
 		)
 			throw failure("Repair receipt missing; read the family before retrying", {
-				submissionUncertain: true,
+				...(readOnly ? {} : { submissionUncertain: true }),
 			});
 		return envelope.data as Record<string, unknown>;
 	}
