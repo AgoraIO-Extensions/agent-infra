@@ -37,6 +37,17 @@ type DeploymentConfiguration = {
 			ConversationRuntimeOptionsV2["connectionInstallation"]
 		>["authorize"];
 	};
+	/** Deployment-owned object-storage/Store assembly for the existing Worker seam. */
+	readonly createSkillMaterializer?: (input: {
+		readonly databaseUrl: string;
+		readonly signal: AbortSignal;
+	}) =>
+		| NonNullable<DeploymentConfiguration["workloadInput"]["skillMaterializer"]>
+		| Promise<
+				NonNullable<
+					DeploymentConfiguration["workloadInput"]["skillMaterializer"]
+				>
+		  >;
 };
 
 function resolveConnectionInstallation(
@@ -81,6 +92,7 @@ const {
 	connectionConsumerApproval,
 	connectionInstallationSupply,
 	connectionInstallation: configuredConnectionInstallation,
+	createSkillMaterializer,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
@@ -105,6 +117,11 @@ const connectionInstallation = resolveConnectionInstallation(
 const connectionConsumer = connectionConsumerSnapshot
 	? JSON.parse(connectionConsumerSnapshot)
 	: undefined;
+if (
+	createSkillMaterializer !== undefined &&
+	typeof createSkillMaterializer !== "function"
+)
+	throw new Error("SKILL_MATERIALIZER_CONFIGURATION_INVALID");
 
 const instanceId = randomUUID();
 let prepared: ReturnType<typeof createPrepared> | undefined;
@@ -136,9 +153,13 @@ async function createPrepared(signal: AbortSignal) {
 		throw new Error(
 			"PLATFORM_WORKER_NAMESPACE must match the workload policy namespace",
 		);
+	const skillMaterializer = createSkillMaterializer
+		? await createSkillMaterializer({ databaseUrl, signal })
+		: workloadInput.skillMaterializer;
 	const workload = await createProductionWorkloadWorkerOptionsV1(
 		{
 			...workloadInput,
+			...(skillMaterializer ? { skillMaterializer } : {}),
 			policy: {
 				...workloadInput.policy,
 				connectionConsumerSnapshot,
