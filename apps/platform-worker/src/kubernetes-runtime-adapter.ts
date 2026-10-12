@@ -78,6 +78,7 @@ function validPodSelector(value: Readonly<Record<string, string>> | undefined) {
 		)
 	);
 }
+
 import {
 	type WorkloadEgressPolicyV1,
 	workloadEgressRulesV1,
