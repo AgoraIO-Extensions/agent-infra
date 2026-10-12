@@ -201,8 +201,12 @@ export function ActiveConversation({
 		const result = command.result;
 		if (!result || result === handled.current) return;
 		handled.current = result;
-		if (result.kind === "rejected" && result.code === "AGENT_STARTING") {
+		if (
+			result.kind === "rejected" &&
+			(result.code === "AGENT_STARTING" || result.code === "AGENT_UPDATING")
+		) {
 			void reader.refresh();
+			refreshAgent();
 			return;
 		}
 		if (result.kind === "accepted") {
@@ -225,7 +229,7 @@ export function ActiveConversation({
 			setNotice("模型选择已保存，从下一条消息开始生效。");
 			void reader.refresh();
 		}
-	}, [command.result, reader.refresh]);
+	}, [command.result, reader.refresh, refreshAgent]);
 	const options = customPlatformAdapter
 		? (runtimeSelection.data?.options ?? [])
 		: agent.configuration.modelOptions;
@@ -251,12 +255,25 @@ export function ActiveConversation({
 		conversation?.status === "unavailable" ||
 		// A stream reconnecting on its own keeps the composer usable (#1606).
 		(timeline.status !== "ready" && timeline.status !== "reconnecting");
+	const commandLocked = command.isPending || command.result?.kind === "unknown";
+	// Keep the local draft editable while an Agent or its Session is becoming
+	// ready. Sending stays blocked by `blocked`/`preparing`; only an authorization
+	// or read failure should lock the text area itself (#1607).
+	const agentTransitioning =
+		agent.serviceAvailability === "starting" ||
+		agent.serviceAvailability === "updating";
+	const draftDisabled =
+		denied ||
+		commandLocked ||
+		!timeline.history ||
+		timeline.status === "disconnected" ||
+		timeline.status === "unavailable" ||
+		(!available && !agentTransitioning);
 	const selectionDirty =
 		(modelId !== undefined &&
 			modelId !== conversation?.selectedModelOptionId) ||
 		(reasoning !== undefined &&
 			reasoning !== conversation?.selectedReasoningLevel);
-	const commandLocked = command.isPending || command.result?.kind === "unknown";
 	const canSend =
 		!blocked &&
 		!preparing &&
@@ -327,7 +344,9 @@ export function ActiveConversation({
 						刷新会话
 					</Button>
 				</div>
-				{timeline.status === "loading" && <p role="status">正在读取会话…</p>}
+				{timeline.status === "loading" && !timeline.history && (
+					<p role="status">正在读取会话…</p>
+				)}
 				{timeline.status === "reconnecting" && (
 					<p role="status">会话连接中断，正在自动重新连接，草稿会保留。</p>
 				)}
@@ -535,7 +554,7 @@ export function ActiveConversation({
 						id={composerId}
 						rows={3}
 						value={draft}
-						disabled={blocked || commandLocked}
+						disabled={draftDisabled}
 						placeholder={`给 ${agent.name} 发一条消息…`}
 						onFocus={(event) => {
 							const input = event.currentTarget;
