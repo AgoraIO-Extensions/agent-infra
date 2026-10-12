@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RuntimeExecutionGrantClaimsV2 } from "@agent-infra/contracts/runtime";
@@ -91,6 +91,28 @@ describe("Runtime authorization denial diagnostics (#1888)", () => {
 		expect(located).toMatch(
 			/^unnamedDenialSite@runtime-authorization-diagnostics\.test\.ts:\d+:\d+$/,
 		);
+	});
+
+	it("ties every named reason to one denial site", async () => {
+		const source = new URL(".", import.meta.url);
+		const named = new Map<string, string[]>();
+		for (const file of await readdir(source)) {
+			if (!file.endsWith(".ts") || /\.test(-support)?\.ts$/.test(file))
+				continue;
+			const text = await readFile(new URL(file, source), "utf8");
+			for (const [, reason] of text.matchAll(
+				/runtimeAuthorizationDenied\(\s*"([^"]+)"/g,
+			))
+				named.set(reason as string, [
+					...(named.get(reason as string) ?? []),
+					file,
+				]);
+		}
+		expect(named.size).toBeGreaterThan(50);
+		expect(
+			[...named].filter(([, sites]) => sites.length > 1),
+			"a reused reason cannot tell its denial sites apart",
+		).toEqual([]);
 	});
 
 	it("names each check of the authority applied to a request", () => {
