@@ -113,6 +113,24 @@ afterEach(async () => {
 });
 
 describe("RuntimeHost environment assembly", () => {
+	it("passes an explicitly injected Browser context factory to RuntimeHost", async () => {
+		const env = await environment();
+		const factory = vi.fn();
+		const runtime = await assembleRuntimeHost(env, undefined, {
+			createBrowserExecutionContext: factory,
+		});
+		try {
+			const options = (
+				runtime.host as unknown as {
+					options: { createBrowserExecutionContext?: unknown };
+				}
+			).options;
+			expect(options.createBrowserExecutionContext).toBe(factory);
+		} finally {
+			await runtime.close();
+		}
+	});
+
 	async function retainSignedControl(failure: string) {
 		const values = await environment();
 		values.AGENT_INFRA_RUNTIME_DATA_DIR = await realpath(

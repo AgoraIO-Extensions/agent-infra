@@ -41,7 +41,7 @@ type CustomAgentGatewayRouteInput = NonNullable<
 /** Deployment-owned Gateway inputs; the production IdentityAdapter is bound by this module. */
 export type ProductionCustomAgentGatewayInputV1 = Omit<
 	CustomAgentGatewayRouteInput,
-	"identity"
+	"identity" | "authorizeAgent"
 >;
 
 export interface ProductionPlatformApiInputV1
@@ -110,6 +110,33 @@ export interface ProductionPlatformApiInputV1
 	>[0]["resolveCustomAgentInteractionUrl"];
 }
 
+/** Merge explicit mounted deployment ports without allowing duplicate authorities. */
+export function mergeProductionPlatformApiDeploymentPortsV1(input: {
+	readonly apiInput: ProductionPlatformApiInputV1;
+	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
+	readonly modelSelection?: ConversationModelSelectionReaderV1;
+}): ProductionPlatformApiInputV1 {
+	if (
+		input.customAgentGateway !== undefined &&
+		input.apiInput.customAgentGateway !== undefined
+	)
+		throw new Error("PLATFORM_CUSTOM_AGENT_GATEWAY_DUPLICATE");
+	if (
+		input.modelSelection !== undefined &&
+		input.apiInput.modelSelection !== undefined
+	)
+		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
+	return {
+		...input.apiInput,
+		...(input.customAgentGateway !== undefined
+			? { customAgentGateway: input.customAgentGateway }
+			: {}),
+		...(input.modelSelection !== undefined
+			? { modelSelection: input.modelSelection }
+			: {}),
+	};
+}
+
 export function createProductionPlatformApiAssemblyInputV1(
 	input: ProductionPlatformApiInputV1,
 ): PlatformApiAssemblyInput {
@@ -159,8 +186,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 				!input.customAgentGateway.path.startsWith("/") ||
 				!input.customAgentGateway.path.includes("*") ||
 				/[?#\s]/.test(input.customAgentGateway.path) ||
-				typeof input.customAgentGateway.resolveDeployment !== "function" ||
-				typeof input.customAgentGateway.authorizeAgent !== "function"
+				typeof input.customAgentGateway.resolveDeployment !== "function"
 			)
 				throw new Error();
 		}
@@ -344,10 +370,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 		...(input.customAgentGateway
 			? {
-					customAgentGateway: {
-						...input.customAgentGateway,
-						identity: input.identity,
-					},
+					customAgentGateway: input.customAgentGateway,
 				}
 			: {}),
 		connectionCapability,

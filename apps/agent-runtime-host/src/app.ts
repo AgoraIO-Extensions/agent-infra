@@ -5,6 +5,7 @@ import {
 	type RuntimeBrowserCapabilityAssemblyV1,
 	type RuntimeHost,
 	RuntimeHostError,
+	runtimeHostErrorDiagnostic,
 } from "@agent-infra/agent-runtime";
 import {
 	type ExecutionGrantV1,
@@ -67,6 +68,11 @@ interface RuntimeHostAppOptions {
 	/** The transport token authenticates this deployment-provisioned Worker identity. */
 	readinessWorkerId?: string;
 	host: RuntimeHost;
+	/**
+	 * Receives one structured line per authorization denial (#1888): its fixed
+	 * reason, the route and the trace id, never a Grant, claim or body value.
+	 */
+	logDiagnostic?: (entry: Record<string, string>) => void;
 	serviceToken: string;
 	verifyGrant: (
 		grant: ExecutionGrantV1,
@@ -360,6 +366,9 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 				"RUNTIME_GRANT_INVALID",
 				"Runtime authorization is not configured",
 				403,
+				false,
+				undefined,
+				"grant-v2-unconfigured",
 			);
 		const verified = await options.verifyGrantV2(grant);
 		if (verified.claims.workerId !== options.runtimeWorkerId)
@@ -367,6 +376,9 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 				"RUNTIME_GRANT_INVALID",
 				"Runtime authorization does not match this deployment",
 				403,
+				false,
+				undefined,
+				"grant-v2-worker-mismatch",
 			);
 		return verified;
 	}
@@ -537,13 +549,25 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 							500,
 							true,
 						);
+		const traceId = context.req.header("x-trace-id") ?? crypto.randomUUID();
+		if (runtimeError.code === "RUNTIME_GRANT_INVALID")
+			(
+				options.logDiagnostic ??
+				((entry) => console.error(JSON.stringify(entry)))
+			)({
+				service: runtimeHostService,
+				code: "RUNTIME_AUTHORIZATION_DENIED",
+				reason: runtimeHostErrorDiagnostic(runtimeError),
+				path: context.req.path,
+				traceId,
+			});
 		return context.json(
 			{
 				schemaVersion: 1,
 				code: runtimeError.code,
 				message: runtimeError.message,
 				retryable: runtimeError.retryable,
-				traceId: context.req.header("x-trace-id") ?? crypto.randomUUID(),
+				traceId,
 			},
 			runtimeError.httpStatus as ContentfulStatusCode,
 		);

@@ -1,6 +1,7 @@
 export * from "./acp-runtime-driver.js";
 export * from "./browser-capability.js";
 export * from "./browser-context.js";
+export * from "./browser-driver-context.js";
 export * from "./browser-handoff.js";
 export * from "./browser-installation.js";
 export * from "./browser-launch-probe.js";
@@ -33,7 +34,6 @@ export * from "./runtime-file-bridge.js";
 export * from "./runtime-host.js";
 export * from "./skill-hub-directory.js";
 export * from "./standard-mcp-client.js";
-
 export {
 	exchangeStandardOAuthCode,
 	refreshStandardOAuthToken,

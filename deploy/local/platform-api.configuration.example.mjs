@@ -34,6 +34,31 @@ export const publicOrigin = requiredEnv("PLATFORM_PUBLIC_ORIGIN");
 // Supply reviewed deployment values explicitly; fixture values are not defaults.
 export const apiInput = missing("apiInput");
 
+// Optional explicit production ports. The entrypoint merges these into
+// apiInput and rejects duplicate definitions. Gateway and model-directory
+// implementations remain deployment-owned; do not use fixtures here.
+export const customAgentGateway = undefined;
+export const modelSelection = undefined;
+
+// Robot-token Agent management API (optional):
+//
+// apiInput.agentApiCreation = {
+//   // Application principals authenticated by Platform API credentials. One
+//   // application principal may call the API for multiple Agents.
+//   allowedPrincipals: [{ kind: "application", id: "<application-id>" }],
+//   // Deployment-owned adapter that validates the requested default Relay Key
+//   // against the same endpoint/model policy used by the deployment. Platform
+//   // encrypts an accepted key with the public wrapping keys above.
+//   candidates: async (key, configuration) => /* reviewed adapter */ [],
+//   // Optional deployment-owned model admission for keyless configuration.
+//   keylessModelAdmission: { admitModels: async (request) => /* decision */ },
+// };
+//
+// The assignment above is illustrative: export the reviewed object through
+// the deployment's apiInput. Do not put application tokens, Relay Keys or
+// private deployment material in this repository. Omit agentApiCreation (or
+// keep allowedPrincipals empty) to keep direct Agent creation fail-closed.
+
 // Optional deployment-owned one-time application credential delivery. When set,
 // this must be a trusted in-process recipient for the intended application
 // principal; it must never expose credential material through HTTP or logs.

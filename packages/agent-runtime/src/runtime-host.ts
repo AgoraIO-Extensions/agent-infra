@@ -93,6 +93,7 @@ import type { RuntimeGrantValidationOptionsV2 } from "./grant-v2.js";
 import type { createWorkloadReadinessVerifierV1 } from "./readiness.js";
 import {
 	type RuntimeOriginalExecutionRef,
+	runtimeAccessDenialCause,
 	runtimeAuthorizationDenied,
 } from "./runtime-authorization.js";
 import {
@@ -113,6 +114,13 @@ export interface RuntimeHostOptions {
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
 	}>;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
+	/** Deployment-owned Browser controller factory; receives only verified readiness binding. */
+	createBrowserExecutionContext?: (
+		input: RuntimeBrowserExecutionContextV1,
+	) =>
+		| RuntimeBrowserExecutionContextV1
+		| undefined
+		| Promise<RuntimeBrowserExecutionContextV1 | undefined>;
 	onBrowserCapabilityAssembly?: (
 		input:
 			| {
@@ -223,6 +231,26 @@ export function runtimeBrowserExecutionContextForCommand(
 	)
 		return undefined;
 	return browser;
+}
+
+async function createBrowserExecutionContextForCommand(
+	factory: RuntimeHostOptions["createBrowserExecutionContext"],
+	browser: RuntimeBrowserExecutionContextV1 | undefined,
+): Promise<RuntimeBrowserExecutionContextV1 | undefined> {
+	if (!browser || !factory) return browser;
+	const admittedVersion = browser.capabilityVersion;
+	const admittedBinding = structuredClone(browser.binding);
+	const created = await factory({
+		...browser,
+		binding: structuredClone(admittedBinding),
+	});
+	if (
+		!created ||
+		created.capabilityVersion !== admittedVersion ||
+		!isDeepStrictEqual(created.binding, admittedBinding)
+	)
+		return undefined;
+	return created;
 }
 
 type RuntimeOperationResponse =
@@ -614,19 +642,21 @@ export class RuntimeHost {
 		request: RuntimeEventReadRequestV4 | RuntimeEventAckRequestV4,
 		verification: unknown,
 	) {
-		if (this.closed || !this.v4 || !this.options.grantValidationV2)
-			runtimeAuthorizationDenied();
+		if (this.closed) runtimeAuthorizationDenied("host-closed");
+		if (!this.v4 || !this.options.grantValidationV2)
+			runtimeAuthorizationDenied("v4-unconfigured");
 		const original =
 			this.options.store.readOriginalExecutionKeyScopeV4(request);
 		const verified =
 			VerifiedRuntimeExecutionGrantV2Schema.safeParse(verification);
-		if (
-			!original?.scope ||
-			original.hostSessionRef !== request.hostSessionRef ||
-			original.operation.kind !== "submit-turn" ||
-			!verified.success
-		)
-			runtimeAuthorizationDenied();
+		if (!original?.scope)
+			runtimeAuthorizationDenied("v4-original-scope-missing");
+		if (original.hostSessionRef !== request.hostSessionRef)
+			runtimeAuthorizationDenied("v4-original-session-mismatch");
+		if (original.operation.kind !== "submit-turn")
+			runtimeAuthorizationDenied("v4-original-operation-kind");
+		if (!verified.success)
+			runtimeAuthorizationDenied("v4-verification-invalid");
 		try {
 			await validateRuntimeEventAccessV4(
 				request,
@@ -645,8 +675,10 @@ export class RuntimeHost {
 					},
 				},
 			);
-		} catch {
-			runtimeAuthorizationDenied();
+		} catch (error) {
+			runtimeAuthorizationDenied(
+				`v4-event-access:${runtimeAccessDenialCause(error)}`,
+			);
 		}
 		return verified.data.claims;
 	}
@@ -1808,9 +1840,13 @@ export class RuntimeHost {
 							},
 						}
 					: context;
-			const browser = runtimeBrowserExecutionContextForCommand(
+			const admittedBrowser = runtimeBrowserExecutionContextForCommand(
 				this.browserExecutionContext,
 				operation.command,
+			);
+			const browser = await createBrowserExecutionContextForCommand(
+				this.options.createBrowserExecutionContext,
+				admittedBrowser,
 			);
 			const executionContext = browser
 				? { ...(driverContext ?? {}), browser }

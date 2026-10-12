@@ -48,26 +48,54 @@ export interface RuntimeExecutionAuthority {
 	evidenceQuery?: { requestId: string; issuedAt: number };
 }
 
-export function runtimeAuthorizationDenied(): never {
+/**
+ * Uniform denial. `reason` is a fixed internal diagnostic (#1888); callers
+ * still only see the same code, message and status.
+ */
+export function runtimeAuthorizationDenied(reason?: string): never {
 	throw new RuntimeHostError(
 		"RUNTIME_GRANT_INVALID",
 		"Runtime authorization is unavailable or does not authorize this operation",
 		403,
+		false,
+		undefined,
+		reason,
 	);
+}
+
+/** Whether a thrown value is already a Runtime authorization denial. */
+export function isRuntimeAuthorizationDenial(
+	error: unknown,
+): error is RuntimeHostError {
+	return (
+		error instanceof RuntimeHostError && error.code === "RUNTIME_GRANT_INVALID"
+	);
+}
+
+/**
+ * The fixed reason a contract validator put in `cause`; anything else, such
+ * as a schema error, is reported only as "invalid" (#1888).
+ */
+export function runtimeAccessDenialCause(error: unknown) {
+	const cause = error instanceof Error ? error.cause : undefined;
+	return typeof cause === "string" && /^[a-z0-9:-]{1,80}$/.test(cause)
+		? cause
+		: "invalid";
 }
 
 export function assertSessionAuthority(
 	authority: RuntimeSessionAuthority | undefined,
 	binding: { principal?: RuntimePrincipalV1; channelId?: string },
 ) {
+	if (!authority) runtimeAuthorizationDenied("session-authority-missing");
 	if (
-		!authority ||
 		!binding.principal ||
 		authority.principal.kind !== binding.principal.kind ||
-		authority.principal.id !== binding.principal.id ||
-		authority.channelId !== binding.channelId
+		authority.principal.id !== binding.principal.id
 	)
-		runtimeAuthorizationDenied();
+		runtimeAuthorizationDenied("session-principal-mismatch");
+	if (authority.channelId !== binding.channelId)
+		runtimeAuthorizationDenied("session-channel-mismatch");
 }
 
 export function validStoredAuthority(authority: RuntimeSessionAuthority) {
@@ -193,49 +221,58 @@ export function applyRuntimeAuthority(
 	mode: "prepare" | "query" | "renew",
 	now = Date.now(),
 ) {
-	if (
-		!Number.isSafeInteger(now) ||
-		claims.issuedAt > now ||
-		claims.expiresAt <= now
-	)
-		runtimeAuthorizationDenied();
+	if (!Number.isSafeInteger(now))
+		runtimeAuthorizationDenied("host-clock-invalid");
+	if (claims.issuedAt > now)
+		runtimeAuthorizationDenied("grant-issued-in-future");
+	if (claims.expiresAt <= now) runtimeAuthorizationDenied("grant-expired");
 	const current = authorities[claims.executionId];
+	if (current && current.workerId !== claims.workerId)
+		runtimeAuthorizationDenied("authority-worker-mismatch");
 	if (
 		current &&
-		(current.workerId !== claims.workerId ||
-			claims.operation.executionDeliveryFence <
-				current.executionDeliveryFence ||
-			(claims.purpose === "control" &&
-				current.controlDeliveryFence !== undefined &&
-				claims.operation.executionDeliveryFence ===
-					current.executionDeliveryFence &&
-				claims.operation.deliveryFence <=
-					(current.controlDeliveryFence ?? current.executionDeliveryFence) &&
-				current.control?.controlRecordId !== claims.controlRecordId))
+		claims.operation.executionDeliveryFence < current.executionDeliveryFence
 	)
-		runtimeAuthorizationDenied();
+		runtimeAuthorizationDenied("authority-fence-regressed");
+	if (
+		current &&
+		claims.purpose === "control" &&
+		current.controlDeliveryFence !== undefined &&
+		claims.operation.executionDeliveryFence ===
+			current.executionDeliveryFence &&
+		claims.operation.deliveryFence <=
+			(current.controlDeliveryFence ?? current.executionDeliveryFence) &&
+		current.control?.controlRecordId !== claims.controlRecordId
+	)
+		runtimeAuthorizationDenied("control-fence-stale");
 	if (claims.purpose === "business") {
+		if (current?.stopped && claims.allowedCommands[0] !== "turn.stop")
+			runtimeAuthorizationDenied("business-authority-stopped");
 		if (
-			(current?.stopped && claims.allowedCommands[0] !== "turn.stop") ||
-			(current?.control &&
-				(current.control.reason !== "recovery" ||
-					(current.authorizationRecordId === claims.authorizationRecordId &&
-						mode !== "renew")))
+			current?.control &&
+			(current.control.reason !== "recovery" ||
+				(current.authorizationRecordId === claims.authorizationRecordId &&
+					mode !== "renew"))
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied(
+				current.control.reason === "recovery"
+					? "business-recovery-latched"
+					: "business-control-latched",
+			);
 		if (
 			current?.authorizationRecordId &&
 			current.authorizationRecordId !== claims.authorizationRecordId &&
 			current.control?.reason !== "recovery"
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("authorization-record-mismatch");
+		if (mode === "renew" && !current?.authorizationRecordId)
+			runtimeAuthorizationDenied("renew-without-authority");
 		if (
 			mode === "renew" &&
-			(!current?.authorizationRecordId ||
-				claims.operation.executionDeliveryFence !==
-					current.executionDeliveryFence)
+			claims.operation.executionDeliveryFence !==
+				current?.executionDeliveryFence
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("renew-fence-mismatch");
 	}
 	const authority: RuntimeExecutionAuthority =
 		mode === "query" && current
@@ -254,7 +291,7 @@ export function applyRuntimeAuthority(
 			authority.control?.controlRecordId === claims.controlRecordId &&
 			authority.control.reason !== claims.reason
 		)
-			runtimeAuthorizationDenied();
+			runtimeAuthorizationDenied("control-reason-changed");
 		authority.control = {
 			controlRecordId: claims.controlRecordId,
 			reason: claims.reason,
@@ -284,7 +321,8 @@ export function applyRuntimeAuthority(
 		if (claims.allowedCommands[0] === "turn.stop") authority.stopped = true;
 		if (mode !== "query") {
 			delete authority.queryOnly;
-			if (claims.issuedAt < authority.issuedAt) runtimeAuthorizationDenied();
+			if (claims.issuedAt < authority.issuedAt)
+				runtimeAuthorizationDenied("grant-older-than-authority");
 			authority.authorizationRecordId = claims.authorizationRecordId;
 			authority.issuedAt = claims.issuedAt;
 			authority.expiresAt = claims.expiresAt;

@@ -41,6 +41,10 @@ export const GenericAcpRuntimeDriver = {
 	async open(options: GenericAcpRuntimeDriverOptions) {
 		const driver = await SessionRuntimeDriver.open({
 			...options,
+			// The Driver consumes attachments when the peer negotiated image input;
+			// readiness reports that negotiated fact per peer, and each Session
+			// enforces it before any bridge read.
+			supportsAttachments: true,
 			cursorPrefix: "acp",
 			retireSession: retireAcpProcess,
 			completionStatus: (reason): RuntimeStatusV1 =>

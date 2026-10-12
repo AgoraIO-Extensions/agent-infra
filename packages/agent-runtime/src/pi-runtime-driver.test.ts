@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,6 +81,81 @@ async function fixture(mode = "normal", withExecutionKeys = false) {
 			await rm(path, { recursive: true, force: true });
 		},
 	};
+}
+
+const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+const imageCommand = {
+	...command,
+	input: { text: "describe this image", attachments: ["file-1"] },
+};
+
+/**
+ * Request-scoped File Bridge double for one authorized image attachment.
+ */
+function imageBridge(
+	overrides: {
+		readonly mediaType?: string;
+		readonly sizeBytes?: number;
+		readonly sha256?: string;
+		readonly revalidate?: () => void;
+	} = {},
+) {
+	const readInput = vi.fn(async (fileId: string) => ({
+		fileId,
+		descriptor: {
+			name: "screen.png",
+			mediaType: overrides.mediaType ?? "image/png",
+			sizeBytes: overrides.sizeBytes ?? imageBytes.byteLength,
+			sha256:
+				overrides.sha256 ??
+				createHash("sha256").update(imageBytes).digest("hex"),
+		},
+		body: new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(imageBytes);
+				controller.close();
+			},
+		}),
+	}));
+	const revalidate = vi.fn(overrides.revalidate);
+	return {
+		readInput,
+		revalidate,
+		fileBridge: {
+			readInput,
+			revalidate,
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+		},
+	};
+}
+
+async function nativeMessages(path: string, ref: string) {
+	const file = join(path, ref, "native/session.jsonl");
+	return (await readFile(file, "utf8"))
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line))
+		.filter((entry) => entry.type === "message")
+		.map((entry) => entry.message);
+}
+
+/** Every user Turn persisted across the Driver's owned native Sessions. */
+async function attachedUserMessages(path: string) {
+	const index = JSON.parse(await readFile(join(path, "index.json"), "utf8"));
+	const users: unknown[] = [];
+	for (const ref of index.sessions.map(
+		(session: { ref: string }) => session.ref,
+	)) {
+		try {
+			for (const message of await nativeMessages(path, ref))
+				if (message?.role === "user") users.push(message);
+		} catch {
+			// A refused submit never opened its native Session.
+		}
+	}
+	return users;
 }
 
 it.each([false, true])(
@@ -484,6 +560,184 @@ it.each(["invalid-json", "self-cycle", "two-node-cycle"])(
 					),
 				).toBe("completed"),
 			);
+		} finally {
+			await f.close();
+		}
+	},
+);
+
+it("dispatches an authorized image as native Pi prompt content", async () => {
+	const f = await fixture();
+	try {
+		const bridge = imageBridge();
+		const result = await f.driver.execute(imageCommand, {
+			fileBridge: bridge.fileBridge,
+		});
+		expect(result.result).toEqual({ outcome: "accepted", status: "running" });
+		await vi.waitFor(async () =>
+			expect(
+				await f.driver.getStatus(result.nativeSessionRef, command.executionId),
+			).toBe("completed"),
+		);
+		expect(bridge.readInput).toHaveBeenCalledWith("file-1");
+		// Authority is re-checked after transfer, before Turn admission and again
+		// at the native boundary.
+		expect(bridge.revalidate).toHaveBeenCalledTimes(3);
+		expect((await f.driver.getCapabilities()).attachments).toBe(true);
+		const user = (await nativeMessages(f.path, result.nativeSessionRef)).find(
+			(message) => message?.role === "user",
+		);
+		// The text stays exactly as submitted and the image travels as native
+		// content, never as an encoded data URL inside the prompt text.
+		expect(user?.content).toEqual([
+			{ type: "text", text: "describe this image" },
+			{
+				type: "image",
+				data: Buffer.from(imageBytes).toString("base64"),
+				mimeType: "image/png",
+			},
+		]);
+	} finally {
+		await f.close();
+	}
+});
+
+it("refuses native submission when the file authority lapses during Session initialization", async () => {
+	const f = await fixture();
+	try {
+		let revalidations = 0;
+		const bridge = imageBridge({
+			revalidate() {
+				revalidations += 1;
+				// Authority lapses after the transfer but before the native Turn.
+				if (revalidations > 1)
+					throw new Error("RUNTIME_FILE_BRIDGE_CONTEXT_STALE");
+			},
+		});
+		await expect(
+			f.driver.execute(imageCommand, { fileBridge: bridge.fileBridge }),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		// The last check runs at the native submission boundary.
+		expect(revalidations).toBe(2);
+		expect(await attachedUserMessages(f.path)).toEqual([]);
+	} finally {
+		await f.close();
+	}
+});
+
+it.each([
+	["an unsupported image media type", { mediaType: "image/svg+xml" }],
+	["a descriptor beyond the byte bound", { sizeBytes: 50 * 1024 * 1024 + 1 }],
+	["bytes that do not match the admitted digest", { sha256: "a".repeat(64) }],
+])("rejects %s before any native Pi Turn", async (_name, overrides) => {
+	const f = await fixture();
+	try {
+		const bridge = imageBridge(overrides);
+		await expect(
+			f.driver.execute(imageCommand, { fileBridge: bridge.fileBridge }),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(bridge.revalidate).not.toHaveBeenCalled();
+		expect(await attachedUserMessages(f.path)).toEqual([]);
+	} finally {
+		await f.close();
+	}
+});
+
+it("releases the body of an attachment rejected before transfer", async () => {
+	const f = await fixture();
+	try {
+		let cancelled = false;
+		const fileBridge = {
+			readInput: async (fileId: string) => ({
+				fileId,
+				descriptor: {
+					name: "vector.svg",
+					mediaType: "image/svg+xml",
+					sizeBytes: imageBytes.byteLength,
+					sha256: createHash("sha256").update(imageBytes).digest("hex"),
+				},
+				body: new ReadableStream<Uint8Array>({
+					cancel() {
+						cancelled = true;
+					},
+				}),
+			}),
+			revalidate: () => {},
+			writeResult: async () => {
+				throw new Error("unused");
+			},
+		};
+		await expect(
+			f.driver.execute(imageCommand, { fileBridge }),
+		).rejects.toMatchObject({ code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE" });
+		expect(cancelled).toBe(true);
+	} finally {
+		await f.close();
+	}
+});
+
+it("requires a request-scoped File Bridge for Pi attachments", async () => {
+	const f = await fixture();
+	try {
+		await expect(f.driver.execute(imageCommand)).rejects.toMatchObject({
+			code: "RUNTIME_NATIVE_SESSION_UNAVAILABLE",
+		});
+	} finally {
+		await f.close();
+	}
+});
+
+it.each([false, true])(
+	"recovers a persisted Pi image Turn only with its image binding (tampered: %s)",
+	async (tampered) => {
+		const f = await fixture("system-prefix-exit");
+		try {
+			const bridge = imageBridge();
+			const result = await f.driver.execute(imageCommand, {
+				fileBridge: bridge.fileBridge,
+			});
+			expect(result.result).toEqual({ outcome: "accepted", status: "running" });
+			await vi.waitFor(async () =>
+				expect(
+					await f.driver.getStatus(
+						result.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("unknown"),
+			);
+			if (tampered) {
+				const file = join(
+					f.path,
+					result.nativeSessionRef,
+					"native/session.jsonl",
+				);
+				const entries = (await readFile(file, "utf8"))
+					.trim()
+					.split("\n")
+					.map((line) => JSON.parse(line));
+				for (const entry of entries) {
+					if (entry.message?.role !== "user") continue;
+					for (const part of entry.message.content)
+						if (part.type === "image")
+							part.data = Buffer.from("other").toString("base64");
+				}
+				await writeFile(
+					file,
+					`${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+				);
+			}
+			await f.restart();
+			expect(
+				await f.driver.getStatus(result.nativeSessionRef, command.executionId),
+			).toBe(tampered ? "unknown" : "completed");
+			expect(
+				(
+					await f.driver.replayEvents(
+						result.nativeSessionRef,
+						command.executionId,
+					)
+				).filter((event) => event.type === "completed"),
+			).toHaveLength(tampered ? 0 : 1);
 		} finally {
 			await f.close();
 		}

@@ -19,9 +19,118 @@ function historyCheckpoint(messages: unknown[]) {
 	});
 }
 
-function promptBinding(nativeId: string, checkpoint: string, text: string) {
+/** Identity facts of one Pi user Turn; image bytes never persist here. */
+interface PiUserContent {
+	readonly text: string;
+	readonly images: readonly {
+		readonly mimeType: string;
+		readonly digest: string;
+	}[];
+}
+
+/** Image media types the pinned Pi vision path transports to its providers. */
+const piImageMediaTypes = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+]);
+
+function piImageDigest(data: string) {
+	return createHash("sha256").update(data).digest("hex");
+}
+
+/**
+ * Reduces one outgoing or persisted Pi user message to the facts that bind a
+ * Turn: its text plus the identity of every native image it carries. Anything
+ * outside the pinned text-plus-image shape stays unconfirmed.
+ */
+function piUserContent(
+	message: PiFrame | undefined,
+): PiUserContent | undefined {
+	const content = message?.content;
+	if (!Array.isArray(content) || !content.length) return;
+	const head = piRecord(content[0]);
+	if (head?.type !== "text" || typeof head.text !== "string") return;
+	const images: { mimeType: string; digest: string }[] = [];
+	for (const part of content.slice(1)) {
+		const image = piRecord(part);
+		if (
+			image?.type !== "image" ||
+			typeof image.data !== "string" ||
+			typeof image.mimeType !== "string" ||
+			!piImageMediaTypes.has(image.mimeType)
+		)
+			return;
+		images.push({
+			mimeType: image.mimeType,
+			digest: piImageDigest(image.data),
+		});
+	}
+	return { text: head.text, images };
+}
+
+function samePiUserContent(left: PiUserContent, right: PiUserContent) {
+	return (
+		left.text === right.text &&
+		left.images.length === right.images.length &&
+		left.images.every(
+			(image, index) =>
+				image.mimeType === right.images[index]?.mimeType &&
+				image.digest === right.images[index]?.digest,
+		)
+	);
+}
+
+/**
+ * Validates one prompt against the native Pi RPC representation: a single text
+ * message plus optional structured images, never an encoded text substitute.
+ */
+function normalizePiPrompt(prompt: NativePromptV1): {
+	readonly content: PiUserContent;
+	readonly images: readonly {
+		readonly type: "image";
+		readonly data: string;
+		readonly mimeType: string;
+	}[];
+} {
+	if (typeof prompt === "string")
+		return { content: { text: prompt, images: [] }, images: [] };
+	const head = prompt[0];
+	if (head?.type !== "text") throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
+	const images: { type: "image"; data: string; mimeType: string }[] = [];
+	for (const block of prompt.slice(1)) {
+		if (
+			block.type !== "image" ||
+			!piImageMediaTypes.has(block.mimeType) ||
+			// Shape only: the shared Driver already owns media type, size and digest
+			// validation, and an empty payload must not block the Session here.
+			!/^[A-Za-z0-9+/]*={0,2}$/.test(block.data)
+		)
+			throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
+		images.push({ type: "image", data: block.data, mimeType: block.mimeType });
+	}
+	return {
+		content: {
+			text: head.text,
+			images: images.map((image) => ({
+				mimeType: image.mimeType,
+				digest: piImageDigest(image.data),
+			})),
+		},
+		images,
+	};
+}
+
+function promptBinding(
+	nativeId: string,
+	checkpoint: string,
+	content: PiUserContent,
+) {
 	return createHash("sha256")
-		.update(JSON.stringify([nativeId, checkpoint, text]))
+		.update(
+			JSON.stringify([nativeId, checkpoint, content.text, content.images]),
+		)
 		.digest("hex");
 }
 
@@ -63,15 +172,6 @@ function piSystemPrefix(
 			sections.preamble.length > 0 &&
 			sections.cwd === expectedCwd)
 	);
-}
-
-function piTextUser(message: PiFrame | undefined) {
-	const content = message?.content;
-	if (!Array.isArray(content) || content.length !== 1) return;
-	const part = piRecord(content[0]);
-	return part?.type === "text" && typeof part.text === "string"
-		? part.text
-		: undefined;
 }
 
 export async function openPiSession(
@@ -163,7 +263,7 @@ export async function openPiSession(
 	let updates = Promise.resolve();
 	let active:
 		| {
-				input: string;
+				content: PiUserContent;
 				resolve: (result: { stopReason: string; checkpoint: string }) => void;
 				reject: (error: Error) => void;
 		  }
@@ -254,7 +354,7 @@ export async function openPiSession(
 					}
 					if (frame.type === "agent_end") {
 						const confirmed = currentCheckpoint
-							? await confirmedTerminal(currentCheckpoint, target.input)
+							? await confirmedTerminal(currentCheckpoint, target.content)
 							: undefined;
 						if (!confirmed) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 						const { stopReason, checkpoint } = confirmed;
@@ -300,7 +400,10 @@ export async function openPiSession(
 			throw new Error("RUNTIME_NATIVE_SESSION_UNAVAILABLE");
 		return state;
 	}
-	async function confirmedTerminal(checkpoint: string, expectedInput?: string) {
+	async function confirmedTerminal(
+		checkpoint: string,
+		expected?: PiUserContent,
+	) {
 		const before = piRecord(JSON.parse(checkpoint));
 		if (
 			!before ||
@@ -329,9 +432,14 @@ export async function openPiSession(
 		const current = messages.slice(count).map(piRecord);
 		const hasSystemPrefix = current[0]?.role === "system";
 		const userIndex = hasSystemPrefix ? 1 : 0;
-		const input = piTextUser(current[userIndex]);
-		let inputMatches = expectedInput !== undefined && input === expectedInput;
-		if (expectedInput === undefined && input !== undefined) {
+		const input = piUserContent(current[userIndex]);
+		// A live Turn is bound to the exact prompt this Driver dispatched; a
+		// recovered Turn to the durable binding of its last observed prompt.
+		let inputMatches =
+			expected !== undefined &&
+			input !== undefined &&
+			samePiUserContent(input, expected);
+		if (expected === undefined && input !== undefined) {
 			try {
 				if ((await lstat(promptBindingFile)).isFile()) {
 					const binding = (await readFile(promptBindingFile, "utf8")).trim();
@@ -400,8 +508,6 @@ export async function openPiSession(
 		}
 		return {
 			nativeId,
-			// Pi RPC accepts string prompts only; structured image input is refused.
-			supportsImagePrompt: false,
 			async discoverCommands(input: {
 				readonly signal: AbortSignal;
 				readonly expiresAt: number;
@@ -448,9 +554,7 @@ export async function openPiSession(
 					throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
 			},
 			async prompt(prompt: NativePromptV1) {
-				if (typeof prompt !== "string")
-					throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
-				const text = prompt;
+				const { content, images } = normalizePiPrompt(prompt);
 				if (active || exited) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 				if (!currentCheckpoint) throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 				const checkpoint = currentCheckpoint;
@@ -461,7 +565,7 @@ export async function openPiSession(
 					checkpoint: string;
 				}>();
 				const target = {
-					input: text,
+					content,
 					resolve: terminal.resolve,
 					reject: terminal.reject,
 				};
@@ -471,7 +575,9 @@ export async function openPiSession(
 				try {
 					const binding = await open(promptBindingFile, "w", 0o600);
 					try {
-						await binding.writeFile(promptBinding(nativeId, checkpoint, text));
+						await binding.writeFile(
+							promptBinding(nativeId, checkpoint, content),
+						);
 						await binding.sync();
 					} finally {
 						await binding.close();
@@ -489,7 +595,10 @@ export async function openPiSession(
 					throw error;
 				}
 				void rpc
-					.request("prompt", { message: text })
+					.request("prompt", {
+						message: content.text,
+						...(images.length ? { images } : {}),
+					})
 					.then(() => (active === target ? options.update() : undefined))
 					.catch(() => {
 						if (active === target) {

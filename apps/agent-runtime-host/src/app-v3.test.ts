@@ -30,7 +30,7 @@ afterEach(async () => {
 			.map((path) => rm(path, { recursive: true, force: true })),
 	);
 });
-async function setup() {
+async function setup(logDiagnostic?: (entry: Record<string, string>) => void) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-http-v3-"));
 	directories.push(directory);
 	const driver = await FakeRuntimeDriver.open(join(directory, "driver.json"));
@@ -55,6 +55,7 @@ async function setup() {
 		verifyGrantV2: createRuntimeExecutionGrantVerifierV2(
 			new Map([["fixture", runtimeV2Keys.publicKey]]),
 		),
+		...(logDiagnostic ? { logDiagnostic } : {}),
 	});
 	return { app, host, driver };
 }
@@ -222,6 +223,79 @@ describe("Runtime V3 authenticated HTTP", () => {
 		);
 		expect(invalid.status).toBe(400);
 		expect(await invalid.text()).not.toContain("synthetic-private-canary");
+		expect(await driver.sideEffectCount()).toBe(0);
+	});
+	it("logs a fixed reason for each authorization denial without changing the response (#1888)", async () => {
+		const entries: Record<string, string>[] = [];
+		const { app, driver } = await setup((entry) => entries.push(entry));
+		const submit = signV3Fixture(submitV3Fixture(), "turn.submit");
+		const foreign = signV3Fixture(submitV3Fixture(), "turn.submit", {
+			claims: { workerId: "another-worker" },
+		});
+		const refusals = [
+			await app.request(
+				"/internal/runtime/v3/turns",
+				post(foreign, "synthetic-service-token"),
+			),
+			await app.request(
+				"/internal/runtime/v3/turns",
+				post({
+					...submit,
+					input: { text: "synthetic changed input", attachments: [] },
+				}),
+			),
+			await app.request(
+				"/internal/runtime/v3/turns",
+				post({
+					...submit,
+					grant: { ...submit.grant, token: `${submit.grant.token}x` },
+				}),
+			),
+		];
+		const bodies = await Promise.all(
+			refusals.map(async (response) => ({
+				status: response.status,
+				body: (await response.json()) as Record<string, unknown>,
+			})),
+		);
+		for (const { status, body } of bodies) {
+			expect(status).toBe(403);
+			expect(Object.keys(body).sort()).toEqual([
+				"code",
+				"message",
+				"retryable",
+				"schemaVersion",
+				"traceId",
+			]);
+			expect(body.code).toBe("RUNTIME_GRANT_INVALID");
+		}
+		expect(
+			entries.map(({ reason, path, code }) => [code, path, reason]),
+		).toEqual([
+			[
+				"RUNTIME_AUTHORIZATION_DENIED",
+				"/internal/runtime/v3/turns",
+				"grant-v2-worker-mismatch",
+			],
+			[
+				"RUNTIME_AUTHORIZATION_DENIED",
+				"/internal/runtime/v3/turns",
+				"v3-request-mismatch",
+			],
+			[
+				"RUNTIME_AUTHORIZATION_DENIED",
+				"/internal/runtime/v3/turns",
+				"grant-v2-segment-encoding",
+			],
+		]);
+		expect(entries.map(({ traceId }) => traceId)).toEqual(
+			bodies.map(({ body }) => body.traceId),
+		);
+		// The entry never carries the Grant, the request or its input.
+		const logged = JSON.stringify(entries);
+		expect(logged).not.toContain(submit.grant.token.split(".")[1]);
+		expect(logged).not.toContain("synthetic changed input");
+		expect(logged).not.toContain("conversation-fixture");
 		expect(await driver.sideEffectCount()).toBe(0);
 	});
 	it("rejects historical business routes in trusted production mode without widening V1", async () => {

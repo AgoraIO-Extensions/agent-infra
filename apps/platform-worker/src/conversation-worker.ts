@@ -77,6 +77,7 @@ function timedAuthorization(
 				stage: "authorization",
 				outcome: decision.outcome === "allowed" ? "completed" : "rejected",
 				durationMs: performance.now() - began,
+				operationRef: "drain.authorization",
 				conversationId: input.conversationId,
 				executionId: input.executionId,
 			});
@@ -163,9 +164,21 @@ export function createPlatformConversationWorkerV2(
 	let runtime: ReturnType<typeof createConversationRuntimeV2> | undefined;
 	let dispatch: ReturnType<typeof createConversationDispatchUseCaseV1>;
 	try {
+		const telemetry = options.observability;
 		runtime = createConversationRuntimeV2({
 			...options,
 			signal,
+			recordDrainStage: telemetry
+				? (observation) =>
+						record(telemetry, {
+							stage: "worker",
+							outcome: observation.outcome,
+							durationMs: observation.durationMs,
+							operationRef: observation.operationRef,
+							conversationId: observation.conversationId,
+							executionId: observation.executionId,
+						})
+				: undefined,
 			dispatchStore: store,
 			taskAuthorizationStore,
 			legacyControlStore,
@@ -188,7 +201,6 @@ export function createPlatformConversationWorkerV2(
 				return current;
 			},
 		});
-		const telemetry = options.observability;
 		dispatch = createConversationDispatchUseCaseV1(
 			{
 				store,

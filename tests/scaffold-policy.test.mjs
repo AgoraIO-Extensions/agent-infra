@@ -68,6 +68,24 @@ test("deployment images select an explicit non-root runtime user", async () => {
 	}
 });
 
+test("Runtime Host image exposes a numeric non-root user to Kubernetes", async () => {
+	const dockerfile = await readFile(
+		"apps/agent-runtime-host/Dockerfile",
+		"utf8",
+	);
+	const runtimeStage = dockerfile.slice(
+		dockerfile.indexOf(
+			"\nFROM node:24-bookworm-slim",
+			dockerfile.indexOf("\nFROM node:24-bookworm-slim") + 1,
+		),
+		dockerfile.indexOf(
+			"\n# Test tools and source stay outside",
+			dockerfile.indexOf("\nFROM node:24-bookworm-slim") + 1,
+		),
+	);
+	assert.match(runtimeStage, /^USER 1000:1000$/m);
+});
+
 test("Node runtime images contain only production deployment artifacts", async () => {
 	const deployCommands = new Map([
 		[
@@ -134,6 +152,26 @@ test("injected Platform runtime images discard compile-time metadata", async () 
 			);
 		}
 	}
+});
+
+test("RuntimeHost image normalizes post-install global directory timestamps", async () => {
+	const dockerfile = await readFile(
+		"apps/agent-runtime-host/Dockerfile",
+		"utf8",
+	);
+	const runtimeStage =
+		/^FROM .* AS runtime\n([\s\S]*?)(?=^FROM |$(?![\s\S]))/m.exec(
+			dockerfile,
+		)?.[1];
+	assert.ok(runtimeStage, "RuntimeHost production stage is missing");
+	assert.match(runtimeStage, /^ARG SOURCE_DATE_EPOCH=0$/m);
+	const normalizers = runtimeStage.match(
+		/utimesSync\("\/usr\/local", epoch, epoch\)/g,
+	);
+	assert.ok(
+		normalizers && normalizers.length >= 2,
+		"RuntimeHost must normalize /usr/local in the producing layer and at the final boundary",
+	);
 });
 
 test("Compose runs every deployment image with a read-only root filesystem", async () => {

@@ -67,7 +67,12 @@ function failure(status?: number, error?: unknown): ConversationCommandResult {
 		code === "AUTHORIZATION_REVOKED"
 	)
 		return { kind: "denied", ...(code ? { code } : {}) };
-	if (status === undefined || status >= 500 || !parsed.success)
+	// A runtime-unavailable response is a deliberate pre-acceptance refusal
+	// (the API uses 503 for this protocol code), so surface it as retryable
+	// instead of implying that the message may have been accepted (#1607).
+	if (status === undefined || !parsed.success)
+		return { kind: "unknown", ...(code ? { code } : {}) };
+	if (status >= 500 && code !== "RUNTIME_UNAVAILABLE")
 		return { kind: "unknown", ...(code ? { code } : {}) };
 	return {
 		kind: "rejected",

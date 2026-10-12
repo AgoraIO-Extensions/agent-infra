@@ -27,6 +27,7 @@ describe("agent-runtime dependency direction", () => {
 			"ajv",
 			"eventsource-parser",
 			"playwright-core",
+			"zod",
 		]);
 		expect(packageJson.dependencies?.["@modelcontextprotocol/sdk"]).toBe(
 			"1.30.0",

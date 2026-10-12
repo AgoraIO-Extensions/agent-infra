@@ -3,6 +3,7 @@ import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import {
 	type BrowserCapabilityAvailableV1,
+	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
@@ -33,13 +34,47 @@ import {
 import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
-import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+import {
+	boundedRuntimeSkillRead,
+	type RuntimeFilesystemSkillDirectoryV1,
+	RuntimeSkillDirectoryErrorV1,
+} from "./skill-hub-directory.js";
 
+/**
+ * Structured native prompt content. Drivers that keep a string-only native
+ * protocol receive the plain text form; image-capable drivers receive the
+ * validated blocks instead of provider-specific text encodings.
+ */
 export type NativePromptContentV1 = Readonly<
 	| { type: "text"; text: string }
 	| { type: "image"; data: string; mimeType: string }
 >;
 export type NativePromptV1 = string | readonly NativePromptContentV1[];
+
+/** Image media types a Session native prompt can render as image content. */
+const nativePromptImageMediaTypes = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+]);
+const nativePromptMaximumImageBytes = 50 * 1024 * 1024;
+
+/**
+ * Releases one attachment transfer that was rejected or interrupted. A body
+ * that never reached the native Turn must not stay live upstream.
+ */
+async function cancelNativePromptReader(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+) {
+	try {
+		await reader.cancel();
+	} catch {
+		// An already closed or upstream-owned body needs no further release.
+	} finally {
+		reader.releaseLock();
+	}
+}
 
 export interface SessionRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -54,6 +89,7 @@ export interface SessionRuntimeDriverOptions {
 	readonly defaultModelOptionId: string;
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly SessionRuntimeModelOption[];
+	readonly supportsAttachments?: boolean;
 	/** Deployment-owned verified Skill Hub generation; never selected by a wire command. */
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly cursorPrefix: string;
@@ -80,15 +116,16 @@ export interface NativeSessionOptions {
 export interface NativeSession {
 	nativeId: string;
 	/**
-	 * Negotiated native image input support. Absent means the native session
-	 * cannot accept structured image content.
+	 * Negotiated image input support for this Session. `false` means the native
+	 * Session explicitly refused structured image content, for example an ACP
+	 * peer that did not negotiate `promptCapabilities.image`; absent leaves the
+	 * decision to the Driver's `supportsAttachments` declaration.
 	 */
 	supportsImagePrompt?: boolean;
 	select(model: string, effort: string): Promise<void>;
-	prompt(prompt: NativePromptV1): Promise<{
-		stopReason: string;
-		checkpoint?: string;
-	}>;
+	prompt(
+		prompt: NativePromptV1,
+	): Promise<{ stopReason: string; checkpoint?: string }>;
 	reusable?(): boolean;
 	startTurn?(options: NativeSessionOptions): void;
 	checkpoint?(): Promise<string>;
@@ -783,10 +820,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			const file = await fileBridge.readInput(fileId);
 			if (
 				file.fileId !== fileId ||
-				!file.descriptor.mediaType.startsWith("image/") ||
-				file.descriptor.sizeBytes > 50 * 1024 * 1024
-			)
+				!nativePromptImageMediaTypes.has(file.descriptor.mediaType) ||
+				file.descriptor.sizeBytes > nativePromptMaximumImageBytes
+			) {
+				await cancelNativePromptReader(file.body.getReader());
 				unavailable();
+			}
 			const reader = file.body.getReader();
 			const chunks: Uint8Array[] = [];
 			let size = 0;
@@ -796,11 +835,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					if (next.done) break;
 					if (!(next.value instanceof Uint8Array)) unavailable();
 					size += next.value.byteLength;
-					if (size > 50 * 1024 * 1024) unavailable();
+					if (size > nativePromptMaximumImageBytes) unavailable();
 					chunks.push(next.value);
 				}
 			} finally {
-				reader.releaseLock();
+				await cancelNativePromptReader(reader);
 			}
 			const bytes = Buffer.concat(chunks);
 			if (
@@ -815,11 +854,23 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				mimeType: file.descriptor.mediaType,
 			});
 		}
-		// Authority that already lapsed while the bytes were acquired must not
-		// carry them into the remaining Session setup.
 		return content;
 	}
-
+	/**
+	 * Roll back the durable Turn admitted for an attachment request whose File
+	 * Grant lapsed before the native boundary. Nothing was dispatched, so the
+	 * request must not stay recorded as an unknown Turn that may have run.
+	 */
+	private async discardTurn(file: DurableJsonFile<Session>, command: Submit) {
+		await file.update((state) => {
+			state.turns = state.turns.filter(
+				(turn) => turn.executionId !== command.executionId,
+			);
+			state.operations = state.operations.filter(
+				(entry) => entry.key !== operationKey(command),
+			);
+		});
+	}
 	private async submit(
 		file: DurableJsonFile<Session>,
 		command: Submit,
@@ -863,6 +914,15 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		if (!("text" in command.input)) unavailable();
 		const hasAttachments = command.input.attachments.length > 0;
 		const text = command.input.text;
+		// Attachment input needs both a wired bridge and a Driver that consumes
+		// it; neither decision may wait for a Session or a bridge read.
+		if (hasAttachments && (!this.options.supportsAttachments || !fileBridge))
+			unavailable();
+		// Attachment bytes were read under the File Grant of this request; they must
+		// not cross into a native Turn once that authority has lapsed.
+		const revalidateInput = () => {
+			if (hasAttachments) fileBridge?.revalidate();
+		};
 		const previousHandle = this.handles.get(ref);
 		const reuse =
 			previousHandle?.native.startTurn &&
@@ -953,21 +1013,21 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		// read, before model selection and before any durable Turn record. ACP
 		// negotiates image input during the handshake, so the opened Session
 		// holds the earliest authoritative capability.
-		let inputText: NativePromptV1 = text;
+		let input: NativePromptV1 = text;
 		if (hasAttachments) {
 			try {
-				if (native.supportsImagePrompt !== true) unavailable();
-				inputText = await this.materializeAttachmentInput(
+				if (native.supportsImagePrompt === false) unavailable();
+				input = await this.materializeAttachmentInput(
 					text,
 					command.input.attachments,
 					fileBridge,
 				);
 				// The bytes must not carry authority that lapsed while they were
 				// acquired into the durable Session state and model selection.
-				fileBridge?.revalidate();
-			} catch (error) {
+				revalidateInput();
+			} catch {
 				if (!reuse) await native.close().catch(() => {});
-				throw error;
+				unavailable();
 			}
 		}
 		try {
@@ -995,18 +1055,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			await native.close();
 			unavailable();
 		}
-		if (hasAttachments) {
-			try {
-				// A stale authority must not admit a durable Turn that no native
-				// prompt will ever be dispatched for.
-				fileBridge?.revalidate();
-			} catch (error) {
-				if (!reuse) await native.close().catch(() => {});
-				throw error;
-			}
-		}
 		try {
 			const nativeCheckpoint = await native.checkpoint?.();
+			// Native initialization is asynchronous; the File Grant must still hold
+			// immediately before validated bytes cross into the native Turn.
+			revalidateInput();
 			await file.update((state) => {
 				state.operations.push({
 					key: operationKey(command),
@@ -1032,14 +1085,30 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		}
 		const handle: Handle = { native, selection, pump: Promise.resolve() };
 		this.handles.set(ref, handle);
+		let preDispatchFailure = false;
 		handle.pump = (async () => {
+			if (hasAttachments) {
+				try {
+					// Materialized bytes must never reach the native session under
+					// authority that lapsed during Session setup or model selection.
+					revalidateInput();
+				} catch {
+					// Nothing reached the native Session, so the admitted Turn is
+					// rolled back rather than retained as an unknown Turn that may or
+					// may not have been accepted.
+					preDispatchFailure = true;
+					await this.discardTurn(file, command);
+					if (!reuse) {
+						await native.close().catch(() => {});
+						this.handles.delete(ref);
+					}
+					return;
+				}
+			}
 			try {
-				// Materialized bytes must never reach the native session under
-				// authority that lapsed during Session setup or model selection.
-				if (hasAttachments) fileBridge?.revalidate();
 				// Only a Turn that passed the native boundary counts as dispatched.
 				dispatched = true;
-				const response = await native.prompt(inputText);
+				const response = await native.prompt(input);
 				await this.resolve(file, command, {
 					outcome: "accepted",
 					status: "running",
@@ -1068,6 +1137,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		} finally {
 			clearTimeout(timer);
 		}
+		if (preDispatchFailure) unavailable();
 		return (
 			file
 				.read()
@@ -1299,14 +1369,123 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		assertCurrent();
 		return result;
 	}
+	/** Return the deployment-owned Hub projection without consulting native state. */
+	async discoverNativeSkills(read: SessionNativeCommandReadContext) {
+		const handle = this.handles.get(read.nativeSessionRef);
+		const directory = this.options.skillDirectory;
+		if (!handle || !directory) throw new RuntimeSkillDirectoryErrorV1();
+		const generationId = directory.generationId;
+		const projectionSnapshot = JSON.stringify(directory.findSkills());
+		const assertCurrent = () => {
+			if (
+				read.signal.aborted ||
+				read.expiresAt <= Date.now() ||
+				this.closed ||
+				this.handles.get(read.nativeSessionRef) !== handle
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			if (
+				directory.generationId !== generationId ||
+				JSON.stringify(directory.findSkills()) !== projectionSnapshot
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			read.assertCurrent();
+		};
+		const revalidate = async () => {
+			assertCurrent();
+			try {
+				await boundedRuntimeSkillRead({
+					pending: read.revalidate(),
+					signal: read.signal,
+					expiresAt: read.expiresAt,
+				});
+			} catch {
+				throw new RuntimeSkillDirectoryErrorV1();
+			}
+			assertCurrent();
+		};
+		await revalidate();
+		const entries = directory.findSkills().map((entry) => ({ ...entry }));
+		await revalidate();
+		return { generationId, entries };
+	}
+
+	/** Read one deployment-owned Hub resource without creating a native Turn. */
+	async readNativeSkill(
+		read: SessionNativeCommandReadContext,
+		name: string,
+		relativePath: string,
+	): Promise<Uint8Array> {
+		const handle = this.handles.get(read.nativeSessionRef);
+		const directory = this.options.skillDirectory;
+		if (!handle || !directory) throw new RuntimeSkillDirectoryErrorV1();
+		const generationId = directory.generationId;
+		const projectionSnapshot = JSON.stringify(directory.findSkills());
+		const assertCurrent = () => {
+			if (
+				read.signal.aborted ||
+				read.expiresAt <= Date.now() ||
+				this.closed ||
+				this.handles.get(read.nativeSessionRef) !== handle
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			if (
+				directory.generationId !== generationId ||
+				JSON.stringify(directory.findSkills()) !== projectionSnapshot
+			)
+				throw new RuntimeSkillDirectoryErrorV1();
+			read.assertCurrent();
+		};
+		assertCurrent();
+		try {
+			await boundedRuntimeSkillRead({
+				pending: read.revalidate(),
+				signal: read.signal,
+				expiresAt: read.expiresAt,
+			});
+		} catch {
+			throw new RuntimeSkillDirectoryErrorV1();
+		}
+		assertCurrent();
+		const bytes = await boundedRuntimeSkillRead({
+			pending: directory.readSkill(name, relativePath),
+			signal: read.signal,
+			expiresAt: read.expiresAt,
+		});
+		assertCurrent();
+		try {
+			await read.revalidate();
+		} catch {
+			throw new RuntimeSkillDirectoryErrorV1();
+		}
+		assertCurrent();
+		return bytes.slice();
+	}
 	async getCapabilities() {
-		return {
+		const skills = this.options.skillDirectory?.findSkills().map((skill) => ({
+			schemaVersion: 1 as const,
+			name: skill.name,
+			version: skill.version,
+			manifestSha256: skill.manifestDigest,
+			packageDigest: skill.packageDigest,
+			readOnly: true as const,
+		}));
+		if (
+			skills &&
+			new Set(skills.map((skill) => skill.name)).size !== skills.length
+		)
+			throw new RuntimeSkillDirectoryErrorV1();
+		const capabilities = {
 			modelSelection: true,
-			attachments: false,
+			attachments: this.options.supportsAttachments === true,
 			resultFiles: false,
 			connection: false,
 			supplementaryInstruction: false,
+			...(skills && skills.length > 0 ? { skills } : {}),
 		};
+		const parsed = RuntimeCapabilitiesV1Schema.safeParse(capabilities);
+		if (!parsed.success) throw new RuntimeSkillDirectoryErrorV1();
+		return parsed.data;
 	}
 	async getModelDirectory(ref: string): Promise<RuntimeModelDirectory> {
 		const handle = this.handles.get(ref);

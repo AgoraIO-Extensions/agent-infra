@@ -156,6 +156,7 @@ export function createObservedConversationEvents(
 						stage: "result_persist",
 						outcome: "completed",
 						durationMs: performance.now() - began,
+						operationRef: "drain.persist",
 						conversationId: decision.event.conversationId,
 						executionId: decision.event.executionId,
 					});
@@ -179,6 +180,7 @@ export function createObservedConversationEvents(
 						outcome: "failed",
 						code: "PERSISTENCE_UNAVAILABLE",
 						durationMs: performance.now() - began,
+						operationRef: "drain.persist",
 						...correlation,
 					});
 				throw error;

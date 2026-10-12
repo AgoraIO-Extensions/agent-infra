@@ -18,7 +18,10 @@ import {
 	runtimeRequestSigningPayloadV4,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import type { RuntimeExternalActionAuthorization } from "./driver.js";
+import type {
+	RuntimeBrowserExecutionContextV1,
+	RuntimeExternalActionAuthorization,
+} from "./driver.js";
 import { DurableJsonFile } from "./durable-json.js";
 import { FakeRuntimeDriver } from "./fake-runtime-driver.js";
 import { FileRuntimeStore } from "./file-runtime-store.js";
@@ -162,7 +165,12 @@ function delivery<T extends RuntimeBusinessRequestV4>(request: T) {
 	};
 }
 
-async function setup(fileBridge?: RuntimeFileBridgePortV1) {
+async function setup(
+	fileBridge?: RuntimeFileBridgePortV1,
+	createBrowserExecutionContext?: (
+		input: RuntimeBrowserExecutionContextV1,
+	) => RuntimeBrowserExecutionContextV1 | undefined,
+) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-consumer-"));
 	cleanups.push(() => rm(directory, { recursive: true, force: true }));
 	const path = join(directory, "host.json");
@@ -186,6 +194,7 @@ async function setup(fileBridge?: RuntimeFileBridgePortV1) {
 			now: () => clock,
 		}),
 		...(fileBridge ? { fileBridge: () => fileBridge } : {}),
+		...(createBrowserExecutionContext ? { createBrowserExecutionContext } : {}),
 	};
 	let host = await RuntimeHost.open(options);
 	cleanups.push(() => host.close());
@@ -350,6 +359,149 @@ it("passes the request-scoped file bridge only through the Driver execution cont
 	expect(JSON.stringify(await readFile(f.path, "utf8"))).not.toContain(
 		"fileBridge",
 	);
+});
+
+it("injects the deployment-owned Browser controller only after Host binding admission", async () => {
+	const factoryCalls: RuntimeBrowserExecutionContextV1[] = [];
+	const f = await setup(undefined, (input) => {
+		factoryCalls.push(input);
+		return {
+			...input,
+			executeTool: async (request) => ({
+				actionId: request.actionId,
+				operationRef: request.operationRef,
+				attemptRef: request.attemptRef,
+				binding: request.binding,
+				phase: "completed" as const,
+				contentItems: [],
+				success: true,
+			}),
+		};
+	});
+	const browser = {
+		capabilityVersion: 3,
+		binding: {
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			sessionGeneration: 1,
+			resourceFence: 1,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+	} satisfies RuntimeBrowserExecutionContextV1;
+	(
+		f.host as unknown as {
+			browserExecutionContext?: RuntimeBrowserExecutionContextV1;
+		}
+	).browserExecutionContext = browser;
+	const execute = f.driver.execute.bind(f.driver);
+	const contexts: RuntimeBrowserExecutionContextV1[] = [];
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command, context) => {
+		if (context?.browser) contexts.push(context.browser);
+		return execute(command, context);
+	});
+	await f.host.submitTurnV4(f.transport);
+	expect(factoryCalls).toHaveLength(1);
+	expect(factoryCalls[0]).toMatchObject({
+		binding: browser.binding,
+		capabilityVersion: 3,
+	});
+	expect(contexts).toHaveLength(1);
+	expect(contexts[0]?.executeTool).toEqual(expect.any(Function));
+});
+
+it("drops a Browser controller factory result whose binding drifts", async () => {
+	const f = await setup(undefined, (input) => ({
+		...input,
+		binding: {
+			...input.binding,
+			resourceFence: input.binding.resourceFence + 1,
+		},
+	}));
+	const browser = {
+		capabilityVersion: 3,
+		binding: {
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			sessionGeneration: 1,
+			resourceFence: 1,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+	} satisfies RuntimeBrowserExecutionContextV1;
+	(
+		f.host as unknown as {
+			browserExecutionContext?: RuntimeBrowserExecutionContextV1;
+		}
+	).browserExecutionContext = browser;
+	const execute = f.driver.execute.bind(f.driver);
+	const contexts: unknown[] = [];
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command, context) => {
+		contexts.push(context?.browser);
+		return execute(command, context);
+	});
+	await f.host.submitTurnV4(f.transport);
+	expect(contexts).toEqual([undefined]);
+});
+
+it("isolates the admitted Browser binding from an in-place factory mutation", async () => {
+	let observed: RuntimeBrowserExecutionContextV1 | undefined;
+	const f = await setup(undefined, (input) => {
+		observed = input;
+		(input.binding as { resourceFence: number }).resourceFence += 1;
+		return input;
+	});
+	const browser = {
+		capabilityVersion: 3,
+		binding: {
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			sessionGeneration: 1,
+			resourceFence: 1,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+	} satisfies RuntimeBrowserExecutionContextV1;
+	(
+		f.host as unknown as {
+			browserExecutionContext?: RuntimeBrowserExecutionContextV1;
+		}
+	).browserExecutionContext = browser;
+	const execute = f.driver.execute.bind(f.driver);
+	const contexts: unknown[] = [];
+	vi.spyOn(f.driver, "execute").mockImplementation(async (command, context) => {
+		contexts.push(context?.browser);
+		return execute(command, context);
+	});
+	await f.host.submitTurnV4(f.transport);
+	expect(observed?.binding.resourceFence).toBe(2);
+	expect(browser.binding.resourceFence).toBe(1);
+	expect(contexts).toEqual([undefined]);
+});
+
+it("does not invoke the Browser controller factory for a foreign readiness binding", async () => {
+	let calls = 0;
+	const f = await setup(undefined, (input) => {
+		calls += 1;
+		return input;
+	});
+	(
+		f.host as unknown as {
+			browserExecutionContext?: RuntimeBrowserExecutionContextV1;
+		}
+	).browserExecutionContext = {
+		capabilityVersion: 3,
+		binding: {
+			agentId: "agent-1",
+			conversationId: "foreign-conversation",
+			sessionGeneration: 1,
+			resourceFence: 1,
+			workloadRevision: 4,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+		},
+	};
+	await f.host.submitTurnV4(f.transport);
+	expect(calls).toBe(0);
 });
 
 it("re-checks current execution authority at the native submission boundary", async () => {
@@ -740,7 +892,23 @@ it("persists only delivered cursors and keeps ACK retryable after response loss"
 			RuntimeEventAckRequestV4Schema.parse(foreign.request),
 			foreign.verification,
 		),
-	).rejects.toThrow();
+	).rejects.toMatchObject({
+		code: "RUNTIME_GRANT_INVALID",
+		diagnostic: "ack-cursor-unknown",
+	});
+	// A read whose cursor differs from its Grant names the failed check (#1888).
+	await expect(
+		f.host.readEventsV4(
+			RuntimeEventReadRequestV4Schema.parse({
+				...read.request,
+				afterCursor: cursor,
+			}),
+			read.verification,
+		),
+	).rejects.toMatchObject({
+		code: "RUNTIME_GRANT_INVALID",
+		diagnostic: "v4-event-access:cursor-mismatch",
+	});
 	expect(await readFile(f.path)).toEqual(before);
 	const ack = await event(
 		f.transport.businessRequest,

@@ -6,6 +6,10 @@ import {
 } from "./connection-consumer-projection.js";
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
+import {
+	type DeploymentSkillMaterializerFactoryV1,
+	resolveDeploymentSkillMaterializerV1,
+} from "./skill-materializer-assembly.js";
 import { createWecomDeploymentCoordinatorV1 } from "./wecom-deployment.js";
 import {
 	createProductionWorkloadWorkerOptionsV1,
@@ -37,6 +41,8 @@ type DeploymentConfiguration = {
 			ConversationRuntimeOptionsV2["connectionInstallation"]
 		>["authorize"];
 	};
+	/** Deployment-owned object-storage/Store assembly for the existing Worker seam. */
+	readonly createSkillMaterializer?: DeploymentSkillMaterializerFactoryV1;
 };
 
 function resolveConnectionInstallation(
@@ -81,6 +87,7 @@ const {
 	connectionConsumerApproval,
 	connectionInstallationSupply,
 	connectionInstallation: configuredConnectionInstallation,
+	createSkillMaterializer,
 } = (await import(
 	new URL("./configuration.mjs", import.meta.url).href
 )) as DeploymentConfiguration;
@@ -136,9 +143,16 @@ async function createPrepared(signal: AbortSignal) {
 		throw new Error(
 			"PLATFORM_WORKER_NAMESPACE must match the workload policy namespace",
 		);
+	const skillMaterializer = await resolveDeploymentSkillMaterializerV1({
+		databaseUrl,
+		signal,
+		configured: workloadInput.skillMaterializer,
+		factory: createSkillMaterializer,
+	});
 	const workload = await createProductionWorkloadWorkerOptionsV1(
 		{
 			...workloadInput,
+			...(skillMaterializer ? { skillMaterializer } : {}),
 			policy: {
 				...workloadInput.policy,
 				connectionConsumerSnapshot,

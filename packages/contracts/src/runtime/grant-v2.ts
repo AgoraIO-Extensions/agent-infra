@@ -130,29 +130,42 @@ export function validateVerifiedRuntimeExecutionGrantClaimsV2(
 		claims.purpose === "control" &&
 		command === "generation.cancel" &&
 		claims.reason !== "generation_isolation";
+	const inconsistent = (reason: string): never => {
+		// The cause names the failed check for Host diagnostics (#1888).
+		throw new Error("Runtime Execution Grant claims are inconsistent", {
+			cause: reason,
+		});
+	};
+	if (claims.issuer !== context.expectedIssuer) inconsistent("issuer");
+	if (claims.workerId !== context.expectedWorkerId) inconsistent("worker");
+	if (!Number.isSafeInteger(context.now)) inconsistent("clock");
+	if (claims.issuedAt > context.now) inconsistent("issued-in-future");
+	if (claims.expiresAt <= context.now) inconsistent("expired");
 	if (
-		claims.issuer !== context.expectedIssuer ||
-		claims.workerId !== context.expectedWorkerId ||
-		!Number.isSafeInteger(context.now) ||
-		claims.issuedAt > context.now ||
-		claims.expiresAt <= context.now ||
 		claims.expiresAt <= claims.issuedAt ||
 		claims.expiresAt - claims.issuedAt >
-			RuntimeExecutionGrantMaximumLifetimeMsV2 ||
-		controlReasonMismatch ||
-		(isEvent
+			RuntimeExecutionGrantMaximumLifetimeMsV2
+	)
+		inconsistent("lifetime");
+	if (controlReasonMismatch) inconsistent("control-reason");
+	if (
+		isEvent
 			? claims.eventAccess?.command !== command
-			: claims.eventAccess !== undefined) ||
-		(claims.purpose === "business" &&
-			command !== "turn.submit" &&
-			command !== "turn.supplement" &&
-			claims.attachments.length !== 0) ||
-		(claims.operation.kind === "execution" &&
-			claims.operation.deliveryFence !==
-				claims.operation.executionDeliveryFence)
-	) {
-		throw new Error("Runtime Execution Grant claims are inconsistent");
-	}
+			: claims.eventAccess !== undefined
+	)
+		inconsistent("event-access");
+	if (
+		claims.purpose === "business" &&
+		command !== "turn.submit" &&
+		command !== "turn.supplement" &&
+		claims.attachments.length !== 0
+	)
+		inconsistent("attachments");
+	if (
+		claims.operation.kind === "execution" &&
+		claims.operation.deliveryFence !== claims.operation.executionDeliveryFence
+	)
+		inconsistent("operation-fence");
 	return claims;
 }
 
