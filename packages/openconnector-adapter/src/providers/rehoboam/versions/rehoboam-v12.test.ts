@@ -176,3 +176,29 @@ test("business errors retain the original family link and permission meaning", a
 		},
 	);
 });
+
+test("oversized endless response is cancelled while reading, before buffering the full body", async () => {
+	let cancelled = false;
+	const response = new Response(
+		new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new Uint8Array(60 * 1024));
+				controller.enqueue(new Uint8Array(8 * 1024));
+				// No close: the adapter must reject without waiting for the body to end.
+			},
+			cancel() {
+				cancelled = true;
+			},
+		}),
+	);
+	const adapter = new RehoboamV12Adapter(async () => response, "machine-key");
+	await assert.rejects(
+		adapter.execute({
+			action: "rehoboam.get_release_family_native_anchor",
+			input: { releaseId: "native" },
+			credential: { accessToken: "stored-pat" },
+		}),
+		/too large/,
+	);
+	assert.equal(cancelled, true);
+});

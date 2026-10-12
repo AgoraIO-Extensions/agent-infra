@@ -126,11 +126,28 @@ export class RehoboamV12Adapter
 				providerError: true,
 				providerStatus: 401,
 			});
-		const raw = await response.text();
-		if (Buffer.byteLength(raw) > 64 * 1024)
-			throw Object.assign(new Error("Rehoboam response is too large"), {
-				providerError: true,
-			});
+		const chunks: Uint8Array[] = [];
+		let totalBytes = 0;
+		const reader = response.body?.getReader();
+		if (reader) {
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					totalBytes += value.byteLength;
+					if (totalBytes > 64 * 1024) {
+						await reader.cancel().catch(() => {});
+						throw Object.assign(new Error("Rehoboam response is too large"), {
+							providerError: true,
+						});
+					}
+					chunks.push(value);
+				}
+			} finally {
+				reader.releaseLock();
+			}
+		}
+		const raw = Buffer.concat(chunks, totalBytes).toString("utf8");
 		let envelope: {
 			data?: Record<string, unknown>;
 			error?: Record<string, unknown>;
