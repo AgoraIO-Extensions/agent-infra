@@ -215,6 +215,14 @@ export class PostgresConversationDispatchStoreV1
 				const payload = exactPayload(state.outbox.payload, claim.operation);
 				if (!payload) return null;
 				const stop = await readStop(transaction, claim.executionId);
+				// 最近一次签发的 stop/撤权控制记录即 Host 当前的闩锁（#2152）。
+				const [latched] = await transaction<{ reason: string }[]>`
+					select reason from platform.task_control_records
+					where execution_id = ${claim.executionId}
+						and reason in ('stop', 'authorization_revoked')
+					order by created_at desc, id desc
+					limit 1
+				`;
 				const original = await originalOperationBinding(
 					transaction,
 					state,
@@ -260,6 +268,14 @@ export class PostgresConversationDispatchStoreV1
 							}),
 					executionStatus: state.execution.status,
 					stopPending: stop?.status === "submitted",
+					...(latched?.reason === "stop" ||
+					latched?.reason === "authorization_revoked"
+						? {
+								latchedControlReason: latched.reason as
+									| "stop"
+									| "authorization_revoked",
+							}
+						: {}),
 				};
 			}),
 		);

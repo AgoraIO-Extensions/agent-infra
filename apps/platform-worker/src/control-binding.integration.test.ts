@@ -183,12 +183,9 @@ it("recovers only the original control ref through production Worker/Core and Po
 					const verified = verify(request.grant).claims;
 					expect(verified).toMatchObject({
 						purpose: "control",
-						reason:
-							phase === "terminal" &&
-							path === "events/ack" &&
-							request.confirmedCursor === "original-terminal-cursor"
-								? "recovery"
-								: "authorization_revoked",
+						// 撤权后 Host 由撤权控制记录闩住；终态 ACK 也沿用该记录，
+						// 另建 recovery 记录会被真实 Host 判为 control-fence-stale（#2152）。
+						reason: "authorization_revoked",
 						executionId,
 						turnId,
 					});
