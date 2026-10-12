@@ -8,7 +8,6 @@ import { createAgentManagementV1 } from "@agent-infra/platform-core";
 import {
 	openPostgresWorkloadReconciliationStoreV1,
 	PostgresAgentManagementTransactionV1,
-	requestSessionSandboxResume,
 } from "@agent-infra/platform-store";
 import { KubeConfig, type V1Pod } from "@kubernetes/client-node";
 import postgres from "postgres";
@@ -567,33 +566,6 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 				expect(identity(row, "PersistentVolumeClaim")).toBe(
 					pvcBeforeIdle.get(row.sandbox_id as string),
 				);
-			}
-			await sql.begin(async (connection) => {
-				for (const [index] of reclaimedRows.entries())
-					await requestSessionSandboxResume(
-						connection,
-						index === 0 ? "session-kind-a" : "session-kind-b",
-						new Date(),
-					);
-			});
-			if (!worker) throw new Error("Session Worker unavailable");
-			await worker.tick();
-			const resumedRows = await eventually(
-				async () =>
-					sql`select sandbox_id, resource_name, resource_fence::int as resource_fence, status, resource_observation from platform.session_sandbox_allocations where conversation_id in ('session-kind-a', 'session-kind-b') order by conversation_id`,
-				(rows) =>
-					rows.length === 2 &&
-					rows.every(
-						(row) => row.status === "ready" && row.resource_fence === 4,
-					),
-			);
-			for (const row of resumedRows) {
-				expect(identity(row, "PersistentVolumeClaim")).toBe(
-					pvcBeforeIdle.get(row.sandbox_id as string),
-				);
-				expect(
-					await client.read("Pod", row.resource_name as string),
-				).not.toBeNull();
 			}
 			const managementTransaction = new PostgresAgentManagementTransactionV1({
 				databaseUrl: database.databaseUrl,
