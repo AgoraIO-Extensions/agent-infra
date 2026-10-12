@@ -52,6 +52,45 @@ describe("latest Browser operation status", () => {
 		});
 	});
 
+	it.each([
+		["intent", "正在受理"],
+		["started", "正在执行"],
+		["completed", "已完成"],
+		["failed", "执行失败"],
+		["unknown", "结果待核实"],
+	] as const)(
+		"retains the %s phase in the projected state",
+		(phase, _label) => {
+			expect(
+				latestBrowserOperationStatus([browserEvent(1, phase)], "execution-1"),
+			).toEqual({ phase, operation: "browser_navigate" });
+		},
+	);
+
+	it("chooses the latest sequence when Browser operations are interleaved", () => {
+		const aIntent = browserEvent(1, "intent");
+		const bCompleted = {
+			...browserEvent(2, "completed"),
+			payload: {
+				...browserEvent(2, "completed").payload,
+				toolId: "browser_observe",
+			},
+		};
+		const aUnknown = {
+			...browserEvent(3, "unknown"),
+			payload: {
+				...browserEvent(3, "unknown").payload,
+				toolId: "browser_navigate",
+			},
+		};
+		expect(
+			latestBrowserOperationStatus(
+				[aIntent, bCompleted, aUnknown],
+				"execution-1",
+			),
+		).toEqual({ phase: "unknown", operation: "browser_navigate" });
+	});
+
 	it("keeps unknown visible and ignores other executions or non-Browser tools", () => {
 		const otherExecution = {
 			...browserEvent(3, "completed"),

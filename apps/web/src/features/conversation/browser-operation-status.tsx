@@ -37,7 +37,16 @@ export function latestBrowserOperationStatus(
 			continue;
 		latest.set(operationKey(event), event);
 	}
-	const event = [...latest.values()].at(-1);
+	const event = [...latest.values()].reduce<
+		| Extract<PersistedConversationEventV2, { type: "execution.operation" }>
+		| undefined
+	>(
+		(current, candidate) =>
+			current === undefined || candidate.sequence > current.sequence
+				? candidate
+				: current,
+		undefined,
+	);
 	if (event?.payload.kind !== "tool" || !event.payload.browser)
 		return undefined;
 	return {
