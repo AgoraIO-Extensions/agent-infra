@@ -58,10 +58,12 @@ it("maps approved Standard MCP tools into an in-process SDK server", async () =>
 		operation: () => operation,
 	});
 	const sdkTool = sdk.tool.mock.results[0]?.value as {
+		inputSchema: { _zod?: unknown };
 		handler: (input: unknown, extra: unknown) => Promise<unknown>;
 	};
 	expect(server).toMatchObject({ type: "sdk", name: "agent-infra-connection" });
 	expect(sdkTool).toBeDefined();
+	expect(sdkTool.inputSchema._zod).toBeDefined();
 	expect(await sdkTool.handler({ text: "hello" }, {})).toEqual({
 		content: [{ type: "text", text: "done" }],
 		isError: false,

@@ -171,7 +171,10 @@ export function createClaudeStandardMcpServer(options: {
 		return sdkTool(
 			definition.name,
 			definition.description,
-			parsed.shape,
+			// The SDK's type only exposes a raw shape, but the MCP server accepts a
+			// complete Zod object. Keeping the object preserves strict/passthrough
+			// root semantics while retaining the official SDK bridge.
+			parsed as unknown as Record<string, ZodTypeAny>,
 			async (arguments_) => {
 				const result = await options.client.call(
 					definition.name,
