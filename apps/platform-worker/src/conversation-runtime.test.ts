@@ -21,6 +21,7 @@ import { runtimeTlsFixture } from "../../../tests/runtime-tls-fixture.js";
 import { createRuntimeOAuthGrantVerifier } from "../../agent-runtime-host/src/runtime-oauth-grant.js";
 import { resolveApprovedConnectionConsumerTargetV1 } from "./conversation-deployment.js";
 import {
+	type ConversationDrainStageObservationV1,
 	type ConversationLegacyControlRecoveryV2,
 	type ConversationRuntimeOptionsV2,
 	type ConversationRuntimeStateV2,
@@ -327,6 +328,59 @@ function harness(
 }
 
 describe("Trusted conversation Runtime adapter", () => {
+	it("records bounded event-drain stage timings without payloads", async () => {
+		const observations: ConversationDrainStageObservationV1[] = [];
+		const h = harness(1, async () => true, {
+			recordDrainStage: (observation) => observations.push(observation),
+		});
+		const reference = await h.authorize();
+		h.fetcher.mockImplementation(async (url) => {
+			const path = String(url);
+			if (path.endsWith("/events/stream")) {
+				return new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.close();
+						},
+					}),
+					{ headers: { "content-type": "text/event-stream" } },
+				);
+			}
+			if (path.endsWith("/events/ack"))
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 3,
+						executionId: "execution",
+						confirmedCursor: "committed",
+					}),
+				);
+			throw new Error(`Unexpected drain timing request: ${path}`);
+		});
+		const stream = h.runtime.runtimeHost
+			.events({ ...h.events(reference), afterCursor: "caller-cursor" })
+			[Symbol.asyncIterator]();
+		Object.assign(h.claim, { executionStatus: "completed" });
+		Object.assign(h.state, { executionStatus: "completed" });
+		expect((await stream.next()).done).toBe(true);
+		Object.assign(h.state, { runtimeCursor: "committed" });
+		await h.runtime.runtimeHost.acknowledge?.({
+			...h.events(reference),
+			confirmedCursor: "committed",
+		});
+		expect(
+			new Set(observations.map((observation) => observation.operationRef)),
+		).toEqual(
+			new Set(["drain.prepare", "drain.host_read", "drain.ack"]),
+		);
+		for (const observation of observations) {
+			expect(observation.outcome).toBe("completed");
+			expect(observation.durationMs).toBeGreaterThanOrEqual(0);
+			expect(observation.conversationId).toBe("conversation");
+			expect(observation.executionId).toBe("execution");
+		}
+		h.runtime.close();
+	});
+
 	it("rechecks the trusted Worker identity when resolver outputs share a mutable object", async () => {
 		const h = harness();
 		const target = {

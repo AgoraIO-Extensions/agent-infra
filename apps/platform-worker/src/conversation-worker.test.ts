@@ -618,6 +618,7 @@ it("records bounded authorization and Runtime submit timings (#1561)", async () 
 			stage: "authorization",
 			outcome: "completed",
 			durationMs: expect.any(Number),
+			operationRef: "drain.authorization",
 			...ids,
 		},
 		{

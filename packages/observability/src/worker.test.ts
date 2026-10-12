@@ -117,6 +117,7 @@ it("observes acceptance only after the event/audit transaction confirms", async 
 		{
 			stage: "result_persist",
 			outcome: "completed",
+			operationRef: "drain.persist",
 			conversationId: command.conversationId,
 			executionId: command.executionId,
 			durationMs: expect.any(Number),
@@ -179,6 +180,7 @@ it.each(["commit failure", "decision mismatch"])(
 				stage: "result_persist",
 				outcome: "failed",
 				code: "PERSISTENCE_UNAVAILABLE",
+				operationRef: "drain.persist",
 				durationMs: expect.any(Number),
 				conversationId: command.conversationId,
 				executionId: command.executionId,
@@ -550,6 +552,7 @@ it("does not publish a computed tool result before Core validates the committed 
 			stage: "result_persist",
 			outcome: "failed",
 			code: "PERSISTENCE_UNAVAILABLE",
+			operationRef: "drain.persist",
 			durationMs: expect.any(Number),
 			conversationId: command.conversationId,
 			executionId: command.executionId,
