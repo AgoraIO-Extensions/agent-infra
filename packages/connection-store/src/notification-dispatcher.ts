@@ -34,6 +34,7 @@ const approvalTopics = [
 	"connection.approval-delegation.revoked",
 	"connection.capability-profile.published",
 	"connection.capability-profile.update-required",
+	"connection.capability-profile.update-canceled",
 	"connection.capability-profile.retired",
 	"connection.disclaimer.published",
 	"connection.disclaimer.retired",
@@ -141,6 +142,21 @@ export class PostgresConnectionNotificationDispatcher {
 		let eventId: string | undefined;
 		try {
 			return await this.sql.begin(async (sql) => {
+				// Profile mutations lock the profile before updating its outbox; use the same order.
+				const [candidate] = await sql<
+					{ id: string; topic: string; profile_id: string | null }[]
+				>`
+ SELECT id, topic, payload->>'sourceProfileId' AS profile_id FROM connection_outbox_events
+ WHERE status = 'PENDING' AND available_at <= now() AND topic IN ${sql([...topics, ...approvalTopics])}
+ ORDER BY available_at, id LIMIT 1
+ `;
+				if (!candidate) return false;
+				if (
+					candidate.topic === "connection.capability-profile.update-required" &&
+					candidate.profile_id
+				) {
+					await sql`SELECT id FROM connection_capability_profiles WHERE id = ${candidate.profile_id} FOR SHARE`;
+				}
 				const [event] = await sql<
 					{
 						aggregate_id: string;
@@ -152,9 +168,8 @@ export class PostgresConnectionNotificationDispatcher {
 				>`
 					SELECT id, topic, aggregate_id, payload->>'aggregateId' AS source_aggregate_id,
 						payload->>'aggregateRevision' AS aggregate_revision FROM connection_outbox_events
-					WHERE status = 'PENDING' AND available_at <= now()
+					WHERE id = ${candidate.id} AND status = 'PENDING' AND available_at <= now()
 						AND topic IN ${sql([...topics, ...approvalTopics])}
-					ORDER BY available_at, id LIMIT 1
 					FOR UPDATE SKIP LOCKED
 				`;
 				if (!event) return false;
@@ -184,7 +199,7 @@ export class PostgresConnectionNotificationDispatcher {
 							{ provider_id: string; status: string; obsolete: boolean }[]
 						>`
 							SELECT release.provider AS provider_id, profile.status,
-							EXISTS (SELECT 1 FROM connection_outbox_events newer
+							COALESCE(pending.payload->>'inactive', 'false') = 'true' OR EXISTS (SELECT 1 FROM connection_outbox_events newer
 							WHERE newer.topic = pending.topic AND newer.payload->>'sourceProfileId' = pending.payload->>'sourceProfileId'
 							AND (COALESCE((newer.payload->>'generation')::bigint, 0), newer.created_at, newer.id) > (COALESCE((pending.payload->>'generation')::bigint, 0), pending.created_at, pending.id)) AS obsolete
 							FROM connection_outbox_events pending

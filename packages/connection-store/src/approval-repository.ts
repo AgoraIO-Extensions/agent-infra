@@ -515,7 +515,14 @@ export class PostgresConnectionApprovalRepository {
 				source.provider_release_id,
 				source.provider_id,
 			);
-			if (!upgrade) continue;
+			if (!upgrade) {
+				if (
+					this.runtime.providerReleases.get(source.provider_id) ===
+					source.provider_release_id
+				)
+					await this.cancelObsoleteProfileUpdates(source);
+				continue;
+			}
 			let failureReason = !this.runtime.approvalDirectoryEnabled
 				? "审批目录门禁未启用，请管理员配置并启用员工目录"
 				: upgrade.reason;
@@ -628,6 +635,37 @@ export class PostgresConnectionApprovalRepository {
 		}
 	}
 
+	private async cancelObsoleteProfileUpdates(source: {
+		id: string;
+		revision: string;
+		provider_release_id: string;
+	}) {
+		await this.sql.begin(async (sql) => {
+			const [profile] = await sql<
+				{ id: string }[]
+			>`SELECT id FROM connection_capability_profiles
+ WHERE id = ${source.id} AND status = 'PUBLISHED' AND revision::text = ${source.revision} FOR UPDATE`;
+			if (!profile) return;
+			const events = await sql<{ id: string }[]>`UPDATE connection_outbox_events
+ SET payload = jsonb_set(payload, '{inactive}', 'true'::jsonb)
+ WHERE topic = 'connection.capability-profile.update-required' AND payload->>'sourceProfileId' = ${source.id}
+ AND payload->>'targetProviderReleaseId' <> ${source.provider_release_id}
+ AND COALESCE(payload->>'inactive', 'false') <> 'true' RETURNING id`;
+			for (const event of events) {
+				await sql`UPDATE connection_work_items SET status = 'CANCELED', completed_at = now(), updated_at = now()
+ WHERE business_type = 'CAPABILITY_PROFILE_UPDATE' AND business_id = ${event.id} AND status = 'OPEN'`;
+				await sql`UPDATE connection_notification_receipts receipt SET archived_at = now()
+ FROM connection_notifications notice WHERE notice.id = receipt.notification_id
+ AND notice.business_type = 'CAPABILITY_PROFILE_UPDATE' AND notice.business_id = ${event.id} AND receipt.archived_at IS NULL`;
+				await this.auditAndEnqueue(sql, {
+					actorPrincipalId: null,
+					aggregateId: `${event.id}:canceled`,
+					event: "connection.capability-profile.update-canceled",
+				});
+			}
+		});
+	}
+
 	private async recordProfileUpdate(
 		source: { id: string; revision: string; provider_id: string },
 		upgrade: NonNullable<
@@ -648,18 +686,20 @@ export class PostgresConnectionApprovalRepository {
 					target_id: string;
 					source_revision: string | null;
 					generation: string;
+					inactive: boolean;
 				}[]
 			>`
  SELECT id, payload->>'targetProviderReleaseId' AS target_id,
  payload->>'sourceRevision' AS source_revision,
- COALESCE(payload->>'generation', '0') AS generation
+ COALESCE(payload->>'generation', '0') AS generation, COALESCE(payload->>'inactive', 'false') = 'true' AS inactive
  FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required'
  AND payload->>'sourceProfileId' = ${source.id}
  ORDER BY COALESCE((payload->>'generation')::bigint, 0) DESC, created_at DESC, id DESC LIMIT 1
  `;
 			const sameLifecycle =
 				latest?.target_id === upgrade.targetProviderReleaseId &&
-				latest.source_revision === source.revision;
+				latest.source_revision === source.revision &&
+				!latest.inactive;
 			const generation = sameLifecycle
 				? latest.generation
 				: String(BigInt(latest?.generation ?? "0") + 1n);

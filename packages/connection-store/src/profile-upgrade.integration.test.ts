@@ -385,6 +385,70 @@ describe("capability profile follows the current runtime", () => {
 									(item) => item.businessId === open[0]?.businessId,
 								),
 							).toBe(true);
+							runtime.providerReleases.set(provider, sourceId);
+							await Promise.all([
+								catalog.reconcileCapabilityProfiles(),
+								catalog.reconcileCapabilityProfiles(),
+							]);
+							while (await dispatcher.runOnce()) {
+								/* finish cancellation projections */
+							}
+							const sourceEvents =
+								await sql`SELECT id FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required' AND payload->>'sourceProfileId' = ${current.id}`;
+							expect(
+								(await requests.listWorkItems(admin)).filter(
+									(item) =>
+										item.status === "OPEN" &&
+										sourceEvents.some((event) => event.id === item.businessId),
+								),
+							).toHaveLength(0);
+							expect(
+								(await requests.listNotifications(admin)).items.filter((item) =>
+									sourceEvents.some((event) => event.id === item.businessId),
+								),
+							).toHaveLength(0);
+							expect(
+								(await catalog.listCatalog()).profiles.find(
+									(item) => item.id === current.id,
+								)?.upgrade,
+							).toBeUndefined();
+							runtime.providerReleases.set(provider, targetId);
+							await catalog.reconcileCapabilityProfiles();
+							while (await dispatcher.runOnce()) {
+								/* restore an upgrade after returning to the base */
+							}
+							expect(
+								(await requests.listWorkItems(admin)).filter(
+									(item) =>
+										item.status === "OPEN" &&
+										item.businessType === "CAPABILITY_PROFILE_UPDATE",
+								),
+							).toHaveLength(1);
+							// Cancellation and a delayed dispatcher cannot deadlock or reopen a closed item.
+							runtime.providerReleases.set(provider, sourceId);
+							await Promise.all([
+								catalog.reconcileCapabilityProfiles(),
+								dispatcher.runOnce(),
+							]);
+							while (await dispatcher.runOnce()) {
+								/* finish canceled events */
+							}
+							const restoredEvents =
+								await sql`SELECT id FROM connection_outbox_events WHERE topic = 'connection.capability-profile.update-required' AND payload->>'sourceProfileId' = ${current.id}`;
+							expect(
+								(await requests.listWorkItems(admin)).filter(
+									(item) =>
+										item.status === "OPEN" &&
+										restoredEvents.some(
+											(event) => event.id === item.businessId,
+										),
+								),
+							).toHaveLength(0);
+							runtime.providerReleases.set(provider, targetId);
+							await catalog.reconcileCapabilityProfiles();
+							while (await dispatcher.runOnce()) {
+								/* resume the valid target for confirmation */
+							}
 							manualTarget = targetId;
 							manualAction = newAction;
 						}
