@@ -18,6 +18,7 @@ import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { verifyClaudeInstallation } from "./claude-installation.js";
 import { claudeQuery } from "./claude-query.js";
 import { readClaudeSessionHistory } from "./claude-session-history.js";
+import { createClaudeStandardMcpServer } from "./claude-standard-mcp.js";
 import { claudeWorkspaceTools } from "./claude-workspace.js";
 import {
 	validateModelAccess,
@@ -46,6 +47,11 @@ import { RuntimeHostError } from "./errors.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+import {
+	StandardMcpClient,
+	type StandardMcpClientOptions,
+	type StandardMcpOperation,
+} from "./standard-mcp-client.js";
 
 export interface ClaudeRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -64,6 +70,8 @@ export interface ClaudeRuntimeDriverOptions {
 	readonly defaultReasoningLevel: string;
 	readonly modelOptions: readonly ClaudeRuntimeModelOption[];
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
+	/** Deployment-owned protected standard MCP consumer input. */
+	readonly standardConnectionClient?: StandardMcpClientOptions;
 	readonly authorizeModelAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
@@ -108,6 +116,7 @@ interface Session {
 interface Handle {
 	native: ReturnType<typeof claudeQuery>;
 	transport: Awaited<ReturnType<typeof openRuntimeMessagesTransport>>;
+	standardMcp?: StandardMcpClient;
 	pump: Promise<void>;
 	retiring: boolean;
 }
@@ -636,7 +645,10 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							if (event.payload.phase === "started")
 								tools.set(
 									event.payload.id,
-									["Read", "Write", "Edit"].includes(event.payload.name ?? "")
+									["Read", "Write", "Edit"].includes(
+										event.payload.name ?? "",
+									) ||
+										(event.payload.name?.startsWith("mcp_") ?? false)
 										? (event.payload.name ?? unavailable())
 										: "unavailable",
 								);
@@ -934,6 +946,59 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			await transport.close();
 			unavailable();
 		}
+		let standardMcp: StandardMcpClient | undefined;
+		let standardMcpServer:
+			| ReturnType<typeof createClaudeStandardMcpServer>
+			| undefined;
+		let handle: Handle | undefined;
+		try {
+			if (this.options.standardConnectionClient) {
+				standardMcp = await StandardMcpClient.open(
+					this.options.standardConnectionClient,
+					{
+						agentId: command.agentId,
+						conversationId: command.conversationId,
+						executionId: command.executionId,
+						sessionGeneration: command.sessionGeneration,
+					},
+					AbortSignal.timeout(10_000),
+				);
+				standardMcpServer = createClaudeStandardMcpServer({
+					client: standardMcp,
+					operation: (): StandardMcpOperation => {
+						const assertCurrent = () => {
+							if (this.closed || handle?.retiring) unavailable();
+							const turn = file
+								.read()
+								.turns.find(
+									(entry) => entry.executionId === command.executionId,
+								);
+							if (!turn || turn.status !== "running") unavailable();
+						};
+						return {
+							assertCurrent: async () => {
+								assertCurrent();
+								await standardMcp?.assertCurrent();
+								return () => {
+									assertCurrent();
+								};
+							},
+							block: () => {
+								if (handle) handle.retiring = true;
+								void standardMcp?.close();
+							},
+							prepare: async () => {},
+							started: async () => {},
+							confirm: async () => {},
+						};
+					},
+				});
+			}
+		} catch {
+			if (standardMcp) await standardMcp.close().catch(() => {});
+			await transport.close();
+			return result(command, ref, unknownResult);
+		}
 		let native: ReturnType<typeof claudeQuery>;
 		try {
 			native = claudeQuery(
@@ -955,7 +1020,9 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						join(directory, "memory"),
 					),
 					strictMcpConfig: true,
-					mcpServers: {},
+					mcpServers: standardMcpServer
+						? { connection: standardMcpServer }
+						: {},
 					systemPrompt: `You are an assistant. Follow the user's request. Your workspace is ${join(directory, "workspace")}. Your private persistent memory directory is ${join(directory, "memory")}. You may read and write files only in these two directories. Read MEMORY.md there for saved user preferences when present.`,
 					model: option.model,
 					effort: selection.reasoningLevel as EffortLevel,
@@ -978,12 +1045,14 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				},
 			);
 		} catch {
+			if (standardMcp) await standardMcp.close().catch(() => {});
 			await transport.close();
 			return result(command, ref, unknownResult);
 		}
-		const handle: Handle = {
+		handle = {
 			native,
 			transport,
+			...(standardMcp ? { standardMcp } : {}),
 			pump: Promise.resolve(),
 			retiring: false,
 		};
@@ -1049,25 +1118,23 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						message.event.content_block.type === "tool_use"
 					) {
 						if (tools.has(message.event.content_block.id)) unavailable();
-						tools.set(
-							message.event.content_block.id,
-							["Read", "Write", "Edit"].includes(
-								message.event.content_block.name,
-							)
-								? message.event.content_block.name
-								: "unavailable",
-						);
+						const nativeToolName = message.event.content_block.name;
+						const name = nativeToolName.startsWith("mcp__connection__")
+							? nativeToolName.slice("mcp__connection__".length)
+							: nativeToolName;
+						if (
+							!["Read", "Write", "Edit"].includes(name) &&
+							!name.startsWith("mcp_")
+						)
+							unavailable();
+						tools.set(message.event.content_block.id, name);
 						await this.event(file, command.executionId, {
 							type: "tool",
 							payload: {
 								toolCallId: createHash("sha256")
 									.update(message.event.content_block.id)
 									.digest("hex"),
-								name: ["Read", "Write", "Edit"].includes(
-									message.event.content_block.name,
-								)
-									? message.event.content_block.name
-									: "unavailable",
+								name,
 								phase: "started",
 							},
 						});
@@ -1198,6 +1265,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		const handle = this.handles.get(ref);
 		if (!handle) return;
 		handle.retiring = true;
+		if (handle.standardMcp) await handle.standardMcp.close();
 		await handle.transport.close();
 		await handle.native.close();
 		await handle.pump;
