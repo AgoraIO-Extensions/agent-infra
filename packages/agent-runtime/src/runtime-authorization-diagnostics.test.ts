@@ -173,6 +173,18 @@ describe("Runtime authorization denial diagnostics (#1888)", () => {
 				fixtureNow,
 			],
 			[
+				"business-control-latched",
+				authority({
+					control: {
+						controlRecordId: "control-1",
+						reason: "authorization_revoked",
+					},
+				}),
+				claims,
+				"query",
+				fixtureNow,
+			],
+			[
 				"business-recovery-latched",
 				authority({
 					control: { controlRecordId: "control-1", reason: "recovery" },
