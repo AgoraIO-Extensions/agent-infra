@@ -30,6 +30,10 @@ import nativeBarrierManifest from "../../../deploy/runtime/vendor/codex/native-b
 	type: "json",
 };
 import {
+	type BrowserHandoffRuntimeSnapshotV1,
+	createBrowserHandoffControllerV1,
+} from "./browser-handoff.js";
+import {
 	CODEX_APP_SERVER_V2_PROVENANCE,
 	CODEX_MODEL_ONLY_CONFIG,
 	type CodexAppServerBridgeOptions,
@@ -3441,6 +3445,213 @@ describe("Codex Runtime Driver", () => {
 				resourceFence: 7,
 			},
 		});
+	});
+
+	it("runs Browser handoff transitions through the request-local controller", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(join(directory, "driver.json")),
+				authorizeExternalAction: async () => ({ revalidate: () => {} }),
+			},
+			async () => new TestCodexBridge(),
+		);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const capability = {
+			capabilityVersion: 3,
+			operations: ["handoff"] as const,
+			policy: {} as never,
+		} as Parameters<typeof createBrowserHandoffControllerV1>[0]["capability"];
+		const binding = {
+			subjectId: "subject-codex",
+			agentId: command.agentId,
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+			sessionGeneration: command.sessionGeneration,
+			resourceFence: 7,
+			capabilityVersion: 3,
+			pageRevision: 2,
+		};
+		const now = Date.parse("2026-01-01T00:00:00.000Z");
+		const controller = createBrowserHandoffControllerV1({
+			binding,
+			capability,
+			now: () => now,
+		});
+		const browser = {
+			capabilityVersion: 3,
+			binding: {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			handoff: { controller },
+			executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) => ({
+				actionId: request.actionId,
+				operationRef: request.operationRef,
+				attemptRef: request.attemptRef,
+				binding: request.binding,
+				phase: "completed" as const,
+				contentItems: [],
+				success: true,
+			}),
+		};
+		const runtime: BrowserHandoffRuntimeSnapshotV1 = {
+			browserAlive: true,
+			authorized: true,
+			subjectId: binding.subjectId,
+			agentId: binding.agentId,
+			conversationId: binding.conversationId,
+			executionId: binding.executionId,
+			sessionGeneration: binding.sessionGeneration,
+			resourceFence: binding.resourceFence,
+			capabilityVersion: binding.capabilityVersion,
+			pageRevision: binding.pageRevision,
+		};
+		const requested = await driver.executeBrowserHandoff(
+			accepted.nativeSessionRef,
+			command.executionId,
+			{ kind: "request", reason: "mfa", runtime },
+			{ browser },
+		);
+		expect(requested).toMatchObject({ status: "requested", reason: "mfa" });
+		await expect(
+			driver.executeBrowserTool(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{ tool: "browser_observe", arguments: {}, pageRevision: 2 },
+				{ browser },
+			),
+		).resolves.toMatchObject({ phase: "failed", success: false });
+		const takenOver = await driver.executeBrowserHandoff(
+			accepted.nativeSessionRef,
+			command.executionId,
+			{
+				kind: "take-over",
+				handoffId: requested?.handoffId ?? "",
+				operatorId: binding.subjectId,
+				subjectId: binding.subjectId,
+				runtime,
+			},
+			{ browser },
+		);
+		expect(takenOver).toMatchObject({ status: "active" });
+		const returned = await driver.executeBrowserHandoff(
+			accepted.nativeSessionRef,
+			command.executionId,
+			{
+				kind: "return-to-agent",
+				handoffId: requested?.handoffId ?? "",
+				operatorId: binding.subjectId,
+				runtime,
+			},
+			{ browser },
+		);
+		expect(returned).toMatchObject({
+			status: "completed",
+			terminalReason: "BROWSER_HANDOFF_RETURNED",
+		});
+		await expect(
+			driver.executeBrowserTool(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{
+					tool: "browser_observe",
+					arguments: {},
+					pageRevision: 2,
+					actionId: "browser-after-handoff",
+				},
+				{ browser },
+			),
+		).resolves.toMatchObject({ phase: "completed", success: true });
+	});
+
+	it("rejects Browser handoff without the exact execution binding", async () => {
+		const directory = await runtimeDirectory();
+		const driver = await openCodexRuntimeDriverForTest(
+			driverOptions(join(directory, "driver.json")),
+			async () => new TestCodexBridge(),
+		);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		const controller = createBrowserHandoffControllerV1({
+			binding: {
+				subjectId: "subject-codex",
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				executionId: command.executionId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				capabilityVersion: 3,
+				pageRevision: 1,
+			},
+			capability: {
+				capabilityVersion: 3,
+				operations: ["handoff"],
+				policy: {} as never,
+			} as Parameters<typeof createBrowserHandoffControllerV1>[0]["capability"],
+		});
+		const browser = {
+			capabilityVersion: 3,
+			binding: {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			handoff: { controller },
+		};
+		const runtime: BrowserHandoffRuntimeSnapshotV1 = {
+			browserAlive: true,
+			authorized: true,
+			subjectId: "subject-codex",
+			agentId: "foreign-agent",
+			conversationId: command.conversationId,
+			executionId: command.executionId,
+			sessionGeneration: command.sessionGeneration,
+			resourceFence: 7,
+			capabilityVersion: 3,
+			pageRevision: 1,
+		};
+		await expect(
+			driver.executeBrowserHandoff(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{ kind: "request", reason: "login", runtime },
+				{ browser },
+			),
+		).rejects.toThrow();
+		await expect(
+			driver.executeBrowserHandoff(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{ kind: "revoke", runtime },
+				{
+					browser: { ...browser, handoff: undefined },
+				},
+			),
+		).rejects.toThrow();
+		const mismatchedRuntime = {
+			...runtime,
+			agentId: command.agentId,
+			subjectId: "subject-foreign",
+		};
+		await expect(
+			driver.executeBrowserHandoff(
+				accepted.nativeSessionRef,
+				command.executionId,
+				{ kind: "browser-crashed", runtime: mismatchedRuntime },
+				{ browser },
+			),
+		).rejects.toThrow();
 	});
 
 	it("does not execute a Browser action twice when an actionId is replayed", async () => {
