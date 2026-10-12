@@ -3,6 +3,7 @@ import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import {
 	type BrowserCapabilityAvailableV1,
+	RuntimeCapabilitiesV1Schema,
 	RuntimeDriverCommandV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnCommandV2Schema,
@@ -1298,7 +1299,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			new Set(skills.map((skill) => skill.name)).size !== skills.length
 		)
 			throw new RuntimeSkillDirectoryErrorV1();
-		return {
+		const capabilities = {
 			modelSelection: true,
 			attachments: false,
 			resultFiles: false,
@@ -1306,6 +1307,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			supplementaryInstruction: false,
 			...(skills && skills.length > 0 ? { skills } : {}),
 		};
+		const parsed = RuntimeCapabilitiesV1Schema.safeParse(capabilities);
+		if (!parsed.success) throw new RuntimeSkillDirectoryErrorV1();
+		return parsed.data;
 	}
 	async getModelDirectory(ref: string): Promise<RuntimeModelDirectory> {
 		const handle = this.handles.get(ref);

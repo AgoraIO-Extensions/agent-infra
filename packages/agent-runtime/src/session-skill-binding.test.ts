@@ -123,6 +123,66 @@ it("forwards the deployment Skill Hub directory through Pi and ACP driver seams"
 	}
 });
 
+it("advertises the verified Skill projection through Pi and ACP shared capabilities", async () => {
+	const skillDirectory: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "c".repeat(64),
+		findSkills: () => [
+			{
+				schemaVersion: 1,
+				name: "workspace-summary",
+				version: "1.0.0",
+				packageDigest: "d".repeat(64),
+				manifestDigest: "e".repeat(64),
+				targetPath: ".agents/skills/workspace-summary",
+				readOnly: true,
+			},
+		],
+		readSkill: async () => new Uint8Array(),
+	};
+	const common = {
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "configured/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		skillDirectory,
+	};
+	const piPath = await mkdtemp(join(tmpdir(), "pi-skill-capabilities-"));
+	const pi = await PiRuntimeDriver.open({
+		...common,
+		path: piPath,
+		launch: async () => ({ command: process.execPath, args: [], env: {} }),
+	});
+	const acpPath = await mkdtemp(join(tmpdir(), "acp-skill-capabilities-"));
+	const acp = await GenericAcpRuntimeDriver.open({
+		...common,
+		path: acpPath,
+		launch: async () => ({ command: process.execPath, args: [], env: {} }),
+	});
+	try {
+		for (const driver of [pi, acp])
+			expect(await driver.getCapabilities()).toMatchObject({
+				skills: [
+					{
+						name: "workspace-summary",
+						manifestSha256: "e".repeat(64),
+						packageDigest: "d".repeat(64),
+					},
+				],
+			});
+	} finally {
+		await pi.close();
+		await acp.close();
+		await rm(piPath, { recursive: true, force: true });
+		await rm(acpPath, { recursive: true, force: true });
+	}
+});
+
 it("discovers and reads the bound Skill projection with generation revalidation", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-skill-reader-"));
 	let generationId = "d".repeat(64);
