@@ -790,7 +790,7 @@ class TextDeltaFailure extends Error {
 
 const capabilities: RuntimeCapabilitiesV1 = {
 	modelSelection: true,
-	attachments: false,
+	attachments: true,
 	resultFiles: false,
 	connection: false,
 	supplementaryInstruction: false,
