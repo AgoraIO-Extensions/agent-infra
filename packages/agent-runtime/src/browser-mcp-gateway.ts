@@ -18,6 +18,7 @@ import {
 } from "./codex-browser-tools.js";
 import type {
 	RuntimeBrowserExecutionContextV1,
+	RuntimeBrowserToolExecutionRequestV1,
 	RuntimeBrowserToolExecutionResultV1,
 } from "./driver.js";
 
@@ -125,6 +126,32 @@ function invalidResult(): CallToolResult {
 	};
 }
 
+/** Execute one MCP Browser call across the cancellation boundary. */
+export async function executeBrowserMcpToolV1(input: {
+	readonly request: RuntimeBrowserToolExecutionRequestV1;
+	readonly signal: AbortSignal;
+	readonly executeTool: NonNullable<
+		RuntimeBrowserExecutionContextV1["executeTool"]
+	>;
+}): Promise<CallToolResult> {
+	try {
+		input.signal.throwIfAborted();
+		const result = await input.executeTool(input.request, input.signal);
+		input.signal.throwIfAborted();
+		const bindingMatches = Object.entries(input.request.binding).every(
+			([key, value]) => Reflect.get(result.binding, key) === value,
+		);
+		return result.actionId === input.request.actionId &&
+			result.operationRef === input.request.operationRef &&
+			result.attemptRef === input.request.attemptRef &&
+			bindingMatches
+			? content(result)
+			: invalidResult();
+	} catch {
+		return invalidResult();
+	}
+}
+
 /**
  * Serve the verified Browser descriptors over the only MCP transport supported
  * by the pinned OpenCode ACP peer. The listener is request-local and owns no
@@ -185,16 +212,11 @@ export async function createBrowserMcpGatewayV1(
 					pageRevision,
 				},
 			};
-			const result = await executeTool(toolRequest, extra.signal);
-			const bindingMatches = Object.entries(toolRequest.binding).every(
-				([key, value]) => Reflect.get(result.binding, key) === value,
-			);
-			return result.actionId === toolRequest.actionId &&
-				result.operationRef === toolRequest.operationRef &&
-				result.attemptRef === toolRequest.attemptRef &&
-				bindingMatches
-				? content(result)
-				: invalidResult();
+			return await executeBrowserMcpToolV1({
+				request: toolRequest,
+				signal: extra.signal,
+				executeTool,
+			});
 		} catch {
 			return invalidResult();
 		}
