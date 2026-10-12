@@ -1720,14 +1720,22 @@ export class RuntimeHost {
 		};
 		const revalidateContext = async () => {
 			assertContext();
-			const authority = await context.revalidate();
+			const authority = await callBoundedNativeMetadataDriver({
+				read: context,
+				work: () => context.revalidate(),
+			});
 			assertAuthority(authority);
 			assertContext();
 		};
 
 		try {
 			assertContext();
-			await context.verifyProof(request);
+			await callBoundedNativeMetadataDriver({
+				read: context,
+				work: async () => {
+					await context.verifyProof(request);
+				},
+			});
 			await revalidateContext();
 		} catch {
 			nativeMetadataReadDenied();

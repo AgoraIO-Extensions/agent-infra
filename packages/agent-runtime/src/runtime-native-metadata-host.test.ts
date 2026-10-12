@@ -200,4 +200,66 @@ describe("RuntimeHost native metadata V1 receiver", () => {
 		).rejects.toMatchObject({ code: "RUNTIME_DRIVER_INVALID" });
 		await f.host.close();
 	});
+
+	it("bounds a hanging proof verifier before Driver I/O", async () => {
+		const f = await fixture();
+		const now = Date.now();
+		const value = {
+			...f.request,
+			readStartedAt: now - 1_000,
+			expiresAt: now + 50,
+		};
+		const read = context(value);
+		const pending = new Promise<void>(() => {});
+		Object.assign(read, { verifyProof: vi.fn(() => pending) });
+		const readNativeMetadataV1 = vi.fn().mockResolvedValue({
+			selector: "status",
+			status: "idle",
+			readAt: new Date().toISOString(),
+		} satisfies NativeMetadataProjectionV1);
+		Object.assign(f.driver, { readNativeMetadataV1 });
+
+		await expect(
+			f.host.readNativeMetadataV1(value, read),
+		).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		expect(readNativeMetadataV1).not.toHaveBeenCalled();
+		await f.host.close();
+	});
+
+	it("bounds a hanging final revalidation after Driver I/O", async () => {
+		const f = await fixture();
+		const now = Date.now();
+		const value = {
+			...f.request,
+			readStartedAt: now - 1_000,
+			expiresAt: now + 50,
+		};
+		const read = context(value);
+		const pending = new Promise<ReturnType<typeof read.assertCurrent>>(
+			() => {},
+		);
+		const authority = read.assertCurrent();
+		Object.assign(read, {
+			revalidate: vi
+				.fn()
+				.mockResolvedValueOnce(authority)
+				.mockImplementation(() => pending),
+		});
+		const readNativeMetadataV1 = vi.fn().mockResolvedValue({
+			selector: "status",
+			status: "idle",
+			readAt: new Date().toISOString(),
+		} satisfies NativeMetadataProjectionV1);
+		Object.assign(f.driver, { readNativeMetadataV1 });
+
+		await expect(
+			f.host.readNativeMetadataV1(value, read),
+		).rejects.toMatchObject({
+			code: "RUNTIME_GRANT_INVALID",
+		});
+		expect(readNativeMetadataV1).toHaveBeenCalledTimes(1);
+		await f.host.close();
+	});
 });
