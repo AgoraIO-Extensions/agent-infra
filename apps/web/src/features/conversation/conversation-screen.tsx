@@ -177,12 +177,12 @@ function ConversationWorkspace(props: ConversationScreenProps) {
 	const selfManaged =
 		agent.source.kind === "custom" &&
 		agent.source.interactionMode === "self-managed";
+	// AgentProjectionV2 currently exposes only authorized Skill name/version
+	// metadata. Keep source/description absent until the projection supplies them.
 	const conversationCapabilities = (agent.capabilities.skills ?? []).map(
 		(skill) => ({
 			kind: "skill" as const,
 			name: skill.name,
-			description: "已安装 Skill；描述不可用",
-			source: "来源不可用",
 			version: skill.version,
 		}),
 	);

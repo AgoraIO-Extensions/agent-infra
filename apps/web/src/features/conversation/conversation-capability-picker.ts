@@ -1,8 +1,8 @@
 export type ConversationCapabilityV1 = Readonly<{
 	kind: "command" | "skill";
 	name: string;
-	description: string;
-	source: string;
+	description?: string;
+	source?: string;
 	version?: string;
 	parameterHint?: string;
 }>;
@@ -46,7 +46,7 @@ export function filterConversationCapabilities(
 	return capabilities
 		.filter((capability) => {
 			const haystack =
-				`${capability.name} ${capability.description} ${capability.source}`.toLocaleLowerCase();
+				`${capability.name} ${capability.description ?? ""} ${capability.source ?? ""} ${capability.version ?? ""}`.toLocaleLowerCase();
 			return normalized.length === 0 || haystack.includes(normalized);
 		})
 		.slice(0, maximumCapabilities);

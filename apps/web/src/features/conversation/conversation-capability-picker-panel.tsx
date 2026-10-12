@@ -138,13 +138,18 @@ export function ConversationCapabilityPickerPanel({
 											<strong className="break-all">{capability.name}</strong>
 											<Badge variant="secondary">{capability.kind}</Badge>
 										</span>
-										<span className="mt-1 block text-muted-foreground text-sm">
-											{capability.description}
-										</span>
-										<span className="mt-1 block text-muted-foreground text-xs">
-											{capability.source}
-											{capability.version ? ` · ${capability.version}` : ""}
-										</span>
+										{capability.description && (
+											<span className="mt-1 block text-muted-foreground text-sm">
+												{capability.description}
+											</span>
+										)}
+										{(capability.source || capability.version) && (
+											<span className="mt-1 block text-muted-foreground text-xs">
+												{[capability.source, capability.version]
+													.filter(Boolean)
+													.join(" · ")}
+											</span>
+										)}
 									</Button>
 								))
 							)}
