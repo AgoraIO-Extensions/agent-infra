@@ -46,7 +46,7 @@
           <li><code>Agent 名称</code>：用户授权页展示的名称，1–100 个字符，例如 <code>My Agent</code>。</li>
           <li><code>Callback URL</code>：你的服务端固定 HTTPS 回调地址，例如 <code>https://agent.example/connection/callback</code>。不能包含用户名、密码或 fragment；绑定请求不能临时替换 callback。注册时只校验地址格式，不会访问或检查该接口是否已存在；开始用户绑定前，开发者须实现该回调并确保用户浏览器可访问。</li>
         </ul>
-        <p>不要用个人 PAT 代替 Agent 服务凭据。注册后页面仅展示一次<strong>服务凭据</strong>，请管理员安全交付给开发者并保存到后端 Secret。它用于创建绑定和领取 PAT，不能用于调用 MCP，也不能交给浏览器或模型。管理员还需在该 Agent 的“配置能力”中选择 Provider 与 Action 并“发布 Declaration”；它是用户可申请的能力上限，不会直接授予账号权限。</p>
+        <p>不要用个人 PAT 代替 Agent 服务凭据。注册后页面仅展示一次<strong>服务凭据</strong>，请管理员安全交付给开发者并保存到后端 Secret。它用于创建绑定和领取 PAT，不能用于调用 MCP，也不能交给浏览器或模型。注册后直接进入能力配置，请选择 Provider 与 Action 并点击“保存能力配置”；之后可通过“配置能力”查看和修改已保存的选项。它是用户可申请的能力上限，不会直接授予账号权限。用户看到“该客户端尚未配置所需能力”时，请联系 Connection 管理员申请开通。</p>
       </section>
 
       <section class="install" aria-labelledby="binding-title">

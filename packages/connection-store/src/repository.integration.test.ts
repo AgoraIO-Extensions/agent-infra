@@ -1627,16 +1627,6 @@ describe("PostgreSQL Connection business authority", () => {
 					sessionToken: browser.sessionToken,
 				});
 				const identity = await oauth.verifyAccessToken(`Bearer ${pat.token}`);
-				await repository.publishConsumerDeclaration({
-					actionVersionIds: githubConnectionCatalog.actions.map(
-						(action) => action.id,
-					),
-					consumer: {
-						id: identity.consumerId,
-						name: "Portable Connection PAT",
-					},
-					providerReleaseId: githubConnectionCatalog.providerReleaseId,
-				});
 				const accountA = await repository.storeGithubOAuthCredential({
 					accessRequestId: await seedApprovedConnectPermit(sql, {
 						principalId: identity.principalId,
@@ -1676,6 +1666,75 @@ describe("PostgreSQL Connection business authority", () => {
 						(scope) => scope !== "delete_repo" && scope !== "workflow",
 					),
 					principalId: identity.principalId,
+				});
+				const unconfiguredConsumerId = `unconfigured-${suffix}`;
+				await sql`INSERT INTO connection_consumers (id, display_name, status)
+					VALUES (${unconfiguredConsumerId}, 'Unconfigured test client', 'ACTIVE')`;
+				await sql`INSERT INTO connection_consumer_instances (id, consumer_id, kind, auth_subject, status, principal_id)
+					VALUES (${`instance-unconfigured-${suffix}`}, ${unconfiguredConsumerId}, 'DEVICE',
+						${`subject-unconfigured-${suffix}`}, 'ACTIVE', ${identity.principalId})`;
+				const previewInput = {
+					connectionId: accountA.connectionId,
+					consumerId: unconfiguredConsumerId,
+					principalId: identity.principalId,
+				};
+				await expect(
+					service.createCurrentConsumerAuthorizationPreview(previewInput),
+				).rejects.toMatchObject({
+					code: "INVALID_REQUEST",
+					data: { reasonCode: "CONSUMER_DECLARATION_REQUIRED" },
+				});
+				await expect(
+					service.createCurrentConsumerAuthorizationPreview({
+						...previewInput,
+						connectionId: "foreign-or-missing-connection",
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN", data: undefined });
+				await expect(
+					service.createCurrentConsumerAuthorizationPreview({
+						...previewInput,
+						principalId: "another-principal",
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN", data: undefined });
+				const otherBrowser = await oauth.loginBrowserSession({
+					password: "not-persisted",
+					username: `authorization-preview-other-${suffix}`,
+				});
+				await sql`INSERT INTO connection_consumer_instances (id, consumer_id, kind, auth_subject, status, principal_id)
+					VALUES (${`instance-other-${suffix}`}, ${unconfiguredConsumerId}, 'DEVICE',
+						${`subject-other-${suffix}`}, 'ACTIVE', ${otherBrowser.account.principalId})`;
+				await expect(
+					service.createCurrentConsumerAuthorizationPreview({
+						...previewInput,
+						principalId: otherBrowser.account.principalId,
+					}),
+				).rejects.toMatchObject({ code: "FORBIDDEN", data: undefined });
+				const declaredActionVersionIds = githubConnectionCatalog.actions
+					.map((action) => action.id)
+					.sort();
+				await repository.publishConsumerDeclaration({
+					actionVersionIds: declaredActionVersionIds,
+					consumer: {
+						id: unconfiguredConsumerId,
+						name: "Unconfigured test client",
+					},
+					providerReleaseId: githubConnectionCatalog.providerReleaseId,
+				});
+				expect(
+					await repository.listConsumerDeclarations(unconfiguredConsumerId),
+				).toEqual([
+					{
+						providerReleaseId: githubConnectionCatalog.providerReleaseId,
+						actionVersionIds: declaredActionVersionIds,
+					},
+				]);
+				await repository.publishConsumerDeclaration({
+					actionVersionIds: declaredActionVersionIds,
+					consumer: {
+						id: identity.consumerId,
+						name: "Portable Connection PAT",
+					},
+					providerReleaseId: githubConnectionCatalog.providerReleaseId,
 				});
 				const discovery =
 					await service.createCurrentConsumerAuthorizationPreview({

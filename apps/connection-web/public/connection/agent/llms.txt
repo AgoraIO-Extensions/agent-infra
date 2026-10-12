@@ -20,7 +20,7 @@ Provide a stable `consumerId` (3-80 lowercase letters/digits/hyphens, beginning 
 
 Registration displays the service credential once. Deliver it securely and store it only in backend Secret configuration. This service credential authenticates binding create/claim calls; it is not the user PAT and cannot be used to call MCP. Ordinary users must contact the administrator rather than substitute a personal PAT.
 
-The administrator must also select the Agent's "Configure capabilities", choose Provider/Actions and publish its Declaration. Declaration is the upper bound of requestable capabilities; it does not grant an external account.
+Registration continues directly into capability configuration. The administrator selects Provider/Actions and saves the capability configuration. "Configure capabilities" later shows saved selections for review and editing. This is the upper bound of requestable capabilities; it does not grant an external account. If authorization reports missing client capabilities, ask the Connection administrator to configure that Provider for the Agent.
 
 ## Implement per-user PAT Binding
 

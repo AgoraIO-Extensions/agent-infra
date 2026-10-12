@@ -282,7 +282,7 @@ Credential refresh/rotation 和 Consumer 访问 token 是不同生命周期。�
 1. 无法登录：核对公司账号、公开 HTTPS 入口及认证服务提示。
 2. 服务不可用：核对发布状态、实际 Provider deployment 与目录提示。
 3. 不能连接：检查前置申请、资格有效期、能力包和 Provider 鉴权。
-4. 客户端没有能力：确认当前 Consumer、账号和 Action Grant，不把登录成功当作已授权。
+4. 客户端没有能力：确认当前 Consumer、账号和 Action Grant，不把登录成功当作已授权。若提示客户端尚未配置所需能力，请联系 Connection 管理员申请开通。管理员在“Agent 接入”注册后直接配置能力，也可点击“配置能力”查看和修改已保存的 Provider 与 Actions；该配置不会直接获得用户账号授权。
 5. 第二台设备重复登录失败：区分实例认证与 Provider 账号；不要拷贝 refresh token。
 6. PAT 不可用：检查期限、撤销状态、对应 Consumer 和 Action 授权。
 7. 升级或重连失败：核对账号是否变化、scope、Credential 状态和任务要求。

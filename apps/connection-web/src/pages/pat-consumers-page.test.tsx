@@ -40,6 +40,21 @@ const api = vi.hoisted(() => ({
 				],
 				providerId: "github",
 				providerReleaseId: "github-release-v7",
+				declaredActionVersionIds: ["github.get_pull_request_review@v7"],
+			},
+			{
+				actions: [
+					{
+						description: "Query data",
+						effect: "READ" as const,
+						id: "datalego.query@v1",
+						name: "datalego.query",
+						requiredScopes: [],
+					},
+				],
+				providerId: "datalego",
+				providerReleaseId: "datalego-release-v1",
+				declaredActionVersionIds: [],
 			},
 		],
 	})),
@@ -90,7 +105,7 @@ it("publishes a filtered ActionVersion selection for a registered Consumer", asy
 	});
 	fireEvent.click(screen.getByRole("button", { name: "选择当前结果" }));
 	expect(screen.getByText("1 项")).toBeTruthy();
-	fireEvent.click(screen.getByRole("button", { name: "发布 Declaration" }));
+	fireEvent.click(screen.getByRole("button", { name: "保存能力配置" }));
 
 	await waitFor(() =>
 		expect(api.publishConsumerDeclaration).toHaveBeenCalledWith(
@@ -100,5 +115,74 @@ it("publishes a filtered ActionVersion selection for a registered Consumer", asy
 				providerReleaseId: "github-release-v7",
 			},
 		),
+	);
+});
+
+function renderPage() {
+	render(
+		<QueryClientProvider
+			client={
+				new QueryClient({ defaultOptions: { queries: { retry: false } } })
+			}
+		>
+			<PatConsumersPage />
+		</QueryClientProvider>,
+	);
+}
+
+it("shows saved capabilities and restores selections when switching Providers", async () => {
+	renderPage();
+	await screen.findByText("github · 1 项");
+	fireEvent.click(screen.getByRole("button", { name: "配置能力" }));
+	await screen.findByRole("heading", {
+		name: "配置 Connection E2E Reviewer 能力",
+	});
+	await waitFor(() =>
+		expect(
+			(screen.getAllByRole("checkbox")[0] as HTMLInputElement).checked,
+		).toBe(true),
+	);
+	expect((screen.getAllByRole("checkbox")[1] as HTMLInputElement).checked).toBe(
+		false,
+	);
+	fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+		target: { value: "datalego-release-v1" },
+	});
+	await screen.findByText(
+		"当前 Provider 未配置能力，用户暂时无法授权，请勾选后保存。",
+	);
+	expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(
+		false,
+	);
+	fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+		target: { value: "github-release-v7" },
+	});
+	await waitFor(() =>
+		expect(
+			(screen.getAllByRole("checkbox")[0] as HTMLInputElement).checked,
+		).toBe(true),
+	);
+});
+
+it("continues registration directly into capability configuration", async () => {
+	api.registerPatConsumer.mockResolvedValueOnce({
+		issued: { secret: "fake-once" },
+	});
+	renderPage();
+	fireEvent.change(screen.getByLabelText("Consumer ID"), {
+		target: { value: "new-agent" },
+	});
+	fireEvent.change(screen.getByLabelText("Agent 名称"), {
+		target: { value: "New Agent" },
+	});
+	fireEvent.change(screen.getByLabelText("Callback URL"), {
+		target: { value: "https://agent.example/callback" },
+	});
+	fireEvent.click(screen.getByRole("button", { name: "注册 Agent" }));
+	await screen.findByText(
+		"Agent 已注册，请继续在下方配置能力，完成后用户才能授权。",
+	);
+	await waitFor(() =>
+		expect(api.getConsumerDeclarationOptions).toHaveBeenCalledWith("new-agent"),
 	);
 });

@@ -3,6 +3,16 @@ import { describe, expect, it } from "vitest";
 import { ConnectionApiError, connectionApi } from "./api";
 
 describe("Connection Web 表单校验", () => {
+	it("guides the user to an administrator for missing client capabilities", () => {
+		expect(
+			new ConnectionApiError({
+				code: "INVALID_REQUEST",
+				retryable: false,
+				traceId: "test",
+				messageKey: "connection.error.consumer_declaration_required",
+			}).message,
+		).toBe("该客户端尚未配置所需能力，请联系管理员申请开通。");
+	});
 	it("distinguishes upgrade approval guidance from inaccessible resources", () => {
 		const detail = { code: "FORBIDDEN", retryable: false, traceId: "test" };
 		expect(

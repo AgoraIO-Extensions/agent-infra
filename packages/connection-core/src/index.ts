@@ -719,6 +719,12 @@ export interface ConnectionRepository {
 		consumer: { id: string; name: string };
 		providerReleaseId: string;
 	}): Promise<{ declarationId: string }>;
+	listConsumerDeclarations(consumerId: string): Promise<
+		Array<{
+			providerReleaseId: string;
+			actionVersionIds: string[];
+		}>
+	>;
 	createCall(input: {
 		action: ActionName;
 		actionVersionId?: string;
@@ -1755,6 +1761,16 @@ export class ConnectionApplicationService {
 			throw new ConnectionError("RESOURCE_NOT_FOUND", "Resource not found");
 		}
 		return this.repository.publishConsumerDeclaration(input);
+	}
+
+	async listConsumerDeclarationsAsAdministrator(
+		actorPrincipalId: string,
+		consumerId: string,
+	) {
+		if (!(await this.repository.isConnectionAdministrator(actorPrincipalId))) {
+			throw new ConnectionError("RESOURCE_NOT_FOUND", "Resource not found");
+		}
+		return this.repository.listConsumerDeclarations(consumerId);
 	}
 
 	async confirmCurrentConsumerAuthorization(input: {

@@ -948,6 +948,29 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 		return row?.allowed === true;
 	}
 
+	async listConsumerDeclarations(consumerId: string) {
+		const rows = await this.sql<
+			{
+				provider_release_id: string;
+				action_version_ids: string[];
+			}[]
+		>`
+			SELECT declaration.provider_release_id,
+				array_agg(member.action_version_id ORDER BY member.action_version_id) AS action_version_ids
+			FROM connection_consumer_action_declarations declaration
+			JOIN connection_consumers consumer ON consumer.id = declaration.consumer_id
+			JOIN connection_consumer_declared_actions member ON member.declaration_id = declaration.id
+			WHERE declaration.consumer_id = ${consumerId}
+				AND consumer.status = 'ACTIVE' AND declaration.status = 'PUBLISHED'
+			GROUP BY declaration.provider_release_id
+			ORDER BY declaration.provider_release_id
+		`;
+		return rows.map((row) => ({
+			providerReleaseId: row.provider_release_id,
+			actionVersionIds: row.action_version_ids,
+		}));
+	}
+
 	async publishConsumerDeclaration(input: {
 		actionVersionIds: readonly string[];
 		consumer: { id: string; name: string };
@@ -2333,9 +2356,9 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				credential_version_id: string;
 				credential_revision: string;
 				credential_scopes: unknown;
-				declaration_digest: string;
-				declaration_id: string;
-				declaration_revision: string;
+				declaration_digest: string | null;
+				declaration_id: string | null;
+				declaration_revision: string | null;
 				external_account: string;
 				provider_id: string;
 				provider_release_id: string;
@@ -2359,7 +2382,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				ON release.id = account.provider_release_id
 				AND release.provider = account.provider_id
 				JOIN connection_consumers consumer ON consumer.id = ${input.consumerId}
-				JOIN connection_consumer_action_declarations declaration
+				LEFT JOIN connection_consumer_action_declarations declaration
 					ON declaration.consumer_id = consumer.id
 					AND declaration.provider_id = account.provider_id
 					AND declaration.provider_release_id = account.provider_release_id
@@ -2372,7 +2395,7 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				AND release.status = 'PUBLISHED'
 				AND consumer.status = 'ACTIVE'
 				AND release.deprecated_at IS NULL
-				FOR SHARE OF account, release, consumer, declaration, credential
+				FOR SHARE OF account, release, consumer, credential
 			`;
 		if (!subject) forbidden();
 		const [admission] = await sql<{ allowed: boolean }[]>`
@@ -2380,6 +2403,23 @@ export class PostgresConnectionRepository implements ConnectionRepository {
 				${input.principalId}, ${input.consumerId}, ${subject.external_account}) AS allowed
 		`;
 		if (!admission?.allowed) forbidden();
+		if (
+			!subject.declaration_id ||
+			!subject.declaration_digest ||
+			!subject.declaration_revision
+		) {
+			throw new ConnectionError(
+				"INVALID_REQUEST",
+				"Consumer capability declaration is missing",
+				{
+					reasonCode: "CONSUMER_DECLARATION_REQUIRED",
+				},
+			);
+		}
+		const [declaration] =
+			await sql`SELECT id FROM connection_consumer_action_declarations
+			WHERE id = ${subject.declaration_id} AND status = 'PUBLISHED' FOR SHARE`;
+		if (!declaration) forbidden();
 		const credentialScopes = Array.isArray(subject.credential_scopes)
 			? subject.credential_scopes.filter(
 					(scope): scope is string => typeof scope === "string",
