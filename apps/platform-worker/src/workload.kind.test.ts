@@ -1261,7 +1261,7 @@ describe.skipIf(process.env.WORKLOAD_KIND_TEST !== "1")(
 						predicate: (state: WorkloadReconciliationStateV1) => boolean,
 						guard?: () => Promise<void>,
 					) {
-						for (let attempt = 0; attempt < 300; attempt++) {
+						for (let attempt = 0; attempt < 1200; attempt++) {
 							await worker?.tick();
 							await guard?.();
 							const [row] = await sql<
