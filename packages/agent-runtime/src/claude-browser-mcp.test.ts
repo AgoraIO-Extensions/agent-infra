@@ -80,7 +80,7 @@ const browser = (
 afterEach(() => vi.clearAllMocks());
 
 it("registers only bounded Browser tools for a verified request-local context", async () => {
-	const executeTool = vi.fn(async (request) => ({
+	const executeTool = vi.fn(async (request, _signal) => ({
 		actionId: request.actionId,
 		operationRef: request.operationRef,
 		attemptRef: request.attemptRef,
@@ -117,22 +117,21 @@ it("registers only bounded Browser tools for a verified request-local context", 
 		content: [{ type: "text", text: "observed" }],
 		isError: false,
 	});
-	expect(executeTool).toHaveBeenCalledWith(
-		expect.objectContaining({
-			tool: "browser_navigate",
-			arguments: { url: "https://example.test/" },
-			binding: {
-				agentId: "agent-a",
-				conversationId: "conversation-a",
-				executionId: "execution-a",
-				sessionGeneration: 2,
-				resourceFence: 8,
-				capabilityVersion: 3,
-				pageRevision: 1,
-			},
-		}),
-		expect.any(AbortSignal),
-	);
+	expect(executeTool).toHaveBeenCalledTimes(1);
+	expect(executeTool.mock.calls[0]?.[0]).toMatchObject({
+		tool: "browser_navigate",
+		arguments: { url: "https://example.test/" },
+		binding: {
+			agentId: "agent-a",
+			conversationId: "conversation-a",
+			executionId: "execution-a",
+			sessionGeneration: 2,
+			resourceFence: 8,
+			capabilityVersion: 3,
+			pageRevision: 1,
+		},
+	});
+	expect(executeTool.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
 });
 
 it("fails closed when Browser context or capability is unavailable", () => {
