@@ -369,9 +369,7 @@ describe("Trusted conversation Runtime adapter", () => {
 		});
 		expect(
 			new Set(observations.map((observation) => observation.operationRef)),
-		).toEqual(
-			new Set(["drain.prepare", "drain.host_read", "drain.ack"]),
-		);
+		).toEqual(new Set(["drain.prepare", "drain.host_read", "drain.ack"]));
 		for (const observation of observations) {
 			expect(observation.outcome).toBe("completed");
 			expect(observation.durationMs).toBeGreaterThanOrEqual(0);
