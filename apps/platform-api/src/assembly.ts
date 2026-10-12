@@ -654,6 +654,7 @@ export function assemblePlatformApi(
 						publicOrigin: input.connectionInstallation.publicOrigin,
 						callbackUrl: input.connectionInstallation.configuration.callbackUrl,
 						issuer: input.connectionInstallation.configuration.issuer,
+						configuration: input.connectionInstallation.configuration,
 						installation: createConnectionInstallationAuthorizationV1({
 							store: installationStore,
 						}),

@@ -21,6 +21,10 @@ const https = z
 			!url.search
 		);
 	});
+const patBinding = z.strictObject({
+	consumerId: OpaqueIdV1Schema,
+	bindingEndpoint: https,
+});
 export const RuntimeOAuthConfigurationV1Schema = z.strictObject({
 	schemaVersion: z.literal(1),
 	ref: OpaqueIdV1Schema,
@@ -36,6 +40,8 @@ export const RuntimeOAuthConfigurationV1Schema = z.strictObject({
 	scope: z.literal("mcp"),
 	configFingerprint: fingerprint,
 	source: reference,
+	/** Optional approved Connection PAT binding route; OAuth remains the default. */
+	patBinding: patBinding.optional(),
 });
 export type RuntimeOAuthConfigurationV1 = z.infer<
 	typeof RuntimeOAuthConfigurationV1Schema
@@ -167,6 +173,11 @@ export const RuntimeOAuthCallbackRequestV1Schema = z.union([
 			"temporarily_unavailable",
 		]),
 	}),
+	z.strictObject({
+		schemaVersion: z.literal(1),
+		issuer: https,
+		bindingId: OpaqueIdV1Schema,
+	}),
 ]);
 export type RuntimeOAuthCallbackRequestV1 = z.infer<
 	typeof RuntimeOAuthCallbackRequestV1Schema
@@ -185,6 +196,8 @@ export const RuntimeOAuthResponseV1Schema = z.strictObject({
 	phase: RuntimeOAuthPhaseV1Schema,
 	expiresAt: z.number().int().positive().safe(),
 	authorizationUrl: z.string().url().max(8192).optional(),
+	/** Hash of a PAT binding id; the id itself never crosses the Platform API. */
+	callbackStateHash: fingerprint.optional(),
 });
 export type RuntimeOAuthResponseV1 = z.infer<
 	typeof RuntimeOAuthResponseV1Schema

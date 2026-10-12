@@ -155,6 +155,21 @@ Platform DB 保存原执行绑定、短期非敏感确认与命令事实，confi
 status 只读这些平台事实；它不表示 Connection 授权、token 可用或 MCP 安装已发布。
 code、verifier、Token、Consumer secret 与 Runtime URL 不能作为浏览器命令字段。
 
+Connection 也支持沿 Rehoboam 已部署的 PAT binding 合同运行。受信配置可在
+`RuntimeOAuthConfigurationV1` 中增加非敏感的
+`patBinding: { consumerId, bindingEndpoint }`；`bindingEndpoint` 必须是同一 issuer
+origin 下固定的 `/api/v1/connection/pat-bindings`。Runtime Host 另从
+`AGENT_INFRA_RUNTIME_CONNECTION_PAT_BINDING_SECRET_FILE` 读取 Host 专用、owner-only 的
+binding service secret。Platform API/Worker 不读取或转交该 secret，也不保存 PAT；Host
+按当前原用户＋Agent 创建 binding，浏览器只回跳 `binding_id`，随后由 Host claim 并把 PAT
+写入既有受保护材料目录；claim 返回的 Connection `account.id` 必须与当前 Runtime
+principal ID 完全一致，否则拒绝接收。部署只有在 Platform 与 Connection 使用同一稳定主体
+标识时才可启用该 PAT profile。Platform DB 只保存 callback state hash。未配置 binding、secret
+文件不可用、claim 返回的 consumer/expiry 不匹配时保持不可用，不能回退
+`CONNECTION_TOKEN` 或其他 Agent 的 token。PAT binding 不提供 refresh-token fallback；过期后
+必须重新确认并 claim。Connection 原生的 binding、确认、claim 和 revoke 合同由 Connection
+维护，本平台只消费其已部署接口。
+
 Worker 的同源 `connectionInstallation` 可以只导出 `configuration`；默认确认 producer
 读取 Platform DB 的这份事实，在 `finalCheck` 后再次核对原用户、权限、Execution、Pod、
 代次与 profile/config。已 configured 的外部 `authorize` 接收合同仍可使用；缺失或漂移时

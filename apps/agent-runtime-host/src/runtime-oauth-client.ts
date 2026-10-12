@@ -22,6 +22,7 @@ import {
 	RuntimeOAuthCallbackRequestV1Schema,
 	type RuntimeOAuthConfigurationV1,
 	RuntimeOAuthConfigurationV1Schema,
+	type RuntimeOAuthGrantClaimsV1,
 	RuntimeOAuthGrantClaimsV1Schema,
 	RuntimeOAuthOriginalExecutionRefV1Schema,
 	type RuntimeOAuthResponseV1,
@@ -58,6 +59,9 @@ interface Transaction {
 	configurationFingerprint: string;
 	reference: import("@agent-infra/agent-runtime").RuntimeOriginalExecutionRef;
 	state: string;
+	authorizationUrl?: string;
+	bindingId?: string;
+	callbackStateHash?: string;
 	phase: RuntimeOAuthResponseV1["phase"] | "exchange_started";
 	expiresAt: number;
 	requestDigest: string;
@@ -130,6 +134,47 @@ async function readProtectedOAuthMaterial(
 function digest(value: unknown) {
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
+function bindingStateHash(bindingId: string) {
+	return createHash("sha256").update(bindingId).digest("hex");
+}
+function patExpiresAt(value: unknown) {
+	if (typeof value !== "string") unavailable();
+	const timestamp = Date.parse(value);
+	if (!Number.isSafeInteger(timestamp) || timestamp <= Date.now())
+		unavailable();
+	return timestamp;
+}
+async function patRequest(
+	fetcher: typeof fetch,
+	endpoint: string,
+	secret: string,
+	body: Record<string, unknown>,
+	idempotencyKey: string,
+	signal: AbortSignal,
+) {
+	const response = await fetcher(endpoint, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${secret}`,
+			"content-type": "application/json",
+			"idempotency-key": idempotencyKey,
+		},
+		body: JSON.stringify(body),
+		redirect: "error",
+		signal,
+	});
+	if (
+		(response.status !== 200 && response.status !== 201) ||
+		response.redirected
+	)
+		unavailable();
+	const text = await response.text();
+	if (text.length > 32_768) unavailable();
+	const value: unknown = JSON.parse(text);
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		unavailable();
+	return value as Record<string, unknown>;
+}
 function parseTransaction(text: string): Transaction {
 	const value = JSON.parse(text) as Transaction;
 	const keys = [
@@ -142,6 +187,9 @@ function parseTransaction(text: string): Transaction {
 		"reference",
 		"confirmationRevision",
 		"state",
+		...(value.authorizationUrl === undefined ? [] : ["authorizationUrl"]),
+		...(value.bindingId === undefined ? [] : ["bindingId"]),
+		...(value.callbackStateHash === undefined ? [] : ["callbackStateHash"]),
 		"phase",
 		"expiresAt",
 		"requestDigest",
@@ -170,6 +218,14 @@ function parseTransaction(text: string): Transaction {
 		!/^[A-Za-z0-9._:-]{1,128}$/.test(value.configuration.ref) ||
 		!/^[A-Za-z0-9._:-]{1,128}$/.test(value.configuration.revision) ||
 		!/^[a-f0-9]{64}$/.test(value.state) ||
+		(value.authorizationUrl !== undefined &&
+			(!/^https:\/\//.test(value.authorizationUrl) ||
+				value.authorizationUrl.length > 8192)) ||
+		(value.bindingId !== undefined &&
+			(!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.bindingId) ||
+				value.callbackStateHash === undefined)) ||
+		(value.callbackStateHash !== undefined &&
+			(!value.bindingId || !/^[a-f0-9]{64}$/.test(value.callbackStateHash))) ||
 		![
 			"awaiting_callback",
 			"awaiting_confirmation",
@@ -235,6 +291,7 @@ async function writeRecord(path: string, name: string, value: unknown) {
 export async function createProtectedRuntimeOAuthClient(options: {
 	dataDirectory: string;
 	configuration: RuntimeOAuthConfigurationV1;
+	patBindingSecret?: string;
 	target: ApprovedConnectionConsumerTargetV1;
 	principal: RuntimePrincipalV1;
 	scope: import("@agent-infra/contracts/runtime").RuntimeOAuthScopeV1;
@@ -254,6 +311,16 @@ export async function createProtectedRuntimeOAuthClient(options: {
 		structuredClone(options.principal),
 	);
 	const scope = RuntimeOAuthScopeV1Schema.parse(options.scope);
+	if (configuration.patBinding && !options.patBindingSecret) unavailable();
+	if (
+		configuration.patBinding &&
+		(!/^https:\/\//.test(configuration.patBinding.bindingEndpoint) ||
+			new URL(configuration.patBinding.bindingEndpoint).origin !==
+				new URL(configuration.issuer).origin ||
+			new URL(configuration.patBinding.bindingEndpoint).pathname !==
+				"/api/v1/connection/pat-bindings")
+	)
+		unavailable();
 	const root = join(
 		options.dataDirectory,
 		"codex-driver.json.native",
@@ -301,6 +368,85 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			() => undefined,
 		);
 		return result;
+	}
+	const patFetch = (options.fetch ?? fetch) as unknown as typeof fetch;
+	async function createPatBinding(
+		claims: RuntimeOAuthGrantClaimsV1,
+		requestKey: string,
+	) {
+		if (!configuration.patBinding || !options.patBindingSecret) unavailable();
+		const created = await patRequest(
+			patFetch,
+			configuration.patBinding.bindingEndpoint,
+			options.patBindingSecret,
+			{
+				consumerId: configuration.patBinding.consumerId,
+				name: `Agent ${claims.agentId}`,
+			},
+			`runtime-pat-binding:${requestKey}`,
+			abort.signal,
+		);
+		const bindingId = created.bindingId;
+		const authorizationUrl = created.authorizationUrl;
+		if (
+			typeof bindingId !== "string" ||
+			!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(bindingId) ||
+			typeof authorizationUrl !== "string"
+		)
+			unavailable();
+		const url = new URL(authorizationUrl);
+		const issuer = new URL(configuration.issuer);
+		if (
+			url.protocol !== "https:" ||
+			url.origin !== issuer.origin ||
+			url.username ||
+			url.password ||
+			url.hash ||
+			!url.pathname.startsWith("/connection/pat-bindings/")
+		)
+			unavailable();
+		return {
+			bindingId,
+			authorizationUrl,
+			expiresAt: patExpiresAt(created.expiresAt),
+		};
+	}
+	async function claimPatBinding(
+		bindingId: string,
+		currentPrincipalId: string,
+	) {
+		if (!configuration.patBinding || !options.patBindingSecret) unavailable();
+		const result = await patRequest(
+			patFetch,
+			`${configuration.patBinding.bindingEndpoint}/${encodeURIComponent(bindingId)}/claim`,
+			options.patBindingSecret,
+			{ consumerId: configuration.patBinding.consumerId },
+			`runtime-pat-claim:${bindingId}`,
+			abort.signal,
+		);
+		const issued = result.issued;
+		if (!issued || typeof issued !== "object" || Array.isArray(issued))
+			unavailable();
+		const issuedRecord = issued as Record<string, unknown>;
+		const account = issuedRecord.account;
+		const token = issuedRecord.token;
+		const consumerId = issuedRecord.consumerId;
+		const tokenId = issuedRecord.tokenId;
+		if (
+			consumerId !== configuration.patBinding.consumerId ||
+			!account ||
+			typeof account !== "object" ||
+			Array.isArray(account) ||
+			(account as Record<string, unknown>).id !== currentPrincipalId ||
+			typeof token !== "string" ||
+			!token.startsWith("conn_pat_") ||
+			typeof tokenId !== "string"
+		)
+			unavailable();
+		return {
+			token,
+			expiresAt: patExpiresAt(issuedRecord.expiresAt),
+		};
 	}
 	async function read(name: string) {
 		return readProtectedStandardMcpBytes(records, name, 16_384);
@@ -438,7 +584,10 @@ export async function createProtectedRuntimeOAuthClient(options: {
 		}
 		return record;
 	}
-	function response(record: Transaction): RuntimeOAuthResponseV1 {
+	function response(
+		record: Transaction,
+		includeCallbackStateHash = false,
+	): RuntimeOAuthResponseV1 {
 		current();
 		return {
 			schemaVersion: 1,
@@ -450,6 +599,9 @@ export async function createProtectedRuntimeOAuthClient(options: {
 						? "expired"
 						: record.phase,
 			expiresAt: record.expiresAt,
+			...(includeCallbackStateHash && record.callbackStateHash
+				? { callbackStateHash: record.callbackStateHash }
+				: {}),
 		};
 	}
 	function keyFor(
@@ -519,6 +671,11 @@ export async function createProtectedRuntimeOAuthClient(options: {
 		record: Transaction,
 	) {
 		if (record.phase !== "awaiting_verification") return response(record);
+		if (configuration.patBinding) {
+			// Connection PAT bindings have no refresh-token contract; a new
+			// browser-confirmed binding is required after expiry.
+			return response(record);
+		}
 		const accessName = `${key}.access`;
 		const refreshName = `${key}.refresh`;
 		const accessToken = await readProtectedStandardMcpBytes(
@@ -631,23 +788,40 @@ export async function createProtectedRuntimeOAuthClient(options: {
 						)
 							unavailable();
 						const state = randomBytes(32).toString("hex");
-						let verifier = await readOptionalMaterial(
-							`${key}.verifier`,
-							256,
-							() => check(snapshot),
-						);
-						if (verifier !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(verifier))
-							unavailable();
-						if (verifier === undefined) {
-							verifier = randomBytes(32).toString("base64url");
-							await publishMaterial(
-								materials,
+						let bindingId: string | undefined;
+						let callbackStateHash: string | undefined;
+						let authorizationUrl: string | undefined;
+						let expiresAt = Date.now() + 600_000;
+						if (configuration.patBinding) {
+							check(snapshot);
+							const binding = await createPatBinding(claims, key);
+							bindingId = binding.bindingId;
+							authorizationUrl = binding.authorizationUrl;
+							callbackStateHash = bindingStateHash(bindingId);
+							expiresAt = Math.min(expiresAt, binding.expiresAt);
+							check(snapshot);
+						} else {
+							let verifier = await readOptionalMaterial(
 								`${key}.verifier`,
-								verifier,
-								() => {
-									check(snapshot);
-								},
+								256,
+								() => check(snapshot),
 							);
+							if (
+								verifier !== undefined &&
+								!/^[A-Za-z0-9_-]{43}$/.test(verifier)
+							)
+								unavailable();
+							if (verifier === undefined) {
+								verifier = randomBytes(32).toString("base64url");
+								await publishMaterial(
+									materials,
+									`${key}.verifier`,
+									verifier,
+									() => {
+										check(snapshot);
+									},
+								);
+							}
 						}
 						record = {
 							schemaVersion: 1,
@@ -663,14 +837,17 @@ export async function createProtectedRuntimeOAuthClient(options: {
 							},
 							state,
 							phase: "awaiting_callback",
-							expiresAt: Date.now() + 600_000,
+							expiresAt,
 							requestDigest: claims.requestDigest,
+							...(bindingId ? { bindingId } : {}),
+							...(callbackStateHash ? { callbackStateHash } : {}),
+							...(authorizationUrl ? { authorizationUrl } : {}),
 						};
 						check(snapshot);
 						await writeRecord(records, `${key}.json`, record);
 						check(snapshot);
 					}
-					const result = response(record);
+					const result = response(record, true);
 					if (result.phase === "awaiting_callback") {
 						const installation = standardMcpInstallationKey(
 							record.principal,
@@ -691,36 +868,45 @@ export async function createProtectedRuntimeOAuthClient(options: {
 							pending.key !== key
 						)
 							unavailable();
-						await publishMaterial(records, `state-${record.state}`, key);
+						await publishMaterial(
+							records,
+							`state-${record.callbackStateHash ?? record.state}`,
+							key,
+						);
 						check(snapshot, record);
 						await writeRecord(records, `current-${installation}.json`, {
 							key,
 							expiresAt: record.expiresAt,
 						});
 						check(snapshot, record);
-						const verifier = await readProtectedStandardMcpBytes(
-							materials,
-							`${key}.verifier`,
-							256,
-							() => {
-								check(snapshot, record);
-							},
-						);
-						check(snapshot, record);
-						const url = new URL(configuration.authorizationEndpoint);
-						url.search = new URLSearchParams({
-							response_type: "code",
-							client_id: configuration.clientId,
-							redirect_uri: configuration.callbackUrl,
-							state: record.state,
-							scope: configuration.scope,
-							resource: configuration.resource,
-							code_challenge_method: "S256",
-							code_challenge: createHash("sha256")
-								.update(verifier)
-								.digest("base64url"),
-						}).toString();
-						result.authorizationUrl = url.toString();
+						if (configuration.patBinding) {
+							if (!record.authorizationUrl || !record.bindingId) unavailable();
+							result.authorizationUrl = record.authorizationUrl;
+						} else {
+							const verifier = await readProtectedStandardMcpBytes(
+								materials,
+								`${key}.verifier`,
+								256,
+								() => {
+									check(snapshot, record);
+								},
+							);
+							check(snapshot, record);
+							const url = new URL(configuration.authorizationEndpoint);
+							url.search = new URLSearchParams({
+								response_type: "code",
+								client_id: configuration.clientId,
+								redirect_uri: configuration.callbackUrl,
+								state: record.state,
+								scope: configuration.scope,
+								resource: configuration.resource,
+								code_challenge_method: "S256",
+								code_challenge: createHash("sha256")
+									.update(verifier)
+									.digest("base64url"),
+							}).toString();
+							result.authorizationUrl = url.toString();
+						}
 					}
 					check(snapshot, record);
 					return result;
@@ -731,6 +917,35 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					return refreshRecord(snapshot, key, record);
 				if (snapshot.command === "status") return response(record);
 				if (record.phase !== "awaiting_confirmation") return response(record);
+				if (configuration.patBinding) {
+					if (!record.bindingId) unavailable();
+					record.phase = "exchange_started";
+					await writeRecord(records, `${key}.json`, record);
+					check(snapshot, record, true);
+					try {
+						const issued = await claimPatBinding(
+							record.bindingId,
+							record.principal.id,
+						);
+						check(snapshot, record, true);
+						await publishMaterial(
+							materials,
+							`${key}.access`,
+							issued.token,
+							() => check(snapshot, record, true),
+						);
+						record.phase = "awaiting_verification";
+						record.tokenExpiresAt = issued.expiresAt;
+						await writeRecord(records, `${key}.json`, record);
+						check(snapshot, record, true);
+					} catch {
+						record.phase = "unknown";
+						await writeRecord(records, `${key}.json`, record).catch(
+							() => undefined,
+						);
+					}
+					return response(record);
+				}
 				const code = await readProtectedStandardMcpBytes(
 					materials,
 					`${key}.code`,
@@ -803,12 +1018,21 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			);
 			return serial(async () => {
 				if (request.issuer !== configuration.issuer) unavailable();
-				const key = await read(`state-${request.state}`);
+				const patCallback = "bindingId" in request;
+				if (patCallback !== (configuration.patBinding !== undefined))
+					unavailable();
+				const callbackHash = patCallback
+					? bindingStateHash(request.bindingId)
+					: request.state;
+				const key = await read(`state-${callbackHash}`);
 				current();
 				if (!/^[a-f0-9]{64}$/.test(key)) unavailable();
 				const record = await load(key);
 				if (
-					record.state !== request.state ||
+					(patCallback
+						? record.bindingId !== request.bindingId ||
+							record.callbackStateHash !== callbackHash
+						: record.state !== request.state) ||
 					record.phase !== "awaiting_callback" ||
 					record.expiresAt <= Date.now()
 				)
@@ -823,7 +1047,9 @@ export async function createProtectedRuntimeOAuthClient(options: {
 					);
 				};
 				assertOriginal();
-				if (request.code) {
+				if (patCallback) {
+					record.phase = "awaiting_confirmation";
+				} else if (request.code) {
 					await publishMaterial(
 						materials,
 						`${key}.code`,

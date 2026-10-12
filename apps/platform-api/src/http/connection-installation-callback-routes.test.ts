@@ -123,3 +123,69 @@ it("does not forward a state that expires after claim", async () => {
 		expect.objectContaining({ attemptId: "attempt-a", status: "unknown" }),
 	);
 });
+
+it("accepts the deployed PAT binding callback without forwarding a token", async () => {
+	const claim = vi.fn(async () => ({
+		authorizationId: "authorization-pat",
+		runtimeOrigin: "https://runtime.test:3443/",
+		callbackPath: "/internal/runtime/oauth/v1/callback",
+		attemptId: "attempt-pat",
+		expiresAt: Date.now() + 60_000,
+		issuer: "https://connection.test/",
+	}));
+	const settle = vi.fn(async () => true);
+	const forward = vi.fn(async () => undefined);
+	const app = new Hono();
+	registerConnectionInstallationCallbackRoutesV1(app, {
+		publicOrigin: "https://platform.test",
+		callbackUrl: "https://platform.test/connection/callback",
+		issuer: "https://connection.test/",
+		configuration: {
+			schemaVersion: 1,
+			ref: "oauth",
+			revision: "r1",
+			clientId: "client",
+			issuer: "https://connection.test/",
+			authorizationEndpoint: "https://connection.test/oauth/authorize",
+			tokenEndpoint: "https://connection.test/oauth/token",
+			revocationEndpoint: "https://connection.test/oauth/revoke",
+			callbackUrl: "https://platform.test/connection/callback",
+			runtimeOrigin: "https://runtime.test:3443/",
+			resource: "https://connection.test/mcp",
+			scope: "mcp",
+			configFingerprint: "a".repeat(64),
+			source: { ref: "profile", revision: "r1" },
+			patBinding: {
+				consumerId: "platform",
+				bindingEndpoint:
+					"https://connection.test/api/v1/connection/pat-bindings",
+			},
+		},
+		installation: { callback: { claim, settle } } as never,
+		forward,
+	});
+	const response = await app.request(
+		"https://platform.test/connection/callback?binding_id=pat-binding-1",
+	);
+	expect(response.status).toBe(204);
+	expect(claim).toHaveBeenCalledWith({
+		stateHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+		now: expect.any(Number),
+	});
+	expect(forward).toHaveBeenCalledWith(
+		expect.objectContaining({
+			request: {
+				schemaVersion: 1,
+				issuer: "https://connection.test/",
+				bindingId: "pat-binding-1",
+			},
+			callbackPath: "/internal/runtime/oauth/v1/callback",
+		}),
+	);
+	const forwardedCalls = forward.mock.calls as unknown as Array<
+		Array<{ request: Record<string, unknown> }>
+	>;
+	const forwardedCall = forwardedCalls[0]?.[0];
+	if (!forwardedCall) throw new Error("callback was not forwarded");
+	expect(forwardedCall.request).not.toHaveProperty("token");
+});

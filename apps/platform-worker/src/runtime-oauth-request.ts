@@ -178,35 +178,54 @@ export async function sendRuntimeOAuthRequest(options: {
 			installationUnavailable();
 		if (request.command !== "begin" && result.authorizationUrl)
 			installationUnavailable();
+		if (request.command !== "begin" && result.callbackStateHash)
+			installationUnavailable();
 		if (result.authorizationUrl) {
 			const url = new URL(result.authorizationUrl);
 			const expected = new URL(configuration.authorizationEndpoint);
-			const keys = [...url.searchParams.keys()].sort().join(",");
-			if (
-				keys !==
-					"client_id,code_challenge,code_challenge_method,redirect_uri,resource,response_type,scope,state" ||
-				url.searchParams.get("client_id") !== configuration.clientId ||
-				url.searchParams.get("redirect_uri") !== configuration.callbackUrl ||
-				url.searchParams.get("resource") !== configuration.resource ||
-				url.searchParams.get("response_type") !== "code" ||
-				url.searchParams.get("scope") !== configuration.scope ||
-				url.searchParams.get("code_challenge_method") !== "S256" ||
-				!/^[a-f0-9]{64}$/.test(url.searchParams.get("state") ?? "") ||
-				!/^[A-Za-z0-9_-]{43}$/.test(
-					url.searchParams.get("code_challenge") ?? "",
+			if (configuration.patBinding) {
+				if (
+					request.command !== "begin" ||
+					result.phase !== "awaiting_callback" ||
+					!result.callbackStateHash ||
+					!/^[a-f0-9]{64}$/.test(result.callbackStateHash) ||
+					url.origin !== expected.origin ||
+					url.username ||
+					url.password ||
+					url.hash ||
+					!url.pathname.startsWith("/connection/pat-bindings/")
 				)
-			)
-				installationUnavailable();
-			if (
-				request.command !== "begin" ||
-				result.phase !== "awaiting_callback" ||
-				url.origin !== expected.origin ||
-				url.pathname !== expected.pathname ||
-				url.username ||
-				url.password ||
-				url.hash
-			)
-				installationUnavailable();
+					installationUnavailable();
+			} else {
+				const keys = [...url.searchParams.keys()].sort().join(",");
+				if (
+					keys !==
+						"client_id,code_challenge,code_challenge_method,redirect_uri,resource,response_type,scope,state" ||
+					url.searchParams.get("client_id") !== configuration.clientId ||
+					url.searchParams.get("redirect_uri") !== configuration.callbackUrl ||
+					url.searchParams.get("resource") !== configuration.resource ||
+					url.searchParams.get("response_type") !== "code" ||
+					url.searchParams.get("scope") !== configuration.scope ||
+					url.searchParams.get("code_challenge_method") !== "S256" ||
+					!/^[a-f0-9]{64}$/.test(url.searchParams.get("state") ?? "") ||
+					!/^[A-Za-z0-9_-]{43}$/.test(
+						url.searchParams.get("code_challenge") ?? "",
+					)
+				)
+					installationUnavailable();
+				if (
+					request.command !== "begin" ||
+					result.phase !== "awaiting_callback" ||
+					url.origin !== expected.origin ||
+					url.pathname !== expected.pathname ||
+					url.username ||
+					url.password ||
+					url.hash
+				)
+					installationUnavailable();
+			}
+		} else if (result.callbackStateHash) {
+			installationUnavailable();
 		}
 		await options.assertCurrent();
 		signal.throwIfAborted();
