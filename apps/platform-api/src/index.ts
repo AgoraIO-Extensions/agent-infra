@@ -278,6 +278,11 @@ export {
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";
 export {
+	type NativeMetadataRoutesDependenciesV1,
+	type RuntimeNativeMetadataPublicReaderV1,
+	registerNativeMetadataRoutes,
+} from "./http/native-metadata-routes.js";
+export {
 	createLdapBrowserAdapter,
 	type LdapBrowserInput,
 	type LdapSessionStore,
@@ -287,6 +292,12 @@ export {
 	createRuntimeModelSelectionReaderV1,
 	type RuntimeModelDirectoryTransportV1,
 } from "./runtime-model-selection-reader.js";
+export {
+	createRuntimeNativeMetadataReaderV1,
+	type RuntimeNativeMetadataProofIssuerV1,
+	type RuntimeNativeMetadataTransportV1,
+} from "./runtime-native-metadata-reader.js";
+export { createRuntimeNativeMetadataScopeResolverV1 } from "./runtime-native-metadata-scope-resolver.js";
 export {
 	createPendingSecretRecordAttachmentResolverV1,
 	type PreparedSecretPlaintextV1,

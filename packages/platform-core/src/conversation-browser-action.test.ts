@@ -14,6 +14,8 @@ const browser = {
 	pageRevision: 2,
 	sessionGeneration: 3,
 	resourceFence: 4,
+	workloadRevision: 2,
+	imageDigest: `sha256:${"a".repeat(64)}`,
 	sideEffect: true,
 } as const;
 

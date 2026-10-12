@@ -90,7 +90,9 @@ function interactionReadiness(
 		return "平台交互入口由平台身份校验。";
 	if (agent.source.identityResponsibility === "self-managed")
 		return interactionUrl ? "自有交互入口已就绪。" : "自有交互入口尚未就绪。";
-	return "平台身份入口需经过 Auth Gateway；当前未提供直接入口。";
+	return interactionUrl
+		? "平台身份入口已就绪。"
+		: "平台身份入口需经过 Auth Gateway；当前未提供直接入口。";
 }
 
 export function AgentDetailScreen({
@@ -155,8 +157,7 @@ export function AgentDetailScreen({
 	const interactionUrl =
 		selfManaged &&
 		agent.source.kind === "custom" &&
-		agent.source.interactionMode === "self-managed" &&
-		agent.source.identityResponsibility === "self-managed"
+		agent.source.interactionMode === "self-managed"
 			? safeInteractionUrl(agent.interactionUrl)
 			: undefined;
 	const ready = canStartPlatformConversation(agent);

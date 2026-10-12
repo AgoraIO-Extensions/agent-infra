@@ -594,6 +594,89 @@ describe("functional conversation screen", () => {
 		).toBeGreaterThan(1);
 	});
 
+	it("keeps sending available while a loaded conversation refreshes after a reply ends (#2136)", async () => {
+		let completed = false;
+		let releaseRefresh: (() => void) | undefined;
+		const terminal = {
+			...event(2),
+			schemaVersion: 1 as const,
+			type: "execution.status" as const,
+			payload: { status: "completed" as const },
+		};
+		const projection = () =>
+			Response.json({
+				...history("conversation-1", completed ? [terminal] : []),
+				conversation: {
+					...history().conversation,
+					status: completed ? "ready" : "active",
+				},
+				messages: [userMessage()],
+			});
+		const { streams, requests } = setup((request) => {
+			const path = new URL(request.url).pathname;
+			if (request.method === "POST") return receipt();
+			if (path !== "/api/v2/conversations/conversation-1") return undefined;
+			if (!completed) return projection();
+			// 终态之后的投影刷新被慢查询拖住，模拟长会话或高负载。
+			return new Promise<Response>((resolve) => {
+				releaseRefresh = () => resolve(projection());
+			});
+		});
+		const input = await composer();
+		completed = true;
+		act(() => streams.at(-1)?.send(terminal));
+		await waitFor(() => expect(releaseRefresh).toBeDefined());
+		fireEvent.change(input, { target: { value: "Next question" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		await waitFor(() =>
+			expect(
+				requests.filter((request) => request.method === "POST"),
+			).toHaveLength(1),
+		);
+		expect(await requests.find((r) => r.method === "POST")?.json()).toEqual({
+			schemaVersion: 1,
+			text: "Next question",
+		});
+		act(() => releaseRefresh?.());
+		// 受理后清空草稿。
+		await waitFor(() => expect(input.value).toBe(""));
+	});
+
+	it("keeps sending blocked while the first projection is still loading (#2136)", async () => {
+		let release: (() => void) | undefined;
+		const { requests } = setup((request) => {
+			if (request.method === "POST") return receipt();
+			if (
+				new URL(request.url).pathname !== "/api/v2/conversations/conversation-1"
+			)
+				return undefined;
+			// 首次读取尚未返回：没有投影时仍不能发送。
+			return new Promise<Response>((resolve) => {
+				release = () =>
+					resolve(
+						Response.json({
+							...history("conversation-1", []),
+							conversation: { ...history().conversation, status: "ready" },
+						}),
+					);
+			});
+		});
+		await waitFor(() => expect(release).toBeDefined());
+		const input = screen.queryByRole("textbox", {
+			name: "消息",
+		}) as HTMLTextAreaElement | null;
+		if (input) {
+			fireEvent.change(input, { target: { value: "Too early" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+		}
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(
+			requests.filter((request) => request.method === "POST"),
+		).toHaveLength(0);
+		act(() => release?.());
+		await composer();
+	});
+
 	it("does not claim a stop receipt is cancellation and retains the original execution target", async () => {
 		const { requests } = setup((request) => {
 			const path = new URL(request.url).pathname;

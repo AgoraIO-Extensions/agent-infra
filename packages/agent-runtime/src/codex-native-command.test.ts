@@ -883,6 +883,48 @@ describe("Codex metadata RPC local failure boundaries (scripted unit fixture)", 
 });
 
 describe("Codex native metadata command (scripted unit fixture)", () => {
+	it.each(["commands", "skills"] as const)(
+		"projects native metadata selector %s through the existing directory reader",
+		async (selector) => {
+			const f = await fixture();
+			const directory = {
+				revision: "a".repeat(64),
+				capabilities: [],
+			};
+			if (selector === "commands")
+				vi.spyOn(f.driver, "discoverNativeCommands").mockResolvedValue(
+					directory,
+				);
+			else
+				vi.spyOn(f.driver, "discoverNativeSkills").mockResolvedValue(directory);
+			await expect(
+				f.driver.readNativeMetadataV1(selector, f.read),
+			).resolves.toEqual({ selector, ...directory });
+		},
+	);
+
+	it("projects status through the V1 metadata reader without exposing native refs", async () => {
+		const f = await fixture();
+		f.transport.status = { type: "idle" };
+		const result = await f.driver.readNativeMetadataV1("status", f.read);
+		expect(result).toEqual({
+			selector: "status",
+			status: "idle",
+			readAt: expect.any(String),
+		});
+		expect(
+			f.transport.requests.filter((x) => x.method === "thread/read"),
+		).toHaveLength(1);
+		for (const request of f.transport.requests.filter(
+			(x) => x.method === "thread/read",
+		))
+			expect(request.params).toEqual({
+				threadId: "native-thread-private",
+				includeTurns: false,
+			});
+		expect(JSON.stringify(result)).not.toMatch(/private|threadId|credential/);
+	});
+
 	it.each([
 		[{ type: "notLoaded" }, "not_loaded"],
 		[{ type: "idle" }, "idle"],

@@ -18,6 +18,7 @@ import {
 } from "./codex-browser-tools.js";
 import type {
 	RuntimeBrowserExecutionContextV1,
+	RuntimeBrowserToolExecutionRequestV1,
 	RuntimeBrowserToolExecutionResultV1,
 } from "./driver.js";
 
@@ -77,6 +78,18 @@ function mcpTool(descriptor: CodexBrowserToolDescriptorV1): Tool {
 	};
 }
 
+function pageRevision(
+	descriptor: CodexBrowserToolDescriptorV1,
+	input: Record<string, unknown>,
+): number {
+	if (descriptor.operation === "navigate" || descriptor.operation === "handoff")
+		return 1;
+	const revision = input.pageRevision;
+	if (!Number.isSafeInteger(revision) || (revision as number) < 1)
+		throw new Error("BROWSER_PAGE_REFERENCE_INVALID");
+	return revision as number;
+}
+
 function boundedContentItems(
 	items: RuntimeBrowserToolExecutionResultV1["contentItems"],
 ) {
@@ -125,6 +138,32 @@ function invalidResult(): CallToolResult {
 	};
 }
 
+/** Execute one MCP Browser call across the cancellation boundary. */
+export async function executeBrowserMcpToolV1(input: {
+	readonly request: RuntimeBrowserToolExecutionRequestV1;
+	readonly signal: AbortSignal;
+	readonly executeTool: NonNullable<
+		RuntimeBrowserExecutionContextV1["executeTool"]
+	>;
+}): Promise<CallToolResult> {
+	try {
+		input.signal.throwIfAborted();
+		const result = await input.executeTool(input.request, input.signal);
+		input.signal.throwIfAborted();
+		const bindingMatches = Object.entries(input.request.binding).every(
+			([key, value]) => Reflect.get(result.binding, key) === value,
+		);
+		return result.actionId === input.request.actionId &&
+			result.operationRef === input.request.operationRef &&
+			result.attemptRef === input.request.attemptRef &&
+			bindingMatches
+			? content(result)
+			: invalidResult();
+	} catch {
+		return invalidResult();
+	}
+}
+
 /**
  * Serve the verified Browser descriptors over the only MCP transport supported
  * by the pinned OpenCode ACP peer. The listener is request-local and owns no
@@ -165,13 +204,8 @@ export async function createBrowserMcpGatewayV1(
 		);
 		const args = request.params.arguments;
 		if (!descriptor || !isRecord(args)) return invalidResult();
-		const pageRevision =
-			typeof args.pageRevision === "number" &&
-			Number.isSafeInteger(args.pageRevision) &&
-			args.pageRevision > 0
-				? args.pageRevision
-				: 1;
 		try {
+			const revision = pageRevision(descriptor, args);
 			const toolRequest = {
 				tool: name,
 				arguments: args,
@@ -182,19 +216,14 @@ export async function createBrowserMcpGatewayV1(
 					...input.context.binding,
 					executionId: input.executionId,
 					capabilityVersion: input.context.capabilityVersion,
-					pageRevision,
+					pageRevision: revision,
 				},
 			};
-			const result = await executeTool(toolRequest, extra.signal);
-			const bindingMatches = Object.entries(toolRequest.binding).every(
-				([key, value]) => Reflect.get(result.binding, key) === value,
-			);
-			return result.actionId === toolRequest.actionId &&
-				result.operationRef === toolRequest.operationRef &&
-				result.attemptRef === toolRequest.attemptRef &&
-				bindingMatches
-				? content(result)
-				: invalidResult();
+			return await executeBrowserMcpToolV1({
+				request: toolRequest,
+				signal: extra.signal,
+				executeTool,
+			});
 		} catch {
 			return invalidResult();
 		}

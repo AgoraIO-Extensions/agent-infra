@@ -85,6 +85,7 @@ import {
 	RuntimeLegacyMigrationV1SchemaDefinitions,
 	RuntimeModelConfigurationV3Schema,
 	RuntimeModelConfigurationV4Schema,
+	RuntimeNativeMetadataV1SchemaDefinitions,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV4Schema,
@@ -243,6 +244,10 @@ const artifactPaths = {
 	runtimeJsonSchema: resolve(
 		artifactRoot,
 		"json-schema/runtime.v1.schema.json",
+	),
+	runtimeNativeMetadataJsonSchema: resolve(
+		artifactRoot,
+		"json-schema/runtime-native-metadata.v1.schema.json",
 	),
 	runtimeJsonSchemaV2: resolve(
 		artifactRoot,
@@ -407,6 +412,11 @@ function buildArtifacts() {
 			...RuntimeHostV2SchemaDefinitions,
 			...RuntimeDriverV2SchemaDefinitions,
 		},
+	});
+	const runtimeNativeMetadataJsonSchema = jsonSchemaDocument({
+		id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-native-metadata.v1.schema.json",
+		title: "Agent Infra Native Metadata Contracts V1",
+		definitions: RuntimeNativeMetadataV1SchemaDefinitions,
 	});
 	const runtimeOpenapi = createDocument({
 		openapi: "3.1.0",
@@ -1014,6 +1024,7 @@ function buildArtifacts() {
 		runtimeOpenapiV3,
 		runtimeOpenapiV4,
 		runtimeJsonSchema,
+		runtimeNativeMetadataJsonSchema,
 		runtimeJsonSchemaV2,
 		runtimeConfigurationJsonSchemaV3: jsonSchemaDocument({
 			id: "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-configuration.v3.schema.json",

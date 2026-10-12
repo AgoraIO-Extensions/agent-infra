@@ -23,6 +23,8 @@ import {
 import { isDeepStrictEqual } from "node:util";
 import { FileProjectionV1Schema } from "@agent-infra/contracts/files";
 import type {
+	NativeMetadataProjectionV1,
+	NativeMetadataSelectorV1,
 	RuntimeCapabilitiesV1,
 	RuntimeConnectionAssociationV1,
 	RuntimeDriverOperationRecordV1,
@@ -32,6 +34,7 @@ import type {
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
 import {
+	NativeMetadataProjectionV1Schema,
 	RuntimeDriverOperationRecordV1Schema,
 	RuntimeDriverSubmitTurnOperationRecordV2Schema,
 	RuntimeOperationFactV2Schema,
@@ -130,6 +133,7 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeExternalActionAuthorizer,
 	RuntimeModelDirectory,
+	RuntimeNativeMetadataReadContextV1,
 	RuntimeOriginalEvidenceBinding,
 	RuntimeOriginalEvidenceReadContext,
 	RuntimeOriginalEvidenceRecoveryRef,
@@ -163,13 +167,7 @@ type OpenCodexBridge = (
 ) => Promise<CodexAppServerTransport>;
 
 /** Host-owned current read authority, never a wire command or business permit. */
-export type CodexNativeCommandReadContext = Pick<
-	RuntimeOriginalEvidenceReadContext,
-	"signal" | "expiresAt" | "assertCurrent"
-> & {
-	readonly nativeSessionRef: string;
-	revalidate(): Promise<RuntimeOriginalEvidenceBinding>;
-};
+export type CodexNativeCommandReadContext = RuntimeNativeMetadataReadContextV1;
 
 interface NativeMetadataReadBoundary {
 	readonly expiresAt: number;
@@ -1860,7 +1858,9 @@ function sameRuntimeBrowserExecutionBinding(
 		left.capabilityVersion === right.capabilityVersion &&
 		left.pageRevision === right.pageRevision &&
 		left.sessionGeneration === right.sessionGeneration &&
-		left.resourceFence === right.resourceFence
+		left.resourceFence === right.resourceFence &&
+		left.workloadRevision === right.workloadRevision &&
+		left.imageDigest === right.imageDigest
 	);
 }
 
@@ -5807,6 +5807,40 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		};
 		await metadataRead.revalidate();
 		return result;
+	}
+
+	/** Read the authenticated V1 metadata projection without opening a Turn. */
+	async readNativeMetadataV1(
+		selector: NativeMetadataSelectorV1,
+		read: CodexNativeCommandReadContext,
+	): Promise<NativeMetadataProjectionV1> {
+		if (selector === "commands") {
+			const directory = await this.discoverNativeCommands(read);
+			return NativeMetadataProjectionV1Schema.parse({
+				selector,
+				...directory,
+			});
+		}
+		if (selector === "skills") {
+			const directory = await this.discoverNativeSkills(read);
+			return NativeMetadataProjectionV1Schema.parse({
+				selector,
+				...directory,
+			});
+		}
+		const binding = this.nativeCommandBinding(read);
+		const metadataRead = this.nativeMetadataRead(read, binding);
+		const status = await this.readBoundNativeStatus(
+			read,
+			binding,
+			metadataRead,
+		);
+		const projection = NativeMetadataProjectionV1Schema.parse({
+			selector,
+			...status,
+		});
+		await metadataRead.revalidate();
+		return projection;
 	}
 
 	async discoverNativeCommands(read: CodexNativeCommandReadContext) {

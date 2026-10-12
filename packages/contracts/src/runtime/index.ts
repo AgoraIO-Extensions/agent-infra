@@ -13,6 +13,7 @@ export * from "./host-v4.ts";
 export * from "./host-v4-events.ts";
 export * from "./installation.ts";
 export * from "./legacy-migration-v1.ts";
+export * from "./native-metadata-v1.ts";
 export * from "./platform-entry-auth.ts";
 export * from "./readiness.ts";
 export * from "./skill-hub.ts";
@@ -91,6 +92,8 @@ export const RuntimeHostV1SchemaDefinitions = {
 	RuntimeSubmitTurnRequestV1: RuntimeSubmitTurnRequestV1Schema,
 	RuntimeSupplementRequestV1: RuntimeSupplementRequestV1Schema,
 };
+
+export { RuntimeNativeMetadataV1SchemaDefinitions } from "./native-metadata-v1.ts";
 
 export const RuntimeEventV1SchemaDefinitions = {
 	RuntimeCapabilitiesV1: RuntimeCapabilitiesV1Schema,

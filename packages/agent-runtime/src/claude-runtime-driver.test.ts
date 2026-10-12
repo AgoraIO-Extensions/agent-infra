@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -414,6 +414,141 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 				turnId: "turn-c",
 			}),
 		).rejects.toThrow("Runtime session could not be recovered");
+		expect(calls).toBe(2);
+	} finally {
+		await driver.close();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(path, { recursive: true, force: true });
+	}
+}, 30000);
+
+it("keeps two Claude Session workspace and memory roots disjoint", async () => {
+	const path = await mkdtemp(join(tmpdir(), "claude-driver-isolation-"));
+	let calls = 0;
+	const server = createServer((req, res) => {
+		let body = "";
+		req.on("data", (chunk) => {
+			body += chunk;
+		});
+		req.on("end", () => {
+			const value = JSON.parse(body);
+			calls++;
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			for (const event of [
+				{
+					type: "message_start",
+					message: {
+						id: `msg_isolation_${calls}`,
+						type: "message",
+						role: "assistant",
+						model: value.model,
+						content: [],
+						stop_reason: null,
+						stop_sequence: null,
+						usage: { input_tokens: 1, output_tokens: 0 },
+					},
+				},
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "text", text: "" },
+				},
+				{
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "text_delta", text: "OK" },
+				},
+				{ type: "content_block_stop", index: 0 },
+				{
+					type: "message_delta",
+					delta: { stop_reason: "end_turn", stop_sequence: null },
+					usage: { output_tokens: 1 },
+				},
+				{ type: "message_stop" },
+			])
+				res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+			res.end();
+		});
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error();
+	const driver = await ClaudeRuntimeDriver.open({
+		path,
+		configVersion: "configuration-isolation",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				model: "claude-opus-5",
+				reasoningLevels: ["high"],
+				authentication: "bearer" as const,
+				endpoint: `http://127.0.0.1:${address.port}`,
+				credential: "synthetic-model-credential",
+			},
+		],
+	});
+	const command = (suffix: string) => ({
+		schemaVersion: 2 as const,
+		kind: "submit-turn" as const,
+		agentId: "agent-a",
+		conversationId: `conversation-${suffix}`,
+		sessionGeneration: 1,
+		executionId: `execution-${suffix}`,
+		turnId: `turn-${suffix}`,
+		operationId: `operation-${suffix}`,
+		selection: {
+			schemaVersion: 1 as const,
+			modelOptionId: "primary",
+			reasoningLevel: "high" as const,
+		},
+		input: { text: "Reply without private content.", attachments: [] },
+	});
+	try {
+		const first = await driver.execute(command("first"));
+		const second = await driver.execute(command("second"));
+		await vi.waitFor(
+			async () =>
+				expect(
+					await driver.getStatus(first.nativeSessionRef, "execution-first"),
+				).toBe("completed"),
+			{ timeout: 10000 },
+		);
+		await vi.waitFor(
+			async () =>
+				expect(
+					await driver.getStatus(second.nativeSessionRef, "execution-second"),
+				).toBe("completed"),
+			{ timeout: 10000 },
+		);
+		expect(first.nativeSessionRef).not.toBe(second.nativeSessionRef);
+		const canonicalPath = await realpath(path);
+		const firstRoot = join(canonicalPath, first.nativeSessionRef);
+		const secondRoot = join(canonicalPath, second.nativeSessionRef);
+		expect(await realpath(join(firstRoot, "workspace"))).toBe(
+			join(firstRoot, "workspace"),
+		);
+		expect(await realpath(join(secondRoot, "workspace"))).toBe(
+			join(secondRoot, "workspace"),
+		);
+		expect(await realpath(join(firstRoot, "memory"))).toBe(
+			join(firstRoot, "memory"),
+		);
+		expect(await realpath(join(secondRoot, "memory"))).toBe(
+			join(secondRoot, "memory"),
+		);
+		await writeFile(join(firstRoot, "workspace", "first.txt"), "first");
+		await writeFile(join(firstRoot, "memory", "MEMORY.md"), "first-memory");
+		await writeFile(join(secondRoot, "workspace", "second.txt"), "second");
+		await writeFile(join(secondRoot, "memory", "MEMORY.md"), "second-memory");
+		await expect(
+			access(join(secondRoot, "workspace", "first.txt")),
+		).rejects.toThrow();
+		await expect(
+			access(join(firstRoot, "workspace", "second.txt")),
+		).rejects.toThrow();
 		expect(calls).toBe(2);
 	} finally {
 		await driver.close();

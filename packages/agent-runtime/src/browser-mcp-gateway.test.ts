@@ -3,7 +3,11 @@ import type { BrowserCapabilityAvailableV1 } from "@agent-infra/contracts/runtim
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, expect, it } from "vitest";
-import { createBrowserMcpGatewayV1 } from "./browser-mcp-gateway.js";
+import {
+	createBrowserMcpGatewayV1,
+	executeBrowserMcpToolV1,
+} from "./browser-mcp-gateway.js";
+import type { RuntimeBrowserToolExecutionRequestV1 } from "./driver.js";
 
 const capability: BrowserCapabilityAvailableV1 = {
 	schemaVersion: 1,
@@ -49,6 +53,65 @@ const capability: BrowserCapabilityAvailableV1 = {
 const gateways: { close(): Promise<void> }[] = [];
 afterEach(async () => {
 	while (gateways.length) await gateways.pop()?.close();
+});
+
+function toolRequest(): RuntimeBrowserToolExecutionRequestV1 {
+	return {
+		tool: "browser_navigate",
+		arguments: { url: "https://example.test/" },
+		actionId: "action-cancelled",
+		operationRef: "operation-cancelled",
+		attemptRef: "attempt-cancelled",
+		binding: {
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			sessionGeneration: 1,
+			resourceFence: 2,
+			workloadRevision: 3,
+			imageDigest: `sha256:${"d".repeat(64)}`,
+			capabilityVersion: 1,
+			pageRevision: 1,
+		},
+	};
+}
+
+it("fails closed when cancellation arrives after Browser controller I/O", async () => {
+	const controller = new AbortController();
+	const result = await executeBrowserMcpToolV1({
+		request: toolRequest(),
+		signal: controller.signal,
+		executeTool: async (request) => {
+			controller.abort();
+			return {
+				...request,
+				phase: "completed" as const,
+				contentItems: [{ type: "inputText" as const, text: "forged" }],
+				success: true,
+			};
+		},
+	});
+	expect(result).toEqual({
+		content: [{ type: "text", text: "BROWSER_EXECUTION_UNKNOWN" }],
+		isError: true,
+	});
+});
+
+it("does not call the Browser controller for an already cancelled request", async () => {
+	const controller = new AbortController();
+	controller.abort();
+	const executeTool = async () => {
+		throw new Error("must not execute");
+	};
+	const result = await executeBrowserMcpToolV1({
+		request: toolRequest(),
+		signal: controller.signal,
+		executeTool,
+	});
+	expect(result).toEqual({
+		content: [{ type: "text", text: "BROWSER_EXECUTION_UNKNOWN" }],
+		isError: true,
+	});
 });
 
 it("serves verified Browser tools and forwards calls to the request-local executor", async () => {
@@ -101,7 +164,7 @@ it("serves verified Browser tools and forwards calls to the request-local execut
 	]);
 	const result = await client.callTool({
 		name: "browser_navigate",
-		arguments: { url: "https://example.test/" },
+		arguments: { url: "https://example.test/", pageRevision: 99 },
 	});
 	expect(result).toMatchObject({
 		isError: false,
@@ -115,6 +178,7 @@ it("serves verified Browser tools and forwards calls to the request-local execut
 			conversationId: "conversation-1",
 			executionId,
 			capabilityVersion: 1,
+			pageRevision: 1,
 		},
 	});
 	await client.close();

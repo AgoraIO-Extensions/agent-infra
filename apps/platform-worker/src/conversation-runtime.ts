@@ -150,6 +150,11 @@ export interface ConversationRuntimeOptionsV2 {
 		readonly sandboxResource?: SessionSandboxRuntimeStateV1 | null;
 		readonly purpose: "business" | "control";
 		readonly command: RuntimeBusinessCommandV2 | RuntimeControlCommandV2;
+		/**
+		 * 同一次准备中，发送前最后一次解析之外的解析可沿用同进程最近一次通过的签名
+		 * readiness（#2134）；未设置时按命令执行完整观测。
+		 */
+		readonly reuseSignedReadiness?: true;
 	}) => Promise<{
 		readonly baseUrl: string;
 		readonly serviceToken: string;
@@ -438,6 +443,8 @@ export function createConversationRuntimeV2(
 				sandboxResource: state.sandboxResource,
 				purpose: authority.purpose,
 				command,
+				// 签名 readiness 只要求在发送前最后一次解析（postTarget）执行（#2134）。
+				reuseSignedReadiness: true,
 			}),
 			signal,
 		);
@@ -488,6 +495,7 @@ export function createConversationRuntimeV2(
 				sandboxResource: state.sandboxResource,
 				purpose: finalRoute.authority.purpose,
 				command,
+				reuseSignedReadiness: true,
 			}),
 			signal,
 		);
@@ -698,6 +706,8 @@ export function createConversationRuntimeV2(
 					sandboxResource: state.sandboxResource,
 					purpose: decision.authority.purpose,
 					command,
+					// 准备阶段最后一次解析已对同一 Pod 完成签名 readiness，发送前复核沿用（#2134）。
+					reuseSignedReadiness: true,
 				}),
 				signal,
 			);

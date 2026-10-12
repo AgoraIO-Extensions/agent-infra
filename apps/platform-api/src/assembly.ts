@@ -68,6 +68,7 @@ import {
 	resolveCurrentMaterialGrantActor,
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
+import type { NativeMetadataRoutesDependenciesV1 } from "./http/native-metadata-routes.js";
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
 import {
@@ -159,6 +160,8 @@ export interface PlatformApiAssemblyInput {
 	readonly directory?: DirectoryRouteDependencies;
 	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
+	/** Optional deployment-owned public native metadata reader. */
+	readonly nativeMetadata?: Pick<NativeMetadataRoutesDependenciesV1, "reader">;
 	/** Optional deployment-owned platform identity route for custom Agents. */
 	readonly customAgentGateway?: Omit<
 		NonNullable<PlatformAppDependencies["customAgentGateway"]>,
@@ -813,6 +816,14 @@ export function assemblePlatformApi(
 					resolveCurrentTaskUser(input.identity, actorId, randomUUID()),
 			}),
 		},
+		...(input.nativeMetadata
+			? {
+					nativeMetadata: {
+						identity: input.identity,
+						reader: input.nativeMetadata.reader,
+					},
+				}
+			: {}),
 		sessionAudit: {
 			identity: input.identity,
 			audit: auditQuery,

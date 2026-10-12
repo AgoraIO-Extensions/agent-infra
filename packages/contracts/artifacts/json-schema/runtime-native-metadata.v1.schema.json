@@ -1,0 +1,2321 @@
+{
+  "$defs": {
+    "NativeMetadataCommandCapabilityV1": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "const": "available",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "effect": {
+          "const": "read_only",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "kind": {
+          "const": "command",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "parameters": {
+          "items": {
+            "not": {}
+          },
+          "maxItems": 0,
+          "type": "array"
+        },
+        "source": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "version": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "version"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "description",
+        "source",
+        "parameters",
+        "effect",
+        "availability"
+      ],
+      "type": "object"
+    },
+    "NativeMetadataCurrentRequestV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expiresAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "originalHostScopeRef": {
+              "type": "null"
+            },
+            "phase": {
+              "const": "resolve_original_binding",
+              "type": "string"
+            },
+            "readId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "readStartedAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "scope": {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "authorizationRevision": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "channelId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "principal": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "user",
+                        "application"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "principal",
+                "agentId",
+                "channelId",
+                "conversationId",
+                "executionId",
+                "sessionGeneration",
+                "authorizationRevision"
+              ],
+              "type": "object"
+            },
+            "selector": {
+              "enum": [
+                "status",
+                "commands",
+                "skills"
+              ],
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "readId",
+            "selector",
+            "scope",
+            "readStartedAt",
+            "expiresAt",
+            "requestId",
+            "traceId",
+            "phase",
+            "originalHostScopeRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expiresAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "originalHostScopeRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "phase": {
+              "const": "read_metadata",
+              "type": "string"
+            },
+            "readId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "readStartedAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "scope": {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "authorizationRevision": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "channelId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "principal": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "user",
+                        "application"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "principal",
+                "agentId",
+                "channelId",
+                "conversationId",
+                "executionId",
+                "sessionGeneration",
+                "authorizationRevision"
+              ],
+              "type": "object"
+            },
+            "selector": {
+              "enum": [
+                "status",
+                "commands",
+                "skills"
+              ],
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "readId",
+            "selector",
+            "scope",
+            "readStartedAt",
+            "expiresAt",
+            "requestId",
+            "traceId",
+            "phase",
+            "originalHostScopeRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NativeMetadataCurrentResponseV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "const": "allowed",
+              "type": "string"
+            },
+            "request": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "expiresAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "originalHostScopeRef": {
+                      "type": "null"
+                    },
+                    "phase": {
+                      "const": "resolve_original_binding",
+                      "type": "string"
+                    },
+                    "readId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "readStartedAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "requestId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "scope": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "agentId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "authorizationRevision": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "channelId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "conversationId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "executionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "principal": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "user",
+                                "application"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "sessionGeneration": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "principal",
+                        "agentId",
+                        "channelId",
+                        "conversationId",
+                        "executionId",
+                        "sessionGeneration",
+                        "authorizationRevision"
+                      ],
+                      "type": "object"
+                    },
+                    "selector": {
+                      "enum": [
+                        "status",
+                        "commands",
+                        "skills"
+                      ],
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "readId",
+                    "selector",
+                    "scope",
+                    "readStartedAt",
+                    "expiresAt",
+                    "requestId",
+                    "traceId",
+                    "phase",
+                    "originalHostScopeRef"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "expiresAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "originalHostScopeRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "phase": {
+                      "const": "read_metadata",
+                      "type": "string"
+                    },
+                    "readId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "readStartedAt": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "requestId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "scope": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "agentId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "authorizationRevision": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "channelId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "conversationId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "executionId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "principal": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "user",
+                                "application"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "sessionGeneration": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "principal",
+                        "agentId",
+                        "channelId",
+                        "conversationId",
+                        "executionId",
+                        "sessionGeneration",
+                        "authorizationRevision"
+                      ],
+                      "type": "object"
+                    },
+                    "selector": {
+                      "enum": [
+                        "status",
+                        "commands",
+                        "skills"
+                      ],
+                      "type": "string"
+                    },
+                    "traceId": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "readId",
+                    "selector",
+                    "scope",
+                    "readStartedAt",
+                    "expiresAt",
+                    "requestId",
+                    "traceId",
+                    "phase",
+                    "originalHostScopeRef"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "required": [
+            "outcome",
+            "request"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "const": "denied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "outcome": {
+              "const": "unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NativeMetadataObjectScopeV1": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "authorizationRevision": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "channelId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "conversationId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "executionId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "principal": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "user",
+                "application"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "sessionGeneration": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "principal",
+        "agentId",
+        "channelId",
+        "conversationId",
+        "executionId",
+        "sessionGeneration",
+        "authorizationRevision"
+      ],
+      "type": "object"
+    },
+    "NativeMetadataProjectionV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "readAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+              "type": "string"
+            },
+            "selector": {
+              "const": "status",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "active",
+                "idle",
+                "not_loaded",
+                "system_error"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "selector",
+            "status",
+            "readAt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "capabilities": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "availability": {
+                    "const": "available",
+                    "type": "string"
+                  },
+                  "description": {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "effect": {
+                    "const": "read_only",
+                    "type": "string"
+                  },
+                  "id": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "command",
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "parameters": {
+                    "items": {
+                      "not": {}
+                    },
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  "source": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "version": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "version"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "name",
+                  "description",
+                  "source",
+                  "parameters",
+                  "effect",
+                  "availability"
+                ],
+                "type": "object"
+              },
+              "maxItems": 128,
+              "type": "array"
+            },
+            "revision": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "selector": {
+              "const": "commands",
+              "type": "string"
+            }
+          },
+          "required": [
+            "selector",
+            "revision",
+            "capabilities"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "capabilities": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "availability": {
+                    "const": "discovered",
+                    "type": "string"
+                  },
+                  "description": {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "id": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "skill",
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "source": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "version": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "version"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "name",
+                  "description",
+                  "source",
+                  "availability"
+                ],
+                "type": "object"
+              },
+              "maxItems": 128,
+              "type": "array"
+            },
+            "revision": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "selector": {
+              "const": "skills",
+              "type": "string"
+            }
+          },
+          "required": [
+            "selector",
+            "revision",
+            "capabilities"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NativeMetadataRequestIdentityV1": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "readId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "readStartedAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "authorizationRevision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "channelId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "principal",
+            "agentId",
+            "channelId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration",
+            "authorizationRevision"
+          ],
+          "type": "object"
+        },
+        "selector": {
+          "enum": [
+            "status",
+            "commands",
+            "skills"
+          ],
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "readId",
+        "selector",
+        "scope",
+        "readStartedAt",
+        "expiresAt",
+        "requestId",
+        "traceId"
+      ],
+      "type": "object"
+    },
+    "NativeMetadataSelectorV1": {
+      "enum": [
+        "status",
+        "commands",
+        "skills"
+      ],
+      "type": "string"
+    },
+    "NativeMetadataSkillCapabilityV1": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "const": "discovered",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "kind": {
+          "const": "skill",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "source": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "version": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "version"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "description",
+        "source",
+        "availability"
+      ],
+      "type": "object"
+    },
+    "PlatformNativeMetadataReadRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "apiRequestSourceRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "readId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "readStartedAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "authorizationRevision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "channelId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "principal",
+            "agentId",
+            "channelId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration",
+            "authorizationRevision"
+          ],
+          "type": "object"
+        },
+        "selector": {
+          "enum": [
+            "status",
+            "commands",
+            "skills"
+          ],
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "readId",
+        "selector",
+        "scope",
+        "readStartedAt",
+        "expiresAt",
+        "requestId",
+        "traceId",
+        "apiRequestSourceRef"
+      ],
+      "type": "object"
+    },
+    "RuntimeNativeMetadataBindingRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "readId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "readStartedAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "authorizationRevision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "channelId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "principal",
+            "agentId",
+            "channelId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration",
+            "authorizationRevision"
+          ],
+          "type": "object"
+        },
+        "selector": {
+          "enum": [
+            "status",
+            "commands",
+            "skills"
+          ],
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "readId",
+        "selector",
+        "scope",
+        "readStartedAt",
+        "expiresAt",
+        "requestId",
+        "traceId"
+      ],
+      "type": "object"
+    },
+    "RuntimeNativeMetadataBindingResponseV1": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "originalHostScopeRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "readId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "readStartedAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "authorizationRevision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "channelId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "principal",
+            "agentId",
+            "channelId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration",
+            "authorizationRevision"
+          ],
+          "type": "object"
+        },
+        "selector": {
+          "enum": [
+            "status",
+            "commands",
+            "skills"
+          ],
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "readId",
+        "selector",
+        "scope",
+        "readStartedAt",
+        "expiresAt",
+        "requestId",
+        "traceId",
+        "originalHostScopeRef"
+      ],
+      "type": "object"
+    },
+    "RuntimeNativeMetadataProofClaimsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "const": "runtime_host.native_metadata_read",
+          "type": "string"
+        },
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "issuedAt": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issuer": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "keyVersion": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "originalHostScopeRef": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "purpose": {
+          "const": "native_metadata_read",
+          "type": "string"
+        },
+        "readId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "readStartedAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "requestDigest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "authorizationRevision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "channelId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "principal",
+            "agentId",
+            "channelId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration",
+            "authorizationRevision"
+          ],
+          "type": "object"
+        },
+        "selector": {
+          "enum": [
+            "status",
+            "commands",
+            "skills"
+          ],
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "workerId": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "readId",
+        "selector",
+        "scope",
+        "readStartedAt",
+        "expiresAt",
+        "requestId",
+        "traceId",
+        "purpose",
+        "issuedAt",
+        "issuer",
+        "audience",
+        "workerId",
+        "keyVersion",
+        "originalHostScopeRef",
+        "requestDigest"
+      ],
+      "type": "object"
+    },
+    "RuntimeNativeMetadataProofV1": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "native-metadata-jws",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "token": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "format",
+        "token"
+      ],
+      "type": "object"
+    },
+    "RuntimeNativeMetadataReadRequestV1": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "originalHostScopeRef": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "proof": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "const": "native-metadata-jws",
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "token": {
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "format",
+            "token"
+          ],
+          "type": "object"
+        },
+        "readId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "readStartedAt": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "type": "number"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "authorizationRevision": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "channelId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "conversationId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "executionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "principal": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "user",
+                    "application"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "sessionGeneration": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "principal",
+            "agentId",
+            "channelId",
+            "conversationId",
+            "executionId",
+            "sessionGeneration",
+            "authorizationRevision"
+          ],
+          "type": "object"
+        },
+        "selector": {
+          "enum": [
+            "status",
+            "commands",
+            "skills"
+          ],
+          "type": "string"
+        },
+        "traceId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "readId",
+        "selector",
+        "scope",
+        "readStartedAt",
+        "expiresAt",
+        "requestId",
+        "traceId",
+        "originalHostScopeRef",
+        "proof"
+      ],
+      "type": "object"
+    },
+    "RuntimeNativeMetadataReadResponseV1": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expiresAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "originalHostScopeRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "projection": {
+              "additionalProperties": false,
+              "properties": {
+                "readAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                  "type": "string"
+                },
+                "selector": {
+                  "const": "status",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "active",
+                    "idle",
+                    "not_loaded",
+                    "system_error"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "selector",
+                "status",
+                "readAt"
+              ],
+              "type": "object"
+            },
+            "readId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "readStartedAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "scope": {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "authorizationRevision": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "channelId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "principal": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "user",
+                        "application"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "principal",
+                "agentId",
+                "channelId",
+                "conversationId",
+                "executionId",
+                "sessionGeneration",
+                "authorizationRevision"
+              ],
+              "type": "object"
+            },
+            "selector": {
+              "const": "status",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "readId",
+            "selector",
+            "scope",
+            "readStartedAt",
+            "expiresAt",
+            "requestId",
+            "traceId",
+            "originalHostScopeRef",
+            "projection"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expiresAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "originalHostScopeRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "projection": {
+              "additionalProperties": false,
+              "properties": {
+                "capabilities": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "availability": {
+                        "const": "available",
+                        "type": "string"
+                      },
+                      "description": {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      "effect": {
+                        "const": "read_only",
+                        "type": "string"
+                      },
+                      "id": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "command",
+                        "type": "string"
+                      },
+                      "name": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "parameters": {
+                        "items": {
+                          "not": {}
+                        },
+                        "maxItems": 0,
+                        "type": "array"
+                      },
+                      "source": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "version": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "version"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "kind",
+                      "name",
+                      "description",
+                      "source",
+                      "parameters",
+                      "effect",
+                      "availability"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 128,
+                  "type": "array"
+                },
+                "revision": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "selector": {
+                  "const": "commands",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "selector",
+                "revision",
+                "capabilities"
+              ],
+              "type": "object"
+            },
+            "readId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "readStartedAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "scope": {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "authorizationRevision": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "channelId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "principal": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "user",
+                        "application"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "principal",
+                "agentId",
+                "channelId",
+                "conversationId",
+                "executionId",
+                "sessionGeneration",
+                "authorizationRevision"
+              ],
+              "type": "object"
+            },
+            "selector": {
+              "const": "commands",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "readId",
+            "selector",
+            "scope",
+            "readStartedAt",
+            "expiresAt",
+            "requestId",
+            "traceId",
+            "originalHostScopeRef",
+            "projection"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expiresAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "originalHostScopeRef": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "projection": {
+              "additionalProperties": false,
+              "properties": {
+                "capabilities": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "availability": {
+                        "const": "discovered",
+                        "type": "string"
+                      },
+                      "description": {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      "id": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "skill",
+                        "type": "string"
+                      },
+                      "name": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "source": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "version": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "version"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "kind",
+                      "name",
+                      "description",
+                      "source",
+                      "availability"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 128,
+                  "type": "array"
+                },
+                "revision": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "selector": {
+                  "const": "skills",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "selector",
+                "revision",
+                "capabilities"
+              ],
+              "type": "object"
+            },
+            "readId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "readStartedAt": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "requestId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "scope": {
+              "additionalProperties": false,
+              "properties": {
+                "agentId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "authorizationRevision": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "channelId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "conversationId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionId": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "principal": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "user",
+                        "application"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "sessionGeneration": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "principal",
+                "agentId",
+                "channelId",
+                "conversationId",
+                "executionId",
+                "sessionGeneration",
+                "authorizationRevision"
+              ],
+              "type": "object"
+            },
+            "selector": {
+              "const": "skills",
+              "type": "string"
+            },
+            "traceId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "readId",
+            "selector",
+            "scope",
+            "readStartedAt",
+            "expiresAt",
+            "requestId",
+            "traceId",
+            "originalHostScopeRef",
+            "projection"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://github.com/AgoraIO-Extensions/agent-infra/schemas/runtime-native-metadata.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Infra Native Metadata Contracts V1"
+}

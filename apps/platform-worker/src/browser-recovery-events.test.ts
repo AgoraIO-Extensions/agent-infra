@@ -14,6 +14,8 @@ const binding = {
 	pageRevision: 2,
 	sessionGeneration: 3,
 	resourceFence: 4,
+	workloadRevision: 2,
+	imageDigest: `sha256:${"a".repeat(64)}`,
 } as const;
 const record: BrowserActionRecordV1 = {
 	actionId: "action-1",

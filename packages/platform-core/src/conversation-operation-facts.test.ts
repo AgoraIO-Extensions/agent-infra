@@ -80,6 +80,8 @@ const browserBinding = {
 	pageRevision: 3,
 	sessionGeneration: 2,
 	resourceFence: 7,
+	workloadRevision: 4,
+	imageDigest: `sha256:${"a".repeat(64)}`,
 	sideEffect: true,
 } as const;
 
@@ -277,8 +279,10 @@ describe("actual operation facts", () => {
 			{ pageRevision: 0 },
 			{ sessionGeneration: 0 },
 			{ resourceFence: 0 },
+			{ workloadRevision: 0 },
 			{ capabilityVersion: 0 },
 			{ sideEffect: "yes" },
+			{ imageDigest: `sha256:${"z".repeat(64)}` },
 		])
 			expect(() =>
 				parseConversationOperationFactV2({
@@ -286,6 +290,16 @@ describe("actual operation facts", () => {
 					browser: { ...browserBinding, ...change },
 				}),
 			).toThrow();
+		expect(() =>
+			parseConversationOperationFactV2({
+				...browserIntent,
+				browser: (({
+					workloadRevision: _revision,
+					imageDigest: _digest,
+					...legacy
+				}) => legacy)(browserBinding) as never,
+			}),
+		).toThrow();
 	});
 
 	it("preserves missing measurements and only stores explicitly observed usage", () => {

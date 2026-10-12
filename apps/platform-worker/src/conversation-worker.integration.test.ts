@@ -54,6 +54,18 @@ async function waitUntil(check: () => Promise<boolean>, label: string) {
 	throw Error(`Timed out: ${label}`);
 }
 
+async function waitUntilWithAttempts(
+	check: () => Promise<boolean>,
+	label: string,
+	attempts: number,
+) {
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		if (await check()) return;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	throw Error(`Timed out: ${label}`);
+}
+
 // Real PostgreSQL and the packaged production module/CLI, with controlled Kubernetes
 // and Runtime HTTP. This is not real model, identity-provider or Connection acceptance.
 it("automatically dispatches lawful Core admissions through two packaged Worker processes", async () => {
@@ -131,6 +143,8 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 		deliveryFence?: number;
 		confirmedCursor?: string;
 		responseStatus?: number;
+		requestBody?: Record<string, unknown>;
+		bearer?: string;
 		/** True when the bearer is a Session Sandbox token, never the deployment one. */
 		sandboxToken?: boolean;
 	}[] = [];
@@ -494,6 +508,8 @@ it("automatically dispatches lawful Core admissions through two packaged Worker 
 				executionId: parsed.executionId,
 				deliveryFence: parsed.operation?.executionDeliveryFence,
 				confirmedCursor: parsed.confirmedCursor,
+				requestBody: parsed,
+				bearer,
 				sandboxToken: sandboxApp !== undefined,
 			};
 			requests.push(observedRequest);
@@ -861,6 +877,50 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					})
 				)?.status,
 			).toBe(401);
+		const firstTurn = requests.find(
+			(request) =>
+				request.path.endsWith("/turns") &&
+				request.sandboxToken &&
+				request.requestBody &&
+				request.bearer,
+		);
+		if (!firstTurn?.requestBody || !firstTurn.bearer)
+			throw Error("Missing Session Runtime turn receipt");
+		const replayHost = sandboxApps.get(firstTurn.bearer);
+		if (!replayHost) throw Error("Missing first Session Runtime Host");
+		const replay = structuredClone(firstTurn.requestBody);
+		const binding = (
+			replay.businessRequest &&
+			typeof replay.businessRequest === "object" &&
+			!Array.isArray(replay.businessRequest)
+				? replay.businessRequest
+				: replay
+		) as Record<string, unknown>;
+		if (
+			typeof binding !== "object" ||
+			Array.isArray(binding) ||
+			typeof binding.conversationId !== "string" ||
+			typeof binding.executionId !== "string"
+		)
+			throw Error("Runtime turn receipt has no execution binding");
+		binding.conversationId = second.conversationId;
+		binding.executionId = second.executionId;
+		const crossSession = await replayHost.request(
+			`http://runtime${firstTurn.path}`,
+			{
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${firstTurn.bearer}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify(replay),
+			},
+		);
+		// RuntimeHost may expose either unauthorized or dependency-unavailable for
+		// a substituted signed binding; both are fail-closed before Driver entry.
+		expect([401, 503]).toContain(crossSession.status);
+		await crossSession.body?.cancel();
+		expect(await driver.sideEffectCount()).toBe(1);
 		const [after] =
 			await sql`select delivery_fence::int as fence, host_session_ref from platform.conversation_executions e join platform.conversations c on c.id=e.conversation_id where e.execution_id=${active.execution_id}`;
 		expect(after?.host_session_ref).toBe(before?.host_session_ref);
@@ -921,6 +981,44 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 			"deferred conversation after capacity release",
 		);
 		expect(ackCount).toBeGreaterThan(0);
+		const [revoked] =
+			await sql`select execution_id from platform.conversation_executions where status='processing' limit 1`;
+		if (!revoked) throw Error("No resumed execution to revoke");
+		// Freeze the restarted Worker cohort at the revocation boundary so an
+		// in-flight submit cannot race the persisted authorization change.
+		for (const child of children.slice(2)) child.kill("SIGSTOP");
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		const sideEffectsBeforeRevoke = await driver.sideEffectCount();
+		const [revokedRecord] = await sql`
+			update platform.task_authorization_records
+			set revoked_at=clock_timestamp()
+			where execution_id=${revoked.execution_id} and revoked_at is null
+			returning execution_id
+		`;
+		if (!revokedRecord)
+			throw Error("Execution authorization record was not revoked");
+		for (const child of children.slice(2)) child.kill("SIGCONT");
+		await waitUntilWithAttempts(
+			async () =>
+				(
+					await sql`select 1 from platform.outbox_items where operation='conversation.turn.stop.v1' and payload->>'executionId'=${revoked.execution_id} and status in ('pending','processing','succeeded')`
+				).length === 1,
+			"revocation stop intent",
+			150,
+		);
+		const sideEffectsAfterRevoke = await driver.sideEffectCount();
+		// A revoked record must emit the existing stop intent before another
+		// Runtime side effect is permitted.
+		await new Promise((resolve) => setTimeout(resolve, 250));
+		expect(await driver.sideEffectCount()).toBeLessThanOrEqual(
+			sideEffectsBeforeRevoke + 1,
+		);
+		expect(sideEffectsAfterRevoke).toBeLessThanOrEqual(
+			sideEffectsBeforeRevoke + 1,
+		);
+		expect(
+			await sql`select 1 from platform.task_authorization_records where execution_id=${revoked.execution_id} and revoked_at is not null`,
+		).toHaveLength(1);
 		for (const child of children.slice(2)) child.kill("SIGTERM");
 		await Promise.all(
 			children.map((child) =>

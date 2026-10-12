@@ -3461,6 +3461,57 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("projects the latest stop or revocation control record into the runtime state (#2152)", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "submitted",
+			hostSessionRef: "host-original",
+		});
+		const claimed = await claim(work.itemId);
+		try {
+			if (claimed.decision.outcome !== "claimed")
+				throw new Error("Expected claim");
+			const current = claimed.decision.claim;
+			const authorizationId = `authorization-${work.executionId}`;
+			await client`insert into platform.task_authorization_records (id, execution_id, boundary)
+				values (${authorizationId}, ${work.executionId}, ${client.json({
+					schemaVersion: 1,
+					principal: { kind: "user", id: "actor-dispatch" },
+					agentId: "agent-dispatch",
+					channelId: "web",
+					identityRevision: "identity-original",
+					agentAuthorizationRevision: "authorization-dispatch",
+					accessSources: [
+						{ kind: "organization", organizationId: "original-team" },
+					],
+				})}) on conflict (id) do nothing`;
+			const insert = (id: string, reason: string, at: string) => client`
+				insert into platform.task_control_records (id, execution_id, authorization_record_id, reason, created_at)
+				values (${id}, ${work.executionId}, ${authorizationId}, ${reason}, ${at}::timestamptz)`;
+			expect(
+				await claimed.store.readRuntimeState({ claim: current }),
+			).not.toHaveProperty("latchedControlReason");
+			// recovery 记录不是闩锁。
+			await insert("control-2152-recovery", "recovery", "2026-10-13T00:00:01Z");
+			expect(
+				await claimed.store.readRuntimeState({ claim: current }),
+			).not.toHaveProperty("latchedControlReason");
+			await insert(
+				"control-2152-revoked",
+				"authorization_revoked",
+				"2026-10-13T00:00:02Z",
+			);
+			expect(
+				await claimed.store.readRuntimeState({ claim: current }),
+			).toMatchObject({ latchedControlReason: "authorization_revoked" });
+			await insert("control-2152-stop", "stop", "2026-10-13T00:00:03Z");
+			expect(
+				await claimed.store.readRuntimeState({ claim: current }),
+			).toMatchObject({ latchedControlReason: "stop" });
+		} finally {
+			await claimed.store.close();
+		}
+	});
+
 	it("cancels an unknown Turn after RuntimeHost confirms it was not accepted", async () => {
 		const work = await seed("conversation.turn.submit.v1", {
 			executionStatus: "unknown",
