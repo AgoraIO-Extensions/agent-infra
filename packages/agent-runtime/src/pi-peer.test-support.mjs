@@ -34,6 +34,59 @@ const messages = entries
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const finish = async (stopReason) => {
 	if (!isStreaming) return;
+	if (mode === "result-file" || mode === "result-file-edit") {
+		const path = `${process.cwd()}/result.txt`;
+		const toolName = mode === "result-file-edit" ? "edit" : "write";
+		await writeFile(path, "synthetic Pi result\n");
+		send({
+			type: "tool_execution_start",
+			toolCallId: "result-file-call",
+			toolName,
+			args:
+				toolName === "edit"
+					? {
+							path: "result.txt",
+							edits: [{ oldText: "old", newText: "synthetic Pi result" }],
+						}
+					: { path: "result.txt", content: "synthetic Pi result\n" },
+		});
+		send({
+			type: "tool_execution_end",
+			toolCallId: "result-file-call",
+			toolName,
+			result: { content: [{ type: "text", text: "ok" }] },
+			isError: false,
+		});
+	}
+	if (mode === "result-file-negative") {
+		await writeFile(`${process.cwd()}/result.txt`, "synthetic Pi result\n");
+		for (const [toolCallId, toolName, path, isError] of [
+			["failed-write", "write", "result.txt", true],
+			["read-tool", "read", "result.txt", false],
+			["outside-write", "write", "../outside-result.txt", false],
+		]) {
+			send({
+				type: "tool_execution_start",
+				toolCallId,
+				toolName,
+				args: { path, content: "synthetic Pi result\n" },
+			});
+			send({
+				type: "tool_execution_end",
+				toolCallId,
+				toolName,
+				result: { content: [{ type: "text", text: "ok" }] },
+				isError,
+			});
+		}
+		send({
+			type: "tool_execution_end",
+			toolCallId: "failed-write",
+			toolName: "write",
+			result: { content: [{ type: "text", text: "duplicate" }] },
+			isError: false,
+		});
+	}
 	send({
 		type: "message_update",
 		assistantMessageEvent: { type: "text_delta", delta: "synthetic result" },

@@ -2,7 +2,7 @@
 // Copyright (c) 2025-present Mohamed Boudra. Apache-2.0; see THIRD_PARTY_NOTICES.md.
 import { createHash } from "node:crypto";
 import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import type { NativeProcessLaunch } from "./native-process.js";
 import { readPiNativeCommandsV1 } from "./pi-native-command.js";
@@ -11,6 +11,7 @@ import type {
 	NativePromptV1,
 	NativeSessionOptions,
 } from "./session-runtime-driver.js";
+import { workspacePathAllowed } from "./workspace-path.js";
 
 function historyCheckpoint(messages: unknown[]) {
 	return JSON.stringify({
@@ -132,6 +133,35 @@ function promptBinding(
 			JSON.stringify([nativeId, checkpoint, content.text, content.images]),
 		)
 		.digest("hex");
+}
+
+const piResultFileMaximumBytes = 10 * 1024 * 1024;
+
+/** Resolve a completed Pi write/edit to an existing file under its workspace. */
+async function readPiResultFile(
+	workspace: string,
+	inputPath: unknown,
+): Promise<{ readonly path: string; readonly content: string } | undefined> {
+	if (typeof inputPath !== "string" || !inputPath) return;
+	const root = await realpath(workspace).catch(() => undefined);
+	if (!root) return;
+	const path = inputPath.startsWith("@") ? inputPath.slice(1) : inputPath;
+	const candidate = resolve(root, path);
+	const lexical = relative(root, candidate);
+	if (!lexical || lexical.startsWith("..") || isAbsolute(lexical)) return;
+	if (!(await workspacePathAllowed(root, join(root, ".memory"), candidate)))
+		return;
+	const actual = await realpath(candidate).catch(() => undefined);
+	if (!actual) return;
+	const resolved = relative(root, actual);
+	if (!resolved || resolved.startsWith("..") || isAbsolute(resolved)) return;
+	const content = await readFile(actual, "utf8").catch(() => undefined);
+	if (
+		content === undefined ||
+		Buffer.byteLength(content, "utf8") > piResultFileMaximumBytes
+	)
+		return;
+	return { path: actual, content };
 }
 
 /** Pi 0.86 may precede one text Turn with a structured system-prompt patch. */
@@ -273,6 +303,7 @@ export async function openPiSession(
 	let exited = false;
 	let policyReady = false;
 	const phases = new Map<string, string>();
+	const toolCalls = new Map<string, { toolName: string; args: unknown }>();
 	const rpc = await openPiRpc(
 		options.directory,
 		options.cwd,
@@ -350,6 +381,32 @@ export async function openPiSession(
 									phase,
 								},
 							});
+						}
+					}
+					if (
+						frame.type === "tool_execution_start" &&
+						typeof frame.toolCallId === "string" &&
+						typeof frame.toolName === "string"
+					)
+						toolCalls.set(frame.toolCallId, {
+							toolName: frame.toolName,
+							args: frame.args,
+						});
+					if (
+						frame.type === "tool_execution_end" &&
+						typeof frame.toolCallId === "string"
+					) {
+						const call = toolCalls.get(frame.toolCallId);
+						toolCalls.delete(frame.toolCallId);
+						if (
+							call &&
+							call.toolName === frame.toolName &&
+							["write", "edit"].includes(call.toolName) &&
+							frame.isError === false
+						) {
+							const args = piRecord(call.args);
+							const result = await readPiResultFile(options.cwd, args?.path);
+							if (result) await options.resultFile?.(result);
 						}
 					}
 					if (frame.type === "agent_end") {
@@ -560,6 +617,7 @@ export async function openPiSession(
 				const checkpoint = currentCheckpoint;
 				started = false;
 				phases.clear();
+				toolCalls.clear();
 				const terminal = Promise.withResolvers<{
 					stopReason: string;
 					checkpoint: string;

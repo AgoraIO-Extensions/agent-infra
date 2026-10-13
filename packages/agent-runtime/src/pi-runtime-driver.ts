@@ -49,6 +49,7 @@ export const PiRuntimeDriver = {
 			// descriptor surface empty until an extension/ACP callback is available.
 			browserCapability: undefined,
 			supportsAttachments: true,
+			supportsResultFiles: true,
 			cursorPrefix: "pi",
 			retireSession: (directory) =>
 				retireNativeProcess(directory, "AGENT_INFRA_PI_OWNER"),

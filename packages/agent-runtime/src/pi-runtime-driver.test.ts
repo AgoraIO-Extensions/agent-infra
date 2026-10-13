@@ -3,11 +3,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { FileDescriptorV1 } from "@agent-infra/contracts/files";
 import { expect, it, vi } from "vitest";
 import {
 	PiRuntimeDriver,
 	type PiRuntimeDriverOptions,
 } from "./pi-runtime-driver.js";
+import { createRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
 import type { SessionNativeCommandReadContext } from "./session-runtime-driver.js";
 
 const command = {
@@ -83,15 +85,146 @@ async function fixture(mode = "normal", withExecutionKeys = false) {
 	};
 }
 
+function resultFileBridge() {
+	const writeResult = vi.fn(
+		async (descriptor: FileDescriptorV1, _body: ReadableStream<Uint8Array>) =>
+			createRuntimeFileResultReceiptV1(
+				{
+					actorId: "actor-a",
+					channelId: "web",
+					agentId: "agent-a",
+					conversationId: "conversation-a",
+					executionId: "execution-a",
+					sessionGeneration: 1,
+					grantId: "grant-a",
+					expiresAt: Date.now() + 60_000,
+					inputFileIds: [],
+				},
+				{
+					schemaVersion: 1,
+					fileId: "result-file-pi",
+					kind: "result",
+					descriptor,
+					status: "available",
+					createdAt: new Date().toISOString(),
+					expiresAt: new Date(Date.now() + 60_000).toISOString(),
+				},
+			),
+	);
+	return {
+		writeResult,
+		fileBridge: {
+			readInput: async () => {
+				throw new Error("unused");
+			},
+			writeResult,
+			revalidate: () => {},
+		},
+	};
+}
+
 it("keeps protected Connection MCP unavailable", async () => {
 	const value = await fixture();
 	try {
 		expect(await value.driver.getCapabilities()).toMatchObject({
 			connection: false,
-			resultFiles: false,
+			resultFiles: true,
 		});
 	} finally {
 		await value.close();
+	}
+});
+
+it.each(["result-file", "result-file-edit"] as const)(
+	"publishes one completed Pi %s as a result file",
+	async (mode) => {
+		const f = await fixture(mode);
+		const { writeResult, fileBridge } = resultFileBridge();
+		try {
+			const accepted = await f.driver.execute(command, { fileBridge });
+			await vi.waitFor(
+				async () =>
+					expect(
+						await f.driver.getStatus(
+							accepted.nativeSessionRef,
+							command.executionId,
+						),
+					).toBe("completed"),
+				{ timeout: 10_000 },
+			);
+			expect(writeResult).toHaveBeenCalledOnce();
+			expect(writeResult.mock.calls[0]?.[0]).toMatchObject({
+				name: "result.txt",
+				mediaType: "text/plain",
+				sizeBytes: Buffer.byteLength("synthetic Pi result\n", "utf8"),
+				sha256: createHash("sha256")
+					.update("synthetic Pi result\n", "utf8")
+					.digest("hex"),
+			});
+			const events = await f.driver.replayEvents(
+				accepted.nativeSessionRef,
+				command.executionId,
+			);
+			expect(events.filter((event) => event.type === "file")).toHaveLength(1);
+		} finally {
+			await f.close();
+		}
+	},
+);
+
+it("ignores failed, unknown, duplicate and outside Pi tool completions", async () => {
+	const f = await fixture("result-file-negative");
+	const { writeResult, fileBridge } = resultFileBridge();
+	try {
+		const accepted = await f.driver.execute(command, { fileBridge });
+		await vi.waitFor(
+			async () =>
+				expect(
+					await f.driver.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("completed"),
+			{ timeout: 10_000 },
+		);
+		expect(writeResult).not.toHaveBeenCalled();
+		expect(
+			(
+				await f.driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				)
+			).filter((event) => event.type === "file"),
+		).toHaveLength(0);
+	} finally {
+		await f.close();
+	}
+});
+
+it("does not publish Pi result files without a request File Bridge", async () => {
+	const f = await fixture("result-file");
+	try {
+		const accepted = await f.driver.execute(command);
+		await vi.waitFor(
+			async () =>
+				expect(
+					await f.driver.getStatus(
+						accepted.nativeSessionRef,
+						command.executionId,
+					),
+				).toBe("completed"),
+			{ timeout: 10_000 },
+		);
+		expect(
+			(
+				await f.driver.replayEvents(
+					accepted.nativeSessionRef,
+					command.executionId,
+				)
+			).filter((event) => event.type === "file"),
+		).toHaveLength(0);
+	} finally {
+		await f.close();
 	}
 });
 
