@@ -145,5 +145,14 @@ it("blocks the bridge when a Connection WRITE result is unknown", async () => {
 	expect(result).toMatchObject({ isError: true });
 	expect(facts).toEqual(["intent", "started", "unknown"]);
 	expect(blocked).toBe(1);
+	const before = fixture.trace.filter(
+		(entry) => entry.method === "tools/call",
+	).length;
+	await expect(
+		peer.callTool({ name, arguments: { text: "unknown-again" } }),
+	).rejects.toThrow();
+	expect(
+		fixture.trace.filter((entry) => entry.method === "tools/call").length,
+	).toBe(before);
 	await peer.close();
 });

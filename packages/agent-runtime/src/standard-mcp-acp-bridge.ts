@@ -114,6 +114,7 @@ export async function createStandardMcpAcpBridge(
 	const replayKeys = new Set<string>();
 	let closed = false;
 	let active = false;
+	let blocked = false;
 	const mcp = new Server(
 		{ name: "agent-infra-connection", version: "1" },
 		{ capabilities: { tools: {} } },
@@ -122,7 +123,7 @@ export async function createStandardMcpAcpBridge(
 		tools: [...descriptorMap.values()],
 	}));
 	mcp.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-		if (closed || active) unavailable();
+		if (closed || blocked || active) unavailable();
 		const name = request.params.name;
 		const tool = descriptorMap.get(name);
 		const args = request.params.arguments;
@@ -165,7 +166,6 @@ export async function createStandardMcpAcpBridge(
 						: {}),
 			});
 		};
-		let blocked = false;
 		const operation: StandardMcpOperation = {
 			assertCurrent: async () => {
 				if (closed || blocked) unavailable();
