@@ -1246,6 +1246,60 @@ function isRuntimeBrowserOperationFactOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2199 permits only the exact optional identity fields added to an existing
+// Browser action binding. Existing fields and unrelated schemas stay strict.
+function isRuntimeBrowserWorkloadIdentityOpenApiAddition(previous, current) {
+	const normalized = structuredClone(current);
+	const fields = {
+		workloadRevision: {
+			exclusiveMinimum: 0,
+			maximum: Number.MAX_SAFE_INTEGER,
+			type: "integer",
+		},
+		imageDigest: {
+			pattern: "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+			type: "string",
+		},
+	};
+	const visit = (before, after) => {
+		if (
+			!before ||
+			!after ||
+			typeof before !== "object" ||
+			typeof after !== "object"
+		)
+			return;
+		const oldProperties = before.properties;
+		const newProperties = after.properties;
+		if (
+			[
+				"actionId",
+				"capabilityVersion",
+				"pageRevision",
+				"sessionGeneration",
+				"resourceFence",
+				"sideEffect",
+			].every(
+				(field) =>
+					oldProperties?.[field] !== undefined &&
+					newProperties?.[field] !== undefined,
+			)
+		) {
+			for (const [field, schema] of Object.entries(fields)) {
+				if (
+					oldProperties[field] === undefined &&
+					sameValue(newProperties[field], schema) &&
+					!after.required?.includes(field)
+				)
+					delete newProperties[field];
+			}
+		}
+		for (const [key, value] of Object.entries(before)) visit(value, after[key]);
+	};
+	visit(previous, normalized);
+	return !sameValue(previous, current) && sameValue(previous, normalized);
+}
+
 // #482 C admits only the frozen three Task HTTP paths and six closed schemas.
 function isTaskHttpV1OpenApiAddition(previous, current) {
 	const paths = [
@@ -3430,6 +3484,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeSkillReadGrantCommandOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserEvidenceOpenApiAddition(previous, current) &&
 			!isRuntimeBrowserOperationFactOpenApiAddition(previous, current) &&
+			!isRuntimeBrowserWorkloadIdentityOpenApiAddition(previous, current) &&
 			!isPilotBrowserProjectionOpenApiAddition(previous, current) &&
 			!isRuntimeOriginalBindingV3OpenApiAddition(previous, current) &&
 			!isApplicationRegistrationV2OpenApiAddition(previous, current) &&

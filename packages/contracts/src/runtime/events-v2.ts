@@ -50,6 +50,12 @@ export const RuntimeBrowserActionBindingV1Schema = z.strictObject({
 	pageRevision: z.number().int().positive().safe(),
 	sessionGeneration: z.number().int().positive().safe(),
 	resourceFence: z.number().int().positive().safe(),
+	/** Added after V2 journals shipped; absent on legacy facts and treated as untrusted for replay. */
+	workloadRevision: z.number().int().positive().safe().optional(),
+	imageDigest: z
+		.string()
+		.regex(/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u)
+		.optional(),
 	sideEffect: z.boolean(),
 });
 export type RuntimeBrowserActionBindingV1 = z.infer<
