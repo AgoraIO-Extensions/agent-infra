@@ -154,9 +154,14 @@ it("counts the current-generation unreserved Turn backlog once per Execution", a
 	`;
 	const timeoutBefore = await client`show statement_timeout`;
 
-	await expect(
-		readPlatformQueueResourceSnapshot(client, AbortSignal.timeout(5000)),
-	).resolves.toEqual({ taskWaiting: 1, outboxPending: 4 });
+	const firstSnapshot = await readPlatformQueueResourceSnapshot(
+		client,
+		AbortSignal.timeout(5000),
+	);
+	expect(firstSnapshot).toMatchObject({ taskWaiting: 1, outboxPending: 4 });
+	expect(firstSnapshot.queryDurationMs).toEqual(expect.any(Number));
+	expect(firstSnapshot.queryDurationMs).toBeGreaterThanOrEqual(0);
+	expect(firstSnapshot.queryDurationMs).toBeLessThanOrEqual(2000);
 	expect(
 		await client`
 			select id, status, attempt_count, delivery_fence from platform.outbox_items
@@ -171,7 +176,7 @@ it("counts the current-generation unreserved Turn backlog once per Execution", a
 	`;
 	await expect(
 		readPlatformQueueResourceSnapshot(client, AbortSignal.timeout(5000)),
-	).resolves.toEqual({ taskWaiting: 0, outboxPending: 4 });
+	).resolves.toMatchObject({ taskWaiting: 0, outboxPending: 4 });
 });
 
 it("bounds a saturated max:1 pool and cancels a running count query", async () => {
@@ -280,6 +285,10 @@ it("bounds a saturated max:1 pool and cancels a running count query", async () =
 			pool,
 			AbortSignal.timeout(5000),
 		);
+		const expectedCounts = {
+			taskWaiting: expected.taskWaiting,
+			outboxPending: expected.outboxPending,
+		};
 
 		const targetPidRows = await pool<{ pid: string }[]>`
 			select pg_backend_pid()::text as pid
@@ -361,7 +370,7 @@ it("bounds a saturated max:1 pool and cancels a running count query", async () =
 		await pool`select 1`;
 		await expect(
 			readPlatformQueueResourceSnapshot(pool, AbortSignal.timeout(5000)),
-		).resolves.toEqual(expected);
+		).resolves.toMatchObject(expectedCounts);
 	} finally {
 		reserved?.release();
 		await pool.end();

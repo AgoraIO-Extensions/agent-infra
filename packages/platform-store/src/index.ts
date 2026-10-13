@@ -101,6 +101,7 @@ export {
 	type PlatformQueueResourceSnapshot,
 	type PostgresConversationQueryOptionsV1,
 	PostgresConversationQueryV1,
+	platformQueueResourceSnapshotTimeoutMs,
 	readPlatformQueueResourceSnapshot,
 } from "./conversation-query.ts";
 export { PostgresFileStoreV1 } from "./files.js";

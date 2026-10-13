@@ -73,6 +73,24 @@ describe("Platform API resource sampling lifecycle", () => {
 		await telemetry.close();
 	});
 
+	it("records bounded Store snapshot duration without SQL details", async () => {
+		const { telemetry, logs } = observer();
+		const read = vi.fn().mockResolvedValue({
+			taskWaiting: 1,
+			outboxPending: 2,
+			queryDurationMs: 37,
+		});
+		const sampling = startPlatformResourceSampling(read, telemetry, 1000);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(logs()).toContain('"stage":"dependency"');
+		expect(logs()).toContain('"outcome":"completed"');
+		expect(logs()).toContain('"durationMs":37');
+		expect(logs()).toContain('"operationRef":"platform.resource_snapshot"');
+		expect(logs()).not.toMatch(/select|payload|parameter|PRIVATE_SENTINEL/i);
+		await sampling.stop();
+		await telemetry.close();
+	});
+
 	it("rejects missing snapshots without partial values and recovers on the next complete read", async () => {
 		const { telemetry, observe, logs } = observer();
 		const read = vi

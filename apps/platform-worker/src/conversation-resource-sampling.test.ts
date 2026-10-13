@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // owner-supplied; these controlled tests do not replace PostgreSQL/collector proof.
 const mocks = vi.hoisted(() => ({
 	read: vi.fn<
-		(
-			signal: AbortSignal,
-		) => Promise<{ taskWaiting: number; outboxPending: number }>
+		(signal: AbortSignal) => Promise<{
+			taskWaiting: number;
+			outboxPending: number;
+			queryDurationMs?: number;
+		}>
 	>(),
 	find: vi.fn(),
 	dispatch: vi.fn(),
@@ -25,6 +27,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@agent-infra/platform-store", () => ({
+	platformQueueResourceSnapshotTimeoutMs: 2000,
 	outboxWakeChannelV1: "agent_infra_outbox_available",
 	PostgresCommitWakeupListenerV1: class {
 		start = async () => {};
@@ -229,6 +232,13 @@ describe("Conversation Worker automatic queue sampling", () => {
 			),
 		).toBe(true);
 		const before = mocks.read.mock.calls.length;
+		expect(observation.record).toHaveBeenCalledWith(
+			expect.objectContaining({
+				stage: "dependency",
+				outcome: "completed",
+				operationRef: "platform.resource_snapshot",
+			}),
+		);
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(mocks.read.mock.calls.length - before).toBe(1);
 	});
@@ -271,6 +281,14 @@ describe("Conversation Worker automatic queue sampling", () => {
 		observation.observeResource.mockClear();
 		mocks.read.mockRejectedValue(new Error("controlled snapshot failure"));
 		await vi.advanceTimersByTimeAsync(4000);
+		expect(observation.record).toHaveBeenCalledWith(
+			expect.objectContaining({
+				stage: "dependency",
+				outcome: "failed",
+				code: "DEPENDENCY_UNAVAILABLE",
+				operationRef: "platform.resource_snapshot",
+			}),
+		);
 		expect(observation.observeResource).not.toHaveBeenCalled();
 		mocks.read.mockResolvedValue({ taskWaiting: 3, outboxPending: 8 });
 		await vi.advanceTimersByTimeAsync(1000);
