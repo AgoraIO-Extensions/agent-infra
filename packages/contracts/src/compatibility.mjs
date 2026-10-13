@@ -1807,6 +1807,43 @@ function isSkillHubInstallationOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2189 publishes the Skill version publication/review/revoke API additively.
+function isSkillHubPublicationOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/skills/versions",
+		"/api/v2/skills/versions/{skillVersionId}/review",
+		"/api/v2/skills/versions/{skillVersionId}/revoke",
+	];
+	const schemas = [
+		"SkillHubPublicationRequestV1",
+		"SkillHubPublicationVersionV1",
+		"SkillHubPublicationResponseV1",
+		"SkillHubReviewRequestV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"3e30138413e708c3e3ec985fa263efacff806263d63ff1f9bbefcdfd11596fe5"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #1052 publishes the exact #1027 recent read; every prior document field stays exact.
 function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/me/conversations/recent";
@@ -3324,13 +3361,21 @@ function normalizeRuntimeConnectionAssociationOpenApiAddition(current) {
 // #2181 binds mounted Skill resources to the directory generation. Treat the
 // additive generation field as a reviewed compatibility extension for the
 // already published Runtime V1 host read contract.
-function normalizeRuntimeSkillHostReadJsonSchemaAddition(current) {
+function normalizeRuntimeSkillHostReadJsonSchemaAddition(previous, current) {
 	const normalized = structuredClone(current);
-	const schemas = normalized.$defs ?? normalized.components?.schemas;
-	for (const name of [
+	const previousSchemas = previous.$defs ?? previous.components?.schemas;
+	const names = [
 		"RuntimeSkillResourceReadRequestV1",
 		"RuntimeSkillResourceReadResponseV1",
-	]) {
+	];
+	if (
+		names.some(
+			(name) => previousSchemas?.[name]?.properties?.generationId !== undefined,
+		)
+	)
+		return normalized;
+	const schemas = normalized.$defs ?? normalized.components?.schemas;
+	for (const name of names) {
 		const schema = schemas?.[name];
 		if (!schema) continue;
 		delete schema.properties?.generationId;
@@ -3415,6 +3460,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRecentPersonalConversationsV2OpenApiAddition(previous, current) &&
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
+			!isSkillHubPublicationOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
 			!isWecomApplicationOpenApiAddition(previous, current) &&
@@ -3437,6 +3483,7 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
 	const normalized = normalizeRuntimeSkillHostReadJsonSchemaAddition(
+		previous,
 		normalizeSkillPackageObjectVersions(previous, current, changes),
 	);
 	const currentSchemas =

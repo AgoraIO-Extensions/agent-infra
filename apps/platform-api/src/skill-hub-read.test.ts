@@ -531,4 +531,105 @@ describe("Skill Hub authenticated HTTP reads with PostgreSQL", () => {
 			).status,
 		).toBe(401);
 	});
+
+	it("publishes, reviews, and revokes through the PostgreSQL-backed API", async () => {
+		const command = {
+			schemaVersion: 1,
+			name: "publication-api-skill",
+			skillId: "publication-api-skill",
+			skillVersionId: "publication-api-version",
+			visibility: "MEMBER",
+			provider: "my_library",
+			version: "1.0.0",
+			packageObjectVersion: "internal-publication-object",
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			signatureDigest: "c".repeat(64),
+		};
+		const first = await fetchInstallation(
+			"/api/v2/skills/versions",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-api-register" },
+				body: JSON.stringify(command),
+			},
+		);
+		expect(first.status).toBe(201);
+		const firstBody = (await first.json()) as {
+			replayed: boolean;
+			version: Record<string, unknown>;
+		};
+		expect(firstBody.replayed).toBe(false);
+		expect(firstBody.version.state).toBe("pending_review");
+		expect(firstBody.version).not.toHaveProperty("packageObjectVersion");
+		expect(firstBody.version).not.toHaveProperty("ownerId");
+
+		const replay = await fetchInstallation(
+			"/api/v2/skills/versions",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-api-register" },
+				body: JSON.stringify(command),
+			},
+		);
+		expect(replay.status).toBe(200);
+		expect(((await replay.json()) as { replayed: boolean }).replayed).toBe(
+			true,
+		);
+
+		const conflict = await fetchInstallation(
+			"/api/v2/skills/versions",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-api-register" },
+				body: JSON.stringify({ ...command, version: "1.0.1" }),
+			},
+		);
+		expect(conflict.status).toBe(409);
+
+		const selfReview = await fetchInstallation(
+			"/api/v2/skills/versions/publication-api-version/review",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-api-self-review" },
+				body: JSON.stringify({ decision: "approve" }),
+			},
+		);
+		expect(selfReview.status).toBe(403);
+
+		const review = await fetchInstallation(
+			"/api/v2/skills/versions/publication-api-version/review",
+			"admin",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-api-review" },
+				body: JSON.stringify({ decision: "approve" }),
+			},
+		);
+		expect(review.status).toBe(200);
+		const reviewed = (await review.json()) as {
+			version: { state: string; reviewedBy: string | null };
+		};
+		expect(reviewed.version).toMatchObject({
+			state: "published",
+			reviewedBy: "admin",
+		});
+
+		const revoked = await fetchInstallation(
+			"/api/v2/skills/versions/publication-api-version/revoke",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-api-revoke" },
+			},
+		);
+		expect(revoked.status).toBe(200);
+		expect(
+			((await revoked.json()) as { version: { state: string } }).version.state,
+		).toBe("revoked");
+	});
 });
