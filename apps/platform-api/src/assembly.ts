@@ -913,6 +913,9 @@ export function assemblePlatformApi(
 			? { skillHubImport: skillHubRead.importDependencies }
 			: {}),
 		skillHubProjects: skillHubRead.projectDependencies,
+		...(skillHubRead.importDependencies
+			? { skillHubImport: skillHubRead.importDependencies }
+			: {}),
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.userGovernance
 			? {

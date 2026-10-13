@@ -3675,8 +3675,8 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&
 			!isSkillHubProjectAndImportOpenApiAddition(previous, current) &&
 			!isSkillHubProjectOpenApiAddition(previous, current) &&
-			!isSkillHubAgentBindingOpenApiAddition(previous, current) &&
 			!isSkillHubImportOpenApiAddition(previous, current) &&
+			!isSkillHubAgentBindingOpenApiAddition(previous, current) &&
 			!isNativeMetadataOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&
