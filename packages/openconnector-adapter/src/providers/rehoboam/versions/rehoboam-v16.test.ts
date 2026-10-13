@@ -165,6 +165,8 @@ test("lost write responses and invalid receipts stay uncertain; known rejects pr
 		},
 		async () => new Response("x".repeat(65537)),
 		async () => new Response("bad json"),
+		async () => Response.json({ success: false }),
+		async () => Response.json({}),
 		async () =>
 			Response.json({
 				success: true,
@@ -204,6 +206,42 @@ test("lost write responses and invalid receipts stay uncertain; known rejects pr
 			providerSubmissionOutcome: "rejected",
 		},
 	);
+});
+
+test("help write failures require explicit rejection or deterministic 4xx", async () => {
+	for (const status of [200, 400, 403, 409, 408, 413, 500]) {
+		for (const explicitRejection of [false, true]) {
+			const adapter = new RehoboamV16Adapter(
+				async () =>
+					Response.json(
+						{
+							success: false,
+							error: explicitRejection
+								? { submission_outcome: "rejected" }
+								: {},
+						},
+						{ status },
+					),
+				"gateway",
+			);
+			await assert.rejects(
+				adapter.execute({ action: submit, credential, input: data }),
+				(error: {
+					providerSubmissionOutcome?: string;
+					submissionUncertain?: boolean;
+				}) => {
+					const rejected =
+						explicitRejection || [400, 403, 409].includes(status);
+					assert.equal(
+						error.providerSubmissionOutcome,
+						rejected ? "rejected" : undefined,
+					);
+					assert.equal(error.submissionUncertain, rejected ? undefined : true);
+					return true;
+				},
+			);
+		}
+	}
 });
 
 test("re-versioned old cancellation still delegates through immutable implementation", async () => {

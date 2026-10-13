@@ -287,7 +287,9 @@ export class RehoboamV16Adapter {
 					: {}),
 				...(write
 					? envelope.error?.submission_outcome === "rejected" ||
-						(response.status < 500 && ![408, 413].includes(response.status))
+						(response.status >= 400 &&
+							response.status < 500 &&
+							![408, 413].includes(response.status))
 						? { providerSubmissionOutcome: "rejected" }
 						: { submissionUncertain: true }
 					: {}),
