@@ -1,3 +1,4 @@
+import { wecomChannelIdV1 } from "@agent-infra/platform-core";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -549,10 +550,22 @@ describe("PostgreSQL Conversation query", () => {
 	it("keeps Web, WeCom and API entry Sessions separate for one actor", async () => {
 		const entries = [
 			{
-				id: "conversation-entry-wecom",
-				channel: "wecom:wecom_bot:binding:group:group-a:sender-a",
+				id: "conversation-entry-wecom-a",
+				actorId: "sender-a",
+				channel: wecomChannelIdV1({
+					kind: "wecom_bot",
+					bindingReference: "binding",
+				}),
 			},
-			{ id: "conversation-entry-api", channel: "api" },
+			{
+				id: "conversation-entry-wecom-b",
+				actorId: "sender-b",
+				channel: wecomChannelIdV1({
+					kind: "wecom_bot",
+					bindingReference: "binding",
+				}),
+			},
+			{ id: "conversation-entry-api", actorId: "actor-1", channel: "api" },
 		] as const;
 		try {
 			for (const entry of entries) {
@@ -560,17 +573,40 @@ describe("PostgreSQL Conversation query", () => {
 					insert into platform.conversations
 						(id, agent_id, actor_id, channel_id, principal_type, status,
 						 session_generation, authorization_revision, created_at, updated_at)
-					values (${entry.id}, 'agent-1', 'actor-1', ${entry.channel}, 'user',
+						values (${entry.id}, 'agent-1', ${entry.actorId}, ${entry.channel}, 'user',
 						 'active', 1, 'authorization-1', '2026-09-05T00:00:00.000Z',
 						 '2026-09-05T00:00:00.000Z')`;
 				await seedSessionSandboxFixture(client, entry.id);
+				await client`
+					insert into platform.conversation_executions
+						(execution_id, conversation_id, agent_id, actor_id, channel_id,
+						 principal_type, turn_id, status, session_generation,
+						 authorization_revision, created_at, updated_at)
+						values (${`execution-${entry.id}`}, ${entry.id}, 'agent-1', ${entry.actorId},
+						 ${entry.channel}, 'user', ${`turn-${entry.id}`}, 'completed', 1,
+						 'authorization-1', now(), now())`;
+				await client`update platform.conversation_executions e
+					set sandbox_id = s.sandbox_id
+					from platform.session_sandbox_allocations s
+					where e.conversation_id = ${entry.id} and s.conversation_id = e.conversation_id`;
 			}
 			const web = await query.list(actorOne, "agent-1", { limit: 20 });
 			const webIds = web.items.map((item) => item.conversationId);
 			for (const entry of entries) expect(webIds).not.toContain(entry.id);
-			const wecom = await query.get(
-				{ actorId: "actor-1", channelId: entries[0].channel },
+			const debugRows = await client`
+				select c.id, c.actor_id, c.channel_id, s.sandbox_id, e.sandbox_id as execution_sandbox_id
+				from platform.conversations c
+				join platform.session_sandbox_allocations s on s.conversation_id = c.id
+				join platform.conversation_executions e on e.conversation_id = c.id
+				where c.id = ${entries[0].id}`;
+			expect(debugRows).toHaveLength(1);
+			const wecomA = await query.get(
+				{ actorId: entries[0].actorId, channelId: entries[0].channel },
 				entries[0].id,
+			);
+			const wecomB = await query.get(
+				{ actorId: entries[1].actorId, channelId: entries[1].channel },
+				entries[1].id,
 			);
 			const api = await query.get(
 				{
@@ -578,22 +614,36 @@ describe("PostgreSQL Conversation query", () => {
 					channelId: "api",
 					principal: { kind: "user", id: "actor-1" },
 				},
-				entries[1].id,
+				entries[2].id,
 			);
-			expect(wecom?.conversation.conversationId).toBe(entries[0].id);
-			expect(api?.conversation.conversationId).toBe(entries[1].id);
-			const wecomSandbox = wecom?.conversation.sandbox;
+			expect(wecomA?.conversation.conversationId).toBe(entries[0].id);
+			expect(wecomB?.conversation.conversationId).toBe(entries[1].id);
+			expect(api?.conversation.conversationId).toBe(entries[2].id);
+			const wecomSandbox = wecomA?.conversation.sandbox;
+			const secondWecomSandbox = wecomB?.conversation.sandbox;
 			const apiSandbox = api?.conversation.sandbox;
-			if (!wecomSandbox || !apiSandbox)
+			if (!wecomSandbox || !secondWecomSandbox || !apiSandbox)
 				throw new Error("Expected Sandbox bindings");
 			expect(wecomSandbox.sessionId).toBe(entries[0].id);
-			expect(apiSandbox.sessionId).toBe(entries[1].id);
+			expect(secondWecomSandbox.sessionId).toBe(entries[1].id);
+			expect(apiSandbox.sessionId).toBe(entries[2].id);
 			expect(wecomSandbox.sandboxId).not.toBe(apiSandbox.sandboxId);
+			expect(wecomSandbox.sandboxId).not.toBe(secondWecomSandbox.sandboxId);
+			expect(secondWecomSandbox.sandboxId).not.toBe(apiSandbox.sandboxId);
+			expect(wecomA?.executions[0]?.executionId).toBe(
+				`execution-${entries[0].id}`,
+			);
+			expect(wecomB?.executions[0]?.executionId).toBe(
+				`execution-${entries[1].id}`,
+			);
+			expect(api?.executions[0]?.executionId).toBe(
+				`execution-${entries[2].id}`,
+			);
 			await expect(query.get(actorOne, entries[0].id)).resolves.toBeUndefined();
 			await expect(query.get(actorOne, entries[1].id)).resolves.toBeUndefined();
 			await expect(
 				query.get(
-					{ actorId: "actor-1", channelId: entries[0].channel },
+					{ actorId: entries[0].actorId, channelId: entries[0].channel },
 					entries[1].id,
 				),
 			).resolves.toBeUndefined();
@@ -607,9 +657,17 @@ describe("PostgreSQL Conversation query", () => {
 					entries[0].id,
 				),
 			).resolves.toBeUndefined();
+			await expect(
+				query.getExecution(
+					{ actorId: entries[0].actorId, channelId: entries[0].channel },
+					entries[0].id,
+					`execution-${entries[1].id}`,
+				),
+			).resolves.toBeUndefined();
 		} finally {
 			for (const entry of entries) {
 				await client`delete from platform.session_sandbox_allocations where conversation_id = ${entry.id}`;
+				await client`delete from platform.conversation_executions where conversation_id = ${entry.id}`;
 				await client`delete from platform.conversations where id = ${entry.id}`;
 			}
 		}
