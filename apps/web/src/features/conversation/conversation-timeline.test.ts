@@ -16,6 +16,7 @@ import {
 	timestamp,
 } from "./conversation-test-fixtures.js";
 import {
+	type ConversationTimelineEnvironment,
 	type ConversationTimelineState,
 	createConversationTimeline,
 } from "./conversation-timeline.js";
@@ -27,12 +28,17 @@ function setup(
 	headers?: Record<string, string>,
 	reconnectDelaysMs: readonly number[] = [],
 	healthyStreamMs?: number,
+	slow: {
+		slowReconnectMs?: number;
+		environment?: ConversationTimelineEnvironment;
+	} = {},
 ) {
 	const requests: Request[] = [];
 	const snapshots: ConversationTimelineState[] = [];
 	const reader = createConversationTimeline({
 		reconnectDelaysMs,
 		...(healthyStreamMs === undefined ? {} : { healthyStreamMs }),
+		...slow,
 		client: createClient({
 			baseUrl: "https://platform.example.test",
 			headers,
@@ -742,6 +748,8 @@ describe("Conversation generated-client data consumer", () => {
 			},
 			undefined,
 			[1, 1],
+			undefined,
+			{ slowReconnectMs: 1 },
 		);
 		await reader.open("conversation-1");
 		revoked.send({
@@ -778,6 +786,8 @@ describe("Conversation generated-client data consumer", () => {
 			},
 			undefined,
 			[1, 1],
+			undefined,
+			{ slowReconnectMs: 1 },
 		);
 		await missing.reader.open("conversation-1");
 		await vi.waitFor(() =>
@@ -785,6 +795,127 @@ describe("Conversation generated-client data consumer", () => {
 		);
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(denied).toBe(1);
+	});
+
+	it("keeps retrying slowly after the automatic attempts and resumes from the last cursor (#2151)", async () => {
+		let opened = 0;
+		const recovered = sse();
+		const { reader, requests, snapshots } = setup(
+			(request) => {
+				if (route(request) !== "stream") return Response.json(history());
+				opened++;
+				// 前 6 次模拟 API 不可用（超过快速重连次数），之后恢复。
+				if (opened <= 6) throw new TypeError("Synthetic connection refused");
+				return recovered.response;
+			},
+			undefined,
+			[1, 1],
+			undefined,
+			{ slowReconnectMs: 5 },
+		);
+		await reader.open("conversation-1");
+		await vi.waitFor(() => expect(opened).toBe(7));
+		recovered.send(event(2));
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot()).toMatchObject({
+				status: "ready",
+				failure: null,
+				events: [event(1), event(2)],
+			}),
+		);
+		expect(snapshots.map((snapshot) => snapshot.status)).toContain(
+			"unavailable",
+		);
+		const streamRequests = requests.filter(
+			(request) => route(request) === "stream",
+		);
+		expect(
+			new Set(
+				streamRequests.map((request) =>
+					new URL(request.url).searchParams.get("cursor"),
+				),
+			),
+		).toEqual(new Set([event(1).conversationCursor]));
+		expect(
+			requests.filter((request) => route(request) === "history"),
+		).toHaveLength(1);
+		expect(requests.every((request) => request.method === "GET")).toBe(true);
+	});
+
+	it("pauses slow retries while hidden and retries at once when woken (#2151)", async () => {
+		let visible = false;
+		let wake: (() => void) | undefined;
+		let unsubscribed = 0;
+		let available = false;
+		let opened = 0;
+		const recovered = sse();
+		const { reader } = setup(
+			(request) => {
+				if (route(request) !== "stream") return Response.json(history());
+				opened++;
+				if (!available) throw new TypeError("Synthetic connection refused");
+				return recovered.response;
+			},
+			undefined,
+			[1],
+			undefined,
+			{
+				slowReconnectMs: 5,
+				environment: {
+					visible: () => visible,
+					subscribe(listener) {
+						wake = listener;
+						return () => {
+							unsubscribed++;
+						};
+					},
+				},
+			},
+		);
+		await reader.open("conversation-1");
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot()).toMatchObject({
+				status: "unavailable",
+				failure: { kind: "network" },
+			}),
+		);
+		const hiddenOpens = opened;
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		expect(opened).toBe(hiddenOpens);
+		available = true;
+		visible = true;
+		wake?.();
+		await vi.waitFor(() => expect(reader.getSnapshot().status).toBe("ready"));
+		expect(opened).toBe(hiddenOpens + 1);
+		reader.abort();
+		expect(unsubscribed).toBe(1);
+	});
+
+	it("retries a temporarily unavailable history read slowly instead of stopping (#2151)", async () => {
+		let historyReads = 0;
+		const stream = sse();
+		const { reader } = setup(
+			(request) => {
+				if (route(request) === "stream") return stream.response;
+				historyReads++;
+				return historyReads <= 2
+					? new Response("Unavailable", { status: 503 })
+					: Response.json(history());
+			},
+			undefined,
+			[],
+			undefined,
+			{ slowReconnectMs: 5 },
+		);
+		await reader.open("conversation-1");
+		await vi.waitFor(() =>
+			expect(reader.getSnapshot()).toMatchObject({
+				status: "ready",
+				failure: null,
+				events: [event(1)],
+			}),
+		);
+		expect(historyReads).toBe(3);
 	});
 
 	it("aborts pending history and clears all state without allowing reconnect", async () => {

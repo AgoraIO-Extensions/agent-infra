@@ -269,13 +269,17 @@ export function ActiveConversation({
 	const agentTransitioning =
 		agent.serviceAvailability === "starting" ||
 		agent.serviceAvailability === "updating";
+	// 连接暂时中断（断开或读取暂不可用）时草稿仍可编辑，发送由 `blocked` 阻止（#2151）。
+	const readLocked =
+		timeline.status === "unavailable" &&
+		timeline.failure?.kind !== "network" &&
+		timeline.failure?.kind !== "service";
 	const draftDisabled =
 		denied ||
 		commandLocked ||
 		!timeline.history ||
 		conversation?.status === "unavailable" ||
-		timeline.status === "disconnected" ||
-		timeline.status === "unavailable" ||
+		readLocked ||
 		(!available && !agentTransitioning);
 	const selectionDirty =
 		(modelId !== undefined &&
@@ -362,7 +366,9 @@ export function ActiveConversation({
 					timeline.status === "unavailable") && (
 					<Alert className="space-y-2 bg-muted">
 						<AlertDescription>
-							会话连接暂时中断，草稿已保留。重新连接只恢复读取，不重新发送任务。
+							{readLocked
+								? "会话连接暂时中断，草稿已保留。重新连接只恢复读取，不重新发送任务。"
+								: "会话连接暂时中断，草稿已保留，恢复后会自动继续读取；也可手动重新连接。重新连接只恢复读取，不重新发送任务。"}
 						</AlertDescription>
 						<Button variant="outline" onClick={() => void reader.reconnect()}>
 							重新连接
