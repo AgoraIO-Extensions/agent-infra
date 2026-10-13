@@ -7,7 +7,7 @@
 			"toReleaseId": "github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v10",
 			"fromExecutorDigest": "sha256:9deba65c280ec0328d94698154702401e69ce4bfdf60883403f321d2edee5cfa",
 			"toExecutorDigest": "sha256:4f7b8c138a271f489102a8b979e007277a05db59487441c6c4490d4452d9aabd",
-			"strategy": "COMPATIBLE_REPAIR",
+			"strategy": "REAUTHORIZATION_REQUIRED",
 			"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/2187"
 		},
 		{
