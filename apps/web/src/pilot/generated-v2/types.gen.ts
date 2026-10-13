@@ -926,10 +926,12 @@ export type RuntimeOperationFactV2 = {
     browser?: {
         actionId: string;
         capabilityVersion: number;
+        imageDigest?: string;
         pageRevision: number;
         resourceFence: number;
         sessionGeneration: number;
         sideEffect: boolean;
+        workloadRevision?: number;
     };
     connection?: RuntimeConnectionAssociationV1;
     durationMs?: number;

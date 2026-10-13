@@ -5392,7 +5392,9 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					existing.browser.capabilityVersion === binding.capabilityVersion &&
 					existing.browser.pageRevision === binding.pageRevision &&
 					existing.browser.sessionGeneration === binding.sessionGeneration &&
-					existing.browser.resourceFence === binding.resourceFence;
+					existing.browser.resourceFence === binding.resourceFence &&
+					existing.browser.workloadRevision === binding.workloadRevision &&
+					existing.browser.imageDigest === binding.imageDigest;
 				if (
 					!compatible ||
 					existing.phase === "intent" ||
@@ -5433,6 +5435,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 					pageRevision: binding.pageRevision,
 					sessionGeneration: binding.sessionGeneration,
 					resourceFence: binding.resourceFence,
+					workloadRevision: binding.workloadRevision,
+					imageDigest: binding.imageDigest,
 					sideEffect: false,
 				},
 			});
