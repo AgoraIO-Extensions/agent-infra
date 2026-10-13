@@ -7,8 +7,8 @@ import { PostgresSkillHubLifecycleV1 } from "@agent-infra/platform-store";
 import { createDeploymentIdentityScope } from "./deployment-identity.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import type { SkillHubInstallationRoutesDependenciesV1 } from "./http/skill-hub-installation-routes.js";
-import type { SkillHubPublicationRoutesDependenciesV1 } from "./http/skill-hub-publication-routes.js";
 import type { SkillHubProjectRoutesDependenciesV1 } from "./http/skill-hub-project-routes.js";
+import type { SkillHubPublicationRoutesDependenciesV1 } from "./http/skill-hub-publication-routes.js";
 import type { SkillHubReadRoutesDependenciesV1 } from "./http/skill-hub-read-routes.js";
 
 export function assembleSkillHubReadApiV1(input: {

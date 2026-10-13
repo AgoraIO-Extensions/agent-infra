@@ -114,25 +114,39 @@ export function registerSkillHubProjectRoutesV1(
 			if (action === "read") {
 				if (request.body !== null)
 					throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+				if (projectId === undefined)
+					throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
 				return context.json(
 					publicProject(await dependencies.read(request, trusted, projectId)),
 				);
 			}
 			const key = parseIdempotencyKey(request, metadata.traceId);
-			const schema =
-				action === "create"
-					? SkillHubProjectCreateV1Schema
-					: SkillHubProjectUpdateV1Schema;
-			const { value } = await parseJson(request, schema, metadata.traceId);
+			if (action === "create") {
+				const value = (
+					await parseJson(
+						request,
+						SkillHubProjectCreateV1Schema,
+						metadata.traceId,
+					)
+				).value;
+				const result = publicResult(
+					await dependencies.create(request, trusted, key, value),
+				);
+				return context.json(result.project, result.replayed ? 200 : 201);
+			}
+			if (projectId === undefined)
+				throw new HttpProtocolError("INVALID_REQUEST", metadata.traceId);
+			const value = (
+				await parseJson(
+					request,
+					SkillHubProjectUpdateV1Schema,
+					metadata.traceId,
+				)
+			).value;
 			const result = publicResult(
-				await (action === "create"
-					? dependencies.create(request, trusted, key, value)
-					: dependencies.update(request, trusted, projectId, key, value)),
+				await dependencies.update(request, trusted, projectId, key, value),
 			);
-			return context.json(
-				result.project,
-				action === "update" || result.replayed ? 200 : 201,
-			);
+			return context.json(result.project, 200);
 		} catch (error) {
 			const protocol = mapCoreError(error, metadata.traceId);
 			return context.json(protocol.body, protocol.status);
