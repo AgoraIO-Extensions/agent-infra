@@ -267,6 +267,8 @@ export interface ConversationExecutionConversationStateV1 {
 	readonly sandbox?: SessionSandboxBindingV1;
 	/** Required with a persisted Sandbox binding; independent of Conversation task status. */
 	readonly sandboxReady?: boolean;
+	/** 空闲回收后等待新消息恢复（#2239）；只在未就绪时出现，表示可受理消息以触发恢复。 */
+	readonly sandboxResumable?: true;
 	/** Persisted C/E identity; legacy non-API user states may omit it. */
 	readonly principal?: TaskPrincipalV1;
 	readonly isolationPending?: true;

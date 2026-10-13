@@ -289,10 +289,12 @@ export function createConversationExecutionUseCaseV1(
 								return { outcome: "denied" };
 							// A Web Conversation stays read-only until its own Sandbox is
 							// ready (Spec §10.1.1); report that as starting, not as a denial.
+							// 空闲回收后的 Sandbox 由下一条消息恢复，必须受理（#2239）。
 							if (
 								authority.channelId === "web" &&
 								conversation.sandbox !== undefined &&
-								conversation.sandboxReady !== true
+								conversation.sandboxReady !== true &&
+								conversation.sandboxResumable !== true
 							)
 								return { outcome: "starting" };
 							const modelSelection = effectiveModelSelection(
@@ -623,10 +625,12 @@ export function createConversationExecutionUseCaseV1(
 								return { outcome: "denied" };
 							// A Web Conversation stays read-only until its own Sandbox is
 							// ready (Spec §10.1.1); report that as starting, not as a denial.
+							// 空闲回收后的 Sandbox 由下一条消息恢复，必须受理（#2239）。
 							if (
 								authority.channelId === "web" &&
 								conversation.sandbox !== undefined &&
-								conversation.sandboxReady !== true
+								conversation.sandboxReady !== true &&
+								conversation.sandboxResumable !== true
 							)
 								return { outcome: "starting" };
 							if (state.activeExecution) return { outcome: "busy" };

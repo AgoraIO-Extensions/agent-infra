@@ -658,6 +658,96 @@ async function commandEffectCounts() {
 }
 
 describe("PostgreSQL Conversation command transaction", () => {
+	it("accepts the next Web message on an idle-reclaimed Session and requests its resume (#2239)", async () => {
+		await persistConformanceModelConfiguration(
+			conformanceModelConfiguration,
+			authority,
+		);
+		const { transaction, useCase } = createConversation(authority, {
+			sandbox: "preparing",
+		});
+		try {
+			const created = await useCase.createConversation({
+				schemaVersion: 1,
+				agentId: authority.agentId,
+				idempotencyKey: "reclaimed-create",
+				requestId: "reclaimed-create",
+				traceId: "reclaimed",
+			});
+			if (created.outcome !== "accepted")
+				throw new Error("Expected Session creation");
+			const conversationId = created.result.conversationId;
+			await markSessionSandboxReadyFixture(client, conversationId);
+			// 空闲回收已完成：计算资源停止，调谐意图等待下一条消息恢复。
+			await client`update platform.session_sandbox_allocations
+				set status = 'stopped', desired_state = 'stopped', resource_fence = resource_fence + 1
+				where conversation_id = ${conversationId}`;
+			const [intent] = await client<
+				{ id: string }[]
+			>`select id from platform.outbox_items
+				where scope_type = 'conversation' and scope_id = ${conversationId}
+					and operation = 'conversation.sandbox.reconcile.v1'`;
+			if (!intent) throw new Error("Expected Sandbox reconcile intent");
+			await client`update platform.outbox_items set status = 'succeeded',
+				payload = payload || ${client.json({
+					lifecycle: {
+						schemaVersion: 1,
+						reason: "idle_reclaim",
+						authority: {
+							kind: "management",
+							applicationId: "application-fixture",
+							managementRevision: 1,
+							managementFence: 1,
+							workloadRevision: 1,
+							targetDesiredState: "running",
+						},
+						source: { sandbox: { generation: 1 } },
+						stopReceipt: null,
+						resumeRequested: false,
+					},
+				})}
+				where id = ${intent.id}`;
+			expect(
+				await useCase.readConversation({ schemaVersion: 1, conversationId }),
+			).toMatchObject({
+				outcome: "found",
+				result: {
+					conversation: { sandboxReady: false, sandboxResumable: true },
+				},
+			});
+			const accepted = await useCase.accept({
+				schemaVersion: 1,
+				command: "message",
+				conversationId,
+				text: "resume this Session",
+				idempotencyKey: "reclaimed-message",
+				requestId: "reclaimed-message",
+				traceId: "reclaimed",
+			});
+			expect(accepted).toMatchObject({ outcome: "accepted" });
+			const [resumed] = await client<
+				{ status: string; resume: string | null }[]
+			>`select status, payload->'lifecycle'->>'resumeRequested' as resume
+				from platform.outbox_items where id = ${intent.id}`;
+			expect(resumed).toEqual({ status: "pending", resume: "true" });
+			// 恢复请求之后会话处于准备中，不再报告为可恢复。
+			const read = await useCase.readConversation({
+				schemaVersion: 1,
+				conversationId,
+			});
+			expect(read).toMatchObject({
+				outcome: "found",
+				result: { conversation: { sandboxReady: false } },
+			});
+			expect(
+				read.outcome === "found" &&
+					"sandboxResumable" in read.result.conversation,
+			).toBe(false);
+		} finally {
+			await transaction.close();
+		}
+	});
+
 	it("keeps a Web Session read-only until its own Sandbox is ready and preserves accepted replay when readiness is lost", async () => {
 		await persistConformanceModelConfiguration(
 			conformanceModelConfiguration,
