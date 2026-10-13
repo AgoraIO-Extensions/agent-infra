@@ -135,6 +135,10 @@ export interface NativeSessionOptions {
 	resolveModelCredential?: RuntimeModelCredentialResolver;
 	/** Request-local Browser context; never persisted or selected by native input. */
 	readonly browser?: import("./driver.js").RuntimeBrowserExecutionContextV1;
+	/** Request-local producer seam for adapter-owned model/tool operation facts. */
+	readonly recordOperationFact?: (
+		fact: RuntimeOperationFactV2,
+	) => Promise<void>;
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly resultFile?: (input: {
 		readonly path: string;
@@ -1187,6 +1191,8 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				},
 				...(resolveModelCredential ? { resolveModelCredential } : {}),
 				...(browser ? { browser } : {}),
+				recordOperationFact: (fact) =>
+					this.recordFact(file, command.executionId, fact),
 				cwd: workspace,
 				nativeId: before.nativeId,
 				skillDirectory: this.options.skillDirectory,
