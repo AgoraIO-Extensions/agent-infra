@@ -53,7 +53,7 @@ const body = {
 		{
 			skillVersionId: "skill-version",
 			grant: {
-				schemaVersion: 1,
+				schemaVersion: 1 as const,
 				tools: [],
 				connections: [],
 				fileRoots: [],
