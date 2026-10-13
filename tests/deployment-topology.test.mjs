@@ -671,7 +671,11 @@ test("production Worker requires a private module and runtime authorization moun
 test("native metadata Worker gateway is opt-in and restricted to Platform API", () => {
 	const disabled = objects(render().stdout);
 	assert.equal(
-		resource(disabled, "Service", "topology-agent-infra-platform-worker-native-metadata"),
+		resource(
+			disabled,
+			"Service",
+			"topology-agent-infra-platform-worker-native-metadata",
+		),
 		undefined,
 	);
 	const enabled = render(
@@ -710,7 +714,10 @@ test("native metadata Worker gateway is opt-in and restricted to Platform API", 
 		"app.kubernetes.io/instance": "topology",
 		"app.kubernetes.io/component": "platform-api",
 	});
-	const external = render("--set", "platformWorker.nativeMetadataGateway.enabled=true");
+	const external = render(
+		"--set",
+		"platformWorker.nativeMetadataGateway.enabled=true",
+	);
 	assert.notEqual(external.status, 0);
 	assert.match(external.stderr, /requires platformApi\.placement=in-cluster/);
 });
