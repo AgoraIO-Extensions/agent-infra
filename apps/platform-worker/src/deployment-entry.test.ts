@@ -43,11 +43,41 @@ beforeAll(async () => {
 			target: "node24",
 		},
 	);
+	const nativeMetadataAssembly = await transform(
+		await readFile(
+			new URL("./native-metadata-deployment-assembly.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
+	const nativeMetadataGateway = await transform(
+		await readFile(
+			new URL("./runtime-native-metadata-gateway.ts", import.meta.url),
+			"utf8",
+		),
+		{
+			loader: "ts",
+			format: "esm",
+			target: "node24",
+		},
+	);
 	await writeFile(join(directory, "package.json"), '{"type":"module"}');
 	await writeFile(join(directory, "deployment.mjs"), code);
 	await writeFile(
 		join(directory, "skill-materializer-assembly.js"),
 		materializerAssembly.code,
+	);
+	await writeFile(
+		join(directory, "native-metadata-deployment-assembly.js"),
+		nativeMetadataAssembly.code,
+	);
+	await writeFile(
+		join(directory, "runtime-native-metadata-gateway.js"),
+		nativeMetadataGateway.code,
 	);
 	await build({
 		entryPoints: [
