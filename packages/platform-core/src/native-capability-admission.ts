@@ -568,6 +568,19 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							!isDeepStrictEqual(latestScope, scope)
 						)
 							return { outcome: "stale" };
+						const finalAuthority = await dependencies.authorization.authorize({
+							schemaVersion: 1,
+							operation: "native-capability.invoke",
+							conversationId: request.conversationId,
+						});
+						if (
+							finalAuthority.outcome !== "allowed" ||
+							!isDeepStrictEqual(
+								parseAuthority(finalAuthority.authority),
+								authority,
+							)
+						)
+							return { outcome: "denied", reason: "authorization_lost" };
 						const executionId = nextOpaqueId(newId);
 						const turnId = nextOpaqueId(newId);
 						const result: NativeCapabilityAdmissionResultV1 = Object.freeze({

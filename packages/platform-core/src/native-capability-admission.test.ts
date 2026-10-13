@@ -240,4 +240,29 @@ describe("native capability admission contract", () => {
 		const decision = await useCase(metadata).admit(request);
 		expect(decision).toEqual({ outcome: "stale" });
 	});
+
+	it("rejects authorization lost after the final metadata read", async () => {
+		let calls = 0;
+		const decision = await createNativeCapabilityAdmissionUseCaseV1({
+			authorization: {
+				async authorize() {
+					calls += 1;
+					return calls < 3
+						? { outcome: "allowed" as const, authority }
+						: { outcome: "denied" as const };
+				},
+			},
+			metadata: new FakeNativeCapabilityMetadataRevalidationV1({ projection }),
+			transaction: transaction({
+				conversation,
+				activeExecution: null,
+				authorizationRevision: "auth-1",
+			}),
+			newId: () => "generated",
+		}).admit(request);
+		expect(decision).toEqual({
+			outcome: "denied",
+			reason: "authorization_lost",
+		});
+	});
 });
