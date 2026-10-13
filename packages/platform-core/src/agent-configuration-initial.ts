@@ -178,6 +178,7 @@ async function completeInitialAgentConfigurationAdmissionV1(
 				agentId: command.agentId,
 				requestId: command.requestId,
 				traceId: command.traceId,
+				source,
 				requested: structuredClone(command.modelConfiguration),
 			});
 			decision = result === null ? null : parseStoredKeylessModel(result);
@@ -200,6 +201,7 @@ async function completeInitialAgentConfigurationAdmissionV1(
 					agentId: command.agentId,
 					requestId: command.requestId,
 					traceId: command.traceId,
+					source,
 					requested: structuredClone(command.modelConfiguration),
 					current: null,
 				}),

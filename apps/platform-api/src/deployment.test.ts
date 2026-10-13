@@ -264,6 +264,9 @@ function deploymentInput(
 				templateId: "codex",
 				imageDigest,
 				modelBinding,
+				codexModelProfiles: [
+					{ model: "model-a", reasoningLevels: ["medium", "high"] },
+				],
 				configurationRevision: "configuration-a",
 			},
 			validation: readiness.revision,

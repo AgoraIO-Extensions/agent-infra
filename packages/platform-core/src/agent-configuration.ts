@@ -417,6 +417,7 @@ function createAgentConfigurationUseCaseV1Internal(
 					agentId: command.agentId,
 					requestId: command.requestId,
 					traceId: command.traceId,
+					source,
 					requested: structuredClone(keyless.changes.modelConfiguration),
 				});
 				admitted = decision === null ? null : parseStoredKeylessModel(decision);
@@ -449,6 +450,7 @@ function createAgentConfigurationUseCaseV1Internal(
 						agentId: command.agentId,
 						requestId: command.requestId,
 						traceId: command.traceId,
+						source,
 						requested: structuredClone(changes.modelConfiguration),
 						current: structuredClone(current.modelConfiguration),
 					}),

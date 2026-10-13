@@ -6,6 +6,8 @@ import {
 } from "@agent-infra/contracts/workload";
 import { createOciImageRegistryAdapterV1 } from "@agent-infra/image-registry";
 import {
+	assertCodexModelProfilesV1,
+	type CodexModelProfileV1,
 	createDeploymentModelCatalogAdapterV1,
 	ModelCatalogSnapshotV1Schema,
 	ModelConfigurationErrorV1,
@@ -14,6 +16,7 @@ import {
 	type StandardTemplateModelBindingV1,
 	standardTemplateDefinitionsV1,
 	standardTemplateReadinessV1,
+	validateCodexModelProfilesV1,
 } from "@agent-infra/model-catalog";
 import {
 	type AgentConfigurationModelAdmissionPortV2,
@@ -61,6 +64,8 @@ export interface DeploymentAdmissionInputV1 {
 		readonly imageReference: string;
 		readonly displayName?: string;
 		readonly modelBinding?: StandardTemplateModelBindingV1;
+		/** Deployment-owned profiles read from the exact pinned Codex image. */
+		readonly codexModelProfiles?: readonly CodexModelProfileV1[];
 		readonly configurationRevision?: string;
 		readonly loadValidation?: (signal: AbortSignal) => Promise<unknown>;
 	})[];
@@ -116,6 +121,7 @@ async function readTemplateReadiness(template: Template) {
 							templateId: template.templateId,
 							imageDigest: template.imageDigest,
 							modelBinding: template.modelBinding,
+							codexModelProfiles: template.codexModelProfiles,
 							configurationRevision: template.configurationRevision,
 						},
 						validation: readiness.revision,
@@ -293,6 +299,11 @@ export function createDeploymentAdmissionsV1(
 				standard.driver !== template.modelBinding.driver
 			)
 				throw new Error();
+			if (template.modelBinding?.driver === "codex") {
+				validateCodexModelProfilesV1(template.codexModelProfiles);
+			} else if (template.codexModelProfiles !== undefined) {
+				throw new Error();
+			}
 			if (
 				!template.templateId ||
 				!ImmutableOciDigestV1Schema.safeParse(template.imageDigest).success ||
@@ -349,6 +360,19 @@ export function createDeploymentAdmissionsV1(
 	const currentIdentity = input.currentIdentity;
 	const currentApiPrincipal = input.currentApiPrincipal;
 	const imageRepository = input.imageRepository;
+	function codexModelProfilesFor(
+		source: AgentConfigurationSourceV1 | undefined,
+	): readonly CodexModelProfileV1[] | undefined {
+		if (source?.kind !== "standard") return undefined;
+		const template = templates.find(
+			(item) =>
+				item.templateId === source.templateId &&
+				item.imageDigest === source.imageDigest,
+		);
+		return template?.modelBinding?.driver === "codex"
+			? template.codexModelProfiles
+			: undefined;
+	}
 	async function resolveSubjectRef(traceId: string) {
 		try {
 			if (currentApiPrincipal) {
@@ -387,6 +411,17 @@ export function createDeploymentAdmissionsV1(
 					snapshot.validUntil <= Date.now()
 				)
 					return null;
+				const codexModelProfiles = codexModelProfilesFor(request.source);
+				if (request.source?.kind === "standard" && codexModelProfiles) {
+					try {
+						assertCodexModelProfilesV1({
+							profiles: codexModelProfiles,
+							options: request.requested.options,
+						});
+					} catch {
+						return null;
+					}
+				}
 				const options: AgentConfigurationModelV2["options"][number][] = [];
 				for (const option of request.requested.options) {
 					const endpoint = snapshot.endpoints.find(
@@ -544,6 +579,13 @@ export function createDeploymentAdmissionsV1(
 					const catalog = createDeploymentModelCatalogAdapterV1({
 						load: async () => snapshot,
 					});
+					const codexModelProfiles = codexModelProfilesFor(request.source);
+					if (request.source?.kind === "standard" && codexModelProfiles) {
+						assertCodexModelProfilesV1({
+							profiles: codexModelProfiles,
+							options: request.requested.options,
+						});
+					}
 					const options = [];
 					for (const option of requested.options) {
 						const endpoint = await catalog.resolve(

@@ -518,6 +518,8 @@ export interface AgentConfigurationModelAdmissionPortV1 {
 		readonly agentId: string;
 		readonly requestId: string;
 		readonly traceId: string;
+		/** Server-resolved source; never supplied by the applicant. */
+		readonly source?: AgentConfigurationSourceV1;
 		readonly requested: AgentConfigurationModelInputV1;
 		readonly current: AgentConfigurationModelV1 | null;
 	}): Promise<
@@ -542,6 +544,8 @@ export interface AgentConfigurationModelAdmissionPortV2 {
 		readonly agentId: string;
 		readonly requestId: string;
 		readonly traceId: string;
+		/** Server-resolved source; never supplied by the applicant. */
+		readonly source?: AgentConfigurationSourceV1;
 		readonly requested: AgentConfigurationModelInputV2;
 	}): Promise<AgentConfigurationModelV2 | null>;
 }
