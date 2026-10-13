@@ -5,6 +5,10 @@ import {
 	RuntimeOperationResponseV4Schema,
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePinnedExecutionKeyScopeV4Schema,
+	type RuntimeRestoreExecutionKeyRequestV4,
+	RuntimeRestoreExecutionKeyResponseV4Schema,
+	type RuntimeRestoreExecutionKeyTransportV4,
+	RuntimeRestoreExecutionKeyTransportV4Schema,
 	type RuntimeSubmitTurnTransportV4,
 	RuntimeSubmitTurnTransportV4Schema,
 	type RuntimeSupplementTransportV4,
@@ -12,6 +16,7 @@ import {
 	runtimeOperationDigestInputV4,
 	validateRuntimePinnedExecutionKeyScopeV4,
 	validateRuntimePrivateRelayKeyFieldV1,
+	validateRuntimeRestoreExecutionKeyPrivateFieldV4,
 } from "@agent-infra/contracts/runtime";
 import type { RuntimeDriverExecutionContextV1 } from "./driver.js";
 import {
@@ -27,10 +32,18 @@ type AcceptedV4 = {
 	readonly claims: RuntimeBusinessGrantClaimsV4;
 };
 
+type AcceptedRecoveryV4 = {
+	readonly request: RuntimeRestoreExecutionKeyRequestV4;
+	readonly claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
+};
+
 interface Options {
 	readonly store: FileRuntimeStore;
 	readonly assertOpen: () => void;
 	readonly validateGrant: (request: unknown) => Promise<AcceptedV4>;
+	readonly validateRecoveryGrant: (
+		request: unknown,
+	) => Promise<AcceptedRecoveryV4>;
 	readonly dispatch: (
 		hostSessionRef: string,
 		operation: StoredOperation,
@@ -87,6 +100,65 @@ export class RuntimeHostV4 {
 
 	async supplement(transport: RuntimeSupplementTransportV4) {
 		return this.execute(RuntimeSupplementTransportV4Schema.parse(transport));
+	}
+
+	async restoreExecutionKey(transport: RuntimeRestoreExecutionKeyTransportV4) {
+		this.options.assertOpen();
+		const parsed = RuntimeRestoreExecutionKeyTransportV4Schema.parse(transport);
+		await this.options.validateRecoveryGrant(parsed.recoveryRequest);
+		this.options.assertOpen();
+		return this.options.serialize(
+			this.options.store.sessionQueueKey(
+				parsed.recoveryRequest.originalRequest,
+			),
+			async () => {
+				this.options.assertOpen();
+				const accepted = await this.options.validateRecoveryGrant(
+					parsed.recoveryRequest,
+				);
+				this.options.assertOpen();
+				const privateField = validateRuntimeRestoreExecutionKeyPrivateFieldV4(
+					parsed.privateKeyField,
+					accepted,
+				);
+				const recovered =
+					await this.options.store.recoverAcceptedExecutionKeyV4({
+						request: accepted.request,
+						claims: accepted.claims,
+						now: this.options.now ?? Date.now,
+					});
+				this.options.assertOpen();
+				const observed = await this.options.dispatch(
+					recovered.hostSessionRef,
+					recovered.operation,
+					false,
+				);
+				const observedResult =
+					RuntimeOperationResponseV4Schema.shape.result.parse(observed.result);
+				if (
+					observedResult.outcome !== "accepted" ||
+					observedResult.status !== "running"
+				)
+					runtimeAuthorizationDenied();
+				this.options.assertOpen();
+				this.options.store.assertAcceptedExecutionKeyCurrentV4({
+					request: accepted.request,
+					claims: accepted.claims,
+					now: this.options.now ?? Date.now,
+				});
+				this.options.installKey(
+					recovered.scope,
+					recovered.hostSessionRef,
+					privateField.keyDelivery.relayKey,
+				);
+				return RuntimeRestoreExecutionKeyResponseV4Schema.parse({
+					schemaVersion: 4,
+					hostSessionRef: recovered.hostSessionRef,
+					operationId: recovered.operation.operationId,
+					result: "restored",
+				});
+			},
+		);
 	}
 
 	private async execute(

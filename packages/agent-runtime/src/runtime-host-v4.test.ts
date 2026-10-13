@@ -12,10 +12,14 @@ import {
 	RuntimeEventAckRequestV4Schema,
 	RuntimeEventReadRequestV4Schema,
 	RuntimeExecutionGrantClaimsV2Schema,
+	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
+	type RuntimeRestoreExecutionKeyRequestV4,
+	RuntimeRestoreExecutionKeyRequestV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	type RuntimeSubmitTurnTransportV4,
 	runtimeEventRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
+	runtimeRestoreExecutionKeyRequestDigestV4,
 } from "@agent-infra/contracts/runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
@@ -173,6 +177,10 @@ async function setup(
 	createBrowserExecutionContext?: (
 		input: RuntimeBrowserExecutionContextFactoryInputV1,
 	) => RuntimeBrowserExecutionContextV1 | undefined,
+	validateRecoveryGrantV4?: (request: unknown) => Promise<{
+		request: RuntimeRestoreExecutionKeyRequestV4;
+		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
+	}>,
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "runtime-host-v4-consumer-"));
 	cleanups.push(() => rm(directory, { recursive: true, force: true }));
@@ -198,6 +206,7 @@ async function setup(
 		}),
 		...(fileBridge ? { fileBridge: () => fileBridge } : {}),
 		...(createBrowserExecutionContext ? { createBrowserExecutionContext } : {}),
+		...(validateRecoveryGrantV4 ? { validateRecoveryGrantV4 } : {}),
 	};
 	let host = await RuntimeHost.open(options);
 	cleanups.push(() => host.close());
@@ -1308,4 +1317,190 @@ it("keeps the pinned Key when stop is accepted but original request drain is sti
 	expect(
 		f.store.readOriginalExecutionKeyScopeV4(submission())?.operation.result,
 	).toEqual({ outcome: "accepted", status: "running" });
+});
+
+it("restores a Key only for the durable accepted/running journal entry", async () => {
+	let acceptedRecovery:
+		| {
+				request: RuntimeRestoreExecutionKeyRequestV4;
+				claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
+		  }
+		| undefined;
+	const f = await setup(undefined, undefined, async () => {
+		if (!acceptedRecovery) throw new Error("recovery fixture not ready");
+		return acceptedRecovery;
+	});
+	const accepted = await f.host.submitTurnV4(f.transport);
+	const original = f.store.readOriginalExecutionKeyScopeV4(
+		f.transport.businessRequest,
+	);
+	if (!original?.scope) throw new Error("missing accepted scope");
+	const recoveryRequest = RuntimeRestoreExecutionKeyRequestV4Schema.parse({
+		schemaVersion: 4,
+		mode: "existing-accepted-only",
+		acceptedHostSessionRef: accepted.hostSessionRef,
+		acceptedOperationDigest: original.operation.requestDigest,
+		grant: {
+			schemaVersion: 4,
+			format: "runtime-execution-jws",
+			token: "a.b.c",
+		},
+		originalRequest: f.transport.businessRequest,
+	});
+	const requestDigest =
+		await runtimeRestoreExecutionKeyRequestDigestV4(recoveryRequest);
+	const claims = RuntimeRestoreExecutionKeyGrantClaimsV4Schema.parse({
+		schemaVersion: 4,
+		issuer: "platform-fixture",
+		audience: "runtime_host",
+		workerId: "worker-fixture",
+		issuedAt: now,
+		expiresAt: now + 30_000,
+		grantId: "recovery-grant-1",
+		principal: f.transport.businessRequest.principal,
+		executionSource: f.transport.businessRequest.executionSource,
+		channelId: f.transport.businessRequest.channelId,
+		agentId: f.transport.businessRequest.agentId,
+		conversationId: f.transport.businessRequest.conversationId,
+		executionId: f.transport.businessRequest.executionId,
+		turnId: f.transport.businessRequest.turnId,
+		sessionGeneration: f.transport.businessRequest.sessionGeneration,
+		traceId: f.transport.businessRequest.traceId,
+		hostSessionRef: f.transport.businessRequest.hostSessionRef,
+		operation: f.transport.businessRequest.operation,
+		relayKeyBinding: f.transport.businessRequest.keyBinding,
+		requestDigest,
+		purpose: "business",
+		authorizationRecordId: "authorization-1",
+		allowedCommands: ["execution.key.restore"],
+		attachments: [],
+		mode: recoveryRequest.mode,
+		acceptedHostSessionRef: recoveryRequest.acceptedHostSessionRef,
+		acceptedOperationDigest: recoveryRequest.acceptedOperationDigest,
+	});
+	acceptedRecovery = { request: recoveryRequest, claims };
+	const before = await readFile(f.path, "utf8");
+	const result = await f.host.restoreExecutionKeyV4({
+		recoveryRequest,
+		privateKeyField: {
+			schemaVersion: 1,
+			context: {
+				requestId: f.transport.businessRequest.requestId,
+				grantId: claims.grantId,
+				requestDigest: claims.requestDigest,
+				traceId: f.transport.businessRequest.traceId,
+				principal: f.transport.businessRequest.principal,
+				executionSource: f.transport.businessRequest.executionSource,
+				channelId: f.transport.businessRequest.channelId,
+				agentId: f.transport.businessRequest.agentId,
+				conversationId: f.transport.businessRequest.conversationId,
+				executionId: f.transport.businessRequest.executionId,
+				turnId: f.transport.businessRequest.turnId,
+				sessionGeneration: f.transport.businessRequest.sessionGeneration,
+				hostSessionRef: f.transport.businessRequest.hostSessionRef,
+				operation: f.transport.businessRequest.operation,
+				keyBinding: f.transport.businessRequest.keyBinding,
+			},
+			keyDelivery: { relayKey: "synthetic-pinned-key-k1" },
+		},
+	});
+	expect(result).toEqual({
+		schemaVersion: 4,
+		hostSessionRef: accepted.hostSessionRef,
+		operationId: f.transport.businessRequest.executionId,
+		result: "restored",
+	});
+	expect(await f.driver.sideEffectCount()).toBe(1);
+	expect(await readFile(f.path, "utf8")).toBe(before);
+	expect(retainedKeys(f.host).get("execution-1")).toMatchObject({
+		relayKey: "synthetic-pinned-key-k1",
+	});
+});
+
+it("rejects missing or terminal recovery without creating durable state", async () => {
+	let acceptedRecovery:
+		| {
+				request: RuntimeRestoreExecutionKeyRequestV4;
+				claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
+		  }
+		| undefined;
+	const f = await setup(undefined, undefined, async () => {
+		if (!acceptedRecovery) throw new Error("recovery fixture not ready");
+		return acceptedRecovery;
+	});
+	const recoveryRequest = RuntimeRestoreExecutionKeyRequestV4Schema.parse({
+		schemaVersion: 4,
+		mode: "existing-accepted-only",
+		acceptedHostSessionRef: "missing-host-session",
+		acceptedOperationDigest: "A".repeat(43),
+		grant: {
+			schemaVersion: 4,
+			format: "runtime-execution-jws",
+			token: "a.b.c",
+		},
+		originalRequest: f.transport.businessRequest,
+	});
+	const requestDigest =
+		await runtimeRestoreExecutionKeyRequestDigestV4(recoveryRequest);
+	acceptedRecovery = {
+		request: recoveryRequest,
+		claims: RuntimeRestoreExecutionKeyGrantClaimsV4Schema.parse({
+			schemaVersion: 4,
+			issuer: "platform-fixture",
+			audience: "runtime_host",
+			workerId: "worker-fixture",
+			issuedAt: now,
+			expiresAt: now + 30_000,
+			grantId: "recovery-grant-2",
+			principal: f.transport.businessRequest.principal,
+			executionSource: f.transport.businessRequest.executionSource,
+			channelId: f.transport.businessRequest.channelId,
+			agentId: f.transport.businessRequest.agentId,
+			conversationId: f.transport.businessRequest.conversationId,
+			executionId: f.transport.businessRequest.executionId,
+			turnId: f.transport.businessRequest.turnId,
+			sessionGeneration: f.transport.businessRequest.sessionGeneration,
+			traceId: f.transport.businessRequest.traceId,
+			hostSessionRef: f.transport.businessRequest.hostSessionRef,
+			operation: f.transport.businessRequest.operation,
+			relayKeyBinding: f.transport.businessRequest.keyBinding,
+			requestDigest,
+			purpose: "business",
+			authorizationRecordId: "authorization-1",
+			allowedCommands: ["execution.key.restore"],
+			attachments: [],
+			mode: recoveryRequest.mode,
+			acceptedHostSessionRef: recoveryRequest.acceptedHostSessionRef,
+			acceptedOperationDigest: recoveryRequest.acceptedOperationDigest,
+		}),
+	};
+	const before = await readFile(f.path, "utf8");
+	await expect(
+		f.host.restoreExecutionKeyV4({
+			recoveryRequest,
+			privateKeyField: {
+				schemaVersion: 1,
+				context: {
+					requestId: f.transport.businessRequest.requestId,
+					grantId: acceptedRecovery.claims.grantId,
+					requestDigest,
+					traceId: f.transport.businessRequest.traceId,
+					principal: f.transport.businessRequest.principal,
+					executionSource: f.transport.businessRequest.executionSource,
+					channelId: f.transport.businessRequest.channelId,
+					agentId: f.transport.businessRequest.agentId,
+					conversationId: f.transport.businessRequest.conversationId,
+					executionId: f.transport.businessRequest.executionId,
+					turnId: f.transport.businessRequest.turnId,
+					sessionGeneration: f.transport.businessRequest.sessionGeneration,
+					hostSessionRef: f.transport.businessRequest.hostSessionRef,
+					operation: f.transport.businessRequest.operation,
+					keyBinding: f.transport.businessRequest.keyBinding,
+				},
+				keyDelivery: { relayKey: "synthetic-pinned-key-k1" },
+			},
+		}),
+	).rejects.toMatchObject({ code: "RUNTIME_GRANT_INVALID" });
+	expect(await readFile(f.path, "utf8")).toBe(before);
+	expect(retainedKeys(f.host).size).toBe(0);
 });

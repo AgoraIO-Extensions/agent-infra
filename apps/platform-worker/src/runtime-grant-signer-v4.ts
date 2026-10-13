@@ -15,10 +15,15 @@ import {
 	RuntimeExecutionGrantClaimsV2Schema,
 	RuntimeExecutionGrantV2Schema,
 	RuntimeExecutionGrantV4Schema,
+	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
+	type RuntimeRestoreExecutionKeyRequestV4,
+	type RuntimeSubmitTurnRequestV4,
 	runtimeEventRequestDigestV4,
 	runtimeRequestSigningPayloadV4,
+	runtimeRestoreExecutionKeyRequestDigestV4,
 	validateVerifiedRuntimeExecutionGrantClaimsV2,
 	validateVerifiedRuntimeExecutionGrantClaimsV4,
+	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV4,
 } from "@agent-infra/contracts/runtime";
 
 import type { WorkerRuntimeAuthorizationV2 } from "./runtime-grant-signer.js";
@@ -65,6 +70,70 @@ export function createWorkerRuntimeGrantSignerV4(options: SignerOptionsV4) {
 		return `${signingInput}.${sign(null, Buffer.from(signingInput, "ascii"), options.privateKey).toString("base64url")}`;
 	}
 	return {
+		async signRecovery(
+			originalRequest: RuntimeSubmitTurnRequestV4,
+			acceptedHostSessionRef: string,
+			acceptedOperationDigest: string,
+			authorizationRecordId: string,
+		) {
+			if (!authorizationRecordId || !acceptedHostSessionRef)
+				throw new TypeError("Runtime V4 recovery authorization is required");
+			const unsigned: RuntimeRestoreExecutionKeyRequestV4 = {
+				schemaVersion: 4,
+				mode: "existing-accepted-only",
+				acceptedHostSessionRef,
+				acceptedOperationDigest,
+				grant: {
+					schemaVersion: 4,
+					format: "runtime-execution-jws",
+					token: "unsigned.unsigned.unsigned",
+				},
+				originalRequest,
+			};
+			const issuedAt = now();
+			const requestDigest =
+				await runtimeRestoreExecutionKeyRequestDigestV4(unsigned);
+			const claims = RuntimeRestoreExecutionKeyGrantClaimsV4Schema.parse({
+				schemaVersion: 4,
+				issuer: options.issuer,
+				audience: "runtime_host",
+				issuedAt,
+				expiresAt: issuedAt + 30_000,
+				grantId: (options.id ?? randomUUID)(),
+				workerId: options.workerId,
+				principal: originalRequest.principal,
+				executionSource: originalRequest.executionSource,
+				relayKeyBinding: originalRequest.keyBinding,
+				agentId: originalRequest.agentId,
+				channelId: originalRequest.channelId,
+				conversationId: originalRequest.conversationId,
+				executionId: originalRequest.executionId,
+				turnId: originalRequest.turnId,
+				sessionGeneration: originalRequest.sessionGeneration,
+				traceId: originalRequest.traceId,
+				hostSessionRef: originalRequest.hostSessionRef,
+				operation: originalRequest.operation,
+				allowedCommands: ["execution.key.restore"],
+				purpose: "business",
+				authorizationRecordId,
+				attachments: [],
+				requestDigest,
+				mode: unsigned.mode,
+				acceptedHostSessionRef,
+				acceptedOperationDigest,
+			});
+			validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV4(claims, {
+				expectedIssuer: options.issuer,
+				expectedWorkerId: options.workerId,
+				now: issuedAt,
+			});
+			const grant = RuntimeExecutionGrantV4Schema.parse({
+				schemaVersion: 4,
+				format: "runtime-execution-jws",
+				token: tokenFor(claims),
+			});
+			return { request: { ...unsigned, grant }, claims };
+		},
 		async signEvent(
 			request: RuntimeEventReadRequestV4 | RuntimeEventAckRequestV4,
 			authority: WorkerRuntimeAuthorizationV2,

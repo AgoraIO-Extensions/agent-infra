@@ -28,6 +28,7 @@ import type {
 	RuntimePrincipalV1,
 	RuntimeReplayRequestV1,
 	RuntimeReplayResponseV1,
+	RuntimeRestoreExecutionKeyTransportV4,
 	RuntimeSkillDirectoryRequestV1,
 	RuntimeSkillDirectoryResponseV1,
 	RuntimeSkillResourceReadRequestV1,
@@ -132,6 +133,10 @@ export interface RuntimeHostOptions {
 			| RuntimeSubmitTurnTransportV4["businessRequest"]
 			| RuntimeSupplementTransportV4["businessRequest"];
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
+	}>;
+	validateRecoveryGrantV4?: (request: unknown) => Promise<{
+		request: RuntimeRestoreExecutionKeyTransportV4["recoveryRequest"];
+		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
 	}>;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
 	/** Deployment-owned local Browser readiness probe; caller-supplied inputs are already signed. */
@@ -660,6 +665,10 @@ export class RuntimeHost {
 					if (this.closed) runtimeAuthorizationDenied();
 				},
 				validateGrant: options.validateGrantV4,
+				validateRecoveryGrant: async (request) => {
+					if (!options.validateRecoveryGrantV4) runtimeAuthorizationDenied();
+					return options.validateRecoveryGrantV4(request);
+				},
 				dispatch: (ref, operation, allowBusinessExecution, context) =>
 					this.dispatch(ref, operation, allowBusinessExecution, context),
 				...(options.fileBridge
@@ -822,6 +831,11 @@ export class RuntimeHost {
 	supplementV4(value: RuntimeSupplementTransportV4) {
 		if (this.closed || !this.v4) runtimeAuthorizationDenied();
 		return this.v4.supplement(value);
+	}
+	restoreExecutionKeyV4(value: RuntimeRestoreExecutionKeyTransportV4) {
+		if (this.closed || !this.v4 || !this.options.validateRecoveryGrantV4)
+			runtimeAuthorizationDenied();
+		return this.v4.restoreExecutionKey(value);
 	}
 
 	private async eventAuthorityV4(

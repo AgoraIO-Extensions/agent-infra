@@ -14,7 +14,10 @@ import {
 	type RuntimePinnedExecutionKeyScopeV4,
 	RuntimePinnedExecutionKeyScopeV4Schema,
 	type RuntimePrincipalV1,
+	type RuntimeRestoreExecutionKeyGrantClaimsV4,
+	type RuntimeRestoreExecutionKeyRequestV4,
 	type RuntimeStatusRequestV3,
+	runtimeOperationDigestInputV4,
 } from "@agent-infra/contracts/runtime";
 import type {
 	RuntimeExternalActionAuthorization,
@@ -591,6 +594,139 @@ export class FileRuntimeStore {
 			hostSessionRef,
 			scope: original.keyScopeV4 ? structuredClone(original.keyScopeV4) : null,
 			operation: structuredClone(original),
+		};
+	}
+
+	/** Existing-only recovery: no Session, operation, or business dispatch is created. */
+	recoverAcceptedExecutionKeyV4(input: {
+		readonly request: RuntimeRestoreExecutionKeyRequestV4;
+		readonly claims: RuntimeRestoreExecutionKeyGrantClaimsV4;
+		readonly now?: RuntimeStoreClock;
+	}) {
+		return this.file.update(
+			(state) => {
+				const recovered = this.checkAcceptedExecutionKeyV4(state, input, true);
+				const session = state.sessions[recovered.hostSessionRef];
+				if (!session?.executionAuthorities) runtimeAuthorizationDenied();
+				const {
+					mode: _mode,
+					acceptedHostSessionRef: _ref,
+					acceptedOperationDigest: _digest,
+					executionSource: _source,
+					relayKeyBinding: _key,
+					...claims
+				} = input.claims;
+				applyRuntimeAuthority(
+					session.executionAuthorities,
+					{
+						...claims,
+						schemaVersion: 2,
+						allowedCommands: ["turn.submit"],
+					},
+					"prepare",
+					typeof input.now === "function"
+						? input.now()
+						: (input.now ?? Date.now()),
+				);
+				const fence = input.claims.operation.executionDeliveryFence;
+				session.highestFences[`execution:${claims.executionId}`] = fence;
+				const operation = session.operations[claims.executionId];
+				if (!operation) runtimeAuthorizationDenied();
+				operation.deliveryFence = fence;
+				return this.checkAcceptedExecutionKeyV4(state, input);
+			},
+			{ skipUnchanged: true },
+		);
+	}
+
+	/** Last committed-state check, synchronous immediately before Key installation. */
+	assertAcceptedExecutionKeyCurrentV4(input: {
+		readonly request: RuntimeRestoreExecutionKeyRequestV4;
+		readonly claims: RuntimeRestoreExecutionKeyGrantClaimsV4;
+		readonly now?: RuntimeStoreClock;
+	}) {
+		return this.checkAcceptedExecutionKeyV4(this.file.read(), input);
+	}
+
+	private checkAcceptedExecutionKeyV4(
+		state: RuntimeStoreState,
+		input: {
+			readonly request: RuntimeRestoreExecutionKeyRequestV4;
+			readonly claims: RuntimeRestoreExecutionKeyGrantClaimsV4;
+			readonly now?: RuntimeStoreClock;
+		},
+		allowTakeover = false,
+	) {
+		const now =
+			typeof input.now === "function" ? input.now() : (input.now ?? Date.now());
+		assertStoreState(state);
+		const request = input.request.originalRequest;
+		const claims = input.claims;
+		const target = input.request.acceptedHostSessionRef;
+		const indexed = state.sessionBindings[sessionBindingKey(request)];
+		if (!indexed || indexed !== target) runtimeAuthorizationDenied();
+		const session = sessionFor(state, target, request);
+		const operation = session.operations[request.executionId];
+		const authority = session.executionAuthorities?.[request.executionId];
+		const scope = RuntimePinnedExecutionKeyScopeV4Schema.safeParse(
+			operation?.keyScopeV4,
+		);
+		const expectedScope = {
+			principal: request.principal,
+			executionSource: request.executionSource,
+			channelId: request.channelId,
+			agentId: request.agentId,
+			conversationId: request.conversationId,
+			executionId: request.executionId,
+			turnId: request.turnId,
+			sessionGeneration: request.sessionGeneration,
+			hostSessionRef: request.hostSessionRef,
+			keyBinding: request.keyBinding,
+		};
+		const executionFence =
+			session.highestFences[`execution:${request.executionId}`];
+		const operationDigest = requestDigest(
+			runtimeOperationDigestInputV4(request),
+		);
+		if (request.hostSessionRef !== null && request.hostSessionRef !== target)
+			runtimeAuthorizationDenied();
+		if (
+			!Number.isSafeInteger(now) ||
+			claims.issuedAt > now ||
+			claims.expiresAt <= now ||
+			session.recovery ||
+			!session.nativeSessionRef ||
+			!operation ||
+			operation.kind !== "submit-turn" ||
+			operation.operationId !== request.operation.id ||
+			operation.turnId !== request.turnId ||
+			operation.state !== "resolved" ||
+			operation.result?.outcome !== "accepted" ||
+			operation.result.status !== "running" ||
+			operation.requestDigest !== operationDigest ||
+			operation.requestDigest !== claims.acceptedOperationDigest ||
+			!scope.success ||
+			!isDeepStrictEqual(scope.data, expectedScope) ||
+			!authority ||
+			authority.workerId !== claims.workerId ||
+			authority.authorizationRecordId !== claims.authorizationRecordId ||
+			authority.stopped ||
+			authority.control !== undefined ||
+			authority.executionDeliveryFence !== executionFence ||
+			executionFence === undefined ||
+			claims.operation.executionDeliveryFence < executionFence ||
+			claims.issuedAt < authority.issuedAt ||
+			(!allowTakeover &&
+				(claims.operation.executionDeliveryFence !== executionFence ||
+					authority.expiresAt <= now ||
+					authority.issuedAt > now))
+		)
+			runtimeAuthorizationDenied();
+		return {
+			hostSessionRef: target,
+			nativeSessionRef: session.nativeSessionRef,
+			scope: structuredClone(scope.data),
+			operation: structuredClone(operation),
 		};
 	}
 

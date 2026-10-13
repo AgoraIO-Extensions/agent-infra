@@ -3,6 +3,8 @@ import { TextDecoder } from "node:util";
 
 import {
 	RuntimeExecutionGrantV4Schema,
+	RuntimeRestoreExecutionKeyGrantClaimsV4Schema,
+	RuntimeRestoreExecutionKeyRequestV4Schema,
 	RuntimeSubmitTurnRequestV4Schema,
 	RuntimeSubmitTurnTransportV4Schema,
 	RuntimeSupplementRequestV4Schema,
@@ -10,7 +12,9 @@ import {
 	VerifiedRuntimeExecutionGrantV4Schema,
 	validateRuntimeBusinessBindingV4,
 	validateRuntimePrivateRelayKeyFieldV1,
+	validateRuntimeRestoreExecutionKeyBindingV4,
 	validateVerifiedRuntimeExecutionGrantClaimsV4,
+	validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV4,
 } from "@agent-infra/contracts/runtime";
 
 import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
@@ -28,45 +32,54 @@ export function createRuntimeExecutionGrantVerifierV4(
 	publicKeys: ReadonlyMap<string, KeyObject>,
 ) {
 	return (value: unknown) => {
-		try {
-			const grant = RuntimeExecutionGrantV4Schema.parse(value);
-			const parts = grant.token.split(".");
-			if (parts.length !== 3) runtimeAuthorizationDenied();
-			const [headerPart, claimsPart, signaturePart] = parts;
-			if (!headerPart || !claimsPart || !signaturePart)
-				runtimeAuthorizationDenied();
-			const header = JSON.parse(utf8.decode(decode(headerPart))) as {
-				alg?: unknown;
-				kid?: unknown;
-				typ?: unknown;
-			};
-			if (
-				!header ||
-				Object.keys(header).sort().join(",") !== "alg,kid,typ" ||
-				header.alg !== "EdDSA" ||
-				header.typ !== "runtime-execution+jws" ||
-				typeof header.kid !== "string"
-			)
-				runtimeAuthorizationDenied();
-			const key = publicKeys.get(header.kid);
-			if (
-				key?.asymmetricKeyType !== "ed25519" ||
-				!verify(
-					null,
-					Buffer.from(`${headerPart}.${claimsPart}`, "ascii"),
-					key,
-					decode(signaturePart),
-				)
-			)
-				runtimeAuthorizationDenied();
-			return VerifiedRuntimeExecutionGrantV4Schema.parse({
-				token: grant.token,
-				claims: JSON.parse(utf8.decode(decode(claimsPart))),
-			});
-		} catch {
-			runtimeAuthorizationDenied();
-		}
+		const verified = verifySignedRuntimeGrantV4(publicKeys, value);
+		return VerifiedRuntimeExecutionGrantV4Schema.parse(verified);
 	};
+}
+
+/** Signature-only verifier used by the independent recovery Grant schema. */
+function verifySignedRuntimeGrantV4(
+	publicKeys: ReadonlyMap<string, KeyObject>,
+	value: unknown,
+) {
+	try {
+		const grant = RuntimeExecutionGrantV4Schema.parse(value);
+		const parts = grant.token.split(".");
+		if (parts.length !== 3) runtimeAuthorizationDenied();
+		const [headerPart, claimsPart, signaturePart] = parts;
+		if (!headerPart || !claimsPart || !signaturePart)
+			runtimeAuthorizationDenied();
+		const header = JSON.parse(utf8.decode(decode(headerPart))) as {
+			alg?: unknown;
+			kid?: unknown;
+			typ?: unknown;
+		};
+		if (
+			!header ||
+			Object.keys(header).sort().join(",") !== "alg,kid,typ" ||
+			header.alg !== "EdDSA" ||
+			header.typ !== "runtime-execution+jws" ||
+			typeof header.kid !== "string"
+		)
+			runtimeAuthorizationDenied();
+		const key = publicKeys.get(header.kid);
+		if (
+			key?.asymmetricKeyType !== "ed25519" ||
+			!verify(
+				null,
+				Buffer.from(`${headerPart}.${claimsPart}`, "ascii"),
+				key,
+				decode(signaturePart),
+			)
+		)
+			runtimeAuthorizationDenied();
+		return {
+			token: grant.token,
+			claims: JSON.parse(utf8.decode(decode(claimsPart))) as unknown,
+		};
+	} catch {
+		runtimeAuthorizationDenied();
+	}
 }
 
 async function validateRuntimeExecutionGrantV4(
@@ -170,6 +183,43 @@ export function createRuntimeExecutionKeyDeliveryValidatorV4(
 				...accepted,
 				relayKey: privateField.keyDelivery.relayKey,
 			};
+		} catch {
+			runtimeAuthorizationDenied();
+		}
+	};
+}
+
+/**
+ * Validate the separate existing-accepted-only recovery capability.  This is
+ * deliberately independent from ordinary submit/supplement validation so a
+ * recovery Grant cannot be replayed as a new business operation.
+ */
+export function createRuntimeExecutionKeyRecoveryValidatorV4(
+	publicKeys: ReadonlyMap<string, KeyObject>,
+	options: {
+		readonly expectedIssuer: string;
+		readonly expectedWorkerId: string;
+		readonly now?: () => number;
+	},
+) {
+	return async (transport: unknown) => {
+		try {
+			const request =
+				RuntimeRestoreExecutionKeyRequestV4Schema.parse(transport);
+			const grant = request.grant;
+			const verified = verifySignedRuntimeGrantV4(publicKeys, grant);
+			const recoveryClaims =
+				RuntimeRestoreExecutionKeyGrantClaimsV4Schema.parse(verified.claims);
+			const claims = validateVerifiedRuntimeRestoreExecutionKeyGrantClaimsV4(
+				recoveryClaims,
+				{
+					expectedIssuer: options.expectedIssuer,
+					expectedWorkerId: options.expectedWorkerId,
+					now: (options.now ?? Date.now)(),
+				},
+			);
+			await validateRuntimeRestoreExecutionKeyBindingV4(request, claims);
+			return { request, claims };
 		} catch {
 			runtimeAuthorizationDenied();
 		}

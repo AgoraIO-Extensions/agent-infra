@@ -100,6 +100,8 @@ import {
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV4Schema,
 	RuntimeReplayRequestV1Schema,
+	RuntimeRestoreExecutionKeyResponseV4Schema,
+	RuntimeRestoreExecutionKeyTransportV4Schema,
 	RuntimeSkillDirectoryRequestV1Schema,
 	RuntimeSkillDirectoryResponseV1Schema,
 	RuntimeSkillResourceReadRequestV1Schema,
@@ -698,6 +700,14 @@ function buildArtifacts() {
 					"acknowledgeRuntimeEventsV4",
 					RuntimeEventAckRequestV4Schema,
 					RuntimeEventAckResponseV4Schema,
+					"application/json",
+				),
+			},
+			"/internal/runtime/v4/execution-key/restore": {
+				post: postOperation(
+					"restoreRuntimeExecutionKeyV4",
+					RuntimeRestoreExecutionKeyTransportV4Schema,
+					RuntimeRestoreExecutionKeyResponseV4Schema,
 					"application/json",
 				),
 			},
