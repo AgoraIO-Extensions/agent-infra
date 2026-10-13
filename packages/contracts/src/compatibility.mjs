@@ -1985,6 +1985,39 @@ function isSkillHubProjectOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2214 adds the controlled Provider import entry point. The request contains
+// only server-resolved candidate selectors; archive, trust and storage facts
+// remain deployment-owned.
+function isSkillHubImportOpenApiAddition(previous, current) {
+	const paths = ["/api/v2/skills/imports"];
+	const schemas = [
+		"SkillHubProviderImportRequestV1",
+		"SkillHubProviderImportResponseV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"cd83cfd612b5226914c5ba26fd89d8278fa55c2cfa8a53ffe7088472c05e5cdc"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #1052 publishes the exact #1027 recent read; every prior document field stays exact.
 function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/me/conversations/recent";
@@ -3604,6 +3637,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&
 			!isSkillHubProjectOpenApiAddition(previous, current) &&
+			!isSkillHubImportOpenApiAddition(previous, current) &&
 			!isSkillHubAgentBindingOpenApiAddition(previous, current) &&
 			!isNativeMetadataOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
