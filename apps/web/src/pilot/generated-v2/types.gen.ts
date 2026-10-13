@@ -992,7 +992,9 @@ export type RuntimeOperationFactV2 = {
     operationRef: string;
     parentOperationRef?: string;
     phase: 'intent' | 'started' | 'completed' | 'failed' | 'unknown';
+    requestDigest?: string;
     resultRef?: string;
+    rpcRequestId?: string | number;
     startedAt?: string;
     toolId: string;
 };

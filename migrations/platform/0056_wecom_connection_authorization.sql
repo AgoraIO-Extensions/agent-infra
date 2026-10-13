@@ -1,0 +1,1 @@
+ALTER TABLE "platform"."wecom_receipts" ADD COLUMN "connection_authorization_fact" jsonb;

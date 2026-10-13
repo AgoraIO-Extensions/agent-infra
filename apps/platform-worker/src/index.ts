@@ -19,6 +19,7 @@ export * from "./runtime-grant-signer.js";
 export * from "./runtime-model-directory-client.js";
 export * from "./runtime-model-directory-service.js";
 export * from "./runtime-native-metadata-client.js";
+export * from "./runtime-native-metadata-gateway.js";
 export * from "./runtime-native-metadata-proof.js";
 export * from "./skill-materialization.js";
 export * from "./wecom-deployment.js";

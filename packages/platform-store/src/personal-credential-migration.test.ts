@@ -151,6 +151,7 @@ beforeAll(async () => {
 		{ idx: 53, tag: "0053_conversation_audit_execution_index" },
 		{ idx: 54, tag: "0054_skill_agent_binding_applied_receipt" },
 		{ idx: 55, tag: "0055_platform_execution_failure_events" },
+		{ idx: 56, tag: "0056_wecom_connection_authorization" },
 	]);
 	appendedHistory = await Promise.all(
 		appendEntries.map(async (entry) => ({
