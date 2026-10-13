@@ -111,7 +111,7 @@ export async function createStandardMcpAcpBridge(
 	const descriptorMap = new Map(
 		tools(options.client).map((tool) => [tool.name, tool]),
 	);
-	const replayKeys = new Map<string, string>();
+	const replayKeys = new Set<string>();
 	let closed = false;
 	let active = false;
 	let blocked = false;
@@ -141,7 +141,7 @@ export async function createStandardMcpAcpBridge(
 				: `digest:${digest}`;
 		if (replayKeys.has(replayKey) || replayKeys.size >= maximumReplayKeys)
 			unavailable();
-		replayKeys.set(replayKey, digest);
+		replayKeys.add(replayKey);
 		active = true;
 		const operationRef = randomUUID();
 		const attemptRef = randomUUID();

@@ -126,11 +126,17 @@ it("rejects replayed JSON-RPC ids while keeping string and numeric ids distinct"
 			},
 			body: JSON.stringify(body),
 		});
-		await response.arrayBuffer();
+		const text = await response.text();
 		return {
 			response,
+			text,
 			sessionId: response.headers.get("MCP-Session-Id") ?? sessionId,
 		};
+	};
+	const message = (text: string) => {
+		const data = text.match(/^data: (.+)$/m)?.[1];
+		if (!data) throw new Error("bridge response missing JSON-RPC message");
+		return JSON.parse(data) as Record<string, unknown>;
 	};
 	const toolName = `mcp_${standardMcpDigest("write_note").slice(0, 32)}`;
 	const initialized = await post({
@@ -163,6 +169,10 @@ it("rejects replayed JSON-RPC ids while keeping string and numeric ids distinct"
 		sessionId,
 	);
 	expect(first.response.status).toBe(200);
+	expect(message(first.text)).toMatchObject({
+		id: 7,
+		result: { isError: false },
+	});
 	const duplicate = await post(
 		{
 			jsonrpc: "2.0",
@@ -173,6 +183,10 @@ it("rejects replayed JSON-RPC ids while keeping string and numeric ids distinct"
 		sessionId,
 	);
 	expect(duplicate.response.status).toBe(200);
+	expect(message(duplicate.text)).toMatchObject({
+		id: 7,
+		error: { code: -32603 },
+	});
 	const typed = await post(
 		{
 			jsonrpc: "2.0",
@@ -183,6 +197,10 @@ it("rejects replayed JSON-RPC ids while keeping string and numeric ids distinct"
 		sessionId,
 	);
 	expect(typed.response.status).toBe(200);
+	expect(message(typed.text)).toMatchObject({
+		id: "7",
+		result: { isError: false },
+	});
 	expect(
 		fixture.trace.filter((entry) => entry.method === "tools/call"),
 	).toHaveLength(2);
