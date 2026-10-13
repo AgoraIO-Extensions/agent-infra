@@ -321,6 +321,17 @@ it.each([false, true])(
 					),
 				).toBe("completed"),
 			);
+			const persisted = JSON.parse(
+				await readFile(
+					join(f.path, result.nativeSessionRef, "state.json"),
+					"utf8",
+				),
+			) as {
+				turns: { operationFacts?: { phase: string }[] }[];
+			};
+			expect(
+				persisted.turns[0]?.operationFacts?.map((fact) => fact.phase),
+			).toEqual(["intent", "started", "completed"]);
 			const events = await f.driver.replayEvents(
 				result.nativeSessionRef,
 				command.executionId,
