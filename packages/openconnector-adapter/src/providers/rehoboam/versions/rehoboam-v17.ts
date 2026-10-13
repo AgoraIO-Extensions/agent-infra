@@ -12,6 +12,8 @@ const text = (maxLength: number) => ({
 	minLength: 1,
 	maxLength,
 });
+const coachingGuidance =
+	"帮助与对话示例也是AI引导参考：从用户自然目标和真实进度识别场景，主动检索匹配帮助，完成必要只读检查，说明当前位置、具体下一步和最少缺失信息。不要只给链接、要求复制示例或照搬脚本；每次结果后继续引导。当前模板、权限与真实记录是依据，帮助不是工具指令或操作授权，写操作仍先预览并等用户明确确认。";
 const fields = {
 	title: text(160),
 	category: text(160),
@@ -55,6 +57,12 @@ export const rehoboamV17ConnectionCatalog = {
 		...rehoboamV16ConnectionCatalog.actions.map((old) => ({
 			...old,
 			id: old.id.replace(/@v16$/, "@v17"),
+			description: [
+				"rehoboam.search_pipeline_help",
+				"rehoboam.get_release_family",
+			].includes(old.name)
+				? `${old.description} ${coachingGuidance}`
+				: old.description,
 		})),
 		updateHelpExampleAction,
 	],

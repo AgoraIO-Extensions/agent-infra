@@ -63,10 +63,16 @@ test("v17 source identity is pinned and all old Action contracts remain intact",
 		rehoboamV16ConnectionCatalog.actions.length + 1,
 	);
 	for (const old of rehoboamV16ConnectionCatalog.actions) {
-		assert.deepEqual(
-			rehoboamV17ConnectionCatalog.actions.find((row) => row.name === old.name),
-			{ ...old, id: old.id.replace(/@v16$/, "@v17") },
+		const next = rehoboamV17ConnectionCatalog.actions.find(
+			(row) => row.name === old.name,
 		);
+		const { description, ...previousContract } = old;
+		const { description: nextDescription, ...nextContract } = next || {};
+		assert.deepEqual(nextContract, {
+			...previousContract,
+			id: old.id.replace(/@v16$/, "@v17"),
+		});
+		assert.ok(nextDescription?.startsWith(description));
 	}
 });
 
