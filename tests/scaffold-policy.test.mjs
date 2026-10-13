@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { posix } from "node:path";
 import test from "node:test";
+import ts from "typescript";
 
 import { parse } from "yaml";
 
@@ -13,6 +15,66 @@ const dockerfiles = new Map([
 ]);
 
 const digestPattern = /@sha256:[a-f0-9]{64}$/;
+
+test("API Docker COPY includes the static local import closure of production entries", async () => {
+	const dockerfile = await readFile("apps/connection-api/Dockerfile", "utf8");
+	const copied = [...dockerfile.matchAll(/^COPY\s+(\S+)\s+/gm)].map(
+		(match) => match[1],
+	);
+	const config = ts.createSourceFile(
+		"tsdown.config.ts",
+		await readFile("apps/connection-api/tsdown.config.ts", "utf8"),
+		ts.ScriptTarget.Latest,
+		true,
+	);
+	const pending = [];
+	function entries(node) {
+		if (
+			ts.isPropertyAssignment(node) &&
+			node.name.getText(config) === "entry" &&
+			ts.isArrayLiteralExpression(node.initializer)
+		) {
+			for (const entry of node.initializer.elements)
+				if (ts.isStringLiteral(entry))
+					pending.push(posix.join("apps/connection-api", entry.text));
+		}
+		ts.forEachChild(node, entries);
+	}
+	entries(config);
+	assert.ok(pending.length > 0);
+	const visited = new Set();
+	while (pending.length) {
+		const file = pending.pop();
+		if (visited.has(file)) continue;
+		visited.add(file);
+		assert.ok(
+			copied.some((source) => source === file || file.startsWith(`${source}/`)),
+			`${file} is missing from the Docker build context`,
+		);
+		const module = ts.createSourceFile(
+			file,
+			await readFile(file, "utf8"),
+			ts.ScriptTarget.Latest,
+			true,
+		);
+		for (const statement of module.statements) {
+			if (
+				!ts.isImportDeclaration(statement) &&
+				!ts.isExportDeclaration(statement)
+			)
+				continue;
+			const specifier = statement.moduleSpecifier;
+			if (
+				!specifier ||
+				!ts.isStringLiteral(specifier) ||
+				!specifier.text.startsWith(".")
+			)
+				continue;
+			const dependency = posix.join(posix.dirname(file), specifier.text);
+			pending.push(posix.extname(dependency) ? dependency : `${dependency}.ts`);
+		}
+	}
+});
 
 test("Connection access logs exclude callback queries and Referer", async () => {
 	const nginx = await readFile("apps/connection-web/nginx-main.conf", "utf8");
