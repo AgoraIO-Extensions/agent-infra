@@ -90,6 +90,8 @@ Skills 使用 `needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-hum
 
 ## Documentation Rules
 
+- Rehoboam v16 帮助 Actions 只检索已发布参考或保存/读取待审核候选；Rehoboam 拥有文章、content_hash、owner 与幂等。候选验证是提交人报告，不得自动推广为正式规则。用户确认后提交，正式帮助通过 PR 审核/部署更新。维护新 Action 时同步 HLD 与 `docs/connection/rehoboam-help.md`，旧版本实现不变。
+
 - 使用简洁、明确的中文，保留必要的英文技术名词。
 - 一个结论只在一份权威文档中完整表述；其他文档使用相对链接引用。
 - 修改文件路径或标题时，同步检查全部相对链接。

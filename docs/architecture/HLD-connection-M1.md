@@ -238,6 +238,17 @@ Rehoboam 渠道发布以新的 immutable `rehoboam-connection-v13` 增补 Publis
 源码编译阶段保留完整PR/提交/编译证据要求。记录是操作人报告的证据，业务校验、CAS、模板签名及追加审计
 仍由 Rehoboam 负责；不获取本地源码、不发送人员消息、不推进阶段、不修改 Job 结果。
 编译通过不代替合并或制品构建；未知写结果先读取原任务核对，禁止盲重试。
+
+发布帮助与知识候选以 immutable `rehoboam-connection-v16` 新增四个固定 Actions：
+已发布帮助搜索/文章读取使用 metadata READ，候选提交使用 release WRITE，指定候选回读使用 release READ。
+Rehoboam 拥有与页面同源的文章导出、适用范围、内容哈希以及 owner 隔离的候选记录；Connection 只负责授权与有界调用。
+候选总内容最多16 KiB，必须携带当前帮助 content_hash、稳定幂等键、适用范围与证据。
+作者由服务端个人身份解析，不接受调用方身份、审核状态或任意请求路径；证据链接仅保存，不抓取，不作为请求地址。
+`proposed` / `submitter_reported` 不表示核验或发布。用户明确要求后才提交候选；普通用户仅回读本人记录，
+当前 Rehoboam 管理员可凭 ID 读取供审核。帮助、候选与业务权限彼此独立，不能从正文推导执行授权。
+正式知识仍通过帮助更新 PR 审核、合并与部署生效；本阶段无自动采集、候选审批/推广或直接修改模板的服务。
+保留 v15 和旧实现/Grant，新增 Action 按原升级授权流程显式选择；服务部署后再做真实只读验收。
+详见[发布帮助与经验候选](../connection/rehoboam-help.md)。
 v14同时增加 `get_release_family_continuation` READ（release READ scope），只读取继续交付步骤、
 模板控制的数字尾缀版本建议和下游影响。建议不是预留；补发仍用原preview/confirm及replacement chain，
 不修改旧Job/申请、Native锚点或自动切换下游。最终交付完成由Rehoboam原通知成功回执投影，不能从Job成功推断。

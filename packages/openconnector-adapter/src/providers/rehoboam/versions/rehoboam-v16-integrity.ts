@@ -1,0 +1,2 @@
+export const rehoboamV16ExecutorDigest =
+	"sha256:8b3274111aa1e19b50edba070e68efc481127b95bc78f6d810258edd8aac2513";
