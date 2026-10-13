@@ -3324,8 +3324,18 @@ function normalizeRuntimeConnectionAssociationOpenApiAddition(current) {
 // #2181 binds mounted Skill resources to the directory generation. Treat the
 // additive generation field as a reviewed compatibility extension for the
 // already published Runtime V1 host read contract.
-function normalizeRuntimeSkillHostReadJsonSchemaAddition(current) {
+function normalizeRuntimeSkillHostReadJsonSchemaAddition(previous, current) {
 	const normalized = structuredClone(current);
+	const previousSchemas = previous.$defs ?? previous.components?.schemas;
+	if (
+		[
+			"RuntimeSkillResourceReadRequestV1",
+			"RuntimeSkillResourceReadResponseV1",
+		].some(
+			(name) => previousSchemas?.[name]?.properties?.generationId !== undefined,
+		)
+	)
+		return normalized;
 	const schemas = normalized.$defs ?? normalized.components?.schemas;
 	for (const name of [
 		"RuntimeSkillResourceReadRequestV1",
@@ -3437,6 +3447,7 @@ function findBreakingChanges(previousValue, currentValue) {
 	}
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
 	const normalized = normalizeRuntimeSkillHostReadJsonSchemaAddition(
+		previous,
 		normalizeSkillPackageObjectVersions(previous, current, changes),
 	);
 	const currentSchemas =
