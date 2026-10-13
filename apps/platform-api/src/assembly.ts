@@ -75,7 +75,10 @@ import {
 	createPlatformProjectionReaders,
 	type PresentPlatformAgent,
 } from "./projection.js";
-import { assembleSkillHubReadApiV1 } from "./skill-hub-read-assembly.js";
+import {
+	assembleSkillHubReadApiV1,
+	type SkillHubProviderImportDeploymentV1,
+} from "./skill-hub-read-assembly.js";
 import {
 	assembleWecomApiV1,
 	assembleWecomReceiptApiV1,
@@ -162,6 +165,8 @@ export interface PlatformApiAssemblyInput {
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	/** Optional deployment-owned public native metadata reader. */
 	readonly nativeMetadata?: Pick<NativeMetadataRoutesDependenciesV1, "reader">;
+	/** Optional deployment-owned Provider registry and admission pipeline. */
+	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
 	readonly customAgentGateway?: Omit<
 		NonNullable<PlatformAppDependencies["customAgentGateway"]>,
@@ -836,6 +841,9 @@ export function assemblePlatformApi(
 		skillHubRead: skillHubRead.dependencies,
 		skillHubInstallations: skillHubRead.installationDependencies,
 		skillHubPublication: skillHubRead.publicationDependencies,
+		...(skillHubRead.importDependencies
+			? { skillHubImport: skillHubRead.importDependencies }
+			: {}),
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.userGovernance
 			? {

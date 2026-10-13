@@ -1012,6 +1012,18 @@ export type SkillHubInstallationV1 = {
     updatedAt: string;
 };
 
+export type SkillHubProviderImportRequestV1 = {
+    name: string;
+    provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+    schemaVersion: 1;
+    version: string;
+};
+
+export type SkillHubProviderImportResponseV1 = {
+    replayed: boolean;
+    version: SkillHubPublicationVersionV1;
+};
+
 export type SkillHubPublicationRequestV1 = {
     manifestDigest: string;
     name: string;
@@ -4003,6 +4015,54 @@ export type ListSkillHubVersionsV1Responses = {
 };
 
 export type ListSkillHubVersionsV1Response = ListSkillHubVersionsV1Responses[keyof ListSkillHubVersionsV1Responses];
+
+export type ImportSkillHubVersionV1Data = {
+    body: SkillHubProviderImportRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/skills/imports';
+};
+
+export type ImportSkillHubVersionV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ImportSkillHubVersionV1Error = ImportSkillHubVersionV1Errors[keyof ImportSkillHubVersionV1Errors];
+
+export type ImportSkillHubVersionV1Responses = {
+    /**
+     * Replayed import
+     */
+    200: SkillHubPublicationResponseV1;
+    /**
+     * Skill version imported
+     */
+    201: SkillHubPublicationResponseV1;
+};
+
+export type ImportSkillHubVersionV1Response = ImportSkillHubVersionV1Responses[keyof ImportSkillHubVersionV1Responses];
 
 export type InstallSkillHubVersionV1Data = {
     body: SkillHubInstallationCommandV1;

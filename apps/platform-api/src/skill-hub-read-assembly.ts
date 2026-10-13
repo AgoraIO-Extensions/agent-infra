@@ -1,4 +1,13 @@
 import {
+	type ObjectStorageDataV1,
+	type SkillPackageAdmissionPolicyV1,
+	type SkillPackageScannerV1,
+	type SkillPackageSourceVerifierV1,
+	SkillPackageSupplierV1,
+} from "@agent-infra/object-storage";
+import type { SkillProviderRegistryV1 } from "@agent-infra/platform-core";
+import {
+	createSkillProviderImportV1,
 	pageSkillHubVersionsV1,
 	projectSkillHubVersionMetadataV1,
 	SkillHubOperationErrorV1,
@@ -6,13 +15,23 @@ import {
 import { PostgresSkillHubLifecycleV1 } from "@agent-infra/platform-store";
 import { createDeploymentIdentityScope } from "./deployment-identity.js";
 import type { IdentityAdapter } from "./http/identity.js";
+import type { SkillHubImportRoutesDependenciesV1 } from "./http/skill-hub-import-routes.js";
 import type { SkillHubInstallationRoutesDependenciesV1 } from "./http/skill-hub-installation-routes.js";
 import type { SkillHubPublicationRoutesDependenciesV1 } from "./http/skill-hub-publication-routes.js";
 import type { SkillHubReadRoutesDependenciesV1 } from "./http/skill-hub-read-routes.js";
 
+export type SkillHubProviderImportDeploymentV1 = Readonly<{
+	readonly registry: SkillProviderRegistryV1;
+	readonly storage: ObjectStorageDataV1;
+	readonly resolveAdmissionPolicy: () => Promise<SkillPackageAdmissionPolicyV1>;
+	readonly sourceVerifier: SkillPackageSourceVerifierV1;
+	readonly scanner: SkillPackageScannerV1;
+}>;
+
 export function assembleSkillHubReadApiV1(input: {
 	readonly databaseUrl: string;
 	readonly identity: IdentityAdapter;
+	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 }) {
 	const scope = createDeploymentIdentityScope(input.identity);
 	const store = new PostgresSkillHubLifecycleV1({
@@ -34,6 +53,15 @@ export function assembleSkillHubReadApiV1(input: {
 			};
 		},
 	});
+	const providerImport = input.providerImport
+		? new SkillPackageSupplierV1({
+				storage: input.providerImport.storage,
+				lifecycle: store,
+				resolveAdmissionPolicy: input.providerImport.resolveAdmissionPolicy,
+				sourceVerifier: input.providerImport.sourceVerifier,
+				scanner: input.providerImport.scanner,
+			})
+		: undefined;
 	const dependencies: SkillHubReadRoutesDependenciesV1 = {
 		identity: input.identity,
 		list: (request, trusted, query) =>
@@ -75,10 +103,38 @@ export function assembleSkillHubReadApiV1(input: {
 				store.revokeVersion(trusted, versionId, key),
 			),
 	};
+	const importDependencies: SkillHubImportRoutesDependenciesV1 | undefined =
+		providerImport && input.providerImport
+			? {
+					identity: input.identity,
+					importer: createSkillProviderImportV1({
+						registry: input.providerImport.registry,
+						admit: async ({ context, key, selection, candidate }) => {
+							const policy =
+								await input.providerImport?.resolveAdmissionPolicy();
+							if (!policy) throw new SkillHubOperationErrorV1("unavailable");
+							return providerImport.admitVersion(
+								context,
+								{
+									...selection,
+									sourceVersion: candidate.sourceVersion,
+									sourceDigest: candidate.sourceDigest,
+									approvalRef: candidate.approvalRef,
+									trustRevision: policy.signer.trustRevision,
+									policyRevision: policy.policyRevision,
+									archiveBytes: candidate.archiveBytes,
+								},
+								key,
+							);
+						},
+					}),
+				}
+			: undefined;
 	return {
 		dependencies,
 		installationDependencies,
 		publicationDependencies,
+		importDependencies,
 		close: () => store.close(),
 	};
 }

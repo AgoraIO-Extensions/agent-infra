@@ -43,6 +43,14 @@ export const modelSelection = undefined;
 // reader object only after its API/Worker/Host proof and Session routing are configured.
 export const nativeMetadata = undefined;
 
+// Optional controlled Skill Hub Provider import. This is a deployment-owned
+// registry + admission pipeline; it must return candidates from approved
+// providers and use the same ObjectStorage, source verifier, scanner and
+// admission policy that Platform uses for publication. HTTP callers can only
+// select an approved provider/name/version; they cannot submit bytes, paths,
+// trust, policy or approval facts.
+export const providerImport = undefined;
+
 // Robot-token Agent management API (optional):
 //
 // apiInput.agentApiCreation = {
