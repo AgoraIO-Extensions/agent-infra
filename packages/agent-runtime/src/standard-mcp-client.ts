@@ -717,7 +717,6 @@ export class StandardMcpClient {
 				)) as CallToolResult;
 			} catch {
 				if (this.#active.sends && !this.#active.prepared) {
-					this.block(operation);
 					return unavailable();
 				}
 				return this.#active.sends
