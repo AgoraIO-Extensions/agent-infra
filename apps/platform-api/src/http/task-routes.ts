@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import {
 	CancelTaskRequestV1Schema,
@@ -13,6 +14,7 @@ import { HttpProtocolError, parseIdempotencyKey, parseJson } from "./common.js";
 import {
 	authorize,
 	boundary,
+	recordTaskObservation,
 	resolveAuthority,
 	scope,
 	type TaskRoutesDependencies,
@@ -21,6 +23,37 @@ import {
 } from "./task-route-support.js";
 
 export type { TaskRoutesDependencies } from "./task-route-support.js";
+
+function taskAdmissionObservation(error: unknown) {
+	if (!(error instanceof HttpProtocolError))
+		return {
+			outcome: "failed" as const,
+			code: "DEPENDENCY_UNAVAILABLE" as const,
+		};
+	switch (error.body.code) {
+		case "AUTHENTICATION_REQUIRED":
+		case "AUTHORIZATION_REVOKED":
+		case "RESOURCE_UNAVAILABLE":
+		case "INVALID_REQUEST":
+		case "AGENT_BUSY":
+			return {
+				outcome: "rejected" as const,
+				...(error.body.code === "AGENT_BUSY"
+					? { code: "TASK_UNAVAILABLE" as const }
+					: {}),
+			};
+		case "RUNTIME_UNAVAILABLE":
+			return {
+				outcome: "failed" as const,
+				code: "RUNTIME_UNAVAILABLE" as const,
+			};
+		default:
+			return {
+				outcome: "failed" as const,
+				code: "DEPENDENCY_UNAVAILABLE" as const,
+			};
+	}
+}
 
 function replaySelector(request: Request, traceId: string) {
 	const search = new URL(request.url).searchParams;
@@ -91,54 +124,77 @@ export function registerTaskRoutes(
 ) {
 	app.post("/api/v1/agents/:agentId/tasks", (context) =>
 		boundary(context, dependencies, "submit", async (metadata, audit) => {
-			const { value: body } = await parseJson(
-				context.req.raw,
-				SubmitTaskRequestV1Schema,
-				metadata.traceId,
-			);
-			const agentId = context.req.param("agentId");
-			const input = {
-				schemaVersion: 1 as const,
-				operation: "task.submit" as const,
-				agentId,
-				...(body.conversationId === undefined
-					? {}
-					: { conversationId: body.conversationId }),
-			};
-			const initial = await resolveAuthority(
-				dependencies,
-				context.req.raw,
-				input,
-				metadata.traceId,
-			);
-			audit.principal = initial.taskBoundary.principal;
-			audit.target = { kind: "agent", agentId };
-			const current = await authorize(
-				dependencies,
-				initial,
-				input,
-				metadata.traceId,
-				context.req.raw,
-			);
-			await audit.record("access", "succeeded", "request_accepted");
-			const decision = await dependencies.commands(current).submitTask({
-				...body,
-				agentId,
-				idempotencyKey: parseIdempotencyKey(context.req.raw, metadata.traceId),
-				...metadata,
-			});
-			if (decision.outcome === "capacity_full")
-				throw new HttpProtocolError("BUSY", metadata.traceId);
-			if (decision.outcome === "conflict")
-				throw new HttpProtocolError("CONFLICT", metadata.traceId);
-			if (decision.outcome === "denied")
-				throw new HttpProtocolError(
-					decision.reason === "conversation_unavailable"
-						? "RESOURCE_UNAVAILABLE"
-						: "RUNTIME_UNAVAILABLE",
+			const began = performance.now();
+			try {
+				const { value: body } = await parseJson(
+					context.req.raw,
+					SubmitTaskRequestV1Schema,
 					metadata.traceId,
 				);
-			return context.json(TaskAcceptedV1Schema.parse(decision.result), 202);
+				const agentId = context.req.param("agentId");
+				const input = {
+					schemaVersion: 1 as const,
+					operation: "task.submit" as const,
+					agentId,
+					...(body.conversationId === undefined
+						? {}
+						: { conversationId: body.conversationId }),
+				};
+				const initial = await resolveAuthority(
+					dependencies,
+					context.req.raw,
+					input,
+					metadata.traceId,
+				);
+				audit.principal = initial.taskBoundary.principal;
+				audit.target = { kind: "agent", agentId };
+				const current = await authorize(
+					dependencies,
+					initial,
+					input,
+					metadata.traceId,
+					context.req.raw,
+				);
+				await audit.record("access", "succeeded", "request_accepted");
+				const decision = await dependencies.commands(current).submitTask({
+					...body,
+					agentId,
+					idempotencyKey: parseIdempotencyKey(
+						context.req.raw,
+						metadata.traceId,
+					),
+					...metadata,
+				});
+				if (decision.outcome === "capacity_full")
+					throw new HttpProtocolError("BUSY", metadata.traceId);
+				if (decision.outcome === "conflict")
+					throw new HttpProtocolError("CONFLICT", metadata.traceId);
+				if (decision.outcome === "denied")
+					throw new HttpProtocolError(
+						decision.reason === "conversation_unavailable"
+							? "RESOURCE_UNAVAILABLE"
+							: "RUNTIME_UNAVAILABLE",
+						metadata.traceId,
+					);
+				const response = context.json(
+					TaskAcceptedV1Schema.parse(decision.result),
+					202,
+				);
+				recordTaskObservation(dependencies.observability, {
+					stage: "task_admission",
+					outcome: "completed",
+					durationMs: performance.now() - began,
+				});
+				return response;
+			} catch (error) {
+				const observation = taskAdmissionObservation(error);
+				recordTaskObservation(dependencies.observability, {
+					stage: "task_admission",
+					...observation,
+					durationMs: performance.now() - began,
+				});
+				throw error;
+			}
 		}),
 	);
 	const path = "/api/v1/conversations/:conversationId/tasks/:executionId";
@@ -323,6 +379,13 @@ export function registerTaskRoutes(
 			);
 			const request = context.req.raw;
 			return streamSSE(context, async (stream) => {
+				const began = performance.now();
+				recordTaskObservation(dependencies.observability, {
+					stage: "sse",
+					outcome: "completed",
+					durationMs: 0,
+					operationRef: "sse.open",
+				});
 				const lifetime = new AbortController();
 				const abort = () => lifetime.abort();
 				let endReason:
@@ -506,6 +569,22 @@ export function registerTaskRoutes(
 					} catch {
 						// The stream is already terminal; no second response is possible.
 					}
+					recordTaskObservation(dependencies.observability, {
+						stage: "sse",
+						outcome:
+							endReason === "authorization_revoked"
+								? "rejected"
+								: endReason === "dependency_unavailable"
+									? "failed"
+									: "completed",
+						durationMs: performance.now() - began,
+						...(endReason === "authorization_revoked"
+							? { code: "AUTHORIZATION_DENIED" as const }
+							: endReason === "dependency_unavailable"
+								? { code: "DEPENDENCY_UNAVAILABLE" as const }
+								: {}),
+						operationRef: "sse.ended",
+					});
 				}
 			});
 		}),
