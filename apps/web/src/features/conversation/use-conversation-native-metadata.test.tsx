@@ -91,4 +91,76 @@ describe("conversation native metadata consumer", () => {
 		expect(result.current.available).toBe(false);
 		expect(result.current.capabilities).toEqual([]);
 	});
+
+	it.each([
+		{},
+		{
+			selector: "commands",
+			revision: "a".repeat(64),
+			capabilities: [],
+		},
+	])("rejects malformed or mismatched projections: %j", async (payload) => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		clients.push(queryClient);
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async () => Response.json(payload),
+		});
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(
+			() =>
+				useConversationNativeMetadata({
+					identityKey: "login-a",
+					conversationId: "conversation-a",
+					executionId: "execution-a",
+					client,
+				}),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		expect(result.current.available).toBe(false);
+		expect(result.current.capabilities).toEqual([]);
+	});
+
+	it("clears a successful projection after a failed refetch", async () => {
+		let calls = 0;
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		clients.push(queryClient);
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async () => {
+				calls += 1;
+				if (calls > 1) return new Response(null, { status: 403 });
+				return Response.json({
+					selector: "skills",
+					revision: "a".repeat(64),
+					capabilities: [],
+				});
+			},
+		});
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(
+			() =>
+				useConversationNativeMetadata({
+					identityKey: "login-a",
+					conversationId: "conversation-a",
+					executionId: "execution-a",
+					client,
+				}),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.available).toBe(true));
+		await result.current.refetch();
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		expect(result.current.available).toBe(false);
+		expect(result.current.capabilities).toEqual([]);
+	});
 });

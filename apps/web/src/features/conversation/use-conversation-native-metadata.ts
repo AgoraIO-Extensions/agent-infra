@@ -1,3 +1,4 @@
+import { NativeMetadataProjectionV1Schema } from "@agent-infra/contracts/runtime";
 import { useQuery } from "@tanstack/react-query";
 import type { Client } from "../../pilot/generated-v2/client/index.js";
 import { client as defaultClient } from "../../pilot/generated-v2/client.gen.js";
@@ -59,13 +60,18 @@ export function useConversationNativeMetadata({
 				throwOnError: false,
 			});
 			signal.throwIfAborted();
-			if (result.response?.status !== 200) return undefined;
-			return result.data;
+			if (result.response?.status !== 200 || !result.data)
+				throw new Error("Native metadata is unavailable");
+			const parsed = NativeMetadataProjectionV1Schema.safeParse(result.data);
+			if (!parsed.success || parsed.data.selector !== selector)
+				throw new Error("Native metadata response is invalid");
+			return parsed.data;
 		},
 	});
+	const projection = query.isError ? undefined : query.data;
 	return {
 		...query,
-		capabilities: nativeMetadataCapabilities(query.data),
-		available: query.data !== undefined,
+		capabilities: nativeMetadataCapabilities(projection),
+		available: projection !== undefined,
 	};
 }
