@@ -613,7 +613,7 @@ Sandbox 身份、ServiceAccount 或网络可达均不授予 Connection 权限。
 | 触发 | 必须保持的边界 |
 | --- | --- |
 | Session 关闭 | 先拒绝新命令、关闭业务路由，再沿原执行停止/核实；确认无剩余副作用后回收计算资源。平台历史和合法持久数据按数据政策保留，不新增删除会话入口。 |
-| 空闲 Session Sandbox 回收 | 连续空闲达到部署配置的时长（默认 30 分钟），且所有执行均已终态、不存在 `active`、`waiting` 或 `unknown` 执行时，沿现有管理排空路径回收 Pod、Service、ServiceAccount、NetworkPolicy 和专属 Secret 等计算与路由资源，保留 Sandbox ID、PVC、工作区、历史和授权映射。下一条消息沿“会话准备中”重新准备同一 Sandbox；执行活跃、等待、待核实或停止屏障未确认时不回收。 |
+| 空闲 Session Sandbox 回收 | 连续空闲达到部署配置的时长（默认 30 分钟），且所有执行均已终态、不存在 `active`、`waiting` 或 `unknown` 执行时，沿现有管理排空路径回收 Pod、Service、ServiceAccount、NetworkPolicy 和专属 Secret 等计算与路由资源，保留 Sandbox ID、PVC、工作区、历史和授权映射。是否回收只取决于该 Sandbox 自身，不要求所属 Agent 的 Workload 处于就绪，也不要求其 policy 仍是当前版本。下一条消息沿“会话准备中”，按 Agent 当前已验证部署重新准备同一 Sandbox；执行活跃、等待、待核实或停止屏障未确认时不回收。 |
 | Agent 停止、停用或升级 | 管理资格作用于所有所属 Sandbox；先阻止新投递，按各实例记录收敛在途任务与路由。升级只复用该 Sandbox 原持久卷，不能共享或交换会话卷；未知执行按恢复规则保持占用。新的已验证部署提交时，空闲 Sandbox 沿管理排空与重新准备路径升级，详见下文。 |
 | 重启或恢复 | Sandbox ID、Session、原执行、Key 版本、持久映射及游标保持；新 Pod UID 须由原分配在当前 fence 下核实，不凭同名资源认定恢复。 |
 | 撤权 | 单凭证失效与主体/Agent 使用权撤销按 §9.2 区分；后者取消等待任务并持久停止活跃执行，阻止后续受控操作。历史读取仍需当前授权，控制恢复不向被撤权用户输出正文。 |
@@ -632,10 +632,13 @@ Sandbox 身份、ServiceAccount 或网络可达均不授予 Connection 权限。
 
 空闲回收与上述升级是两个独立的生命周期原因。空闲回收由连续无活动达到部署配置时长触发，默认时长为
 30 分钟；它不改变 Agent 或 Sandbox 的 policy、Workload revision、授权或会话归属，只停止计算与路由资源并保留
-PVC。只有不存在 `active`、`waiting` 或 `unknown` 执行，且停止屏障和上一轮生命周期均已确认时才能写入回收意图；
+PVC。回收判断只看该 Sandbox 自身，在所属 Agent 的每次 Workload 写回中执行，与 Agent Workload 是否就绪、
+Sandbox policy 是否过期无关；所属 Agent 的管理状态不是可用且运行时，仍由管理生命周期处理。只有不存在 `active`、`waiting` 或 `unknown` 执行，且停止屏障和上一轮生命周期均已确认时才能写入回收意图；
 所有执行还必须已经进入终态；任一执行活跃、等待或待核实时保留占用。回收完成后，下一条消息触发现有会话准备流程，在原 Sandbox 和 PVC 上恢复，
-不新建 Session 或以新实例重放任务。升级仍只由已验证 Workload policy 变化触发，沿 `reason: upgrade` 的排空、
-`stopReceipt` 和重新准备规则执行；不能用 idle reclaim 代替升级，也不能把升级期间的等待解释为空闲回收。
+不新建 Session 或以新实例重放任务。恢复按 Agent 当前已验证部署准备：回收时 policy 已过期的 Sandbox 因此在恢复时
+使用新 policy；Agent Workload 未就绪时，会话保持“会话准备中”，就绪后再准备。升级仍只由已验证 Workload policy
+变化触发，沿 `reason: upgrade` 的排空、`stopReceipt` 和重新准备规则执行；已满足空闲回收条件的过期 Sandbox
+先回收，不立即为其重新准备计算资源，其余过期的空闲 Sandbox 仍按升级处理；不能把升级期间的等待解释为空闲回收。
 
 历史 Agent 共享 PVC 不能直接标记为新 Sandbox 已隔离。迁移须先停止旧业务准入，核实并排空
 旧执行源；unknown 或归属不明时保持隔离维护，不自动复制共享历史、补造主体或新建 Session。

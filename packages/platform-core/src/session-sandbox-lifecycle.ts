@@ -401,10 +401,14 @@ export function planSessionSandboxUpgradeTransitionV1(input: {
 }
 
 /**
- * Plans a compute-only reclaim for a settled, current Session Sandbox.
+ * Plans a compute-only reclaim for a settled, idle Session Sandbox.
  * The lifecycle keeps the target authority as running so the existing
  * drain/reprepare path can be resumed by a later message, but the absence of
  * `resumeRequested` deliberately leaves the Sandbox stopped after the drain.
+ *
+ * 与 Magic 对齐（#2239）：空闲回收只看 Sandbox 自身，不要求所属 Agent 的
+ * Workload 就绪，也不要求 policy 仍是当前版本；恢复时按 Agent 当前已验证部署
+ * 重新准备，过期的 Sandbox 因此在恢复时完成升级。
  */
 export function planSessionSandboxIdleReclaimTransitionV1(input: {
 	readonly management: Pick<
@@ -423,13 +427,11 @@ export function planSessionSandboxIdleReclaimTransitionV1(input: {
 		readonly desiredState: string;
 	};
 	readonly intent: { readonly status: string } | null;
-	readonly policyCurrent: boolean;
 	readonly executionStatuses: readonly string[];
 	readonly generationBarrierPending: boolean;
 }) {
 	const { management, current } = input;
 	if (
-		!input.policyCurrent ||
 		management.agentId !== current.sandbox.agentId ||
 		management.status !== "available" ||
 		management.desiredState !== "running" ||
