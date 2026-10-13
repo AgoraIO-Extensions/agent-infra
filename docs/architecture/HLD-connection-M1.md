@@ -2271,6 +2271,31 @@ OAuth endpoints 以 G-01 对目标 Direct MCP Client 版本支持的 remote MCP 
 Connection MCP resource。若客户端需要 dynamic client registration，必须限制 redirect URI、software
 metadata 和注册生命周期，不能开放任意公共 client。
 
+### 公司 OAuth 身份探测
+
+已登录的 Connection 管理员可在 `/api/v1/connection/identity/oauth/probe` 发起公司 OAuth
+诊断，固定使用公司 confidential client、`scope=read` 与
+`/api/v1/connection/identity/oauth/callback`。authorize、token 和 userInfo 只允许
+`https://oauth.agoralab.co` 的具名端点；服务端 Basic client authentication、bounded deadline、
+受控 DNS/TLS transport、禁止 redirect 与 code 自动重试。client 配置成对注入；缺配置拒绝探测，
+不改变正式 LDAP 登录。该探测不是第二套登录或身份绕过入口。
+
+state 使用 realm 隔离的 HMAC 绑定随机 nonce、浏览器 session hash 与五分钟期限；独立
+HttpOnly、Secure、SameSite=Lax Cookie 只承载 state，并限定 callback 路径。正式 session
+Cookie 保持 SameSite=Strict。跨站 GET callback 只展示无脚本的同源确认表单；同源 POST
+再次验证当前会话、管理员、state/Cookie/期限/会话绑定，且在交换 code 前以 PostgreSQL
+Browser Command 原子取得单次执行权。失败、响应未知或进程崩溃后不能再次提交同一 code，
+需要重新发起。不得因注销、换账号或撤权重新绑定旧 state。
+
+个人 access/refresh token 和完整 userInfo 只在服务端内存用于一次固定查询，随后丢弃，
+不进入数据库、日志、审计或浏览器。结果只展示 `id/uid/uuid/email/notifyemail/displayName/permissions`
+的字段存在性与类型，以及稳定标识是否与当前 LDAP subject 相同、邮箱是否与当前会话一致；
+不展示原始值或动态字段名。任何比较结果都不授予权限，不创建 Principal、Connection、Grant、
+PAT 或新会话。请求与上游错误只输出固定失败消息；接入层不得记录 callback 查询串或 Referer。
+
+MCP、metadata、DCR、Direct OAuth、Delegated 与现有 Provider 接口保持原协议。HCI 鉴权不挂到
+该域名的所有路径。正式 LDAP 替换仍需经批准的稳定身份映射、禁用与标识不复用契约。
+
 `/connection/login` 是 `apps/connection-web` 持有的中文登录页，表单只向
 `POST /api/v1/connection/session` 提交 LDAP 用户名/密码，成功后由 `connection-api` 设置
 HttpOnly、Secure、SameSite=Strict 的高熵 opaque Cookie；PostgreSQL 只保存 session hash，浏览器

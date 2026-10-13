@@ -31,6 +31,7 @@ import {
 	sharedScopeNameSchema,
 } from "@agent-infra/connection-contracts";
 import {
+	type CompanyIdentityProbe,
 	type ConnectionAccessApprovalService,
 	type ConnectionApplicationService,
 	ConnectionError,
@@ -45,6 +46,7 @@ import type {
 } from "@agent-infra/connection-store";
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { createIdentityProbeApp } from "./identity-probe-routes";
 
 function providerCredentialValue(body: ProviderCredentialRequest) {
 	if (body.providerId === "datalego") {
@@ -61,6 +63,7 @@ function providerCredentialValue(body: ProviderCredentialRequest) {
 }
 
 export type ConnectionOAuthServerOptions = {
+	identityProbe?: CompanyIdentityProbe;
 	browserCommands?: {
 		execute: <T>(
 			input: {
@@ -178,7 +181,7 @@ function oauthError(error: OAuthProtocolError) {
 	return { error: error.error, error_description: error.message };
 }
 
-function html(value: string) {
+export function html(value: string) {
 	return value
 		.replaceAll("&", "&amp;")
 		.replaceAll("<", "&lt;")
@@ -292,7 +295,7 @@ function browserAccountProjection(account: {
 	return { displayName: account.displayName, email: account.email };
 }
 
-function secureHtmlHeaders(
+export function secureHtmlHeaders(
 	context: { header(name: string, value: string): void },
 	options: {
 		allowLoopbackFormRedirect?: boolean;
@@ -498,7 +501,7 @@ function browserCookieOptions(issuer: string) {
 	};
 }
 
-function requireSameOrigin(headers: Headers, issuer: string) {
+export function requireSameOrigin(headers: Headers, issuer: string) {
 	const issuerUrl = new URL(issuer);
 	const origin = headers.get("origin");
 	if (origin === issuerUrl.origin) return;
@@ -517,6 +520,7 @@ export function createConnectionOAuthApp(
 ) {
 	const app = new Hono();
 	const cookieOptions = browserCookieOptions(options.issuer);
+	app.route("/", createIdentityProbeApp(options.identityProbe, options.issuer));
 
 	const currentBrowserAccount = async (context: Context) => {
 		const sessionToken = getCookie(context, browserSessionCookie);

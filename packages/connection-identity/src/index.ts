@@ -2,6 +2,9 @@ import type {
 	DirectoryAuthenticator,
 	DirectoryIdentity,
 } from "@agent-infra/connection-core";
+
+export { CompanyOAuthIdentityClient } from "./company-oauth";
+
 import { Client, type Entry } from "ldapts";
 import {
 	type EmployeeDirectoryOptions,

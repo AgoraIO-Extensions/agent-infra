@@ -882,6 +882,58 @@ export class ConnectionOAuthService {
 		return this.browserAccount(await this.requireBrowserSession(sessionToken));
 	}
 
+	async inspectCompanyIdentity(
+		sessionToken: string | undefined,
+		values: Record<string, unknown>,
+	) {
+		const session = await this.requireBrowserSession(sessionToken);
+		const identity = this.protector.unprotect(session.identityReference);
+		const names = [
+			"id",
+			"uid",
+			"uuid",
+			"email",
+			"notifyemail",
+			"displayName",
+			"permissions",
+		] as const;
+		const fields = names.map((name) => {
+			const value = values[name];
+			const present = Object.hasOwn(values, name);
+			const type = !present
+				? "absent"
+				: value === null
+					? "null"
+					: Array.isArray(value)
+						? "array"
+						: typeof value;
+			const scalar =
+				typeof value === "string" && value.length <= 1024
+					? value
+					: typeof value === "number" && Number.isSafeInteger(value)
+						? String(value)
+						: undefined;
+			return {
+				name,
+				present,
+				type,
+				...(["id", "uid", "uuid"].includes(name)
+					? {
+							matchesLdapSubject:
+								scalar === undefined ? null : scalar === identity.subject,
+						}
+					: {}),
+			};
+		});
+		return {
+			fields,
+			emailMatchesCurrentAccount:
+				typeof values.email === "string" && session.email !== null
+					? values.email === session.email
+					: null,
+		};
+	}
+
 	async listPersonalAccessTokens(sessionToken: string | undefined) {
 		const sessionHash = this.browserSessionHash(sessionToken);
 		await this.requireBrowserSession(sessionToken);

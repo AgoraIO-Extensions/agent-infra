@@ -14,6 +14,7 @@ import {
 export * from "./access-approval";
 export * from "./audit";
 export * from "./call-diagnostics";
+export * from "./company-identity-probe";
 export * from "./oauth";
 
 import {

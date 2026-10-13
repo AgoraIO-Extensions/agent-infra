@@ -14,6 +14,18 @@ const dockerfiles = new Map([
 
 const digestPattern = /@sha256:[a-f0-9]{64}$/;
 
+test("Connection access logs exclude callback queries and Referer", async () => {
+	const nginx = await readFile("apps/connection-web/nginx-main.conf", "utf8");
+	const format = nginx.match(/log_format connection_safe ([^;]+);/)?.[1];
+	assert.ok(format);
+	assert.match(format, /\$request_method \$uri \$status/);
+	assert.doesNotMatch(
+		format,
+		/\$request\b|\$request_uri\b|\$args\b|\$http_referer\b/,
+	);
+	assert.match(nginx, /access_log \/dev\/stdout connection_safe;/);
+});
+
 test("deployment images pin every base image by digest", async () => {
 	for (const [service, path] of dockerfiles) {
 		const dockerfile = await readFile(path, "utf8");

@@ -30,6 +30,21 @@ Runtime、SQLite、global alias 和 Runtime token 不进入部署拓扑。[#301]
 
 ## 前置条件
 
+### 公司 OAuth 身份探测配置
+
+受监督身份探测使用 `CONNECTION_IDENTITY_OAUTH_CLIENT_ID` 与
+`CONNECTION_IDENTITY_OAUTH_CLIENT_SECRET`，仅保存于现有 `connection-config` Secret，并由 API
+通过具名 `secretKeyRef` 注入。这两项成对配置；未配置时不提供探测，部分配置拒绝启动。
+固定公网 callback 为 `/api/v1/connection/identity/oauth/callback`，须预先注册完整 HTTPS URL。
+callback 可先发布为 fail-closed 的 503 接收端，不发起授权、不交换 code；入口日志门禁通过后才
+注入 client 配置以启用管理员探测。该配置不替换 LDAP、管理员绑定或 MCP token，具体边界见
+[HLD 身份探测](HLD-connection-M1.md#公司-oauth-身份探测)。
+
+首次启用是经评审的具名 runtime 配置变更；Secret 不写 Helm values、Git、命令行参数或发布日志。
+发布前确认入口日志不记录 callback 查询串和 Referer，并用合成 code/state 验证。
+Nginx 主配置采用不含查询串、Referer 的日志格式。共享 Ingress 的日志脱敏由入口 Owner 确认，
+不能只凭应用日志无 token 宣称整个入口已通过。常规镜像发布仍使用下文正式流程。
+
 - PostgreSQL 可通过 `DATABASE_URL` 访问。
 - Bootstrap 只接收现有 Kubernetes Secret 注入进程环境的 `DATABASE_URL`。
 - 公司 LDAP、Connection identity key、Credential key 和 Provider Secret 由现有 Kubernetes Secret 注入
