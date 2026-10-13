@@ -636,3 +636,77 @@ it("records bounded authorization and Runtime submit timings (#1561)", async () 
 	]);
 	await worker.stop();
 });
+
+describe("conversation dispatch observability", () => {
+	it.each([
+		[{ schemaVersion: 1, outcome: "accepted" }, { outcome: "completed" }],
+		[
+			{ schemaVersion: 1, outcome: "busy", retryScheduled: false },
+			{ outcome: "failed", code: "TASK_UNAVAILABLE" },
+		],
+		[
+			{ schemaVersion: 1, outcome: "retry", retryScheduled: true },
+			{ outcome: "failed", code: "TASK_UNAVAILABLE" },
+		],
+		[
+			{ schemaVersion: 1, outcome: "unknown", retryScheduled: false },
+			{ outcome: "unknown" },
+		],
+		[{ schemaVersion: 1, outcome: "stale" }, { outcome: "rejected" }],
+		[
+			{ schemaVersion: 1, outcome: "already_completed" },
+			{ outcome: "rejected" },
+		],
+	] as const)("records a bounded %s decision", async (decision, expected) => {
+		mocks.find.mockResolvedValue([
+			{ itemId: "turn-a", operation: "conversation.turn.submit.v1" },
+		]);
+		mocks.dispatch.mockResolvedValueOnce(decision);
+		const telemetry = { record: vi.fn() };
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			observability: telemetry,
+		});
+		try {
+			expect(await worker.tick()).toBe(1);
+			await vi.waitFor(() =>
+				expect(telemetry.record).toHaveBeenCalledWith({
+					stage: "task_dispatch",
+					...expected,
+					durationMs: expect.any(Number),
+					operationRef: "conversation.turn.submit.v1",
+				}),
+			);
+		} finally {
+			await worker.stop();
+		}
+	});
+
+	it("records thrown dispatch failures without changing the Worker result", async () => {
+		mocks.find.mockResolvedValue([
+			{ itemId: "turn-a", operation: "conversation.turn.submit.v1" },
+		]);
+		mocks.dispatch.mockRejectedValueOnce(
+			new Error("synthetic dispatch failure"),
+		);
+		const telemetry = { record: vi.fn() };
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			observability: telemetry,
+		});
+		try {
+			expect(await worker.tick()).toBe(1);
+			await vi.waitFor(() =>
+				expect(telemetry.record).toHaveBeenCalledWith({
+					stage: "task_dispatch",
+					outcome: "failed",
+					code: "TASK_UNAVAILABLE",
+					durationMs: expect.any(Number),
+					operationRef: "conversation.turn.submit.v1",
+				}),
+			);
+		} finally {
+			await worker.stop();
+		}
+	});
+});

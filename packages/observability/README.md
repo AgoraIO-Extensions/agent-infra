@@ -16,6 +16,8 @@
 
 `record` 只记录调用方已确认的阶段结果。`durationMs` 进入耗时直方图；当前 Span 在采集时创建并结束，其自身时长不是该阶段的实际耗时。业务 `traceId` 只是受控关联属性，尚未恢复持久工作项的 OpenTelemetry 上下文或建立跨进程 Span link。真实 API/Worker 装配、持久重放去重和全链路关联仍由 #441 交付。
 
+Conversation Worker 在已有 dispatch use case 返回决定后记录一次带实测耗时的 `task_dispatch`：`accepted` 为 `completed`，`busy`/`retry` 为带 `TASK_UNAVAILABLE` 的 `failed`，`unknown` 为 `unknown`，`rejected`/`stale`/`already_completed` 为 `rejected`。`operationRef` 只使用 Store 提供的固定 operation 名称；item ID 不进入日志或指标标签。dispatch 抛出异常时记录 `failed`，遥测采集失败仍由 Worker 原有错误处理和重试语义决定。未装配 observability 时不产生该阶段记录。
+
 ## HTTP 与已持久事件 Adapter
 
 `@agent-infra/observability/http` 的 `createHttpObservability(telemetry)` 是 Hono middleware，须在路由前注册。每个请求生成独立的 UUID `requestId`、`traceId`；`currentRequestMetadata()` 在该请求的 await 链内返回同一只读上下文，请求结束后及其后续异步任务返回 `undefined`。接入方的 `requestMetadata` 须消费该上下文，不能另行生成或采信外部 header。
