@@ -7,12 +7,14 @@ import {
 	type ConversationEventUseCaseOptionsV1,
 	type ConversationEventUseCaseV1,
 	type ConversationEventWritePlanV1,
+	type ConversationOperationFactV2,
 	type ConversationOperationFailureV2,
 	createConversationEventUseCaseV1,
 	parseConversationOperationHistoryV2,
 } from "@agent-infra/platform-core";
 import type {
 	ModelTokenUsage,
+	OperationalBrowserCategory,
 	OperationalCode,
 	OperationalEvent,
 	OperationalOutcome,
@@ -28,6 +30,38 @@ const failureCodes: Partial<
 	dependency_unavailable: "DEPENDENCY_UNAVAILABLE",
 	persistence_unavailable: "PERSISTENCE_UNAVAILABLE",
 };
+
+function browserCategory(
+	fact: Extract<ConversationOperationFactV2, { kind: "tool" }>,
+): OperationalBrowserCategory {
+	if (fact.failureCode === "authorization_denied") return "policy_rejection";
+	if (fact.failureCode === "request_rejected") return "capacity_rejection";
+	if (
+		fact.failureCode === "recovery_unconfirmed" ||
+		fact.failureCode === "interrupted"
+	)
+		return "recovery";
+	if (fact.phase === "unknown") return "unknown";
+	const toolId = fact.toolId.toLowerCase().replace(/[:_]/gu, ".");
+	if (/(?:^|\.)(?:navigate|goto|reload|back|forward|open)(?:$|\.)/.test(toolId))
+		return "navigation";
+	if (
+		/(?:^|\.)(?:observe|snapshot|screenshot|inspect|extract|read)(?:$|\.)/.test(
+			toolId,
+		)
+	)
+		return "observation";
+	if (/(?:^|\.)(?:upload|download|file|artifact)(?:$|\.)/.test(toolId))
+		return "artifact_transfer";
+	if (/(?:^|\.)(?:handoff|human)(?:$|\.)/.test(toolId)) return "handoff";
+	if (
+		/(?:^|\.)(?:click|type|fill|press|select|scroll|hover|drag|wait)(?:$|\.)/.test(
+			toolId,
+		)
+	)
+		return "interaction";
+	return "unknown";
+}
 
 function firstOperationOutcome(
 	next: ConversationEventWritePlanV1 | ConversationEventDecisionV1,
@@ -58,10 +92,13 @@ function firstOperationOutcome(
 			: fact.failureCode === undefined
 				? undefined
 				: failureCodes[fact.failureCode];
+	const category =
+		fact.kind === "tool" && fact.browser ? browserCategory(fact) : undefined;
 	return {
 		stage: fact.kind === "tool" && fact.browser ? "browser" : fact.kind,
 		outcome,
 		...(code === undefined ? {} : { code }),
+		...(category === undefined ? {} : { browserCategory: category }),
 		...(fact.durationMs === undefined ? {} : { durationMs: fact.durationMs }),
 		operationRef: fact.operationRef,
 		attemptRef: fact.attemptRef,

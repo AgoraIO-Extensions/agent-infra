@@ -43,6 +43,21 @@ export type OperationalOutcome =
 	| "failed"
 	| "unknown";
 
+export const operationalBrowserCategories = [
+	"navigation",
+	"observation",
+	"interaction",
+	"artifact_transfer",
+	"handoff",
+	"recovery",
+	"policy_rejection",
+	"capacity_rejection",
+	"unknown",
+] as const;
+
+export type OperationalBrowserCategory =
+	(typeof operationalBrowserCategories)[number];
+
 export const operationalCodes = [
 	"AUTHORIZATION_DENIED",
 	"TASK_UNAVAILABLE",
@@ -67,6 +82,7 @@ export interface OperationalEvent {
 	readonly executionId?: string;
 	readonly operationRef?: string;
 	readonly attemptRef?: string;
+	readonly browserCategory?: OperationalBrowserCategory;
 }
 
 export interface ModelTokenUsage {
@@ -117,6 +133,7 @@ const outcomes = new Set<OperationalOutcome>([
 ]);
 const stages = new Set<string>(operationalStages);
 const codes = new Set<string>(operationalCodes);
+const browserCategories = new Set<string>(operationalBrowserCategories);
 const knownResourceKinds = new Set<string>(resourceKinds);
 const identifier =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -431,8 +448,15 @@ export function startObservability(options: ObservabilityOptions) {
 					executionId,
 					operationRef,
 					attemptRef,
+					browserCategory,
 				} = event;
-				if (!stages.has(stage) || !outcomes.has(outcome)) {
+				if (
+					!stages.has(stage) ||
+					!outcomes.has(outcome) ||
+					(browserCategory !== undefined &&
+						!browserCategories.has(browserCategory)) ||
+					(browserCategory !== undefined && stage !== "browser")
+				) {
 					invalidRecords++;
 					return;
 				}
@@ -449,6 +473,7 @@ export function startObservability(options: ObservabilityOptions) {
 					service,
 					stage,
 					outcome,
+					...(browserCategory === undefined ? {} : { browserCategory }),
 				};
 				const details = {
 					...labels,
@@ -460,6 +485,7 @@ export function startObservability(options: ObservabilityOptions) {
 					...(safeId(executionId) ? { executionId } : {}),
 					...(safeOperationRef(operationRef) ? { operationRef } : {}),
 					...(safeOperationRef(attemptRef) ? { attemptRef } : {}),
+					...(browserCategory === undefined ? {} : { browserCategory }),
 				};
 				operations?.add(1, labels);
 				if (durationMs !== undefined) duration?.record(durationMs, labels);
