@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import {
 	CheckCircle2,
 	ClipboardCheck,
@@ -8,7 +9,7 @@ import {
 import type { ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
 	Empty,
 	EmptyDescription,
@@ -45,18 +46,23 @@ export function SkillHubManagementScreen({
 						配置共用同一版本事实；尚未接入的写操作保持不可用。
 					</p>
 				</div>
-				<Button
-					type="button"
-					variant="ghost"
-					onClick={onRetry}
-					disabled={retrying}
-				>
-					<RefreshCw
-						className={retrying ? "animate-spin" : ""}
-						aria-hidden="true"
-					/>
-					刷新
-				</Button>
+				<div className="flex flex-wrap items-center gap-2">
+					<Link className={buttonVariants({ variant: "outline" })} to="/skills">
+						打开 Skill 目录
+					</Link>
+					<Button
+						type="button"
+						variant="ghost"
+						onClick={onRetry}
+						disabled={retrying}
+					>
+						<RefreshCw
+							className={retrying ? "animate-spin" : ""}
+							aria-hidden="true"
+						/>
+						刷新
+					</Button>
+				</div>
 			</header>
 
 			{state.kind === "loading" ? (
@@ -141,7 +147,13 @@ export function SkillHubManagementScreen({
 										<div className="flex flex-wrap items-start justify-between gap-3">
 											<div className="min-w-0">
 												<h3 className="break-all font-medium">
-													{version.name}
+													<Link
+														className={buttonVariants({ variant: "link" })}
+														to="/skills/$skillVersionId"
+														params={{ skillVersionId: version.skillVersionId }}
+													>
+														{version.name}
+													</Link>
 												</h3>
 												<p className="mt-1 break-all text-muted-foreground text-sm">
 													版本 {version.version} · {version.skillVersionId}
