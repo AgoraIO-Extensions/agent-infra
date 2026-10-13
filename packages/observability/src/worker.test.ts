@@ -466,11 +466,62 @@ it("classifies Browser operation outcomes separately from ordinary tools", async
 		expect.objectContaining({
 			stage: "browser",
 			outcome: "unknown",
+			browserOperation: "interaction",
 			code: "OPERATION_UNKNOWN",
 			operationRef: "browser-operation",
 			attemptRef: "browser-attempt",
 		}),
 	]);
+});
+
+it.each([
+	["browser_navigate", "navigation"],
+	["browser_observe", "observation"],
+	["browser_interact", "interaction"],
+	["browser_screenshot", "artifact"],
+	["browser_handoff", "handoff"],
+	["browser_recover", "recovery"],
+	["browser_other", "unknown"],
+] as const)("projects Browser tool %s as %s", async (toolId, category) => {
+	const fixture = transactionFixture();
+	const observations: OperationalEvent[] = [];
+	const events = createObservedConversationEvents({
+		transaction: fixture.transaction,
+		telemetry: { record: (event) => observations.push(event) },
+	});
+	const fact: ConversationOperationFactV2 = {
+		kind: "tool",
+		operationRef: `browser-operation-${category}`,
+		attemptRef: `browser-attempt-${category}`,
+		phase: "intent",
+		toolId,
+		browser: {
+			actionId: `browser-action-${category}`,
+			capabilityVersion: 1,
+			pageRevision: 2,
+			sessionGeneration: 3,
+			resourceFence: 4,
+			workloadRevision: 2,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+			sideEffect: false,
+		},
+	};
+	await events.persist(operation(fact, `${toolId}-intent`));
+	await events.persist(
+		operation({ ...fact, phase: "started" }, `${toolId}-started`),
+	);
+	await events.persist(
+		operation(
+			{ ...fact, phase: "completed", finishedAt: command.occurredAt },
+			`${toolId}-completed`,
+		),
+	);
+	expect(
+		observations.findLast((event) => event.stage === "browser"),
+	).toMatchObject({
+		browserOperation: category,
+		outcome: "completed",
+	});
 });
 
 it("does not recount later Connection metadata on a completed tool attempt", async () => {

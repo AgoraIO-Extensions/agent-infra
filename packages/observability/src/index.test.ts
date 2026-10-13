@@ -363,6 +363,44 @@ it("keeps invalid observational input out of business control flow", () => {
 	expect(telemetry.status().invalidRecords).toBe(1);
 });
 
+it("rejects a Browser category on a non-Browser event", () => {
+	const telemetry = startObservability({
+		service: "platform-api",
+		output: new Writable({
+			write(_chunk, _encoding, done) {
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({
+		stage: "tool",
+		outcome: "completed",
+		browserOperation: "interaction",
+	});
+	expect(telemetry.status().invalidRecords).toBe(1);
+});
+
+it("keeps a valid Browser category in logs", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({
+		stage: "browser",
+		outcome: "unknown",
+		browserOperation: "recovery",
+	});
+	expect(lines[0]).toContain('"browserOperation":"recovery"');
+});
+
 it("contains capture failures and reports them independently", () => {
 	const telemetry = startObservability({
 		service: "platform-api",

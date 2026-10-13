@@ -43,6 +43,20 @@ export type OperationalOutcome =
 	| "failed"
 	| "unknown";
 
+/** Bounded operation categories projected from an existing Browser fact. */
+export const browserOperationCategories = [
+	"navigation",
+	"observation",
+	"interaction",
+	"artifact",
+	"handoff",
+	"recovery",
+	"unknown",
+] as const;
+
+export type BrowserOperationCategory =
+	(typeof browserOperationCategories)[number];
+
 export const operationalCodes = [
 	"AUTHORIZATION_DENIED",
 	"TASK_UNAVAILABLE",
@@ -67,6 +81,8 @@ export interface OperationalEvent {
 	readonly executionId?: string;
 	readonly operationRef?: string;
 	readonly attemptRef?: string;
+	/** Present only for events projected from a Browser operation fact. */
+	readonly browserOperation?: BrowserOperationCategory;
 }
 
 export interface ModelTokenUsage {
@@ -117,6 +133,7 @@ const outcomes = new Set<OperationalOutcome>([
 ]);
 const stages = new Set<string>(operationalStages);
 const codes = new Set<string>(operationalCodes);
+const browserOperations = new Set<string>(browserOperationCategories);
 const knownResourceKinds = new Set<string>(resourceKinds);
 const identifier =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -431,8 +448,14 @@ export function startObservability(options: ObservabilityOptions) {
 					executionId,
 					operationRef,
 					attemptRef,
+					browserOperation,
 				} = event;
-				if (!stages.has(stage) || !outcomes.has(outcome)) {
+				if (
+					!stages.has(stage) ||
+					!outcomes.has(outcome) ||
+					(browserOperation !== undefined &&
+						(stage !== "browser" || !browserOperations.has(browserOperation)))
+				) {
 					invalidRecords++;
 					return;
 				}
@@ -449,6 +472,7 @@ export function startObservability(options: ObservabilityOptions) {
 					service,
 					stage,
 					outcome,
+					...(browserOperation === undefined ? {} : { browserOperation }),
 				};
 				const details = {
 					...labels,

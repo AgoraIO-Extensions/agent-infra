@@ -12,6 +12,7 @@ import {
 	parseConversationOperationHistoryV2,
 } from "@agent-infra/platform-core";
 import type {
+	BrowserOperationCategory,
 	ModelTokenUsage,
 	OperationalCode,
 	OperationalEvent,
@@ -28,6 +29,34 @@ const failureCodes: Partial<
 	dependency_unavailable: "DEPENDENCY_UNAVAILABLE",
 	persistence_unavailable: "PERSISTENCE_UNAVAILABLE",
 };
+
+function browserOperationCategory(toolId: string): BrowserOperationCategory {
+	const normalized = toolId.toLowerCase().replaceAll(":", ".");
+	if (normalized.includes("navigate")) return "navigation";
+	if (normalized.includes("observe") || normalized.includes("snapshot"))
+		return "observation";
+	if (
+		normalized.includes("screenshot") ||
+		normalized.includes("download") ||
+		normalized.includes("upload") ||
+		normalized.includes("artifact")
+	)
+		return "artifact";
+	if (normalized.includes("handoff")) return "handoff";
+	if (normalized.includes("recover")) return "recovery";
+	if (
+		normalized.includes("interact") ||
+		normalized.includes("click") ||
+		normalized.includes("fill") ||
+		normalized.includes("select") ||
+		normalized.includes("press") ||
+		normalized.includes("scroll") ||
+		normalized.includes("switch") ||
+		normalized.includes("wait")
+	)
+		return "interaction";
+	return "unknown";
+}
 
 function firstOperationOutcome(
 	next: ConversationEventWritePlanV1 | ConversationEventDecisionV1,
@@ -61,6 +90,9 @@ function firstOperationOutcome(
 	return {
 		stage: fact.kind === "tool" && fact.browser ? "browser" : fact.kind,
 		outcome,
+		...(fact.kind === "tool" && fact.browser
+			? { browserOperation: browserOperationCategory(fact.toolId) }
+			: {}),
 		...(code === undefined ? {} : { code }),
 		...(fact.durationMs === undefined ? {} : { durationMs: fact.durationMs }),
 		operationRef: fact.operationRef,
