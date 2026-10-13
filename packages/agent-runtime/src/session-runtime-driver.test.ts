@@ -585,8 +585,6 @@ it("keeps a protected cancellation as an unknown Turn hold after a persistence r
 	try {
 		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
 		await enteredPrompt;
-		failNextPersist = true;
-		await sessionOptions?.markUnknown?.();
 		await sessionOptions?.recordOperationFact?.({
 			kind: "tool",
 			operationRef: "11111111-1111-4111-8111-111111111111",
@@ -594,6 +592,17 @@ it("keeps a protected cancellation as an unknown Turn hold after a persistence r
 			phase: "intent",
 			toolId: "filesystem.read",
 		});
+		failNextPersist = true;
+		await sessionOptions?.markUnknown?.();
+		await expect(
+			sessionOptions?.recordOperationFact?.({
+				kind: "tool",
+				operationRef: "33333333-3333-4333-8333-333333333333",
+				attemptRef: "44444444-4444-4444-8444-444444444444",
+				phase: "intent",
+				toolId: "filesystem.write",
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
 		release();
 		await pending;
 		const state = JSON.parse(
@@ -607,11 +616,14 @@ it("keeps a protected cancellation as an unknown Turn hold after a persistence r
 			turns: {
 				status: string;
 				events: { type: string }[];
-				operationFacts?: { phase: string }[];
+				operationFacts?: { phase: string; failureCode?: string }[];
 			}[];
 		};
 		expect(persisted.turns[0]?.status).toBe("unknown");
-		expect(persisted.turns[0]?.operationFacts?.at(-1)?.phase).toBe("intent");
+		expect(persisted.turns[0]?.operationFacts?.at(-1)).toMatchObject({
+			phase: "unknown",
+			failureCode: "recovery_unconfirmed",
+		});
 		expect(
 			persisted.turns[0]?.events.some((event) => event.type === "completed"),
 		).toBe(false);

@@ -244,11 +244,10 @@ interface Turn {
 	operationRef?: string;
 	attemptRef?: string;
 }
-function uncertainToolFacts(turn: Turn) {
+function uncertainOperationFacts(turn: Turn) {
 	const latest = new Map<string, RuntimeOperationFactV2>();
 	for (const fact of turn.operationFacts ?? []) {
-		if (fact.kind === "tool")
-			latest.set(JSON.stringify([fact.operationRef, fact.attemptRef]), fact);
+		latest.set(JSON.stringify([fact.operationRef, fact.attemptRef]), fact);
 	}
 	return [...latest.values()].filter(
 		(fact) =>
@@ -257,7 +256,7 @@ function uncertainToolFacts(turn: Turn) {
 			fact.phase === "unknown",
 	);
 }
-function appendUnknownToolFacts(
+function appendUnknownOperationFacts(
 	turn: Turn,
 	facts: readonly RuntimeOperationFactV2[],
 ) {
@@ -369,6 +368,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			.read()
 			.turns.find((item) => item.executionId === action.executionId);
 		if (!turn) runtimeAuthorizationDenied();
+		if (turn.unknownHold) runtimeAuthorizationDenied();
 		if (
 			action.kind === "model" &&
 			(turn.operationRef !== action.operationRef ||
@@ -414,7 +414,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			const turn = state.turns.find(
 				(entry) => entry.executionId === executionId,
 			);
-			if (!turn || terminal(turn.status))
+			if (!turn || terminal(turn.status) || turn.unknownHold)
 				throw new RuntimeHostError(
 					"RUNTIME_OPERATION_CONFLICT",
 					"Runtime operation fact is no longer current",
@@ -605,7 +605,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			return binding;
 		});
 	}
-	private file(binding: Binding) {
+	private file(binding: Binding, recover = true) {
 		let file = this.files.get(binding.ref);
 		if (!file) {
 			file = (async () => {
@@ -773,10 +773,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					unavailable();
 				await file.update((draft) => {
 					for (const turn of draft.turns) {
-						const uncertainTools = uncertainToolFacts(turn);
-						const hold = turn.unknownHold || uncertainTools.length > 0;
+						const uncertainOperations = uncertainOperationFacts(turn);
+						const hold = turn.unknownHold || uncertainOperations.length > 0;
 						if (turn.status === "running" && hold) {
-							appendUnknownToolFacts(turn, uncertainTools);
+							appendUnknownOperationFacts(turn, uncertainOperations);
 							draft.sequence++;
 							turn.events.push(
 								RuntimeEventV1Schema.parse({
@@ -792,7 +792,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							turn.status = "unknown";
 							turn.unknownHold = true;
 						} else if (turn.status === "unknown" && hold) {
-							appendUnknownToolFacts(turn, uncertainTools);
+							appendUnknownOperationFacts(turn, uncertainOperations);
 							turn.unknownHold = true;
 							if (!hasUnknownStatusEvent(turn)) {
 								draft.sequence++;
@@ -828,6 +828,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					}
 				});
 				state = file.read();
+				if (!recover) return file;
 				const active = state.turns.find((turn) => !terminal(turn.status));
 				const latest = active ?? state.turns.at(-1);
 				const recoverable = active && !active.unknownHold ? active : undefined;
@@ -931,32 +932,9 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	 * committed bytes so an unknown hold can be retried after a transient fsync or
 	 * rename failure. The caller keeps the native action blocked while this runs.
 	 */
-	private async reopenDurableFile(binding: Binding) {
+	private reopenDurableFile(binding: Binding) {
 		this.files.delete(binding.ref);
-		const fresh = (async () => {
-			const reopened = await DurableJsonFile.open<Session>(
-				join(this.options.path, binding.ref, "state.json"),
-				{
-					schemaVersion: 1,
-					binding,
-					cancelled: false,
-					sequence: 0,
-					operations: [],
-					turns: [],
-				},
-			);
-			const state = reopened.read();
-			if (
-				state.schemaVersion !== 1 ||
-				JSON.stringify(state.binding) !== JSON.stringify(binding) ||
-				!Array.isArray(state.turns) ||
-				!Array.isArray(state.operations)
-			)
-				unavailable();
-			return reopened;
-		})();
-		this.files.set(binding.ref, fresh);
-		return fresh;
+		return this.file(binding, false);
 	}
 	private async persistUnknownAfterFailure(
 		binding: Binding,
@@ -1708,7 +1686,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
 			if (!turn) return;
-			if (turn.status === status && status === "unknown") return;
+			if (turn.status === status && status === "unknown") {
+				if (unknownHold) turn.unknownHold = true;
+				return;
+			}
 			if (unknownHold && terminal(turn.status)) {
 				const completed = turn.events.at(-1);
 				if (completed?.type !== "completed") unavailable();
