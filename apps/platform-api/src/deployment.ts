@@ -33,6 +33,10 @@ import type { ConversationModelSelectionReaderV1 } from "./http/conversation-rou
 import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
+import {
+	createRuntimeNativeMetadataWorkerReaderV1,
+	type RuntimeNativeMetadataWorkerGatewayV1,
+} from "./runtime-native-metadata-reader.js";
 import type { SkillHubProviderImportDeploymentV1 } from "./skill-hub-read-assembly.js";
 
 type CustomAgentGatewayRouteInput = NonNullable<
@@ -113,6 +117,19 @@ export interface ProductionPlatformApiInputV1
 	readonly resolveCustomAgentInteractionUrl?: Parameters<
 		typeof createDeploymentPresentation
 	>[0]["resolveCustomAgentInteractionUrl"];
+}
+
+/**
+ * Compose the production API reader from the Store scope resolver and the
+ * fixed Worker gateway. The Worker remains the only proof issuer.
+ */
+export function createProductionNativeMetadataReaderV1(options: {
+	readonly resolveRequest: Parameters<
+		typeof createRuntimeNativeMetadataWorkerReaderV1
+	>[0]["resolveRequest"];
+	readonly gateway: RuntimeNativeMetadataWorkerGatewayV1;
+}) {
+	return createRuntimeNativeMetadataWorkerReaderV1(options);
 }
 
 /** Merge explicit mounted deployment ports without allowing duplicate authorities. */
