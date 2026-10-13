@@ -2018,7 +2018,10 @@ describe("explicit historical metadata delivery", () => {
 	);
 });
 
-function installationHarness(runtimeOrigin = "https://runtime.test:3443/") {
+function installationHarness(
+	runtimeOrigin = "https://runtime.test:3443/",
+	patBinding = false,
+) {
 	const profile = {
 		schemaVersion: 1 as const,
 		publicOrigin: "https://connection.test",
@@ -2049,6 +2052,15 @@ function installationHarness(runtimeOrigin = "https://runtime.test:3443/") {
 		scope: "mcp" as const,
 		configFingerprint: approved.configFingerprint,
 		source: approved.source,
+		...(patBinding
+			? {
+					patBinding: {
+						consumerId: "platform",
+						bindingEndpoint:
+							"https://connection.test/api/v1/connection/pat-bindings",
+					},
+				}
+			: {}),
 	};
 	const installationAuthorize = vi.fn<
 		NonNullable<
@@ -2108,11 +2120,19 @@ function installationHarness(runtimeOrigin = "https://runtime.test:3443/") {
 			authorizationId: "authorization-a",
 			phase: "awaiting_callback",
 			expiresAt: now + 600_000,
-			authorizationUrl:
-				"https://connection.test/oauth/authorize?response_type=code&client_id=client&redirect_uri=https%3A%2F%2Fplatform.test%2Fcallback&scope=mcp&resource=https%3A%2F%2Fconnection.test%2Fmcp&code_challenge_method=S256&state=" +
-				"a".repeat(64) +
-				"&code_challenge=" +
-				"a".repeat(43),
+			...(patBinding
+				? {
+						authorizationUrl:
+							"https://connection.test/connection/pat-bindings/state-a",
+						callbackStateHash: "b".repeat(64),
+					}
+				: {
+						authorizationUrl:
+							"https://connection.test/oauth/authorize?response_type=code&client_id=client&redirect_uri=https%3A%2F%2Fplatform.test%2Fcallback&scope=mcp&resource=https%3A%2F%2Fconnection.test%2Fmcp&code_challenge_method=S256&state=" +
+							"a".repeat(64) +
+							"&code_challenge=" +
+							"a".repeat(43),
+					}),
 		}),
 	);
 	return { ...h, approved, configuration, installationAuthorize };
@@ -2164,6 +2184,68 @@ it("sends a separately authorized installation request from the original Worker 
 		});
 		expect(body).not.toHaveProperty("input");
 		expect(body).not.toHaveProperty("token");
+	} finally {
+		await h.runtime.close();
+	}
+});
+
+it("accepts PAT begin callback metadata once and keeps confirm/status responses clean", async () => {
+	const h = installationHarness("https://runtime.test:3443/", true);
+	const responses = [
+		{
+			schemaVersion: 1,
+			authorizationId: "authorization-a",
+			phase: "awaiting_callback",
+			expiresAt: now + 600_000,
+			authorizationUrl:
+				"https://connection.test/connection/pat-bindings/state-a",
+			callbackStateHash: "b".repeat(64),
+		},
+		{
+			schemaVersion: 1,
+			authorizationId: "authorization-a",
+			phase: "awaiting_verification",
+			expiresAt: now + 600_000,
+		},
+		{
+			schemaVersion: 1,
+			authorizationId: "authorization-a",
+			phase: "awaiting_verification",
+			expiresAt: now + 600_000,
+		},
+	];
+	h.fetcher.mockImplementation(async () => {
+		const response = responses.shift();
+		if (!response) throw new Error("unexpected PAT request");
+		return Response.json(response);
+	});
+	const runtimeGrant = await h.authorize();
+	try {
+		const begin = await h.runtime.connectionInstallation.request({
+			execution: h.events(runtimeGrant),
+			authorizationId: "authorization-a",
+			command: "begin",
+		});
+		expect(begin.callbackStateHash).toMatch(/^[a-f0-9]{64}$/);
+		expect(begin.authorizationUrl).toContain("/connection/pat-bindings/");
+
+		const confirm = await h.runtime.connectionInstallation.request({
+			execution: h.events(runtimeGrant),
+			authorizationId: "authorization-a",
+			command: "confirm",
+		});
+		expect(confirm.phase).toBe("awaiting_verification");
+		expect(confirm).not.toHaveProperty("callbackStateHash");
+		expect(confirm).not.toHaveProperty("authorizationUrl");
+
+		const status = await h.runtime.connectionInstallation.request({
+			execution: h.events(runtimeGrant),
+			authorizationId: "authorization-a",
+			command: "status",
+		});
+		expect(status.phase).toBe("awaiting_verification");
+		expect(status).not.toHaveProperty("callbackStateHash");
+		expect(status).not.toHaveProperty("authorizationUrl");
 	} finally {
 		await h.runtime.close();
 	}
