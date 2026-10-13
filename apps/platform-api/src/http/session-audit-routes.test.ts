@@ -192,14 +192,31 @@ describe("session and audit routes", () => {
 		).toBe(401);
 	});
 	it("rejects non-administrators before querying audit persistence", async () => {
-		const { app, audit } = createApp({
-			...activeIdentity,
-			roles: ["employee"],
-		});
+		const telemetry = { record: vi.fn() } satisfies AuditTelemetry;
+		const { app, audit } = createApp(
+			{
+				...activeIdentity,
+				roles: ["employee"],
+			},
+			undefined,
+			telemetry,
+		);
 		for (const path of ["/api/v1/admin/audit", "/api/v2/admin/audit"]) {
 			expect((await app.request(path)).status).toBe(403);
 		}
 		expect(audit.listAudit).not.toHaveBeenCalled();
+		expect(telemetry.record).toHaveBeenCalledTimes(2);
+		expect(telemetry.record.mock.calls).toEqual(
+			expect.arrayContaining([
+				expect.arrayContaining([
+					expect.objectContaining({
+						stage: "audit_query",
+						outcome: "rejected",
+						code: "AUTHORIZATION_DENIED",
+					}),
+				]),
+			]),
+		);
 	});
 
 	it("does not invent a browser user for a system audit actor", async () => {

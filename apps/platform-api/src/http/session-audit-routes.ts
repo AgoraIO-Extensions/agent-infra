@@ -10,7 +10,12 @@ import {
 } from "@agent-infra/platform-store";
 import type { Hono } from "hono";
 import type { ConnectionCapabilityV1 } from "../connection-consumer-profile.js";
-import { type AuditTelemetry, observeAuditQuery } from "./audit-telemetry.js";
+import {
+	type AuditTelemetry,
+	auditOutcome,
+	observeAuditQuery,
+	recordAuditStage,
+} from "./audit-telemetry.js";
 import {
 	HttpProtocolError,
 	parsePageQuery,
@@ -66,15 +71,29 @@ async function readAuditPage(
 	request: Request,
 	metadata: RequestMetadata,
 ): Promise<PlatformAuditPageV1> {
-	const identity = await resolveIdentity(
-		dependencies.identity,
-		request,
-		metadata.traceId,
-	);
-	if (!identity.roles.includes("system_admin")) {
-		throw new HttpProtocolError("FORBIDDEN", metadata.traceId);
+	const preflightStartedAt = performance.now();
+	let identity: Awaited<ReturnType<typeof resolveIdentity>>;
+	let page: ReturnType<typeof parsePageQuery>;
+	try {
+		identity = await resolveIdentity(
+			dependencies.identity,
+			request,
+			metadata.traceId,
+		);
+		if (!identity.roles.includes("system_admin"))
+			throw new HttpProtocolError("FORBIDDEN", metadata.traceId);
+		page = parsePageQuery(request, metadata.traceId);
+	} catch (error) {
+		recordAuditStage(
+			dependencies.telemetry,
+			"audit_query",
+			"list",
+			preflightStartedAt,
+			auditOutcome(error),
+			metadata,
+		);
+		throw error;
 	}
-	const page = parsePageQuery(request, metadata.traceId);
 	try {
 		return await observeAuditQuery({
 			telemetry: dependencies.telemetry,

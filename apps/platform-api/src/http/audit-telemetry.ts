@@ -14,13 +14,19 @@ export type AuditOperation = "list" | "detail" | "denied";
 
 function codeFor(error: unknown): OperationalCode | undefined {
 	if (error && typeof error === "object") {
-		const code = (error as { code?: unknown }).code;
+		const value = error as {
+			code?: unknown;
+			body?: { code?: unknown };
+		};
+		const code = value.code ?? value.body?.code;
 		if (
 			code === "access_denied" ||
 			code === "authentication_required" ||
 			code === "forbidden" ||
 			code === "AUTHENTICATION_REQUIRED" ||
-			code === "AUTHORIZATION_REVOKED"
+			code === "FORBIDDEN" ||
+			code === "AUTHORIZATION_REVOKED" ||
+			code === "RESOURCE_UNAVAILABLE"
 		)
 			return "AUTHORIZATION_DENIED";
 		if (code === "unavailable" || code === "DEPENDENCY_UNAVAILABLE")
@@ -40,7 +46,11 @@ export function auditOutcome(error: unknown): {
 	code?: OperationalCode;
 } {
 	if (error && typeof error === "object") {
-		const rawCode = (error as { code?: unknown }).code;
+		const value = error as {
+			code?: unknown;
+			body?: { code?: unknown };
+		};
+		const rawCode = value.code ?? value.body?.code;
 		const status = (error as { status?: unknown }).status;
 		if (typeof status === "number" && status >= 400 && status < 500)
 			return {
