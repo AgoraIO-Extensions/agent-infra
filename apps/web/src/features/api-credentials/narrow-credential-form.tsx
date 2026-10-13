@@ -65,13 +65,14 @@ export function NarrowCredentialForm({
 	const [expiryError, setExpiryError] = useState<string | null>(null);
 	const [requestError, setRequestError] = useState<string | null>(null);
 	const busy = pending || disabled;
+	const scopesKey = JSON.stringify(credential.scopes);
 	const credentialSnapshot = useMemo(
 		() => ({
 			credentialId: credential.credentialId,
-			scopes: credential.scopes,
+			scopes: JSON.parse(scopesKey) as typeof credential.scopes,
 			expiresAt: credential.expiresAt,
 		}),
-		[credential.credentialId, credential.scopes, credential.expiresAt],
+		[credential.credentialId, scopesKey, credential.expiresAt],
 	);
 
 	useEffect(() => {

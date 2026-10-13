@@ -222,6 +222,39 @@ describe("NarrowCredentialForm", () => {
 		expect(onRefresh).toHaveBeenCalledOnce();
 	});
 
+	it("keeps drafts when readback returns equivalent scope values", () => {
+		const view = render(
+			<NarrowCredentialForm
+				credential={metadata}
+				onNarrow={vi.fn()}
+				onComplete={vi.fn()}
+				onCancel={vi.fn()}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("checkbox", { name: "使用 Agent" }));
+		fireEvent.change(screen.getByLabelText("提前到期时间（可选）"), {
+			target: { value: "2026-10-20T12:30" },
+		});
+
+		view.rerender(
+			<NarrowCredentialForm
+				credential={{ ...metadata, scopes: [...metadata.scopes] }}
+				onNarrow={vi.fn()}
+				onComplete={vi.fn()}
+				onCancel={vi.fn()}
+			/>,
+		);
+
+		expect(
+			screen
+				.getByRole("checkbox", { name: "使用 Agent" })
+				.getAttribute("aria-checked"),
+		).toBe("false");
+		expect(
+			(screen.getByLabelText("提前到期时间（可选）") as HTMLInputElement).value,
+		).toBe("2026-10-20T12:30");
+	});
+
 	it("prevents concurrent submissions and keeps controls disabled through completion", async () => {
 		const { onNarrow, onComplete } = setup();
 		let finish: () => void = () => undefined;
