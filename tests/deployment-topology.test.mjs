@@ -668,6 +668,53 @@ test("production Worker requires a private module and runtime authorization moun
 	assert.match(invalidCaRef.stderr, /trustedCaSecretRef/);
 });
 
+test("native metadata Worker gateway is opt-in and restricted to Platform API", () => {
+	const disabled = objects(render().stdout);
+	assert.equal(
+		resource(disabled, "Service", "topology-agent-infra-platform-worker-native-metadata"),
+		undefined,
+	);
+	const enabled = render(
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set",
+		"platformWorker.nativeMetadataGateway.enabled=true",
+		"--set",
+		"platformWorker.nativeMetadataGateway.port=3010",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+	);
+	assert.equal(enabled.status, 0, enabled.stderr);
+	const resources = objects(enabled.stdout);
+	const service = resource(
+		resources,
+		"Service",
+		"topology-agent-infra-platform-worker-native-metadata",
+	);
+	assert.equal(service.spec.ports[0].port, 3010);
+	const deployment = resource(
+		resources,
+		"Deployment",
+		"topology-agent-infra-platform-worker",
+	);
+	assert.deepEqual(deployment.spec.template.spec.containers[0].ports, [
+		{ name: "native-metadata", containerPort: 3010, protocol: "TCP" },
+	]);
+	const policy = resource(
+		resources,
+		"NetworkPolicy",
+		"topology-agent-infra-platform-worker-native-metadata",
+	);
+	assert.equal(policy.spec.ingress[0].ports[0].port, 3010);
+	assert.deepEqual(policy.spec.ingress[0].from[0].podSelector.matchLabels, {
+		"app.kubernetes.io/instance": "topology",
+		"app.kubernetes.io/component": "platform-api",
+	});
+	const external = render("--set", "platformWorker.nativeMetadataGateway.enabled=true");
+	assert.notEqual(external.status, 0);
+	assert.match(external.stderr, /requires platformApi\.placement=in-cluster/);
+});
+
 test("enterprise directory deployment keeps migration ahead of its runtime resources", () => {
 	const disabled = render();
 	assert.equal(disabled.status, 0, disabled.stderr);

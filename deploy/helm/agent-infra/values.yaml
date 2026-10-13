@@ -86,6 +86,9 @@ platformWorker:
   runtimeImageDigest: ""
   replicas: 1
   wecomEnabled: false
+  nativeMetadataGateway:
+    enabled: false
+    port: 3004
 
 enterpriseDirectorySync:
   enabled: false
