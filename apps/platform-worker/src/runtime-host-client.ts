@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ProtocolErrorV1Schema } from "@agent-infra/contracts";
 import type { ApprovedConnectionConsumerTargetV1 } from "@agent-infra/contracts/connection-consumer-profile";
@@ -35,6 +36,16 @@ import {
 	RuntimeRelayKeyDeliveryV1Schema,
 	RuntimeReplayRequestV1Schema,
 	type RuntimeSelectionV1,
+	type RuntimeSkillDirectoryEntryV1,
+	RuntimeSkillDirectoryEntryV1Schema,
+	type RuntimeSkillDirectoryRequestV1,
+	RuntimeSkillDirectoryRequestV1Schema,
+	type RuntimeSkillDirectoryResponseV1,
+	RuntimeSkillDirectoryResponseV1Schema,
+	type RuntimeSkillResourceReadRequestV1,
+	RuntimeSkillResourceReadRequestV1Schema,
+	type RuntimeSkillResourceReadResponseV1,
+	RuntimeSkillResourceReadResponseV1Schema,
 	RuntimeStatusRequestV2Schema,
 	type RuntimeStatusRequestV3,
 	RuntimeStatusRequestV3Schema,
@@ -124,6 +135,31 @@ export class RuntimeRelayKeyDeliveryError extends ConversationRuntimeHostError {
 
 const maximumResponseBytes = 65_536;
 const maximumEventFrameBytes = 131_072;
+const maximumSkillResourceBytes = 1_048_576;
+const maximumSkillResourceResponseBytes =
+	Math.ceil(maximumSkillResourceBytes / 3) * 4 + 4_096;
+
+export interface WorkerRuntimeSkillResourceBindingV1 {
+	/** Generation returned by the immediately preceding directory read. */
+	readonly generationId: string;
+	/** The exact immutable directory entry selected for this resource read. */
+	readonly entry: RuntimeSkillDirectoryEntryV1;
+	/** Local upper bound; never sent to RuntimeHost as caller-controlled policy. */
+	readonly maximumBytes?: number;
+}
+
+export interface WorkerRuntimeHostClientV1
+	extends ConversationRuntimeHostPortV1 {
+	skillDirectory(
+		request: RuntimeSkillDirectoryRequestV1,
+		signal?: AbortSignal,
+	): Promise<RuntimeSkillDirectoryResponseV1>;
+	readSkillResource(
+		request: RuntimeSkillResourceReadRequestV1,
+		bindingOrSignal?: WorkerRuntimeSkillResourceBindingV1 | AbortSignal,
+		signal?: AbortSignal,
+	): Promise<RuntimeSkillResourceReadResponseV1>;
+}
 
 function bindConnectionConsumer(
 	fetcher: typeof fetch,
@@ -210,6 +246,94 @@ async function boundedResponseText(
 	} finally {
 		await reader.cancel().catch(() => undefined);
 	}
+}
+
+function skillDirectoryScopeKey(
+	request: RuntimeSkillDirectoryRequestV1 | RuntimeSkillResourceReadRequestV1,
+): string {
+	return JSON.stringify({
+		actorId: request.actorId,
+		channelId: request.channelId,
+		agentId: request.agentId,
+		conversationId: request.conversationId,
+		executionId: request.executionId,
+		turnId: request.turnId,
+		sessionGeneration: request.sessionGeneration,
+		deliveryFence: request.deliveryFence,
+		hostSessionRef: request.hostSessionRef,
+	});
+}
+
+function validateSkillRelativePath(value: string): void {
+	const parts = value.split("/");
+	if (
+		value.includes("\0") ||
+		parts.some((part) => part.length === 0 || part === "." || part === "..")
+	)
+		failure("RUNTIME_REQUEST_INVALID", false);
+}
+
+function parseSkillDirectoryResponse(
+	request: RuntimeSkillDirectoryRequestV1,
+	value: unknown,
+): RuntimeSkillDirectoryResponseV1 {
+	let response: RuntimeSkillDirectoryResponseV1;
+	try {
+		response = RuntimeSkillDirectoryResponseV1Schema.parse(value);
+	} catch {
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	}
+	if (response.hostSessionRef !== request.hostSessionRef)
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	const names = new Set(response.skills.map((entry) => entry.name));
+	if (names.size !== response.skills.length)
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	return response;
+}
+
+function responseResourceBytes(
+	response: RuntimeSkillResourceReadResponseV1,
+	maximumBytes: number,
+): Uint8Array {
+	if (
+		!Number.isSafeInteger(maximumBytes) ||
+		maximumBytes < 1 ||
+		maximumBytes > maximumSkillResourceBytes ||
+		response.sizeBytes > maximumBytes
+	)
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	const bytes = Buffer.from(response.bytesBase64, "base64");
+	const digest = createHash("sha256").update(bytes).digest("hex");
+	if (
+		bytes.byteLength !== response.sizeBytes ||
+		bytes.byteLength > maximumBytes ||
+		Buffer.from(bytes).toString("base64") !== response.bytesBase64 ||
+		digest !== response.sha256
+	) {
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	}
+	return bytes;
+}
+
+function parseSkillResourceResponse(
+	request: RuntimeSkillResourceReadRequestV1,
+	value: unknown,
+	maximumBytes: number,
+): RuntimeSkillResourceReadResponseV1 {
+	let response: RuntimeSkillResourceReadResponseV1;
+	try {
+		response = RuntimeSkillResourceReadResponseV1Schema.parse(value);
+	} catch {
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	}
+	if (
+		response.hostSessionRef !== request.hostSessionRef ||
+		response.skillName !== request.skillName ||
+		response.relativePath !== request.relativePath
+	)
+		return failure("RUNTIME_RESPONSE_INVALID", true);
+	responseResourceBytes(response, maximumBytes);
+	return response;
 }
 
 function requestInit(
@@ -458,12 +582,33 @@ async function* eventStream<T extends { cursor: string; type: string }>(
 
 export function createWorkerRuntimeHostClientV1(
 	options: WorkerRuntimeHostClientOptionsV1,
-): ConversationRuntimeHostPortV1 {
+): WorkerRuntimeHostClientV1 {
 	if (!options || typeof options !== "object" || !options.serviceToken) {
 		throw new TypeError("RuntimeHost client options are invalid");
 	}
 	const dispatchBase = endpoint(options.baseUrl, "/");
 	const fetcher = options.fetch ?? runtimeFetch;
+	const skillDirectories = new Map<string, RuntimeSkillDirectoryResponseV1>();
+	const isSignal = (
+		value: WorkerRuntimeSkillResourceBindingV1 | AbortSignal | undefined,
+	): value is AbortSignal =>
+		!!value &&
+		typeof value === "object" &&
+		"aborted" in value &&
+		typeof value.addEventListener === "function";
+	const rememberSkillDirectory = (
+		request: RuntimeSkillDirectoryRequestV1,
+		response: RuntimeSkillDirectoryResponseV1,
+	) => {
+		const key = skillDirectoryScopeKey(request);
+		skillDirectories.delete(key);
+		skillDirectories.set(key, response);
+		while (skillDirectories.size > 64) {
+			const oldest = skillDirectories.keys().next().value;
+			if (oldest === undefined) break;
+			skillDirectories.delete(oldest);
+		}
+	};
 	return {
 		async dispatch(request, signal) {
 			let selected: ReturnType<typeof dispatchBody>;
@@ -533,6 +678,109 @@ export function createWorkerRuntimeHostClientV1(
 				signal,
 			);
 			yield* eventStream(response, RuntimeEventV1Schema);
+		},
+		async skillDirectory(request, signal) {
+			let body: RuntimeSkillDirectoryRequestV1;
+			try {
+				body = RuntimeSkillDirectoryRequestV1Schema.parse(request);
+			} catch {
+				return failure("RUNTIME_REQUEST_INVALID", false);
+			}
+			if (signal?.aborted) return failure("RUNTIME_INTERRUPTED", true);
+			try {
+				const response = await interruptedDependency(
+					post(
+						fetcher,
+						new URL("internal/runtime/v1/skills", dispatchBase),
+						options.serviceToken,
+						body.traceId,
+						body,
+						signal,
+					),
+					signal,
+				);
+				if (signal?.aborted) return failure("RUNTIME_INTERRUPTED", true);
+				const value = JSON.parse(
+					await interruptedDependency(boundedResponseText(response), signal),
+				);
+				const parsed = parseSkillDirectoryResponse(body, value);
+				rememberSkillDirectory(body, parsed);
+				return parsed;
+			} catch (error) {
+				if (error instanceof ConversationRuntimeHostError) throw error;
+				return failure("RUNTIME_RESPONSE_INVALID", true);
+			}
+		},
+		async readSkillResource(request, bindingOrSignal, signal) {
+			const readSignal = isSignal(bindingOrSignal) ? bindingOrSignal : signal;
+			const binding = isSignal(bindingOrSignal) ? undefined : bindingOrSignal;
+			let body: RuntimeSkillResourceReadRequestV1;
+			try {
+				body = RuntimeSkillResourceReadRequestV1Schema.parse(request);
+				validateSkillRelativePath(body.relativePath);
+			} catch (error) {
+				if (error instanceof ConversationRuntimeHostError) throw error;
+				return failure("RUNTIME_REQUEST_INVALID", false);
+			}
+			if (readSignal?.aborted) return failure("RUNTIME_INTERRUPTED", true);
+			const directory = skillDirectories.get(skillDirectoryScopeKey(body));
+			const directoryEntry = directory?.skills.find(
+				(candidate) => candidate.name === body.skillName,
+			);
+			let entry: RuntimeSkillDirectoryEntryV1;
+			if (binding) {
+				try {
+					if (!/^[a-f0-9]{64}$/.test(binding.generationId))
+						return failure("RUNTIME_REQUEST_INVALID", false);
+					entry = RuntimeSkillDirectoryEntryV1Schema.parse(binding.entry);
+				} catch {
+					return failure("RUNTIME_REQUEST_INVALID", false);
+				}
+				if (entry.name !== body.skillName)
+					return failure("RUNTIME_REQUEST_INVALID", false);
+				if (
+					directory &&
+					(!directoryEntry || directory.generationId !== binding.generationId)
+				)
+					return failure("RUNTIME_REQUEST_INVALID", false);
+				if (directoryEntry && !isDeepStrictEqual(binding.entry, directoryEntry))
+					return failure("RUNTIME_REQUEST_INVALID", false);
+			} else {
+				if (!directory || !directoryEntry)
+					return failure("RUNTIME_REQUEST_INVALID", false);
+				entry = directoryEntry;
+			}
+			const maximumBytes = binding?.maximumBytes ?? maximumSkillResourceBytes;
+			if (
+				!Number.isSafeInteger(maximumBytes) ||
+				maximumBytes < 1 ||
+				maximumBytes > maximumSkillResourceBytes
+			)
+				return failure("RUNTIME_REQUEST_INVALID", false);
+			try {
+				const response = await interruptedDependency(
+					post(
+						fetcher,
+						new URL("internal/runtime/v1/skills/resources", dispatchBase),
+						options.serviceToken,
+						body.traceId,
+						body,
+						readSignal,
+					),
+					readSignal,
+				);
+				if (readSignal?.aborted) return failure("RUNTIME_INTERRUPTED", true);
+				const value = JSON.parse(
+					await interruptedDependency(
+						boundedResponseText(response, maximumSkillResourceResponseBytes),
+						readSignal,
+					),
+				);
+				return parseSkillResourceResponse(body, value, maximumBytes);
+			} catch (error) {
+				if (error instanceof ConversationRuntimeHostError) throw error;
+				return failure("RUNTIME_RESPONSE_INVALID", true);
+			}
 		},
 	};
 }

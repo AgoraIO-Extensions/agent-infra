@@ -55,6 +55,8 @@ export {
 	createWorkerRuntimeHostClientV1,
 	createWorkerRuntimeHostClientV3,
 	type WorkerRuntimeHostClientOptionsV1,
+	type WorkerRuntimeHostClientV1,
+	type WorkerRuntimeSkillResourceBindingV1,
 } from "./runtime-host-client.js";
 export {
 	createWorkerSecretActivationKubernetesPortV1,
