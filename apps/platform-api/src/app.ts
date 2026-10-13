@@ -86,13 +86,13 @@ import {
 	type SkillHubInstallationRoutesDependenciesV1,
 } from "./http/skill-hub-installation-routes.js";
 import {
-	registerSkillHubReadRoutesV1,
-	type SkillHubReadRoutesDependenciesV1,
-} from "./http/skill-hub-read-routes.js";
-import {
 	registerSkillHubPublicationRoutesV1,
 	type SkillHubPublicationRoutesDependenciesV1,
 } from "./http/skill-hub-publication-routes.js";
+import {
+	registerSkillHubReadRoutesV1,
+	type SkillHubReadRoutesDependenciesV1,
+} from "./http/skill-hub-read-routes.js";
 import {
 	registerTaskRoutes,
 	type TaskRoutesDependencies,
