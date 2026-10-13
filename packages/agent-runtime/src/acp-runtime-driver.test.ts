@@ -171,6 +171,21 @@ it("persists a confirmed ACP result and events, then resumes the same session wi
 				await driver.getStatus(result.nativeSessionRef, command.executionId),
 			).toBe("completed"),
 		);
+		const state = JSON.parse(
+			await readFile(join(path, result.nativeSessionRef, "state.json"), "utf8"),
+		) as {
+			turns: {
+				operationFacts?: { phase: string; model?: { modelId: string } }[];
+			}[];
+		};
+		expect(state.turns[0]?.operationFacts?.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
+			"completed",
+		]);
+		expect(state.turns[0]?.operationFacts?.[0]?.model?.modelId).toBe(
+			"provider_model",
+		);
 		const events = await driver.replayEvents(
 			result.nativeSessionRef,
 			command.executionId,
