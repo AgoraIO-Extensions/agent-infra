@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import {
 	type NativeMetadataProjectionV1,
+	PlatformNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataBindingResponseV1Schema,
 	type RuntimeNativeMetadataProofV1,
 	RuntimeNativeMetadataProofV1Schema,
@@ -21,6 +23,13 @@ export interface RuntimeNativeMetadataProofIssuerV1 {
 		readonly request: RuntimeNativeMetadataBindingResponseV1;
 		readonly signal: AbortSignal;
 	}): Promise<RuntimeNativeMetadataProofV1>;
+}
+
+export interface RuntimeNativeMetadataWorkerGatewayV1 {
+	read(
+		request: import("@agent-infra/contracts/runtime").PlatformNativeMetadataReadRequestV1,
+		signal: AbortSignal,
+	): Promise<unknown>;
 }
 
 type RuntimeNativeMetadataBindingResponseV1 =
@@ -107,6 +116,76 @@ export function createRuntimeNativeMetadataReaderV1(options: {
 					);
 				if (
 					!sameBinding(binding, responseBinding) ||
+					response.projection.selector !== selector
+				)
+					return null;
+				return response.projection;
+			} catch {
+				return null;
+			} finally {
+				controller.abort();
+			}
+		},
+	};
+}
+
+/** API reader variant for the production Worker-only proof path. */
+export function createRuntimeNativeMetadataWorkerReaderV1(options: {
+	readonly resolveRequest: Parameters<
+		typeof createRuntimeNativeMetadataReaderV1
+	>[0]["resolveRequest"];
+	readonly gateway: RuntimeNativeMetadataWorkerGatewayV1;
+}) {
+	if (
+		typeof options.resolveRequest !== "function" ||
+		typeof options.gateway?.read !== "function"
+	)
+		throw new TypeError(
+			"Runtime native metadata Worker reader options are invalid",
+		);
+	return {
+		async read(
+			identity: IdentityContext,
+			conversationId: string,
+			executionId: string,
+			selector: "status" | "commands" | "skills",
+		): Promise<NativeMetadataProjectionV1 | null> {
+			const controller = new AbortController();
+			try {
+				const resolved = await options.resolveRequest({
+					identity,
+					conversationId,
+					executionId,
+					selector,
+					signal: controller.signal,
+				});
+				if (!resolved) return null;
+				const binding =
+					RuntimeNativeMetadataBindingResponseV1Schema.parse(resolved);
+				if (
+					binding.selector !== selector ||
+					binding.scope.principal.kind !== "user" ||
+					binding.scope.principal.id !== identity.userId ||
+					binding.scope.authorizationRevision !==
+						identity.authorizationRevision ||
+					binding.scope.conversationId !== conversationId ||
+					binding.scope.executionId !== executionId ||
+					binding.scope.channelId !== "web"
+				)
+					return null;
+				const { originalHostScopeRef: _hostScope, ...requestIdentity } =
+					binding;
+				const request = PlatformNativeMetadataReadRequestV1Schema.parse({
+					...requestIdentity,
+					apiRequestSourceRef: randomUUID(),
+				});
+				const response = RuntimeNativeMetadataReadResponseV1Schema.parse(
+					await options.gateway.read(request, controller.signal),
+				);
+				const { projection: _projection, ...responseBinding } = response;
+				if (
+					runtimeNativeMetadataRequestSigningPayloadV1(responseBinding) !==
+						runtimeNativeMetadataRequestSigningPayloadV1(binding) ||
 					response.projection.selector !== selector
 				)
 					return null;
