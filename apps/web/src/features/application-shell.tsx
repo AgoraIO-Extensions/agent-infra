@@ -129,8 +129,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		select: (location) => location.search.mode === "conversation",
 	});
 	const selectingConversation =
-		(pathname === "/agents" || pathname === "/agents/") &&
-		conversationSelection;
+		normalizedPathname === "/agents" && conversationSelection;
 	const chatContext = pathname.startsWith("/chat/") || selectingConversation;
 	const [sheet, setSheet] = useState(false);
 	const routeHref = useLocation({ select: (location) => location.href });
@@ -166,7 +165,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		import.meta.env.DEV &&
 		import.meta.env.VITE_PLATFORM_DEVELOPMENT_MODE === "controlled";
 	const title =
-		pathname === "/"
+		normalizedPathname === "/"
 			? "工作台"
 			: selectingConversation
 				? "选择 Agent 开始对话"
@@ -174,27 +173,28 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					? "对话"
 					: pathname.includes("/configuration")
 						? "配置与生命周期"
-						: pathname === "/admin/audit"
+						: normalizedPathname === "/admin/audit"
 							? "平台审计"
-							: pathname === "/audit"
+							: normalizedPathname === "/audit"
 								? "我的执行审计"
-								: pathname === "/admin/agents"
+								: normalizedPathname === "/admin/agents"
 									? "Agent 管理"
-									: pathname.startsWith("/admin")
+									: normalizedPathname.startsWith("/admin")
 										? "创建审批"
-										: pathname === "/my-agents/new"
+										: normalizedPathname === "/my-agents/new"
 											? "创建申请"
-											: pathname.startsWith("/my-agents/") &&
-													pathname.endsWith("/edit")
+											: normalizedPathname.startsWith("/my-agents/") &&
+													normalizedPathname.endsWith("/edit")
 												? "编辑申请"
-												: pathname.startsWith("/my-agents/") &&
-														pathname !== "/my-agents/"
+												: normalizedPathname.startsWith("/my-agents/") &&
+														normalizedPathname !== "/my-agents"
 													? "申请详情"
-													: pathname.startsWith("/my-agents")
+													: normalizedPathname.startsWith("/my-agents")
 														? "我的 Agent"
-														: pathname === "/my-settings/api-credentials"
+														: normalizedPathname ===
+																"/my-settings/api-credentials"
 															? "API 凭证与应用"
-															: pathname === "/my-settings/relay-key"
+															: normalizedPathname === "/my-settings/relay-key"
 																? "个人 Relay Key"
 																: normalizedPathname === "/skills/manage"
 																	? "Skill Hub 管理"
@@ -205,8 +205,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 																			? "评测"
 																			: normalizedPathname === "/ops"
 																				? "运维观测"
-																				: pathname === "/agents" ||
-																						pathname === "/agents/"
+																				: normalizedPathname === "/agents"
 																					? "Agent 目录"
 																					: "Agent 详情";
 	const navigation = (
@@ -224,8 +223,8 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 				<nav aria-label="工作区" className="platform-nav-group">
 					<p className="platform-nav-label">工作区</p>
 					<Link
-						aria-current={pathname === "/" ? "page" : undefined}
-						className={`platform-nav-item ${pathname === "/" ? "selected" : ""}`}
+						aria-current={normalizedPathname === "/" ? "page" : undefined}
+						className={`platform-nav-item ${normalizedPathname === "/" ? "selected" : ""}`}
 						to="/"
 						onClick={() => setSheet(false)}
 					>
@@ -262,11 +261,12 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					<p className="platform-nav-label">我的管理</p>
 					<Link
 						aria-current={
-							pathname.startsWith("/my-agents") && pathname !== "/my-agents/new"
+							normalizedPathname.startsWith("/my-agents") &&
+							normalizedPathname !== "/my-agents/new"
 								? "page"
 								: undefined
 						}
-						className={`platform-nav-item ${pathname.startsWith("/my-agents") && pathname !== "/my-agents/new" ? "selected" : ""}`}
+						className={`platform-nav-item ${normalizedPathname.startsWith("/my-agents") && normalizedPathname !== "/my-agents/new" ? "selected" : ""}`}
 						to="/my-agents"
 						onClick={() => setSheet(false)}
 					>
@@ -274,8 +274,10 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						我的 Agent
 					</Link>
 					<Link
-						aria-current={pathname === "/my-agents/new" ? "page" : undefined}
-						className={`platform-nav-item ${pathname === "/my-agents/new" ? "selected" : ""}`}
+						aria-current={
+							normalizedPathname === "/my-agents/new" ? "page" : undefined
+						}
+						className={`platform-nav-item ${normalizedPathname === "/my-agents/new" ? "selected" : ""}`}
 						to="/my-agents/new"
 						onClick={() => setSheet(false)}
 					>
@@ -283,8 +285,8 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						创建申请
 					</Link>
 					<Link
-						aria-current={pathname === "/audit" ? "page" : undefined}
-						className={`platform-nav-item ${pathname === "/audit" ? "selected" : ""}`}
+						aria-current={normalizedPathname === "/audit" ? "page" : undefined}
+						className={`platform-nav-item ${normalizedPathname === "/audit" ? "selected" : ""}`}
 						to="/audit"
 						onClick={() => setSheet(false)}
 					>
@@ -304,9 +306,11 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					</Link>
 					<Link
 						aria-current={
-							pathname === "/my-settings/api-credentials" ? "page" : undefined
+							normalizedPathname === "/my-settings/api-credentials"
+								? "page"
+								: undefined
 						}
-						className={`platform-nav-item ${pathname === "/my-settings/api-credentials" ? "selected" : ""}`}
+						className={`platform-nav-item ${normalizedPathname === "/my-settings/api-credentials" ? "selected" : ""}`}
 						to="/my-settings/api-credentials"
 						onClick={() => setSheet(false)}
 					>
@@ -315,9 +319,11 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					</Link>
 					<Link
 						aria-current={
-							pathname === "/my-settings/relay-key" ? "page" : undefined
+							normalizedPathname === "/my-settings/relay-key"
+								? "page"
+								: undefined
 						}
-						className={`platform-nav-item ${pathname === "/my-settings/relay-key" ? "selected" : ""}`}
+						className={`platform-nav-item ${normalizedPathname === "/my-settings/relay-key" ? "selected" : ""}`}
 						to="/my-settings/relay-key"
 						onClick={() => setSheet(false)}
 					>
@@ -357,7 +363,12 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					<nav aria-label="系统管理" className="platform-nav-group">
 						<p className="platform-nav-label">系统管理</p>
 						<Link
-							className={`platform-nav-item ${pathname.startsWith("/admin/approvals") ? "selected" : ""}`}
+							aria-current={
+								normalizedPathname.startsWith("/admin/approvals")
+									? "page"
+									: undefined
+							}
+							className={`platform-nav-item ${normalizedPathname.startsWith("/admin/approvals") ? "selected" : ""}`}
 							to="/admin/approvals"
 							onClick={() => setSheet(false)}
 						>
@@ -365,8 +376,10 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							创建审批
 						</Link>
 						<Link
-							aria-current={pathname === "/admin/agents" ? "page" : undefined}
-							className={`platform-nav-item ${pathname === "/admin/agents" ? "selected" : ""}`}
+							aria-current={
+								normalizedPathname === "/admin/agents" ? "page" : undefined
+							}
+							className={`platform-nav-item ${normalizedPathname === "/admin/agents" ? "selected" : ""}`}
 							to="/admin/agents"
 							onClick={() => setSheet(false)}
 						>
@@ -374,7 +387,10 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 							Agent 管理
 						</Link>
 						<Link
-							className={`platform-nav-item ${pathname === "/admin/audit" ? "selected" : ""}`}
+							aria-current={
+								normalizedPathname === "/admin/audit" ? "page" : undefined
+							}
+							className={`platform-nav-item ${normalizedPathname === "/admin/audit" ? "selected" : ""}`}
 							to="/admin/audit"
 							onClick={() => setSheet(false)}
 						>
