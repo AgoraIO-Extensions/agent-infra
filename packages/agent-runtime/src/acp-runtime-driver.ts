@@ -87,10 +87,25 @@ export const GenericAcpRuntimeDriver = {
 							? "failed"
 							: "unknown",
 			openSession: async ({ selection, admit, update, ...session }) => {
+				const modelOption = options.modelOptions.find(
+					(option) => option.modelOptionId === selection.modelOptionId,
+				);
+				if (!modelOption)
+					throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
 				const callbacks = {
 					admit,
 					update,
 					resolveModelCredential: session.resolveModelCredential,
+					recordOperationFact: session.recordOperationFact,
+					modelFact: {
+						configVersion: options.configVersion,
+						modelOptionId: selection.modelOptionId,
+						modelId: modelOption.nativeModelId.replace(
+							/[^A-Za-z0-9._:-]/g,
+							"_",
+						),
+						reasoningLevel: selection.reasoningLevel,
+					},
 				};
 				// ACP sessions can process multiple prompts over one native Session.
 				// Keep the resolver stable inside the launch, while replacing its
@@ -145,6 +160,8 @@ export const GenericAcpRuntimeDriver = {
 				const native = await openAcpSession({
 					...session,
 					launch: launchWithBrowser,
+					recordOperationFact: callbacks.recordOperationFact,
+					modelFact: () => callbacks.modelFact,
 					update: async ({ update: event }) => {
 						if (
 							event.sessionUpdate === "agent_message_chunk" &&
@@ -212,9 +229,26 @@ export const GenericAcpRuntimeDriver = {
 					? {
 							...native,
 							startTurn: (next: NativeSessionOptions) => {
+								native.startTurn?.(next);
 								callbacks.admit = next.admit;
 								callbacks.update = next.update;
 								callbacks.resolveModelCredential = next.resolveModelCredential;
+								callbacks.recordOperationFact = next.recordOperationFact;
+								const nextOption = options.modelOptions.find(
+									(option) =>
+										option.modelOptionId === next.selection.modelOptionId,
+								);
+								if (!nextOption)
+									throw new Error("RUNTIME_MODEL_SELECTION_UNSUPPORTED");
+								callbacks.modelFact = {
+									configVersion: options.configVersion,
+									modelOptionId: next.selection.modelOptionId,
+									modelId: nextOption.nativeModelId.replace(
+										/[^A-Za-z0-9._:-]/g,
+										"_",
+									),
+									reasoningLevel: next.selection.reasoningLevel,
+								};
 								phases.clear();
 								launch.beginTurn?.();
 							},
