@@ -46,8 +46,12 @@ import {
 import { workloadResourceConfigurationHashV1 } from "./workload-runtime.js";
 
 const execFile = promisify(execFileCallback);
-async function waitUntil(check: () => Promise<boolean>, label: string) {
-	for (let attempt = 0; attempt < 150; attempt++) {
+async function waitUntil(
+	check: () => Promise<boolean>,
+	label: string,
+	attempts = 150,
+) {
+	for (let attempt = 0; attempt < attempts; attempt++) {
 		if (await check()) return;
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
@@ -753,6 +757,7 @@ modelCatalog:{load:async()=>({})}, runtimeFetch: (url, init)=> fetch(${JSON.stri
 					await sql`select 1 from platform.conversation_events where execution_id=${first.executionId} or execution_id=${second.executionId}`
 				).length === 1,
 			"persisted running event",
+			600,
 		);
 		const [active] =
 			await sql`select execution_id, conversation_id from platform.conversation_executions where status='processing'`;

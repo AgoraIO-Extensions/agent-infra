@@ -557,7 +557,7 @@ export const conversationEvents = platformSchema.table(
 						${table.eventType} in ('model.selection.fell_back', 'task.status')
 						OR (
 							${table.eventType} = 'execution.status'
-							AND (${table.eventPayload}->>'status' = 'cancelled') IS TRUE
+							AND (${table.eventPayload}->>'status' in ('cancelled', 'failed', 'unknown')) IS TRUE
 						)
 					)
 				)`,

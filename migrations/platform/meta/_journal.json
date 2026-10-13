@@ -358,6 +358,13 @@
       "when": 1791815724512,
       "tag": "0054_skill_agent_binding_applied_receipt",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1791815724513,
+      "tag": "0055_platform_execution_failure_events",
+      "breakpoints": true
     }
   ]
 }

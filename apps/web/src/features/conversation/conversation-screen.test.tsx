@@ -429,6 +429,72 @@ describe("functional conversation screen", () => {
 		},
 	);
 
+	it("clears the accepted placeholder, shows the failure, and allows resending when the Platform persists a failed execution over SSE", async () => {
+		let accepted = false;
+		let failureDelivered = false;
+		const failedEvent = {
+			...event(1),
+			schemaVersion: 1 as const,
+			type: "execution.status" as const,
+			payload: { status: "failed" as const },
+		};
+		const slowRefresh = deferred<Response>();
+		const { streams, requests } = setup((request) => {
+			if (request.method === "POST") {
+				accepted = true;
+				return receipt();
+			}
+			if (
+				new URL(request.url).pathname !== "/api/v2/conversations/conversation-1"
+			)
+				return undefined;
+			// Hold the post-failure projection re-read open: the three behaviors
+			// below must come from the SSE event alone, without a refresh or reload.
+			if (failureDelivered) return slowRefresh.promise;
+			return Response.json({
+				...history("conversation-1", []),
+				messages: accepted ? [userMessage()] : [],
+			});
+		});
+		const input = await composer();
+		fireEvent.change(input, { target: { value: "Fail this task" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await screen.findByText("消息已受理，等待处理结果。");
+		// The receipt re-read opens the stream that carries the persisted failure.
+		await waitFor(() => expect(streams.length).toBe(2));
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "发送补充指令",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		failureDelivered = true;
+		act(() => streams.at(-1)?.send(failedEvent));
+		await screen.findByText("执行失败");
+		expect(screen.queryByText("消息已受理，等待处理结果。")).toBeNull();
+		expect(input.disabled).toBe(false);
+		fireEvent.change(input, { target: { value: "Try once more" } });
+		const send = screen.getByRole("button", {
+			name: "发送",
+		}) as HTMLButtonElement;
+		await waitFor(() => expect(send.disabled).toBe(false));
+		fireEvent.click(send);
+		await waitFor(() =>
+			expect(
+				requests.filter((request) => request.method === "POST"),
+			).toHaveLength(2),
+		);
+		await act(async () => {
+			slowRefresh.resolve(
+				Response.json({
+					...history("conversation-1", [failedEvent]),
+					messages: [userMessage()],
+				}),
+			);
+		});
+	});
+
 	it.each(["timeline", "unknown", "removed-unknown"] as const)(
 		"restores focus after closing execution details opened from %s",
 		async (entry) => {

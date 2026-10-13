@@ -14,6 +14,11 @@ const migrations = readMigrationFiles({
 		"../../../migrations/platform",
 	),
 });
+const appliedReceiptMigrationIndex = migrations.findIndex((entry) =>
+	entry.sql.some((statement) =>
+		statement.includes("skill_hub_agent_binding_receipt_binding"),
+	),
+);
 
 let database: PostgresTestDatabase | undefined;
 let client: ReturnType<typeof postgres>;
@@ -40,13 +45,14 @@ describe("Skill Hub Applied receipt migration", () => {
 				created_at bigint
 			)
 		`;
-		for (const migration of migrations.slice(0, -1)) {
+		const legacyMigrations = migrations.slice(0, appliedReceiptMigrationIndex);
+		for (const migration of legacyMigrations) {
 			await client`
 				insert into platform_migrations.history (hash, created_at)
 				values (${migration.hash}, ${migration.folderMillis})
 			`;
 		}
-		for (const migration of migrations.slice(0, -1)) {
+		for (const migration of legacyMigrations) {
 			for (const statement of migration.sql) {
 				if (statement.trim()) await client.unsafe(statement);
 			}
@@ -83,7 +89,7 @@ describe("Skill Hub Applied receipt migration", () => {
 				 1, 'synced', null, now(), now(), 1)
 		`;
 
-		const migration = migrations[migrations.length - 1];
+		const migration = migrations[appliedReceiptMigrationIndex];
 		if (!migration) throw new Error("Missing Applied receipt migration");
 		for (const statement of migration.sql) {
 			if (statement.trim()) await client.unsafe(statement);
