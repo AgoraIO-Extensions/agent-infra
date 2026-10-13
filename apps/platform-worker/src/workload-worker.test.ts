@@ -172,6 +172,49 @@ describe("Workload Worker lifecycle", () => {
 		expect(store.runNext).toHaveBeenCalledOnce();
 		expect(store.close).toHaveBeenCalledOnce();
 	});
+	it("runs the next due step at once after an advance and waits only when idle (#2295)", async () => {
+		store.runNext
+			.mockResolvedValueOnce("advanced")
+			.mockResolvedValueOnce("advanced")
+			.mockResolvedValueOnce("advanced")
+			.mockResolvedValue("idle");
+		const worker = createPlatformWorkloadWorkerV1({
+			...fixture(),
+			pollIntervalMs: 1000,
+			files: {
+				storage: { scan: async () => ({ objects: [], cursor: null }) },
+				batchSize: 10,
+				orphanGraceMs: 60_000,
+			} as never,
+		});
+		worker.start();
+		// 三次推进加一次空闲远早于一个轮询间隔就完成。
+		await vi.advanceTimersByTimeAsync(50);
+		expect(store.runNext).toHaveBeenCalledTimes(4);
+		// 存储扫描不随连续步数放大：这一轮只在空闲前清理一次。
+		expect(fileCleanup.runOnce).toHaveBeenCalledOnce();
+		await vi.advanceTimersByTimeAsync(900);
+		expect(store.runNext).toHaveBeenCalledTimes(4);
+		await vi.advanceTimersByTimeAsync(100);
+		expect(store.runNext).toHaveBeenCalledTimes(5);
+		expect(fileCleanup.runOnce).toHaveBeenCalledTimes(2);
+		await worker.stop();
+	});
+	it("waits one poll interval after the maximum consecutive advances (#2295)", async () => {
+		store.runNext.mockResolvedValue("advanced");
+		const worker = createPlatformWorkloadWorkerV1({
+			...fixture(),
+			pollIntervalMs: 1000,
+		});
+		worker.start();
+		await vi.advanceTimersByTimeAsync(100);
+		expect(store.runNext).toHaveBeenCalledTimes(20);
+		await vi.advanceTimersByTimeAsync(850);
+		expect(store.runNext).toHaveBeenCalledTimes(20);
+		await vi.advanceTimersByTimeAsync(150);
+		expect(store.runNext).toHaveBeenCalledTimes(40);
+		await worker.stop();
+	});
 	it("retries a failed transaction without logging provider details", async () => {
 		const options = fixture();
 		store.runNext.mockRejectedValueOnce(new Error("private-provider-response"));
