@@ -102,6 +102,8 @@ export const RuntimeOAuthGrantClaimsV1Schema = RuntimeOAuthScopeV1Schema.extend(
 		issuer: OpaqueIdV1Schema,
 		workerId: OpaqueIdV1Schema,
 		principal: RuntimePrincipalV1Schema,
+		/** Deployment-approved Connection principal mapping for PAT binding. */
+		connectionPrincipalId: OpaqueIdV1Schema.optional(),
 		command: z.enum(["begin", "confirm", "status", "refresh"]),
 		authorizationId: OpaqueIdV1Schema,
 		confirmationRevision: OpaqueIdV1Schema,

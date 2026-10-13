@@ -54,6 +54,7 @@ interface Transaction {
 	authorizationId: string;
 	confirmationRevision: string;
 	principal: { kind: "user"; id: string };
+	connectionPrincipalId?: string;
 	scope: import("@agent-infra/contracts/runtime").RuntimeOAuthScopeV1;
 	configuration: { ref: string; revision: string };
 	configurationFingerprint: string;
@@ -181,6 +182,9 @@ function parseTransaction(text: string): Transaction {
 		"schemaVersion",
 		"authorizationId",
 		"principal",
+		...(value.connectionPrincipalId === undefined
+			? []
+			: ["connectionPrincipalId"]),
 		"scope",
 		"configuration",
 		"configurationFingerprint",
@@ -212,6 +216,10 @@ function parseTransaction(text: string): Transaction {
 		).success ||
 		!RuntimePrincipalV1Schema.safeParse(value.principal).success ||
 		value.principal.kind !== "user" ||
+		(value.connectionPrincipalId !== undefined &&
+			!RuntimeOAuthGrantClaimsV1Schema.shape.connectionPrincipalId.safeParse(
+				value.connectionPrincipalId,
+			).success) ||
 		!RuntimeOAuthScopeV1Schema.safeParse(value.scope).success ||
 		!value.configuration ||
 		Object.keys(value.configuration).sort().join(",") !== "ref,revision" ||
@@ -625,6 +633,7 @@ export async function createProtectedRuntimeOAuthClient(options: {
 			record &&
 			(claims.principal.kind !== record.principal.kind ||
 				claims.principal.id !== record.principal.id ||
+				claims.connectionPrincipalId !== record.connectionPrincipalId ||
 				!isDeepStrictEqual(runtimeOAuthScopeV1(claims), record.scope) ||
 				!isDeepStrictEqual(request.reference, record.reference) ||
 				claims.authorizationId !== record.authorizationId ||
@@ -789,6 +798,8 @@ export async function createProtectedRuntimeOAuthClient(options: {
 							unavailable();
 						const state = randomBytes(32).toString("hex");
 						let bindingId: string | undefined;
+						if (configuration.patBinding && !claims.connectionPrincipalId)
+							unavailable();
 						let callbackStateHash: string | undefined;
 						let authorizationUrl: string | undefined;
 						let expiresAt = Date.now() + 600_000;
@@ -840,6 +851,9 @@ export async function createProtectedRuntimeOAuthClient(options: {
 							expiresAt,
 							requestDigest: claims.requestDigest,
 							...(bindingId ? { bindingId } : {}),
+							...(claims.connectionPrincipalId
+								? { connectionPrincipalId: claims.connectionPrincipalId }
+								: {}),
 							...(callbackStateHash ? { callbackStateHash } : {}),
 							...(authorizationUrl ? { authorizationUrl } : {}),
 						};
@@ -918,14 +932,14 @@ export async function createProtectedRuntimeOAuthClient(options: {
 				if (snapshot.command === "status") return response(record);
 				if (record.phase !== "awaiting_confirmation") return response(record);
 				if (configuration.patBinding) {
-					if (!record.bindingId) unavailable();
+					if (!record.bindingId || !record.connectionPrincipalId) unavailable();
 					record.phase = "exchange_started";
 					await writeRecord(records, `${key}.json`, record);
 					check(snapshot, record, true);
 					try {
 						const issued = await claimPatBinding(
 							record.bindingId,
-							record.principal.id,
+							record.connectionPrincipalId,
 						);
 						check(snapshot, record, true);
 						await publishMaterial(
