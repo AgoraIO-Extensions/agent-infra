@@ -249,6 +249,16 @@ Rehoboam 渠道发布以新的 immutable `rehoboam-connection-v13` 增补 Publis
 
 发布帮助以待发布的 immutable `rehoboam-connection-v16` 新增四个固定 Actions：
 搜索/文章读取使用metadata READ；直接发布和作者/管理员撤销恢复使用release WRITE。
+`rehoboam-connection-v17` 新增 `update_pipeline_help_example` WRITE，使用 release WRITE scope。
+47 个核心对话示例的运行真值在 Rehoboam 数据库，既有 search/get 实时读最新版本；
+管理员在当前对话明确确认完整草稿后才能原地修改。固定 POST `/mcp/v1/pipeline-help/examples/<id>`，
+传稳定 ID、expected_revision、完整八个文本字段与幂等键，不接受身份、编号或端点选择。
+Rehoboam 校验当前管理员、revision CAS 和幂等，保留完整历史正文与稳定编号/分享链接。
+Connection 验证 operation_revision 与当前 article revision；历史重放可能返回较新当前正文，
+仅当操作回执仍为本次 revision 且当前版本未变化时核对约定字段。未知写结果保持 uncertain，
+不换键重复创建；明确拒绝或确定 4xx 才标记 rejected。v16 源码与旧 Grant 保留，新增能力需显式授权。
+初始化不作为新 Agent Action，由管理员在 Rehoboam 显式补缺失，永不覆盖现有数据库编辑；
+不修改发布模板、审批或 Job。静态导出仍只含基础功能说明，示例修改不需要部署。
 申请人在当前对话明确要求加入帮助后，Rehoboam 将约定内容直接发布到共享数据库，网页和AI实时检索，
 没有候选审核、负责人通知、企微审批或逐条部署。AI可主动检索、去重、整理草稿，但建议/文档/工具内容不构成发布授权。
 Rehoboam 拥有基础说明、知识、服务端作者身份、幂等和revision CAS；Connection只转发固定授权调用。

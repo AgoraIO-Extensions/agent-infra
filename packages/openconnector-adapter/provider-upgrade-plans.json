@@ -3,6 +3,15 @@
 	"transitions": [
 		{
 			"provider": "rehoboam",
+			"fromReleaseId": "rehoboam-connection-v16",
+			"toReleaseId": "rehoboam-connection-v17",
+			"fromExecutorDigest": "sha256:1da2c8b2425759d2c2936167046b8abc04f8313ffacabc0595023304f34cc9af",
+			"toExecutorDigest": "sha256:d6a769f67ffa719f2201a80d79f1da7913693d095b2aa08e786db4ad0e6600ab",
+			"strategy": "REAPPROVAL_REQUIRED",
+			"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/2308"
+		},
+		{
+			"provider": "rehoboam",
 			"fromReleaseId": "rehoboam-connection-v15",
 			"toReleaseId": "rehoboam-connection-v16",
 			"fromExecutorDigest": "sha256:ac98f7a8839518e7a9714593096e9560249e6bd1a4d0a6499a9d221fc1743172",

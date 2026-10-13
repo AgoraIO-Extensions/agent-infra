@@ -205,6 +205,7 @@ export const providerGuideChapters: Record<string, GuideChapter> = {
 				title: "Rehoboam · 首次验证与效果",
 				paragraphs: [
 					"先调用 rehoboam.get_current_user，再查询有权限的模板或版本。创建、启动流水线、提测、交付和通知有不同效果；先预览，再明确确认，不能用一次连接授权代替业务操作确认。403 检查 PAT scope、资源角色及 Consumer Action。",
+					"发布帮助的对话示例从 Rehoboam 数据库实时读取。管理员先读取文章当前 revision，让 AI 展示完整新版，明确确认后可通过 v17 update_pipeline_help_example 原地保存；网页/AI立即生效，无需重新部署，旧正文保留历史。新增 Action 要明确授权，普通申请人不能越权修改核心示例，但仍可明确加入自己的发版经验。",
 				],
 			},
 		],
