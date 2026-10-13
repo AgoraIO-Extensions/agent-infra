@@ -1,10 +1,14 @@
 import { generateKeyPairSync } from "node:crypto";
+import { createExecutionGrantVerifier } from "@agent-infra/agent-runtime";
 import { describe, expect, it } from "vitest";
 import {
 	createRuntimeExecutionGrantVerifierV2,
 	validateRuntimeExecutionGrantV2,
 } from "../../../packages/agent-runtime/src/grant-v2.js";
-import { createWorkerRuntimeGrantSignerV2 } from "./runtime-grant-signer.js";
+import {
+	createWorkerRuntimeGrantSignerV2,
+	createWorkerRuntimeModelDirectoryGrantSignerV1,
+} from "./runtime-grant-signer.js";
 
 const now = 1_800_000_000_000;
 const keys = generateKeyPairSync("ed25519");
@@ -44,6 +48,44 @@ const validation = {
 };
 
 describe("Worker Runtime grant signer", () => {
+	it("signs the API model-directory dispatch as a short-lived RuntimeHost Grant", () => {
+		const keys = generateKeyPairSync("ed25519");
+		const request = {
+			schemaVersion: 1 as const,
+			requestId: "request-model-directory",
+			traceId: "trace-model-directory",
+			actorId: "user-1",
+			channelId: "web",
+			agentId: "agent-1",
+			conversationId: "conversation-1",
+			executionId: "execution-1",
+			turnId: "turn-1",
+			sessionGeneration: 2,
+			deliveryFence: 7,
+			hostSessionRef: "host-session-1",
+		};
+		const signer = createWorkerRuntimeModelDirectoryGrantSignerV1({
+			issuer: "platform",
+			keyId: "model-key",
+			privateKey: keys.privateKey,
+			now: () => now,
+			id: () => "model-grant",
+		});
+		const grant = signer(request);
+		const claims = createExecutionGrantVerifier(
+			new Map([["model-key", keys.publicKey]]),
+		)(grant).claims;
+		expect(claims).toMatchObject({
+			issuer: "platform",
+			grantId: "model-grant",
+			allowedCommands: ["model-directory.read"],
+			actorId: "user-1",
+		});
+		expect(Date.parse(claims.expiresAt) - Date.parse(claims.issuedAt)).toBe(
+			30_000,
+		);
+	});
+
 	it("signs the final input/selection and original authorization record with a 30-second lifetime", () => {
 		const body = {
 			...request,

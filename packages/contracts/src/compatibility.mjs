@@ -696,6 +696,7 @@ function isCustomAgentModelSelectionOpenApiAddition(previous, current) {
 	const command = "model-directory.read";
 	const runtimeSchemas = [
 		"RuntimeModelDirectoryRequestV1",
+		"RuntimeModelDirectoryDispatchRequestV1",
 		"RuntimeModelDirectoryResponseV1",
 	];
 	const runtimeHasSchemas = runtimeSchemas.some(
@@ -704,6 +705,21 @@ function isCustomAgentModelSelectionOpenApiAddition(previous, current) {
 	const currentHasSchemas = runtimeSchemas.every(
 		(name) => current.components?.schemas?.[name] !== undefined,
 	);
+	const previousHasPublishedDirectory =
+		previous.components?.schemas?.RuntimeModelDirectoryRequestV1 !==
+			undefined &&
+		previous.components?.schemas?.RuntimeModelDirectoryResponseV1 !== undefined;
+	if (
+		previousHasPublishedDirectory &&
+		previous.components?.schemas?.RuntimeModelDirectoryDispatchRequestV1 ===
+			undefined &&
+		current.components?.schemas?.RuntimeModelDirectoryDispatchRequestV1 !==
+			undefined
+	) {
+		const normalized = structuredClone(current);
+		delete normalized.components.schemas.RuntimeModelDirectoryDispatchRequestV1;
+		return findBreakingChanges(previous, normalized).length === 0;
+	}
 	if (runtimeHasSchemas) return false;
 	const previousCommands = previous.components?.schemas?.[commandSchema]?.enum;
 	const currentCommands = current.components?.schemas?.[commandSchema]?.enum;
@@ -730,7 +746,7 @@ function isCustomAgentModelSelectionOpenApiAddition(previous, current) {
 	if (
 		currentHasSchemas &&
 		fingerprint !==
-			"295257286a4113aa928fd4ccf63949e3518ffe9b90afdabf28d031d485ca75b9"
+			"86876308c8233f9c95306b421e6bd622c60e974f6213e47e95830e14d14f9ba6"
 	)
 		return false;
 	if (

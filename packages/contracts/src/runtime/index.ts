@@ -44,6 +44,7 @@ import {
 	RuntimeCapabilitiesResponseV1Schema,
 	RuntimeGenerationCancelRequestV1Schema,
 	RuntimeInputV1Schema,
+	RuntimeModelDirectoryDispatchRequestV1Schema,
 	RuntimeModelDirectoryRequestV1Schema,
 	RuntimeModelDirectoryResponseV1Schema,
 	RuntimeOperationResponseV1Schema,
@@ -80,6 +81,8 @@ export const RuntimeHostV1SchemaDefinitions = {
 	RuntimeSkillResourceReadRequestV1: RuntimeSkillResourceReadRequestV1Schema,
 	RuntimeSkillResourceReadResponseV1: RuntimeSkillResourceReadResponseV1Schema,
 	RuntimeModelDirectoryRequestV1: RuntimeModelDirectoryRequestV1Schema,
+	RuntimeModelDirectoryDispatchRequestV1:
+		RuntimeModelDirectoryDispatchRequestV1Schema,
 	RuntimeModelDirectoryResponseV1: RuntimeModelDirectoryResponseV1Schema,
 	RuntimeGenerationCancelRequestV1: RuntimeGenerationCancelRequestV1Schema,
 	RuntimeInputV1: RuntimeInputV1Schema,
