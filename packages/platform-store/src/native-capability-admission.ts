@@ -88,9 +88,10 @@ export class FakeNativeCapabilityAdmissionStoreV1
 			  >
 		>,
 		isCurrent: (plan: NativeCapabilityInvocationPlanV1) => boolean,
+		isAuthorized: () => Promise<boolean>,
 	): Promise<NativeCapabilityAdmissionDecisionV1> {
 		return this.#serialize(() =>
-			this.#admitNativeCapability(request, decide, isCurrent),
+			this.#admitNativeCapability(request, decide, isCurrent, isAuthorized),
 		);
 	}
 
@@ -122,6 +123,7 @@ export class FakeNativeCapabilityAdmissionStoreV1
 			  >
 		>,
 		isCurrent: (plan: NativeCapabilityInvocationPlanV1) => boolean,
+		isAuthorized: () => Promise<boolean>,
 	): Promise<NativeCapabilityAdmissionDecisionV1> {
 		const authority = request.authority;
 		const command = request.command;
@@ -142,6 +144,8 @@ export class FakeNativeCapabilityAdmissionStoreV1
 		]);
 		const existing = this.#idempotency.get(idempotencyKey);
 		if (existing) {
+			if (!(await isAuthorized()))
+				return { outcome: "denied", reason: "authorization_lost" };
 			if (existing.requestDigest !== request.requestDigest)
 				return { outcome: "conflict", reason: "idempotency_conflict" };
 			return {

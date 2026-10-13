@@ -111,6 +111,37 @@ describe("native capability admission Store seam", () => {
 		expect(harness.store.plans).toHaveLength(1);
 	});
 
+	it("rechecks authorization before returning a queued replay", async () => {
+		let authorizationCalls = 0;
+		const store = new FakeNativeCapabilityAdmissionStoreV1({ conversation });
+		const metadata = new FakeNativeCapabilityMetadataRevalidationV1({
+			projection,
+		});
+		const useCase = createNativeCapabilityAdmissionUseCaseV1({
+			authorization: {
+				async authorize() {
+					authorizationCalls += 1;
+					return authorizationCalls < 5
+						? { outcome: "allowed" as const, authority }
+						: { outcome: "denied" as const };
+				},
+			},
+			metadata,
+			transaction: store,
+			newId: (() => {
+				let next = 0;
+				return () => `generated-${++next}`;
+			})(),
+		});
+		expect((await useCase.admit(request)).outcome).toBe("accepted");
+		expect(
+			await useCase.admit({ ...request, requestId: "request-replay" }),
+		).toEqual({
+			outcome: "denied",
+			reason: "authorization_lost",
+		});
+	});
+
 	it("fails closed for stale or disabled metadata", async () => {
 		const staleMetadata = new FakeNativeCapabilityMetadataRevalidationV1({
 			projection,

@@ -207,6 +207,7 @@ export interface NativeCapabilityAdmissionTransactionPortV1 {
 			  >
 		>,
 		isCurrent: (plan: NativeCapabilityInvocationPlanV1) => boolean,
+		isAuthorized: () => Promise<boolean>,
 	): Promise<NativeCapabilityAdmissionDecisionV1>;
 }
 
@@ -672,6 +673,21 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							capability: plan.capability,
 							sessionGeneration: plan.sessionGeneration,
 						}),
+					async () => {
+						try {
+							const current = await dependencies.authorization.authorize({
+								schemaVersion: 1,
+								operation: "native-capability.invoke",
+								conversationId: request.conversationId,
+							});
+							return (
+								current.outcome === "allowed" &&
+								isDeepStrictEqual(parseAuthority(current.authority), authority)
+							);
+						} catch {
+							return false;
+						}
+					},
 				);
 			} catch {
 				return { outcome: "unavailable", reason: "metadata_unavailable" };
