@@ -274,6 +274,7 @@ export {
 	registerCustomAgentAuthGatewayRoutesV1,
 } from "./custom-agent-auth-gateway.js";
 export {
+	createProductionNativeMetadataReaderV1,
 	createProductionPlatformApiAssemblyInputV1,
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";
