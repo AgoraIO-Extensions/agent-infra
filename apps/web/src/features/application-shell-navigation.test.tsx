@@ -16,6 +16,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApplicationShell } from "./application-shell.js";
+import { NotFoundScreen } from "./not-found-screen.js";
 
 beforeEach(() => {
 	vi.stubGlobal(
@@ -70,6 +71,7 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 				<Outlet />
 			</ApplicationShell>
 		),
+		notFoundComponent: NotFoundScreen,
 	});
 	const home = createRoute({
 		getParentRoute: () => root,
@@ -115,6 +117,26 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 }
 
 describe("Original IA workbench navigation", () => {
+	it.each(["/no-such-page", "/admin/no-such-page", "/agents/a/b/c"])(
+		"shows a Chinese not-found page inside the shell for %s (#2297)",
+		async (entry) => {
+			const { history } = await showShell(false, entry);
+			expect(
+				await screen.findByRole("heading", { level: 1, name: "页面不存在" }),
+			).toBeTruthy();
+			expect(screen.queryByText("Not Found")).toBeNull();
+			// 面包屑不沿用其他页面的标题。
+			const breadcrumb = screen.getByRole("navigation", { name: "breadcrumb" });
+			expect(within(breadcrumb).getByText("页面不存在")).toBeTruthy();
+			expect(within(breadcrumb).queryByText("Agent 详情")).toBeNull();
+			expect(within(breadcrumb).queryByText("创建审批")).toBeNull();
+			fireEvent.click(screen.getByRole("link", { name: "返回工作台" }));
+			expect(
+				await screen.findByRole("heading", { name: "受控工作台" }),
+			).toBeTruthy();
+			expect(history.location.pathname).toBe("/");
+		},
+	);
 	it.each([
 		["/skills/manage", "Skill Hub 管理"],
 		["/skills/manage/", "Skill Hub 管理"],

@@ -3,7 +3,7 @@ import {
 	QueryClientProvider,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { Link, useLocation } from "@tanstack/react-router";
+import { Link, useLocation, useRouterState } from "@tanstack/react-router";
 import {
 	Activity,
 	Bot,
@@ -164,8 +164,13 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 	const development =
 		import.meta.env.DEV &&
 		import.meta.env.VITE_PLATFORM_DEVELOPMENT_MODE === "controlled";
-	const title =
-		normalizedPathname === "/"
+	// 未匹配任何路由时不要按路径前缀猜标题（否则落到「Agent 详情」，#2297）。
+	const notFound = useRouterState({
+		select: (state) => state.matches.some((match) => match.globalNotFound),
+	});
+	const title = notFound
+		? "页面不存在"
+		: normalizedPathname === "/"
 			? "工作台"
 			: selectingConversation
 				? "选择 Agent 开始对话"
