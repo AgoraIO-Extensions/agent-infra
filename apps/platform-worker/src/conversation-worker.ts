@@ -314,12 +314,48 @@ export function createPlatformConversationWorkerV2(
 		readonly itemId: string;
 		readonly operation: string;
 	}) {
-		if (item.operation !== "conversation.sandbox.reconcile.v1")
-			return dispatch.dispatch({
-				schemaVersion: 1,
-				itemId: item.itemId,
-				workerId: options.workerId,
-			});
+		if (item.operation !== "conversation.sandbox.reconcile.v1") {
+			const began = performance.now();
+			try {
+				const decision = await dispatch.dispatch({
+					schemaVersion: 1,
+					itemId: item.itemId,
+					workerId: options.workerId,
+				});
+				if (options.observability) {
+					const outcome =
+						decision.outcome === "accepted"
+							? "completed"
+							: decision.outcome === "unknown"
+								? "unknown"
+								: decision.outcome === "busy" || decision.outcome === "retry"
+									? "failed"
+									: "rejected";
+					record(options.observability, {
+						stage: "task_dispatch",
+						outcome,
+						durationMs: performance.now() - began,
+						...(decision.outcome === "busy" || decision.outcome === "retry"
+							? { code: "TASK_UNAVAILABLE" as const }
+							: {}),
+						// The operation is a bounded Store value. Item IDs stay out of
+						// telemetry to avoid high-cardinality labels and logs.
+						operationRef: item.operation,
+					});
+				}
+				return decision;
+			} catch (error) {
+				if (options.observability)
+					record(options.observability, {
+						stage: "task_dispatch",
+						outcome: "failed",
+						durationMs: performance.now() - began,
+						code: "TASK_UNAVAILABLE",
+						operationRef: item.operation,
+					});
+				throw error;
+			}
+		}
 		signal.throwIfAborted();
 		const leaseDurationMs = options.leaseDurationMs ?? 30_000;
 		const initialClaim = await store.claimSandboxReconciliation({
