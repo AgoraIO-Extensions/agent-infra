@@ -325,6 +325,7 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 		agentId = "agent-a",
 		userId = "same-id",
 		key = "user-grant",
+		expectedRevision = 2,
 	) {
 		return fetch(
 			`${origin}/api/v2/agents/${agentId}/api-use-grants/${userId}`,
@@ -335,7 +336,7 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 					"Idempotency-Key": key,
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ schemaVersion: 1, expectedRevision: 2 }),
+				body: JSON.stringify({ schemaVersion: 1, expectedRevision }),
 			},
 		);
 	}
@@ -640,6 +641,14 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 				and principal_id='same-id' and grant_type='use'`;
 		expect(grant?.authorization_revision).not.toBe("user-use-old");
 		expect(grant?.revoked_at).toBeNull();
+		await sql`update platform.agent_applications set management_revision = 3 where agent_id = 'agent-a'`;
+		const conflict = await grantUserUse(
+			"agent-a",
+			"same-id",
+			"user-grant-1",
+			3,
+		);
+		expect(conflict.status).toBe(409);
 	});
 
 	it("user use revoke persists its running Task control and JSON stop payload atomically", async () => {

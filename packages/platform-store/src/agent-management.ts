@@ -105,6 +105,26 @@ function sameValue(left: unknown, right: unknown): boolean {
 	return JSON.stringify(left) === JSON.stringify(right);
 }
 
+async function resolvePersonalApiUserForGrantV1(
+	directory: TaskUserDirectoryV1 | undefined,
+	userId: string,
+): Promise<Awaited<ReturnType<typeof resolveCurrentPersonalApiUserV1>>> {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			resolveCurrentPersonalApiUserV1(directory, userId),
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(
+					() => reject(new PersonalApiCredentialErrorV1("unavailable")),
+					5_000,
+				);
+			}),
+		]);
+	} finally {
+		if (timeout !== undefined) clearTimeout(timeout);
+	}
+}
+
 function acceptedResult(
 	input: unknown,
 	request: AgentManagementTransactionRequestV1,
@@ -893,6 +913,7 @@ export class PostgresAgentManagementTransactionV1
 			schemaVersion: 1,
 			agentId: command.agentId,
 			userId: command.userId,
+			expectedRevision: command.expectedRevision,
 		});
 		const commandType = "agent.user.use.grant.v1";
 		let auditContext: AgentApiAuditContextV1 = {
@@ -903,7 +924,7 @@ export class PostgresAgentManagementTransactionV1
 				await transaction`set local lock_timeout = '5s'`;
 				await transaction`set local statement_timeout = '30s'`;
 				await transaction`lock table platform.platform_user_disables in share row exclusive mode`;
-				const actor = await resolveCurrentPersonalApiUserV1(
+				const actor = await resolvePersonalApiUserForGrantV1(
 					this.#userDirectory,
 					command.actorId,
 				);
@@ -993,7 +1014,7 @@ export class PostgresAgentManagementTransactionV1
 							(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
 						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, 'api.agent.use.replayed', 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${transaction.json(saved as postgres.JSONValue)})
 					`;
-					const finalActor = await resolveCurrentPersonalApiUserV1(
+					const finalActor = await resolvePersonalApiUserForGrantV1(
 						this.#userDirectory,
 						command.actorId,
 					);
@@ -1006,7 +1027,10 @@ export class PostgresAgentManagementTransactionV1
 						select user_id from platform.platform_user_disables where user_id = ${command.actorId}
 					`;
 					if (
-						finalActor.userId !== command.actorId ||
+						finalActor.userId !== actor.userId ||
+						finalActor.accountStatus !== actor.accountStatus ||
+						finalActor.authorizationRevision !== actor.authorizationRevision ||
+						!sameValue(finalActor.organizationIds, actor.organizationIds) ||
 						finalActor.accountStatus !== "active" ||
 						finalDisabled ||
 						!finalOwner
@@ -1082,7 +1106,7 @@ export class PostgresAgentManagementTransactionV1
 							(id, scope_type, scope_id, actor_id, command_type, idempotency_key, request_digest, status, result, created_at, updated_at)
 						values (${randomUUID()}, 'agent', ${command.agentId}, ${command.actorId}, ${commandType}, ${command.idempotencyKey}, ${digest}, 'completed', ${transaction.json({ ...plan.result })}, ${plan.occurredAt}, ${plan.occurredAt})
 					`;
-				const finalActor = await resolveCurrentPersonalApiUserV1(
+				const finalActor = await resolvePersonalApiUserForGrantV1(
 					this.#userDirectory,
 					command.actorId,
 				);
@@ -1101,7 +1125,10 @@ export class PostgresAgentManagementTransactionV1
 						and principal_id = ${command.userId} and grant_type = 'use'
 				`;
 				if (
-					finalActor.userId !== command.actorId ||
+					finalActor.userId !== actor.userId ||
+					finalActor.accountStatus !== actor.accountStatus ||
+					finalActor.authorizationRevision !== actor.authorizationRevision ||
+					!sameValue(finalActor.organizationIds, actor.organizationIds) ||
 					finalActor.accountStatus !== "active" ||
 					finalDisabled ||
 					!finalOwner ||
