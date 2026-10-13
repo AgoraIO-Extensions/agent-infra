@@ -774,9 +774,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				await file.update((draft) => {
 					for (const turn of draft.turns) {
 						const uncertainOperations = uncertainOperationFacts(turn);
-						const hold = turn.unknownHold || uncertainOperations.length > 0;
+						const uncertainTools = uncertainOperations.filter(
+							(fact) => fact.kind === "tool",
+						);
+						const hold = turn.unknownHold || uncertainTools.length > 0;
 						if (turn.status === "running" && hold) {
-							appendUnknownOperationFacts(turn, uncertainOperations);
+							appendUnknownOperationFacts(turn, uncertainTools);
 							draft.sequence++;
 							turn.events.push(
 								RuntimeEventV1Schema.parse({
@@ -792,7 +795,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							turn.status = "unknown";
 							turn.unknownHold = true;
 						} else if (turn.status === "unknown" && hold) {
-							appendUnknownOperationFacts(turn, uncertainOperations);
+							appendUnknownOperationFacts(turn, uncertainTools);
 							turn.unknownHold = true;
 							if (!hasUnknownStatusEvent(turn)) {
 								draft.sequence++;
@@ -915,8 +918,19 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								recoveredTerminal = true;
 							}
 						}
-						if (recoverable && !recoveredTerminal)
+						if (recoverable && !recoveredTerminal) {
+							await file.update((draft) => {
+								const turn = draft.turns.find(
+									(entry) => entry.executionId === recoverable.executionId,
+								);
+								if (turn)
+									appendUnknownOperationFacts(
+										turn,
+										uncertainOperationFacts(turn),
+									);
+							});
 							await this.status(file, recoverable.executionId, "unknown");
+						}
 					} finally {
 						await restored.close();
 					}
