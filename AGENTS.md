@@ -142,6 +142,9 @@ volume。本地省略 Docker 不替代当前 PR head 的 CI 镜像构建和正�
 
 ## Security
 
+- GitHub 当前发布为 v10，保留 v9 源码及运行路由；v10 仅恢复 Kernel 包装错误中的原始
+  HTTP 状态。405/409 等拒绝走现有确定性失败，真实 5xx/断线仍为 UNCERTAIN，不自动重试。
+
 - Rehoboam 渠道取消 v15 仅取消本人的未获批申请；原生权限、状态 CAS 和回执真值在 Rehoboam，
   不能用 Pipeline Center 撤回或审批驳回代替。边界见已批准的渠道取消 ADR。
 

@@ -3,7 +3,11 @@ import test from "node:test";
 
 test("provider entry points preserve executor identity and published action arrays", async () => {
 	for (const [provider, file, executor] of [
-		["github", "index.ts", "OpenConnectorGitHubAdapter"],
+		[
+			"github",
+			"providers/github/versions/github-v10.ts",
+			"OpenConnectorGitHubAdapter",
+		],
 		[
 			"bitbucket",
 			"providers/bitbucket/versions/bitbucket-v9.ts",
