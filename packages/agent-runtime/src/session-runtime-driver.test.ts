@@ -423,12 +423,17 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 			nativeSessionRef: record.nativeSessionRef,
 			executionId: "execution-a",
 		};
+		const requestIdentity = {
+			rpcRequestId: 7,
+			requestDigest: "a".repeat(64),
+		};
 		await sessionOptions?.recordOperationFact?.({
 			kind: "tool",
 			operationRef: "11111111-1111-4111-8111-111111111111",
 			attemptRef: "22222222-2222-4222-8222-222222222222",
 			phase: "intent",
 			toolId: "filesystem.read",
+			...requestIdentity,
 		});
 		await sessionOptions?.recordOperationFact?.({
 			kind: "tool",
@@ -437,6 +442,7 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 			phase: "started",
 			startedAt: new Date().toISOString(),
 			toolId: "filesystem.read",
+			...requestIdentity,
 		});
 		await runtime.recordOperationFact({
 			...input,
@@ -498,7 +504,15 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 		await runtime.close();
 		const state = JSON.parse(
 			await readFile(join(path, record.nativeSessionRef, "state.json"), "utf8"),
-		) as { turns: { operationFacts?: { phase: string }[] }[] };
+		) as {
+			turns: {
+				operationFacts?: {
+					phase: string;
+					rpcRequestId?: string | number;
+					requestDigest?: string;
+				}[];
+			}[];
+		};
 		const facts = state.turns[0]?.operationFacts ?? [];
 		expect(facts.length).toBeLessThanOrEqual(256);
 		expect(facts.slice(0, 4).map((fact) => fact.phase)).toEqual([
@@ -508,6 +522,12 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 			"started",
 		]);
 		expect(facts.at(-1)?.phase).toBe("started");
+		expect(
+			facts.slice(0, 2).map((fact) => ({
+				rpcRequestId: fact.rpcRequestId,
+				requestDigest: fact.requestDigest,
+			})),
+		).toEqual([requestIdentity, requestIdentity]);
 	} finally {
 		releasePrompt?.();
 		await runtime.close();
