@@ -83,6 +83,10 @@ import {
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
 import {
+	registerSkillHubImportRoutesV1,
+	type SkillHubImportRoutesDependenciesV1,
+} from "./http/skill-hub-import-routes.js";
+import {
 	registerSkillHubInstallationRoutesV1,
 	type SkillHubInstallationRoutesDependenciesV1,
 } from "./http/skill-hub-installation-routes.js";
@@ -90,10 +94,6 @@ import {
 	registerSkillHubPublicationRoutesV1,
 	type SkillHubPublicationRoutesDependenciesV1,
 } from "./http/skill-hub-publication-routes.js";
-import {
-	registerSkillHubImportRoutesV1,
-	type SkillHubImportRoutesDependenciesV1,
-} from "./http/skill-hub-import-routes.js";
 import {
 	registerSkillHubReadRoutesV1,
 	type SkillHubReadRoutesDependenciesV1,
