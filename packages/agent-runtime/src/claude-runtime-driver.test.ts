@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
-import { access, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+	access,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -341,6 +348,26 @@ it("runs a native Claude Turn, durably replays its result and resumes the origin
 				).toBe("completed"),
 			{ timeout: 10000 },
 		);
+		const persisted = JSON.parse(
+			await readFile(
+				join(path, accepted.nativeSessionRef, "state.json"),
+				"utf8",
+			),
+		) as {
+			turns: {
+				operationFacts?: {
+					kind: string;
+					phase: string;
+					model?: Record<string, unknown>;
+				}[];
+			}[];
+		};
+		expect(
+			persisted.turns[0]?.operationFacts?.map((fact) => fact.phase),
+		).toEqual(["intent", "started", "completed"]);
+		expect(
+			persisted.turns[0]?.operationFacts?.every((fact) => !fact.model?.text),
+		).toBe(true);
 		const commands = await driver.discoverNativeCommands(
 			commandRead(accepted.nativeSessionRef),
 		);
