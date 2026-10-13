@@ -1,6 +1,7 @@
 import {
 	createNativeCapabilityAdmissionUseCaseV1,
 	type NativeCapabilityMetadataRevalidationPortV1,
+	nativeCapabilityAdmissionRequestDigestV1,
 } from "@agent-infra/platform-core";
 import { FakeNativeCapabilityMetadataRevalidationV1 } from "@agent-infra/platform-core/testing";
 import { describe, expect, it } from "vitest";
@@ -137,6 +138,35 @@ describe("native capability admission Store seam", () => {
 		expect(
 			await useCase.admit({ ...request, requestId: "request-replay" }),
 		).toEqual({
+			outcome: "denied",
+			reason: "authorization_lost",
+		});
+	});
+
+	it("rechecks Store revision after replay authorization awaits", async () => {
+		const harness = createHarness();
+		const accepted = await harness.useCase.admit(request);
+		if (accepted.outcome !== "accepted") throw new Error("Expected acceptance");
+		let release = () => {};
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const replay = harness.store.admitNativeCapability(
+			{
+				command: request,
+				authority,
+				requestDigest: nativeCapabilityAdmissionRequestDigestV1(request),
+			},
+			async () => accepted.plan,
+			() => true,
+			async () => {
+				await pending;
+				return true;
+			},
+		);
+		harness.store.setAuthorizationRevision("auth-revoked");
+		release();
+		expect(await replay).toEqual({
 			outcome: "denied",
 			reason: "authorization_lost",
 		});

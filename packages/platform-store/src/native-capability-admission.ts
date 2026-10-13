@@ -146,6 +146,8 @@ export class FakeNativeCapabilityAdmissionStoreV1
 		if (existing) {
 			if (!(await isAuthorized()))
 				return { outcome: "denied", reason: "authorization_lost" };
+			if (this.#authorizationRevision !== authority.authorizationRevision)
+				return { outcome: "denied", reason: "authorization_lost" };
 			if (existing.requestDigest !== request.requestDigest)
 				return { outcome: "conflict", reason: "idempotency_conflict" };
 			return {
