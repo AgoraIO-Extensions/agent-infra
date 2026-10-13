@@ -1129,7 +1129,11 @@ describe("long Conversation reads (#1732)", () => {
 			}
 		}
 		await seedSessionSandboxFixture(client, "long-history");
-	});
+		// 扫描计数读的是库级统计。刚在 1 秒内刷新过统计的后端，会把后续统计延迟到
+		// 空闲 10 秒（PGSTAT_IDLE_INTERVAL）后才写入；前面用例遗留的连接池若在计数
+		// 窗口内补记扫描，会让断言偶发超限。先等过这个间隔再开始计数。
+		await new Promise((resolve) => setTimeout(resolve, 11_000));
+	}, 60_000);
 
 	async function auditScans() {
 		const [row] = await client<{ scans: string }[]>`
