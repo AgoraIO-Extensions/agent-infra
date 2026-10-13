@@ -48,7 +48,14 @@ export function claudeWorkspaceTools(
 				{
 					hooks: [
 						async (input) => {
-							if (onToolOperation && input.hook_event_name === "PreToolUse")
+							const allowed =
+								input.hook_event_name === "PreToolUse" &&
+								(await permits(input.tool_name, input.tool_input));
+							if (
+								allowed &&
+								onToolOperation &&
+								input.hook_event_name === "PreToolUse"
+							)
 								await onToolOperation.onStarted?.(
 									typeof input.tool_use_id === "string"
 										? input.tool_use_id
@@ -58,11 +65,7 @@ export function claudeWorkspaceTools(
 							return {
 								hookSpecificOutput: {
 									hookEventName: "PreToolUse",
-									permissionDecision:
-										input.hook_event_name === "PreToolUse" &&
-										(await permits(input.tool_name, input.tool_input))
-											? "allow"
-											: "deny",
+									permissionDecision: allowed ? "allow" : "deny",
 									permissionDecisionReason: "Conversation workspace policy",
 								},
 							};
