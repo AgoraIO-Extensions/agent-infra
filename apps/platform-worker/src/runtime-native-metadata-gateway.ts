@@ -104,6 +104,28 @@ function currentRequest(
 	});
 }
 
+async function boundedRequestBody(request: Request) {
+	const reader = request.body?.getReader();
+	if (!reader) return "";
+	const chunks: Uint8Array[] = [];
+	let bytes = 0;
+	try {
+		for (;;) {
+			const next = await reader.read();
+			if (next.done) break;
+			bytes += next.value.byteLength;
+			if (bytes > maximumRequestBytes) {
+				await reader.cancel();
+				throw new Error("RUNTIME_REQUEST_TOO_LARGE");
+			}
+			chunks.push(next.value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	return Buffer.concat(chunks, bytes).toString("utf8");
+}
+
 /** Coordinate one authenticated API → Worker → RuntimeHost metadata read. */
 export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 	readonly binding: WorkerRuntimeNativeMetadataBindingResolverV1;
@@ -190,9 +212,7 @@ export function createWorkerRuntimeNativeMetadataGatewayAppV1(options: {
 				);
 			let value: PlatformNativeMetadataReadRequestV1;
 			try {
-				const body = await request.text();
-				if (Buffer.byteLength(body, "utf8") > maximumRequestBytes)
-					throw new Error();
+				const body = await boundedRequestBody(request);
 				value = PlatformNativeMetadataReadRequestV1Schema.parse(
 					JSON.parse(body),
 				);

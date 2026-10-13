@@ -167,4 +167,24 @@ describe("Worker native metadata gateway", () => {
 		);
 		expect(responseValue.status).toBe(200);
 	});
+
+	it("rejects an oversized body while streaming it", async () => {
+		const f = setup();
+		const app = createWorkerRuntimeNativeMetadataGatewayAppV1({
+			serviceToken: "worker-gateway-token",
+			gateway: f.gateway,
+		});
+		const responseValue = await app.fetch(
+			new Request("http://worker/internal/platform-worker/v1/native-metadata", {
+				method: "POST",
+				headers: {
+					authorization: "Bearer worker-gateway-token",
+					"content-type": "application/json",
+				},
+				body: "x".repeat(1_048_577),
+			}),
+		);
+		expect(responseValue.status).toBe(400);
+		expect(f.resolveBinding).not.toHaveBeenCalled();
+	});
 });
