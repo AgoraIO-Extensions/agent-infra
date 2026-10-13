@@ -5,10 +5,12 @@ import {
 } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
+	Activity,
 	Bot,
 	Check,
 	ClipboardMinus,
 	ExternalLink,
+	FlaskConical,
 	House,
 	KeyRound,
 	Layers,
@@ -193,10 +195,19 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 															? "API 凭证与应用"
 															: pathname === "/my-settings/relay-key"
 																? "个人 Relay Key"
-																: pathname === "/agents" ||
-																		pathname === "/agents/"
-																	? "Agent 目录"
-																	: "Agent 详情";
+																: pathname === "/skills/manage"
+																	? "Skill Hub 管理"
+																	: pathname === "/skills" ||
+																			pathname.startsWith("/skills/")
+																		? "Skill Hub"
+																		: pathname === "/eval"
+																			? "评测"
+																			: pathname === "/ops"
+																				? "运维观测"
+																				: pathname === "/agents" ||
+																						pathname === "/agents/"
+																					? "Agent 目录"
+																					: "Agent 详情";
 	const navigation = (
 		<>
 			<Link className="platform-brand" to="/" onClick={() => setSheet(false)}>
@@ -280,6 +291,15 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						我的执行审计
 					</Link>
 					<Link
+						aria-current={pathname.startsWith("/skills") ? "page" : undefined}
+						className={`platform-nav-item ${pathname.startsWith("/skills") ? "selected" : ""}`}
+						to="/skills/manage"
+						onClick={() => setSheet(false)}
+					>
+						<Layers size={17} strokeWidth={1.8} aria-hidden="true" />
+						Skill Hub 管理
+					</Link>
+					<Link
 						aria-current={
 							pathname === "/my-settings/api-credentials" ? "page" : undefined
 						}
@@ -357,6 +377,24 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						>
 							<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
 							平台审计
+						</Link>
+						<Link
+							aria-current={pathname === "/eval" ? "page" : undefined}
+							className={`platform-nav-item ${pathname === "/eval" ? "selected" : ""}`}
+							to="/eval"
+							onClick={() => setSheet(false)}
+						>
+							<FlaskConical size={17} strokeWidth={1.8} aria-hidden="true" />
+							评测
+						</Link>
+						<Link
+							aria-current={pathname === "/ops" ? "page" : undefined}
+							className={`platform-nav-item ${pathname === "/ops" ? "selected" : ""}`}
+							to="/ops"
+							onClick={() => setSheet(false)}
+						>
+							<Activity size={17} strokeWidth={1.8} aria-hidden="true" />
+							运维观测
 						</Link>
 					</nav>
 				)}
@@ -442,9 +480,12 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 									? "系统管理"
 									: pathname.startsWith("/my-agents") ||
 											pathname === "/audit" ||
-											pathname.startsWith("/my-settings")
+											pathname.startsWith("/my-settings") ||
+											pathname.startsWith("/skills")
 										? "我的管理"
-										: "工作区"}
+										: pathname === "/eval" || pathname === "/ops"
+											? "系统管理"
+											: "工作区"}
 							</BreadcrumbItem>
 							<BreadcrumbItem>
 								<BreadcrumbPage>{title}</BreadcrumbPage>

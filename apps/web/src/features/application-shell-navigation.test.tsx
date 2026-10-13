@@ -86,6 +86,10 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 		"/my-agents/new",
 		"/my-settings/api-credentials",
 		"/my-settings/relay-key",
+		"/skills",
+		"/skills/manage",
+		"/eval",
+		"/ops",
 		"/audit",
 		"/admin/approvals",
 		"/admin/agents",
@@ -94,6 +98,7 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 	].map((path) =>
 		createRoute({ getParentRoute: () => root, path, component: () => null }),
 	);
+
 	const history = createMemoryHistory({ initialEntries: [initialEntry] });
 	const router = createRouter({
 		history,
@@ -110,6 +115,47 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 }
 
 describe("Original IA workbench navigation", () => {
+	it("maps new M1 management routes to the original IA groups and titles", async () => {
+		await showShell(false, "/skills/manage");
+		const management = screen.getByRole("navigation", { name: "我的管理" });
+		expect(
+			within(management)
+				.getByRole("link", { name: "Skill Hub 管理" })
+				.getAttribute("aria-current"),
+		).toBe("page");
+		expect(
+			screen.getByText("Skill Hub 管理", {
+				selector: '[data-slot="breadcrumb-page"]',
+			}),
+		).toBeTruthy();
+		cleanup();
+
+		await showShell(true, "/eval");
+		const system = screen.getByRole("navigation", { name: "系统管理" });
+		expect(
+			within(system)
+				.getByRole("link", { name: "评测" })
+				.getAttribute("aria-current"),
+		).toBe("page");
+		expect(
+			screen.getByText("系统管理", {
+				selector: '[data-slot="breadcrumb-item"]',
+			}),
+		).toBeTruthy();
+		expect(
+			screen.getByText("评测", { selector: '[data-slot="breadcrumb-page"]' }),
+		).toBeTruthy();
+		cleanup();
+
+		await showShell(false, "/ops");
+		expect(screen.queryByRole("navigation", { name: "系统管理" })).toBeNull();
+		expect(
+			screen.getByText("运维观测", {
+				selector: '[data-slot="breadcrumb-page"]',
+			}),
+		).toBeTruthy();
+	});
+
 	it.each(["/agents?mode=conversation", "/chat/agent-1/conversation-1"])(
 		"uses one chat navigation highlight and the appropriate breadcrumb at %s",
 		async (entry) => {
