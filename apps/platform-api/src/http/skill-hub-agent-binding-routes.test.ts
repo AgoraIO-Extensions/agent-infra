@@ -33,6 +33,7 @@ function appWith(
 			agentId: "agent",
 			revision: 3,
 			changedFields: ["skills"],
+				replayed: false,
 		})),
 		read: vi.fn(async () => ({
 			configurationRevision: 3,
