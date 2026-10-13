@@ -13,6 +13,12 @@ import {
 import type { PostgresScopedPlatformAuditQueryV1 } from "@agent-infra/platform-store";
 import type { Hono } from "hono";
 import {
+	type AuditTelemetry,
+	auditOutcome,
+	observeAuditQuery,
+	recordAuditStage,
+} from "./audit-telemetry.js";
+import {
 	HttpProtocolError,
 	type RequestMetadata,
 	requestMetadata,
@@ -25,6 +31,7 @@ import {
 
 export interface ScopedAuditRoutesDependencies {
 	readonly identity: IdentityAdapter;
+	readonly observability?: AuditTelemetry;
 	readonly audit: Pick<
 		PostgresScopedPlatformAuditQueryV1,
 		"listAudit" | "getAudit" | "recordDeniedQuery"
@@ -94,6 +101,7 @@ async function auditedQueryScope(
 			},
 		);
 	} catch (error) {
+		const startedAt = performance.now();
 		const reason: PlatformAuditQueryDenialReasonV1 =
 			error instanceof PlatformAuditScopeErrorV1
 				? error.code
@@ -117,9 +125,41 @@ async function auditedQueryScope(
 				},
 				metadata,
 			);
+			recordAuditStage(
+				dependencies.observability,
+				"audit_write",
+				"denied",
+				startedAt,
+				auditOutcome(undefined),
+				metadata,
+			);
 		} catch {
+			recordAuditStage(
+				dependencies.observability,
+				"audit_write",
+				"denied",
+				startedAt,
+				auditOutcome(new Error("audit write unavailable")),
+				metadata,
+			);
+			recordAuditStage(
+				dependencies.observability,
+				"audit_query",
+				"denied",
+				startedAt,
+				auditOutcome(error),
+				metadata,
+			);
 			throw new HttpProtocolError("DEPENDENCY_UNAVAILABLE", metadata.traceId);
 		}
+		recordAuditStage(
+			dependencies.observability,
+			"audit_query",
+			"denied",
+			startedAt,
+			auditOutcome(error),
+			metadata,
+		);
 		throw error;
 	}
 }
@@ -191,11 +231,13 @@ export function registerScopedAuditRoutes(
 					"list",
 					metadata,
 				);
-				const page = await dependencies.audit.listAudit(
-					scope,
-					queryInput(request),
+				const page = await observeAuditQuery({
+					telemetry: dependencies.observability,
+					operation: "list",
 					metadata,
-				);
+					work: () =>
+						dependencies.audit.listAudit(scope, queryInput(request), metadata),
+				});
 				return context.json(
 					ScopedPlatformAuditPageV1Schema.parse({
 						items: page.items.map(publicRecord),
@@ -217,12 +259,18 @@ export function registerScopedAuditRoutes(
 					"detail",
 					metadata,
 				);
-				const item = await dependencies.audit.getAudit(
-					scope,
-					context.req.param("auditId"),
-					queryInput(request, 1),
+				const item = await observeAuditQuery({
+					telemetry: dependencies.observability,
+					operation: "detail",
 					metadata,
-				);
+					work: () =>
+						dependencies.audit.getAudit(
+							scope,
+							context.req.param("auditId"),
+							queryInput(request, 1),
+							metadata,
+						),
+				});
 				return context.json(publicRecord(item));
 			} catch (error) {
 				protocolError(error, metadata.traceId);
