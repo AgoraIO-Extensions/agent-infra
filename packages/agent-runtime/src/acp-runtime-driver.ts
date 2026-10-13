@@ -5,7 +5,6 @@ import { join } from "node:path";
 import type {
 	BrowserCapabilityAvailableV1,
 	RuntimeCapabilitiesV1,
-	RuntimeOperationFactV2,
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
@@ -97,12 +96,7 @@ export const GenericAcpRuntimeDriver = {
 					admit,
 					update,
 					resolveModelCredential: session.resolveModelCredential,
-					recordOperationFact: session.recordOperationFact
-						? async (fact: RuntimeOperationFactV2) => {
-								const record = callbacks.recordOperationFact;
-								if (record) await record(fact);
-							}
-						: undefined,
+					recordOperationFact: session.recordOperationFact,
 					modelFact: {
 						configVersion: options.configVersion,
 						modelOptionId: selection.modelOptionId,
@@ -166,7 +160,7 @@ export const GenericAcpRuntimeDriver = {
 				const native = await openAcpSession({
 					...session,
 					launch: launchWithBrowser,
-					recordOperationFact: session.recordOperationFact,
+					recordOperationFact: callbacks.recordOperationFact,
 					modelFact: () => callbacks.modelFact,
 					update: async ({ update: event }) => {
 						if (
