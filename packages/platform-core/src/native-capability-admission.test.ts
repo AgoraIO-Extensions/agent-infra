@@ -267,4 +267,28 @@ describe("native capability admission contract", () => {
 			reason: "authorization_lost",
 		});
 	});
+
+	it("maps malformed metadata responses to unavailable", async () => {
+		const decision = await useCase({
+			async revalidate() {
+				return {
+					outcome: "allowed" as const,
+					capability: { directoryRevision } as never,
+					scope: {
+						agentId: authority.agentId,
+						actorId: authority.actorId,
+						channelId: authority.channelId,
+						conversationId: request.conversationId,
+						sessionGeneration: conversation.sessionGeneration,
+						authorizationRevision: authority.authorizationRevision,
+					},
+				};
+			},
+			isCurrent: () => true,
+		}).admit(request);
+		expect(decision).toEqual({
+			outcome: "unavailable",
+			reason: "metadata_unavailable",
+		});
+	});
 });

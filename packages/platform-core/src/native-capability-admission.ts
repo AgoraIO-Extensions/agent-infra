@@ -666,8 +666,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						return freeze(plan);
 					},
 				);
-			} catch (error) {
-				if (error instanceof NativeCapabilityAdmissionError) throw error;
+			} catch {
 				return { outcome: "unavailable", reason: "metadata_unavailable" };
 			}
 		},

@@ -186,6 +186,7 @@ describe("native capability admission Store seam", () => {
 					projection,
 				}).revalidate(input);
 			},
+			isCurrent: () => true,
 		};
 		const harness = createHarness({}, delayedMetadata);
 		const admission = harness.useCase.admit(request);
