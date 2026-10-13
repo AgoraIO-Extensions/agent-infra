@@ -76,10 +76,11 @@ export const PiRuntimeDriver = {
 					recordToolOperation: session.recordToolOperation,
 				};
 				const recordToolOperation = async (
+					toolCallId: string,
 					toolId: string,
 					phase: "started" | "completed" | "failed",
 				) => {
-					await callbacks.recordToolOperation?.(toolId, phase);
+					await callbacks.recordToolOperation?.(toolCallId, toolId, phase);
 				};
 				// Pi keeps its native transport alive when a later Turn reuses the
 				// session. Resolve the current execution's Key through a stable

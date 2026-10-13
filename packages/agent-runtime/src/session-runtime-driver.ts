@@ -143,6 +143,7 @@ export interface NativeSessionOptions {
 		| Extract<RuntimeOperationFactV2, { kind: "model" }>["model"]
 		| undefined;
 	readonly recordToolOperation?: (
+		toolCallId: string,
 		toolId: string,
 		phase: "started" | "completed" | "failed",
 	) => Promise<void>;
@@ -1185,6 +1186,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			{ operationRef: string; attemptRef: string; startedAt: number }
 		>();
 		const recordToolOperation = async (
+			toolCallId: string,
 			toolId: string,
 			phase: "started" | "completed" | "failed",
 		) => {
@@ -1207,16 +1209,15 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					startedAt: new Date(startedAt).toISOString(),
 					toolId,
 				});
-				toolFacts.set(`${toolId}:${toolFacts.size}`, {
+				toolFacts.set(toolCallId, {
 					operationRef,
 					attemptRef,
 					startedAt,
 				});
 				return;
 			}
-			const latest = [...toolFacts.entries()].at(-1);
-			if (!latest) return;
-			const [, fact] = latest;
+			const fact = toolFacts.get(toolCallId);
+			if (!fact) return;
 			await this.recordFact(file, command.executionId, {
 				kind: "tool",
 				operationRef: fact.operationRef,
@@ -1229,7 +1230,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					: {}),
 				toolId,
 			});
-			toolFacts.delete(latest[0]);
+			toolFacts.delete(toolCallId);
 		};
 		let native: NativeSession;
 		try {
