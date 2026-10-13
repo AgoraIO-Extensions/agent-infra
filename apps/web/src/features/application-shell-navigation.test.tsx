@@ -115,26 +115,34 @@ async function showShell(administrator: boolean, initialEntry = "/agents") {
 }
 
 describe("Original IA workbench navigation", () => {
-	it("maps new M1 management routes to the original IA groups and titles", async () => {
-		await showShell(false, "/skills/manage");
+	it.each([
+		["/skills/manage", "Skill Hub 管理"],
+		["/skills/manage/", "Skill Hub 管理"],
+	])("maps Skill Hub route %s to the management IA", async (entry, label) => {
+		await showShell(false, entry);
 		const management = screen.getByRole("navigation", { name: "我的管理" });
 		expect(
 			within(management)
-				.getByRole("link", { name: "Skill Hub 管理" })
+				.getByRole("link", { name: label })
 				.getAttribute("aria-current"),
 		).toBe("page");
 		expect(
-			screen.getByText("Skill Hub 管理", {
-				selector: '[data-slot="breadcrumb-page"]',
-			}),
+			screen.getByText(label, { selector: '[data-slot="breadcrumb-page"]' }),
 		).toBeTruthy();
 		cleanup();
+	});
 
-		await showShell(true, "/eval");
+	it.each([
+		["/eval", "评测"],
+		["/eval/", "评测"],
+		["/ops", "运维观测"],
+		["/ops/", "运维观测"],
+	])("maps administrator route %s to the system IA", async (entry, label) => {
+		await showShell(true, entry);
 		const system = screen.getByRole("navigation", { name: "系统管理" });
 		expect(
 			within(system)
-				.getByRole("link", { name: "评测" })
+				.getByRole("link", { name: label })
 				.getAttribute("aria-current"),
 		).toBe("page");
 		expect(
@@ -143,11 +151,13 @@ describe("Original IA workbench navigation", () => {
 			}),
 		).toBeTruthy();
 		expect(
-			screen.getByText("评测", { selector: '[data-slot="breadcrumb-page"]' }),
+			screen.getByText(label, { selector: '[data-slot="breadcrumb-page"]' }),
 		).toBeTruthy();
 		cleanup();
+	});
 
-		await showShell(false, "/ops");
+	it("keeps the system navigation hidden from a non-admin deep link", async () => {
+		await showShell(false, "/ops/");
 		expect(screen.queryByRole("navigation", { name: "系统管理" })).toBeNull();
 		expect(
 			screen.getByText("运维观测", {
