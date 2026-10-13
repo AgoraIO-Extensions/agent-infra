@@ -59,7 +59,7 @@ describe("Worker model-directory service", () => {
 			reader,
 		});
 		const denied = await app.request(
-			"http://worker.local/internal/worker/v1/model-directory",
+			new URL("http://worker.local/internal/worker/v1/model-directory"),
 			{
 				method: "POST",
 				body: JSON.stringify(request),
@@ -67,7 +67,7 @@ describe("Worker model-directory service", () => {
 		);
 		expect(denied.status).toBe(401);
 		const accepted = await app.request(
-			"http://worker.local/internal/worker/v1/model-directory",
+			new URL("http://worker.local/internal/worker/v1/model-directory"),
 			{
 				method: "POST",
 				headers: {
@@ -93,7 +93,7 @@ describe("Worker model-directory service", () => {
 			reader,
 		});
 		const response = await app.request(
-			"http://worker.local/internal/worker/v1/model-directory",
+			new URL("http://worker.local/internal/worker/v1/model-directory"),
 			{
 				method: "POST",
 				headers: {
