@@ -303,15 +303,25 @@ export function createPlatformApp(
 	});
 	if (dependencies.nativeMetadata)
 		registerNativeMetadataRoutes(app, dependencies.nativeMetadata);
-	if (dependencies.tasks) registerTaskRoutes(app, dependencies.tasks);
+	if (dependencies.tasks)
+		registerTaskRoutes(app, {
+			...dependencies.tasks,
+			...(observability ? { observability } : {}),
+		});
 	if (dependencies.unknownStopOperations)
 		registerUnknownStopOperationsRoutes(
 			app,
 			dependencies.unknownStopOperations,
 		);
-	registerSessionAuditRoutes(app, dependencies.sessionAudit);
+	registerSessionAuditRoutes(app, {
+		...dependencies.sessionAudit,
+		...(observability ? { observability } : {}),
+	});
 	if (dependencies.scopedAudit)
-		registerScopedAuditRoutes(app, dependencies.scopedAudit);
+		registerScopedAuditRoutes(app, {
+			...dependencies.scopedAudit,
+			...(observability ? { observability } : {}),
+		});
 	if (dependencies.directory)
 		registerDirectoryRoutes(app, dependencies.directory);
 	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);

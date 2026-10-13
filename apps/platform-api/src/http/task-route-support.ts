@@ -3,6 +3,7 @@ import {
 	TaskProjectionV1Schema,
 	TaskStatusEventV1Schema,
 } from "@agent-infra/contracts/pilot";
+import type { OperationalEvent } from "@agent-infra/observability";
 import {
 	type ConversationExecutionAuthorityV1,
 	ConversationExecutionError,
@@ -31,6 +32,24 @@ import {
 	requestMetadata,
 } from "./common.js";
 import { eventProjection } from "./conversation-routes.js";
+
+/** Process-owned recorder for bounded task route stage observations. */
+export interface TaskRouteObservability {
+	record(event: OperationalEvent): void;
+}
+
+/** Observations are best effort and must never change the HTTP result. */
+export function recordTaskObservation(
+	observability: TaskRouteObservability | undefined,
+	event: OperationalEvent,
+) {
+	if (!observability) return;
+	try {
+		observability.record(event);
+	} catch {
+		// Telemetry capture is deliberately isolated from task behavior.
+	}
+}
 export interface TaskAuthorizationInput {
 	readonly schemaVersion: 1;
 	readonly operation: "task.submit" | "task.read" | "task.cancel";
@@ -42,6 +61,7 @@ export interface TaskAccessDependencies {
 	readonly authorize: PostgresConversationExecutionTransactionV1["authorizeTaskApi"];
 }
 export interface TaskRoutesDependencies extends TaskAccessDependencies {
+	readonly observability?: TaskRouteObservability;
 	readonly commands: (authority: ConversationExecutionAuthorityV1) => {
 		submitTask(
 			command: ConversationTaskSubmitCommandV1,
