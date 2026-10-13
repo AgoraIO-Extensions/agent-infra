@@ -92,7 +92,11 @@ export interface ClaudeRuntimeModelOption {
 }
 export interface ClaudeRuntimeDriverOptions {
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
-	readonly browserCapability?: import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1;
+	readonly browserCapability?:
+		| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
+		| (() =>
+					| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
+					| undefined);
 	readonly path: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
@@ -1288,8 +1292,12 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 			| ReturnType<typeof createClaudeStandardMcpServer>
 			| undefined;
 		const browserAbortController = new AbortController();
+		const browserCapability =
+			typeof this.options.browserCapability === "function"
+				? this.options.browserCapability()
+				: this.options.browserCapability;
 		const browserMcpServer = createClaudeBrowserMcpServer({
-			capability: this.options.browserCapability,
+			capability: browserCapability,
 			context: browser,
 			executionId: command.executionId,
 			signal: browserAbortController.signal,
@@ -2141,7 +2149,11 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 
 	/** Return the same bounded Browser descriptor contract used by Codex. */
 	getBrowserToolDescriptors(): readonly CodexBrowserToolDescriptorV1[] {
-		return createCodexBrowserToolDescriptorsV1(this.options.browserCapability);
+		const browserCapability =
+			typeof this.options.browserCapability === "function"
+				? this.options.browserCapability()
+				: this.options.browserCapability;
+		return createCodexBrowserToolDescriptorsV1(browserCapability);
 	}
 	async replayEvents(ref: string, executionId: string, afterCursor?: string) {
 		const turn = (await this.forReference(ref))

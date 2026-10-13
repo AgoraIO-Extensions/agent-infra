@@ -95,7 +95,9 @@ export interface SessionRuntimeModelOption {
 }
 export interface SessionRuntimeDriverOptions {
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
-	readonly browserCapability?: BrowserCapabilityAvailableV1;
+	readonly browserCapability?:
+		| BrowserCapabilityAvailableV1
+		| (() => BrowserCapabilityAvailableV1 | undefined);
 	readonly path: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
@@ -1839,6 +1841,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		for (const wake of this.waiters.get(bindingRecord.ref) ?? []) wake();
 	}
 	async getCapabilities() {
+		const browserCapability =
+			typeof this.options.browserCapability === "function"
+				? this.options.browserCapability()
+				: this.options.browserCapability;
 		const skills = this.options.skillDirectory?.findSkills().map((skill) => ({
 			schemaVersion: 1 as const,
 			name: skill.name,
@@ -1859,10 +1865,24 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			connection: false,
 			supplementaryInstruction: false,
 			...(skills && skills.length > 0 ? { skills } : {}),
+			...(browserCapability
+				? {
+						browser: {
+							capabilityVersion: browserCapability.capabilityVersion,
+							operations: browserCapability.operations,
+							provenance: browserCapability.provenance,
+							conformance: browserCapability.conformance,
+						},
+					}
+				: {}),
 		};
 		const parsed = RuntimeCapabilitiesV1Schema.safeParse(capabilities);
 		if (!parsed.success) throw new RuntimeSkillDirectoryErrorV1();
 		return parsed.data;
+	}
+	async probeReadiness(signal: AbortSignal) {
+		signal.throwIfAborted();
+		return this.getCapabilities();
 	}
 	async getModelDirectory(ref: string): Promise<RuntimeModelDirectory> {
 		const handle = this.handles.get(ref);
@@ -1907,7 +1927,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 
 	/** Return bounded Browser descriptors from the deployment-owned projection. */
 	getBrowserToolDescriptors() {
-		return createCodexBrowserToolDescriptorsV1(this.options.browserCapability);
+		const browserCapability =
+			typeof this.options.browserCapability === "function"
+				? this.options.browserCapability()
+				: this.options.browserCapability;
+		return createCodexBrowserToolDescriptorsV1(browserCapability);
 	}
 	async replayEvents(ref: string, executionId: string, afterCursor?: string) {
 		const turn = (await this.forReference(ref))

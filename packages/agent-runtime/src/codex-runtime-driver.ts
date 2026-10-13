@@ -442,7 +442,11 @@ import {
 
 export interface CodexRuntimeDriverOptions {
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
-	readonly browserCapability?: import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1;
+	readonly browserCapability?:
+		| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
+		| (() =>
+					| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
+					| undefined);
 	readonly installedSkill?: CodexInstalledSkillDescriptorV1;
 	/** Deployment-owned verified Hub generation mounted at the fixed Runtime root. */
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
@@ -3825,7 +3829,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly standardConnectionOptions?: StandardMcpClientOptions,
 		private readonly installedSkill?: CodexInstalledSkillDescriptorV1,
 		private readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1,
-		private readonly browserCapability?: import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1,
+		private readonly browserCapability?:
+			| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
+			| (() =>
+						| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
+						| undefined),
 		/**
 		 * Reclaimed and recreated by `open`; absent only for direct construction
 		 * outside the open path.
@@ -7102,7 +7110,11 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 
 	/** Return bounded Browser descriptors from the deployment-owned capability projection. */
 	getBrowserToolDescriptors(): readonly CodexBrowserToolDescriptorV1[] {
-		return createCodexBrowserToolDescriptorsV1(this.browserCapability);
+		const browserCapability =
+			typeof this.browserCapability === "function"
+				? this.browserCapability()
+				: this.browserCapability;
+		return createCodexBrowserToolDescriptorsV1(browserCapability);
 	}
 
 	async probeReadiness(signal: AbortSignal) {
