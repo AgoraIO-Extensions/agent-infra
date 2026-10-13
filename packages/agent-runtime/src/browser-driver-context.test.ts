@@ -79,15 +79,14 @@ const record: BrowserActionRecordV1 = {
 };
 
 function session(
-	options: Pick<BrowserSessionControllerV1, "act"> = {
-		act: vi.fn().mockResolvedValue(record),
-	},
+	options: Partial<Pick<BrowserSessionControllerV1, "act" | "readAction">> = {},
 ): BrowserSessionControllerV1 {
 	return {
 		start: vi.fn(),
 		navigate: vi.fn().mockResolvedValue(page),
 		observe: vi.fn().mockResolvedValue(observation),
-		act: options.act,
+		act: options.act ?? vi.fn().mockResolvedValue(record),
+		readAction: options.readAction ?? vi.fn().mockReturnValue(null),
 		cancelAction: vi.fn().mockReturnValue(true),
 		close: vi.fn(),
 		recoverPage: vi.fn().mockResolvedValue(page),
@@ -207,6 +206,47 @@ describe("createBrowserSessionDriverContextV1", () => {
 			success: false,
 			failureCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
 		});
+	});
+
+	it("recovers a terminal controller result after an unknown action outcome", async () => {
+		const recovered = {
+			...record,
+			executionBinding: {
+				...binding,
+				executionId: "execution-recovery",
+				capabilityVersion: 3,
+				pageRevision: 2,
+			},
+		};
+		const readAction = vi.fn(() => recovered);
+		const browser = session({
+			act: vi.fn().mockResolvedValue({ ...record, status: "unknown" }),
+			readAction,
+		});
+		const context = createBrowserSessionDriverContextV1({
+			session: browser,
+			capability,
+			binding,
+			subjectId: "user-1",
+		});
+		const result = await context.executeTool?.(
+			{
+				tool: "browser_interact",
+				arguments: { ...page, elementId: "element-1", kind: "click" },
+				actionId: "action-1",
+				operationRef: "operation-1",
+				attemptRef: "attempt-1",
+				binding: {
+					...binding,
+					executionId: "execution-recovery",
+					capabilityVersion: 3,
+					pageRevision: 2,
+				},
+			},
+			new AbortController().signal,
+		);
+		expect(result).toMatchObject({ phase: "completed", success: true });
+		expect(readAction).toHaveBeenCalledOnce();
 	});
 
 	it("fails closed for unsupported tools and stale page references", async () => {

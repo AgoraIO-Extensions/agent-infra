@@ -129,6 +129,53 @@ function actionRecordSummary(record: BrowserActionRecordV1) {
 	};
 }
 
+function sameActionIdentity(
+	request: RuntimeBrowserToolExecutionRequestV1,
+	record: BrowserActionRecordV1,
+): boolean {
+	const binding = record.executionBinding;
+	return (
+		record.actionId === request.actionId &&
+		record.operationRef === request.operationRef &&
+		record.attemptRef === request.attemptRef &&
+		binding !== undefined &&
+		sameExecutionBinding(request.binding, {
+			binding,
+			capabilityVersion: request.binding.capabilityVersion,
+		}) &&
+		binding.executionId === request.binding.executionId
+	);
+}
+
+function actionRecordResult(
+	request: RuntimeBrowserToolExecutionRequestV1,
+	record: BrowserActionRecordV1,
+): RuntimeBrowserToolExecutionResultV1 {
+	if (record.status === "completed")
+		return success(request, actionRecordSummary(record));
+	if (record.status === "failed" || record.status === "rejected")
+		return {
+			actionId: request.actionId,
+			operationRef: request.operationRef,
+			attemptRef: request.attemptRef,
+			binding: request.binding,
+			phase: "failed",
+			contentItems: [],
+			success: false,
+			failureCode: record.reasonCode ?? "operation_failed",
+		};
+	return {
+		actionId: request.actionId,
+		operationRef: request.operationRef,
+		attemptRef: request.attemptRef,
+		binding: request.binding,
+		phase: "unknown",
+		contentItems: [],
+		success: false,
+		failureCode: record.reasonCode ?? "recovery_unconfirmed",
+	};
+}
+
 export function createBrowserSessionDriverContextV1(input: {
 	readonly session: BrowserSessionControllerV1;
 	readonly capability: BrowserCapabilityAvailableV1;
@@ -138,6 +185,37 @@ export function createBrowserSessionDriverContextV1(input: {
 }): RuntimeBrowserExecutionContextV1 {
 	if (!input.subjectId || input.capability.status !== "available")
 		throw new Error("BROWSER_DRIVER_CONTEXT_INVALID");
+	const bindingFor = (request: RuntimeBrowserToolExecutionRequestV1) => ({
+		agentId: request.binding.agentId,
+		conversationId: request.binding.conversationId,
+		sessionGeneration: request.binding.sessionGeneration,
+		resourceFence: request.binding.resourceFence,
+		workloadRevision: request.binding.workloadRevision,
+		imageDigest: request.binding.imageDigest,
+	});
+	const readBack = (
+		request: RuntimeBrowserToolExecutionRequestV1,
+	): RuntimeBrowserToolExecutionResultV1 | undefined => {
+		try {
+			const record = input.session.readAction({
+				actionId: request.actionId,
+				idempotencyKey: request.actionId,
+				executionBinding: {
+					...bindingFor(request),
+					capabilityVersion: request.binding.capabilityVersion,
+					pageRevision: request.binding.pageRevision,
+					workloadRevision: request.binding.workloadRevision,
+					imageDigest: request.binding.imageDigest,
+					// The Session binding carries no execution id; the recovery record does.
+					executionId: request.binding.executionId,
+				},
+			});
+			if (!record || !sameActionIdentity(request, record)) return undefined;
+			return actionRecordResult(request, record);
+		} catch {
+			return undefined;
+		}
+	};
 	return {
 		capabilityVersion: input.capability.capabilityVersion,
 		binding: structuredClone(input.binding),
@@ -220,8 +298,14 @@ export function createBrowserSessionDriverContextV1(input: {
 					signal,
 				);
 				signal.throwIfAborted();
-				return success(request, actionRecordSummary(record));
+				if (record.status === "unknown")
+					return readBack(request) ?? actionRecordResult(request, record);
+				return actionRecordResult(request, record);
 			} catch (error) {
+				if (!signal.aborted) {
+					const recovered = readBack(request);
+					if (recovered) return recovered;
+				}
 				return failure(request, error, signal);
 			} finally {
 				signal.removeEventListener("abort", cancel);
