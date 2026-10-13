@@ -1,11 +1,14 @@
-# ADR-0023：RuntimeHost 的 ACP 受保护 MCP transport bridge
+# ADR-0025：RuntimeHost 的 ACP 受保护 MCP transport bridge
 
 状态：Draft for Review（#851）
+
+本 ADR 是架构修订候选，不改变当前 Runtime 行为；只有本 ADR 与工程 Spec 的修订经过评审合入后，才可实施后续代码。
 
 ## 背景
 
 当前固定的 OpenCode/Generic ACP 版本不能让 RuntimeHost 直接把 Connection
-凭据交给 native 进程。ACP 的 `mcpServers` 请求可以携带 HTTP headers，但这些
+凭据交给 native 进程。工程 Spec §13.5.4 当前要求原生 Connection MCP 配置保持为空，
+并禁止 Runtime 创建 MCP server；这份 ADR 明确提出需要评审的边界变化。ACP 的 `mcpServers` 请求可以携带 HTTP headers，但这些
 headers 会进入 native ACP stdin；把 Connection OAuth access token 或获准 PAT
 放进该字段会越过 RuntimeHost 的受保护凭据边界。Pi 0.86 也没有 MCP session
 transport，因此继续保持 `connection: false`。
@@ -44,6 +47,14 @@ transport，因此继续保持 `connection: false`。
 和 Connection API 不经过它代理调用，也不取得 Connection token、目录、Grant
 或 Provider credential；Connection 仍是外部身份、授权、调用和结果的权威。
 
+## 与当前工程 Spec 的关系
+
+当前 [工程 Spec §13.5.4](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1354-runtime-driver-直接消费标准-mcp)
+仍然优先采用 Driver 内直接消费标准 MCP，并要求原生 Connection MCP 配置保持为空。
+在本 ADR 被接受、固定 native artifact 通过门禁、且 §13.5.4 完成相应修订以前，
+这些现行要求继续有效，`connection: false` 不变；本 ADR 不能单独授权创建 MCP server、
+修改 Host 装配或启用 OpenCode/Pi。
+
 ## 能力门禁
 
 - 只有固定 native artifact 的 provenance 明确证明其 ACP `mcpServers` HTTP
@@ -58,7 +69,7 @@ transport，因此继续保持 `connection: false`。
 
 ## 实施边界
 
-后续实现 PR 必须只修改 Platform/Runtime consumer 侧：
+只有上述 Spec 修订合入后，后续实现 PR 才能只修改 Platform/Runtime consumer 侧：
 
 - `StandardMcpClient` 的 bridge-facing tool projection 与 Host-owned loopback
   server；
