@@ -158,6 +158,9 @@ export async function createStandardMcpAcpBridge(
 		const operationRef = randomUUID();
 		const attemptRef = randomUUID();
 		const startedAt = Date.now();
+		let requestIdentity:
+			| { rpcRequestId: string | number; requestDigest: string }
+			| undefined;
 		const write = async (phase: RuntimeOperationFactV2["phase"]) => {
 			await options.recordOperationFact?.({
 				kind: "tool",
@@ -165,6 +168,7 @@ export async function createStandardMcpAcpBridge(
 				attemptRef,
 				phase,
 				toolId: name,
+				...(requestIdentity ?? {}),
 				// The deployed MCP contract does not expose a same-call callRef or
 				// an original-record query for this consumer.
 				// Preserve the independently validated ConsumerInstance mapping while
@@ -224,10 +228,12 @@ export async function createStandardMcpAcpBridge(
 			confirm: async (value) => {
 				await write(value.phase);
 			},
-			prepare: async () => {
+			prepare: async (request) => {
+				requestIdentity = request;
 				await write("intent");
 			},
-			started: async () => {
+			started: async (request) => {
+				requestIdentity = request;
 				await write("started");
 			},
 		};

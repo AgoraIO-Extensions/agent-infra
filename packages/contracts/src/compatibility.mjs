@@ -776,6 +776,64 @@ function isCustomAgentModelSelectionOpenApiAddition(previous, current) {
 	return findBreakingChanges(previous, normalized).length === 0;
 }
 
+// #851 persists the non-sensitive JSON-RPC identity for Host-owned ACP tool
+// facts. The fields are optional and only widen the existing tool branch.
+function isRuntimeOperationIdentityOpenApiAddition(previous, current) {
+	const previousFact = previous.components?.schemas?.RuntimeOperationFactV2;
+	const currentFact = current.components?.schemas?.RuntimeOperationFactV2;
+	if (
+		!previousFact ||
+		!currentFact ||
+		!Array.isArray(previousFact.oneOf) ||
+		!Array.isArray(currentFact.oneOf) ||
+		previousFact.oneOf.length !== currentFact.oneOf.length
+	)
+		return isDeepStrictEqual(previous, stripRuntimeOperationIdentity(current));
+	const previousTool = previousFact.oneOf.find(
+		(option) => option.properties?.kind?.const === "tool",
+	);
+	const currentTool = currentFact.oneOf.find(
+		(option) => option.properties?.kind?.const === "tool",
+	);
+	if (!previousTool || !currentTool) return false;
+	if (
+		previousTool.properties?.rpcRequestId !== undefined ||
+		previousTool.properties?.requestDigest !== undefined ||
+		currentTool.properties?.rpcRequestId === undefined ||
+		currentTool.properties?.requestDigest === undefined
+	)
+		return false;
+	const normalized = structuredClone(current);
+	const normalizedTool =
+		normalized.components.schemas.RuntimeOperationFactV2.oneOf.find(
+			(option) => option.properties?.kind?.const === "tool",
+		);
+	if (!normalizedTool) return false;
+	delete normalizedTool.properties.rpcRequestId;
+	delete normalizedTool.properties.requestDigest;
+	return isDeepStrictEqual(previous, normalized);
+}
+
+function stripRuntimeOperationIdentity(value) {
+	if (Array.isArray(value)) return value.map(stripRuntimeOperationIdentity);
+	if (!value || typeof value !== "object") return value;
+	const copy = Object.fromEntries(
+		Object.entries(value).map(([key, child]) => [
+			key,
+			stripRuntimeOperationIdentity(child),
+		]),
+	);
+	if (
+		copy.properties?.kind?.const === "tool" &&
+		copy.properties.requestDigest !== undefined &&
+		copy.properties.rpcRequestId !== undefined
+	) {
+		delete copy.properties.requestDigest;
+		delete copy.properties.rpcRequestId;
+	}
+	return copy;
+}
+
 // #1266 admits the GET side of the existing model-selection route and its
 // projection schema. The PUT route and all prior components remain exact.
 // #2028 adds the compatibility result to each standard-template fan-out target.
@@ -3741,6 +3799,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isRuntimeFileExchangeOpenApiAddition(previous, current) &&
 			!isFileAuthorityOpenApiAddition(previous, current) &&
 			!isCustomAgentModelSelectionOpenApiAddition(previous, current) &&
+			!isRuntimeOperationIdentityOpenApiAddition(previous, current) &&
 			!isCustomAgentModelProjectionOpenApiAddition(previous, current) &&
 			!isStandardTemplateReleaseCompatibilityOpenApiAddition(previous, current)
 		) {

@@ -66,6 +66,14 @@ it("keeps Connection credentials in Host while serving an ACP MCP bridge", async
 		"started",
 		"completed",
 	]);
+	expect(
+		facts.every(
+			(fact) =>
+				(typeof fact.rpcRequestId === "string" ||
+					typeof fact.rpcRequestId === "number") &&
+				/^[a-f0-9]{64}$/.test(fact.requestDigest ?? ""),
+		),
+	).toBe(true);
 	expect(facts.map((fact) => fact.connection)).toEqual([
 		{
 			serviceRef: "connection-fixture",
