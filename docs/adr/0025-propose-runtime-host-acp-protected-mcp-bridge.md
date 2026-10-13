@@ -81,9 +81,14 @@ Spec 并通过同一套评审，随后才能实施。
 - Generic ACP 在 `openAcpSession()` 的 session 生命周期中挂接 bridge；
   `AcpLaunch.mcpServers` 只传 loopback URL 和短期 bridge bearer。
 - 每次 native `tools/call` 先由 bridge 校验固定工具名、参数 schema 和当前
-  native session，再调用 `StandardMcpClient.call(alias, arguments, operation, signal)`。
+  native session，再由 Generic ACP adapter 为**当前可信 Execution**生成新的
+  `operationRef`/`attemptRef`，调用
+  `StandardMcpClient.call(alias, arguments, operation, signal)`。这两个引用由
+  Driver/Host 生成和持久化，绝不从 ACP JSON-RPC id、server name 或 arguments
+  推导；native `sessionId`、`toolCallId` 和 RPC id 只作为短期关联键。
   `operation` 必须实现现有 `StandardMcpOperation` 的
-  `assertCurrent → prepare → started → confirm/block` 顺序。
+  `assertCurrent → prepare → started → confirm/block` 顺序，并把同一对引用传给
+  `SessionRuntimeDriver.recordOperationFact()` 的 `RuntimeOperationFactV2`。
 - `prepare` 持久化 RPC identity 与参数摘要，`started` 只在最后一次授权/保护
   复核后记录；一次 HTTP dispatch 最多对应一个实际发送。响应丢失、发送次数异常
   或 `confirm` 失败调用 `block()`，将结果保持 `unknown` 并封闭 native Session，
