@@ -668,6 +668,42 @@ export type ModelSelectionFallbackEventV1 = {
     type: 'model.selection.fell_back';
 };
 
+export type NativeMetadataProjectionV1 = {
+    readAt: string;
+    selector: 'status';
+    status: 'active' | 'idle' | 'not_loaded' | 'system_error';
+} | {
+    capabilities: Array<{
+        availability: 'available';
+        description: string;
+        effect: 'read_only';
+        id: string;
+        kind: 'command';
+        name: string;
+        parameters: Array<unknown>;
+        source: {
+            name: string;
+            version: string;
+        };
+    }>;
+    revision: string;
+    selector: 'commands';
+} | {
+    capabilities: Array<{
+        availability: 'discovered';
+        description: string;
+        id: string;
+        kind: 'skill';
+        name: string;
+        source: {
+            name: string;
+            version: string;
+        };
+    }>;
+    revision: string;
+    selector: 'skills';
+};
+
 export type PersistedConversationEventV1 = {
     conversationCursor: string;
     conversationId: string;
@@ -3388,6 +3424,52 @@ export type GetExecutionDetailV2Responses = {
 };
 
 export type GetExecutionDetailV2Response = GetExecutionDetailV2Responses[keyof GetExecutionDetailV2Responses];
+
+export type ReadConversationNativeMetadataV1Data = {
+    body?: never;
+    path: {
+        conversationId: string;
+        executionId: string;
+    };
+    query: {
+        selector: 'status' | 'commands' | 'skills';
+    };
+    url: '/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata';
+};
+
+export type ReadConversationNativeMetadataV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Native metadata is unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadConversationNativeMetadataV1Error = ReadConversationNativeMetadataV1Errors[keyof ReadConversationNativeMetadataV1Errors];
+
+export type ReadConversationNativeMetadataV1Responses = {
+    /**
+     * Current authenticated native metadata projection
+     */
+    200: NativeMetadataProjectionV1;
+};
+
+export type ReadConversationNativeMetadataV1Response = ReadConversationNativeMetadataV1Responses[keyof ReadConversationNativeMetadataV1Responses];
 
 export type GetDeploymentConfigurationV2Data = {
     body?: never;
