@@ -107,6 +107,7 @@ export function assembleSkillHubReadApiV1(input: {
 		providerImport && input.providerImport
 			? {
 					identity: input.identity,
+					requestScope: scope.requestScope,
 					importer: createSkillProviderImportV1({
 						registry: input.providerImport.registry,
 						admit: async ({ context, key, selection, candidate }) => {
