@@ -34,15 +34,12 @@ const failureCodes: Partial<
 function browserCategory(
 	fact: Extract<ConversationOperationFactV2, { kind: "tool" }>,
 ): OperationalBrowserCategory {
-	if (fact.failureCode === "authorization_denied") return "policy_rejection";
-	if (fact.failureCode === "request_rejected") return "capacity_rejection";
-	if (
-		fact.failureCode === "recovery_unconfirmed" ||
-		fact.failureCode === "interrupted"
-	)
-		return "recovery";
-	if (fact.phase === "unknown") return "unknown";
 	const toolId = fact.toolId.toLowerCase().replace(/[:_]/gu, ".");
+	if (/(?:^|\.)(?:capacity|throttled|concurrency)(?:$|\.)/.test(toolId))
+		return "capacity_rejection";
+	if (/(?:^|\.)(?:policy|denied)(?:$|\.)/.test(toolId))
+		return "policy_rejection";
+	if (fact.phase === "unknown") return "recovery";
 	if (/(?:^|\.)(?:navigate|goto|reload|back|forward|open)(?:$|\.)/.test(toolId))
 		return "navigation";
 	if (

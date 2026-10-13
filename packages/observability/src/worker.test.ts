@@ -562,6 +562,52 @@ it.each([
 		);
 		expect(observations.at(-1)).toMatchObject({
 			stage: "browser",
+			browserCategory:
+				failureCode === "recovery_unconfirmed" ? "recovery" : "interaction",
+		});
+	},
+);
+
+it.each([
+	["browser.policy_denied", "policy_rejection"],
+	["browser.capacity_rejected", "capacity_rejection"],
+] as const)(
+	"classifies explicit Browser tool category %s",
+	async (toolId, category) => {
+		const fixture = transactionFixture();
+		const observations: OperationalEvent[] = [];
+		const events = createObservedConversationEvents({
+			transaction: fixture.transaction,
+			telemetry: { record: (event) => observations.push(event) },
+		});
+		const fact: ConversationOperationFactV2 = {
+			kind: "tool",
+			operationRef: `browser-${category.replace("_", "-")}`,
+			attemptRef: "browser-attempt",
+			phase: "failed",
+			failureCode: "request_rejected",
+			toolId,
+			browser: {
+				actionId: "browser-action",
+				capabilityVersion: 1,
+				pageRevision: 2,
+				sessionGeneration: 3,
+				resourceFence: 4,
+				workloadRevision: 2,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				sideEffect: false,
+			},
+		};
+		const { failureCode: _failureCode, ...factWithoutFailure } = fact;
+		const key = category.replace("_", "-");
+		const intent = { ...factWithoutFailure, phase: "intent" as const };
+		await events.persist(operation(intent, `explicit-${key}-intent`));
+		await events.persist(
+			operation({ ...intent, phase: "started" }, `explicit-${key}-started`),
+		);
+		await events.persist(operation(fact, `explicit-${key}`));
+		expect(observations.at(-1)).toMatchObject({
+			stage: "browser",
 			browserCategory: category,
 		});
 	},
