@@ -157,6 +157,7 @@ export class FakeNativeCapabilityAdmissionStoreV1
 		if ("outcome" in decision) return decision;
 		if (this.#authorizationRevision !== authority.authorizationRevision)
 			return { outcome: "denied", reason: "authorization_lost" };
+		if (this.#activeExecution) return { outcome: "busy" };
 		this.#validatePlan(decision, request);
 		const plan = freeze(structuredClone(decision));
 		this.#idempotency.set(idempotencyKey, {

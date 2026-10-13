@@ -200,6 +200,36 @@ describe("native capability admission Store seam", () => {
 		expect(harness.store.plans).toHaveLength(0);
 	});
 
+	it("rejects occupancy added while metadata admission is pending", async () => {
+		let release = () => {};
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const delayedMetadata = {
+			async revalidate(
+				input: Parameters<
+					NativeCapabilityMetadataRevalidationPortV1["revalidate"]
+				>[0],
+			) {
+				await pending;
+				return new FakeNativeCapabilityMetadataRevalidationV1({
+					projection,
+				}).revalidate(input);
+			},
+			isCurrent: () => true,
+		};
+		const harness = createHarness({}, delayedMetadata);
+		const admission = harness.useCase.admit(request);
+		await Promise.resolve();
+		harness.store.setActiveExecution({
+			executionId: "late-execution",
+			status: "unknown",
+		});
+		release();
+		expect(await admission).toEqual({ outcome: "busy" });
+		expect(harness.store.plans).toHaveLength(0);
+	});
+
 	it("rejects authorization loss before replay or metadata reads", async () => {
 		const harness = createHarness();
 		harness.store.setAuthorizationRevision("auth-revoked");
