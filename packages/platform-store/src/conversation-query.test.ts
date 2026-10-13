@@ -546,6 +546,53 @@ describe("PostgreSQL Conversation query", () => {
 		}
 	});
 
+	it("keeps Web, WeCom and API entry Sessions separate for one actor", async () => {
+		const entries = [
+			{
+				id: "conversation-entry-wecom",
+				channel: "wecom:wecom_bot:binding:group:group-a:sender-a",
+			},
+			{ id: "conversation-entry-api", channel: "api" },
+		] as const;
+		try {
+			for (const entry of entries) {
+				await client`
+					insert into platform.conversations
+						(id, agent_id, actor_id, channel_id, principal_type, status,
+						 session_generation, authorization_revision, created_at, updated_at)
+					values (${entry.id}, 'agent-1', 'actor-1', ${entry.channel}, 'user',
+						 'active', 1, 'authorization-1', '2026-09-05T00:00:00.000Z',
+						 '2026-09-05T00:00:00.000Z')`;
+				await seedSessionSandboxFixture(client, entry.id);
+			}
+			const web = await query.list(actorOne, "agent-1", { limit: 20 });
+			expect(web.items.map((item) => item.conversationId)).not.toEqual(
+				expect.arrayContaining(entries.map((entry) => entry.id)),
+			);
+			const wecom = await query.get(
+				{ actorId: "actor-1", channelId: entries[0].channel },
+				entries[0].id,
+			);
+			const api = await query.get(
+				{
+					actorId: "actor-1",
+					channelId: "api",
+					principal: { kind: "user", id: "actor-1" },
+				},
+				entries[1].id,
+			);
+			expect(wecom?.conversation.conversationId).toBe(entries[0].id);
+			expect(api?.conversation.conversationId).toBe(entries[1].id);
+			await expect(query.get(actorOne, entries[0].id)).resolves.toBeUndefined();
+			await expect(query.get(actorOne, entries[1].id)).resolves.toBeUndefined();
+		} finally {
+			for (const entry of entries) {
+				await client`delete from platform.session_sandbox_allocations where conversation_id = ${entry.id}`;
+				await client`delete from platform.conversations where id = ${entry.id}`;
+			}
+		}
+	});
+
 	it("maps Last-Event-ID and bound cursor replay from persisted rows", async () => {
 		const byEvent = await query.replay(actorOne, "conversation-1", {
 			kind: "last-event-id",
