@@ -85,6 +85,7 @@ function session(): BrowserSessionControllerV1 {
 		observe: vi.fn().mockResolvedValue(observation),
 		act: vi.fn().mockResolvedValue(record),
 		close: vi.fn(),
+		recoverPage: vi.fn().mockResolvedValue(page),
 		snapshot: vi.fn(),
 	};
 }

@@ -14,6 +14,12 @@
   keyring，两个引用必须属于不同 Secret。
 - Identity、Image Registry、Model Catalog、Object Storage、Kubernetes Runtime 和 Workload
   Route 只保存部署 Adapter binding，不限定部署产品或内部地址。
+- `platformApi.connectionCallbackAuthSecretRef` 是可选的 callback-only Secret 引用。仅当
+  `platformApi.placement=in-cluster` 且部署 owner 显式提供该引用时，Chart 才将其单个 key
+  以只读 `0600` 文件投影到 API 容器的
+  `/var/run/agent-infra/connection-callback-auth/callback.auth`，并设置
+  `PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE`；省略时不渲染该环境变量或 volume。Secret
+  内容不写入 values 或渲染结果，使用边界见 [Platform API 部署模块](platform-api/README.md)。
 
 所有 values 都由 `values.schema.json` fail closed 校验。默认值只用于展示结构；部署前必须替换
 镜像 Digest、Secret 引用、Adapter binding 和对外 Base URL。数据库兼容基线是 PostgreSQL 16

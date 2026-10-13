@@ -12,6 +12,8 @@ export type BrowserContextBindingV1 = Readonly<{
 	conversationId: string;
 	sessionGeneration: number;
 	resourceFence: number;
+	workloadRevision: number;
+	imageDigest: string;
 }>;
 
 export type BrowserContextManagerSnapshotV1 = Readonly<{
@@ -57,7 +59,10 @@ function assertBinding(binding: BrowserContextBindingV1): void {
 		!Number.isSafeInteger(binding.sessionGeneration) ||
 		binding.sessionGeneration < 1 ||
 		!Number.isSafeInteger(binding.resourceFence) ||
-		binding.resourceFence < 1
+		binding.resourceFence < 1 ||
+		!Number.isSafeInteger(binding.workloadRevision) ||
+		binding.workloadRevision < 1 ||
+		!/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(binding.imageDigest)
 	)
 		throw new Error("BROWSER_CONTEXT_BINDING_INVALID");
 }
@@ -70,6 +75,8 @@ function captureBinding(
 		conversationId: binding?.conversationId,
 		sessionGeneration: binding?.sessionGeneration,
 		resourceFence: binding?.resourceFence,
+		workloadRevision: binding?.workloadRevision,
+		imageDigest: binding?.imageDigest,
 	});
 	assertBinding(captured);
 	return captured;
@@ -83,7 +90,9 @@ function sameBinding(
 		left.agentId === right.agentId &&
 		left.conversationId === right.conversationId &&
 		left.sessionGeneration === right.sessionGeneration &&
-		left.resourceFence === right.resourceFence
+		left.resourceFence === right.resourceFence &&
+		left.workloadRevision === right.workloadRevision &&
+		left.imageDigest === right.imageDigest
 	);
 }
 

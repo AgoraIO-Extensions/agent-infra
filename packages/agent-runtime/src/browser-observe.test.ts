@@ -116,6 +116,13 @@ function executionBinding(pageRevision: number) {
 	} as const;
 }
 
+const recoveryBinding = {
+	sessionGeneration: 2,
+	resourceFence: 7,
+	workloadRevision: 4,
+	imageDigest: `sha256:${"a".repeat(64)}`,
+} as const;
+
 describe("Browser observe controller", () => {
 	it("navigates only to approved origins and expires element references on navigation", async () => {
 		const page = new FakePage();
@@ -217,7 +224,7 @@ describe("Browser observe controller", () => {
 		const controller = createBrowserObserveControllerV1({
 			context: context as never,
 			capability,
-			recoveryBinding: { sessionGeneration: 2, resourceFence: 7 },
+			recoveryBinding,
 		});
 		const reference = await controller.navigate("https://example.test/app");
 		const observation = await controller.observe(reference);
@@ -230,8 +237,7 @@ describe("Browser observe controller", () => {
 			url: "https://example.test/app",
 			origin: "https://example.test",
 			capabilityVersion: 1,
-			sessionGeneration: 2,
-			resourceFence: 7,
+			...recoveryBinding,
 		});
 		expect(rebound).toEqual(reference);
 		expect(() => controller.resolveElement(element)).toThrow(
@@ -245,7 +251,7 @@ describe("Browser observe controller", () => {
 		const controller = createBrowserObserveControllerV1({
 			context: context as never,
 			capability,
-			recoveryBinding: { sessionGeneration: 2, resourceFence: 7 },
+			recoveryBinding,
 		});
 		const reference = await controller.navigate("https://example.test/app");
 		context.pages.mockReturnValue([]);
@@ -257,8 +263,7 @@ describe("Browser observe controller", () => {
 				url: "https://example.test/app",
 				origin: "https://example.test",
 				capabilityVersion: 1,
-				sessionGeneration: 2,
-				resourceFence: 7,
+				...recoveryBinding,
 			}),
 		).rejects.toThrow("BROWSER_PAGE_RECOVERY_PAGE_MISSING");
 		context.pages.mockReturnValue([page]);
@@ -270,8 +275,8 @@ describe("Browser observe controller", () => {
 				url: "https://example.test/app",
 				origin: "https://example.test",
 				capabilityVersion: 1,
+				...recoveryBinding,
 				sessionGeneration: 3,
-				resourceFence: 7,
 			}),
 		).rejects.toThrow("BROWSER_PAGE_RECOVERY_BINDING_MISMATCH");
 		await expect(
@@ -282,8 +287,7 @@ describe("Browser observe controller", () => {
 				url: "https://example.test/app",
 				origin: "https://example.test",
 				capabilityVersion: 1,
-				sessionGeneration: 2,
-				resourceFence: 7,
+				...recoveryBinding,
 			}),
 		).rejects.toThrow("BROWSER_PAGE_RECOVERY_REVISION_MISMATCH");
 		await expect(
@@ -294,10 +298,21 @@ describe("Browser observe controller", () => {
 				url: "https://example.test/other",
 				origin: "https://example.test",
 				capabilityVersion: 1,
-				sessionGeneration: 2,
-				resourceFence: 7,
+				...recoveryBinding,
 			}),
 		).rejects.toThrow("BROWSER_PAGE_RECOVERY_URL_MISMATCH");
+		await expect(
+			controller.recoverPage({
+				pageId: reference.pageId,
+				pageRevision: reference.pageRevision,
+				tabIndex: 0,
+				url: "https://example.test/app",
+				origin: "https://example.test",
+				capabilityVersion: 1,
+				...recoveryBinding,
+				workloadRevision: 5,
+			}),
+		).rejects.toThrow("BROWSER_PAGE_RECOVERY_BINDING_MISMATCH");
 	});
 });
 

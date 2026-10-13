@@ -427,6 +427,104 @@ test("fingerprint uses raw JSON serialization for HTML characters", () => {
 	);
 });
 
+test("Platform API callback auth SecretRef is optional and projected as a protected file", () => {
+	const base = [
+		"--set",
+		"platformApi.placement=in-cluster",
+		"--set-string",
+		`images.platformApi.digest=${validDigest}`,
+	];
+	const disabled = render(...base);
+	assert.equal(disabled.status, 0, disabled.stderr);
+	const disabledApi = resource(
+		objects(disabled.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-api",
+	).spec.template.spec;
+	assert.equal(
+		disabledApi.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE",
+		),
+		undefined,
+	);
+	assert.equal(
+		disabledApi.containers[0].volumeMounts.some(
+			(mount) => mount.name === "connection-callback-auth",
+		),
+		false,
+	);
+	assert.equal(
+		disabledApi.volumes.some(
+			(volume) => volume.name === "connection-callback-auth",
+		),
+		false,
+	);
+
+	const configured = render(
+		...base,
+		"--set-string",
+		"platformApi.connectionCallbackAuthSecretRef.name=runtime-callback-auth",
+		"--set-string",
+		"platformApi.connectionCallbackAuthSecretRef.key=callback.auth",
+	);
+	assert.equal(configured.status, 0, configured.stderr);
+	const configuredApi = resource(
+		objects(configured.stdout),
+		"Deployment",
+		"topology-agent-infra-platform-api",
+	).spec.template.spec;
+	assert.equal(
+		configuredApi.containers[0].env.find(
+			(entry) => entry.name === "PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE",
+		)?.value,
+		"/var/run/agent-infra/connection-callback-auth/callback.auth",
+	);
+	assert.deepEqual(
+		configuredApi.containers[0].volumeMounts.find(
+			(mount) => mount.name === "connection-callback-auth",
+		),
+		{
+			name: "connection-callback-auth",
+			mountPath: "/var/run/agent-infra/connection-callback-auth/callback.auth",
+			subPath: "callback.auth",
+			readOnly: true,
+		},
+	);
+	assert.deepEqual(
+		configuredApi.volumes.find(
+			(volume) => volume.name === "connection-callback-auth",
+		)?.secret,
+		{
+			secretName: "runtime-callback-auth",
+			defaultMode: 384,
+			items: [{ key: "callback.auth", path: "callback.auth" }],
+		},
+	);
+	assert.doesNotMatch(configured.stdout, /super-secret-callback-value/);
+
+	const malformed = render(
+		...base,
+		"--set-string",
+		"platformApi.connectionCallbackAuthSecretRef.name=runtime-callback-auth",
+		"--set-string",
+		"platformApi.connectionCallbackAuthSecretRef.key=../callback.auth",
+	);
+	assert.notEqual(malformed.status, 0);
+	assert.match(malformed.stderr, /connectionCallbackAuthSecretRef/);
+
+	const external = render(
+		"--set-string",
+		"platformApi.connectionCallbackAuthSecretRef.name=runtime-callback-auth",
+		"--set-string",
+		"platformApi.connectionCallbackAuthSecretRef.key=callback.auth",
+	);
+	assert.notEqual(external.status, 0);
+	assert.match(
+		external.stderr,
+		/platformApi\.connectionCallbackAuthSecretRef requires platformApi\.placement=in-cluster/,
+	);
+});
+
 test("production Worker requires a private module and runtime authorization mounts", () => {
 	const topologyWecom = render("--set", "platformWorker.wecomEnabled=true");
 	assert.notEqual(topologyWecom.status, 0);

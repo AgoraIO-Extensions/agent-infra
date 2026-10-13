@@ -10,6 +10,14 @@ Compose 固定 `PLATFORM_API_CONFIGURATION_MODULE=file:///app/deployment/configu
 和 `PLATFORM_API_PROXY_TOKEN_FILE=/run/secrets/platform_proxy_token`；模块只接受本地
 文件 URL 和绝对令牌路径。`configuration.mjs` 必须导出：
 
+Kubernetes Helm 部署可选配置 `platformApi.connectionCallbackAuthSecretRef`，由部署 owner
+提供只用于 Runtime OAuth callback 的 Secret name/key。`platformApi.placement=in-cluster` 时，
+Chart 以只读 `0600` 文件投影该 Secret key，并设置
+`PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE=/var/run/agent-infra/connection-callback-auth/callback.auth`。
+Secret 内容不进入 values、模板渲染日志或 API 配置；省略该 SecretRef 时 callback 能力保持关闭。
+该凭据只允许固定的 `/internal/runtime/oauth/v1/callback` 路由，不能复用 Worker business/
+installation credential。外置 `platform-api` 的文件装配仍由其部署方负责。
+
 | 导出 | 契约 |
 | --- | --- |
 | `ldap` | [`LdapIdentityConfiguration`](../../packages/identity/src/ldap.ts)，含实际 LDAP（`tls: true` 默认使用 LDAPS，`tls: false` 使用 LDAP，见工程 Spec §9.1）、受控 `verifyCurrentStatus` 和持久 issuer/UID 映射；无需专用 active 属性 |

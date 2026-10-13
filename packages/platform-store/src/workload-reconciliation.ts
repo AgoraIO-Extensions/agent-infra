@@ -21,7 +21,8 @@ import {
 	PostgresJsTransaction,
 } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+// 审批后的 Workload 与会话路径显式接收 V3（默认 Relay Key、无模型凭证）配置。
+import { decodeVersionedAgentConfigurationRecord as decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import {
 	persistAcceptedAgentManagement,
 	readAgentManagementState,
@@ -253,7 +254,7 @@ function expectedSecretReferences(
 		readonly modelConfiguration: {
 			readonly options: readonly {
 				readonly optionId: string;
-				readonly credential: {
+				readonly credential?: {
 					readonly secretId: string;
 					readonly version: number;
 					readonly isSet: boolean;
@@ -272,13 +273,18 @@ function expectedSecretReferences(
 				secretVersion: version,
 			})),
 		...(includeModelCredentials
-			? (configuration.modelConfiguration?.options
-					.filter(({ credential }) => credential.isSet)
-					.map(({ optionId, credential }) => ({
-						name: `model:${optionId}`,
-						secretId: credential.secretId,
-						secretVersion: credential.version,
-					})) ?? [])
+			? (configuration.modelConfiguration?.options.flatMap(
+					({ optionId, credential }) =>
+						credential?.isSet
+							? [
+									{
+										name: `model:${optionId}`,
+										secretId: credential.secretId,
+										secretVersion: credential.version,
+									},
+								]
+							: [],
+				) ?? [])
 			: []),
 	];
 	if (
@@ -302,7 +308,7 @@ function resolveSecretBindings(
 		readonly modelConfiguration: {
 			readonly options: readonly {
 				readonly optionId: string;
-				readonly credential: {
+				readonly credential?: {
 					readonly secretId: string;
 					readonly version: number;
 					readonly isSet: boolean;
@@ -645,14 +651,17 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 				"schemaVersion" in projection
 					? projection.schemaVersion === 4
 					: options.runtimeModelVersion === 4;
+			// V3 配置本身不含模型凭证：一律不收集模型 Key。Worker 未启用 V4
+			// keyless 投影时，由预检显式拒绝 V3，不会退回物化模型 Key。
 			const keyless =
-				secretConfiguration.source.kind === "standard" &&
-				(historical
-					? persistedKeyless
-					: options.runtimeModelVersion === 4 ||
-						(state?.candidate.configuration.revision ===
-							configuration.revision &&
-							persistedKeyless));
+				secretConfiguration.schemaVersion === 3 ||
+				(secretConfiguration.source.kind === "standard" &&
+					(historical
+						? persistedKeyless
+						: options.runtimeModelVersion === 4 ||
+							(state?.candidate.configuration.revision ===
+								configuration.revision &&
+								persistedKeyless)));
 			const bindings = resolveSecretBindings(
 				records,
 				secretConfiguration,

@@ -66,6 +66,8 @@ export function createSessionBrowserExecutionContextV1(input: {
 			conversationId: input.binding.conversationId,
 			sessionGeneration: input.binding.sessionGeneration,
 			resourceFence: input.binding.resourceFence,
+			workloadRevision: input.binding.workloadRevision,
+			imageDigest: input.binding.imageDigest,
 		},
 		capability: input.capability,
 	});

@@ -52,6 +52,8 @@ const binding = {
 	conversationId: "conversation-1",
 	sessionGeneration: 1,
 	resourceFence: 3,
+	workloadRevision: 4,
+	imageDigest: `sha256:${"a".repeat(64)}`,
 } as const;
 
 function fakeBrowserType() {
@@ -146,6 +148,8 @@ describe("Session BrowserContext manager", () => {
 		{ conversationId: "foreign-conversation" },
 		{ sessionGeneration: 2 },
 		{ resourceFence: 4 },
+		{ workloadRevision: 5 },
+		{ imageDigest: `sha256:${"f".repeat(64)}` },
 	])("retains profile ownership after a crash (%j)", async (different) => {
 		const root = await mkdtemp(join(tmpdir(), "agent-infra-browser-context-"));
 		try {
@@ -229,7 +233,12 @@ describe("Session BrowserContext manager", () => {
 			supplied.conversationId = "foreign-conversation";
 			finishLaunch(fake.context);
 			await opening;
-			expect(manager.snapshot()).toMatchObject(binding);
+			expect(manager.snapshot()).toMatchObject({
+				agentId: binding.agentId,
+				conversationId: binding.conversationId,
+				sessionGeneration: binding.sessionGeneration,
+				resourceFence: binding.resourceFence,
+			});
 			await expect(
 				manager.resume(supplied, availableCapability),
 			).rejects.toThrow("BROWSER_CONTEXT_BINDING_CONFLICT");
