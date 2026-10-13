@@ -41,4 +41,24 @@ describe("createSessionBrowserExecutionContextV1", () => {
 		);
 		expect(() => createSessionBrowserExecutionContextV1(input)).toThrow();
 	});
+
+	it("accepts the readiness binding's bare image digest", () => {
+		const context = createSessionBrowserExecutionContextV1({
+			sandboxRoot: "/workspace",
+			capability: {
+				status: "available",
+				schemaVersion: 1,
+				capabilityVersion: 1,
+				operations: ["observe"],
+				policy: {} as never,
+				provenance: {} as never,
+				conformance: {} as never,
+			},
+			binding: {
+				...binding,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+		});
+		expect(context.binding.imageDigest).toBe(`sha256:${"a".repeat(64)}`);
+	});
 });

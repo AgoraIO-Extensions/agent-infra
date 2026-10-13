@@ -12,6 +12,11 @@ NetworkPolicy 的出站规则；部署未批准目标时出站为空，即全部
 回包都不能提供或扩大目标。该 NetworkPolicy 已随 Sandbox 就绪回执记录 UID/resourceVersion；同 UID
 漂移沿 adapter 既有语义判定 unknown 并拒绝原地更新。部署出站策略变化后既有 Session 的恢复路径尚未定义。
 
+`modelEgress` 与 `connectionEgress` 也可以使用部署批准的 bounded CIDR（`cidr` + 端口）。仅接受
+规范网络地址，IPv4 不宽于 `/16`、IPv6 不宽于 `/48`，并拒绝全网、私网、回环、链路本地/元数据、
+组播和保留网段；`dnsEgress` 仍只接受精确 IP 或集群内 namespace/Pod selector。CIDR 不是开放公网
+的通用配置，必须对应已批准的模型或 Connection 网关目标。
+
 下文的 `createSessionSandboxEgressV1` 是另一种独立策略的 Worker 内部 enforcement seam，不是新的
 分配、授权、Store 事务或调度入口；当前未接入 Session 生命周期，以下接线要求仅在启用该 seam 时适用。
 

@@ -134,6 +134,12 @@ export interface RuntimeHostOptions {
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
 	}>;
 	readinessVerifier?: ReturnType<typeof createWorkloadReadinessVerifierV1>;
+	/** Deployment-owned local Browser readiness probe; caller-supplied inputs are already signed. */
+	probeBrowserCapability?: (input: {
+		readonly declaration: BrowserCapabilityDeclarationV1;
+		readonly binding: BrowserCapabilityBindingV1;
+		readonly signal: AbortSignal;
+	}) => Promise<RuntimeBrowserCapabilityProbeEvidenceV1 | undefined>;
 	/** Request-local Browser context plus the admitted Execution identity. */
 	createBrowserExecutionContext?: (
 		input: RuntimeBrowserExecutionContextFactoryInputV1,
@@ -1512,7 +1518,25 @@ export class RuntimeHost {
 				);
 			verify(request, authenticatedWorkerId);
 			const browserBinding = request.browserBinding;
-			const browserProbe = capabilities.browser;
+			let browserProbe = capabilities.browser;
+			if (
+				!browserProbe?.binding &&
+				request.browserDeclaration &&
+				browserBinding &&
+				this.options.probeBrowserCapability
+			) {
+				try {
+					browserProbe = await this.options.probeBrowserCapability({
+						declaration: request.browserDeclaration,
+						binding: browserBinding,
+						signal: bounded,
+					});
+				} catch {
+					browserProbe = undefined;
+				}
+			}
+			if (browserProbe)
+				capabilities = { ...capabilities, browser: browserProbe };
 			if (!request.browserDeclaration) {
 				publishBrowserAssembly(undefined);
 			} else if (

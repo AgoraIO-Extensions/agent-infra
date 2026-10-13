@@ -297,7 +297,7 @@ describe("session sandbox workload adapter", () => {
 			dnsEgress: [
 				{ namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
 			],
-			modelEgress: [{ destination: { ip: "203.0.113.10" }, port: 443 }],
+			modelEgress: [{ destination: { cidr: "8.8.8.0/24" }, port: 443 }],
 			connectionEgress: [
 				{
 					destination: {
@@ -340,6 +340,24 @@ describe("session sandbox workload adapter", () => {
 				...allocation,
 				egress: {
 					modelEgress: [{ destination: { ip: "0.0.0.0/0" }, port: 443 }],
+				},
+			},
+		],
+		[
+			"reserved CIDR destination",
+			{
+				...allocation,
+				egress: {
+					modelEgress: [{ destination: { cidr: "4000::/48" }, port: 443 }],
+				},
+			},
+		],
+		[
+			"CIDR without port",
+			{
+				...allocation,
+				egress: {
+					modelEgress: [{ destination: { cidr: "8.8.8.0/24" } } as never],
 				},
 			},
 		],
