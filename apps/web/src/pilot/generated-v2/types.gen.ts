@@ -372,6 +372,7 @@ export type AgentProjectionV2 = {
         };
         connection: boolean;
         modelSelection: boolean;
+        nativeMetadata?: boolean;
         resultFiles: boolean;
         skills?: Array<{
             manifestSha256: string;

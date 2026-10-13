@@ -31,12 +31,14 @@ export function useConversationNativeMetadata({
 	conversationId,
 	executionId,
 	selector = "skills",
+	enabled = true,
 	client = defaultClient,
 }: {
 	readonly identityKey: string;
 	readonly conversationId: string;
 	readonly executionId?: string;
 	readonly selector?: "commands" | "skills";
+	readonly enabled?: boolean;
 	readonly client?: Client;
 }) {
 	const query = useQuery({
@@ -47,7 +49,7 @@ export function useConversationNativeMetadata({
 			executionId ?? null,
 			selector,
 		],
-		enabled: Boolean(identityKey && conversationId && executionId),
+		enabled: enabled && Boolean(identityKey && conversationId && executionId),
 		retry: false,
 		gcTime: 0,
 		queryFn: async ({ signal }) => {
@@ -68,9 +70,11 @@ export function useConversationNativeMetadata({
 			return parsed.data;
 		},
 	});
-	const projection = query.isError ? undefined : query.data;
+	const projection = enabled && !query.isError ? query.data : undefined;
 	return {
 		...query,
+		isPending: enabled && query.isPending,
+		isError: enabled && query.isError,
 		capabilities: nativeMetadataCapabilities(projection),
 		available: projection !== undefined,
 	};

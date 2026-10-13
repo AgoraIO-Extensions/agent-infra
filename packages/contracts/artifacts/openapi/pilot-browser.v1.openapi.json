@@ -1491,6 +1491,9 @@
               "modelSelection": {
                 "type": "boolean"
               },
+              "nativeMetadata": {
+                "type": "boolean"
+              },
               "resultFiles": {
                 "type": "boolean"
               },

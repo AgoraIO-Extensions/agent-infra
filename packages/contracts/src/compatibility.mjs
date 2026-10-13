@@ -3509,9 +3509,9 @@ function isConnectionInstallationAuthorizationUrlAddition(previous, current) {
 	return changed && findBreakingChanges(previous, normalized).length === 0;
 }
 
-// #1760 projects the already-versioned Browser projection into Agent API
-// capabilities. The field is optional, so Browser-absent consumers keep the
-// historical response shape.
+// #1760 and #2305 add optional verified runtime capabilities to Agent API
+// projections. Browser/native-metadata-absent consumers keep the historical
+// response shape.
 function isPilotBrowserProjectionOpenApiAddition(previous, current) {
 	const normalized = structuredClone(current);
 	let changed = false;
@@ -3525,6 +3525,13 @@ function isPilotBrowserProjectionOpenApiAddition(previous, current) {
 			previousCapabilities?.properties?.browser === undefined
 		) {
 			delete currentCapabilities.properties.browser;
+			changed = true;
+		}
+		if (
+			currentCapabilities?.properties?.nativeMetadata !== undefined &&
+			previousCapabilities?.properties?.nativeMetadata === undefined
+		) {
+			delete currentCapabilities.properties.nativeMetadata;
 			changed = true;
 		}
 	}
