@@ -64,6 +64,7 @@ import {
 	type NativeMetadataRoutesDependenciesV1,
 	registerNativeMetadataRoutes,
 } from "./http/native-metadata-routes.js";
+import { registerObservabilityRoutes } from "./http/observability-routes.js";
 import {
 	type PersonalApiCredentialRouteDependencies,
 	registerPersonalApiCredentialRoutes,
@@ -210,6 +211,10 @@ export function createPlatformApp(
 			});
 			return context.res;
 		});
+	registerObservabilityRoutes(app, {
+		identity: dependencies.sessionAudit.identity,
+		...(observability ? { observability } : {}),
+	});
 	if (dependencies.customAgentGateway)
 		registerCustomAgentAuthGatewayRoutesV1(
 			app,
