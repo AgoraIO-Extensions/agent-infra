@@ -47,6 +47,50 @@ transport，因此继续保持 `connection: false`。
 和 Connection API 不经过它代理调用，也不取得 Connection token、目录、Grant
 或 Provider credential；Connection 仍是外部身份、授权、调用和结果的权威。
 
+## 规范映射
+
+本提案同时受以下现行边界约束：
+
+- [工程 Spec §13.5.3](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1353-secretref权威与交付边界)
+  负责 SecretRef、主体/Agent/ConsumerInstance 选择和不向 native 交付原始凭据；
+- [工程 Spec §13.5.4](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1354-runtime-driver-直接消费标准-mcp)
+  负责 Runtime Driver 的 MCP 执行、原生配置为空和真实 Linux 保护；
+- [Runtime HLD §11.2](../architecture/HLD-agent-runtime-M1.md#112-codex-与-connection-接缝验收)
+  负责固定产物、秘密/FD/子进程保护、结果保存和 unknown WRITE；
+- [Connection HLD §5.2](../architecture/HLD-connection-M1.md#52-consumer-与-instance)、
+  [§7](../architecture/HLD-connection-M1.md#7-mcpapi-调用流程)、
+  [§8](../architecture/HLD-connection-M1.md#8-幂等与线性化) 和
+  [§13](../architecture/HLD-connection-M1.md#13-pilot-验收与成功声明)
+  负责 ConsumerInstance、逐次认证、幂等、撤销和真实调用证据。
+
+本 ADR 只是候选 transport adapter；它不能覆盖这些文档。若 bridge 需要改变
+§13.5.4 的“原生 Connection MCP 配置保持为空”或其他边界，必须先修订工程
+Spec 并通过同一套评审，随后才能实施。
+
+## 现有 seam 与拟定调用序列
+
+实现必须复用已有符号，不新建第二套 Connection journal 或授权权威：
+
+- Host 以 `StandardMcpClient.open()` 创建当前原执行的标准客户端；
+  `StandardMcpClient.assertCurrent()` 在每次发送前重新读取受保护安装与当前授权。
+- Generic ACP 在 `openAcpSession()` 的 session 生命周期中挂接 bridge；
+  `AcpLaunch.mcpServers` 只传 loopback URL 和短期 bridge bearer。
+- 每次 native `tools/call` 先由 bridge 校验固定工具名、参数 schema 和当前
+  native session，再调用 `StandardMcpClient.call(alias, arguments, operation, signal)`。
+  `operation` 必须实现现有 `StandardMcpOperation` 的
+  `assertCurrent → prepare → started → confirm/block` 顺序。
+- `prepare` 持久化 RPC identity 与参数摘要，`started` 只在最后一次授权/保护
+  复核后记录；一次 HTTP dispatch 最多对应一个实际发送。响应丢失、发送次数异常
+  或 `confirm` 失败调用 `block()`，将结果保持 `unknown` 并封闭 native Session，
+  不把普通工具错误交给模型继续推理。
+- Driver 使用现有 `SessionRuntimeDriver` 的
+  `recordOperationFact()`/`RuntimeOperationFactV2` seam 记录同一
+  operation/attempt 的开始、终态或 unknown；Connection 关联引用仍只能来自
+  同次认证响应，缺失时保持 unverified。
+
+上面的顺序是实现前必须锁定的 contract；当前固定 OpenCode/Pi 版本没有足够
+transport/dispatch 证据，因此本 ADR 不提供实现或 capability enable。
+
 ## 与当前工程 Spec 的关系
 
 当前 [工程 Spec §13.5.4](../architecture/SPEC-agent-infra-M1-engineering-architecture.md#1354-runtime-driver-直接消费标准-mcp)
@@ -60,7 +104,11 @@ transport，因此继续保持 `connection: false`。
 - 只有固定 native artifact 的 provenance 明确证明其 ACP `mcpServers` HTTP
   transport 会话级注册、不会把 headers 写入 native home/log/journal，并且
   具备 bounded initialization、tool discovery 和 session close 语义时，才可
-  开启该 bridge。
+  开启该 bridge。当前仓库固定证据是 OpenCode `1.18.30`、ACP SDK `1.4.0`
+  （见 `packages/agent-runtime/src/opencode-release.json`、
+  `packages/agent-runtime/src/protected-mcp-compatibility.test.ts`）；这些测试只
+  锁定版本/provenance，不证明受保护 headers 或 dispatch admission，故当前仍关闭。
+  未来升级到其他版本必须重新提交 artifact source、lock、transport 和泄漏负测证据。
 - Generic ACP 的 artifact 不满足时保持 `connection: false`，不能用
   `OPENCODE_CONFIG_CONTENT`、普通 env/argv、stdio、代理签名或自定义 tool
   replacement 绕过。
