@@ -5,10 +5,12 @@ import {
 } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
+	Activity,
 	Bot,
 	Check,
 	ClipboardMinus,
 	ExternalLink,
+	FlaskConical,
 	House,
 	KeyRound,
 	Layers,
@@ -122,6 +124,7 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 		sessionProjection,
 	]);
 	const pathname = useLocation({ select: (location) => location.pathname });
+	const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
 	const conversationSelection = useLocation({
 		select: (location) => location.search.mode === "conversation",
 	});
@@ -193,10 +196,19 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 															? "API 凭证与应用"
 															: pathname === "/my-settings/relay-key"
 																? "个人 Relay Key"
-																: pathname === "/agents" ||
-																		pathname === "/agents/"
-																	? "Agent 目录"
-																	: "Agent 详情";
+																: normalizedPathname === "/skills/manage"
+																	? "Skill Hub 管理"
+																	: normalizedPathname === "/skills" ||
+																			normalizedPathname.startsWith("/skills/")
+																		? "Skill Hub"
+																		: normalizedPathname === "/eval"
+																			? "评测"
+																			: normalizedPathname === "/ops"
+																				? "运维观测"
+																				: pathname === "/agents" ||
+																						pathname === "/agents/"
+																					? "Agent 目录"
+																					: "Agent 详情";
 	const navigation = (
 		<>
 			<Link className="platform-brand" to="/" onClick={() => setSheet(false)}>
@@ -281,6 +293,17 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					</Link>
 					<Link
 						aria-current={
+							normalizedPathname.startsWith("/skills") ? "page" : undefined
+						}
+						className={`platform-nav-item ${normalizedPathname.startsWith("/skills") ? "selected" : ""}`}
+						to="/skills/manage"
+						onClick={() => setSheet(false)}
+					>
+						<Layers size={17} strokeWidth={1.8} aria-hidden="true" />
+						Skill Hub 管理
+					</Link>
+					<Link
+						aria-current={
 							pathname === "/my-settings/api-credentials" ? "page" : undefined
 						}
 						className={`platform-nav-item ${pathname === "/my-settings/api-credentials" ? "selected" : ""}`}
@@ -357,6 +380,24 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 						>
 							<ClipboardMinus size={17} strokeWidth={1.8} aria-hidden="true" />
 							平台审计
+						</Link>
+						<Link
+							aria-current={normalizedPathname === "/eval" ? "page" : undefined}
+							className={`platform-nav-item ${normalizedPathname === "/eval" ? "selected" : ""}`}
+							to="/eval"
+							onClick={() => setSheet(false)}
+						>
+							<FlaskConical size={17} strokeWidth={1.8} aria-hidden="true" />
+							评测
+						</Link>
+						<Link
+							aria-current={normalizedPathname === "/ops" ? "page" : undefined}
+							className={`platform-nav-item ${normalizedPathname === "/ops" ? "selected" : ""}`}
+							to="/ops"
+							onClick={() => setSheet(false)}
+						>
+							<Activity size={17} strokeWidth={1.8} aria-hidden="true" />
+							运维观测
 						</Link>
 					</nav>
 				)}
@@ -438,13 +479,17 @@ export function ApplicationShell({ children }: { children: ReactNode }) {
 					<Breadcrumb className="platform-breadcrumb">
 						<BreadcrumbList>
 							<BreadcrumbItem>
-								{pathname.startsWith("/admin")
+								{normalizedPathname.startsWith("/admin")
 									? "系统管理"
-									: pathname.startsWith("/my-agents") ||
-											pathname === "/audit" ||
-											pathname.startsWith("/my-settings")
+									: normalizedPathname.startsWith("/my-agents") ||
+											normalizedPathname === "/audit" ||
+											normalizedPathname.startsWith("/my-settings") ||
+											normalizedPathname.startsWith("/skills")
 										? "我的管理"
-										: "工作区"}
+										: normalizedPathname === "/eval" ||
+												normalizedPathname === "/ops"
+											? "系统管理"
+											: "工作区"}
 							</BreadcrumbItem>
 							<BreadcrumbItem>
 								<BreadcrumbPage>{title}</BreadcrumbPage>
