@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import {
 	createChromiumBrowserSessionControllerV1,
@@ -28,6 +29,20 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 	input.signal.throwIfAborted();
 	const installation = await verifyChromiumInstallationV1();
 	const root = await mkdtemp(join(input.dataDirectory, ".browser-probe-"));
+	const server = createServer((_request, response) => {
+		response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+		response.end(
+			"<html><body><main>agent-infra-browser-readiness</main></body></html>",
+		);
+	});
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", () => resolve());
+	});
+	const address = server.address();
+	if (!address || typeof address === "string")
+		throw new Error("BROWSER_PROBE_SERVER_UNAVAILABLE");
+	const probeOrigin = `http://127.0.0.1:${address.port}/`;
 	const operations = ["observe"] as const;
 	const verifiedAt = new Date().toISOString();
 	const evidenceHash = createHash("sha256")
@@ -62,6 +77,10 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 			operations: [...operations],
 		},
 	};
+	const probeCapability: BrowserCapabilityAvailableV1 = {
+		...capability,
+		policy: { ...capability.policy, allowedOrigins: [probeOrigin] },
+	};
 	const session = createChromiumBrowserSessionControllerV1({
 		sandboxRoot: root,
 		binding: {
@@ -72,12 +91,28 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 			workloadRevision: input.binding.workloadRevision,
 			imageDigest: input.binding.imageDigest,
 		},
-		capability,
+		capability: probeCapability,
 	});
 	try {
-		const snapshot = await session.start();
+		let onAbort: (() => void) | undefined;
+		const aborted = new Promise<never>((_resolve, reject) => {
+			onAbort = () => {
+				void session.close().catch(() => undefined);
+				reject(new Error("RUNTIME_BROWSER_PROBE_INTERRUPTED"));
+			};
+			input.signal.addEventListener("abort", onAbort, { once: true });
+		});
+		const snapshot = await Promise.race([session.start(), aborted]).finally(
+			() => {
+				if (onAbort) input.signal.removeEventListener("abort", onAbort);
+			},
+		);
 		input.signal.throwIfAborted();
 		if (snapshot.status !== "ready") return undefined;
+		const page = await session.navigate(probeOrigin);
+		const observation = await session.observe(page);
+		if (!observation.text.includes("agent-infra-browser-readiness"))
+			return undefined;
 		return {
 			capabilityVersion: capability.capabilityVersion,
 			operations: [...operations],
@@ -87,6 +122,7 @@ export async function probeRuntimeBrowserCapabilityV1(input: {
 		};
 	} finally {
 		await session.close().catch(() => undefined);
+		await new Promise<void>((resolve) => server.close(() => resolve()));
 		await rm(root, { recursive: true, force: true });
 	}
 }
