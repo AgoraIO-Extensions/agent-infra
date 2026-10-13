@@ -258,7 +258,7 @@ export const sessionSandboxUpgradingSql = `exists (
  where upgrade.scope_type = 'conversation' and upgrade.scope_id = c.id
    and upgrade.operation = 'conversation.sandbox.reconcile.v1'
    and upgrade.status <> 'succeeded'
-   and upgrade.payload->'lifecycle'->>'reason' in ('upgrade', 'idle_reclaim')
+   and upgrade.payload->'lifecycle'->>'reason' = 'upgrade'
 )`;
 
 /**
