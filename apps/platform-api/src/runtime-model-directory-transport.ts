@@ -81,7 +81,7 @@ export function createWorkerRuntimeModelDirectoryTransportV1(options: {
 						"x-trace-id": request.traceId,
 					},
 					body: JSON.stringify(request),
-					signal,
+					signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
 				});
 				if (
 					!response.ok ||

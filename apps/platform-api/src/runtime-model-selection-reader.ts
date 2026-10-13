@@ -144,6 +144,7 @@ export function createRuntimeModelSelectionReaderFromDispatchV1(options: {
 				const response = RuntimeModelDirectoryResponseV1Schema.parse(
 					await options.transport.read(bound, controller.signal),
 				);
+				if (response.executionId !== bound.executionId) return null;
 				return projectRuntimeModelDirectory(
 					identity,
 					conversationId,

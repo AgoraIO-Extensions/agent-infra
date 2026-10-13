@@ -66,6 +66,22 @@ describe("Runtime model-selection reader", () => {
 		});
 	});
 
+	it("rejects a Worker response from another execution", async () => {
+		const { grant: _grant, ...dispatch } = request;
+		const reader = createRuntimeModelSelectionReaderFromDispatchV1({
+			resolveRequest: async () => dispatch,
+			transport: {
+				read: vi.fn().mockResolvedValue({
+					...response,
+					executionId: "foreign-execution",
+				}),
+			},
+		});
+		await expect(
+			reader.read(identity, request.conversationId),
+		).resolves.toBeNull();
+	});
+
 	it("projects only a bound Runtime response", async () => {
 		const transport = { read: vi.fn().mockResolvedValue(response) };
 		const reader = createRuntimeModelSelectionReaderV1({
