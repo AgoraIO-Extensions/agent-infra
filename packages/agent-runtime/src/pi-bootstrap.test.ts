@@ -22,6 +22,19 @@ it("uses only projection-derived explicit Skill entry paths", () => {
 	]);
 });
 
+it("enables Skill commands only when explicit Skill arguments are present", () => {
+	const directory: RuntimeFilesystemSkillDirectoryV1 = {
+		generationId: "a".repeat(64),
+		findSkills: () => [],
+		nativeSkillPaths: () => [
+			"/opt/agent-infra-skill-hub/.agents/skills/workspace-summary/SKILL.md",
+		],
+		readSkill: async () => new Uint8Array(),
+	};
+	expect(piNativeSkillArguments(undefined).includes("--skill")).toBe(false);
+	expect(piNativeSkillArguments(directory).includes("--skill")).toBe(true);
+});
+
 it("fails closed for duplicate or caller-shaped native Skill paths", () => {
 	for (const path of [
 		"/tmp/skill.md",
