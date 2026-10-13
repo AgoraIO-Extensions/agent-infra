@@ -904,6 +904,7 @@ export function assemblePlatformApi(
 				};
 			},
 		} satisfies SkillHubAgentBindingRoutesDependenciesV1,
+		skillHubProjects: skillHubRead.projectDependencies,
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.userGovernance
 			? {

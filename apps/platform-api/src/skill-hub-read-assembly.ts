@@ -8,6 +8,7 @@ import { createDeploymentIdentityScope } from "./deployment-identity.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import type { SkillHubInstallationRoutesDependenciesV1 } from "./http/skill-hub-installation-routes.js";
 import type { SkillHubPublicationRoutesDependenciesV1 } from "./http/skill-hub-publication-routes.js";
+import type { SkillHubProjectRoutesDependenciesV1 } from "./http/skill-hub-project-routes.js";
 import type { SkillHubReadRoutesDependenciesV1 } from "./http/skill-hub-read-routes.js";
 
 export function assembleSkillHubReadApiV1(input: {
@@ -49,6 +50,23 @@ export function assembleSkillHubReadApiV1(input: {
 		recordRefusal: (metadata, userId, reason) =>
 			store.recordReadRefusal(metadata, userId, reason),
 	};
+	const projectDependencies: SkillHubProjectRoutesDependenciesV1 = {
+		identity: input.identity,
+		list: (request, trusted) =>
+			scope.requestScope(request, async () => store.listProjects(trusted)),
+		read: (request, trusted, projectId) =>
+			scope.requestScope(request, async () =>
+				store.readProject(trusted, projectId),
+			),
+		create: (request, trusted, key, inputValue) =>
+			scope.requestScope(request, async () =>
+				store.createProject(trusted, key, inputValue),
+			),
+		update: (request, trusted, projectId, key, inputValue) =>
+			scope.requestScope(request, async () =>
+				store.updateProject(trusted, projectId, key, inputValue),
+			),
+	};
 	const installationDependencies: SkillHubInstallationRoutesDependenciesV1 = {
 		identity: input.identity,
 		install: (request, trusted, key, command) =>
@@ -79,6 +97,7 @@ export function assembleSkillHubReadApiV1(input: {
 		dependencies,
 		installationDependencies,
 		publicationDependencies,
+		projectDependencies,
 		close: () => store.close(),
 	};
 }

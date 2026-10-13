@@ -6539,6 +6539,157 @@
         ],
         "type": "object"
       },
+      "SkillHubProjectCreateV1": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "type": "string"
+          },
+          "organizationId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "name"
+        ],
+        "type": "object"
+      },
+      "SkillHubProjectPageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SkillHubProjectV1"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object"
+      },
+      "SkillHubProjectUpdateV1": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "type": "string"
+          },
+          "organizationId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "disabled"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion"
+        ],
+        "type": "object"
+      },
+      "SkillHubProjectV1": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "type": "string"
+          },
+          "organizationId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ownerId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "projectId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "disabled"
+            ],
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "projectId",
+          "name",
+          "ownerId",
+          "organizationId",
+          "status",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
       "SkillHubPublicationRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -14115,6 +14266,406 @@
               }
             },
             "description": "Installation removed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
+    "/api/v2/skills/projects": {
+      "get": {
+        "operationId": "listSkillHubProjectsV1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubProjectPageV1"
+                }
+              }
+            },
+            "description": "Skill projects"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createSkillHubProjectV1",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillHubProjectCreateV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubProjectV1"
+                }
+              }
+            },
+            "description": "Replayed project"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubProjectV1"
+                }
+              }
+            },
+            "description": "Project created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
+    "/api/v2/skills/projects/{projectId}": {
+      "get": {
+        "operationId": "readSkillHubProjectV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubProjectV1"
+                }
+              }
+            },
+            "description": "Skill project"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateSkillHubProjectV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillHubProjectUpdateV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubProjectV1"
+                }
+              }
+            },
+            "description": "Project updated"
           },
           "400": {
             "content": {
