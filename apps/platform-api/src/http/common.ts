@@ -24,6 +24,12 @@ const protocolErrors = {
 		"Request conflicts with current state.",
 		false,
 	],
+	CODEX_MODEL_PROFILE_UNSUPPORTED: [
+		409,
+		"MODEL_SELECTION_INVALID",
+		"The selected model or reasoning level is not supported by this Codex template.",
+		false,
+	],
 	BUSY: [409, "AGENT_BUSY", "The conversation is busy.", true],
 	AGENT_STARTING: [
 		409,
@@ -76,7 +82,12 @@ const protocolErrors = {
 	],
 } as const satisfies Partial<
 	Record<
-		ProtocolErrorCode | "BUSY" | "CONFLICT" | "FORBIDDEN" | "VERSION_RETIRED",
+		| ProtocolErrorCode
+		| "BUSY"
+		| "CONFLICT"
+		| "FORBIDDEN"
+		| "VERSION_RETIRED"
+		| "CODEX_MODEL_PROFILE_UNSUPPORTED",
 		readonly [HttpErrorStatus, ProtocolErrorCode, string, boolean]
 	>
 >;

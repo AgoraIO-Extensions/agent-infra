@@ -70,13 +70,14 @@ export function mapCoreError(
 		return new HttpProtocolError(codes[error.code], traceId);
 	}
 	if (error instanceof ApplicationFoundationError) {
+		if (error.code === "model_profile_unsupported")
+			return new HttpProtocolError("CODEX_MODEL_PROFILE_UNSUPPORTED", traceId);
 		if (error.code === "invalid_command")
 			return new HttpProtocolError("INVALID_REQUEST", traceId);
 		if (error.code === "not_authorized")
 			return new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
 		if (
 			error.code === "not_admitted" ||
-			error.code === "model_profile_unsupported" ||
 			error.code === "conflict" ||
 			error.code === "idempotency_conflict"
 		) {
@@ -100,13 +101,14 @@ export function mapCoreError(
 		return new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
 	if (error instanceof AgentConfigurationError) {
+		if (error.code === "model_profile_unsupported")
+			return new HttpProtocolError("CODEX_MODEL_PROFILE_UNSUPPORTED", traceId);
 		if (error.code === "invalid_command")
 			return new HttpProtocolError("INVALID_REQUEST", traceId);
 		if (error.code === "not_authorized")
 			return new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
 		if (
 			error.code === "not_admitted" ||
-			error.code === "model_profile_unsupported" ||
 			error.code === "no_change" ||
 			error.code === "stale_revision" ||
 			error.code === "idempotency_conflict"
