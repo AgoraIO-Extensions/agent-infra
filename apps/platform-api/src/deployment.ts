@@ -44,6 +44,68 @@ export type ProductionCustomAgentGatewayInputV1 = Omit<
 	"identity" | "authorizeAgent"
 >;
 
+const productionRelayKeyPolicyFields = [
+	"agentDefaultRelayKeyPolicy",
+	"personalRelayKeyValidation",
+] as const;
+
+export type ProductionRelayKeyPolicyFieldV1 =
+	(typeof productionRelayKeyPolicyFields)[number];
+
+/** A stable, value-free startup diagnostic for an incomplete production policy. */
+export class ProductionRelayKeyPolicyConfigurationError extends Error {
+	readonly code = "PLATFORM_RELAY_KEY_POLICY_MISSING" as const;
+	readonly fields: readonly ProductionRelayKeyPolicyFieldV1[];
+
+	constructor(fields: readonly ProductionRelayKeyPolicyFieldV1[]) {
+		super("PLATFORM_RELAY_KEY_POLICY_MISSING");
+		this.name = "ProductionRelayKeyPolicyConfigurationError";
+		this.fields = [...fields];
+	}
+}
+
+export function isProductionRelayKeyPolicyConfigurationError(
+	error: unknown,
+): error is ProductionRelayKeyPolicyConfigurationError {
+	if (!error || typeof error !== "object") return false;
+	const candidate = error as {
+		readonly code?: unknown;
+		readonly fields?: unknown;
+	};
+	return (
+		candidate.code === "PLATFORM_RELAY_KEY_POLICY_MISSING" &&
+		Array.isArray(candidate.fields) &&
+		candidate.fields.every((field) =>
+			(productionRelayKeyPolicyFields as readonly unknown[]).includes(field),
+		)
+	);
+}
+
+/** Require the two reviewed Relay Key policies at the production entrypoint. */
+export function requireProductionRelayKeyPolicyV1(input: {
+	readonly agentDefaultRelayKeyPolicy?: ProductionPlatformApiInputV1["agentDefaultRelayKeyPolicy"];
+	readonly personalRelayKeyValidation?: ProductionPlatformApiInputV1["personalRelayKeyValidation"];
+}): Required<
+	Pick<
+		ProductionPlatformApiInputV1,
+		"agentDefaultRelayKeyPolicy" | "personalRelayKeyValidation"
+	>
+> {
+	const missing = productionRelayKeyPolicyFields.filter(
+		(field) => input[field] === undefined || input[field] === null,
+	);
+	if (missing.length > 0)
+		throw new ProductionRelayKeyPolicyConfigurationError(missing);
+	return {
+		agentDefaultRelayKeyPolicy: input.agentDefaultRelayKeyPolicy as NonNullable<
+			ProductionPlatformApiInputV1["agentDefaultRelayKeyPolicy"]
+		>,
+		personalRelayKeyValidation: input.personalRelayKeyValidation as NonNullable<
+			ProductionPlatformApiInputV1["personalRelayKeyValidation"]
+		>,
+	};
+}
+
 export interface ProductionPlatformApiInputV1
 	extends Omit<
 		DeploymentAdmissionInputV1,

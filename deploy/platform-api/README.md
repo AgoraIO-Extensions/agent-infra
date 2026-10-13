@@ -26,6 +26,8 @@ installation credential。外置 `platform-api` 的文件装配仍由其部署�
 | `directorySnapshot` | 可选的通用快照 consumer：`{ endpoint, token, organizationIdForDepartment }`。配置后每次敏感身份解析从 HTTPS 当前快照按 LDAP email 唯一匹配 active 成员，并映射组织 ID；失败不得回退到旧 `organizationIds`。快照 revision/fetchedAt/validUntil 已由 consumer 校验，但现有 LDAP identity wire 尚未携带 sidecar，跨 #481/#508/#440 的不可变版本绑定仍需后续契约接收。 |
 | `publicOrigin` | 与本地 HTTPS Web 相同的精确 Origin |
 | `apiInput` | [`ProductionPlatformApiInputV1`](../../apps/platform-api/src/deployment.ts) 中除 `databaseUrl`、`identity` 外的真实 Registry、模板、ModelCatalog、密钥公钥、准入和展示依赖 |
+| `agentDefaultRelayKeyPolicy` | 必填的部署 owner 策略：精确的 `templateBindings`、`relayEndpointId` 和 `relayBaseUrl`，必须与生产 ModelCatalog/模板能力一致；不得放入 Relay Key 或 endpoint credential |
+| `personalRelayKeyValidation` | 必填的部署 owner 校验策略：`profile: "sub2api-key-billing-v1"`、固定 HTTPS billing URL 和受控 TLS transport；不得记录或提交 Relay Key 明文 |
 | `customAgentGateway` | 可选的部署端 Gateway port：提供 `resolveDeployment`、`authorizeAgent`、签名 issuer/key version/private key；不要同时放入 `apiInput.customAgentGateway` |
 | `modelSelection` | 可选的 Runtime ACP model-directory reader；应由部署方用 `createRuntimeModelSelectionReaderV1` 和受认证 transport 组装；不要同时放入 `apiInput.modelSelection` |
 | `directorySearch` | 查询当前用户和组织目录记录的函数，返回 canonical ID、可读名称及邮箱或组织路径；依赖不可用时抛错 |
@@ -34,6 +36,11 @@ installation credential。外置 `platform-api` 的文件装配仍由其部署�
 是每个 Agent 的等待任务容量（单位：任务），`waitingTimeoutMs` 是等待期限（单位：毫秒）；
 两者均为正安全整数。平台不提供隐含生产默认值；缺失或无效时启动失败。
 测试 fixture 中的受控数值仅用于测试，不是生产建议值，也不能通过关闭 Task 路由绕过配置。
+
+Relay Key 策略必须作为配置模块顶层的 `agentDefaultRelayKeyPolicy` 和
+`personalRelayKeyValidation` 导出；把它们仅放在 `apiInput` 的 optional 字段中不能证明生产供给。
+任一字段缺失时，Platform API 以稳定的 `PLATFORM_RELAY_KEY_POLICY_MISSING` 诊断退出，并只列出缺失
+字段名，不输出 Relay Key、endpoint、billing URL 或 credential 内容。
 
 内置模块从 `PLATFORM_DATABASE_URL` 取数据库 URL，从上述 Secret 文件读取高熵
 代理令牌，并覆盖 `apiInput` 中的

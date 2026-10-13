@@ -2,7 +2,10 @@ import { readFile } from "node:fs/promises";
 import { createLdapIdentityDirectory } from "@agent-infra/identity";
 import { PostgresPlatformUserDisablesV1 } from "@agent-infra/platform-store";
 import { createProtectedConnectionInstallationForwarder } from "./connection-installation-callback-forwarder.js";
-import { mergeProductionPlatformApiDeploymentPortsV1 } from "./deployment.js";
+import {
+	mergeProductionPlatformApiDeploymentPortsV1,
+	requireProductionRelayKeyPolicyV1,
+} from "./deployment.js";
 import {
 	createDirectoryOrganizationAuthorityResolverV1,
 	createDirectoryOrganizationIdsResolverV1,
@@ -28,6 +31,8 @@ const {
 	connectionInstallationConfiguration,
 	connectionInstallationCallback,
 	applicationCredentialDelivery,
+	agentDefaultRelayKeyPolicy,
+	personalRelayKeyValidation,
 	apiInput,
 	customAgentGateway,
 	modelSelection,
@@ -96,6 +101,10 @@ const callbackForwarder =
 
 export const browserAuth = browser.browserAuth;
 export function createPlatformApiAssemblyInput() {
+	const relayKeyPolicy = requireProductionRelayKeyPolicyV1({
+		agentDefaultRelayKeyPolicy,
+		personalRelayKeyValidation,
+	});
 	const configuredApiInput = mergeProductionPlatformApiDeploymentPortsV1({
 		apiInput,
 		...(customAgentGateway !== undefined ? { customAgentGateway } : {}),
@@ -104,6 +113,7 @@ export function createPlatformApiAssemblyInput() {
 	});
 	return createProductionPlatformApiAssemblyInputV1({
 		...configuredApiInput,
+		...relayKeyPolicy,
 		userGovernance,
 		directory: { identity: browser.identity, search: directorySearch },
 		connectionConsumerProfile,

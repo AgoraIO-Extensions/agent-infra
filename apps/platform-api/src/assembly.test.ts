@@ -53,6 +53,24 @@ describe("Platform API production assembly", () => {
 		).rejects.toThrow("Platform API deployment module is invalid");
 	});
 
+	it("preserves the stable redacted Relay Key policy diagnostic", async () => {
+		const moduleSpecifier = `data:text/javascript,${encodeURIComponent(`
+			export function createPlatformApiAssemblyInput() {
+				throw Object.assign(new Error("PLATFORM_RELAY_KEY_POLICY_MISSING"), {
+					code: "PLATFORM_RELAY_KEY_POLICY_MISSING",
+					fields: ["personalRelayKeyValidation"],
+				});
+			}
+		`)}`;
+		await expect(
+			loadPlatformApiAssembly(moduleSpecifier),
+		).rejects.toMatchObject({
+			message: "PLATFORM_RELAY_KEY_POLICY_MISSING",
+			code: "PLATFORM_RELAY_KEY_POLICY_MISSING",
+			fields: ["personalRelayKeyValidation"],
+		});
+	});
+
 	it.each([
 		["factory", false],
 		["factory", true],

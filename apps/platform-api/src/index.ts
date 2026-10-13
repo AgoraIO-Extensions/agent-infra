@@ -15,6 +15,7 @@ import {
 	type PlatformApiAssembly,
 	type PlatformApiAssemblyInput,
 } from "./assembly.js";
+import { isProductionRelayKeyPolicyConfigurationError } from "./deployment.js";
 import { startPlatformResourceSampling } from "./resource-sampler.js";
 
 interface StartOptions {
@@ -128,7 +129,8 @@ export async function loadPlatformApiAssembly(
 		let input: PlatformApiAssemblyInput;
 		try {
 			input = await deployment.createPlatformApiAssemblyInput();
-		} catch {
+		} catch (error) {
+			if (isProductionRelayKeyPolicyConfigurationError(error)) throw error;
 			throw new Error("Platform API deployment dependencies are unavailable");
 		}
 		assembly = assemblePlatformApi(input);
@@ -275,7 +277,10 @@ export {
 } from "./custom-agent-auth-gateway.js";
 export {
 	createProductionPlatformApiAssemblyInputV1,
+	isProductionRelayKeyPolicyConfigurationError,
 	type ProductionPlatformApiInputV1,
+	ProductionRelayKeyPolicyConfigurationError,
+	requireProductionRelayKeyPolicyV1,
 } from "./deployment.js";
 export {
 	type NativeMetadataRoutesDependenciesV1,
@@ -336,12 +341,23 @@ if (
 			process.once("SIGINT", handleShutdown);
 		})
 		.catch((error: unknown) => {
-			console.error(
-				error instanceof Error &&
-					error.message === "PLATFORM_API_DEPLOYMENT_MODULE is required"
-					? error.message
-					: "Platform API failed to start",
-			);
+			if (isProductionRelayKeyPolicyConfigurationError(error)) {
+				console.error(
+					JSON.stringify({
+						service: platformApiService,
+						status: "failed",
+						code: error.code,
+						fields: error.fields,
+					}),
+				);
+			} else {
+				console.error(
+					error instanceof Error &&
+						error.message === "PLATFORM_API_DEPLOYMENT_MODULE is required"
+						? error.message
+						: "Platform API failed to start",
+				);
+			}
 			process.exitCode = 1;
 		});
 }

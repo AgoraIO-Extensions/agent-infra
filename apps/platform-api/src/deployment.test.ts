@@ -38,6 +38,8 @@ import {
 	createProductionPlatformApiAssemblyInputV1,
 	mergeProductionPlatformApiDeploymentPortsV1,
 	type ProductionPlatformApiInputV1,
+	ProductionRelayKeyPolicyConfigurationError,
+	requireProductionRelayKeyPolicyV1,
 } from "./deployment.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 import {
@@ -60,6 +62,49 @@ const connectDatabase = createRequire(
 ) => DatabaseReader;
 
 describe("explicit custom Agent deployment ports", () => {
+	it("requires reviewed Relay Key policies without retaining policy values", () => {
+		const agentDefaultRelayKeyPolicy = {
+			templateBindings: [],
+			relayEndpointId: "endpoint-private-sentinel",
+			relayBaseUrl: "https://relay.private.invalid/v1",
+		};
+		const personalRelayKeyValidation = {
+			profile: "sub2api-key-billing-v1" as const,
+			billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing",
+		};
+		expect(() =>
+			requireProductionRelayKeyPolicyV1({
+				agentDefaultRelayKeyPolicy,
+			}),
+		).toThrow(ProductionRelayKeyPolicyConfigurationError);
+		try {
+			requireProductionRelayKeyPolicyV1({});
+		} catch (error) {
+			expect(
+				(error as ProductionRelayKeyPolicyConfigurationError).fields,
+			).toEqual([
+				"agentDefaultRelayKeyPolicy",
+				"personalRelayKeyValidation",
+			]);
+		}
+		try {
+			requireProductionRelayKeyPolicyV1({ personalRelayKeyValidation });
+		} catch (error) {
+			expect(error).toBeInstanceOf(ProductionRelayKeyPolicyConfigurationError);
+			expect(String(error)).not.toContain("private");
+			expect(String(error)).not.toContain("https://");
+			expect(
+				(error as ProductionRelayKeyPolicyConfigurationError).fields,
+			).toEqual(["agentDefaultRelayKeyPolicy"]);
+		}
+		expect(
+			requireProductionRelayKeyPolicyV1({
+				agentDefaultRelayKeyPolicy,
+				personalRelayKeyValidation,
+			}),
+		).toEqual({ agentDefaultRelayKeyPolicy, personalRelayKeyValidation });
+	});
+
 	it("merges Gateway, model and native metadata reader exports outside apiInput", () => {
 		const customAgentGateway =
 			{} as ProductionPlatformApiInputV1["customAgentGateway"];
