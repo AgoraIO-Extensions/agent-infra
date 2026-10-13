@@ -680,15 +680,22 @@ it("normalizes an interrupted Turn into an unknown hold before recovery", async 
 	try {
 		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
 		const record = await pending;
-		const recoveredOpen = vi.fn(async () => {
-			throw new Error("unknown hold must not reopen native recovery");
-		});
+		const recoverCall = vi.fn(async () => undefined);
+		const recoveredOpen = vi.fn(async () => ({
+			nativeId: "native-reopened",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			recover: recoverCall,
+			cancel: async () => {},
+			close: async () => {},
+		}));
 		const recovered = await driver(path, recoveredOpen);
 		try {
 			expect(
 				await recovered.getStatus(record.nativeSessionRef, "execution-a"),
 			).toBe("unknown");
-			expect(recoveredOpen).not.toHaveBeenCalled();
+			expect(recoveredOpen).toHaveBeenCalledOnce();
+			expect(recoverCall).not.toHaveBeenCalled();
 			const persisted = JSON.parse(
 				await readFile(
 					join(path, record.nativeSessionRef, "state.json"),

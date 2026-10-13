@@ -752,12 +752,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				state = file.read();
 				const active = state.turns.find((turn) => !terminal(turn.status));
 				const latest = active ?? state.turns.at(-1);
-				const recoverable = active && !active.unknownHold;
-				if (active?.unknownHold && !this.cancelled(binding.ref))
-					await this.options.retireSession(directory);
+				const recoverable = active && !active.unknownHold ? active : undefined;
 				if (
 					latest &&
-					(recoverable || latest.nativeTerminalCheckpoint) &&
+					(active || latest.nativeTerminalCheckpoint) &&
 					!this.cancelled(binding.ref)
 				) {
 					if (!state.nativeId) unavailable();
@@ -810,26 +808,26 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						)
 							unavailable();
 						const recovered = recoverable?.nativeCheckpoint
-							? await restored.recover?.(active.nativeCheckpoint)
+							? await restored.recover?.(recoverable.nativeCheckpoint)
 							: undefined;
 						if (
 							recoverable &&
 							recovered &&
 							terminal(this.options.completionStatus(recovered.stopReason))
 						) {
-							const text = active.events
+							const text = recoverable.events
 								.filter((event) => event.type === "text")
 								.map((event) => event.payload.delta)
 								.join("");
 							if (recovered.text.startsWith(text)) {
 								if (recovered.text.length > text.length)
-									await this.event(file, active.executionId, {
+									await this.event(file, recoverable.executionId, {
 										type: "text",
 										payload: { delta: recovered.text.slice(text.length) },
 									});
 								await this.status(
 									file,
-									active.executionId,
+									recoverable.executionId,
 									this.options.completionStatus(recovered.stopReason),
 									recovered.stopReason,
 									recovered.checkpoint,
