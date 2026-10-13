@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { ConversationExecutionAuthorityV1 } from "./conversation-execution-types.js";
 import {
 	type NativeCapabilityAdmissionCapabilityV1,
@@ -67,5 +68,28 @@ export class FakeNativeCapabilityMetadataRevalidationV1
 				directoryRevision: projection.revision,
 			}) as NativeCapabilityAdmissionCapabilityV1,
 		};
+	}
+
+	isCurrent(input: {
+		readonly request: NativeCapabilityAdmissionRequestV1;
+		readonly capability: NativeCapabilityAdmissionCapabilityV1;
+		readonly sessionGeneration: number;
+	}): boolean {
+		if (!this.#available) return false;
+		void input.sessionGeneration;
+		const projection = parseNativeCapabilityMetadataProjectionV1(
+			this.#projection,
+		);
+		const selected = projection.capabilities.find(
+			({ id }) => id === input.request.capabilityId,
+		);
+		return (
+			projection.revision === input.request.directoryRevision &&
+			selected !== undefined &&
+			isDeepStrictEqual(
+				{ ...selected, directoryRevision: projection.revision },
+				input.capability,
+			)
+		);
 	}
 }

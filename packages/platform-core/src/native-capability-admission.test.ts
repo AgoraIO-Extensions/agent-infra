@@ -190,6 +190,7 @@ describe("native capability admission contract", () => {
 					},
 				};
 			},
+			isCurrent: () => true,
 		};
 		const decision = await useCase(metadata).admit(request);
 		expect(decision).toEqual({
@@ -236,6 +237,7 @@ describe("native capability admission contract", () => {
 				if (metadataCalls === 1) return fake.revalidate(input);
 				return { outcome: "stale" };
 			},
+			isCurrent: () => false,
 		};
 		const decision = await useCase(metadata).admit(request);
 		expect(decision).toEqual({ outcome: "stale" });

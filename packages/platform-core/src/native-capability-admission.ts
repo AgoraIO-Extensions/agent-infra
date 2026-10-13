@@ -180,6 +180,11 @@ export interface NativeCapabilityMetadataRevalidationPortV1 {
 		  }
 		| { readonly outcome: "stale" | "unknown" | "disabled" | "unavailable" }
 	>;
+	isCurrent(input: {
+		readonly request: NativeCapabilityAdmissionRequestV1;
+		readonly capability: NativeCapabilityAdmissionCapabilityV1;
+		readonly sessionGeneration: number;
+	}): boolean;
 }
 
 export interface NativeCapabilityAdmissionTransactionPortV1 {
@@ -581,6 +586,14 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							)
 						)
 							return { outcome: "denied", reason: "authorization_lost" };
+						if (
+							!dependencies.metadata.isCurrent({
+								request,
+								capability: latestSelected,
+								sessionGeneration: conversation.sessionGeneration,
+							})
+						)
+							return { outcome: "stale" };
 						const executionId = nextOpaqueId(newId);
 						const turnId = nextOpaqueId(newId);
 						const result: NativeCapabilityAdmissionResultV1 = Object.freeze({
