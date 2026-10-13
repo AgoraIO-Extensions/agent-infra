@@ -414,7 +414,10 @@ export function createSkillHubAgentBindingUseCaseV1(dependencies: {
 				throw new SkillHubAgentBindingErrorV1("persistence_failed");
 			}
 			if (readDecision.outcome === "replayed")
-				return parseResult(readDecision.result, command.agentId);
+				return {
+					...parseResult(readDecision.result, command.agentId),
+					replayed: true,
+				};
 			if (readDecision.outcome === "idempotency_conflict")
 				throw new SkillHubAgentBindingErrorV1("idempotency_conflict");
 			if (readDecision.outcome === "missing")
