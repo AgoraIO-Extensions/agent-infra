@@ -95,6 +95,7 @@ describe("deployment-owned Workload egress", () => {
 		"224.0.0.0/4",
 		"ff00::/8",
 		"64:ff9b::/96",
+		"64:ff9b::a9fe:a9fe/128",
 		"64:ff9b:1::/48",
 		"100:0:0:1::/64",
 		"2001:1::1/128",
