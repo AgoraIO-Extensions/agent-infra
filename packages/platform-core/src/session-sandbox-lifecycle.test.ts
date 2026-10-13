@@ -767,6 +767,36 @@ describe("idle Sandbox upgrade plan (ADR 0023)", () => {
 			).toBeNull();
 	});
 
+	it("reclaims an idle settled Sandbox even when its policy is stale (#2239)", () => {
+		const { policyCurrent: _ignored, ...base } = {
+			...upgradeFixture(),
+			policyCurrent: false,
+		};
+		const input = {
+			...base,
+			executionStatuses: ["completed"],
+		};
+		// 与 Magic 对齐：空闲回收只看 Sandbox 自身，过期 policy 在恢复时按当前部署重新准备。
+		expect(planSessionSandboxIdleReclaimTransitionV1(input)).toMatchObject({
+			resourceFence: 4,
+			desiredState: "stopped",
+			lifecycle: { reason: "idle_reclaim", resumeRequested: false },
+		});
+		for (const management of [
+			{ ...input.management, status: "stopped" as const },
+			{ ...input.management, desiredState: "stopped" as const },
+		])
+			expect(
+				planSessionSandboxIdleReclaimTransitionV1({ ...input, management }),
+			).toBeNull();
+		expect(
+			planSessionSandboxIdleReclaimTransitionV1({
+				...input,
+				generationBarrierPending: true,
+			}),
+		).toBeNull();
+	});
+
 	it("keeps existing management lifecycles preparing while idle reclaim waits for resume", () => {
 		const fixtureLifecycle = fixture().lifecycle;
 		const lifecycle = {

@@ -6271,6 +6271,136 @@ describe("idle Session Sandbox upgrade (#1523)", () => {
 		});
 	});
 
+	/** 把所属 Agent 的 Workload 置为失败（Pod 健康检查失败），verified 部署保留。 */
+	async function failAgentWorkload() {
+		await client`update platform.workload_reconciliations set state = state
+			|| jsonb_build_object('phase', 'failed', 'failureCode', 'health_check_failed')
+			where agent_id = 'agent-dispatch'`;
+	}
+
+	async function ageConversations(...conversationIds: string[]) {
+		await client`
+			update platform.conversations
+			set updated_at = clock_timestamp() - interval '31 minutes'
+			where id in ${client(conversationIds)}`;
+	}
+
+	it("reclaims an idle settled Sandbox while its Agent Workload has failed (#2239)", async () => {
+		const reclaimed = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		const waiting = await seed("conversation.turn.submit.v1", {
+			executionStatus: "waiting",
+		});
+		const recent = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		await prepared(reclaimed);
+		await prepared(waiting);
+		await prepared(recent);
+		await ageConversations(reclaimed.conversationId, waiting.conversationId);
+		await failAgentWorkload();
+		await reverify();
+		await failAgentWorkload();
+
+		// 失败的 Agent 不升级任何 Sandbox。
+		await expect(upgrade()).resolves.toBe(0);
+		// 与 Magic 对齐：只要 Sandbox 空闲且执行已终态就回收，不要求 Agent 就绪或 policy 当前。
+		await expect(upgrade(30 * 60 * 1000)).resolves.toBe(1);
+		expect(await sandboxState(reclaimed.conversationId)).toMatchObject({
+			desired_state: "stopped",
+			status: "unavailable",
+			resource_fence: 2,
+			intent_status: "pending",
+			payload: {
+				lifecycle: {
+					reason: "idle_reclaim",
+					resumeRequested: false,
+					authority: { workloadRevision: 4, targetDesiredState: "running" },
+				},
+			},
+		});
+		for (const kept of [waiting, recent])
+			expect(await sandboxState(kept.conversationId)).toMatchObject({
+				desired_state: "running",
+				status: "ready",
+				intent_status: "succeeded",
+			});
+		expect(
+			await client`select details->>'reason' as reason from platform.audit_events where action = 'conversation.sandbox.idle_reclaim_requested'`,
+		).toEqual([{ reason: "idle_reclaim" }]);
+	});
+
+	it("reclaims an idle stale Sandbox instead of upgrading it, and still upgrades a recent one (#2239)", async () => {
+		const idle = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		const recent = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		await prepared(idle);
+		await prepared(recent);
+		await ageConversations(idle.conversationId);
+		await reverify();
+
+		await expect(upgrade(30 * 60 * 1000)).resolves.toBe(2);
+		expect(await sandboxState(idle.conversationId)).toMatchObject({
+			desired_state: "stopped",
+			payload: {
+				lifecycle: { reason: "idle_reclaim", resumeRequested: false },
+			},
+		});
+		expect(await sandboxState(recent.conversationId)).toMatchObject({
+			desired_state: "stopped",
+			payload: { lifecycle: { reason: "upgrade" } },
+		});
+	});
+
+	it("reclaims idle Sandboxes from a failed Workload's periodic write-back (#2239)", async () => {
+		await seedCapacityAgent("agent-dispatch", 8, "custom");
+		const [seeded] =
+			await client`select state->'verified'->'configuration' as configuration from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+		await client`insert into platform.agent_configuration_revisions
+			(agent_id, revision, source_reference, created_at, configuration)
+			values ('agent-dispatch', 4, 'reclaim-test-source', now(), ${client.json(seeded?.configuration)})`;
+		const idle = await seed("conversation.turn.submit.v1", {
+			executionStatus: "completed",
+		});
+		await prepared(idle);
+		await ageConversations(idle.conversationId);
+		// 与 agent_afe16fe8 的现场一致：Workload 已滚动，Sandbox policy 过期。
+		await reverify();
+		await failAgentWorkload();
+		// 现场中失败 Agent 的服务可用性已投影为 unavailable。
+		await client`update platform.agent_applications set service_availability = 'unavailable', failure_code = 'health_check_failed' where agent_id = 'agent-dispatch'`;
+		const workload = openPostgresWorkloadReconciliationStoreV1({
+			databaseUrl,
+			retryDelayMs: 0,
+			monitorDelayMs: 0,
+		});
+		try {
+			await client`update platform.workload_reconciliations set next_attempt_at = now() where agent_id = 'agent-dispatch'`;
+			// 已失败 Workload 的周期写回不改变状态，同一事务回收空闲 Sandbox。
+			await expect(
+				workload.runNext("workload-worker", async (input) => {
+					expect(input.state?.phase).toBe("failed");
+					return input.state!;
+				}),
+			).resolves.toBe("advanced");
+			const [failed] =
+				await client`select state->>'phase' as phase from platform.workload_reconciliations where agent_id = 'agent-dispatch'`;
+			expect(failed?.phase).toBe("failed");
+			expect(await sandboxState(idle.conversationId)).toMatchObject({
+				desired_state: "stopped",
+				status: "unavailable",
+				intent_status: "pending",
+				payload: { lifecycle: { reason: "idle_reclaim" } },
+			});
+		} finally {
+			await workload.close();
+		}
+	});
+
 	it("upgrades from the periodic ready Workload write-back, never from a discarded step", async () => {
 		await seedCapacityAgent("agent-dispatch", 8, "custom");
 		const [seeded] =

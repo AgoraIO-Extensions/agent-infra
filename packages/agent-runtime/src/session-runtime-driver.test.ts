@@ -461,17 +461,53 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 				},
 			}),
 		).resolves.toBeUndefined();
+		let rejected = false;
+		for (let index = 0; index < 200; index++) {
+			const operationRef = `${String(index + 10).padStart(8, "0")}-1111-4111-8111-111111111111`;
+			const attemptRef = `${String(index + 10).padStart(8, "0")}-2222-4222-8222-222222222222`;
+			try {
+				await runtime.recordOperationFact({
+					...input,
+					fact: {
+						kind: "tool",
+						operationRef,
+						attemptRef,
+						phase: "intent",
+						toolId: "filesystem.read",
+					},
+				});
+				await runtime.recordOperationFact({
+					...input,
+					fact: {
+						kind: "tool",
+						operationRef,
+						attemptRef,
+						phase: "started",
+						startedAt: new Date().toISOString(),
+						toolId: "filesystem.read",
+					},
+				});
+			} catch (error) {
+				expect(error).toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+				rejected = true;
+				break;
+			}
+		}
+		expect(rejected).toBe(true);
 		releasePrompt();
 		await runtime.close();
 		const state = JSON.parse(
 			await readFile(join(path, record.nativeSessionRef, "state.json"), "utf8"),
 		) as { turns: { operationFacts?: { phase: string }[] }[] };
-		expect(state.turns[0]?.operationFacts?.map((fact) => fact.phase)).toEqual([
+		const facts = state.turns[0]?.operationFacts ?? [];
+		expect(facts.length).toBeLessThanOrEqual(256);
+		expect(facts.slice(0, 4).map((fact) => fact.phase)).toEqual([
 			"intent",
 			"started",
 			"intent",
 			"started",
 		]);
+		expect(facts.at(-1)?.phase).toBe("started");
 	} finally {
 		releasePrompt?.();
 		await runtime.close();

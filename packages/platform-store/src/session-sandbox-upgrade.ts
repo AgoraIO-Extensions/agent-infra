@@ -80,21 +80,23 @@ export async function persistSessionSandboxUpgradeIntents(
 		agent.workload_state,
 		input.agentId,
 	);
-	if (!decoded || decoded.legacy || decoded.state.phase !== "ready") return 0;
-	try {
-		// Only a deployment a replacement can be prepared from (same gate as
-		// the Sandbox prepare claim); otherwise a drain would strand the Session.
-		const deployment = validateAgentWorkloadDesiredV1(
-			decoded.state.verified?.deployment,
-		);
-		if (
-			deployment.desiredState !== "running" ||
-			deployment.runtimeManifest.interactionMode !== "platform-adapter"
-		)
-			return 0;
-	} catch {
-		return 0;
-	}
+	if (!decoded || decoded.legacy) return 0;
+	// 升级只针对可立即重新准备的部署（与 Sandbox 准备认领同一门禁），否则排空会让会话停在准备中。
+	let upgradeAllowed = decoded.state.phase === "ready";
+	if (upgradeAllowed)
+		try {
+			const deployment = validateAgentWorkloadDesiredV1(
+				decoded.state.verified?.deployment,
+			);
+			upgradeAllowed =
+				deployment.desiredState === "running" &&
+				deployment.runtimeManifest.interactionMode === "platform-adapter";
+		} catch {
+			upgradeAllowed = false;
+		}
+	// 空闲回收与 Magic 对齐（#2239）：只看 Sandbox 自身是否空闲且执行已终态，不要求
+	// Agent 就绪或 policy 当前；恢复时按当前已验证部署重新准备，Agent 未就绪时会话等待准备。
+	if (!upgradeAllowed && idleCutoff === undefined) return 0;
 	const isCurrent = (policy: SessionSandboxSourceV1["policy"]) =>
 		isSessionSandboxPolicyCurrentV1({
 			agentId: input.agentId,
@@ -190,41 +192,31 @@ export async function persistSessionSandboxUpgradeIntents(
 		>`select status from platform.conversation_executions where conversation_id = ${conversationId}`;
 		const pending =
 			await transaction`select 1 from platform.conversation_generation_tombstones where conversation_id = ${conversationId} and status = 'pending' limit 1`;
-		const lockedPolicyCurrent = isCurrent(row.resource_policy);
+		const current = {
+			sandbox,
+			resourceFence: Number(row.resource_fence),
+			policy: row.resource_policy,
+			observation: row.resource_observation,
+			deployment: payload.deployment ?? null,
+			modelProjection: payload.modelProjection ?? null,
+		};
+		const common = {
+			management,
+			current,
+			allocation: { status: row.status, desiredState: row.desired_state },
+			intent: { status: intent.status },
+			executionStatuses: executions.map(({ status }) => status),
+			generationBarrierPending: pending.length > 0,
+		};
+		// 空闲且执行均已终态时回收；否则在 Agent 就绪时按原规则升级过期的空闲 Sandbox。
 		const next =
-			lockedPolicyCurrent && idle
-				? planSessionSandboxIdleReclaimTransitionV1({
-						management,
-						current: {
-							sandbox,
-							resourceFence: Number(row.resource_fence),
-							policy: row.resource_policy,
-							observation: row.resource_observation,
-							deployment: payload.deployment ?? null,
-							modelProjection: payload.modelProjection ?? null,
-						},
-						allocation: { status: row.status, desiredState: row.desired_state },
-						intent: { status: intent.status },
-						policyCurrent: lockedPolicyCurrent,
-						executionStatuses: executions.map(({ status }) => status),
-						generationBarrierPending: pending.length > 0,
+			(idle ? planSessionSandboxIdleReclaimTransitionV1(common) : null) ??
+			(upgradeAllowed
+				? planSessionSandboxUpgradeTransitionV1({
+						...common,
+						policyCurrent: isCurrent(row.resource_policy),
 					})
-				: planSessionSandboxUpgradeTransitionV1({
-						management,
-						current: {
-							sandbox,
-							resourceFence: Number(row.resource_fence),
-							policy: row.resource_policy,
-							observation: row.resource_observation,
-							deployment: payload.deployment ?? null,
-							modelProjection: payload.modelProjection ?? null,
-						},
-						allocation: { status: row.status, desiredState: row.desired_state },
-						intent: { status: intent.status },
-						policyCurrent: lockedPolicyCurrent,
-						executionStatuses: executions.map(({ status }) => status),
-						generationBarrierPending: pending.length > 0,
-					});
+				: null);
 		if (!next) continue;
 		await transaction`update platform.session_sandbox_allocations
 			set desired_state = ${next.desiredState}, status = ${next.status},

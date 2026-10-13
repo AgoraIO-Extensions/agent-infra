@@ -139,6 +139,14 @@ export interface NativeSessionOptions {
 	readonly recordOperationFact?: (
 		fact: RuntimeOperationFactV2,
 	) => Promise<void>;
+	readonly modelFact?: () =>
+		| Extract<RuntimeOperationFactV2, { kind: "model" }>["model"]
+		| undefined;
+	readonly recordToolOperation?: (
+		toolCallId: string,
+		toolId: string,
+		phase: "started" | "completed" | "failed",
+	) => Promise<void>;
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly resultFile?: (input: {
 		readonly path: string;
@@ -370,12 +378,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				previous.kind === fact.kind &&
 				JSON.stringify(previous) === JSON.stringify(fact);
 			if (duplicate) return;
-			if (turn.operationFacts.length >= 256)
-				throw new RuntimeHostError(
-					"RUNTIME_OPERATION_CONFLICT",
-					"Runtime operation fact journal is full",
-					409,
-				);
 			if (!previous) {
 				if (fact.phase !== "intent")
 					throw new RuntimeHostError(
@@ -391,6 +393,27 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				throw new RuntimeHostError(
 					"RUNTIME_OPERATION_CONFLICT",
 					"Runtime operation fact transition is invalid",
+					409,
+				);
+			const latestPhases = new Map<string, RuntimeOperationFactV2["phase"]>();
+			for (const entry of turn.operationFacts)
+				latestPhases.set(
+					JSON.stringify([entry.operationRef, entry.attemptRef]),
+					entry.phase,
+				);
+			latestPhases.set(
+				JSON.stringify([fact.operationRef, fact.attemptRef]),
+				fact.phase,
+			);
+			let reservedSlots = 0;
+			for (const phase of latestPhases.values()) {
+				if (phase === "intent") reservedSlots += 2;
+				else if (phase === "started") reservedSlots += 1;
+			}
+			if (turn.operationFacts.length + 1 + reservedSlots > 256)
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation fact journal is full",
 					409,
 				);
 			turn.operationFacts.push(fact);
@@ -1173,6 +1196,57 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			admitted = resolve;
 		});
 		let dispatched = false;
+		const toolFacts = new Map<
+			string,
+			{ operationRef: string; attemptRef: string; startedAt: number }
+		>();
+		const recordToolOperation = async (
+			toolCallId: string,
+			toolId: string,
+			phase: "started" | "completed" | "failed",
+		) => {
+			if (phase === "started") {
+				const operationRef = randomUUID();
+				const attemptRef = randomUUID();
+				const startedAt = Date.now();
+				await this.recordFact(file, command.executionId, {
+					kind: "tool",
+					operationRef,
+					attemptRef,
+					phase: "intent",
+					toolId,
+				});
+				await this.recordFact(file, command.executionId, {
+					kind: "tool",
+					operationRef,
+					attemptRef,
+					phase: "started",
+					startedAt: new Date(startedAt).toISOString(),
+					toolId,
+				});
+				toolFacts.set(toolCallId, {
+					operationRef,
+					attemptRef,
+					startedAt,
+				});
+				return;
+			}
+			const fact = toolFacts.get(toolCallId);
+			if (!fact) return;
+			await this.recordFact(file, command.executionId, {
+				kind: "tool",
+				operationRef: fact.operationRef,
+				attemptRef: fact.attemptRef,
+				phase,
+				finishedAt: new Date().toISOString(),
+				durationMs: Math.max(0, Date.now() - fact.startedAt),
+				...(phase === "failed"
+					? { failureCode: "operation_failed" as const }
+					: {}),
+				toolId,
+			});
+			toolFacts.delete(toolCallId);
+		};
 		let native: NativeSession;
 		try {
 			const sessionOptions: NativeSessionOptions = {
@@ -1193,6 +1267,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				...(browser ? { browser } : {}),
 				recordOperationFact: (fact) =>
 					this.recordFact(file, command.executionId, fact),
+				recordToolOperation,
+				modelFact: () => ({
+					configVersion: this.options.configVersion,
+					modelOptionId: selection.modelOptionId,
+					modelId: option.nativeModelId.replace(/[^A-Za-z0-9._:-]/g, "_"),
+					reasoningLevel: selection.reasoningLevel,
+				}),
 				cwd: workspace,
 				nativeId: before.nativeId,
 				skillDirectory: this.options.skillDirectory,

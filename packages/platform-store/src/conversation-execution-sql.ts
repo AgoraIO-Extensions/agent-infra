@@ -9,6 +9,7 @@ import type {
 	ConversationModelSelectionWritePlanV1,
 	ConversationRegenerationWritePlanV1,
 	ConversationStopWritePlanV1,
+	SessionSandboxBindingV1,
 } from "@agent-infra/platform-core";
 import { parseTaskPrincipalV1 } from "@agent-infra/platform-core";
 // 审批后的 Workload 与会话路径显式接收 V3（默认 Relay Key、无模型凭证）配置。
@@ -44,6 +45,7 @@ import {
 	conversationSandboxReadBindingSql,
 	readSessionSandboxBinding,
 	readSessionSandboxReadiness,
+	readSessionSandboxResumable,
 } from "./session-sandbox.js";
 
 export async function lockAgentConfiguration(
@@ -229,6 +231,22 @@ export async function completeIdempotency(
 	if (completed.length !== 1) unavailable();
 }
 
+/** 就绪与“空闲回收待恢复”两项事实；后者只在未就绪时出现（#2239）。 */
+async function sandboxReadiness(
+	transaction: Transaction,
+	conversationId: string,
+	sandbox: SessionSandboxBindingV1,
+): Promise<{
+	readonly sandboxReady: boolean;
+	readonly sandboxResumable?: true;
+}> {
+	const sandboxReady = await readSessionSandboxReadiness(transaction, sandbox);
+	if (sandboxReady) return { sandboxReady };
+	return (await readSessionSandboxResumable(transaction, conversationId))
+		? { sandboxReady, sandboxResumable: true }
+		: { sandboxReady };
+}
+
 export async function lockConversation(
 	transaction: Transaction,
 	conversationId: string,
@@ -253,7 +271,7 @@ export async function lockConversation(
 	return {
 		...conversationFromRow(row, !!pending),
 		sandbox,
-		sandboxReady: await readSessionSandboxReadiness(transaction, sandbox),
+		...(await sandboxReadiness(transaction, conversationId, sandbox)),
 	};
 }
 
@@ -277,7 +295,7 @@ export async function lockConversationForRead(
 	return {
 		...conversationFromRow(row, !!pending),
 		sandbox,
-		sandboxReady: await readSessionSandboxReadiness(transaction, sandbox),
+		...(await sandboxReadiness(transaction, conversationId, sandbox)),
 	};
 }
 

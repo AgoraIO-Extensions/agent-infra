@@ -156,15 +156,87 @@ describe("Original IA workbench navigation", () => {
 		cleanup();
 	});
 
-	it("keeps the system navigation hidden from a non-admin deep link", async () => {
-		await showShell(false, "/ops/");
-		expect(screen.queryByRole("navigation", { name: "系统管理" })).toBeNull();
-		expect(
-			screen.getByText("运维观测", {
-				selector: '[data-slot="breadcrumb-page"]',
-			}),
-		).toBeTruthy();
-	});
+	it.each(["/ops/", "/admin/approvals/", "/admin/agents/", "/admin/audit/"])(
+		"keeps the system navigation hidden from a non-admin deep link at %s",
+		async (entry) => {
+			await showShell(false, entry);
+			expect(screen.queryByRole("navigation", { name: "系统管理" })).toBeNull();
+		},
+	);
+
+	it.each([
+		{
+			entry: "/my-agents/",
+			group: "我的管理",
+			label: "我的 Agent",
+			title: "我的 Agent",
+			administrator: false,
+		},
+		{
+			entry: "/my-agents/new/",
+			group: "我的管理",
+			label: "创建申请",
+			title: "创建申请",
+			administrator: false,
+		},
+		{
+			entry: "/audit/",
+			group: "我的管理",
+			label: "我的执行审计",
+			title: "我的执行审计",
+			administrator: false,
+		},
+		{
+			entry: "/my-settings/api-credentials/",
+			group: "我的管理",
+			label: "API 凭证与应用",
+			title: "API 凭证与应用",
+			administrator: false,
+		},
+		{
+			entry: "/my-settings/relay-key/",
+			group: "我的管理",
+			label: "个人 Relay Key",
+			title: "个人 Relay Key",
+			administrator: false,
+		},
+		{
+			entry: "/admin/approvals/",
+			group: "系统管理",
+			label: "创建审批",
+			title: "创建审批",
+			administrator: true,
+		},
+		{
+			entry: "/admin/agents/",
+			group: "系统管理",
+			label: "Agent 管理",
+			title: "Agent 管理",
+			administrator: true,
+		},
+		{
+			entry: "/admin/audit/",
+			group: "系统管理",
+			label: "平台审计",
+			title: "平台审计",
+			administrator: true,
+		},
+	])(
+		"keeps trailing-slash deep links aligned with their IA state at $entry",
+		async ({ entry, group: groupName, label, title, administrator }) => {
+			await showShell(administrator, entry);
+			const group = screen.getByRole("navigation", { name: groupName });
+			const link = within(group).getByRole("link", { name: label });
+			expect(link.getAttribute("aria-current")).toBe("page");
+			expect(link.className).toContain("selected");
+			expect(
+				screen.getByText(title, {
+					selector: '[data-slot="breadcrumb-page"]',
+				}),
+			).toBeTruthy();
+			cleanup();
+		},
+	);
 
 	it.each(["/agents?mode=conversation", "/chat/agent-1/conversation-1"])(
 		"uses one chat navigation highlight and the appropriate breadcrumb at %s",

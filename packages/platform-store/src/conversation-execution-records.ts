@@ -113,7 +113,13 @@ export function parseConversation(
 			"createdAt",
 			"updatedAt",
 		],
-		["isolationPending", "principal", "sandbox", "sandboxReady"],
+		[
+			"isolationPending",
+			"principal",
+			"sandbox",
+			"sandboxReady",
+			"sandboxResumable",
+		],
 	);
 	if (
 		input.schemaVersion !== 1 ||
@@ -148,9 +154,12 @@ export function parseConversation(
 		input.sandbox === undefined
 			? undefined
 			: parseSessionSandboxBindingV1(input.sandbox);
+	if (!sandbox && input.sandboxResumable !== undefined) unavailable();
 	if (
 		sandbox &&
 		(typeof input.sandboxReady !== "boolean" ||
+			(input.sandboxResumable !== undefined &&
+				(input.sandboxResumable !== true || input.sandboxReady !== false)) ||
 			sandbox.sessionId !== input.conversationId ||
 			sandbox.agentId !== input.agentId ||
 			sandbox.principal.id !== input.actorId ||
@@ -170,7 +179,13 @@ export function parseConversation(
 		channelId,
 		...(principal ? { principal } : {}),
 		...(sandbox
-			? { sandbox, sandboxReady: input.sandboxReady as boolean }
+			? {
+					sandbox,
+					sandboxReady: input.sandboxReady as boolean,
+					...(input.sandboxResumable === true
+						? { sandboxResumable: true as const }
+						: {}),
+				}
 			: {}),
 		...(input.isolationPending === true
 			? { isolationPending: true as const }

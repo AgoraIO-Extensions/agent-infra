@@ -1012,12 +1012,14 @@ export function registerConversationRoutes(
 									? {}
 									: { eventWindow: detail.eventWindow }),
 								// Same readiness fact as the Web message gate (#1534); an
-								// upgrading Sandbox is shown as updating (ADR 0023).
+								// upgrading Sandbox is shown as updating (ADR 0023). 空闲回收后
+								// 等待恢复的 Sandbox 可受理下一条消息并由它触发恢复（#2239）。
 								sessionAvailability:
 									conversation.status === "unavailable"
 										? "unavailable"
 										: detail.conversation.sandbox !== undefined &&
-												detail.conversation.sandboxReady !== true
+												detail.conversation.sandboxReady !== true &&
+												detail.conversation.sandboxResumable !== true
 											? detail.conversation.sandboxUpdating === true
 												? "updating"
 												: "preparing"

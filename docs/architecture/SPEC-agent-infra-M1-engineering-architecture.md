@@ -613,7 +613,7 @@ Sandbox 身份、ServiceAccount 或网络可达均不授予 Connection 权限。
 | 触发 | 必须保持的边界 |
 | --- | --- |
 | Session 关闭 | 先拒绝新命令、关闭业务路由，再沿原执行停止/核实；确认无剩余副作用后回收计算资源。平台历史和合法持久数据按数据政策保留，不新增删除会话入口。 |
-| 空闲 Session Sandbox 回收 | 连续空闲达到部署配置的时长（默认 30 分钟），且所有执行均已终态、不存在 `active`、`waiting` 或 `unknown` 执行时，沿现有管理排空路径回收 Pod、Service、ServiceAccount、NetworkPolicy 和专属 Secret 等计算与路由资源，保留 Sandbox ID、PVC、工作区、历史和授权映射。下一条消息沿“会话准备中”重新准备同一 Sandbox；执行活跃、等待、待核实或停止屏障未确认时不回收。 |
+| 空闲 Session Sandbox 回收 | 连续空闲达到部署配置的时长（默认 30 分钟），且所有执行均已终态、不存在 `active`、`waiting` 或 `unknown` 执行时，沿现有管理排空路径回收 Pod、Service、ServiceAccount、NetworkPolicy 和专属 Secret 等计算与路由资源，保留 Sandbox ID、PVC、工作区、历史和授权映射。是否回收只取决于该 Sandbox 自身，不要求所属 Agent 的 Workload 处于就绪，也不要求其 policy 仍是当前版本。下一条消息沿“会话准备中”，按 Agent 当前已验证部署重新准备同一 Sandbox；执行活跃、等待、待核实或停止屏障未确认时不回收。 |
 | Agent 停止、停用或升级 | 管理资格作用于所有所属 Sandbox；先阻止新投递，按各实例记录收敛在途任务与路由。升级只复用该 Sandbox 原持久卷，不能共享或交换会话卷；未知执行按恢复规则保持占用。新的已验证部署提交时，空闲 Sandbox 沿管理排空与重新准备路径升级，详见下文。 |
 | 重启或恢复 | Sandbox ID、Session、原执行、Key 版本、持久映射及游标保持；新 Pod UID 须由原分配在当前 fence 下核实，不凭同名资源认定恢复。 |
 | 撤权 | 单凭证失效与主体/Agent 使用权撤销按 §9.2 区分；后者取消等待任务并持久停止活跃执行，阻止后续受控操作。历史读取仍需当前授权，控制恢复不向被撤权用户输出正文。 |
@@ -632,10 +632,13 @@ Sandbox 身份、ServiceAccount 或网络可达均不授予 Connection 权限。
 
 空闲回收与上述升级是两个独立的生命周期原因。空闲回收由连续无活动达到部署配置时长触发，默认时长为
 30 分钟；它不改变 Agent 或 Sandbox 的 policy、Workload revision、授权或会话归属，只停止计算与路由资源并保留
-PVC。只有不存在 `active`、`waiting` 或 `unknown` 执行，且停止屏障和上一轮生命周期均已确认时才能写入回收意图；
+PVC。回收判断只看该 Sandbox 自身，在所属 Agent 的每次 Workload 写回中执行，与 Agent Workload 是否就绪、
+Sandbox policy 是否过期无关；所属 Agent 的管理状态不是可用且运行时，仍由管理生命周期处理。只有不存在 `active`、`waiting` 或 `unknown` 执行，且停止屏障和上一轮生命周期均已确认时才能写入回收意图；
 所有执行还必须已经进入终态；任一执行活跃、等待或待核实时保留占用。回收完成后，下一条消息触发现有会话准备流程，在原 Sandbox 和 PVC 上恢复，
-不新建 Session 或以新实例重放任务。升级仍只由已验证 Workload policy 变化触发，沿 `reason: upgrade` 的排空、
-`stopReceipt` 和重新准备规则执行；不能用 idle reclaim 代替升级，也不能把升级期间的等待解释为空闲回收。
+不新建 Session 或以新实例重放任务。恢复按 Agent 当前已验证部署准备：回收时 policy 已过期的 Sandbox 因此在恢复时
+使用新 policy；Agent Workload 未就绪时，会话保持“会话准备中”，就绪后再准备。升级仍只由已验证 Workload policy
+变化触发，沿 `reason: upgrade` 的排空、`stopReceipt` 和重新准备规则执行；已满足空闲回收条件的过期 Sandbox
+先回收，不立即为其重新准备计算资源，其余过期的空闲 Sandbox 仍按升级处理；不能把升级期间的等待解释为空闲回收。
 
 历史 Agent 共享 PVC 不能直接标记为新 Sandbox 已隔离。迁移须先停止旧业务准入，核实并排空
 旧执行源；unknown 或归属不明时保持隔离维护，不自动复制共享历史、补造主体或新建 Session。
@@ -662,10 +665,11 @@ Platform DB 保存：
 4. 根据探针和 Workload 状态计算产品服务可用性。
 5. 写回已应用修订号、可用性和脱敏失败原因。
 
-已提升的 Workload 仍按第 4 步周期复核。复核探测在期限内没有完成（超时或连接失败）时，连续未达阈值
-（默认 3 次，`platform-worker` 可配置）前保持现有可用性和路由；达到阈值，或探测明确报告不健康、Workload
-漂移、Pod 未就绪时，立即关闭路由并重新验证。验证阶段（含达到阈值后的重新验证）把未完成的探测按 Pod
-未就绪处理，在原有重试预算内重试，不因此删除实例；只有明确不健康的回答立即判定健康检查失败。每次探测
+已提升的 Workload 仍按第 4 步周期复核。复核探测在期限内没有完成（超时或连接失败），或 Pod 以 5xx
+答复健康检查或 readiness（服务端暂时无法处理）时，连续未达阈值（默认 3 次，`platform-worker` 可配置）前
+保持现有可用性和路由；达到阈值，或探测明确报告不健康（其他非 2xx、超限、格式错误、身份或签名不匹配）、
+Workload 漂移、Pod 未就绪时，立即关闭路由并重新验证。验证阶段（含达到阈值后的重新验证）把上述暂时性
+失败按 Pod 未就绪处理，在原有重试预算内重试，不因此删除实例；只有明确不健康的回答立即判定健康检查失败。每次探测
 失败只记录 Agent、Workload 修订、阶段（health / readiness）与原因，不记录凭证。业务请求前的实际路由
 观测不受该阈值影响，探测不成功时仍不发送。
 
@@ -1556,7 +1560,11 @@ Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agen
 Driver 内的 TypeScript 标准 MCP 客户端执行 Connection 操作。客户端只存在于所属 Sandbox
 的 RuntimeHost/Driver 受保护范围，直接连接完整获准 profile 的固定 HTTPS endpoint；
 API/Worker/Web 交付非敏感配置与自身执行授权，不取得 token，不转发 MCP，也不创建
-MCP server、Provider 执行器、Connection 目录或授权/审计投影。敏感临时授权码仅允许按
+Platform/Connection MCP proxy、Provider 执行器、Connection 目录或授权/审计投影。
+Generic ACP 只有在 [ADR-0025](../adr/0025-propose-runtime-host-acp-protected-mcp-bridge.md)
+及本节后文的 bridge 门禁全部满足时，才可使用 RuntimeHost-owned 的 loopback transport
+adapter；该 adapter 不是 Platform API 或 Connection 服务的代理，Connection token 仍只在
+Host 内的 `StandardMcpClient` 中，native 只收到单 Execution 的本地 bearer。敏感临时授权码仅允许按
 [§13.5.6](#1356-标准-oauth-安装供应)的固定 callback 窄通道瞬时转交；该例外不允许
 access/refresh Token、PKCE verifier 或 Consumer secret 进入控制面。产品边界与 token 选择以
 §13.5.3 为准。本路径的取舍见 [ADR 0019](../adr/0019-run-standard-mcp-in-protected-runtime-driver.md)。
@@ -1566,8 +1574,21 @@ access/refresh Token、PKCE verifier 或 Consumer secret 进入控制面。产�
 固定协议/schema，并在最终产物验证；不修改原生 release。定义只来自当前受信 MCP 发现快照，
 每个工具名、输入 schema 和修订绑定原 Conversation/generation；它是会话内的客户端元数据，
 不成为平台工具目录或 Grant 权威。原生只取得工具定义及按业务权限可见的脱敏结果，token、
-SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空，
-同一会话不同时启用另一 native MCP、private bootstrap 或 token helper 路径。
+SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空；ACP adapter 的本地 URL 不是 Connection endpoint，
+也不能读取 Connection token、SecretRef 或服务认证 header。同一会话不同时启用另一
+native MCP、private bootstrap 或 token helper 路径。Pi 和不满足固定 artifact 门禁的
+Generic ACP 继续 `connection:false`。
+
+**ADR-0025 ACP adapter gate。** 只有固定 artifact/protocol 明确证明 ACP session 级
+HTTP MCP 注册、bounded discovery/call/close、native 不持久化本地 bearer、工具子进程
+和日志不读取 bearer，且最终 Linux 保护负测通过时才允许启用。adapter 必须位于
+`packages/agent-runtime`，按 Execution 创建、关闭和重建；`apps/agent-runtime-host`
+只做配置和 capability 装配。bridge 请求固定到 `127.0.0.1`、单一 `/mcp` 路径、HTTP
+method/body 上限、短 expiry、replay/duplicate 拒绝、无 redirect 和 constant-time
+bearer 校验。每次 call 由 Driver/Host 生成 `operationRef`/`attemptRef`，不能从 ACP
+JSON-RPC id 或 native 字段推导；调用必须按 `prepare → started → confirm/block`
+屏障，响应丢失、重复发送、确认失败或 close 不确定都封闭当前 native Session，
+unknown WRITE 不得让原生继续推理。缺少任一门禁时能力保持关闭。
 
 **受保护输入。** Host 从当前经过验证且已持久接受的原执行解析 principal、Agent、
 Conversation、Sandbox、generation 与授权修订，再定位获准安装的 SecretRef。安装的

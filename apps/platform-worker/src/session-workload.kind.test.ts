@@ -65,6 +65,27 @@ async function eventually<T>(
 	}
 	throw new Error("Session Sandbox resources did not converge");
 }
+// Pod Ready 后 EndpointSlice 与 kube-proxy 路由仍在异步收敛：只对 Service 不可达
+// （exit 3）做有界重试；可达但状态码或 marker 不符（exit 2）仍立即失败。
+async function expectServiceRetained(probePod: string, target: string) {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			await kubectl(
+				"exec",
+				probePod,
+				"--",
+				"node",
+				"-e",
+				`fetch('http://${target}.${namespace}.svc:8080/healthz',{signal:AbortSignal.timeout(2500)}).then(async r=>{const body=await r.json();if(r.status!==200||body.marker!=='retained')process.exit(2)}).catch(()=>process.exit(3))`,
+			);
+			return;
+		} catch (error) {
+			if ((error as { code?: unknown }).code !== 3 || attempt >= 30)
+				throw error;
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+		}
+	}
+}
 
 describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 	it("reconciles two Store allocations through the Worker loop and proves isolation", async () => {
@@ -333,14 +354,7 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 				"--timeout=120s",
 			);
 			for (const target of [a, b])
-				await kubectl(
-					"exec",
-					workerProbe,
-					"--",
-					"node",
-					"-e",
-					`fetch('http://${target}.${namespace}.svc:8080/healthz',{signal:AbortSignal.timeout(2500)}).then(async r=>{const body=await r.json();if(r.status!==200||body.marker!=='retained')process.exit(2)}).catch(()=>process.exit(3))`,
-				);
+				await expectServiceRetained(workerProbe, target);
 			for (const pod of [a, b])
 				await kubectl(
 					"exec",
@@ -496,14 +510,7 @@ describe.skipIf(!enabled)("real SessionSandbox Worker isolation", () => {
 				"--timeout=120s",
 			);
 			for (const target of [a, b])
-				await kubectl(
-					"exec",
-					workerProbe,
-					"--",
-					"node",
-					"-e",
-					`fetch('http://${target}.${namespace}.svc:8080/healthz',{signal:AbortSignal.timeout(2500)}).then(async r=>{const body=await r.json();if(r.status!==200||body.marker!=='retained')process.exit(2)}).catch(()=>process.exit(3))`,
-				);
+				await expectServiceRetained(workerProbe, target);
 			// Idle reclaim uses the same production Workload write-back and the
 			// packaged Conversation Worker drain. The one-millisecond threshold
 			// keeps this fixed kind receipt bounded.

@@ -1,9 +1,10 @@
 // Pi lifecycle adapted from Paseo PiCliRuntimeSession/buildPiLaunch at d1b705a0cd91617a5707fae25d80cb0be3057950.
 // Copyright (c) 2025-present Mohamed Boudra. Apache-2.0; see THIRD_PARTY_NOTICES.md.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import type { NativeProcessLaunch } from "./native-process.js";
 import { readPiNativeCommandsV1 } from "./pi-native-command.js";
@@ -348,6 +349,17 @@ export async function openPiSession(
 	let currentCheckpoint: string | undefined;
 	let exited = false;
 	let policyReady = false;
+	let currentRecordOperationFact = options.recordOperationFact;
+	let currentModelFact = options.modelFact;
+	let currentModelOperation:
+		| {
+				operationRef: string;
+				attemptRef: string;
+				fact: Extract<RuntimeOperationFactV2, { kind: "model" }>["model"];
+				startedAt: number;
+				writeFact: (fact: RuntimeOperationFactV2) => Promise<void>;
+		  }
+		| undefined;
 	const phases = new Map<string, string>();
 	const toolCalls = new Map<string, { toolName: string; args: unknown }>();
 	const rpc = await openPiRpc(
@@ -412,6 +424,15 @@ export async function openPiSession(
 									: "completed";
 						if (phases.get(frame.toolCallId) !== phase) {
 							phases.set(frame.toolCallId, phase);
+							await options.recordToolOperation?.(
+								frame.toolCallId,
+								frame.toolName === "read"
+									? "Read"
+									: ["write", "edit"].includes(frame.toolName as string)
+										? "Edit"
+										: "unavailable",
+								phase,
+							);
 							await options.update({
 								type: "tool",
 								payload: {
@@ -475,8 +496,30 @@ export async function openPiSession(
 						)
 							throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 						const completion = active;
+						const modelOperation = currentModelOperation;
+						if (modelOperation) {
+							const failed = ["error", "aborted"].includes(stopReason);
+							await modelOperation.writeFact({
+								kind: "model",
+								operationRef: modelOperation.operationRef,
+								attemptRef: modelOperation.attemptRef,
+								phase: failed ? "failed" : "completed",
+								finishedAt: new Date().toISOString(),
+								durationMs: Math.max(0, Date.now() - modelOperation.startedAt),
+								...(failed
+									? {
+											failureCode:
+												stopReason === "aborted"
+													? ("interrupted" as const)
+													: ("operation_failed" as const),
+										}
+									: {}),
+								model: modelOperation.fact,
+							});
+						}
 						active = undefined;
-						completion.resolve({ stopReason, checkpoint });
+						currentModelOperation = undefined;
+						completion?.resolve({ stopReason, checkpoint });
 					}
 				})
 				.catch(() => {
@@ -611,6 +654,15 @@ export async function openPiSession(
 		}
 		return {
 			nativeId,
+			startTurn(next: {
+				recordOperationFact?: (fact: RuntimeOperationFactV2) => Promise<void>;
+				modelFact?: () =>
+					| Extract<RuntimeOperationFactV2, { kind: "model" }>["model"]
+					| undefined;
+			}) {
+				currentRecordOperationFact = next.recordOperationFact;
+				currentModelFact = next.modelFact;
+			},
 			async discoverCommands(input: {
 				readonly signal: AbortSignal;
 				readonly expiresAt: number;
@@ -698,13 +750,61 @@ export async function openPiSession(
 					if (active === target) active = undefined;
 					throw error;
 				}
+				const operationRef = randomUUID();
+				const attemptRef = randomUUID();
+				const fact = currentModelFact?.();
+				const writeFact = currentRecordOperationFact;
+				const startedAt = Date.now();
+				if (fact && writeFact)
+					currentModelOperation = {
+						operationRef,
+						attemptRef,
+						fact,
+						startedAt,
+						writeFact,
+					};
+				try {
+					if (fact && writeFact) {
+						await writeFact({
+							kind: "model",
+							operationRef,
+							attemptRef,
+							phase: "intent",
+							model: fact,
+						});
+						await writeFact({
+							kind: "model",
+							operationRef,
+							attemptRef,
+							phase: "started",
+							startedAt: new Date(startedAt).toISOString(),
+							model: fact,
+						});
+					}
+				} catch (error) {
+					if (active === target) active = undefined;
+					throw error;
+				}
 				void rpc
 					.request("prompt", {
 						message: content.text,
 						...(images.length ? { images } : {}),
 					})
-					.then(() => (active === target ? options.update() : undefined))
-					.catch(() => {
+					.then(async () => {
+						if (active === target) await options.update();
+					})
+					.catch(async () => {
+						if (fact && writeFact)
+							await writeFact({
+								kind: "model",
+								operationRef,
+								attemptRef,
+								phase: "failed",
+								finishedAt: new Date().toISOString(),
+								durationMs: Math.max(0, Date.now() - startedAt),
+								failureCode: "operation_failed",
+								model: fact,
+							}).catch(() => undefined);
 						if (active === target) {
 							active?.reject(new Error("RUNTIME_ACCEPTANCE_UNKNOWN"));
 							active = undefined;

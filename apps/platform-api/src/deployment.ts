@@ -104,6 +104,8 @@ export interface ProductionPlatformApiInputV1
 	readonly directory?: DirectoryRouteDependencies;
 	/** Runtime-owned custom ACP model directory; never derived from ModelCatalog. */
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
+	/** Optional deployment-owned authenticated native metadata reader. */
+	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
 	/** Optional deployment-owned platform identity route for custom Agents. */
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
 	readonly resolveCustomAgentInteractionUrl?: Parameters<
@@ -116,6 +118,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly apiInput: ProductionPlatformApiInputV1;
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
+	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
 }): ProductionPlatformApiInputV1 {
 	if (
 		input.customAgentGateway !== undefined &&
@@ -127,6 +130,11 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 		input.apiInput.modelSelection !== undefined
 	)
 		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
+	if (
+		input.nativeMetadata !== undefined &&
+		input.apiInput.nativeMetadata !== undefined
+	)
+		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
 	return {
 		...input.apiInput,
 		...(input.customAgentGateway !== undefined
@@ -134,6 +142,9 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 			: {}),
 		...(input.modelSelection !== undefined
 			? { modelSelection: input.modelSelection }
+			: {}),
+		...(input.nativeMetadata !== undefined
+			? { nativeMetadata: input.nativeMetadata }
 			: {}),
 	};
 }
@@ -370,6 +381,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		conversationEventWindow: input.conversationEventWindow,
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+		...(input.nativeMetadata ? { nativeMetadata: input.nativeMetadata } : {}),
 		...(input.customAgentGateway
 			? {
 					customAgentGateway: input.customAgentGateway,

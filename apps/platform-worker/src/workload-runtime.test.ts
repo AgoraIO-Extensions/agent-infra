@@ -2825,7 +2825,10 @@ describe("assembled Workload Runtime contracts", () => {
 			"Runtime capabilities are unavailable",
 		);
 		expect(await runtime.observe(promoting)).toBe("healthy");
+		// 5xx 是暂时性故障（#2252），其余非 2xx 应答仍是不健康（#2046）。
 		fetch.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+		expect(await runtime.observe(promoting)).toBe("unreachable");
+		fetch.mockResolvedValueOnce(new Response("missing", { status: 404 }));
 		expect(await runtime.observe(promoting)).toBe("unhealthy");
 		await expect(runtime.capabilities(promoting)).rejects.toThrow(
 			"Runtime capabilities are unavailable",
@@ -2875,6 +2878,23 @@ describe("assembled Workload Runtime contracts", () => {
 				),
 			}),
 		],
+		// 与 Magic 对齐：Pod 暂时答复 5xx 不立即重建（#2252）。
+		["unavailable", "health", () => ({ healthStatus: 503 })],
+		[
+			"unavailable",
+			"readiness",
+			() => ({
+				readiness: new WorkloadDeploymentErrorV1(
+					"WORKER_RUNTIME_PROBE_FAILED",
+					{
+						cause: new WorkloadProbeIncompleteErrorV1(
+							"readiness",
+							"unavailable",
+						),
+					},
+				),
+			}),
+		],
 	] as const)(
 		"keeps a ready route open through incomplete probes until the third in a row (%s, %s, #2046)",
 		async (reason, stage, failure) => {
@@ -2903,6 +2923,10 @@ describe("assembled Workload Runtime contracts", () => {
 			const failOnce = () => {
 				const next = failure();
 				if ("health" in next) fetcher.mockRejectedValueOnce(next.health);
+				else if ("healthStatus" in next)
+					fetcher.mockResolvedValueOnce(
+						new Response("busy", { status: next.healthStatus }),
+					);
 				else readinessFailure = next.readiness;
 			};
 
@@ -2943,7 +2967,8 @@ describe("assembled Workload Runtime contracts", () => {
 		});
 		await f.tick(8);
 		if (f.state?.phase !== "ready") throw new Error();
-		fetcher.mockResolvedValueOnce(new Response("down", { status: 503 }));
+		// 非 5xx 的异常应答不是暂时性故障，仍立即关闭路由。
+		fetcher.mockResolvedValueOnce(new Response("down", { status: 404 }));
 
 		await f.tick(1);
 
@@ -3247,7 +3272,7 @@ describe("assembled Workload Runtime contracts", () => {
 		}
 	});
 	it("uses a fixed origin and disables redirects for image-declared health paths", async () => {
-		const fetcher = vi.fn(async () => new Response("", { status: 503 }));
+		const fetcher = vi.fn(async () => new Response("", { status: 404 }));
 		const probe = vi.fn(async () => ({
 			core: "passed" as const,
 			capabilities: {},
