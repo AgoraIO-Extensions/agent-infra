@@ -20,6 +20,10 @@ import { type IdentityAdapter, resolveIdentity } from "./identity.js";
 export interface SkillHubImportRoutesDependenciesV1 {
 	readonly identity: IdentityAdapter;
 	readonly importer: SkillProviderImportPortV1;
+	readonly requestScope: <T>(
+		request: Request,
+		operation: () => Promise<T>,
+	) => Promise<T>;
 }
 
 function publicResponse(result: {
@@ -70,7 +74,9 @@ export function registerSkillHubImportRoutesV1(
 				metadata.traceId,
 			);
 			const result = publicResponse(
-				await dependencies.importer.importVersion(trusted, key, value),
+				await dependencies.requestScope(request, () =>
+					dependencies.importer.importVersion(trusted, key, value),
+				),
 			);
 			return context.json(result, result.replayed ? 200 : 201);
 		} catch (error) {

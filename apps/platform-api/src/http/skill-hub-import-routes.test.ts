@@ -39,6 +39,7 @@ describe("Skill Hub Provider import HTTP", () => {
 				}),
 				hydrateUsers: async () => [],
 			},
+			requestScope: async (_request, operation) => operation(),
 			importer: { importVersion: importer },
 		});
 		const response = await app.request("/api/v2/skills/imports", {
@@ -79,6 +80,7 @@ describe("Skill Hub Provider import HTTP", () => {
 				}),
 				hydrateUsers: async () => [],
 			},
+			requestScope: async (_request, operation) => operation(),
 			importer: { importVersion: importer },
 		});
 		const response = await app.request("/api/v2/skills/imports", {
