@@ -13,6 +13,14 @@ const identity = {
 };
 
 function fixture() {
+	const grant = vi.fn().mockResolvedValue({
+		schemaVersion: 1,
+		agentId: "agent-1",
+		userId: "user-2",
+		granted: true,
+		authorizationRevision: "grant-2",
+		replayed: false,
+	});
 	const revoke = vi.fn().mockResolvedValue({
 		schemaVersion: 1,
 		agentId: "agent-1",
@@ -25,11 +33,37 @@ function fixture() {
 	const app = new Hono();
 	registerAgentUserUseGrantRoutes(app, {
 		identity: { resolve: async () => identity, hydrateUsers: async () => [] },
+		grant,
 		revoke,
 		recordRefusal,
 	});
-	return { app, revoke, recordRefusal };
+	return { app, grant, revoke, recordRefusal };
 }
+
+it("grants and forwards the server identity", async () => {
+	const f = fixture();
+	const response = await f.app.request(
+		"/api/v2/agents/agent-1/api-use-grants/user-2",
+		{
+			method: "PUT",
+			headers: {
+				Cookie: "session=owner",
+				"Idempotency-Key": "grant-1",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ schemaVersion: 1, expectedRevision: 1 }),
+		},
+	);
+	expect(response.status).toBe(200);
+	expect(f.grant).toHaveBeenCalledWith(
+		expect.objectContaining({
+			agentId: "agent-1",
+			userId: "user-2",
+			actorId: "owner-1",
+			idempotencyKey: "grant-1",
+		}),
+	);
+});
 
 describe("Agent user API-use revoke HTTP", () => {
 	it("requires a browser session and forwards the server identity", async () => {

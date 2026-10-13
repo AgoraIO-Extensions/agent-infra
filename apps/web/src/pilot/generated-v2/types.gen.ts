@@ -406,6 +406,20 @@ export type AgentProjectionV2 = {
     };
 };
 
+export type AgentUserUseGrantRequestV1 = {
+    expectedRevision: number;
+    schemaVersion: 1;
+};
+
+export type AgentUserUseGrantResponseV1 = {
+    agentId: string;
+    authorizationRevision: string;
+    granted: true;
+    replayed: boolean;
+    schemaVersion: 1;
+    userId: string;
+};
+
 export type AgentUserUseRevokeRequestV1 = {
     expectedRevision: number;
     schemaVersion: 1;
@@ -2382,6 +2396,61 @@ export type RevokeAgentUserApiUseV1Responses = {
 };
 
 export type RevokeAgentUserApiUseV1Response = RevokeAgentUserApiUseV1Responses[keyof RevokeAgentUserApiUseV1Responses];
+
+export type GrantAgentUserApiUseV1Data = {
+    body: AgentUserUseGrantRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+        userId: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/api-use-grants/{userId}';
+};
+
+export type GrantAgentUserApiUseV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Request is not authorized
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Internal error
+     */
+    500: PilotInternalErrorV1;
+    /**
+     * Dependency is temporarily unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type GrantAgentUserApiUseV1Error = GrantAgentUserApiUseV1Errors[keyof GrantAgentUserApiUseV1Errors];
+
+export type GrantAgentUserApiUseV1Responses = {
+    /**
+     * Explicit user API use grant
+     */
+    200: AgentUserUseGrantResponseV1;
+};
+
+export type GrantAgentUserApiUseV1Response = GrantAgentUserApiUseV1Responses[keyof GrantAgentUserApiUseV1Responses];
 
 export type RevokeAgentApplicationManagerV1Data = {
     body: AgentApplicationManagerRequestV1;

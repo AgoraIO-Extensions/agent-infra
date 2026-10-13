@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	planAgentUserUseGrantV1,
 	planAgentUserUseRevokeV1,
 	requireAgentUserUseRevokeAuthorityV1,
 } from "./agent-user-use-grants.js";
@@ -40,6 +41,23 @@ const actor = {
 };
 
 describe("user API use revoke policy", () => {
+	it("plans a grant and re-grant with a fresh authorization revision", () => {
+		const plan = planAgentUserUseGrantV1({
+			command: { ...command, idempotencyKey: "grant-1" },
+			current: { granted: false, authorizationRevision: "use-old" },
+			replayed: false,
+			nextRevision: "use-new",
+			occurredAt: new Date("2026-10-10T00:00:00.000Z"),
+		});
+		expect(plan.mutation).toBe("grant");
+		expect(plan.result).toMatchObject({
+			agentId: "agent-1",
+			userId: "user-2",
+			granted: true,
+			authorizationRevision: "use-new",
+		});
+	});
+
 	it("requires the current Owner and allows a disabled target to be revoked", () => {
 		expect(
 			requireAgentUserUseRevokeAuthorityV1({

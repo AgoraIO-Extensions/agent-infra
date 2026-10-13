@@ -556,6 +556,12 @@ describe("contract compatibility command", () => {
 			);
 			const previous = structuredClone(current);
 			restorePreApplicationUseGrantContract(previous);
+			for (const document of [current, previous]) {
+				const userUsePath = "/api/v2/agents/{agentId}/api-use-grants/{userId}";
+				if (document.paths[userUsePath]) delete document.paths[userUsePath].put;
+				delete document.components.schemas.AgentUserUseGrantRequestV1;
+				delete document.components.schemas.AgentUserUseGrantResponseV1;
+			}
 			const dir = await mkdtemp(
 				resolve(tmpdir(), "agent-infra-use-grant-compat-"),
 			);

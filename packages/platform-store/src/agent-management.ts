@@ -12,14 +12,18 @@ import {
 	type AgentManagementStateV1,
 	type AgentManagementTransactionPortV1,
 	type AgentManagementTransactionRequestV1,
+	type AgentUserUseGrantCommandV1,
+	type AgentUserUseGrantResultV1,
 	type AgentUserUseRevokeCommandV1,
 	type AgentUserUseRevokeResultV1,
 	PersonalApiCredentialErrorV1,
 	parseAgentApiLifecycleCommandV1,
 	parseAgentApplicationGrantCommandV1,
+	parseAgentUserUseGrantCommandV1,
 	parseAgentUserUseRevokeCommandV1,
 	personalApiAgentMetadataGrantTypesV1,
 	planAgentApplicationGrantV1,
+	planAgentUserUseGrantV1,
 	planAgentUserUseRevokeV1,
 	platformIdempotencyV1,
 	requireAgentApplicationGrantAuthorityV1,
@@ -99,6 +103,26 @@ function validText(input: unknown, maximum = 1024): input is string {
 
 function sameValue(left: unknown, right: unknown): boolean {
 	return JSON.stringify(left) === JSON.stringify(right);
+}
+
+async function resolvePersonalApiUserForGrantV1(
+	directory: TaskUserDirectoryV1 | undefined,
+	userId: string,
+): Promise<Awaited<ReturnType<typeof resolveCurrentPersonalApiUserV1>>> {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			resolveCurrentPersonalApiUserV1(directory, userId),
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(
+					() => reject(new PersonalApiCredentialErrorV1("unavailable")),
+					5_000,
+				);
+			}),
+		]);
+	} finally {
+		if (timeout !== undefined) clearTimeout(timeout);
+	}
 }
 
 function acceptedResult(
@@ -870,6 +894,250 @@ export class PostgresAgentManagementTransactionV1
 				)
 					throw new PersonalApiCredentialErrorV1("unavailable");
 				return result;
+			});
+		} catch (error) {
+			const failure =
+				error instanceof PersonalApiCredentialErrorV1
+					? error
+					: new PersonalApiCredentialErrorV1("unavailable");
+			throw withAgentApiAuditContextV1(failure, auditContext);
+		}
+	}
+
+	/** Browser Owner-only API-use grant; governance and re-grant are idempotent. governance and affected Task controls share one raw transaction. */
+	async grantUserApiUse(
+		input: AgentUserUseGrantCommandV1,
+	): Promise<AgentUserUseGrantResultV1> {
+		const command = parseAgentUserUseGrantCommandV1(input);
+		const digest = platformIdempotencyV1.canonicalRequestDigest({
+			schemaVersion: 1,
+			agentId: command.agentId,
+			userId: command.userId,
+			expectedRevision: command.expectedRevision,
+		});
+		const commandType = "agent.user.use.grant.v1";
+		let auditContext: AgentApiAuditContextV1 = {
+			command: "grant_use",
+		};
+		try {
+			return await this.#revokeClient.begin(async (transaction) => {
+				await transaction`set local lock_timeout = '5s'`;
+				await transaction`set local statement_timeout = '30s'`;
+				await transaction`lock table platform.platform_user_disables in share row exclusive mode`;
+				const actor = await resolvePersonalApiUserForGrantV1(
+					this.#userDirectory,
+					command.actorId,
+				);
+				const [actorDisabled] = await transaction<{ user_id: string }[]>`
+					select user_id from platform.platform_user_disables where user_id = ${command.actorId}
+				`;
+				auditContext = {
+					...auditContext,
+					principal: { kind: "user", id: actor.userId },
+					agentId: command.agentId,
+				};
+				if (
+					actor.userId !== command.actorId ||
+					actor.accountStatus !== "active" ||
+					actorDisabled
+				)
+					throw new PersonalApiCredentialErrorV1("forbidden");
+				const [agent] = await transaction<
+					{
+						status: string;
+						owner_id: string;
+						management_revision: number | string;
+					}[]
+				>`select application.status, owner.owner_id
+					, application.management_revision
+					from platform.agent_applications application
+					join platform.agent_owners owner on owner.agent_id = application.agent_id
+					where application.agent_id = ${command.agentId} and owner.owner_id = ${command.actorId}
+					limit 1 for update`;
+				if (
+					!agent ||
+					Number(agent.management_revision) !== command.expectedRevision ||
+					![
+						"creating",
+						"available",
+						"stopped",
+						"creation_failed",
+						"disabled",
+					].includes(agent.status)
+				)
+					throw new PersonalApiCredentialErrorV1("not_found");
+				await transaction`lock table platform.agent_principal_grants in share row exclusive mode`;
+				const idempotencyScope = {
+					select: async () =>
+						transaction<
+							{
+								id: string;
+								request_digest: string;
+								status: string;
+								result: unknown;
+							}[]
+						>`
+							select id, request_digest, status, result from platform.idempotency_records
+							where scope_type = 'agent' and scope_id = ${command.agentId}
+								and actor_id = ${command.actorId} and command_type = ${commandType}
+								and idempotency_key = ${command.idempotencyKey}
+							for update
+						`,
+				};
+				const [existing] = await idempotencyScope.select();
+				if (existing && existing.request_digest !== digest)
+					throw new PersonalApiCredentialErrorV1("idempotency_conflict");
+				const [grant] = await transaction<
+					{ authorization_revision: string; revoked_at: Date | null }[]
+				>`select authorization_revision, revoked_at from platform.agent_principal_grants
+					where agent_id = ${command.agentId} and principal_type = 'user'
+						and principal_id = ${command.userId} and grant_type = 'use'
+					for update`;
+				if (existing) {
+					const saved = existing.result as Record<string, unknown> | null;
+					if (
+						!saved ||
+						typeof saved !== "object" ||
+						Array.isArray(saved) ||
+						Object.keys(saved).length !== 6 ||
+						saved.schemaVersion !== 1 ||
+						saved.agentId !== command.agentId ||
+						saved.userId !== command.userId ||
+						saved.granted !== true ||
+						(saved.authorizationRevision !== null &&
+							!validText(saved.authorizationRevision)) ||
+						saved.replayed !== false
+					)
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					await transaction`
+						insert into platform.audit_events
+							(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, 'api.agent.use.replayed', 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${transaction.json(saved as postgres.JSONValue)})
+					`;
+					const finalActor = await resolvePersonalApiUserForGrantV1(
+						this.#userDirectory,
+						command.actorId,
+					);
+					const [finalOwner] = await transaction<{ owner_id: string }[]>`
+						select owner_id from platform.agent_owners
+						where agent_id = ${command.agentId} and owner_id = ${command.actorId}
+						for update
+					`;
+					const [finalDisabled] = await transaction<{ user_id: string }[]>`
+						select user_id from platform.platform_user_disables where user_id = ${command.actorId}
+					`;
+					if (
+						finalActor.userId !== actor.userId ||
+						finalActor.accountStatus !== actor.accountStatus ||
+						finalActor.authorizationRevision !== actor.authorizationRevision ||
+						!sameValue(finalActor.organizationIds, actor.organizationIds) ||
+						finalActor.accountStatus !== "active" ||
+						finalDisabled ||
+						!finalOwner
+					)
+						throw new PersonalApiCredentialErrorV1("unavailable");
+					return {
+						...saved,
+						replayed: true,
+					} as unknown as AgentUserUseGrantResultV1;
+				}
+				const plan = planAgentUserUseGrantV1({
+					command,
+					current: grant
+						? {
+								granted: grant.revoked_at === null,
+								authorizationRevision: grant.authorization_revision,
+							}
+						: null,
+					replayed: false,
+					nextRevision: randomUUID(),
+					occurredAt: new Date(),
+				});
+				if (plan.mutation === "grant") {
+					await transaction`
+						insert into platform.agent_principal_grants
+							(agent_id, principal_type, principal_id, grant_type, authorization_revision, revoked_at)
+						values (${command.agentId}, 'user', ${command.userId}, 'use', ${plan.result.authorizationRevision}, null)
+						on conflict (agent_id, principal_type, principal_id, grant_type) do update
+						set authorization_revision = excluded.authorization_revision, revoked_at = null
+					`;
+				}
+				if (plan.mutation === "revoke") {
+					await transaction`
+						update platform.agent_principal_grants
+						set revoked_at = ${plan.occurredAt}, authorization_revision = ${plan.result.authorizationRevision}
+						where agent_id = ${command.agentId} and principal_type = 'user'
+							and principal_id = ${command.userId} and grant_type = 'use'
+					`;
+					const executions = await transaction<{ execution_id: string }[]>`
+						select execution_id from platform.conversation_executions
+						where agent_id = ${command.agentId} and principal_type = 'user'
+							and actor_id = ${command.userId}
+							and channel_id in ('api', 'api:user')
+							and status in ('waiting', 'submitted', 'processing', 'unknown')
+					`;
+					const { recordTaskSystemControlInTransactionV1 } = await import(
+						"./task-authorization.ts"
+					);
+					for (const execution of executions) {
+						const [record] = await transaction<{ id: string }[]>`
+							select id from platform.task_authorization_records
+							where execution_id = ${execution.execution_id} for update
+						`;
+						if (!record) throw new Error("Missing task authorization record");
+						await recordTaskSystemControlInTransactionV1(transaction, {
+							executionId: execution.execution_id,
+							authorizationRecordId: record.id,
+							reason: "authorization_revoked",
+							workerId: `api-owner-revoke:${command.actorId}`,
+							traceId: command.traceId,
+							requestId: command.requestId,
+						});
+					}
+				}
+				await transaction`
+					insert into platform.audit_events
+						(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, details)
+						values (${randomUUID()}, ${command.traceId}, 'user', ${command.actorId}, ${plan.audit.action}, 'agent', ${command.agentId}, 'succeeded', ${command.requestId}, ${command.agentId}, ${transaction.json({ ...plan.result })})
+				`;
+				if (!existing)
+					await transaction`
+						insert into platform.idempotency_records
+							(id, scope_type, scope_id, actor_id, command_type, idempotency_key, request_digest, status, result, created_at, updated_at)
+						values (${randomUUID()}, 'agent', ${command.agentId}, ${command.actorId}, ${commandType}, ${command.idempotencyKey}, ${digest}, 'completed', ${transaction.json({ ...plan.result })}, ${plan.occurredAt}, ${plan.occurredAt})
+					`;
+				const finalActor = await resolvePersonalApiUserForGrantV1(
+					this.#userDirectory,
+					command.actorId,
+				);
+				const [finalDisabled] = await transaction<{ user_id: string }[]>`
+					select user_id from platform.platform_user_disables where user_id = ${command.actorId}
+				`;
+				const [finalOwner] = await transaction<{ owner_id: string }[]>`
+					select owner_id from platform.agent_owners
+					where agent_id = ${command.agentId} and owner_id = ${command.actorId}
+					for update
+				`;
+				const [finalGrant] = await transaction<
+					{ authorization_revision: string; revoked_at: Date | null }[]
+				>`select authorization_revision, revoked_at from platform.agent_principal_grants
+					where agent_id = ${command.agentId} and principal_type = 'user'
+						and principal_id = ${command.userId} and grant_type = 'use'
+				`;
+				if (
+					finalActor.userId !== actor.userId ||
+					finalActor.accountStatus !== actor.accountStatus ||
+					finalActor.authorizationRevision !== actor.authorizationRevision ||
+					!sameValue(finalActor.organizationIds, actor.organizationIds) ||
+					finalActor.accountStatus !== "active" ||
+					finalDisabled ||
+					!finalOwner ||
+					(finalGrant?.authorization_revision ?? null) !==
+						plan.result.authorizationRevision ||
+					(finalGrant?.revoked_at === null) !== plan.result.granted
+				)
+					throw new PersonalApiCredentialErrorV1("unavailable");
+				return plan.result;
 			});
 		} catch (error) {
 			const failure =
