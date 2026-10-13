@@ -52,8 +52,6 @@ import {
 	skillHubInstallationSchemasV1,
 	skillHubPublicationOpenApiPathsV1,
 	skillHubPublicationSchemasV1,
-	skillHubAgentBindingOpenApiPathsV1,
-	skillHubAgentBindingSchemasV1,
 	skillHubReadOpenApiPathsV1,
 	skillHubReadSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
