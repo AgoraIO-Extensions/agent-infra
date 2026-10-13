@@ -974,6 +974,28 @@ export type SkillHubInstallationV1 = {
     updatedAt: string;
 };
 
+export type SkillHubVersionLifecycleMetadataV1 = {
+    manifestDigest: string;
+    needUpgrade: boolean;
+    packageDigest: string;
+    provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+    reviewReason: string | null;
+    reviewedBy: string | null;
+    revokedAt: string | null;
+    schemaVersion: 1;
+    signatureDigest: string;
+    skillId: string;
+    skillVersionId: string;
+    state: 'published' | 'pending_review' | 'rejected' | 'revoked';
+    version: string;
+    visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
+};
+
+export type SkillHubVersionLifecycleResponseV1 = {
+    replayed: boolean;
+    version: SkillHubVersionLifecycleMetadataV1;
+};
+
 export type SkillHubVersionMetadataV1 = {
     manifestDigest: string;
     name: string;
@@ -986,6 +1008,26 @@ export type SkillHubVersionMetadataV1 = {
     state: 'published';
     version: string;
     visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
+};
+
+export type SkillHubVersionPublicationRequestV1 = {
+    manifestDigest: string;
+    name: string;
+    organizationId?: string | null;
+    packageDigest: string;
+    packageObjectVersion: string;
+    provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+    schemaVersion: 1;
+    signatureDigest: string;
+    skillId: string;
+    skillVersionId: string;
+    version: string;
+    visibility: 'PRIVATE' | 'MEMBER' | 'ORGANIZATION' | 'MARKET';
+};
+
+export type SkillHubVersionReviewRequestV1 = {
+    decision: 'approve' | 'reject';
+    reason?: string;
 };
 
 export type SseEventIdV1 = string;
@@ -3980,6 +4022,58 @@ export type UninstallSkillHubInstallationV1Responses = {
 
 export type UninstallSkillHubInstallationV1Response = UninstallSkillHubInstallationV1Responses[keyof UninstallSkillHubInstallationV1Responses];
 
+export type PublishSkillHubVersionV1Data = {
+    body: SkillHubVersionPublicationRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/skills/versions';
+};
+
+export type PublishSkillHubVersionV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type PublishSkillHubVersionV1Error = PublishSkillHubVersionV1Errors[keyof PublishSkillHubVersionV1Errors];
+
+export type PublishSkillHubVersionV1Responses = {
+    /**
+     * Replayed publication
+     */
+    200: SkillHubVersionLifecycleResponseV1;
+    /**
+     * Skill version published
+     */
+    201: SkillHubVersionLifecycleResponseV1;
+};
+
+export type PublishSkillHubVersionV1Response = PublishSkillHubVersionV1Responses[keyof PublishSkillHubVersionV1Responses];
+
 export type ReadSkillHubVersionV1Data = {
     body?: never;
     path: {
@@ -4022,3 +4116,111 @@ export type ReadSkillHubVersionV1Responses = {
 };
 
 export type ReadSkillHubVersionV1Response = ReadSkillHubVersionV1Responses[keyof ReadSkillHubVersionV1Responses];
+
+export type ReviewSkillHubVersionV1Data = {
+    body: SkillHubVersionReviewRequestV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        skillVersionId: string;
+    };
+    query?: never;
+    url: '/api/v2/skills/versions/{skillVersionId}/review';
+};
+
+export type ReviewSkillHubVersionV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReviewSkillHubVersionV1Error = ReviewSkillHubVersionV1Errors[keyof ReviewSkillHubVersionV1Errors];
+
+export type ReviewSkillHubVersionV1Responses = {
+    /**
+     * Replayed review
+     */
+    200: SkillHubVersionLifecycleResponseV1;
+    /**
+     * Skill version review recorded
+     */
+    201: SkillHubVersionLifecycleResponseV1;
+};
+
+export type ReviewSkillHubVersionV1Response = ReviewSkillHubVersionV1Responses[keyof ReviewSkillHubVersionV1Responses];
+
+export type RevokeSkillHubVersionV1Data = {
+    body?: never;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        skillVersionId: string;
+    };
+    query?: never;
+    url: '/api/v2/skills/versions/{skillVersionId}/revoke';
+};
+
+export type RevokeSkillHubVersionV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type RevokeSkillHubVersionV1Error = RevokeSkillHubVersionV1Errors[keyof RevokeSkillHubVersionV1Errors];
+
+export type RevokeSkillHubVersionV1Responses = {
+    /**
+     * Replayed revocation
+     */
+    200: SkillHubVersionLifecycleResponseV1;
+    /**
+     * Skill version revoked
+     */
+    201: SkillHubVersionLifecycleResponseV1;
+};
+
+export type RevokeSkillHubVersionV1Response = RevokeSkillHubVersionV1Responses[keyof RevokeSkillHubVersionV1Responses];

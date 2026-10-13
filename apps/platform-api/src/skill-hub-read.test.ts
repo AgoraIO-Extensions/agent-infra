@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import {
 	SkillHubDirectoryPageV1Schema,
+	SkillHubVersionLifecycleResponseV1Schema,
 	SkillHubVersionMetadataV1Schema,
 } from "@agent-infra/contracts/pilot";
 import {
@@ -530,5 +531,159 @@ describe("Skill Hub authenticated HTTP reads with PostgreSQL", () => {
 				})
 			).status,
 		).toBe(401);
+	});
+
+	it("publishes, independently reviews and revokes fixed versions through HTTP", async () => {
+		const publication = {
+			schemaVersion: 1,
+			name: "api-published",
+			skillId: "api-skill",
+			skillVersionId: "api-version",
+			visibility: "MEMBER",
+			provider: "my_library",
+			version: "1.0.0",
+			packageObjectVersion: "object-api-version",
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			signatureDigest: "c".repeat(64),
+		};
+		const publish = await fetchInstallation(
+			"/api/v2/skills/versions",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publish-api-version" },
+				body: JSON.stringify(publication),
+			},
+		);
+		expect(publish.status).toBe(201);
+		const published = SkillHubVersionLifecycleResponseV1Schema.parse(
+			await publish.json(),
+		);
+		expect(published).toMatchObject({
+			replayed: false,
+			version: {
+				skillVersionId: "api-version",
+				state: "pending_review",
+			},
+		});
+		expect(JSON.stringify(published)).not.toContain("packageObjectVersion");
+
+		const replay = await fetchInstallation(
+			"/api/v2/skills/versions",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publish-api-version" },
+				body: JSON.stringify(publication),
+			},
+		);
+		expect(replay.status).toBe(200);
+		expect(
+			SkillHubVersionLifecycleResponseV1Schema.parse(await replay.json())
+				.version.skillVersionId,
+		).toBe("api-version");
+
+		const ownerReview = await fetchInstallation(
+			"/api/v2/skills/versions/api-version/review",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "review-api-version-owner" },
+				body: JSON.stringify({ decision: "approve" }),
+			},
+		);
+		expect(ownerReview.status).toBe(403);
+		const crossOwnerRevoke = await fetchInstallation(
+			"/api/v2/skills/versions/api-version/revoke",
+			"owner-b",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "revoke-api-version-cross-owner" },
+			},
+		);
+		expect(crossOwnerRevoke.status).toBe(404);
+
+		const review = await fetchInstallation(
+			"/api/v2/skills/versions/api-version/review",
+			"admin",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "review-api-version" },
+				body: JSON.stringify({ decision: "approve" }),
+			},
+		);
+		expect(review.status).toBe(201);
+		expect(
+			SkillHubVersionLifecycleResponseV1Schema.parse(await review.json())
+				.version.state,
+		).toBe("published");
+
+		const revoke = await fetchInstallation(
+			"/api/v2/skills/versions/api-version/revoke",
+			"admin",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "revoke-api-version" },
+			},
+		);
+		expect(revoke.status).toBe(201);
+		expect(
+			SkillHubVersionLifecycleResponseV1Schema.parse(await revoke.json())
+				.version.state,
+		).toBe("revoked");
+
+		const revokeReplay = await fetchInstallation(
+			"/api/v2/skills/versions/api-version/revoke",
+			"admin",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "revoke-api-version" },
+			},
+		);
+		expect(revokeReplay.status).toBe(200);
+
+		const rejectedPublication = {
+			...publication,
+			name: "api-rejected",
+			skillId: "api-rejected-skill",
+			skillVersionId: "api-rejected-version",
+			visibility: "MARKET",
+			version: "2.0.0",
+		};
+		expect(
+			(
+				await fetchInstallation("/api/v2/skills/versions", "owner-a", {
+					method: "POST",
+					headers: { "Idempotency-Key": "publish-api-rejected" },
+					body: JSON.stringify(rejectedPublication),
+				})
+			).status,
+		).toBe(201);
+		const rejected = await fetchInstallation(
+			"/api/v2/skills/versions/api-rejected-version/review",
+			"admin",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "review-api-rejected" },
+				body: JSON.stringify({ decision: "reject", reason: "policy" }),
+			},
+		);
+		expect(rejected.status).toBe(201);
+		expect(
+			SkillHubVersionLifecycleResponseV1Schema.parse(await rejected.json())
+				.version,
+		).toMatchObject({ state: "rejected", reviewReason: "policy" });
+
+		const forged = await fetchInstallation(
+			"/api/v2/skills/versions",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publish-forged" },
+				body: JSON.stringify({ ...publication, ownerId: "owner-b" }),
+			},
+		);
+		expect(forged.status).toBe(400);
 	});
 });

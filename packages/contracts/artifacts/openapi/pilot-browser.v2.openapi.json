@@ -5422,6 +5422,139 @@
         ],
         "type": "object"
       },
+      "SkillHubVersionLifecycleMetadataV1": {
+        "additionalProperties": false,
+        "properties": {
+          "manifestDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "needUpgrade": {
+            "type": "boolean"
+          },
+          "packageDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "system",
+              "my_library",
+              "market",
+              "clawhub",
+              "skillhub",
+              "npx",
+              "github"
+            ],
+            "type": "string"
+          },
+          "reviewReason": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewedBy": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revokedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))[Tt](?:[01]\\d|2[0-3]):[0-5]\\d:(?:[0-5]\\d|60)(?:\\.\\d+)?(?:[Zz]|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "signatureDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "skillId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "skillVersionId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "published",
+              "pending_review",
+              "rejected",
+              "revoked"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "PRIVATE",
+              "MEMBER",
+              "ORGANIZATION",
+              "MARKET"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "skillId",
+          "skillVersionId",
+          "provider",
+          "version",
+          "packageDigest",
+          "manifestDigest",
+          "signatureDigest",
+          "visibility",
+          "state",
+          "needUpgrade",
+          "reviewedBy",
+          "reviewReason",
+          "revokedAt"
+        ],
+        "type": "object"
+      },
+      "SkillHubVersionLifecycleResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "replayed": {
+            "type": "boolean"
+          },
+          "version": {
+            "$ref": "#/components/schemas/SkillHubVersionLifecycleMetadataV1"
+          }
+        },
+        "required": [
+          "replayed",
+          "version"
+        ],
+        "type": "object"
+      },
       "SkillHubVersionMetadataV1": {
         "additionalProperties": false,
         "properties": {
@@ -5495,6 +5628,115 @@
           "name",
           "visibility",
           "state"
+        ],
+        "type": "object"
+      },
+      "SkillHubVersionPublicationRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "manifestDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "type": "string"
+          },
+          "organizationId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "packageDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "packageObjectVersion": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "system",
+              "my_library",
+              "market",
+              "clawhub",
+              "skillhub",
+              "npx",
+              "github"
+            ],
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "signatureDigest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "skillId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "skillVersionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "version": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "PRIVATE",
+              "MEMBER",
+              "ORGANIZATION",
+              "MARKET"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "name",
+          "skillId",
+          "skillVersionId",
+          "visibility",
+          "provider",
+          "version",
+          "packageObjectVersion",
+          "packageDigest",
+          "manifestDigest",
+          "signatureDigest"
+        ],
+        "type": "object"
+      },
+      "SkillHubVersionReviewRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "enum": [
+              "approve",
+              "reject"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision"
         ],
         "type": "object"
       },
@@ -12497,6 +12739,121 @@
         ]
       }
     },
+    "/api/v2/skills/versions": {
+      "post": {
+        "operationId": "publishSkillHubVersionV1",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillHubVersionPublicationRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubVersionLifecycleResponseV1"
+                }
+              }
+            },
+            "description": "Replayed publication"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubVersionLifecycleResponseV1"
+                }
+              }
+            },
+            "description": "Skill version published"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
     "/api/v2/skills/versions/{skillVersionId}": {
       "get": {
         "operationId": "readSkillHubVersionV1",
@@ -12561,6 +12918,244 @@
               }
             },
             "description": "Resource is unavailable"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
+    "/api/v2/skills/versions/{skillVersionId}/review": {
+      "post": {
+        "operationId": "reviewSkillHubVersionV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skillVersionId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillHubVersionReviewRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubVersionLifecycleResponseV1"
+                }
+              }
+            },
+            "description": "Replayed review"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubVersionLifecycleResponseV1"
+                }
+              }
+            },
+            "description": "Skill version review recorded"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      }
+    },
+    "/api/v2/skills/versions/{skillVersionId}/revoke": {
+      "post": {
+        "operationId": "revokeSkillHubVersionV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skillVersionId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubVersionLifecycleResponseV1"
+                }
+              }
+            },
+            "description": "Replayed revocation"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubVersionLifecycleResponseV1"
+                }
+              }
+            },
+            "description": "Skill version revoked"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
           },
           "503": {
             "content": {
