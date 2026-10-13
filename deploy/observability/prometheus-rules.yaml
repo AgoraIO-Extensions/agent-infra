@@ -1,0 +1,32 @@
+groups:
+  - name: agent-infra-platform
+    interval: 30s
+    rules:
+      # Tune the limits to the deployment's measured capacity before enabling.
+      - alert: AgentPlatformOutboxBacklog
+        expr: sum(agent_platform_resource_count{kind="outbox_pending"}) >= 100
+        for: 5m
+        labels:
+          severity: warning
+          kind: backlog
+        annotations:
+          summary: Platform outbox backlog is sustained
+          description: The durable outbox has been at or above the configured default threshold for five minutes.
+      - alert: AgentPlatformHttpErrors
+        expr: sum(rate(agent_platform_operations_total{stage="http",outcome="failed"}[5m])) >= 0.1
+        for: 5m
+        labels:
+          severity: warning
+          kind: errors
+        annotations:
+          summary: Platform HTTP errors are sustained
+          description: Platform HTTP failures have exceeded the configured default rate for five minutes.
+      - alert: AgentPlatformTelemetryMissing
+        expr: absent(agent_platform_resource_count{kind="outbox_pending"})
+        for: 5m
+        labels:
+          severity: warning
+          kind: telemetry
+        annotations:
+          summary: Platform telemetry is missing
+          description: No outbox resource sample has been received for five minutes.
