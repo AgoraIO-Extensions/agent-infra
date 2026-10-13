@@ -31,11 +31,15 @@ const allowed = { outcome: "allowed" as const, request };
 function fixture(
 	check: NativeMetadataCurrentRouteDependenciesV1["check"] = async () =>
 		allowed,
+	checkerTimeoutMs?: number,
 ) {
-	return createNativeMetadataCurrentAppV1({
-		serviceToken: "api-current-token",
-		check,
-	});
+	return createNativeMetadataCurrentAppV1(
+		{
+			serviceToken: "api-current-token",
+			check,
+		},
+		checkerTimeoutMs === undefined ? {} : { checkerTimeoutMs },
+	);
 }
 
 function requestFor(
@@ -73,6 +77,14 @@ describe("native metadata current-confirmation route", () => {
 			(await requestFor(app, "api-current-token", { apiRequestSourceRef: "x" }))
 				.status,
 		).toBe(503);
+		expect(
+			(
+				await requestFor(app, "api-current-token", {
+					apiRequestSourceRef: "x",
+					request: "a".repeat(64 * 1024),
+				})
+			).status,
+		).toBe(400);
 	});
 
 	it("returns denied without exposing checker errors", async () => {
@@ -81,5 +93,13 @@ describe("native metadata current-confirmation route", () => {
 		);
 		expect(response.status).toBe(403);
 		expect(await response.json()).toEqual({ outcome: "denied" });
+	});
+
+	it("ends a stalled checker at the route deadline", async () => {
+		const response = await requestFor(
+			fixture(() => new Promise<never>(() => undefined), 1),
+		);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ outcome: "unavailable" });
 	});
 });
