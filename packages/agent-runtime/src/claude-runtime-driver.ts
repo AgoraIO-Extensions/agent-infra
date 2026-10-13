@@ -1451,16 +1451,24 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				readonly operationRef: string;
 				readonly attemptRef: string;
 				readonly toolId: string;
-				readonly startedAt: number;
+				startedAt?: number;
 			}
 		>();
 		const toolOperations: ClaudeToolOperationCallbacks = {
-			onStarted: async (toolUseId, toolName) => {
+			authorize: async () => {
+				if (this.closed || handle?.retiring) return false;
+				return (
+					file
+						.read()
+						.turns.find((turn) => turn.executionId === command.executionId)
+						?.status === "running"
+				);
+			},
+			onIntent: async (toolUseId, toolName) => {
 				if (toolFacts.has(toolUseId)) return;
 				const operationRef = randomUUID();
 				const attemptRef = randomUUID();
-				const startedAt = Date.now();
-				const tool = { operationRef, attemptRef, toolId: toolName, startedAt };
+				const tool = { operationRef, attemptRef, toolId: toolName };
 				await this.recordFact(file, command.executionId, {
 					kind: "tool",
 					operationRef,
@@ -1468,30 +1476,71 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					phase: "intent",
 					toolId: toolName,
 				});
+				toolFacts.set(toolUseId, tool);
+			},
+			onStarted: async (toolUseId, toolName) => {
+				const tool = toolFacts.get(toolUseId);
+				if (!tool || tool.startedAt !== undefined) return;
+				const startedAt = Date.now();
+				tool.startedAt = startedAt;
 				await this.recordFact(file, command.executionId, {
 					kind: "tool",
-					operationRef,
-					attemptRef,
+					operationRef: tool.operationRef,
+					attemptRef: tool.attemptRef,
 					phase: "started",
 					startedAt: new Date(startedAt).toISOString(),
 					toolId: toolName,
 				});
-				toolFacts.set(toolUseId, tool);
 			},
 			onCompleted: async (toolUseId, toolName) => {
+				const tool = toolFacts.get(toolUseId);
+				if (!tool) return;
+				const finishedAt = Date.now();
+				await this.recordFact(file, command.executionId, {
+					kind: "tool",
+					operationRef: tool.operationRef,
+					attemptRef: tool.attemptRef,
+					phase: "completed",
+					finishedAt: new Date(finishedAt).toISOString(),
+					...(tool.startedAt === undefined
+						? {}
+						: { durationMs: Math.max(0, finishedAt - tool.startedAt) }),
+					toolId: toolName,
+				});
+				toolFacts.delete(toolUseId);
+			},
+			onFailed: async (toolUseId, toolName, durationMs) => {
 				const tool = toolFacts.get(toolUseId);
 				if (!tool) return;
 				await this.recordFact(file, command.executionId, {
 					kind: "tool",
 					operationRef: tool.operationRef,
 					attemptRef: tool.attemptRef,
-					phase: "completed",
+					phase: "failed",
 					finishedAt: new Date().toISOString(),
-					durationMs: Math.max(0, Date.now() - tool.startedAt),
+					...(durationMs === undefined ? {} : { durationMs }),
+					failureCode: "operation_failed",
 					toolId: toolName,
 				});
 				toolFacts.delete(toolUseId);
 			},
+		};
+		const settleToolFacts = async () => {
+			for (const [toolUseId, tool] of toolFacts) {
+				await this.recordFact(file, command.executionId, {
+					kind: "tool",
+					operationRef: tool.operationRef,
+					attemptRef: tool.attemptRef,
+					phase: "unknown",
+					finishedAt: new Date().toISOString(),
+					...(tool.startedAt === undefined
+						? {}
+						: { durationMs: Math.max(0, Date.now() - tool.startedAt) }),
+					failureCode: "recovery_unconfirmed",
+					toolId: tool.toolId,
+				});
+				toolFacts.delete(toolUseId);
+			}
 		};
 		let native: ReturnType<typeof claudeQuery>;
 		try {
@@ -1581,6 +1630,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						seen.set(message.uuid, fingerprint);
 					}
 					if (message.type === "assistant" && message.error) {
+						await settleToolFacts();
 						await this.status(
 							file,
 							command.executionId,
@@ -1652,6 +1702,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							payload: { delta: message.event.delta.text },
 						});
 					if (message.type === "result") {
+						await settleToolFacts();
 						await this.status(
 							file,
 							command.executionId,
@@ -1671,12 +1722,14 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							.turns.find((turn) => turn.executionId === command.executionId)
 							?.status ?? unavailable(),
 					)
-				)
+				) {
+					await settleToolFacts();
 					await this.status(
 						file,
 						command.executionId,
 						transport.failure() ?? "unknown",
 					);
+				}
 			} catch {
 				if (
 					!handle.retiring &&
@@ -1686,12 +1739,14 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							.turns.find((turn) => turn.executionId === command.executionId)
 							?.status ?? unavailable(),
 					)
-				)
+				) {
+					await settleToolFacts();
 					await this.status(
 						file,
 						command.executionId,
 						transport.failure() ?? "unknown",
 					);
+				}
 			} finally {
 				browserAbortController.abort();
 				await transport.close();

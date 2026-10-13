@@ -8,8 +8,15 @@ export type ClaudeFileWriteOutput = Readonly<{
 }>;
 
 export type ClaudeToolOperationCallbacks = Readonly<{
+	onIntent?: (toolUseId: string, toolName: string) => Promise<void>;
 	onStarted?: (toolUseId: string, toolName: string) => Promise<void>;
 	onCompleted?: (toolUseId: string, toolName: string) => Promise<void>;
+	onFailed?: (
+		toolUseId: string,
+		toolName: string,
+		durationMs?: number,
+	) => Promise<void>;
+	authorize?: () => Promise<boolean>;
 }>;
 
 /** Fixed core tools; Bash, subagents, MCP, network tools and arbitrary file roots remain unavailable. */
@@ -40,7 +47,8 @@ export function claudeWorkspaceTools(
 			claudeMdExcludes: ["**"],
 		},
 		canUseTool: async (name, input) =>
-			(await permits(name, input))
+			(await permits(name, input)) &&
+			(!onToolOperation?.authorize || (await onToolOperation.authorize()))
 				? { behavior: "allow", updatedInput: input }
 				: { behavior: "deny", message: "Tool access is unavailable" },
 		hooks: {
@@ -50,13 +58,15 @@ export function claudeWorkspaceTools(
 						async (input) => {
 							const allowed =
 								input.hook_event_name === "PreToolUse" &&
-								(await permits(input.tool_name, input.tool_input));
+								(await permits(input.tool_name, input.tool_input)) &&
+								(!onToolOperation?.authorize ||
+									(await onToolOperation.authorize()));
 							if (
 								allowed &&
 								onToolOperation &&
 								input.hook_event_name === "PreToolUse"
 							)
-								await onToolOperation.onStarted?.(
+								await onToolOperation.onIntent?.(
 									typeof input.tool_use_id === "string"
 										? input.tool_use_id
 										: "unknown-tool-use",
@@ -79,6 +89,16 @@ export function claudeWorkspaceTools(
 							{
 								hooks: [
 									async (input) => {
+										if (
+											onToolOperation &&
+											input.hook_event_name === "PostToolUse"
+										)
+											await onToolOperation.onStarted?.(
+												typeof input.tool_use_id === "string"
+													? input.tool_use_id
+													: "unknown-tool-use",
+												input.tool_name,
+											);
 										if (
 											onToolOperation &&
 											input.hook_event_name === "PostToolUse"
@@ -108,6 +128,34 @@ export function claudeWorkspaceTools(
 												input.tool_response as ClaudeFileWriteOutput,
 											);
 										}
+										return {};
+									},
+								],
+							},
+						],
+					}
+				: {}),
+			...(onToolOperation
+				? {
+						PostToolUseFailure: [
+							{
+								hooks: [
+									async (input) => {
+										if (input.hook_event_name !== "PostToolUseFailure")
+											return {};
+										const toolUseId =
+											typeof input.tool_use_id === "string"
+												? input.tool_use_id
+												: "unknown-tool-use";
+										await onToolOperation.onStarted?.(
+											toolUseId,
+											input.tool_name,
+										);
+										await onToolOperation.onFailed?.(
+											toolUseId,
+											input.tool_name,
+											input.duration_ms,
+										);
 										return {};
 									},
 								],

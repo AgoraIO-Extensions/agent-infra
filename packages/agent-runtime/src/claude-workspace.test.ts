@@ -80,9 +80,11 @@ describe("Claude workspace result hook", () => {
 		const memory = join(root, "memory");
 		await mkdir(workspace);
 		await mkdir(memory);
+		const onIntent = vi.fn(async () => {});
 		const onStarted = vi.fn(async () => {});
 		const onCompleted = vi.fn(async () => {});
 		const tools = claudeWorkspaceTools(workspace, memory, undefined, {
+			onIntent,
 			onStarted,
 			onCompleted,
 		});
@@ -102,6 +104,8 @@ describe("Claude workspace result hook", () => {
 		expect(beforeResult).toMatchObject({
 			hookSpecificOutput: { permissionDecision: "allow" },
 		});
+		expect(onIntent).toHaveBeenCalledWith("tool-1", "Read");
+		expect(onStarted).not.toHaveBeenCalled();
 		await after(
 			{
 				hook_event_name: "PostToolUse",
@@ -127,8 +131,10 @@ describe("Claude workspace result hook", () => {
 		const memory = join(root, "memory");
 		await mkdir(workspace);
 		await mkdir(memory);
+		const onIntent = vi.fn(async () => {});
 		const onStarted = vi.fn(async () => {});
 		const tools = claudeWorkspaceTools(workspace, memory, undefined, {
+			onIntent,
 			onStarted,
 		});
 		const before = tools.hooks?.PreToolUse?.[0]?.hooks[0];
@@ -143,7 +149,35 @@ describe("Claude workspace result hook", () => {
 			"tool-denied",
 			{ signal: new AbortController().signal },
 		);
+		expect(onIntent).not.toHaveBeenCalled();
 		expect(onStarted).not.toHaveBeenCalled();
 		await rm(root, { recursive: true, force: true });
+	});
+
+	it("settles failed native tool execution through the failure hook", async () => {
+		const onStarted = vi.fn(async () => {});
+		const onFailed = vi.fn(async () => {});
+		const tools = claudeWorkspaceTools(
+			"/private/runtime/workspace",
+			"/private/runtime/memory",
+			undefined,
+			{ onStarted, onFailed },
+		);
+		const failure = tools.hooks?.PostToolUseFailure?.[0]?.hooks[0];
+		if (!failure) throw new Error("missing PostToolUseFailure hook");
+		await failure(
+			{
+				hook_event_name: "PostToolUseFailure",
+				tool_name: "Read",
+				tool_input: { file_path: "/private/runtime/workspace/out.txt" },
+				tool_use_id: "tool-failed",
+				error: "read failed",
+				duration_ms: 12,
+			} as never,
+			"tool-failed",
+			{ signal: new AbortController().signal },
+		);
+		expect(onStarted).toHaveBeenCalledWith("tool-failed", "Read");
+		expect(onFailed).toHaveBeenCalledWith("tool-failed", "Read", 12);
 	});
 });
