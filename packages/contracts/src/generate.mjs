@@ -54,8 +54,6 @@ import {
 	skillHubProjectSchemasV1,
 	skillHubImportOpenApiPathsV1,
 	skillHubImportSchemasV1,
-	skillHubInstallationOpenApiPathsV1,
-	skillHubInstallationSchemasV1,
 	skillHubPublicationOpenApiPathsV1,
 	skillHubPublicationSchemasV1,
 	skillHubReadOpenApiPathsV1,
