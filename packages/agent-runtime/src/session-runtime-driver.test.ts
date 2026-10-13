@@ -622,3 +622,34 @@ it("keeps a protected cancellation as an unknown Turn hold after a persistence r
 		await rm(path, { recursive: true, force: true });
 	}
 });
+
+it("lets a protected unknown hold supersede a racing terminal status", async () => {
+	const path = await mkdtemp(
+		join(tmpdir(), "session-protected-terminal-race-"),
+	);
+	let sessionOptions: NativeSessionOptions | undefined;
+	const runtime = await driver(path, async (options) => {
+		sessionOptions = options;
+		return {
+			nativeId: "native-protected",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	try {
+		const record = await runtime.execute(command([]));
+		await sessionOptions?.markUnknown?.();
+		const persisted = JSON.parse(
+			await readFile(join(path, record.nativeSessionRef, "state.json"), "utf8"),
+		) as { turns: { status: string; events: { type: string }[] }[] };
+		expect(persisted.turns[0]?.status).toBe("unknown");
+		expect(
+			persisted.turns[0]?.events.some((event) => event.type === "completed"),
+		).toBe(false);
+	} finally {
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});

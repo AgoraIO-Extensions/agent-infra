@@ -1589,7 +1589,22 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	) {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
-			if (!turn || terminal(turn.status)) return;
+			if (!turn) return;
+			if (unknownHold && terminal(turn.status)) {
+				const completed = turn.events.at(-1);
+				if (completed?.type !== "completed") unavailable();
+				turn.events[turn.events.length - 1] = RuntimeEventV1Schema.parse({
+					...completed,
+					type: "status",
+					payload: { status: "unknown" },
+				});
+				turn.status = "unknown";
+				turn.unknownHold = true;
+				delete turn.nativeStopReason;
+				delete turn.nativeTerminalCheckpoint;
+				return;
+			}
+			if (terminal(turn.status)) return;
 			if (turn.unknownHold && status === "unknown") return;
 			if (turn.unknownHold && status !== "unknown") return;
 			if (unknownHold) turn.unknownHold = true;
