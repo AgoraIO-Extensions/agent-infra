@@ -772,12 +772,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				)
 					unavailable();
 				await file.update((draft) => {
+					const sessionCancelled = this.cancelled(binding.ref);
 					for (const turn of draft.turns) {
 						const uncertainOperations = uncertainOperationFacts(turn);
 						const uncertainTools = uncertainOperations.filter(
 							(fact) => fact.kind === "tool",
 						);
-						const hold = turn.unknownHold || uncertainTools.length > 0;
+						const hold =
+							turn.unknownHold || uncertainTools.length > 0 || sessionCancelled;
 						if (turn.status === "running" && hold) {
 							appendUnknownOperationFacts(turn, uncertainTools);
 							draft.sequence++;
