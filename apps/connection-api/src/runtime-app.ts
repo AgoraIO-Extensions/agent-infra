@@ -42,7 +42,9 @@ import {
 	datalegoV6ConnectionCatalog,
 } from "@agent-infra/openconnector-adapter/providers/datalego";
 import {
+	GitHubV10Adapter,
 	githubConnectionCatalog,
+	githubV10ConnectionCatalog,
 	LegacyGitHubAdapter,
 	legacyGitHubConnectionCatalog,
 	OpenConnectorGitHubAdapter,
@@ -301,7 +303,17 @@ export async function createConnectionRuntime(
 			config.githubEgressProxyUrl,
 		),
 	);
-	const github = new OpenConnectorGitHubAdapter(githubFetch);
+	const github = new OpenConnectorGitHubAdapter(githubFetch, (origin) => {
+		const transport = createPinnedProviderFetch({
+			origins: [origin],
+			proxyUrl: config.githubEgressProxyUrl,
+		});
+		return {
+			fetch: observeProviderFetch("github", transport.fetch),
+			close: transport.close,
+		};
+	});
+	const githubV10 = new GitHubV10Adapter(githubFetch);
 	const legacyGitHub = new LegacyGitHubAdapter(githubFetch);
 	const githubOAuth = createPreSubmitGithubOAuthAdapter(
 		config.github,
@@ -489,6 +501,7 @@ export async function createConnectionRuntime(
 			]),
 		),
 		[githubConnectionCatalog.providerReleaseId]: github,
+		[githubV10ConnectionCatalog.providerReleaseId]: githubV10,
 		[legacyGitHubConnectionCatalog.providerReleaseId]: legacyGitHub,
 		[jiraServerConnectionCatalog.providerReleaseId]: jira,
 		[confluenceServerConnectionCatalog.providerReleaseId]: confluence,

@@ -5,7 +5,7 @@ test("provider entry points preserve executor identity and published action arra
 	for (const [provider, file, executor] of [
 		[
 			"github",
-			"providers/github/versions/github-v10.ts",
+			"providers/github/versions/github-v11.ts",
 			"OpenConnectorGitHubAdapter",
 		],
 		[

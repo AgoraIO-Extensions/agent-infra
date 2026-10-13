@@ -104,6 +104,7 @@ Authorization: Bearer &lt;当前用户与实例的 Connection PAT&gt;</code></pr
           <li><code>execute_action</code>：按真实工具 Schema 和 Guide 执行；不猜 Action ID，不传 Provider 凭证或自报用户、Agent、Consumer 身份。</li>
         </ol>
         <p>服务凭据与用户 PAT 必须分开保存。令牌不得进入聊天、模型输入、前端存储、源码、日志或 URL；不要让不同用户共享一个 PAT。针对实际 SDK 和版本验证初始化、鉴权、发现与错误路径，Codex 的兼容性验证不代表你的 SDK 已兼容。</p>
+        <p>分析 GitHub Actions 失败时，先发现并确认用户已授权 <code>github.get_workflow_job_logs</code>。用 Job 列表取得 ID，读取日志后按 <code>nextStartLine</code> 继续；<code>scanLimitReached</code> 且没有下一页时请引导查看 GitHub 原日志。不要据此重跑构建。原始日志会进入已授权 Agent 或模型上下文，详细限制见<a href="/connection/help?chapter=15">GitHub 接入帮助</a>。</p>
       </section>
 
       <section class="install" aria-labelledby="errors-title">

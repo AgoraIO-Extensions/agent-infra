@@ -97,6 +97,14 @@ ProviderRelease、Credential、Connection、Grant 与真实 App-owned Check E2E�
 切换 OAuth Credential。完整取舍见
 [GitHub credential mode 与 Action compatibility](../adr/ADR-connection-github-credential-mode-compatibility.md)。
 
+GitHub v10 保留原始 HTTP 拒绝状态，原能力的 schema、effect 和 scope 不变。
+Owner 于 2026-10-13 批准以新的 immutable v11 增加 READ
+`github.get_workflow_job_logs`（`repo` scope），仅读取指定 Job 的有界日志。
+下载跨 origin、凭据隔离和原始日志进入 Consumer/模型的具名风险接受，完整定义在
+[GitHub Job 日志 ADR](../adr/0002-github-job-log-reading.md)；这是 27.4 默认禁止跨 origin
+的受限例外，不开放任意 URL、run ZIP 或 artifact。v10 和旧版本保留，旧 Grant 不扩权；
+升级保留既有能力选择与批准上限，日志 Action 需要单独确认，发布仍须通过 13.4。
+
 公司存在多个 Jenkins deployment。由于 Consumer declaration 和 AuthorizationRoot 都以
 `providerId` 为授权唯一维度，每个 Jenkins deployment 必须使用独立稳定 Provider ID、
 ProviderRelease、固定 origin、Credential 和 Grant；不能共用 `providerId=jenkins`，也不能通过
