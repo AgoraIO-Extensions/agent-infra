@@ -1480,7 +1480,10 @@ it("keeps a Connection PAT binding scoped to the original Agent", async () => {
 		return new Response(
 			JSON.stringify({
 				issued: {
-					account: { id: "alice", email: "alice@example.invalid" },
+					account: {
+						id: "connection-user",
+						email: "alice@example.invalid",
+					},
 					consumerId: "platform",
 					expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
 					token: "conn_pat_agent_a",
@@ -1502,7 +1505,8 @@ it("keeps a Connection PAT binding scoped to the original Agent", async () => {
 		fetch: patFetch,
 	});
 	closes.push(client.close);
-	const begun = await client.authorized(f.signed("begin"));
+	const mapping = { connectionPrincipalId: "connection-user" } as const;
+	const begun = await client.authorized(f.signed("begin", mapping));
 	expect(begun.phase).toBe("awaiting_callback");
 	expect(begun.authorizationUrl).toContain(
 		"/connection/pat-bindings/pat-binding-1",
@@ -1514,7 +1518,7 @@ it("keeps a Connection PAT binding scoped to the original Agent", async () => {
 		bindingId: "pat-binding-1",
 	});
 	expect(callback.phase).toBe("awaiting_confirmation");
-	const confirmed = await client.authorized(f.signed("confirm"));
+	const confirmed = await client.authorized(f.signed("confirm", mapping));
 	expect(confirmed.phase).toBe("awaiting_verification");
 	expect(confirmed).not.toHaveProperty("token");
 	expect(requests.map(({ url }) => url)).toEqual([

@@ -2068,7 +2068,12 @@ function installationHarness(
 		>["authorize"]
 	>(async (input, _signal, finalCheck) => {
 		await finalCheck();
-		return { ...input, revision: "confirmation-r1", scope: input.scope };
+		return {
+			...input,
+			revision: "confirmation-r1",
+			scope: input.scope,
+			...(patBinding ? { connectionPrincipalId: "connection-user" } : {}),
+		};
 	});
 	const h = harness(1, undefined, {
 		connectionInstallation: {

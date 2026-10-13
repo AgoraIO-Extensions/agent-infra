@@ -52,8 +52,9 @@ callback 凭据只认证专用 HTTPS `/internal/runtime/oauth/v1/callback`；Wor
 owner-only binding service secret。Host 只向固定的 Connection binding endpoint 发起
 create/claim，并在浏览器 callback 只接收不透明 `binding_id`；PAT 不进入 Platform DB、
 Worker、日志或响应。`binding_id` 在平台状态中只以 SHA-256 形式关联，claim 返回的
-Connection `account.id` 还必须等于当前 Runtime principal ID；`consumerId`、token 形式和
-expiry 不匹配时保持不可用。平台与 Connection 没有稳定主体 ID 映射时，该 profile 保持关闭。
+Connection `account.id` 还必须等于 Worker 审批签入的稳定 Connection principal ID；该映射
+不能由请求或模型选择。`consumerId`、token 形式和 expiry 不匹配时保持不可用。PAT profile
+没有部署批准的稳定主体映射时保持关闭。
 该路线没有 refresh-token fallback，
 过期后重新进行用户确认；显式撤销仍调用 Connection 的 revoke endpoint。
 

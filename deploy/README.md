@@ -168,9 +168,9 @@ origin 下固定的 `/api/v1/connection/pat-bindings`。Runtime Host 另从
 `AGENT_INFRA_RUNTIME_CONNECTION_PAT_BINDING_SECRET_FILE` 读取 Host 专用、owner-only 的
 binding service secret。Platform API/Worker 不读取或转交该 secret，也不保存 PAT；Host
 按当前原用户＋Agent 创建 binding，浏览器只回跳 `binding_id`，随后由 Host claim 并把 PAT
-写入既有受保护材料目录；claim 返回的 Connection `account.id` 必须与当前 Runtime
-principal ID 完全一致，否则拒绝接收。部署只有在 Platform 与 Connection 使用同一稳定主体
-标识时才可启用该 PAT profile。Platform DB 只保存 callback state hash。未配置 binding、secret
+写入既有受保护材料目录；claim 返回的 Connection `account.id` 必须与 Worker 审批返回的
+部署批准主体映射完全一致，否则拒绝接收。该映射是签名的非敏感字段，不能来自请求或模型。
+部署没有稳定主体映射时不可启用该 PAT profile。Platform DB 只保存 callback state hash。未配置 binding、secret
 文件不可用、claim 返回的 consumer/expiry 不匹配时保持不可用，不能回退
 `CONNECTION_TOKEN` 或其他 Agent 的 token。PAT binding 不提供 refresh-token fallback；过期后
 必须重新确认并 claim。Connection 原生的 binding、确认、claim 和 revoke 合同由 Connection

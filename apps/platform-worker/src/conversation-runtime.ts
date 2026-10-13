@@ -1619,6 +1619,7 @@ export function createConversationRuntimeV2(
 							"reference",
 							"revision",
 							"scope",
+							...(configuration.patBinding ? ["connectionPrincipalId"] : []),
 							...(snapshot.commandId ? ["commandId"] : []),
 							...(snapshot.attemptId ? ["attemptId"] : []),
 							...(snapshot.attemptOwner ? ["attemptOwner"] : []),
@@ -1641,7 +1642,11 @@ export function createConversationRuntimeV2(
 								: {}),
 						},
 						approvalInput,
-					)
+					) ||
+					(configuration.patBinding
+						? typeof approval.connectionPrincipalId !== "string" ||
+							!approval.connectionPrincipalId
+						: approval.connectionPrincipalId !== undefined)
 				)
 					installationUnavailable();
 				const approved = structuredClone(approval);
@@ -1676,6 +1681,9 @@ export function createConversationRuntimeV2(
 					signing: installationSigning,
 					signal: active,
 					fetch: options.fetch,
+					...(approved.connectionPrincipalId
+						? { connectionPrincipalId: approved.connectionPrincipalId }
+						: {}),
 					assertCurrent: async () => {
 						let finalCheckCalled = false;
 						let finalCheckPromise: Promise<void> | undefined;

@@ -34,6 +34,8 @@ export type WorkerInstallationAuthorization = Omit<
 	readonly command: WorkerInstallationCommand;
 	readonly scope: import("@agent-infra/contracts/runtime").RuntimeOAuthScopeV1;
 	readonly revision: string;
+	/** Deployment-approved nonsecret mapping to Connection's principal id. */
+	readonly connectionPrincipalId?: string;
 	readonly commandId?: string;
 	readonly attemptId?: string;
 	readonly attemptOwner?: string;
@@ -55,6 +57,7 @@ export async function sendRuntimeOAuthRequest(options: {
 	request: RuntimeOAuthAuthorizedRequestV1;
 	principal: RuntimeOAuthGrantClaimsV1["principal"];
 	configuration: RuntimeOAuthConfigurationV1;
+	connectionPrincipalId?: string;
 	serviceToken: string;
 	signing: {
 		issuer: string;
@@ -97,6 +100,9 @@ export async function sendRuntimeOAuthRequest(options: {
 			issuer: signing.issuer,
 			workerId: signing.workerId,
 			principal: options.principal,
+			...(options.connectionPrincipalId
+				? { connectionPrincipalId: options.connectionPrincipalId }
+				: {}),
 			confirmationRevision: request.confirmationRevision,
 			grantId: randomUUID(),
 			issuedAt,
