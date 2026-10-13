@@ -42,14 +42,13 @@ function statusFor(
 		status.exportFailures > 0 ||
 		status.droppedLogs > 0 ||
 		status.invalidRecords > 0;
-	const value: OperationsStatus = degraded ? "degraded" : "healthy";
 	return {
 		kind: "ready",
 		statuses: {
-			health: value,
-			agents: value,
-			delivery: value,
-			alerts: degraded ? "degraded" : "healthy",
+			health: "unknown",
+			agents: "unknown",
+			delivery: "unknown",
+			alerts: degraded ? "degraded" : "unknown",
 		},
 	};
 }

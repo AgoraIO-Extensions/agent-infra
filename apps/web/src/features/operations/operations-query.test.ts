@@ -25,10 +25,10 @@ describe("operations query", () => {
 		expect(await fetchOperationsStatus()).toEqual({
 			kind: "ready",
 			statuses: {
-				health: "healthy",
-				agents: "healthy",
-				delivery: "healthy",
-				alerts: "healthy",
+				health: "unknown",
+				agents: "unknown",
+				delivery: "unknown",
+				alerts: "unknown",
 			},
 		});
 	});
