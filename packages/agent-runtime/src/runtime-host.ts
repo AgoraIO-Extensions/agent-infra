@@ -1850,7 +1850,10 @@ export class RuntimeHost {
 		const driver = (
 			this.options.driver as RuntimeDriver & Partial<RuntimeNativeSkillReaderV1>
 		).readNativeSkill;
-		if (!driver) driverInvalid();
+		const directoryReader = (
+			this.options.driver as RuntimeDriver & Partial<RuntimeNativeSkillReaderV1>
+		).discoverNativeSkills;
+		if (!driver || !directoryReader) driverInvalid();
 		const lease = this.nativeSkillReadContext(
 			request,
 			verification,
@@ -1859,6 +1862,24 @@ export class RuntimeHost {
 		);
 		let bytes: Uint8Array;
 		try {
+			const assertGeneration = async () => {
+				const directory = await callBoundedNativeSkillDriver({
+					read: lease,
+					work: () => directoryReader.call(this.options.driver, lease),
+				});
+				if (
+					!directory ||
+					typeof directory !== "object" ||
+					(directory as { generationId?: unknown }).generationId !==
+						request.generationId ||
+					!Array.isArray((directory as { entries?: unknown }).entries) ||
+					!(
+						directory as { entries: readonly { name?: unknown }[] }
+					).entries.some((entry) => entry?.name === request.skillName)
+				)
+					driverInvalid();
+			};
+			await assertGeneration();
 			bytes = await callBoundedNativeSkillDriver({
 				read: lease,
 				work: () =>
@@ -1870,6 +1891,7 @@ export class RuntimeHost {
 					),
 			});
 			await lease.revalidate();
+			await assertGeneration();
 		} finally {
 			lease.close();
 		}
@@ -1879,6 +1901,7 @@ export class RuntimeHost {
 		return RuntimeSkillResourceReadResponseV1Schema.parse({
 			schemaVersion: 1,
 			hostSessionRef: request.hostSessionRef,
+			generationId: request.generationId,
 			skillName: request.skillName,
 			relativePath: request.relativePath,
 			sizeBytes: encoded.byteLength,

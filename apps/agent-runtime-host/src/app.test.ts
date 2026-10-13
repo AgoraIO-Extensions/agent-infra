@@ -257,6 +257,7 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 				headers: authorizedHeaders,
 				body: JSON.stringify({
 					...readBody,
+					generationId: "a".repeat(64),
 					skillName: "workspace-summary",
 					relativePath: "SKILL.md",
 				}),
@@ -291,6 +292,66 @@ describe("RuntimeHost HTTP/SSE adapter", () => {
 			}),
 		});
 		expect(escaped.status).toBe(400);
+	});
+
+	it("rejects a mounted Skill resource when the Host generation drifts", async () => {
+		let generationCalls = 0;
+		const { app } = await setup(
+			(driver) =>
+				Object.assign(driver, {
+					discoverNativeSkills: async () => {
+						generationCalls += 1;
+						return {
+							generationId:
+								generationCalls === 1 ? "a".repeat(64) : "b".repeat(64),
+							entries: [
+								{
+									schemaVersion: 1,
+									name: "workspace-summary",
+									version: "0.1.0",
+									packageDigest: "b".repeat(64),
+									manifestDigest: "c".repeat(64),
+									targetPath: ".agents/skills/workspace-summary",
+									readOnly: true,
+								},
+							],
+						};
+					},
+					readNativeSkill: async () => new Uint8Array([1, 2, 3]),
+				}) as RuntimeDriver,
+		);
+		const body = submitBody();
+		const submittedResponse = await app.request("/internal/runtime/v1/turns", {
+			method: "POST",
+			headers: authorizedHeaders,
+			body: JSON.stringify(body),
+		});
+		const submitted = (await submittedResponse.json()) as {
+			hostSessionRef: string;
+		};
+		const { input: _input, ...readableBody } = body;
+		const response = await app.request(
+			"/internal/runtime/v1/skills/resources",
+			{
+				method: "POST",
+				headers: authorizedHeaders,
+				body: JSON.stringify({
+					...readableBody,
+					requestId: "request-http-skills-drift",
+					hostSessionRef: submitted.hostSessionRef,
+					generationId: "a".repeat(64),
+					skillName: "workspace-summary",
+					relativePath: "SKILL.md",
+					grant: executionGrant(
+						body,
+						["skills.read"],
+						"grant-http-skills-drift",
+					),
+				}),
+			},
+		);
+		expect(response.status).toBe(503);
+		expect(generationCalls).toBe(2);
 	});
 
 	it("revalidates authorization after the Driver Skill read", async () => {

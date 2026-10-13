@@ -1,4 +1,9 @@
-import type { ExecutionGrantV1 } from "@agent-infra/contracts/runtime";
+import type {
+	ExecutionGrantV1,
+	RuntimeSkillDirectoryEntryV1,
+	RuntimeSkillDirectoryRequestV1,
+	RuntimeSkillResourceReadRequestV1,
+} from "@agent-infra/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -81,6 +86,69 @@ function statusRequest() {
 			},
 		},
 	};
+}
+
+function skillRequest(): RuntimeSkillDirectoryRequestV1;
+function skillRequest(relativePath: string): RuntimeSkillResourceReadRequestV1;
+function skillRequest(relativePath?: string) {
+	const base = {
+		schemaVersion: 1 as const,
+		requestId: "request-skill",
+		traceId: "trace-skill",
+		actorId: "actor-client",
+		channelId: "web",
+		agentId: "agent-client",
+		conversationId: "conversation-client",
+		executionId: "execution-client",
+		turnId: "turn-client",
+		sessionGeneration: 1,
+		deliveryFence: 3,
+		hostSessionRef: "host-client",
+		grant,
+	};
+	return relativePath === undefined
+		? base
+		: {
+				...base,
+				generationId: "a".repeat(64),
+				skillName: "demo",
+				relativePath,
+			};
+}
+
+const skillDirectoryResponse = {
+	schemaVersion: 1,
+	hostSessionRef: "host-client",
+	generationId: "a".repeat(64),
+	skills: [
+		{
+			schemaVersion: 1,
+			name: "demo",
+			version: "1.0.0",
+			manifestSha256: "b".repeat(64),
+			packageDigest: "c".repeat(64),
+			readOnly: true,
+		},
+	],
+} as const;
+
+const skillResourceResponse = {
+	schemaVersion: 1,
+	hostSessionRef: "host-client",
+	generationId: "a".repeat(64),
+	skillName: "demo",
+	relativePath: "SKILL.md",
+	sizeBytes: 5,
+	sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+	bytesBase64: "aGVsbG8=",
+};
+
+function firstSkill(directory: {
+	readonly skills: readonly RuntimeSkillDirectoryEntryV1[];
+}): RuntimeSkillDirectoryEntryV1 {
+	const entry = directory.skills[0];
+	if (!entry) throw new Error("Missing Skill fixture");
+	return entry;
 }
 
 function response(
@@ -416,5 +484,216 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 		})();
 		expect(error).toMatchObject({ code: "RUNTIME_EVENT_INVALID" });
 		expect(JSON.stringify(error)).not.toContain("must-not-cross");
+	});
+
+	it("reads the authenticated directory and a bound resource through fixed Host routes", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify(skillDirectoryResponse), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				}),
+			)
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify(skillResourceResponse), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				}),
+			);
+		const client = createWorkerRuntimeHostClientV1({
+			baseUrl: "http://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: fetcher,
+		});
+		const directory = await client.skillDirectory(skillRequest());
+		const resource = await client.readSkillResource(skillRequest("SKILL.md"), {
+			generationId: directory.generationId,
+			entry: firstSkill(directory),
+			maximumBytes: 5,
+		});
+		expect(directory).toEqual(skillDirectoryResponse);
+		expect(resource).toEqual(skillResourceResponse);
+		expect(String(fetcher.mock.calls[0]?.[0])).toBe(
+			"http://runtime.internal/internal/runtime/v1/skills",
+		);
+		expect(String(fetcher.mock.calls[1]?.[0])).toBe(
+			"http://runtime.internal/internal/runtime/v1/skills/resources",
+		);
+		for (const [, init] of fetcher.mock.calls) {
+			expect(init?.headers).toMatchObject({
+				authorization: "Bearer synthetic-service-token",
+				"content-type": "application/json",
+			});
+		}
+		expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual(
+			skillRequest("SKILL.md"),
+		);
+	});
+
+	it("keeps a defensive directory snapshot when callers mutate the response", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify(skillDirectoryResponse), { status: 200 }),
+			)
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify(skillResourceResponse), { status: 200 }),
+			);
+		const client = createWorkerRuntimeHostClientV1({
+			baseUrl: "http://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: fetcher,
+		});
+		const directory = await client.skillDirectory(skillRequest());
+		const entry = structuredClone(firstSkill(directory));
+		const mutableSkills = directory.skills as Array<{ name: string }>;
+		const first = mutableSkills[0];
+		if (!first) throw new Error("Missing Skill fixture");
+		first.name = "tampered";
+		await expect(
+			client.readSkillResource(skillRequest("SKILL.md"), {
+				generationId: directory.generationId,
+				entry,
+			}),
+		).resolves.toEqual(skillResourceResponse);
+	});
+
+	it("rejects an invalid service token response and malformed or oversized bodies", async () => {
+		const unauthorized = vi.fn<typeof fetch>().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					schemaVersion: 1,
+					code: "RUNTIME_SERVICE_UNAUTHORIZED",
+					message: "Runtime service authentication failed",
+					retryable: false,
+					traceId: "trace-skill",
+				}),
+				{ status: 401 },
+			),
+		);
+		await expect(
+			createWorkerRuntimeHostClientV1({
+				baseUrl: "http://runtime.internal",
+				serviceToken: "wrong-service-token",
+				fetch: unauthorized,
+			}).skillDirectory(skillRequest()),
+		).rejects.toMatchObject({
+			code: "RUNTIME_SERVICE_UNAUTHORIZED",
+			retryable: false,
+		});
+
+		const malformed = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify(skillDirectoryResponse), { status: 200 }),
+			)
+			.mockResolvedValueOnce(new Response("not-json", { status: 200 }));
+		const malformedClient = createWorkerRuntimeHostClientV1({
+			baseUrl: "http://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: malformed,
+		});
+		const directory = await malformedClient.skillDirectory(skillRequest());
+		await expect(
+			malformedClient.readSkillResource(skillRequest("SKILL.md"), {
+				generationId: directory.generationId,
+				entry: firstSkill(directory),
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_RESPONSE_INVALID" });
+
+		const oversized = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify(skillDirectoryResponse), { status: 200 }),
+			)
+			.mockResolvedValueOnce(
+				new Response("x".repeat(1_402_201), { status: 200 }),
+			);
+		const oversizedClient = createWorkerRuntimeHostClientV1({
+			baseUrl: "http://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: oversized,
+		});
+		await oversizedClient.skillDirectory(skillRequest());
+		await expect(
+			oversizedClient.readSkillResource(skillRequest("SKILL.md")),
+		).rejects.toMatchObject({ code: "RUNTIME_RESPONSE_INVALID" });
+	});
+
+	it("fails closed on generation, entry, path and digest drift", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify(skillDirectoryResponse), { status: 200 }),
+			)
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						...skillResourceResponse,
+						relativePath: "other.md",
+					}),
+					{ status: 200 },
+				),
+			);
+		const client = createWorkerRuntimeHostClientV1({
+			baseUrl: "http://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: fetcher,
+		});
+		const directory = await client.skillDirectory(skillRequest());
+		await expect(
+			client.readSkillResource(skillRequest("SKILL.md"), {
+				generationId: "d".repeat(64),
+				entry: firstSkill(directory),
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_REQUEST_INVALID" });
+		expect(fetcher).toHaveBeenCalledOnce();
+
+		await expect(
+			client.readSkillResource(skillRequest("SKILL.md"), {
+				generationId: directory.generationId,
+				entry: { ...firstSkill(directory), name: "foreign" },
+			}),
+		).rejects.toMatchObject({ code: "RUNTIME_REQUEST_INVALID" });
+		expect(fetcher).toHaveBeenCalledOnce();
+
+		await expect(
+			client.readSkillResource(skillRequest("SKILL.md")),
+		).rejects.toMatchObject({ code: "RUNTIME_RESPONSE_INVALID" });
+	});
+
+	it("converts cancellation into a retryable interruption before delivering bytes", async () => {
+		let release: (() => void) | undefined;
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify(skillDirectoryResponse), { status: 200 }),
+			)
+			.mockImplementationOnce(
+				() =>
+					new Promise<Response>(
+						(resolve) => (release = () => resolve(new Response("{}"))),
+					),
+			);
+		const client = createWorkerRuntimeHostClientV1({
+			baseUrl: "http://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: fetcher,
+		});
+		const directory = await client.skillDirectory(skillRequest());
+		const controller = new AbortController();
+		const pending = client.readSkillResource(
+			skillRequest("SKILL.md"),
+			{ generationId: directory.generationId, entry: firstSkill(directory) },
+			controller.signal,
+		);
+		await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+		controller.abort();
+		await expect(pending).rejects.toMatchObject({
+			code: "RUNTIME_INTERRUPTED",
+			retryable: true,
+		});
+		release?.();
 	});
 });
