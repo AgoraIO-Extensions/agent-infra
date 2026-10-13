@@ -36,10 +36,9 @@ import {
 import { createAgentApiV1 } from "../../web/src/pilot/generated-v2/sdk.gen.js";
 import {
 	createProductionPlatformApiAssemblyInputV1,
+	inspectProductionRelayKeyPolicyV1,
 	mergeProductionPlatformApiDeploymentPortsV1,
 	type ProductionPlatformApiInputV1,
-	ProductionRelayKeyPolicyConfigurationError,
-	requireProductionRelayKeyPolicyV1,
 } from "./deployment.js";
 import type { IdentityAdapter, IdentityContext } from "./http/identity.js";
 import {
@@ -62,7 +61,7 @@ const connectDatabase = createRequire(
 ) => DatabaseReader;
 
 describe("explicit custom Agent deployment ports", () => {
-	it("requires reviewed Relay Key policies without retaining policy values", () => {
+	it("inspects missing Relay Key policies without retaining policy values", () => {
 		const agentDefaultRelayKeyPolicy = {
 			templateBindings: [],
 			relayEndpointId: "endpoint-private-sentinel",
@@ -72,37 +71,23 @@ describe("explicit custom Agent deployment ports", () => {
 			profile: "sub2api-key-billing-v1" as const,
 			billingUrl: "https://sub2api.la3.agoralab.co/v1/sub2api/billing",
 		};
-		expect(() =>
-			requireProductionRelayKeyPolicyV1({
-				agentDefaultRelayKeyPolicy,
-			}),
-		).toThrow(ProductionRelayKeyPolicyConfigurationError);
-		try {
-			requireProductionRelayKeyPolicyV1({});
-		} catch (error) {
-			expect(
-				(error as ProductionRelayKeyPolicyConfigurationError).fields,
-			).toEqual([
-				"agentDefaultRelayKeyPolicy",
-				"personalRelayKeyValidation",
-			]);
-		}
-		try {
-			requireProductionRelayKeyPolicyV1({ personalRelayKeyValidation });
-		} catch (error) {
-			expect(error).toBeInstanceOf(ProductionRelayKeyPolicyConfigurationError);
-			expect(String(error)).not.toContain("private");
-			expect(String(error)).not.toContain("https://");
-			expect(
-				(error as ProductionRelayKeyPolicyConfigurationError).fields,
-			).toEqual(["agentDefaultRelayKeyPolicy"]);
-		}
 		expect(
-			requireProductionRelayKeyPolicyV1({
+			inspectProductionRelayKeyPolicyV1({
 				agentDefaultRelayKeyPolicy,
-				personalRelayKeyValidation,
 			}),
-		).toEqual({ agentDefaultRelayKeyPolicy, personalRelayKeyValidation });
+		).toEqual({ missing: ["personalRelayKeyValidation"] });
+		expect(inspectProductionRelayKeyPolicyV1({})).toEqual({
+			missing: ["agentDefaultRelayKeyPolicy", "personalRelayKeyValidation"],
+		});
+		expect(
+			inspectProductionRelayKeyPolicyV1({
+				personalRelayKeyValidation,
+				agentDefaultRelayKeyPolicy,
+			}),
+		).toEqual({ missing: [] });
+		expect(JSON.stringify(inspectProductionRelayKeyPolicyV1({}))).not.toContain(
+			"https://",
+		);
 	});
 
 	it("merges Gateway, model and native metadata reader exports outside apiInput", () => {
@@ -120,6 +105,16 @@ describe("explicit custom Agent deployment ports", () => {
 				nativeMetadata,
 			}),
 		).toMatchObject({ customAgentGateway, modelSelection, nativeMetadata });
+	});
+
+	it("does not accept Relay Key policy nested in apiInput as production supply", () => {
+		const apiInput = {
+			agentDefaultRelayKeyPolicy: { relayEndpointId: "nested" },
+			personalRelayKeyValidation: { billingUrl: "https://nested.invalid" },
+		} as unknown as ProductionPlatformApiInputV1;
+		const merged = mergeProductionPlatformApiDeploymentPortsV1({ apiInput });
+		expect(merged).not.toHaveProperty("agentDefaultRelayKeyPolicy");
+		expect(merged).not.toHaveProperty("personalRelayKeyValidation");
 	});
 
 	it.each([

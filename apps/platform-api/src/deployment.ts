@@ -52,58 +52,15 @@ const productionRelayKeyPolicyFields = [
 export type ProductionRelayKeyPolicyFieldV1 =
 	(typeof productionRelayKeyPolicyFields)[number];
 
-/** A stable, value-free startup diagnostic for an incomplete production policy. */
-export class ProductionRelayKeyPolicyConfigurationError extends Error {
-	readonly code = "PLATFORM_RELAY_KEY_POLICY_MISSING" as const;
-	readonly fields: readonly ProductionRelayKeyPolicyFieldV1[];
-
-	constructor(fields: readonly ProductionRelayKeyPolicyFieldV1[]) {
-		super("PLATFORM_RELAY_KEY_POLICY_MISSING");
-		this.name = "ProductionRelayKeyPolicyConfigurationError";
-		this.fields = [...fields];
-	}
-}
-
-export function isProductionRelayKeyPolicyConfigurationError(
-	error: unknown,
-): error is ProductionRelayKeyPolicyConfigurationError {
-	if (!error || typeof error !== "object") return false;
-	const candidate = error as {
-		readonly code?: unknown;
-		readonly fields?: unknown;
-	};
-	return (
-		candidate.code === "PLATFORM_RELAY_KEY_POLICY_MISSING" &&
-		Array.isArray(candidate.fields) &&
-		candidate.fields.every((field) =>
-			(productionRelayKeyPolicyFields as readonly unknown[]).includes(field),
-		)
-	);
-}
-
-/** Require the two reviewed Relay Key policies at the production entrypoint. */
-export function requireProductionRelayKeyPolicyV1(input: {
+/** Inspect the reviewed Relay Key policy exports without retaining values. */
+export function inspectProductionRelayKeyPolicyV1(input: {
 	readonly agentDefaultRelayKeyPolicy?: ProductionPlatformApiInputV1["agentDefaultRelayKeyPolicy"];
 	readonly personalRelayKeyValidation?: ProductionPlatformApiInputV1["personalRelayKeyValidation"];
-}): Required<
-	Pick<
-		ProductionPlatformApiInputV1,
-		"agentDefaultRelayKeyPolicy" | "personalRelayKeyValidation"
-	>
-> {
+}): { readonly missing: readonly ProductionRelayKeyPolicyFieldV1[] } {
 	const missing = productionRelayKeyPolicyFields.filter(
 		(field) => input[field] === undefined || input[field] === null,
 	);
-	if (missing.length > 0)
-		throw new ProductionRelayKeyPolicyConfigurationError(missing);
-	return {
-		agentDefaultRelayKeyPolicy: input.agentDefaultRelayKeyPolicy as NonNullable<
-			ProductionPlatformApiInputV1["agentDefaultRelayKeyPolicy"]
-		>,
-		personalRelayKeyValidation: input.personalRelayKeyValidation as NonNullable<
-			ProductionPlatformApiInputV1["personalRelayKeyValidation"]
-		>,
-	};
+	return { missing };
 }
 
 export interface ProductionPlatformApiInputV1
@@ -182,23 +139,28 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
 }): ProductionPlatformApiInputV1 {
+	const {
+		agentDefaultRelayKeyPolicy: _apiAgentDefaultRelayKeyPolicy,
+		personalRelayKeyValidation: _apiPersonalRelayKeyValidation,
+		...apiInputWithoutRelayKeyPolicy
+	} = input.apiInput;
 	if (
 		input.customAgentGateway !== undefined &&
-		input.apiInput.customAgentGateway !== undefined
+		apiInputWithoutRelayKeyPolicy.customAgentGateway !== undefined
 	)
 		throw new Error("PLATFORM_CUSTOM_AGENT_GATEWAY_DUPLICATE");
 	if (
 		input.modelSelection !== undefined &&
-		input.apiInput.modelSelection !== undefined
+		apiInputWithoutRelayKeyPolicy.modelSelection !== undefined
 	)
 		throw new Error("PLATFORM_MODEL_SELECTION_DUPLICATE");
 	if (
 		input.nativeMetadata !== undefined &&
-		input.apiInput.nativeMetadata !== undefined
+		apiInputWithoutRelayKeyPolicy.nativeMetadata !== undefined
 	)
 		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
 	return {
-		...input.apiInput,
+		...apiInputWithoutRelayKeyPolicy,
 		...(input.customAgentGateway !== undefined
 			? { customAgentGateway: input.customAgentGateway }
 			: {}),
