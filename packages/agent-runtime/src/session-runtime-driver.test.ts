@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { RuntimeDriverCommand } from "./driver.js";
+import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import {
 	createRuntimeFileResultReceiptV1,
@@ -530,6 +531,125 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 		).toEqual([requestIdentity, requestIdentity]);
 	} finally {
 		releasePrompt?.();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("keeps a protected cancellation as an unknown Turn hold after a persistence retry", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-protected-unknown-"));
+	let sessionOptions: NativeSessionOptions | undefined;
+	let entered!: () => void;
+	const enteredPrompt = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	let release!: () => void;
+	const releasePrompt = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const runtime = await driver(path, async (options) => {
+		sessionOptions = options;
+		return {
+			nativeId: "native-protected",
+			select: async () => {},
+			prompt: async () => {
+				entered();
+				await releasePrompt;
+				return { stopReason: "cancelled" };
+			},
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	const originalPersist = (
+		DurableJsonFile.prototype as unknown as {
+			persist: (serialized: string) => Promise<void>;
+		}
+	).persist;
+	let failNextPersist = false;
+	const persistFailure = vi
+		.spyOn(
+			DurableJsonFile.prototype as unknown as {
+				persist: (serialized: string) => Promise<void>;
+			},
+			"persist",
+		)
+		.mockImplementation(function (this: DurableJsonFile<unknown>, serialized) {
+			if (failNextPersist) {
+				failNextPersist = false;
+				return Promise.reject(new Error("synthetic persistence failure"));
+			}
+			return originalPersist.call(this, serialized);
+		});
+	const pending = runtime.execute(command([]));
+	try {
+		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
+		await enteredPrompt;
+		failNextPersist = true;
+		await sessionOptions?.markUnknown?.();
+		await sessionOptions?.recordOperationFact?.({
+			kind: "tool",
+			operationRef: "11111111-1111-4111-8111-111111111111",
+			attemptRef: "22222222-2222-4222-8222-222222222222",
+			phase: "intent",
+			toolId: "filesystem.read",
+		});
+		release();
+		await pending;
+		const state = JSON.parse(
+			await readFile(join(path, "index.json"), "utf8"),
+		) as { sessions: { ref: string }[] };
+		const ref = state.sessions[0]?.ref;
+		if (!ref) throw new Error("missing session ref");
+		const persisted = JSON.parse(
+			await readFile(join(path, ref, "state.json"), "utf8"),
+		) as {
+			turns: {
+				status: string;
+				events: { type: string }[];
+				operationFacts?: { phase: string }[];
+			}[];
+		};
+		expect(persisted.turns[0]?.status).toBe("unknown");
+		expect(persisted.turns[0]?.operationFacts?.at(-1)?.phase).toBe("intent");
+		expect(
+			persisted.turns[0]?.events.some((event) => event.type === "completed"),
+		).toBe(false);
+	} finally {
+		release();
+		persistFailure.mockRestore();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("lets a protected unknown hold supersede a racing terminal status", async () => {
+	const path = await mkdtemp(
+		join(tmpdir(), "session-protected-terminal-race-"),
+	);
+	let sessionOptions: NativeSessionOptions | undefined;
+	const runtime = await driver(path, async (options) => {
+		sessionOptions = options;
+		return {
+			nativeId: "native-protected",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	try {
+		const record = await runtime.execute(command([]));
+		await sessionOptions?.markUnknown?.();
+		const persisted = JSON.parse(
+			await readFile(join(path, record.nativeSessionRef, "state.json"), "utf8"),
+		) as { turns: { status: string; events: { type: string }[] }[] };
+		expect(persisted.turns[0]?.status).toBe("unknown");
+		expect(
+			persisted.turns[0]?.events.some((event) => event.type === "completed"),
+		).toBe(true);
+		expect(persisted.turns[0]?.events.at(-1)?.type).toBe("status");
+	} finally {
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });
 	}
