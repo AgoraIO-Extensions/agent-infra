@@ -68,4 +68,42 @@ describe("Claude workspace result hook", () => {
 			structuredPatch: [],
 		});
 	});
+
+	it("reports the native tool dispatch boundary without forwarding tool input", async () => {
+		const onStarted = vi.fn(async () => {});
+		const onCompleted = vi.fn(async () => {});
+		const tools = claudeWorkspaceTools(
+			"/private/runtime/workspace",
+			"/private/runtime/memory",
+			undefined,
+			{ onStarted, onCompleted },
+		);
+		const before = tools.hooks?.PreToolUse?.[0]?.hooks[0];
+		const after = tools.hooks?.PostToolUse?.[0]?.hooks[0];
+		if (!before || !after) throw new Error("missing tool operation hooks");
+		await before(
+			{
+				hook_event_name: "PreToolUse",
+				tool_name: "Read",
+				tool_input: { file_path: "/private/runtime/workspace/out.txt" },
+				tool_use_id: "tool-1",
+			} as never,
+			"tool-1",
+			{ signal: new AbortController().signal },
+		);
+		await after(
+			{
+				hook_event_name: "PostToolUse",
+				tool_name: "Read",
+				tool_input: { file_path: "/private/runtime/workspace/out.txt" },
+				tool_response: { type: "text", content: "secret" },
+				tool_use_id: "tool-1",
+			} as never,
+			"tool-1",
+			{ signal: new AbortController().signal },
+		);
+		expect(onStarted).toHaveBeenCalledWith("tool-1", "Read");
+		expect(onCompleted).toHaveBeenCalledWith("tool-1", "Read");
+		expect(JSON.stringify(onStarted.mock.calls)).not.toContain("secret");
+	});
 });
