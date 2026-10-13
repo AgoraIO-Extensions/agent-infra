@@ -1225,6 +1225,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		});
 		let dispatched = false;
 		let unknownHold = false;
+		let unknownMarking = false;
 		const toolFacts = new Map<
 			string,
 			{ operationRef: string; attemptRef: string; startedAt: number }
@@ -1289,7 +1290,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				},
 				selection,
 				admit: async () => {
-					if (!dispatched || this.closed || unknownHold)
+					if (!dispatched || this.closed || unknownHold || unknownMarking)
 						throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 					await this.resolve(file, command, {
 						outcome: "accepted",
@@ -1299,7 +1300,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					admitted();
 				},
 				markUnknown: async () => {
-					unknownHold = true;
+					unknownMarking = true;
 					if (dispatched && !this.closed)
 						await this.status(
 							file,
@@ -1309,6 +1310,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							undefined,
 							true,
 						);
+					unknownHold = true;
 				},
 				...(resolveModelCredential ? { resolveModelCredential } : {}),
 				...(browser ? { browser } : {}),
@@ -1333,7 +1335,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						}
 					: undefined,
 				update: async (event) => {
-					if (!dispatched || unknownHold) return;
+					if (!dispatched || unknownHold || unknownMarking) return;
 					await this.resolve(file, command, {
 						outcome: "accepted",
 						status: "running",
@@ -1443,7 +1445,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				// Only a Turn that passed the native boundary counts as dispatched.
 				dispatched = true;
 				const response = await native.prompt(input);
-				if (!unknownHold) {
+				if (!unknownHold && !unknownMarking) {
 					await this.resolve(file, command, {
 						outcome: "accepted",
 						status: "running",
@@ -1458,7 +1460,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					admitted();
 				}
 			} catch {
-				if (!unknownHold)
+				if (!unknownHold && !unknownMarking)
 					await this.status(file, command.executionId, "unknown");
 			}
 		})();
