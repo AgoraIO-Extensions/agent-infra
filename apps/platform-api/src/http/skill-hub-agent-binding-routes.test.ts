@@ -29,7 +29,7 @@ function appWith(
 	const dependencies: SkillHubAgentBindingRoutesDependenciesV1 = {
 		identity,
 		bind: vi.fn(async () => ({
-			schemaVersion: 1,
+			schemaVersion: 1 as const,
 			agentId: "agent",
 			revision: 3,
 			changedFields: ["skills"] as const,
