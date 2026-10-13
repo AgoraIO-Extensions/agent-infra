@@ -112,22 +112,28 @@ export function createPlatformWorkloadWorkerV1(
 				databaseUrl: options.databaseUrl,
 			});
 		const observedStore: WorkloadReconciliationStorePortV1 = {
-			runNext(workerId, step) {
+			async runNext(workerId, step) {
 				const startedAt = performance.now();
-				return store.runNext(workerId, async (input) => {
+				let event: Parameters<WorkloadTelemetry["record"]>[0] | undefined;
+				const result = await store.runNext(workerId, async (input) => {
 					const next = await step(input);
 					const code = workloadFailureCode(next);
-					observeWorkload(options.observability, {
+					event = {
 						stage: "workload",
 						outcome: code ? "failed" : "completed",
-						durationMs: performance.now() - startedAt,
 						...(code ? { code } : {}),
 						requestId: input.requestId,
 						traceId: input.traceId,
 						agentId: input.management.agentId,
-					});
+					};
 					return next;
 				});
+				if (event)
+					observeWorkload(options.observability, {
+						...event,
+						durationMs: performance.now() - startedAt,
+					});
+				return result;
 			},
 		};
 		reconciliation = createWorkloadReconciliationV1({
