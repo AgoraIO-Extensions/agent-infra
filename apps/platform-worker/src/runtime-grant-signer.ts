@@ -1,13 +1,80 @@
 import { createHash, type KeyObject, randomUUID, sign } from "node:crypto";
 
 import {
+	ExecutionGrantClaimsV1Schema,
+	type ExecutionGrantV1,
+	ExecutionGrantV1Schema,
 	type RuntimeExecutionGrantClaimsV2,
 	RuntimeExecutionGrantClaimsV2Schema,
 	RuntimeExecutionGrantV2Schema,
+	type RuntimeModelDirectoryDispatchRequestV1,
 	type RuntimeSubmitTurnRequestV3,
 	runtimeRequestSigningPayloadV3,
 	validateVerifiedRuntimeExecutionGrantClaimsV2,
 } from "@agent-infra/contracts/runtime";
+
+/**
+ * Sign the legacy RuntimeHost Grant used by the model-directory V1 route.
+ * The API dispatch contains only the already-bound request; this signer is
+ * the sole Worker-side source of the short-lived Host Grant.
+ */
+export function createWorkerRuntimeModelDirectoryGrantSignerV1(options: {
+	readonly issuer: string;
+	readonly keyId: string;
+	readonly privateKey: KeyObject;
+	readonly now?: () => number;
+	readonly id?: () => string;
+}) {
+	if (
+		!options.issuer ||
+		!options.keyId ||
+		options.privateKey.type !== "private" ||
+		options.privateKey.asymmetricKeyType !== "ed25519"
+	)
+		throw new TypeError("Runtime model-directory signing options are invalid");
+	return (
+		request: Omit<RuntimeModelDirectoryDispatchRequestV1, "grant">,
+	): ExecutionGrantV1 => {
+		const issuedAt = new Date((options.now ?? Date.now)());
+		const claims = ExecutionGrantClaimsV1Schema.parse({
+			schemaVersion: 1,
+			issuer: options.issuer,
+			audience: ["runtime_host"],
+			issuedAt: issuedAt.toISOString(),
+			expiresAt: new Date(issuedAt.getTime() + 30_000).toISOString(),
+			grantId: (options.id ?? randomUUID)(),
+			agentId: request.agentId,
+			actorId: request.actorId,
+			channelId: request.channelId,
+			conversationId: request.conversationId,
+			turnId: request.turnId,
+			executionId: request.executionId,
+			sessionGeneration: request.sessionGeneration,
+			allowedCommands: ["model-directory.read"],
+			attachments: [],
+			actionSetVersion: "runtime-model-directory-v1",
+			actionIds: [],
+			traceId: request.traceId,
+		});
+		const protectedPart = Buffer.from(
+			JSON.stringify({ alg: "EdDSA", kid: options.keyId }),
+		).toString("base64url");
+		const claimsPart = Buffer.from(JSON.stringify(claims)).toString(
+			"base64url",
+		);
+		const signingInput = `${protectedPart}.${claimsPart}`;
+		const signature = sign(
+			null,
+			Buffer.from(signingInput, "ascii"),
+			options.privateKey,
+		).toString("base64url");
+		return ExecutionGrantV1Schema.parse({
+			schemaVersion: 1,
+			format: "compact-jws",
+			token: `${signingInput}.${signature}`,
+		});
+	};
+}
 
 export type WorkerRuntimeAuthorizationV2 =
 	| { readonly purpose: "business"; readonly authorizationRecordId: string }

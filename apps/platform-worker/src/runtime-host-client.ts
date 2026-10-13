@@ -26,6 +26,10 @@ import {
 	type RuntimeEventV2,
 	type RuntimeGenerationCancelRequestV3,
 	RuntimeGenerationCancelRequestV3Schema,
+	type RuntimeModelDirectoryRequestV1,
+	RuntimeModelDirectoryRequestV1Schema,
+	type RuntimeModelDirectoryResponseV1,
+	RuntimeModelDirectoryResponseV1Schema,
 	RuntimeOperationResponseV1Schema,
 	RuntimeOperationResponseV2Schema,
 	RuntimeOperationResponseV3Schema,
@@ -150,6 +154,10 @@ export interface WorkerRuntimeSkillResourceBindingV1 {
 
 export interface WorkerRuntimeHostClientV1
 	extends ConversationRuntimeHostPortV1 {
+	modelDirectory(
+		request: RuntimeModelDirectoryRequestV1,
+		signal?: AbortSignal,
+	): Promise<RuntimeModelDirectoryResponseV1>;
 	skillDirectory(
 		request: RuntimeSkillDirectoryRequestV1,
 		signal?: AbortSignal,
@@ -611,6 +619,37 @@ export function createWorkerRuntimeHostClientV1(
 		}
 	};
 	return {
+		async modelDirectory(request, signal) {
+			let body: RuntimeModelDirectoryRequestV1;
+			try {
+				body = RuntimeModelDirectoryRequestV1Schema.parse(request);
+			} catch {
+				return failure("RUNTIME_REQUEST_INVALID", false);
+			}
+			if (signal?.aborted) return failure("RUNTIME_INTERRUPTED", true);
+			try {
+				const response = await interruptedDependency(
+					post(
+						fetcher,
+						new URL("internal/runtime/v1/model-directory", dispatchBase),
+						options.serviceToken,
+						body.traceId,
+						body,
+						signal,
+					),
+					signal,
+				);
+				if (signal?.aborted) return failure("RUNTIME_INTERRUPTED", true);
+				return RuntimeModelDirectoryResponseV1Schema.parse(
+					JSON.parse(
+						await interruptedDependency(boundedResponseText(response), signal),
+					),
+				);
+			} catch (error) {
+				if (error instanceof ConversationRuntimeHostError) throw error;
+				return failure("RUNTIME_RESPONSE_INVALID", true);
+			}
+		},
 		async dispatch(request, signal) {
 			let selected: ReturnType<typeof dispatchBody>;
 			try {

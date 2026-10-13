@@ -288,8 +288,11 @@ export {
 	type LdapSessionStore,
 } from "./ldap-browser.js";
 export { createPostgresLdapBrowserDeployment } from "./ldap-browser-deployment.js";
+export { createWorkerRuntimeModelDirectoryTransportV1 } from "./runtime-model-directory-transport.js";
 export {
+	createRuntimeModelSelectionReaderFromDispatchV1,
 	createRuntimeModelSelectionReaderV1,
+	type RuntimeModelDirectoryDispatchTransportV1,
 	type RuntimeModelDirectoryTransportV1,
 } from "./runtime-model-selection-reader.js";
 export {

@@ -1,6 +1,9 @@
 import {
+	type RuntimeModelDirectoryDispatchRequestV1,
+	RuntimeModelDirectoryDispatchRequestV1Schema,
 	type RuntimeModelDirectoryRequestV1,
 	RuntimeModelDirectoryRequestV1Schema,
+	type RuntimeModelDirectoryResponseV1,
 	RuntimeModelDirectoryResponseV1Schema,
 } from "@agent-infra/contracts/runtime";
 import type {
@@ -14,6 +17,56 @@ export interface RuntimeModelDirectoryTransportV1 {
 		request: RuntimeModelDirectoryRequestV1,
 		signal: AbortSignal,
 	): Promise<unknown>;
+}
+
+export interface RuntimeModelDirectoryDispatchTransportV1 {
+	read(
+		request: RuntimeModelDirectoryDispatchRequestV1,
+		signal: AbortSignal,
+	): Promise<unknown>;
+}
+
+function projectRuntimeModelDirectory(
+	identity: IdentityContext,
+	conversationId: string,
+	bound: {
+		readonly actorId: string;
+		readonly conversationId: string;
+		readonly channelId: string;
+		readonly agentId: string;
+		readonly hostSessionRef: string;
+	},
+	response: RuntimeModelDirectoryResponseV1,
+) {
+	if (
+		bound.actorId !== identity.userId ||
+		bound.conversationId !== conversationId ||
+		bound.channelId !== "web" ||
+		response.hostSessionRef !== bound.hostSessionRef
+	)
+		return null;
+	const current = response.options.find(
+		(option) => option.modelOptionId === response.current.modelOptionId,
+	);
+	if (
+		!current?.reasoningLevels.includes(response.current.reasoningLevel) ||
+		new Set(response.options.map((option) => option.modelOptionId)).size !==
+			response.options.length
+	)
+		return null;
+	return {
+		agentId: bound.agentId,
+		source: "custom-platform-adapter" as const,
+		available: true,
+		options: response.options.map((option) => ({
+			optionId: option.modelOptionId,
+			displayName: option.displayName,
+			modelId: option.modelId,
+			reasoningLevels: [...option.reasoningLevels],
+		})),
+		currentModelOptionId: response.current.modelOptionId,
+		currentReasoningLevel: response.current.reasoningLevel,
+	};
 }
 
 /**
@@ -42,42 +95,61 @@ export function createRuntimeModelSelectionReaderV1(options: {
 				});
 				if (!request) return null;
 				const bound = RuntimeModelDirectoryRequestV1Schema.parse(request);
-				if (
-					bound.actorId !== identity.userId ||
-					bound.conversationId !== conversationId ||
-					bound.channelId !== "web"
-				)
-					return null;
 				const response = RuntimeModelDirectoryResponseV1Schema.parse(
 					await options.transport.read(bound, controller.signal),
 				);
-				if (
-					response.hostSessionRef !== bound.hostSessionRef ||
-					response.executionId !== bound.executionId
-				)
-					return null;
-				const current = response.options.find(
-					(option) => option.modelOptionId === response.current.modelOptionId,
+				if (response.executionId !== bound.executionId) return null;
+				return projectRuntimeModelDirectory(
+					identity,
+					conversationId,
+					bound,
+					response,
 				);
-				if (
-					!current?.reasoningLevels.includes(response.current.reasoningLevel) ||
-					new Set(response.options.map((option) => option.modelOptionId))
-						.size !== response.options.length
-				)
-					return null;
-				return {
-					agentId: bound.agentId,
-					source: "custom-platform-adapter" as const,
-					available: true,
-					options: response.options.map((option) => ({
-						optionId: option.modelOptionId,
-						displayName: option.displayName,
-						modelId: option.modelId,
-						reasoningLevels: [...option.reasoningLevels],
-					})),
-					currentModelOptionId: response.current.modelOptionId,
-					currentReasoningLevel: response.current.reasoningLevel,
-				};
+			} catch {
+				return null;
+			} finally {
+				controller.abort();
+			}
+		},
+	};
+}
+
+/**
+ * API-side reader for the production API → Worker dispatch. The Worker owns
+ * the RuntimeHost Grant; the API only supplies the already-bound Session
+ * request and never manufactures a placeholder Grant.
+ */
+export function createRuntimeModelSelectionReaderFromDispatchV1(options: {
+	readonly resolveRequest: (input: {
+		readonly identity: IdentityContext;
+		readonly conversationId: string;
+		readonly signal: AbortSignal;
+	}) => Promise<RuntimeModelDirectoryDispatchRequestV1 | null>;
+	readonly transport: RuntimeModelDirectoryDispatchTransportV1;
+}): ConversationModelSelectionReaderV1 {
+	if (typeof options.resolveRequest !== "function" || !options.transport)
+		throw new TypeError("Runtime model-directory dispatch options are invalid");
+	return {
+		async read(identity, conversationId) {
+			const controller = new AbortController();
+			try {
+				const request = await options.resolveRequest({
+					identity,
+					conversationId,
+					signal: controller.signal,
+				});
+				if (!request) return null;
+				const bound =
+					RuntimeModelDirectoryDispatchRequestV1Schema.parse(request);
+				const response = RuntimeModelDirectoryResponseV1Schema.parse(
+					await options.transport.read(bound, controller.signal),
+				);
+				return projectRuntimeModelDirectory(
+					identity,
+					conversationId,
+					bound,
+					response,
+				);
 			} catch {
 				return null;
 			} finally {

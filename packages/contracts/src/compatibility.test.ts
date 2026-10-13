@@ -1914,6 +1914,8 @@ describe("contract compatibility command", () => {
 				name: "runtime-host.v1.openapi.json",
 				remove(value: OpenApiDocument) {
 					delete value.components.schemas.RuntimeModelDirectoryRequestV1;
+					delete value.components.schemas
+						.RuntimeModelDirectoryDispatchRequestV1;
 					delete value.components.schemas.RuntimeModelDirectoryResponseV1;
 					const schema = value.components.schemas.ExecutionGrantCommandV1;
 					if (!schema) throw new Error("ExecutionGrantCommandV1 missing");
