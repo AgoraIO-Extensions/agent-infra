@@ -25,6 +25,7 @@ export const operationalStages = [
 	"task_wait",
 	"task_dispatch",
 	"worker",
+	"workload",
 	"runtime",
 	"model",
 	"tool",
@@ -61,6 +62,9 @@ export type OperationalBrowserCategory =
 export const operationalCodes = [
 	"AUTHORIZATION_DENIED",
 	"TASK_UNAVAILABLE",
+	"WORKLOAD_UNAVAILABLE",
+	"WORKLOAD_RECONCILIATION_FAILED",
+	"WORKLOAD_HEALTH_CHECK_FAILED",
 	"RUNTIME_UNAVAILABLE",
 	"DEPENDENCY_UNAVAILABLE",
 	"PERSISTENCE_UNAVAILABLE",

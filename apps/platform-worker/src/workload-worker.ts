@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { createWorkloadReconciliationV1 } from "@agent-infra/platform-core";
+import type { startObservability } from "@agent-infra/observability";
+import {
+	createWorkloadReconciliationV1,
+	type WorkloadReconciliationStateV1,
+	type WorkloadReconciliationStorePortV1,
+} from "@agent-infra/platform-core";
 import { openPostgresWorkloadReconciliationStoreV1 } from "@agent-infra/platform-store";
 import { createPlatformFileReconciliationWorkerV1 } from "./file-worker.js";
 import {
@@ -21,11 +26,39 @@ export interface PlatformWorkloadWorkerOptionsV1
 	readonly probeFailureThreshold?: number;
 	/** Idle Session Sandbox reclaim threshold; defaults to 30 minutes. */
 	readonly idleSandboxReclaimAfterMs?: number | null;
+	/** Process-owned telemetry; collection failures never affect reconciliation. */
+	readonly observability?: WorkloadTelemetry;
 	readonly log?: (message: string) => void;
 }
 
 /** 连续推进多少步后休眠一次 `pollIntervalMs`。 */
 const maximumConsecutiveStepsV1 = 20;
+
+type WorkloadTelemetry = Pick<ReturnType<typeof startObservability>, "record">;
+
+function workloadFailureCode(
+	state: WorkloadReconciliationStateV1,
+):
+	| "WORKLOAD_RECONCILIATION_FAILED"
+	| "WORKLOAD_HEALTH_CHECK_FAILED"
+	| undefined {
+	if (state.failureCode === "health_check_failed")
+		return "WORKLOAD_HEALTH_CHECK_FAILED";
+	if (state.failureCode === "reconciliation_failed" || state.phase === "failed")
+		return "WORKLOAD_RECONCILIATION_FAILED";
+	return undefined;
+}
+
+function observeWorkload(
+	telemetry: WorkloadTelemetry | undefined,
+	event: Parameters<WorkloadTelemetry["record"]>[0],
+) {
+	try {
+		telemetry?.record(event);
+	} catch {
+		// Telemetry is observational and must not alter Workload reconciliation.
+	}
+}
 
 export function createPlatformWorkloadWorkerV1(
 	options: PlatformWorkloadWorkerOptionsV1,
@@ -78,8 +111,33 @@ export function createPlatformWorkloadWorkerV1(
 				...options.files,
 				databaseUrl: options.databaseUrl,
 			});
+		const observedStore: WorkloadReconciliationStorePortV1 = {
+			async runNext(workerId, step) {
+				const startedAt = performance.now();
+				let event: Parameters<WorkloadTelemetry["record"]>[0] | undefined;
+				const result = await store.runNext(workerId, async (input) => {
+					const next = await step(input);
+					const code = workloadFailureCode(next);
+					event = {
+						stage: "workload",
+						outcome: code ? "failed" : "completed",
+						...(code ? { code } : {}),
+						requestId: input.requestId,
+						traceId: input.traceId,
+						agentId: input.management.agentId,
+					};
+					return next;
+				});
+				if (event)
+					observeWorkload(options.observability, {
+						...event,
+						durationMs: performance.now() - startedAt,
+					});
+				return result;
+			},
+		};
 		reconciliation = createWorkloadReconciliationV1({
-			store,
+			store: observedStore,
 			runtime,
 			maximumAttempts: options.maximumAttempts,
 			probeFailureThreshold: options.probeFailureThreshold,
@@ -98,9 +156,18 @@ export function createPlatformWorkloadWorkerV1(
 	function enqueueTick(polling = false) {
 		const result = tickTail.then(async () => {
 			let outcome: "idle" | "advanced" | undefined;
+			const startedAt = performance.now();
 			try {
 				outcome = await reconciliation.tick(workerId);
 				return outcome;
+			} catch (error) {
+				observeWorkload(options.observability, {
+					stage: "workload",
+					outcome: "failed",
+					code: "WORKLOAD_UNAVAILABLE",
+					durationMs: performance.now() - startedAt,
+				});
+				throw error;
 			} finally {
 				// 连续推进期间暂缓文件清理，在本轮休眠前运行一次，不随步数放大
 				// 存储扫描（#2295）；手动 tick 与失败后照常清理。
@@ -177,6 +244,7 @@ export function createPlatformWorkloadWorkerV1(
 export async function startPlatformWorkloadWorkerFromDeploymentV1(
 	moduleSpecifier = process.env.PLATFORM_WORKER_DEPLOYMENT_MODULE,
 	signal?: AbortSignal,
+	observability?: WorkloadTelemetry,
 ) {
 	if (!moduleSpecifier)
 		throw new Error("PLATFORM_WORKER_DEPLOYMENT_MODULE is required");
@@ -197,7 +265,10 @@ export async function startPlatformWorkloadWorkerFromDeploymentV1(
 	} catch {
 		throw new Error("Platform Worker deployment dependencies are unavailable");
 	}
-	const worker = createPlatformWorkloadWorkerV1(options);
+	const worker = createPlatformWorkloadWorkerV1({
+		...options,
+		...(observability ? { observability } : {}),
+	});
 	if (assemblySignal.aborted) await worker.stop();
 	else worker.start();
 	return worker;
