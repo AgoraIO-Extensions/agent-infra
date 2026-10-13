@@ -2635,6 +2635,7 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/skills" &&
 				path !== "/api/v2/skills/installations" &&
 				path !== "/api/v2/skills/installations/{installationId}" &&
+				path !== "/api/v2/agents/{agentId}/versions/{agentVersion}/skills" &&
 				path !== "/api/v2/skills/versions" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}/review" &&
