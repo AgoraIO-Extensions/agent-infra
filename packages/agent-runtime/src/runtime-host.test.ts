@@ -146,7 +146,7 @@ describe("RuntimeHost durable Session", () => {
 		"foreign operation",
 		"foreign V1",
 	])(
-		"validates %s events before filtering V1 replay and stream",
+		"validates %s events before replay and stream delivery",
 		async (scenario) => {
 			const directory = await runtimeDirectory();
 			const driver = await FakeRuntimeDriver.open(
@@ -248,11 +248,23 @@ describe("RuntimeHost durable Session", () => {
 			if (scenario === "mixed") {
 				await expect(iterator.next()).resolves.toEqual({
 					done: false,
+					value: events[1],
+				});
+				await expect(iterator.next()).resolves.toEqual({
+					done: false,
 					value: events[2],
 				});
 				await expect(iterator.next()).resolves.toEqual({
 					done: true,
 					value: undefined,
+				});
+			} else if (scenario === "invalid V1" || scenario === "foreign V1") {
+				await expect(iterator.next()).resolves.toEqual({
+					done: false,
+					value: events[1],
+				});
+				await expect(iterator.next()).rejects.toMatchObject({
+					code: "RUNTIME_DRIVER_INVALID",
 				});
 			} else {
 				await expect(iterator.next()).rejects.toMatchObject({

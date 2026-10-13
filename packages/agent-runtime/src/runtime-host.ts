@@ -557,7 +557,6 @@ async function* validatedDriverEventStream(
 			if (!event.success || event.data.executionId !== executionId) {
 				driverInvalid();
 			}
-			if (event.data.type === "operation") continue;
 			yield event.data;
 		}
 	} finally {
@@ -2012,6 +2011,9 @@ export class RuntimeHost {
 		}
 		return {
 			schemaVersion: 1,
+			// The legacy replay response is still V1-only. Operation facts cross the
+			// process boundary through the streaming endpoint below, whose event
+			// contract preserves the versioned RuntimeEvent union.
 			events: events.data.filter((event) => event.type !== "operation"),
 		};
 	}
