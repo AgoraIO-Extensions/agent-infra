@@ -321,6 +321,25 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 		);
 	}
 
+	function grantUserUse(
+		agentId = "agent-a",
+		userId = "same-id",
+		key = "user-grant",
+	) {
+		return fetch(
+			`${origin}/api/v2/agents/${agentId}/api-use-grants/${userId}`,
+			{
+				method: "PUT",
+				headers: {
+					Cookie: "session=owner",
+					"Idempotency-Key": key,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ schemaVersion: 1, expectedRevision: 2 }),
+			},
+		);
+	}
+
 	async function seedUnknownStop(
 		stopTimedOut = true,
 		conversationId = "unknown-stop-conversation",
@@ -595,6 +614,32 @@ describe("Agent lifecycle with real PostgreSQL and controlled principals", () =>
 			where agent_id='agent-a' and principal_type='user'
 				and principal_id='same-id' and grant_type='use'`;
 		expect(grant?.revoked_at).not.toBeNull();
+	});
+
+	it("Owner grants and re-grants a typed user API-use grant idempotently", async () => {
+		await sql`insert into platform.agent_principal_grants
+			(agent_id, principal_type, principal_id, grant_type, authorization_revision, revoked_at)
+			values ('agent-a', 'user', 'same-id', 'use', 'user-use-old', now())`;
+		const first = await grantUserUse("agent-a", "same-id", "user-grant-1");
+		expect(first.status, await first.clone().text()).toBe(200);
+		expect(await first.json()).toMatchObject({
+			agentId: "agent-a",
+			userId: "same-id",
+			granted: true,
+			replayed: false,
+		});
+		const replay = await grantUserUse("agent-a", "same-id", "user-grant-1");
+		expect(replay.status).toBe(200);
+		expect(await replay.json()).toMatchObject({
+			granted: true,
+			replayed: true,
+		});
+		const [grant] = await sql`
+			select authorization_revision, revoked_at from platform.agent_principal_grants
+			where agent_id='agent-a' and principal_type='user'
+				and principal_id='same-id' and grant_type='use'`;
+		expect(grant?.authorization_revision).not.toBe("user-use-old");
+		expect(grant?.revoked_at).toBeNull();
 	});
 
 	it("user use revoke persists its running Task control and JSON stop payload atomically", async () => {

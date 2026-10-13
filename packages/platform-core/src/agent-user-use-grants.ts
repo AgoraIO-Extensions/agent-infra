@@ -28,6 +28,17 @@ export interface AgentUserUseRevokeResultV1 {
 	readonly replayed: boolean;
 }
 
+export type AgentUserUseGrantCommandV1 = AgentUserUseRevokeCommandV1;
+
+export interface AgentUserUseGrantResultV1 {
+	readonly schemaVersion: 1;
+	readonly agentId: string;
+	readonly userId: string;
+	readonly granted: true;
+	readonly authorizationRevision: string;
+	readonly replayed: boolean;
+}
+
 export function parseAgentUserUseRevokeCommandV1(
 	input: unknown,
 ): AgentUserUseRevokeCommandV1 {
@@ -62,6 +73,12 @@ export function parseAgentUserUseRevokeCommandV1(
 	} catch {
 		throw new PersonalApiCredentialErrorV1("invalid_input");
 	}
+}
+
+export function parseAgentUserUseGrantCommandV1(
+	input: unknown,
+): AgentUserUseGrantCommandV1 {
+	return parseAgentUserUseRevokeCommandV1(input);
 }
 
 export function requireAgentUserUseRevokeAuthorityV1(input: {
@@ -149,6 +166,65 @@ export function planAgentUserUseRevokeV1(input: {
 				userId: command.userId,
 				grantType: "use",
 				granted: false,
+				authorizationRevision: result.authorizationRevision,
+			},
+		},
+	};
+}
+
+export function planAgentUserUseGrantV1(input: {
+	readonly command: AgentUserUseGrantCommandV1;
+	readonly current: {
+		readonly granted: boolean;
+		readonly authorizationRevision: string;
+	} | null;
+	readonly replayed: boolean;
+	readonly nextRevision: string;
+	readonly occurredAt: Date;
+}) {
+	const command = parseAgentUserUseGrantCommandV1(input.command);
+	if (
+		!isAgentManagementText(input.nextRevision) ||
+		!Number.isFinite(input.occurredAt.getTime()) ||
+		(input.current &&
+			(typeof input.current.granted !== "boolean" ||
+				!isAgentManagementText(input.current.authorizationRevision)))
+	)
+		throw new PersonalApiCredentialErrorV1("unavailable");
+	const mutation =
+		input.replayed || input.current?.granted === true ? "none" : "grant";
+	const result: AgentUserUseGrantResultV1 = {
+		schemaVersion: 1,
+		agentId: command.agentId,
+		userId: command.userId,
+		granted: true,
+		authorizationRevision:
+			mutation === "none"
+				? (input.current?.authorizationRevision ?? input.nextRevision)
+				: input.nextRevision,
+		replayed: input.replayed,
+	};
+	return {
+		mutation,
+		result,
+		occurredAt: new Date(input.occurredAt),
+		audit: {
+			requestId: command.requestId,
+			traceId: command.traceId,
+			agentId: command.agentId,
+			actorType: "user" as const,
+			actorId: command.actorId,
+			action: input.replayed
+				? "api.agent.use.replayed"
+				: "api.agent.use.granted",
+			targetType: "agent" as const,
+			targetId: command.agentId,
+			outcome: "succeeded" as const,
+			occurredAt: new Date(input.occurredAt),
+			details: {
+				userId: command.userId,
+				grantType: "use",
+				granted: true,
 				authorizationRevision: result.authorizationRevision,
 			},
 		},

@@ -747,6 +747,7 @@ export function assemblePlatformApi(
 		},
 		agentUserUseGrants: {
 			identity: input.identity,
+			grant: (command) => managementTransaction.grantUserApiUse(command),
 			revoke: (command) => managementTransaction.revokeUserApiUse(command),
 			recordRefusal: (request) =>
 				managementTransaction.recordApiManagementRefusal(request),

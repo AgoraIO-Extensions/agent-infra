@@ -2738,6 +2738,32 @@ function isAgentUserUseRevokeOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #1084 admits only the additive Owner user-use grant method and its schemas.
+function isAgentUserUseGrantOpenApiAddition(previous, current) {
+	const path = "/api/v2/agents/{agentId}/api-use-grants/{userId}";
+	const schemas = ["AgentUserUseGrantRequestV1", "AgentUserUseGrantResponseV1"];
+	if (
+		previous.paths?.[path]?.put !== undefined ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: { [path]: { put: current.paths?.[path]?.put } },
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (
+		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
+		"f46a4f608dc9ab4c58aa71df467542f5bc02ead2d1c60061bfcb259fe7ede9bb"
+	)
+		return false;
+	const normalized = structuredClone(current);
+	delete normalized.paths[path].put;
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #481 admits only this exact machine/personal lifecycle contract and its audit variants.
 function isAgentApiManagementOpenApiAddition(previous, current) {
 	const actions = [
@@ -3556,6 +3582,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!sameValue(previous, current) &&
 			!isAgentApplicationUseGrantOpenApiAddition(previous, current) &&
 			!isAgentUserUseRevokeOpenApiAddition(previous, current) &&
+			!isAgentUserUseGrantOpenApiAddition(previous, current) &&
 			!isAgentApiManagementOpenApiAddition(previous, current) &&
 			!isAgentApiCreationOpenApiAddition(previous, current) &&
 			!isConnectionCapabilityOpenApiAddition(previous, current) &&
