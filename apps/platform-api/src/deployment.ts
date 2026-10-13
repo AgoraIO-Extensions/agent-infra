@@ -33,6 +33,7 @@ import type { ConversationModelSelectionReaderV1 } from "./http/conversation-rou
 import type { DirectoryRouteDependencies } from "./http/directory-routes.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import { createPersonalRelayKeyValidatorV1 } from "./relay-key-validation.js";
+import type { SkillHubProviderImportDeploymentV1 } from "./skill-hub-read-assembly.js";
 
 type CustomAgentGatewayRouteInput = NonNullable<
 	PlatformApiAssemblyInput["customAgentGateway"]
@@ -106,6 +107,7 @@ export interface ProductionPlatformApiInputV1
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	/** Optional deployment-owned authenticated native metadata reader. */
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
+	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 	/** Optional deployment-owned platform identity route for custom Agents. */
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
 	readonly resolveCustomAgentInteractionUrl?: Parameters<
@@ -119,6 +121,7 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 	readonly customAgentGateway?: ProductionCustomAgentGatewayInputV1;
 	readonly modelSelection?: ConversationModelSelectionReaderV1;
 	readonly nativeMetadata?: PlatformApiAssemblyInput["nativeMetadata"];
+	readonly providerImport?: SkillHubProviderImportDeploymentV1;
 }): ProductionPlatformApiInputV1 {
 	if (
 		input.customAgentGateway !== undefined &&
@@ -135,6 +138,11 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 		input.apiInput.nativeMetadata !== undefined
 	)
 		throw new Error("PLATFORM_NATIVE_METADATA_DUPLICATE");
+	if (
+		input.providerImport !== undefined &&
+		input.apiInput.providerImport !== undefined
+	)
+		throw new Error("PLATFORM_PROVIDER_IMPORT_DUPLICATE");
 	return {
 		...input.apiInput,
 		...(input.customAgentGateway !== undefined
@@ -145,6 +153,9 @@ export function mergeProductionPlatformApiDeploymentPortsV1(input: {
 			: {}),
 		...(input.nativeMetadata !== undefined
 			? { nativeMetadata: input.nativeMetadata }
+			: {}),
+		...(input.providerImport !== undefined
+			? { providerImport: input.providerImport }
 			: {}),
 	};
 }
@@ -382,6 +393,7 @@ export function createProductionPlatformApiAssemblyInputV1(
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
 		...(input.nativeMetadata ? { nativeMetadata: input.nativeMetadata } : {}),
+		...(input.providerImport ? { providerImport: input.providerImport } : {}),
 		...(input.customAgentGateway
 			? {
 					customAgentGateway: input.customAgentGateway,
