@@ -13,7 +13,7 @@ const DEFAULTS = Object.freeze({
 	healthPath: "/health",
 	requestTimeoutMs: 5_000,
 	sse: false,
-	sseTimeoutMs: 750,
+	sseTimeoutMs: 2_000,
 	tasks: 1,
 	users: 1,
 });
@@ -317,7 +317,17 @@ function summaryFor(records) {
 			p50: percentile(latencies, 0.5),
 			p95: percentile(latencies, 0.95),
 			p99: percentile(latencies, 0.99),
-			max: latencies.length ? Number(Math.max(...latencies).toFixed(2)) : null,
+			max:
+				latencies.length > 0
+					? Number(
+							latencies
+								.reduce(
+									(current, value) => Math.max(current, value),
+									-Number.MAX_VALUE,
+								)
+								.toFixed(2),
+						)
+					: null,
 		},
 		totalRequests: records.length,
 	};
@@ -378,7 +388,23 @@ async function requestJson({
 	}
 }
 
-async function requestSse({ fetchImpl, url, token, timeoutMs }) {
+const MAX_SSE_BYTES = 128 * 1024;
+
+function sseEventFromFrame(frame) {
+	const data = frame
+		.split(/\r?\n/)
+		.filter((line) => line.startsWith("data:"))
+		.map((line) => line.slice(5).trimStart())
+		.join("\n");
+	if (!data) return false;
+	try {
+		return JSON.parse(data)?.kind === "event";
+	} catch {
+		return false;
+	}
+}
+
+export async function requestSse({ fetchImpl, url, token, timeoutMs }) {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	const started = performance.now();
@@ -399,17 +425,44 @@ async function requestSse({ fetchImpl, url, token, timeoutMs }) {
 			};
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error("SSE response has no body");
+		const decoder = new TextDecoder();
+		let buffered = "";
+		let bytes = 0;
 		try {
-			await reader.read();
+			while (true) {
+				const chunk = await reader.read();
+				if (chunk.value) {
+					bytes += chunk.value.byteLength;
+					if (bytes > MAX_SSE_BYTES)
+						return {
+							durationMs: Number((performance.now() - started).toFixed(2)),
+							phase: "sse",
+							status: response.status,
+							outcome: "sse_limit",
+						};
+					buffered += decoder.decode(chunk.value, { stream: !chunk.done });
+				}
+				if (chunk.done) buffered += decoder.decode();
+				const frames = buffered.split(/\r?\n\r?\n/);
+				buffered = frames.pop() ?? "";
+				if (frames.some(sseEventFromFrame))
+					return {
+						durationMs: Number((performance.now() - started).toFixed(2)),
+						phase: "sse",
+						status: response.status,
+						outcome: "frame_read",
+					};
+				if (chunk.done)
+					return {
+						durationMs: Number((performance.now() - started).toFixed(2)),
+						phase: "sse",
+						status: response.status,
+						outcome: "stream_ended_without_event",
+					};
+			}
 		} finally {
 			await reader.cancel();
 		}
-		return {
-			durationMs: Number((performance.now() - started).toFixed(2)),
-			phase: "sse",
-			status: response.status,
-			outcome: "frame_read",
-		};
 	} catch (error) {
 		return {
 			durationMs: Number((performance.now() - started).toFixed(2)),
@@ -485,9 +538,23 @@ async function runConversation({
 			token,
 			url: `${options.baseUrl}${path}`,
 		});
-		if (readback.payload && typeof readback.payload.status === "string")
-			refs[refs.length - 1].status = readback.payload.status;
 		records.push(readback);
+		if (readback.outcome === "http_ok") {
+			const matchesSubmission =
+				readback.payload?.conversationId === conversationId &&
+				readback.payload?.executionId === submission.payload.executionId &&
+				typeof readback.payload.status === "string";
+			if (!matchesSubmission) {
+				records.push({
+					durationMs: 0,
+					phase: "readback_validation",
+					status: readback.status,
+					outcome: "identity_mismatch",
+				});
+			} else {
+				refs[refs.length - 1].status = readback.payload.status;
+			}
+		}
 		if (options.sse) {
 			records.push(
 				await requestSse({
@@ -626,15 +693,29 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 	const tokens = await loadTokens(options, env);
 	const evidence = await runCapacityLoad({ options, tokens });
 	await writeEvidence(evidence, options.output);
-	return evidence.result.summary.byOutcome["preflight:http_ok"] === 1 ? 0 : 1;
+	const allowedOutcomes = new Set([
+		"preflight:http_ok",
+		"submit:http_ok",
+		"readback:http_ok",
+		...(options.sse ? ["sse:frame_read"] : []),
+	]);
+	return Object.keys(evidence.result.summary.byOutcome).some(
+		(outcome) => !allowedOutcomes.has(outcome),
+	)
+		? 1
+		: 0;
 }
 
 const entrypoint = process.argv[1]
 	? new URL(process.argv[1], `file://${process.cwd()}/`).href
 	: "";
 if (import.meta.url === entrypoint) {
-	main().catch((error) => {
-		process.stderr.write(`${error.message}\n`);
-		process.exitCode = 2;
-	});
+	main()
+		.then((code) => {
+			process.exitCode = code;
+		})
+		.catch((error) => {
+			process.stderr.write(`${error.message}\n`);
+			process.exitCode = 2;
+		});
 }
