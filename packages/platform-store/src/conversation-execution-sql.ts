@@ -11,7 +11,8 @@ import type {
 	ConversationStopWritePlanV1,
 } from "@agent-infra/platform-core";
 import { parseTaskPrincipalV1 } from "@agent-infra/platform-core";
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+// 审批后的 Workload 与会话路径显式接收 V3（默认 Relay Key、无模型凭证）配置。
+import { decodeVersionedAgentConfigurationRecord as decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { awaitConversationExecutionQueryV1 } from "./conversation-execution-abort.js";
 import {
 	type AgentConfigurationRow,

@@ -55,9 +55,26 @@ function authority(channelId = "web"): ConversationExecutionAuthorityV1 {
 	};
 }
 
+// V3（默认 Relay Key）配置：标准模板，模型选项不含 credential。
+const conformanceModelConfiguration =
+	agentConfigurationConformanceRecordV1.modelConfiguration;
+if (!conformanceModelConfiguration) {
+	throw new Error("Expected model configuration fixture");
+}
+const agentConfigurationDefaultRelayKeyRecordV3 = {
+	...agentConfigurationConformanceRecordV1,
+	schemaVersion: 3,
+	modelConfiguration: {
+		...conformanceModelConfiguration,
+		options: conformanceModelConfiguration.options.map(
+			({ credential: _credential, ...option }) => option,
+		),
+	},
+};
+
 function harness(
 	options: {
-		source?: "standard" | "custom";
+		source?: "standard" | "standard-v3" | "custom";
 		application?: CurrentTaskApplicationV1;
 		revision?: string;
 		missingKey?: boolean;
@@ -98,7 +115,9 @@ function harness(
 					configuration:
 						options.source === "custom"
 							? agentConfigurationCustomImageRecordV1
-							: agentConfigurationConformanceRecordV1,
+							: options.source === "standard-v3"
+								? agentConfigurationDefaultRelayKeyRecordV3
+								: agentConfigurationConformanceRecordV1,
 				},
 			];
 		if (statement.startsWith("lock table")) return [];
@@ -194,6 +213,33 @@ describe("Execution Key selection on the caller's transaction", () => {
 			expect(
 				h.queries.some((q) => q.statement.includes("for share of s")),
 			).toBe(true);
+		},
+	);
+
+	it.each([
+		["web", "web", "personal", identity.userId],
+		["api", "platform-api", "agent-default", apiAuthority.agentId],
+	] as const)(
+		"selects the %s Key for a V3 default Relay Key Agent",
+		async (channel, executionSource, purpose, subjectId) => {
+			const h = harness({ source: "standard-v3" });
+			expect(
+				await selectKey(h.transaction, {
+					authority: authority(channel),
+					userDirectory: h.userDirectory,
+					...(channel === "api"
+						? { personalApiAdmissionAuthority: apiAuthority }
+						: {}),
+				}),
+			).toEqual({
+				executionSource,
+				relayKeyBinding: {
+					purpose,
+					subjectId,
+					keyId: "ciphertext-1",
+					keyVersion: 7,
+				},
+			});
 		},
 	);
 

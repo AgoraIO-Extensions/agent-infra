@@ -8,6 +8,7 @@ import {
 	createSessionSandboxBindingV1,
 } from "@agent-infra/platform-core";
 import {
+	type ConversationCommandConformanceHarnessV1,
 	type ConversationCommandConformanceSnapshotV1,
 	conversationCommandConformanceV1,
 	conversationConformanceAuthorityV1,
@@ -96,6 +97,8 @@ afterEach(async () => {
 		platform.conversations`;
 });
 
+let conformanceConfigurationVersion: 1 | 3 = 1;
+
 async function persistConformanceModelConfiguration(
 	modelConfiguration: ConversationModelConfigurationV1 | undefined,
 	executionAuthority = storeConformanceAuthority,
@@ -150,6 +153,19 @@ async function persistConformanceModelConfiguration(
 		channels: [],
 		channelRevision: "channels_fixture",
 	};
+	const persisted =
+		conformanceConfigurationVersion === 3 && record.modelConfiguration
+			? (({ actions: _actions, actionSetRevision: _revision, ...current }) => ({
+					...current,
+					schemaVersion: 3,
+					modelConfiguration: current.modelConfiguration && {
+						...current.modelConfiguration,
+						options: current.modelConfiguration.options.map(
+							({ credential: _credential, ...option }) => option,
+						),
+					},
+				}))(record)
+			: record;
 	await client`
 		insert into platform.agents
 			(id, current_configuration_revision, authorization_revision)
@@ -164,7 +180,7 @@ async function persistConformanceModelConfiguration(
 			(agent_id, revision, source_reference, created_at, configuration)
 		values
 			(${executionAuthority.agentId}, ${revision},
-			 ${`source_fixture_${revision}`}, now(), ${client.json(record)})
+			 ${`source_fixture_${revision}`}, now(), ${client.json(persisted)})
 		on conflict (agent_id, revision) do update
 		set configuration = excluded.configuration
 	`;
@@ -186,7 +202,7 @@ async function persistConformanceModelConfiguration(
 	`;
 }
 
-conversationCommandConformanceV1("PostgreSQL", async () => {
+const openPostgresConformanceHarness = async () => {
 	await persistConformanceModelConfiguration(conformanceModelConfiguration);
 	let effectiveAuthority: ConversationExecutionAuthorityV1 | undefined =
 		storeConformanceAuthority;
@@ -522,8 +538,22 @@ conversationCommandConformanceV1("PostgreSQL", async () => {
 				}
 			}
 		},
-	};
+	} satisfies ConversationCommandConformanceHarnessV1;
+};
+
+conversationCommandConformanceV1("PostgreSQL", async () => {
+	conformanceConfigurationVersion = 1;
+	return openPostgresConformanceHarness();
 });
+
+// 带 Agent 默认 Relay Key 的标准 Agent 持久化为 V3（无模型凭证），同一套会话规则必须成立。
+conversationCommandConformanceV1(
+	"PostgreSQL V3 default Relay Key",
+	async () => {
+		conformanceConfigurationVersion = 3;
+		return openPostgresConformanceHarness();
+	},
+);
 
 afterAll(async () => {
 	await client?.end();

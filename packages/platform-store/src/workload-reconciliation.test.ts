@@ -1827,6 +1827,121 @@ describe("PostgreSQL Workload steps", () => {
 		},
 	);
 
+	it.each([4, undefined] as const)(
+		"reconciles a V3 default Relay Key configuration without model Keys (runtimeModelVersion %s)",
+		async (runtimeModelVersion) => {
+			const api = fakeKubernetesApi();
+			const catalog = catalogFixture();
+			// V3（默认 Relay Key）配置的模型选项不含 credential 字段。
+			const configuration = {
+				...structuredClone(agentConfigurationConformanceRecordV1),
+				schemaVersion: 3,
+				agentId: "agent-a",
+				revision: 1,
+				secrets: [],
+				environment: [],
+				source: {
+					kind: "standard",
+					templateId: "template-a",
+					imageDigest: `sha256:${"a".repeat(64)}`,
+					admissionRevision: "admission-a",
+					allowedEnvironmentKeys: [],
+					allowedSecretKeys: [],
+					platformManagedKeys: [],
+					connectionEnabled: false,
+				},
+				modelConfiguration: {
+					catalogRevision: "catalog-a",
+					options: [
+						{
+							optionId: "option-a",
+							endpointId: "endpoint-a",
+							modelId: "model-a",
+							reasoningLevels: ["medium"],
+						},
+					],
+					defaultOptionId: "option-a",
+					defaultReasoningLevel: "medium",
+				},
+			};
+			await sql`update platform.agent_configuration_revisions set configuration = ${sql.json(configuration as unknown as postgres.JSONValue)} where agent_id = 'agent-a' and revision = 1`;
+			const decrypt = vi.fn();
+			const validate = vi.fn();
+			const store = openPostgresWorkloadReconciliationStoreV1({
+				...database,
+				...(runtimeModelVersion ? { runtimeModelVersion } : {}),
+				retryDelayMs: 0,
+				monitorDelayMs: 0,
+			});
+			try {
+				for (let step = 0; step < 16; step++)
+					await createWorkloadReconciliationV1({
+						store,
+						runtime: createWorkloadRuntimeV1({
+							...(runtimeModelVersion ? { runtimeModelVersion } : {}),
+							workerId: "worker-a",
+							client: api.client,
+							policy: workloadTestPolicy,
+							registry: workloadRegistryFixture({
+								schemaVersion: 1,
+								interactionMode: "platform-adapter",
+								protocol: "acp",
+								service: { port: 8080 },
+								health: { path: "/healthz" },
+								capabilities: {},
+							}),
+							admissionPolicyRef: "policy-a",
+							registrySubjectRef: "subject-a",
+							modelCatalog: createDeploymentModelCatalogAdapterV1({
+								load: async () => catalog,
+							}),
+							templateModelBindings: [
+								{
+									templateId: "template-a",
+									imageDigest: `sha256:${"a".repeat(64)}`,
+									driver: "codex" as const,
+									protocol: "openai-responses-v1" as const,
+								},
+							],
+							modelAccess: { validate },
+							decryptor: { decrypt },
+							fetch: (async () => new Response("ok")) as typeof fetch,
+							probeRuntime: async () => ({
+								core: "passed" as const,
+								capabilities: {},
+							}),
+						}),
+					}).tick("worker-a");
+				const [row] =
+					await sql`select state from platform.workload_reconciliations where agent_id = 'agent-a'`;
+				if (runtimeModelVersion === 4) {
+					expect(row?.state).toMatchObject({
+						phase: "ready",
+						rollback: false,
+						verified: {
+							configuration: { schemaVersion: 3, revision: 1 },
+							modelProjection: { schemaVersion: 4 },
+						},
+					});
+				} else {
+					// 未启用 V4 keyless 投影的 Worker 必须在预检拒绝 V3，不退回 V1 凭证注入。
+					expect(row?.state).toMatchObject({ verified: null });
+					expect(["rejected", "failed"]).toContain(row?.state.phase);
+				}
+				expect(decrypt).not.toHaveBeenCalled();
+				expect(validate).not.toHaveBeenCalled();
+				expect(
+					await sql`select secret_id from platform.secret_records`,
+				).toHaveLength(0);
+				expect(JSON.stringify([...api.resources.values()])).not.toContain(
+					"AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_",
+				);
+			} finally {
+				await store.close();
+			}
+		},
+	);
+
 	async function verifyPersistedModelRecovery(
 		rollout: "legacy" | "trusted-v4-restart",
 	) {
