@@ -38,7 +38,32 @@ async function respond(response: ServerResponse, value: Response) {
 		for (;;) {
 			const next = await reader.read();
 			if (next.done) break;
-			response.write(Buffer.from(next.value));
+			if (response.destroyed) throw new Error("Response connection closed");
+			if (!response.write(Buffer.from(next.value))) {
+				await new Promise<void>((resolve, reject) => {
+					const cleanup = () => {
+						response.off("drain", onDrain);
+						response.off("close", onClose);
+						response.off("error", onError);
+					};
+					const onDrain = () => {
+						cleanup();
+						resolve();
+					};
+					const onClose = () => {
+						cleanup();
+						reject(new Error("Response connection closed"));
+					};
+					const onError = (error: Error) => {
+						cleanup();
+						reject(error);
+					};
+					response.once("drain", onDrain);
+					response.once("close", onClose);
+					response.once("error", onError);
+					if (response.destroyed) onClose();
+				});
+			}
 		}
 		response.end();
 	} finally {
