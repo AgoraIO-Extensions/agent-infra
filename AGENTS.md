@@ -90,6 +90,8 @@ Skills 使用 `needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-hum
 
 ## Documentation Rules
 
+- Rehoboam v17 adds only update_pipeline_help_example WRITE for administrator-confirmed database dialogue edits. Stable IDs/numbers and full history live in Rehoboam; examples and shared knowledge are read dynamically, not baked into Codex. Keep v16 bytes/old grants; new capability needs explicit authorization. Initialization is an explicit Rehoboam admin action, never automatic. Unknown outcomes stay uncertain and reuse the same key/read-back.
+
 - Rehoboam v16 帮助 Actions 检索基础说明和共享数据库经验；申请人当前对话明确要求加入帮助后直接发布，无候选审核/企微审批/逐条部署。Rehoboam拥有作者身份、幂等、revision CAS和撤销恢复历史；经验为applicant_reported参考，不改变业务执行规则。新增能力需授权，AI建议或工具文档不是发布授权。维护Action同步HLD与docs/connection/rehoboam-help.md，v15及已发布旧实现不变。
 
 - 使用简洁、明确的中文，保留必要的英文技术名词。
