@@ -87,8 +87,11 @@ export class FakeNativeCapabilityAdmissionStoreV1
 					}
 			  >
 		>,
+		isCurrent: (plan: NativeCapabilityInvocationPlanV1) => boolean,
 	): Promise<NativeCapabilityAdmissionDecisionV1> {
-		return this.#serialize(() => this.#admitNativeCapability(request, decide));
+		return this.#serialize(() =>
+			this.#admitNativeCapability(request, decide, isCurrent),
+		);
 	}
 
 	#serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -118,6 +121,7 @@ export class FakeNativeCapabilityAdmissionStoreV1
 					}
 			  >
 		>,
+		isCurrent: (plan: NativeCapabilityInvocationPlanV1) => boolean,
 	): Promise<NativeCapabilityAdmissionDecisionV1> {
 		const authority = request.authority;
 		const command = request.command;
@@ -158,6 +162,7 @@ export class FakeNativeCapabilityAdmissionStoreV1
 		if (this.#authorizationRevision !== authority.authorizationRevision)
 			return { outcome: "denied", reason: "authorization_lost" };
 		if (this.#activeExecution) return { outcome: "busy" };
+		if (!isCurrent(decision)) return { outcome: "stale" };
 		this.#validatePlan(decision, request);
 		const plan = freeze(structuredClone(decision));
 		this.#idempotency.set(idempotencyKey, {

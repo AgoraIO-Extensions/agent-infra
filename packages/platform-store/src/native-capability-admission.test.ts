@@ -230,6 +230,30 @@ describe("native capability admission Store seam", () => {
 		expect(harness.store.plans).toHaveLength(0);
 	});
 
+	it("rechecks metadata currency at the Store commit boundary", async () => {
+		let checks = 0;
+		const fake = new FakeNativeCapabilityMetadataRevalidationV1({ projection });
+		const metadata = {
+			async revalidate(
+				input: Parameters<
+					NativeCapabilityMetadataRevalidationPortV1["revalidate"]
+				>[0],
+			) {
+				return fake.revalidate(input);
+			},
+			isCurrent: () => {
+				checks += 1;
+				return checks === 1;
+			},
+		};
+		const harness = createHarness({}, metadata);
+		expect(await harness.useCase.admit(request)).toEqual({
+			outcome: "stale",
+		});
+		expect(checks).toBe(2);
+		expect(harness.store.plans).toHaveLength(0);
+	});
+
 	it("rejects authorization loss before replay or metadata reads", async () => {
 		const harness = createHarness();
 		harness.store.setAuthorizationRevision("auth-revoked");

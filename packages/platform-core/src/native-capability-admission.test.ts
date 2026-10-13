@@ -66,7 +66,7 @@ function transaction(
 	state: NativeCapabilityAdmissionStateV1,
 ): NativeCapabilityAdmissionTransactionPortV1 {
 	return {
-		async admitNativeCapability(_request, decide) {
+		async admitNativeCapability(_request, decide, _isCurrent) {
 			const decision = await decide(state);
 			if ("outcome" in decision) return decision;
 			return {

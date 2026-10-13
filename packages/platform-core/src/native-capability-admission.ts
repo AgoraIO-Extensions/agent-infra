@@ -206,6 +206,7 @@ export interface NativeCapabilityAdmissionTransactionPortV1 {
 					}
 			  >
 		>,
+		isCurrent: (plan: NativeCapabilityInvocationPlanV1) => boolean,
 	): Promise<NativeCapabilityAdmissionDecisionV1>;
 }
 
@@ -665,6 +666,12 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 						};
 						return freeze(plan);
 					},
+					(plan) =>
+						dependencies.metadata.isCurrent({
+							request,
+							capability: plan.capability,
+							sessionGeneration: plan.sessionGeneration,
+						}),
 				);
 			} catch {
 				return { outcome: "unavailable", reason: "metadata_unavailable" };
