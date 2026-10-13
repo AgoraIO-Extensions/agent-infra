@@ -1,6 +1,6 @@
 import type { BrowserCapabilityAvailableV1 } from "@agent-infra/contracts/runtime";
 import type { BrowserContext, BrowserType, Page } from "playwright-core";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createBrowserContextManagerV1 } from "./browser-context.js";
 import { createBrowserSessionControllerV1 } from "./browser-session.js";
 
@@ -96,7 +96,7 @@ function fakeBrowser() {
 			return [page];
 		},
 		newPage: async () => page,
-		route: async () => undefined,
+		route: vi.fn(async () => undefined),
 		close: async () => undefined,
 		on: (_event: string, listener: () => void) => {
 			listeners.add(listener);
@@ -190,6 +190,51 @@ it("creates fresh page references after a Context crash rather than using the ol
 	);
 	expect(await session.observe(newPage)).toMatchObject({ title: "Example" });
 	await session.close();
+});
+
+it("does not enter Browser action I/O when cancellation arrives during Session startup", async () => {
+	const fake = fakeBrowser();
+	let releaseAcquire: (() => void) | undefined;
+	const manager = {
+		acquire: vi.fn(
+			() =>
+				new Promise<BrowserContext>((resolve) => {
+					releaseAcquire = () => resolve(fake.context);
+				}),
+		),
+		resume: vi.fn(),
+		close: vi.fn(async () => undefined),
+		snapshot: vi.fn(() => ({ status: "starting" as const })),
+	};
+	const session = createBrowserSessionControllerV1({
+		manager,
+		binding,
+		capability,
+	});
+	const controller = new AbortController();
+	const action = session.act(
+		{
+			kind: "click",
+			page: { pageId: "page-1", pageRevision: 1 },
+			target: {
+				elementId: "element-1",
+				pageId: "page-1",
+				pageRevision: 1,
+				role: "button",
+				name: "Continue",
+			},
+			actionId: "action-startup-cancel",
+			operationRef: "operation-startup-cancel",
+			attemptRef: "attempt-startup-cancel",
+			idempotencyKey: "action-startup-cancel",
+		},
+		controller.signal,
+	);
+	await vi.waitFor(() => expect(manager.acquire).toHaveBeenCalled());
+	controller.abort();
+	releaseAcquire?.();
+	await expect(action).rejects.toMatchObject({ name: "AbortError" });
+	expect(fake.context.route).not.toHaveBeenCalled();
 });
 
 it("recovers a page through the Session facade with the immutable workload binding", async () => {

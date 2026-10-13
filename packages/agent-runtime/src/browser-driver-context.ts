@@ -188,34 +188,37 @@ export function createBrowserSessionDriverContextV1(input: {
 					role: "",
 					name: "",
 				};
-				const record = await input.session.act({
-					kind: args.kind as BrowserActionKindV1,
-					page,
-					target,
-					...(typeof args.value === "string" ? { value: args.value } : {}),
-					...(typeof args.key === "string" ? { key: args.key } : {}),
-					actionId: request.actionId,
-					operationRef: request.operationRef,
-					attemptRef: request.attemptRef,
-					idempotencyKey: request.actionId,
-					executionBinding: {
-						agentId: request.binding.agentId,
-						conversationId: request.binding.conversationId,
-						executionId: request.binding.executionId,
-						capabilityVersion: request.binding.capabilityVersion,
-						pageRevision: request.binding.pageRevision,
-						sessionGeneration: request.binding.sessionGeneration,
-						resourceFence: request.binding.resourceFence,
-						workloadRevision: request.binding.workloadRevision,
-						imageDigest: request.binding.imageDigest,
+				const record = await input.session.act(
+					{
+						kind: args.kind as BrowserActionKindV1,
+						page,
+						target,
+						...(typeof args.value === "string" ? { value: args.value } : {}),
+						...(typeof args.key === "string" ? { key: args.key } : {}),
+						actionId: request.actionId,
+						operationRef: request.operationRef,
+						attemptRef: request.attemptRef,
+						idempotencyKey: request.actionId,
+						executionBinding: {
+							agentId: request.binding.agentId,
+							conversationId: request.binding.conversationId,
+							executionId: request.binding.executionId,
+							capabilityVersion: request.binding.capabilityVersion,
+							pageRevision: request.binding.pageRevision,
+							sessionGeneration: request.binding.sessionGeneration,
+							resourceFence: request.binding.resourceFence,
+							workloadRevision: request.binding.workloadRevision,
+							imageDigest: request.binding.imageDigest,
+						},
+						authorization: {
+							subjectId: input.subjectId,
+							agentId: request.binding.agentId,
+							conversationId: request.binding.conversationId,
+							executionId: request.binding.executionId,
+						},
 					},
-					authorization: {
-						subjectId: input.subjectId,
-						agentId: request.binding.agentId,
-						conversationId: request.binding.conversationId,
-						executionId: request.binding.executionId,
-					},
-				});
+					signal,
+				);
 				signal.throwIfAborted();
 				return success(request, actionRecordSummary(record));
 			} catch (error) {

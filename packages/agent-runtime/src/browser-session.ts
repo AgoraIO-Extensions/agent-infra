@@ -23,7 +23,10 @@ export type BrowserSessionControllerV1 = Readonly<{
 	recoverPage(
 		recovery: BrowserPageRecoveryInputV1,
 	): Promise<BrowserPageReferenceV1>;
-	act(request: BrowserActionRequestV1): Promise<BrowserActionRecordV1>;
+	act(
+		request: BrowserActionRequestV1,
+		signal?: AbortSignal,
+	): Promise<BrowserActionRecordV1>;
 	cancelAction(actionId: string): boolean;
 	close(): Promise<void>;
 	snapshot(): BrowserContextManagerSnapshotV1;
@@ -37,6 +40,7 @@ export function createBrowserSessionControllerV1(input: {
 }): BrowserSessionControllerV1 {
 	let observe: ReturnType<typeof createBrowserObserveControllerV1> | undefined;
 	let activeContext: BrowserContext | undefined;
+	const pendingCancellationIds = new Set<string>();
 
 	async function start(): Promise<BrowserContextManagerSnapshotV1> {
 		const context = await input.manager.acquire(
@@ -59,6 +63,12 @@ export function createBrowserSessionControllerV1(input: {
 		}
 		return input.manager.snapshot();
 	}
+	function cancelAction(actionId: string): boolean {
+		if (!actionId) return false;
+		if (observe?.cancelAction(actionId)) return true;
+		pendingCancellationIds.add(actionId);
+		return true;
+	}
 
 	return {
 		start,
@@ -80,19 +90,30 @@ export function createBrowserSessionControllerV1(input: {
 			if (!controller) throw new Error("BROWSER_SESSION_UNAVAILABLE");
 			return controller.recoverPage(recovery);
 		},
-		async act(request) {
-			await start();
-			const controller = observe;
-			if (!controller) throw new Error("BROWSER_SESSION_UNAVAILABLE");
-			return controller.executeAction(request);
+		async act(request, signal) {
+			const cancel = () => {
+				if (request.actionId) cancelAction(request.actionId);
+			};
+			signal?.addEventListener("abort", cancel, { once: true });
+			try {
+				signal?.throwIfAborted();
+				await start();
+				const controller = observe;
+				if (!controller) throw new Error("BROWSER_SESSION_UNAVAILABLE");
+				if (request.actionId && pendingCancellationIds.delete(request.actionId))
+					controller.cancelAction(request.actionId);
+				signal?.throwIfAborted();
+				return controller.executeAction(request);
+			} finally {
+				signal?.removeEventListener("abort", cancel);
+			}
 		},
-		cancelAction(actionId) {
-			return observe?.cancelAction(actionId) ?? false;
-		},
+		cancelAction,
 		async close() {
 			await input.manager.close(input.binding);
 			observe = undefined;
 			activeContext = undefined;
+			pendingCancellationIds.clear();
 		},
 		snapshot: input.manager.snapshot,
 	};

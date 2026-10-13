@@ -161,6 +161,7 @@ describe("createBrowserSessionDriverContextV1", () => {
 		expect(interacted).toMatchObject({ phase: "completed", success: true });
 		expect(browser.act).toHaveBeenCalledWith(
 			expect.objectContaining({ kind: "click", actionId: "action-1" }),
+			expect.any(AbortSignal),
 		);
 	});
 
