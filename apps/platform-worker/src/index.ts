@@ -21,6 +21,7 @@ export * from "./conversation-worker.js";
 export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
 export * from "./native-metadata-deployment.js";
+export * from "./native-metadata-deployment-assembly.js";
 export * from "./runtime-grant-signer.js";
 export * from "./runtime-model-directory-client.js";
 export * from "./runtime-model-directory-service.js";
