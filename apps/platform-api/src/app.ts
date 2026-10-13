@@ -83,9 +83,15 @@ import {
 	type SessionAuditRoutesDependencies,
 } from "./http/session-audit-routes.js";
 import {
+<<<<<<< HEAD
 	registerSkillHubAgentBindingRoutesV1,
 	type SkillHubAgentBindingRoutesDependenciesV1,
 } from "./http/skill-hub-agent-binding-routes.js";
+=======
+	registerSkillHubImportRoutesV1,
+	type SkillHubImportRoutesDependenciesV1,
+} from "./http/skill-hub-import-routes.js";
+>>>>>>> 61bcdfef2 (style(platform-api): order Skill Hub route imports)
 import {
 	registerSkillHubInstallationRoutesV1,
 	type SkillHubInstallationRoutesDependenciesV1,
@@ -98,10 +104,6 @@ import {
 	registerSkillHubPublicationRoutesV1,
 	type SkillHubPublicationRoutesDependenciesV1,
 } from "./http/skill-hub-publication-routes.js";
-import {
-	registerSkillHubImportRoutesV1,
-	type SkillHubImportRoutesDependenciesV1,
-} from "./http/skill-hub-import-routes.js";
 import {
 	registerSkillHubReadRoutesV1,
 	type SkillHubReadRoutesDependenciesV1,
