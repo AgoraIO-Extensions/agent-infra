@@ -858,7 +858,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					undefined,
 					true,
 				);
-				return;
+				return reopened;
 			} catch (error) {
 				lastError = error;
 			}
@@ -1133,11 +1133,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		});
 	}
 	private async submit(
-		file: DurableJsonFile<Session>,
+		initialFile: DurableJsonFile<Session>,
 		command: Submit,
 		fileBridge?: import("./runtime-file-bridge.js").RuntimeFileBridgePortV1,
 		browser?: import("./driver.js").RuntimeBrowserExecutionContextV1,
 	) {
+		let file = initialFile;
 		const before = file.read();
 		const ref = before.binding.ref;
 		if (before.cancelled || this.cancelled(ref)) unavailable();
@@ -1375,7 +1376,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							// DurableJsonFile deliberately poisons a failed instance. Reopen
 							// the committed bytes and retry so a transient persistence fault
 							// cannot leave a cancelled protected Turn durably running.
-							await this.persistUnknownAfterFailure(
+							file = await this.persistUnknownAfterFailure(
 								before.binding,
 								command.executionId,
 								error,

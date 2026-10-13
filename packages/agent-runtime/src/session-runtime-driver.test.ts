@@ -587,6 +587,13 @@ it("keeps a protected cancellation as an unknown Turn hold after a persistence r
 		await enteredPrompt;
 		failNextPersist = true;
 		await sessionOptions?.markUnknown?.();
+		await sessionOptions?.recordOperationFact?.({
+			kind: "tool",
+			operationRef: "11111111-1111-4111-8111-111111111111",
+			attemptRef: "22222222-2222-4222-8222-222222222222",
+			phase: "intent",
+			toolId: "filesystem.read",
+		});
 		release();
 		await pending;
 		const state = JSON.parse(
@@ -596,8 +603,15 @@ it("keeps a protected cancellation as an unknown Turn hold after a persistence r
 		if (!ref) throw new Error("missing session ref");
 		const persisted = JSON.parse(
 			await readFile(join(path, ref, "state.json"), "utf8"),
-		) as { turns: { status: string; events: { type: string }[] }[] };
+		) as {
+			turns: {
+				status: string;
+				events: { type: string }[];
+				operationFacts?: { phase: string }[];
+			}[];
+		};
 		expect(persisted.turns[0]?.status).toBe("unknown");
+		expect(persisted.turns[0]?.operationFacts?.at(-1)?.phase).toBe("intent");
 		expect(
 			persisted.turns[0]?.events.some((event) => event.type === "completed"),
 		).toBe(false);
