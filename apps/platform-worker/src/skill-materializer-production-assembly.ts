@@ -47,10 +47,16 @@ async function readObject(
 	const reader = stream.getReader();
 	const chunks: Uint8Array[] = [];
 	let size = 0;
+	const onAbort = () => {
+		void reader.cancel(signal.reason).catch(() => undefined);
+	};
+	signal.addEventListener("abort", onAbort, { once: true });
 	try {
+		signal.throwIfAborted();
 		for (;;) {
 			signal.throwIfAborted();
 			const next = await reader.read();
+			signal.throwIfAborted();
 			if (next.done) break;
 			size += next.value.byteLength;
 			if (size > object.sizeBytes)
@@ -58,6 +64,7 @@ async function readObject(
 			chunks.push(next.value);
 		}
 	} finally {
+		signal.removeEventListener("abort", onAbort);
 		await reader.cancel().catch(() => undefined);
 		reader.releaseLock();
 	}
