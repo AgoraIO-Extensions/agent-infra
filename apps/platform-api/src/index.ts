@@ -279,6 +279,10 @@ export {
 	type ProductionPlatformApiInputV1,
 } from "./deployment.js";
 export {
+	createNativeMetadataCurrentAppV1,
+	type NativeMetadataCurrentRouteDependenciesV1,
+} from "./http/native-metadata-current-routes.js";
+export {
 	type NativeMetadataRoutesDependenciesV1,
 	type RuntimeNativeMetadataPublicReaderV1,
 	registerNativeMetadataRoutes,
