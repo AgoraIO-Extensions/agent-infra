@@ -775,6 +775,9 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 							{ released: boolean }[]
 						>`select pg_advisory_unlock(hashtextextended(${key}, 0)) as released`;
 						if (!released?.released) return "stale" as const;
+						// 会话锁已释放，finally 不再重复释放；否则 PostgreSQL 每次写回
+						// 都会告警 "you don't own a lock"（#2287）。
+						lockedKey = null;
 					} catch {
 						return "stale" as const;
 					}

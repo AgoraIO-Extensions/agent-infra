@@ -2495,6 +2495,33 @@ describe("PostgreSQL Workload steps", () => {
 			await shortLeaseStore.close();
 		}
 	});
+	it("releases the step lock once per write-back without a PostgreSQL notice (#2287)", async () => {
+		// postgres.js 未配置 onnotice 时用 console.log 输出服务端 notice。
+		const notices = vi.spyOn(console, "log").mockImplementation(() => {});
+		try {
+			expect(
+				await first.runNext("worker-a", async (input) =>
+					preflightState(input, 0),
+				),
+			).toBe("advanced");
+			expect(
+				notices.mock.calls.filter((call) =>
+					JSON.stringify(call).includes("you don't own a lock"),
+				),
+			).toEqual([]);
+		} finally {
+			notices.mockRestore();
+		}
+		// 锁确已释放：另一个 Worker 可以立刻执行同一 Agent 的下一步。
+		expect(
+			await second.runNext("worker-b", async (input) =>
+				preflightState(input, 0),
+			),
+		).toBe("advanced");
+		expect(
+			await sql`select count(*)::int as count from pg_locks where locktype = 'advisory'`,
+		).toEqual([{ count: 0 }]);
+	});
 	it("runs a step without an open transaction or Agent row lock", async () => {
 		const held = heldStep();
 		const tick = first.runNext("worker-a", held.step);
