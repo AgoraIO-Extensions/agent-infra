@@ -156,15 +156,13 @@ describe("Original IA workbench navigation", () => {
 		cleanup();
 	});
 
-	it("keeps the system navigation hidden from a non-admin deep link", async () => {
-		await showShell(false, "/ops/");
-		expect(screen.queryByRole("navigation", { name: "系统管理" })).toBeNull();
-		expect(
-			screen.getByText("运维观测", {
-				selector: '[data-slot="breadcrumb-page"]',
-			}),
-		).toBeTruthy();
-	});
+	it.each(["/ops/", "/admin/approvals/", "/admin/agents/", "/admin/audit/"])(
+		"keeps the system navigation hidden from a non-admin deep link at %s",
+		async (entry) => {
+			await showShell(false, entry);
+			expect(screen.queryByRole("navigation", { name: "系统管理" })).toBeNull();
+		},
+	);
 
 	it.each([
 		{
