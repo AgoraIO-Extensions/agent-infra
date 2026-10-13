@@ -36,7 +36,7 @@ function assertBinding(input: SessionBrowserExecutionBindingV1): void {
 		input.pageRevision < 1 ||
 		!Number.isSafeInteger(input.workloadRevision) ||
 		input.workloadRevision < 1 ||
-		!/^[^@\s]+@sha256:[0-9a-f]{64}$/u.test(input.imageDigest)
+		!/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(input.imageDigest)
 	)
 		throw new Error("RUNTIME_BROWSER_SESSION_BINDING_INVALID");
 }
