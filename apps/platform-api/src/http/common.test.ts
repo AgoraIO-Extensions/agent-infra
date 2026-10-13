@@ -174,6 +174,17 @@ describe("HTTP common boundary", () => {
 			retryable: false,
 			traceId,
 		});
+		expect(
+			new HttpProtocolError("CODEX_MODEL_PROFILE_UNSUPPORTED", traceId),
+		).toMatchObject({
+			status: 409,
+			body: {
+				code: "MODEL_SELECTION_INVALID",
+				message:
+					"The selected model or reasoning level is not supported by this Codex template.",
+				retryable: false,
+			},
+		});
 
 		expect(new HttpProtocolError("BUSY", traceId).body).toMatchObject({
 			code: "AGENT_BUSY",

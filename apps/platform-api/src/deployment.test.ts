@@ -264,6 +264,9 @@ function deploymentInput(
 				templateId: "codex",
 				imageDigest,
 				modelBinding,
+				codexModelProfiles: [
+					{ model: "model-a", reasoningLevels: ["medium", "high"] },
+				],
 				configurationRevision: "configuration-a",
 			},
 			validation: readiness.revision,
@@ -330,6 +333,9 @@ function deploymentInput(
 				platformManagedKeys: ["PORT"],
 				connectionEnabled: false,
 				modelBinding,
+				codexModelProfiles: [
+					{ model: "model-a", reasoningLevels: ["medium", "high"] },
+				],
 				configurationRevision: "configuration-a",
 				loadValidation: async () => validation,
 			},

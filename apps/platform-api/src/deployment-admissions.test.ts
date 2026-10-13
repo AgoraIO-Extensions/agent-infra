@@ -3,6 +3,7 @@ import { standardTemplateReadinessV1 } from "@agent-infra/model-catalog";
 import type {
 	AgentConfigurationModelInputV1,
 	AgentConfigurationModelV1,
+	AgentConfigurationSourceV1,
 } from "@agent-infra/platform-core";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -155,6 +156,10 @@ function fixture(
 				platformManagedKeys: ["PORT"],
 				connectionEnabled: false,
 				modelBinding,
+				codexModelProfiles: [
+					{ model: "model-a", reasoningLevels: ["medium", "high"] },
+					{ model: "model-b", reasoningLevels: ["medium", "high"] },
+				],
 				configurationRevision: "config-a",
 				loadValidation: async () => validation,
 			},
@@ -188,6 +193,10 @@ function fixture(
 					templateId: "codex",
 					imageDigest,
 					modelBinding,
+					codexModelProfiles: [
+						{ model: "model-a", reasoningLevels: ["medium", "high"] },
+						{ model: "model-b", reasoningLevels: ["medium", "high"] },
+					],
 					configurationRevision: "config-a",
 				},
 				validation: readiness.revision,
@@ -636,6 +645,106 @@ describe("production deployment admissions", () => {
 				requested: modelInput(),
 			}),
 		).toMatchObject({ status: "rejected" });
+	});
+
+	it("rejects a Codex model outside the fixed profile before endpoint admission", async () => {
+		const f = fixture();
+		const first = modelInput().options[0];
+		if (!first) throw new Error("model fixture missing");
+		const source = {
+			kind: "standard" as const,
+			templateId: "codex",
+			imageDigest: f.imageDigest,
+		} as AgentConfigurationSourceV1;
+		const result = await createDeploymentAdmissionsV1(
+			f.input,
+		).modelAdmission.admitModels({
+			...request,
+			source,
+			current: null,
+			requested: {
+				...modelInput(),
+				options: [{ ...first, modelId: "gpt-6.1-sol" }],
+			},
+		});
+		expect(result).toMatchObject({
+			status: "rejected",
+			reason: "codex_model_profile_unsupported",
+		});
+	});
+
+	it("admits a Codex model and reasoning level covered by the fixed profile", async () => {
+		const f = fixture();
+		const result = await createDeploymentAdmissionsV1(
+			f.input,
+		).keylessModelAdmission.admitModels({
+			...request,
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				imageDigest: f.imageDigest,
+			} as AgentConfigurationSourceV1,
+			requested: {
+				...modelInput(),
+				options: modelInput().options.map(
+					({ replaceCredential: _replaceCredential, ...option }) => option,
+				),
+			},
+		});
+		expect(result).toMatchObject({
+			catalogRevision: "catalog-a",
+			options: [{ modelId: "model-a", reasoningLevels: ["high", "medium"] }],
+		});
+	});
+
+	it("fails closed when a Codex source has no exact trusted template binding", async () => {
+		const f = fixture();
+		const result = await createDeploymentAdmissionsV1(
+			f.input,
+		).keylessModelAdmission.admitModels({
+			...request,
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				imageDigest: `sha256:${"b".repeat(64)}`,
+			} as AgentConfigurationSourceV1,
+			requested: {
+				...modelInput(),
+				options: modelInput().options.map(
+					({ replaceCredential: _replaceCredential, ...option }) => option,
+				),
+			},
+		});
+		expect(result).toBeNull();
+	});
+
+	it("returns an explicit profile rejection for the keyless admission path", async () => {
+		const f = fixture();
+		const first = modelInput().options[0];
+		if (!first) throw new Error("model fixture missing");
+		const result = await createDeploymentAdmissionsV1(
+			f.input,
+		).keylessModelAdmission.admitModels({
+			...request,
+			source: {
+				kind: "standard",
+				templateId: "codex",
+				imageDigest: f.imageDigest,
+			} as AgentConfigurationSourceV1,
+			requested: {
+				...modelInput(),
+				options: [
+					{
+						...first,
+						modelId: "gpt-6.1-sol",
+					},
+				],
+			},
+		});
+		expect(result).toEqual({
+			status: "rejected",
+			reason: "codex_model_profile_unsupported",
+		});
 	});
 
 	it("reports unavailable catalog loading without leaking source errors", async () => {

@@ -70,6 +70,8 @@ export function mapCoreError(
 		return new HttpProtocolError(codes[error.code], traceId);
 	}
 	if (error instanceof ApplicationFoundationError) {
+		if (error.code === "model_profile_unsupported")
+			return new HttpProtocolError("CODEX_MODEL_PROFILE_UNSUPPORTED", traceId);
 		if (error.code === "invalid_command")
 			return new HttpProtocolError("INVALID_REQUEST", traceId);
 		if (error.code === "not_authorized")
@@ -99,6 +101,8 @@ export function mapCoreError(
 		return new HttpProtocolError("DEPENDENCY_UNAVAILABLE", traceId);
 	}
 	if (error instanceof AgentConfigurationError) {
+		if (error.code === "model_profile_unsupported")
+			return new HttpProtocolError("CODEX_MODEL_PROFILE_UNSUPPORTED", traceId);
 		if (error.code === "invalid_command")
 			return new HttpProtocolError("INVALID_REQUEST", traceId);
 		if (error.code === "not_authorized")

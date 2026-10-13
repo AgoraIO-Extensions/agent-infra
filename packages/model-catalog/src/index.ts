@@ -31,6 +31,11 @@ export {
 } from "./agent-default-admission.js";
 export { createAgentDefaultRelayKeyModelCandidatesV1 } from "./agent-default-candidates.js";
 export * from "./catalog.js";
+export {
+	assertCodexModelProfilesV1,
+	type CodexModelProfileV1,
+	validateCodexModelProfilesV1,
+} from "./codex-model-profile.js";
 export { createMessagesModelAccessValidatorV1 } from "./messages-access.js";
 export {
 	projectRuntimeModelConfigurationV1,

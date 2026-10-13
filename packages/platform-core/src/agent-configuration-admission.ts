@@ -147,8 +147,14 @@ export function parseAuthorizationDecision(
 function snapshotAdmissionDecision(
 	input: unknown,
 	admittedKeys: readonly string[],
+	optionalKeys: readonly string[] = [],
 ):
-	| { status: "rejected"; agentId: string; requestId: string }
+	| {
+			status: "rejected";
+			agentId: string;
+			requestId: string;
+			reason?: "codex_model_profile_unsupported";
+	  }
 	| {
 			status: "admitted";
 			agentId: string;
@@ -157,7 +163,10 @@ function snapshotAdmissionDecision(
 	  } {
 	return dependencyValue(() => {
 		const common = ["schemaVersion", "status", "agentId", "requestId"];
-		const values = exactObject(input, common, admittedKeys);
+		const values = exactObject(input, common, [
+			...admittedKeys,
+			...optionalKeys,
+		]);
 		if (
 			values.schemaVersion !== 1 ||
 			!isText(values.agentId, idMaxBytes) ||
@@ -166,11 +175,22 @@ function snapshotAdmissionDecision(
 			invalidCommand();
 		}
 		if (values.status === "rejected") {
-			requireAgentManagementExactKeys(values, common);
+			requireAgentManagementExactKeys(values, [
+				...common,
+				...(Object.hasOwn(values, "reason") ? ["reason"] : []),
+			]);
+			if (
+				Object.hasOwn(values, "reason") &&
+				values.reason !== "codex_model_profile_unsupported"
+			)
+				invalidCommand();
 			return {
 				status: "rejected",
 				agentId: values.agentId,
 				requestId: values.requestId,
+				...(Object.hasOwn(values, "reason")
+					? { reason: values.reason as "codex_model_profile_unsupported" }
+					: {}),
 			};
 		}
 		if (values.status !== "admitted") invalidCommand();
@@ -202,7 +222,11 @@ export function parseImageDecision(
 export function parseModelDecision(
 	input: unknown,
 ): Awaited<ReturnType<AgentConfigurationModelAdmissionPortV1["admitModels"]>> {
-	const decision = snapshotAdmissionDecision(input, ["configuration"]);
+	const decision = snapshotAdmissionDecision(
+		input,
+		["configuration"],
+		["reason"],
+	);
 	return decision.status === "rejected"
 		? { schemaVersion: 1, ...decision }
 		: dependencyValue(() => ({
