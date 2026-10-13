@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, symlink, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
 // Exercise native peers that remain alive after their Host closes stdin.
@@ -34,6 +34,76 @@ const messages = entries
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const finish = async (stopReason) => {
 	if (!isStreaming) return;
+	if (mode === "result-file" || mode === "result-file-edit") {
+		const path = `${process.cwd()}/result.txt`;
+		const toolName = mode === "result-file-edit" ? "edit" : "write";
+		await writeFile(path, "synthetic Pi result\n");
+		send({
+			type: "tool_execution_start",
+			toolCallId: "result-file-call",
+			toolName,
+			args:
+				toolName === "edit"
+					? {
+							path: "result.txt",
+							edits: [{ oldText: "old", newText: "synthetic Pi result" }],
+						}
+					: { path: "result.txt", content: "synthetic Pi result\n" },
+		});
+		send({
+			type: "tool_execution_end",
+			toolCallId: "result-file-call",
+			toolName,
+			result: { content: [{ type: "text", text: "ok" }] },
+			isError: false,
+		});
+	}
+	if (mode === "result-file-negative") {
+		await writeFile(`${process.cwd()}/result.txt`, "synthetic Pi result\n");
+		await writeFile(`${process.cwd()}/outside-result.txt`, "outside\n");
+		await writeFile(
+			`${process.cwd()}/invalid-result.txt`,
+			new Uint8Array([0xc3, 0x28]),
+		);
+		await symlink(
+			`${process.cwd()}/outside-result.txt`,
+			`${process.cwd()}/result-link.txt`,
+		);
+		for (const [toolCallId, toolName, path, isError] of [
+			["failed-write", "write", "result.txt", true],
+			["read-tool", "read", "result.txt", false],
+			["outside-write", "write", "../outside-result.txt", false],
+			["symlink-write", "write", "result-link.txt", false],
+			["invalid-write", "write", "invalid-result.txt", false],
+		]) {
+			send({
+				type: "tool_execution_start",
+				toolCallId,
+				toolName,
+				args: { path, content: "synthetic Pi result\n" },
+			});
+			send({
+				type: "tool_execution_end",
+				toolCallId,
+				toolName,
+				result: { content: [{ type: "text", text: "ok" }] },
+				isError,
+			});
+		}
+		send({
+			type: "tool_execution_end",
+			toolCallId: "failed-write",
+			toolName: "write",
+			result: { content: [{ type: "text", text: "duplicate" }] },
+			isError: false,
+		});
+		send({
+			type: "tool_execution_start",
+			toolCallId: "late-write",
+			toolName: "write",
+			args: { path: "result.txt", content: "late" },
+		});
+	}
 	send({
 		type: "message_update",
 		assistantMessageEvent: { type: "text_delta", delta: "synthetic result" },
@@ -64,6 +134,14 @@ const finish = async (stopReason) => {
 	isStreaming = false;
 	if (mode === "system-prefix-exit") process.exit(0);
 	send({ type: "agent_end" });
+	if (mode === "result-file-negative")
+		send({
+			type: "tool_execution_end",
+			toolCallId: "late-write",
+			toolName: "write",
+			result: { content: [{ type: "text", text: "late" }] },
+			isError: false,
+		});
 	// Queued duplicates and unknown vendor frames must not create a second terminal.
 	send({ type: "agent_end" });
 	send({ type: "unrecognized_vendor_event", data: "sensitive-vendor-canary" });
