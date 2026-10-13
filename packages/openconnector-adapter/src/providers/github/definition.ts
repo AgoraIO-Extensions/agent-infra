@@ -1,4 +1,4 @@
 export {
 	githubConnectionCatalog,
 	githubConnectionCatalog as providerDefinition,
-} from "./versions/index.ts";
+} from "./compatibility.ts";

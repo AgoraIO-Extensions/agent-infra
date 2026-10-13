@@ -318,730 +318,740 @@
 		},
 		{
 			"provider": "github",
-			"providerReleaseId": "github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v9",
-			"executorDigest": "sha256:9deba65c280ec0328d94698154702401e69ce4bfdf60883403f321d2edee5cfa",
+			"providerReleaseId": "github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v10",
+			"executorDigest": "sha256:4f7b8c138a271f489102a8b979e007277a05db59487441c6c4490d4452d9aabd",
 			"sourceCommit": "0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674",
 			"credentialUpgradeBehavior": "REAUTHORIZE",
 			"authDigest": "sha256:75325f1e41ab4020e3675b7c682788c58708ee54922f46ac7e9eb08c17d41aad",
 			"deploymentDigest": "sha256:bdfc5fbf48889a07f2a269ec29114ead048f289f776146aa53f92338dce466aa",
 			"actions": [
 				{
-					"id": "github.add_issue_assignees@v9",
+					"id": "github.add_issue_assignees@v10",
 					"name": "github.add_issue_assignees",
 					"authorizationDigest": "sha256:75a33b2314eccdc96228aeaf3c7cb031360f214cc3dda9b5ec16d10b5b7b8885"
 				},
 				{
-					"id": "github.add_issue_labels@v9",
+					"id": "github.add_issue_labels@v10",
 					"name": "github.add_issue_labels",
 					"authorizationDigest": "sha256:bdd0ac08d80ddd68bd8a2796956aec818c32cae4090aee81df85a545f96abc05"
 				},
 				{
-					"id": "github.add_repository_collaborator@v9",
+					"id": "github.add_repository_collaborator@v10",
 					"name": "github.add_repository_collaborator",
 					"authorizationDigest": "sha256:d10e73262a2c2d5f65c3fe11613ba57570a88ab2471118f7ee42dea32908ce69"
 				},
 				{
-					"id": "github.cancel_workflow_run@v9",
+					"id": "github.cancel_workflow_run@v10",
 					"name": "github.cancel_workflow_run",
 					"authorizationDigest": "sha256:e3d8ffcdc8d92631508dd78ad762ec480a7b1faf5dcacc619948909c3b89bf45"
 				},
 				{
-					"id": "github.check_pull_request_merged@v9",
+					"id": "github.check_pull_request_merged@v10",
 					"name": "github.check_pull_request_merged",
 					"authorizationDigest": "sha256:05da55167e8a402d7cd7c97cc53d14424b306ad1d4716ba4aaf283e91466298b"
 				},
 				{
-					"id": "github.check_repository_starred@v9",
+					"id": "github.check_repository_starred@v10",
 					"name": "github.check_repository_starred",
 					"authorizationDigest": "sha256:9283b46d1d37f9b09c15a2e69e89871688c391e39f17356c4cdd0bc76b51c245"
 				},
 				{
-					"id": "github.clear_issue_labels@v9",
+					"id": "github.clear_issue_labels@v10",
 					"name": "github.clear_issue_labels",
 					"authorizationDigest": "sha256:136d0f238c0fd06ef7bc09f91b14649ac03ae5bd0d1290a0fa53ea453cba48dd"
 				},
 				{
-					"id": "github.compare_commits@v9",
+					"id": "github.compare_commits@v10",
 					"name": "github.compare_commits",
 					"authorizationDigest": "sha256:65d175f4f1cf4054bcba9583479e00cf4c0f4e794f1e04b7d06dc870ec12942e"
 				},
 				{
-					"id": "github.create_commit_comment@v9",
+					"id": "github.create_commit_comment@v10",
 					"name": "github.create_commit_comment",
 					"authorizationDigest": "sha256:42c218ca86b7351a88b196b06b173344e622c2f1b2437b6df66c994325a76af5"
 				},
 				{
-					"id": "github.create_commit_status@v9",
+					"id": "github.create_commit_status@v10",
 					"name": "github.create_commit_status",
 					"authorizationDigest": "sha256:eb62e063b355ee151710f82bd953239c098f7673e61fac2a35caf3f70d15f050"
 				},
 				{
-					"id": "github.create_issue@v9",
+					"id": "github.create_issue@v10",
 					"name": "github.create_issue",
 					"authorizationDigest": "sha256:129d24c761f7e1f473abc14bd7e3643477d5ade8b9d96004e2dc737e4c29d372"
 				},
 				{
-					"id": "github.create_issue_comment@v9",
+					"id": "github.create_issue_comment@v10",
 					"name": "github.create_issue_comment",
 					"authorizationDigest": "sha256:ac7314e0fd1777d87fd1aaba83df781e94445f7bb4b1157488a8c22fa058b4d0"
 				},
 				{
-					"id": "github.create_issue_comment_reaction@v9",
+					"id": "github.create_issue_comment_reaction@v10",
 					"name": "github.create_issue_comment_reaction",
 					"authorizationDigest": "sha256:7505bf7a33650ad051f841a4124c212dcae376f88c943f86be3bed3a030b66e2"
 				},
 				{
-					"id": "github.create_issue_reaction@v9",
+					"id": "github.create_issue_reaction@v10",
 					"name": "github.create_issue_reaction",
 					"authorizationDigest": "sha256:141fc649431a471f51a1da17b75ea2b4ac0701f3196994fc7517ee0fdfaba8c9"
 				},
 				{
-					"id": "github.create_label@v9",
+					"id": "github.create_label@v10",
 					"name": "github.create_label",
 					"authorizationDigest": "sha256:fe2126646521e7aeae1a2941c9881bbd3eeb1f7eabf9c3dbfeccb589df3659e3"
 				},
 				{
-					"id": "github.create_milestone@v9",
+					"id": "github.create_milestone@v10",
 					"name": "github.create_milestone",
 					"authorizationDigest": "sha256:ab9427ae08e24856709346f282735ab9e2ead57b863d943c6ea7367b325b89e2"
 				},
 				{
-					"id": "github.create_or_update_file@v9",
+					"id": "github.create_or_update_file@v10",
 					"name": "github.create_or_update_file",
 					"authorizationDigest": "sha256:c674d6ad3d4086b1d9359a45b39e341da59c141ca4c4acdc7c38db589d7eacad"
 				},
 				{
-					"id": "github.create_pull_request@v9",
+					"id": "github.create_pull_request@v10",
 					"name": "github.create_pull_request",
 					"authorizationDigest": "sha256:115cd330d8c6a752ccb9967e030c25cbaa08c0f87a8292d6cc796cf3221970c9"
 				},
 				{
-					"id": "github.create_pull_request_review@v9",
+					"id": "github.create_pull_request_review@v10",
 					"name": "github.create_pull_request_review",
 					"authorizationDigest": "sha256:5343b1b977c3adef49d21cdb39fdeb2365ad9c3d438fd6e4a3df2ee0465e6038"
 				},
 				{
-					"id": "github.create_pull_request_review_comment@v9",
+					"id": "github.create_pull_request_review_comment@v10",
 					"name": "github.create_pull_request_review_comment",
 					"authorizationDigest": "sha256:b17fd4d069a815d91e7c721434bd17e830ec038f060015c98ad445905dcc35e5"
 				},
 				{
-					"id": "github.create_ref@v9",
+					"id": "github.create_ref@v10",
 					"name": "github.create_ref",
 					"authorizationDigest": "sha256:cb3d3af6ffea777de0845970e3ded002911e7bafa4bacdfe073fd7199d358fc3"
 				},
 				{
-					"id": "github.create_release@v9",
+					"id": "github.create_release@v10",
 					"name": "github.create_release",
 					"authorizationDigest": "sha256:7ae7d99a8b915c9b946597e45db66b49734c859bb0e1c1bd36076caf30cf3831"
 				},
 				{
-					"id": "github.create_repository@v9",
+					"id": "github.create_repository@v10",
 					"name": "github.create_repository",
 					"authorizationDigest": "sha256:33b8a5a5316d017e4507068f297a7e6d88089408f3cbc113ff00aca43cc3d7d0"
 				},
 				{
-					"id": "github.delete_file@v9",
+					"id": "github.delete_file@v10",
 					"name": "github.delete_file",
 					"authorizationDigest": "sha256:e4cd6dd4bcd1f29c76663cde248c5e4e6c02bf0fff3d50fd380e8102dfac1f3a"
 				},
 				{
-					"id": "github.delete_issue_comment@v9",
+					"id": "github.delete_issue_comment@v10",
 					"name": "github.delete_issue_comment",
 					"authorizationDigest": "sha256:d4e9a519d0bea4089da17903b61f4886ee4c4033069e349c44104b8510e920b8"
 				},
 				{
-					"id": "github.delete_label@v9",
+					"id": "github.delete_label@v10",
 					"name": "github.delete_label",
 					"authorizationDigest": "sha256:a191379cbb87474c691d0105271ce479650986ec06a7494bc570c26a8b4162e7"
 				},
 				{
-					"id": "github.delete_milestone@v9",
+					"id": "github.delete_milestone@v10",
 					"name": "github.delete_milestone",
 					"authorizationDigest": "sha256:d26eba3be94b9f9a8cc7e740c9438d2609547c2a82a7b5f23cbbcef175326067"
 				},
 				{
-					"id": "github.delete_pending_pull_request_review@v9",
+					"id": "github.delete_pending_pull_request_review@v10",
 					"name": "github.delete_pending_pull_request_review",
 					"authorizationDigest": "sha256:7aeb56c18908a43244e58791e50d88d48ff286b2e9b93b2d13d7a544539cfa65"
 				},
 				{
-					"id": "github.delete_pull_request_review_comment@v9",
+					"id": "github.delete_pull_request_review_comment@v10",
 					"name": "github.delete_pull_request_review_comment",
 					"authorizationDigest": "sha256:c1e0cf504c3cc644cc3e38c035c47966dd126b499a8b92b0f2cb97e0a1129f35"
 				},
 				{
-					"id": "github.delete_ref@v9",
+					"id": "github.delete_ref@v10",
 					"name": "github.delete_ref",
 					"authorizationDigest": "sha256:f92f204f2f1e9d3aa9209ce8cf1e2f8fcfe6c576c4b4671cb69e9ee729836aca"
 				},
 				{
-					"id": "github.delete_release@v9",
+					"id": "github.delete_release@v10",
 					"name": "github.delete_release",
 					"authorizationDigest": "sha256:a5e3658af93ae9af3c4a9962312e1fc4ba85890dd3fba1aa12135174fef4bdb3"
 				},
 				{
-					"id": "github.delete_release_asset@v9",
+					"id": "github.delete_release_asset@v10",
 					"name": "github.delete_release_asset",
 					"authorizationDigest": "sha256:a6e11db53aa3234435e2d6a010d5e693ce3edbd2449c8ba00fd1d8de5e6c4c00"
 				},
 				{
-					"id": "github.delete_repository@v9",
+					"id": "github.delete_repository@v10",
 					"name": "github.delete_repository",
 					"authorizationDigest": "sha256:1350cd50fb448b7f9663851d65ecc1b8c862bb7826417babe60db2956cd4f865"
 				},
 				{
-					"id": "github.disable_workflow@v9",
+					"id": "github.disable_workflow@v10",
 					"name": "github.disable_workflow",
 					"authorizationDigest": "sha256:166d93c67f3286758e1099fe0371e696c132c770aa8b6f4734fd7a43f4072d69"
 				},
 				{
-					"id": "github.dismiss_pull_request_review@v9",
+					"id": "github.dismiss_pull_request_review@v10",
 					"name": "github.dismiss_pull_request_review",
 					"authorizationDigest": "sha256:88791defd641ade4fd46925b04d9071f9bacfec925c21aaad07d569f5e7ee09c"
 				},
 				{
-					"id": "github.dispatch_workflow@v9",
+					"id": "github.dispatch_workflow@v10",
 					"name": "github.dispatch_workflow",
 					"authorizationDigest": "sha256:4d10712b5686744d32dd1c14a318e5b62e5bd751ad4ab183f16b34deba9f74b6"
 				},
 				{
-					"id": "github.enable_workflow@v9",
+					"id": "github.enable_workflow@v10",
 					"name": "github.enable_workflow",
 					"authorizationDigest": "sha256:88df94ec398050fe8f2d9b8f015b4ce867643c910787b68a1fe0e32f5469ea1c"
 				},
 				{
-					"id": "github.fork_repository@v9",
+					"id": "github.fork_repository@v10",
 					"name": "github.fork_repository",
 					"authorizationDigest": "sha256:dcfe11cddd310778fbf22ea959c15088ba94fd2ee142c7c5a2f448b645604cd2"
 				},
 				{
-					"id": "github.generate_release_notes@v9",
+					"id": "github.generate_release_notes@v10",
 					"name": "github.generate_release_notes",
 					"authorizationDigest": "sha256:0982ee0dcd7253f896f4d313edcef754b940e5a9e6785a8cca6fe362db65eac4"
 				},
 				{
-					"id": "github.get_branch@v9",
+					"id": "github.get_branch@v10",
 					"name": "github.get_branch",
 					"authorizationDigest": "sha256:c2de97ed55908a3247357aede5e4d639834cfb3ae03032b74783d480f321bfc2"
 				},
 				{
-					"id": "github.get_commit@v9",
+					"id": "github.get_commit@v10",
 					"name": "github.get_commit",
 					"authorizationDigest": "sha256:759ad9ebf14085659b46b63b3b1f008996b1a4e6c7ceb5a59ab386286f300804"
 				},
 				{
-					"id": "github.get_commit_statuses@v9",
+					"id": "github.get_commit_statuses@v10",
 					"name": "github.get_commit_statuses",
 					"authorizationDigest": "sha256:d496e275be5f551554f0b46f42315d1f27fb2701dc655d8908c31291ca021bff"
 				},
 				{
-					"id": "github.get_current_user@v9",
+					"id": "github.get_current_user@v10",
 					"name": "github.get_current_user",
 					"authorizationDigest": "sha256:a859f517dc28e662ee1ab287027d8cfc1e6330d265cd632d33f5b9afa1f4d31e"
 				},
 				{
-					"id": "github.get_file_contents@v9",
+					"id": "github.get_file_contents@v10",
 					"name": "github.get_file_contents",
 					"authorizationDigest": "sha256:124034702886651135461059379c4f5ca8fc5737a8d0b552cad17e4893afa3e2"
 				},
 				{
-					"id": "github.get_issue@v9",
+					"id": "github.get_issue@v10",
 					"name": "github.get_issue",
 					"authorizationDigest": "sha256:04f2ca219685713b07f2079a2424faa6f9eba89a2b0f2ddcc9f19f749ff4fa71"
 				},
 				{
-					"id": "github.get_issue_comment@v9",
+					"id": "github.get_issue_comment@v10",
 					"name": "github.get_issue_comment",
 					"authorizationDigest": "sha256:3a007774a0dbbc9b5aa02db8afc3ab182d5e355d7f13f8ac1b4a0defa786f429"
 				},
 				{
-					"id": "github.get_label@v9",
+					"id": "github.get_label@v10",
 					"name": "github.get_label",
 					"authorizationDigest": "sha256:988f2a87d79bcc300b5ccec3f9302140c12f85f586211d35099efde41939eb4d"
 				},
 				{
-					"id": "github.get_latest_release@v9",
+					"id": "github.get_latest_release@v10",
 					"name": "github.get_latest_release",
 					"authorizationDigest": "sha256:ab29836e09eea3899af0cc577a044bc0b5dadc524fc6bfdf76e9e92f89009f47"
 				},
 				{
-					"id": "github.get_milestone@v9",
+					"id": "github.get_milestone@v10",
 					"name": "github.get_milestone",
 					"authorizationDigest": "sha256:a2206b464a8a3c3e7f7a30c116f18b560a1f3a9ade5896c603b7319956910368"
 				},
 				{
-					"id": "github.get_pull_request@v9",
+					"id": "github.get_pull_request@v10",
 					"name": "github.get_pull_request",
 					"authorizationDigest": "sha256:c7ab6c38ab953c989c0cd04be01ed7b111e5306ea169e66a4fc2b8e19292e736"
 				},
 				{
-					"id": "github.get_pull_request_review@v9",
+					"id": "github.get_pull_request_review@v10",
 					"name": "github.get_pull_request_review",
 					"authorizationDigest": "sha256:8e3c05e876630e0bcfc77496e19ee5ea1dfe40a4eba43e921119daa041fdec07"
 				},
 				{
-					"id": "github.get_ref@v9",
+					"id": "github.get_ref@v10",
 					"name": "github.get_ref",
 					"authorizationDigest": "sha256:280d47dbfabed9a41fe20bc3769827fe8f19b61ea8520a77fac39b060930128b"
 				},
 				{
-					"id": "github.get_release@v9",
+					"id": "github.get_release@v10",
 					"name": "github.get_release",
 					"authorizationDigest": "sha256:489e72c53f44047194900b0d529eefc766c2d4b877ccae2f5124d4d6412af304"
 				},
 				{
-					"id": "github.get_release_asset@v9",
+					"id": "github.get_release_asset@v10",
 					"name": "github.get_release_asset",
 					"authorizationDigest": "sha256:5bf0d6805576cd0073c25e5390382827c543c35877652b0e70d3c56a029049d7"
 				},
 				{
-					"id": "github.get_release_by_tag@v9",
+					"id": "github.get_release_by_tag@v10",
 					"name": "github.get_release_by_tag",
 					"authorizationDigest": "sha256:e38ff1e02078068594646d56371a075b0c4eb76ce6cb856e4ce30f3e47ca35b1"
 				},
 				{
-					"id": "github.get_repository@v9",
+					"id": "github.get_repository@v10",
 					"name": "github.get_repository",
 					"authorizationDigest": "sha256:8d10b7b7e7c1a94d5347df8fa13c560069a1f4ccf351bf6f0ac15be9df7593b0"
 				},
 				{
-					"id": "github.get_repository_permission_for_user@v9",
+					"id": "github.get_repository_permission_for_user@v10",
 					"name": "github.get_repository_permission_for_user",
 					"authorizationDigest": "sha256:0701453bcbbaca5a2b5be93d3c621780fa7bb3637613fcd67b2067c0164b138d"
 				},
 				{
-					"id": "github.get_repository_readme@v9",
+					"id": "github.get_repository_readme@v10",
 					"name": "github.get_repository_readme",
 					"authorizationDigest": "sha256:af5f5e44ffef85d9629ad011e5e0c7718b90b2be1c9798da159790cf5eeff5c7"
 				},
 				{
-					"id": "github.get_user@v9",
+					"id": "github.get_user@v10",
 					"name": "github.get_user",
 					"authorizationDigest": "sha256:e94fdb0b49c11ab6884102fc2625c44045ee5764af965f45ec018cbe6ba8116c"
 				},
 				{
-					"id": "github.get_workflow@v9",
+					"id": "github.get_workflow@v10",
 					"name": "github.get_workflow",
 					"authorizationDigest": "sha256:83167ef793494f426150e2f7130aedb90c1e6d08ccecc4043276fb5b6b586639"
 				},
 				{
-					"id": "github.get_workflow_run@v9",
+					"id": "github.get_workflow_run@v10",
 					"name": "github.get_workflow_run",
 					"authorizationDigest": "sha256:a3e9861a007ff43e22474ea5861dc9609d5c4f6ab6863620efaac35a5ba08954"
 				},
 				{
-					"id": "github.list_assignees@v9",
+					"id": "github.list_assignees@v10",
 					"name": "github.list_assignees",
 					"authorizationDigest": "sha256:30ede5bd9b861571f75eb58527adc4896741d9ebe3166a83f2f84e177d95d0d7"
 				},
 				{
-					"id": "github.list_authenticated_user_events@v9",
+					"id": "github.list_authenticated_user_events@v10",
 					"name": "github.list_authenticated_user_events",
 					"authorizationDigest": "sha256:5b3c6a3bf1238dde7b2046f5f97d6d313fe5654940d1c208d3b7cd0bb9b2616a"
 				},
 				{
-					"id": "github.list_authenticated_user_received_events@v9",
+					"id": "github.list_authenticated_user_received_events@v10",
 					"name": "github.list_authenticated_user_received_events",
 					"authorizationDigest": "sha256:2672db5970edf29fe6ecd03986619c5a3799426597fde86a08bcec8e2ee11cc6"
 				},
 				{
-					"id": "github.list_branches@v9",
+					"id": "github.list_branches@v10",
 					"name": "github.list_branches",
 					"authorizationDigest": "sha256:669564fd500cd50e82d9e2a99deebdac984ab590ead1a1ee0691871bc4fe043f"
 				},
 				{
-					"id": "github.list_check_runs_for_ref@v9",
+					"id": "github.list_check_runs_for_ref@v10",
 					"name": "github.list_check_runs_for_ref",
 					"authorizationDigest": "sha256:85aa66e9c6d7305d52302097a68057d33ffdba5630cf527a84f9cac0e0a85d69"
 				},
 				{
-					"id": "github.list_commit_comments@v9",
+					"id": "github.list_commit_comments@v10",
 					"name": "github.list_commit_comments",
 					"authorizationDigest": "sha256:b665b2eb452cc1f883cbda8a5fb6bd35a756ec5592dd371217991866d202f964"
 				},
 				{
-					"id": "github.list_commits@v9",
+					"id": "github.list_commits@v10",
 					"name": "github.list_commits",
 					"authorizationDigest": "sha256:7623a3e4f16341f4cbafc49e36532ec55bc30a439500ae24a9d8e5b224f7649d"
 				},
 				{
-					"id": "github.list_directory_contents@v9",
+					"id": "github.list_directory_contents@v10",
 					"name": "github.list_directory_contents",
 					"authorizationDigest": "sha256:513c743bf7fa067dd9d121ea22176bad0b6daad68a3bc13e05d7b95b1a1583c2"
 				},
 				{
-					"id": "github.list_issue_comments@v9",
+					"id": "github.list_issue_comments@v10",
 					"name": "github.list_issue_comments",
 					"authorizationDigest": "sha256:12f797601016ae0f4ae4ccdbfa6abc5da4a31b8223eb1c213c7d1d817cef483f"
 				},
 				{
-					"id": "github.list_issue_events@v9",
+					"id": "github.list_issue_events@v10",
 					"name": "github.list_issue_events",
 					"authorizationDigest": "sha256:b32bc25d64696a5c336450666f3be0be9fe59d2223c0709b8bc9c497e807d8a7"
 				},
 				{
-					"id": "github.list_issue_labels@v9",
+					"id": "github.list_issue_labels@v10",
 					"name": "github.list_issue_labels",
 					"authorizationDigest": "sha256:7629dab5ac471736d6e9a2028953328d9dfc3a102f25b2ef231bf06cd4683bde"
 				},
 				{
-					"id": "github.list_issue_timeline_events@v9",
+					"id": "github.list_issue_timeline_events@v10",
 					"name": "github.list_issue_timeline_events",
 					"authorizationDigest": "sha256:8e9037692887ad7a2812aef723dbdeb3bf5261882dd08766dc20226c4228982f"
 				},
 				{
-					"id": "github.list_matching_refs@v9",
+					"id": "github.list_matching_refs@v10",
 					"name": "github.list_matching_refs",
 					"authorizationDigest": "sha256:7ac0d4af618071dd6e1c34c128737209bf2c6da0e2bc79be6f4ec392f9afd9f2"
 				},
 				{
-					"id": "github.list_milestones@v9",
+					"id": "github.list_milestones@v10",
 					"name": "github.list_milestones",
 					"authorizationDigest": "sha256:94d21f74192a456fcab18960f09edac0dbfb33e62c343d721215ff313ce0aff3"
 				},
 				{
-					"id": "github.list_my_repositories@v9",
+					"id": "github.list_my_repositories@v10",
 					"name": "github.list_my_repositories",
 					"authorizationDigest": "sha256:8473e4a16004c92d278766d8eef1616ad1f36203122f9fff499116b966f5a315"
 				},
 				{
-					"id": "github.list_my_starred_repositories@v9",
+					"id": "github.list_my_starred_repositories@v10",
 					"name": "github.list_my_starred_repositories",
 					"authorizationDigest": "sha256:99d6ba2590f726f9cd631e9fd97b518bb068d2aa952b606fd82c1a9d2075d44d"
 				},
 				{
-					"id": "github.list_organization_repositories@v9",
+					"id": "github.list_organization_repositories@v10",
 					"name": "github.list_organization_repositories",
 					"authorizationDigest": "sha256:9d5325af3702b0f334831c9c2fc741463374a22514b7b0bbf6bfbb1ba9a8af59"
 				},
 				{
-					"id": "github.list_public_events@v9",
+					"id": "github.list_public_events@v10",
 					"name": "github.list_public_events",
 					"authorizationDigest": "sha256:4e5ff7ee98acee281d39c4177cbe9b8307e2d8e36567b997a34c85faa83bb0e0"
 				},
 				{
-					"id": "github.list_pull_request_commits@v9",
+					"id": "github.list_pull_request_commits@v10",
 					"name": "github.list_pull_request_commits",
 					"authorizationDigest": "sha256:f175562f0e2a30f8614e523fe8c6ebba4fb0f77ee211ea93bf98c5884a575d71"
 				},
 				{
-					"id": "github.list_pull_request_files@v9",
+					"id": "github.list_pull_request_files@v10",
 					"name": "github.list_pull_request_files",
 					"authorizationDigest": "sha256:6061050fa67ffdec707bd1de7427733576d74e0308be9c0798078c10283d6aba"
 				},
 				{
-					"id": "github.list_pull_request_requested_reviewers@v9",
+					"id": "github.list_pull_request_requested_reviewers@v10",
 					"name": "github.list_pull_request_requested_reviewers",
 					"authorizationDigest": "sha256:ff9a909b0797e4184e917ec0cb3bcd12c53c7e38d2f70cc49657dd9d80c115b7"
 				},
 				{
-					"id": "github.list_pull_request_review_comments@v9",
+					"id": "github.list_pull_request_review_comments@v10",
 					"name": "github.list_pull_request_review_comments",
 					"authorizationDigest": "sha256:904dca58a36bdf2488f8e88cafdeead4dedeaa627d75fde4c1a23ee94947ae9f"
 				},
 				{
-					"id": "github.list_pull_request_reviews@v9",
+					"id": "github.list_pull_request_reviews@v10",
 					"name": "github.list_pull_request_reviews",
 					"authorizationDigest": "sha256:2ff15e9088e11c2814505618aa68705cd9b04b031f6488123f78f196e93a0aaa"
 				},
 				{
-					"id": "github.list_pull_requests@v9",
+					"id": "github.list_pull_requests@v10",
 					"name": "github.list_pull_requests",
 					"authorizationDigest": "sha256:205abe0b8d66f3bbbbf12a5e9a914c23830163ca5730d5f0827573bd4ea21a0a"
 				},
 				{
-					"id": "github.list_pull_requests_associated_with_commit@v9",
+					"id": "github.list_pull_requests_associated_with_commit@v10",
 					"name": "github.list_pull_requests_associated_with_commit",
 					"authorizationDigest": "sha256:fcba8eb0f93592a32e2c0b4838acacc736c05300af55482189b6ee3210f42f6c"
 				},
 				{
-					"id": "github.list_release_assets@v9",
+					"id": "github.list_release_assets@v10",
 					"name": "github.list_release_assets",
 					"authorizationDigest": "sha256:47f4ef2ffdaafd4c2c3e7815374b898acbbd0dc79b2a5c9c402ea11b3fa107c4"
 				},
 				{
-					"id": "github.list_releases@v9",
+					"id": "github.list_releases@v10",
 					"name": "github.list_releases",
 					"authorizationDigest": "sha256:1c47f4d595063e60fb5b9364890927302c76832e7e5f6331173c1e7ef09e0a1e"
 				},
 				{
-					"id": "github.list_repository_collaborators@v9",
+					"id": "github.list_repository_collaborators@v10",
 					"name": "github.list_repository_collaborators",
 					"authorizationDigest": "sha256:fd23627447fc72499ff9739aa5e0bb0eeea65806083cf60d5fb5bd998587090a"
 				},
 				{
-					"id": "github.list_repository_contributors@v9",
+					"id": "github.list_repository_contributors@v10",
 					"name": "github.list_repository_contributors",
 					"authorizationDigest": "sha256:165a79d524e9734360f7d2b1638f93b54acab7e0545612c0364a4bf3ba7029c2"
 				},
 				{
-					"id": "github.list_repository_events@v9",
+					"id": "github.list_repository_events@v10",
 					"name": "github.list_repository_events",
 					"authorizationDigest": "sha256:17f0f83506b0c850b719b84a1f8a8859d238bb79c57b6de070b38748533aca9c"
 				},
 				{
-					"id": "github.list_repository_forks@v9",
+					"id": "github.list_repository_forks@v10",
 					"name": "github.list_repository_forks",
 					"authorizationDigest": "sha256:69838422d53259d7cbd85b51c0582c11f15017ea43705196916416e359d37fa3"
 				},
 				{
-					"id": "github.list_repository_issue_events@v9",
+					"id": "github.list_repository_issue_events@v10",
 					"name": "github.list_repository_issue_events",
 					"authorizationDigest": "sha256:554f1868ea0bfdd4be2e3837989d1c14ee31ccab6d523a3cc2401163876c44a5"
 				},
 				{
-					"id": "github.list_repository_issues@v9",
+					"id": "github.list_repository_issues@v10",
 					"name": "github.list_repository_issues",
 					"authorizationDigest": "sha256:39893a6126944da0f2b6f261fae88f602b31a7f0dd7a599b4d0fdf75c41e6f65"
 				},
 				{
-					"id": "github.list_repository_labels@v9",
+					"id": "github.list_repository_labels@v10",
 					"name": "github.list_repository_labels",
 					"authorizationDigest": "sha256:73cb8a673f1d4e2a3d1cfad594fadd49f5ba42843de6bc0bb244b2e175bab090"
 				},
 				{
-					"id": "github.list_repository_languages@v9",
+					"id": "github.list_repository_languages@v10",
 					"name": "github.list_repository_languages",
 					"authorizationDigest": "sha256:5792b772a3aeabca8718df14e674b5f9d9816e21dd4c99c397ed1ab5d6fd0ca3"
 				},
 				{
-					"id": "github.list_repository_stargazers@v9",
+					"id": "github.list_repository_stargazers@v10",
 					"name": "github.list_repository_stargazers",
 					"authorizationDigest": "sha256:eb161b647b9c7789ab7210239f8d392b6f9e63616f15ef1fa3492f55a950b897"
 				},
 				{
-					"id": "github.list_repository_tags@v9",
+					"id": "github.list_repository_tags@v10",
 					"name": "github.list_repository_tags",
 					"authorizationDigest": "sha256:09b5a98c32361758168474f00f5d15eba3303f76d7c2ac3c9e0f24a5ac9aba95"
 				},
 				{
-					"id": "github.list_repository_topics@v9",
+					"id": "github.list_repository_topics@v10",
 					"name": "github.list_repository_topics",
 					"authorizationDigest": "sha256:954a2dac597a9d2acf14e8c1f2a94481c2db26695f7e7862aa0ffdc93906302f"
 				},
 				{
-					"id": "github.list_repository_watchers@v9",
+					"id": "github.list_repository_watchers@v10",
 					"name": "github.list_repository_watchers",
 					"authorizationDigest": "sha256:8cc39eba2f8e1341668a0826d9a889c552f1ea673fadbfcf12905a4df20117c5"
 				},
 				{
-					"id": "github.list_repository_workflows@v9",
+					"id": "github.list_repository_workflows@v10",
 					"name": "github.list_repository_workflows",
 					"authorizationDigest": "sha256:73d9f4d0a39831b962c68f5edcaead414e3a94e44fb2f5c7be225c6d1d1d5ffc"
 				},
 				{
-					"id": "github.list_user_public_events@v9",
+					"id": "github.list_user_public_events@v10",
 					"name": "github.list_user_public_events",
 					"authorizationDigest": "sha256:3962a824b8a1ebe2689d4af3754d6738aa06ba13a0b105c28e26c74ecdce49cb"
 				},
 				{
-					"id": "github.list_user_received_public_events@v9",
+					"id": "github.list_user_received_public_events@v10",
 					"name": "github.list_user_received_public_events",
 					"authorizationDigest": "sha256:584d6eb8952315e7c8a270e85933e4e7da52595a337516c4cf9245ca30e39717"
 				},
 				{
-					"id": "github.list_user_repositories@v9",
+					"id": "github.list_user_repositories@v10",
 					"name": "github.list_user_repositories",
 					"authorizationDigest": "sha256:b3aefbd9ddae23cf151153d2064f33d557e08ad82a84b927d8b567b020a52676"
 				},
 				{
-					"id": "github.list_workflow_run_artifacts@v9",
+					"id": "github.list_workflow_run_artifacts@v10",
 					"name": "github.list_workflow_run_artifacts",
 					"authorizationDigest": "sha256:e1fece6acb47890c3540a0c3ed8a3a1901506fd5bc9f22cda0cf84c841d30489"
 				},
 				{
-					"id": "github.list_workflow_run_jobs@v9",
+					"id": "github.list_workflow_run_jobs@v10",
 					"name": "github.list_workflow_run_jobs",
 					"authorizationDigest": "sha256:a4d16972e93f68df829ecd42e8a41ff5caccfae9a536da7b882a58190f0a3c27"
 				},
 				{
-					"id": "github.list_workflow_runs@v9",
+					"id": "github.list_workflow_runs@v10",
 					"name": "github.list_workflow_runs",
 					"authorizationDigest": "sha256:c48ffbdaaf9f10746d67dda108e6e30e515880a2dc5fc69f914528abc8b3e396"
 				},
 				{
-					"id": "github.lock_issue@v9",
+					"id": "github.lock_issue@v10",
 					"name": "github.lock_issue",
 					"authorizationDigest": "sha256:c05bbd9ed9ffca168b597de6c25243228a948d4d8c6f55c566c2fd1536baf2e0"
 				},
 				{
-					"id": "github.merge_branch@v9",
+					"id": "github.merge_branch@v10",
 					"name": "github.merge_branch",
 					"authorizationDigest": "sha256:26dba1435f29a06fb3f1583b731614d84df06f153d529cc7171701420479fb2b"
 				},
 				{
-					"id": "github.merge_pull_request@v9",
+					"id": "github.merge_pull_request@v10",
 					"name": "github.merge_pull_request",
 					"authorizationDigest": "sha256:37d1275f17956c1e716c63712a2dc68c4bb8e741cf0cfffb4bf7647b050d0a9d"
 				},
 				{
-					"id": "github.remove_issue_assignees@v9",
+					"id": "github.remove_issue_assignees@v10",
 					"name": "github.remove_issue_assignees",
 					"authorizationDigest": "sha256:4e2e045ad342b746ee29376b6b3f6b600560b8cff4f03db0d03eba177c9cfeed"
 				},
 				{
-					"id": "github.remove_issue_label@v9",
+					"id": "github.remove_issue_label@v10",
 					"name": "github.remove_issue_label",
 					"authorizationDigest": "sha256:934bdba5bed11201a92f710a79dfb9162efcfcceae6696073c345e5fecaf376b"
 				},
 				{
-					"id": "github.remove_pull_request_reviewers@v9",
+					"id": "github.remove_pull_request_reviewers@v10",
 					"name": "github.remove_pull_request_reviewers",
 					"authorizationDigest": "sha256:13303fdb4b2fb0bbc80f2f2edf82ddd609a1bbab98205998e952c9e9ac28cfd0"
 				},
 				{
-					"id": "github.remove_repository_collaborator@v9",
+					"id": "github.remove_repository_collaborator@v10",
 					"name": "github.remove_repository_collaborator",
 					"authorizationDigest": "sha256:f3b03ec6ea206036221ca8123c96f80a688fdeac77678d35c1de017736b5d3f8"
 				},
 				{
-					"id": "github.rename_branch@v9",
+					"id": "github.rename_branch@v10",
 					"name": "github.rename_branch",
 					"authorizationDigest": "sha256:13de068dfd93cf4031d491cb83788423197bfe4ccb8c4b4043cfaf3798c13a75"
 				},
 				{
-					"id": "github.replace_repository_topics@v9",
+					"id": "github.replace_repository_topics@v10",
 					"name": "github.replace_repository_topics",
 					"authorizationDigest": "sha256:fbc0dda9ea4b8fc475eb3f6d9a9eafeba9cf50f396491af09f45d56af4c47999"
 				},
 				{
-					"id": "github.reply_pull_request_review_comment@v9",
+					"id": "github.reply_pull_request_review_comment@v10",
 					"name": "github.reply_pull_request_review_comment",
 					"authorizationDigest": "sha256:f637af9b8b8821712d34600dba81ea41def395093fc67f0e31b1a2b87632ae73"
 				},
 				{
-					"id": "github.request_pull_request_reviewers@v9",
+					"id": "github.request_pull_request_reviewers@v10",
 					"name": "github.request_pull_request_reviewers",
 					"authorizationDigest": "sha256:b39191b387cf823bc17f468e7147d7e18c232bacf300e7dfdc6bf409bac8ebd1"
 				},
 				{
-					"id": "github.rerun_failed_jobs@v9",
+					"id": "github.rerun_failed_jobs@v10",
 					"name": "github.rerun_failed_jobs",
 					"authorizationDigest": "sha256:abfbdb03111ad6237bc6aa5a2261065ca21ebdd8f68f1aa1a0fddb86442fe555"
 				},
 				{
-					"id": "github.rerun_workflow@v9",
+					"id": "github.rerun_workflow@v10",
 					"name": "github.rerun_workflow",
 					"authorizationDigest": "sha256:9b4ccdafe8ee36287203ff2ba28978ab249082468b3645c6275d995b3041be77"
 				},
 				{
-					"id": "github.search_code@v9",
+					"id": "github.search_code@v10",
 					"name": "github.search_code",
 					"authorizationDigest": "sha256:95cd909c56ce97fc5fe8bcecdf732f86e81cbf3ed3d3f61fca5e55d070923f29"
 				},
 				{
-					"id": "github.search_commits@v9",
+					"id": "github.search_commits@v10",
 					"name": "github.search_commits",
 					"authorizationDigest": "sha256:48316af3763decfe104548b70d71e9d5c61b8283dc639f2df0bb531cd8428955"
 				},
 				{
-					"id": "github.search_issues_and_pull_requests@v9",
+					"id": "github.search_issues_and_pull_requests@v10",
 					"name": "github.search_issues_and_pull_requests",
 					"authorizationDigest": "sha256:1c385e0a6d7d8f35911a4e98a24ffe9c4608ccf89567f8d56ef7f50c9e8c6282"
 				},
 				{
-					"id": "github.search_labels@v9",
+					"id": "github.search_labels@v10",
 					"name": "github.search_labels",
 					"authorizationDigest": "sha256:357b8109792e0524dbe75700ac0359063043de8909dccafa5258eb172a67f4d6"
 				},
 				{
-					"id": "github.search_repositories@v9",
+					"id": "github.search_repositories@v10",
 					"name": "github.search_repositories",
 					"authorizationDigest": "sha256:78fa78707254d44ea0f31bc52f10ae06a5debb43d50c8a0ae87c5987f80a3210"
 				},
 				{
-					"id": "github.search_topics@v9",
+					"id": "github.search_topics@v10",
 					"name": "github.search_topics",
 					"authorizationDigest": "sha256:292f90a7c6b5e8a7a1cfd0af8fcb415d38e3f8d2327860324256cdd7bc075a2b"
 				},
 				{
-					"id": "github.search_users@v9",
+					"id": "github.search_users@v10",
 					"name": "github.search_users",
 					"authorizationDigest": "sha256:02d3dded63757353dd762e2bc31b5bfb76e652d3c8291207d129feb0b6e675d0"
 				},
 				{
-					"id": "github.set_issue_labels@v9",
+					"id": "github.set_issue_labels@v10",
 					"name": "github.set_issue_labels",
 					"authorizationDigest": "sha256:4b7380b5376066d06ebd4a814d41a4c0d5124614c9170f08e480e2b4e60234e0"
 				},
 				{
-					"id": "github.star_repository@v9",
+					"id": "github.star_repository@v10",
 					"name": "github.star_repository",
 					"authorizationDigest": "sha256:a37e9c5aa1c2ed692c63a3bc726f3856b4e5d7fb9e06d7e5f539f4a282477206"
 				},
 				{
-					"id": "github.submit_pull_request_review@v9",
+					"id": "github.submit_pull_request_review@v10",
 					"name": "github.submit_pull_request_review",
 					"authorizationDigest": "sha256:35f82d25504d670740fec88d866f2c66c548ddf90748ff160aebaf3011f4ad86"
 				},
 				{
-					"id": "github.sync_fork_branch_with_upstream@v9",
+					"id": "github.sync_fork_branch_with_upstream@v10",
 					"name": "github.sync_fork_branch_with_upstream",
 					"authorizationDigest": "sha256:9fdd0d22c5b5c03d3e5f93030a457af2d06cca986adc46b3b781d91363a47561"
 				},
 				{
-					"id": "github.unlock_issue@v9",
+					"id": "github.unlock_issue@v10",
 					"name": "github.unlock_issue",
 					"authorizationDigest": "sha256:8771923e6ff391b6f5dfb3dd1f8151f56f52c5559bae79686aaa9f0c4a3d2f69"
 				},
 				{
-					"id": "github.unstar_repository@v9",
+					"id": "github.unstar_repository@v10",
 					"name": "github.unstar_repository",
 					"authorizationDigest": "sha256:1a906048ab3a40212bbb232acd4bd791dbdbaac37b1a30b1e29bf7e71d90b60c"
 				},
 				{
-					"id": "github.update_issue@v9",
+					"id": "github.update_issue@v10",
 					"name": "github.update_issue",
 					"authorizationDigest": "sha256:5967281698acdb895ffc0d3aee44e72af091434bd2fdc7bac198a45426fa1e77"
 				},
 				{
-					"id": "github.update_issue_comment@v9",
+					"id": "github.update_issue_comment@v10",
 					"name": "github.update_issue_comment",
 					"authorizationDigest": "sha256:fcca2baca4c30d44eb9c48f27c217d291205590e70c8827ff7afac6089463667"
 				},
 				{
-					"id": "github.update_label@v9",
+					"id": "github.update_label@v10",
 					"name": "github.update_label",
 					"authorizationDigest": "sha256:0372ee3d3ae8cb1a39c1f5cad3fbe587dbc467cbaba6d7e1a974f26d17ef5bdd"
 				},
 				{
-					"id": "github.update_milestone@v9",
+					"id": "github.update_milestone@v10",
 					"name": "github.update_milestone",
 					"authorizationDigest": "sha256:b0c75dd22dd9e8be8d33e444e28177b1ab244f3557dadfca1fe6bc473e9ce75b"
 				},
 				{
-					"id": "github.update_pull_request@v9",
+					"id": "github.update_pull_request@v10",
 					"name": "github.update_pull_request",
 					"authorizationDigest": "sha256:e31d369982b9ca66df5da97b7647cbaa8baa606e491e14fb92602600a8486650"
 				},
 				{
-					"id": "github.update_pull_request_branch@v9",
+					"id": "github.update_pull_request_branch@v10",
 					"name": "github.update_pull_request_branch",
 					"authorizationDigest": "sha256:929162bc6fbbb700b989f23d0b73af3590ea0d8371bfbafc8330f2879a6782d4"
 				},
 				{
-					"id": "github.update_pull_request_review_comment@v9",
+					"id": "github.update_pull_request_review_comment@v10",
 					"name": "github.update_pull_request_review_comment",
 					"authorizationDigest": "sha256:d6ed9ec45cb729b0c420eafb399c7917c50ff8927065f0123aedc8a44f3d9f04"
 				},
 				{
-					"id": "github.update_ref@v9",
+					"id": "github.update_ref@v10",
 					"name": "github.update_ref",
 					"authorizationDigest": "sha256:a08e2612dc5c815d9a6d5806edf4e3f2d73f49ba568561771f7b30a528e4ab10"
 				},
 				{
-					"id": "github.update_release@v9",
+					"id": "github.update_release@v10",
 					"name": "github.update_release",
 					"authorizationDigest": "sha256:389d14fac0374c722fc49dbb5b01077dcf11b72bb23d872175eb73c862ffab16"
 				},
 				{
-					"id": "github.update_repository@v9",
+					"id": "github.update_repository@v10",
 					"name": "github.update_repository",
 					"authorizationDigest": "sha256:497d9c486084df21db5b3ae27ee6022d5099d1377a1aeed0f1ead9b15fd90a4f"
 				}
 			],
-			"compatibility": []
+			"compatibility": [
+				{
+					"provider": "github",
+					"fromReleaseId": "github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v9",
+					"toReleaseId": "github-openconnector-0cb0e0dd2ed686fa7fa2ff8d9eef97a7d6b31674-connection-v10",
+					"fromExecutorDigest": "sha256:9deba65c280ec0328d94698154702401e69ce4bfdf60883403f321d2edee5cfa",
+					"toExecutorDigest": "sha256:4f7b8c138a271f489102a8b979e007277a05db59487441c6c4490d4452d9aabd",
+					"rationale": "v10 preserves original GitHub HTTP rejection statuses only; all 143 action names, schemas, effects, scopes, OAuth identity and endpoints remain unchanged. GitHub retains its existing reauthorization requirement.",
+					"reviewReference": "https://github.com/AgoraIO-Extensions/agent-infra/issues/2187"
+				}
+			]
 		},
 		{
 			"provider": "jenkins-ci",
