@@ -709,6 +709,7 @@ it("normalizes an interrupted Turn into an unknown hold before recovery", async 
 					"utf8",
 				),
 			) as {
+				sequence: number;
 				turns: {
 					status: string;
 					unknownHold?: true;
@@ -730,6 +731,12 @@ it("normalizes an interrupted Turn into an unknown hold before recovery", async 
 			if (!legacyUnknown.turns[0]) throw new Error("missing recovered turn");
 			legacyUnknown.turns[0].status = "unknown";
 			delete legacyUnknown.turns[0].unknownHold;
+			const legacyFact = legacyUnknown.turns[0].operationFacts?.at(-1);
+			if (!legacyFact) throw new Error("missing recovered operation fact");
+			legacyFact.phase = "started";
+			delete legacyFact.failureCode;
+			legacyUnknown.turns[0].events.pop();
+			legacyUnknown.sequence--;
 			await writeFile(
 				join(path, record.nativeSessionRef, "state.json"),
 				JSON.stringify(legacyUnknown),
@@ -743,8 +750,41 @@ it("normalizes an interrupted Turn into an unknown hold before recovery", async 
 					),
 				).toBe("unknown");
 				expect(recoverCall).not.toHaveBeenCalled();
+				const legacyPersisted = JSON.parse(
+					await readFile(
+						join(path, record.nativeSessionRef, "state.json"),
+						"utf8",
+					),
+				) as { turns: { operationFacts?: { phase: string }[] }[] };
+				expect(legacyPersisted.turns[0]?.operationFacts?.at(-1)?.phase).toBe(
+					"unknown",
+				);
 			} finally {
 				await recoveredLegacy.close();
+			}
+			const beforeRepeat = JSON.parse(
+				await readFile(
+					join(path, record.nativeSessionRef, "state.json"),
+					"utf8",
+				),
+			) as { sequence: number };
+			const recoveredAgain = await driver(path, recoveredOpen);
+			try {
+				expect(
+					await recoveredAgain.getStatus(
+						record.nativeSessionRef,
+						"execution-a",
+					),
+				).toBe("unknown");
+				const afterRepeat = JSON.parse(
+					await readFile(
+						join(path, record.nativeSessionRef, "state.json"),
+						"utf8",
+					),
+				) as { sequence: number };
+				expect(afterRepeat.sequence).toBe(beforeRepeat.sequence);
+			} finally {
+				await recoveredAgain.close();
 			}
 		} finally {
 			await recovered.close();
