@@ -24,6 +24,9 @@ export interface PlatformWorkloadWorkerOptionsV1
 	readonly log?: (message: string) => void;
 }
 
+/** 连续推进多少步后休眠一次 `pollIntervalMs`。 */
+const maximumConsecutiveStepsV1 = 20;
+
 export function createPlatformWorkloadWorkerV1(
 	options: PlatformWorkloadWorkerOptionsV1,
 ) {
@@ -90,12 +93,22 @@ export function createPlatformWorkloadWorkerV1(
 	let running: Promise<void> | undefined;
 	let closing: Promise<void> | undefined;
 	let tickTail: Promise<void> = Promise.resolve();
-	function enqueueTick() {
+	// 轮询连续推进的步数，达到上限后休眠一次，防止反复到期的步骤形成热循环。
+	let consecutiveSteps = 0;
+	function enqueueTick(polling = false) {
 		const result = tickTail.then(async () => {
+			let outcome: "idle" | "advanced" | undefined;
 			try {
-				return await reconciliation.tick(workerId);
+				outcome = await reconciliation.tick(workerId);
+				return outcome;
 			} finally {
-				await files?.runOnce();
+				// 连续推进期间暂缓文件清理，在本轮休眠前运行一次，不随步数放大
+				// 存储扫描（#2295）；手动 tick 与失败后照常清理。
+				const draining =
+					polling &&
+					outcome === "advanced" &&
+					consecutiveSteps + 1 < maximumConsecutiveStepsV1;
+				if (!draining) await files?.runOnce();
 			}
 		});
 		tickTail = result.then(
@@ -105,8 +118,9 @@ export function createPlatformWorkloadWorkerV1(
 		return result;
 	}
 	async function poll() {
+		let advanced = false;
 		try {
-			await enqueueTick();
+			advanced = (await enqueueTick(true)) === "advanced";
 		} catch {
 			logSafely(
 				JSON.stringify({
@@ -116,10 +130,19 @@ export function createPlatformWorkloadWorkerV1(
 				}),
 			);
 		}
+		// 刚推进一步时立即处理下一个已到期的 Workload；所有 Agent 共用这条串行
+		// 队列，固定休眠会让创建中的步骤排在复核之后（#2295）。单个 Agent 两步之间
+		// 的间隔仍由 Store 的重试与复核时间控制。
+		consecutiveSteps = advanced ? consecutiveSteps + 1 : 0;
+		const drain = advanced && consecutiveSteps < maximumConsecutiveStepsV1;
+		if (!drain) consecutiveSteps = 0;
 		if (!stopped)
-			timer = setTimeout(() => {
-				running = poll();
-			}, pollIntervalMs);
+			timer = setTimeout(
+				() => {
+					running = poll();
+				},
+				drain ? 0 : pollIntervalMs,
+			);
 	}
 	return {
 		tick: () => {
