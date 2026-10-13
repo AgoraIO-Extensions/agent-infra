@@ -114,6 +114,49 @@ describe("conversation native metadata consumer", () => {
 		expect(result.current.capabilities).toEqual([]);
 	});
 
+	it("hides cached metadata when the Agent capability is disabled", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		clients.push(queryClient);
+		const client = createClient({
+			baseUrl: "https://platform.example.test",
+			fetch: async () =>
+				Response.json({
+					selector: "skills",
+					revision: "a".repeat(64),
+					capabilities: [
+						{
+							id: "b".repeat(64),
+							kind: "skill",
+							name: "workspace-summary",
+							description: "Summarize files",
+							source: { name: "skillhub", version: "1.0.0" },
+							availability: "discovered",
+						},
+					],
+				}),
+		});
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result, rerender } = renderHook(
+			({ enabled }: { enabled: boolean }) =>
+				useConversationNativeMetadata({
+					identityKey: "login-a",
+					conversationId: "conversation-a",
+					executionId: "execution-a",
+					enabled,
+					client,
+				}),
+			{ initialProps: { enabled: true }, wrapper },
+		);
+		await waitFor(() => expect(result.current.available).toBe(true));
+		rerender({ enabled: false });
+		expect(result.current.available).toBe(false);
+		expect(result.current.capabilities).toEqual([]);
+	});
+
 	it.each([
 		{},
 		{

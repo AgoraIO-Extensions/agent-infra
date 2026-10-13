@@ -70,9 +70,11 @@ export function useConversationNativeMetadata({
 			return parsed.data;
 		},
 	});
-	const projection = query.isError ? undefined : query.data;
+	const projection = enabled && !query.isError ? query.data : undefined;
 	return {
 		...query,
+		isPending: enabled && query.isPending,
+		isError: enabled && query.isError,
 		capabilities: nativeMetadataCapabilities(projection),
 		available: projection !== undefined,
 	};
