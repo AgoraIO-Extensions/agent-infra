@@ -172,7 +172,7 @@
     "platformWorker": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["replicas", "wecomEnabled"],
+      "required": ["replicas", "wecomEnabled", "nativeMetadataGateway"],
       "properties": {
         "configurationModuleSecretRef": { "$ref": "#/$defs/secretRef" },
         "trustedCaSecretRef": { "$ref": "#/$defs/secretRef" },
@@ -180,6 +180,15 @@
         "runtimeImageRepository": { "type": "string", "pattern": "^(?:$|(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?/)?[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)$" },
         "runtimeImageDigest": { "type": "string", "pattern": "^(?:|sha256:[a-f0-9]{64})$" },
         "wecomEnabled": { "type": "boolean" },
+        "nativeMetadataGateway": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "port"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
         "runtimeAuthSecretRef": {
           "type": "object",
           "additionalProperties": false,
