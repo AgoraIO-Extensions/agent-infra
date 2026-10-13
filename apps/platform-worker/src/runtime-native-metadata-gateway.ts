@@ -37,6 +37,7 @@ export interface WorkerRuntimeNativeMetadataCurrentCheckerV1 {
 	/** Reconfirm the original API request and Host scope on every call. */
 	check(input: {
 		readonly request: NativeMetadataCurrentRequestV1;
+		readonly apiRequestSourceRef: string;
 		readonly signal: AbortSignal;
 	}): Promise<NativeMetadataCurrentResponseV1>;
 }
@@ -154,6 +155,7 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 			if (!sameIdentity(request, parsedBinding)) unavailable();
 			const current = await options.current.check({
 				request: currentRequest(parsedBinding),
+				apiRequestSourceRef: request.apiRequestSourceRef,
 				signal,
 			});
 			if (signal.aborted || !sameCurrent(current, parsedBinding)) unavailable();
@@ -178,6 +180,7 @@ export function createWorkerRuntimeNativeMetadataGatewayV1(options: {
 				unavailable();
 			const after = await options.current.check({
 				request: currentRequest(parsedBinding),
+				apiRequestSourceRef: request.apiRequestSourceRef,
 				signal,
 			});
 			if (signal.aborted || !sameCurrent(after, parsedBinding)) unavailable();

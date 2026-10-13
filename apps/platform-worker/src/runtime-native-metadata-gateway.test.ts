@@ -98,6 +98,12 @@ describe("Worker native metadata gateway", () => {
 			signal: expect.any(AbortSignal),
 		});
 		expect(f.current).toHaveBeenCalledTimes(2);
+		expect(f.current).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({
+				apiRequestSourceRef: request.apiRequestSourceRef,
+			}),
+		);
 		expect(f.resolveTransport).toHaveBeenCalledWith({
 			binding,
 			signal: expect.any(AbortSignal),
