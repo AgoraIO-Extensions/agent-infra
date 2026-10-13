@@ -780,6 +780,13 @@ Connection 结果均须拒绝且不泄漏存在性。同主体不同 Session 也
 - 标准 MCP/OAuth/PAT 路径按 [§9.1](#91-codex-独立-connection-consumer-profile) 与 [Connection HLD §5.2](HLD-connection-M1.md#52-consumer-与-instance)、[§7](HLD-connection-M1.md#7-mcpapi-调用流程)、[§8](HLD-connection-M1.md#8-幂等与线性化) 和 [§13](HLD-connection-M1.md#13-pilot-验收与成功声明) 验证 token 当前主体/实例、user/application + Agent 选择、工具子进程不可读取、独立撤销、跨实例隔离、幂等和未知不重放；缺 token 不回退 Owner 或共享凭据。profile 明确要求 sender constraint 时另验持有证明，准备层或 token 签发通过不替代真实运行。
 - 可信关联另验同次实际请求/响应、服务端原调用、跨 Execution/attempt 替换、丢响应与只读核实；缺失保持未核实，标准 token 接入不能代签关联。
 - Driver 直接标准 MCP 路径另验固定官方 dynamicTools/server request 的真实等待、受保护 Host 的文件/内存/FD 与诊断拒绝、原安装选择、每次真实发送、结果保存及 ACK；结果保存失败、unknown WRITE 已保存但未核实或 stdio 断连，均不得释放原执行继续推理。覆盖同 UID 工具、旧修订、跨主体/Agent/Sandbox、未知 WRITE、崩溃、撤销与原操作只读恢复，fixture 与真实 Connection/Provider 证据分别记录；通过不外推 native MCP 或其他原生工具。
+- 对已批准的 ADR-0025 ACP adapter，RuntimeHost 仍是 Connection 的直接标准 MCP
+  consumer；loopback URL/bearer 只连接同一 Host 内的 adapter，不把 Connection token
+  或服务 header 交给 native。adapter 按单 Execution 生命周期绑定原
+  `RuntimeOriginalExecutionRef`，调用沿 8.5 的 operation/attempt、intent、started、
+  result/unknown 和 ACK 屏障，跨 Execution 的 native Session 必须排空并重建；其
+  provenance、native bearer 泄漏、close/replay/unknown WRITE 和 Linux 负例须在最终
+  artifact 上独立验证，不能用 Codex 或 fixture 证据外推。
 - 明确启用的私有 FD callback、bootstrap 或 recovery 在 intent/permit/结果确认失败、断连、过期、跨代次或主体绑定不一致时，不得产生 Provider/工具副作用。该 lane 未通过不按普通 token 绕过；标准 MCP 路径按自己的获准合同验证，不要求具备未启用的私有接缝。
 
 ## 12. RuntimeHost 未来抽取与维护标准

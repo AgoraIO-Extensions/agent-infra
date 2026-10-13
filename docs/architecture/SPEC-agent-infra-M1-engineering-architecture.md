@@ -1560,7 +1560,11 @@ Connection runtime/readiness；[#435](https://github.com/AgoraIO-Extensions/agen
 Driver 内的 TypeScript 标准 MCP 客户端执行 Connection 操作。客户端只存在于所属 Sandbox
 的 RuntimeHost/Driver 受保护范围，直接连接完整获准 profile 的固定 HTTPS endpoint；
 API/Worker/Web 交付非敏感配置与自身执行授权，不取得 token，不转发 MCP，也不创建
-MCP server、Provider 执行器、Connection 目录或授权/审计投影。敏感临时授权码仅允许按
+Platform/Connection MCP proxy、Provider 执行器、Connection 目录或授权/审计投影。
+Generic ACP 只有在 [ADR-0025](../adr/0025-propose-runtime-host-acp-protected-mcp-bridge.md)
+及本节后文的 bridge 门禁全部满足时，才可使用 RuntimeHost-owned 的 loopback transport
+adapter；该 adapter 不是 Platform API 或 Connection 服务的代理，Connection token 仍只在
+Host 内的 `StandardMcpClient` 中，native 只收到单 Execution 的本地 bearer。敏感临时授权码仅允许按
 [§13.5.6](#1356-标准-oauth-安装供应)的固定 callback 窄通道瞬时转交；该例外不允许
 access/refresh Token、PKCE verifier 或 Consumer secret 进入控制面。产品边界与 token 选择以
 §13.5.3 为准。本路径的取舍见 [ADR 0019](../adr/0019-run-standard-mcp-in-protected-runtime-driver.md)。
@@ -1570,8 +1574,21 @@ access/refresh Token、PKCE verifier 或 Consumer secret 进入控制面。产�
 固定协议/schema，并在最终产物验证；不修改原生 release。定义只来自当前受信 MCP 发现快照，
 每个工具名、输入 schema 和修订绑定原 Conversation/generation；它是会话内的客户端元数据，
 不成为平台工具目录或 Grant 权威。原生只取得工具定义及按业务权限可见的脱敏结果，token、
-SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空，
-同一会话不同时启用另一 native MCP、private bootstrap 或 token helper 路径。
+SecretRef 内容、服务认证头与客户端对象均不交给原生。原生 Connection MCP 配置保持空；ACP adapter 的本地 URL 不是 Connection endpoint，
+也不能读取 Connection token、SecretRef 或服务认证 header。同一会话不同时启用另一
+native MCP、private bootstrap 或 token helper 路径。Pi 和不满足固定 artifact 门禁的
+Generic ACP 继续 `connection:false`。
+
+**ADR-0025 ACP adapter gate。** 只有固定 artifact/protocol 明确证明 ACP session 级
+HTTP MCP 注册、bounded discovery/call/close、native 不持久化本地 bearer、工具子进程
+和日志不读取 bearer，且最终 Linux 保护负测通过时才允许启用。adapter 必须位于
+`packages/agent-runtime`，按 Execution 创建、关闭和重建；`apps/agent-runtime-host`
+只做配置和 capability 装配。bridge 请求固定到 `127.0.0.1`、单一 `/mcp` 路径、HTTP
+method/body 上限、短 expiry、replay/duplicate 拒绝、无 redirect 和 constant-time
+bearer 校验。每次 call 由 Driver/Host 生成 `operationRef`/`attemptRef`，不能从 ACP
+JSON-RPC id 或 native 字段推导；调用必须按 `prepare → started → confirm/block`
+屏障，响应丢失、重复发送、确认失败或 close 不确定都封闭当前 native Session，
+unknown WRITE 不得让原生继续推理。缺少任一门禁时能力保持关闭。
 
 **受保护输入。** Host 从当前经过验证且已持久接受的原执行解析 principal、Agent、
 Conversation、Sandbox、generation 与授权修订，再定位获准安装的 SecretRef。安装的

@@ -1,8 +1,8 @@
 # ADR-0025：RuntimeHost 的 ACP 受保护 MCP transport bridge
 
-状态：Draft for Review（#851）
+状态：accepted for #851 implementation
 
-本 ADR 是架构修订候选，不改变当前 Runtime 行为；只有本 ADR 与工程 Spec 的修订经过评审合入后，才可实施后续代码。
+本 ADR 已获本次任务的架构方向批准；本次只批准 RuntimeHost consumer bridge 的边界，不批准真实 Token 启用、Connection 运行实现或生产验收。
 
 ## 背景
 
