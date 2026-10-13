@@ -544,10 +544,14 @@ it.each(["ignore-cancel", "delayed-cancel"])(
 				).some((e) => e.type === "completed"),
 			).toBe(false);
 			if (mode === "delayed-cancel") {
-				await vi.waitFor(async () =>
-					expect(
-						await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
-					).toBe("cancelled"),
+				// peer 在收到 cancel 后延迟 2200ms 才返回 stopReason:"cancelled"，
+				// 给 waitFor 设置足够的 timeout 避免 flaky 超时
+				await vi.waitFor(
+					async () =>
+						expect(
+							await driver.getStatus(accepted.nativeSessionRef, "execution-a"),
+						).toBe("cancelled"),
+					{ timeout: 5000 },
 				);
 				expect(await driver.lookupOperation(stopCommand)).toMatchObject({
 					state: "found",
