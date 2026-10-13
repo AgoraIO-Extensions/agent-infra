@@ -181,8 +181,20 @@ async function completeInitialAgentConfigurationAdmissionV1(
 				source,
 				requested: structuredClone(command.modelConfiguration),
 			});
-			decision = result === null ? null : parseStoredKeylessModel(result);
-		} catch {
+			if (
+				result &&
+				typeof result === "object" &&
+				"status" in result &&
+				result.status === "rejected"
+			) {
+				if (result.reason === "codex_model_profile_unsupported")
+					throw new AgentConfigurationError("model_profile_unsupported");
+				decision = null;
+			} else {
+				decision = result === null ? null : parseStoredKeylessModel(result);
+			}
+		} catch (error) {
+			if (error instanceof AgentConfigurationError) throw error;
 			throw new AgentConfigurationError("dependency_unavailable");
 		}
 		if (decision === null) throw new AgentConfigurationError("not_admitted");
@@ -209,6 +221,11 @@ async function completeInitialAgentConfigurationAdmissionV1(
 		} catch {
 			throw new AgentConfigurationError("dependency_unavailable");
 		}
+		if (
+			admission.status === "rejected" &&
+			admission.reason === "codex_model_profile_unsupported"
+		)
+			throw new AgentConfigurationError("model_profile_unsupported");
 		if (
 			admission.status !== "admitted" ||
 			admission.agentId !== command.agentId ||

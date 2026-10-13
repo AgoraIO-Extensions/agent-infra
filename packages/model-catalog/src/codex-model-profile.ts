@@ -80,6 +80,9 @@ export function assertCodexModelProfilesV1(input: {
 				(level) => !profile.reasoningLevels.includes(level),
 			)
 		)
-			throw new ModelConfigurationErrorV1();
+			throw new ModelConfigurationErrorV1(
+				false,
+				"codex_model_profile_unsupported",
+			);
 	}
 }

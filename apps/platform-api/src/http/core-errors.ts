@@ -76,6 +76,7 @@ export function mapCoreError(
 			return new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
 		if (
 			error.code === "not_admitted" ||
+			error.code === "model_profile_unsupported" ||
 			error.code === "conflict" ||
 			error.code === "idempotency_conflict"
 		) {
@@ -105,6 +106,7 @@ export function mapCoreError(
 			return new HttpProtocolError("RESOURCE_UNAVAILABLE", traceId);
 		if (
 			error.code === "not_admitted" ||
+			error.code === "model_profile_unsupported" ||
 			error.code === "no_change" ||
 			error.code === "stale_revision" ||
 			error.code === "idempotency_conflict"

@@ -195,6 +195,7 @@ export type ApplicationFoundationErrorCode =
 	| "invalid_command"
 	| "not_authorized"
 	| "not_admitted"
+	| "model_profile_unsupported"
 	| "dependency_unavailable"
 	| "conflict"
 	| "idempotency_conflict"
@@ -230,6 +231,7 @@ function isApplicationFoundationErrorCode(
 		value === "invalid_command" ||
 		value === "not_authorized" ||
 		value === "not_admitted" ||
+		value === "model_profile_unsupported" ||
 		value === "dependency_unavailable" ||
 		value === "conflict" ||
 		value === "idempotency_conflict" ||
@@ -788,6 +790,7 @@ function normalizeInitialAdmissionError(
 			case "invalid_command":
 			case "not_authorized":
 			case "not_admitted":
+			case "model_profile_unsupported":
 			case "dependency_unavailable":
 				return new ApplicationFoundationError(error.code);
 		}

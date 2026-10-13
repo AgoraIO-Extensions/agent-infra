@@ -32,7 +32,7 @@ describe("fixed Codex model profiles", () => {
 				profiles,
 				options: [{ modelId, reasoningLevels }],
 			}),
-		).toThrow("MODEL_CONFIGURATION_UNAVAILABLE");
+		).toThrow("CODEX_MODEL_PROFILE_UNSUPPORTED");
 	});
 
 	it("chooses the longest matching profile", () => {

@@ -362,16 +362,22 @@ export function createDeploymentAdmissionsV1(
 	const imageRepository = input.imageRepository;
 	function codexModelProfilesFor(
 		source: AgentConfigurationSourceV1 | undefined,
-	): readonly CodexModelProfileV1[] | undefined {
+	): readonly CodexModelProfileV1[] | null | undefined {
 		if (source?.kind !== "standard") return undefined;
+		if (
+			standardTemplateDefinitionsV1.find(
+				(template) => template.templateId === source.templateId,
+			)?.driver !== "codex"
+		)
+			return undefined;
 		const template = templates.find(
 			(item) =>
 				item.templateId === source.templateId &&
 				item.imageDigest === source.imageDigest,
 		);
 		return template?.modelBinding?.driver === "codex"
-			? template.codexModelProfiles
-			: undefined;
+			? (template.codexModelProfiles ?? null)
+			: null;
 	}
 	async function resolveSubjectRef(traceId: string) {
 		try {
@@ -418,9 +424,22 @@ export function createDeploymentAdmissionsV1(
 							profiles: codexModelProfiles,
 							options: request.requested.options,
 						});
-					} catch {
+					} catch (error) {
+						if (
+							error instanceof ModelConfigurationErrorV1 &&
+							error.reason === "codex_model_profile_unsupported"
+						)
+							return {
+								status: "rejected",
+								reason: "codex_model_profile_unsupported",
+							};
 						return null;
 					}
+				} else if (
+					request.source?.kind === "standard" &&
+					codexModelProfiles === null
+				) {
+					return null;
 				}
 				const options: AgentConfigurationModelV2["options"][number][] = [];
 				for (const option of request.requested.options) {
@@ -585,6 +604,11 @@ export function createDeploymentAdmissionsV1(
 							profiles: codexModelProfiles,
 							options: request.requested.options,
 						});
+					} else if (
+						request.source?.kind === "standard" &&
+						codexModelProfiles === null
+					) {
+						return denied;
 					}
 					const options = [];
 					for (const option of requested.options) {
@@ -630,6 +654,14 @@ export function createDeploymentAdmissionsV1(
 						},
 					};
 				} catch (error) {
+					if (
+						error instanceof ModelConfigurationErrorV1 &&
+						error.reason === "codex_model_profile_unsupported"
+					)
+						return {
+							...denied,
+							reason: "codex_model_profile_unsupported",
+						};
 					if (error instanceof ModelConfigurationErrorV1 && !error.retryable)
 						return denied;
 					throw new Error("PLATFORM_DEPLOYMENT_MODEL_ADMISSION_UNAVAILABLE");
