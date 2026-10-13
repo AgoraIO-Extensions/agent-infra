@@ -492,10 +492,13 @@ export function startObservability(options: ObservabilityOptions) {
 				tracer?.startSpan(`platform.${stage}`, { attributes: details }).end();
 				// Stage duration is bounded metadata; logging it lets latency be
 				// compared across deployments without an exporter (#1525).
+				// pino 的 base 已写入 service；日志记录不再重复写，否则每行 JSON 都有
+				// 两个 service 键（#2306）。指标标签与 span 属性仍带 service。
+				const { service: _baseField, ...fields } = details;
 				const logged =
 					durationMs === undefined
-						? details
-						: { ...details, durationMs: Math.round(durationMs) };
+						? fields
+						: { ...fields, durationMs: Math.round(durationMs) };
 				if (outcome === "failed" || outcome === "unknown")
 					logger.error(logged, "operation");
 				else logger.info(logged, "operation");
