@@ -56,15 +56,19 @@ function authority(channelId = "web"): ConversationExecutionAuthorityV1 {
 }
 
 // V3（默认 Relay Key）配置：标准模板，模型选项不含 credential。
+const conformanceModelConfiguration =
+	agentConfigurationConformanceRecordV1.modelConfiguration;
+if (!conformanceModelConfiguration) {
+	throw new Error("Expected model configuration fixture");
+}
 const agentConfigurationDefaultRelayKeyRecordV3 = {
 	...agentConfigurationConformanceRecordV1,
 	schemaVersion: 3,
 	modelConfiguration: {
-		...agentConfigurationConformanceRecordV1.modelConfiguration,
-		options:
-			agentConfigurationConformanceRecordV1.modelConfiguration.options.map(
-				({ credential: _credential, ...option }) => option,
-			),
+		...conformanceModelConfiguration,
+		options: conformanceModelConfiguration.options.map(
+			({ credential: _credential, ...option }) => option,
+		),
 	},
 };
 

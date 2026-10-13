@@ -8,6 +8,7 @@ import {
 	createSessionSandboxBindingV1,
 } from "@agent-infra/platform-core";
 import {
+	type ConversationCommandConformanceHarnessV1,
 	type ConversationCommandConformanceSnapshotV1,
 	conversationCommandConformanceV1,
 	conversationConformanceAuthorityV1,
@@ -537,7 +538,7 @@ const openPostgresConformanceHarness = async () => {
 				}
 			}
 		},
-	};
+	} satisfies ConversationCommandConformanceHarnessV1;
 };
 
 conversationCommandConformanceV1("PostgreSQL", async () => {
