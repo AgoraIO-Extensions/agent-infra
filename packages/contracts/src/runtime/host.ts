@@ -264,7 +264,7 @@ export const RuntimeSkillDirectoryEntryV1Schema = z.strictObject({
 export const RuntimeSkillDirectoryResponseV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	hostSessionRef: OpaqueIdV1Schema,
-	generationId: runtimeSkillGenerationId.optional(),
+	generationId: runtimeSkillGenerationId,
 	skills: z.array(RuntimeSkillDirectoryEntryV1Schema).max(150),
 });
 

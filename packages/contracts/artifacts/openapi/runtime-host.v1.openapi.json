@@ -1703,6 +1703,7 @@
         "required": [
           "schemaVersion",
           "hostSessionRef",
+          "generationId",
           "skillName",
           "relativePath",
           "sizeBytes",

@@ -2796,6 +2796,20 @@ function isRuntimeSkillHostReadOpenApiAddition(previous, current) {
 		"RuntimeSkillResourceReadResponseV1",
 	];
 	if (
+		previous.paths?.[paths[0]] !== undefined &&
+		previous.paths?.[paths[1]] !== undefined &&
+		schemas.every((name) => previous.components?.schemas?.[name] !== undefined)
+	) {
+		const normalized = structuredClone(current);
+		const request = normalized.components.schemas.RuntimeSkillResourceReadRequestV1;
+		const response = normalized.components.schemas.RuntimeSkillResourceReadResponseV1;
+		delete request.properties?.generationId;
+		request.required = request.required?.filter((key) => key !== "generationId");
+		delete response.properties?.generationId;
+		response.required = response.required?.filter((key) => key !== "generationId");
+		return sameValue(previous, normalized);
+	}
+	if (
 		previous.paths?.[paths[0]] !== undefined ||
 		previous.paths?.[paths[1]] !== undefined ||
 		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
