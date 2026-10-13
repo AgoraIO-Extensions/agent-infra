@@ -654,3 +654,64 @@ it("lets a protected unknown hold supersede a racing terminal status", async () 
 		await rm(path, { recursive: true, force: true });
 	}
 });
+
+it("normalizes an interrupted Turn into an unknown hold before recovery", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-recovery-unknown-hold-"));
+	let sessionOptions: NativeSessionOptions | undefined;
+	let release!: () => void;
+	const releasePrompt = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const runtime = await driver(path, async (options) => {
+		sessionOptions = options;
+		return {
+			nativeId: "native-interrupted",
+			select: async () => {},
+			prompt: async () => {
+				await options.admit();
+				await releasePrompt;
+				return { stopReason: "completed" };
+			},
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	const pending = runtime.execute(command([]));
+	try {
+		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
+		const record = await pending;
+		const recoveredOpen = vi.fn(async () => {
+			throw new Error("unknown hold must not reopen native recovery");
+		});
+		const recovered = await driver(path, recoveredOpen);
+		try {
+			expect(
+				await recovered.getStatus(record.nativeSessionRef, "execution-a"),
+			).toBe("unknown");
+			expect(recoveredOpen).not.toHaveBeenCalled();
+			const persisted = JSON.parse(
+				await readFile(
+					join(path, record.nativeSessionRef, "state.json"),
+					"utf8",
+				),
+			) as {
+				turns: {
+					status: string;
+					unknownHold?: true;
+					events: { type: string; payload?: { status?: string } }[];
+				}[];
+			};
+			expect(persisted.turns[0]?.unknownHold).toBe(true);
+			expect(persisted.turns[0]?.events.at(-1)).toMatchObject({
+				type: "status",
+				payload: { status: "unknown" },
+			});
+		} finally {
+			await recovered.close();
+		}
+	} finally {
+		release();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});

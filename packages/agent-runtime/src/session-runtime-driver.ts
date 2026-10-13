@@ -584,7 +584,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						turns: [],
 					},
 				);
-				const state = file.read();
+				let state = file.read();
 				if (
 					state.schemaVersion !== 1 ||
 					JSON.stringify(state.binding) !== JSON.stringify(binding) ||
@@ -727,15 +727,37 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					state.turns.filter((turn) => !terminal(turn.status)).length > 1
 				)
 					unavailable();
-				await file.update((state) => {
-					for (const turn of state.turns)
-						if (turn.status === "running") turn.status = "unknown";
+				await file.update((draft) => {
+					for (const turn of draft.turns) {
+						if (turn.status === "running") {
+							draft.sequence++;
+							turn.events.push(
+								RuntimeEventV1Schema.parse({
+									schemaVersion: 1,
+									executionId: turn.executionId,
+									adapterEventKey: randomUUID(),
+									cursor: `${this.options.cursorPrefix}-${draft.sequence}`,
+									occurredAt: new Date().toISOString(),
+									type: "status",
+									payload: { status: "unknown" },
+								}),
+							);
+							turn.status = "unknown";
+							turn.unknownHold = true;
+						} else if (turn.status === "unknown") {
+							turn.unknownHold = true;
+						}
+					}
 				});
+				state = file.read();
 				const active = state.turns.find((turn) => !terminal(turn.status));
 				const latest = active ?? state.turns.at(-1);
+				const recoverable = active && !active.unknownHold;
+				if (active?.unknownHold && !this.cancelled(binding.ref))
+					await this.options.retireSession(directory);
 				if (
 					latest &&
-					(active || latest.nativeTerminalCheckpoint) &&
+					(recoverable || latest.nativeTerminalCheckpoint) &&
 					!this.cancelled(binding.ref)
 				) {
 					if (!state.nativeId) unavailable();
@@ -787,11 +809,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								(await restored.checkpoint?.())
 						)
 							unavailable();
-						const recovered = active?.nativeCheckpoint
+						const recovered = recoverable?.nativeCheckpoint
 							? await restored.recover?.(active.nativeCheckpoint)
 							: undefined;
 						if (
-							active &&
+							recoverable &&
 							recovered &&
 							terminal(this.options.completionStatus(recovered.stopReason))
 						) {
