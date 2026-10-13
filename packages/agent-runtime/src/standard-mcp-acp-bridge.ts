@@ -111,7 +111,7 @@ export async function createStandardMcpAcpBridge(
 	const descriptorMap = new Map(
 		tools(options.client).map((tool) => [tool.name, tool]),
 	);
-	const replayKeys = new Set<string>();
+	const replayKeys = new Map<string, string>();
 	let closed = false;
 	let active = false;
 	let blocked = false;
@@ -133,12 +133,15 @@ export async function createStandardMcpAcpBridge(
 			"requestId" in extra &&
 			(typeof extra.requestId === "string" ||
 				typeof extra.requestId === "number")
-				? String(extra.requestId)
-				: digest;
-		const replayKey = `${requestId}:${digest}`;
+				? extra.requestId
+				: undefined;
+		const replayKey =
+			requestId !== undefined
+				? `${typeof requestId}:${String(requestId)}`
+				: `digest:${digest}`;
 		if (replayKeys.has(replayKey) || replayKeys.size >= maximumReplayKeys)
 			unavailable();
-		replayKeys.add(replayKey);
+		replayKeys.set(replayKey, digest);
 		active = true;
 		const operationRef = randomUUID();
 		const attemptRef = randomUUID();
@@ -150,6 +153,18 @@ export async function createStandardMcpAcpBridge(
 				attemptRef,
 				phase,
 				toolId: name,
+				// The deployed MCP contract does not expose a same-call callRef or
+				// an original-record query for this consumer.
+				// Preserve the independently validated ConsumerInstance mapping while
+				// keeping the call association explicitly unverified.
+				connection: {
+					serviceRef: options.client.serviceRef,
+					verification: "unverified",
+					consumerId: options.client.consumerId,
+					instanceRef: options.client.instanceRef,
+					credentialRevision: options.client.credentialRevision,
+					reason: "record_unavailable",
+				},
 				...(phase === "started"
 					? { startedAt: new Date(startedAt).toISOString() }
 					: {}),

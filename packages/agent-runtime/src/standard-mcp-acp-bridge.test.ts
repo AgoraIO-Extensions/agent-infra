@@ -1,3 +1,4 @@
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, expect, it } from "vitest";
@@ -8,7 +9,7 @@ import {
 	token,
 } from "./standard-mcp.fixture.js";
 import { createStandardMcpAcpBridge } from "./standard-mcp-acp-bridge.js";
-import { StandardMcpClient } from "./standard-mcp-client.js";
+import { StandardMcpClient, standardMcpDigest } from "./standard-mcp-client.js";
 
 const bridges: { close(): Promise<void> }[] = [];
 
@@ -19,7 +20,7 @@ afterEach(async () => {
 
 it("keeps Connection credentials in Host while serving an ACP MCP bridge", async () => {
 	const fixture = await standardMcpFixture();
-	const facts: string[] = [];
+	const facts: Extract<RuntimeOperationFactV2, { kind: "tool" }>[] = [];
 	const client = await StandardMcpClient.open(
 		{
 			target: fixture.target,
@@ -33,7 +34,7 @@ it("keeps Connection credentials in Host while serving an ACP MCP bridge", async
 		client,
 		execution: reference,
 		recordOperationFact: async (fact) => {
-			facts.push(fact.phase);
+			if (fact.kind === "tool") facts.push(fact);
 		},
 	});
 	bridges.push(bridge);
@@ -58,12 +59,133 @@ it("keeps Connection credentials in Host while serving an ACP MCP bridge", async
 		isError: false,
 		content: [{ type: "text", text: expect.stringContaining("written") }],
 	});
-	expect(facts).toEqual(["intent", "started", "completed"]);
+	expect(facts.map((fact) => fact.phase)).toEqual([
+		"intent",
+		"started",
+		"completed",
+	]);
+	expect(facts.map((fact) => fact.connection)).toEqual([
+		{
+			serviceRef: "connection-fixture",
+			verification: "unverified",
+			consumerId: "platform",
+			instanceRef: "instance-a",
+			credentialRevision: "r1",
+			reason: "record_unavailable",
+		},
+		{
+			serviceRef: "connection-fixture",
+			verification: "unverified",
+			consumerId: "platform",
+			instanceRef: "instance-a",
+			credentialRevision: "r1",
+			reason: "record_unavailable",
+		},
+		{
+			serviceRef: "connection-fixture",
+			verification: "unverified",
+			consumerId: "platform",
+			instanceRef: "instance-a",
+			credentialRevision: "r1",
+			reason: "record_unavailable",
+		},
+	]);
 	expect(
 		fixture.trace.filter((entry) => entry.method === "tools/call"),
 	).toHaveLength(1);
 	expect(JSON.stringify(result)).not.toContain(token);
 	await peer.close();
+});
+
+it("rejects replayed JSON-RPC ids while keeping string and numeric ids distinct", async () => {
+	const fixture = await standardMcpFixture();
+	const client = await StandardMcpClient.open(
+		{
+			target: fixture.target,
+			resolveInput: async () => fixture.input,
+			fetch: fixture.fetch,
+		},
+		reference,
+		new AbortController().signal,
+	);
+	const bridge = await createStandardMcpAcpBridge({
+		client,
+		execution: reference,
+	});
+	bridges.push(bridge);
+	const authorization = bridge.server.headers[0].value;
+	const post = async (body: unknown, sessionId?: string) => {
+		const response = await fetch(bridge.server.url, {
+			method: "POST",
+			headers: {
+				Authorization: authorization,
+				Accept: "application/json, text/event-stream",
+				"Content-Type": "application/json",
+				"MCP-Protocol-Version": "2025-11-25",
+				...(sessionId ? { "MCP-Session-Id": sessionId } : {}),
+			},
+			body: JSON.stringify(body),
+		});
+		await response.arrayBuffer();
+		return {
+			response,
+			sessionId: response.headers.get("MCP-Session-Id") ?? sessionId,
+		};
+	};
+	const toolName = `mcp_${standardMcpDigest("write_note").slice(0, 32)}`;
+	const initialized = await post({
+		jsonrpc: "2.0",
+		id: "initialize",
+		method: "initialize",
+		params: {
+			protocolVersion: "2025-11-25",
+			capabilities: {},
+			clientInfo: { name: "bridge-replay-test", version: "1" },
+		},
+	});
+	if (!initialized.sessionId) throw new Error("bridge session missing");
+	const sessionId = initialized.sessionId;
+	await post(
+		{ jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+		sessionId,
+	);
+	await post(
+		{ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+		sessionId,
+	);
+	const first = await post(
+		{
+			jsonrpc: "2.0",
+			id: 7,
+			method: "tools/call",
+			params: { name: toolName, arguments: { text: "first" } },
+		},
+		sessionId,
+	);
+	expect(first.response.status).toBe(200);
+	const duplicate = await post(
+		{
+			jsonrpc: "2.0",
+			id: 7,
+			method: "tools/call",
+			params: { name: toolName, arguments: { text: "changed" } },
+		},
+		sessionId,
+	);
+	expect(duplicate.response.status).toBe(200);
+	const typed = await post(
+		{
+			jsonrpc: "2.0",
+			id: "7",
+			method: "tools/call",
+			params: { name: toolName, arguments: { text: "typed" } },
+		},
+		sessionId,
+	);
+	expect(typed.response.status).toBe(200);
+	expect(
+		fixture.trace.filter((entry) => entry.method === "tools/call"),
+	).toHaveLength(2);
 });
 
 it("rejects requests without the local bearer", async () => {
@@ -114,13 +236,13 @@ it("blocks the bridge when a Connection WRITE result is unknown", async () => {
 		reference,
 		new AbortController().signal,
 	);
-	const facts: string[] = [];
+	const facts: Extract<RuntimeOperationFactV2, { kind: "tool" }>[] = [];
 	let blocked = 0;
 	const bridge = await createStandardMcpAcpBridge({
 		client,
 		execution: reference,
 		recordOperationFact: async (fact) => {
-			facts.push(fact.phase);
+			if (fact.kind === "tool") facts.push(fact);
 		},
 		onBlocked: () => {
 			blocked++;
@@ -143,7 +265,14 @@ it("blocks the bridge when a Connection WRITE result is unknown", async () => {
 	if (!name) throw new Error("bridge tool missing");
 	const result = await peer.callTool({ name, arguments: { text: "unknown" } });
 	expect(result).toMatchObject({ isError: true });
-	expect(facts).toEqual(["intent", "started", "unknown"]);
+	expect(facts.map((fact) => fact.phase)).toEqual([
+		"intent",
+		"started",
+		"unknown",
+	]);
+	expect(
+		facts.every((fact) => fact.connection?.verification === "unverified"),
+	).toBe(true);
 	expect(blocked).toBe(1);
 	const before = fixture.trace.filter(
 		(entry) => entry.method === "tools/call",
