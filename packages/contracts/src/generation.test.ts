@@ -259,6 +259,8 @@ describe("standard contract artifacts", () => {
 			"/api/v2/skills",
 			"/api/v2/skills/installations",
 			"/api/v2/skills/installations/{installationId}",
+			"/api/v2/skills/projects",
+			"/api/v2/skills/projects/{projectId}",
 			"/api/v2/skills/versions",
 			"/api/v2/skills/versions/{skillVersionId}",
 			"/api/v2/skills/versions/{skillVersionId}/review",

@@ -11,6 +11,14 @@ export const OPENCODE_NATIVE_PROVENANCE = {
 	upstreamCommit: release.upstreamCommit,
 };
 
+/** The pinned release must explicitly opt into the reviewed ACP bridge contract. */
+export function supportsProtectedOpenCodeMcpTransport() {
+	return (
+		(release as typeof release & { protectedMcpTransport?: string })
+			.protectedMcpTransport === "acp-loopback-v1"
+	);
+}
+
 export async function verifyOpenCodeInstallation(executable: string) {
 	try {
 		const require = createRequire(import.meta.url);

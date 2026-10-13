@@ -44,7 +44,10 @@ import {
 	projectNativeMetadataCommandsV1,
 	projectNativeMetadataSkillsV1,
 } from "./native-metadata-projection.js";
-import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import {
+	type RuntimeOriginalExecutionRef,
+	runtimeAuthorizationDenied,
+} from "./runtime-authorization.js";
 import { readRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
 import {
 	boundedRuntimeSkillRead,
@@ -95,7 +98,9 @@ export interface SessionRuntimeModelOption {
 }
 export interface SessionRuntimeDriverOptions {
 	/** Deployment-owned verified Browser projection; never selected by a wire command. */
-	readonly browserCapability?: BrowserCapabilityAvailableV1;
+	readonly browserCapability?:
+		| BrowserCapabilityAvailableV1
+		| (() => BrowserCapabilityAvailableV1 | undefined);
 	readonly path: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;
@@ -131,6 +136,8 @@ export interface NativeSessionOptions {
 	selection: RuntimeSelectionV1;
 	/** Request-local execution identity for Browser adapters; never persisted here. */
 	readonly executionId?: string;
+	/** Trusted original execution binding for protected Connection adapters. */
+	readonly connectionReference?: RuntimeOriginalExecutionRef;
 	admit: () => Promise<void>;
 	resolveModelCredential?: RuntimeModelCredentialResolver;
 	/** Request-local Browser context; never persisted or selected by native input. */
@@ -741,6 +748,16 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							: undefined,
 						selection,
 						admit: async () => unavailable(),
+						...(active
+							? {
+									connectionReference: {
+										agentId: binding.agentId,
+										conversationId: binding.conversationId,
+										sessionGeneration: binding.sessionGeneration,
+										executionId: active.executionId,
+									},
+								}
+							: {}),
 						skillDirectory: this.options.skillDirectory,
 						update: async () => {},
 					});
@@ -1252,6 +1269,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			const sessionOptions: NativeSessionOptions = {
 				directory,
 				executionId: command.executionId,
+				connectionReference: {
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					sessionGeneration: command.sessionGeneration,
+					executionId: command.executionId,
+				},
 				selection,
 				admit: async () => {
 					if (!dispatched || this.closed)
@@ -1839,6 +1862,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		for (const wake of this.waiters.get(bindingRecord.ref) ?? []) wake();
 	}
 	async getCapabilities() {
+		const browserCapability =
+			typeof this.options.browserCapability === "function"
+				? this.options.browserCapability()
+				: this.options.browserCapability;
 		const skills = this.options.skillDirectory?.findSkills().map((skill) => ({
 			schemaVersion: 1 as const,
 			name: skill.name,
@@ -1859,10 +1886,24 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			connection: false,
 			supplementaryInstruction: false,
 			...(skills && skills.length > 0 ? { skills } : {}),
+			...(browserCapability
+				? {
+						browser: {
+							capabilityVersion: browserCapability.capabilityVersion,
+							operations: browserCapability.operations,
+							provenance: browserCapability.provenance,
+							conformance: browserCapability.conformance,
+						},
+					}
+				: {}),
 		};
 		const parsed = RuntimeCapabilitiesV1Schema.safeParse(capabilities);
 		if (!parsed.success) throw new RuntimeSkillDirectoryErrorV1();
 		return parsed.data;
+	}
+	async probeReadiness(signal: AbortSignal) {
+		signal.throwIfAborted();
+		return this.getCapabilities();
 	}
 	async getModelDirectory(ref: string): Promise<RuntimeModelDirectory> {
 		const handle = this.handles.get(ref);
@@ -1907,7 +1948,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 
 	/** Return bounded Browser descriptors from the deployment-owned projection. */
 	getBrowserToolDescriptors() {
-		return createCodexBrowserToolDescriptorsV1(this.options.browserCapability);
+		const browserCapability =
+			typeof this.options.browserCapability === "function"
+				? this.options.browserCapability()
+				: this.options.browserCapability;
+		return createCodexBrowserToolDescriptorsV1(browserCapability);
 	}
 	async replayEvents(ref: string, executionId: string, afterCursor?: string) {
 		const turn = (await this.forReference(ref))

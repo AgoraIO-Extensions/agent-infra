@@ -113,6 +113,7 @@ export {
 } from "./file-limits.js";
 export * from "./file-reconciliation.js";
 export * from "./idempotency.js";
+export * from "./native-capability-admission.js";
 export * from "./personal-api-agent-read.js";
 export * from "./personal-api-credentials.js";
 export * from "./personal-api-task-authorization.js";
@@ -135,6 +136,8 @@ export * from "./skill-hub.js";
 export * from "./skill-hub-agent-binding.js";
 export * from "./skill-hub-installation.js";
 export * from "./skill-hub-management.js";
+export * from "./skill-hub-project.js";
+export * from "./skill-hub-project.js";
 export * from "./skill-hub-read.js";
 export * from "./skill-package-publication.js";
 export * from "./skill-package-ref.js";

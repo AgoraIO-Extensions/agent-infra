@@ -138,9 +138,14 @@ const connection = new AgentSideConnection(
 				])
 					process.stdout.write(`${JSON.stringify(frame)}\n`);
 			}
+			const previous = JSON.parse(
+				await readFile(join(process.cwd(), "session.json"), "utf8").catch(
+					() => "{}",
+				),
+			);
 			await writeFile(
 				join(process.cwd(), "session.json"),
-				JSON.stringify({ sessionId, count }),
+				JSON.stringify({ ...previous, sessionId, count }),
 			);
 			await connection.sessionUpdate({
 				sessionId,

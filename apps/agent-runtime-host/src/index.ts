@@ -21,6 +21,7 @@ import {
 	type RuntimeExternalActionAuthorization,
 	RuntimeHost,
 	RuntimeHostError,
+	supportsProtectedOpenCodeMcpTransport,
 	verifyCodexPilotInstallation,
 } from "@agent-infra/agent-runtime";
 import type {
@@ -32,6 +33,8 @@ import type {
 } from "@agent-infra/contracts/runtime";
 import { getRequestListener, serve } from "@hono/node-server";
 import { createRuntimeHostApp, runtimeHostService } from "./app.js";
+import { probeRuntimeBrowserCapabilityV1 } from "./browser-capability-probe.js";
+import { createSessionBrowserExecutionContextV1 } from "./browser-session-provider.js";
 import {
 	readCodexInstalledSkillDeployment,
 	readCodexPilotConfiguration,
@@ -274,7 +277,11 @@ export async function assembleRuntimeHost(
 	const installationRevision =
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION;
 	const supportsProtectedStandardMcp =
-		binding === "codex" || binding === "claude";
+		binding === "codex" ||
+		binding === "claude" ||
+		(binding === "acp" &&
+			environment.AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE === "verified-v1" &&
+			supportsProtectedOpenCodeMcpTransport());
 	if (
 		installationRevision !== undefined &&
 		(!supportsProtectedStandardMcp ||
@@ -400,6 +407,7 @@ export async function assembleRuntimeHost(
 				: undefined;
 		const driver = configuration
 			? await CodexRuntimeDriver.open({
+					browserCapability: verifiedBrowserCapability,
 					...(skillDirectory ? { skillDirectory } : {}),
 					...(standardConnectionClient ? { standardConnectionClient } : {}),
 					...(connectionProfile && installationRevision === undefined
@@ -456,11 +464,19 @@ export async function assembleRuntimeHost(
 					? await openOpenCodeRuntime({
 							...messagesConfiguration,
 							browserCapability: verifiedBrowserCapability,
+							...(standardConnectionClient ? { standardConnectionClient } : {}),
 							...(skillDirectory ? { skillDirectory } : {}),
 							modelOptions: messagesRuntimeOptions ?? [],
 							...(messagesConfiguration.schemaVersion === 4
 								? {
 										authorizeModelAction: async (
+											action: RuntimeExternalActionAuthorization,
+										) => {
+											if (!assembledHost)
+												throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+											return assembledHost.authorizeExternalAction(action);
+										},
+										authorizeToolAction: async (
 											action: RuntimeExternalActionAuthorization,
 										) => {
 											if (!assembledHost)
@@ -495,6 +511,7 @@ export async function assembleRuntimeHost(
 							})
 						: await ClaudeRuntimeDriver.open({
 								...messagesConfiguration,
+								browserCapability: verifiedBrowserCapability,
 								...(skillDirectory ? { skillDirectory } : {}),
 								...(standardConnectionClient
 									? { standardConnectionClient }
@@ -539,13 +556,40 @@ export async function assembleRuntimeHost(
 					return verified;
 				}
 			: undefined;
+		const createBrowserExecutionContext =
+			options.createBrowserExecutionContext ??
+			(async (
+				input: Parameters<
+					NonNullable<RuntimeHostOptions["createBrowserExecutionContext"]>
+				>[0],
+			) => {
+				const capability = verifiedBrowserCapability();
+				if (!capability || !input.principal) return undefined;
+				return createSessionBrowserExecutionContextV1({
+					sandboxRoot: join(
+						dataDirectory,
+						"browser",
+						input.binding.conversationId,
+					),
+					capability,
+					binding: {
+						...input.binding,
+						subjectId: input.principal.id,
+						executionId: input.executionId,
+						pageRevision: input.pageRevision,
+						capabilityVersion: input.capabilityVersion,
+					},
+				});
+			});
 		const host = await RuntimeHost.open({
-			...(options.createBrowserExecutionContext
-				? {
-						createBrowserExecutionContext:
-							options.createBrowserExecutionContext,
-					}
-				: {}),
+			createBrowserExecutionContext,
+			probeBrowserCapability: async ({ declaration, binding, signal }) =>
+				probeRuntimeBrowserCapabilityV1({
+					dataDirectory,
+					declaration,
+					binding,
+					signal,
+				}),
 			onBrowserCapabilityAssembly: (input) => {
 				browserCapabilityAssembly = input;
 			},
