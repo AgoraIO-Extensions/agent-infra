@@ -1,6 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Square } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+	useEffect,
+	useId,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "../../components/ui/button.js";
 import { Label } from "../../components/ui/label.js";
@@ -14,6 +21,7 @@ import {
 import { Textarea } from "../../components/ui/textarea.js";
 import type { AgentProjectionV2 } from "../../pilot/generated-v2/types.gen.js";
 import { BrowserOperationStatus } from "./browser-operation-status.js";
+import { ConversationCapabilityPickerPanel } from "./conversation-capability-picker-panel.js";
 import { CommandNotice } from "./conversation-command-notice.js";
 import type { ConversationCommandResult } from "./conversation-commands.js";
 import {
@@ -25,6 +33,7 @@ import { ConversationMessages } from "./conversation-screen-messages.js";
 import { currentExecution, isTerminal } from "./conversation-screen-state.js";
 import { useConversationCommands } from "./use-conversation-commands.js";
 import { useConversationModelSelection } from "./use-conversation-model-selection.js";
+import { useConversationNativeMetadata } from "./use-conversation-native-metadata.js";
 import { useConversationTimeline } from "./use-conversation-timeline.js";
 
 // Readiness is still authoritative on the server; a short bounded poll keeps
@@ -99,6 +108,43 @@ export function ActiveConversation({
 		timeline.events,
 		acceptedExecution,
 	);
+	const nativeMetadataCommands = useConversationNativeMetadata({
+		identityKey,
+		conversationId,
+		executionId: latestExecution,
+		selector: "commands",
+	});
+	const nativeMetadataSkills = useConversationNativeMetadata({
+		identityKey,
+		conversationId,
+		executionId: latestExecution,
+		selector: "skills",
+	});
+	const nativeMetadataCapabilities = useMemo(
+		() => [
+			...nativeMetadataCommands.capabilities,
+			...nativeMetadataSkills.capabilities,
+		],
+		[nativeMetadataCommands.capabilities, nativeMetadataSkills.capabilities],
+	);
+	const nativeMetadataScopeKey = JSON.stringify([
+		identityKey,
+		agentId,
+		conversationId,
+		latestExecution ?? null,
+	]);
+	const nativeMetadataLoading =
+		latestExecution !== undefined &&
+		(nativeMetadataCommands.isPending || nativeMetadataSkills.isPending);
+	const nativeMetadataUnavailable =
+		latestExecution !== undefined &&
+		!nativeMetadataLoading &&
+		!nativeMetadataCommands.available &&
+		!nativeMetadataSkills.available &&
+		(nativeMetadataCommands.isError || nativeMetadataSkills.isError);
+	const nativeMetadataReady =
+		latestExecution !== undefined &&
+		(nativeMetadataCommands.available || nativeMetadataSkills.available);
 	const active = Boolean(latestExecution && !isTerminal(status));
 	const visibleNotice =
 		notice ||
@@ -337,6 +383,33 @@ export function ActiveConversation({
 		);
 	return (
 		<>
+			{latestExecution && (
+				<div aria-live="polite">
+					{nativeMetadataLoading && (
+						<p role="status">正在读取当前执行的命令和 Skill…</p>
+					)}
+					{nativeMetadataUnavailable && (
+						<Alert role="status">
+							<AlertDescription>
+								当前执行的命令或 Skill 暂不可用，已隐藏旧数据。
+							</AlertDescription>
+						</Alert>
+					)}
+					{nativeMetadataReady &&
+						!nativeMetadataLoading &&
+						nativeMetadataCapabilities.length === 0 && (
+						<p role="status">当前执行没有可用命令或 Skill。</p>
+					)}
+					{nativeMetadataReady && nativeMetadataCapabilities.length > 0 && (
+						<ConversationCapabilityPickerPanel
+							key={nativeMetadataScopeKey}
+							capabilities={nativeMetadataCapabilities}
+							scopeKey={nativeMetadataScopeKey}
+							disabled={!available}
+						/>
+					)}
+				</div>
+			)}
 			<div
 				hidden={Boolean(selectedExecution)}
 				className="chat-thread space-y-5"
