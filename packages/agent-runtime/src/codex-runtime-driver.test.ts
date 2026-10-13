@@ -3971,6 +3971,106 @@ describe("Codex Runtime Driver", () => {
 		},
 	);
 
+	it("fails closed when a legacy Browser fact lacks workload identity", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const driver = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(path),
+				authorizeExternalAction: async () => ({ revalidate: () => {} }),
+			},
+			async () => bridge,
+		);
+		drivers.push(driver);
+		const command = submitCommand();
+		const accepted = await driver.execute(command);
+		let calls = 0;
+		const browser = {
+			capabilityVersion: 3,
+			binding: {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) => {
+				calls += 1;
+				return {
+					actionId: request.actionId,
+					operationRef: request.operationRef,
+					attemptRef: request.attemptRef,
+					binding: request.binding,
+					phase: "completed" as const,
+					contentItems: [],
+					success: true,
+				};
+			},
+		};
+		const request = {
+			tool: "browser_click",
+			arguments: {},
+			pageRevision: 1,
+			actionId: "browser-action-legacy-fact",
+		};
+		await expect(
+			driver.executeBrowserTool(
+				accepted.nativeSessionRef,
+				command.executionId,
+				request,
+				{ browser },
+			),
+		).resolves.toMatchObject({ phase: "completed", success: true });
+		const originalUpdate = DurableJsonFile.prototype.update;
+		const stripLegacyIdentity = vi
+			.spyOn(DurableJsonFile.prototype, "update")
+			.mockImplementationOnce(async function <R>(
+				this: DurableJsonFile<unknown>,
+				change: (draft: unknown) => R | Promise<R>,
+			) {
+				return originalUpdate.call(this, async (draft) => {
+					const state = draft as StoredCodexDriverState;
+					for (const session of Object.values(state.sessions))
+						for (const journal of Object.values(session.journals ?? {}))
+							for (const event of journal.events) {
+								const payload = (event as { payload?: unknown }).payload;
+								if (
+									payload &&
+									typeof payload === "object" &&
+									"browser" in payload &&
+									payload.browser &&
+									typeof payload.browser === "object"
+								) {
+									delete (payload.browser as Record<string, unknown>)
+										.workloadRevision;
+									delete (payload.browser as Record<string, unknown>)
+										.imageDigest;
+								}
+							}
+					return change(draft);
+				});
+			});
+		try {
+			await expect(
+				driver.executeBrowserTool(
+					accepted.nativeSessionRef,
+					command.executionId,
+					request,
+					{ browser },
+				),
+			).resolves.toMatchObject({
+				phase: "unknown",
+				success: false,
+				failureCode: "recovery_unconfirmed",
+			});
+			expect(calls).toBe(1);
+		} finally {
+			stripLegacyIdentity.mockRestore();
+		}
+	});
+
 	it("records an unknown result when the Browser response identity mismatches", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
