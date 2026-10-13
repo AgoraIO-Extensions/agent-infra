@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import runtimePackage from "../package.json" with { type: "json" };
-import { OPENCODE_NATIVE_PROVENANCE } from "./opencode-installation.js";
+import {
+	OPENCODE_NATIVE_PROVENANCE,
+	supportsProtectedOpenCodeMcpTransport,
+} from "./opencode-installation.js";
 import { PI_NATIVE_PROVENANCE } from "./pi-installation.js";
 
 describe("protected Connection MCP compatibility facts", () => {
@@ -28,5 +31,6 @@ describe("protected Connection MCP compatibility facts", () => {
 		);
 		expect(readme).toContain(PI_NATIVE_PROVENANCE.upstreamCommit);
 		expect(readme).toContain(OPENCODE_NATIVE_PROVENANCE.upstreamCommit);
+		expect(supportsProtectedOpenCodeMcpTransport()).toBe(false);
 	});
 });

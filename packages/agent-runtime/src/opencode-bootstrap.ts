@@ -15,6 +15,7 @@ import type {
 } from "./driver.js";
 import { openRuntimeMessagesTransport } from "./messages-model-transport.js";
 import { verifyOpenCodeInstallation } from "./opencode-installation.js";
+import type { StandardMcpClientOptions } from "./standard-mcp-client.js";
 import { workspacePathAllowed } from "./workspace-path.js";
 
 export interface OpenCodeRuntimeOptions {
@@ -35,6 +36,10 @@ export interface OpenCodeRuntimeOptions {
 		authentication: "api-key" | "bearer";
 	}[];
 	readonly authorizeModelAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
+	readonly standardConnectionClient?: StandardMcpClientOptions;
+	readonly authorizeToolAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 }
@@ -80,7 +85,7 @@ export async function openOpenCodeRuntime(options: OpenCodeRuntimeOptions) {
 	await verifyOpenCodeInstallation(options.executable);
 	return GenericAcpRuntimeDriver.open({
 		...options,
-		reuseNativeSession: true,
+		reuseNativeSession: !options.standardConnectionClient,
 		modelOptions: options.modelOptions.map((option) => ({
 			modelOptionId: option.modelOptionId,
 			nativeModelId: `anthropic/${option.model}`,
