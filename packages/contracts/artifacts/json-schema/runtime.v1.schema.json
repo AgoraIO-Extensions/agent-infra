@@ -3357,7 +3357,6 @@
         "deliveryFence",
         "grant",
         "hostSessionRef",
-        "generationId",
         "skillName",
         "relativePath"
       ],
@@ -3368,6 +3367,10 @@
       "properties": {
         "bytesBase64": {
           "maxLength": 1398104,
+          "type": "string"
+        },
+        "generationId": {
+          "pattern": "^[a-f0-9]{64}$",
           "type": "string"
         },
         "hostSessionRef": {

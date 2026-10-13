@@ -135,6 +135,7 @@ const skillDirectoryResponse = {
 const skillResourceResponse = {
 	schemaVersion: 1,
 	hostSessionRef: "host-client",
+	generationId: "a".repeat(64),
 	skillName: "demo",
 	relativePath: "SKILL.md",
 	sizeBytes: 5,

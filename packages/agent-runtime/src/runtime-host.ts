@@ -1901,6 +1901,7 @@ export class RuntimeHost {
 		return RuntimeSkillResourceReadResponseV1Schema.parse({
 			schemaVersion: 1,
 			hostSessionRef: request.hostSessionRef,
+			generationId: request.generationId,
 			skillName: request.skillName,
 			relativePath: request.relativePath,
 			sizeBytes: encoded.byteLength,

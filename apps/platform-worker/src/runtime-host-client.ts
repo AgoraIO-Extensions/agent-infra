@@ -328,6 +328,7 @@ function parseSkillResourceResponse(
 	}
 	if (
 		response.hostSessionRef !== request.hostSessionRef ||
+		response.generationId !== request.generationId ||
 		response.skillName !== request.skillName ||
 		response.relativePath !== request.relativePath
 	)
