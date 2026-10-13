@@ -10,6 +10,7 @@ import {
 } from "@agent-infra/platform-store";
 import type { Hono } from "hono";
 import type { ConnectionCapabilityV1 } from "../connection-consumer-profile.js";
+import { type AuditTelemetry, observeAuditQuery } from "./audit-telemetry.js";
 import {
 	HttpProtocolError,
 	parsePageQuery,
@@ -40,6 +41,7 @@ interface PlatformAuditQuery {
 export interface SessionAuditRoutesDependencies {
 	readonly identity: IdentityAdapter;
 	readonly audit: PlatformAuditQuery;
+	readonly telemetry?: AuditTelemetry;
 	readonly connectionCapability?: ConnectionCapabilityV1;
 }
 
@@ -74,18 +76,24 @@ async function readAuditPage(
 	}
 	const page = parsePageQuery(request, metadata.traceId);
 	try {
-		return await dependencies.audit.listAudit(
-			{
-				schemaVersion: 1,
-				kind: "administrator",
-				administratorId: identity.userId,
-			},
-			{
-				schemaVersion: 1,
-				limit: page.limit ?? 50,
-				...(page.cursor === undefined ? {} : { cursor: page.cursor }),
-			},
-		);
+		return await observeAuditQuery({
+			telemetry: dependencies.telemetry,
+			operation: "list",
+			metadata,
+			work: () =>
+				dependencies.audit.listAudit(
+					{
+						schemaVersion: 1,
+						kind: "administrator",
+						administratorId: identity.userId,
+					},
+					{
+						schemaVersion: 1,
+						limit: page.limit ?? 50,
+						...(page.cursor === undefined ? {} : { cursor: page.cursor }),
+					},
+				),
+		});
 	} catch (error) {
 		mapAuditError(error, metadata.traceId);
 	}

@@ -6,6 +6,7 @@ import {
 import type { PostgresScopedPlatformAuditQueryV1 } from "@agent-infra/platform-store";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
+import type { AuditTelemetry } from "./audit-telemetry.js";
 import { HttpProtocolError } from "./common.js";
 import { registerScopedAuditRoutes } from "./scoped-audit-routes.js";
 
@@ -63,7 +64,7 @@ const item = {
 	operation: null,
 };
 
-function fixture() {
+function fixture(telemetry?: AuditTelemetry) {
 	const identity = {
 		resolve: vi.fn().mockResolvedValue(browser),
 		hydrateUsers: vi.fn(),
@@ -103,7 +104,7 @@ function fixture() {
 			? context.json(error.body, error.status)
 			: context.json({ code: "unexpected" }, 500),
 	);
-	registerScopedAuditRoutes(app, { identity, audit });
+	registerScopedAuditRoutes(app, { identity, audit, telemetry });
 	return { app, identity, audit };
 }
 
@@ -527,5 +528,84 @@ describe("scoped audit HTTP adapter", () => {
 			/SENSITIVE_SENTINEL|items|nextCursor/,
 		);
 		expect(audit.recordDeniedQuery).not.toHaveBeenCalled();
+	});
+
+	it("records a bounded audit query stage without inventing a write", async () => {
+		const telemetry = { record: vi.fn() } satisfies AuditTelemetry;
+		const { app } = fixture(telemetry);
+		const response = await app.request("/api/v1/audit?limit=5");
+		expect(response.status).toBe(200);
+		expect(telemetry.record).toHaveBeenCalledOnce();
+		expect(telemetry.record).toHaveBeenCalledWith(
+			expect.objectContaining({
+				stage: "audit_query",
+				outcome: "completed",
+				operationRef: "platform.audit.list",
+			}),
+		);
+		for (const [event] of telemetry.record.mock.calls) {
+			expect(event).toMatchObject({
+				requestId: expect.any(String),
+				traceId: expect.any(String),
+				durationMs: expect.any(Number),
+			});
+			expect(event.operationRef).not.toContain("audit-a");
+		}
+	});
+
+	it("keeps query failures visible while recording failed stages", async () => {
+		const telemetry = { record: vi.fn() } satisfies AuditTelemetry;
+		const { app, audit } = fixture(telemetry);
+		audit.listAudit.mockRejectedValueOnce(new Error("private database detail"));
+		const response = await app.request("/api/v1/audit");
+		expect(response.status).toBe(503);
+		expect(await response.text()).not.toMatch(/items|nextCursor/);
+		expect(telemetry.record.mock.calls.map(([event]) => event)).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ stage: "audit_query", outcome: "failed" }),
+			]),
+		);
+	});
+
+	it("records audit-write only when a denied-query audit is persisted", async () => {
+		const telemetry = { record: vi.fn() } satisfies AuditTelemetry;
+		const { app } = fixture(telemetry);
+		const response = await app.request(
+			"/api/v3/admin/audit?principalId=PRIVATE_FILTER_SENTINEL",
+		);
+		expect(response.status).toBe(404);
+		expect(telemetry.record.mock.calls.map(([event]) => event)).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					stage: "audit_query",
+					outcome: "rejected",
+					operationRef: "platform.audit.denied",
+				}),
+				expect.objectContaining({
+					stage: "audit_write",
+					outcome: "completed",
+					operationRef: "platform.audit.denied",
+				}),
+			]),
+		);
+	});
+
+	it("records failed audit-write without changing denial fail-closed behavior", async () => {
+		const telemetry = { record: vi.fn() } satisfies AuditTelemetry;
+		const { app, audit } = fixture(telemetry);
+		audit.recordDeniedQuery.mockRejectedValueOnce(
+			new Error("private database detail"),
+		);
+		const response = await app.request(
+			"/api/v3/admin/audit?principalId=PRIVATE_FILTER_SENTINEL",
+		);
+		expect(response.status).toBe(503);
+		expect(await response.text()).not.toMatch(/PRIVATE_FILTER_SENTINEL|items/);
+		expect(telemetry.record.mock.calls.map(([event]) => event)).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ stage: "audit_query", outcome: "rejected" }),
+				expect.objectContaining({ stage: "audit_write", outcome: "failed" }),
+			]),
+		);
 	});
 });

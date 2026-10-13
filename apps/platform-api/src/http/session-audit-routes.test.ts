@@ -6,7 +6,7 @@ import {
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { createConnectionCapability } from "../connection-consumer-profile.js";
-
+import type { AuditTelemetry } from "./audit-telemetry.js";
 import { HttpProtocolError } from "./common.js";
 import { registerSessionAuditRoutes } from "./session-audit-routes.js";
 
@@ -29,6 +29,7 @@ function createApp(
 		mcpPath: string;
 		configFingerprint: string;
 	},
+	telemetry?: AuditTelemetry,
 ) {
 	const app = new Hono();
 	app.onError((error, context) =>
@@ -67,6 +68,7 @@ function createApp(
 	registerSessionAuditRoutes(app, {
 		identity: identityAdapter,
 		audit,
+		telemetry,
 		...(connectionCapability ? { connectionCapability } : {}),
 	});
 	return { app, identityAdapter, audit };
@@ -387,5 +389,23 @@ describe("session and audit routes", () => {
 			retryable: true,
 		});
 		expect(JSON.stringify(body)).not.toContain("private database detail");
+	});
+
+	it("records a bounded audit query stage for the administrator page", async () => {
+		const telemetry = { record: vi.fn() } satisfies AuditTelemetry;
+		const { app } = createApp(activeIdentity, undefined, telemetry);
+		const response = await app.request("/api/v2/admin/audit");
+		expect(response.status).toBe(200);
+		expect(telemetry.record).toHaveBeenCalledOnce();
+		expect(telemetry.record).toHaveBeenCalledWith(
+			expect.objectContaining({
+				stage: "audit_query",
+				outcome: "completed",
+				operationRef: "platform.audit.list",
+				requestId: expect.any(String),
+				traceId: expect.any(String),
+				durationMs: expect.any(Number),
+			}),
+		);
 	});
 });
