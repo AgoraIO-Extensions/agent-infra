@@ -848,6 +848,10 @@ export class StandardMcpClient {
 		const headers = new Headers(init?.headers);
 		headers.set("authorization", `Bearer ${this.#input.token}`);
 		const fetch = this.options.fetch ?? globalThis.fetch;
+		// The operation journal must confirm the native started boundary before
+		// creating the HTTP request. Otherwise a WRITE can reach Connection while
+		// its durable started fact is still pending.
+		await recordStarted?.();
 		const pending = fetch(url, {
 			...init,
 			headers,
@@ -858,7 +862,6 @@ export class StandardMcpClient {
 			]),
 		});
 		void pending.catch(() => {});
-		await recordStarted?.();
 		const response = await pending;
 		if (response.status >= 300 && response.status < 400) unavailable();
 		if (!response.body) return response;

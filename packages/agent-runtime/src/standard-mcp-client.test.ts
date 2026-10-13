@@ -94,6 +94,49 @@ it("uses actual standard initialize/discovery/call once without exporting creden
 	expect(JSON.stringify([client.toolDefinitions, result])).not.toContain(token);
 });
 
+it("does not dispatch the HTTP WRITE until the started fact is durable", async () => {
+	const fixture = await standardMcpFixture();
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const client = await StandardMcpClient.open(
+		{
+			target: fixture.target,
+			resolveInput: async () => fixture.input,
+			fetch: fixture.fetch,
+		},
+		reference,
+		new AbortController().signal,
+	);
+	closes.push(() => client.close());
+	const pending = client.call(
+		client.toolDefinitions[0]?.tools[0]?.name ?? "",
+		{ text: "started barrier" },
+		{
+			block: () => {},
+			confirm: async () => {},
+			assertCurrent: async () => () => {},
+			prepare: async () => {},
+			started: async () => {
+				entered.resolve();
+				await release.promise;
+			},
+		},
+		new AbortController().signal,
+	);
+	await entered.promise;
+	expect(
+		fixture.trace.filter((item) => item.method === "tools/call"),
+	).toHaveLength(0);
+	release.resolve();
+	await expect(pending).resolves.toMatchObject({
+		phase: "completed",
+		success: true,
+	});
+	expect(
+		fixture.trace.filter((item) => item.method === "tools/call"),
+	).toHaveLength(1);
+});
+
 it.each(["persisted", "failed", "revoked"] as const)(
 	"waits for RPC identity persistence and rechecks authority when it is %s",
 	async (outcome) => {
@@ -142,7 +185,9 @@ it.each(["persisted", "failed", "revoked"] as const)(
 				},
 				started: async () => {
 					starts++;
-					expect(sends).toEqual([true]);
+					// The started fact is committed before fetch dispatch; the request
+					// is asserted after the callback releases the barrier below.
+					expect(sends).toEqual([]);
 				},
 			},
 			new AbortController().signal,
