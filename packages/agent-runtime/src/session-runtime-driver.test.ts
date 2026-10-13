@@ -534,3 +534,54 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 		await rm(path, { recursive: true, force: true });
 	}
 });
+
+it("keeps a protected cancellation as an unknown Turn hold", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-protected-unknown-"));
+	let sessionOptions: NativeSessionOptions | undefined;
+	let entered!: () => void;
+	const enteredPrompt = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	let release!: () => void;
+	const releasePrompt = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const runtime = await driver(path, async (options) => {
+		sessionOptions = options;
+		return {
+			nativeId: "native-protected",
+			select: async () => {},
+			prompt: async () => {
+				entered();
+				await releasePrompt;
+				return { stopReason: "cancelled" };
+			},
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	const pending = runtime.execute(command([]));
+	try {
+		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
+		await enteredPrompt;
+		await sessionOptions?.markUnknown?.();
+		release();
+		await pending;
+		const state = JSON.parse(
+			await readFile(join(path, "index.json"), "utf8"),
+		) as { sessions: { ref: string }[] };
+		const ref = state.sessions[0]?.ref;
+		if (!ref) throw new Error("missing session ref");
+		const persisted = JSON.parse(
+			await readFile(join(path, ref, "state.json"), "utf8"),
+		) as { turns: { status: string; events: { type: string }[] }[] };
+		expect(persisted.turns[0]?.status).toBe("unknown");
+		expect(
+			persisted.turns[0]?.events.some((event) => event.type === "completed"),
+		).toBe(false);
+	} finally {
+		release();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});

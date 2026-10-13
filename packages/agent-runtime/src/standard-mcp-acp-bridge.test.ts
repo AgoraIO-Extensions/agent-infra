@@ -305,16 +305,21 @@ it("blocks the bridge when a Connection WRITE result is unknown", async () => {
 		new AbortController().signal,
 	);
 	const facts: Extract<RuntimeOperationFactV2, { kind: "tool" }>[] = [];
+	const order: string[] = [];
 	let blocked = 0;
 	const bridge = await createStandardMcpAcpBridge({
 		client,
 		execution: reference,
 		nativeSessionRef: () => "native-bridge-test",
 		recordOperationFact: async (fact) => {
-			if (fact.kind === "tool") facts.push(fact);
+			if (fact.kind === "tool") {
+				facts.push(fact);
+				order.push(`fact:${fact.phase}`);
+			}
 		},
 		onBlocked: () => {
 			blocked++;
+			order.push("blocked");
 		},
 	});
 	bridges.push(bridge);
@@ -343,6 +348,7 @@ it("blocks the bridge when a Connection WRITE result is unknown", async () => {
 		facts.every((fact) => fact.connection?.verification === "unverified"),
 	).toBe(true);
 	expect(blocked).toBe(1);
+	expect(order.at(-1)).toBe("blocked");
 	const before = fixture.trace.filter(
 		(entry) => entry.method === "tools/call",
 	).length;
@@ -352,5 +358,57 @@ it("blocks the bridge when a Connection WRITE result is unknown", async () => {
 	expect(
 		fixture.trace.filter((entry) => entry.method === "tools/call").length,
 	).toBe(before);
+	await peer.close();
+});
+
+it("blocks native cancellation when intent persistence fails before dispatch", async () => {
+	const fixture = await standardMcpFixture();
+	const client = await StandardMcpClient.open(
+		{
+			target: fixture.target,
+			resolveInput: async () => fixture.input,
+			fetch: fixture.fetch,
+		},
+		reference,
+		new AbortController().signal,
+	);
+	let blocked = 0;
+	let firstIntent = true;
+	const bridge = await createStandardMcpAcpBridge({
+		client,
+		execution: reference,
+		nativeSessionRef: () => "native-bridge-test",
+		recordOperationFact: async (fact) => {
+			if (fact.phase === "intent" && firstIntent) {
+				firstIntent = false;
+				throw new Error("controlled intent persistence failure");
+			}
+		},
+		onBlocked: () => {
+			blocked++;
+		},
+	});
+	bridges.push(bridge);
+	const peer = new Client({ name: "bridge-intent-failure-test", version: "1" });
+	const transport = new StreamableHTTPClientTransport(
+		new URL(bridge.server.url),
+		{
+			requestInit: {
+				headers: Object.fromEntries(
+					bridge.server.headers.map((header) => [header.name, header.value]),
+				),
+			},
+		},
+	);
+	await peer.connect(transport);
+	const name = (await peer.listTools()).tools[0]?.name;
+	if (!name) throw new Error("bridge tool missing");
+	await expect(
+		peer.callTool({ name, arguments: { text: "intent-failure" } }),
+	).rejects.toThrow();
+	expect(blocked).toBe(1);
+	expect(
+		fixture.trace.filter((entry) => entry.method === "tools/call"),
+	).toHaveLength(0);
 	await peer.close();
 });

@@ -161,6 +161,13 @@ export async function createStandardMcpAcpBridge(
 		let requestIdentity:
 			| { rpcRequestId: string | number; requestDigest: string }
 			| undefined;
+		let blockNotified = false;
+		let intentCommitted = false;
+		const notifyBlocked = async () => {
+			if (blockNotified) return;
+			blockNotified = true;
+			await Promise.resolve(options.onBlocked?.()).catch(() => {});
+		};
 		const write = async (phase: RuntimeOperationFactV2["phase"]) => {
 			await options.recordOperationFact?.({
 				kind: "tool",
@@ -223,14 +230,21 @@ export async function createStandardMcpAcpBridge(
 			block: () => {
 				if (blocked) return;
 				blocked = true;
-				void Promise.resolve(options.onBlocked?.()).catch(() => {});
+				if (!intentCommitted) void notifyBlocked();
 			},
 			confirm: async (value) => {
-				await write(value.phase);
+				try {
+					await write(value.phase);
+				} catch (error) {
+					if (blocked) await notifyBlocked();
+					throw error;
+				}
+				if (value.phase === "unknown" && blocked) await notifyBlocked();
 			},
 			prepare: async (request) => {
 				requestIdentity = request;
 				await write("intent");
+				intentCommitted = true;
 			},
 			started: async (request) => {
 				requestIdentity = request;

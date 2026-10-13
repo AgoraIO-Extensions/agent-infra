@@ -138,6 +138,8 @@ export interface NativeSessionOptions {
 	readonly executionId?: string;
 	/** Trusted original execution binding for protected Connection adapters. */
 	readonly connectionReference?: RuntimeOriginalExecutionRef;
+	/** Retires a protected external action while preserving an unknown Turn hold. */
+	readonly markUnknown?: () => Promise<void>;
 	admit: () => Promise<void>;
 	resolveModelCredential?: RuntimeModelCredentialResolver;
 	/** Request-local Browser context; never persisted or selected by native input. */
@@ -1213,6 +1215,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			admitted = resolve;
 		});
 		let dispatched = false;
+		let unknownHold = false;
 		const toolFacts = new Map<
 			string,
 			{ operationRef: string; attemptRef: string; startedAt: number }
@@ -1277,7 +1280,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				},
 				selection,
 				admit: async () => {
-					if (!dispatched || this.closed)
+					if (!dispatched || this.closed || unknownHold)
 						throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 					await this.resolve(file, command, {
 						outcome: "accepted",
@@ -1285,6 +1288,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					});
 					await this.status(file, command.executionId, "running");
 					admitted();
+				},
+				markUnknown: async () => {
+					unknownHold = true;
+					if (dispatched && !this.closed)
+						await this.status(file, command.executionId, "unknown");
 				},
 				...(resolveModelCredential ? { resolveModelCredential } : {}),
 				...(browser ? { browser } : {}),
@@ -1309,7 +1317,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						}
 					: undefined,
 				update: async (event) => {
-					if (!dispatched) return;
+					if (!dispatched || unknownHold) return;
 					await this.resolve(file, command, {
 						outcome: "accepted",
 						status: "running",
@@ -1419,20 +1427,23 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				// Only a Turn that passed the native boundary counts as dispatched.
 				dispatched = true;
 				const response = await native.prompt(input);
-				await this.resolve(file, command, {
-					outcome: "accepted",
-					status: "running",
-				});
-				await this.status(
-					file,
-					command.executionId,
-					this.options.completionStatus(response.stopReason),
-					response.stopReason,
-					response.checkpoint,
-				);
-				admitted();
+				if (!unknownHold) {
+					await this.resolve(file, command, {
+						outcome: "accepted",
+						status: "running",
+					});
+					await this.status(
+						file,
+						command.executionId,
+						this.options.completionStatus(response.stopReason),
+						response.stopReason,
+						response.checkpoint,
+					);
+					admitted();
+				}
 			} catch {
-				await this.status(file, command.executionId, "unknown");
+				if (!unknownHold)
+					await this.status(file, command.executionId, "unknown");
 			}
 		})();
 		let timer: ReturnType<typeof setTimeout> | undefined;
