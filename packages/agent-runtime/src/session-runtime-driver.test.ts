@@ -647,7 +647,8 @@ it("lets a protected unknown hold supersede a racing terminal status", async () 
 		expect(persisted.turns[0]?.status).toBe("unknown");
 		expect(
 			persisted.turns[0]?.events.some((event) => event.type === "completed"),
-		).toBe(false);
+		).toBe(true);
+		expect(persisted.turns[0]?.events.at(-1)?.type).toBe("status");
 	} finally {
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });

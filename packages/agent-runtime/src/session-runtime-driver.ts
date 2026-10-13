@@ -658,10 +658,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					executions.add(turn.executionId);
 					turns.add(turn.turnId);
 					let completed = false;
+					let corrected = false;
 					for (const event of turn.events) {
 						sequence++;
 						if (
-							completed ||
+							(completed && !(event.type === "status" && !corrected)) ||
 							!RuntimeEventV1Schema.safeParse(event).success ||
 							event.executionId !== turn.executionId ||
 							event.cursor !== `${this.options.cursorPrefix}-${sequence}` ||
@@ -671,7 +672,17 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						eventKeys.add(event.adapterEventKey);
 						if (event.type === "completed") {
 							completed = true;
-							if (event.payload.status !== turn.status) unavailable();
+							if (!turn.unknownHold && event.payload.status !== turn.status)
+								unavailable();
+						} else if (completed) {
+							if (
+								!turn.unknownHold ||
+								event.type !== "status" ||
+								event.payload.status !== "unknown" ||
+								corrected
+							)
+								unavailable();
+							corrected = true;
 						}
 					}
 					const operationFacts = turn.operationFacts ?? [];
@@ -693,15 +704,19 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						factKeys.add(key);
 						latestFacts.set(key, fact);
 					}
-					if (terminal(turn.status) !== completed) unavailable();
+					if (corrected) {
+						if (turn.status !== "unknown" || !turn.unknownHold) unavailable();
+					} else if (terminal(turn.status) !== completed) unavailable();
 					if (
 						completed &&
+						!corrected &&
 						turn.nativeCheckpoint &&
 						!turn.nativeTerminalCheckpoint
 					)
 						unavailable();
 					if (
 						completed &&
+						!corrected &&
 						this.options.completionStatus(turn.nativeStopReason ?? "") !==
 							turn.status
 					)
@@ -1045,15 +1060,16 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		command: RuntimeDriverCommand,
 		value: RuntimeDriverOperationRecord["result"],
 	) {
-		const current = file
-			.read()
-			.turns.find((turn) => turn.executionId === command.executionId);
-		const record = result(
-			command,
-			file.read().binding.ref,
-			current?.unknownHold ? unknownResult : value,
-		);
+		let record!: RuntimeDriverOperationRecord;
 		await file.update((state) => {
+			const current = state.turns.find(
+				(turn) => turn.executionId === command.executionId,
+			);
+			record = result(
+				command,
+				state.binding.ref,
+				current?.unknownHold ? unknownResult : value,
+			);
 			let operation = state.operations.find(
 				(entry) => entry.key === operationKey(command),
 			);
@@ -1593,11 +1609,18 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			if (unknownHold && terminal(turn.status)) {
 				const completed = turn.events.at(-1);
 				if (completed?.type !== "completed") unavailable();
-				turn.events[turn.events.length - 1] = RuntimeEventV1Schema.parse({
-					...completed,
-					type: "status",
-					payload: { status: "unknown" },
-				});
+				state.sequence++;
+				turn.events.push(
+					RuntimeEventV1Schema.parse({
+						schemaVersion: 1,
+						executionId,
+						adapterEventKey: randomUUID(),
+						cursor: `${this.options.cursorPrefix}-${state.sequence}`,
+						occurredAt: new Date().toISOString(),
+						type: "status",
+						payload: { status: "unknown" },
+					}),
+				);
 				turn.status = "unknown";
 				turn.unknownHold = true;
 				delete turn.nativeStopReason;
