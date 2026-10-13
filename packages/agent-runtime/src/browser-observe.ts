@@ -24,11 +24,15 @@ export type BrowserPageRecoveryInputV1 = Readonly<{
 	capabilityVersion: number;
 	sessionGeneration: number;
 	resourceFence: number;
+	workloadRevision: number;
+	imageDigest: string;
 }>;
 
 export type BrowserContextRecoveryBindingV1 = Readonly<{
 	sessionGeneration: number;
 	resourceFence: number;
+	workloadRevision: number;
+	imageDigest: string;
 }>;
 
 export type BrowserElementReferenceV1 = Readonly<{
@@ -556,14 +560,19 @@ export function createBrowserObserveControllerV1(input: {
 			!Number.isSafeInteger(recovery.sessionGeneration) ||
 			recovery.sessionGeneration < 1 ||
 			!Number.isSafeInteger(recovery.resourceFence) ||
-			recovery.resourceFence < 1
+			recovery.resourceFence < 1 ||
+			!Number.isSafeInteger(recovery.workloadRevision) ||
+			recovery.workloadRevision < 1 ||
+			!/^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$/u.test(recovery.imageDigest)
 		)
 			throw new Error("BROWSER_PAGE_RECOVERY_INVALID");
 		const binding = input.recoveryBinding;
 		if (
 			!binding ||
 			binding.sessionGeneration !== recovery.sessionGeneration ||
-			binding.resourceFence !== recovery.resourceFence
+			binding.resourceFence !== recovery.resourceFence ||
+			binding.workloadRevision !== recovery.workloadRevision ||
+			binding.imageDigest !== recovery.imageDigest
 		)
 			throw new Error("BROWSER_PAGE_RECOVERY_BINDING_MISMATCH");
 		if (capability.capabilityVersion !== recovery.capabilityVersion)
