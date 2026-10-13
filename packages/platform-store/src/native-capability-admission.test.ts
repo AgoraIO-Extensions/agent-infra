@@ -112,12 +112,18 @@ describe("native capability admission Store seam", () => {
 	});
 
 	it("fails closed for stale or disabled metadata", async () => {
-		const stale = createHarness();
-		stale.metadata.setProjection({ ...projection, revision: "c".repeat(64) });
+		const staleMetadata = new FakeNativeCapabilityMetadataRevalidationV1({
+			projection,
+		});
+		const stale = createHarness({}, staleMetadata);
+		staleMetadata.setProjection({ ...projection, revision: "c".repeat(64) });
 		expect((await stale.useCase.admit(request)).outcome).toBe("stale");
 
-		const disabled = createHarness();
-		disabled.metadata.setProjection({
+		const disabledMetadata = new FakeNativeCapabilityMetadataRevalidationV1({
+			projection,
+		});
+		const disabled = createHarness({}, disabledMetadata);
+		disabledMetadata.setProjection({
 			...projection,
 			capabilities: projection.capabilities.map((capability) => ({
 				...capability,
@@ -223,8 +229,11 @@ describe("native capability admission Store seam", () => {
 				},
 			],
 		};
-		const command = createHarness();
-		command.metadata.setProjection(commandProjection);
+		const commandMetadata = new FakeNativeCapabilityMetadataRevalidationV1({
+			projection,
+		});
+		const command = createHarness({}, commandMetadata);
+		commandMetadata.setProjection(commandProjection);
 		expect(
 			(await command.useCase.admit({ ...request, parameters: "" })).outcome,
 		).toBe("unsupported");
