@@ -32,8 +32,8 @@ function appWith(
 			schemaVersion: 1,
 			agentId: "agent",
 			revision: 3,
-			changedFields: ["skills"],
-				replayed: false,
+			changedFields: ["skills"] as const,
+			replayed: false,
 		})),
 		read: vi.fn(async () => ({
 			configurationRevision: 3,
