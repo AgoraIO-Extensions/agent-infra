@@ -61,7 +61,7 @@ export function assembleSkillHubReadApiV1(input: {
 				resolveAdmissionPolicy: input.providerImport.resolveAdmissionPolicy,
 				sourceVerifier: input.providerImport.sourceVerifier,
 				scanner: input.providerImport.scanner,
-		  })
+			})
 		: undefined;
 	const dependencies: SkillHubReadRoutesDependenciesV1 = {
 		identity: input.identity,
