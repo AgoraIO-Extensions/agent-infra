@@ -21,6 +21,7 @@ import {
 	type RuntimeExternalActionAuthorization,
 	RuntimeHost,
 	RuntimeHostError,
+	supportsProtectedOpenCodeMcpTransport,
 	verifyCodexPilotInstallation,
 } from "@agent-infra/agent-runtime";
 import type {
@@ -274,7 +275,11 @@ export async function assembleRuntimeHost(
 	const installationRevision =
 		environment.AGENT_INFRA_RUNTIME_CONNECTION_INSTALLATION_REVISION;
 	const supportsProtectedStandardMcp =
-		binding === "codex" || binding === "claude";
+		binding === "codex" ||
+		binding === "claude" ||
+		(binding === "acp" &&
+			environment.AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE === "verified-v1" &&
+			supportsProtectedOpenCodeMcpTransport());
 	if (
 		installationRevision !== undefined &&
 		(!supportsProtectedStandardMcp ||
@@ -456,11 +461,19 @@ export async function assembleRuntimeHost(
 					? await openOpenCodeRuntime({
 							...messagesConfiguration,
 							browserCapability: verifiedBrowserCapability,
+							...(standardConnectionClient ? { standardConnectionClient } : {}),
 							...(skillDirectory ? { skillDirectory } : {}),
 							modelOptions: messagesRuntimeOptions ?? [],
 							...(messagesConfiguration.schemaVersion === 4
 								? {
 										authorizeModelAction: async (
+											action: RuntimeExternalActionAuthorization,
+										) => {
+											if (!assembledHost)
+												throw new Error("RUNTIME_AUTHORIZATION_UNAVAILABLE");
+											return assembledHost.authorizeExternalAction(action);
+										},
+										authorizeToolAction: async (
 											action: RuntimeExternalActionAuthorization,
 										) => {
 											if (!assembledHost)

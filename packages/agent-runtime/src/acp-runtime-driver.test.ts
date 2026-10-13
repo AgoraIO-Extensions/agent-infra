@@ -6,6 +6,81 @@ import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { GenericAcpRuntimeDriver } from "./acp-runtime-driver.js";
 import { createRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
+import {
+	closeStandardMcpFixtures,
+	reference,
+	standardMcpFixture,
+} from "./standard-mcp.fixture.js";
+
+it("passes only a local bearer to an ACP protected MCP session", async () => {
+	const fixture = await standardMcpFixture();
+	const path = await mkdtemp(join(tmpdir(), "acp-connection-bridge-"));
+	const driver = await GenericAcpRuntimeDriver.open({
+		path,
+		configVersion: "configuration-a",
+		defaultModelOptionId: "primary",
+		defaultReasoningLevel: "high",
+		modelOptions: [
+			{
+				modelOptionId: "primary",
+				nativeModelId: "provider/model",
+				reasoningLevels: ["high"],
+			},
+		],
+		standardConnectionClient: {
+			target: fixture.target,
+			resolveInput: async () => fixture.input,
+			fetch: fixture.fetch,
+		},
+		launch: async () => ({
+			command: process.execPath,
+			args: [
+				fileURLToPath(new URL("./acp-peer.test-support.mjs", import.meta.url)),
+			],
+			env: { ACP_TEST_MODE: "mcp-servers" },
+		}),
+	});
+	try {
+		expect(await driver.getCapabilities()).toMatchObject({ connection: true });
+		const accepted = await driver.execute({
+			schemaVersion: 2,
+			kind: "submit-turn",
+			agentId: reference.agentId,
+			conversationId: reference.conversationId,
+			sessionGeneration: reference.sessionGeneration,
+			executionId: reference.executionId,
+			turnId: "turn-connection",
+			operationId: "operation-connection",
+			input: { text: "synthetic input", attachments: [] },
+			selection: {
+				schemaVersion: 1,
+				modelOptionId: "primary",
+				reasoningLevel: "high",
+			},
+		});
+		await vi.waitFor(async () =>
+			expect(
+				await driver.getStatus(
+					accepted.nativeSessionRef,
+					reference.executionId,
+				),
+			).toBe("completed"),
+		);
+		const session = JSON.parse(
+			await readFile(
+				join(path, accepted.nativeSessionRef, "workspace", "session.json"),
+				"utf8",
+			),
+		) as { mcpServers: { url: string; headers?: unknown }[] };
+		expect(session.mcpServers).toHaveLength(1);
+		expect(session.mcpServers[0]?.url).toMatch(/^http:\/\/127\.0\.0\.1:/);
+		expect(JSON.stringify(session)).not.toContain(fixture.input.token);
+	} finally {
+		await driver.close();
+		await rm(path, { recursive: true, force: true });
+		await closeStandardMcpFixtures();
+	}
+});
 
 it("persists the first ACP Diff as a confirmed result file event", async () => {
 	const path = await mkdtemp(join(tmpdir(), "acp-result-file-"));

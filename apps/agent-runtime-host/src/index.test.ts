@@ -215,6 +215,7 @@ describe("RuntimeHost environment assembly", () => {
 			const dataDirectory = values.AGENT_INFRA_RUNTIME_DATA_DIR;
 			if (!dataDirectory) throw new Error("Missing test data directory");
 			values.AGENT_INFRA_RUNTIME_DRIVER = binding;
+			values.AGENT_INFRA_RUNTIME_ACP_MCP_BRIDGE = "verified-v1";
 			values.AGENT_INFRA_RUNTIME_AGENT_ID = "agent-messages";
 			values.AGENT_INFRA_RUNTIME_MODEL_CREDENTIAL_PRIMARY =
 				"synthetic-model-credential";
