@@ -1,9 +1,17 @@
-import type { GitHubOAuthProvider } from "@agent-infra/connection-core";
+import type {
+	GitHubOAuthProvider,
+	ProviderExecutor,
+} from "@agent-infra/connection-core";
+import {
+	githubConnectionCatalog,
+	githubV10ConnectionCatalog,
+} from "@agent-infra/openconnector-adapter/providers/github";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConnectionRuntime } from "./runtime-app";
 
 const captured = vi.hoisted(() => ({
 	oauth: undefined as GitHubOAuthProvider | undefined,
+	executor: undefined as ProviderExecutor | undefined,
 	requests: [] as string[],
 	origins: [] as string[][],
 	profileReconciliation: vi.fn(async () => {}),
@@ -20,6 +28,7 @@ vi.mock("@agent-infra/connection-store", async (importOriginal) => {
 			expect(releases).toContain("rehoboam-connection-v10");
 			expect(releases).toContain("datalego-connection-v6");
 			expect(releases).toContain("static-spaces-connection-v2-supervised");
+			expect(releases).toContain(githubV10ConnectionCatalog.providerReleaseId);
 		}
 		async publishConsumerDeclaration() {
 			return { declarationId: "synthetic" };
@@ -50,6 +59,7 @@ vi.mock("@agent-infra/connection-core", async (importOriginal) => {
 			) {
 				super(...args);
 				captured.oauth = args[2];
+				captured.executor = args[1];
 			}
 		},
 	};
@@ -74,6 +84,24 @@ vi.mock("@agent-infra/openconnector-adapter/provider-fetch", () => ({
 				)
 					throw new Error("Provider origin is not allowed");
 				captured.requests.push(url);
+				if (new URL(url).pathname.endsWith("/jobs/42/logs"))
+					return new Response(null, {
+						status: 302,
+						headers: {
+							location:
+								"https://productionresultssa2.blob.core.windows.net/logs/job?sig=synthetic-signature",
+						},
+					});
+				if (
+					new URL(url).hostname === "productionresultssa2.blob.core.windows.net"
+				) {
+					expect(new Headers(init?.headers).get("authorization")).toBeNull();
+					expect(new Headers(init?.headers).get("cookie")).toBeNull();
+					expect(init?.redirect).toBe("manual");
+					return new Response("build failed", {
+						headers: { "content-type": "text/plain" },
+					});
+				}
 				return init?.method === "POST"
 					? Response.json({
 							access_token: "synthetic-token",
@@ -125,6 +153,7 @@ const environment = {
 
 afterEach(() => {
 	captured.oauth = undefined;
+	captured.executor = undefined;
 	captured.requests = [];
 	captured.origins = [];
 	captured.profileReconciliation.mockClear();
@@ -133,6 +162,39 @@ afterEach(() => {
 });
 
 describe("production GitHub OAuth transport wiring", () => {
+	it("routes v11 logs through a separate exact-origin pinned transport with the GitHub proxy and keeps v10 registered", async () => {
+		vi.spyOn(console, "info").mockImplementation(() => {});
+		const runtime = await createConnectionRuntime(environment);
+		try {
+			if (!captured.executor) throw new Error("Executor router missing");
+			await expect(
+				captured.executor.execute({
+					action: "github.get_workflow_job_logs",
+					actionVersionId: "github.get_workflow_job_logs@v11",
+					providerId: "github",
+					providerReleaseId: githubConnectionCatalog.providerReleaseId,
+					credential: { accessToken: "synthetic-token" },
+					input: { owner: "acme", repo: "widgets", jobId: 42 },
+				}),
+			).resolves.toMatchObject({ text: "build failed", moreData: false });
+			expect(captured.origins.at(-1)).toEqual([
+				"https://productionresultssa2.blob.core.windows.net",
+			]);
+			expect(captured.proxies.at(-1)).toBe(environment.GITHUB_EGRESS_PROXY_URL);
+			await expect(
+				captured.executor.execute({
+					action: "github.get_workflow_job_logs",
+					actionVersionId: "github.get_workflow_job_logs@v11",
+					providerId: "github",
+					providerReleaseId: githubV10ConnectionCatalog.providerReleaseId,
+					credential: { accessToken: "synthetic-token" },
+					input: { owner: "acme", repo: "widgets", jobId: 42 },
+				}),
+			).rejects.toThrow("OpenConnector action is not available");
+		} finally {
+			await runtime.closeProviderTransports();
+		}
+	});
 	for (const tokenUrl of [
 		undefined,
 		"https://approved-token.example/oauth/token",

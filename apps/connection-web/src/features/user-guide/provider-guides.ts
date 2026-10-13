@@ -28,6 +28,15 @@ export const providerGuideChapters: Record<string, GuideChapter> = {
 					"先调用 github.get_current_user，确认是自己的账号，再读取有权限的仓库。OAuth 成功不等于能访问所有组织仓库；仓库 403/404 时检查 GitHub 权限、组织 SSO 和应用策略。连接失败与某个仓库不可见是不同问题。",
 				],
 			},
+			{
+				title: "GitHub · 读取 Actions Job 日志",
+				paragraphs: [
+					"当前目录发布日志能力后，可在“我的 Connection”的 GitHub 账号中，为目标 Consumer 勾选 github.get_workflow_job_logs 并确认。原有授权不会自动获得日志能力；只有页面提示需要升级或重连时才处理对应入口。公司审批开启且原批准范围未包含日志时，先申请包含日志的能力范围。",
+					"先用 github.list_workflow_run_jobs 找到目标 Run 中的 Job ID，再调用 github.get_workflow_job_logs，提交 owner、repo、jobId。startLine 从 1 开始，maxLines 默认 200、最多 1000；每页正文最多 64 KiB。",
+					"有 nextStartLine 时用该值继续读取。truncated 表示未完整返回；lineTruncated 表示超长行只返回前缀，继续读取会跳过该行剩余部分。scanLimitReached 表示达到单次 8 MiB 扫描上限；nextStartLine 为空时，剩余日志请到 GitHub Actions 页面查看，不要将当前结果当作完整日志。",
+					"日志仅读取，不会重跑或停止 Job。403/404 时检查仓库权限、组织 SSO、日志是否已生成或已过期；超时稍后重新读取，不要因此触发构建。日志正文不额外脱敏，会进入已授权客户端或模型上下文，请仅授权适合交给该客户端分析的构建日志。",
+				],
+			},
 		],
 	},
 	bitbucket: {

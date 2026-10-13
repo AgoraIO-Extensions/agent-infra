@@ -2,6 +2,10 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	OpenConnectorGitHubAdapter as GitHubLogAdapter,
+	githubV11ConnectionCatalog,
+} from "../../openconnector-adapter/src/providers/github/versions/github-v11.ts";
+import {
 	channelPublishingActions,
 	RehoboamV13Adapter,
 } from "../../openconnector-adapter/src/providers/rehoboam/versions/rehoboam-v13.ts";
@@ -544,6 +548,76 @@ class MemoryRepository implements ConnectionRepository {
 }
 
 describe("Connection application service", () => {
+	it("requires explicit Job log authorization and rejects cross-user/Consumer/Connection selectors before dispatch", async () => {
+		const memory = new MemoryRepository();
+		const repository: ConnectionRepository = memory;
+		const logAction = githubV11ConnectionCatalog.actions.find(
+			(action) => action.name === "github.get_workflow_job_logs",
+		);
+		if (!logAction) throw new Error("Job log definition missing");
+		const createCall = memory.createCall.bind(memory);
+		repository.createCall = (input) =>
+			createCall({
+				...input,
+				actionVersionId: logAction.id,
+			});
+		let granted = false;
+		let requests = 0;
+		repository.resolveDirectIdentities = async (identity) => [
+			{
+				...direct,
+				...identity,
+				providerReleaseId: githubV11ConnectionCatalog.providerReleaseId,
+			},
+		];
+		repository.listAuthorizedActions = async (invocation) =>
+			granted &&
+			invocation.principalId === direct.principalId &&
+			invocation.consumerId === direct.consumerId
+				? [logAction]
+				: [];
+		const service = new ConnectionApplicationService(
+			repository,
+			new GitHubLogAdapter(async () => {
+				requests++;
+				return new Response("build failed", {
+					headers: { "content-type": "text/plain" },
+				});
+			}),
+		);
+		const input = { owner: "acme", repo: "widgets", jobId: 42 };
+		await expect(
+			service.executeDirectActionForIdentity(direct, logAction.name, input),
+		).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		granted = true;
+		for (const identity of [
+			{ ...direct, principalId: "bob" },
+			{ ...direct, consumerId: "other-consumer" },
+		])
+			await expect(
+				service.executeDirectActionForIdentity(identity, logAction.name, input),
+			).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		for (const selector of [
+			{ connectionId: "other-connection" },
+			{ principalId: "bob" },
+			{ consumerId: "other-consumer" },
+		])
+			await expect(
+				service.executeDirectActionForIdentity(direct, logAction.name, {
+					...input,
+					...selector,
+				}),
+			).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+		expect(requests).toBe(0);
+		await expect(
+			service.executeDirectActionForIdentity(direct, logAction.name, input),
+		).resolves.toMatchObject({
+			actionVersionId: "github.get_workflow_job_logs@v11",
+			status: "SUCCEEDED",
+			result: { text: "build failed", moreData: false },
+		});
+		expect(requests).toBe(1);
+	});
 	it("refreshes a GitHub display label only after the numeric account matches", async () => {
 		const repository = new MemoryRepository();
 		repository.githubProfileRefreshCandidates = [
