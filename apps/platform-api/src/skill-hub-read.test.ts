@@ -632,4 +632,166 @@ describe("Skill Hub authenticated HTTP reads with PostgreSQL", () => {
 			((await revoked.json()) as { version: { state: string } }).version.state,
 		).toBe("revoked");
 	});
+
+	it("keeps publication visibility and failure responses closed across scopes", async () => {
+		const baseCommand = {
+			schemaVersion: 1,
+			provider: "my_library",
+			version: "1.0.0",
+			packageObjectVersion: "internal-publication-scope-object",
+			packageDigest: "a".repeat(64),
+			manifestDigest: "b".repeat(64),
+			signatureDigest: "c".repeat(64),
+		};
+		const privateCommand = {
+			...baseCommand,
+			name: "publication-private-skill",
+			skillId: "publication-private-skill",
+			skillVersionId: "publication-private-version",
+			visibility: "PRIVATE",
+		};
+		const privateResponse = await fetchInstallation(
+			"/api/v2/skills/versions",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-private-register" },
+				body: JSON.stringify(privateCommand),
+			},
+		);
+		expect(privateResponse.status).toBe(201);
+		expect(
+			((await privateResponse.json()) as { version: { state: string } }).version
+				.state,
+		).toBe("published");
+		expect(
+			(
+				await fetchRead(
+					"/api/v2/skills/versions/publication-private-version",
+					"owner-a",
+				)
+			).status,
+		).toBe(200);
+
+		const organizationResponse = await fetchInstallation(
+			"/api/v2/skills/versions",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-organization-register" },
+				body: JSON.stringify({
+					...baseCommand,
+					name: "publication-organization-skill",
+					skillId: "publication-organization-skill",
+					skillVersionId: "publication-organization-version",
+					visibility: "ORGANIZATION",
+					organizationId: "org-a",
+				}),
+			},
+		);
+		expect(organizationResponse.status).toBe(201);
+		expect(
+			((await organizationResponse.json()) as { version: { state: string } })
+				.version.state,
+		).toBe("pending_review");
+		expect(
+			(
+				await fetchInstallation(
+					"/api/v2/skills/versions/publication-organization-version/revoke",
+					"owner-b",
+					{
+						method: "POST",
+						headers: { "Idempotency-Key": "publication-cross-org-revoke" },
+					},
+				)
+			).status,
+		).toBe(404);
+		const rejected = await fetchInstallation(
+			"/api/v2/skills/versions/publication-organization-version/review",
+			"admin",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-organization-reject" },
+				body: JSON.stringify({ decision: "reject", reason: "policy" }),
+			},
+		);
+		expect(rejected.status).toBe(200);
+		expect(
+			((await rejected.json()) as { version: Record<string, unknown> }).version,
+		).toMatchObject({
+			state: "rejected",
+			reviewReason: "policy",
+		});
+
+		const marketResponse = await fetchInstallation(
+			"/api/v2/skills/versions",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-market-register" },
+				body: JSON.stringify({
+					...baseCommand,
+					name: "publication-market-skill",
+					skillId: "publication-market-skill",
+					skillVersionId: "publication-market-version",
+					visibility: "MARKET",
+				}),
+			},
+		);
+		expect(marketResponse.status).toBe(201);
+		expect(
+			((await marketResponse.json()) as { version: { state: string } }).version
+				.state,
+		).toBe("pending_review");
+		const approvedMarket = await fetchInstallation(
+			"/api/v2/skills/versions/publication-market-version/review",
+			"admin",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-market-approve" },
+				body: JSON.stringify({ decision: "approve" }),
+			},
+		);
+		expect(approvedMarket.status).toBe(200);
+		expect(
+			((await approvedMarket.json()) as { version: { state: string } }).version
+				.state,
+		).toBe("published");
+		const revokedMarket = await fetchInstallation(
+			"/api/v2/skills/versions/publication-market-version/revoke",
+			"owner-a",
+			{
+				method: "POST",
+				headers: { "Idempotency-Key": "publication-market-revoke" },
+			},
+		);
+		expect(revokedMarket.status).toBe(200);
+		expect(
+			((await revokedMarket.json()) as { version: { state: string } }).version
+				.state,
+		).toBe("revoked");
+
+		expect(
+			(
+				await fetchInstallation(
+					"/api/v2/skills/versions/unknown-publication-version/review",
+					"admin",
+					{
+						method: "POST",
+						headers: { "Idempotency-Key": "publication-unknown-review" },
+						body: JSON.stringify({ decision: "approve" }),
+					},
+				)
+			).status,
+		).toBe(404);
+		expect(
+			(
+				await fetchInstallation("/api/v2/skills/versions", null, {
+					method: "POST",
+					headers: { "Idempotency-Key": "publication-unauthenticated" },
+					body: JSON.stringify(privateCommand),
+				})
+			).status,
+		).toBe(401);
+	});
 });
