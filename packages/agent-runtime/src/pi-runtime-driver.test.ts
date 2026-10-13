@@ -172,7 +172,7 @@ it.each(["result-file", "result-file-edit"] as const)(
 	},
 );
 
-it("ignores failed, unknown, duplicate and outside Pi tool completions", async () => {
+it("ignores failed, unknown, duplicate, outside, symlink, oversized and late Pi tool completions", async () => {
 	const f = await fixture("result-file-negative");
 	const { writeResult, fileBridge } = resultFileBridge();
 	try {

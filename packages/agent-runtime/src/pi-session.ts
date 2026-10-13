@@ -1,6 +1,7 @@
 // Pi lifecycle adapted from Paseo PiCliRuntimeSession/buildPiLaunch at d1b705a0cd91617a5707fae25d80cb0be3057950.
 // Copyright (c) 2025-present Mohamed Boudra. Apache-2.0; see THIRD_PARTY_NOTICES.md.
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { buildSessionContext } from "@earendil-works/pi-coding-agent";
@@ -137,6 +138,10 @@ function promptBinding(
 
 const piResultFileMaximumBytes = 10 * 1024 * 1024;
 
+function descriptorPath(fd: number): string | undefined {
+	if (process.platform === "linux") return `/proc/self/fd/${fd}`;
+}
+
 /** Resolve a completed Pi write/edit to an existing file under its workspace. */
 async function readPiResultFile(
 	workspace: string,
@@ -155,13 +160,46 @@ async function readPiResultFile(
 	if (!actual) return;
 	const resolved = relative(root, actual);
 	if (!resolved || resolved.startsWith("..") || isAbsolute(resolved)) return;
-	const content = await readFile(actual, "utf8").catch(() => undefined);
-	if (
-		content === undefined ||
-		Buffer.byteLength(content, "utf8") > piResultFileMaximumBytes
-	)
-		return;
-	return { path: actual, content };
+	const noFollow = constants.O_NOFOLLOW ?? 0;
+	const file = await open(actual, constants.O_RDONLY | noFollow).catch(
+		() => undefined,
+	);
+	if (!file) return;
+	try {
+		const stat = await file.stat();
+		if (!stat.isFile() || stat.size > piResultFileMaximumBytes) return;
+		const opened = descriptorPath(file.fd);
+		if (opened) {
+			const openedPath = await realpath(opened).catch(() => undefined);
+			if (!openedPath) return;
+			const openedRelative = relative(root, openedPath);
+			if (
+				!openedRelative ||
+				openedRelative.startsWith("..") ||
+				isAbsolute(openedRelative)
+			)
+				return;
+		}
+		const bytes = Buffer.allocUnsafe(piResultFileMaximumBytes + 1);
+		let offset = 0;
+		while (offset < bytes.byteLength) {
+			const { bytesRead } = await file.read(
+				bytes,
+				offset,
+				bytes.byteLength - offset,
+				offset,
+			);
+			if (bytesRead === 0) break;
+			offset += bytesRead;
+		}
+		if (offset > piResultFileMaximumBytes) return;
+		return {
+			path: actual,
+			content: bytes.subarray(0, offset).toString("utf8"),
+		};
+	} finally {
+		await file.close().catch(() => {});
+	}
 }
 
 /** Pi 0.86 may precede one text Turn with a structured system-prompt patch. */

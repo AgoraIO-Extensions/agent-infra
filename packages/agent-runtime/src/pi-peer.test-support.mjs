@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, symlink, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
 // Exercise native peers that remain alive after their Host closes stdin.
@@ -60,10 +60,16 @@ const finish = async (stopReason) => {
 	}
 	if (mode === "result-file-negative") {
 		await writeFile(`${process.cwd()}/result.txt`, "synthetic Pi result\n");
+		await writeFile(`${process.cwd()}/outside-result.txt`, "outside\n");
+		await symlink(
+			`${process.cwd()}/outside-result.txt`,
+			`${process.cwd()}/result-link.txt`,
+		);
 		for (const [toolCallId, toolName, path, isError] of [
 			["failed-write", "write", "result.txt", true],
 			["read-tool", "read", "result.txt", false],
 			["outside-write", "write", "../outside-result.txt", false],
+			["symlink-write", "write", "result-link.txt", false],
 		]) {
 			send({
 				type: "tool_execution_start",
@@ -117,6 +123,14 @@ const finish = async (stopReason) => {
 	isStreaming = false;
 	if (mode === "system-prefix-exit") process.exit(0);
 	send({ type: "agent_end" });
+	if (mode === "result-file-negative")
+		send({
+			type: "tool_execution_end",
+			toolCallId: "failed-write",
+			toolName: "write",
+			result: { content: [{ type: "text", text: "late" }] },
+			isError: false,
+		});
 	// Queued duplicates and unknown vendor frames must not create a second terminal.
 	send({ type: "agent_end" });
 	send({ type: "unrecognized_vendor_event", data: "sensitive-vendor-canary" });
