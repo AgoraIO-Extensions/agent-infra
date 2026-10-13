@@ -78,6 +78,7 @@ describe("Workload Skill materialization receipt", () => {
 	});
 
 	it("maps the physical generation manifest to the Worker projection", async () => {
+		const receipts: unknown[] = [];
 		const materializer = {
 			async materialize() {
 				return {
@@ -128,8 +129,12 @@ describe("Workload Skill materialization receipt", () => {
 					skillVersion: skill.skillVersion,
 					packageObject: materializerOutput().packageObject,
 					grant: skill.grant,
+					syncRevision: 7,
 				},
 			],
+			writeAppliedReceipt: async (receipt) => {
+				receipts.push(receipt);
+			},
 		});
 		const result = await worker.materialize({
 			agentId: "agent-a",
@@ -140,6 +145,80 @@ describe("Workload Skill materialization receipt", () => {
 		expect(result.skills[0]?.targetPath).toBe(
 			".agents/skills/workspace-summary",
 		);
+		expect(receipts).toEqual([
+			{
+				schemaVersion: 1,
+				agentId: "agent-a",
+				agentVersion: "agent-version-1",
+				skillName: "workspace-summary",
+				configurationRevision: 1,
+				syncRevision: 7,
+				skillVersionId: "skill-version-a",
+				generationId: digest,
+				packageDigest: digest,
+				manifestDigest: digest,
+				targetPath: ".agents/skills/workspace-summary",
+				readOnly: true,
+			},
+		]);
+	});
+
+	it("fails closed when a bound Skill has no Applied receipt writer", async () => {
+		const materializer = {
+			async materialize() {
+				return {
+					schemaVersion: 1 as const,
+					status: "materialized" as const,
+					generationId: digest,
+					packages: [],
+				};
+			},
+			async readCurrentDetails() {
+				return {
+					result: {
+						schemaVersion: 1 as const,
+						status: "materialized" as const,
+						generationId: digest,
+						packages: [],
+					},
+					packages: [
+						{
+							input: {
+								name: "workspace-summary",
+								version: "1.0.0",
+								packageObject: materializerOutput().packageObject,
+								packageDigest: digest,
+								manifestDigest: digest,
+							},
+							manifest: skill.manifest,
+							manifestDigest: digest,
+						},
+					],
+				};
+			},
+		};
+		const worker = createObjectStorageWorkloadSkillMaterializerV1({
+			materializerFor: () => materializer,
+			resolveBindings: async () => [
+				{
+					agentId: "agent-a",
+					name: "workspace-summary",
+					agentVersion: "agent-version-1",
+					skillVersion: skill.skillVersion,
+					packageObject: materializerOutput().packageObject,
+					grant: skill.grant,
+					syncRevision: 7,
+				},
+			],
+		});
+		await expect(
+			worker.materialize({
+				agentId: "agent-a",
+				configurationRevision: 1,
+				workloadRevision: 1,
+				fence: 1,
+			}),
+		).rejects.toThrow("Skill Applied receipt writer unavailable");
 	});
 });
 
