@@ -23,6 +23,7 @@ export const wecomReceipts = platformSchema.table(
 		taskBoundary: jsonb("task_boundary").notNull(),
 		channelRevision: text("channel_revision").notNull(),
 		authorizationRevision: text("authorization_revision").notNull(),
+		connectionAuthorizationFact: jsonb("connection_authorization_fact"),
 		acceptanceStatus: text("acceptance_status").notNull(),
 		conversationId: text("conversation_id"),
 		executionId: text("execution_id"),

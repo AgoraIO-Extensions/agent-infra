@@ -3,6 +3,7 @@ import {
 	createWecomChannelV1,
 	createWecomReceiptAccessV1,
 	type TaskUserDirectoryV1,
+	type WecomConnectionAuthorizationPortV1,
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
 import { PostgresWecomChannelV1 } from "@agent-infra/platform-store";
@@ -14,6 +15,7 @@ import {
 import type { WecomRoutesDependenciesV1 } from "./http/wecom-routes.js";
 export interface WecomApiDeploymentV1 {
 	readonly identity: WecomIdentityPortV1;
+	readonly connectionAuthorization?: WecomConnectionAuthorizationPortV1;
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly verifyCallback?: (reference: string) => Promise<boolean>;
 	readonly acceptMessages?: (reference: string) => Promise<boolean>;
@@ -38,6 +40,7 @@ export function assembleWecomApiV1(
 		databaseUrl,
 		deployment.identity,
 		deployment.userDirectory,
+		deployment.connectionAuthorization,
 	);
 	const { store, authorization } = receipts;
 	return {
@@ -63,13 +66,19 @@ export function assembleWecomReceiptApiV1(
 	databaseUrl: string,
 	identity: WecomIdentityPortV1,
 	userDirectory?: TaskUserDirectoryV1,
+	connectionAuthorization?: WecomConnectionAuthorizationPortV1,
 ) {
 	const store = new PostgresWecomChannelV1({
 		databaseUrl,
 		userDirectory,
 		identity,
+		connectionAuthorization,
 	});
-	const authorization = createWecomAuthorizationV1({ identity, state: store });
+	const authorization = createWecomAuthorizationV1({
+		identity,
+		state: store,
+		connectionAuthorization,
+	});
 	return {
 		store,
 		authorization,

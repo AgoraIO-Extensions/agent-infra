@@ -443,3 +443,104 @@ it("rejects replay through a replacement binding without starting another execut
 	).toEqual({ outcome: "conflict" });
 	expect(f.conversations.size).toBe(1);
 });
+
+it("requires a current sender-to-Connection fact when Connection is enabled", async () => {
+	const fact = {
+		schemaVersion: 1 as const,
+		providerId: message.providerId,
+		bindingReference: message.bindingReference,
+		senderId: "company-user",
+		authorizationReference: "opaque-grant-ref",
+		authorizationRevision: "auth-r1",
+		grantRevision: "grant-r1",
+		revocationRevision: "revoke-r1",
+		expiresAt: "2099-01-01T00:00:00.000Z",
+	};
+	const state = {
+		management: {
+			schemaVersion: 1 as const,
+			agentId: message.agentId,
+			applicationId: "app-1",
+			applicantId: "owner",
+			status: "available" as const,
+			revision: 1,
+			approvalRevision: 1,
+			decisionReason: null,
+			serviceAvailability: "ready" as const,
+			desiredState: "running" as const,
+			workloadRevision: 1,
+			fence: 1,
+			ownerIds: ["owner"],
+			availability: [
+				{ kind: "organization" as const, organizationId: "org-1" },
+			],
+			failureCode: null,
+		},
+		configuration: {
+			schemaVersion: 2 as const,
+			agentId: message.agentId,
+			revision: 1,
+			source: {
+				kind: "custom" as const,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				admissionRevision: "admitted",
+				interactionMode: "platform-adapter" as const,
+				connectionEnabled: true,
+			},
+			modelConfiguration: null,
+			actions: [],
+			actionSetRevision: "v1",
+			environment: [],
+			secrets: [],
+			channels: [
+				{
+					kind: "wecom_bot" as const,
+					bindingReference: message.bindingReference,
+				},
+			],
+			channelRevision: "v1",
+		},
+		authorizationRevision: "rev-1",
+	};
+	const identity = {
+		resolveSender: async () => ({
+			schemaVersion: 1 as const,
+			userId: "company-user",
+			accountStatus: "active" as const,
+			organizationIds: ["org-1"],
+			authorizationRevision: "identity-1",
+		}),
+		activeUsers: async () => ["owner"],
+	};
+	const statePort = { readAuthorityState: async () => state };
+	const unavailable = createWecomAuthorizationV1({
+		identity,
+		state: statePort,
+	});
+	expect(
+		await unavailable.authorize(message, "use", undefined, message.providerId),
+	).toMatchObject({ outcome: "unavailable" });
+	const auth = createWecomAuthorizationV1({
+		identity,
+		state: statePort,
+		connectionAuthorization: { resolve: async () => fact },
+	});
+	const allowed = await auth.authorize(
+		message,
+		"use",
+		undefined,
+		message.providerId,
+	);
+	expect(allowed).toMatchObject({
+		outcome: "allowed",
+		authority: { connectionAuthorizationFact: fact },
+	});
+	const mismatch = await createWecomAuthorizationV1({
+		identity,
+		state: statePort,
+		connectionAuthorization: {
+			resolve: async () => ({ ...fact, senderId: "other-sender" }),
+		},
+	}).authorize(message, "use", undefined, message.providerId);
+	expect(mismatch).toMatchObject({ outcome: "denied" });
+});

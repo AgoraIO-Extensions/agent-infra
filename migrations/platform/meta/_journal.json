@@ -365,6 +365,13 @@
       "when": 1791815724513,
       "tag": "0055_platform_execution_failure_events",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1791902539534,
+      "tag": "0056_wecom_connection_authorization",
+      "breakpoints": true
     }
   ]
 }
