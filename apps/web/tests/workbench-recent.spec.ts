@@ -344,6 +344,17 @@ async function workbenchFixture(
 				}),
 			});
 		}
+		if (request.method() === "GET" && url.pathname.endsWith("/native-metadata"))
+			return route.fulfill({
+				json: {
+					selector:
+						url.searchParams.get("selector") === "commands"
+							? "commands"
+							: "skills",
+					revision: "a".repeat(64),
+					capabilities: [],
+				},
+			});
 		if (url.pathname.startsWith("/api/v2/admin/")) {
 			if (
 				url.pathname !== "/api/v2/admin/agents" &&
@@ -663,11 +674,12 @@ test("formal root route consumes fixture recent, opens the same Conversation and
 	expect(
 		fixture.requests
 			.filter((request) => request.path.startsWith("/api/v2/conversations/"))
-			.every((request) =>
-				[
-					"/api/v2/conversations/conversation-z",
-					"/api/v2/conversations/conversation-z/events",
-				].includes(request.path),
+			.every(
+				(request) =>
+					[
+						"/api/v2/conversations/conversation-z",
+						"/api/v2/conversations/conversation-z/events",
+					].includes(request.path) || request.path.endsWith("/native-metadata"),
 			),
 	).toBe(true);
 	expect(fixture.unexpected).toEqual([]);

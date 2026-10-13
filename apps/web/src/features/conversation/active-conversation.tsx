@@ -388,40 +388,35 @@ export function ActiveConversation({
 		);
 	return (
 		<>
-			{latestExecution && (
-				<div aria-live="polite">
-					{nativeMetadataLoading && (
-						<p role="status">正在读取当前执行的命令和 Skill…</p>
-					)}
-					{nativeMetadataUnavailable && (
-						<Alert role="status">
-							<AlertDescription>
-								当前执行的命令或 Skill 暂不可用，已隐藏旧数据。
-							</AlertDescription>
-						</Alert>
-					)}
-					{nativeMetadataPartiallyUnavailable && (
-						<Alert role="status">
-							<AlertDescription>
-								部分命令或 Skill 目录暂不可用，已隐藏对应旧数据。
-							</AlertDescription>
-						</Alert>
-					)}
-					{nativeMetadataReady &&
-						!nativeMetadataLoading &&
-						nativeMetadataCapabilities.length === 0 && (
-							<p role="status">当前执行没有可用命令或 Skill。</p>
+			{latestExecution &&
+				(nativeMetadataUnavailable ||
+					nativeMetadataPartiallyUnavailable ||
+					(nativeMetadataReady && nativeMetadataCapabilities.length > 0)) && (
+					<div aria-live="polite">
+						{nativeMetadataUnavailable && (
+							<Alert role="status">
+								<AlertDescription>
+									当前执行的命令或 Skill 暂不可用，已隐藏旧数据。
+								</AlertDescription>
+							</Alert>
 						)}
-					{nativeMetadataReady && nativeMetadataCapabilities.length > 0 && (
-						<ConversationCapabilityPickerPanel
-							key={nativeMetadataScopeKey}
-							capabilities={nativeMetadataCapabilities}
-							scopeKey={nativeMetadataScopeKey}
-							disabled={!available}
-						/>
-					)}
-				</div>
-			)}
+						{nativeMetadataPartiallyUnavailable && (
+							<Alert role="status">
+								<AlertDescription>
+									部分命令或 Skill 目录暂不可用，已隐藏对应旧数据。
+								</AlertDescription>
+							</Alert>
+						)}
+						{nativeMetadataReady && nativeMetadataCapabilities.length > 0 && (
+							<ConversationCapabilityPickerPanel
+								key={nativeMetadataScopeKey}
+								capabilities={nativeMetadataCapabilities}
+								scopeKey={nativeMetadataScopeKey}
+								disabled={!available}
+							/>
+						)}
+					</div>
+				)}
 			<div
 				hidden={Boolean(selectedExecution)}
 				className="chat-thread space-y-5"

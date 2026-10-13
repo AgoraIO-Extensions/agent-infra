@@ -1069,6 +1069,21 @@ for (const source of ["standard", "custom"] as const) {
 				)
 					await route.fulfill({ json: agent });
 				else if (
+					request.method() === "GET" &&
+					path.endsWith("/native-metadata")
+				)
+					await route.fulfill({
+						json: {
+							selector:
+								new URL(request.url()).searchParams.get("selector") ===
+								"commands"
+									? "commands"
+									: "skills",
+							revision: "a".repeat(64),
+							capabilities: [],
+						},
+					});
+				else if (
 					source === "custom" &&
 					request.method() === "GET" &&
 					path === `/api/v1/conversations/${conversationId}/model-selection`
