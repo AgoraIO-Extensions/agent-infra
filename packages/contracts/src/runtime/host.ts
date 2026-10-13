@@ -271,7 +271,7 @@ export const RuntimeSkillDirectoryResponseV1Schema = z.strictObject({
 /** Request for one bounded resource from the mounted Skill directory. */
 export const RuntimeSkillResourceReadRequestV1Schema = z.strictObject({
 	...RuntimeSkillDirectoryRequestV1Schema.shape,
-	generationId: runtimeSkillGenerationId.optional(),
+	generationId: runtimeSkillGenerationId,
 	skillName: runtimeSkillName,
 	relativePath: runtimeSkillRelativePath,
 });
@@ -279,7 +279,7 @@ export const RuntimeSkillResourceReadRequestV1Schema = z.strictObject({
 export const RuntimeSkillResourceReadResponseV1Schema = z.strictObject({
 	schemaVersion: SchemaVersionV1Schema,
 	hostSessionRef: OpaqueIdV1Schema,
-	generationId: runtimeSkillGenerationId.optional(),
+	generationId: runtimeSkillGenerationId,
 	skillName: runtimeSkillName,
 	relativePath: runtimeSkillRelativePath,
 	sizeBytes: z.number().int().nonnegative().max(1_048_576),

@@ -2801,12 +2801,18 @@ function isRuntimeSkillHostReadOpenApiAddition(previous, current) {
 		schemas.every((name) => previous.components?.schemas?.[name] !== undefined)
 	) {
 		const normalized = structuredClone(current);
-		const request = normalized.components.schemas.RuntimeSkillResourceReadRequestV1;
-		const response = normalized.components.schemas.RuntimeSkillResourceReadResponseV1;
+		const request =
+			normalized.components.schemas.RuntimeSkillResourceReadRequestV1;
+		const response =
+			normalized.components.schemas.RuntimeSkillResourceReadResponseV1;
 		delete request.properties?.generationId;
-		request.required = request.required?.filter((key) => key !== "generationId");
+		request.required = request.required?.filter(
+			(key) => key !== "generationId",
+		);
 		delete response.properties?.generationId;
-		response.required = response.required?.filter((key) => key !== "generationId");
+		response.required = response.required?.filter(
+			(key) => key !== "generationId",
+		);
 		return sameValue(previous, normalized);
 	}
 	if (
@@ -3314,6 +3320,25 @@ function normalizeRuntimeConnectionAssociationOpenApiAddition(current) {
 	visit(normalized);
 	return normalized;
 }
+
+// #2181 binds mounted Skill resources to the directory generation. Treat the
+// additive generation field as a reviewed compatibility extension for the
+// already published Runtime V1 host read contract.
+function normalizeRuntimeSkillHostReadJsonSchemaAddition(current) {
+	const normalized = structuredClone(current);
+	const schemas = normalized.$defs ?? normalized.components?.schemas;
+	for (const name of [
+		"RuntimeSkillResourceReadRequestV1",
+		"RuntimeSkillResourceReadResponseV1",
+	]) {
+		const schema = schemas?.[name];
+		if (!schema) continue;
+		delete schema.properties?.generationId;
+		if (Array.isArray(schema.required))
+			schema.required = schema.required.filter((key) => key !== "generationId");
+	}
+	return normalized;
+}
 function findBreakingChanges(previousValue, currentValue) {
 	let previous = previousValue;
 	let current = currentValue;
@@ -3411,10 +3436,8 @@ function findBreakingChanges(previousValue, currentValue) {
 		return changes.sort();
 	}
 	const previousSchemas = previous.$defs ?? previous.components?.schemas ?? {};
-	const normalized = normalizeSkillPackageObjectVersions(
-		previous,
-		current,
-		changes,
+	const normalized = normalizeRuntimeSkillHostReadJsonSchemaAddition(
+		normalizeSkillPackageObjectVersions(previous, current, changes),
 	);
 	const currentSchemas =
 		normalized.$defs ?? normalized.components?.schemas ?? {};

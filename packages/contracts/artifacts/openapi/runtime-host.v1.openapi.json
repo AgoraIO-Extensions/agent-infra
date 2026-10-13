@@ -1655,6 +1655,7 @@
           "deliveryFence",
           "grant",
           "hostSessionRef",
+          "generationId",
           "skillName",
           "relativePath"
         ],
