@@ -87,6 +87,8 @@ export interface ProductionWorkloadWorkerInputV1 {
 	readonly pollIntervalMs?: number;
 	readonly maximumAttempts?: number;
 	readonly probeFailureThreshold?: number;
+	/** Defaults to 30 minutes; null disables automatic idle reclaim. */
+	readonly idleSandboxReclaimAfterMs?: number | null;
 	readonly log?: (message: string) => void;
 }
 
@@ -144,7 +146,12 @@ export async function createProductionWorkloadWorkerOptionsV1(
 					typeof input.files.storage?.scan !== "function" ||
 					typeof input.files.storage?.remove !== "function")) ||
 			(input.skillMaterializer !== undefined &&
-				typeof input.skillMaterializer?.materialize !== "function")
+				typeof input.skillMaterializer?.materialize !== "function") ||
+			(input.idleSandboxReclaimAfterMs !== undefined &&
+				input.idleSandboxReclaimAfterMs !== null &&
+				(!Number.isSafeInteger(input.idleSandboxReclaimAfterMs) ||
+					input.idleSandboxReclaimAfterMs < 1 ||
+					input.idleSandboxReclaimAfterMs > 30 * 24 * 60 * 60 * 1000))
 		)
 			throw new Error();
 		const templateModelBindings = validateStandardTemplateModelBindingsV1(
@@ -241,6 +248,7 @@ export async function createProductionWorkloadWorkerOptionsV1(
 			pollIntervalMs: input.pollIntervalMs,
 			maximumAttempts: input.maximumAttempts,
 			probeFailureThreshold: input.probeFailureThreshold,
+			idleSandboxReclaimAfterMs: input.idleSandboxReclaimAfterMs,
 			log: input.log,
 		};
 	} catch {

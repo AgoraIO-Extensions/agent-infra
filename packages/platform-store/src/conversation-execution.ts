@@ -106,7 +106,10 @@ import {
 	type RelayKeyVersionCiphertextV1,
 	readRelayKeyVersionInTransaction,
 } from "./relay-key-versions.js";
-import { insertSessionSandboxBinding } from "./session-sandbox.js";
+import {
+	insertSessionSandboxBinding,
+	requestSessionSandboxResume,
+} from "./session-sandbox.js";
 import { writeTaskApiAuditV1 } from "./task-api-audit.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
 
@@ -507,6 +510,11 @@ export class PostgresConversationExecutionTransactionV1
 			`,
 			);
 			if (updated.length !== 1) unavailable();
+			await requestSessionSandboxResume(
+				transaction,
+				conversation.conversationId,
+				plan.message.createdAt,
+			);
 			if (plan.execution) {
 				await awaitConversationExecutionQueryV1(
 					transaction,
@@ -800,6 +808,11 @@ export class PostgresConversationExecutionTransactionV1
 				returning id
 			`;
 			if (updated.length !== 1) unavailable();
+			await requestSessionSandboxResume(
+				transaction,
+				conversation.conversationId,
+				plan.execution.createdAt,
+			);
 			await transaction`
 				insert into platform.conversation_executions
 					(execution_id, conversation_id, sandbox_id, agent_id, actor_id, channel_id,

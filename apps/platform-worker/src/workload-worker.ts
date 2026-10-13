@@ -19,6 +19,8 @@ export interface PlatformWorkloadWorkerOptionsV1
 	readonly maximumAttempts?: number;
 	/** Consecutive incomplete monitor probes a serving Workload tolerates (#2046). */
 	readonly probeFailureThreshold?: number;
+	/** Idle Session Sandbox reclaim threshold; defaults to 30 minutes. */
+	readonly idleSandboxReclaimAfterMs?: number | null;
 	readonly log?: (message: string) => void;
 }
 
@@ -61,6 +63,7 @@ export function createPlatformWorkloadWorkerV1(
 		databaseUrl: options.databaseUrl,
 		runtimeModelVersion: options.runtimeModelVersion,
 		retryDelayMs: pollIntervalMs,
+		idleSandboxReclaimAfterMs: options.idleSandboxReclaimAfterMs,
 	});
 	let files:
 		| ReturnType<typeof createPlatformFileReconciliationWorkerV1>

@@ -261,6 +261,55 @@ export const sessionSandboxUpgradingSql = `exists (
    and upgrade.payload->'lifecycle'->>'reason' = 'upgrade'
 )`;
 
+/**
+ * A user message is the only authority that resumes an idle-reclaimed
+ * Sandbox. This runs after the caller has locked the Conversation, and only
+ * reopens the existing reconcile outbox; it never creates a new allocation or
+ * changes a management stop.
+ */
+export async function requestSessionSandboxResume(
+	transaction: Transaction,
+	conversationId: string,
+	occurredAt: Date,
+): Promise<boolean> {
+	const [row] = await transaction<
+		{
+			id: string;
+			status: string;
+			payload: { lifecycle?: SessionSandboxLifecycleV1 };
+		}[]
+	>`
+		select id, status, payload from platform.outbox_items
+		where scope_type = 'conversation' and scope_id = ${conversationId}
+			and operation = 'conversation.sandbox.reconcile.v1'
+		for update`;
+	const lifecycle = row?.payload?.lifecycle;
+	if (!row || lifecycle?.reason !== "idle_reclaim") return false;
+	if (lifecycle.resumeRequested === true && row.status !== "succeeded")
+		return true;
+	if (lifecycle.resumeRequested === true && lifecycle.preparation) return false;
+	const reopened =
+		row.status === "succeeded" || row.status === "retry_scheduled";
+	if (!reopened && !["pending", "processing"].includes(row.status))
+		return false;
+	const updated = await transaction`
+		update platform.outbox_items
+		set payload = payload || ${transaction.json({
+			schemaVersion: 1,
+			conversationId,
+			sessionGeneration: lifecycle.source.sandbox.generation,
+			lifecycle: { ...lifecycle, resumeRequested: true },
+		} as unknown as Parameters<typeof transaction.json>[0])},
+			status = ${reopened ? "pending" : row.status},
+			lease_owner = case when ${reopened} then null else lease_owner end,
+			lease_expires_at = case when ${reopened} then null else lease_expires_at end,
+			available_at = case when ${reopened} then ${occurredAt} else available_at end,
+			updated_at = ${occurredAt}
+		where id = ${row.id} and status = ${row.status}
+		returning id`;
+	return updated.length === 1;
+}
+
 export async function readSessionSandboxUpgrading(
 	transaction: Transaction,
 	conversationId: string,

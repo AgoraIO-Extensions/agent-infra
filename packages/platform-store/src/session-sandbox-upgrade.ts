@@ -3,6 +3,7 @@ import { validateAgentWorkloadDesiredV1 } from "@agent-infra/contracts/workload"
 import {
 	type AgentManagementStateV1,
 	parseSessionSandboxBindingV1,
+	planSessionSandboxIdleReclaimTransitionV1,
 	planSessionSandboxUpgradeTransitionV1,
 	type SessionSandboxBindingV1,
 	type SessionSandboxSourceV1,
@@ -15,8 +16,9 @@ type Transaction = postgres.TransactionSql;
 type Json = Parameters<Transaction["json"]>[0];
 
 /**
- * Writes one upgrade intent per idle Session Sandbox whose policy predates the
- * Agent's ready verified Workload state (ADR 0023). Runs inside the Workload
+ * Writes one upgrade intent per Session Sandbox whose policy predates the
+ * Agent's ready verified Workload state (ADR 0023), or one idle reclaim intent
+ * when the deployment threshold is reached. Runs inside the Workload
  * write-back after its Agent row lock, then locks Conversation -> allocation
  * -> reconcile outbox like the management fanout. A Sandbox that is busy now
  * is reconsidered by the next periodic write-back.
@@ -28,8 +30,21 @@ export async function persistSessionSandboxUpgradeIntents(
 		readonly workerId: string;
 		readonly traceId: string;
 		readonly requestId: string;
+		/** Deployment-configured idle threshold; omitted keeps upgrade-only behavior. */
+		readonly idleSandboxReclaimAfterMs?: number;
 	},
 ): Promise<number> {
+	if (
+		input.idleSandboxReclaimAfterMs !== undefined &&
+		(!Number.isSafeInteger(input.idleSandboxReclaimAfterMs) ||
+			input.idleSandboxReclaimAfterMs < 1 ||
+			input.idleSandboxReclaimAfterMs > 30 * 24 * 60 * 60 * 1000)
+	)
+		throw new TypeError("Invalid idle Sandbox reclaim threshold");
+	const idleCutoff =
+		input.idleSandboxReclaimAfterMs === undefined
+			? undefined
+			: Date.now() - input.idleSandboxReclaimAfterMs;
 	const [agent] = await transaction<
 		{
 			configuration_revision: string;
@@ -105,14 +120,16 @@ export async function persistSessionSandboxUpgradeIntents(
 	`;
 	let written = 0;
 	for (const candidate of candidates) {
-		if (isCurrent(candidate.resource_policy)) continue;
 		const conversationId = candidate.conversation_id;
 		const [conversation] = await transaction<
-			{ authorization_revision: string }[]
-		>`select authorization_revision from platform.conversations where id = ${conversationId} for update`;
+			{ authorization_revision: string; updated_at: Date }[]
+		>`select authorization_revision, updated_at from platform.conversations where id = ${conversationId} for update`;
 		// The replacement prepare requires the Agent's current authorization.
 		if (conversation?.authorization_revision !== agent.authorization_revision)
 			continue;
+		const idle =
+			idleCutoff !== undefined &&
+			conversation.updated_at.getTime() <= idleCutoff;
 		const [row] = await transaction<
 			{
 				sandbox_id: string;
@@ -173,22 +190,41 @@ export async function persistSessionSandboxUpgradeIntents(
 		>`select status from platform.conversation_executions where conversation_id = ${conversationId}`;
 		const pending =
 			await transaction`select 1 from platform.conversation_generation_tombstones where conversation_id = ${conversationId} and status = 'pending' limit 1`;
-		const next = planSessionSandboxUpgradeTransitionV1({
-			management,
-			current: {
-				sandbox,
-				resourceFence: Number(row.resource_fence),
-				policy: row.resource_policy,
-				observation: row.resource_observation,
-				deployment: payload.deployment ?? null,
-				modelProjection: payload.modelProjection ?? null,
-			},
-			allocation: { status: row.status, desiredState: row.desired_state },
-			intent: { status: intent.status },
-			policyCurrent: isCurrent(row.resource_policy),
-			executionStatuses: executions.map(({ status }) => status),
-			generationBarrierPending: pending.length > 0,
-		});
+		const lockedPolicyCurrent = isCurrent(row.resource_policy);
+		const next =
+			lockedPolicyCurrent && idle
+				? planSessionSandboxIdleReclaimTransitionV1({
+						management,
+						current: {
+							sandbox,
+							resourceFence: Number(row.resource_fence),
+							policy: row.resource_policy,
+							observation: row.resource_observation,
+							deployment: payload.deployment ?? null,
+							modelProjection: payload.modelProjection ?? null,
+						},
+						allocation: { status: row.status, desiredState: row.desired_state },
+						intent: { status: intent.status },
+						policyCurrent: lockedPolicyCurrent,
+						executionStatuses: executions.map(({ status }) => status),
+						generationBarrierPending: pending.length > 0,
+					})
+				: planSessionSandboxUpgradeTransitionV1({
+						management,
+						current: {
+							sandbox,
+							resourceFence: Number(row.resource_fence),
+							policy: row.resource_policy,
+							observation: row.resource_observation,
+							deployment: payload.deployment ?? null,
+							modelProjection: payload.modelProjection ?? null,
+						},
+						allocation: { status: row.status, desiredState: row.desired_state },
+						intent: { status: intent.status },
+						policyCurrent: lockedPolicyCurrent,
+						executionStatuses: executions.map(({ status }) => status),
+						generationBarrierPending: pending.length > 0,
+					});
 		if (!next) continue;
 		await transaction`update platform.session_sandbox_allocations
 			set desired_state = ${next.desiredState}, status = ${next.status},
@@ -213,11 +249,11 @@ export async function persistSessionSandboxUpgradeIntents(
 		await transaction`insert into platform.audit_events
 			(id, trace_id, actor_type, actor_id, action, target_type, target_id, outcome, request_id, agent_id, occurred_at, details)
 			values (${randomUUID()}, ${input.traceId}, 'system', ${input.workerId},
-				'conversation.sandbox.upgrade_requested', 'sandbox', ${sandbox.sandboxId}, 'succeeded',
+				${next.lifecycle.reason === "idle_reclaim" ? "conversation.sandbox.idle_reclaim_requested" : "conversation.sandbox.upgrade_requested"}, 'sandbox', ${sandbox.sandboxId}, 'succeeded',
 				${input.requestId}, ${input.agentId}, clock_timestamp(),
 				${transaction.json({
 					conversationId,
-					reason: "upgrade",
+					reason: next.lifecycle.reason,
 					sourceResourceFence: Number(row.resource_fence),
 					resourceFence: next.resourceFence,
 				})})`;

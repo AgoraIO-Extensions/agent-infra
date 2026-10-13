@@ -393,6 +393,8 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 	readonly retryDelayMs?: number;
 	readonly monitorDelayMs?: number;
 	readonly workloadLeaseMs?: number;
+	/** Defaults to 30 minutes; `null` disables automatic idle reclaim. */
+	readonly idleSandboxReclaimAfterMs?: number | null;
 }): WorkloadReconciliationStorePortV1 & { close(): Promise<void> } {
 	if (
 		options.runtimeModelVersion !== undefined &&
@@ -412,13 +414,21 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 	const retryDelayMs = options.retryDelayMs ?? 1000;
 	const monitorDelayMs = options.monitorDelayMs ?? 30_000;
 	const workloadLeaseMs = options.workloadLeaseMs ?? defaultWorkloadLeaseMs;
+	const idleSandboxReclaimAfterMs =
+		options.idleSandboxReclaimAfterMs === null
+			? undefined
+			: (options.idleSandboxReclaimAfterMs ?? 30 * 60 * 1000);
 	if (
 		![retryDelayMs, monitorDelayMs].every(
 			(n) => Number.isSafeInteger(n) && n >= 0 && n <= 300_000,
 		) ||
 		!Number.isSafeInteger(workloadLeaseMs) ||
 		workloadLeaseMs < 1 ||
-		workloadLeaseMs > 300_000
+		workloadLeaseMs > 300_000 ||
+		(idleSandboxReclaimAfterMs !== undefined &&
+			(!Number.isSafeInteger(idleSandboxReclaimAfterMs) ||
+				idleSandboxReclaimAfterMs < 1 ||
+				idleSandboxReclaimAfterMs > 30 * 24 * 60 * 60 * 1000))
 	)
 		throw new TypeError("Invalid Workload poll interval");
 	// Fairness is local to this live poller; restart begins a new rotation.
@@ -815,6 +825,7 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 							workerId,
 							traceId,
 							requestId,
+							idleSandboxReclaimAfterMs,
 						});
 					// Outbox deliveries only wake reconciliation. The durable Workload
 					// row owns subsequent recovery steps and periodic observations.

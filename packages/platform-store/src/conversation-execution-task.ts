@@ -35,6 +35,7 @@ import { requireCurrentPersonalApiTaskAdmissionV1 } from "./personal-api-task-au
 import {
 	insertSessionSandboxBinding,
 	readSessionSandboxBinding,
+	requestSessionSandboxResume,
 } from "./session-sandbox.js";
 import { insertTaskAuthorization } from "./task-authorization.js";
 import { decodePersistedWorkloadStateV1 } from "./workload-reconciliation.js";
@@ -375,6 +376,11 @@ export async function submitConversationTask(
 			where id = ${plan.conversationId}
 		`;
 	}
+	await requestSessionSandboxResume(
+		transaction,
+		plan.conversationId,
+		plan.acceptedAt,
+	);
 	const committedSandbox = await readSessionSandboxBinding(
 		transaction,
 		plan.conversationId,

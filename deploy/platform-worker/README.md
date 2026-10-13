@@ -9,6 +9,12 @@ Helm 的 `platformWorker.wecomEnabled=true` 还会在同一进程启动 WeCom �
 启用该开关须使用 `workloadTopology.enabled=false` 的正式 Worker 部署；受控 topology
 模式不运行渠道，组合启用会拒绝渲染。
 
+Session Sandbox 的空闲计算回收属于同一 Worker 的会话生命周期策略。部署配置模块的
+`workloadInput.idleSandboxReclaimAfterMs` 可以配置空闲阈值，设为 `null` 可关闭，未配置时默认
+30 分钟；只有没有 `active`、`waiting` 或 `unknown` 执行的 Sandbox 才会停止计算资源，PVC 和会话映射保留，
+下一条消息会重新准备原 Sandbox。该策略与已验证 Workload 升级分开，
+不会改变 policy 或 Workload revision。
+
 ## 打包与启动
 
 在仓库根目录、Node.js 24 与仓库固定 pnpm 版本下执行：

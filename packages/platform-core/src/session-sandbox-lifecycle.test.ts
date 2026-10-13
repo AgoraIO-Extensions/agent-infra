@@ -3,10 +3,13 @@ import { createSessionSandboxBindingV1 } from "./session-sandbox.js";
 import {
 	canDrainSessionSandboxComputeV1,
 	canPrepareSessionSandboxReplacementV1,
+	canReclaimIdleSessionSandboxV1,
 	decideSessionSandboxDrainObservationV1,
+	planSessionSandboxIdleReclaimTransitionV1,
 	planSessionSandboxUpgradeTransitionV1,
 	type SessionSandboxLifecycleV1,
 	type SessionSandboxStopReceiptV1,
+	shouldContinueSessionSandboxPreparationV1,
 } from "./session-sandbox-lifecycle.js";
 import {
 	decideSessionSandboxObservationV1,
@@ -736,5 +739,63 @@ describe("idle Sandbox upgrade plan (ADR 0023)", () => {
 			expect(
 				planSessionSandboxUpgradeTransitionV1({ ...input, management }),
 			).toBeNull();
+	});
+
+	it("reclaims only a current Sandbox whose executions are all terminal", () => {
+		const input = {
+			...upgradeFixture(),
+			policyCurrent: true,
+			executionStatuses: ["completed", "failed", "cancelled"],
+		};
+		expect(canReclaimIdleSessionSandboxV1(input.executionStatuses)).toBe(true);
+		expect(planSessionSandboxIdleReclaimTransitionV1(input)).toMatchObject({
+			resourceFence: 4,
+			status: "unavailable",
+			desiredState: "stopped",
+			lifecycle: {
+				reason: "idle_reclaim",
+				resumeRequested: false,
+				stopReceipt: null,
+			},
+		});
+		for (const status of ["submitted", "waiting", "processing", "unknown"])
+			expect(
+				planSessionSandboxIdleReclaimTransitionV1({
+					...input,
+					executionStatuses: [status],
+				}),
+			).toBeNull();
+	});
+
+	it("keeps existing management lifecycles preparing while idle reclaim waits for resume", () => {
+		const fixtureLifecycle = fixture().lifecycle;
+		const lifecycle = {
+			...fixtureLifecycle,
+			authority: {
+				...fixtureLifecycle.authority,
+				targetDesiredState: "running" as const,
+			},
+		};
+		expect(shouldContinueSessionSandboxPreparationV1(lifecycle)).toBe(true);
+		expect(
+			shouldContinueSessionSandboxPreparationV1({
+				...lifecycle,
+				reason: "upgrade",
+			}),
+		).toBe(true);
+		expect(
+			shouldContinueSessionSandboxPreparationV1({
+				...lifecycle,
+				reason: "idle_reclaim",
+				resumeRequested: false,
+			}),
+		).toBe(false);
+		expect(
+			shouldContinueSessionSandboxPreparationV1({
+				...lifecycle,
+				reason: "idle_reclaim",
+				resumeRequested: true,
+			}),
+		).toBe(true);
 	});
 });
