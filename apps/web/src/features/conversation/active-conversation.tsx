@@ -142,9 +142,14 @@ export function ActiveConversation({
 		!nativeMetadataCommands.available &&
 		!nativeMetadataSkills.available &&
 		(nativeMetadataCommands.isError || nativeMetadataSkills.isError);
+	const nativeMetadataPartiallyUnavailable =
+		latestExecution !== undefined &&
+		!nativeMetadataLoading &&
+		nativeMetadataCommands.available !== nativeMetadataSkills.available;
 	const nativeMetadataReady =
 		latestExecution !== undefined &&
-		(nativeMetadataCommands.available || nativeMetadataSkills.available);
+		nativeMetadataCommands.available &&
+		nativeMetadataSkills.available;
 	const active = Boolean(latestExecution && !isTerminal(status));
 	const visibleNotice =
 		notice ||
@@ -392,6 +397,13 @@ export function ActiveConversation({
 						<Alert role="status">
 							<AlertDescription>
 								当前执行的命令或 Skill 暂不可用，已隐藏旧数据。
+							</AlertDescription>
+						</Alert>
+					)}
+					{nativeMetadataPartiallyUnavailable && (
+						<Alert role="status">
+							<AlertDescription>
+								部分命令或 Skill 目录暂不可用，已隐藏对应旧数据。
 							</AlertDescription>
 						</Alert>
 					)}

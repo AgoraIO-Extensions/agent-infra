@@ -262,6 +262,27 @@ describe("functional conversation screen", () => {
 		expect(screen.queryByRole("button", { name: "打开" })).toBeNull();
 	});
 
+	it("shows a partial-unavailable notice when one native selector fails", async () => {
+		setup((request) => {
+			const url = new URL(request.url);
+			if (url.pathname.endsWith("/native-metadata")) {
+				if (url.searchParams.get("selector") === "commands")
+					return Response.json({
+						selector: "commands",
+						revision: "c".repeat(64),
+						capabilities: [],
+					});
+				return new Response(null, { status: 503 });
+			}
+			if (url.pathname === "/api/v2/conversations/conversation-1")
+				return Response.json(history("conversation-1"));
+		});
+		await screen.findByText(
+			"部分命令或 Skill 目录暂不可用，已隐藏对应旧数据。",
+		);
+		expect(screen.queryByText("当前执行没有可用命令或 Skill。")).toBeNull();
+	});
+
 	it("rejects unsupported and oversized files before creating an upload", async () => {
 		const { requests } = setup();
 		const input = await screen.findByLabelText("添加附件");
