@@ -7,11 +7,17 @@ export type ClaudeFileWriteOutput = Readonly<{
 	structuredPatch?: readonly unknown[];
 }>;
 
+export type ClaudeToolOperationCallbacks = Readonly<{
+	onStarted?: (toolUseId: string, toolName: string) => Promise<void>;
+	onCompleted?: (toolUseId: string, toolName: string) => Promise<void>;
+}>;
+
 /** Fixed core tools; Bash, subagents, MCP, network tools and arbitrary file roots remain unavailable. */
 export function claudeWorkspaceTools(
 	workspace: string,
 	memory: string,
 	onResultFile?: (output: ClaudeFileWriteOutput) => Promise<void>,
+	onToolOperation?: ClaudeToolOperationCallbacks,
 ): Pick<Options, "tools" | "hooks" | "canUseTool" | "settings"> {
 	const permits = async (name: string, input: unknown) => {
 		if (
@@ -41,27 +47,47 @@ export function claudeWorkspaceTools(
 			PreToolUse: [
 				{
 					hooks: [
-						async (input) => ({
-							hookSpecificOutput: {
-								hookEventName: "PreToolUse",
-								permissionDecision:
-									input.hook_event_name === "PreToolUse" &&
-									(await permits(input.tool_name, input.tool_input))
-										? "allow"
-										: "deny",
-								permissionDecisionReason: "Conversation workspace policy",
-							},
-						}),
+						async (input) => {
+							if (onToolOperation && input.hook_event_name === "PreToolUse")
+								await onToolOperation.onStarted?.(
+									typeof input.tool_use_id === "string"
+										? input.tool_use_id
+										: "unknown-tool-use",
+									input.tool_name,
+								);
+							return {
+								hookSpecificOutput: {
+									hookEventName: "PreToolUse",
+									permissionDecision:
+										input.hook_event_name === "PreToolUse" &&
+										(await permits(input.tool_name, input.tool_input))
+											? "allow"
+											: "deny",
+									permissionDecisionReason: "Conversation workspace policy",
+								},
+							};
+						},
 					],
 				},
 			],
-			...(onResultFile
+			...(onResultFile || onToolOperation
 				? {
 						PostToolUse: [
 							{
 								hooks: [
 									async (input) => {
 										if (
+											onToolOperation &&
+											input.hook_event_name === "PostToolUse"
+										)
+											await onToolOperation.onCompleted?.(
+												typeof input.tool_use_id === "string"
+													? input.tool_use_id
+													: "unknown-tool-use",
+												input.tool_name,
+											);
+										if (
+											onResultFile &&
 											input.hook_event_name === "PostToolUse" &&
 											["Write", "Edit"].includes(input.tool_name) &&
 											input.tool_response &&
