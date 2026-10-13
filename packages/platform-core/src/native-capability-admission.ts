@@ -378,7 +378,7 @@ function parseAdmittedCapability(
 	return Object.freeze({ ...capability(metadata), directoryRevision });
 }
 
-function parseProjection(
+export function parseNativeCapabilityMetadataProjectionV1(
 	input: NativeCapabilityMetadataProjectionV1,
 ): NativeCapabilityMetadataProjectionV1 {
 	const object = exactObject(input, ["selector", "revision", "capabilities"]);
@@ -406,64 +406,6 @@ function parseProjection(
 		revision,
 		capabilities: Object.freeze(capabilities),
 	});
-}
-
-export class FakeNativeCapabilityMetadataRevalidationV1
-	implements NativeCapabilityMetadataRevalidationPortV1
-{
-	#projection: NativeCapabilityMetadataProjectionV1;
-	#available: boolean;
-
-	constructor(input: {
-		readonly projection: NativeCapabilityMetadataProjectionV1;
-		readonly available?: boolean;
-	}) {
-		this.#projection = parseProjection(input.projection);
-		this.#available = input.available ?? true;
-	}
-
-	setProjection(projection: NativeCapabilityMetadataProjectionV1): void {
-		this.#projection = parseProjection(projection);
-	}
-
-	setAvailable(available: boolean): void {
-		this.#available = available;
-	}
-
-	async revalidate(input: {
-		readonly request: NativeCapabilityAdmissionRequestV1;
-		readonly authority: ConversationExecutionAuthorityV1;
-		readonly sessionGeneration: number;
-	}) {
-		if (!this.#available) return { outcome: "unavailable" as const };
-		const projection = parseProjection(this.#projection);
-		if (projection.revision !== input.request.directoryRevision)
-			return { outcome: "stale" as const };
-		const selected = projection.capabilities.find(
-			({ id }) => id === input.request.capabilityId,
-		);
-		if (!selected) return { outcome: "unknown" as const };
-		if (
-			(selected.kind === "command" && selected.availability !== "available") ||
-			(selected.kind === "skill" && selected.availability !== "discovered")
-		)
-			return { outcome: "disabled" as const };
-		return {
-			outcome: "allowed" as const,
-			scope: Object.freeze({
-				agentId: input.authority.agentId,
-				actorId: input.authority.actorId,
-				channelId: input.authority.channelId,
-				conversationId: input.request.conversationId,
-				sessionGeneration: input.sessionGeneration,
-				authorizationRevision: input.authority.authorizationRevision,
-			}),
-			capability: Object.freeze({
-				...selected,
-				directoryRevision: projection.revision,
-			}),
-		};
-	}
 }
 
 function freeze<T>(value: T): T {
@@ -584,7 +526,11 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 								selected.availability !== "discovered")
 						)
 							return { outcome: "disabled" };
-						if (selected.kind === "command") return { outcome: "unsupported" };
+						if (selected.kind === "command") {
+							if (request.parameters.length > 0)
+								return { outcome: "invalid_parameters" };
+							return { outcome: "unsupported" };
+						}
 						if (
 							selected.kind === "skill" &&
 							request.parameters.trim().length === 0

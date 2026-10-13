@@ -1,7 +1,8 @@
 import {
 	createNativeCapabilityAdmissionUseCaseV1,
-	FakeNativeCapabilityMetadataRevalidationV1,
+	type NativeCapabilityMetadataRevalidationPortV1,
 } from "@agent-infra/platform-core";
+import { FakeNativeCapabilityMetadataRevalidationV1 } from "@agent-infra/platform-core/testing";
 import { describe, expect, it } from "vitest";
 import {
 	type FakeNativeCapabilityAdmissionStoreOptionsV1,
@@ -64,13 +65,13 @@ const projection = {
 
 function createHarness(
 	options: Partial<FakeNativeCapabilityAdmissionStoreOptionsV1> = {},
+	metadata: NativeCapabilityMetadataRevalidationPortV1 = new FakeNativeCapabilityMetadataRevalidationV1(
+		{ projection },
+	),
 ) {
 	const store = new FakeNativeCapabilityAdmissionStoreV1({
 		conversation,
 		...options,
-	});
-	const metadata = new FakeNativeCapabilityMetadataRevalidationV1({
-		projection,
 	});
 	const useCase = createNativeCapabilityAdmissionUseCaseV1({
 		authorization: {
@@ -134,6 +135,62 @@ describe("native capability admission Store seam", () => {
 			expect(await harness.useCase.admit(request)).toEqual({ outcome: "busy" });
 			expect(harness.store.plans).toHaveLength(0);
 		}
+	});
+
+	it("serializes same-key and different-key concurrent admissions", async () => {
+		const sameKey = createHarness();
+		const sameResults = await Promise.all([
+			sameKey.useCase.admit(request),
+			sameKey.useCase.admit({ ...request, requestId: "request-2" }),
+		]);
+		expect(sameResults.map((result) => result.outcome).sort()).toEqual([
+			"accepted",
+			"replayed",
+		]);
+
+		const differentKey = createHarness();
+		const differentResults = await Promise.all([
+			differentKey.useCase.admit(request),
+			differentKey.useCase.admit({
+				...request,
+				idempotencyKey: "invoke-2",
+				requestId: "request-2",
+			}),
+		]);
+		expect(differentResults.map((result) => result.outcome).sort()).toEqual([
+			"accepted",
+			"busy",
+		]);
+		expect(differentKey.store.plans).toHaveLength(1);
+	});
+
+	it("rejects a revision revocation while metadata admission is pending", async () => {
+		let release = () => {};
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const delayedMetadata = {
+			async revalidate(
+				input: Parameters<
+					NativeCapabilityMetadataRevalidationPortV1["revalidate"]
+				>[0],
+			) {
+				await pending;
+				return new FakeNativeCapabilityMetadataRevalidationV1({
+					projection,
+				}).revalidate(input);
+			},
+		};
+		const harness = createHarness({}, delayedMetadata);
+		const admission = harness.useCase.admit(request);
+		await Promise.resolve();
+		harness.store.setAuthorizationRevision("auth-revoked");
+		release();
+		expect(await admission).toEqual({
+			outcome: "denied",
+			reason: "authorization_lost",
+		});
+		expect(harness.store.plans).toHaveLength(0);
 	});
 
 	it("rejects authorization loss before replay or metadata reads", async () => {

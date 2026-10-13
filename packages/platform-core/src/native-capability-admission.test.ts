@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { FakeNativeCapabilityMetadataRevalidationV1 } from "./fake-native-capability-admission.ts";
 import {
 	createNativeCapabilityAdmissionUseCaseV1,
-	FakeNativeCapabilityMetadataRevalidationV1,
 	type NativeCapabilityAdmissionStateV1,
 	type NativeCapabilityAdmissionTransactionPortV1,
 	type NativeCapabilityMetadataRevalidationPortV1,

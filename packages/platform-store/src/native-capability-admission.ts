@@ -43,6 +43,7 @@ export class FakeNativeCapabilityAdmissionStoreV1
 	#activeExecution: NativeCapabilityAdmissionStateV1["activeExecution"];
 	readonly #idempotency = new Map<string, IdempotencyRecord>();
 	readonly #plans = new Map<string, NativeCapabilityInvocationPlanV1>();
+	#tail: Promise<void> = Promise.resolve();
 
 	constructor(options: FakeNativeCapabilityAdmissionStoreOptionsV1) {
 		this.#conversation = structuredClone(options.conversation);
@@ -69,6 +70,37 @@ export class FakeNativeCapabilityAdmissionStoreV1
 	}
 
 	async admitNativeCapability(
+		request: {
+			readonly command: NativeCapabilityAdmissionRequestV1;
+			readonly authority: ConversationExecutionAuthorityV1;
+			readonly requestDigest: string;
+		},
+		decide: (state: NativeCapabilityAdmissionStateV1) => Promise<
+			| NativeCapabilityInvocationPlanV1
+			| Extract<
+					NativeCapabilityAdmissionDecisionV1,
+					{
+						readonly outcome: Exclude<
+							NativeCapabilityAdmissionDecisionV1["outcome"],
+							"accepted" | "replayed" | "conflict"
+						>;
+					}
+			  >
+		>,
+	): Promise<NativeCapabilityAdmissionDecisionV1> {
+		return this.#serialize(() => this.#admitNativeCapability(request, decide));
+	}
+
+	#serialize<T>(operation: () => Promise<T>): Promise<T> {
+		const previous = this.#tail;
+		let release = () => {};
+		this.#tail = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		return previous.then(operation).finally(release);
+	}
+
+	async #admitNativeCapability(
 		request: {
 			readonly command: NativeCapabilityAdmissionRequestV1;
 			readonly authority: ConversationExecutionAuthorityV1;
@@ -123,6 +155,8 @@ export class FakeNativeCapabilityAdmissionStoreV1
 			authorizationRevision: this.#authorizationRevision,
 		});
 		if ("outcome" in decision) return decision;
+		if (this.#authorizationRevision !== authority.authorizationRevision)
+			return { outcome: "denied", reason: "authorization_lost" };
 		this.#validatePlan(decision, request);
 		const plan = freeze(structuredClone(decision));
 		this.#idempotency.set(idempotencyKey, {
