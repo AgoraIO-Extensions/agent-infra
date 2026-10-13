@@ -221,6 +221,21 @@ async function routingFixture(
 			});
 		}
 		if (path[1] === "v2" && path[2] === "conversations") {
+			if (
+				path[4] === "executions" &&
+				path[6] === "native-metadata" &&
+				request.method() === "GET"
+			)
+				return route.fulfill({
+					json: {
+						selector:
+							url.searchParams.get("selector") === "commands"
+								? "commands"
+								: "skills",
+						revision: "a".repeat(64),
+						capabilities: [],
+					},
+				});
 			if (path[3] === "forbidden")
 				return route.fulfill({
 					status: 403,

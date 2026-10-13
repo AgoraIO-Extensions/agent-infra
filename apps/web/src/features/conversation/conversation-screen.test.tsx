@@ -66,6 +66,12 @@ function setup(
 		if (path === "/api/v2/me/conversations/recent")
 			return Response.json({ items: [], nextCursor: null });
 		if (path === "/api/v2/agents/agent-1") return Response.json(agent);
+		if (path.endsWith("/native-metadata"))
+			return Response.json({
+				selector: new URL(request.url).searchParams.get("selector"),
+				revision: "c".repeat(64),
+				capabilities: [],
+			});
 		if (path === "/api/v1/conversations/conversation-1/files/limits")
 			return Response.json({
 				schemaVersion: 1,
@@ -176,30 +182,64 @@ function fileProjection(status: "pending" | "available" = "available") {
 }
 
 describe("functional conversation screen", () => {
-	it("shows the current Agent Skill metadata without submitting a request", async () => {
+	it("shows authenticated native Skill metadata without submitting a request", async () => {
 		const { requests } = setup((request) => {
-			if (new URL(request.url).pathname === "/api/v2/agents/agent-1")
-				return Response.json({
-					...agent,
-					capabilities: {
-						...agent.capabilities,
-						skills: [
+			const url = new URL(request.url);
+			if (url.pathname.endsWith("/native-metadata")) {
+				if (url.searchParams.get("selector") === "commands")
+					return Response.json({
+						selector: "commands",
+						revision: "c".repeat(64),
+						capabilities: [
 							{
-								schemaVersion: 1,
-								name: "workspace-summary",
-								version: "1.0.0",
-								manifestSha256: "a".repeat(64),
-								packageDigest: "b".repeat(64),
-								readOnly: true,
+								id: "f".repeat(64),
+								kind: "command",
+								name: "list-files",
+								description: "List approved workspace files",
+								source: { name: "codex", version: "1.0.0" },
+								parameters: [],
+								effect: "read_only",
+								availability: "available",
 							},
 						],
-					},
+					});
+				return Response.json({
+					selector: "skills",
+					revision: "d".repeat(64),
+					capabilities: [
+						{
+							id: "e".repeat(64),
+							kind: "skill",
+							name: "workspace-summary",
+							description: "Summarize approved workspace files",
+							source: { name: "skillhub", version: "1.0.0" },
+							availability: "discovered",
+						},
+					],
 				});
+			}
+			if (url.pathname === "/api/v2/agents/agent-1")
+				return Response.json({
+					...agent,
+				});
+			if (url.pathname === "/api/v2/conversations/conversation-1")
+				return Response.json(history("conversation-1"));
 		});
 		fireEvent.click(await screen.findByRole("button", { name: "打开" }));
 		expect(screen.getByText("workspace-summary")).toBeTruthy();
-		expect(screen.getByText(/Skill Hub/)).toBeTruthy();
-		expect(screen.getByText(/1\.0\.0/)).toBeTruthy();
+		expect(screen.getByText("list-files")).toBeTruthy();
+		expect(screen.getByText(/skillhub/)).toBeTruthy();
+		expect(screen.getAllByText(/1\.0\.0/)).toHaveLength(2);
+		const metadataRequests = requests.filter((request) =>
+			new URL(request.url).pathname.endsWith("/native-metadata"),
+		);
+		expect(
+			new Set(
+				metadataRequests.map((request) =>
+					new URL(request.url).searchParams.get("selector"),
+				),
+			),
+		).toEqual(new Set(["commands", "skills"]));
 		fireEvent.click(screen.getByRole("button", { name: /workspace-summary/ }));
 		fireEvent.click(screen.getByRole("button", { name: "确认选择" }));
 		expect(
@@ -208,6 +248,39 @@ describe("functional conversation screen", () => {
 			),
 		).toBeTruthy();
 		expect(requests.some((request) => request.method === "POST")).toBe(false);
+	});
+
+	it("hides native capabilities when the current execution metadata is unavailable", async () => {
+		setup((request) => {
+			const url = new URL(request.url);
+			if (url.pathname.endsWith("/native-metadata"))
+				return new Response(null, { status: 503 });
+			if (url.pathname === "/api/v2/conversations/conversation-1")
+				return Response.json(history("conversation-1"));
+		});
+		await screen.findByText("当前执行的命令或 Skill 暂不可用，已隐藏旧数据。");
+		expect(screen.queryByRole("button", { name: "打开" })).toBeNull();
+	});
+
+	it("shows a partial-unavailable notice when one native selector fails", async () => {
+		setup((request) => {
+			const url = new URL(request.url);
+			if (url.pathname.endsWith("/native-metadata")) {
+				if (url.searchParams.get("selector") === "commands")
+					return Response.json({
+						selector: "commands",
+						revision: "c".repeat(64),
+						capabilities: [],
+					});
+				return new Response(null, { status: 503 });
+			}
+			if (url.pathname === "/api/v2/conversations/conversation-1")
+				return Response.json(history("conversation-1"));
+		});
+		await screen.findByText(
+			"部分命令或 Skill 目录暂不可用，已隐藏对应旧数据。",
+		);
+		expect(screen.queryByText("当前执行没有可用命令或 Skill。")).toBeNull();
 	});
 
 	it("rejects unsupported and oversized files before creating an upload", async () => {
