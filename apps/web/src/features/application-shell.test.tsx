@@ -22,6 +22,7 @@ import { useBrowserSession } from "./use-browser-session";
 
 vi.mock("@tanstack/react-router", () => ({
 	useLocation: () => "/agents",
+	useRouterState: () => false,
 	Link: ({ children, to }: { children: ReactNode; to: string }) => (
 		<a href={to}>{children}</a>
 	),
