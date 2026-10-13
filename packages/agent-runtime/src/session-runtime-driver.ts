@@ -233,6 +233,8 @@ interface Turn {
 	configVersion: string;
 	selection: RuntimeSelectionV1;
 	status: RuntimeStatusV1;
+	/** Protected external action was blocked; terminal native callbacks cannot clear it. */
+	unknownHold?: true;
 	nativeStopReason?: string;
 	nativeCheckpoint?: string;
 	nativeTerminalCheckpoint?: string;
@@ -984,7 +986,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		command: RuntimeDriverCommand,
 		value: RuntimeDriverOperationRecord["result"],
 	) {
-		const record = result(command, file.read().binding.ref, value);
+		const current = file
+			.read()
+			.turns.find((turn) => turn.executionId === command.executionId);
+		const record = result(
+			command,
+			file.read().binding.ref,
+			current?.unknownHold ? unknownResult : value,
+		);
 		await file.update((state) => {
 			let operation = state.operations.find(
 				(entry) => entry.key === operationKey(command),
@@ -1292,7 +1301,14 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				markUnknown: async () => {
 					unknownHold = true;
 					if (dispatched && !this.closed)
-						await this.status(file, command.executionId, "unknown");
+						await this.status(
+							file,
+							command.executionId,
+							"unknown",
+							undefined,
+							undefined,
+							true,
+						);
 				},
 				...(resolveModelCredential ? { resolveModelCredential } : {}),
 				...(browser ? { browser } : {}),
@@ -1473,7 +1489,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 	) {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
-			if (!turn || terminal(turn.status)) return;
+			if (!turn || terminal(turn.status) || turn.unknownHold) return;
 			state.sequence++;
 			turn.events.push(
 				RuntimeEventV1Schema.parse({
@@ -1494,10 +1510,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		status: RuntimeStatusV1,
 		nativeStopReason?: string,
 		nativeTerminalCheckpoint?: string,
+		unknownHold = false,
 	) {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
 			if (!turn || terminal(turn.status)) return;
+			if (turn.unknownHold && status !== "unknown") return;
+			if (unknownHold) turn.unknownHold = true;
 			if (terminal(status)) {
 				if (
 					!nativeStopReason ||
