@@ -1,5 +1,7 @@
 # Rehoboam 版本与配置管理
 
+发布帮助检索与共享经验发布见[专用说明](rehoboam-help.md)，由 v16 新 Action 提供，不属于配置修改或运行 Job。
+
 `rehoboam-connection-v11` 增加 28 个 Actions，保留 v10 的 42 个能力。
 Rehoboam 后端必须先部署；Connection 升级要求重新审批和显式选择新增能力，不自动扩大旧授权。
 
