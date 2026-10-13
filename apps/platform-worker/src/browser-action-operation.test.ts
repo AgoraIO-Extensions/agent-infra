@@ -182,6 +182,11 @@ function setup(
 		readonly executeAction?: (
 			request: BrowserActionOperationControllerRequestV1,
 		) => Promise<ActionRecord>;
+		readonly readAction?: (request: {
+			readonly actionId: string;
+			readonly idempotencyKey?: string;
+			readonly executionBinding: typeof binding;
+		}) => ActionRecord | null;
 	} = {},
 ) {
 	const phases: string[] = [];
@@ -207,7 +212,11 @@ function setup(
 			executionBinding: request.executionBinding,
 			createdAt: "2026-10-07T00:00:00.000Z",
 		}));
-	const controller = { executeAction: vi.fn(executeAction) };
+	const readAction = options.readAction ? vi.fn(options.readAction) : undefined;
+	const controller = {
+		executeAction: vi.fn(executeAction),
+		...(readAction ? { readAction } : {}),
+	};
 	const adapter = createBrowserActionOperationAdapterV1({
 		events: { persist } as ConversationEventUseCaseV1,
 		controller,
@@ -433,6 +442,43 @@ describe("Browser action operation adapter", () => {
 			]);
 		},
 	);
+
+	it("reads a terminal Browser record after the controller first returns unknown", async () => {
+		const state = setup({
+			executeAction: async (request) => ({
+				actionId: request.actionId,
+				operationRef: request.operationRef,
+				attemptRef: request.attemptRef,
+				kind: request.kind,
+				status: "unknown",
+				page: request.page,
+				sideEffect: request.sideEffect === true,
+				executionBinding: request.executionBinding,
+				createdAt: "2026-10-07T00:00:00.000Z",
+			}),
+			readAction: (request) => ({
+				actionId: request.actionId,
+				operationRef: attempt.operationRef,
+				attemptRef: attempt.attemptRef,
+				kind: action.kind,
+				status: "completed",
+				page,
+				sideEffect: true,
+				executionBinding: request.executionBinding,
+				createdAt: "2026-10-07T00:00:00.000Z",
+			}),
+		});
+
+		await expect(state.adapter.execute(state.input)).resolves.toMatchObject({
+			record: { status: "completed", actionId: "action-1" },
+		});
+		expect(state.phases).toEqual(["intent", "started", "completed"]);
+		expect(state.controller.readAction).toHaveBeenCalledWith({
+			actionId: "action-1",
+			idempotencyKey: "action-1",
+			executionBinding: binding,
+		});
+	});
 
 	it("does not invoke the controller when the durable intent replays completed", async () => {
 		const state = setup({
