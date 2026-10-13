@@ -94,6 +94,16 @@ describe("deployment-owned Workload egress", () => {
 		"fe80::/10",
 		"224.0.0.0/4",
 		"ff00::/8",
+		"64:ff9b::/96",
+		"64:ff9b:1::/48",
+		"100:0:0:1::/64",
+		"2001:1::1/128",
+		"2001:20::/48",
+		"2002::/48",
+		"2620:4f:8000::/48",
+		"3fff::/48",
+		"4000::/48",
+		"5f00::/48",
 		"192.0.2.0/24",
 		"2001:db8::/32",
 		"8.8.0.0/15",
@@ -104,6 +114,13 @@ describe("deployment-owned Workload egress", () => {
 		expect(() =>
 			workloadEgressRulesV1({
 				modelEgress: [{ destination: { cidr }, port: 443 }],
+			}),
+		).toThrow();
+	});
+	it("rejects a CIDR without a port", () => {
+		expect(() =>
+			workloadEgressRulesV1({
+				modelEgress: [{ destination: { cidr: "8.8.8.0/24" } } as never],
 			}),
 		).toThrow();
 	});
@@ -193,6 +210,7 @@ describe("deployment-owned Workload egress", () => {
 			port: 443,
 		},
 		{ destination: { ip: "203.0.113.8" }, port: 0 },
+		{ destination: { cidr: "8.8.8.0/24" } },
 		{ destination: { ip: "203.0.113.8" }, port: 443, endPort: 65535 },
 	])(
 		"rejects widened or malformed deployment input before any resource mutation: %j",

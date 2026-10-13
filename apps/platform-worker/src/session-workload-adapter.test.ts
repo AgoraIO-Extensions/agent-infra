@@ -344,6 +344,24 @@ describe("session sandbox workload adapter", () => {
 			},
 		],
 		[
+			"reserved CIDR destination",
+			{
+				...allocation,
+				egress: {
+					modelEgress: [{ destination: { cidr: "4000::/48" }, port: 443 }],
+				},
+			},
+		],
+		[
+			"CIDR without port",
+			{
+				...allocation,
+				egress: {
+					modelEgress: [{ destination: { cidr: "8.8.8.0/24" } } as never],
+				},
+			},
+		],
+		[
 			"missing port",
 			{
 				...allocation,
