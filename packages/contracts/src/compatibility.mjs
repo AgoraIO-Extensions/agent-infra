@@ -1929,6 +1929,27 @@ function isNativeMetadataOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2206 publishes the Agent version Skill binding and status API additively.
+function isSkillHubAgentBindingOpenApiAddition(previous, current) {
+	const paths = ["/api/v2/agents/{agentId}/versions/{agentVersion}/skills"];
+	const schemas = [
+		"SkillHubAgentBindingRequestV1",
+		"SkillHubAgentBindingCommandV1",
+		"SkillHubAgentBindingResultV1",
+		"SkillHubAgentBindingStatusV1",
+		"SkillHubAgentBindingStatusResponseV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #1052 publishes the exact #1027 recent read; every prior document field stays exact.
 function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/me/conversations/recent";
@@ -3547,6 +3568,7 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&
+			!isSkillHubAgentBindingOpenApiAddition(previous, current) &&
 			!isNativeMetadataOpenApiAddition(previous, current) &&
 			!isWecomReceiptOpenApiAddition(previous, current) &&
 			!isWecomQrAuthorizationOpenApiAddition(previous, current) &&

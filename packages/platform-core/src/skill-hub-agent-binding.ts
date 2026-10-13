@@ -53,6 +53,9 @@ export type SkillHubAgentBindingWriteV1 = Readonly<{
 	}[];
 }>;
 
+export type SkillHubAgentBindingResultV1 = AgentConfigurationResultV1 &
+	Readonly<{ replayed: boolean }>;
+
 export type SkillHubAgentBindingAdmissionV1 = Readonly<{
 	skillVersionId: string;
 	principalType: "user" | "organization";
@@ -351,7 +354,7 @@ export function createSkillHubAgentBindingUseCaseV1(dependencies: {
 		async bind(
 			commandInput: unknown,
 			actorContextInput: unknown,
-		): Promise<AgentConfigurationResultV1> {
+		): Promise<SkillHubAgentBindingResultV1> {
 			let command: SkillHubAgentBindingCommandV1;
 			let actor: AgentConfigurationActorContextV1;
 			try {
@@ -411,7 +414,10 @@ export function createSkillHubAgentBindingUseCaseV1(dependencies: {
 				throw new SkillHubAgentBindingErrorV1("persistence_failed");
 			}
 			if (readDecision.outcome === "replayed")
-				return parseResult(readDecision.result, command.agentId);
+				return {
+					...parseResult(readDecision.result, command.agentId),
+					replayed: true,
+				};
 			if (readDecision.outcome === "idempotency_conflict")
 				throw new SkillHubAgentBindingErrorV1("idempotency_conflict");
 			if (readDecision.outcome === "missing")
@@ -543,7 +549,7 @@ export function createSkillHubAgentBindingUseCaseV1(dependencies: {
 				!sameValue(decision.result, plan.result)
 			)
 				throw new SkillHubAgentBindingErrorV1("persistence_failed");
-			return decision.result;
+			return { ...decision.result, replayed: decision.outcome === "replayed" };
 		},
 	};
 }

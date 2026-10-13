@@ -192,6 +192,7 @@ describe("Skill Hub Agent binding persistence", () => {
 			agentId: "agent-1",
 			revision: 8,
 			changedFields: ["skills"],
+			replayed: false,
 		});
 		const rows = await client`
 			select agent_id, agent_version, skill_version_id, configuration_revision,
@@ -209,7 +210,7 @@ describe("Skill Hub Agent binding persistence", () => {
 			}),
 		]);
 		const replay = await useCase.bind(command, actor);
-		expect(replay).toEqual(result);
+		expect(replay).toEqual({ ...result, replayed: true });
 		expect(
 			await client`select count(*)::int as count from platform.skill_hub_agent_bindings`,
 		).toEqual([{ count: 1 }]);

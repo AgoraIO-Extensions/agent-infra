@@ -20,6 +20,7 @@ import {
 	createPersonalApiCredentialUseCaseV1,
 	createPersonalRelayKeyUseCaseV1,
 	createRecentPersonalConversationsUseCaseV1,
+	createSkillHubAgentBindingUseCaseV1,
 	type WecomIdentityPortV1,
 } from "@agent-infra/platform-core";
 import {
@@ -43,6 +44,7 @@ import {
 	PostgresPlatformAuditQueryV1,
 	type PostgresPlatformUserDisablesV1,
 	PostgresScopedPlatformAuditQueryV1,
+	PostgresSkillHubAgentBindingAdmissionV1,
 	PostgresTaskAuthorizationStoreV1,
 } from "@agent-infra/platform-store";
 import {
@@ -69,6 +71,7 @@ import {
 	resolveCurrentTaskUser,
 } from "./http/identity.js";
 import type { NativeMetadataRoutesDependenciesV1 } from "./http/native-metadata-routes.js";
+import type { SkillHubAgentBindingRoutesDependenciesV1 } from "./http/skill-hub-agent-binding-routes.js";
 import { createTaskRoutesDependenciesV1 } from "./http/task-dependencies.js";
 import type { ManagementRouteDependencies } from "./http/v2-management-routes.js";
 import {
@@ -328,6 +331,9 @@ export function assemblePlatformApi(
 			databaseUrl: input.databaseUrl,
 		});
 	const skillHubRead = assembleSkillHubReadApiV1(input);
+	const skillHubBindingAdmission = new PostgresSkillHubAgentBindingAdmissionV1({
+		databaseUrl: input.databaseUrl,
+	});
 	const applicationMaterialGrants = createApplicationMaterialGrantUseCaseV1({
 		store: applicationMaterialGrantStore,
 		resolveCurrentActor: (userId) =>
@@ -419,6 +425,11 @@ export function assemblePlatformApi(
 		typeof input.admissions === "function"
 			? input.admissions({ configurationQuery })
 			: input.admissions;
+	const skillHubBinding = createSkillHubAgentBindingUseCaseV1({
+		transaction: configurationTransaction,
+		authorizationAdmission: admissions.authorizationAdmission,
+		bindingAdmission: skillHubBindingAdmission,
+	});
 	const channelAdmission =
 		resolveWecomBinding || wecomSetup
 			? {
@@ -836,6 +847,63 @@ export function assemblePlatformApi(
 		skillHubRead: skillHubRead.dependencies,
 		skillHubInstallations: skillHubRead.installationDependencies,
 		skillHubPublication: skillHubRead.publicationDependencies,
+		skillHubAgentBindings: {
+			identity: input.identity,
+			bind: async (request) =>
+				skillHubBinding.bind(
+					{
+						schemaVersion: 1,
+						agentId: request.agentId,
+						agentVersion: request.agentVersion,
+						expectedConfigurationRevision:
+							request.expectedConfigurationRevision,
+						idempotencyKey: request.idempotencyKey,
+						requestId: request.requestId,
+						traceId: request.traceId,
+						bindings: request.bindings as never,
+					},
+					{
+						schemaVersion: 1,
+						actorId: request.actorId,
+						rawRequestDigest: request.rawRequestDigest,
+					},
+				),
+			read: async (request) => {
+				const authorization = await admissions.authorizationAdmission.authorize(
+					{
+						schemaVersion: 1,
+						agentId: request.agentId,
+						actorId: request.actorId,
+						requestId: request.requestId,
+						traceId: request.traceId,
+					},
+				);
+				if (
+					authorization.status !== "admitted" ||
+					!authorization.accessAuthority ||
+					authorization.accessAuthority.state.agentId !== request.agentId ||
+					!authorization.accessAuthority.state.ownerIds.includes(
+						request.actorId,
+					) ||
+					authorization.accessAuthority.actorContext.userId !== request.actorId
+				)
+					throw new Error("Skill binding is unavailable");
+				const bindings = await skillHubBindingAdmission.resolveSyncBindings({
+					agentId: request.agentId,
+					agentVersion: request.agentVersion,
+					configurationRevision: authorization.accessAuthority.state.revision,
+					actorId: request.actorId,
+					organizationIds:
+						authorization.accessAuthority.actorContext.organizationIds,
+					isAdministrator:
+						authorization.accessAuthority.actorContext.isAdministrator,
+				});
+				return {
+					configurationRevision: authorization.accessAuthority.state.revision,
+					bindings,
+				};
+			},
+		} satisfies SkillHubAgentBindingRoutesDependenciesV1,
 		...(input.directory ? { directory: input.directory } : {}),
 		...(input.userGovernance
 			? {
@@ -867,6 +935,7 @@ export function assemblePlatformApi(
 		applicationRegistrationStore,
 		applicationMaterialGrantStore,
 		skillHubRead,
+		skillHubBindingAdmission,
 		applicationApiCredentialStore,
 		...(installationStore ? [installationStore] : []),
 		...(personalRelayKeyStore ? [personalRelayKeyStore] : []),
