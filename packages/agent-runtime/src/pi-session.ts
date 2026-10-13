@@ -660,7 +660,18 @@ export async function openPiSession(
 								model: fact,
 							});
 					})
-					.catch(() => {
+					.catch(async () => {
+						if (fact && writeFact)
+							await writeFact({
+								kind: "model",
+								operationRef,
+								attemptRef,
+								phase: "failed",
+								finishedAt: new Date().toISOString(),
+								durationMs: Math.max(0, Date.now() - startedAt),
+								failureCode: "operation_failed",
+								model: fact,
+							}).catch(() => undefined);
 						if (active === target) {
 							active?.reject(new Error("RUNTIME_ACCEPTANCE_UNKNOWN"));
 							active = undefined;
