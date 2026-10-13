@@ -1394,24 +1394,28 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
 	)
 		return false;
-	const addition = stripRuntimeBrowserOperationFacts({
-		paths: Object.fromEntries(
-			paths.map((path) => [path, current.paths?.[path]]),
-		),
-		schemas: Object.fromEntries(
-			schemas.map((name) => [name, current.components?.schemas?.[name]]),
-		),
-		security: {
-			platformApiCredential:
-				current.components?.securitySchemes?.platformApiCredential,
-		},
-	});
+	const addition = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts({
+			paths: Object.fromEntries(
+				paths.map((path) => [path, current.paths?.[path]]),
+			),
+			schemas: Object.fromEntries(
+				schemas.map((name) => [name, current.components?.schemas?.[name]]),
+			),
+			security: {
+				platformApiCredential:
+					current.components?.securitySchemes?.platformApiCredential,
+			},
+		}),
+	);
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		"062938f470294f68ec205f6e2007fa01a6306c40e3a59fe2195b8cad9e580a48"
 	)
 		return false;
-	const normalized = stripRuntimeBrowserOperationFacts(current);
+	const normalized = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts(current),
+	);
 	for (const path of paths) delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
 	if (
@@ -1424,7 +1428,10 @@ function isTaskHttpV1OpenApiAddition(previous, current) {
 		)
 			delete normalized.components.securitySchemes;
 	}
-	return sameValue(stripRuntimeBrowserOperationFacts(previous), normalized);
+	return sameValue(
+		stripRuntimeOperationIdentity(stripRuntimeBrowserOperationFacts(previous)),
+		normalized,
+	);
 }
 
 // #482 follow-up permits only the execution-scoped Task SSE path/schema.
@@ -1437,21 +1444,29 @@ function isTaskHttpV1SseOpenApiAddition(previous, current) {
 		previous.components?.schemas?.[schema] !== undefined
 	)
 		return false;
-	const addition = stripRuntimeBrowserOperationFacts({
-		paths: { [path]: current.paths?.[path] },
-		schemas: { [schema]: current.components?.schemas?.[schema] },
-	});
+	const addition = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts({
+			paths: { [path]: current.paths?.[path] },
+			schemas: { [schema]: current.components?.schemas?.[schema] },
+		}),
+	);
 	if (
 		createHash("sha256").update(JSON.stringify(addition)).digest("hex") !==
 		"6326d5f83b123da8233ac85fb694a1362d64ee5c4747618b37acba8759721167"
 	)
 		return false;
-	const normalized = stripRuntimeBrowserOperationFacts(current);
+	const normalized = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts(current),
+	);
 	delete normalized.paths[path];
 	delete normalized.components.schemas[schema];
 	return (
-		findBreakingChanges(stripRuntimeBrowserOperationFacts(previous), normalized)
-			.length === 0
+		findBreakingChanges(
+			stripRuntimeOperationIdentity(
+				stripRuntimeBrowserOperationFacts(previous),
+			),
+			normalized,
+		).length === 0
 	);
 }
 
@@ -1679,14 +1694,16 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
 	)
 		return false;
-	const addition = stripRuntimeBrowserOperationFacts({
-		paths: Object.fromEntries(
-			paths.map((path) => [path, current.paths?.[path]]),
-		),
-		schemas: Object.fromEntries(
-			schemas.map((name) => [name, current.components?.schemas?.[name]]),
-		),
-	});
+	const addition = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts({
+			paths: Object.fromEntries(
+				paths.map((path) => [path, current.paths?.[path]]),
+			),
+			schemas: Object.fromEntries(
+				schemas.map((name) => [name, current.components?.schemas?.[name]]),
+			),
+		}),
+	);
 	// The bounded event window is a later additive field on this V2 detail;
 	// keep the original #508 publication digest stable when checking the
 	// historical operation-read addition.
@@ -1730,7 +1747,9 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 		"097d6b3631a284fd8faf916f2c35a70d7c721c8bc832f3b97a96389fecfc541f"
 	)
 		return false;
-	const normalized = stripRuntimeBrowserOperationFacts(current);
+	const normalized = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts(current),
+	);
 	const normalizedDetailPath =
 		normalized.paths["/api/v2/conversations/{conversationId}"];
 	if (
@@ -1742,7 +1761,9 @@ function isConversationFactsV2OpenApiAddition(previous, current) {
 	for (const path of paths) delete normalized.paths[path];
 	for (const name of schemas) delete normalized.components.schemas[name];
 	delete normalized.components.schemas.ConversationEventWindowV1;
-	const normalizedPrevious = stripRuntimeBrowserOperationFacts(previous);
+	const normalizedPrevious = stripRuntimeOperationIdentity(
+		stripRuntimeBrowserOperationFacts(previous),
+	);
 	delete normalizedPrevious.components.schemas.ConversationEventWindowV1;
 	return (
 		sameValue(normalizedPrevious, normalized) ||
