@@ -244,6 +244,19 @@ interface Turn {
 	operationRef?: string;
 	attemptRef?: string;
 }
+function hasPendingToolOperation(turn: Turn) {
+	const phases = new Map<string, RuntimeOperationFactV2["phase"]>();
+	for (const fact of turn.operationFacts ?? []) {
+		if (fact.kind === "tool")
+			phases.set(
+				JSON.stringify([fact.operationRef, fact.attemptRef]),
+				fact.phase,
+			);
+	}
+	return [...phases.values()].some(
+		(phase) => phase === "intent" || phase === "started",
+	);
+}
 interface Session {
 	schemaVersion: 1;
 	binding: Binding;
@@ -729,7 +742,10 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					unavailable();
 				await file.update((draft) => {
 					for (const turn of draft.turns) {
-						if (turn.status === "running") {
+						if (
+							turn.status === "running" &&
+							(turn.unknownHold || hasPendingToolOperation(turn))
+						) {
 							draft.sequence++;
 							turn.events.push(
 								RuntimeEventV1Schema.parse({
@@ -743,8 +759,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								}),
 							);
 							turn.status = "unknown";
-							turn.unknownHold = true;
-						} else if (turn.status === "unknown") {
 							turn.unknownHold = true;
 						}
 					}

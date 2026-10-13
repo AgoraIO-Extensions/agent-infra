@@ -680,6 +680,13 @@ it("normalizes an interrupted Turn into an unknown hold before recovery", async 
 	try {
 		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
 		const record = await pending;
+		await sessionOptions?.recordOperationFact?.({
+			kind: "tool",
+			operationRef: "11111111-1111-4111-8111-111111111111",
+			attemptRef: "22222222-2222-4222-8222-222222222222",
+			phase: "intent",
+			toolId: "filesystem.write",
+		});
 		const recoverCall = vi.fn(async () => undefined);
 		const recoveredOpen = vi.fn(async () => ({
 			nativeId: "native-reopened",
