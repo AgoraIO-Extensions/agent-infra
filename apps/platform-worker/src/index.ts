@@ -7,6 +7,7 @@ import {
 	type PlatformConversationWorkerLifecycleStatusV1,
 	startPlatformConversationWorkerFromDeploymentV2,
 } from "./conversation-worker.js";
+import { createPlatformNativeMetadataGatewayOptionsV1 } from "./native-metadata-deployment.js";
 import {
 	type PlatformWorkerNativeMetadataGatewayServerOptionsV1,
 	startPlatformWorkerNativeMetadataGatewayServerV1,
@@ -19,6 +20,7 @@ export * from "./conversation-runtime.js";
 export * from "./conversation-worker.js";
 export * from "./kubernetes-client.js";
 export * from "./kubernetes-runtime-adapter.js";
+export * from "./native-metadata-deployment.js";
 export * from "./runtime-grant-signer.js";
 export * from "./runtime-model-directory-client.js";
 export * from "./runtime-model-directory-service.js";
@@ -393,10 +395,12 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
 	if (wecomSetting !== undefined && !["true", "false"].includes(wecomSetting))
 		throw new Error("PLATFORM_WORKER_WECOM_ENABLED must be true or false");
 	const wecomEnabled = wecomSetting === "true";
+	const nativeMetadataGateway =
+		await createPlatformNativeMetadataGatewayOptionsV1(termination.signal);
 	let primary: ReturnType<typeof startPlatformWorker> | undefined;
 	const workerPromise = startPlatformWorkerFromDeploymentV2({
 		startPrimary: () => {
-			primary = startPlatformWorker();
+			primary = startPlatformWorker({ nativeMetadataGateway });
 			return primary;
 		},
 		startConversation: (observability) =>
