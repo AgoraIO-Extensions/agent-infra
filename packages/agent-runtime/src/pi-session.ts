@@ -351,6 +351,15 @@ export async function openPiSession(
 	let policyReady = false;
 	let currentRecordOperationFact = options.recordOperationFact;
 	let currentModelFact = options.modelFact;
+	let currentModelOperation:
+		| {
+				operationRef: string;
+				attemptRef: string;
+				fact: Extract<RuntimeOperationFactV2, { kind: "model" }>["model"];
+				startedAt: number;
+				writeFact: (fact: RuntimeOperationFactV2) => Promise<void>;
+		  }
+		| undefined;
 	const phases = new Map<string, string>();
 	const toolCalls = new Map<string, { toolName: string; args: unknown }>();
 	const rpc = await openPiRpc(
@@ -487,8 +496,30 @@ export async function openPiSession(
 						)
 							throw new Error("RUNTIME_ACCEPTANCE_UNKNOWN");
 						const completion = active;
+						const modelOperation = currentModelOperation;
+						if (modelOperation) {
+							const failed = ["error", "aborted"].includes(stopReason);
+							await modelOperation.writeFact({
+								kind: "model",
+								operationRef: modelOperation.operationRef,
+								attemptRef: modelOperation.attemptRef,
+								phase: failed ? "failed" : "completed",
+								finishedAt: new Date().toISOString(),
+								durationMs: Math.max(0, Date.now() - modelOperation.startedAt),
+								...(failed
+									? {
+											failureCode:
+												stopReason === "aborted"
+													? ("interrupted" as const)
+													: ("operation_failed" as const),
+										}
+									: {}),
+								model: modelOperation.fact,
+							});
+						}
 						active = undefined;
-						completion.resolve({ stopReason, checkpoint });
+						currentModelOperation = undefined;
+						completion?.resolve({ stopReason, checkpoint });
 					}
 				})
 				.catch(() => {
@@ -724,6 +755,14 @@ export async function openPiSession(
 				const fact = currentModelFact?.();
 				const writeFact = currentRecordOperationFact;
 				const startedAt = Date.now();
+				if (fact && writeFact)
+					currentModelOperation = {
+						operationRef,
+						attemptRef,
+						fact,
+						startedAt,
+						writeFact,
+					};
 				try {
 					if (fact && writeFact) {
 						await writeFact({
@@ -753,16 +792,6 @@ export async function openPiSession(
 					})
 					.then(async () => {
 						if (active === target) await options.update();
-						if (fact && writeFact)
-							await writeFact({
-								kind: "model",
-								operationRef,
-								attemptRef,
-								phase: "completed",
-								finishedAt: new Date().toISOString(),
-								durationMs: Math.max(0, Date.now() - startedAt),
-								model: fact,
-							});
 					})
 					.catch(async () => {
 						if (fact && writeFact)
