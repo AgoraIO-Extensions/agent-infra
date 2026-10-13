@@ -546,6 +546,28 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 							!isDeepStrictEqual(parseAuthority(current.authority), authority)
 						)
 							return { outcome: "denied", reason: "authorization_lost" };
+						const latestMetadata = await dependencies.metadata.revalidate({
+							request,
+							authority,
+							sessionGeneration: conversation.sessionGeneration,
+						});
+						if (latestMetadata.outcome !== "allowed") return latestMetadata;
+						const latestSelected = parseAdmittedCapability(
+							latestMetadata.capability,
+						);
+						const latestScope = exactObject(latestMetadata.scope, [
+							"agentId",
+							"actorId",
+							"channelId",
+							"conversationId",
+							"sessionGeneration",
+							"authorizationRevision",
+						]);
+						if (
+							!isDeepStrictEqual(latestSelected, selected) ||
+							!isDeepStrictEqual(latestScope, scope)
+						)
+							return { outcome: "stale" };
 						const executionId = nextOpaqueId(newId);
 						const turnId = nextOpaqueId(newId);
 						const result: NativeCapabilityAdmissionResultV1 = Object.freeze({

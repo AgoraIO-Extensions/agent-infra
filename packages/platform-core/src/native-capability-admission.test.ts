@@ -226,4 +226,18 @@ describe("native capability admission contract", () => {
 			reason: "authorization_lost",
 		});
 	});
+
+	it("rejects a directory invalidation after the final authorization check", async () => {
+		let metadataCalls = 0;
+		const fake = new FakeNativeCapabilityMetadataRevalidationV1({ projection });
+		const metadata: NativeCapabilityMetadataRevalidationPortV1 = {
+			async revalidate(input) {
+				metadataCalls += 1;
+				if (metadataCalls === 1) return fake.revalidate(input);
+				return { outcome: "stale" };
+			},
+		};
+		const decision = await useCase(metadata).admit(request);
+		expect(decision).toEqual({ outcome: "stale" });
+	});
 });
