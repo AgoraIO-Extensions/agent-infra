@@ -116,6 +116,35 @@ it("logs a bounded stage duration for latency comparison (#1525)", () => {
 	expect(JSON.parse(lines[1] ?? "{}")).not.toHaveProperty("durationMs");
 });
 
+it("emits Browser categories as bounded telemetry metadata", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({
+		stage: "browser",
+		outcome: "failed",
+		browserCategory: "policy_rejection",
+	});
+	telemetry.record({
+		stage: "http",
+		outcome: "failed",
+		browserCategory: "policy_rejection",
+	} as Parameters<typeof telemetry.record>[0]);
+	expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+		stage: "browser",
+		browserCategory: "policy_rejection",
+	});
+	expect(telemetry.status().invalidRecords).toBe(1);
+});
+
 it("keeps the validated service label after caller options change", () => {
 	const lines: string[] = [];
 	const options = {

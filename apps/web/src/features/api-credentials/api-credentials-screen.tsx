@@ -451,7 +451,6 @@ function CredentialRow({
 			) : null}
 			{active && editing && onNarrow ? (
 				<NarrowCredentialForm
-					key={JSON.stringify([credential.scopes, credential.expiresAt])}
 					credential={credential}
 					onNarrow={onNarrow}
 					onRefresh={onRefresh}
