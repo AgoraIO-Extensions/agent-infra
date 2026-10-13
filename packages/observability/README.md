@@ -18,6 +18,8 @@
 
 Conversation Worker 在已有 dispatch use case 返回决定后记录一次带实测耗时的 `task_dispatch`：`accepted` 为 `completed`，`busy`/`retry` 为带 `TASK_UNAVAILABLE` 的 `failed`，`unknown` 为 `unknown`，`rejected`/`stale`/`already_completed` 为 `rejected`。`operationRef` 只使用 Store 提供的固定 operation 名称；item ID 不进入日志或指标标签。dispatch 抛出异常时记录 `failed`，遥测采集失败仍由 Worker 原有错误处理和重试语义决定。未装配 observability 时不产生该阶段记录。
 
+Workload Worker 在部署装配完成或失败时记录一次 `workload` 启动结果；每次既有 reconciliation Store 写回前的状态步记录一次带实测耗时的 `workload` 结果。正常状态步为 `completed`，带 `failureCode` 的 `rejected`、`cleaning` 或 `failed` 状态为 `failed`，分别使用固定的 `WORKLOAD_RECONCILIATION_FAILED` 或 `WORKLOAD_HEALTH_CHECK_FAILED`；Store/调谐依赖不可用使用 `WORKLOAD_UNAVAILABLE`。阶段和代码是封闭集合，Agent、request 和 trace 关联只进入受控日志/Trace，不进入指标标签；采集异常不会改变原有调谐、写回、重试或关闭语义。
+
 ## HTTP 与已持久事件 Adapter
 
 `@agent-infra/observability/http` 的 `createHttpObservability(telemetry)` 是 Hono middleware，须在路由前注册。每个请求生成独立的 UUID `requestId`、`traceId`；`currentRequestMetadata()` 在该请求的 await 链内返回同一只读上下文，请求结束后及其后续异步任务返回 `undefined`。接入方的 `requestMetadata` 须消费该上下文，不能另行生成或采信外部 header。

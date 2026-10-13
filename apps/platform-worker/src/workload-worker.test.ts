@@ -1,3 +1,4 @@
+import type { OperationalEvent } from "@agent-infra/observability";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	fakeKubernetesApi,
@@ -216,7 +217,13 @@ describe("Workload Worker lifecycle", () => {
 		await worker.stop();
 	});
 	it("retries a failed transaction without logging provider details", async () => {
-		const options = fixture();
+		const observations: OperationalEvent[] = [];
+		const options = {
+			...fixture(),
+			observability: {
+				record: (event: OperationalEvent) => observations.push(event),
+			},
+		};
 		store.runNext.mockRejectedValueOnce(new Error("private-provider-response"));
 		const worker = createPlatformWorkloadWorkerV1(options);
 		worker.start();
@@ -229,6 +236,14 @@ describe("Workload Worker lifecycle", () => {
 		expect(options.log.mock.calls.join()).not.toContain(
 			"private-provider-response",
 		);
+		expect(observations).toEqual([
+			expect.objectContaining({
+				stage: "workload",
+				outcome: "failed",
+				code: "WORKLOAD_UNAVAILABLE",
+				durationMs: expect.any(Number),
+			}),
+		]);
 	});
 	it("continues polling and closes the Store when retry logging throws", async () => {
 		const options = fixture();

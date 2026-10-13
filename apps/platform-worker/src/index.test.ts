@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
+import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -561,6 +562,7 @@ describe("platform worker lifecycle", () => {
 
 describe("Platform Worker production V2 lifecycle", () => {
 	it("starts and stops workload and trusted conversation workers with the primary process", async () => {
+		const lines: string[] = [];
 		const stopOrder: string[] = [];
 		let conversationStatus: PlatformConversationWorkerLifecycleStatusV1 =
 			"not_started";
@@ -589,7 +591,17 @@ describe("Platform Worker production V2 lifecycle", () => {
 			startPrimary: () => primary,
 			startWorkload: async () => workload,
 			startConversation: async () => conversation,
+			observabilityOptions: {
+				output: new Writable({
+					write(chunk, _encoding, done) {
+						lines.push(String(chunk));
+						done();
+					},
+				}),
+			},
 		});
+		expect(lines.join("\n")).toContain('"stage":"workload"');
+		expect(lines.join("\n")).toContain('"outcome":"completed"');
 		expect(worker.conversationStatus()).toBe("running");
 		expect(worker.observabilityStatus().state).toBe("active");
 		const stopping = worker.stop();
@@ -602,6 +614,29 @@ describe("Platform Worker production V2 lifecycle", () => {
 		expect(conversation.stop).toHaveBeenCalledOnce();
 		expect(stopOrder).toEqual(["conversation", "workload", "primary"]);
 		expect(worker.observabilityStatus().state).toBe("closed");
+	});
+	it("records unavailable workload startup without replacing the assembly error", async () => {
+		const lines: string[] = [];
+		await expect(
+			startPlatformWorkerFromDeploymentV2({
+				startPrimary: () => ({ stop: async () => {} }),
+				startWorkload: async () => {
+					throw new Error("workload dependency unavailable");
+				},
+				observabilityOptions: {
+					output: new Writable({
+						write(chunk, _encoding, done) {
+							lines.push(String(chunk));
+							done();
+						},
+					}),
+				},
+			}),
+		).rejects.toThrow("workload dependency unavailable");
+		const output = lines.join("\n");
+		expect(output).toContain('"stage":"workload"');
+		expect(output).toContain('"outcome":"failed"');
+		expect(output).toContain('"code":"WORKLOAD_UNAVAILABLE"');
 	});
 	it("keeps Conversation status stopping when conversation cleanup fails", async () => {
 		let conversationStatus: PlatformConversationWorkerLifecycleStatusV1 =

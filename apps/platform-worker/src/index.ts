@@ -234,7 +234,9 @@ export async function startPlatformWorkerFromDeploymentV1(
 export async function startPlatformWorkerFromDeploymentV2(
 	options: {
 		readonly startPrimary?: () => { stop(): void | Promise<void> };
-		readonly startWorkload?: () => Promise<{ stop(): Promise<void> }>;
+		readonly startWorkload?: (
+			observability: ReturnType<typeof startObservability>,
+		) => Promise<{ stop(): Promise<void> }>;
 		readonly startConversation?: (
 			observability: ReturnType<typeof startObservability>,
 		) => Promise<{
@@ -270,9 +272,39 @@ export async function startPlatformWorkerFromDeploymentV2(
 		| undefined;
 	let wecom: { stop(): Promise<void> } | undefined;
 	try {
-		workload = await (
-			options.startWorkload ?? startPlatformWorkloadWorkerFromDeploymentV1
-		)();
+		const workloadStartedAt = performance.now();
+		try {
+			workload = await (
+				options.startWorkload ??
+				((telemetry) =>
+					startPlatformWorkloadWorkerFromDeploymentV1(
+						undefined,
+						undefined,
+						telemetry,
+					))
+			)(observability);
+			try {
+				observability.record({
+					stage: "workload",
+					outcome: "completed",
+					durationMs: performance.now() - workloadStartedAt,
+				});
+			} catch {
+				// Telemetry is observational and must not alter startup.
+			}
+		} catch (error) {
+			try {
+				observability.record({
+					stage: "workload",
+					outcome: "failed",
+					code: "WORKLOAD_UNAVAILABLE",
+					durationMs: performance.now() - workloadStartedAt,
+				});
+			} catch {
+				// Telemetry is observational and must not alter startup failure.
+			}
+			throw error;
+		}
 		wecom = await options.startWecom?.();
 		conversation = await (
 			options.startConversation ??
