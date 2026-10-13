@@ -51,11 +51,6 @@ function fixture() {
 	};
 }
 
-/** 只执行到期的 0 ms 定时器（含其新排入的），模拟时钟不前进。 */
-async function runZeroDelayTimers() {
-	for (let round = 0; round < 50; round++) await vi.advanceTimersByTimeAsync(0);
-}
-
 beforeEach(() => {
 	vi.useFakeTimers();
 	fileCleanup.runOnce.mockReset().mockResolvedValue(true);
