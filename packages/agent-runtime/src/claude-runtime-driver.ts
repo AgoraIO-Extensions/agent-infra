@@ -13,6 +13,8 @@ import {
 	type RuntimeEventV1,
 	RuntimeEventV1Schema,
 	RuntimeModelConfigurationV3Schema,
+	type RuntimeOperationFactV2,
+	RuntimeOperationFactV2Schema,
 	type RuntimeSelectionV1,
 	RuntimeSelectionV1Schema,
 	type RuntimeStatusV1,
@@ -29,6 +31,7 @@ import { readClaudeSessionHistory } from "./claude-session-history.js";
 import { createClaudeStandardMcpServer } from "./claude-standard-mcp.js";
 import {
 	type ClaudeFileWriteOutput,
+	type ClaudeToolOperationCallbacks,
 	claudeWorkspaceTools,
 } from "./claude-workspace.js";
 import {
@@ -49,6 +52,7 @@ import type {
 	RuntimeExternalActionAuthorizationResult,
 	RuntimeModelDirectory,
 	RuntimeNativeMetadataReadContextV1,
+	RuntimeOperationFactInputV1,
 } from "./driver.js";
 import {
 	driverRequestDigest as digest,
@@ -125,6 +129,8 @@ interface Turn {
 	};
 	status: RuntimeStatusV1;
 	events: RuntimeEventV1[];
+	/** Durable metadata-only facts emitted at the Claude model/tool boundary. */
+	operationFacts?: RuntimeOperationFactV2[];
 	operationRef?: string;
 	attemptRef?: string;
 	connectionOperations?: ConnectionOperation[];
@@ -396,6 +402,75 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 		)
 			runtimeAuthorizationDenied();
 	}
+
+	/** Append one acknowledged Claude model/tool operation fact. */
+	async recordOperationFact(input: RuntimeOperationFactInputV1): Promise<void> {
+		if (this.closed) unavailable();
+		const binding = this.index
+			.read()
+			.sessions.find((entry) => entry.ref === input.nativeSessionRef);
+		if (!binding) unavailable();
+		const file = await this.file(binding);
+		await this.exclusive(binding.ref, () =>
+			this.recordFact(file, input.executionId, input.fact),
+		);
+	}
+
+	private async recordFact(
+		file: DurableJsonFile<Session>,
+		executionId: string,
+		input: RuntimeOperationFactV2,
+	): Promise<void> {
+		const fact = RuntimeOperationFactV2Schema.parse(input);
+		await file.update((state) => {
+			const turn = state.turns.find(
+				(entry) => entry.executionId === executionId,
+			);
+			if (!turn || terminal(turn.status))
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation fact is no longer current",
+					409,
+				);
+			turn.operationFacts ??= [];
+			const previous = turn.operationFacts
+				.filter(
+					(entry) =>
+						entry.operationRef === fact.operationRef &&
+						entry.attemptRef === fact.attemptRef,
+				)
+				.at(-1);
+			const duplicate =
+				previous &&
+				previous.kind === fact.kind &&
+				JSON.stringify(previous) === JSON.stringify(fact);
+			if (duplicate) return;
+			if (turn.operationFacts.length >= 256)
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation fact journal is full",
+					409,
+				);
+			if (!previous) {
+				if (fact.phase !== "intent")
+					throw new RuntimeHostError(
+						"RUNTIME_OPERATION_CONFLICT",
+						"Runtime operation must start with intent",
+						409,
+					);
+			} else if (
+				previous.kind !== fact.kind ||
+				(previous.phase !== "intent" && previous.phase !== "started") ||
+				fact.phase === "intent"
+			)
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation fact transition is invalid",
+					409,
+				);
+			turn.operationFacts.push(fact);
+		});
+	}
 	private constructor(
 		private readonly options: ClaudeRuntimeDriverOptions,
 		private readonly executable: string,
@@ -637,6 +712,15 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 							typeof turn.modelResponse.endTurn !== "boolean" ||
 							(turn.modelResponse.endTurn &&
 								turn.modelResponse.state !== "completed"))
+					)
+						unavailable();
+					if (
+						turn.operationFacts !== undefined &&
+						(!Array.isArray(turn.operationFacts) ||
+							turn.operationFacts.length > 256 ||
+							turn.operationFacts.some(
+								(fact) => !RuntimeOperationFactV2Schema.safeParse(fact).success,
+							))
 					)
 						unavailable();
 					if (
@@ -1087,6 +1171,24 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				attemptRef,
 			});
 		});
+		const modelFact = {
+			kind: "model" as const,
+			operationRef,
+			attemptRef,
+			model: {
+				configVersion: this.options.configVersion,
+				modelOptionId: selection.modelOptionId,
+				modelId: option.model,
+				reasoningLevel: selection.reasoningLevel,
+			},
+		};
+		await this.recordFact(file, command.executionId, {
+			...modelFact,
+			phase: "intent",
+		});
+		let modelPhase: "intent" | "started" | "completed" | "failed" | "unknown" =
+			"intent";
+		let modelStartedAt: number | undefined;
 		let admitted: () => void = () => {};
 		const admission = new Promise<void>((resolve) => {
 			admitted = resolve;
@@ -1112,6 +1214,35 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 					}
 				: {}),
 			receipt: async (response, endTurn = false) => {
+				const now = Date.now();
+				if (response === "sent" && modelPhase === "intent") {
+					modelStartedAt = now;
+					modelPhase = "started";
+					await this.recordFact(file, command.executionId, {
+						...modelFact,
+						phase: "started",
+						startedAt: new Date(now).toISOString(),
+					});
+				} else if (
+					modelStartedAt !== undefined &&
+					modelPhase === "started" &&
+					(response === "completed" ||
+						response === "failed" ||
+						response === "unknown")
+				) {
+					modelPhase = response;
+					await this.recordFact(file, command.executionId, {
+						...modelFact,
+						phase: response,
+						finishedAt: new Date(now).toISOString(),
+						durationMs: Math.max(0, now - modelStartedAt),
+						...(response === "failed"
+							? { failureCode: "operation_failed" as const }
+							: response === "unknown"
+								? { failureCode: "recovery_unconfirmed" as const }
+								: {}),
+					});
+				}
 				await file.update((state) => {
 					const turn =
 						state.turns.find(
@@ -1299,6 +1430,54 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 				resultFileInFlight = false;
 			}
 		};
+		const toolFacts = new Map<
+			string,
+			{
+				readonly operationRef: string;
+				readonly attemptRef: string;
+				readonly toolId: string;
+				readonly startedAt: number;
+			}
+		>();
+		const toolOperations: ClaudeToolOperationCallbacks = {
+			onStarted: async (toolUseId, toolName) => {
+				if (toolFacts.has(toolUseId)) return;
+				const operationRef = randomUUID();
+				const attemptRef = randomUUID();
+				const startedAt = Date.now();
+				const tool = { operationRef, attemptRef, toolId: toolName, startedAt };
+				await this.recordFact(file, command.executionId, {
+					kind: "tool",
+					operationRef,
+					attemptRef,
+					phase: "intent",
+					toolId: toolName,
+				});
+				await this.recordFact(file, command.executionId, {
+					kind: "tool",
+					operationRef,
+					attemptRef,
+					phase: "started",
+					startedAt: new Date(startedAt).toISOString(),
+					toolId: toolName,
+				});
+				toolFacts.set(toolUseId, tool);
+			},
+			onCompleted: async (toolUseId, toolName) => {
+				const tool = toolFacts.get(toolUseId);
+				if (!tool) return;
+				await this.recordFact(file, command.executionId, {
+					kind: "tool",
+					operationRef: tool.operationRef,
+					attemptRef: tool.attemptRef,
+					phase: "completed",
+					finishedAt: new Date().toISOString(),
+					durationMs: Math.max(0, Date.now() - tool.startedAt),
+					toolId: toolName,
+				});
+				toolFacts.delete(toolUseId);
+			},
+		};
 		let native: ReturnType<typeof claudeQuery>;
 		try {
 			native = claudeQuery(
@@ -1319,6 +1498,7 @@ export class ClaudeRuntimeDriver implements RuntimeDriver {
 						workspace,
 						join(directory, "memory"),
 						onResultFile,
+						toolOperations,
 					),
 					strictMcpConfig: true,
 					mcpServers: {
