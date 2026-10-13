@@ -108,7 +108,12 @@ function skillRequest(relativePath?: string) {
 	};
 	return relativePath === undefined
 		? base
-		: { ...base, skillName: "demo", relativePath };
+		: {
+				...base,
+				generationId: "a".repeat(64),
+				skillName: "demo",
+				relativePath,
+			};
 }
 
 const skillDirectoryResponse = {
@@ -523,6 +528,34 @@ describe("Worker RuntimeHost HTTP/SSE client", () => {
 		expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual(
 			skillRequest("SKILL.md"),
 		);
+	});
+
+	it("keeps a defensive directory snapshot when callers mutate the response", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify(skillDirectoryResponse), { status: 200 }),
+			)
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify(skillResourceResponse), { status: 200 }),
+			);
+		const client = createWorkerRuntimeHostClientV1({
+			baseUrl: "http://runtime.internal",
+			serviceToken: "synthetic-service-token",
+			fetch: fetcher,
+		});
+		const directory = await client.skillDirectory(skillRequest());
+		const entry = structuredClone(firstSkill(directory));
+		const mutableSkills = directory.skills as Array<{ name: string }>;
+		const first = mutableSkills[0];
+		if (!first) throw new Error("Missing Skill fixture");
+		first.name = "tampered";
+		await expect(
+			client.readSkillResource(skillRequest("SKILL.md"), {
+				generationId: directory.generationId,
+				entry,
+			}),
+		).resolves.toEqual(skillResourceResponse);
 	});
 
 	it("rejects an invalid service token response and malformed or oversized bodies", async () => {

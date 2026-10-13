@@ -602,7 +602,7 @@ export function createWorkerRuntimeHostClientV1(
 	) => {
 		const key = skillDirectoryScopeKey(request);
 		skillDirectories.delete(key);
-		skillDirectories.set(key, response);
+		skillDirectories.set(key, structuredClone(response));
 		while (skillDirectories.size > 64) {
 			const oldest = skillDirectories.keys().next().value;
 			if (oldest === undefined) break;
@@ -727,6 +727,10 @@ export function createWorkerRuntimeHostClientV1(
 			const directoryEntry = directory?.skills.find(
 				(candidate) => candidate.name === body.skillName,
 			);
+			if (!directory || !directoryEntry)
+				return failure("RUNTIME_REQUEST_INVALID", false);
+			if (body.generationId !== directory.generationId)
+				return failure("RUNTIME_REQUEST_INVALID", false);
 			let entry: RuntimeSkillDirectoryEntryV1;
 			if (binding) {
 				try {
@@ -738,12 +742,9 @@ export function createWorkerRuntimeHostClientV1(
 				}
 				if (entry.name !== body.skillName)
 					return failure("RUNTIME_REQUEST_INVALID", false);
-				if (
-					directory &&
-					(!directoryEntry || directory.generationId !== binding.generationId)
-				)
+				if (directory.generationId !== binding.generationId)
 					return failure("RUNTIME_REQUEST_INVALID", false);
-				if (directoryEntry && !isDeepStrictEqual(binding.entry, directoryEntry))
+				if (!isDeepStrictEqual(binding.entry, directoryEntry))
 					return failure("RUNTIME_REQUEST_INVALID", false);
 			} else {
 				if (!directory || !directoryEntry)

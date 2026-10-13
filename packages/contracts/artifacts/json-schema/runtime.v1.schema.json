@@ -3279,6 +3279,10 @@
           "minLength": 1,
           "type": "string"
         },
+        "generationId": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
         "grant": {
           "additionalProperties": false,
           "properties": {
@@ -3353,6 +3357,7 @@
         "deliveryFence",
         "grant",
         "hostSessionRef",
+        "generationId",
         "skillName",
         "relativePath"
       ],

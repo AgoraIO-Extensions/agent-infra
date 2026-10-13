@@ -271,6 +271,7 @@ export const RuntimeSkillDirectoryResponseV1Schema = z.strictObject({
 /** Request for one bounded resource from the mounted Skill directory. */
 export const RuntimeSkillResourceReadRequestV1Schema = z.strictObject({
 	...RuntimeSkillDirectoryRequestV1Schema.shape,
+	generationId: runtimeSkillGenerationId,
 	skillName: runtimeSkillName,
 	relativePath: runtimeSkillRelativePath,
 });
