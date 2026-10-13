@@ -3791,6 +3791,216 @@ describe("PostgreSQL Conversation dispatch Store", () => {
 		}
 	});
 
+	it("publishes one Platform failure event when recovery is exhausted", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "host-session-existing",
+		});
+		const { store, decision } = await claim(work.itemId);
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			await expect(
+				store.finish({
+					claim: decision.claim,
+					status: "failed",
+					transition: {
+						executionStatus: "failed",
+						conversationStatus: "ready",
+					},
+					errorCode: "RUNTIME_RECOVERY_TIMEOUT",
+				}),
+			).resolves.toBe(true);
+			const events = await client<
+				{
+					source: string;
+					runtime_cursor: string | null;
+					event_payload: unknown;
+					sequence: number;
+					conversation_cursor: number;
+				}[]
+			>`
+				select source, runtime_cursor, event_payload,
+					sequence::int as sequence,
+					conversation_cursor::int as conversation_cursor
+				from platform.conversation_events
+				where execution_id = ${work.executionId}
+				order by sequence
+			`;
+			expect(events).toEqual([
+				expect.objectContaining({
+					source: "platform",
+					runtime_cursor: null,
+					event_payload: { type: "execution.status", status: "failed" },
+				}),
+			]);
+			// The same transaction advances the Execution sequence and the
+			// Conversation cursor (HLD §8.2).
+			const [execution] = await client<
+				{ status: string; last_event_sequence: number }[]
+			>`
+				select status, last_event_sequence::int as last_event_sequence
+				from platform.conversation_executions
+				where execution_id = ${work.executionId}
+			`;
+			expect(execution).toMatchObject({
+				status: "failed",
+				last_event_sequence: events[0]?.sequence,
+			});
+			const [conversation] = await client<
+				{ last_conversation_cursor: number }[]
+			>`
+				select last_conversation_cursor::int as last_conversation_cursor
+				from platform.conversations where id = ${work.conversationId}
+			`;
+			expect(conversation?.last_conversation_cursor).toBe(
+				events[0]?.conversation_cursor,
+			);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("publishes one Platform unknown event when a retry leaves the Turn unverified and reuses it on replay", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "host-session-existing",
+		});
+		const { store, decision } = await claim(work.itemId);
+		const snapshot = () => client`
+			select source, runtime_cursor, event_payload
+			from platform.conversation_events
+			where execution_id = ${work.executionId}
+			order by sequence
+		`;
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			await expect(
+				store.retry({
+					claim: decision.claim,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_ACCEPTANCE_UNKNOWN",
+					transition: {
+						executionStatus: "unknown",
+						conversationStatus: "active",
+					},
+				}),
+			).resolves.toBe(true);
+			const committed = await snapshot();
+			expect(committed).toEqual([
+				expect.objectContaining({
+					source: "platform",
+					runtime_cursor: null,
+					event_payload: { type: "execution.status", status: "unknown" },
+				}),
+			]);
+			// The retry keeps the outbox open, so a later claim replays the same
+			// unverified transition. It must reuse the durable event reference
+			// instead of appending a second Platform event (HLD §8.2).
+			const replay = await store.claim({
+				schemaVersion: 1,
+				itemId: work.itemId,
+				workerId: "worker-replay",
+				leaseDurationMs: 30_000,
+			});
+			if (replay.outcome !== "claimed")
+				throw new Error("Expected replay claim");
+			expect(replay.claim.executionStatus).toBe("unknown");
+			await expect(
+				store.retry({
+					claim: replay.claim,
+					retryDelayMs: 0,
+					errorCode: "RUNTIME_ACCEPTANCE_UNKNOWN",
+					transition: {
+						executionStatus: "unknown",
+						conversationStatus: "active",
+					},
+				}),
+			).resolves.toBe(true);
+			expect(await snapshot()).toEqual(committed);
+			const [execution] =
+				await client`select status from platform.conversation_executions where execution_id = ${work.executionId}`;
+			expect(execution?.status).toBe("unknown");
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("does not append a Platform failure event when the Runtime terminal event is already persisted", async () => {
+		const work = await seed("conversation.turn.submit.v1", {
+			executionStatus: "processing",
+			hostSessionRef: "host-session-existing",
+		});
+		const { store, decision } = await claim(work.itemId);
+		const transaction = new PostgresConversationEventTransactionV1({
+			databaseUrl,
+		});
+		const eventStore = createConversationEventUseCaseV1({ transaction });
+		try {
+			if (decision.outcome !== "claimed") throw new Error("Expected claim");
+			const claim = decision.claim;
+			await expect(
+				eventStore.persist({
+					schemaVersion: 1,
+					conversationId: work.conversationId,
+					executionId: work.executionId,
+					sessionGeneration: claim.sessionGeneration,
+					deliveryFence: claim.executionDeliveryFence,
+					adapterEventKey: "runtime-terminal-failed",
+					runtimeCursor: "terminal-cursor",
+					occurredAt: "2026-09-15T00:00:00.000Z",
+					event: { type: "execution.status", status: "failed" },
+					transition: {
+						executionStatus: "failed",
+						conversationStatus: "ready",
+					},
+					dispatchLease: {
+						schemaVersion: 1,
+						itemId: claim.itemId,
+						leaseOwner: claim.leaseOwner,
+						deliveryFence: claim.deliveryFence,
+					},
+				}),
+			).resolves.toMatchObject({ outcome: "accepted" });
+			// The Runtime terminal outcome stays authoritative. The Worker's own
+			// failure write for the same status must reuse it, and any other
+			// terminal status stays rejected by the transition guard.
+			await expect(
+				store.finish({
+					claim,
+					status: "failed",
+					transition: {
+						executionStatus: "failed",
+						conversationStatus: "ready",
+					},
+					errorCode: "RUNTIME_GRANT_INVALID",
+				}),
+			).resolves.toBe(true);
+			await expect(
+				store.finish({
+					claim,
+					status: "failed",
+					transition: { executionStatus: "unknown" },
+					errorCode: "RUNTIME_RECOVERY_TIMEOUT",
+				}),
+			).resolves.toBe(false);
+			const saved = await client`
+				select source, runtime_cursor, event_payload
+				from platform.conversation_events
+				where execution_id = ${work.executionId}
+				order by sequence
+			`;
+			expect(saved).toEqual([
+				expect.objectContaining({
+					source: "runtime",
+					runtime_cursor: "terminal-cursor",
+					event_payload: { type: "execution.status", status: "failed" },
+				}),
+			]);
+		} finally {
+			await Promise.all([store.close(), transaction.close()]);
+		}
+	});
+
 	it.each([
 		["stale generation", { sessionGeneration: 2 }],
 		["selection mismatch", { modelOptionId: "other-model-option" }],
