@@ -82,7 +82,20 @@ function success(
 function failure(
 	request: RuntimeBrowserToolExecutionRequestV1,
 	error: unknown,
+	signal?: AbortSignal,
 ): RuntimeBrowserToolExecutionResultV1 {
+	if (signal?.aborted) {
+		return {
+			actionId: request.actionId,
+			operationRef: request.operationRef,
+			attemptRef: request.attemptRef,
+			binding: request.binding,
+			phase: "unknown",
+			contentItems: [],
+			success: false,
+			failureCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
+		};
+	}
 	const reason =
 		error instanceof Error ? error.message : "BROWSER_EXECUTION_FAILED";
 	return {
@@ -140,6 +153,10 @@ export function createBrowserSessionDriverContextV1(input: {
 				})
 			)
 				throw new Error("BROWSER_DRIVER_CONTEXT_BINDING_MISMATCH");
+			const cancel = () => {
+				input.session.cancelAction(request.actionId);
+			};
+			signal.addEventListener("abort", cancel, { once: true });
 			try {
 				signal.throwIfAborted();
 				const args = request.arguments;
@@ -202,7 +219,9 @@ export function createBrowserSessionDriverContextV1(input: {
 				signal.throwIfAborted();
 				return success(request, actionRecordSummary(record));
 			} catch (error) {
-				return failure(request, error);
+				return failure(request, error, signal);
+			} finally {
+				signal.removeEventListener("abort", cancel);
 			}
 		},
 	};

@@ -24,6 +24,7 @@ export type BrowserSessionControllerV1 = Readonly<{
 		recovery: BrowserPageRecoveryInputV1,
 	): Promise<BrowserPageReferenceV1>;
 	act(request: BrowserActionRequestV1): Promise<BrowserActionRecordV1>;
+	cancelAction(actionId: string): boolean;
 	close(): Promise<void>;
 	snapshot(): BrowserContextManagerSnapshotV1;
 }>;
@@ -84,6 +85,9 @@ export function createBrowserSessionControllerV1(input: {
 			const controller = observe;
 			if (!controller) throw new Error("BROWSER_SESSION_UNAVAILABLE");
 			return controller.executeAction(request);
+		},
+		cancelAction(actionId) {
+			return observe?.cancelAction(actionId) ?? false;
 		},
 		async close() {
 			await input.manager.close(input.binding);

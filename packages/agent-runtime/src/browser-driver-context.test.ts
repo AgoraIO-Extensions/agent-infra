@@ -78,12 +78,17 @@ const record: BrowserActionRecordV1 = {
 	createdAt: "2026-10-12T00:00:00.000Z",
 };
 
-function session(): BrowserSessionControllerV1 {
+function session(
+	options: Pick<BrowserSessionControllerV1, "act"> = {
+		act: vi.fn().mockResolvedValue(record),
+	},
+): BrowserSessionControllerV1 {
 	return {
 		start: vi.fn(),
 		navigate: vi.fn().mockResolvedValue(page),
 		observe: vi.fn().mockResolvedValue(observation),
-		act: vi.fn().mockResolvedValue(record),
+		act: options.act,
+		cancelAction: vi.fn().mockReturnValue(true),
 		close: vi.fn(),
 		recoverPage: vi.fn().mockResolvedValue(page),
 		snapshot: vi.fn(),
@@ -157,6 +162,50 @@ describe("createBrowserSessionDriverContextV1", () => {
 		expect(browser.act).toHaveBeenCalledWith(
 			expect.objectContaining({ kind: "click", actionId: "action-1" }),
 		);
+	});
+
+	it("forwards cancellation to the existing Session action barrier", async () => {
+		let release: (() => void) | undefined;
+		const browser = session({
+			act: vi.fn(
+				() =>
+					new Promise<BrowserActionRecordV1>((resolve) => {
+						release = () => resolve({ ...record, status: "unknown" });
+					}),
+			),
+		});
+		const context = createBrowserSessionDriverContextV1({
+			session: browser,
+			capability,
+			binding,
+			subjectId: "user-1",
+		});
+		const controller = new AbortController();
+		const pending = context.executeTool?.(
+			{
+				tool: "browser_interact",
+				arguments: { ...page, elementId: "element-1", kind: "click" },
+				actionId: "action-cancel",
+				operationRef: "operation-cancel",
+				attemptRef: "attempt-cancel",
+				binding: {
+					...binding,
+					executionId: "execution-1",
+					capabilityVersion: 3,
+					pageRevision: 2,
+				},
+			},
+			controller.signal,
+		);
+		await vi.waitFor(() => expect(browser.act).toHaveBeenCalled());
+		controller.abort();
+		expect(browser.cancelAction).toHaveBeenCalledWith("action-cancel");
+		release?.();
+		await expect(pending).resolves.toMatchObject({
+			phase: "unknown",
+			success: false,
+			failureCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
+		});
 	});
 
 	it("fails closed for unsupported tools and stale page references", async () => {
