@@ -5503,6 +5503,911 @@
         ],
         "type": "string"
       },
+      "SkillHubAgentBindingCommandV1": {
+        "additionalProperties": false,
+        "properties": {
+          "bindings": {
+            "items": {
+              "$ref": "#/components/schemas/SkillHubAgentBindingRequestV1"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array"
+          },
+          "expectedConfigurationRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "expectedConfigurationRevision",
+          "bindings"
+        ],
+        "type": "object"
+      },
+      "SkillHubAgentBindingRequestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "grant": {
+            "additionalProperties": false,
+            "properties": {
+              "connections": {
+                "items": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                },
+                "maxItems": 128,
+                "type": "array"
+              },
+              "fileRoots": {
+                "items": {
+                  "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "networkOrigins": {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "scripts": {
+                "const": false,
+                "type": "boolean"
+              },
+              "tools": {
+                "items": {
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                  "type": "string"
+                },
+                "maxItems": 128,
+                "type": "array"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "tools",
+              "connections",
+              "fileRoots",
+              "networkOrigins",
+              "scripts"
+            ],
+            "type": "object"
+          },
+          "skillVersionId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "skillVersionId",
+          "grant"
+        ],
+        "type": "object"
+      },
+      "SkillHubAgentBindingResultV1": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "agentVersion": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "changedFields": {
+            "items": {
+              "const": "skills",
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "configurationRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "agentId",
+          "agentVersion",
+          "configurationRevision",
+          "changedFields",
+          "replayed"
+        ],
+        "type": "object"
+      },
+      "SkillHubAgentBindingStatusResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "agentId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "agentVersion": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "bindings": {
+            "items": {
+              "$ref": "#/components/schemas/SkillHubAgentBindingStatusV1"
+            },
+            "maxItems": 32,
+            "type": "array"
+          },
+          "configurationRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "agentId",
+          "agentVersion",
+          "configurationRevision",
+          "bindings"
+        ],
+        "type": "object"
+      },
+      "SkillHubAgentBindingStatusV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "agentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "agentVersion": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "appliedReceipt": {
+                "type": "null"
+              },
+              "configurationRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "failureReason": {
+                "type": "null"
+              },
+              "grant": {
+                "additionalProperties": false,
+                "properties": {
+                  "connections": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  },
+                  "fileRoots": {
+                    "items": {
+                      "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "type": "array"
+                  },
+                  "networkOrigins": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "type": "array"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "scripts": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "tools": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "tools",
+                  "connections",
+                  "fileRoots",
+                  "networkOrigins",
+                  "scripts"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "skillName": {
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                "type": "string"
+              },
+              "skillVersion": {
+                "additionalProperties": false,
+                "properties": {
+                  "manifestDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "packageDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "provider": {
+                    "enum": [
+                      "system",
+                      "my_library",
+                      "market",
+                      "clawhub",
+                      "skillhub",
+                      "npx",
+                      "github"
+                    ],
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "signatureDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "skillId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "skillVersionId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "version": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "skillId",
+                  "skillVersionId",
+                  "provider",
+                  "version",
+                  "packageDigest",
+                  "manifestDigest",
+                  "signatureDigest"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "pending_sync",
+                "type": "string"
+              },
+              "syncRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "agentId",
+              "agentVersion",
+              "skillName",
+              "skillVersion",
+              "grant",
+              "configurationRevision",
+              "syncRevision",
+              "state",
+              "failureReason",
+              "appliedReceipt"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "agentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "agentVersion": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "appliedReceipt": {
+                "additionalProperties": false,
+                "properties": {
+                  "agentId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "agentVersion": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "configurationRevision": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "generationId": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "manifestDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "packageDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "readOnly": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "skillName": {
+                    "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                    "type": "string"
+                  },
+                  "skillVersionId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "syncRevision": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "targetPath": {
+                    "pattern": "^\\.agents\\/skills\\/[a-z0-9][a-z0-9._-]{0,62}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "agentId",
+                  "agentVersion",
+                  "skillName",
+                  "configurationRevision",
+                  "syncRevision",
+                  "skillVersionId",
+                  "generationId",
+                  "packageDigest",
+                  "manifestDigest",
+                  "targetPath",
+                  "readOnly"
+                ],
+                "type": "object"
+              },
+              "configurationRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "failureReason": {
+                "type": "null"
+              },
+              "grant": {
+                "additionalProperties": false,
+                "properties": {
+                  "connections": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  },
+                  "fileRoots": {
+                    "items": {
+                      "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "type": "array"
+                  },
+                  "networkOrigins": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "type": "array"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "scripts": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "tools": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "tools",
+                  "connections",
+                  "fileRoots",
+                  "networkOrigins",
+                  "scripts"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "skillName": {
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                "type": "string"
+              },
+              "skillVersion": {
+                "additionalProperties": false,
+                "properties": {
+                  "manifestDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "packageDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "provider": {
+                    "enum": [
+                      "system",
+                      "my_library",
+                      "market",
+                      "clawhub",
+                      "skillhub",
+                      "npx",
+                      "github"
+                    ],
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "signatureDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "skillId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "skillVersionId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "version": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "skillId",
+                  "skillVersionId",
+                  "provider",
+                  "version",
+                  "packageDigest",
+                  "manifestDigest",
+                  "signatureDigest"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "synced",
+                "type": "string"
+              },
+              "syncRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "agentId",
+              "agentVersion",
+              "skillName",
+              "skillVersion",
+              "grant",
+              "configurationRevision",
+              "syncRevision",
+              "state",
+              "failureReason",
+              "appliedReceipt"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "agentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "agentVersion": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "appliedReceipt": {
+                "type": "null"
+              },
+              "configurationRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "failureReason": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "grant": {
+                "additionalProperties": false,
+                "properties": {
+                  "connections": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  },
+                  "fileRoots": {
+                    "items": {
+                      "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "type": "array"
+                  },
+                  "networkOrigins": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "type": "array"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "scripts": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "tools": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "tools",
+                  "connections",
+                  "fileRoots",
+                  "networkOrigins",
+                  "scripts"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "skillName": {
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                "type": "string"
+              },
+              "skillVersion": {
+                "additionalProperties": false,
+                "properties": {
+                  "manifestDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "packageDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "provider": {
+                    "enum": [
+                      "system",
+                      "my_library",
+                      "market",
+                      "clawhub",
+                      "skillhub",
+                      "npx",
+                      "github"
+                    ],
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "signatureDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "skillId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "skillVersionId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "version": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "skillId",
+                  "skillVersionId",
+                  "provider",
+                  "version",
+                  "packageDigest",
+                  "manifestDigest",
+                  "signatureDigest"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "failed",
+                "type": "string"
+              },
+              "syncRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "agentId",
+              "agentVersion",
+              "skillName",
+              "skillVersion",
+              "grant",
+              "configurationRevision",
+              "syncRevision",
+              "state",
+              "failureReason",
+              "appliedReceipt"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "agentId": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "agentVersion": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "appliedReceipt": {
+                "type": "null"
+              },
+              "configurationRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "failureReason": {
+                "type": "null"
+              },
+              "grant": {
+                "additionalProperties": false,
+                "properties": {
+                  "connections": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  },
+                  "fileRoots": {
+                    "items": {
+                      "pattern": "^\\/[A-Za-z0-9._/-]{1,255}$",
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "type": "array"
+                  },
+                  "networkOrigins": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 32,
+                    "type": "array"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "scripts": {
+                    "const": false,
+                    "type": "boolean"
+                  },
+                  "tools": {
+                    "items": {
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "tools",
+                  "connections",
+                  "fileRoots",
+                  "networkOrigins",
+                  "scripts"
+                ],
+                "type": "object"
+              },
+              "schemaVersion": {
+                "const": 1,
+                "type": "number"
+              },
+              "skillName": {
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+                "type": "string"
+              },
+              "skillVersion": {
+                "additionalProperties": false,
+                "properties": {
+                  "manifestDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "packageDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "provider": {
+                    "enum": [
+                      "system",
+                      "my_library",
+                      "market",
+                      "clawhub",
+                      "skillhub",
+                      "npx",
+                      "github"
+                    ],
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "signatureDigest": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "skillId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "skillVersionId": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  },
+                  "version": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "skillId",
+                  "skillVersionId",
+                  "provider",
+                  "version",
+                  "packageDigest",
+                  "manifestDigest",
+                  "signatureDigest"
+                ],
+                "type": "object"
+              },
+              "state": {
+                "const": "revoked",
+                "type": "string"
+              },
+              "syncRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "agentId",
+              "agentVersion",
+              "skillName",
+              "skillVersion",
+              "grant",
+              "configurationRevision",
+              "syncRevision",
+              "state",
+              "failureReason",
+              "appliedReceipt"
+            ],
+            "type": "object"
+          }
+        ],
+        "type": "object"
+      },
       "SkillHubDirectoryPageV1": {
         "additionalProperties": false,
         "properties": {
@@ -9673,6 +10578,239 @@
         "security": [
           {
             "platformApiCredential": []
+          }
+        ]
+      }
+    },
+    "/api/v2/agents/{agentId}/versions/{agentVersion}/skills": {
+      "get": {
+        "operationId": "readSkillHubAgentBindingsV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentVersion",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubAgentBindingStatusResponseV1"
+                }
+              }
+            },
+            "description": "Current Skill binding status"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "bindSkillHubAgentVersionV1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agentId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agentVersion",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillHubAgentBindingCommandV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubAgentBindingResultV1"
+                }
+              }
+            },
+            "description": "Replayed Skill binding"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillHubAgentBindingResultV1"
+                }
+              }
+            },
+            "description": "Skill binding committed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Authorization is no longer valid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Resource is unavailable"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Request conflicts with current state"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PilotProtocolErrorV1"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "PlatformSession": []
           }
         ]
       }

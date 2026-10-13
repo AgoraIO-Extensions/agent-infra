@@ -7,6 +7,7 @@ import {
 	ApplicationRevisionError,
 	PersonalApiCredentialErrorV1,
 	PersonalRelayKeyErrorV1,
+	SkillHubAgentBindingErrorV1,
 	SkillHubOperationErrorV1,
 } from "@agent-infra/platform-core";
 
@@ -28,6 +29,18 @@ export function mapCoreError(
 			owner_cannot_review: "AUTHORIZATION_REVOKED",
 			version_unavailable: "RESOURCE_UNAVAILABLE",
 			unavailable: "DEPENDENCY_UNAVAILABLE",
+		} as const;
+		return new HttpProtocolError(codes[error.code], traceId);
+	}
+	if (error instanceof SkillHubAgentBindingErrorV1) {
+		const codes = {
+			invalid_input: "INVALID_REQUEST",
+			not_authorized: "RESOURCE_UNAVAILABLE",
+			not_admitted: "RESOURCE_UNAVAILABLE",
+			stale_revision: "CONFLICT",
+			idempotency_conflict: "CONFLICT",
+			dependency_unavailable: "DEPENDENCY_UNAVAILABLE",
+			persistence_failed: "DEPENDENCY_UNAVAILABLE",
 		} as const;
 		return new HttpProtocolError(codes[error.code], traceId);
 	}

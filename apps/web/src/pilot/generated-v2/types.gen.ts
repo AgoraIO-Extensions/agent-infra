@@ -984,6 +984,170 @@ export type RuntimeOperationFactV2 = {
 
 export type RuntimeOperationFailureV2 = 'authorization_denied' | 'authorization_unavailable' | 'dependency_unavailable' | 'request_rejected' | 'response_incomplete' | 'operation_failed' | 'persistence_unavailable' | 'interrupted' | 'recovery_unconfirmed';
 
+export type SkillHubAgentBindingCommandV1 = {
+    bindings: Array<SkillHubAgentBindingRequestV1>;
+    expectedConfigurationRevision: number;
+    schemaVersion: 1;
+};
+
+export type SkillHubAgentBindingRequestV1 = {
+    grant: {
+        connections: Array<string>;
+        fileRoots: Array<string>;
+        networkOrigins: Array<string>;
+        schemaVersion: 1;
+        scripts: false;
+        tools: Array<string>;
+    };
+    skillVersionId: string;
+};
+
+export type SkillHubAgentBindingResultV1 = {
+    agentId: string;
+    agentVersion: string;
+    changedFields: [
+        'skills'
+    ];
+    configurationRevision: number;
+    replayed: boolean;
+    schemaVersion: 1;
+};
+
+export type SkillHubAgentBindingStatusResponseV1 = {
+    agentId: string;
+    agentVersion: string;
+    bindings: Array<SkillHubAgentBindingStatusV1>;
+    configurationRevision: number;
+    schemaVersion: 1;
+};
+
+export type SkillHubAgentBindingStatusV1 = {
+    agentId: string;
+    agentVersion: string;
+    appliedReceipt: null;
+    configurationRevision: number;
+    failureReason: null;
+    grant: {
+        connections: Array<string>;
+        fileRoots: Array<string>;
+        networkOrigins: Array<string>;
+        schemaVersion: 1;
+        scripts: false;
+        tools: Array<string>;
+    };
+    schemaVersion: 1;
+    skillName: string;
+    skillVersion: {
+        manifestDigest: string;
+        packageDigest: string;
+        provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+        schemaVersion: 1;
+        signatureDigest: string;
+        skillId: string;
+        skillVersionId: string;
+        version: string;
+    };
+    state: 'pending_sync';
+    syncRevision: number;
+} | {
+    agentId: string;
+    agentVersion: string;
+    appliedReceipt: {
+        agentId: string;
+        agentVersion: string;
+        configurationRevision: number;
+        generationId: string;
+        manifestDigest: string;
+        packageDigest: string;
+        readOnly: true;
+        schemaVersion: 1;
+        skillName: string;
+        skillVersionId: string;
+        syncRevision: number;
+        targetPath: string;
+    };
+    configurationRevision: number;
+    failureReason: null;
+    grant: {
+        connections: Array<string>;
+        fileRoots: Array<string>;
+        networkOrigins: Array<string>;
+        schemaVersion: 1;
+        scripts: false;
+        tools: Array<string>;
+    };
+    schemaVersion: 1;
+    skillName: string;
+    skillVersion: {
+        manifestDigest: string;
+        packageDigest: string;
+        provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+        schemaVersion: 1;
+        signatureDigest: string;
+        skillId: string;
+        skillVersionId: string;
+        version: string;
+    };
+    state: 'synced';
+    syncRevision: number;
+} | {
+    agentId: string;
+    agentVersion: string;
+    appliedReceipt: null;
+    configurationRevision: number;
+    failureReason: string;
+    grant: {
+        connections: Array<string>;
+        fileRoots: Array<string>;
+        networkOrigins: Array<string>;
+        schemaVersion: 1;
+        scripts: false;
+        tools: Array<string>;
+    };
+    schemaVersion: 1;
+    skillName: string;
+    skillVersion: {
+        manifestDigest: string;
+        packageDigest: string;
+        provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+        schemaVersion: 1;
+        signatureDigest: string;
+        skillId: string;
+        skillVersionId: string;
+        version: string;
+    };
+    state: 'failed';
+    syncRevision: number;
+} | {
+    agentId: string;
+    agentVersion: string;
+    appliedReceipt: null;
+    configurationRevision: number;
+    failureReason: null;
+    grant: {
+        connections: Array<string>;
+        fileRoots: Array<string>;
+        networkOrigins: Array<string>;
+        schemaVersion: 1;
+        scripts: false;
+        tools: Array<string>;
+    };
+    schemaVersion: 1;
+    skillName: string;
+    skillVersion: {
+        manifestDigest: string;
+        packageDigest: string;
+        provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
+        schemaVersion: 1;
+        signatureDigest: string;
+        skillId: string;
+        skillVersionId: string;
+        version: string;
+    };
+    state: 'revoked';
+    syncRevision: number;
+};
+
 export type SkillHubDirectoryPageV1 = {
     items: Array<SkillHubVersionMetadataV1>;
     nextCursor: string | null;
@@ -2797,6 +2961,109 @@ export type GetAgentApiStateV1Responses = {
 };
 
 export type GetAgentApiStateV1Response = GetAgentApiStateV1Responses[keyof GetAgentApiStateV1Responses];
+
+export type ReadSkillHubAgentBindingsV1Data = {
+    body?: never;
+    path: {
+        agentId: string;
+        agentVersion: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/versions/{agentVersion}/skills';
+};
+
+export type ReadSkillHubAgentBindingsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadSkillHubAgentBindingsV1Error = ReadSkillHubAgentBindingsV1Errors[keyof ReadSkillHubAgentBindingsV1Errors];
+
+export type ReadSkillHubAgentBindingsV1Responses = {
+    /**
+     * Current Skill binding status
+     */
+    200: SkillHubAgentBindingStatusResponseV1;
+};
+
+export type ReadSkillHubAgentBindingsV1Response = ReadSkillHubAgentBindingsV1Responses[keyof ReadSkillHubAgentBindingsV1Responses];
+
+export type BindSkillHubAgentVersionV1Data = {
+    body: SkillHubAgentBindingCommandV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        agentId: string;
+        agentVersion: string;
+    };
+    query?: never;
+    url: '/api/v2/agents/{agentId}/versions/{agentVersion}/skills';
+};
+
+export type BindSkillHubAgentVersionV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type BindSkillHubAgentVersionV1Error = BindSkillHubAgentVersionV1Errors[keyof BindSkillHubAgentVersionV1Errors];
+
+export type BindSkillHubAgentVersionV1Responses = {
+    /**
+     * Replayed Skill binding
+     */
+    200: SkillHubAgentBindingResultV1;
+    /**
+     * Skill binding committed
+     */
+    201: SkillHubAgentBindingResultV1;
+};
+
+export type BindSkillHubAgentVersionV1Response = BindSkillHubAgentVersionV1Responses[keyof BindSkillHubAgentVersionV1Responses];
 
 export type RegisterApplicationV2Data = {
     body: ApplicationRegistrationRequestV1;
