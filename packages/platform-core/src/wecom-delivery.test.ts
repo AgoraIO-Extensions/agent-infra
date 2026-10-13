@@ -199,3 +199,35 @@ it("does not send expired or oversized replies", async () => {
 	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "expired");
 	expect(f.store.finish).toHaveBeenCalledWith(expect.any(Object), "failed");
 });
+it("cancels when the pinned Connection fact changes before delivery", async () => {
+	const fact = {
+		schemaVersion: 1 as const,
+		providerId: claim.scope.senderId,
+		bindingReference: claim.scope.bindingReference,
+		senderId: claim.actorId,
+		authorizationReference: "opaque-grant-ref",
+		authorizationRevision: "auth-r1",
+		grantRevision: "grant-r1",
+		revocationRevision: "revoke-r1",
+		expiresAt: "2099-01-01T00:00:00.000Z",
+	};
+	const f = fixture();
+	f.store.claim.mockResolvedValueOnce({
+		...claim,
+		connectionAuthorizationFact: fact,
+	});
+	f.authorization.authorize.mockResolvedValue({
+		outcome: "allowed",
+		authority: { ...authority, connectionAuthorizationFact: fact },
+	});
+	await f.useCase.dispatch();
+	const revalidate = f.sender.send.mock.calls[0]?.[0]?.revalidate;
+	f.authorization.authorize.mockResolvedValue({
+		outcome: "allowed",
+		authority: {
+			...authority,
+			connectionAuthorizationFact: { ...fact, grantRevision: "grant-r2" },
+		},
+	});
+	expect(await revalidate?.()).toBe(false);
+});

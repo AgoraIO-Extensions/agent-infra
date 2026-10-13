@@ -47,6 +47,48 @@ export interface WecomMessageV1 extends WecomScopeV1 {
 	readonly replyHandle: string;
 	readonly replyExpiresAt: string;
 }
+export interface WecomConnectionAuthorizationRequestV1 {
+	readonly agentId: string;
+	readonly providerId: string;
+	readonly bindingReference: string;
+	readonly senderId: string;
+}
+/** Deployment-provided, non-secret fact; its reference is opaque to Platform. */
+export interface WecomConnectionAuthorizationFactV1 {
+	readonly schemaVersion: 1;
+	readonly providerId: string;
+	readonly bindingReference: string;
+	readonly senderId: string;
+	readonly authorizationReference: string;
+	readonly authorizationRevision: string;
+	readonly grantRevision: string;
+	readonly revocationRevision: string;
+	readonly expiresAt: string;
+}
+export interface WecomConnectionAuthorizationPortV1 {
+	/** Return null for revoked, disabled, stale or cross-sender authority. */
+	resolve(
+		request: WecomConnectionAuthorizationRequestV1,
+		signal?: AbortSignal,
+	): Promise<WecomConnectionAuthorizationFactV1 | null>;
+}
+export function sameWecomConnectionAuthorizationFactV1(
+	left: WecomConnectionAuthorizationFactV1 | undefined,
+	right: WecomConnectionAuthorizationFactV1 | undefined,
+): boolean {
+	if (!left || !right) return left === right;
+	return (
+		left.schemaVersion === right.schemaVersion &&
+		left.providerId === right.providerId &&
+		left.bindingReference === right.bindingReference &&
+		left.senderId === right.senderId &&
+		left.authorizationReference === right.authorizationReference &&
+		left.authorizationRevision === right.authorizationRevision &&
+		left.grantRevision === right.grantRevision &&
+		left.revocationRevision === right.revocationRevision &&
+		left.expiresAt === right.expiresAt
+	);
+}
 export interface WecomMediaResolverV1 {
 	/**
 	 * Resolve provider media through the existing File Authority and return the
@@ -72,12 +114,14 @@ export interface WecomAuthorityV1 {
 	};
 	readonly channelRevision: string;
 	readonly managementRevision: number;
+	readonly connectionAuthorizationFact?: WecomConnectionAuthorizationFactV1;
 }
 export interface WecomAuthorizationPortV1 {
 	authorize(
 		scope: WecomScopeV1,
 		operation?: "use" | "read",
 		originalBoundary?: TaskAuthorizationBoundaryV1,
+		providerId?: string,
 	): Promise<
 		| { readonly outcome: "allowed"; readonly authority: WecomAuthorityV1 }
 		| { readonly outcome: "denied" | "unavailable"; readonly actorId?: string }
@@ -129,7 +173,13 @@ async function authorizeAdmission(
 	message: WecomMessageV1,
 	signal: AbortSignal | undefined,
 ): ReturnType<WecomAuthorizationPortV1["authorize"]> {
-	if (!signal) return authorization.authorize(message);
+	if (!signal)
+		return authorization.authorize(
+			message,
+			undefined,
+			undefined,
+			message.providerId,
+		);
 	if (signal.aborted) return { outcome: "unavailable" };
 	let abort: (() => void) | undefined;
 	try {
@@ -140,7 +190,15 @@ async function authorizeAdmission(
 				if (signal.aborted) abort();
 			},
 		);
-		return await Promise.race([authorization.authorize(message), cancelled]);
+		return await Promise.race([
+			authorization.authorize(
+				message,
+				undefined,
+				undefined,
+				message.providerId,
+			),
+			cancelled,
+		]);
 	} finally {
 		if (abort) signal.removeEventListener("abort", abort);
 	}
@@ -380,6 +438,7 @@ export interface WecomDeliveryClaimV1 {
 	readonly replyHandle: string;
 	readonly replyExpiresAt: string;
 	readonly taskBoundary: TaskAuthorizationBoundaryV1;
+	readonly connectionAuthorizationFact?: WecomConnectionAuthorizationFactV1;
 	readonly acceptanceStatus: WecomReceiptStatusV1;
 	readonly executionStatus: string | null;
 	readonly textDeltas: readonly string[];
@@ -425,16 +484,27 @@ export function createWecomDeliveryV1(dependencies: {
 				await dependencies.store.finish(claim, "expired");
 				return true;
 			}
-			const current = await dependencies.authorization.authorize(
-				claim.scope,
-				"use",
-				claim.taskBoundary,
-			);
+			const current = claim.connectionAuthorizationFact
+				? await dependencies.authorization.authorize(
+						claim.scope,
+						"use",
+						claim.taskBoundary,
+						claim.connectionAuthorizationFact.providerId,
+					)
+				: await dependencies.authorization.authorize(
+						claim.scope,
+						"use",
+						claim.taskBoundary,
+					);
 			if (current.outcome === "unavailable") return true;
 			if (
 				current.outcome !== "allowed" ||
 				current.authority.actor.actorId !== claim.actorId ||
-				current.authority.channelRevision !== claim.channelRevision
+				current.authority.channelRevision !== claim.channelRevision ||
+				!sameWecomConnectionAuthorizationFactV1(
+					current.authority.connectionAuthorizationFact,
+					claim.connectionAuthorizationFact,
+				)
 			) {
 				await dependencies.store.finish(claim, "cancelled");
 				return true;
@@ -464,15 +534,26 @@ export function createWecomDeliveryV1(dependencies: {
 					text,
 					...(media.length ? { media } : {}),
 					revalidate: async () => {
-						const latest = await dependencies.authorization.authorize(
-							claim.scope,
-							"use",
-							claim.taskBoundary,
-						);
+						const latest = claim.connectionAuthorizationFact
+							? await dependencies.authorization.authorize(
+									claim.scope,
+									"use",
+									claim.taskBoundary,
+									claim.connectionAuthorizationFact.providerId,
+								)
+							: await dependencies.authorization.authorize(
+									claim.scope,
+									"use",
+									claim.taskBoundary,
+								);
 						return (
 							latest.outcome === "allowed" &&
 							latest.authority.actor.actorId === claim.actorId &&
-							latest.authority.channelRevision === claim.channelRevision
+							latest.authority.channelRevision === claim.channelRevision &&
+							sameWecomConnectionAuthorizationFactV1(
+								latest.authority.connectionAuthorizationFact,
+								claim.connectionAuthorizationFact,
+							)
 						);
 					},
 				});
@@ -498,12 +579,54 @@ export interface WecomAuthorityStateV1 {
 export interface WecomAuthorityStatePortV1 {
 	readAuthorityState(agentId: string): Promise<WecomAuthorityStateV1 | null>;
 }
+function parseWecomConnectionAuthorizationFactV1(
+	value: unknown,
+	request: WecomConnectionAuthorizationRequestV1,
+	now: number,
+): WecomConnectionAuthorizationFactV1 | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return undefined;
+	const record = value as Record<string, unknown>;
+	if (
+		Object.keys(record).sort().join(",") !==
+			"authorizationReference,authorizationRevision,bindingReference,expiresAt,grantRevision,providerId,revocationRevision,schemaVersion,senderId" ||
+		record.schemaVersion !== 1 ||
+		record.providerId !== request.providerId ||
+		record.bindingReference !== request.bindingReference ||
+		record.senderId !== request.senderId
+	)
+		return undefined;
+	const strings = [
+		record.authorizationReference,
+		record.authorizationRevision,
+		record.grantRevision,
+		record.revocationRevision,
+		record.expiresAt,
+	];
+	if (strings.some((entry) => !isAgentManagementText(entry, 512)))
+		return undefined;
+	const expiresAt = Date.parse(record.expiresAt as string);
+	if (!Number.isFinite(expiresAt) || expiresAt <= now) return undefined;
+	return {
+		schemaVersion: 1,
+		providerId: request.providerId,
+		bindingReference: request.bindingReference,
+		senderId: request.senderId,
+		authorizationReference: record.authorizationReference as string,
+		authorizationRevision: record.authorizationRevision as string,
+		grantRevision: record.grantRevision as string,
+		revocationRevision: record.revocationRevision as string,
+		expiresAt: record.expiresAt as string,
+	};
+}
 export function createWecomAuthorizationV1(dependencies: {
 	readonly identity: WecomIdentityPortV1;
 	readonly state: WecomAuthorityStatePortV1;
+	readonly connectionAuthorization?: WecomConnectionAuthorizationPortV1;
+	readonly now?: () => number;
 }): WecomAuthorizationPortV1 {
 	return {
-		async authorize(scope, operation, originalBoundary) {
+		async authorize(scope, operation, originalBoundary, providerId) {
 			const resolved = await dependencies.identity.resolveSender(scope);
 			const actor = resolved ? parseCurrentTaskUserV1(resolved) : null;
 			if (actor?.accountStatus !== "active")
@@ -527,6 +650,39 @@ export function createWecomAuthorizationV1(dependencies: {
 					configuration.source.interactionMode !== "platform-adapter")
 			)
 				return { outcome: "denied", actorId: actor.userId };
+			let connectionAuthorizationFact:
+				| WecomConnectionAuthorizationFactV1
+				| undefined;
+			if (
+				(operation ?? "use") === "use" &&
+				configuration.source.connectionEnabled
+			) {
+				if (!providerId || !dependencies.connectionAuthorization)
+					return { outcome: "unavailable", actorId: actor.userId };
+				let raw: WecomConnectionAuthorizationFactV1 | null;
+				try {
+					raw = await dependencies.connectionAuthorization.resolve({
+						agentId: scope.agentId,
+						providerId,
+						bindingReference: scope.bindingReference,
+						senderId: actor.userId,
+					});
+				} catch {
+					return { outcome: "unavailable", actorId: actor.userId };
+				}
+				connectionAuthorizationFact = parseWecomConnectionAuthorizationFactV1(
+					raw,
+					{
+						agentId: scope.agentId,
+						providerId,
+						bindingReference: scope.bindingReference,
+						senderId: actor.userId,
+					},
+					(dependencies.now ?? Date.now)(),
+				);
+				if (!connectionAuthorizationFact)
+					return { outcome: "denied", actorId: actor.userId };
+			}
 			const boundary = captureTaskAuthorizationBoundaryV1({
 				principal: { kind: "user", id: actor.userId },
 				user: actor,
@@ -562,6 +718,9 @@ export function createWecomAuthorizationV1(dependencies: {
 				authority: {
 					channelRevision: configuration.channelRevision,
 					managementRevision: management.revision,
+					...(connectionAuthorizationFact
+						? { connectionAuthorizationFact }
+						: {}),
 					actor: {
 						schemaVersion: 1,
 						actorId: actor.userId,

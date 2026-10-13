@@ -265,6 +265,7 @@ describe("platform-core package surface", () => {
 			"reviewSkillHubVersionV1",
 			"revokeSkillHubVersionV1",
 			"runSkillProviderBatchV1",
+			"sameWecomConnectionAuthorizationFactV1",
 			"shouldContinueSessionSandboxPreparationV1",
 			"skillHubInstallationStatesV1",
 			"skillHubOperationCodesV1",

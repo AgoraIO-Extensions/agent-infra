@@ -3,8 +3,10 @@ import {
 	createWecomAuthorizationV1,
 	createWecomChannelV1,
 	createWecomDeliveryV1,
+	sameWecomConnectionAuthorizationFactV1,
 	type TaskRuntimeAuthorizationRecordV1,
 	type TaskUserDirectoryV1,
+	type WecomConnectionAuthorizationPortV1,
 	type WecomDeliveryStatusV1,
 	type WecomIdentityPortV1,
 	type WecomMediaResolverV1,
@@ -22,6 +24,7 @@ import {
 
 export interface WecomWorkerDeploymentV1 {
 	readonly identity: WecomIdentityPortV1;
+	readonly connectionAuthorization?: WecomConnectionAuthorizationPortV1;
 	readonly userDirectory?: TaskUserDirectoryV1;
 	readonly observe: (status: WecomDeliveryStatusV1) => void;
 	readonly sender: WecomSendPortV1;
@@ -43,11 +46,13 @@ export function createPlatformWecomWorkerV1(
 		databaseUrl: options.databaseUrl,
 		userDirectory: options.userDirectory,
 		identity: options.identity,
+		connectionAuthorization: options.connectionAuthorization,
 		observe: options.observe,
 	});
 	const authorization = createWecomAuthorizationV1({
 		identity: options.identity,
 		state: store,
+		connectionAuthorization: options.connectionAuthorization,
 	});
 	const channel = createWecomChannelV1({
 		authorization,
@@ -135,11 +140,20 @@ export function createPlatformWecomWorkerV1(
 				record.boundary.channelId,
 			);
 			if (!receipt) return false;
-			const current = await authorization.authorize(receipt.scope, "read");
+			const current = await authorization.authorize(
+				receipt.scope,
+				"use",
+				undefined,
+				receipt.connectionAuthorizationFact?.providerId,
+			);
 			return (
 				current.outcome === "allowed" &&
 				current.authority.actor.actorId === record.boundary.principal.id &&
-				current.authority.channelRevision === receipt.channelRevision
+				current.authority.channelRevision === receipt.channelRevision &&
+				sameWecomConnectionAuthorizationFactV1(
+					current.authority.connectionAuthorizationFact,
+					receipt.connectionAuthorizationFact ?? undefined,
+				)
 			);
 		},
 		async close() {
