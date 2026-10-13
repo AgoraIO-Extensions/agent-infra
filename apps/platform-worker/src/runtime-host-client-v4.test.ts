@@ -49,6 +49,7 @@ function clientHarness() {
 		decryptor: h.relayKeyDecryptor,
 		selection: accepted.selection,
 		assertCurrentAuthorization,
+		signRecovery: signer.signRecovery,
 	};
 	return {
 		h,
@@ -60,6 +61,46 @@ function clientHarness() {
 }
 
 describe("V4 authenticated confidential private Key client", () => {
+	it("delivers the original Key through the independent recovery route", async () => {
+		const { h, client, request } = clientHarness();
+		try {
+			const accepted = h.accepted();
+			if (!accepted) throw new Error("Missing fixture acceptance");
+			h.setAccepted({ ...accepted, trustedHostSessionRef: "host" });
+			h.fetcher.mockResolvedValue(
+				Response.json({
+					schemaVersion: 4,
+					hostSessionRef: "host",
+					operationId: "execution",
+					result: "restored",
+				}),
+			);
+			const response = await client.restoreExecutionKey(
+				request,
+				"host",
+				"A".repeat(43),
+			);
+			expect(response).toMatchObject({
+				schemaVersion: 4,
+				hostSessionRef: "host",
+				operationId: "execution",
+				result: "restored",
+			});
+			expect(String(h.sent().url)).toContain(
+				"/internal/runtime/v4/execution-key/restore",
+			);
+			expect(h.sent().body).toHaveProperty(
+				"recoveryRequest.mode",
+				"existing-accepted-only",
+			);
+			expect(h.sent().body).not.toHaveProperty(
+				"recoveryRequest.createIfMissing",
+			);
+		} finally {
+			h.runtime.close();
+		}
+	});
+
 	it("uses the existing real cipher decryptor and zeroes its original plaintext buffer", async () => {
 		const { h, options, request } = clientHarness();
 		const keys = generateKeyPairSync("rsa", { modulusLength: 3072 });

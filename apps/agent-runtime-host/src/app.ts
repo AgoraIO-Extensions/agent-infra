@@ -22,6 +22,7 @@ import {
 	RuntimeNativeMetadataReadRequestV1Schema,
 	RuntimeNativeMetadataReadResponseV1Schema,
 	RuntimeReplayRequestV1Schema,
+	RuntimeRestoreExecutionKeyTransportV4Schema,
 	RuntimeSkillDirectoryRequestV1Schema,
 	RuntimeSkillResourceReadRequestV1Schema,
 	RuntimeStatusRequestV1Schema,
@@ -68,6 +69,10 @@ interface RuntimeHostAppOptions {
 	verifyGrantV4?: (request: unknown) => Promise<{
 		request: import("@agent-infra/contracts/runtime").RuntimeBusinessRequestV4;
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
+	}>;
+	verifyRecoveryGrantV4?: (request: unknown) => Promise<{
+		request: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyRequestV4;
+		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
 	}>;
 	/** The transport token authenticates this deployment-provisioned Worker identity. */
 	readinessWorkerId?: string;
@@ -478,6 +483,22 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 			);
 		return verified;
 	}
+	async function verifyRecoveryV4(request: unknown) {
+		if (!options.verifyRecoveryGrantV4 || !options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization is not configured",
+				403,
+			);
+		const verified = await options.verifyRecoveryGrantV4(request);
+		if (verified.claims.workerId !== options.runtimeWorkerId)
+			throw new RuntimeHostError(
+				"RUNTIME_GRANT_INVALID",
+				"Runtime authorization does not match this deployment",
+				403,
+			);
+		return verified;
+	}
 	app.post("/internal/runtime/v4/turns", async (context) => {
 		const request = await parseBody(
 			context.req.raw,
@@ -493,6 +514,14 @@ export function createRuntimeHostApp(options: RuntimeHostAppOptions) {
 		);
 		await verifyV4(request.businessRequest);
 		return context.json(await options.host.supplementV4(request));
+	});
+	app.post("/internal/runtime/v4/execution-key/restore", async (context) => {
+		const request = await parseBody(
+			context.req.raw,
+			RuntimeRestoreExecutionKeyTransportV4Schema,
+		);
+		await verifyRecoveryV4(request.recoveryRequest);
+		return context.json(await options.host.restoreExecutionKeyV4(request));
 	});
 	app.post("/internal/runtime/v4/events/read", async (context) => {
 		const request = await parseBody(

@@ -12,6 +12,7 @@ import {
 	createExecutionGrantVerifier,
 	createRuntimeExecutionGrantValidatorV4,
 	createRuntimeExecutionGrantVerifierV2,
+	createRuntimeExecutionKeyRecoveryValidatorV4,
 	createWorkloadReadinessVerifierV1,
 	discoverRuntimeBrowserCapabilityV1,
 	FakeRuntimeDriver,
@@ -28,6 +29,7 @@ import type {
 	ExecutionGrantV1,
 	RuntimeBusinessRequestV4,
 	RuntimeExecutionGrantV2,
+	RuntimeRestoreExecutionKeyRequestV4,
 	VerifiedExecutionGrantV1,
 	VerifiedRuntimeExecutionGrantV2,
 } from "@agent-infra/contracts/runtime";
@@ -93,6 +95,10 @@ interface StartOptions {
 	verifyGrantV4?: (request: unknown) => Promise<{
 		request: RuntimeBusinessRequestV4;
 		claims: import("@agent-infra/contracts/runtime").RuntimeBusinessGrantClaimsV4;
+	}>;
+	verifyRecoveryGrantV4?: (request: unknown) => Promise<{
+		request: RuntimeRestoreExecutionKeyRequestV4;
+		claims: import("@agent-infra/contracts/runtime").RuntimeRestoreExecutionKeyGrantClaimsV4;
 	}>;
 	host: RuntimeHost;
 	serviceToken: string;
@@ -581,6 +587,29 @@ export async function assembleRuntimeHost(
 					},
 				});
 			});
+
+		const rawValidateRecoveryV4 =
+			runtimeWorkerId && activeConfiguration?.schemaVersion === 4
+				? createRuntimeExecutionKeyRecoveryValidatorV4(
+						new Map([[keyId, publicKey]]),
+						{
+							expectedIssuer,
+							expectedWorkerId: runtimeWorkerId,
+						},
+					)
+				: undefined;
+		const validateRecoveryV4 = rawValidateRecoveryV4
+			? async (request: unknown) => {
+					const verified = await rawValidateRecoveryV4(request);
+					if (agentId && verified.claims.agentId !== agentId)
+						throw new RuntimeHostError(
+							"RUNTIME_GRANT_INVALID",
+							"Runtime authorization does not match this deployment",
+							403,
+						);
+					return verified;
+				}
+			: undefined;
 		const host = await RuntimeHost.open({
 			createBrowserExecutionContext,
 			probeBrowserCapability: async ({ declaration, binding, signal }) =>
@@ -619,6 +648,9 @@ export async function assembleRuntimeHost(
 					}
 				: {}),
 			...(validateV4 ? { validateGrantV4: validateV4 } : {}),
+			...(validateRecoveryV4
+				? { validateRecoveryGrantV4: validateRecoveryV4 }
+				: {}),
 		});
 		assembledHost = host;
 		const verifyV2 = createRuntimeExecutionGrantVerifierV2(
@@ -652,6 +684,12 @@ export async function assembleRuntimeHost(
 				: {}),
 			...(validateV4
 				? { verifyGrantV4: (request: unknown) => validateV4(request) }
+				: {}),
+			...(validateRecoveryV4
+				? {
+						verifyRecoveryGrantV4: (request: unknown) =>
+							validateRecoveryV4(request),
+					}
 				: {}),
 			...(activeConfiguration
 				? { configVersion: activeConfiguration.configVersion }

@@ -163,7 +163,7 @@ export async function readAcceptedExecutionKeyInTransactionV4(
 		validateRuntimePinnedExecutionKeyScopeV4(
 			scope,
 			request,
-			conversation.host_session_ref,
+			submit ? scope.hostSessionRef : conversation.host_session_ref,
 		);
 	} catch {
 		return null;
