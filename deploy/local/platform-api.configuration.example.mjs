@@ -39,6 +39,9 @@ export const apiInput = missing("apiInput");
 // implementations remain deployment-owned; do not use fixtures here.
 export const customAgentGateway = undefined;
 export const modelSelection = undefined;
+// Optional deployment-owned native metadata reader. Supply the existing
+// reader object only after its API/Worker/Host proof and Session routing are configured.
+export const nativeMetadata = undefined;
 
 // Robot-token Agent management API (optional):
 //

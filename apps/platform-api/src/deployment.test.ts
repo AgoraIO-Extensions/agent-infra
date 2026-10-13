@@ -60,10 +60,11 @@ const connectDatabase = createRequire(
 ) => DatabaseReader;
 
 describe("explicit custom Agent deployment ports", () => {
-	it("merges Gateway and model reader exports outside apiInput", () => {
+	it("merges Gateway, model and native metadata reader exports outside apiInput", () => {
 		const customAgentGateway =
 			{} as ProductionPlatformApiInputV1["customAgentGateway"];
 		const modelSelection = {} as ProductionPlatformApiInputV1["modelSelection"];
+		const nativeMetadata = {} as ProductionPlatformApiInputV1["nativeMetadata"];
 		const apiInput = {} as ProductionPlatformApiInputV1;
 
 		expect(
@@ -71,13 +72,15 @@ describe("explicit custom Agent deployment ports", () => {
 				apiInput,
 				customAgentGateway,
 				modelSelection,
+				nativeMetadata,
 			}),
-		).toMatchObject({ customAgentGateway, modelSelection });
+		).toMatchObject({ customAgentGateway, modelSelection, nativeMetadata });
 	});
 
 	it.each([
 		["Gateway", "customAgentGateway"],
 		["model reader", "modelSelection"],
+		["native metadata reader", "nativeMetadata"],
 	] as const)("rejects duplicate %s authorities", (_label, field) => {
 		const value = {};
 		const apiInput = {
@@ -91,7 +94,9 @@ describe("explicit custom Agent deployment ports", () => {
 		).toThrow(
 			field === "customAgentGateway"
 				? "PLATFORM_CUSTOM_AGENT_GATEWAY_DUPLICATE"
-				: "PLATFORM_MODEL_SELECTION_DUPLICATE",
+				: field === "modelSelection"
+					? "PLATFORM_MODEL_SELECTION_DUPLICATE"
+					: "PLATFORM_NATIVE_METADATA_DUPLICATE",
 		);
 	});
 });
