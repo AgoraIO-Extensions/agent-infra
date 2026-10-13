@@ -1,6 +1,7 @@
 import {
 	createSkillWorkloadProjectionV1,
 	type SkillGrantV1,
+	type SkillHubAppliedReceiptV1,
 	type SkillVersionRefV1,
 	type SkillWorkloadProjectionV1,
 	SkillWorkloadProjectionV1Schema,
@@ -38,6 +39,7 @@ export type WorkloadSkillMaterializationBindingV1 = Readonly<{
 	readonly skillVersion: SkillVersionRefV1;
 	readonly packageObject: SkillPackagePublicationObjectV1;
 	readonly grant: SkillGrantV1;
+	readonly syncRevision: number;
 }>;
 
 /**
@@ -51,6 +53,10 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 	readonly resolveBindings: (
 		input: WorkloadSkillMaterializationInputV1,
 	) => Promise<readonly WorkloadSkillMaterializationBindingV1[]>;
+	/** Existing Store-owned Applied receipt writer; never caller-controlled. */
+	readonly writeAppliedReceipt?: (
+		receipt: SkillHubAppliedReceiptV1,
+	) => Promise<void>;
 }): WorkloadSkillMaterializerV1 {
 	return {
 		async materialize(input) {
@@ -89,7 +95,11 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 				expectedGenerationId: current?.result.generationId ?? null,
 			});
 			const details = await materializer.readCurrentDetails();
-			if (!details || details.result.generationId !== result.generationId)
+			if (
+				!details ||
+				details.result.generationId !== result.generationId ||
+				details.packages.length !== bindings.length
+			)
 				throw new Error("Skill materialization generation unavailable");
 			const bindingByName = new Map(
 				bindings.map((binding) => [binding.name, binding]),
@@ -106,10 +116,44 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 					grant: binding.grant,
 				});
 			});
-			return validateWorkloadSkillMaterializationV1(input, {
+			if (
+				bindings.some((binding) => {
+					const detail = details.packages.find(
+						(candidate) => candidate.input.name === binding.name,
+					);
+					return (
+						!detail ||
+						detail.input.packageDigest !== binding.skillVersion.packageDigest ||
+						detail.manifestDigest !== binding.skillVersion.manifestDigest
+					);
+				})
+			)
+				throw new Error("Skill materialization binding mismatch");
+			const validated = validateWorkloadSkillMaterializationV1(input, {
 				generationId: result.generationId,
 				skills,
 			});
+			if (bindings.length > 0 && !options.writeAppliedReceipt)
+				throw new Error("Skill Applied receipt writer unavailable");
+			if (options.writeAppliedReceipt) {
+				for (const binding of bindings) {
+					await options.writeAppliedReceipt({
+						schemaVersion: 1,
+						agentId: input.agentId,
+						agentVersion: binding.agentVersion,
+						skillName: binding.name,
+						configurationRevision: input.configurationRevision,
+						syncRevision: binding.syncRevision,
+						skillVersionId: binding.skillVersion.skillVersionId,
+						generationId: result.generationId,
+						packageDigest: binding.skillVersion.packageDigest,
+						manifestDigest: binding.skillVersion.manifestDigest,
+						targetPath: `.agents/skills/${binding.name}`,
+						readOnly: true,
+					});
+				}
+			}
+			return validated;
 		},
 	};
 }
