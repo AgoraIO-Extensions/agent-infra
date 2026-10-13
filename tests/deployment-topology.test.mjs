@@ -485,8 +485,7 @@ test("Platform API callback auth SecretRef is optional and projected as a protec
 		),
 		{
 			name: "connection-callback-auth",
-			mountPath:
-				"/var/run/agent-infra/connection-callback-auth/callback.auth",
+			mountPath: "/var/run/agent-infra/connection-callback-auth/callback.auth",
 			subPath: "callback.auth",
 			readOnly: true,
 		},
