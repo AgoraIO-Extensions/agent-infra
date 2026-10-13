@@ -70,10 +70,9 @@ export function recordAuditStage(
 	if (!telemetry) return;
 	try {
 		const code =
-			result.code ??
-			(stage === "audit_write" && result.outcome === "failed"
+			stage === "audit_write" && result.outcome === "failed"
 				? "AUDIT_UNAVAILABLE"
-				: undefined);
+				: result.code;
 		telemetry.record({
 			stage,
 			outcome: result.outcome,

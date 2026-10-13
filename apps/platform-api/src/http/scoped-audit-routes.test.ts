@@ -604,7 +604,11 @@ describe("scoped audit HTTP adapter", () => {
 		expect(telemetry.record.mock.calls.map(([event]) => event)).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ stage: "audit_query", outcome: "rejected" }),
-				expect.objectContaining({ stage: "audit_write", outcome: "failed" }),
+				expect.objectContaining({
+					stage: "audit_write",
+					outcome: "failed",
+					code: "AUDIT_UNAVAILABLE",
+				}),
 			]),
 		);
 	});
