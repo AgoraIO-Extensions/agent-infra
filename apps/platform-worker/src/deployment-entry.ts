@@ -6,7 +6,10 @@ import {
 } from "./connection-consumer-projection.js";
 import * as conversationDeployment from "./conversation-deployment.js";
 import type { ConversationRuntimeOptionsV2 } from "./conversation-runtime.js";
-import type { PlatformWorkerNativeMetadataGatewayServerOptionsV1 } from "./runtime-native-metadata-server.js";
+import {
+	createPlatformNativeMetadataGatewayAssemblyV1,
+	type PlatformWorkerNativeMetadataGatewayPortsV1,
+} from "./native-metadata-deployment-assembly.js";
 import {
 	type DeploymentSkillMaterializerFactoryV1,
 	resolveDeploymentSkillMaterializerV1,
@@ -47,7 +50,7 @@ type DeploymentConfiguration = {
 	};
 	/** Deployment-owned object-storage/Store assembly for the existing Worker seam. */
 	readonly createSkillMaterializer?: DeploymentSkillMaterializerFactoryV1;
-	readonly nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayServerOptionsV1;
+	readonly nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayPortsV1;
 };
 
 function resolveConnectionInstallation(
@@ -378,5 +381,9 @@ export async function createPlatformNativeMetadataGatewayOptionsV1(
 	signal: AbortSignal,
 ) {
 	signal.throwIfAborted();
-	return nativeMetadataGateway;
+	if (!nativeMetadataGateway) return undefined;
+	return createPlatformNativeMetadataGatewayAssemblyV1({
+		serviceToken,
+		ports: nativeMetadataGateway,
+	});
 }
