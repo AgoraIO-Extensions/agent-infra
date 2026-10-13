@@ -398,8 +398,8 @@ export function ActiveConversation({
 					{nativeMetadataReady &&
 						!nativeMetadataLoading &&
 						nativeMetadataCapabilities.length === 0 && (
-						<p role="status">当前执行没有可用命令或 Skill。</p>
-					)}
+							<p role="status">当前执行没有可用命令或 Skill。</p>
+						)}
 					{nativeMetadataReady && nativeMetadataCapabilities.length > 0 && (
 						<ConversationCapabilityPickerPanel
 							key={nativeMetadataScopeKey}
