@@ -509,6 +509,7 @@ export function assemblePlatformApi(
 		managementQuery,
 		configurationQuery,
 		presentAgent,
+		nativeMetadataAvailable: input.nativeMetadata !== undefined,
 	});
 	const conversationAuthorization: ConversationAuthorization = {
 		async authorize(identity, request) {

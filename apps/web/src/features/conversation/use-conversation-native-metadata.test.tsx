@@ -92,6 +92,28 @@ describe("conversation native metadata consumer", () => {
 		expect(result.current.capabilities).toEqual([]);
 	});
 
+	it("does not request native metadata when the Agent capability is absent", () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		clients.push(queryClient);
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(
+			() =>
+				useConversationNativeMetadata({
+					identityKey: "login-a",
+					conversationId: "conversation-a",
+					executionId: "execution-a",
+					enabled: false,
+				}),
+			{ wrapper },
+		);
+		expect(result.current.available).toBe(false);
+		expect(result.current.capabilities).toEqual([]);
+	});
+
 	it.each([
 		{},
 		{

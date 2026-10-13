@@ -323,6 +323,7 @@ export const AgentProjectionV1Schema = z.strictObject({
 		resultFiles: z.boolean(),
 		connection: z.boolean(),
 		supplementaryInstruction: z.boolean(),
+		nativeMetadata: z.boolean().optional(),
 		skills: z.array(RuntimeSkillCapabilityV1Schema).max(150).optional(),
 		browser: BrowserCapabilityProjectionV1Schema.optional(),
 	}),

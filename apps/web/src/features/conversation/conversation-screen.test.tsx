@@ -43,6 +43,10 @@ const agent = AgentProjectionV2Schema.parse({
 	agentId: "agent-1",
 	managementStatus: "available",
 	serviceAvailability: "ready",
+	capabilities: {
+		...pilotFakeScenariosV2.starting.response.body.capabilities,
+		nativeMetadata: true,
+	},
 });
 const originalV1 = v1.getConfig();
 const originalV2 = v2.getConfig();
