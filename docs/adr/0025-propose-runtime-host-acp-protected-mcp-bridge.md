@@ -27,10 +27,13 @@ transport，因此继续保持 `connection: false`。
 1. Host 为一个原始 Execution 打开一个 `StandardMcpClient`，Connection token、
    SecretRef、Connection headers 和远端 MCP client 对象始终留在 Host 内存与
    Host 的受保护材料边界。
-2. Host bridge 只绑定 `127.0.0.1`，使用每次 Session/Execution 生成的短期随机
-   bearer。ACP `mcpServers` 只接收 bridge URL 和这个本地 bearer；native 进程
-   不接收 Connection token、SecretRef、OAuth/PAT headers、普通 token helper 或
-   可重开的秘密文件。
+2. Host bridge 只绑定 `127.0.0.1`，使用**单个 Execution**生成的短期随机
+   capability bearer。ACP `mcpServers` 只接收 bridge URL 和这个本地 bearer；
+   native 进程不接收 Connection token、SecretRef、OAuth/PAT headers、普通 token
+   helper 或可重开的秘密文件。该 bearer 也属于受保护的 session capability：必须
+   有 expiry、单次/有界 replay 防护、固定 method/path/body、禁止 redirect、close
+   即撤销，并且不能写入 native config/home、journal、日志、模型上下文或工具
+   子进程。若固定 artifact 不能证明这些条件，bridge 保持关闭。
 3. Bridge 只发布当前受信 MCP discovery 中的工具名和输入 schema。每个
    `tools/call` 都通过 `StandardMcpClient` 的既有校验和 operation 接口，绑定
    当前 Agent、Conversation、Execution、generation、安装修订和 deadline；
@@ -40,7 +43,9 @@ transport，因此继续保持 `connection: false`。
    Host 原有 journal/fact seam 保存；响应丢失或确认失败时封闭当前 native
    Session，WRITE 不重放。
 5. Session、Execution、撤权、过期、进程退出和 Host close 都关闭 bridge、
-   `StandardMcpClient` 和 loopback bearer。任何保护检查失败都让 Connection
+   `StandardMcpClient` 和 loopback bearer。一个 native ACP Session 跨 Execution
+   时不得沿用旧 bridge：先排空并确认旧 handle 退出，再创建新 bridge；不能确认
+   旧 handle 已退役时拒绝新 Execution。任何保护检查失败都让 Connection
    capability 保持不可用，同时保留控制和只读恢复边界。
 
 这个 bridge 是 RuntimeHost 内部的 transport adapter。Platform API、Worker
@@ -90,6 +95,22 @@ Spec 并通过同一套评审，随后才能实施。
 
 上面的顺序是实现前必须锁定的 contract；当前固定 OpenCode/Pi 版本没有足够
 transport/dispatch 证据，因此本 ADR 不提供实现或 capability enable。
+
+## 额外实施门禁与归属
+
+- `sessionId`、native `toolCallId` 和 MCP RPC id 只能作为 bridge 内部关联键；
+  它们不能自报原主体、Agent 或 Execution。Host 必须从当前受信
+  `RuntimeOriginalExecutionRef` 和活动 `nativeSessionRef` 解析唯一 Execution，
+  迟到、重复、跨 Session 或跨 Execution 的请求统一拒绝。
+- native dispatch 前必须完成 `prepare → started` 的持久屏障；`started` 后的响应
+  丢失、bridge 断连、重复发送、`confirm`/journal 写入失败或 close 不确定都进入
+  unknown，并先阻断/终止当前 native Session 的下一次 model/tool admission，不能
+  让 ACP 继续推理或重发 WRITE。故障测试必须覆盖这些转移。
+- bridge server、请求解析、bearer 生命周期和 ACP adapter 归属
+  `packages/agent-runtime`；`apps/agent-runtime-host` 只负责受信配置、Host 装配
+  和 capability gate，不承载 Connection 业务规则或第二份 journal。
+- 这些门禁是接受实现的必要条件，不是当前固定 artifact 已满足的事实。ADR、工程
+  Spec/HLD 修订和真实 artifact/最终 Linux 负向证据全部完成前，#851 的能力保持关闭。
 
 ## 与当前工程 Spec 的关系
 
