@@ -52,6 +52,25 @@ describe("deployment-owned Workload egress", () => {
 			},
 		]);
 	});
+	it("compiles bounded public CIDRs for model and Connection egress", () => {
+		expect(
+			workloadEgressRulesV1({
+				modelEgress: [{ destination: { cidr: "8.8.8.0/24" }, port: 443 }],
+				connectionEgress: [
+					{ destination: { cidr: "2001:4860:4860::/48" }, port: 443 },
+				],
+			}),
+		).toEqual([
+			{
+				to: [{ ipBlock: { cidr: "8.8.8.0/24" } }],
+				ports: [{ protocol: "TCP", port: 443 }],
+			},
+			{
+				to: [{ ipBlock: { cidr: "2001:4860:4860::/48" } }],
+				ports: [{ protocol: "TCP", port: 443 }],
+			},
+		]);
+	});
 	it.each([
 		{ destination: { ip: "0.0.0.0/0" }, port: 443 },
 		{ destination: { namespace: "connection", podLabels: {} }, port: 443 },
@@ -61,6 +80,37 @@ describe("deployment-owned Workload egress", () => {
 		expect(() =>
 			workloadEgressRulesV1({
 				connectionEgress: [entry] as WorkloadEgressPolicyV1["connectionEgress"],
+			}),
+		).toThrow();
+	});
+	it.each([
+		"0.0.0.0/0",
+		"::/0",
+		"10.0.0.0/8",
+		"fc00::/7",
+		"127.0.0.0/8",
+		"::1/128",
+		"169.254.0.0/16",
+		"fe80::/10",
+		"224.0.0.0/4",
+		"ff00::/8",
+		"192.0.2.0/24",
+		"2001:db8::/32",
+		"8.8.0.0/15",
+		"2001:4860::/47",
+		"8.8.8.1/24",
+		"2001:4860:4860::1/48",
+	])("rejects unsafe or non-canonical CIDR destinations: %s", (cidr) => {
+		expect(() =>
+			workloadEgressRulesV1({
+				modelEgress: [{ destination: { cidr }, port: 443 }],
+			}),
+		).toThrow();
+	});
+	it("keeps CIDR destinations out of DNS egress", () => {
+		expect(() =>
+			workloadEgressRulesV1({
+				dnsEgress: [{ cidr: "8.8.8.0/24" }],
 			}),
 		).toThrow();
 	});

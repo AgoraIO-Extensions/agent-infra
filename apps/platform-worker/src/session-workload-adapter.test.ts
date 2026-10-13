@@ -297,7 +297,7 @@ describe("session sandbox workload adapter", () => {
 			dnsEgress: [
 				{ namespace: "kube-system", podLabels: { "k8s-app": "kube-dns" } },
 			],
-			modelEgress: [{ destination: { ip: "203.0.113.10" }, port: 443 }],
+			modelEgress: [{ destination: { cidr: "8.8.8.0/24" }, port: 443 }],
 			connectionEgress: [
 				{
 					destination: {
