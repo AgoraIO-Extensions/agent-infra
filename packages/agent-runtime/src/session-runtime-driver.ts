@@ -378,12 +378,6 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				previous.kind === fact.kind &&
 				JSON.stringify(previous) === JSON.stringify(fact);
 			if (duplicate) return;
-			if (turn.operationFacts.length >= 256)
-				throw new RuntimeHostError(
-					"RUNTIME_OPERATION_CONFLICT",
-					"Runtime operation fact journal is full",
-					409,
-				);
 			if (!previous) {
 				if (fact.phase !== "intent")
 					throw new RuntimeHostError(
@@ -399,6 +393,27 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				throw new RuntimeHostError(
 					"RUNTIME_OPERATION_CONFLICT",
 					"Runtime operation fact transition is invalid",
+					409,
+				);
+			const latestPhases = new Map<string, RuntimeOperationFactV2["phase"]>();
+			for (const entry of turn.operationFacts)
+				latestPhases.set(
+					JSON.stringify([entry.operationRef, entry.attemptRef]),
+					entry.phase,
+				);
+			latestPhases.set(
+				JSON.stringify([fact.operationRef, fact.attemptRef]),
+				fact.phase,
+			);
+			let reservedSlots = 0;
+			for (const phase of latestPhases.values()) {
+				if (phase === "intent") reservedSlots += 2;
+				else if (phase === "started") reservedSlots += 1;
+			}
+			if (turn.operationFacts.length + 1 + reservedSlots > 256)
+				throw new RuntimeHostError(
+					"RUNTIME_OPERATION_CONFLICT",
+					"Runtime operation fact journal is full",
 					409,
 				);
 			turn.operationFacts.push(fact);
