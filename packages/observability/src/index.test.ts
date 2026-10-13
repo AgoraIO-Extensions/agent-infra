@@ -116,6 +116,28 @@ it("logs a bounded stage duration for latency comparison (#1525)", () => {
 	expect(JSON.parse(lines[1] ?? "{}")).not.toHaveProperty("durationMs");
 });
 
+it("writes the service key once per operation log line (#2306)", () => {
+	const lines: string[] = [];
+	const telemetry = startObservability({
+		service: "platform-worker",
+		output: new Writable({
+			write(chunk, _encoding, done) {
+				lines.push(String(chunk));
+				done();
+			},
+		}),
+	});
+	active.push(telemetry);
+	telemetry.record({ stage: "result_persist", outcome: "completed" });
+	telemetry.record({ stage: "worker", outcome: "failed", durationMs: 5 });
+	expect(lines).toHaveLength(2);
+	for (const line of lines) {
+		// JSON.parse 会静默保留最后一个重复键，所以直接数原始行中的键。
+		expect(line.match(/"service":/g)).toHaveLength(1);
+		expect(JSON.parse(line)).toMatchObject({ service: "platform-worker" });
+	}
+});
+
 it("emits Browser categories as bounded telemetry metadata", () => {
 	const lines: string[] = [];
 	const telemetry = startObservability({

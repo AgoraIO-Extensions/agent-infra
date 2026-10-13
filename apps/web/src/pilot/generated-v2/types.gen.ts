@@ -1176,6 +1176,35 @@ export type SkillHubInstallationV1 = {
     updatedAt: string;
 };
 
+export type SkillHubProjectCreateV1 = {
+    name: string;
+    organizationId?: string | null;
+    schemaVersion: 1;
+};
+
+export type SkillHubProjectPageV1 = {
+    items: Array<SkillHubProjectV1>;
+    nextCursor: string | null;
+};
+
+export type SkillHubProjectUpdateV1 = {
+    name?: string;
+    organizationId?: string | null;
+    schemaVersion: 1;
+    status?: 'active' | 'disabled';
+};
+
+export type SkillHubProjectV1 = {
+    createdAt: string;
+    name: string;
+    organizationId: string | null;
+    ownerId: string;
+    projectId: string;
+    schemaVersion: 1;
+    status: 'active' | 'disabled';
+    updatedAt: string;
+};
+
 export type SkillHubProviderImportRequestV1 = {
     name: string;
     provider: 'system' | 'my_library' | 'market' | 'clawhub' | 'skillhub' | 'npx' | 'github';
@@ -4432,6 +4461,200 @@ export type UninstallSkillHubInstallationV1Responses = {
 };
 
 export type UninstallSkillHubInstallationV1Response = UninstallSkillHubInstallationV1Responses[keyof UninstallSkillHubInstallationV1Responses];
+
+export type ListSkillHubProjectsV1Data = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v2/skills/projects';
+};
+
+export type ListSkillHubProjectsV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ListSkillHubProjectsV1Error = ListSkillHubProjectsV1Errors[keyof ListSkillHubProjectsV1Errors];
+
+export type ListSkillHubProjectsV1Responses = {
+    /**
+     * Skill projects
+     */
+    200: SkillHubProjectPageV1;
+};
+
+export type ListSkillHubProjectsV1Response = ListSkillHubProjectsV1Responses[keyof ListSkillHubProjectsV1Responses];
+
+export type CreateSkillHubProjectV1Data = {
+    body: SkillHubProjectCreateV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v2/skills/projects';
+};
+
+export type CreateSkillHubProjectV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type CreateSkillHubProjectV1Error = CreateSkillHubProjectV1Errors[keyof CreateSkillHubProjectV1Errors];
+
+export type CreateSkillHubProjectV1Responses = {
+    /**
+     * Replayed project
+     */
+    200: SkillHubProjectV1;
+    /**
+     * Project created
+     */
+    201: SkillHubProjectV1;
+};
+
+export type CreateSkillHubProjectV1Response = CreateSkillHubProjectV1Responses[keyof CreateSkillHubProjectV1Responses];
+
+export type ReadSkillHubProjectV1Data = {
+    body?: never;
+    path: {
+        projectId: string;
+    };
+    query?: never;
+    url: '/api/v2/skills/projects/{projectId}';
+};
+
+export type ReadSkillHubProjectV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type ReadSkillHubProjectV1Error = ReadSkillHubProjectV1Errors[keyof ReadSkillHubProjectV1Errors];
+
+export type ReadSkillHubProjectV1Responses = {
+    /**
+     * Skill project
+     */
+    200: SkillHubProjectV1;
+};
+
+export type ReadSkillHubProjectV1Response = ReadSkillHubProjectV1Responses[keyof ReadSkillHubProjectV1Responses];
+
+export type UpdateSkillHubProjectV1Data = {
+    body: SkillHubProjectUpdateV1;
+    headers: {
+        'Idempotency-Key': string;
+    };
+    path: {
+        projectId: string;
+    };
+    query?: never;
+    url: '/api/v2/skills/projects/{projectId}';
+};
+
+export type UpdateSkillHubProjectV1Errors = {
+    /**
+     * Invalid request
+     */
+    400: PilotProtocolErrorV1;
+    /**
+     * Authentication required
+     */
+    401: PilotProtocolErrorV1;
+    /**
+     * Authorization is no longer valid
+     */
+    403: PilotProtocolErrorV1;
+    /**
+     * Resource is unavailable
+     */
+    404: PilotProtocolErrorV1;
+    /**
+     * Request conflicts with current state
+     */
+    409: PilotProtocolErrorV1;
+    /**
+     * Dependency unavailable
+     */
+    503: PilotProtocolErrorV1;
+};
+
+export type UpdateSkillHubProjectV1Error = UpdateSkillHubProjectV1Errors[keyof UpdateSkillHubProjectV1Errors];
+
+export type UpdateSkillHubProjectV1Responses = {
+    /**
+     * Project updated
+     */
+    200: SkillHubProjectV1;
+};
+
+export type UpdateSkillHubProjectV1Response = UpdateSkillHubProjectV1Responses[keyof UpdateSkillHubProjectV1Responses];
 
 export type PublishSkillHubVersionV1Data = {
     body: SkillHubPublicationRequestV1;

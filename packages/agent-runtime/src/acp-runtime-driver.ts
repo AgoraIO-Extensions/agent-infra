@@ -23,6 +23,14 @@ import {
 	SessionRuntimeDriver,
 } from "./session-runtime-driver.js";
 import type { RuntimeFilesystemSkillDirectoryV1 } from "./skill-hub-directory.js";
+import {
+	createStandardMcpAcpBridge,
+	type StandardMcpAcpBridge,
+} from "./standard-mcp-acp-bridge.js";
+import {
+	StandardMcpClient,
+	type StandardMcpClientOptions,
+} from "./standard-mcp-client.js";
 
 export interface AcpRuntimeModelOption {
 	readonly modelOptionId: string;
@@ -42,6 +50,11 @@ export interface GenericAcpRuntimeDriverOptions {
 	/** OpenCode supports multiple prompts on one ACP Session with refreshed Keys. */
 	readonly reuseNativeSession?: boolean;
 	readonly authorizeModelAction?: (
+		action: RuntimeExternalActionAuthorization,
+	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
+	/** Host-owned protected Connection client; only enabled by a verified ACP gate. */
+	readonly standardConnectionClient?: StandardMcpClientOptions;
+	readonly authorizeToolAction?: (
 		action: RuntimeExternalActionAuthorization,
 	) => Promise<RuntimeExternalActionAuthorizationResult | undefined>;
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
@@ -130,6 +143,10 @@ export const GenericAcpRuntimeDriver = {
 						? options.browserCapability()
 						: options.browserCapability;
 				let gateway: BrowserMcpGatewayV1 | undefined;
+				let connectionGateway: StandardMcpAcpBridge | undefined;
+				let connectionClient: StandardMcpClient | undefined;
+				let nativeSessionRef = session.nativeId ?? "";
+				let nativeCancel: (() => Promise<void>) | undefined;
 				try {
 					if (executionBrowser) {
 						if (!executionCapability || !session.executionId)
@@ -140,23 +157,51 @@ export const GenericAcpRuntimeDriver = {
 							executionId: session.executionId,
 						});
 					}
+					if (options.standardConnectionClient) {
+						if (!session.connectionReference)
+							throw new Error("CONNECTION_STANDARD_CLIENT_UNAVAILABLE");
+						const client = await StandardMcpClient.open(
+							options.standardConnectionClient,
+							session.connectionReference,
+							AbortSignal.timeout(10_000),
+						);
+						connectionClient = client;
+						connectionGateway = await createStandardMcpAcpBridge({
+							client,
+							execution: session.connectionReference,
+							nativeSessionRef: () => nativeSessionRef,
+							recordOperationFact: callbacks.recordOperationFact,
+							authorizeToolAction: options.authorizeToolAction,
+							onBlocked: async () => {
+								await nativeCancel?.();
+							},
+						});
+					}
 				} catch (error) {
+					await connectionGateway?.close().catch(() => {});
+					await connectionClient?.close().catch(() => {});
 					await launch.close?.().catch(() => {});
 					throw error;
 				}
-				const launchWithBrowser = gateway
+				const servers = [
+					...(gateway ? [gateway.server] : []),
+					...(connectionGateway ? [connectionGateway.server] : []),
+				];
+				const launchWithGateway = servers.length
 					? {
 							...launch,
-							mcpServers: [gateway.server],
+							mcpServers: servers,
 							close: async () => {
 								try {
 									await launch.close?.();
 								} finally {
-									await gateway.close();
+									await connectionGateway?.close();
+									await gateway?.close();
 								}
 							},
 						}
 					: launch;
+				const launchWithBrowser = launchWithGateway;
 				const native = await openAcpSession({
 					...session,
 					launch: launchWithBrowser,
@@ -212,20 +257,25 @@ export const GenericAcpRuntimeDriver = {
 						} else await callbacks.update();
 					},
 				});
+				nativeSessionRef = native.nativeId;
+				nativeCancel = native.cancel;
 				negotiatedImageInput = native.supportsImagePrompt;
-				if (gateway) {
+				if (gateway || connectionGateway) {
 					return {
 						...native,
 						cancel: async () => {
 							try {
 								await native.cancel();
 							} finally {
-								await gateway.close();
+								await connectionGateway?.close();
+								await gateway?.close();
 							}
 						},
 					};
 				}
-				return options.reuseNativeSession && !session.browser
+				return options.reuseNativeSession &&
+					!options.standardConnectionClient &&
+					!session.browser
 					? {
 							...native,
 							startTurn: (next: NativeSessionOptions) => {
@@ -257,6 +307,16 @@ export const GenericAcpRuntimeDriver = {
 					: native;
 			},
 		});
+		if (
+			options.standardConnectionClient &&
+			typeof driver.getCapabilities === "function"
+		) {
+			const baseGetCapabilities = driver.getCapabilities.bind(driver);
+			driver.getCapabilities = async () => ({
+				...(await baseGetCapabilities()),
+				connection: true,
+			});
+		}
 		return Object.assign(driver, {
 			/**
 			 * Probe only the ACP handshake and Session creation. A readiness probe
@@ -267,7 +327,10 @@ export const GenericAcpRuntimeDriver = {
 			): Promise<RuntimeCapabilitiesV1> => {
 				const capabilities = await probeAcpReadiness(options, signal);
 				negotiatedImageInput = capabilities.attachments;
-				return capabilities;
+				return {
+					...capabilities,
+					connection: options.standardConnectionClient !== undefined,
+				};
 			},
 		});
 	},

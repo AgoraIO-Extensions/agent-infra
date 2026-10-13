@@ -95,6 +95,10 @@ import {
 	type SkillHubInstallationRoutesDependenciesV1,
 } from "./http/skill-hub-installation-routes.js";
 import {
+	registerSkillHubProjectRoutesV1,
+	type SkillHubProjectRoutesDependenciesV1,
+} from "./http/skill-hub-project-routes.js";
+import {
 	registerSkillHubPublicationRoutesV1,
 	type SkillHubPublicationRoutesDependenciesV1,
 } from "./http/skill-hub-publication-routes.js";
@@ -175,6 +179,7 @@ export interface PlatformAppDependencies {
 	readonly scopedAudit?: ScopedAuditRoutesDependencies;
 	readonly directory?: DirectoryRouteDependencies;
 	readonly skillHubRead?: SkillHubReadRoutesDependenciesV1;
+	readonly skillHubProjects?: SkillHubProjectRoutesDependenciesV1;
 	readonly skillHubInstallations?: SkillHubInstallationRoutesDependenciesV1;
 	readonly skillHubPublication?: SkillHubPublicationRoutesDependenciesV1;
 	readonly skillHubAgentBindings?: SkillHubAgentBindingRoutesDependenciesV1;
@@ -312,6 +317,8 @@ export function createPlatformApp(
 	if (dependencies.files) registerFileRoutesV1(app, dependencies.files);
 	if (dependencies.skillHubRead)
 		registerSkillHubReadRoutesV1(app, dependencies.skillHubRead);
+	if (dependencies.skillHubProjects)
+		registerSkillHubProjectRoutesV1(app, dependencies.skillHubProjects);
 	if (dependencies.skillHubInstallations)
 		registerSkillHubInstallationRoutesV1(
 			app,

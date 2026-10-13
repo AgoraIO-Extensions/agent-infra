@@ -1983,6 +1983,78 @@ function isSkillHubImportOpenApiAddition(previous, current) {
 	return sameValue(previous, normalized);
 }
 
+// #2207 publishes the authenticated Skill project management API additively.
+function isSkillHubProjectOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/skills/projects",
+		"/api/v2/skills/projects/{projectId}",
+	];
+	const schemas = [
+		"SkillHubProjectCreateV1",
+		"SkillHubProjectUpdateV1",
+		"SkillHubProjectV1",
+		"SkillHubProjectPageV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (Object.values(addition.paths).some((path) => path === undefined))
+		return false;
+	if (Object.values(addition.schemas).some((schema) => schema === undefined))
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
+function isSkillHubProjectAndImportOpenApiAddition(previous, current) {
+	const paths = [
+		"/api/v2/skills/projects",
+		"/api/v2/skills/projects/{projectId}",
+		"/api/v2/skills/imports",
+	];
+	const schemas = [
+		"SkillHubProjectCreateV1",
+		"SkillHubProjectUpdateV1",
+		"SkillHubProjectV1",
+		"SkillHubProjectPageV1",
+		"SkillHubProviderImportRequestV1",
+		"SkillHubProviderImportResponseV1",
+	];
+	if (
+		paths.some((path) => previous.paths?.[path] !== undefined) ||
+		schemas.some((name) => previous.components?.schemas?.[name] !== undefined)
+	)
+		return false;
+	const addition = {
+		paths: Object.fromEntries(
+			paths.map((path) => [path, current.paths?.[path]]),
+		),
+		schemas: Object.fromEntries(
+			schemas.map((name) => [name, current.components?.schemas?.[name]]),
+		),
+	};
+	if (Object.values(addition.paths).some((path) => path === undefined))
+		return false;
+	if (Object.values(addition.schemas).some((schema) => schema === undefined))
+		return false;
+	const normalized = structuredClone(current);
+	for (const path of paths) delete normalized.paths[path];
+	for (const name of schemas) delete normalized.components.schemas[name];
+	return sameValue(previous, normalized);
+}
+
 // #1052 publishes the exact #1027 recent read; every prior document field stays exact.
 function isRecentPersonalConversationsV2OpenApiAddition(previous, current) {
 	const path = "/api/v2/me/conversations/recent";
@@ -3601,6 +3673,8 @@ function findBreakingChanges(previousValue, currentValue) {
 			!isSkillHubReadOpenApiAddition(previous, current) &&
 			!isSkillHubInstallationOpenApiAddition(previous, current) &&
 			!isSkillHubPublicationOpenApiAddition(previous, current) &&
+			!isSkillHubProjectAndImportOpenApiAddition(previous, current) &&
+			!isSkillHubProjectOpenApiAddition(previous, current) &&
 			!isSkillHubAgentBindingOpenApiAddition(previous, current) &&
 			!isSkillHubImportOpenApiAddition(previous, current) &&
 			!isNativeMetadataOpenApiAddition(previous, current) &&

@@ -44,7 +44,10 @@ import {
 	projectNativeMetadataCommandsV1,
 	projectNativeMetadataSkillsV1,
 } from "./native-metadata-projection.js";
-import { runtimeAuthorizationDenied } from "./runtime-authorization.js";
+import {
+	type RuntimeOriginalExecutionRef,
+	runtimeAuthorizationDenied,
+} from "./runtime-authorization.js";
 import { readRuntimeFileResultReceiptV1 } from "./runtime-file-bridge.js";
 import {
 	boundedRuntimeSkillRead,
@@ -131,6 +134,8 @@ export interface NativeSessionOptions {
 	selection: RuntimeSelectionV1;
 	/** Request-local execution identity for Browser adapters; never persisted here. */
 	readonly executionId?: string;
+	/** Trusted original execution binding for protected Connection adapters. */
+	readonly connectionReference?: RuntimeOriginalExecutionRef;
 	admit: () => Promise<void>;
 	resolveModelCredential?: RuntimeModelCredentialResolver;
 	/** Request-local Browser context; never persisted or selected by native input. */
@@ -741,6 +746,16 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 							: undefined,
 						selection,
 						admit: async () => unavailable(),
+						...(active
+							? {
+									connectionReference: {
+										agentId: binding.agentId,
+										conversationId: binding.conversationId,
+										sessionGeneration: binding.sessionGeneration,
+										executionId: active.executionId,
+									},
+								}
+							: {}),
 						skillDirectory: this.options.skillDirectory,
 						update: async () => {},
 					});
@@ -1252,6 +1267,12 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			const sessionOptions: NativeSessionOptions = {
 				directory,
 				executionId: command.executionId,
+				connectionReference: {
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					sessionGeneration: command.sessionGeneration,
+					executionId: command.executionId,
+				},
 				selection,
 				admit: async () => {
 					if (!dispatched || this.closed)

@@ -9,6 +9,10 @@ import {
 	parseSkillHubIdentitySnapshotV1,
 	parseSkillHubIdV1,
 	parseSkillHubInstallationCommandV1,
+	parseSkillHubProjectCreateV1,
+	parseSkillHubProjectIdempotencyKeyV1,
+	parseSkillHubProjectIdV1,
+	parseSkillHubProjectUpdateV1,
 	parseSkillHubRegistrationV1,
 	parseSkillHubRequestV1,
 	parseSkillHubReviewV1,
@@ -26,6 +30,7 @@ import {
 	type SkillHubInstallationV1,
 	SkillHubLifecycleErrorV1,
 	SkillHubOperationErrorV1,
+	type SkillHubProjectV1,
 	type SkillHubRegistrationV1,
 	type SkillHubRequestV1,
 	type SkillHubVersionV1,
@@ -102,6 +107,23 @@ function decode(row: VersionRow, name: string): SkillHubVersionV1 {
 	} catch {
 		throw new SkillHubOperationErrorV1("unavailable");
 	}
+}
+
+function decodeProject(
+	row: typeof skillHubSkills.$inferSelect,
+): SkillHubProjectV1 {
+	if (row.status !== "active" && row.status !== "disabled")
+		throw new SkillHubOperationErrorV1("unavailable");
+	return Object.freeze({
+		schemaVersion: 1,
+		projectId: row.id,
+		name: row.name,
+		ownerId: row.ownerId,
+		organizationId: row.organizationId,
+		status: row.status as SkillHubProjectV1["status"],
+		createdAt: row.createdAt.toISOString(),
+		updatedAt: row.updatedAt.toISOString(),
+	});
 }
 
 function idempotencyWhere(
@@ -485,6 +507,258 @@ export class PostgresSkillHubLifecycleV1 {
 			},
 		);
 	}
+	async createProject(
+		context: SkillHubRequestV1,
+		keyInput: string,
+		input: unknown,
+	) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				const command = parseSkillHubProjectCreateV1(input);
+				const key = parseSkillHubProjectIdempotencyKeyV1(keyInput);
+				const digest = platformIdempotencyV1.canonicalRequestDigest({
+					...command,
+				});
+				await transaction.execute(
+					sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["skill_project_create", request.userId, key])}, 0))`,
+				);
+				const priorRows = await transaction
+					.select()
+					.from(idempotencyRecords)
+					.where(
+						and(
+							eq(idempotencyRecords.scopeType, "skill_project_create"),
+							eq(idempotencyRecords.scopeId, request.userId),
+							eq(idempotencyRecords.actorId, request.userId),
+							eq(idempotencyRecords.commandType, "skill.project.create.v1"),
+							eq(idempotencyRecords.idempotencyKey, key),
+						),
+					);
+				const prior = priorRows[0];
+				if (prior && prior.requestDigest !== digest)
+					throw new SkillHubOperationErrorV1("idempotency_conflict");
+				if (prior?.status !== undefined) {
+					const projectId = prior.result?.projectId;
+					if (typeof projectId !== "string")
+						throw new SkillHubOperationErrorV1("unavailable");
+					const [row] = await transaction
+						.select()
+						.from(skillHubSkills)
+						.where(eq(skillHubSkills.id, projectId));
+					if (!row) throw new SkillHubOperationErrorV1("unavailable");
+					requireSkillHubVersionAccessV1(
+						{ ownerId: row.ownerId } as SkillHubVersionV1,
+						identity.actor,
+					);
+					return { replayed: true, project: decodeProject(row) };
+				}
+				if (
+					command.organizationId &&
+					!identity.actor.organizationIds.includes(command.organizationId)
+				)
+					throw new SkillHubOperationErrorV1("forbidden");
+				const [sameName] = await transaction
+					.select()
+					.from(skillHubSkills)
+					.where(
+						and(
+							eq(skillHubSkills.ownerId, request.userId),
+							eq(skillHubSkills.name, command.name),
+						),
+					);
+				if (sameName) throw new SkillHubOperationErrorV1("version_conflict");
+				const now = new Date();
+				const projectId = randomUUID();
+				const [row] = await transaction
+					.insert(skillHubSkills)
+					.values({
+						id: projectId,
+						name: command.name,
+						ownerId: request.userId,
+						organizationId: command.organizationId ?? null,
+						status: "active",
+						createdAt: now,
+						updatedAt: now,
+					})
+					.returning();
+				if (!row) throw new SkillHubOperationErrorV1("unavailable");
+				await transaction.insert(idempotencyRecords).values({
+					id: randomUUID(),
+					scopeType: "skill_project_create",
+					scopeId: request.userId,
+					actorId: request.userId,
+					commandType: "skill.project.create.v1",
+					idempotencyKey: key,
+					requestDigest: digest,
+					status: "completed",
+					result: { projectId },
+				});
+				await audit(
+					transaction,
+					request,
+					"skill.project.create",
+					projectId,
+					"succeeded",
+					{ replayed: false },
+				);
+				return { replayed: false, project: decodeProject(row) };
+			},
+		);
+	}
+
+	async listProjects(context: SkillHubRequestV1) {
+		return this.#transaction(context, async (transaction, request) => {
+			const rows = await transaction
+				.select()
+				.from(skillHubSkills)
+				.where(eq(skillHubSkills.ownerId, request.userId));
+			await audit(
+				transaction,
+				request,
+				"skill.project.list",
+				request.userId,
+				"succeeded",
+				{ count: rows.length },
+			);
+			return Object.freeze(rows.map(decodeProject));
+		});
+	}
+
+	async readProject(context: SkillHubRequestV1, projectIdInput: string) {
+		return this.#transaction(context, async (transaction, request) => {
+			const projectId = parseSkillHubProjectIdV1(projectIdInput);
+			const [row] = await transaction
+				.select()
+				.from(skillHubSkills)
+				.where(
+					and(
+						eq(skillHubSkills.id, projectId),
+						eq(skillHubSkills.ownerId, request.userId),
+					),
+				);
+			if (!row) throw new SkillHubOperationErrorV1("not_found");
+			await audit(
+				transaction,
+				request,
+				"skill.project.read",
+				projectId,
+				"succeeded",
+				{ status: row.status },
+			);
+			return decodeProject(row);
+		});
+	}
+
+	async updateProject(
+		context: SkillHubRequestV1,
+		projectIdInput: string,
+		keyInput: string,
+		input: unknown,
+	) {
+		return this.#transaction(
+			context,
+			async (transaction, request, identity) => {
+				const projectId = parseSkillHubProjectIdV1(projectIdInput);
+				const command = parseSkillHubProjectUpdateV1(input);
+				const key = parseSkillHubProjectIdempotencyKeyV1(keyInput);
+				const digest = platformIdempotencyV1.canonicalRequestDigest({
+					projectId,
+					...command,
+				});
+				await transaction.execute(
+					sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["skill_project_update", projectId, request.userId, key])}, 0))`,
+				);
+				const [prior] = await transaction
+					.select()
+					.from(idempotencyRecords)
+					.where(
+						and(
+							eq(idempotencyRecords.scopeType, "skill_project"),
+							eq(idempotencyRecords.scopeId, projectId),
+							eq(idempotencyRecords.actorId, request.userId),
+							eq(idempotencyRecords.commandType, "skill.project.update.v1"),
+							eq(idempotencyRecords.idempotencyKey, key),
+						),
+					);
+				if (prior && prior.requestDigest !== digest)
+					throw new SkillHubOperationErrorV1("idempotency_conflict");
+				const [row] = await transaction
+					.select()
+					.from(skillHubSkills)
+					.where(
+						and(
+							eq(skillHubSkills.id, projectId),
+							eq(skillHubSkills.ownerId, request.userId),
+						),
+					)
+					.for("update");
+				if (!row) throw new SkillHubOperationErrorV1("not_found");
+				if (prior) {
+					const [current] = await transaction
+						.select()
+						.from(skillHubSkills)
+						.where(eq(skillHubSkills.id, projectId));
+					if (!current) throw new SkillHubOperationErrorV1("unavailable");
+					return { replayed: true, project: decodeProject(current) };
+				}
+				if (row.status === "disabled" && command.status !== "active")
+					throw new SkillHubOperationErrorV1("forbidden");
+				if (
+					command.organizationId &&
+					!identity.actor.organizationIds.includes(command.organizationId)
+				)
+					throw new SkillHubOperationErrorV1("forbidden");
+				if (command.name && command.name !== row.name) {
+					const [same] = await transaction
+						.select()
+						.from(skillHubSkills)
+						.where(
+							and(
+								eq(skillHubSkills.ownerId, request.userId),
+								eq(skillHubSkills.name, command.name),
+							),
+						);
+					if (same && same.id !== projectId)
+						throw new SkillHubOperationErrorV1("version_conflict");
+				}
+				const [updated] = await transaction
+					.update(skillHubSkills)
+					.set({
+						...(command.name === undefined ? {} : { name: command.name }),
+						...(command.organizationId === undefined
+							? {}
+							: { organizationId: command.organizationId }),
+						...(command.status === undefined ? {} : { status: command.status }),
+						updatedAt: new Date(),
+					})
+					.where(eq(skillHubSkills.id, projectId))
+					.returning();
+				if (!updated) throw new SkillHubOperationErrorV1("unavailable");
+				await transaction.insert(idempotencyRecords).values({
+					id: randomUUID(),
+					scopeType: "skill_project",
+					scopeId: projectId,
+					actorId: request.userId,
+					commandType: "skill.project.update.v1",
+					idempotencyKey: key,
+					requestDigest: digest,
+					status: "completed",
+					result: { projectId },
+				});
+				await audit(
+					transaction,
+					request,
+					"skill.project.update",
+					projectId,
+					"succeeded",
+					{ status: updated.status },
+				);
+				return { replayed: false, project: decodeProject(updated) };
+			},
+		);
+	}
+
 	/** Internal supplier boundary: durable intent and checkpoints in the original outbox. */
 	async publishPackage(
 		context: SkillHubRequestV1,
