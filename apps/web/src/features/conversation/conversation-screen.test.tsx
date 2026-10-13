@@ -1146,6 +1146,39 @@ describe("functional conversation screen", () => {
 		).toHaveLength(0);
 	});
 
+	it("sends an edited draft after the conversation read recovers (#2151)", async () => {
+		let failRefresh = false;
+		const { requests } = setup((request) => {
+			if (
+				failRefresh &&
+				request.method === "GET" &&
+				new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+			) {
+				failRefresh = false;
+				return new Response("Unavailable", { status: 503 });
+			}
+			return request.method === "POST" ? receipt() : undefined;
+		});
+		const input = await composer();
+		failRefresh = true;
+		fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+		await screen.findByText(/恢复后会自动继续读取/);
+		fireEvent.change(input, { target: { value: "断线期间的草稿" } });
+		fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
+		await waitFor(() =>
+			expect(
+				(screen.getByRole("button", { name: "发送" }) as HTMLButtonElement)
+					.disabled,
+			).toBe(false),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await waitFor(() =>
+			expect(
+				requests.filter((request) => request.method === "POST"),
+			).toHaveLength(1),
+		);
+	});
+
 	it("retains an unknown command and only retries the same idempotency key explicitly", async () => {
 		const { requests, streams } = setup((request) =>
 			request.method === "POST"
