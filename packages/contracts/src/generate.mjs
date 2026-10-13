@@ -46,6 +46,8 @@ import {
 	pilotTaskSchemasV1,
 	skillHubInstallationOpenApiPathsV1,
 	skillHubInstallationSchemasV1,
+	skillHubPublicationOpenApiPathsV1,
+	skillHubPublicationSchemasV1,
 	skillHubReadOpenApiPathsV1,
 	skillHubReadSchemasV1,
 	standardTemplateReleaseOpenApiPathsV1,
@@ -749,6 +751,7 @@ function buildArtifacts() {
 			...pilotOperationOpenApiPathsV2,
 			...skillHubReadOpenApiPathsV1,
 			...skillHubInstallationOpenApiPathsV1,
+			...skillHubPublicationOpenApiPathsV1,
 			...connectionInstallationOpenApiPathsV1,
 		},
 		components: {
@@ -765,6 +768,7 @@ function buildArtifacts() {
 				...pilotOperationSchemasV2,
 				...skillHubReadSchemasV1,
 				...skillHubInstallationSchemasV1,
+				...skillHubPublicationSchemasV1,
 			},
 		},
 	});
