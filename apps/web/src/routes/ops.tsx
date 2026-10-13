@@ -12,6 +12,7 @@ function OperationsRoute() {
 		<main className="platform-content management-content">
 			<OperationsEntry
 				isAdministrator={session.user.roles.includes("system_admin")}
+				state={{ kind: "unknown" }}
 			/>
 		</main>
 	);
