@@ -101,6 +101,7 @@ it.each(["persisted", "failed", "revoked"] as const)(
 		let persisted = false;
 		let authorized = true;
 		let starts = 0;
+		let blocks = 0;
 		const sends: boolean[] = [];
 		const client = await StandardMcpClient.open(
 			{
@@ -125,7 +126,9 @@ it.each(["persisted", "failed", "revoked"] as const)(
 			client.toolDefinitions[0]?.tools[0]?.name ?? "",
 			{ text: "fixture" },
 			{
-				block: () => {},
+				block: () => {
+					blocks++;
+				},
 				confirm: async () => {},
 				assertCurrent: async () => () => {
 					if (!authorized) throw new Error("Controlled revocation");
@@ -148,13 +151,20 @@ it.each(["persisted", "failed", "revoked"] as const)(
 		const sendsBeforePersistence = sends.length;
 		if (outcome === "revoked") authorized = false;
 		release.resolve();
-		const result = await pending;
+		if (outcome === "failed") {
+			await expect(pending).rejects.toMatchObject({
+				code: "CONNECTION_STANDARD_CLIENT_UNAVAILABLE",
+			});
+		} else {
+			const result = await pending;
+			expect(result.phase).toBe(
+				outcome === "persisted" ? "completed" : "unknown",
+			);
+		}
 		expect(sendsBeforePersistence).toBe(0);
 		expect(sends).toEqual(outcome === "persisted" ? [true] : []);
 		expect(starts).toBe(outcome === "persisted" ? 1 : 0);
-		expect(result.phase).toBe(
-			outcome === "persisted" ? "completed" : "unknown",
-		);
+		if (outcome === "failed") expect(blocks).toBe(1);
 	},
 );
 

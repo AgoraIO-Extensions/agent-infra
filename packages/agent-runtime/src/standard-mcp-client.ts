@@ -472,6 +472,8 @@ export class StandardMcpClient {
 				arguments: Record<string, unknown>;
 				operation: StandardMcpOperation;
 				sends: number;
+				prepared: boolean;
+				prepareFailed: boolean;
 		  }
 		| undefined;
 	#discoveryRequests = 0;
@@ -700,6 +702,8 @@ export class StandardMcpClient {
 				arguments: structuredClone(arguments_),
 				operation,
 				sends: 0,
+				prepared: false,
+				prepareFailed: false,
 			};
 			let result: CallToolResult;
 			try {
@@ -712,9 +716,16 @@ export class StandardMcpClient {
 					},
 				)) as CallToolResult;
 			} catch {
+				if (this.#active.sends && !this.#active.prepared) {
+					return unavailable();
+				}
 				return this.#active.sends
 					? this.unknown(operation)
 					: { phase: "failed", contentItems: [], success: false };
+			}
+			if (this.#active.prepareFailed) {
+				this.block(operation);
+				return unavailable();
 			}
 			if (
 				this.#active.sends !== 1 ||
@@ -745,6 +756,10 @@ export class StandardMcpClient {
 				success: completed,
 			};
 		} catch {
+			if (this.#active?.prepareFailed) {
+				this.block(operation);
+				return unavailable();
+			}
 			return this.#active?.sends
 				? this.unknown(operation)
 				: { phase: "failed", contentItems: [], success: false };
@@ -806,7 +821,13 @@ export class StandardMcpClient {
 					rpcRequestId: parsed.id as string | number,
 					requestDigest: standardMcpDigest(parsed.params),
 				};
-				await active.operation.prepare(request);
+				try {
+					await active.operation.prepare(request);
+				} catch (error) {
+					active.prepareFailed = true;
+					throw error;
+				}
+				active.prepared = true;
 				const finalRevalidate = await active.operation.assertCurrent();
 				await this.assertCurrent();
 				const finalGuarded: unknown = finalRevalidate();
