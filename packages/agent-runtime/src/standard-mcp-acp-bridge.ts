@@ -190,7 +190,7 @@ export async function createStandardMcpAcpBridge(
 			block: () => {
 				if (blocked) return;
 				blocked = true;
-				void options.onBlocked?.();
+				void Promise.resolve(options.onBlocked?.()).catch(() => {});
 			},
 			confirm: async (value) => {
 				await write(value.phase);

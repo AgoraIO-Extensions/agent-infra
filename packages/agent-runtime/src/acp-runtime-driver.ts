@@ -144,6 +144,7 @@ export const GenericAcpRuntimeDriver = {
 						: options.browserCapability;
 				let gateway: BrowserMcpGatewayV1 | undefined;
 				let connectionGateway: StandardMcpAcpBridge | undefined;
+				let connectionClient: StandardMcpClient | undefined;
 				let nativeSessionRef = session.nativeId ?? "";
 				let nativeCancel: (() => Promise<void>) | undefined;
 				try {
@@ -164,6 +165,7 @@ export const GenericAcpRuntimeDriver = {
 							session.connectionReference,
 							AbortSignal.timeout(10_000),
 						);
+						connectionClient = client;
 						connectionGateway = await createStandardMcpAcpBridge({
 							client,
 							execution: session.connectionReference,
@@ -177,6 +179,7 @@ export const GenericAcpRuntimeDriver = {
 					}
 				} catch (error) {
 					await connectionGateway?.close().catch(() => {});
+					await connectionClient?.close().catch(() => {});
 					await launch.close?.().catch(() => {});
 					throw error;
 				}
