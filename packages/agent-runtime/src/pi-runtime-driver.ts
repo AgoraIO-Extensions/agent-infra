@@ -1,5 +1,6 @@
 import type {
 	BrowserCapabilityAvailableV1,
+	RuntimeOperationFactV2,
 	RuntimeSelectionV1,
 	RuntimeStatusV1,
 } from "@agent-infra/contracts/runtime";
@@ -71,6 +72,16 @@ export const PiRuntimeDriver = {
 					admit: session.admit,
 					update: session.update,
 					resolveModelCredential: session.resolveModelCredential,
+					recordOperationFact: session.recordOperationFact,
+					modelFact: session.modelFact,
+					recordToolOperation: session.recordToolOperation,
+				};
+				const recordToolOperation = async (
+					toolCallId: string,
+					toolId: string,
+					phase: "started" | "completed" | "failed",
+				) => {
+					await callbacks.recordToolOperation?.(toolCallId, toolId, phase);
 				};
 				// Pi keeps its native transport alive when a later Turn reuses the
 				// session. Resolve the current execution's Key through a stable
@@ -84,6 +95,11 @@ export const PiRuntimeDriver = {
 					: undefined;
 				const native = await openPiSession({
 					...session,
+					recordOperationFact: async (fact: RuntimeOperationFactV2) => {
+						await callbacks.recordOperationFact?.(fact);
+					},
+					modelFact: () => callbacks.modelFact?.(),
+					recordToolOperation,
 					update: (event) => callbacks.update(event),
 					launch: await options.launch(
 						session.directory,
@@ -95,9 +111,13 @@ export const PiRuntimeDriver = {
 				return {
 					...native,
 					startTurn: (next) => {
+						native.startTurn?.(next);
 						callbacks.admit = next.admit;
 						callbacks.update = next.update;
 						callbacks.resolveModelCredential = next.resolveModelCredential;
+						callbacks.recordOperationFact = next.recordOperationFact;
+						callbacks.modelFact = next.modelFact;
+						callbacks.recordToolOperation = next.recordToolOperation;
 					},
 				};
 			},

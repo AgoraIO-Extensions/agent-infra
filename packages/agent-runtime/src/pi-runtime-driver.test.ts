@@ -321,6 +321,17 @@ it.each([false, true])(
 					),
 				).toBe("completed"),
 			);
+			const persisted = JSON.parse(
+				await readFile(
+					join(f.path, result.nativeSessionRef, "state.json"),
+					"utf8",
+				),
+			) as {
+				turns: { operationFacts?: { phase: string }[] }[];
+			};
+			expect(
+				persisted.turns[0]?.operationFacts?.map((fact) => fact.phase),
+			).toEqual(["intent", "started", "completed"]);
 			const events = await f.driver.replayEvents(
 				result.nativeSessionRef,
 				command.executionId,
@@ -373,6 +384,42 @@ it.each([false, true])(
 		}
 	},
 );
+
+it("keeps overlapping same-tool operation facts bound to each call id", async () => {
+	const f = await fixture("overlap-tools");
+	try {
+		const result = await f.driver.execute(command);
+		await vi.waitFor(async () =>
+			expect(
+				await f.driver.getStatus(result.nativeSessionRef, command.executionId),
+			).toBe("completed"),
+		);
+		const state = JSON.parse(
+			await readFile(
+				join(f.path, result.nativeSessionRef, "state.json"),
+				"utf8",
+			),
+		) as {
+			turns: {
+				operationFacts?: { kind: string; phase: string; toolId?: string }[];
+			}[];
+		};
+		expect(
+			state.turns[0]?.operationFacts
+				?.filter((fact) => fact.kind === "tool")
+				.map((fact) => fact.phase),
+		).toEqual([
+			"intent",
+			"started",
+			"intent",
+			"started",
+			"completed",
+			"completed",
+		]);
+	} finally {
+		await f.close();
+	}
+});
 
 it("refreshes the execution Key when Pi reuses a native session", async () => {
 	const f = await fixture("normal", true);

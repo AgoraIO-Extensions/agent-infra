@@ -58,6 +58,26 @@ const finish = async (stopReason) => {
 			isError: false,
 		});
 	}
+	if (mode === "overlap-tools") {
+		for (const [toolCallId, type] of [
+			["overlap-a", "tool_execution_start"],
+			["overlap-b", "tool_execution_start"],
+			["overlap-b", "tool_execution_end"],
+			["overlap-a", "tool_execution_end"],
+		]) {
+			send({
+				type,
+				toolCallId,
+				toolName: "read",
+				...(type === "tool_execution_start"
+					? { args: { path: "overlap.txt" } }
+					: {
+							result: { content: [{ type: "text", text: "ok" }] },
+							isError: false,
+						}),
+			});
+		}
+	}
 	if (mode === "result-file-negative") {
 		await writeFile(`${process.cwd()}/result.txt`, "synthetic Pi result\n");
 		await writeFile(`${process.cwd()}/outside-result.txt`, "outside\n");

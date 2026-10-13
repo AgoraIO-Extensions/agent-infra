@@ -139,6 +139,14 @@ export interface NativeSessionOptions {
 	readonly recordOperationFact?: (
 		fact: RuntimeOperationFactV2,
 	) => Promise<void>;
+	readonly modelFact?: () =>
+		| Extract<RuntimeOperationFactV2, { kind: "model" }>["model"]
+		| undefined;
+	readonly recordToolOperation?: (
+		toolCallId: string,
+		toolId: string,
+		phase: "started" | "completed" | "failed",
+	) => Promise<void>;
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
 	readonly resultFile?: (input: {
 		readonly path: string;
@@ -1173,6 +1181,57 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			admitted = resolve;
 		});
 		let dispatched = false;
+		const toolFacts = new Map<
+			string,
+			{ operationRef: string; attemptRef: string; startedAt: number }
+		>();
+		const recordToolOperation = async (
+			toolCallId: string,
+			toolId: string,
+			phase: "started" | "completed" | "failed",
+		) => {
+			if (phase === "started") {
+				const operationRef = randomUUID();
+				const attemptRef = randomUUID();
+				const startedAt = Date.now();
+				await this.recordFact(file, command.executionId, {
+					kind: "tool",
+					operationRef,
+					attemptRef,
+					phase: "intent",
+					toolId,
+				});
+				await this.recordFact(file, command.executionId, {
+					kind: "tool",
+					operationRef,
+					attemptRef,
+					phase: "started",
+					startedAt: new Date(startedAt).toISOString(),
+					toolId,
+				});
+				toolFacts.set(toolCallId, {
+					operationRef,
+					attemptRef,
+					startedAt,
+				});
+				return;
+			}
+			const fact = toolFacts.get(toolCallId);
+			if (!fact) return;
+			await this.recordFact(file, command.executionId, {
+				kind: "tool",
+				operationRef: fact.operationRef,
+				attemptRef: fact.attemptRef,
+				phase,
+				finishedAt: new Date().toISOString(),
+				durationMs: Math.max(0, Date.now() - fact.startedAt),
+				...(phase === "failed"
+					? { failureCode: "operation_failed" as const }
+					: {}),
+				toolId,
+			});
+			toolFacts.delete(toolCallId);
+		};
 		let native: NativeSession;
 		try {
 			const sessionOptions: NativeSessionOptions = {
@@ -1193,6 +1252,13 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				...(browser ? { browser } : {}),
 				recordOperationFact: (fact) =>
 					this.recordFact(file, command.executionId, fact),
+				recordToolOperation,
+				modelFact: () => ({
+					configVersion: this.options.configVersion,
+					modelOptionId: selection.modelOptionId,
+					modelId: option.nativeModelId.replace(/[^A-Za-z0-9._:-]/g, "_"),
+					reasoningLevel: selection.reasoningLevel,
+				}),
 				cwd: workspace,
 				nativeId: before.nativeId,
 				skillDirectory: this.options.skillDirectory,
