@@ -1520,7 +1520,7 @@ export class RuntimeHost {
 			const browserBinding = request.browserBinding;
 			let browserProbe = capabilities.browser;
 			if (
-				(!browserProbe?.binding) &&
+				!browserProbe?.binding &&
 				request.browserDeclaration &&
 				browserBinding &&
 				this.options.probeBrowserCapability
@@ -1535,7 +1535,8 @@ export class RuntimeHost {
 					browserProbe = undefined;
 				}
 			}
-			if (browserProbe) capabilities = { ...capabilities, browser: browserProbe };
+			if (browserProbe)
+				capabilities = { ...capabilities, browser: browserProbe };
 			if (!request.browserDeclaration) {
 				publishBrowserAssembly(undefined);
 			} else if (

@@ -95,8 +95,8 @@ export interface ClaudeRuntimeDriverOptions {
 	readonly browserCapability?:
 		| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
 		| (() =>
-					| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
-					| undefined);
+				| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
+				| undefined);
 	readonly path: string;
 	readonly configVersion: string;
 	readonly defaultModelOptionId: string;

@@ -445,8 +445,8 @@ export interface CodexRuntimeDriverOptions {
 	readonly browserCapability?:
 		| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
 		| (() =>
-					| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
-					| undefined);
+				| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
+				| undefined);
 	readonly installedSkill?: CodexInstalledSkillDescriptorV1;
 	/** Deployment-owned verified Hub generation mounted at the fixed Runtime root. */
 	readonly skillDirectory?: RuntimeFilesystemSkillDirectoryV1;
@@ -3832,8 +3832,8 @@ export class CodexRuntimeDriver implements RuntimeDriver {
 		private readonly browserCapability?:
 			| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
 			| (() =>
-						| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
-						| undefined),
+					| import("@agent-infra/contracts/runtime").BrowserCapabilityAvailableV1
+					| undefined),
 		/**
 		 * Reclaimed and recreated by `open`; absent only for direct construction
 		 * outside the open path.
