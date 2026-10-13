@@ -417,30 +417,35 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 	const execution = runtime.execute(command([]));
 	try {
 		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
+		expect(sessionOptions?.recordOperationFact).toBeTypeOf("function");
 		const record = await execution;
 		const input = {
 			nativeSessionRef: record.nativeSessionRef,
 			executionId: "execution-a",
 		};
-		await runtime.recordOperationFact({
-			...input,
-			fact: {
-				kind: "tool",
-				operationRef: "11111111-1111-4111-8111-111111111111",
-				attemptRef: "22222222-2222-4222-8222-222222222222",
-				phase: "intent",
-				toolId: "filesystem.read",
-			},
+		await sessionOptions?.recordOperationFact?.({
+			kind: "tool",
+			operationRef: "11111111-1111-4111-8111-111111111111",
+			attemptRef: "22222222-2222-4222-8222-222222222222",
+			phase: "intent",
+			toolId: "filesystem.read",
+		});
+		await sessionOptions?.recordOperationFact?.({
+			kind: "tool",
+			operationRef: "11111111-1111-4111-8111-111111111111",
+			attemptRef: "22222222-2222-4222-8222-222222222222",
+			phase: "started",
+			startedAt: new Date().toISOString(),
+			toolId: "filesystem.read",
 		});
 		await runtime.recordOperationFact({
 			...input,
 			fact: {
 				kind: "tool",
-				operationRef: "11111111-1111-4111-8111-111111111111",
-				attemptRef: "22222222-2222-4222-8222-222222222222",
-				phase: "started",
-				startedAt: new Date().toISOString(),
-				toolId: "filesystem.read",
+				operationRef: "33333333-3333-4333-8333-333333333333",
+				attemptRef: "44444444-4444-4444-8444-444444444444",
+				phase: "intent",
+				toolId: "filesystem.write",
 			},
 		});
 		await expect(
@@ -455,13 +460,15 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 					toolId: "filesystem.write",
 				},
 			}),
-		).rejects.toMatchObject({ code: "RUNTIME_OPERATION_CONFLICT" });
+		).resolves.toBeUndefined();
 		releasePrompt();
 		await runtime.close();
 		const state = JSON.parse(
 			await readFile(join(path, record.nativeSessionRef, "state.json"), "utf8"),
 		) as { turns: { operationFacts?: { phase: string }[] }[] };
 		expect(state.turns[0]?.operationFacts?.map((fact) => fact.phase)).toEqual([
+			"intent",
+			"started",
 			"intent",
 			"started",
 		]);
