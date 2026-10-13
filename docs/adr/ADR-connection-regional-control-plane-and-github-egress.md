@@ -26,7 +26,7 @@ PostgreSQL 17，权威数据库保持唯一，不双写。旧库保留为备份�
 上海 GitHub 出口按 [Issue #1915](https://github.com/AgoraIO-Extensions/agent-infra/issues/1915)
 的明确执行范围改为代理优先，代理不可用时才受控直连：
 
-- `GITHUB_EGRESS_PROXY_URL` 配置固定无凭证代理 `http://103.101.125.158:28062`；GitHub API、
+- `GITHUB_EGRESS_PROXY_URL` 配置受控部署配置指定的固定无凭证代理地址；GitHub API、
   OAuth code exchange、refresh 和 profile 共用连接级 transport。浏览器 authorize 页面仍由浏览器访问。
 - 每次新连接先受控解析并校验目标和代理地址，CONNECT authority 使用已校验目标 IP；
   目标 TLS SNI、证书校验和 Host 保留 Catalog hostname，不能交给代理重新解析目标 hostname。
@@ -45,7 +45,7 @@ PostgreSQL 17，权威数据库保持唯一，不双写。旧库保留为备份�
 
 以下为已被上海迁移替代的 GZ3 历史基线，不能用作当前部署目标。
 
-Connection 的唯一 control plane、PostgreSQL authority、Identity、Credential、Grant、Call/Effect 和审计部署在 GZ3。国内 Provider 从 GZ3 直连；GitHub 服务端请求默认通过 `103.101.125.158:28062` 代理，GZ3 pilot 的首次 OAuth code exchange 适用下述直连回退，浏览器 authorize 页面仍由用户浏览器直接访问。该代理只用于 GitHub，不用于 GZ3 可直连的 Bitbucket、Jira、Confluence 或 Jenkins。GitHub WRITE 在请求提交后响应未知时仍进入 `UNCERTAIN`，禁止盲重试。拒绝 LA3/GZ3 双活数据库和通用多区域调度平台。
+Connection 的唯一 control plane、PostgreSQL authority、Identity、Credential、Grant、Call/Effect 和审计部署在 GZ3。国内 Provider 从 GZ3 直连；GitHub 服务端请求默认通过受控部署配置指定的固定地址代理，GZ3 pilot 的首次 OAuth code exchange 适用下述直连回退，浏览器 authorize 页面仍由用户浏览器直接访问。该代理只用于 GitHub，不用于 GZ3 可直连的 Bitbucket、Jira、Confluence 或 Jenkins。GitHub WRITE 在请求提交后响应未知时仍进入 `UNCERTAIN`，禁止盲重试。拒绝 LA3/GZ3 双活数据库和通用多区域调度平台。
 
 LA3 `connection-provider-egress` 的协议代码保留为未来 TODO，但不进入当前生产拓扑。只有 HCI 提供可审计的双向 workload mTLS、证书轮换、TLS passthrough 或等价可信入口，并完成 READ/WRITE crash-window 验收后，才能重新评审启用；不得以普通 HTTPS、共享 Token 或调用方可伪造的证书 Header 绕过门禁。
 

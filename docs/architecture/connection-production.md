@@ -7,7 +7,7 @@ Connection 已按 [#1276](https://github.com/AgoraIO-Extensions/agent-infra/issu
 
 | 配置 | 上海契约 |
 | --- | --- |
-| 集群 | `hcicore-acs-sh-prod01`；API server `https://106.14.182.204:6443` |
+| 集群 | 批准的上海集群；API server 从受控发布目标文件读取 |
 | namespace | `agent-connector` |
 | 公开 origin | `https://agent-connector.agoralab.co` |
 | MCP | `https://agent-connector.agoralab.co/mcp` |
@@ -261,6 +261,7 @@ kubectl 与 API server 的 minor 版本差不能超过 1；例如 Kubernetes 1.3
 
 ```bash
 export CONNECTION_KUBECONFIG="/path/to/approved-shanghai-kubeconfig"
+export CONNECTION_RELEASE_TARGET_FILE="/path/to/private/approved-release-target.json"
 export CONNECTION_KUBECTL="/path/to/compatible-kubectl"
 "$CONNECTION_KUBECTL" --kubeconfig "$CONNECTION_KUBECONFIG" version -o json
 ```
@@ -458,7 +459,7 @@ Provider 连接级 IP pinning、精确依赖 NetworkPolicy 和隔离 enforcement
 配置与提交前直连回退规则见[区域 ADR](../adr/ADR-connection-regional-control-plane-and-github-egress.md#上海分阶段迁移)。
 
 部署含该 transport 的正式镜像时，在 API 的持久部署配置中设置
-`GITHUB_EGRESS_PROXY_URL=http://103.101.125.158:28062`，删除旧
+`GITHUB_EGRESS_PROXY_URL` 为受控部署配置中的固定无凭证代理地址，删除旧
 `GITHUB_READ_FALLBACK_PROXY_URL`。Helm 配置对应 `env.GITHUB_EGRESS_PROXY_URL`；现有常规
 发布只修改镜像，不能期待它自动补齐环境变量。旧 pinned 镜像拒绝代理配置，必须先确认目标镜像
 包含该实现，镜像与配置变更按同一批准的发布执行；回退旧镜像前移除新代理配置以避免启动失败。
@@ -467,3 +468,33 @@ Provider 连接级 IP pinning、精确依赖 NetworkPolicy 和隔离 enforcement
 Token endpoint 的无凭证连通性，再由用户重新发起 OAuth（不刷新旧 callback URL）。OAuth 成功后
 验证真实 profile/API READ；Token refresh 单独验证。不能以代理探测代替用户授权或业务 WRITE
 验收。策略 enforcement 与 Security/SRE 门禁独立保留。
+
+## 发布目标配置与暴露处置
+
+`CONNECTION_RELEASE_TARGET_FILE` 指向部署负责人独立批准的私有 JSON 文件，权限为 `0600`。
+文件只包含 `server`（HTTPS Kubernetes API 地址）和 `databaseHost`（RDS hostname）两个字段。
+真实文件保存在仓库外的受控配置中，不提交到 Git、公开 Issue、CI Artifact 或日志。
+不得从本次待验证的 kubeconfig 或数据库 Secret 自动生成预期值；缺少配置时发布失败。
+以下仅为字段示例，不是有效生产目标：
+
+```json
+{
+  "server": "https://cluster.invalid:6443",
+  "databaseHost": "database.invalid"
+}
+```
+
+基础设施地址和 Kubernetes Secret 名称不等于凭证，但公开后可以用于定向探测。
+删除当前文件内容不能撤销 Git 历史、已有 clone、截图和索引中的副本。
+Security/SRE 应核实 Kubernetes API 的公网访问限制、RBAC 与审计记录，以及 RDS 的公网开关、
+网络白名单、TLS 和数据库登录审计。必要时先限制入口，再按已批准方案迁移或更换地址。
+若发现实际密码、token、私钥或 kubeconfig client credential 泄露，立即按相应资源的轮换流程
+处置并验证旧凭证失效；不得通过更改 Secret 名称代替凭证轮换。
+地址迁移、数据库密码轮换和身份/凭证加密密钥轮换是不同操作；后者不能直接重置，否则可能使
+现有身份或加密凭证不可用。生产变更须保留连续性、恢复和真实验证证据。
+历史清理需要仓库负责人另行批准，且不替代访问限制或必要的轮换。
+
+更换 RDS 外网域名时，同时核实 SSL 服务器证书的保护主机。连接地址修改不会自动保证旧证书
+匹配新域名；在 RDS 的 SSL 配置中选择新地址更新证书，并同步数据库 Secret 和私有发布目标
+文件。证书更新会重启 RDS 实例，须纳入已批准的维护窗口。API 重建后从实际 Pod 验证
+数据库连接、证书 hostname 和 TLS；不得用 `sslmode=require` 或关闭证书校验规避失败。
