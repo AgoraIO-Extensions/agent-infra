@@ -1,7 +1,9 @@
 // Lifecycle adapted from Paseo acp-agent.ts at d1b705a0cd91617a5707fae25d80cb0be3057950.
 // Copyright (c) 2025-present Mohamed Boudra. Apache-2.0; see THIRD_PARTY_NOTICES.md.
 
+import { randomUUID } from "node:crypto";
 import { Readable, Writable } from "node:stream";
+import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import {
 	type ContentBlock,
 	client,
@@ -16,7 +18,6 @@ import {
 	createAcpNativeCommandDirectoryV1,
 } from "./acp-native-command.js";
 import { spawnAcpProcess } from "./acp-process.js";
-
 import { acpStream } from "./acp-stream.js";
 import type { NativePromptV1 } from "./session-runtime-driver.js";
 
@@ -42,6 +43,10 @@ export async function openAcpSession(options: {
 	cwd: string;
 	nativeId?: string;
 	update: (notification: SessionNotification) => Promise<void>;
+	recordOperationFact?: (fact: RuntimeOperationFactV2) => Promise<void>;
+	modelFact?: () =>
+		| Extract<RuntimeOperationFactV2, { kind: "model" }>["model"]
+		| undefined;
 }) {
 	const native = await spawnAcpProcess(
 		options.directory,
@@ -70,6 +75,7 @@ export async function openAcpSession(options: {
 		Pick<ToolCall, "toolCallId" | "kind" | "rawInput">
 	>();
 	let activeSessionId: string | undefined;
+	let currentRecordOperationFact = options.recordOperationFact;
 	const connection = client({ name: "agent-infra" })
 		.onNotification("session/update", async ({ params }) => {
 			const update = params.update;
@@ -213,6 +219,11 @@ export async function openAcpSession(options: {
 		}
 		return {
 			nativeId,
+			startTurn(next: {
+				recordOperationFact?: (fact: RuntimeOperationFactV2) => Promise<void>;
+			}) {
+				currentRecordOperationFact = next.recordOperationFact;
+			},
 			supportsImagePrompt,
 			reusable: () =>
 				!processExited &&
@@ -300,12 +311,59 @@ export async function openAcpSession(options: {
 					content.some((block) => block.type === "image")
 				)
 					throw new Error("RUNTIME_FILE_INPUT_UNAVAILABLE");
-				const response = await connection.agent.request("session/prompt", {
-					sessionId: nativeId,
-					prompt: content,
-				});
-				await updates;
-				return response as { stopReason: string; checkpoint?: string };
+				const operationRef = randomUUID();
+				const attemptRef = randomUUID();
+				const fact = options.modelFact?.();
+				const writeFact = currentRecordOperationFact;
+				if (fact && writeFact)
+					await writeFact({
+						kind: "model",
+						operationRef,
+						attemptRef,
+						phase: "intent",
+						model: fact,
+					});
+				const startedAt = Date.now();
+				if (fact && writeFact)
+					await writeFact({
+						kind: "model",
+						operationRef,
+						attemptRef,
+						phase: "started",
+						startedAt: new Date(startedAt).toISOString(),
+						model: fact,
+					});
+				try {
+					const response = await connection.agent.request("session/prompt", {
+						sessionId: nativeId,
+						prompt: content,
+					});
+					await updates;
+					if (fact && writeFact)
+						await writeFact({
+							kind: "model",
+							operationRef,
+							attemptRef,
+							phase: "completed",
+							finishedAt: new Date().toISOString(),
+							durationMs: Math.max(0, Date.now() - startedAt),
+							model: fact,
+						});
+					return response as { stopReason: string; checkpoint?: string };
+				} catch (error) {
+					if (fact && writeFact)
+						await writeFact({
+							kind: "model",
+							operationRef,
+							attemptRef,
+							phase: "unknown",
+							finishedAt: new Date().toISOString(),
+							durationMs: Math.max(0, Date.now() - startedAt),
+							failureCode: "recovery_unconfirmed",
+							model: fact,
+						});
+					throw error;
+				}
 			},
 			async discoverCommands(input: {
 				readonly signal: AbortSignal;
