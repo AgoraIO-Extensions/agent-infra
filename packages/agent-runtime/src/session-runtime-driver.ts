@@ -809,6 +809,65 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		}
 		return file;
 	}
+	/**
+	 * A failed DurableJsonFile commit poisons that in-memory instance. Reopen the
+	 * committed bytes so an unknown hold can be retried after a transient fsync or
+	 * rename failure. The caller keeps the native action blocked while this runs.
+	 */
+	private async reopenDurableFile(binding: Binding) {
+		this.files.delete(binding.ref);
+		const fresh = (async () => {
+			const reopened = await DurableJsonFile.open<Session>(
+				join(this.options.path, binding.ref, "state.json"),
+				{
+					schemaVersion: 1,
+					binding,
+					cancelled: false,
+					sequence: 0,
+					operations: [],
+					turns: [],
+				},
+			);
+			const state = reopened.read();
+			if (
+				state.schemaVersion !== 1 ||
+				JSON.stringify(state.binding) !== JSON.stringify(binding) ||
+				!Array.isArray(state.turns) ||
+				!Array.isArray(state.operations)
+			)
+				unavailable();
+			return reopened;
+		})();
+		this.files.set(binding.ref, fresh);
+		return fresh;
+	}
+	private async persistUnknownAfterFailure(
+		binding: Binding,
+		executionId: string,
+		firstError: unknown,
+	) {
+		let lastError = firstError;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			try {
+				const reopened = await this.reopenDurableFile(binding);
+				await this.status(
+					reopened,
+					executionId,
+					"unknown",
+					undefined,
+					undefined,
+					true,
+				);
+				return;
+			} catch (error) {
+				lastError = error;
+			}
+		}
+		throw new AggregateError(
+			[firstError, lastError],
+			"Unable to persist protected runtime unknown hold",
+		);
+	}
 	private cancelled(ref: string) {
 		return (
 			this.index.read().barriers?.some((barrier) => barrier.ref === ref) ??
@@ -1301,16 +1360,28 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 				},
 				markUnknown: async () => {
 					unknownMarking = true;
-					if (dispatched && !this.closed)
-						await this.status(
-							file,
-							command.executionId,
-							"unknown",
-							undefined,
-							undefined,
-							true,
-						);
 					unknownHold = true;
+					if (dispatched && !this.closed) {
+						try {
+							await this.status(
+								file,
+								command.executionId,
+								"unknown",
+								undefined,
+								undefined,
+								true,
+							);
+						} catch (error) {
+							// DurableJsonFile deliberately poisons a failed instance. Reopen
+							// the committed bytes and retry so a transient persistence fault
+							// cannot leave a cancelled protected Turn durably running.
+							await this.persistUnknownAfterFailure(
+								before.binding,
+								command.executionId,
+								error,
+							);
+						}
+					}
 				},
 				...(resolveModelCredential ? { resolveModelCredential } : {}),
 				...(browser ? { browser } : {}),
@@ -1477,6 +1548,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 			clearTimeout(timer);
 		}
 		if (preDispatchFailure) unavailable();
+		if (unknownHold) return result(command, ref, unknownResult);
 		return (
 			file
 				.read()
@@ -1517,6 +1589,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 		await file.update((state) => {
 			const turn = state.turns.find((turn) => turn.executionId === executionId);
 			if (!turn || terminal(turn.status)) return;
+			if (turn.unknownHold && status === "unknown") return;
 			if (turn.unknownHold && status !== "unknown") return;
 			if (unknownHold) turn.unknownHold = true;
 			if (terminal(status)) {

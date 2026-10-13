@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { RuntimeDriverCommand } from "./driver.js";
+import { DurableJsonFile } from "./durable-json.js";
 import { RuntimeHostError } from "./errors.js";
 import {
 	createRuntimeFileResultReceiptV1,
@@ -535,7 +536,7 @@ it("durably acknowledges non-Codex operation facts with ordered phase transition
 	}
 });
 
-it("keeps a protected cancellation as an unknown Turn hold", async () => {
+it("keeps a protected cancellation as an unknown Turn hold after a persistence retry", async () => {
 	const path = await mkdtemp(join(tmpdir(), "session-protected-unknown-"));
 	let sessionOptions: NativeSessionOptions | undefined;
 	let entered!: () => void;
@@ -560,10 +561,31 @@ it("keeps a protected cancellation as an unknown Turn hold", async () => {
 			close: async () => {},
 		};
 	});
+	const originalPersist = (
+		DurableJsonFile.prototype as unknown as {
+			persist: (serialized: string) => Promise<void>;
+		}
+	).persist;
+	let failNextPersist = false;
+	const persistFailure = vi
+		.spyOn(
+			DurableJsonFile.prototype as unknown as {
+				persist: (serialized: string) => Promise<void>;
+			},
+			"persist",
+		)
+		.mockImplementation(function (this: DurableJsonFile<unknown>, serialized) {
+			if (failNextPersist) {
+				failNextPersist = false;
+				return Promise.reject(new Error("synthetic persistence failure"));
+			}
+			return originalPersist.call(this, serialized);
+		});
 	const pending = runtime.execute(command([]));
 	try {
 		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
 		await enteredPrompt;
+		failNextPersist = true;
 		await sessionOptions?.markUnknown?.();
 		release();
 		await pending;
@@ -581,6 +603,7 @@ it("keeps a protected cancellation as an unknown Turn hold", async () => {
 		).toBe(false);
 	} finally {
 		release();
+		persistFailure.mockRestore();
 		await runtime.close();
 		await rm(path, { recursive: true, force: true });
 	}
