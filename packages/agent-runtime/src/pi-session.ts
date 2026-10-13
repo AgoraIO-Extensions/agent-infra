@@ -339,6 +339,7 @@ export async function openPiSession(
 						if (phases.get(frame.toolCallId) !== phase) {
 							phases.set(frame.toolCallId, phase);
 							await options.recordToolOperation?.(
+								frame.toolCallId,
 								frame.toolName === "read"
 									? "Read"
 									: ["write", "edit"].includes(frame.toolName as string)
@@ -619,22 +620,27 @@ export async function openPiSession(
 				const fact = currentModelFact?.();
 				const writeFact = currentRecordOperationFact;
 				const startedAt = Date.now();
-				if (fact && writeFact) {
-					await writeFact({
-						kind: "model",
-						operationRef,
-						attemptRef,
-						phase: "intent",
-						model: fact,
-					});
-					await writeFact({
-						kind: "model",
-						operationRef,
-						attemptRef,
-						phase: "started",
-						startedAt: new Date(startedAt).toISOString(),
-						model: fact,
-					});
+				try {
+					if (fact && writeFact) {
+						await writeFact({
+							kind: "model",
+							operationRef,
+							attemptRef,
+							phase: "intent",
+							model: fact,
+						});
+						await writeFact({
+							kind: "model",
+							operationRef,
+							attemptRef,
+							phase: "started",
+							startedAt: new Date(startedAt).toISOString(),
+							model: fact,
+						});
+					}
+				} catch (error) {
+					if (active === target) active = undefined;
+					throw error;
 				}
 				void rpc
 					.request("prompt", {
