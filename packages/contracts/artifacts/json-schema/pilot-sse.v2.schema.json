@@ -1458,6 +1458,10 @@
                               "maximum": 9007199254740991,
                               "type": "integer"
                             },
+                            "imageDigest": {
+                              "pattern": "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+                              "type": "string"
+                            },
                             "pageRevision": {
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991,
@@ -1475,6 +1479,11 @@
                             },
                             "sideEffect": {
                               "type": "boolean"
+                            },
+                            "workloadRevision": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
                             }
                           },
                           "required": [
@@ -1963,6 +1972,10 @@
                       "maximum": 9007199254740991,
                       "type": "integer"
                     },
+                    "imageDigest": {
+                      "pattern": "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+                      "type": "string"
+                    },
                     "pageRevision": {
                       "exclusiveMinimum": 0,
                       "maximum": 9007199254740991,
@@ -1980,6 +1993,11 @@
                     },
                     "sideEffect": {
                       "type": "boolean"
+                    },
+                    "workloadRevision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
                     }
                   },
                   "required": [
@@ -3554,6 +3572,10 @@
                           "maximum": 9007199254740991,
                           "type": "integer"
                         },
+                        "imageDigest": {
+                          "pattern": "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+                          "type": "string"
+                        },
                         "pageRevision": {
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991,
@@ -3571,6 +3593,11 @@
                         },
                         "sideEffect": {
                           "type": "boolean"
+                        },
+                        "workloadRevision": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
                         }
                       },
                       "required": [
@@ -3989,6 +4016,10 @@
                   "maximum": 9007199254740991,
                   "type": "integer"
                 },
+                "imageDigest": {
+                  "pattern": "^(?:[^@\\s]+@)?sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
                 "pageRevision": {
                   "exclusiveMinimum": 0,
                   "maximum": 9007199254740991,
@@ -4006,6 +4037,11 @@
                 },
                 "sideEffect": {
                   "type": "boolean"
+                },
+                "workloadRevision": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
                 }
               },
               "required": [

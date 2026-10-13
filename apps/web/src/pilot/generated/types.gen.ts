@@ -798,10 +798,12 @@ export type ScopedPlatformAuditProjectionV1 = {
             browser?: {
                 actionId: string;
                 capabilityVersion: number;
+                imageDigest?: string;
                 pageRevision: number;
                 resourceFence: number;
                 sessionGeneration: number;
                 sideEffect: boolean;
+                workloadRevision?: number;
             };
             connection?: {
                 callRef: string;
@@ -916,10 +918,12 @@ export type TaskProjectionV1 = {
             browser?: {
                 actionId: string;
                 capabilityVersion: number;
+                imageDigest?: string;
                 pageRevision: number;
                 resourceFence: number;
                 sessionGeneration: number;
                 sideEffect: boolean;
+                workloadRevision?: number;
             };
             connection?: {
                 callRef: string;
@@ -991,10 +995,12 @@ export type TaskSseMessageV1 = PersistedConversationEventV1 | {
         browser?: {
             actionId: string;
             capabilityVersion: number;
+            imageDigest?: string;
             pageRevision: number;
             resourceFence: number;
             sessionGeneration: number;
             sideEffect: boolean;
+            workloadRevision?: number;
         };
         connection?: {
             callRef: string;

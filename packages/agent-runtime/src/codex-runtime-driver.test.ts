@@ -3895,6 +3895,184 @@ describe("Codex Runtime Driver", () => {
 		expect(calls).toBe(1);
 	});
 
+	it.each([
+		["workload revision", { workloadRevision: 5 }],
+		["image digest", { imageDigest: `sha256:${"b".repeat(64)}` }],
+	] as const)(
+		"fails closed when a replayed Browser action changes its %s",
+		async (_name, drift) => {
+			const directory = await runtimeDirectory();
+			const bridge = new TestCodexBridge();
+			const driver = await openCodexRuntimeDriverForTest(
+				{
+					...driverOptions(join(directory, "driver.json")),
+					authorizeExternalAction: async () => ({ revalidate: () => {} }),
+				},
+				async () => bridge,
+			);
+			drivers.push(driver);
+			const command = submitCommand();
+			const accepted = await driver.execute(command);
+			let calls = 0;
+			const browser = {
+				capabilityVersion: 3,
+				binding: {
+					agentId: command.agentId,
+					conversationId: command.conversationId,
+					sessionGeneration: command.sessionGeneration,
+					resourceFence: 7,
+					workloadRevision: 4,
+					imageDigest: `sha256:${"a".repeat(64)}`,
+				},
+				executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) => {
+					calls += 1;
+					return {
+						actionId: request.actionId,
+						operationRef: request.operationRef,
+						attemptRef: request.attemptRef,
+						binding: request.binding,
+						phase: "completed" as const,
+						contentItems: [],
+						success: true,
+					};
+				},
+			};
+			const request = {
+				tool: "browser_click",
+				arguments: {},
+				pageRevision: 1,
+				actionId: "browser-action-workload-replay",
+			};
+			await expect(
+				driver.executeBrowserTool(
+					accepted.nativeSessionRef,
+					command.executionId,
+					request,
+					{ browser },
+				),
+			).resolves.toMatchObject({ phase: "completed", success: true });
+			const driftedBrowser = {
+				...browser,
+				binding: { ...browser.binding, ...drift },
+			};
+			await expect(
+				driver.executeBrowserTool(
+					accepted.nativeSessionRef,
+					command.executionId,
+					request,
+					{ browser: driftedBrowser },
+				),
+			).resolves.toMatchObject({
+				phase: "unknown",
+				success: false,
+				failureCode: "recovery_unconfirmed",
+			});
+			expect(calls).toBe(1);
+		},
+	);
+
+	it("fails closed when a legacy Browser fact lacks workload identity", async () => {
+		const directory = await runtimeDirectory();
+		const path = join(directory, "driver.json");
+		const bridge = new TestCodexBridge();
+		const first = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(path),
+				authorizeExternalAction: async () => ({ revalidate: () => {} }),
+			},
+			async () => bridge,
+		);
+		drivers.push(first);
+		const command = submitCommand();
+		const accepted = await first.execute(command);
+		let calls = 0;
+		const browser = {
+			capabilityVersion: 3,
+			binding: {
+				agentId: command.agentId,
+				conversationId: command.conversationId,
+				sessionGeneration: command.sessionGeneration,
+				resourceFence: 7,
+				workloadRevision: 4,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+			},
+			executeTool: async (request: RuntimeBrowserToolExecutionRequestV1) => {
+				calls += 1;
+				return {
+					actionId: request.actionId,
+					operationRef: request.operationRef,
+					attemptRef: request.attemptRef,
+					binding: request.binding,
+					phase: "completed" as const,
+					contentItems: [],
+					success: true,
+				};
+			},
+		};
+		const request = {
+			tool: "browser_click",
+			arguments: {},
+			pageRevision: 1,
+			actionId: "browser-action-legacy-fact",
+		};
+		await expect(
+			first.executeBrowserTool(
+				accepted.nativeSessionRef,
+				command.executionId,
+				request,
+				{ browser },
+			),
+		).resolves.toMatchObject({ phase: "completed", success: true });
+		await first.close();
+		const state = JSON.parse(
+			await readFile(path, "utf8"),
+		) as StoredCodexDriverState;
+		const session = state.sessions[accepted.nativeSessionRef];
+		const journal = Object.values(session?.journals ?? {})[0];
+		if (!journal) throw new Error("expected Browser journal");
+		const events = (
+			journal.events as unknown as Array<{
+				type: "operation";
+				payload: {
+					kind: string;
+					browser?: { actionId?: string; [key: string]: unknown };
+				};
+			}>
+		).filter(
+			(value) =>
+				value.payload.kind === "tool" &&
+				value.payload.browser?.actionId === request.actionId,
+		);
+		if (events.length === 0) throw new Error("expected Browser operation fact");
+		for (const event of events) {
+			if (!event.payload.browser) continue;
+			delete event.payload.browser.workloadRevision;
+			delete event.payload.browser.imageDigest;
+		}
+		await writeFile(path, JSON.stringify(state));
+		const recovered = await openCodexRuntimeDriverForTest(
+			{
+				...driverOptions(path),
+				authorizeExternalAction: async () => ({ revalidate: () => {} }),
+			},
+			async () => new TestCodexBridge(),
+		);
+		drivers.push(recovered);
+		await expect(
+			recovered.executeBrowserTool(
+				accepted.nativeSessionRef,
+				command.executionId,
+				request,
+				{ browser },
+			),
+		).resolves.toMatchObject({
+			phase: "unknown",
+			success: false,
+			failureCode: "recovery_unconfirmed",
+		});
+		expect(calls).toBe(1);
+	});
+
 	it("records an unknown result when the Browser response identity mismatches", async () => {
 		const directory = await runtimeDirectory();
 		const bridge = new TestCodexBridge();
