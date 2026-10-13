@@ -1,7 +1,7 @@
 import type { RuntimeOperationFactV2 } from "@agent-infra/contracts/runtime";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
 	closeStandardMcpFixtures,
 	reference,
@@ -16,6 +16,7 @@ const bridges: { close(): Promise<void> }[] = [];
 afterEach(async () => {
 	while (bridges.length) await bridges.pop()?.close();
 	await closeStandardMcpFixtures();
+	vi.useRealTimers();
 });
 
 it("keeps Connection credentials in Host while serving an ACP MCP bridge", async () => {
@@ -33,6 +34,7 @@ it("keeps Connection credentials in Host while serving an ACP MCP bridge", async
 	const bridge = await createStandardMcpAcpBridge({
 		client,
 		execution: reference,
+		nativeSessionRef: () => "native-bridge-test",
 		recordOperationFact: async (fact) => {
 			if (fact.kind === "tool") facts.push(fact);
 		},
@@ -111,6 +113,7 @@ it("rejects replayed JSON-RPC ids while keeping string and numeric ids distinct"
 	const bridge = await createStandardMcpAcpBridge({
 		client,
 		execution: reference,
+		nativeSessionRef: () => "native-bridge-test",
 	});
 	bridges.push(bridge);
 	const authorization = bridge.server.headers[0].value;
@@ -220,6 +223,7 @@ it("rejects requests without the local bearer", async () => {
 	const bridge = await createStandardMcpAcpBridge({
 		client,
 		execution: reference,
+		nativeSessionRef: () => "native-bridge-test",
 	});
 	bridges.push(bridge);
 	const response = await fetch(bridge.server.url, {
@@ -242,6 +246,38 @@ it("rejects requests without the local bearer", async () => {
 	await peer.close();
 });
 
+it("closes the local bearer at the approved credential expiry", async () => {
+	const fixture = await standardMcpFixture();
+	const client = await StandardMcpClient.open(
+		{
+			target: fixture.target,
+			resolveInput: async () => fixture.input,
+			fetch: fixture.fetch,
+		},
+		reference,
+		new AbortController().signal,
+	);
+	vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+	vi.setSystemTime(client.expiresAt - 10);
+	const bridge = await createStandardMcpAcpBridge({
+		client,
+		execution: reference,
+		nativeSessionRef: () => "native-bridge-test",
+	});
+	bridges.push(bridge);
+	vi.setSystemTime(client.expiresAt + 1);
+	const response = await fetch(bridge.server.url, {
+		method: "POST",
+		headers: {
+			Authorization: bridge.server.headers[0].value,
+			"Content-Type": "application/json",
+		},
+		body: "{}",
+	});
+	expect(response.status).toBe(404);
+	await vi.runOnlyPendingTimersAsync();
+});
+
 it("blocks the bridge when a Connection WRITE result is unknown", async () => {
 	const fixture = await standardMcpFixture();
 	fixture.setBehavior("unknown");
@@ -259,6 +295,7 @@ it("blocks the bridge when a Connection WRITE result is unknown", async () => {
 	const bridge = await createStandardMcpAcpBridge({
 		client,
 		execution: reference,
+		nativeSessionRef: () => "native-bridge-test",
 		recordOperationFact: async (fact) => {
 			if (fact.kind === "tool") facts.push(fact);
 		},
