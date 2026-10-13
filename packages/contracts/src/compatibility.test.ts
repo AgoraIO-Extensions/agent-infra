@@ -2756,8 +2756,13 @@ describe("contract compatibility command", () => {
 			),
 		);
 		const previous = structuredClone(current);
+		const nativeMetadataPath =
+			"/api/v2/conversations/{conversationId}/executions/{executionId}/native-metadata";
 		for (const path of Object.keys(previous.paths)) {
-			if (path.startsWith("/api/v2/conversations/"))
+			if (
+				path.startsWith("/api/v2/conversations/") &&
+				path !== nativeMetadataPath
+			)
 				delete previous.paths[path];
 		}
 		for (const name of [
