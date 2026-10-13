@@ -11,6 +11,7 @@ import type {
 	BrowserActionRequestV1,
 	BrowserControlledFixtureV1,
 	BrowserObservationV1,
+	BrowserPageRecoveryInputV1,
 	BrowserPageReferenceV1,
 } from "./browser-observe.js";
 import { createBrowserObserveControllerV1 } from "./browser-observe.js";
@@ -19,6 +20,9 @@ export type BrowserSessionControllerV1 = Readonly<{
 	start(): Promise<BrowserContextManagerSnapshotV1>;
 	navigate(url: string): Promise<BrowserPageReferenceV1>;
 	observe(reference: BrowserPageReferenceV1): Promise<BrowserObservationV1>;
+	recoverPage(
+		recovery: BrowserPageRecoveryInputV1,
+	): Promise<BrowserPageReferenceV1>;
 	act(request: BrowserActionRequestV1): Promise<BrowserActionRecordV1>;
 	close(): Promise<void>;
 	snapshot(): BrowserContextManagerSnapshotV1;
@@ -43,6 +47,12 @@ export function createBrowserSessionControllerV1(input: {
 				context,
 				capability: input.capability,
 				controlledFixture: input.controlledFixture,
+				recoveryBinding: {
+					sessionGeneration: input.binding.sessionGeneration,
+					resourceFence: input.binding.resourceFence,
+					workloadRevision: input.binding.workloadRevision,
+					imageDigest: input.binding.imageDigest,
+				},
 			});
 			activeContext = context;
 		}
@@ -62,6 +72,12 @@ export function createBrowserSessionControllerV1(input: {
 			const controller = observe;
 			if (!controller) throw new Error("BROWSER_SESSION_UNAVAILABLE");
 			return controller.observe(reference);
+		},
+		async recoverPage(recovery) {
+			await start();
+			const controller = observe;
+			if (!controller) throw new Error("BROWSER_SESSION_UNAVAILABLE");
+			return controller.recoverPage(recovery);
 		},
 		async act(request) {
 			await start();
