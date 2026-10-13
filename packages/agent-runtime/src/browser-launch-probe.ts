@@ -18,6 +18,8 @@ export async function probeChromiumLaunchV1() {
 		conversationId: "controlled-probe-conversation",
 		sessionGeneration: 1,
 		resourceFence: 1,
+		workloadRevision: 1,
+		imageDigest: `sha256:${"0".repeat(64)}`,
 	};
 	// This fixture only drives the Session facade inside the network-free image test.
 	// Its synthetic receipt/digests are never returned, published or accepted as

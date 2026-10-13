@@ -51,6 +51,8 @@ const binding = {
 	conversationId: "conversation-1",
 	sessionGeneration: 1,
 	resourceFence: 3,
+	workloadRevision: 1,
+	imageDigest: `sha256:${"a".repeat(64)}`,
 };
 
 const filesystem = vi.hoisted(() => ({ fault: "valid" }));

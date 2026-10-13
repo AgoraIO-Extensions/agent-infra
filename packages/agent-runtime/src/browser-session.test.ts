@@ -50,6 +50,8 @@ const binding = {
 	conversationId: "conversation-1",
 	sessionGeneration: 1,
 	resourceFence: 1,
+	workloadRevision: 4,
+	imageDigest: `sha256:${"a".repeat(64)}`,
 } as const;
 
 function fakePage() {
@@ -126,7 +128,14 @@ it("composes one Session facade over Context lifecycle and observe controller", 
 		capability,
 	});
 	const [first, second] = await Promise.all([session.start(), session.start()]);
-	expect(first).toEqual({ status: "ready", ...binding, capabilityVersion: 1 });
+	expect(first).toEqual({
+		status: "ready",
+		agentId: binding.agentId,
+		conversationId: binding.conversationId,
+		sessionGeneration: binding.sessionGeneration,
+		resourceFence: binding.resourceFence,
+		capabilityVersion: 1,
+	});
 	expect(second).toEqual(first);
 	expect(first).not.toHaveProperty("pages");
 	const page = await session.navigate("https://example.test/");
@@ -180,5 +189,45 @@ it("creates fresh page references after a Context crash rather than using the ol
 		"BROWSER_PAGE_REFERENCE_STALE",
 	);
 	expect(await session.observe(newPage)).toMatchObject({ title: "Example" });
+	await session.close();
+});
+
+it("recovers a page through the Session facade with the immutable workload binding", async () => {
+	const fake = fakeBrowser();
+	const manager = createBrowserContextManagerV1({
+		sandboxRoot: "/tmp/browser-session-recovery-test",
+		browserType: fake.browserType,
+	});
+	const session = createBrowserSessionControllerV1({
+		manager,
+		binding,
+		capability,
+	});
+	const page = await session.navigate("https://example.test/");
+	const recovered = await session.recoverPage({
+		...page,
+		tabIndex: 0,
+		url: "https://example.test/",
+		origin: "https://example.test",
+		capabilityVersion: capability.capabilityVersion,
+		sessionGeneration: binding.sessionGeneration,
+		resourceFence: binding.resourceFence,
+		workloadRevision: binding.workloadRevision,
+		imageDigest: binding.imageDigest,
+	});
+	expect(recovered).toEqual(page);
+	await expect(
+		session.recoverPage({
+			...page,
+			tabIndex: 0,
+			url: "https://example.test/",
+			origin: "https://example.test",
+			capabilityVersion: capability.capabilityVersion,
+			sessionGeneration: binding.sessionGeneration,
+			resourceFence: binding.resourceFence,
+			workloadRevision: binding.workloadRevision + 1,
+			imageDigest: binding.imageDigest,
+		}),
+	).rejects.toThrow("BROWSER_PAGE_RECOVERY_BINDING_MISMATCH");
 	await session.close();
 });
