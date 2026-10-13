@@ -244,7 +244,7 @@ interface Turn {
 	operationRef?: string;
 	attemptRef?: string;
 }
-function hasPendingToolOperation(turn: Turn) {
+function uncertainToolOperations(turn: Turn) {
 	const phases = new Map<string, RuntimeOperationFactV2["phase"]>();
 	for (const fact of turn.operationFacts ?? []) {
 		if (fact.kind === "tool")
@@ -253,9 +253,12 @@ function hasPendingToolOperation(turn: Turn) {
 				fact.phase,
 			);
 	}
-	return [...phases.values()].some(
-		(phase) => phase === "intent" || phase === "started",
-	);
+	return [...phases.entries()]
+		.filter(
+			([, phase]) =>
+				phase === "intent" || phase === "started" || phase === "unknown",
+		)
+		.map(([key]) => key);
 }
 interface Session {
 	schemaVersion: 1;
@@ -742,10 +745,38 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 					unavailable();
 				await file.update((draft) => {
 					for (const turn of draft.turns) {
+						const uncertainTools = uncertainToolOperations(turn);
 						if (
 							turn.status === "running" &&
-							(turn.unknownHold || hasPendingToolOperation(turn))
+							(turn.unknownHold || uncertainTools.length > 0)
 						) {
+							const now = new Date().toISOString();
+							for (const key of uncertainTools) {
+								const fact = (turn.operationFacts ?? []).find(
+									(entry) =>
+										entry.kind === "tool" &&
+										JSON.stringify([entry.operationRef, entry.attemptRef]) ===
+											key,
+								);
+								if (!fact || fact.phase === "unknown") continue;
+								turn.operationFacts ??= [];
+								turn.operationFacts.push(
+									RuntimeOperationFactV2Schema.parse({
+										...fact,
+										phase: "unknown",
+										finishedAt: now,
+										...(fact.startedAt
+											? {
+													durationMs: Math.max(
+														0,
+														Date.parse(now) - Date.parse(fact.startedAt),
+													),
+												}
+											: {}),
+										failureCode: "recovery_unconfirmed",
+									}),
+								);
+							}
 							draft.sequence++;
 							turn.events.push(
 								RuntimeEventV1Schema.parse({
@@ -759,6 +790,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 								}),
 							);
 							turn.status = "unknown";
+							turn.unknownHold = true;
+						} else if (
+							turn.status === "unknown" &&
+							(turn.unknownHold || uncertainTools.length > 0)
+						) {
 							turn.unknownHold = true;
 						}
 					}
@@ -824,6 +860,7 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 						const recovered = recoverable?.nativeCheckpoint
 							? await restored.recover?.(recoverable.nativeCheckpoint)
 							: undefined;
+						let recoveredTerminal = false;
 						if (
 							recoverable &&
 							recovered &&
@@ -846,8 +883,11 @@ export class SessionRuntimeDriver implements RuntimeDriver {
 									recovered.stopReason,
 									recovered.checkpoint,
 								);
+								recoveredTerminal = true;
 							}
 						}
+						if (recoverable && !recoveredTerminal)
+							await this.status(file, recoverable.executionId, "unknown");
 					} finally {
 						await restored.close();
 					}

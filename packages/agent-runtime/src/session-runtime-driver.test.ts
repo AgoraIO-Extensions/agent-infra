@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
@@ -713,6 +713,7 @@ it("normalizes an interrupted Turn into an unknown hold before recovery", async 
 					status: string;
 					unknownHold?: true;
 					events: { type: string; payload?: { status?: string } }[];
+					operationFacts?: { phase: string; failureCode?: string }[];
 				}[];
 			};
 			expect(persisted.turns[0]?.unknownHold).toBe(true);
@@ -720,6 +721,79 @@ it("normalizes an interrupted Turn into an unknown hold before recovery", async 
 				type: "status",
 				payload: { status: "unknown" },
 			});
+			expect(persisted.turns[0]?.operationFacts?.at(-1)).toMatchObject({
+				phase: "unknown",
+				failureCode: "recovery_unconfirmed",
+			});
+			await recovered.close();
+			const legacyUnknown = persisted;
+			if (!legacyUnknown.turns[0]) throw new Error("missing recovered turn");
+			legacyUnknown.turns[0].status = "unknown";
+			delete legacyUnknown.turns[0].unknownHold;
+			await writeFile(
+				join(path, record.nativeSessionRef, "state.json"),
+				JSON.stringify(legacyUnknown),
+			);
+			const recoveredLegacy = await driver(path, recoveredOpen);
+			try {
+				expect(
+					await recoveredLegacy.getStatus(
+						record.nativeSessionRef,
+						"execution-a",
+					),
+				).toBe("unknown");
+				expect(recoverCall).not.toHaveBeenCalled();
+			} finally {
+				await recoveredLegacy.close();
+			}
+		} finally {
+			await recovered.close();
+		}
+	} finally {
+		release();
+		await runtime.close();
+		await rm(path, { recursive: true, force: true });
+	}
+});
+
+it("converges an ordinary interrupted Turn to unknown without recovery evidence", async () => {
+	const path = await mkdtemp(join(tmpdir(), "session-recovery-no-evidence-"));
+	let sessionOptions: NativeSessionOptions | undefined;
+	let release!: () => void;
+	const releasePrompt = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const runtime = await driver(path, async (options) => {
+		sessionOptions = options;
+		return {
+			nativeId: "native-interrupted",
+			select: async () => {},
+			prompt: async () => {
+				await options.admit();
+				await releasePrompt;
+				return { stopReason: "completed" };
+			},
+			cancel: async () => {},
+			close: async () => {},
+		};
+	});
+	const pending = runtime.execute(command([]));
+	try {
+		await vi.waitFor(() => expect(sessionOptions).toBeDefined());
+		const record = await pending;
+		const recoveredOpen = vi.fn(async () => ({
+			nativeId: "native-reopened",
+			select: async () => {},
+			prompt: async () => ({ stopReason: "completed" }),
+			cancel: async () => {},
+			close: async () => {},
+		}));
+		const recovered = await driver(path, recoveredOpen);
+		try {
+			expect(
+				await recovered.getStatus(record.nativeSessionRef, "execution-a"),
+			).toBe("unknown");
+			expect(recoveredOpen).toHaveBeenCalledOnce();
 		} finally {
 			await recovered.close();
 		}
