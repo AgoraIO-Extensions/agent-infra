@@ -86,6 +86,10 @@ import {
 	type SkillHubInstallationRoutesDependenciesV1,
 } from "./http/skill-hub-installation-routes.js";
 import {
+	registerSkillHubPublicationRoutesV1,
+	type SkillHubPublicationRoutesDependenciesV1,
+} from "./http/skill-hub-publication-routes.js";
+import {
 	registerSkillHubReadRoutesV1,
 	type SkillHubReadRoutesDependenciesV1,
 } from "./http/skill-hub-read-routes.js";
@@ -163,6 +167,7 @@ export interface PlatformAppDependencies {
 	readonly directory?: DirectoryRouteDependencies;
 	readonly skillHubRead?: SkillHubReadRoutesDependenciesV1;
 	readonly skillHubInstallations?: SkillHubInstallationRoutesDependenciesV1;
+	readonly skillHubPublication?: SkillHubPublicationRoutesDependenciesV1;
 	readonly userGovernance?: UserGovernanceRoutesDependencies;
 }
 
@@ -297,5 +302,7 @@ export function createPlatformApp(
 			app,
 			dependencies.skillHubInstallations,
 		);
+	if (dependencies.skillHubPublication)
+		registerSkillHubPublicationRoutesV1(app, dependencies.skillHubPublication);
 	return app;
 }

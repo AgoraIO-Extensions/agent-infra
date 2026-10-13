@@ -7,6 +7,7 @@ import { PostgresSkillHubLifecycleV1 } from "@agent-infra/platform-store";
 import { createDeploymentIdentityScope } from "./deployment-identity.js";
 import type { IdentityAdapter } from "./http/identity.js";
 import type { SkillHubInstallationRoutesDependenciesV1 } from "./http/skill-hub-installation-routes.js";
+import type { SkillHubPublicationRoutesDependenciesV1 } from "./http/skill-hub-publication-routes.js";
 import type { SkillHubReadRoutesDependenciesV1 } from "./http/skill-hub-read-routes.js";
 
 export function assembleSkillHubReadApiV1(input: {
@@ -59,9 +60,25 @@ export function assembleSkillHubReadApiV1(input: {
 				store.uninstallInstallation(trusted, installationId, key),
 			),
 	};
+	const publicationDependencies: SkillHubPublicationRoutesDependenciesV1 = {
+		identity: input.identity,
+		publish: (request, trusted, key, command) =>
+			scope.requestScope(request, async () =>
+				store.registerVersion(trusted, key, command),
+			),
+		review: (request, trusted, versionId, key, command) =>
+			scope.requestScope(request, async () =>
+				store.reviewVersion(trusted, versionId, key, command),
+			),
+		revoke: (request, trusted, versionId, key) =>
+			scope.requestScope(request, async () =>
+				store.revokeVersion(trusted, versionId, key),
+			),
+	};
 	return {
 		dependencies,
 		installationDependencies,
+		publicationDependencies,
 		close: () => store.close(),
 	};
 }
