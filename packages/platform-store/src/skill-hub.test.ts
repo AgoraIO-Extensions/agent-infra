@@ -536,3 +536,64 @@ describe("Skill Hub PostgreSQL lifecycle", () => {
 		},
 	);
 });
+
+describe("Skill Hub project management", () => {
+	it("creates, lists, reads, updates and replays owner projects", async () => {
+		const adapter = store();
+		const created = await adapter.createProject(request(), "project-a", {
+			schemaVersion: 1,
+			name: "summary",
+		});
+		expect(created.replayed).toBe(false);
+		expect(created.project).toMatchObject({
+			name: "summary",
+			ownerId: "owner-a",
+			status: "active",
+			organizationId: null,
+		});
+		expect(
+			(
+				await adapter.createProject(request(), "project-a", {
+					schemaVersion: 1,
+					name: "summary",
+				})
+			).replayed,
+		).toBe(true);
+		expect(
+			(await adapter.listProjects(request())).map((item) => item.projectId),
+		).toEqual([created.project.projectId]);
+		expect(
+			(await adapter.readProject(request(), created.project.projectId)).name,
+		).toBe("summary");
+		const updated = await adapter.updateProject(
+			request(),
+			created.project.projectId,
+			"update-a",
+			{ schemaVersion: 1, name: "renamed", status: "disabled" },
+		);
+		expect(updated.project).toMatchObject({
+			name: "renamed",
+			status: "disabled",
+		});
+		expect(
+			(await adapter.readProject(request(), created.project.projectId)).status,
+		).toBe("disabled");
+	});
+
+	it("does not expose a project to a foreign owner and rejects duplicate names", async () => {
+		const adapter = store();
+		const created = await adapter.createProject(request(), "project-a", {
+			schemaVersion: 1,
+			name: "summary",
+		});
+		await expect(
+			adapter.readProject(request("owner-b"), created.project.projectId),
+		).rejects.toMatchObject({ code: "not_found" });
+		await expect(
+			adapter.createProject(request(), "project-b", {
+				schemaVersion: 1,
+				name: "summary",
+			}),
+		).rejects.toMatchObject({ code: "version_conflict" });
+	});
+});
