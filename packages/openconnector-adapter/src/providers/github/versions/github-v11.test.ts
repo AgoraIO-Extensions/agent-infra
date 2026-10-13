@@ -178,6 +178,35 @@ test("injected credential is excluded while approved arbitrary build content rem
 	assert.equal(result.text, "business-secret [REDACTED]");
 });
 
+for (const prefixLength of [1, 6, credential.accessToken.length - 1]) {
+	test(`redacts the ${prefixLength}-character credential prefix split by the scan cap`, async () => {
+		const text = `${"x".repeat(8 * 1024 * 1024 - prefixLength - 1)}\n${credential.accessToken}\ntail`;
+		const result = await execute(
+			new OpenConnectorGitHubAdapter(async () => logs(text)),
+			{ startLine: 2 },
+		);
+		assert.equal(result.text, "[REDACTED]");
+		assert.equal(result.scanLimitReached, true);
+		assert.equal(result.lineTruncated, true);
+		assert.equal(result.nextStartLine, null);
+	});
+}
+
+test("redacts a complete self-overlapping credential ending exactly at the scan cap", async () => {
+	const accessToken = "ABABABABAB";
+	const text = `${"x".repeat(8 * 1024 * 1024 - accessToken.length - 1)}\n${accessToken}\ntail`;
+	const result = await new OpenConnectorGitHubAdapter(async () =>
+		logs(text),
+	).execute({
+		action,
+		credential: { accessToken },
+		input: { ...input, startLine: 2 },
+	});
+	assert.equal(result.text, "[REDACTED]");
+	assert.equal(result.scanLimitReached, true);
+	assert.equal(result.nextStartLine, null);
+});
+
 for (const target of [
 	null,
 	"http://productionresultssa2.blob.core.windows.net/log",

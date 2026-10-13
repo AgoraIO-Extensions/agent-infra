@@ -138,11 +138,21 @@ export class OpenConnectorGitHubAdapter extends PreviousAdapter {
 				response,
 				controller.signal,
 			);
-			// Protect the injected credential, without masking arbitrary build content.
-			const safeText = text.replaceAll(
-				input.credential.accessToken,
-				"[REDACTED]",
-			);
+			// Mask complete tokens first so self-overlapping prefixes cannot break them.
+			const token = input.credential.accessToken;
+			let safeText = text.replaceAll(token, "[REDACTED]");
+			if (scanLimitReached) {
+				for (
+					let length = Math.min(token.length - 1, safeText.length);
+					length > 0;
+					length--
+				) {
+					if (safeText.endsWith(token.slice(0, length))) {
+						safeText = `${safeText.slice(0, -length)}[REDACTED]`;
+						break;
+					}
+				}
+			}
 			return logPage(safeText, args.startLine, args.maxLines, scanLimitReached);
 		} catch (error) {
 			if (error instanceof Error && "providerCode" in error) throw error;
