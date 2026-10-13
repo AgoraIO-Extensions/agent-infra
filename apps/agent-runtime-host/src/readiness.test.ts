@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type {
 	RuntimeBrowserCapabilityAssemblyV1,
 	RuntimeDriver,
+	RuntimeHostOptions,
 } from "@agent-infra/agent-runtime";
 import {
 	createExecutionGrantVerifier,
@@ -86,6 +87,9 @@ function request(
 async function harness(
 	probe?: (signal: AbortSignal) => ReturnType<RuntimeDriver["getCapabilities"]>,
 	now?: () => number,
+	probeBrowserCapability?: NonNullable<
+		RuntimeHostOptions["probeBrowserCapability"]
+	>,
 ) {
 	const dir = await mkdtemp(join(tmpdir(), "readiness-host-"));
 	dirs.push(dir);
@@ -107,6 +111,7 @@ async function harness(
 		onBrowserCapabilityAssembly: (input) => {
 			browserCapabilityAssembly = input;
 		},
+		...(probeBrowserCapability ? { probeBrowserCapability } : {}),
 	});
 	const app = createRuntimeHostApp({
 		host,
@@ -264,6 +269,24 @@ describe("HTTP Workload readiness", () => {
 			BrowserCapabilityProjectionV1Schema.parse(await afterGeneration.json())
 				.status,
 		).toBe("unavailable");
+	});
+	it("adds deployment-owned Browser probe evidence when the Driver has no Browser field", async () => {
+		const probeBrowserCapability = vi.fn(async () => browserProbe);
+		const h = await harness(
+			async () => caps,
+			undefined,
+			probeBrowserCapability,
+		);
+		const response = await h.app.request(
+			"/internal/runtime/v1/readiness",
+			post(request(browserDeclaration, browserBinding)),
+		);
+		expect(response.status).toBe(200);
+		const readiness = (await response.json()) as {
+			capabilities: { browser?: RuntimeBrowserCapabilityProbeEvidenceV1 };
+		};
+		expect(readiness.capabilities.browser).toEqual(browserProbe);
+		expect(probeBrowserCapability).toHaveBeenCalledOnce();
 	});
 	it("does not let an older readiness completion overwrite newer Browser evidence", async () => {
 		const pending: ((value: RuntimeCapabilitiesV1) => void)[] = [];
