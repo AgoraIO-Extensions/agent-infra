@@ -1,3 +1,7 @@
+{{- $callbackAuthRef := .Values.platformApi.connectionCallbackAuthSecretRef | default dict -}}
+{{- if and (ne .Values.platformApi.placement "in-cluster") $callbackAuthRef.name -}}
+{{- fail "platformApi.connectionCallbackAuthSecretRef requires platformApi.placement=in-cluster" -}}
+{{- end -}}
 {{- if eq .Values.platformApi.placement "in-cluster" -}}
 {{- $name := include "agent-infra.componentName" (dict "root" . "suffix" "platform-api") -}}
 {{- $bindings := include "agent-infra.componentName" (dict "root" . "suffix" "adapter-bindings") -}}
@@ -73,6 +77,10 @@ spec:
               value: /var/run/agent-infra/encryption-public-key/public.pem
             - name: AGENT_INFRA_ENCRYPTION_KEY_VERSION
               value: {{ .Values.keys.encryptionPublicKey.version | quote }}
+            {{- if $callbackAuthRef.name }}
+            - name: PLATFORM_API_CONNECTION_CALLBACK_AUTH_FILE
+              value: /var/run/agent-infra/connection-callback-auth/callback.auth
+            {{- end }}
             {{- include "agent-infra.connectionEnv" . | nindent 12 }}
           envFrom:
             - configMapRef:
@@ -82,6 +90,12 @@ spec:
             - name: encryption-public-key
               mountPath: /var/run/agent-infra/encryption-public-key
               readOnly: true
+            {{- if $callbackAuthRef.name }}
+            - name: connection-callback-auth
+              mountPath: /var/run/agent-infra/connection-callback-auth/callback.auth
+              subPath: callback.auth
+              readOnly: true
+            {{- end }}
       volumes:
         - name: encryption-public-key
           secret:
@@ -89,4 +103,13 @@ spec:
             items:
               - key: {{ .Values.keys.encryptionPublicKey.secretRef.key }}
                 path: public.pem
+        {{- if $callbackAuthRef.name }}
+        - name: connection-callback-auth
+          secret:
+            secretName: {{ required "platformApi.connectionCallbackAuthSecretRef.name is required" $callbackAuthRef.name }}
+            defaultMode: 384
+            items:
+              - key: {{ required "platformApi.connectionCallbackAuthSecretRef.key is required" $callbackAuthRef.key }}
+                path: callback.auth
+        {{- end }}
 {{- end }}

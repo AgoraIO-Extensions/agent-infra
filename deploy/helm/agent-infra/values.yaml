@@ -73,6 +73,12 @@ platformApi:
   placement: external
   externalBaseUrl: https://api.example.invalid
   deploymentModule: deployment-platform-api
+  # Optional callback-only credential for the in-cluster Platform API. The
+  # referenced Secret is supplied by the deployment owner; its bytes are
+  # projected read-only and never stored in Helm values.
+  # connectionCallbackAuthSecretRef:
+  #   name: agent-infra-runtime-callback-auth
+  #   key: callback.auth
 
 platformWorker:
   deploymentModule: ""
