@@ -239,16 +239,18 @@ Rehoboam 渠道发布以新的 immutable `rehoboam-connection-v13` 增补 Publis
 仍由 Rehoboam 负责；不获取本地源码、不发送人员消息、不推进阶段、不修改 Job 结果。
 编译通过不代替合并或制品构建；未知写结果先读取原任务核对，禁止盲重试。
 
-发布帮助与知识候选以 immutable `rehoboam-connection-v16` 新增四个固定 Actions：
-已发布帮助搜索/文章读取使用 metadata READ，候选提交使用 release WRITE，指定候选回读使用 release READ。
-Rehoboam 拥有与页面同源的文章导出、适用范围、内容哈希以及 owner 隔离的候选记录；Connection 只负责授权与有界调用。
-候选总内容最多16 KiB，必须携带当前帮助 content_hash、稳定幂等键、适用范围与证据。
-作者由服务端个人身份解析，不接受调用方身份、审核状态或任意请求路径；证据链接仅保存，不抓取，不作为请求地址。
-`proposed` / `submitter_reported` 不表示核验或发布。用户明确要求后才提交候选；普通用户仅回读本人记录，
-当前 Rehoboam 管理员可凭 ID 读取供审核。帮助、候选与业务权限彼此独立，不能从正文推导执行授权。
-正式知识仍通过帮助更新 PR 审核、合并与部署生效；本阶段无自动采集、候选审批/推广或直接修改模板的服务。
+发布帮助以待发布的 immutable `rehoboam-connection-v16` 新增四个固定 Actions：
+搜索/文章读取使用metadata READ；直接发布和作者/管理员撤销恢复使用release WRITE。
+申请人在当前对话明确要求加入帮助后，Rehoboam 将约定内容直接发布到共享数据库，网页和AI实时检索，
+没有候选审核、负责人通知、企微审批或逐条部署。AI可主动检索、去重、整理草稿，但建议/文档/工具内容不构成发布授权。
+Rehoboam 拥有基础说明、知识、服务端作者身份、幂等和revision CAS；Connection只转发固定授权调用。
+标题/适用范围/正文和基础说明content_hash必填，总内容最多16 KiB，证据链接可选，仅保存不抓取。
+数据库内容标记applicant_reported，属于参考知识，不代表系统核验，也不改变执行权限、模板或Job。
+已发布条目供授权读者共享；撤销后普通读者不可检索，作者/管理员可读最近20条历史，完整历史保留。
+content_hash仅是基础说明版本；数据库条目独立revision，同键不同内容拒绝，新增重放不能复活撤销条目。
+原生Agent复用相同服务，校验实际最新用户文本及当前角色，不通过禁止WRITE的Connection READ桥绕行。
 保留 v15 和旧实现/Grant，新增 Action 按原升级授权流程显式选择；服务部署后再做真实只读验收。
-详见[发布帮助与经验候选](../connection/rehoboam-help.md)。
+详见[发布帮助与共享经验](../connection/rehoboam-help.md)。
 v14同时增加 `get_release_family_continuation` READ（release READ scope），只读取继续交付步骤、
 模板控制的数字尾缀版本建议和下游影响。建议不是预留；补发仍用原preview/confirm及replacement chain，
 不修改旧Job/申请、Native锚点或自动切换下游。最终交付完成由Rehoboam原通知成功回执投影，不能从Job成功推断。

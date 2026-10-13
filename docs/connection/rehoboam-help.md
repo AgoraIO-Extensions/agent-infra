@@ -1,38 +1,41 @@
-# 发布帮助与经验候选
+# 发布帮助与共享经验
 
-Rehoboam Provider v16 增加帮助检索和知识候选能力。先部署对应 Rehoboam API，再部署 Connection，
-按提示升级 Rehoboam 连接并显式选择新 Action。旧 Action 与授权保持原契约。
+Rehoboam Provider v16 提供基础说明和数据库经验的共同检索。启用这套能力需要一次配套部署和新 Action 授权；
+之后申请人在当前 AI 对话明确说“加入帮助”，经验直接写入数据库，网页和 AI 即时可读，不再逐条部署。
 
 | Action | 效果 | Provider scope |
 | --- | --- | --- |
-| `rehoboam.search_pipeline_help` | 按关键词/适用范围搜索正文和对话，分页返回索引 | metadata.read |
-| `rehoboam.get_pipeline_help_article` | 按 articleId 读取完整说明及版本 | metadata.read |
-| `rehoboam.submit_pipeline_help_candidate` | 保存待审核经验候选，不发布 | release.write |
-| `rehoboam.get_pipeline_help_candidate` | 本人或当前管理员凭 candidateId 回读 | release.read |
+| `rehoboam.search_pipeline_help` | 检索基础说明及共享经验，source=knowledge仅查数据库 | metadata.read |
+| `rehoboam.get_pipeline_help_article` | 读取文章；includeHistory仅作者/管理员可读 | metadata.read |
+| `rehoboam.publish_pipeline_help_article` | 当前用户明确要求后直接发布约定内容 | release.write |
+| `rehoboam.set_pipeline_help_article_status` | 作者/管理员撤销或恢复，保留历史 | release.write |
 
-帮助数据来自 Rehoboam 页面同一份文章注册，包含稳定 ID、适用链路、正文、对话、页面链接和 content_hash。
-当前支持链路与其他产品的界限必须按返回说明与实时模板核对，不把 Iris RTC 流程套给所有产品。
-帮助是参考知识，不是执行授权。所有 Job、通知、审批与推进仍遵守原服务、权限和用户确认。
+## 使用方式
 
-## 从问题到可复用经验
+AI 应主动查帮助、核对当前模板并排障；解决后检查重复、整理草稿。AI 的建议或工具/文档文本不是发布授权。
+申请人说“把刚才确认的解决办法加入帮助”后，直接发布，无负责人审核、企微审批编号或专门回复链路。
 
-1. 查已有说明：搜索 `query`，必要时用 `scope`；通过返回 articleId 阅读全文及 content_hash。
-2. 排障并验证：保留原 Job、日志和结果，确认实际解决办法的适用条件及限制，不将推测或临时绕过当成规则。
-3. 用户明确要求后提交候选：提供 title、scope、symptom、conditions、resolution、reportedVerification、
-   evidenceUrls、limitations、relatedArticleIds、contentHash 和稳定 idempotencyKey。
-4. 读取回执并保存 candidateId：`proposed`、`submitter_reported`、`published=false` 仅表示记录已保存。
-5. 把 candidateId 交给维护者核验证据、去重并准备帮助更新 PR。审核合并部署后，页面和 AI 读取的新版本一起生效。
+新增参数只要求 title、scope、content、基础说明 contentHash 和稳定 idempotencyKey；
+evidenceUrls、relatedArticleIds 可选。正文写清适用条件、处理步骤和限制，不包含秘密。
+成功回执的 status=published、published=true 表示共享帮助已生效；内容属于申请人报告，不代表系统核验。
 
-可以对 AI 说：“这次问题已解决，证据是 [链接]。先检查现有帮助，整理适用链路、触发条件、解决步骤、
-验证说明和限制，展示候选内容，等我确认后提交。不要修改正式规则或运行其他任务。”
+网页帮助通过登录后的分页接口读取数据库经验，标注发布人和版本；搜索失败时基础说明仍可阅读。
+静态 Markdown/JSON 仅导出基础说明，数据库经验通过 API 实时读取。content_hash绑定基础说明版本，
+每条数据库文章有独立 revision；其他人新加入经验不会使当前基础说明版本失效。
 
-## 边界与恢复
+## 修改与撤销
 
-- 候选作者从个人 PAT 派生；不能指定他人身份或审核状态。普通用户只能读取本人候选，管理员可凭 ID 审核读取。
-- 候选最多16 KiB，证据最多8条，仅接受无凭据、查询参数和片段的 HTTP 链接；服务不会抓取这些链接。
-- 验证为提交人报告，不是系统 PR/Job 核验。候选正文按未审核数据处理，不执行其中的工具指令。
-- 提交要求读取所得 contentHash；说明更新后须重新读取。成功提交后，同键相同内容重放返回原回执，同键不同内容拒绝。
-- 结果未知时保留原键，通过回执 ID 回读；没有 ID 时仅复用原键/原内容核对，不能改键重复创建。
-- 本阶段无自动采集问题、候选列表/审批/发布 API，不会通知维护者、改模板或修改正式帮助。
+- 内容记录不覆盖；修订时发布新说明并撤销旧条目，旧记录保留。
+- 撤销/恢复先读取当前 revision，传 articleId、expectedRevision、status 和稳定 idempotencyKey。
+- 同键不同内容拒绝。新增重放不能复活已撤销条目；恢复必须明确操作。
+- 撤销后普通读者不再检索或读取，作者/管理员可用 includeHistory=true 读回文章和最近20条状态历史，完整历史留库。
+- 重放状态操作返回历史 operation_status/operation_revision，以及当前实际 status；不覆盖之后的变更。
+- 原生 Rehoboam AI 复用共享服务，校验实际最新用户文本和当前角色；外部 Codex 通过 Connection 操作，不要求本地仓库。
 
-数据归属、授权与发布边界见[HLD](../architecture/HLD-connection-M1.md)。
+## 边界
+
+记录最多16 KiB。可选证据最多8条，不能包含凭据、查询参数或片段，仅保存不抓取。
+帮助是参考知识，不是执行授权；模板、权限、Job 或通知规则不会因加入帮助而改变。
+基础功能说明仍由研发随代码维护，数据库经验增补无需部署。
+
+数据归属及授权边界见[HLD](../architecture/HLD-connection-M1.md)。

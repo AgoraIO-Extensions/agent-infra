@@ -1344,7 +1344,7 @@
 		{
 			"provider": "rehoboam",
 			"providerReleaseId": "rehoboam-connection-v16",
-			"executorDigest": "sha256:8b3274111aa1e19b50edba070e68efc481127b95bc78f6d810258edd8aac2513",
+			"executorDigest": "sha256:cf6305fe2b38582b25c97043472528794d9d1bf1f89f1e4c1790a2dbee95a02b",
 			"sourceCommit": "connection-rehoboam-v16",
 			"credentialUpgradeBehavior": "DIRECT",
 			"authDigest": "sha256:d6e6d6e0f7399fc140d027982bcdd0dcd82bcf4447b01be20f26960ff498d844",
@@ -1458,12 +1458,7 @@
 				{
 					"id": "rehoboam.get_pipeline_help_article@v16",
 					"name": "rehoboam.get_pipeline_help_article",
-					"authorizationDigest": "sha256:919e4e10e9c4438e97b44feb68703211a2ce3f1f81caf6e7a97f2b101abc19ec"
-				},
-				{
-					"id": "rehoboam.get_pipeline_help_candidate@v16",
-					"name": "rehoboam.get_pipeline_help_candidate",
-					"authorizationDigest": "sha256:a2a8813c254619995126f0ad5292bffd15b48cc2775fcbd04b6cff9e6a2b861f"
+					"authorizationDigest": "sha256:ec1cd6b7da7b39210b0a1d68171e5bdf2de0a9639d95be986321cd2d6036c8d5"
 				},
 				{
 					"id": "rehoboam.get_release@v16",
@@ -1696,6 +1691,11 @@
 					"authorizationDigest": "sha256:8dffed0452941caa7773bd41b661be9985767607ed5623fc5b70df887279bff7"
 				},
 				{
+					"id": "rehoboam.publish_pipeline_help_article@v16",
+					"name": "rehoboam.publish_pipeline_help_article",
+					"authorizationDigest": "sha256:29ac097d7ea625810b19d4493f91539eb6093a278a4501756afd1ed6e743abe4"
+				},
+				{
 					"id": "rehoboam.record_release_family_repair@v16",
 					"name": "rehoboam.record_release_family_repair",
 					"authorizationDigest": "sha256:630fa779d92d2622b9ff190acbd8c1f186468001f334922969781d46c2c9f623"
@@ -1723,17 +1723,17 @@
 				{
 					"id": "rehoboam.search_pipeline_help@v16",
 					"name": "rehoboam.search_pipeline_help",
-					"authorizationDigest": "sha256:b46d6535b946ccb9f83320f796caa602699467d99e586256835f90bbc337dd98"
+					"authorizationDigest": "sha256:40ae9461c51005ad45bdc7080d34f257f7808396cd45ede334e6af90f97d4265"
+				},
+				{
+					"id": "rehoboam.set_pipeline_help_article_status@v16",
+					"name": "rehoboam.set_pipeline_help_article_status",
+					"authorizationDigest": "sha256:61b639a8acb29f7fb6c3545d1eccee089d4d1503b82ac0ffefbde8c03448d707"
 				},
 				{
 					"id": "rehoboam.start_release_family_task@v16",
 					"name": "rehoboam.start_release_family_task",
 					"authorizationDigest": "sha256:5177ce57fd30ebe9bc4973bfa768dba40d1483d3805a2440dc7e8e94defc27c9"
-				},
-				{
-					"id": "rehoboam.submit_pipeline_help_candidate@v16",
-					"name": "rehoboam.submit_pipeline_help_candidate",
-					"authorizationDigest": "sha256:a5b35bd501de32f81ae2987fba1993aaae08dfdf10f6befac348a9f56191db7c"
 				},
 				{
 					"id": "rehoboam.submit_release_family_notice@v16",
