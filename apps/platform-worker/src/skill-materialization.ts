@@ -129,6 +129,10 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 				})
 			)
 				throw new Error("Skill materialization binding mismatch");
+			const validated = validateWorkloadSkillMaterializationV1(input, {
+				generationId: result.generationId,
+				skills,
+			});
 			if (bindings.length > 0 && !options.writeAppliedReceipt)
 				throw new Error("Skill Applied receipt writer unavailable");
 			if (options.writeAppliedReceipt) {
@@ -149,10 +153,7 @@ export function createObjectStorageWorkloadSkillMaterializerV1(options: {
 					});
 				}
 			}
-			return validateWorkloadSkillMaterializationV1(input, {
-				generationId: result.generationId,
-				skills,
-			});
+			return validated;
 		},
 	};
 }
