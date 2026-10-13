@@ -333,6 +333,9 @@ function deploymentInput(
 				platformManagedKeys: ["PORT"],
 				connectionEnabled: false,
 				modelBinding,
+				codexModelProfiles: [
+					{ model: "model-a", reasoningLevels: ["medium", "high"] },
+				],
 				configurationRevision: "configuration-a",
 				loadValidation: async () => validation,
 			},
