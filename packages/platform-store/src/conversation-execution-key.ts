@@ -13,7 +13,8 @@ import {
 	type TaskUserDirectoryV1,
 } from "@agent-infra/platform-core";
 import type postgres from "postgres";
-import { decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
+// 审批后的 Workload 与会话路径显式接收 V3（默认 Relay Key、无模型凭证）配置。
+import { decodeVersionedAgentConfigurationRecord as decodeAgentConfigurationRecord } from "./agent-configuration-record.js";
 import { readCurrentTaskApplicationV1 } from "./application-task-authorization.js";
 import { requireCurrentPersonalApiTaskAdmissionV1 } from "./personal-api-task-authorization.js";
 import {
