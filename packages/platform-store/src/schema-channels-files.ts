@@ -23,7 +23,6 @@ export const wecomReceipts = platformSchema.table(
 		taskBoundary: jsonb("task_boundary").notNull(),
 		channelRevision: text("channel_revision").notNull(),
 		authorizationRevision: text("authorization_revision").notNull(),
-		connectionAuthorizationFact: jsonb("connection_authorization_fact"),
 		acceptanceStatus: text("acceptance_status").notNull(),
 		conversationId: text("conversation_id"),
 		executionId: text("execution_id"),
@@ -36,6 +35,7 @@ export const wecomReceipts = platformSchema.table(
 		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 		connectionBotId: text("connection_bot_id"),
 		connectionFence: bigint("connection_fence", { mode: "number" }),
+		connectionAuthorizationFact: jsonb("connection_authorization_fact"),
 	},
 	(table) => [
 		check(
