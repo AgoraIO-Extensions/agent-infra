@@ -134,6 +134,7 @@ export type NativeCapabilityAdmissionDecisionV1 =
 				| "unknown"
 				| "disabled"
 				| "invalid_parameters"
+				| "unsupported"
 				| "unavailable";
 			readonly reason?:
 				| "authorization_lost"
@@ -583,6 +584,7 @@ export function createNativeCapabilityAdmissionUseCaseV1(dependencies: {
 								selected.availability !== "discovered")
 						)
 							return { outcome: "disabled" };
+						if (selected.kind === "command") return { outcome: "unsupported" };
 						if (
 							selected.kind === "skill" &&
 							request.parameters.trim().length === 0

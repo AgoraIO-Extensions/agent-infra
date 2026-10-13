@@ -170,6 +170,6 @@ describe("native capability admission Store seam", () => {
 		command.metadata.setProjection(commandProjection);
 		expect(
 			(await command.useCase.admit({ ...request, parameters: "" })).outcome,
-		).toBe("accepted");
+		).toBe("unsupported");
 	});
 });
