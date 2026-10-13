@@ -2635,12 +2635,9 @@ describe("contract compatibility command", () => {
 				path !== "/api/v2/skills" &&
 				path !== "/api/v2/skills/installations" &&
 				path !== "/api/v2/skills/installations/{installationId}" &&
-<<<<<<< HEAD
 				path !== "/api/v2/agents/{agentId}/versions/{agentVersion}/skills" &&
-=======
 				path !== "/api/v2/skills/projects" &&
 				path !== "/api/v2/skills/projects/{projectId}" &&
->>>>>>> 459851ac2 (feat(skill-hub): expose project management API)
 				path !== "/api/v2/skills/versions" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}" &&
 				path !== "/api/v2/skills/versions/{skillVersionId}/review" &&
