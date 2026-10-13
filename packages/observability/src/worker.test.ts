@@ -467,11 +467,105 @@ it("classifies Browser operation outcomes separately from ordinary tools", async
 			stage: "browser",
 			outcome: "unknown",
 			code: "OPERATION_UNKNOWN",
+			browserCategory: "recovery",
 			operationRef: "browser-operation",
 			attemptRef: "browser-attempt",
 		}),
 	]);
 });
+
+it.each([
+	["browser.navigate", "navigation"],
+	["browser.snapshot", "observation"],
+	["browser.click", "interaction"],
+	["browser.download", "artifact_transfer"],
+	["browser.handoff", "handoff"],
+] as const)("classifies Browser tool %s as %s", async (toolId, category) => {
+	const fixture = transactionFixture();
+	const observations: OperationalEvent[] = [];
+	const events = createObservedConversationEvents({
+		transaction: fixture.transaction,
+		telemetry: { record: (event) => observations.push(event) },
+	});
+	const key = category.replace("_", "-");
+	const fact: ConversationOperationFactV2 = {
+		kind: "tool",
+		operationRef: `browser-${category.replace("_", "-")}`,
+		attemptRef: "browser-attempt",
+		phase: "completed",
+		toolId,
+		browser: {
+			actionId: "browser-action",
+			capabilityVersion: 1,
+			pageRevision: 2,
+			sessionGeneration: 3,
+			resourceFence: 4,
+			workloadRevision: 2,
+			imageDigest: `sha256:${"a".repeat(64)}`,
+			sideEffect: false,
+		},
+	};
+	const intent = { ...fact, phase: "intent" as const };
+	await events.persist(operation(intent, `category-${key}-intent`));
+	await events.persist(
+		operation({ ...intent, phase: "started" }, `category-${key}-started`),
+	);
+	await events.persist(
+		operation(fact, `category-${category.replace("_", "-")}`),
+	);
+	expect(observations.at(-1)).toMatchObject({
+		stage: "browser",
+		browserCategory: category,
+	});
+});
+
+it.each([
+	["authorization_denied", "policy_rejection"],
+	["request_rejected", "capacity_rejection"],
+	["recovery_unconfirmed", "recovery"],
+] as const)(
+	"classifies Browser failure %s as %s",
+	async (failureCode, category) => {
+		const fixture = transactionFixture();
+		const observations: OperationalEvent[] = [];
+		const events = createObservedConversationEvents({
+			transaction: fixture.transaction,
+			telemetry: { record: (event) => observations.push(event) },
+		});
+		const key = category.replace("_", "-");
+		const fact: ConversationOperationFactV2 = {
+			kind: "tool",
+			operationRef: `browser-${category.replace("_", "-")}`,
+			attemptRef: "browser-attempt",
+			phase: failureCode === "recovery_unconfirmed" ? "unknown" : "failed",
+			failureCode,
+			toolId: "browser.click",
+			browser: {
+				actionId: "browser-action",
+				capabilityVersion: 1,
+				pageRevision: 2,
+				sessionGeneration: 3,
+				resourceFence: 4,
+				workloadRevision: 2,
+				imageDigest: `sha256:${"a".repeat(64)}`,
+				sideEffect: true,
+			},
+		};
+		const { failureCode: _failureCode, ...factWithoutFailure } = fact;
+		const intent = { ...factWithoutFailure, phase: "intent" as const };
+		await events.persist(operation(intent, `failure-${key}-intent`));
+		await events.persist(
+			operation({ ...intent, phase: "started" }, `failure-${key}-started`),
+		);
+		await events.persist(
+			operation(fact, `failure-${category.replace("_", "-")}`),
+		);
+		expect(observations.at(-1)).toMatchObject({
+			stage: "browser",
+			browserCategory: category,
+		});
+	},
+);
 
 it("does not recount later Connection metadata on a completed tool attempt", async () => {
 	const fixture = transactionFixture();
