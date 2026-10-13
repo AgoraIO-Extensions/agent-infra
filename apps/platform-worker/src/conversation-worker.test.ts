@@ -673,6 +673,27 @@ describe("conversation dispatch observability", () => {
 		}
 	});
 
+	it("does not count sandbox maintenance as a task wait", async () => {
+		mocks.find.mockResolvedValueOnce([
+			{ itemId: "sandbox-a", operation: "conversation.sandbox.reconcile.v1" },
+		]);
+		const telemetry = { record: vi.fn() };
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			observability: telemetry,
+		});
+		try {
+			expect(await worker.tick()).toBe(1);
+			expect(
+				telemetry.record.mock.calls.some(
+					([event]) => event.stage === "task_wait",
+				),
+			).toBe(false);
+		} finally {
+			await worker.stop();
+		}
+	});
+
 	it("records a failed task wait while preserving discovery errors", async () => {
 		mocks.find.mockRejectedValueOnce(new Error("synthetic queue failure"));
 		const telemetry = { record: vi.fn() };

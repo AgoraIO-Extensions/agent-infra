@@ -552,9 +552,15 @@ export function createPlatformConversationWorkerV2(
 				});
 			throw error;
 		}
-		// An empty discovery is an idle poll, not a task wait. Emit one bounded
-		// observation for a returned page so timer sleeps do not create events.
-		if (items.length > 0 && options.observability)
+		// An empty discovery (or a page containing only maintenance work) is an
+		// idle poll, not a task wait. Emit one bounded observation for a returned
+		// task page so timer sleeps do not create events.
+		if (
+			items.some(
+				(item) => item.operation !== "conversation.sandbox.reconcile.v1",
+			) &&
+			options.observability
+		)
 			record(options.observability, {
 				stage: "task_wait",
 				outcome: "completed",

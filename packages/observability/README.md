@@ -18,7 +18,7 @@
 
 Conversation Worker 在已有 dispatch use case 返回决定后记录一次带实测耗时的 `task_dispatch`：`accepted` 为 `completed`，`busy`/`retry` 为带 `TASK_UNAVAILABLE` 的 `failed`，`unknown` 为 `unknown`，`rejected`/`stale`/`already_completed` 为 `rejected`。`operationRef` 只使用 Store 提供的固定 operation 名称；item ID 不进入日志或指标标签。dispatch 抛出异常时记录 `failed`，遥测采集失败仍由 Worker 原有错误处理和重试语义决定。未装配 observability 时不产生该阶段记录。
 
-Conversation Worker 在已有 durable queue discovery 返回非空页面后记录一次 `task_wait/completed`，耗时是该次 Store discovery 的实测等待时间，`operationRef` 固定为 `conversation.queue.find`；空页面和下一次 poll 的 timer sleep 不产生事件。Store discovery 失败记录一次带 `TASK_UNAVAILABLE` 的 `task_wait/failed`，然后继续抛出原错误交给既有 discovery/retry 处理。该阶段只记录批次等待，不写入 item、Conversation 或 execution ID；遥测采集失败不会改变 Worker 的投递、重试或停止语义。
+Conversation Worker 在已有 durable queue discovery 返回至少一个会话任务后记录一次 `task_wait/completed`，耗时是该次 Store discovery 的实测等待时间，`operationRef` 固定为 `conversation.queue.find`；空页面、只有 sandbox maintenance 的页面和下一次 poll 的 timer sleep 不产生事件。Store discovery 失败记录一次带 `TASK_UNAVAILABLE` 的 `task_wait/failed`，然后继续抛出原错误交给既有 discovery/retry 处理。该阶段只记录批次等待，不写入 item、Conversation 或 execution ID；遥测采集失败不会改变 Worker 的投递、重试或停止语义。
 
 Workload Worker 在部署装配完成或失败时记录一次 `workload` 启动结果；每次既有 reconciliation Store 写回前的状态步记录一次带实测耗时的 `workload` 结果。正常状态步为 `completed`，带 `failureCode` 的 `rejected`、`cleaning` 或 `failed` 状态为 `failed`，分别使用固定的 `WORKLOAD_RECONCILIATION_FAILED` 或 `WORKLOAD_HEALTH_CHECK_FAILED`；Store/调谐依赖不可用使用 `WORKLOAD_UNAVAILABLE`。阶段和代码是封闭集合，Agent、request 和 trace 关联只进入受控日志/Trace，不进入指标标签；采集异常不会改变原有调谐、写回、重试或关闭语义。
 
