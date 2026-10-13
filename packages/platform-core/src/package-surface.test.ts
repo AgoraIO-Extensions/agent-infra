@@ -113,6 +113,7 @@ describe("platform-core package surface", () => {
 			"createSessionSandboxBindingV1",
 			"createSkillHubAgentBindingUseCaseV1",
 			"createSkillHubVersionV1",
+			"createSkillProviderImportV1",
 			"createSkillProviderRegistryV1",
 			"createTaskApiAuditV1",
 			"createTaskRuntimeAuthorizationUseCaseV1",

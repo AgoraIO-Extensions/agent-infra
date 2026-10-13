@@ -141,6 +141,8 @@ export * from "./skill-hub-project.js";
 export * from "./skill-hub-read.js";
 export * from "./skill-package-publication.js";
 export * from "./skill-package-ref.js";
+export * from "./skill-provider-import.js";
+export * from "./skill-provider-registry.js";
 export * from "./skill-provider-registry.js";
 export {
 	classifyStandardTemplateUpgradeCompatibilityV1,
