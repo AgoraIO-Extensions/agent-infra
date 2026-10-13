@@ -693,7 +693,7 @@ export function createBrowserObserveControllerV1(input: {
 	}
 
 	function cancelAction(actionId: string): boolean {
-		if (!nonEmpty(actionId) || !activeActionIds.has(actionId)) return false;
+		if (!nonEmpty(actionId) || actionsById.has(actionId)) return false;
 		cancelledActionIds.add(actionId);
 		return true;
 	}

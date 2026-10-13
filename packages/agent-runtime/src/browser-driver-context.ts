@@ -82,7 +82,20 @@ function success(
 function failure(
 	request: RuntimeBrowserToolExecutionRequestV1,
 	error: unknown,
+	signal?: AbortSignal,
 ): RuntimeBrowserToolExecutionResultV1 {
+	if (signal?.aborted) {
+		return {
+			actionId: request.actionId,
+			operationRef: request.operationRef,
+			attemptRef: request.attemptRef,
+			binding: request.binding,
+			phase: "unknown",
+			contentItems: [],
+			success: false,
+			failureCode: "BROWSER_ACTION_CANCELLED_UNCONFIRMED",
+		};
+	}
 	const reason =
 		error instanceof Error ? error.message : "BROWSER_EXECUTION_FAILED";
 	return {
@@ -140,6 +153,10 @@ export function createBrowserSessionDriverContextV1(input: {
 				})
 			)
 				throw new Error("BROWSER_DRIVER_CONTEXT_BINDING_MISMATCH");
+			const cancel = () => {
+				input.session.cancelAction(request.actionId);
+			};
+			signal.addEventListener("abort", cancel, { once: true });
 			try {
 				signal.throwIfAborted();
 				const args = request.arguments;
@@ -171,38 +188,43 @@ export function createBrowserSessionDriverContextV1(input: {
 					role: "",
 					name: "",
 				};
-				const record = await input.session.act({
-					kind: args.kind as BrowserActionKindV1,
-					page,
-					target,
-					...(typeof args.value === "string" ? { value: args.value } : {}),
-					...(typeof args.key === "string" ? { key: args.key } : {}),
-					actionId: request.actionId,
-					operationRef: request.operationRef,
-					attemptRef: request.attemptRef,
-					idempotencyKey: request.actionId,
-					executionBinding: {
-						agentId: request.binding.agentId,
-						conversationId: request.binding.conversationId,
-						executionId: request.binding.executionId,
-						capabilityVersion: request.binding.capabilityVersion,
-						pageRevision: request.binding.pageRevision,
-						sessionGeneration: request.binding.sessionGeneration,
-						resourceFence: request.binding.resourceFence,
-						workloadRevision: request.binding.workloadRevision,
-						imageDigest: request.binding.imageDigest,
+				const record = await input.session.act(
+					{
+						kind: args.kind as BrowserActionKindV1,
+						page,
+						target,
+						...(typeof args.value === "string" ? { value: args.value } : {}),
+						...(typeof args.key === "string" ? { key: args.key } : {}),
+						actionId: request.actionId,
+						operationRef: request.operationRef,
+						attemptRef: request.attemptRef,
+						idempotencyKey: request.actionId,
+						executionBinding: {
+							agentId: request.binding.agentId,
+							conversationId: request.binding.conversationId,
+							executionId: request.binding.executionId,
+							capabilityVersion: request.binding.capabilityVersion,
+							pageRevision: request.binding.pageRevision,
+							sessionGeneration: request.binding.sessionGeneration,
+							resourceFence: request.binding.resourceFence,
+							workloadRevision: request.binding.workloadRevision,
+							imageDigest: request.binding.imageDigest,
+						},
+						authorization: {
+							subjectId: input.subjectId,
+							agentId: request.binding.agentId,
+							conversationId: request.binding.conversationId,
+							executionId: request.binding.executionId,
+						},
 					},
-					authorization: {
-						subjectId: input.subjectId,
-						agentId: request.binding.agentId,
-						conversationId: request.binding.conversationId,
-						executionId: request.binding.executionId,
-					},
-				});
+					signal,
+				);
 				signal.throwIfAborted();
 				return success(request, actionRecordSummary(record));
 			} catch (error) {
-				return failure(request, error);
+				return failure(request, error, signal);
+			} finally {
+				signal.removeEventListener("abort", cancel);
 			}
 		},
 	};
