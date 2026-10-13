@@ -1120,6 +1120,32 @@ describe("functional conversation screen", () => {
 		).toHaveLength(1);
 	});
 
+	it("keeps the draft editable but blocks sending while the conversation read is temporarily unavailable (#2151)", async () => {
+		let unavailable = false;
+		const { requests } = setup((request) =>
+			unavailable &&
+			request.method === "GET" &&
+			new URL(request.url).pathname === "/api/v2/conversations/conversation-1"
+				? new Response("Unavailable", { status: 503 })
+				: undefined,
+		);
+		const input = await composer();
+		unavailable = true;
+		fireEvent.click(screen.getByRole("button", { name: "刷新会话" }));
+		await screen.findByText(/恢复后会自动继续读取/);
+		expect(input.disabled).toBe(false);
+		fireEvent.change(input, { target: { value: "断线期间的草稿" } });
+		expect(input.value).toBe("断线期间的草稿");
+		const send = screen.getByRole("button", {
+			name: "发送",
+		}) as HTMLButtonElement;
+		expect(send.disabled).toBe(true);
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(
+			requests.filter((request) => request.method === "POST"),
+		).toHaveLength(0);
+	});
+
 	it("retains an unknown command and only retries the same idempotency key explicitly", async () => {
 		const { requests, streams } = setup((request) =>
 			request.method === "POST"

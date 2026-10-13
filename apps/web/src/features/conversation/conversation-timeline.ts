@@ -50,6 +50,33 @@ type ReadingSession = {
 	/** Automatic reconnects since the stream last proved healthy (#1606). */
 	reconnectAttempts?: number;
 	reconnectTimer?: ReturnType<typeof setTimeout>;
+	/** 快速重连用尽或读取暂不可用后的低频重试已排队（#2151）。 */
+	slowRetry?: boolean;
+};
+
+/** 页面可见性与唤醒信号；测试可注入。 */
+export type ConversationTimelineEnvironment = {
+	/** 页面不可见时暂停低频重试，回到可见时立即重试。 */
+	visible(): boolean;
+	/** 网络恢复或页面回到可见时调用 wake；返回取消订阅。 */
+	subscribe(wake: () => void): () => void;
+};
+
+const browserEnvironment: ConversationTimelineEnvironment = {
+	visible: () =>
+		typeof document === "undefined" || document.visibilityState !== "hidden",
+	subscribe(wake) {
+		if (typeof window === "undefined") return () => {};
+		const onVisibility = () => {
+			if (document.visibilityState !== "hidden") wake();
+		};
+		window.addEventListener("online", wake);
+		document.addEventListener("visibilitychange", onVisibility);
+		return () => {
+			window.removeEventListener("online", wake);
+			document.removeEventListener("visibilitychange", onVisibility);
+		};
+	},
 };
 
 /** Delays of automatic stream reconnects after a transient end (#1606). */
@@ -59,6 +86,12 @@ const defaultReconnectDelaysMs: readonly number[] = [
 /** A stream the server accepted and kept open this long was healthy; its end
  * starts the automatic attempts afresh. */
 const defaultHealthyStreamMs = 10_000;
+/** 快速重连用尽后，页面可见时按此间隔继续只读重试（#2151）。 */
+const defaultSlowReconnectMs = 8_000;
+
+function transientFailure(failure: ConversationReadFailure | null | undefined) {
+	return failure?.kind === "network" || failure?.kind === "service";
+}
 
 function emptyState(): ConversationTimelineState {
 	return {
@@ -103,19 +136,26 @@ function prependTimelineEvents(
 }
 
 /** Read-only, per-page consumer. Abort on unmount or identity changes. A
- * transient stream end reconnects automatically a bounded number of times, then
- * reconnect is explicit; both only resume reads and never replay a command. */
+ * transient stream end reconnects quickly a bounded number of times (#1606),
+ * then keeps retrying slowly while the page is visible and at once on
+ * `online`/visibility (#2151); manual reconnect stays available. Every retry
+ * only resumes reads and never replays a command. */
 export function createConversationTimeline({
 	client = defaultClient,
 	reconnectDelaysMs = defaultReconnectDelaysMs,
 	healthyStreamMs = defaultHealthyStreamMs,
+	slowReconnectMs = defaultSlowReconnectMs,
+	environment = browserEnvironment,
 }: {
 	client?: Client;
 	reconnectDelaysMs?: readonly number[];
 	healthyStreamMs?: number;
+	slowReconnectMs?: number;
+	environment?: ConversationTimelineEnvironment;
 } = {}) {
 	let state = emptyState();
 	let current: ReadingSession | undefined;
+	let unsubscribeWake: (() => void) | undefined;
 	const listeners = new Set<() => void>();
 
 	function publish(next: ConversationTimelineState) {
@@ -124,9 +164,39 @@ export function createConversationTimeline({
 	}
 
 	function cancelReconnect(session: ReadingSession | undefined) {
-		if (!session?.reconnectTimer) return;
+		if (!session) return;
+		session.slowRetry = false;
+		if (!session.reconnectTimer) return;
 		clearTimeout(session.reconnectTimer);
 		session.reconnectTimer = undefined;
+	}
+
+	function retryRead(session: ReadingSession) {
+		if (current !== session) return;
+		if (session.needsHistory) void readHistory(session);
+		else void readStream(session);
+	}
+
+	/** 低频只读重试；页面不可见时等待唤醒，不在后台持续请求。 */
+	function scheduleSlowRetry(session: ReadingSession) {
+		if (current !== session) return;
+		cancelReconnect(session);
+		session.slowRetry = true;
+		session.reconnectTimer = setTimeout(() => {
+			session.reconnectTimer = undefined;
+			if (current !== session || !session.slowRetry) return;
+			if (!environment.visible()) return;
+			session.slowRetry = false;
+			retryRead(session);
+		}, slowReconnectMs);
+	}
+
+	/** 网络恢复或页面回到可见：立即执行已排队的低频重试。 */
+	function wake() {
+		const session = current;
+		if (!session?.slowRetry) return;
+		cancelReconnect(session);
+		retryRead(session);
 	}
 
 	/** Schedules the next automatic stream read; false once the delays are spent. */
@@ -146,6 +216,8 @@ export function createConversationTimeline({
 	function stop() {
 		const previous = current;
 		current = undefined;
+		unsubscribeWake?.();
+		unsubscribeWake = undefined;
 		cancelReconnect(previous);
 		previous?.historyRequest?.abort();
 		previous?.stream?.abort();
@@ -167,6 +239,7 @@ export function createConversationTimeline({
 					seenCursors: new Set(),
 					needsHistory: true,
 				};
+				unsubscribeWake = environment.subscribe(wake);
 			}
 			publish({
 				...emptyState(),
@@ -177,6 +250,7 @@ export function createConversationTimeline({
 			return;
 		}
 		publish({ ...state, status: "unavailable", failure });
+		if (transientFailure(failure)) scheduleSlowRetry(session);
 	}
 
 	async function readHistory(session: ReadingSession) {
@@ -380,7 +454,13 @@ export function createConversationTimeline({
 						throw new ConversationReadError({ kind: "invalid" });
 					opened.at = performance.now();
 					// The server accepted the reconnect after re-authorizing it.
-					if (active() && state.status === "reconnecting")
+					if (
+						active() &&
+						(state.status === "reconnecting" ||
+							state.status === "disconnected" ||
+							(state.status === "unavailable" &&
+								transientFailure(state.failure)))
+					)
 						publish({ ...state, status: "ready", failure: null });
 					return response;
 				},
@@ -427,7 +507,10 @@ export function createConversationTimeline({
 			if (!active()) return;
 			if (streamEnded(session, opened.at, streamFailure)) return;
 			if (streamFailure) fail(session, streamFailure);
-			else publish({ ...state, status: "disconnected" });
+			else {
+				publish({ ...state, status: "disconnected" });
+				scheduleSlowRetry(session);
+			}
 		} catch (error) {
 			if (active()) {
 				const failure =
@@ -478,6 +561,7 @@ export function createConversationTimeline({
 				needsHistory: true,
 			};
 			current = session;
+			unsubscribeWake = environment.subscribe(wake);
 			publish({ ...emptyState(), conversationId, status: "loading" });
 			await readHistory(session);
 		},
