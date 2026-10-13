@@ -638,6 +638,87 @@ it("records bounded authorization and Runtime submit timings (#1561)", async () 
 });
 
 describe("conversation dispatch observability", () => {
+	it("records one bounded task wait for a returned queue page", async () => {
+		mocks.find
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([
+				{ itemId: "turn-a", operation: "conversation.turn.submit.v1" },
+			]);
+		mocks.dispatch.mockResolvedValueOnce({
+			schemaVersion: 1,
+			outcome: "accepted",
+		});
+		const telemetry = { record: vi.fn() };
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			observability: telemetry,
+		});
+		try {
+			expect(await worker.tick()).toBe(0);
+			expect(telemetry.record).not.toHaveBeenCalled();
+			expect(await worker.tick()).toBe(1);
+			expect(telemetry.record).toHaveBeenCalledWith({
+				stage: "task_wait",
+				outcome: "completed",
+				durationMs: expect.any(Number),
+				operationRef: "conversation.queue.find",
+			});
+			expect(
+				telemetry.record.mock.calls.filter(
+					([event]) => event.stage === "task_wait",
+				),
+			).toHaveLength(1);
+		} finally {
+			await worker.stop();
+		}
+	});
+
+	it("records a failed task wait while preserving discovery errors", async () => {
+		mocks.find.mockRejectedValueOnce(new Error("synthetic queue failure"));
+		const telemetry = { record: vi.fn() };
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			observability: telemetry,
+		});
+		try {
+			await expect(worker.tick()).rejects.toThrow("synthetic queue failure");
+			expect(telemetry.record).toHaveBeenCalledWith({
+				stage: "task_wait",
+				outcome: "failed",
+				code: "TASK_UNAVAILABLE",
+				durationMs: expect.any(Number),
+				operationRef: "conversation.queue.find",
+			});
+		} finally {
+			await worker.stop();
+		}
+	});
+
+	it("contains telemetry failures without changing queue dispatch", async () => {
+		mocks.find.mockResolvedValueOnce([
+			{ itemId: "turn-a", operation: "conversation.turn.submit.v1" },
+		]);
+		mocks.dispatch.mockResolvedValueOnce({
+			schemaVersion: 1,
+			outcome: "accepted",
+		});
+		const telemetry = {
+			record: vi.fn(() => {
+				throw new Error("sink down");
+			}),
+		};
+		const worker = createPlatformConversationWorkerV2({
+			...options,
+			observability: telemetry,
+		});
+		try {
+			expect(await worker.tick()).toBe(1);
+			await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(1));
+		} finally {
+			await worker.stop();
+		}
+	});
+
 	it.each([
 		[{ schemaVersion: 1, outcome: "accepted" }, { outcome: "completed" }],
 		[

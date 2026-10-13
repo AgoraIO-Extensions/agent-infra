@@ -533,11 +533,34 @@ export function createPlatformConversationWorkerV2(
 			}
 		}
 		const limit = 256;
-		const items = await store.findDispatchable({
-			limit,
-			...(afterItemId ? { afterItemId } : {}),
-			signal,
-		});
+		const began = performance.now();
+		let items: Awaited<ReturnType<typeof store.findDispatchable>>;
+		try {
+			items = await store.findDispatchable({
+				limit,
+				...(afterItemId ? { afterItemId } : {}),
+				signal,
+			});
+		} catch (error) {
+			if (options.observability)
+				record(options.observability, {
+					stage: "task_wait",
+					outcome: "failed",
+					durationMs: performance.now() - began,
+					code: "TASK_UNAVAILABLE",
+					operationRef: "conversation.queue.find",
+				});
+			throw error;
+		}
+		// An empty discovery is an idle poll, not a task wait. Emit one bounded
+		// observation for a returned page so timer sleeps do not create events.
+		if (items.length > 0 && options.observability)
+			record(options.observability, {
+				stage: "task_wait",
+				outcome: "completed",
+				durationMs: performance.now() - began,
+				operationRef: "conversation.queue.find",
+			});
 		let launched = 0;
 		let lastBusinessItemId: string | undefined;
 		for (const item of items) {
