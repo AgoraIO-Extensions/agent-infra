@@ -16,6 +16,7 @@ import {
 	PostgresConversationEventTransactionV1,
 	PostgresLegacyTaskRecoveryReaderV1,
 	PostgresTaskAuthorizationStoreV1,
+	platformQueueResourceSnapshotTimeoutMs,
 } from "@agent-infra/platform-store";
 import {
 	type ConversationRuntimeOptionsV2,
@@ -61,6 +62,21 @@ export interface PlatformConversationWorkerOptionsV2
 
 type Telemetry = Pick<ReturnType<typeof startObservability>, "record">;
 type ConversationRuntime = ReturnType<typeof createConversationRuntimeV2>;
+const resourceSnapshotOperation = "platform.resource_snapshot";
+
+function boundedResourceSnapshotDuration(
+	value: unknown,
+	startedAt: number,
+): number {
+	const measured =
+		typeof value === "number" && Number.isFinite(value)
+			? value
+			: performance.now() - startedAt;
+	return Math.min(
+		platformQueueResourceSnapshotTimeoutMs,
+		Math.max(0, measured),
+	);
+}
 
 /** Bounded stage timings between a claim and the Runtime submit (#1561);
  * only identifiers and durations are recorded. */
@@ -286,23 +302,46 @@ export function createPlatformConversationWorkerV2(
 	}
 	function sampleResources() {
 		if (sampling || !canSampleResources()) return;
+		const telemetry = options.observability;
+		if (!telemetry) return;
+		const startedAt = performance.now();
+		let snapshotRead = false;
 		sampling = Promise.resolve()
 			.then(async () => {
 				if (!canSampleResources()) return;
 				const snapshot = await store.readResourceSnapshot(signal);
 				if (!canSampleResources()) return;
-				options.observability?.observeResource?.({
+				snapshotRead = true;
+				record(telemetry, {
+					stage: "dependency",
+					outcome: "completed",
+					durationMs: boundedResourceSnapshotDuration(
+						snapshot.queryDurationMs,
+						startedAt,
+					),
+					operationRef: resourceSnapshotOperation,
+				});
+				telemetry.observeResource?.({
 					kind: "task_waiting",
 					value: snapshot.taskWaiting,
 				});
-				options.observability?.observeResource?.({
+				telemetry.observeResource?.({
 					kind: "outbox_pending",
 					value: snapshot.outboxPending,
 				});
 			})
 			.catch(() => {
-				if (!stopped && !signal.aborted)
+				if (!stopped && !signal.aborted) {
+					if (!snapshotRead)
+						record(telemetry, {
+							stage: "dependency",
+							outcome: "failed",
+							code: "DEPENDENCY_UNAVAILABLE",
+							durationMs: boundedResourceSnapshotDuration(undefined, startedAt),
+							operationRef: resourceSnapshotOperation,
+						});
 					log("CONVERSATION_RESOURCE_SNAPSHOT_UNAVAILABLE");
+				}
 			})
 			.finally(() => {
 				sampling = undefined;

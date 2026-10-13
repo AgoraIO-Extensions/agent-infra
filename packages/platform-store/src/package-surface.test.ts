@@ -100,6 +100,7 @@ describe("platform-store package surface", () => {
 			"openPostgresWorkloadReconciliationStoreV1",
 			"outboxWakeChannelV1",
 			"platformDatabaseUrlFromEnvironment",
+			"platformQueueResourceSnapshotTimeoutMs",
 			"readCurrentTaskApiUseGrantV1",
 			"readCurrentTaskApplicationV1",
 			"readPlatformQueueResourceSnapshot",

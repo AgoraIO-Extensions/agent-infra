@@ -22,6 +22,8 @@ Conversation Worker 在已有 durable queue discovery 返回至少一个会话�
 
 Workload Worker 在部署装配完成或失败时记录一次 `workload` 启动结果；每次既有 reconciliation Store 写回前的状态步记录一次带实测耗时的 `workload` 结果。正常状态步为 `completed`，带 `failureCode` 的 `rejected`、`cleaning` 或 `failed` 状态为 `failed`，分别使用固定的 `WORKLOAD_RECONCILIATION_FAILED` 或 `WORKLOAD_HEALTH_CHECK_FAILED`；Store/调谐依赖不可用使用 `WORKLOAD_UNAVAILABLE`。阶段和代码是封闭集合，Agent、request 和 trace 关联只进入受控日志/Trace，不进入指标标签；采集异常不会改变原有调谐、写回、重试或关闭语义。
 
+Platform API 与 Conversation Worker 的 queue sampler 只消费 Store-owned 的 bounded resource snapshot。Store 在 read-only transaction 中设置 `statement_timeout = 2000ms`，返回两个 durable queue counts 和本次读取的 `queryDurationMs`；时长被限制在 `0..2000ms`，输出不包含 SQL、参数或业务正文。成功读取记录一次 `dependency/completed`，固定 `operationRef=platform.resource_snapshot`；连接、取消、超时、非法计数或其他读取失败记录一次带 `DEPENDENCY_UNAVAILABLE` 的 `dependency/failed`，耗时同样有界。该摘要反映 bounded snapshot 的依赖延迟，不伪造 PostgreSQL pool active/idle/waiting 指标，也不改变原有业务结果或重试语义。
+
 ## HTTP 与已持久事件 Adapter
 
 `@agent-infra/observability/http` 的 `createHttpObservability(telemetry)` 是 Hono middleware，须在路由前注册。每个请求生成独立的 UUID `requestId`、`traceId`；`currentRequestMetadata()` 在该请求的 await 链内返回同一只读上下文，请求结束后及其后续异步任务返回 `undefined`。接入方的 `requestMetadata` 须消费该上下文，不能另行生成或采信外部 header。

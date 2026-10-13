@@ -1,5 +1,19 @@
 import type { startObservability } from "@agent-infra/observability";
+import { platformQueueResourceSnapshotTimeoutMs } from "@agent-infra/platform-store";
 import type { PlatformApiAssembly } from "./assembly.js";
+
+const resourceSnapshotOperation = "platform.resource_snapshot";
+
+function boundedDurationMs(value: unknown, startedAt: number): number {
+	const measured =
+		typeof value === "number" && Number.isFinite(value)
+			? value
+			: performance.now() - startedAt;
+	return Math.min(
+		platformQueueResourceSnapshotTimeoutMs,
+		Math.max(0, measured),
+	);
+}
 
 /** Process-owned sampling of the existing query; no business state is computed here. */
 export function startPlatformResourceSampling(
@@ -16,7 +30,12 @@ export function startPlatformResourceSampling(
 	async function sample() {
 		const controller = new AbortController();
 		active = controller;
-		const deadline = setTimeout(() => controller.abort(), 2000);
+		const startedAt = performance.now();
+		let snapshotRead = false;
+		const deadline = setTimeout(
+			() => controller.abort(),
+			platformQueueResourceSnapshotTimeoutMs,
+		);
 		deadline.unref();
 		try {
 			const snapshot = await read(controller.signal);
@@ -30,6 +49,17 @@ export function startPlatformResourceSampling(
 				snapshot.outboxPending < 0
 			)
 				throw new Error("Platform resource snapshot is unavailable");
+			snapshotRead = true;
+			try {
+				observability.record({
+					stage: "dependency",
+					outcome: "completed",
+					durationMs: boundedDurationMs(snapshot.queryDurationMs, startedAt),
+					operationRef: resourceSnapshotOperation,
+				});
+			} catch {
+				// Telemetry capture must not escape the background sampler.
+			}
 			observability.observeResource({
 				kind: "task_waiting",
 				value: snapshot.taskWaiting,
@@ -39,12 +69,14 @@ export function startPlatformResourceSampling(
 				value: snapshot.outboxPending,
 			});
 		} catch {
-			if (!stopped) {
+			if (!stopped && !snapshotRead) {
 				try {
 					observability.record({
 						stage: "dependency",
 						outcome: "failed",
 						code: "DEPENDENCY_UNAVAILABLE",
+						durationMs: boundedDurationMs(undefined, startedAt),
+						operationRef: resourceSnapshotOperation,
 					});
 				} catch {
 					// Telemetry capture must not escape the background sampler.

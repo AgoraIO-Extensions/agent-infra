@@ -157,6 +157,8 @@ export interface PlatformQueueResourceSnapshot {
 	readonly taskWaiting: number;
 	/** All pending or retry-scheduled outbox rows, including non-task control work. */
 	readonly outboxPending: number;
+	/** Bounded duration of this read-only snapshot, in milliseconds. */
+	readonly queryDurationMs?: number;
 }
 
 interface ConversationRow {
@@ -814,11 +816,24 @@ function countResource(value: unknown): number {
 
 const activeResourceSnapshots = new WeakSet<postgres.Sql>();
 
+/** The Store query and both process samplers share this bounded timeout. */
+export const platformQueueResourceSnapshotTimeoutMs = 2_000;
+
+function boundedResourceSnapshotDuration(startedAt: number): number {
+	const duration = performance.now() - startedAt;
+	if (!Number.isFinite(duration)) return platformQueueResourceSnapshotTimeoutMs;
+	return Math.min(
+		platformQueueResourceSnapshotTimeoutMs,
+		Math.max(0, duration),
+	);
+}
+
 /** Read one bounded, read-only resource snapshot for the observability consumer. */
 export async function readPlatformQueueResourceSnapshot(
 	client: postgres.Sql,
 	signal: AbortSignal,
 ): Promise<PlatformQueueResourceSnapshot> {
+	const startedAt = performance.now();
 	const unavailable = () =>
 		new Error("Platform resource snapshot is unavailable");
 	if (signal.aborted) throw unavailable();
@@ -829,7 +844,7 @@ export async function readPlatformQueueResourceSnapshot(
 	const onAbort = () => controller.abort();
 	signal.addEventListener("abort", onAbort, { once: true });
 	if (signal.aborted) onAbort();
-	const timer = setTimeout(onAbort, 2000);
+	const timer = setTimeout(onAbort, platformQueueResourceSnapshotTimeoutMs);
 	let rejectOnAbort: () => void = () => {};
 	let removeOperationAbortListener = () => {};
 	let began = false;
@@ -933,6 +948,7 @@ export async function readPlatformQueueResourceSnapshot(
 			return {
 				taskWaiting: countResource(rows[0]?.task_waiting),
 				outboxPending: countResource(rows[0]?.outbox_pending),
+				queryDurationMs: boundedResourceSnapshotDuration(startedAt),
 			};
 		});
 		began = true;
