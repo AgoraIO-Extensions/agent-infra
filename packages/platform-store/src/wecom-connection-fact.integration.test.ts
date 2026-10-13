@@ -6,6 +6,7 @@ import {
 	createWecomDeliveryV1,
 	type WecomConnectionAuthorizationFactV1,
 	type WecomConnectionAuthorizationPortV1,
+	type WecomConnectionAuthorizationRequestV1,
 	type WecomIdentityPortV1,
 	type WecomMessageV1,
 } from "@agent-infra/platform-core";
@@ -20,12 +21,13 @@ import { PostgresWecomChannelV1 } from "./wecom-channel.ts";
 
 let db: PostgresTestDatabase;
 let sql: ReturnType<typeof postgres>;
+const disabledUsers = new Set<string>();
 
 const fixtureUserDirectory = {
 	resolveUser: async (userId: string): Promise<CurrentTaskUserV1> => ({
 		schemaVersion: 1,
 		userId,
-		accountStatus: "active",
+		accountStatus: disabledUsers.has(userId) ? "disabled" : "active",
 		organizationIds: ["controlled-org"],
 		authorizationRevision: "identity-1",
 	}),
@@ -244,16 +246,39 @@ describe("WeCom sender-to-Connection authorization fact", () => {
 			outcome: "unavailable" as const,
 		},
 		{
-			name: "revoked or missing grant",
-			resolver: { resolve: async () => null },
+			name: "null grant",
+			resolver: {
+				resolve: async (): Promise<WecomConnectionAuthorizationFactV1 | null> =>
+					null,
+			},
+			outcome: "denied" as const,
+		},
+		{
+			name: "revoked or expired grant",
+			resolver: {
+				resolve: async (
+					request: WecomConnectionAuthorizationRequestV1,
+				): Promise<WecomConnectionAuthorizationFactV1 | null> => ({
+					schemaVersion: 1,
+					providerId: request.providerId,
+					bindingReference: request.bindingReference,
+					senderId: request.senderId,
+					authorizationReference: "revoked-ref",
+					authorizationRevision: "authorization-r1",
+					grantRevision: "grant-revoked",
+					revocationRevision: "revoked-r2",
+					expiresAt: "2020-01-01T00:00:00.000Z",
+				}),
+			},
 			outcome: "denied" as const,
 		},
 		{
 			name: "producer unavailable",
 			resolver: {
-				resolve: async () => {
-					throw new Error("controlled producer unavailable");
-				},
+				resolve:
+					async (): Promise<WecomConnectionAuthorizationFactV1 | null> => {
+						throw new Error("controlled producer unavailable");
+					},
 			},
 			outcome: "unavailable" as const,
 		},
@@ -490,6 +515,55 @@ describe("WeCom sender-to-Connection authorization fact", () => {
 					?.deliveryStatus,
 			).toBe("cancelled");
 		} finally {
+			await useCase.store.close();
+		}
+	});
+
+	it("does not call the sender when the trusted sender is disabled before send", async () => {
+		const agentId = `fact-disable-${Math.random().toString(36).slice(2)}`;
+		await seedAgent(agentId);
+		const message = messageFor(
+			agentId,
+			`disable-${Date.now()}-${Math.random()}`,
+		);
+		const fact = factFor(message);
+		const resolver: WecomConnectionAuthorizationPortV1 = {
+			resolve: async () => fact,
+		};
+		const useCase = fixture({ connectionAuthorization: resolver });
+		try {
+			const accepted = await useCase.receive(message);
+			expect(accepted.outcome).toBe("accepted");
+			if (accepted.outcome !== "accepted") throw new Error("Expected accepted");
+			await sql`update platform.conversation_executions set status='completed'
+				where execution_id=${accepted.receipt.executionId}`;
+			await sql`insert into platform.conversation_events
+				(event_id,conversation_id,execution_id,adapter_event_key,sequence,
+				 conversation_cursor,event_type,event_payload,event_digest,runtime_cursor,occurred_at,source)
+				values (${`disable-reply-${agentId}`},${accepted.receipt.conversationId},
+				 ${accepted.receipt.executionId},${`disable-adapter-${agentId}`},1,1,'text.delta',
+				 ${sql.json({ type: "text.delta", text: "reply" })},${"e".repeat(64)},
+				 ${`runtime-disable-${agentId}`},now(),'runtime')`;
+			disabledUsers.add(message.senderId);
+			let sends = 0;
+			const delivery = createWecomDeliveryV1({
+				store: useCase.store,
+				authorization: useCase.authorization,
+				sender: {
+					async send() {
+						sends += 1;
+						return "sent";
+					},
+				},
+			});
+			expect(await delivery.dispatch()).toBe(true);
+			expect(sends).toBe(0);
+			expect(
+				(await useCase.store.read(accepted.receipt.receiptId, message.senderId))
+					?.deliveryStatus,
+			).toBe("cancelled");
+		} finally {
+			disabledUsers.delete(message.senderId);
 			await useCase.store.close();
 		}
 	});
