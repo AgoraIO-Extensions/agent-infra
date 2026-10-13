@@ -29,6 +29,7 @@ import {
 } from "./kubernetes-runtime-adapter.js";
 import { runtimeFetch as inClusterRuntimeFetch } from "./runtime-transport.js";
 import {
+	isTransientProbeStatusV1,
 	WorkloadProbeIncompleteErrorV1,
 	workloadProbeIncompleteReasonV1,
 } from "./workload-probe-failure.js";
@@ -363,6 +364,12 @@ export function createWorkloadRuntimeProbeV1(options: {
 					signal.addEventListener("abort", cancelRead, { once: true });
 					try {
 						signal.throwIfAborted();
+						// 5xx 是暂时性故障（#2252）；其余异常应答仍是探测失败（#2046）。
+						if (isTransientProbeStatusV1(response.status))
+							throw new WorkloadProbeIncompleteErrorV1(
+								"readiness",
+								"unavailable",
+							);
 						if (
 							!response.ok ||
 							!reader ||

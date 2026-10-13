@@ -738,6 +738,27 @@ describe("authenticated Workload Runtime probe", () => {
 			workloadProbeIncompleteReasonV1(await pending.catch((error) => error)),
 		).toBe(failure.endsWith("stall") ? "timeout" : undefined);
 	});
+	it.each([
+		[503, "unavailable"],
+		[500, "unavailable"],
+		[401, undefined],
+		[404, undefined],
+	] as const)(
+		"classifies a readiness answer with status %s (#2252)",
+		async (status, expected) => {
+			const probe = createWorkloadRuntimeProbeV1({
+				namespace: workloadTestPolicy.namespace,
+				workerId: "worker-a",
+				authorization: authorize(),
+				fetch: async () => new Response("{}", { status }),
+			});
+			const error = await probe(probeInput()).catch((caught) => caught);
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).message).toContain("WORKER_RUNTIME_PROBE_FAILED");
+			// 5xx 是暂时性故障，按阈值容忍；其余异常应答仍立即失败（#2046）。
+			expect(workloadProbeIncompleteReasonV1(error)).toBe(expected);
+		},
+	);
 	it("marks a readiness transport that never connected as incomplete (#2046)", async () => {
 		const probe = createWorkloadRuntimeProbeV1({
 			namespace: workloadTestPolicy.namespace,
