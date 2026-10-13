@@ -310,6 +310,33 @@ export async function requestSessionSandboxResume(
 	return updated.length === 1;
 }
 
+/**
+ * 空闲回收后尚未收到恢复请求的 Sandbox（Spec §10.1.1）。`c` 是 Conversation 别名。
+ * Web 会话应受理下一条消息并以此触发恢复；它本身不代表就绪，也不授予任何执行权。
+ */
+export const sessionSandboxResumableSql = `exists (
+ select 1 from platform.outbox_items resume
+ join platform.session_sandbox_allocations reclaimed
+   on reclaimed.conversation_id = resume.scope_id
+ where resume.scope_type = 'conversation' and resume.scope_id = c.id
+   and resume.operation = 'conversation.sandbox.reconcile.v1'
+   and reclaimed.desired_state = 'stopped'
+   and resume.payload->'lifecycle'->>'reason' = 'idle_reclaim'
+   and resume.payload->'lifecycle'->'authority'->>'targetDesiredState' = 'running'
+   and coalesce(resume.payload->'lifecycle'->>'resumeRequested', 'false') <> 'true'
+)`;
+
+export async function readSessionSandboxResumable(
+	transaction: Transaction,
+	conversationId: string,
+): Promise<boolean> {
+	const [row] = await transaction<{ resumable: boolean }[]>`
+		select ${transaction.unsafe(sessionSandboxResumableSql)} as resumable
+		from platform.conversations c where c.id = ${conversationId}
+	`;
+	return row?.resumable === true;
+}
+
 export async function readSessionSandboxUpgrading(
 	transaction: Transaction,
 	conversationId: string,

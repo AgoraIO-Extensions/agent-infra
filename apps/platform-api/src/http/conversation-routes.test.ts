@@ -237,6 +237,8 @@ describe("Conversation HTTP routes", () => {
 	it.each([
 		[{ sandboxReady: false }, "preparing"],
 		[{ sandboxReady: false, sandboxUpdating: true }, "updating"],
+		// 空闲回收后可由下一条消息恢复（#2239）。
+		[{ sandboxReady: false, sandboxResumable: true }, "ready"],
 		[{ sandboxReady: true }, "ready"],
 	] as const)(
 		"projects the Session readiness %o as %s (#1534, #1523)",

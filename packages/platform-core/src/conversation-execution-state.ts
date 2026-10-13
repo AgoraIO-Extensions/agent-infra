@@ -78,7 +78,13 @@ export function parseState(
 				"createdAt",
 				"updatedAt",
 			],
-			["isolationPending", "principal", "sandbox", "sandboxReady"],
+			[
+				"isolationPending",
+				"principal",
+				"sandbox",
+				"sandboxReady",
+				"sandboxResumable",
+			],
 		);
 		const sessionGenerationInput = conversation.sessionGeneration;
 		const lastConversationCursorInput = conversation.lastConversationCursor;
@@ -378,9 +384,13 @@ export function parseState(
 			conversation.sandbox === undefined
 				? undefined
 				: parseSessionSandboxBindingV1(conversation.sandbox);
+		if (!sandbox && conversation.sandboxResumable !== undefined) unavailable();
 		if (
 			sandbox &&
 			(typeof conversation.sandboxReady !== "boolean" ||
+				(conversation.sandboxResumable !== undefined &&
+					(conversation.sandboxResumable !== true ||
+						conversation.sandboxReady !== false)) ||
 				sandbox.sessionId !== conversation.conversationId ||
 				sandbox.agentId !== conversation.agentId ||
 				sandbox.principal.id !== conversation.actorId ||
@@ -403,7 +413,13 @@ export function parseState(
 				channelId: conversation.channelId,
 				...(principal ? { principal } : {}),
 				...(sandbox
-					? { sandbox, sandboxReady: conversation.sandboxReady as boolean }
+					? {
+							sandbox,
+							sandboxReady: conversation.sandboxReady as boolean,
+							...(conversation.sandboxResumable === true
+								? { sandboxResumable: true as const }
+								: {}),
+						}
 					: {}),
 				status,
 				...(conversation.isolationPending === true

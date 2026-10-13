@@ -827,15 +827,15 @@ export function openPostgresWorkloadReconciliationStoreV1(options: {
 					await sql`insert into platform.workload_reconciliations (agent_id, revision, state, next_attempt_at) values (${agentId}, ${next.revision}, ${sql.json(next as unknown as postgres.JSONValue)}, clock_timestamp() + ${delay} * interval '1 millisecond') on conflict (agent_id) do update set revision = excluded.revision, state = excluded.state, next_attempt_at = excluded.next_attempt_at, updated_at = clock_timestamp()`;
 					// Idle Session Sandboxes follow a ready verified deployment in
 					// this same transaction; periodic monitor write-backs retry the
-					// ones that were busy (ADR 0023).
-					if (next.phase === "ready")
-						await persistSessionSandboxUpgradeIntents(sql, {
-							agentId,
-							workerId,
-							traceId,
-							requestId,
-							idleSandboxReclaimAfterMs,
-						});
+					// ones that were busy (ADR 0023). 空闲回收在任何阶段的写回中都执行
+					// （#2239，与 Magic 对齐）；升级仍只在 ready 时由函数内部判定。
+					await persistSessionSandboxUpgradeIntents(sql, {
+						agentId,
+						workerId,
+						traceId,
+						requestId,
+						idleSandboxReclaimAfterMs,
+					});
 					// Outbox deliveries only wake reconciliation. The durable Workload
 					// row owns subsequent recovery steps and periodic observations.
 					if (task) {

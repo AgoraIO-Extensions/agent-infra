@@ -21,6 +21,7 @@ import { readRecentPersonalConversations } from "./conversation-recent-query.js"
 import { platformDatabaseUrlFromEnvironment } from "./migrate.js";
 import {
 	conversationSandboxReadBindingSql,
+	sessionSandboxResumableSql,
 	sessionSandboxUpgradingSql,
 } from "./session-sandbox.js";
 
@@ -46,6 +47,8 @@ export interface ConversationQueryProjectionV1 {
 	readonly sandboxReady?: boolean;
 	/** Present only while the not-ready Sandbox is being upgraded (ADR 0023). */
 	readonly sandboxUpdating?: true;
+	/** 空闲回收后等待新消息恢复（#2239）；Web 据此允许发送下一条消息。 */
+	readonly sandboxResumable?: true;
 	readonly conversationId: string;
 	readonly agentId: string;
 	readonly status: "ready" | "active" | "unavailable";
@@ -163,6 +166,7 @@ interface ConversationRow {
 	readonly sandbox_observation_status: string | null;
 	/** Selected only by the Conversation detail/list reads. */
 	readonly sandbox_upgrading?: boolean | null;
+	readonly sandbox_resumable?: boolean | null;
 	readonly sandbox_id: string | null;
 	readonly resource_name: string | null;
 	readonly workspace_scope: string | null;
@@ -463,6 +467,9 @@ function projection(row: ConversationRow): ConversationQueryProjectionV1 {
 		...(!sandboxReady && row.sandbox_upgrading === true
 			? { sandboxUpdating: true as const }
 			: {}),
+		...(!sandboxReady && row.sandbox_resumable === true
+			? { sandboxResumable: true as const }
+			: {}),
 		lastConversationCursor:
 			cursor === 0 ? null : conversationCursor(row.id, cursor),
 		createdAt: timestamp(row.created_at),
@@ -516,11 +523,12 @@ function event(row: EventRow): ConversationQueryEventV1 {
 
 const conversationSelection = `
  select id, agent_id, status, last_conversation_cursor, created_at, updated_at,
-   sandbox_id, resource_name, workspace_scope, sandbox_status, sandbox_desired_state, sandbox_resource_fence, sandbox_observation_status, sandbox_upgrading, actor_id, principal_type, channel_id, session_generation
+   sandbox_id, resource_name, workspace_scope, sandbox_status, sandbox_desired_state, sandbox_resource_fence, sandbox_observation_status, sandbox_upgrading, sandbox_resumable, actor_id, principal_type, channel_id, session_generation
  from (select c.*, s.sandbox_id, s.resource_name, s.workspace_scope,
    s.status as sandbox_status, s.desired_state as sandbox_desired_state,
    s.resource_fence as sandbox_resource_fence, s.resource_observation->>'status' as sandbox_observation_status,
-   ${sessionSandboxUpgradingSql} as sandbox_upgrading
+   ${sessionSandboxUpgradingSql} as sandbox_upgrading,
+   ${sessionSandboxResumableSql} as sandbox_resumable
    from platform.conversations c left join platform.session_sandbox_allocations s
      on s.conversation_id = c.id
    where ${conversationSandboxReadBindingSql}
