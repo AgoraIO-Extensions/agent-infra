@@ -7,6 +7,10 @@ import {
 	type PlatformConversationWorkerLifecycleStatusV1,
 	startPlatformConversationWorkerFromDeploymentV2,
 } from "./conversation-worker.js";
+import {
+	type PlatformWorkerNativeMetadataGatewayServerOptionsV1,
+	startPlatformWorkerNativeMetadataGatewayServerV1,
+} from "./runtime-native-metadata-server.js";
 import { startPlatformWecomWorkerFromDeploymentV1 } from "./wecom-deployment.js";
 import { startPlatformWorkloadWorkerFromDeploymentV1 } from "./workload-worker.js";
 
@@ -21,6 +25,7 @@ export * from "./runtime-model-directory-service.js";
 export * from "./runtime-native-metadata-client.js";
 export * from "./runtime-native-metadata-gateway.js";
 export * from "./runtime-native-metadata-proof.js";
+export * from "./runtime-native-metadata-server.js";
 export * from "./skill-materialization.js";
 export * from "./wecom-deployment.js";
 export { createPlatformWecomWorkerV1 } from "./wecom-worker.js";
@@ -174,23 +179,39 @@ export function createPlatformSecretRotationWorkerV1(options: {
 interface StartOptions {
 	heartbeatMs?: number;
 	log?: (message: string) => void;
+	nativeMetadataGateway?: PlatformWorkerNativeMetadataGatewayServerOptionsV1;
 }
 
 export function startPlatformWorker(options: StartOptions = {}) {
 	const log = options.log ?? console.info;
 	const heartbeat = setInterval(() => undefined, options.heartbeatMs ?? 60_000);
 	let stopped = false;
+	let gateway:
+		| ReturnType<typeof startPlatformWorkerNativeMetadataGatewayServerV1>
+		| undefined;
+	try {
+		if (options.nativeMetadataGateway)
+			gateway = startPlatformWorkerNativeMetadataGatewayServerV1(
+				options.nativeMetadataGateway,
+			);
+	} catch (error) {
+		clearInterval(heartbeat);
+		throw error;
+	}
 
 	log(JSON.stringify({ service: platformWorkerService, status: "ready" }));
 
 	return {
+		nativeMetadataGatewayServer: gateway?.server,
 		stop() {
 			if (stopped) return;
 			stopped = true;
 			clearInterval(heartbeat);
+			const closing = gateway?.stop();
 			log(
 				JSON.stringify({ service: platformWorkerService, status: "stopped" }),
 			);
+			return closing;
 		},
 	};
 }
