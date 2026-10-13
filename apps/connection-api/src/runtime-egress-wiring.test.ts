@@ -103,7 +103,7 @@ const environment = {
 	LDAP_URL: "ldap://directory.invalid:389",
 	LDAP_USERNAME_ATTRIBUTE: "cn",
 	LDAP_USERS_BASE_DN: "dc=example",
-	GITHUB_EGRESS_PROXY_URL: "http://103.101.125.158:28062/",
+	GITHUB_EGRESS_PROXY_URL: "http://192.0.2.10:28062/",
 	GITHUB_OAUTH_CLIENT_ID: "synthetic-client",
 	GITHUB_OAUTH_CLIENT_SECRET: "synthetic-secret",
 	JIRA_TOKEN_CLIENT_ID: "synthetic-client",

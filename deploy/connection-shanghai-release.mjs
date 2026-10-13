@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
 	applyReviewedMigrations,
@@ -15,9 +15,7 @@ import {
 class ReleaseError extends Error {}
 
 export const shanghai = {
-	server: "https://106.14.182.204:6443",
 	namespace: "agent-connector",
-	databaseHost: "pgm-uf6c9w6165b2my7nbo.pg.rds.aliyuncs.com",
 	databaseSecret: "connection-database-shanghai",
 	caConfigMap: "connection-rds-ca",
 	caPath: "/etc/connection-rds/ApsaraDB-CA-Chain.pem",
@@ -25,6 +23,41 @@ export const shanghai = {
 
 function requireCondition(condition, message) {
 	if (!condition) throw new ReleaseError(message);
+}
+
+export function loadReleaseTarget(file) {
+	requireCondition(
+		file && existsSync(file),
+		"Approved release target file is required",
+	);
+	const stat = statSync(file);
+	requireCondition(
+		stat.isFile() && (stat.mode & 0o077) === 0,
+		"Release target file must be private (0600)",
+	);
+	let target;
+	try {
+		target = JSON.parse(readFileSync(file, "utf8"));
+		const server = new URL(target.server);
+		requireCondition(
+			typeof target.server === "string" &&
+				server.protocol === "https:" &&
+				!server.username &&
+				!server.password &&
+				server.pathname === "/" &&
+				!server.search &&
+				!server.hash &&
+				typeof target.databaseHost === "string" &&
+				/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(target.databaseHost) &&
+				Object.keys(target).length === 2,
+			"Invalid approved release target configuration",
+		);
+	} catch {
+		throw new ReleaseError(
+			"Invalid approved release target configuration; values withheld",
+		);
+	}
+	return { ...shanghai, ...target };
 }
 
 function execute(command, args, input) {
@@ -42,7 +75,7 @@ function execute(command, args, input) {
 	}
 }
 
-export function validateTarget(config, versions, namespace) {
+export function validateTarget(config, versions, namespace, shanghai) {
 	requireCondition(
 		config.clusters?.length === 1 &&
 			config.clusters[0].cluster.server === shanghai.server,
@@ -69,7 +102,14 @@ export function validateTarget(config, versions, namespace) {
 	);
 }
 
-export function validateRuntime(api, web, databaseSecret, configSecret, ca) {
+export function validateRuntime(
+	api,
+	web,
+	databaseSecret,
+	configSecret,
+	ca,
+	shanghai,
+) {
 	requireCondition(
 		api.metadata?.name === "connection-api" &&
 			web.metadata?.name === "connection-web",
@@ -267,12 +307,17 @@ export async function main(args = process.argv.slice(2)) {
 			"--request-timeout=20s",
 			...flags,
 		]);
+	const shanghai = loadReleaseTarget(
+		// biome-ignore lint/suspicious/noUndeclaredEnvVars: operator-owned deployment configuration, outside Turbo caching.
+		process.env.CONNECTION_RELEASE_TARGET_FILE,
+	);
 	const get = (kind, name) =>
 		JSON.parse(kube("-n", shanghai.namespace, "get", kind, name, "-o", "json"));
 	validateTarget(
 		JSON.parse(kube("config", "view", "--minify", "-o", "json")),
 		JSON.parse(kube("version", "-o", "json")),
 		get("namespace", shanghai.namespace),
+		shanghai,
 	);
 	const api = get("deployment", "connection-api");
 	const web = get("deployment", "connection-web");
@@ -282,6 +327,7 @@ export async function main(args = process.argv.slice(2)) {
 		get("secret", shanghai.databaseSecret),
 		get("secret", "connection-config"),
 		get("configmap", shanghai.caConfigMap),
+		shanghai,
 	);
 	for (const update of updates) {
 		kube(

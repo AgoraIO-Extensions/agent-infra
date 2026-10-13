@@ -188,18 +188,16 @@ describe("Connection runtime configuration", () => {
 		const config = fullConnectionRuntimeConfig({
 			...accountBase,
 			GITHUB_EGRESS_PROXY_URL: "https://github-egress.la3.example",
-			GITHUB_READ_FALLBACK_PROXY_URL: "http://103.101.125.158:28062",
+			GITHUB_READ_FALLBACK_PROXY_URL: "http://192.0.2.10:28062",
 		});
 		expect(config.githubEgressProxyUrl).toBe(
 			"https://github-egress.la3.example/",
 		);
-		expect(config.githubReadFallbackProxyUrl).toBe(
-			"http://103.101.125.158:28062/",
-		);
+		expect(config.githubReadFallbackProxyUrl).toBe("http://192.0.2.10:28062/");
 		expect(() =>
 			fullConnectionRuntimeConfig({
 				...accountBase,
-				GITHUB_READ_FALLBACK_PROXY_URL: "http://103.101.125.158:28062",
+				GITHUB_READ_FALLBACK_PROXY_URL: "http://192.0.2.10:28062",
 			}),
 		).toThrow(/requires GITHUB_EGRESS_PROXY_URL/);
 	});

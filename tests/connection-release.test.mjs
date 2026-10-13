@@ -1,16 +1,23 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
 	imageUpdates,
-	shanghai,
+	loadReleaseTarget,
+	shanghai as releaseDefaults,
 	validatePublishedRun,
 	validateRuntime,
 	validateTarget,
 } from "../deploy/connection-shanghai-release.mjs";
+
+const shanghai = {
+	...releaseDefaults,
+	server: "https://cluster.invalid:6443",
+	databaseHost: "database.invalid",
+};
 
 function runtime() {
 	return {
@@ -78,7 +85,14 @@ function runtime() {
 }
 
 function checkRuntime(value) {
-	validateRuntime(value.api, value.web, value.database, value.config, value.ca);
+	validateRuntime(
+		value.api,
+		value.web,
+		value.database,
+		value.config,
+		value.ca,
+		shanghai,
+	);
 }
 
 test("wrong context/server, TLS bypass and incompatible kubectl are rejected", () => {
@@ -91,7 +105,9 @@ test("wrong context/server, TLS bypass and incompatible kubectl are rejected", (
 		metadata: { name: shanghai.namespace },
 		status: { phase: "Active" },
 	};
-	assert.doesNotThrow(() => validateTarget(config, versions, namespace));
+	assert.doesNotThrow(() =>
+		validateTarget(config, versions, namespace, shanghai),
+	);
 	assert.throws(
 		() =>
 			validateTarget(
@@ -100,12 +116,13 @@ test("wrong context/server, TLS bypass and incompatible kubectl are rejected", (
 				},
 				versions,
 				namespace,
+				shanghai,
 			),
 		/Wrong cluster/,
 	);
 	config.clusters[0].cluster["insecure-skip-tls-verify"] = true;
 	assert.throws(
-		() => validateTarget(config, versions, namespace),
+		() => validateTarget(config, versions, namespace, shanghai),
 		/TLS verification/,
 	);
 	delete config.clusters[0].cluster["insecure-skip-tls-verify"];
@@ -115,15 +132,21 @@ test("wrong context/server, TLS bypass and incompatible kubectl are rejected", (
 				config,
 				{ ...versions, clientVersion: { major: "1", minor: "27" } },
 				namespace,
+				shanghai,
 			),
 		/kubectl/,
 	);
 	assert.throws(
 		() =>
-			validateTarget(config, versions, {
-				...namespace,
-				metadata: { name: "other-namespace" },
-			}),
+			validateTarget(
+				config,
+				versions,
+				{
+					...namespace,
+					metadata: { name: "other-namespace" },
+				},
+				shanghai,
+			),
 		/namespace/,
 	);
 });
@@ -279,6 +302,15 @@ test("malformed Kubernetes output cannot leak runtime configuration in errors", 
 	try {
 		const kubeconfig = path.join(directory, "kubeconfig");
 		const kubectl = path.join(directory, "kubectl");
+		const target = path.join(directory, "target.json");
+		writeFileSync(
+			target,
+			JSON.stringify({
+				server: shanghai.server,
+				databaseHost: shanghai.databaseHost,
+			}),
+			{ mode: 0o600 },
+		);
 		const marker = "FIXTURE_NOT_A_REAL_CREDENTIAL";
 		writeFileSync(kubeconfig, "fixture");
 		writeFileSync(kubectl, `#!/bin/sh\nprintf '%s' '${marker}'\n`, {
@@ -294,12 +326,59 @@ test("malformed Kubernetes output cannot leak runtime configuration in errors", 
 			],
 			{
 				encoding: "utf8",
-				env: { ...process.env, CONNECTION_KUBECTL: kubectl },
+				env: {
+					...process.env,
+					CONNECTION_KUBECTL: kubectl,
+					CONNECTION_RELEASE_TARGET_FILE: target,
+				},
 			},
 		);
 		assert.equal(result.status, 1);
 		assert.match(result.stderr, /raw exception withheld/);
 		assert.equal(result.stderr.includes(marker), false);
+	} finally {
+		rmSync(directory, { recursive: true });
+	}
+});
+
+test("release target requires private independently supplied valid configuration", () => {
+	const directory = mkdtempSync(path.join(tmpdir(), "connection-target-test-"));
+	try {
+		const file = path.join(directory, "target.json");
+		assert.throws(
+			() => loadReleaseTarget(undefined),
+			/target file is required/,
+		);
+		for (const target of [
+			{},
+			{ server: "http://cluster.invalid", databaseHost: "database.invalid" },
+			{
+				server: "https://user:password@cluster.invalid",
+				databaseHost: "database.invalid",
+			},
+			{
+				server: shanghai.server,
+				databaseHost: "postgres://secret@database.invalid",
+			},
+			{
+				server: shanghai.server,
+				databaseHost: "database.invalid",
+				extra: true,
+			},
+		]) {
+			writeFileSync(file, JSON.stringify(target), { mode: 0o600 });
+			assert.throws(() => loadReleaseTarget(file), /values withheld/);
+		}
+		writeFileSync(
+			file,
+			JSON.stringify({
+				server: shanghai.server,
+				databaseHost: shanghai.databaseHost,
+			}),
+		);
+		assert.deepEqual(loadReleaseTarget(file), shanghai);
+		chmodSync(file, 0o644);
+		assert.throws(() => loadReleaseTarget(file), /must be private/);
 	} finally {
 		rmSync(directory, { recursive: true });
 	}
