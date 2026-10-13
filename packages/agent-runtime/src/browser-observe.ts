@@ -413,6 +413,7 @@ export function createBrowserObserveControllerV1(input: {
 	const actionsById = new Map<string, BrowserActionRecordV1>();
 	const actionDigests = new Map<string, string>();
 	const activeActionIds = new Set<string>();
+	const activeIdempotencyKeys = new Set<string>();
 	const cancelledActionIds = new Set<string>();
 	let downloadCount = 0;
 	const confirmations = new Map<
@@ -672,6 +673,7 @@ export function createBrowserObserveControllerV1(input: {
 		page: BrowserPageReferenceV1,
 		createdAt: string,
 		fields: Partial<BrowserActionRecordV1> = {},
+		options: { readonly index?: boolean } = {},
 	): BrowserActionRecordV1 {
 		const actionId = request.actionId ?? `action-${randomUUID()}`;
 		const record = Object.freeze({
@@ -688,7 +690,7 @@ export function createBrowserObserveControllerV1(input: {
 			createdAt,
 			...fields,
 		});
-		actionsById.set(record.actionId, record);
+		if (options.index !== false) actionsById.set(record.actionId, record);
 		return record;
 	}
 
@@ -885,6 +887,23 @@ export function createBrowserObserveControllerV1(input: {
 			request.sideEffect === true ||
 			request.kind === "upload" ||
 			(request.kind === "click" && sideEffectName(request.target?.name ?? ""));
+		const alreadyActive =
+			activeActionIds.has(actionId) ||
+			(request.idempotencyKey !== undefined &&
+				activeIdempotencyKeys.has(request.idempotencyKey));
+		if (alreadyActive)
+			return actionRecord(
+				request,
+				"unknown",
+				pageReference(state),
+				createdAt,
+				{
+					actionId,
+					sideEffect: inferredSideEffect,
+					reasonCode: "BROWSER_ACTION_IN_FLIGHT",
+				},
+				{ index: false },
+			);
 		let authorization: BrowserActionAuthorizationV1 | undefined;
 		if (inferredSideEffect) {
 			try {
@@ -1049,6 +1068,8 @@ export function createBrowserObserveControllerV1(input: {
 			);
 
 		activeActionIds.add(actionId);
+		if (request.idempotencyKey !== undefined)
+			activeIdempotencyKeys.add(request.idempotencyKey);
 		inFlightActions += 1;
 		let artifact: BrowserArtifactV1 | undefined;
 		try {
@@ -1211,6 +1232,8 @@ export function createBrowserObserveControllerV1(input: {
 		} finally {
 			inFlightActions -= 1;
 			activeActionIds.delete(actionId);
+			if (request.idempotencyKey !== undefined)
+				activeIdempotencyKeys.delete(request.idempotencyKey);
 			cancelledActionIds.delete(actionId);
 		}
 	}

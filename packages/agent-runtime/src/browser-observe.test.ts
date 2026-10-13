@@ -378,6 +378,71 @@ describe("Browser action cancellation barrier", () => {
 	});
 });
 
+describe("Browser action idempotency barrier", () => {
+	it("does not execute the same actionId twice while the first attempt is in flight", async () => {
+		const page = new FakePage();
+		const context = fakeContext(page);
+		const controller = createBrowserObserveControllerV1({
+			context: context as never,
+			capability: {
+				...capability,
+				operations: ["navigate", "observe", "interact"],
+				policy: { ...capability.policy, maxConcurrentActions: 2 },
+			},
+		});
+		const reference = await controller.navigate("https://example.test/app");
+		const observation = await controller.observe(reference);
+		const target = observation.elements[0];
+		if (!target) throw new Error("expected element");
+		let releaseClick!: () => void;
+		page.pageLocator.click = vi.fn(
+			() => new Promise<void>((resolve) => (releaseClick = resolve)),
+		);
+		const binding = executionBinding(reference.pageRevision);
+		const request = {
+			actionId: "concurrent-action",
+			operationRef: "operation-1",
+			attemptRef: "attempt-1",
+			idempotencyKey: "concurrent-action-key",
+			kind: "click" as const,
+			page: reference,
+			target,
+			executionBinding: binding,
+		};
+		const first = controller.executeAction(request);
+		await vi.waitFor(() =>
+			expect(page.pageLocator.click).toHaveBeenCalledTimes(1),
+		);
+		const duplicate = await controller.executeAction({
+			...request,
+			operationRef: "operation-2",
+			attemptRef: "attempt-2",
+		});
+		expect(duplicate).toMatchObject({
+			status: "unknown",
+			actionId: "concurrent-action",
+			reasonCode: "BROWSER_ACTION_IN_FLIGHT",
+		});
+		expect(
+			controller.readAction({
+				actionId: "concurrent-action",
+				executionBinding: binding,
+			}),
+		).toBeNull();
+		expect(page.pageLocator.click).toHaveBeenCalledTimes(1);
+		releaseClick();
+		await expect(first).resolves.toMatchObject({
+			status: "completed",
+			actionId: "concurrent-action",
+		});
+		await expect(controller.executeAction(request)).resolves.toMatchObject({
+			status: "completed",
+			actionId: "concurrent-action",
+		});
+		expect(page.pageLocator.click).toHaveBeenCalledTimes(1);
+	});
+});
+
 describe("Browser action outcome readback", () => {
 	it("reads terminal records without browser I/O and rejects conflicting keys", async () => {
 		const page = new FakePage();
